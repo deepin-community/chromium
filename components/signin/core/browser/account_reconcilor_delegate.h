@@ -29,11 +29,6 @@ class AccountReconcilorDelegate {
   // false.
   virtual bool IsReconcileEnabled() const;
 
-  // Returns true if calling OAuthMultiLogin to update cookies to match
-  // refresh tokens is allowed. Used in Dice to disable updating cookies when
-  // the user is not signed in to chrome.
-  virtual bool IsUpdateCookieAllowed() const;
-
   // Returns the value to set in the "source" parameter for Gaia API calls.
   virtual gaia::GaiaSource GetGaiaApiSource() const;
 
@@ -70,10 +65,8 @@ class AccountReconcilorDelegate {
       const std::vector<gaia::ListedAccount>& gaia_accounts);
 
   // Called when cookies are deleted by user action.
-  // This might be a no-op or signout the profile or lead to a sync paused state
-  // based on different platforms conditions.
-  virtual void OnAccountsCookieDeletedByUserAction(
-      bool synced_data_deletion_in_progress);
+  // This might be a no-op or signout the profile.
+  virtual void OnAccountsCookieDeletedByUserAction();
 
   // Returns whether tokens should be revoked when the primary account is empty.
   virtual bool ShouldRevokeTokensIfNoPrimaryAccount() const;

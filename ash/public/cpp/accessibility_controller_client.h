@@ -61,14 +61,6 @@ class ASH_PUBLIC_EXPORT AccessibilityControllerClient {
   // Cancels all current and queued speech immediately.
   virtual void SilenceSpokenFeedback() = 0;
 
-  // Called when we first detect two fingers are held down, which can be used to
-  // toggle spoken feedback on some touch-only devices.
-  virtual void OnTwoFingerTouchStart() = 0;
-
-  // Called when the user is no longer holding down two fingers (including
-  // releasing one, holding down three, or moving them).
-  virtual void OnTwoFingerTouchStop() = 0;
-
   // Whether or not to enable toggling spoken feedback via holding down two
   // fingers on the screen.
   virtual bool ShouldToggleSpokenFeedbackViaTouch() const = 0;
@@ -106,6 +98,10 @@ class ASH_PUBLIC_EXPORT AccessibilityControllerClient {
   virtual void SetA11yOverrideWindow(aura::Window* a11y_override_window) = 0;
 
   virtual std::string GetDictationDefaultLocale(bool new_user) = 0;
+
+  // Called when the FaceGaze disable dialog is accepted/rejected so that the
+  // settings UI can be properly updated.
+  virtual void SendFaceGazeDisableDialogResultToSettings(bool accepted) = 0;
 };
 
 }  // namespace ash

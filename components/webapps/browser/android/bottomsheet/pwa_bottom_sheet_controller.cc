@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "components/webapps/browser/android/bottomsheet/pwa_bottom_sheet_controller.h"
+
 #include <string>
 
 #include "base/android/jni_android.h"
@@ -11,8 +12,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "components/url_formatter/elide_url.h"
 #include "components/webapps/browser/android/app_banner_manager_android.h"
-#include "components/webapps/browser/android/webapps_jni_headers/PwaBottomSheetControllerProvider_jni.h"
-#include "components/webapps/browser/android/webapps_jni_headers/PwaBottomSheetController_jni.h"
+#include "components/webapps/browser/android/webapps_utils.h"
+#include "components/webapps/browser/banners/install_banner_config.h"
 #include "components/webapps/browser/installable/installable_data.h"
 #include "components/webapps/browser/webapps_client.h"
 #include "components/webapps/common/constants.h"
@@ -21,17 +22,28 @@
 #include "ui/gfx/android/java_bitmap.h"
 #include "ui/gfx/text_elider.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/webapps/browser/android/webapps_jni_headers/PwaBottomSheetControllerProvider_jni.h"
+#include "components/webapps/browser/android/webapps_jni_headers/PwaBottomSheetController_jni.h"
+
 using base::ASCIIToUTF16;
 using base::android::ConvertUTF16ToJavaString;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
+
+namespace webapps {
 
 namespace {
 
 bool CanShowBottomSheet(content::WebContents* web_contents,
-                        const std::vector<webapps::Screenshot>& screenshots) {
-  if (screenshots.size() == 0)
+                        const std::vector<Screenshot>& screenshots) {
+  if (screenshots.size() == 0) {
     return false;
+  }
+  if (WebappsUtils::IsAutoMintedTwaEnabled()) {
+    // Web App Service on the Android side will show the install UX instead.
+    return false;
+  }
 
   JNIEnv* env = base::android::AttachCurrentThread();
   return Java_PwaBottomSheetControllerProvider_canShowPwaBottomSheetInstaller(
@@ -40,24 +52,28 @@ bool CanShowBottomSheet(content::WebContents* web_contents,
 
 }  // anonymous namespace
 
-namespace webapps {
-
 PwaBottomSheetController::~PwaBottomSheetController() = default;
 
 // static
-jboolean JNI_PwaBottomSheetController_RequestOrExpandBottomSheetInstaller(
+static bool JNI_PwaBottomSheetController_RequestOrExpandBottomSheetInstaller(
     JNIEnv* env,
-    const JavaParamRef<jobject>& jweb_contents,
+    const JavaRef<jobject>& jweb_contents,
     int install_trigger) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(jweb_contents);
   auto* app_banner_manager = static_cast<AppBannerManagerAndroid*>(
       WebappsClient::Get()->GetAppBannerManager(web_contents));
 
+  std::optional<InstallBannerConfig> install_config =
+      app_banner_manager->GetCurrentBannerConfig();
+  if (!install_config.has_value()) {
+    return false;
+  }
+
   WebappInstallSource install_source = InstallableMetrics::GetInstallSource(
       web_contents, static_cast<InstallTrigger>(install_trigger));
   return app_banner_manager->MaybeShowPwaBottomSheetController(
-      /* expand_sheet= */ true, install_source);
+      /* expand_sheet= */ true, install_source, install_config.value());
 }
 
 // static
@@ -65,9 +81,7 @@ bool PwaBottomSheetController::MaybeShow(
     content::WebContents* web_contents,
     const WebAppBannerData& web_app_banner_data,
     bool expand_sheet,
-    base::RepeatingCallback<void(AddToHomescreenInstaller::Event,
-                                 const AddToHomescreenParams&)>
-        a2hs_event_callback,
+    AddToHomescreenEventCallback a2hs_event_callback,
     std::unique_ptr<AddToHomescreenParams> a2hs_params) {
   if (!CanShowBottomSheet(web_contents, web_app_banner_data.screenshots)) {
     return false;
@@ -78,7 +92,7 @@ bool PwaBottomSheetController::MaybeShow(
           env, web_contents->GetJavaWebContents())) {
     Java_PwaBottomSheetControllerProvider_updateState(
         env, web_contents->GetJavaWebContents(),
-        jint(a2hs_params->install_source), expand_sheet);
+        int32_t(a2hs_params->install_source), expand_sheet);
   } else {
     // Lifetime of this object is managed by the Java counterpart, iff bottom
     // sheets can be shown (otherwise an infobar is used and this class is no
@@ -94,9 +108,7 @@ bool PwaBottomSheetController::MaybeShow(
 PwaBottomSheetController::PwaBottomSheetController(
     const WebAppBannerData& web_app_banner_data,
     std::unique_ptr<AddToHomescreenParams> a2hs_params,
-    base::RepeatingCallback<void(AddToHomescreenInstaller::Event,
-                                 const AddToHomescreenParams&)>
-        a2hs_event_callback)
+    AddToHomescreenEventCallback a2hs_event_callback)
     : web_app_banner_data_(web_app_banner_data),
       a2hs_params_(std::move(a2hs_params)),
       a2hs_event_callback_(a2hs_event_callback) {}
@@ -107,8 +119,7 @@ void PwaBottomSheetController::Destroy(JNIEnv* env) {
   // to the regular install dialog prompt. Therefore, we send UI_CANCELLED
   // only if the bottom sheet was ever expanded and not closed.
   if (!install_triggered_ && !sheet_closed_ && sheet_expanded_) {
-    a2hs_event_callback_.Run(AddToHomescreenInstaller::Event::UI_CANCELLED,
-                             *a2hs_params_);
+    a2hs_event_callback_.Run(AddToHomescreenEvent::UI_CANCELLED, *a2hs_params_);
   }
   delete this;
 }
@@ -120,33 +131,28 @@ void PwaBottomSheetController::UpdateInstallSource(JNIEnv* env,
 }
 
 void PwaBottomSheetController::OnSheetClosedWithSwipe(JNIEnv* env) {
-  a2hs_event_callback_.Run(AddToHomescreenInstaller::Event::UI_CANCELLED,
-                           *a2hs_params_);
+  a2hs_event_callback_.Run(AddToHomescreenEvent::UI_CANCELLED, *a2hs_params_);
   sheet_closed_ = true;
 }
 
 void PwaBottomSheetController::OnSheetExpanded(JNIEnv* env) {
-  a2hs_event_callback_.Run(AddToHomescreenInstaller::Event::UI_SHOWN,
-                           *a2hs_params_);
+  a2hs_event_callback_.Run(AddToHomescreenEvent::UI_SHOWN, *a2hs_params_);
   sheet_expanded_ = true;
 }
 
 void PwaBottomSheetController::OnAddToHomescreen(
     JNIEnv* env,
-    const JavaParamRef<jobject>& jweb_contents) {
+    const JavaRef<jobject>& jweb_contents) {
   content::WebContents* web_contents =
       content::WebContents::FromJavaWebContents(jweb_contents);
   if (!web_contents)
     return;
-  auto* app_banner_manager = static_cast<AppBannerManagerAndroid*>(
-      WebappsClient::Get()->GetAppBannerManager(web_contents));
-  if (!app_banner_manager)
-    return;
 
   install_triggered_ = true;
-  app_banner_manager->Install(*a2hs_params_, std::move(a2hs_event_callback_));
-  app_banner_manager->TrackInstallPath(/* bottom_sheet= */ true,
-                                       a2hs_params_->install_source);
+  AddToHomescreenInstaller::Install(web_contents, *a2hs_params_,
+                                    std::move(a2hs_event_callback_));
+  PwaInstallPathTracker::TrackInstallPath(/* bottom_sheet= */ true,
+                                          a2hs_params_->install_source);
 }
 
 void PwaBottomSheetController::ShowBottomSheetInstaller(
@@ -193,10 +199,13 @@ void PwaBottomSheetController::UpdateScreenshot(
   JNIEnv* env = base::android::AttachCurrentThread();
   ScopedJavaLocalRef<jobject> java_screenshot =
       gfx::ConvertToJavaBitmap(screenshot);
-  // TODO(https://crbug.com/1371279): support passing label to use as
+  // TODO(crbug.com/40870351): support passing label to use as
   // the accessibility string.
   Java_PwaBottomSheetController_addWebAppScreenshot(
       env, java_screenshot, web_contents->GetJavaWebContents());
 }
 
 }  // namespace webapps
+
+DEFINE_JNI(PwaBottomSheetControllerProvider)
+DEFINE_JNI(PwaBottomSheetController)

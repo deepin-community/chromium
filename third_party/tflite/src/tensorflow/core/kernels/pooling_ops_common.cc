@@ -49,34 +49,35 @@ struct RawType {
 
 template <>
 struct RawType<qint8> {
-  using type = int8;
+  using type = int8_t;
 };
 
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 template <typename T>
 struct PadInputWithNegativeInf {
-  Status operator()(const GPUDevice& d,
-                    typename TTypes<T, 4, int>::ConstTensor in,
-                    int input_pad_top, int input_pad_bottom, int input_pad_left,
-                    int input_pad_right, typename TTypes<T, 4, int>::Tensor out,
-                    TensorFormat format) {
+  absl::Status operator()(const GPUDevice& d,
+                          typename TTypes<T, 4, int>::ConstTensor in,
+                          int input_pad_top, int input_pad_bottom,
+                          int input_pad_left, int input_pad_right,
+                          typename TTypes<T, 4, int>::Tensor out,
+                          TensorFormat format) {
     T padding_value = -std::numeric_limits<T>::infinity();
     functor::PadInput<GPUDevice, T, int, 4>()(
         d, in, {{input_pad_top, input_pad_left}},
         {{input_pad_bottom, input_pad_right}}, out, format, padding_value);
-    return OkStatus();
+    return absl::OkStatus();
   }
 };
 
 template <>
 struct PadInputWithNegativeInf<qint8> {
-  Status operator()(const GPUDevice& d,
-                    typename TTypes<qint8, 4, int>::ConstTensor in,
-                    int input_pad_top, int input_pad_bottom, int input_pad_left,
-                    int input_pad_right,
-                    typename TTypes<qint8, 4, int>::Tensor out,
-                    TensorFormat format) {
+  absl::Status operator()(const GPUDevice& d,
+                          typename TTypes<qint8, 4, int>::ConstTensor in,
+                          int input_pad_top, int input_pad_bottom,
+                          int input_pad_left, int input_pad_right,
+                          typename TTypes<qint8, 4, int>::Tensor out,
+                          TensorFormat format) {
     return errors::InvalidArgument(
         "Explicit padding not yet supported with qint8");
   }
@@ -86,9 +87,9 @@ struct PadInputWithNegativeInf<qint8> {
 
 }  // namespace
 
-Status CheckPaddingSize(int64_t window_rows, int64_t window_cols,
-                        int64_t pad_top, int64_t pad_bottom, int64_t pad_left,
-                        int64_t pad_right) {
+absl::Status CheckPaddingSize(int64_t window_rows, int64_t window_cols,
+                              int64_t pad_top, int64_t pad_bottom,
+                              int64_t pad_left, int64_t pad_right) {
   if (!FastBoundsCheck(pad_top, window_rows)) {
     return errors::InvalidArgument("Top padding ", pad_top,
                                    " needs to be smaller than the "
@@ -117,8 +118,8 @@ Status CheckPaddingSize(int64_t window_rows, int64_t window_cols,
 }
 
 PoolParameters::PoolParameters(OpKernelContext* context,
-                               const std::vector<int32>& ksize,
-                               const std::vector<int32>& stride,
+                               const std::vector<int32_t>& ksize,
+                               const std::vector<int32_t>& stride,
                                Padding padding,
                                std::vector<int64_t> explicit_paddings,
                                TensorFormat data_format,
@@ -210,7 +211,7 @@ PoolParameters::PoolParameters(OpKernelContext* context,
   }
 }
 
-Status PoolParameters::forward_output_shape(TensorShape* shape) {
+absl::Status PoolParameters::forward_output_shape(TensorShape* shape) {
   if (depth_window == 1) {
     // Spatial pooling
     return ShapeFromFormatWithStatus(data_format, tensor_in_batch, out_height,
@@ -227,8 +228,8 @@ Status PoolParameters::forward_output_shape(TensorShape* shape) {
 
 template <typename T>
 void DnnPoolingImpl(OpKernelContext* context, se::dnn::PoolingMode pooling_mode,
-                    const std::vector<int32>& size,
-                    const std::vector<int32>& stride, Padding padding,
+                    const std::vector<int32_t>& size,
+                    const std::vector<int32_t>& stride, Padding padding,
                     std::vector<int64_t> explicit_paddings,
                     TensorFormat data_format, const Tensor& tensor_in,
                     const TensorShape& tensor_out_shape, bool propagate_nans,
@@ -413,15 +414,15 @@ void DnnPoolingImpl(OpKernelContext* context, se::dnn::PoolingMode pooling_mode,
   );
 
   DnnScratchAllocator scratch_allocator(PoolingScratchSize, context);
-  OP_REQUIRES_OK(context,
-                 dnn->PoolForward(stream, pooling_desc, GetNumericOptions(),
-                                  input_desc, input_data, output_desc,
-                                  &output_data, &scratch_allocator));
+  OP_REQUIRES_OK(context, dnn->PoolForward(stream, pooling_desc,
+                                           GetNumericOptionsForCuDnn(),
+                                           input_desc, input_data, output_desc,
+                                           &output_data, &scratch_allocator));
 #else
   OP_REQUIRES_OK(
       context,
-      dnn->PoolForward(stream, pooling_desc, GetNumericOptions(), input_desc,
-                       input_data, output_desc, &output_data));
+      dnn->PoolForward(stream, pooling_desc, GetNumericOptionsForCuDnn(),
+                       input_desc, input_data, output_desc, &output_data));
 #endif
 
 #if CUDNN_VERSION < 7300
@@ -438,14 +439,12 @@ void DnnPoolingImpl(OpKernelContext* context, se::dnn::PoolingMode pooling_mode,
 }
 
 template <typename T>
-void DnnPoolingOp<T>::Compute(OpKernelContext* context,
-                              se::dnn::PoolingMode pooling_mode,
-                              const std::vector<int32>& size,
-                              const std::vector<int32>& stride, Padding padding,
-                              std::vector<int64_t> explicit_paddings,
-                              TensorFormat data_format, const Tensor& tensor_in,
-                              const TensorShape& tensor_out_shape,
-                              bool propagate_nans) {
+void DnnPoolingOp<T>::Compute(
+    OpKernelContext* context, se::dnn::PoolingMode pooling_mode,
+    const std::vector<int32_t>& size, const std::vector<int32_t>& stride,
+    Padding padding, std::vector<int64_t> explicit_paddings,
+    TensorFormat data_format, const Tensor& tensor_in,
+    const TensorShape& tensor_out_shape, bool propagate_nans) {
   Tensor* tensor_out = nullptr;
   OP_REQUIRES_OK(context,
                  context->allocate_output(0, tensor_out_shape, &tensor_out));
@@ -457,7 +456,7 @@ void DnnPoolingOp<T>::Compute(OpKernelContext* context,
 template <>
 void DnnPoolingOp<Eigen::bfloat16>::Compute(
     OpKernelContext* context, se::dnn::PoolingMode pooling_mode,
-    const std::vector<int32>& size, const std::vector<int32>& stride,
+    const std::vector<int32_t>& size, const std::vector<int32_t>& stride,
     Padding padding, std::vector<int64_t> explicit_paddings,
     TensorFormat data_format, const Tensor& tensor_in,
     const TensorShape& tensor_out_shape, bool propagate_nans) {
@@ -511,14 +510,14 @@ DECLARE_GPU_SPEC(float);
 DECLARE_GPU_SPEC(Eigen::half);
 DECLARE_GPU_SPEC(Eigen::bfloat16);
 DECLARE_GPU_SPEC(double);
-DECLARE_GPU_SPEC(int32);
+DECLARE_GPU_SPEC(int32_t);
 }  // namespace functor
 
 template <typename T>
 void DnnPoolingGradImpl(OpKernelContext* context,
                         se::dnn::PoolingMode pooling_mode,
-                        const std::vector<int32>& size,
-                        const std::vector<int32>& stride, Padding padding,
+                        const std::vector<int32_t>& size,
+                        const std::vector<int32_t>& stride, Padding padding,
                         std::vector<int64_t> explicit_paddings,
                         TensorFormat data_format, const Tensor* tensor_in,
                         const Tensor* tensor_out, const Tensor& out_backprop,
@@ -815,16 +814,16 @@ void DnnPoolingGradImpl(OpKernelContext* context,
   DnnScratchAllocator scratch_allocator(PoolingScratchSize, context);
   OP_REQUIRES_OK(
       context,
-      dnn->PoolBackward(stream, pooling_desc, GetNumericOptions(),
+      dnn->PoolBackward(stream, pooling_desc, GetNumericOptionsForCuDnn(),
                         orig_input_desc, orig_input_data, orig_output_desc,
                         orig_output_data, output_backprop_data,
                         &input_backprop_data, &scratch_allocator));
 #else
-  OP_REQUIRES_OK(context,
-                 dnn->PoolBackward(stream, pooling_desc, GetNumericOptions(),
-                                   orig_input_desc, orig_input_data,
-                                   orig_output_desc, orig_output_data,
-                                   output_backprop_data, &input_backprop_data));
+  OP_REQUIRES_OK(context, dnn->PoolBackward(
+                              stream, pooling_desc, GetNumericOptionsForCuDnn(),
+                              orig_input_desc, orig_input_data,
+                              orig_output_desc, orig_output_data,
+                              output_backprop_data, &input_backprop_data));
 #endif
 
   if (padding == EXPLICIT && (params.pad_top != params.pad_bottom ||
@@ -856,7 +855,7 @@ void DnnPoolingGradImpl(OpKernelContext* context,
 template <typename T>
 void DnnPoolingGradOp<T>::Compute(
     OpKernelContext* context, se::dnn::PoolingMode pooling_mode,
-    const std::vector<int32>& size, const std::vector<int32>& stride,
+    const std::vector<int32_t>& size, const std::vector<int32_t>& stride,
     Padding padding, std::vector<int64_t> explicit_paddings,
     TensorFormat data_format, const Tensor* tensor_in, const Tensor* tensor_out,
     const Tensor& out_backprop, const TensorShape& tensor_in_shape,
@@ -873,7 +872,7 @@ void DnnPoolingGradOp<T>::Compute(
 template <>
 void DnnPoolingGradOp<Eigen::bfloat16>::Compute(
     OpKernelContext* context, se::dnn::PoolingMode pooling_mode,
-    const std::vector<int32>& size, const std::vector<int32>& stride,
+    const std::vector<int32_t>& size, const std::vector<int32_t>& stride,
     Padding padding, std::vector<int64_t> explicit_paddings,
     TensorFormat data_format, const Tensor* tensor_in, const Tensor* tensor_out,
     const Tensor& out_backprop, const TensorShape& tensor_in_shape,

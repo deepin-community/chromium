@@ -25,9 +25,7 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "gtest/gtest-spi.h"
-
-#include "src/tint/lang/core/builtin_value.h"
+#include "src/tint/lang/core/enums.h"
 #include "src/tint/lang/wgsl/ast/helper_test.h"
 #include "src/tint/lang/wgsl/ast/id_attribute.h"
 
@@ -37,6 +35,7 @@ namespace tint::ast {
 namespace {
 
 using VariableTest = TestHelper;
+using VariableDeathTest = VariableTest;
 
 TEST_F(VariableTest, Creation) {
     auto* v = Var("my_var", ty.i32(), core::AddressSpace::kFunction);
@@ -77,31 +76,11 @@ TEST_F(VariableTest, CreationEmpty) {
     EXPECT_EQ(v->source.range.end.column, 7u);
 }
 
-TEST_F(VariableTest, Assert_Null_Name) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(VariableDeathTest, Assert_Null_Name) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder b;
             b.Var(static_cast<Identifier*>(nullptr), b.ty.i32());
-        },
-        "internal compiler error");
-}
-
-TEST_F(VariableTest, Assert_DifferentGenerationID_Symbol) {
-    EXPECT_FATAL_FAILURE(
-        {
-            ProgramBuilder b1;
-            ProgramBuilder b2;
-            b1.Var(b2.Sym("x"), b1.ty.f32());
-        },
-        "internal compiler error");
-}
-
-TEST_F(VariableTest, Assert_DifferentGenerationID_Initializer) {
-    EXPECT_FATAL_FAILURE(
-        {
-            ProgramBuilder b1;
-            ProgramBuilder b2;
-            b1.Var("x", b1.ty.f32(), b2.Expr(1.2_f));
         },
         "internal compiler error");
 }

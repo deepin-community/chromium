@@ -82,8 +82,9 @@ class CoverageExecutor:
     self.llvm_directory = os.path.join(self.source_directory, 'third_party',
                                        'llvm-build', 'Release+Asserts', 'bin')
     if not os.path.isdir(self.llvm_directory):
-      parser.error("Cannot find LLVM bin directory , expected it to be in '%s'"
-                   % self.llvm_directory)
+      parser.error(
+          "Cannot find LLVM bin directory , expected it to be in '%s'" %
+          self.llvm_directory)
 
     self.build_directory = args['build_directory']
     if not os.path.isdir(self.build_directory):
@@ -101,9 +102,6 @@ class CoverageExecutor:
       parser.error(
           'use_clang_coverage does not appear to be set to true for build, but '
           'is needed')
-
-    self.use_goma = common.GetBooleanGnArg('use_goma', self.build_directory,
-                                           self.verbose)
 
     self.output_directory = args['output_directory']
     if not os.path.exists(self.output_directory):
@@ -180,11 +178,8 @@ class CoverageExecutor:
   def build_binaries(self):
     """Build all the binaries that are going to be needed for coverage
     generation."""
-    call_args = ['ninja']
-    if self.use_goma:
-      call_args += ['-j', '250']
-    call_args += ['-C', self.build_directory]
-    call_args += self.build_targets
+    call_args = ['autoninja', '-C', self.build_directory]
+    call_args.extend(self.build_targets)
     return self.call(call_args, dry_run=self.dry_run) == 0
 
   def generate_coverage(self, name, spec):
@@ -315,9 +310,8 @@ def main():
   parser.add_argument(
       '-b',
       '--build_directory',
-      help=
-      'Location of PDFium build directory with coverage enabled, defaults to '
-      '%s under CWD' % build_default,
+      help='Location of PDFium build directory with coverage enabled, defaults '
+      'to %s under CWD' % build_default,
       default=os.path.join(os.getcwd(), build_default))
   output_default = 'coverage_report'
   parser.add_argument(

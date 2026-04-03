@@ -57,7 +57,6 @@ void FetchParameters::SetCrossOriginAccessControl(
   switch (cross_origin) {
     case kCrossOriginAttributeNotSet:
       NOTREACHED();
-      break;
     case kCrossOriginAttributeAnonymous:
       SetCrossOriginAccessControl(origin,
                                   network::mojom::CredentialsMode::kSameOrigin);

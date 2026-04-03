@@ -16,6 +16,10 @@
 #include "ui/display/display.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/vector2d.h"
+#include "ui/gfx/native_ui_types.h"
+#include "ui/views/widget/widget_observer.h"
+
+class BrowserWindowInterface;
 
 namespace display {
 class Screen;
@@ -24,30 +28,33 @@ class Screen;
 #if defined(TOOLKIT_VIEWS)
 namespace views {
 class View;
+class Widget;
 }
 #endif
 
 namespace ui_test_utils {
 
 // Use in browser interactive uitests to wait until a browser is set to active.
-// To use, create and call WaitForActivation().
-class BrowserActivationWaiter : public BrowserListObserver {
+// To use, create and call WaitForActivation(). Since on some platforms, the
+// active browser list kept in |BrowserList| is updated before the actual
+// activation (see |BrowserView::Show()| for details), observe the widget
+// directly and wait for it to actually get activated.
+class BrowserActivationWaiter : public views::WidgetObserver {
  public:
-  explicit BrowserActivationWaiter(const Browser* browser);
+  explicit BrowserActivationWaiter(const BrowserWindowInterface* browser);
   BrowserActivationWaiter(const BrowserActivationWaiter&) = delete;
   BrowserActivationWaiter& operator=(const BrowserActivationWaiter&) = delete;
   ~BrowserActivationWaiter() override;
 
-  // Runs a message loop until the |browser_| supplied to the constructor is
-  // activated, or returns immediately if |browser_| has already become active.
-  // Should only be called once.
+  // Runs a message loop until the widget associated to |browser| supplied to
+  // the constructor is activated, or returns immediately if |browser| has
+  // already active. Should only be called once.
   void WaitForActivation();
 
- private:
-  // BrowserListObserver:
-  void OnBrowserSetLastActive(Browser* browser) override;
+  // views::WidgetObserver
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
-  const base::WeakPtr<const Browser> browser_;
+ private:
   bool observed_ = false;
   base::RunLoop run_loop_;
 };
@@ -79,7 +86,8 @@ class BrowserDeactivationWaiter : public BrowserListObserver {
 
 // Brings the native window for |browser| to the foreground and waits until the
 // browser is active.
-[[nodiscard]] bool BringBrowserWindowToFront(const Browser* browser);
+[[nodiscard]] bool BringBrowserWindowToFront(
+    const BrowserWindowInterface* browser);
 
 // Returns true if the View is focused.
 bool IsViewFocused(const Browser* browser, ViewID vid);
@@ -110,7 +118,7 @@ void HideNativeWindow(gfx::NativeWindow window);
 // on a deleted target. This uses `ui_controls::SendKeyPress`, see it for
 // details. Returns true if the event was successfully dispatched.
 [[nodiscard]] bool SendKeyPressSync(
-    const Browser* browser,
+    const BrowserWindowInterface* browser,
     ui::KeyboardCode key,
     bool control,
     bool shift,
@@ -131,24 +139,24 @@ void HideNativeWindow(gfx::NativeWindow window);
 // see it for details.
 [[nodiscard]] bool SendMouseMoveSync(
     const gfx::Point& location,
-    gfx::NativeWindow window_hint = ui_controls::kNoWindowHint);
+    gfx::NativeWindow window_hint = gfx::NativeWindow());
 [[nodiscard]] bool SendMouseEventsSync(
     ui_controls::MouseButton type,
     int button_state,
-    gfx::NativeWindow window_hint = ui_controls::kNoWindowHint);
+    gfx::NativeWindow window_hint = gfx::NativeWindow());
 
 // A combination of SendMouseMove to the middle of the view followed by
 // SendMouseEvents. Only exposed for toolkit-views.
 // Alternatives: ClickOnView() and ui::test::EventGenerator.
 #if defined(TOOLKIT_VIEWS)
-void MoveMouseToCenterAndPress(
+void MoveMouseToCenterAndClick(
     views::View* view,
     ui_controls::MouseButton button,
     int button_state,
     base::OnceClosure task,
     int accelerator_state = ui_controls::kNoAccelerator);
 
-void MoveMouseToCenterWithOffsetAndPress(
+void MoveMouseToCenterWithOffsetAndClick(
     views::View* view,
     const gfx::Vector2d& offset,
     ui_controls::MouseButton button,
@@ -168,6 +176,11 @@ void WaitForViewFocus(Browser* browser, views::View* view, bool focused);
 #if BUILDFLAG(IS_MAC)
 // Clear pressed modifier keys and report true if any key modifiers were down.
 bool ClearKeyEventModifiers();
+
+// Ensures that if no key window is set (can happen in apps that are not
+// frontmost), we simulate the frontmost window becoming key, which triggers
+// any logic that would normally run in this case.
+void HandleMissingKeyWindow();
 #endif
 
 namespace internal {

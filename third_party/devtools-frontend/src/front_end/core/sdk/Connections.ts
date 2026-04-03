@@ -1,26 +1,31 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import * as i18n from '../../core/i18n/i18n.js';
 import * as Common from '../common/common.js';
-import type * as Platform from '../platform/platform.js';
 import * as Host from '../host/host.js';
+import type * as Platform from '../platform/platform.js';
 import * as ProtocolClient from '../protocol_client/protocol_client.js';
 import * as Root from '../root/root.js';
 
-import {TargetManager} from './TargetManager.js';
+import {RehydratingConnectionTransport} from './RehydratingConnection.js';
 
-export class MainConnection implements ProtocolClient.InspectorBackend.Connection {
-  onMessage: ((arg0: (Object|string)) => void)|null;
-  #onDisconnect: ((arg0: string) => void)|null;
-  #messageBuffer: string;
-  #messageSize: number;
+const UIStrings = {
+  /**
+   * @description Text on the remote debugging window to indicate the connection is lost
+   */
+  websocketDisconnected: 'WebSocket disconnected',
+} as const;
+const str_ = i18n.i18n.registerUIStrings('core/sdk/Connections.ts', UIStrings);
+const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
+export class MainConnection implements ProtocolClient.ConnectionTransport.ConnectionTransport {
+  onMessage: ((arg0: Object|string) => void)|null = null;
+  #onDisconnect: ((arg0: string) => void)|null = null;
+  #messageBuffer = '';
+  #messageSize = 0;
   readonly #eventListeners: Common.EventTarget.EventDescriptor[];
   constructor() {
-    this.onMessage = null;
-    this.#onDisconnect = null;
-    this.#messageBuffer = '';
-    this.#messageSize = 0;
     this.#eventListeners = [
       Host.InspectorFrontendHost.InspectorFrontendHostInstance.events.addEventListener(
           Host.InspectorFrontendHostAPI.Events.DispatchMessage, this.dispatchMessage, this),
@@ -29,7 +34,7 @@ export class MainConnection implements ProtocolClient.InspectorBackend.Connectio
     ];
   }
 
-  setOnMessage(onMessage: (arg0: (Object|string)) => void): void {
+  setOnMessage(onMessage: (arg0: Object|string) => void): void {
     this.onMessage = onMessage;
   }
 
@@ -76,14 +81,16 @@ export class MainConnection implements ProtocolClient.InspectorBackend.Connectio
   }
 }
 
-export class WebSocketConnection implements ProtocolClient.InspectorBackend.Connection {
+export class WebSocketTransport implements ProtocolClient.ConnectionTransport.ConnectionTransport {
   #socket: WebSocket|null;
-  onMessage: ((arg0: (Object|string)) => void)|null;
-  #onDisconnect: ((arg0: string) => void)|null;
-  #onWebSocketDisconnect: (() => void)|null;
-  #connected: boolean;
-  #messages: string[];
-  constructor(url: Platform.DevToolsPath.UrlString, onWebSocketDisconnect: () => void) {
+  onMessage: ((arg0: Object|string) => void)|null = null;
+  #onDisconnect: ((arg0: string) => void)|null = null;
+  #onWebSocketDisconnect: ((message: Platform.UIString.LocalizedString) => void)|null;
+  #connected = false;
+  #messages: string[] = [];
+  constructor(
+      url: Platform.DevToolsPath.UrlString,
+      onWebSocketDisconnect: (message: Platform.UIString.LocalizedString) => void) {
     this.#socket = new WebSocket(url);
     this.#socket.onerror = this.onError.bind(this);
     this.#socket.onopen = this.onOpen.bind(this);
@@ -94,14 +101,10 @@ export class WebSocketConnection implements ProtocolClient.InspectorBackend.Conn
     };
     this.#socket.onclose = this.onClose.bind(this);
 
-    this.onMessage = null;
-    this.#onDisconnect = null;
     this.#onWebSocketDisconnect = onWebSocketDisconnect;
-    this.#connected = false;
-    this.#messages = [];
   }
 
-  setOnMessage(onMessage: (arg0: (Object|string)) => void): void {
+  setOnMessage(onMessage: (arg0: Object|string) => void): void {
     this.onMessage = onMessage;
   }
 
@@ -111,7 +114,7 @@ export class WebSocketConnection implements ProtocolClient.InspectorBackend.Conn
 
   private onError(): void {
     if (this.#onWebSocketDisconnect) {
-      this.#onWebSocketDisconnect.call(null);
+      this.#onWebSocketDisconnect.call(null, i18nString(UIStrings.websocketDisconnected));
     }
     if (this.#onDisconnect) {
       // This is called if error occurred while connecting.
@@ -133,7 +136,7 @@ export class WebSocketConnection implements ProtocolClient.InspectorBackend.Conn
 
   private onClose(): void {
     if (this.#onWebSocketDisconnect) {
-      this.#onWebSocketDisconnect.call(null);
+      this.#onWebSocketDisconnect.call(null, i18nString(UIStrings.websocketDisconnected));
     }
     if (this.#onDisconnect) {
       this.#onDisconnect.call(null, 'websocket closed');
@@ -173,15 +176,11 @@ export class WebSocketConnection implements ProtocolClient.InspectorBackend.Conn
   }
 }
 
-export class StubConnection implements ProtocolClient.InspectorBackend.Connection {
-  onMessage: ((arg0: (Object|string)) => void)|null;
-  #onDisconnect: ((arg0: string) => void)|null;
-  constructor() {
-    this.onMessage = null;
-    this.#onDisconnect = null;
-  }
+export class StubTransport implements ProtocolClient.ConnectionTransport.ConnectionTransport {
+  onMessage: ((arg0: Object|string) => void)|null = null;
+  #onDisconnect: ((arg0: string) => void)|null = null;
 
-  setOnMessage(onMessage: (arg0: (Object|string)) => void): void {
+  setOnMessage(onMessage: (arg0: Object|string) => void): void {
     this.onMessage = onMessage;
   }
 
@@ -197,63 +196,12 @@ export class StubConnection implements ProtocolClient.InspectorBackend.Connectio
     const messageObject = JSON.parse(message);
     const error = {
       message: 'This is a stub connection, can\'t dispatch message.',
-      code: ProtocolClient.InspectorBackend.DevToolsStubErrorCode,
+      code: ProtocolClient.CDPConnection.CDPErrorStatus.DEVTOOLS_STUB_ERROR,
       data: messageObject,
     };
     if (this.onMessage) {
-      this.onMessage.call(null, {id: messageObject.id, error: error});
+      this.onMessage.call(null, {id: messageObject.id, error});
     }
-  }
-
-  async disconnect(): Promise<void> {
-    if (this.#onDisconnect) {
-      this.#onDisconnect.call(null, 'force disconnect');
-    }
-    this.#onDisconnect = null;
-    this.onMessage = null;
-  }
-}
-
-export interface ParallelConnectionInterface extends ProtocolClient.InspectorBackend.Connection {
-  getSessionId: () => string;
-  getOnDisconnect: () => ((arg0: string) => void) | null;
-}
-
-export class ParallelConnection implements ParallelConnectionInterface {
-  readonly #connection: ProtocolClient.InspectorBackend.Connection;
-  #sessionId: string;
-  onMessage: ((arg0: Object) => void)|null;
-  #onDisconnect: ((arg0: string) => void)|null;
-  constructor(connection: ProtocolClient.InspectorBackend.Connection, sessionId: string) {
-    this.#connection = connection;
-    this.#sessionId = sessionId;
-    this.onMessage = null;
-    this.#onDisconnect = null;
-  }
-
-  setOnMessage(onMessage: (arg0: Object) => void): void {
-    this.onMessage = onMessage;
-  }
-
-  setOnDisconnect(onDisconnect: (arg0: string) => void): void {
-    this.#onDisconnect = onDisconnect;
-  }
-
-  getOnDisconnect(): ((arg0: string) => void)|null {
-    return this.#onDisconnect;
-  }
-
-  sendRawMessage(message: string): void {
-    const messageObject = JSON.parse(message);
-    // If the message isn't for a specific session, it must be for the root session.
-    if (!messageObject.sessionId) {
-      messageObject.sessionId = this.#sessionId;
-    }
-    this.#connection.sendRawMessage(JSON.stringify(messageObject));
-  }
-
-  getSessionId(): string {
-    return this.#sessionId;
   }
 
   async disconnect(): Promise<void> {
@@ -266,32 +214,30 @@ export class ParallelConnection implements ParallelConnectionInterface {
 }
 
 export async function initMainConnection(
-    createRootTarget: () => Promise<void>, websocketConnectionLost: () => void): Promise<void> {
-  ProtocolClient.InspectorBackend.Connection.setFactory(createMainConnection.bind(null, websocketConnectionLost));
+    createRootTarget: () => Promise<void>,
+    onConnectionLost: (message: Platform.UIString.LocalizedString) => void): Promise<void> {
+  ProtocolClient.ConnectionTransport.ConnectionTransport.setFactory(createMainTransport.bind(null, onConnectionLost));
   await createRootTarget();
   Host.InspectorFrontendHost.InspectorFrontendHostInstance.connectionReady();
-  Host.InspectorFrontendHost.InspectorFrontendHostInstance.events.addEventListener(
-      Host.InspectorFrontendHostAPI.Events.ReattachRootTarget, () => {
-        const target = TargetManager.instance().rootTarget();
-        if (target) {
-          const router = target.router();
-          if (router) {
-            void router.connection().disconnect();
-          }
-        }
-        void createRootTarget();
-      });
 }
 
-function createMainConnection(websocketConnectionLost: () => void): ProtocolClient.InspectorBackend.Connection {
+function createMainTransport(onConnectionLost: (message: Platform.UIString.LocalizedString) => void):
+    ProtocolClient.ConnectionTransport.ConnectionTransport {
+  if (Root.Runtime.Runtime.isTraceApp()) {
+    return new RehydratingConnectionTransport(onConnectionLost);
+  }
+
   const wsParam = Root.Runtime.Runtime.queryParam('ws');
   const wssParam = Root.Runtime.Runtime.queryParam('wss');
   if (wsParam || wssParam) {
     const ws = (wsParam ? `ws://${wsParam}` : `wss://${wssParam}`) as Platform.DevToolsPath.UrlString;
-    return new WebSocketConnection(ws, websocketConnectionLost);
+    return new WebSocketTransport(ws, onConnectionLost);
   }
-  if (Host.InspectorFrontendHost.InspectorFrontendHostInstance.isHostedMode()) {
-    return new StubConnection();
+
+  const notEmbeddedOrWs = Host.InspectorFrontendHost.InspectorFrontendHostInstance.isHostedMode();
+  if (notEmbeddedOrWs) {
+    // eg., hosted mode (e.g. `http://localhost:9222/devtools/inspector.html`) without a WebSocket URL,
+    return new StubTransport();
   }
 
   return new MainConnection();

@@ -5,12 +5,13 @@
 #ifndef CHROME_TEST_BASE_CHROMEOS_CROSIER_CHROMEOS_INTEGRATION_ARC_MIXIN_H_
 #define CHROME_TEST_BASE_CHROMEOS_CROSIER_CHROMEOS_INTEGRATION_ARC_MIXIN_H_
 
+#include <optional>
 #include <string>
 
+#include "base/memory/raw_ref.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/test/base/chromeos/crosier/adb_helper.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace aura {
 class Window;
@@ -62,13 +63,14 @@ class ChromeOSIntegrationArcMixin : public InProcessBrowserTestMixin {
   // InProcessBrowserTestMixin:
   void SetUp() override;
   void SetUpCommandLine(base::CommandLine* command_line) override;
+  void TearDown() override;
 
  private:
-  const ChromeOSIntegrationLoginMixin& login_mixin_;
+  const raw_ref<const ChromeOSIntegrationLoginMixin> login_mixin_;
 
   bool setup_called_ = false;
   Mode mode_ = Mode::kNone;
-  absl::optional<base::test::ScopedFeatureList> scoped_feature_list_;
+  std::optional<base::test::ScopedFeatureList> scoped_feature_list_;
 
   AdbHelper adb_helper_;
 };

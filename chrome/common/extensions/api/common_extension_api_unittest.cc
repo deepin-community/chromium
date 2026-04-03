@@ -4,13 +4,13 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
@@ -59,12 +59,12 @@ struct FeatureSessionTypesTestData {
 
 class TestExtensionAPI : public ExtensionAPI {
  public:
-  TestExtensionAPI() {}
+  TestExtensionAPI() = default;
 
   TestExtensionAPI(const TestExtensionAPI&) = delete;
   TestExtensionAPI& operator=(const TestExtensionAPI&) = delete;
 
-  ~TestExtensionAPI() override {}
+  ~TestExtensionAPI() override = default;
 
   void add_fake_schema(const std::string& name) { fake_schemas_.insert(name); }
 
@@ -91,14 +91,15 @@ TEST(ExtensionAPITest, Creation) {
 
   ExtensionAPI empty_instance;
 
-  struct {
+  struct TestData {
     raw_ptr<ExtensionAPI> api;
     bool expect_populated;
-  } test_data[] = {
-    { shared_instance, true },
-    { new_instance.get(), true },
-    { &empty_instance, false }
   };
+  auto test_data = std::to_array<TestData>({
+      {shared_instance, true},
+      {new_instance.get(), true},
+      {&empty_instance, false},
+  });
 
   for (size_t i = 0; i < std::size(test_data); ++i) {
     EXPECT_EQ(test_data[i].expect_populated,
@@ -107,16 +108,19 @@ TEST(ExtensionAPITest, Creation) {
 }
 
 TEST(ExtensionAPITest, SplitDependencyName) {
-  struct {
+  struct TestData {
     std::string input;
     std::string expected_feature_type;
     std::string expected_feature_name;
-  } test_data[] = {{"", "api", ""},  // assumes "api" when no type is present
-                   {"foo", "api", "foo"},
-                   {"foo:", "foo", ""},
-                   {":foo", "", "foo"},
-                   {"foo:bar", "foo", "bar"},
-                   {"foo:bar.baz", "foo", "bar.baz"}};
+  };
+  auto test_data = std::to_array<TestData>({
+      {"", "api", ""},  // assumes "api" when no type is present
+      {"foo", "api", "foo"},
+      {"foo:", "foo", ""},
+      {":foo", "", "foo"},
+      {"foo:bar", "foo", "bar"},
+      {"foo:bar.baz", "foo", "bar.baz"},
+  });
 
   for (size_t i = 0; i < std::size(test_data); ++i) {
     std::string feature_type;
@@ -129,12 +133,13 @@ TEST(ExtensionAPITest, SplitDependencyName) {
 }
 
 TEST(ExtensionAPITest, APIFeatures) {
-  struct {
+  struct TestData {
     std::string api_full_name;
     bool expect_is_available;
     mojom::ContextType context;
     GURL url;
-  } test_data[] = {
+  };
+  auto test_data = std::to_array<TestData>({
       {"test1", false, mojom::ContextType::kWebPage, GURL()},
       {"test1", true, mojom::ContextType::kPrivilegedExtension, GURL()},
       {"test1", true, mojom::ContextType::kUnprivilegedExtension, GURL()},
@@ -230,7 +235,8 @@ TEST(ExtensionAPITest, APIFeatures) {
       {"parent3.noparent.child", true, mojom::ContextType::kPrivilegedExtension,
        GURL()},
       {"parent3.noparent.child", true,
-       mojom::ContextType::kUnprivilegedExtension, GURL()}};
+       mojom::ContextType::kUnprivilegedExtension, GURL()},
+  });
 
   FeatureProvider api_feature_provider;
   AddUnittestAPIFeatures(&api_feature_provider);
@@ -289,7 +295,7 @@ TEST(ExtensionAPITest, APIFeaturesAlias) {
 
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "extension")
                            .Set("version", "1")
                            .Set("manifest_version", 2))
@@ -311,31 +317,32 @@ TEST(ExtensionAPITest, IsAnyFeatureAvailableToContext) {
   scoped_refptr<const Extension> app =
       ExtensionBuilder()
           .SetManifest(
-              base::Value::Dict()
+              base::DictValue()
                   .Set("name", "app")
-                  .Set("app", base::Value::Dict().Set(
+                  .Set("app", base::DictValue().Set(
                                   "background",
-                                  base::Value::Dict().Set(
-                                      "scripts", base::Value::List().Append(
+                                  base::DictValue().Set(
+                                      "scripts", base::ListValue().Append(
                                                      "background.js"))))
                   .Set("version", "1")
                   .Set("manifest_version", 2))
           .Build();
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "extension")
                            .Set("version", "1")
                            .Set("manifest_version", 2))
           .Build();
 
-  struct {
+  struct TestData {
     std::string api_full_name;
     bool expect_is_available;
     mojom::ContextType context;
     raw_ptr<const Extension> extension;
     GURL url;
-  } test_data[] = {
+  };
+  auto test_data = std::to_array<TestData>({
       {"test1", false, mojom::ContextType::kWebPage, nullptr, GURL()},
       {"test1", true, mojom::ContextType::kUnprivilegedExtension, nullptr,
        GURL()},
@@ -370,7 +377,7 @@ TEST(ExtensionAPITest, IsAnyFeatureAvailableToContext) {
        GURL("chrome-untrusted://other-test/")},
       {"test11", false, mojom::ContextType::kWebUi, nullptr,
        GURL("chrome://test/")},
-  };
+  });
 
   FeatureProvider api_feature_provider;
   AddUnittestAPIFeatures(&api_feature_provider);
@@ -398,12 +405,12 @@ TEST(ExtensionAPITest, SessionTypeFeature) {
   scoped_refptr<const Extension> app =
       ExtensionBuilder()
           .SetManifest(
-              base::Value::Dict()
+              base::DictValue()
                   .Set("name", "app")
-                  .Set("app", base::Value::Dict().Set(
+                  .Set("app", base::DictValue().Set(
                                   "background",
-                                  base::Value::Dict().Set(
-                                      "scripts", base::Value::List().Append(
+                                  base::DictValue().Set(
+                                      "scripts", base::ListValue().Append(
                                                      "background.js"))))
                   .Set("version", "1")
                   .Set("manifest_version", 2))
@@ -476,19 +483,19 @@ TEST(ExtensionAPITest, LazyGetSchema) {
 
 scoped_refptr<Extension> CreateExtensionWithPermissions(
     const std::set<std::string>& permissions) {
-  auto manifest = base::Value::Dict()
+  auto manifest = base::DictValue()
                       .Set("name", "extension")
                       .Set("version", "1.0")
                       .Set("manifest_version", 2);
   {
-    base::Value::List permissions_list;
+    base::ListValue permissions_list;
     for (const auto& i : permissions) {
       permissions_list.Append(i);
     }
     manifest.Set("permissions", std::move(permissions_list));
   }
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(
       Extension::Create(base::FilePath(), mojom::ManifestLocation::kUnpacked,
                         manifest, Extension::NO_FLAGS, &error));
@@ -567,14 +574,14 @@ TEST(ExtensionAPITest, ExtensionWithUnprivilegedAPIs) {
 }
 
 scoped_refptr<Extension> CreateHostedApp() {
-  base::Value::Dict values;
+  base::DictValue values;
   values.Set(manifest_keys::kName, "test");
   values.Set(manifest_keys::kVersion, "0.1");
   values.SetByDottedPath(manifest_keys::kWebURLs,
                          base::Value(base::Value::Type::LIST));
   values.SetByDottedPath(manifest_keys::kLaunchWebURL,
                          "http://www.example.com");
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(
       Extension::Create(base::FilePath(), mojom::ManifestLocation::kInternal,
                         values, Extension::NO_FLAGS, &error));
@@ -585,24 +592,24 @@ scoped_refptr<Extension> CreateHostedApp() {
 scoped_refptr<Extension> CreatePackagedAppWithPermissions(
     const std::set<std::string>& permissions) {
   auto manifest =
-      base::Value::Dict()
+      base::DictValue()
           .Set(manifest_keys::kName, "test")
           .Set(manifest_keys::kVersion, "0.1")
           .Set(manifest_keys::kApp,
-               base::Value::Dict().Set(
+               base::DictValue().Set(
                    "background",
-                   base::Value::Dict().Set(
-                       "scripts", base::Value::List().Append("test.js"))));
+                   base::DictValue().Set("scripts",
+                                         base::ListValue().Append("test.js"))));
 
   {
-    base::Value::List permissions_list;
+    base::ListValue permissions_list;
     for (const auto& i : permissions) {
       permissions_list.Append(i);
     }
     manifest.Set("permissions", std::move(permissions_list));
   }
 
-  std::string error;
+  std::u16string error;
   scoped_refptr<Extension> extension(
       Extension::Create(base::FilePath(), mojom::ManifestLocation::kInternal,
                         manifest, Extension::NO_FLAGS, &error));
@@ -791,22 +798,23 @@ TEST(ExtensionAPITest, URLMatching) {
 }
 
 TEST(ExtensionAPITest, GetAPINameFromFullName) {
-  struct {
+  struct TestData {
     std::string input;
     std::string api_name;
     std::string child_name;
-  } test_data[] = {
-    { "", "", "" },
-    { "unknown", "", "" },
-    { "bookmarks", "bookmarks", "" },
-    { "bookmarks.", "bookmarks", "" },
-    { ".bookmarks", "", "" },
-    { "bookmarks.create", "bookmarks", "create" },
-    { "bookmarks.create.", "bookmarks", "create." },
-    { "bookmarks.create.monkey", "bookmarks", "create.monkey" },
-    { "bookmarkManagerPrivate", "bookmarkManagerPrivate", "" },
-    { "bookmarkManagerPrivate.copy", "bookmarkManagerPrivate", "copy" }
   };
+  auto test_data = std::to_array<TestData>({
+      {"", "", ""},
+      {"unknown", "", ""},
+      {"bookmarks", "bookmarks", ""},
+      {"bookmarks.", "bookmarks", ""},
+      {".bookmarks", "", ""},
+      {"bookmarks.create", "bookmarks", "create"},
+      {"bookmarks.create.", "bookmarks", "create."},
+      {"bookmarks.create.monkey", "bookmarks", "create.monkey"},
+      {"bookmarkManagerPrivate", "bookmarkManagerPrivate", ""},
+      {"bookmarkManagerPrivate.copy", "bookmarkManagerPrivate", "copy"},
+  });
 
   std::unique_ptr<ExtensionAPI> api(
       ExtensionAPI::CreateWithDefaultConfiguration());
@@ -829,10 +837,12 @@ TEST(ExtensionAPITest, DefaultConfigurationFeatures) {
       static_cast<const SimpleFeature*>(
           api->GetFeatureDependency("api:browserAction.setTitle"));
 
-  struct {
+  struct TestData {
     raw_ptr<const SimpleFeature> feature;
     // TODO(aa): More stuff to test over time.
-  } test_data[] = {{browser_action}, {browser_action_set_title}};
+  };
+  auto test_data =
+      std::to_array<TestData>({{browser_action}, {browser_action_set_title}});
 
   for (size_t i = 0; i < std::size(test_data); ++i) {
     const SimpleFeature* feature = test_data[i].feature;
@@ -848,75 +858,75 @@ TEST(ExtensionAPITest, DefaultConfigurationFeatures) {
   }
 }
 
-static const base::Value::Dict* GetDictChecked(const base::Value::Dict* dict,
-                                               const std::string& key) {
-  const base::Value::Dict* out = dict->FindDict(key);
+static const base::DictValue* GetDictChecked(const base::DictValue* dict,
+                                             const std::string& key) {
+  const base::DictValue* out = dict->FindDict(key);
   CHECK(out) << key;
   return out;
 }
 
-static std::string GetStringChecked(const base::Value::Dict* dict,
+static std::string GetStringChecked(const base::DictValue* dict,
                                     const std::string& key) {
   const std::string* out = dict->FindString(key);
   CHECK(out) << key;
   return *out;
 }
 
+// Returns the dictionary that has `key`: `value`.
+static const base::DictValue* GetDictFromList(const base::ListValue* list,
+                                              const std::string& key,
+                                              const std::string& value) {
+  for (const auto& val : *list) {
+    const base::DictValue* dict = val.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    if (const std::string* str = dict->FindString(key); str && *str == value) {
+      return dict;
+    }
+  }
+  return nullptr;
+}
+
 TEST(ExtensionAPITest, TypesHaveNamespace) {
   std::unique_ptr<ExtensionAPI> api(
       ExtensionAPI::CreateWithDefaultConfiguration());
 
-  // Returns the dictionary that has |key|: |value|.
-  auto get_dict_from_list =
-      [](const base::Value::List* list, const std::string& key,
-         const std::string& value) -> const base::Value::Dict* {
-    for (const auto& val : *list) {
-      const base::Value::Dict* dict = val.GetIfDict();
-      if (!dict)
-        continue;
-      if (const std::string* str = dict->FindString(key)) {
-        if (*str == value)
-          return dict;
-      }
-    }
-    return nullptr;
-  };
-
-  const base::Value::Dict* schema = api->GetSchema("sessions");
+  const base::DictValue* schema = api->GetSchema("sessions");
   ASSERT_TRUE(schema);
 
-  const base::Value::List* types = schema->FindList("types");
+  const base::ListValue* types = schema->FindList("types");
   ASSERT_TRUE(types);
   {
-    const base::Value::Dict* session_type =
-        get_dict_from_list(types, "id", "sessions.Session");
+    const base::DictValue* session_type =
+        GetDictFromList(types, "id", "sessions.Session");
     ASSERT_TRUE(session_type);
-    const base::Value::Dict* props = GetDictChecked(session_type, "properties");
-    const base::Value::Dict* tab = GetDictChecked(props, "tab");
+    const base::DictValue* props = GetDictChecked(session_type, "properties");
+    const base::DictValue* tab = GetDictChecked(props, "tab");
     EXPECT_EQ("tabs.Tab", GetStringChecked(tab, "$ref"));
-    const base::Value::Dict* window = GetDictChecked(props, "window");
+    const base::DictValue* window = GetDictChecked(props, "window");
     EXPECT_EQ("windows.Window", GetStringChecked(window, "$ref"));
   }
   {
-    const base::Value::Dict* device_type =
-        get_dict_from_list(types, "id", "sessions.Device");
+    const base::DictValue* device_type =
+        GetDictFromList(types, "id", "sessions.Device");
     ASSERT_TRUE(device_type);
-    const base::Value::Dict* props = GetDictChecked(device_type, "properties");
-    const base::Value::Dict* sessions = GetDictChecked(props, "sessions");
-    const base::Value::Dict* items = GetDictChecked(sessions, "items");
+    const base::DictValue* props = GetDictChecked(device_type, "properties");
+    const base::DictValue* sessions = GetDictChecked(props, "sessions");
+    const base::DictValue* items = GetDictChecked(sessions, "items");
     EXPECT_EQ("sessions.Session", GetStringChecked(items, "$ref"));
   }
-  const base::Value::List* functions = schema->FindList("functions");
+  const base::ListValue* functions = schema->FindList("functions");
   ASSERT_TRUE(functions);
   {
-    const base::Value::Dict* get_recently_closed =
-        get_dict_from_list(functions, "name", "getRecentlyClosed");
+    const base::DictValue* get_recently_closed =
+        GetDictFromList(functions, "name", "getRecentlyClosed");
     ASSERT_TRUE(get_recently_closed);
-    const base::Value::List* parameters =
+    const base::ListValue* parameters =
         get_recently_closed->FindList("parameters");
     ASSERT_TRUE(parameters);
-    const base::Value::Dict* filter =
-        get_dict_from_list(parameters, "name", "filter");
+    const base::DictValue* filter =
+        GetDictFromList(parameters, "name", "filter");
     ASSERT_TRUE(filter);
     EXPECT_EQ("sessions.Filter", GetStringChecked(filter, "$ref"));
   }
@@ -926,8 +936,8 @@ TEST(ExtensionAPITest, TypesHaveNamespace) {
   types = schema->FindList("types");
   ASSERT_TRUE(types);
   {
-    const base::Value::Dict* chrome_setting =
-        get_dict_from_list(types, "id", "types.ChromeSetting");
+    const base::DictValue* chrome_setting =
+        GetDictFromList(types, "id", "types.ChromeSetting");
     ASSERT_TRUE(chrome_setting);
     EXPECT_EQ("types.ChromeSetting",
               GetStringChecked(chrome_setting, "customBindings"));
@@ -936,10 +946,11 @@ TEST(ExtensionAPITest, TypesHaveNamespace) {
 
 // Tests API availability with an empty manifest.
 TEST(ExtensionAPITest, NoPermissions) {
-  const struct {
+  struct Tests {
     const char* permission_name;
     bool expect_success;
-  } kTests[] = {
+  };
+  const auto kTests = std::to_array<Tests>({
       // Test default module/package permission.
       {"extension", true},
       {"i18n", true},
@@ -978,11 +989,15 @@ TEST(ExtensionAPITest, NoPermissions) {
       // But other functions in those modules do.
       {"management.getPermissionWarningsById", false},
       {"runtime.connectNative", false},
-  };
+  });
 
   std::unique_ptr<ExtensionAPI> extension_api(
       ExtensionAPI::CreateWithDefaultConfiguration());
-  scoped_refptr<const Extension> extension = ExtensionBuilder("Test").Build();
+
+  // TODO(https://crbug.com/40804030): Update this to use MV3.
+  // Some of the APIs above are deprecated in MV3.
+  scoped_refptr<const Extension> extension =
+      ExtensionBuilder("Test").SetManifestVersion(2).Build();
 
   for (size_t i = 0; i < std::size(kTests); ++i) {
     EXPECT_EQ(kTests[i].expect_success,
@@ -1002,21 +1017,26 @@ TEST(ExtensionAPITest, ManifestKeys) {
   std::unique_ptr<ExtensionAPI> extension_api(
       ExtensionAPI::CreateWithDefaultConfiguration());
 
-  scoped_refptr<const Extension> extension =
-      ExtensionBuilder("Test").SetAction(ActionInfo::TYPE_BROWSER).Build();
+  {
+    scoped_refptr<const Extension> extension =
+        ExtensionBuilder("Test").SetAction(ActionInfo::Type::kAction).Build();
+    EXPECT_TRUE(extension_api
+                    ->IsAvailable("action", extension.get(),
+                                  mojom::ContextType::kPrivilegedExtension,
+                                  GURL(), CheckAliasStatus::NOT_ALLOWED,
+                                  kUnspecifiedContextId, TestContextData())
+                    .is_available());
+  }
 
-  EXPECT_TRUE(extension_api
-                  ->IsAvailable("browserAction", extension.get(),
-                                mojom::ContextType::kPrivilegedExtension,
-                                GURL(), CheckAliasStatus::NOT_ALLOWED,
-                                kUnspecifiedContextId, TestContextData())
-                  .is_available());
-  EXPECT_FALSE(extension_api
-                   ->IsAvailable("pageAction", extension.get(),
-                                 mojom::ContextType::kPrivilegedExtension,
-                                 GURL(), CheckAliasStatus::NOT_ALLOWED,
-                                 kUnspecifiedContextId, TestContextData())
-                   .is_available());
+  {
+    scoped_refptr<const Extension> extension = ExtensionBuilder("Test").Build();
+    EXPECT_FALSE(extension_api
+                     ->IsAvailable("action", extension.get(),
+                                   mojom::ContextType::kPrivilegedExtension,
+                                   GURL(), CheckAliasStatus::NOT_ALLOWED,
+                                   kUnspecifiedContextId, TestContextData())
+                     .is_available());
+  }
 }
 
 // (TSAN) Tests that ExtensionAPI are able to handle GetSchema from different
@@ -1030,13 +1050,12 @@ TEST(ExtensionAPITest, GetSchemaFromDifferentThreads) {
   ASSERT_TRUE(t.Start());
 
   base::RunLoop run_loop;
-  const base::Value::Dict* another_thread_schema = nullptr;
+  const base::DictValue* another_thread_schema = nullptr;
 
-  auto result_cb =
-      base::BindLambdaForTesting([&](const base::Value::Dict* res) {
-        another_thread_schema = res;
-        run_loop.Quit();
-      });
+  auto result_cb = base::BindLambdaForTesting([&](const base::DictValue* res) {
+    another_thread_schema = res;
+    run_loop.Quit();
+  });
   auto task =
       base::BindOnce(&ExtensionAPI::GetSchema,
                      base::Unretained(shared_instance), "storage")
@@ -1050,6 +1069,50 @@ TEST(ExtensionAPITest, GetSchemaFromDifferentThreads) {
 
   // The pointers (not only the values) must be the same.
   EXPECT_EQ(another_thread_schema, current_thread_schema);
+}
+
+// Test that the keys of RuleCondition dictionary in the declarativeNetRequest
+// API are consistent with the RuleConditionKeys enum.
+TEST(ExtensionAPITest, DNRRuleConditionKeysConsistent) {
+  ExtensionAPI* shared_instance = ExtensionAPI::GetSharedInstance();
+  ASSERT_TRUE(shared_instance);
+
+  const base::DictValue* schema =
+      shared_instance->GetSchema("declarativeNetRequest");
+  EXPECT_TRUE(schema);
+
+  // Get the keys of the RuleConditions dictionary.
+  const base::ListValue* types = schema->FindList("types");
+  EXPECT_TRUE(types);
+  const base::DictValue* rule_condition_dict =
+      GetDictFromList(types, "id", "declarativeNetRequest.RuleCondition");
+  EXPECT_TRUE(rule_condition_dict);
+  const base::DictValue* rule_condition_dict_properties =
+      rule_condition_dict->FindDict("properties");
+  EXPECT_TRUE(rule_condition_dict_properties);
+  std::set<std::string> rule_condition_dict_keys;
+  for (const auto [key, _] : *rule_condition_dict_properties) {
+    rule_condition_dict_keys.insert(key);
+  }
+
+  // Get the values of the RuleConditionKeys enum.
+  const base::DictValue* rule_condition_keys_enum =
+      GetDictFromList(types, "id", "declarativeNetRequest.RuleConditionKeys");
+  EXPECT_TRUE(rule_condition_keys_enum);
+  const base::ListValue* rule_condition_keys_enum_value_dicts =
+      rule_condition_keys_enum->FindList("enum");
+  EXPECT_TRUE(rule_condition_keys_enum_value_dicts);
+  std::set<std::string> rule_condition_keys_enum_values;
+  for (const auto& value : *rule_condition_keys_enum_value_dicts) {
+    EXPECT_TRUE(value.is_dict());
+    const std::string* name = value.GetDict().FindString("name");
+    EXPECT_TRUE(name);
+    rule_condition_keys_enum_values.insert(*name);
+  }
+
+  // Check the RuleConditionKeys enum and RuleCondition dict's keys are
+  // consistent.
+  EXPECT_EQ(rule_condition_dict_keys, rule_condition_keys_enum_values);
 }
 
 }  // namespace extensions

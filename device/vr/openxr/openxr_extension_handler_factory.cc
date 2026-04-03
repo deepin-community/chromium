@@ -4,9 +4,9 @@
 
 #include "device/vr/openxr/openxr_extension_handler_factory.h"
 
+#include <algorithm>
 #include <memory>
 
-#include "base/ranges/algorithm.h"
 #include "device/vr/openxr/openxr_extension_helper.h"
 #include "third_party/openxr/src/include/openxr/openxr.h"
 
@@ -14,16 +14,23 @@ namespace device {
 OpenXrExtensionHandlerFactory::OpenXrExtensionHandlerFactory() = default;
 OpenXrExtensionHandlerFactory::~OpenXrExtensionHandlerFactory() = default;
 
-bool OpenXrExtensionHandlerFactory::IsEnabled(
-    const OpenXrExtensionEnumeration* extension_enum) const {
-  return AreAllRequestedExtensionsSupported(extension_enum);
+bool OpenXrExtensionHandlerFactory::IsEnabled() const {
+  return enabled_;
 }
 
-std::unique_ptr<OpenXrAnchorManager>
-OpenXrExtensionHandlerFactory::CreateAnchorManager(
+void OpenXrExtensionHandlerFactory::CheckAndUpdateEnabledState(
+    const OpenXrExtensionEnumeration* extension_enum,
+    XrInstance instance,
+    XrSystemId system) {
+  SetEnabled(AreAllRequestedExtensionsSupported(extension_enum));
+}
+
+std::unique_ptr<OpenXrDepthSensor>
+OpenXrExtensionHandlerFactory::CreateDepthSensor(
     const OpenXrExtensionHelper& extension_helper,
     XrSession session,
-    XrSpace mojo_space) const {
+    XrSpace mojo_space,
+    const mojom::XRDepthOptions& depth_options) const {
   return nullptr;
 }
 
@@ -35,34 +42,44 @@ OpenXrExtensionHandlerFactory::CreateHandTracker(
   return nullptr;
 }
 
+std::unique_ptr<OpenXrLightEstimator>
+OpenXrExtensionHandlerFactory::CreateLightEstimator(
+    const OpenXrExtensionHelper& extenion_helper,
+    XrSession session,
+    XrSpace local_space) const {
+  return nullptr;
+}
+
 std::unique_ptr<OpenXRSceneUnderstandingManager>
 OpenXrExtensionHandlerFactory::CreateSceneUnderstandingManager(
     const OpenXrExtensionHelper& extension_helper,
-    XrSession session,
+    OpenXrApiWrapper* openxr,
     XrSpace mojo_space) const {
   return nullptr;
 }
 
 std::unique_ptr<OpenXrStageBoundsProvider>
 OpenXrExtensionHandlerFactory::CreateStageBoundsProvider(
-    const OpenXrExtensionHelper& extension_helper,
     XrSession session) const {
   return nullptr;
 }
 
 std::unique_ptr<OpenXrUnboundedSpaceProvider>
-OpenXrExtensionHandlerFactory::CreateUnboundedSpaceProvider(
-    const OpenXrExtensionHelper& extension_helper) const {
+OpenXrExtensionHandlerFactory::CreateUnboundedSpaceProvider() const {
   return nullptr;
 }
 
 bool OpenXrExtensionHandlerFactory::AreAllRequestedExtensionsSupported(
     const OpenXrExtensionEnumeration* extension_enum) const {
-  return base::ranges::all_of(
+  return std::ranges::all_of(
       GetRequestedExtensions(),
       [&extension_enum](std::string_view extension_name) {
         return extension_enum->ExtensionSupported(extension_name.data());
       });
+}
+
+void OpenXrExtensionHandlerFactory::SetEnabled(bool enabled) {
+  enabled_ = enabled;
 }
 
 }  // namespace device

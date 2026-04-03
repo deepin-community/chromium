@@ -4,10 +4,12 @@
 
 #include "third_party/blink/renderer/platform/fonts/font_fallback_iterator.h"
 
+#include "base/memory/values_equivalent.h"
 #include "third_party/blink/renderer/platform/fonts/font_cache.h"
 #include "third_party/blink/renderer/platform/fonts/font_description.h"
 #include "third_party/blink/renderer/platform/fonts/font_fallback_list.h"
 #include "third_party/blink/renderer/platform/fonts/segmented_font_data.h"
+#include "third_party/blink/renderer/platform/fonts/shaping/harfbuzz_face.h"
 #include "third_party/blink/renderer/platform/fonts/simple_font_data.h"
 
 namespace blink {
@@ -23,20 +25,30 @@ FontFallbackIterator::FontFallbackIterator(
       fallback_stage_(kFontGroupFonts),
       font_fallback_priority_(font_fallback_priority) {}
 
+void FontFallbackIterator::Reset() {
+  current_font_data_index_ = 0;
+  segmented_face_index_ = 0;
+  fallback_stage_ = kFontGroupFonts;
+  previously_asked_for_hint_.clear();
+  unique_font_data_for_range_sets_returned_.clear();
+  first_candidate_ = nullptr;
+  tracked_loading_range_sets_.clear();
+}
+
 bool FontFallbackIterator::AlreadyLoadingRangeForHintChar(UChar32 hint_char) {
-  for (auto* it = tracked_loading_range_sets_.begin();
-       it != tracked_loading_range_sets_.end(); ++it) {
-    if ((*it)->Contains(hint_char))
+  for (const auto& range : tracked_loading_range_sets_) {
+    if (range->Contains(hint_char)) {
       return true;
+    }
   }
   return false;
 }
 
 bool FontFallbackIterator::RangeSetContributesForHint(
-    const Vector<UChar32>& hint_list,
+    const HintCharList& hint_list,
     const FontDataForRangeSet* segmented_face) {
-  for (auto* it = hint_list.begin(); it != hint_list.end(); ++it) {
-    if (segmented_face->Contains(*it)) {
+  for (const auto& hint : hint_list) {
+    if (segmented_face->Contains(hint)) {
       // If it's a pending custom font, we need to make sure it can render any
       // new characters, otherwise we may trigger a redundant load. In other
       // cases (already loaded or not a custom font), we can use it right away.
@@ -44,8 +56,9 @@ bool FontFallbackIterator::RangeSetContributesForHint(
       // load them.
       if (!segmented_face->IsPendingCustomFont() ||
           segmented_face->IsPendingDataUrlCustomFont() ||
-          !AlreadyLoadingRangeForHintChar(*it))
+          !AlreadyLoadingRangeForHintChar(hint)) {
         return true;
+      }
     }
   }
   return false;
@@ -62,7 +75,7 @@ void FontFallbackIterator::WillUseRange(const AtomicString& family,
 
 FontDataForRangeSet* FontFallbackIterator::UniqueOrNext(
     FontDataForRangeSet* candidate,
-    const Vector<UChar32>& hint_list) {
+    const HintCharList& hint_list) {
   if (!candidate->HasFontData())
     return Next(hint_list);
 
@@ -104,8 +117,7 @@ bool FontFallbackIterator::NeedsHintList() const {
   return font_data->IsSegmented();
 }
 
-FontDataForRangeSet* FontFallbackIterator::Next(
-    const Vector<UChar32>& hint_list) {
+FontDataForRangeSet* FontFallbackIterator::Next(const HintCharList& hint_list) {
   if (fallback_stage_ == kOutOfLuck)
     return MakeGarbageCollected<FontDataForRangeSet>();
 
@@ -139,11 +151,6 @@ FontDataForRangeSet* FontFallbackIterator::Next(
     fallback_stage_ = kFirstCandidateForNotdefGlyph;
     const SimpleFontData* last_resort =
         font_cache.GetLastResortFallbackFont(font_description_);
-
-    if (FontSelector* font_selector = font_fallback_list_->GetFontSelector()) {
-      font_selector->ReportLastResortFallbackFontLookup(font_description_,
-                                                        last_resort);
-    }
 
     return UniqueOrNext(MakeGarbageCollected<FontDataForRangeSet>(last_resort),
                         hint_list);
@@ -225,17 +232,15 @@ FontDataForRangeSet* FontFallbackIterator::Next(
 const SimpleFontData* FontFallbackIterator::FallbackPriorityFont(UChar32 hint) {
   const SimpleFontData* font_data = FontCache::Get().FallbackFontForCharacter(
       font_description_, hint,
-      font_fallback_list_->PrimarySimpleFontData(font_description_),
+      font_fallback_list_->PrimarySimpleFontDataWithSpace(font_description_),
       font_fallback_priority_);
 
-  if (FontSelector* font_selector = font_fallback_list_->GetFontSelector()) {
-    font_selector->ReportFontLookupByFallbackCharacter(
-        hint, font_fallback_priority_, font_description_, font_data);
-  }
   return font_data;
 }
 
-static inline unsigned ChooseHintIndex(const Vector<UChar32>& hint_list) {
+// static
+unsigned FontFallbackIterator::ChooseHintIndex(
+    const FontFallbackIterator::HintCharList& hint_list) {
   // crbug.com/618178 has a test case where no Myanmar font is ever found,
   // because the run starts with a punctuation character with a script value of
   // common. Our current font fallback code does not find a very meaningful
@@ -249,14 +254,15 @@ static inline unsigned ChooseHintIndex(const Vector<UChar32>& hint_list) {
     return 0;
 
   for (wtf_size_t i = 1; i < hint_list.size(); ++i) {
-    if (Character::HasDefiniteScript(hint_list[i]))
+    if (Character::HasLikelyScript(hint_list[i])) {
       return i;
+    }
   }
   return 0;
 }
 
 const SimpleFontData* FontFallbackIterator::UniqueSystemFontForHintList(
-    const Vector<UChar32>& hint_list) {
+    const HintCharList& hint_list) {
   // When we're asked for a fallback for the same characters again, we give up
   // because the shaper must have previously tried shaping with the font
   // already.
@@ -272,13 +278,21 @@ const SimpleFontData* FontFallbackIterator::UniqueSystemFontForHintList(
 
   const SimpleFontData* font_data = font_cache.FallbackFontForCharacter(
       font_description_, hint,
-      font_fallback_list_->PrimarySimpleFontData(font_description_));
+      font_fallback_list_->PrimarySimpleFontDataWithSpace(font_description_));
 
-  if (FontSelector* font_selector = font_fallback_list_->GetFontSelector()) {
-    font_selector->ReportFontLookupByFallbackCharacter(
-        hint, FontFallbackPriority::kText, font_description_, font_data);
-  }
   return font_data;
+}
+
+bool FontFallbackIterator::operator==(const FontFallbackIterator& other) const {
+  return fallback_stage_ == other.fallback_stage_ &&
+         font_fallback_priority_ == other.font_fallback_priority_ &&
+         current_font_data_index_ == other.current_font_data_index_ &&
+         segmented_face_index_ == other.segmented_face_index_ &&
+         font_description_ == other.font_description_ &&
+         previously_asked_for_hint_ == other.previously_asked_for_hint_ &&
+         unique_font_data_for_range_sets_returned_ ==
+             other.unique_font_data_for_range_sets_returned_ &&
+         tracked_loading_range_sets_ == other.tracked_loading_range_sets_;
 }
 
 }  // namespace blink

@@ -8,7 +8,6 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "cc/base/math_util.h"
 #include "cc/layers/heads_up_display_layer_impl.h"
@@ -177,7 +176,7 @@ void DamageTracker::InitializeUpdateDamageTracking(
         render_surface->OwningEffectNode()->view_transition_element_resource_id;
 
     if (resource_id.IsValid()) {
-      DCHECK(!base::Contains(id_to_render_surface_map, resource_id));
+      DCHECK(!id_to_render_surface_map.contains(resource_id));
       id_to_render_surface_map.emplace(resource_id, render_surface);
     }
   }
@@ -220,19 +219,28 @@ void DamageTracker::ComputeSurfaceDamage(RenderSurfaceImpl* render_surface) {
       }
     }
   }
-  if (expanded)
-    damage_for_this_update_.Union(expanded_damage_rect);
+  if (expanded) {
+    damage_for_this_update_.Union(expanded_damage_rect,
+                                  damage_from_leftover_rects.reasons());
+  }
 
   contributing_surfaces_.clear();
 
-  if (render_surface->SurfacePropertyChanged() &&
-      !render_surface->AncestorPropertyChanged()) {
-    damage_for_this_update_ = DamageAccumulator();
-    damage_for_this_update_.Union(render_surface->content_rect());
-  } else {
+  // Need to merge all non-empty damage reasons in both branches of damage
+  // computation, so compute reasons on the side.
+  DamageReasonSet reasons = damage_for_this_update_.reasons();
+  if (render_surface->SurfacePropertyChanged()) {
+    reasons.Put(DamageReason::kUntracked);
+  }
+  if (!damage_from_leftover_rects.IsEmpty()) {
+    reasons.PutAll(damage_from_leftover_rects.reasons());
+  }
+
+  // Add damage_from_leftover_rects
+  {
     // TODO(shawnsingh): can we clamp this damage to the surface's content rect?
     // (affects performance, but not correctness)
-    damage_for_this_update_.Union(damage_from_leftover_rects);
+    damage_for_this_update_.Union(damage_from_leftover_rects, {});
 
     gfx::Rect damage_rect;
     bool is_rect_valid = damage_for_this_update_.GetAsRect(&damage_rect);
@@ -241,23 +249,30 @@ void DamageTracker::ComputeSurfaceDamage(RenderSurfaceImpl* render_surface) {
           damage_rect,
           gfx::TransformToFlattenedSkMatrix(render_surface->SurfaceScale()));
       damage_for_this_update_ = DamageAccumulator();
-      damage_for_this_update_.Union(damage_rect);
+      damage_for_this_update_.Union(damage_rect, {});
     }
   }
+  damage_for_this_update_.UnionReasons(reasons);
 
   // True if there is surface property change from descendant (clip_rect or
   // content_rect).
   if (render_surface->SurfacePropertyChanged()) {
+    damage_for_this_update_.Union(render_surface->content_rect(), {});
     has_damage_from_contributing_content_ |= !damage_for_this_update_.IsEmpty();
   }
 
   // Damage accumulates until we are notified that we actually did draw on that
   // frame.
-  current_damage_.Union(damage_for_this_update_);
+  current_damage_.Union(damage_for_this_update_,
+                        damage_for_this_update_.reasons());
 }
 
 bool DamageTracker::GetDamageRectIfValid(gfx::Rect* rect) {
   return current_damage_.GetAsRect(rect);
+}
+
+DamageReasonSet DamageTracker::GetDamageReasons() {
+  return current_damage_.reasons();
 }
 
 DamageTracker::LayerRectMapData& DamageTracker::RectDataForLayer(
@@ -328,7 +343,7 @@ DamageTracker::DamageAccumulator DamageTracker::TrackDamageFromLeftoverRects() {
 
       ++layer_copy_pos;
     } else {
-      damage.Union(layer_cur_pos->rect_);
+      damage.Union(layer_cur_pos->rect_, {DamageReason::kUntracked});
     }
 
     ++layer_cur_pos;
@@ -341,7 +356,7 @@ DamageTracker::DamageAccumulator DamageTracker::TrackDamageFromLeftoverRects() {
 
       ++surface_copy_pos;
     } else {
-      damage.Union(surface_cur_pos->rect_);
+      damage.Union(surface_cur_pos->rect_, {DamageReason::kUntracked});
     }
 
     ++surface_cur_pos;
@@ -407,22 +422,33 @@ void DamageTracker::AccumulateDamageFromLayer(
   }
 
   if (layer_is_new || layer->LayerPropertyChanged()) {
+    DamageReasonSet reasons = layer->GetDamageReasons();
+    if (layer_is_new) {
+      reasons.Put(DamageReason::kUntracked);
+    }
     // If a layer is new or has changed, then its entire layer rect affects the
     // target surface.
-    damage_for_this_update_.Union(visible_rect_in_target_space);
+    damage_for_this_update_.Union(visible_rect_in_target_space, reasons);
 
     // The layer's old region is now exposed on the target surface, too.
     // Note old_visible_rect_in_target_space is already in target space.
-    damage_for_this_update_.Union(old_visible_rect_in_target_space);
+    damage_for_this_update_.Union(old_visible_rect_in_target_space, {});
   } else {
+    DamageReasonSet reasons = layer->GetDamageReasons();
     // If the layer properties haven't changed, then the the target surface is
     // only affected by the layer's damaged area, which could be empty.
     gfx::Rect damage_rect =
         gfx::UnionRects(layer->update_rect(), layer->GetDamageRect());
+    // Clip the damage to the visible layer.
+    damage_rect.Intersect(layer->visible_layer_rect());
     // if this is a view transition layer, the damage from the corresponding
     // live content surface should propagate to the layer's parent surface.
     // |view_transition_content_surface_damage_rect| is in the layer's space.
     damage_rect.Union(view_transition_content_surface_damage_rect);
+    if (view_transition_content_surface_damage_rect.Intersects(
+            gfx::Rect(layer->bounds()))) {
+      reasons.Put(DamageReason::kUntracked);
+    }
 
     damage_rect.Intersect(gfx::Rect(layer->bounds()));
 
@@ -430,8 +456,9 @@ void DamageTracker::AccumulateDamageFromLayer(
       gfx::Rect damage_visible_rect_in_target_space =
           MathUtil::MapEnclosingClippedRect(layer->DrawTransform(),
                                             damage_rect);
-      damage_for_this_update_.Union(damage_visible_rect_in_target_space);
+      damage_for_this_update_.Union(damage_visible_rect_in_target_space, {});
     }
+    damage_for_this_update_.UnionReasons(reasons);
   }
 
   // Property changes on effect or transform nodes that are shared by the
@@ -498,16 +525,23 @@ void DamageTracker::AccumulateDamageFromRenderSurface(
       !valid || damage_on_target.Intersects(surface_rect_in_target_space);
   if (render_surface->BackdropFilters().HasFilterThatMovesPixels() &&
       intersects_damage_under) {
-    damage_for_this_update_.Union(surface_rect_in_target_space);
+    damage_for_this_update_.Union(surface_rect_in_target_space,
+                                  {DamageReason::kUntracked});
   }
 
   if (surface_is_new || render_surface->SurfacePropertyChanged() ||
       render_surface->AncestorPropertyChanged()) {
+    DamageReasonSet reasons =
+        render_surface->damage_tracker()->GetDamageReasons();
+    if (surface_is_new) {
+      reasons.Put(DamageReason::kUntracked);
+    }
     // The entire surface contributes damage.
-    damage_for_this_update_.Union(surface_rect_in_target_space);
+    damage_for_this_update_.Union(surface_rect_in_target_space, reasons);
 
     // The surface's old region is now exposed on the target surface, too.
-    damage_for_this_update_.Union(old_surface_rect);
+    damage_for_this_update_.Union(old_surface_rect, {});
+
     intersects_damage_under = true;
   } else {
     // Only the surface's damage_rect will damage the target surface.
@@ -522,9 +556,13 @@ void DamageTracker::AccumulateDamageFromRenderSurface(
       gfx::Rect damage_rect_in_target_space = MathUtil::MapEnclosingClippedRect(
           draw_transform, damage_rect_in_local_space);
       damage_rect_in_target_space.Intersect(surface_rect_in_target_space);
-      damage_for_this_update_.Union(damage_rect_in_target_space);
+      damage_for_this_update_.Union(
+          damage_rect_in_target_space,
+          render_surface->damage_tracker()->GetDamageReasons());
     } else if (!is_valid_rect) {
-      damage_for_this_update_.Union(surface_rect_in_target_space);
+      damage_for_this_update_.Union(
+          surface_rect_in_target_space,
+          render_surface->damage_tracker()->GetDamageReasons());
     }
   }
 
@@ -571,8 +609,8 @@ DamageTracker::GetViewTransitionContentSurfaceDamageInSharedElementLayerSpace(
 
     // A live content surface is found. Add this id to the current id list.
     // Don't add this id if no surface is found.
-    DCHECK(!base::Contains(current_view_transition_content_surfaces_by_id_,
-                           vt_resource_id));
+    DCHECK(!std::ranges::contains(
+        current_view_transition_content_surfaces_by_id_, vt_resource_id));
     current_view_transition_content_surfaces_by_id_.push_back(vt_resource_id);
   }
 
@@ -618,10 +656,10 @@ DamageTracker::GetViewTransitionContentSurfaceDamageInSharedElementLayerSpace(
   // (1) If this is a new content surface with vt_resource_id.
   // (2) If the content surface with vt_resource_id was there in the previous
   // frame but missing in the current frame.
-  if (base::Contains(previous_view_transition_content_surfaces_by_id_,
-                     vt_resource_id) !=
-      base::Contains(current_view_transition_content_surfaces_by_id_,
-                     vt_resource_id)) {
+  if (std::ranges::contains(previous_view_transition_content_surfaces_by_id_,
+                            vt_resource_id) !=
+      std::ranges::contains(current_view_transition_content_surfaces_by_id_,
+                            vt_resource_id)) {
     // The whole view transition layer is considered damaged.
     return layer_drawable_bounds;
   }

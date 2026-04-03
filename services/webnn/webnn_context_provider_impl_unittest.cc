@@ -7,12 +7,14 @@
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/task_environment.h"
 #include "base/test/test_future.h"
-#include "components/ml/webnn/features.mojom-features.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "services/webnn/buildflags.h"
+#include "services/webnn/public/mojom/features.mojom-features.h"
+#include "services/webnn/public/mojom/webnn_context.mojom.h"
 #include "services/webnn/public/mojom/webnn_context_provider.mojom.h"
 #include "services/webnn/public/mojom/webnn_error.mojom.h"
+#include "services/webnn/webnn_test_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if BUILDFLAG(IS_MAC)
@@ -21,11 +23,24 @@
 
 namespace webnn {
 
+// `WebNNContextProviderImplTest` only focuses on the non-supported platforms.
+// For supported platforms, it should be tested by the backend specific test
+// cases.
+//
+// For platforms using TFLite, `tflite::ContextImplTflite` is always available.
+
+#if !BUILDFLAG(IS_WIN) && !BUILDFLAG(WEBNN_USE_TFLITE) && \
+    !BUILDFLAG(WEBNN_USE_LITERT)
+
 class WebNNContextProviderImplTest : public testing::Test {
  public:
   WebNNContextProviderImplTest(const WebNNContextProviderImplTest&) = delete;
   WebNNContextProviderImplTest& operator=(const WebNNContextProviderImplTest&) =
       delete;
+
+  test::WebNNTestEnvironment& test_environment() {
+    return webnn_test_environment_;
+  }
 
  protected:
   WebNNContextProviderImplTest()
@@ -34,21 +49,11 @@ class WebNNContextProviderImplTest : public testing::Test {
   ~WebNNContextProviderImplTest() override = default;
 
  private:
+  test::WebNNTestEnvironment webnn_test_environment_;
   base::test::ScopedFeatureList scoped_feature_list_;
-  base::test::TaskEnvironment task_environment_;
 };
 
-// `WebNNContextProviderImplTest` only focuses on the non-supported platforms.
-// For supported platforms, it should be tested by the backend specific test
-// cases.
-//
-// For Windows platform, `dml::ContextImpl` is implemented by the DirectML
-// backend. It relies on a real GPU adapter and is tested by
-// `WebNNContextDMLImplTest`.
-
-#if !BUILDFLAG(IS_WIN)
-
-TEST_F(WebNNContextProviderImplTest, CreateWebNNContextTest) {
+TEST_F(WebNNContextProviderImplTest, NotSupported) {
 #if BUILDFLAG(IS_MAC)
   if (base::mac::MacOSVersion() >= 13'00'00) {
     GTEST_SKIP() << "Skipping test because WebNN is supported on Mac OS "
@@ -58,7 +63,7 @@ TEST_F(WebNNContextProviderImplTest, CreateWebNNContextTest) {
 
   mojo::Remote<mojom::WebNNContextProvider> provider_remote;
 
-  WebNNContextProviderImpl::Create(
+  test_environment().BindWebNNContextProvider(
       provider_remote.BindNewPipeAndPassReceiver());
 
   base::test::TestFuture<mojom::CreateContextResultPtr> future;
@@ -66,10 +71,10 @@ TEST_F(WebNNContextProviderImplTest, CreateWebNNContextTest) {
                                       future.GetCallback());
   mojom::CreateContextResultPtr result = future.Take();
   ASSERT_TRUE(result->is_error());
-  const auto& create_context_error = result->get_error();
+  const mojom::ErrorPtr& create_context_error = result->get_error();
   EXPECT_EQ(create_context_error->code, mojom::Error::Code::kNotSupportedError);
   EXPECT_EQ(create_context_error->message,
-            "WebNN Service is not supported on this platform.");
+            "WebNN is not supported on this platform.");
 }
 
 #endif

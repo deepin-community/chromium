@@ -4,7 +4,8 @@
 
 #include "content/browser/network/cross_origin_embedder_policy_reporter.h"
 
-#include "base/strings/string_piece.h"
+#include <string_view>
+
 #include "base/values.h"
 #include "content/public/browser/storage_partition.h"
 #include "services/network/public/cpp/request_destination.h"
@@ -93,7 +94,7 @@ void CrossOriginEmbedderPolicyReporter::Clone(
 }
 
 void CrossOriginEmbedderPolicyReporter::QueueAndNotify(
-    std::initializer_list<std::pair<base::StringPiece, base::StringPiece>> body,
+    std::initializer_list<std::pair<std::string_view, std::string_view>> body,
     bool report_only) {
   const std::optional<std::string>& endpoint =
       report_only ? report_only_endpoint_ : endpoint_;
@@ -112,7 +113,7 @@ void CrossOriginEmbedderPolicyReporter::QueueAndNotify(
         kType, context_url_, blink::mojom::ReportBody::New(std::move(list))));
   }
   if (endpoint) {
-    base::Value::Dict body_to_pass;
+    base::DictValue body_to_pass;
     for (const auto& pair : body) {
       body_to_pass.Set(pair.first, pair.second);
     }
@@ -121,8 +122,7 @@ void CrossOriginEmbedderPolicyReporter::QueueAndNotify(
     if (auto* storage_partition = storage_partition_.get()) {
       storage_partition->GetNetworkContext()->QueueReport(
           kType, *endpoint, context_url_, reporting_source_,
-          network_anonymization_key_,
-          /*user_agent=*/std::nullopt, std::move(body_to_pass));
+          network_anonymization_key_, std::move(body_to_pass));
     }
   }
 }

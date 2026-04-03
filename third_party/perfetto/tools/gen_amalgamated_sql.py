@@ -66,8 +66,10 @@ struct FileToSql {
 
 
 def filename_to_variable(filename: str):
-  return "k" + "".join(
-      [x.capitalize() for x in filename.replace(os.path.sep, '_').split("_")])
+  return "k" + "".join([
+      x.capitalize()
+      for x in filename.replace(os.path.sep, '_').replace('-', '_').split("_")
+  ])
 
 
 def main():
@@ -85,7 +87,7 @@ def main():
 
   sql_files = []
   if args.input_list_file:
-    with open(args.input_list_file, 'r') as input_list_file:
+    with open(args.input_list_file, 'r', encoding='utf-8') as input_list_file:
       for line in input_list_file.read().splitlines():
         sql_files.append(line)
   else:
@@ -100,7 +102,7 @@ def main():
   # Extract the SQL output from each file.
   sql_outputs = {}
   for file_name in sql_files:
-    with open(file_name, 'r') as f:
+    with open(file_name, 'r', encoding='utf-8') as f:
       relpath = os.path.relpath(file_name, root_dir)
 
       # We've had bugs (e.g. b/264711057) when Soong's common path logic breaks
@@ -109,7 +111,7 @@ def main():
       assert '../' not in relpath
       sql_outputs[relpath] = f.read()
 
-  with open(args.cpp_out, 'w+') as output:
+  with open(args.cpp_out, 'w+', encoding='utf-8') as output:
     output.write(REPLACEMENT_HEADER)
     output.write(NAMESPACE_BEGIN.format(args.namespace))
 

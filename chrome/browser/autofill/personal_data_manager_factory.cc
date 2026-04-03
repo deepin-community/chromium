@@ -5,19 +5,21 @@
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 
 #include "base/no_destructor.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/autofill/autofill_image_fetcher_factory.h"
-#include "chrome/browser/autofill/strike_database_factory.h"
+#include "chrome/browser/autofill/autofill_optimization_guide_decider_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/strike_database/strike_database_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/web_data_service_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "components/autofill/content/browser/content_autofill_shared_storage_handler.h"
-#include "components/autofill/core/browser/personal_data_manager.h"
-#include "components/autofill/core/browser/strike_databases/strike_database.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "components/strike_database/strike_database.h"
 #include "components/sync/base/command_line_switches.h"
 #include "components/variations/service/variations_service.h"
 #include "content/public/browser/storage_partition.h"
@@ -31,19 +33,11 @@ namespace {
 const std::string GetCountryCodeFromVariations() {
   variations::VariationsService* variation_service =
       g_browser_process->variations_service();
-
   return variation_service
              ? base::ToUpperASCII(variation_service->GetLatestCountry())
              : std::string();
 }
 }  // namespace
-
-// static
-PersonalDataManager* PersonalDataManagerFactory::GetForProfile(
-    Profile* profile) {
-  return static_cast<PersonalDataManager*>(
-      GetInstance()->GetServiceForBrowserContext(profile, true));
-}
 
 // static
 PersonalDataManager* PersonalDataManagerFactory::GetForBrowserContext(
@@ -63,9 +57,12 @@ PersonalDataManagerFactory::PersonalDataManagerFactory()
           "PersonalDataManager",
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kRedirectedToOriginal)
-              // TODO(crbug.com/1418376): Check if this service is needed in
+              // TODO(crbug.com/40257657): Check if this service is needed in
               // Guest mode.
               .WithGuest(ProfileSelection::kRedirectedToOriginal)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kRedirectedToOriginal)
               .Build()) {
   DependsOn(IdentityManagerFactory::GetInstance());
   DependsOn(HistoryServiceFactory::GetInstance());
@@ -73,17 +70,15 @@ PersonalDataManagerFactory::PersonalDataManagerFactory()
   DependsOn(StrikeDatabaseFactory::GetInstance());
   DependsOn(AutofillImageFetcherFactory::GetInstance());
   DependsOn(SyncServiceFactory::GetInstance());
+  DependsOn(AutofillOptimizationGuideDeciderFactory::GetInstance());
 }
 
 PersonalDataManagerFactory::~PersonalDataManagerFactory() = default;
 
-KeyedService* PersonalDataManagerFactory::BuildPersonalDataManager(
-    content::BrowserContext* context) {
-  Profile* profile = Profile::FromBrowserContext(context);
-  PersonalDataManager* service =
-      new PersonalDataManager(g_browser_process->GetApplicationLocale(),
-                              GetCountryCodeFromVariations());
-
+std::unique_ptr<KeyedService>
+PersonalDataManagerFactory::BuildServiceInstanceForBrowserContext(
+    content::BrowserContext* context) const {
+ Profile* profile = Profile::FromBrowserContext(context);
   // WebDataServiceFactory redirects to the original profile.
   auto local_storage = WebDataServiceFactory::GetAutofillWebDataForProfile(
       profile, ServiceAccessType::EXPLICIT_ACCESS);
@@ -103,6 +98,9 @@ KeyedService* PersonalDataManagerFactory::BuildPersonalDataManager(
 
   auto* sync_service = SyncServiceFactory::GetForProfile(profile);
 
+  auto* autofill_optimization_guide_decider =
+      AutofillOptimizationGuideDeciderFactory::GetForProfile(profile);
+
   auto* shared_storage_manager =
       profile->GetDefaultStoragePartition()->GetSharedStorageManager();
   auto shared_storage_handler =
@@ -111,17 +109,13 @@ KeyedService* PersonalDataManagerFactory::BuildPersonalDataManager(
                 *shared_storage_manager)
           : nullptr;
 
-  service->Init(local_storage, account_storage, profile->GetPrefs(),
-                g_browser_process->local_state(), identity_manager,
-                history_service, sync_service, strike_database, image_fetcher,
-                std::move(shared_storage_handler));
-
-  return service;
-}
-
-KeyedService* PersonalDataManagerFactory::BuildServiceInstanceFor(
-    content::BrowserContext* context) const {
-  return BuildPersonalDataManager(context);
+  return std::make_unique<PersonalDataManager>(
+      local_storage, account_storage, profile->GetPrefs(),
+      g_browser_process->local_state(), identity_manager, history_service,
+      sync_service, strike_database, image_fetcher,
+      std::move(shared_storage_handler),
+      g_browser_process->GetApplicationLocale(), GetCountryCodeFromVariations(),
+      autofill_optimization_guide_decider);
 }
 
 }  // namespace autofill

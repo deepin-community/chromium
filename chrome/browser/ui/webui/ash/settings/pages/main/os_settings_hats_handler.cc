@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/webui/ash/settings/pages/main/os_settings_hats_handler.h"
+
 #include "chrome/browser/ui/webui/ash/settings/os_settings_ui.h"
 #include "chrome/browser/ui/webui/ash/settings/services/hats/os_settings_hats_manager.h"
 #include "chrome/browser/ui/webui/ash/settings/services/hats/os_settings_hats_manager_factory.h"
@@ -30,7 +31,7 @@ void OsSettingsHatsHandler::RegisterMessages() {
 }
 
 void OsSettingsHatsHandler::HandleSettingsUsedSearch(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(args.empty());
   AllowJavascript();
 
@@ -40,7 +41,7 @@ void OsSettingsHatsHandler::HandleSettingsUsedSearch(
 }
 
 void OsSettingsHatsHandler::HandleSendSettingsHats(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(args.empty());
   AllowJavascript();
 

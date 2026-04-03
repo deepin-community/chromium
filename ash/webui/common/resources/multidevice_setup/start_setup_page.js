@@ -6,6 +6,7 @@ import './icons.html.js';
 import './mojo_api.js';
 import './multidevice_setup_shared.css.js';
 import './ui_page.js';
+import './pausable_lottie.js';
 import '//resources/ash/common/cr.m.js';
 import '//resources/polymer/v3_0/iron-icon/iron-icon.js';
 import '//resources/polymer/v3_0/iron-media-query/iron-media-query.js';
@@ -14,14 +15,14 @@ import 'chrome://resources/cros_components/lottie_renderer/lottie-renderer.js';
 import {loadTimeData} from '//resources/ash/common/load_time_data.m.js';
 import {WebUIListenerBehavior} from '//resources/ash/common/web_ui_listener_behavior.js';
 import {Polymer} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {LottieRenderer} from 'chrome://resources/cros_components/lottie_renderer/lottie-renderer.js';
 import {ConnectivityStatus} from 'chrome://resources/mojo/chromeos/ash/services/device_sync/public/mojom/device_sync.mojom-webui.js';
-import {HostDevice} from 'chrome://resources/mojo/chromeos/ash/services/multidevice_setup/public/mojom/multidevice_setup.mojom-webui.js';
 
 import {MojoInterfaceProvider, MojoInterfaceProviderImpl} from './mojo_api.js';
 import {MultiDeviceSetupDelegate} from './multidevice_setup_delegate.js';
 import {getTemplate} from './start_setup_page.html.js';
 import {UiPageContainerBehavior} from './ui_page_container_behavior.js';
+
+/** @typedef {*} HostDevice */
 
 /**
  * The multidevice setup animation for dynamic colors.
@@ -73,7 +74,7 @@ Polymer({
      * Unique identifier for the currently selected host device. This uses the
      * device's Instance ID if it is available; otherwise, the device's legacy
      * device ID is used.
-     * TODO(https://crbug.com/1019206): When v1 DeviceSync is turned off, only
+     * TODO(crbug.com/40105247): When v1 DeviceSync is turned off, only
      * use Instance ID since all devices are guaranteed to have one.
      *
      * Undefined if the no list of potential hosts has been received from mojo
@@ -145,11 +146,7 @@ Polymer({
    * @param {boolean} enabled Whether the animation should play or not.
    */
   setPlayAnimation(enabled) {
-    if (enabled) {
-      this.$.multideviceSetupAnimation.play();
-    } else {
-      this.$.multideviceSetupAnimation.pause();
-    }
+    this.$.multideviceSetupAnimation.playing = enabled;
   },
 
   /**
@@ -254,7 +251,7 @@ Polymer({
    * @return {string} Returns a unique identifier for the input device, using
    *     the device's Instance ID if it is available; otherwise, the device's
    *     legacy device ID is used.
-   *     TODO(https://crbug.com/1019206): When v1 DeviceSync is turned off, only
+   *     TODO(crbug.com/40105247): When v1 DeviceSync is turned off, only
    *     use Instance ID since all devices are guaranteed to have one.
    * @private
    */

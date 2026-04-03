@@ -4,7 +4,7 @@
 
 #include "cc/metrics/scroll_jank_ukm_reporter.h"
 
-#include "cc/trees/ukm_manager.h"
+#include "cc/metrics/ukm_manager.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
@@ -38,7 +38,12 @@ void ScrollJankUkmReporter::IncrementPredictorJankyFrames() {
   predictor_jank_frames_++;
 }
 
+
 void ScrollJankUkmReporter::EmitScrollJankUkm() {
+  if (num_frames_ == 0) {
+    return;
+  }
+
   if (ukm_manager_) {
     ukm::builders::Event_Scroll builder(ukm_manager_->source_id());
     builder.SetFrameCount(
@@ -56,6 +61,7 @@ void ScrollJankUkmReporter::EmitScrollJankUkm() {
     builder.Record(ukm_manager_->recorder());
   }
 
+  // Reset metrics.
   num_frames_ = 0;
   num_vsyncs_ = 0;
   num_missed_vsyncs_ = 0;
@@ -64,7 +70,8 @@ void ScrollJankUkmReporter::EmitScrollJankUkm() {
   predictor_jank_frames_ = 0;
 }
 
-void ScrollJankUkmReporter::EmitPredictorJankUkm() {
+void ScrollJankUkmReporter::UpdateLatestFrameAndEmitPredictorJank(
+    base::TimeTicks latest_timestamp) {
   bool should_report =
       frame_with_missed_vsync_ != 0 || frame_with_no_missed_vsync_ != 0;
   if (ukm_manager_ && should_report) {

@@ -7,7 +7,6 @@
 #include <string>
 
 #include "base/json/json_writer.h"
-#include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
@@ -26,13 +25,13 @@ GetCardUploadDetailsRequest::GetCardUploadDetailsRequest(
     const std::vector<ClientBehaviorConstants>& client_behavior_signals,
     const bool full_sync_enabled,
     const std::string& app_locale,
-    base::OnceCallback<void(AutofillClient::PaymentsRpcResult,
+    base::OnceCallback<void(PaymentsAutofillClient::PaymentsRpcResult,
                             const std::u16string&,
-                            std::unique_ptr<base::Value::Dict>,
+                            std::unique_ptr<base::DictValue>,
                             std::vector<std::pair<int, int>>)> callback,
     const int billable_service_number,
     const int64_t billing_customer_number,
-    PaymentsNetworkInterface::UploadCardSource upload_card_source)
+    UploadCardSource upload_card_source)
     : addresses_(addresses),
       detected_values_(detected_values),
       client_behavior_signals_(client_behavior_signals),
@@ -54,8 +53,8 @@ std::string GetCardUploadDetailsRequest::GetRequestContentType() {
 }
 
 std::string GetCardUploadDetailsRequest::GetRequestContent() {
-  base::Value::Dict request_dict;
-  base::Value::Dict context;
+  base::DictValue request_dict;
+  base::DictValue context;
   context.Set("language_code", app_locale_);
   context.Set("billable_service", billable_service_number_);
   if (billing_customer_number_ != 0) {
@@ -67,7 +66,7 @@ std::string GetCardUploadDetailsRequest::GetRequestContent() {
       "chrome_user_context",
       BuildChromeUserContext(client_behavior_signals_, full_sync_enabled_));
 
-  base::Value::List addresses;
+  base::ListValue addresses;
   for (const AutofillProfile& profile : addresses_) {
     // These addresses are used by Payments to (1) accurately determine the
     // user's country in order to show the correct legal documents and (2) to
@@ -86,49 +85,37 @@ std::string GetCardUploadDetailsRequest::GetRequestContent() {
   request_dict.Set("detected_values", detected_values_);
 
   switch (upload_card_source_) {
-    case PaymentsNetworkInterface::UploadCardSource::UNKNOWN_UPLOAD_CARD_SOURCE:
+    case UploadCardSource::kUnknown:
       request_dict.Set("upload_card_source", "UNKNOWN_UPLOAD_CARD_SOURCE");
       break;
-    case PaymentsNetworkInterface::UploadCardSource::UPSTREAM_CHECKOUT_FLOW:
+    case UploadCardSource::kUpstreamCheckoutFlow:
       request_dict.Set("upload_card_source", "UPSTREAM_CHECKOUT_FLOW");
       break;
-    case PaymentsNetworkInterface::UploadCardSource::UPSTREAM_SETTINGS_PAGE:
+    case UploadCardSource::kUpstreamSettingsPage:
       request_dict.Set("upload_card_source", "UPSTREAM_SETTINGS_PAGE");
       break;
-    case PaymentsNetworkInterface::UploadCardSource::UPSTREAM_CARD_OCR:
+    case UploadCardSource::kUpstreamCardOcr:
       request_dict.Set("upload_card_source", "UPSTREAM_CARD_OCR");
-      break;
-    case PaymentsNetworkInterface::UploadCardSource::
-        LOCAL_CARD_MIGRATION_CHECKOUT_FLOW:
-      request_dict.Set("upload_card_source",
-                       "LOCAL_CARD_MIGRATION_CHECKOUT_FLOW");
-      break;
-    case PaymentsNetworkInterface::UploadCardSource::
-        LOCAL_CARD_MIGRATION_SETTINGS_PAGE:
-      request_dict.Set("upload_card_source",
-                       "LOCAL_CARD_MIGRATION_SETTINGS_PAGE");
       break;
     default:
       NOTREACHED();
   }
 
-  std::string request_content;
-  base::JSONWriter::Write(request_dict, &request_content);
-  VLOG(3) << "getdetailsforsavecard request body: " << request_content;
+  std::string request_content = base::WriteJson(request_dict).value_or("");
+  DVLOG(3) << "getdetailsforsavecard request body: " << request_content;
   return request_content;
 }
 
 void GetCardUploadDetailsRequest::ParseResponse(
-  const base::Value::Dict& response) {
+    const base::DictValue& response) {
   const auto* context_token = response.FindString("context_token");
   context_token_ =
       context_token ? base::UTF8ToUTF16(*context_token) : std::u16string();
 
-  const base::Value::Dict* dictionary_value =
-      response.FindDict("legal_message");
+  const base::DictValue* dictionary_value = response.FindDict("legal_message");
   if (dictionary_value)
     legal_message_ =
-        std::make_unique<base::Value::Dict>(dictionary_value->Clone());
+        std::make_unique<base::DictValue>(dictionary_value->Clone());
 
   const auto* supported_card_bin_ranges_string =
       response.FindString("supported_card_bin_ranges_string");
@@ -142,35 +129,9 @@ bool GetCardUploadDetailsRequest::IsResponseComplete() {
 }
 
 void GetCardUploadDetailsRequest::RespondToDelegate(
-    AutofillClient::PaymentsRpcResult result) {
+    PaymentsAutofillClient::PaymentsRpcResult result) {
   std::move(callback_).Run(result, context_token_, std::move(legal_message_),
                            supported_card_bin_ranges_);
-}
-
-std::vector<std::pair<int, int>>
-GetCardUploadDetailsRequest::ParseSupportedCardBinRangesString(
-    const std::string& supported_card_bin_ranges_string) {
-  std::vector<std::pair<int, int>> supported_card_bin_ranges;
-  std::vector<std::string> range_strings =
-      base::SplitString(supported_card_bin_ranges_string, ",",
-                        base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-
-  for (std::string& range_string : range_strings) {
-    std::vector<std::string> range = base::SplitString(
-        range_string, "-", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-    DCHECK(range.size() <= 2);
-    int start;
-    base::StringToInt(range[0], &start);
-    if (range.size() == 1) {
-      supported_card_bin_ranges.emplace_back(start, start);
-    } else {
-      int end;
-      base::StringToInt(range[1], &end);
-      DCHECK_LE(start, end);
-      supported_card_bin_ranges.emplace_back(start, end);
-    }
-  }
-  return supported_card_bin_ranges;
 }
 
 }  // namespace autofill::payments

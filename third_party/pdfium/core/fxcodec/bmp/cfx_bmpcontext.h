@@ -10,17 +10,18 @@
 #include "core/fxcodec/bmp/bmp_decoder.h"
 #include "core/fxcodec/bmp/cfx_bmpdecompressor.h"
 #include "core/fxcodec/bmp/fx_bmp.h"
+#include "core/fxcodec/progressive_decoder_context.h"
 #include "core/fxcrt/unowned_ptr.h"
 
 namespace fxcodec {
 
-class CFX_BmpContext final : public ProgressiveDecoderIface::Context {
+class CFX_BmpContext final : public ProgressiveDecoderContext {
  public:
   explicit CFX_BmpContext(BmpDecoder::Delegate* pDelegate);
   ~CFX_BmpContext() override;
 
-  CFX_BmpDecompressor m_Bmp;
-  UnownedPtr<BmpDecoder::Delegate> const m_pDelegate;
+  CFX_BmpDecompressor bmp_;
+  UnownedPtr<BmpDecoder::Delegate> const delegate_;
 };
 
 }  // namespace fxcodec

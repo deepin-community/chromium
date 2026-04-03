@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/extensions/extension_apitest.h"
-
 #include <optional>
 #include <vector>
 
@@ -12,7 +10,11 @@
 #include "base/memory/ref_counted.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/extensions/input_method_event_router.h"
+#include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/common/content_switches.h"
@@ -51,13 +53,13 @@ const InputMethodDescriptor CreateInputMethodDescriptor(
 
 class ExtensionInputMethodApiTest : public extensions::ExtensionApiTest {
  public:
-  ExtensionInputMethodApiTest() {}
+  ExtensionInputMethodApiTest() = default;
 
   ExtensionInputMethodApiTest(const ExtensionInputMethodApiTest&) = delete;
   ExtensionInputMethodApiTest& operator=(const ExtensionInputMethodApiTest&) =
       delete;
 
-  ~ExtensionInputMethodApiTest() override {}
+  ~ExtensionInputMethodApiTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     extensions::ExtensionApiTest::SetUpCommandLine(command_line);
@@ -102,7 +104,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionInputMethodApiTest, Basic) {
   ASSERT_TRUE(RunExtensionTest("input_method/basic")) << message_;
 }
 
-// TODO(https://crbug.com/997888): Flaky on multiple platforms.
+// TODO(crbug.com/41478266): Flaky on multiple platforms.
 IN_PROC_BROWSER_TEST_F(ExtensionInputMethodApiTest, DISABLED_Typing) {
   // Enable the test IME from the test extension.
   std::vector<std::string> extension_ime_ids = {
@@ -110,7 +112,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionInputMethodApiTest, DISABLED_Typing) {
   InputMethodManager::Get()->GetActiveIMEState()->SetEnabledExtensionImes(
       extension_ime_ids);
 
-  GURL test_url = ui_test_utils::GetTestUrl(
+  GURL test_url = chrome_test_utils::GetTestUrl(
       base::FilePath("extensions/api_test/input_method/typing/"),
       base::FilePath("test_page.html"));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), test_url));

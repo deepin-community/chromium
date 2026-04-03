@@ -27,10 +27,11 @@
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) ||   \
+    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
     PERFETTO_BUILDFLAG(PERFETTO_OS_FUCHSIA)
 #include <limits.h>
 #include <stdlib.h>  // For _exit()
-#include <unistd.h>  // For getpagesize() and geteuid() & fork()
+#include <unistd.h>  // For getpagesize() and geteuid() & fork() & sysconf()
 #endif
 
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
@@ -38,8 +39,31 @@
 #include <mach/vm_page_size.h>
 #endif
 
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD)
+#include <sys/sysctl.h>
+#endif
+
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX_BUT_NOT_QNX) || \
+    PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
+#include <sys/prctl.h>
+
+#ifndef PR_GET_TAGGED_ADDR_CTRL
+#define PR_GET_TAGGED_ADDR_CTRL 56
+#endif
+
+#ifndef PR_TAGGED_ADDR_ENABLE
+#define PR_TAGGED_ADDR_ENABLE (1UL << 0)
+#endif
+
+#ifndef PR_MTE_TCF_SYNC
+#define PR_MTE_TCF_SYNC (1UL << 1)
+#endif
+
+#endif  // OS_LINUX | OS_ANDROID
+
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
-#include <Windows.h>
+#include <windows.h>
+
 #include <io.h>
 #include <malloc.h>  // For _aligned_malloc().
 #endif
@@ -116,11 +140,16 @@ CheckCpuOptimizations() {
   const bool have_bmi = (ebx >> 3) & 0x1;
   const bool have_bmi2 = (ebx >> 8) & 0x1;
 
-  if (!have_sse4_2 || !have_popcnt || !have_avx2 || !have_bmi || !have_bmi2) {
+  // Get extended features for LZCNT.
+  PERFETTO_GETCPUID(eax, ebx, ecx, edx, 0x80000001, 0);
+  const bool have_lzcnt = ecx & (1u << 5);
+
+  if (!have_sse4_2 || !have_popcnt || !have_avx2 || !have_bmi || !have_bmi2 ||
+      !have_lzcnt) {
     fprintf(
         stderr,
-        "This executable requires a x86_64 cpu that supports SSE4.2, BMI2 and "
-        "AVX2.\n"
+        "This executable requires a x86_64 cpu that supports SSE4.2, BMI2, "
+        "AVX2 and LZCNT.\n"
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
         "On MacOS, this might be caused by running x86_64 binaries on arm64.\n"
         "See https://github.com/google/perfetto/issues/294 for more.\n"
@@ -151,6 +180,8 @@ uint32_t GetSysPageSizeSlowpath() {
   page_size = static_cast<uint32_t>(page_size_int > 0 ? page_size_int : 4096);
 #elif PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
   page_size = static_cast<uint32_t>(vm_page_size);
+#elif PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD)
+  page_size = static_cast<uint32_t>(sysconf(_SC_PAGESIZE));
 #else
   page_size = 4096;
 #endif
@@ -184,6 +215,7 @@ void MaybeReleaseAllocatorMemToOS() {
 uid_t GetCurrentUserId() {
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
+    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
     PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
   return geteuid();
 #else
@@ -214,7 +246,9 @@ void UnsetEnv(const std::string& key) {
 void Daemonize(std::function<int()> parent_cb) {
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
-    PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE)
+    PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD) || \
+    (PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE) &&  \
+     !PERFETTO_BUILDFLAG(PERFETTO_OS_APPLE_TVOS))
   Pipe pipe = Pipe::Create(Pipe::kBothBlock);
   pid_t pid;
   switch (pid = fork()) {
@@ -277,6 +311,18 @@ std::string GetCurExecutablePath() {
   char buf[MAX_PATH];
   auto len = ::GetModuleFileNameA(nullptr /*current*/, buf, sizeof(buf));
   self_path = std::string(buf, len);
+#elif PERFETTO_BUILDFLAG(PERFETTO_OS_FREEBSD)
+  char buf[PATH_MAX];
+  int mib[4], ret;
+  size_t len = sizeof(buf);
+  mib[0] = CTL_KERN;
+  mib[1] = KERN_PROC;
+  mib[2] = KERN_PROC_PATHNAME;
+  mib[3] = -1;
+  ret = sysctl(mib, 4, buf, &len, NULL, 0);
+  PERFETTO_CHECK(ret == 0);
+  // This returns the full path; need to trim the executable
+  self_path = std::string(buf);
 #else
   PERFETTO_FATAL(
       "GetCurExecutableDir() not implemented on the current platform");
@@ -315,6 +361,23 @@ void AlignedFree(void* ptr) {
   _aligned_free(ptr);  // MSDN says it is fine to pass nullptr.
 #else
   free(ptr);
+#endif
+}
+
+bool IsSyncMemoryTaggingEnabled() {
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX_BUT_NOT_QNX) || \
+    PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
+  // Compute only once per lifetime of the process.
+  static bool cached_value = [] {
+    const int res = prctl(PR_GET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
+    if (res < 0)
+      return false;
+    const uint32_t actl = static_cast<uint32_t>(res);
+    return (actl & PR_TAGGED_ADDR_ENABLE) && (actl & PR_MTE_TCF_SYNC);
+  }();
+  return cached_value;
+#else
+  return false;
 #endif
 }
 

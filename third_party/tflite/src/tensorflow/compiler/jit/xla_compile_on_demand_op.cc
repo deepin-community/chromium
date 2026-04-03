@@ -23,10 +23,12 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/memory/memory.h"
 #include "absl/types/span.h"
+#include "tensorflow/compiler/jit/device_compilation_cluster_signature.h"
 #include "tensorflow/compiler/jit/device_compilation_profiler.h"
 #include "tensorflow/compiler/jit/device_compiler.h"
 #include "tensorflow/compiler/jit/flags.h"
@@ -83,7 +85,7 @@ XlaCompiler::CompileOptions GetCompileOptions(bool for_pjrt = false) {
 // Gets `variables` from `ctx`, locks them and builds XlaCompiler::Arguments
 // using them. Stores the arguments in `args`. `variables` and `args` passed in
 // will be cleared before populating them.
-Status GetAndLockVariablesAndBuildXlaCompilerArguments(
+absl::Status GetAndLockVariablesAndBuildXlaCompilerArguments(
     const OpKernelContext& ctx, const std::vector<const Tensor*>& inputs,
     const std::vector<int>& constant_indices,
     const std::vector<int>& variable_indices,
@@ -99,23 +101,29 @@ Status GetAndLockVariablesAndBuildXlaCompilerArguments(
                       XlaComputationLaunchContext::BuildXlaCompilerArguments(
                           constant_indices, inputs, *variables,
                           static_cast<Device*>(ctx.device())));
-  return OkStatus();
+  return absl::OkStatus();
 }
 }  // namespace
 
-Status XlaCompileOnDemandOp::Run(const ResourceVarsSnapshot& variable_args,
-                                 const XlaCompiler::CompilationResult* result,
-                                 const XlaDeviceCompiler* xla_device_compiler,
-                                 xla::LocalExecutable* executable,
-                                 OpKernelContext* ctx) {
+XlaCompileOnDemandOp::XlaCompileOnDemandOp(OpKernelConstruction* ctx)
+    : OpKernel(ctx),
+      platform_info_(XlaPlatformInfoFromDevice(ctx->device())),
+      function_(GetDeviceCompilerFunction(ctx->def())),
+      canonical_function_(Canonicalize(function_)) {}
+
+absl::Status XlaCompileOnDemandOp::Run(
+    const ResourceVarsSnapshot& variable_args,
+    const XlaCompiler::CompilationResult* result,
+    const XlaDeviceCompiler* xla_device_compiler,
+    xla::LocalExecutable* executable, OpKernelContext* ctx) {
   xla::LocalClient* client =
       static_cast<xla::LocalClient*>(xla_device_compiler->client());
 
   se::Stream* stream =
       ctx->op_device_context() ? ctx->op_device_context()->stream() : nullptr;
-  std::shared_ptr<se::DeviceMemoryAllocator> allocator_ptr =
+  std::shared_ptr<stream_executor::DeviceAddressAllocator> allocator_ptr =
       GetAllocator(ctx->device(), stream, platform_info_);
-  se::DeviceMemoryAllocator* allocator = allocator_ptr.get();
+  stream_executor::DeviceAddressAllocator* allocator = allocator_ptr.get();
   XlaComputationLaunchContext launch_context(
       client, allocator, client->default_device_ordinal(),
       /*allocate_xla_tensors=*/platform_info_.xla_device_metadata() != nullptr,
@@ -123,7 +131,7 @@ Status XlaCompileOnDemandOp::Run(const ResourceVarsSnapshot& variable_args,
           ? platform_info_.xla_device_metadata()->UseMultipleStreams()
           : false);
 
-  std::map<int, const Tensor*> snapshot_ptrs;
+  absl::flat_hash_map<int, const Tensor*> snapshot_ptrs;
   for (auto& p : variable_args) {
     snapshot_ptrs.emplace(p.first,
                           p.second.has_value() ? &p.second.value() : nullptr);
@@ -131,7 +139,7 @@ Status XlaCompileOnDemandOp::Run(const ResourceVarsSnapshot& variable_args,
 
   const xla::HloInputOutputAliasConfig& input_output_alias =
       executable->executable()->module().input_output_alias_config();
-  StatusOr<std::vector<xla::ExecutionInput>> execution_inputs =
+  absl::StatusOr<std::vector<xla::ExecutionInput>> execution_inputs =
       launch_context.PopulateInputs(ctx, result, snapshot_ptrs,
                                     /*missing_ctx_input_prefix=*/0,
                                     input_output_alias);
@@ -152,11 +160,11 @@ Status XlaCompileOnDemandOp::Run(const ResourceVarsSnapshot& variable_args,
   run_options.set_intra_op_thread_pool(&ctx->eigen_cpu_device());
   run_options.set_rng_seed(GetXLARandomSeed());
 
-  StatusOr<xla::ExecutionOutput> run_result =
+  absl::StatusOr<xla::ExecutionOutput> run_result =
       executable->Run(std::move(execution_inputs).value(), run_options);
   TF_RETURN_IF_ERROR(run_result.status());
   xla::ExecutionOutput execution_output = std::move(run_result).value();
-  StatusOr<std::vector<VariableInfo>> variable_infos =
+  absl::StatusOr<std::vector<VariableInfo>> variable_infos =
       GatherVariableInfo(ctx, *result, 0);
   TF_RETURN_IF_ERROR(variable_infos.status());
   TF_RETURN_IF_ERROR(LockVariables(absl::MakeSpan(*variable_infos)));
@@ -164,10 +172,10 @@ Status XlaCompileOnDemandOp::Run(const ResourceVarsSnapshot& variable_args,
       ctx, result, execution_output.ConsumeResult(),
       /*missing_ctx_input_prefix=*/0, absl::MakeSpan(*variable_infos),
       input_output_alias, snapshot_ptrs));
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status XlaCompileOnDemandOp::Compile(
+absl::Status XlaCompileOnDemandOp::Compile(
     const std::vector<XlaCompiler::Argument>& args, OpKernelContext* ctx,
     PjRtDeviceCompiler** pjrt_device_compiler,
     DeviceCompilationProfiler** profiler,
@@ -185,11 +193,12 @@ Status XlaCompileOnDemandOp::Compile(
   XlaCompiler::CompileOptions compile_options = GetCompileOptions(true);
 
   return (*pjrt_device_compiler)
-      ->CompileSingleOpIfNeeded(options, args, compile_options, ctx, *profiler,
-                                result, executable);
+      ->CompileSingleOpIfNeeded(options, function_, canonical_function_, args,
+                                compile_options, ctx, *profiler, result,
+                                executable);
 }
 
-Status XlaCompileOnDemandOp::Compile(
+absl::Status XlaCompileOnDemandOp::Compile(
     const std::vector<XlaCompiler::Argument>& args, OpKernelContext* ctx,
     XlaDeviceCompiler** xla_device_compiler,
     DeviceCompilationProfiler** profiler,
@@ -215,7 +224,7 @@ Status XlaCompileOnDemandOp::Compile(
       rm->default_container(), "device_compilation_profiler", profiler,
       [](DeviceCompilationProfiler** profiler) {
         *profiler = new DeviceCompilationProfiler();
-        return OkStatus();
+        return absl::OkStatus();
       }));
 
   XlaCompiler::Options options = GenerateCompilerOptions(
@@ -227,8 +236,9 @@ Status XlaCompileOnDemandOp::Compile(
   XlaCompiler::CompileOptions compile_options = GetCompileOptions();
 
   return (*xla_device_compiler)
-      ->CompileSingleOpIfNeeded(options, args, compile_options, ctx, *profiler,
-                                result, executable);
+      ->CompileSingleOpIfNeeded(options, function_, canonical_function_, args,
+                                compile_options, ctx, *profiler, result,
+                                executable);
 }
 
 void XlaCompileOnDemandOp::Compute(OpKernelContext* ctx) {
@@ -257,15 +267,17 @@ void XlaCompileOnDemandOp::Compute(OpKernelContext* ctx) {
                             *ctx, inputs, *constant_indices_or,
                             variable_indices, &variables, &args));
 
-    PjRtDeviceCompiler* pjrt_device_compiler;
-    xla::PjRtLoadedExecutable* pjrt_executable;
-    OP_REQUIRES_OK(ctx, Compile(args, ctx, &pjrt_device_compiler, &profiler,
-                                &result, &pjrt_executable));
+    PjRtDeviceCompiler* pjrt_device_compiler = nullptr;
+    xla::PjRtLoadedExecutable* pjrt_executable = nullptr;
+    absl::Status status = Compile(args, ctx, &pjrt_device_compiler, &profiler,
+                                  &result, &pjrt_executable);
     // Hold the reference to the XLA device compiler and profiler during
     // evaluation. (We could probably free them sooner because the ResourceMgr
     // will retain references, but this is more obviously correct.)
+    // We must also ensure these pointers are freed even if compilation fails.
     core::ScopedUnref pjrt_device_compiler_ref(pjrt_device_compiler);
     core::ScopedUnref profiler_ref(profiler);
+    OP_REQUIRES_OK(ctx, status);
 
     VLOG(2) << "Compiled op with PJRT: " << ctx->status();
     VLOG(2) << "result != nullptr: " << (result != nullptr);
@@ -291,15 +303,17 @@ void XlaCompileOnDemandOp::Compute(OpKernelContext* ctx) {
                                                     variables, &variable_args));
     }
 
-    XlaDeviceCompiler* xla_device_compiler;
-    xla::LocalExecutable* executable;
-    OP_REQUIRES_OK(ctx, Compile(args, ctx, &xla_device_compiler, &profiler,
-                                &result, &executable));
+    XlaDeviceCompiler* xla_device_compiler = nullptr;
+    xla::LocalExecutable* executable = nullptr;
+    absl::Status status = Compile(args, ctx, &xla_device_compiler, &profiler,
+                                  &result, &executable);
     // Hold the reference to the XLA device compiler and profiler during
     // evaluation. (We could probably free them sooner because the ResourceMgr
     // will retain references, but this is more obviously correct.)
+    // We must also ensure these pointers are freed even if compilation fails.
     core::ScopedUnref xla_device_compiler_ref(xla_device_compiler);
     core::ScopedUnref profiler_ref(profiler);
+    OP_REQUIRES_OK(ctx, status);
 
     // Locks are acquired again when populating the `ctx` outputs.
     OP_REQUIRES_OK(

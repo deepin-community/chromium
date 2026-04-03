@@ -5,7 +5,6 @@
 #ifndef ASH_SYSTEM_TIME_CALENDAR_VIEW_CONTROLLER_H_
 #define ASH_SYSTEM_TIME_CALENDAR_VIEW_CONTROLLER_H_
 
-#include <deque>
 #include <list>
 #include <map>
 #include <memory>
@@ -210,6 +209,7 @@ class ASH_EXPORT CalendarViewController {
   // For unit tests.
   friend class CalendarMonthViewTest;
   friend class CalendarViewAnimationTest;
+  friend class CalendarViewEventListViewFetchTest;
   friend class CalendarViewEventListViewTest;
   friend class CalendarViewTest;
   friend class CalendarViewEventListItemViewTest;

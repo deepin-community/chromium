@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,30 @@ import * as TextUtils from '../../models/text_utils/text_utils.js';
 import * as Common from '../common/common.js';
 import * as HostModule from '../host/host.js';
 import * as Platform from '../platform/platform.js';
+import * as Root from '../root/root.js';
 
+import type {CSSMatchedStyles} from './CSSMatchedStyles.js';
 import {cssMetadata, GridAreaRowRegex} from './CSSMetadata.js';
-import {type Edit} from './CSSModel.js';
-import {stripComments} from './CSSPropertyParser.js';
-import {type CSSStyleDeclaration} from './CSSStyleDeclaration.js';
+import type {Edit} from './CSSModel.js';
+import {
+  type BottomUpTreeMatching,
+  type Match,
+  matchDeclaration,
+  type Matcher,
+  stripComments
+} from './CSSPropertyParser.js';
+import {CSSWideKeywordMatcher, FontMatcher} from './CSSPropertyParserMatchers.js';
+import type {CSSStyleDeclaration} from './CSSStyleDeclaration.js';
 
-export class CSSProperty {
+export const enum Events {
+  LOCAL_VALUE_UPDATED = 'localValueUpdated',
+}
+
+export interface EventTypes {
+  [Events.LOCAL_VALUE_UPDATED]: void;
+}
+
+export class CSSProperty extends Common.ObjectWrapper.ObjectWrapper<EventTypes> {
   ownerStyle: CSSStyleDeclaration;
   index: number;
   name: string;
@@ -24,9 +41,9 @@ export class CSSProperty {
   implicit: boolean;
   text: string|null|undefined;
   range: TextUtils.TextRange.TextRange|null;
-  #active: boolean;
-  #nameRangeInternal: TextUtils.TextRange.TextRange|null;
-  #valueRangeInternal: TextUtils.TextRange.TextRange|null;
+  #active = true;
+  #nameRange: TextUtils.TextRange.TextRange|null = null;
+  #valueRange: TextUtils.TextRange.TextRange|null = null;
   #invalidString?: Common.UIString.LocalizedString;
   #longhandProperties: CSSProperty[] = [];
 
@@ -34,6 +51,7 @@ export class CSSProperty {
       ownerStyle: CSSStyleDeclaration, index: number, name: string, value: string, important: boolean,
       disabled: boolean, parsedOk: boolean, implicit: boolean, text?: string|null, range?: Protocol.CSS.SourceRange,
       longhandProperties?: Protocol.CSS.CSSProperty[]) {
+    super();
     this.ownerStyle = ownerStyle;
     this.index = index;
     this.name = name;
@@ -44,9 +62,6 @@ export class CSSProperty {
     this.implicit = implicit;  // A longhand, implicitly set by missing values of shorthand.
     this.text = text;
     this.range = range ? TextUtils.TextRange.TextRange.fromObject(range) : null;
-    this.#active = true;
-    this.#nameRangeInternal = null;
-    this.#valueRangeInternal = null;
 
     if (longhandProperties && longhandProperties.length > 0) {
       for (const property of longhandProperties) {
@@ -79,8 +94,35 @@ export class CSSProperty {
     return result;
   }
 
+  parseExpression(expression: string, matchedStyles: CSSMatchedStyles, computedStyles: Map<string, string>|null):
+      BottomUpTreeMatching|null {
+    if (!this.parsedOk) {
+      return null;
+    }
+
+    return matchDeclaration(this.name, expression, this.#matchers(matchedStyles, computedStyles));
+  }
+
+  parseValue(matchedStyles: CSSMatchedStyles, computedStyles: Map<string, string>|null): BottomUpTreeMatching|null {
+    if (!this.parsedOk) {
+      return null;
+    }
+
+    return matchDeclaration(this.name, this.value, this.#matchers(matchedStyles, computedStyles));
+  }
+
+  #matchers(matchedStyles: CSSMatchedStyles, computedStyles: Map<string, string>|null): Array<Matcher<Match>> {
+    const matchers = matchedStyles.propertyMatchers(this.ownerStyle, computedStyles);
+
+    matchers.push(new CSSWideKeywordMatcher(this, matchedStyles));
+    if (Root.Runtime.experiments.isEnabled(Root.ExperimentNames.ExperimentName.FONT_EDITOR)) {
+      matchers.push(new FontMatcher());
+    }
+    return matchers;
+  }
+
   private ensureRanges(): void {
-    if (this.#nameRangeInternal && this.#valueRangeInternal) {
+    if (this.#nameRange && this.#valueRange) {
       return;
     }
     const range = this.range;
@@ -98,8 +140,8 @@ export class CSSProperty {
     const nameSourceRange = new TextUtils.TextRange.SourceRange(nameIndex, this.name.length);
     const valueSourceRange = new TextUtils.TextRange.SourceRange(valueIndex, this.value.length);
 
-    this.#nameRangeInternal = rebase(text.toTextRange(nameSourceRange), range.startLine, range.startColumn);
-    this.#valueRangeInternal = rebase(text.toTextRange(valueSourceRange), range.startLine, range.startColumn);
+    this.#nameRange = rebase(text.toTextRange(nameSourceRange), range.startLine, range.startColumn);
+    this.#valueRange = rebase(text.toTextRange(valueSourceRange), range.startLine, range.startColumn);
 
     function rebase(oneLineRange: TextUtils.TextRange.TextRange, lineOffset: number, columnOffset: number):
         TextUtils.TextRange.TextRange {
@@ -115,12 +157,12 @@ export class CSSProperty {
 
   nameRange(): TextUtils.TextRange.TextRange|null {
     this.ensureRanges();
-    return this.#nameRangeInternal;
+    return this.#nameRange;
   }
 
   valueRange(): TextUtils.TextRange.TextRange|null {
     this.ensureRanges();
-    return this.#valueRangeInternal;
+    return this.#valueRange;
   }
 
   rebase(edit: Edit): void {
@@ -149,11 +191,6 @@ export class CSSProperty {
 
   activeInStyle(): boolean {
     return this.#active;
-  }
-
-  trimmedValueWithoutImportant(): string {
-    const important = '!important';
-    return this.value.endsWith(important) ? this.value.slice(0, -important.length).trim() : this.value.trim();
   }
 
   async setText(propertyText: string, majorChange: boolean, overwrite?: boolean): Promise<boolean> {
@@ -193,7 +230,7 @@ export class CSSProperty {
     const text = new TextUtils.Text.Text(this.ownerStyle.cssText || '');
     const newStyleText = text.replaceRange(range, Platform.StringUtilities.sprintf(';%s;', propertyText));
     const styleText = await CSSProperty.formatStyle(newStyleText, indentation, endIndentation);
-    return this.ownerStyle.setText(styleText, majorChange);
+    return await this.ownerStyle.setText(styleText, majorChange);
   }
 
   static async formatStyle(styleText: string, indentation: string, endIndentation: string): Promise<string> {
@@ -255,7 +292,7 @@ export class CSSProperty {
       }
       if (cssMetadata().isGridAreaDefiningProperty(propertyName)) {
         const rowResult = GridAreaRowRegex.exec(token);
-        if (rowResult && rowResult.index === 0 && !propertyText.trimEnd().endsWith(']')) {
+        if (rowResult?.index === 0 && !propertyText.trimEnd().endsWith(']')) {
           propertyText = propertyText.trimEnd() + '\n' + doubleIndent;
         }
       }
@@ -288,6 +325,12 @@ export class CSSProperty {
     void this.setText(text, majorChange, overwrite).then(userCallback);
   }
 
+  // Updates the value stored locally and emits an event to signal its update.
+  setLocalValue(value: string): void {
+    this.value = value;
+    this.dispatchEventToListeners(Events.LOCAL_VALUE_UPDATED);
+  }
+
   async setDisabled(disabled: boolean): Promise<boolean> {
     if (!this.ownerStyle) {
       return false;
@@ -315,7 +358,7 @@ export class CSSProperty {
     } else {
       text = appendSemicolonIfMissing(this.text.substring(2, propertyText.length - 2).trim());
     }
-    return this.setText(text, true, true);
+    return await this.setText(text, true, true);
   }
 
   /**

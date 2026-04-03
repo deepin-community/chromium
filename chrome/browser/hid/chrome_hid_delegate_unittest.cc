@@ -5,6 +5,7 @@
 #include "chrome/browser/hid/chrome_hid_delegate.h"
 
 #include <memory>
+#include <string_view>
 
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
@@ -28,8 +29,10 @@
 #include "content/public/test/embedded_worker_instance_test_harness.h"
 #include "content/public/test/web_contents_tester.h"
 #include "extensions/buildflags/buildflags.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "services/device/public/cpp/test/fake_hid_manager.h"
 #include "services/device/public/cpp/test/hid_test_util.h"
+#include "services/device/public/cpp/test/scoped_usb_device_manager_overrider.h"
 #include "services/device/public/cpp/test/test_report_descriptors.h"
 #include "services/device/public/mojom/hid.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -39,18 +42,24 @@
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "base/command_line.h"
 #include "base/values.h"
-#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/test_extension_system.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/login/users/scoped_account_id_annotator.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "components/account_id/account_id.h"
+#include "components/account_id/account_id_literal.h"
+#include "components/prefs/testing_pref_service.h"
+#include "components/user_manager/fake_user_manager_delegate.h"
 #include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/test_helper.h"
+#include "components/user_manager/user_manager.h"
+#include "components/user_manager/user_manager_impl.h"
 #endif
 
 namespace {
@@ -61,14 +70,20 @@ using ::testing::ElementsAre;
 using ::testing::NiceMock;
 using ::testing::UnorderedElementsAre;
 
-constexpr base::StringPiece kDefaultTestUrl{"https://www.google.com"};
-constexpr base::StringPiece kCrossOriginTestUrl{"https://www.chromium.org"};
+constexpr std::string_view kDefaultTestUrl{"https://www.google.com"};
+constexpr std::string_view kCrossOriginTestUrl{"https://www.chromium.org"};
 constexpr char kTestUserEmail[] = "user@example.com";
 
+#if BUILDFLAG(IS_CHROMEOS)
+constexpr GaiaId::Literal kTestUserGaiaId("1111111111");
+constexpr AccountId::Literal kTestAccountId =
+    AccountId::Literal::FromUserEmailGaiaId(kTestUserEmail, kTestUserGaiaId);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-constexpr base::StringPiece kPrivilegedExtensionId{
+constexpr std::string_view kPrivilegedExtensionId{
     "ckcendljdlmgnhghiaomidhiiclmapok"};
-constexpr base::StringPiece kExtensionDocumentFileName{"index.html"};
+constexpr std::string_view kExtensionDocumentFileName{"index.html"};
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 MATCHER_P(HasGuid, matcher, "") {
@@ -202,42 +217,28 @@ class ChromeHidTestHelper {
     EXPECT_TRUE(devices_future.Wait());
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  const user_manager::User* SetUpUserManager() {
-    // On ChromeOS a user account is needed in order to check whether the user
-    // account is affiliated with the device owner for the purposes of applying
-    // enterprise policy.
-    constexpr char kTestUserGaiaId[] = "1111111111";
-    auto fake_user_manager = std::make_unique<ash::FakeChromeUserManager>();
-    auto* fake_user_manager_ptr = fake_user_manager.get();
-    scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
-        std::move(fake_user_manager));
-
-    auto account_id =
-        AccountId::FromUserEmailGaiaId(kTestUserEmail, kTestUserGaiaId);
-    const user_manager::User* user = fake_user_manager_ptr->AddUser(account_id);
-
-    fake_user_manager_ptr->LoginUser(account_id);
-
-    return user;
+#if BUILDFLAG(IS_CHROMEOS)
+  void LogIn(const AccountId& account_id) {
+    CHECK(user_manager::TestHelper(user_manager_.Get())
+              .AddRegularUser(account_id));
+    user_manager_->UserLoggedIn(
+        account_id, user_manager::TestHelper::GetFakeUsernameHash(account_id));
   }
-
-  void TearDownUserManager() { scoped_user_manager_.reset(); }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   // Creates a fake extension with the specified `extension_id` so that it can
   // exercise behaviors that are only enabled for privileged extensions.
   scoped_refptr<const extensions::Extension> CreateExtensionWithId(
-      base::StringPiece extension_id) {
+      std::string_view extension_id) {
     auto manifest =
-        base::Value::Dict()
+        base::DictValue()
             .Set("name", "Fake extension")
             .Set("description", "For testing.")
             .Set("version", "0.1")
             .Set("manifest_version", 2)
             .Set("web_accessible_resources",
-                 base::Value::List().Append(kExtensionDocumentFileName));
+                 base::ListValue().Append(kExtensionDocumentFileName));
     scoped_refptr<const extensions::Extension> extension =
         extensions::ExtensionBuilder()
             .SetManifest(std::move(manifest))
@@ -249,10 +250,9 @@ class ChromeHidTestHelper {
     extensions::TestExtensionSystem* extension_system =
         static_cast<extensions::TestExtensionSystem*>(
             extensions::ExtensionSystem::Get(profile_));
-    extensions::ExtensionService* extension_service =
-        extension_system->CreateExtensionService(
-            base::CommandLine::ForCurrentProcess(), base::FilePath(), false);
-    extension_service->AddExtension(extension.get());
+    extension_system->CreateExtensionService(
+        base::CommandLine::ForCurrentProcess(), base::FilePath(), false);
+    extensions::ExtensionRegistrar::Get(profile_)->AddExtension(extension);
     return extension;
   }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
@@ -645,7 +645,8 @@ class ChromeHidTestHelper {
 
     if (web_contents) {
       // The `WebContents` should not indicate we are connected to a device.
-      EXPECT_FALSE(web_contents->IsConnectedToHidDevice());
+      EXPECT_FALSE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kHID));
     }
 
     // Open a connection to `device`.
@@ -667,7 +668,8 @@ class ChromeHidTestHelper {
 
     if (web_contents) {
       // Now the `WebContents` should indicate we are connected to a device.
-      EXPECT_TRUE(web_contents->IsConnectedToHidDevice());
+      EXPECT_TRUE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kHID));
     }
 
     // Close `connection` and check that the `WebContents` no longer indicates
@@ -687,7 +689,8 @@ class ChromeHidTestHelper {
     }
 
     if (web_contents) {
-      EXPECT_FALSE(web_contents->IsConnectedToHidDevice());
+      EXPECT_FALSE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kHID));
     }
   }
 
@@ -714,7 +717,8 @@ class ChromeHidTestHelper {
 
     if (web_contents) {
       // The `WebContents` should not indicate we are connected to a device.
-      EXPECT_FALSE(web_contents->IsConnectedToHidDevice());
+      EXPECT_FALSE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kHID));
     }
 
     // Open a connection to `device`.
@@ -736,7 +740,8 @@ class ChromeHidTestHelper {
 
     if (web_contents) {
       // Now the `WebContents` should indicate we are connected to a device.
-      EXPECT_TRUE(web_contents->IsConnectedToHidDevice());
+      EXPECT_TRUE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kHID));
     }
 
     // Remove `device` and check that the `WebContents` no longer indicates we
@@ -756,7 +761,8 @@ class ChromeHidTestHelper {
     }
 
     if (web_contents) {
-      EXPECT_FALSE(web_contents->IsConnectedToHidDevice());
+      EXPECT_FALSE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kHID));
     }
   }
 
@@ -782,7 +788,8 @@ class ChromeHidTestHelper {
 
     if (web_contents) {
       // The `WebContents` should not indicate we are connected to a device.
-      EXPECT_FALSE(web_contents->IsConnectedToHidDevice());
+      EXPECT_FALSE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kHID));
     }
 
     // Open a connection to `device`.
@@ -801,7 +808,8 @@ class ChromeHidTestHelper {
 
     if (web_contents) {
       // Now the `WebContents` should indicate we are connected to a device.
-      EXPECT_TRUE(web_contents->IsConnectedToHidDevice());
+      EXPECT_TRUE(web_contents->IsCapabilityActive(
+          content::WebContentsCapabilityType::kHID));
     }
   }
 #endif
@@ -837,7 +845,7 @@ class ChromeHidTestHelper {
   }
 
  protected:
-  raw_ptr<TestingProfile, DanglingUntriaged> profile_ = nullptr;
+  raw_ptr<TestingProfile> profile_ = nullptr;
   GURL origin_url_;
   raw_ptr<MockHidConnectionTracker, DanglingUntriaged> hid_connection_tracker_ =
       nullptr;
@@ -847,8 +855,14 @@ class ChromeHidTestHelper {
 
  private:
   std::unique_ptr<device::FakeHidManager> hid_manager_;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
+#if BUILDFLAG(IS_CHROMEOS)
+  // On ChromeOS a user account is needed in order to check whether the user
+  // account is affiliated with the device owner for the purposes of applying
+  // enterprise policy.
+  user_manager::ScopedUserManager user_manager_{
+      std::make_unique<user_manager::UserManagerImpl>(
+          std::make_unique<user_manager::FakeUserManagerDelegate>(),
+          TestingBrowserProcess::GetGlobal()->GetTestingLocalState())};
 #endif
   scoped_refptr<const extensions::Extension> extension_;
   MockHidManagerClient hid_manager_client_;
@@ -859,32 +873,12 @@ class ChromeHidDelegateRenderFrameTestBase
       public ChromeHidTestHelper {
  public:
   void SetUp() override {
-    ChromeRenderViewHostTestHarness::SetUp();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    const user_manager::User* user = SetUpUserManager();
-    TestingProfile::Builder builder;
-    testing_profile_ = builder.Build();
-    profile_ = testing_profile_.get();
-    ash::ProfileHelper::Get()->SetUserToProfileMappingForTesting(
-        user, profile_.get());
-#else
     profile_manager_ = std::make_unique<TestingProfileManager>(
         TestingBrowserProcess::GetGlobal());
     ASSERT_TRUE(profile_manager_->SetUp());
-    // TODO(crbug.com/1399310): Pass testing factory when creating profile.
-    // Ideally, we should be able to pass testing factory when calling profile
-    // manager's CreateTestingProfile. However, due to the fact that:
-    // 1) TestingProfile::TestingProfile(...) will call BrowserContextShutdown
-    // as part of setting testing factory.
-    // 2) HidConnectionTrackerFactory::BrowserContextShutdown() at some point
-    // need valid profile_metrics::GetBrowserProfileType() as part of
-    // HidConnectionTrackerFactory::GetForProfile().
-    // It will hit failure in profile_metrics::GetBrowserProfileType() because
-    // the profile is not initialized properly before setting testing factory.
-    // As a result, here create a profile then call SetTestingFactory to inject
-    // MockHidConnectionTracker.
-    profile_ = profile_manager_->CreateTestingProfile(kTestUserEmail);
-#endif
+
+    ChromeRenderViewHostTestHarness::SetUp();
+
     HidConnectionTrackerFactory::GetInstance()->SetTestingFactory(
         profile_, GetHidConnectionTrackerTestingFactory());
 
@@ -900,16 +894,55 @@ class ChromeHidDelegateRenderFrameTestBase
 
   void TearDown() override {
     DeleteContents();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    testing_profile_.reset();
-    TearDownUserManager();
-#else
-    profile_manager_->DeleteAllTestingProfiles();
-    profile_manager_.reset();
+
+#if BUILDFLAG(IS_CHROMEOS)
+    // Notify User's profile is going to be destroyed soon.
+    user_manager::UserManager::Get()->OnUserProfileWillBeDestroyed(
+        kTestAccountId);
 #endif
     profile_ = nullptr;
+    profile_manager_->DeleteAllTestingProfiles();
+
     ChromeRenderViewHostTestHarness::TearDown();
+
+    profile_manager_.reset();
     hid_connection_tracker_ = nullptr;
+  }
+
+  std::unique_ptr<TestingProfile> CreateTestingProfile() override {
+#if BUILDFLAG(IS_CHROMEOS)
+    // LogIn must happen before profile creation.
+    LogIn(kTestAccountId);
+    ash::ScopedAccountIdAnnotator annotator(profile_manager_->profile_manager(),
+                                            kTestAccountId);
+#endif
+    // TODO(crbug.com/40249783): Pass testing factory when creating profile.
+    // Ideally, we should be able to pass testing factory when calling profile
+    // manager's CreateTestingProfile. However, due to the fact that:
+    // 1) TestingProfile::TestingProfile(...) will call BrowserContextShutdown
+    // as part of setting testing factory.
+    // 2) HidConnectionTrackerFactory::BrowserContextShutdown() at some point
+    // need valid profile_metrics::GetBrowserProfileType() as part of
+    // HidConnectionTrackerFactory::GetForProfile().
+    // It will hit failure in profile_metrics::GetBrowserProfileType() because
+    // the profile is not initialized properly before setting testing factory.
+    // As a result, here create a profile then call SetTestingFactory to inject
+    // MockHidConnectionTracker.
+    profile_ = profile_manager_->CreateTestingProfile(kTestUserEmail);
+
+#if BUILDFLAG(IS_CHROMEOS)
+    // Notify ChromeOS User that its profile is created.
+    user_manager::UserManager::Get()->OnUserProfileCreated(
+        kTestAccountId, profile_->GetPrefs());
+#endif
+
+    // The ownership is still held by ProfileManager, so do not return the
+    // instance.
+    return nullptr;
+  }
+
+  content::BrowserContext* GetBrowserContext() override {
+    return profile_.get();
   }
 
   // ChromeHidTestHelper
@@ -923,7 +956,7 @@ class ChromeHidDelegateRenderFrameTestBase
     // The test assumes the previous page gets deleted after navigation,
     // disconnecting the device. Disable back/forward cache to ensure that it
     // doesn't get preserved in the cache.
-    // TODO(crbug.com/1346021): Integrate WebHID with bfcache and remove this.
+    // TODO(crbug.com/40232335): Integrate WebHID with bfcache and remove this.
     content::DisableBackForwardCacheForTesting(
         web_contents, content::BackForwardCache::TEST_REQUIRES_NO_CACHING);
 
@@ -946,7 +979,8 @@ class ChromeHidDelegateRenderFrameTestBase
     EXPECT_THAT(devices_future.Take(), ElementsAre(HasGuid(device->guid)));
 
     // The `WebContents` should not indicate we are connected to a device.
-    EXPECT_FALSE(web_contents->IsConnectedToHidDevice());
+    EXPECT_FALSE(web_contents->IsCapabilityActive(
+        content::WebContentsCapabilityType::kHID));
 
     // Open a connection to `device`.
     FakeHidConnectionClient connection_client;
@@ -963,22 +997,20 @@ class ChromeHidDelegateRenderFrameTestBase
     ASSERT_TRUE(connection);
 
     // Now the `WebContents` should indicate we are connected to a device.
-    EXPECT_TRUE(web_contents->IsConnectedToHidDevice());
+    EXPECT_TRUE(web_contents->IsCapabilityActive(
+        content::WebContentsCapabilityType::kHID));
 
     // Perform a cross-document navigation. The `WebContents` should no longer
     // indicate we are connected.
     NavigateAndCommit(GURL(kCrossOriginTestUrl));
     base::RunLoop().RunUntilIdle();
 
-    EXPECT_FALSE(web_contents->IsConnectedToHidDevice());
+    EXPECT_FALSE(web_contents->IsCapabilityActive(
+        content::WebContentsCapabilityType::kHID));
   }
 
  private:
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  std::unique_ptr<TestingProfile> testing_profile_;
-#else
   std::unique_ptr<TestingProfileManager> profile_manager_;
-#endif
 };
 
 class ChromeHidDelegateRenderFrameTest
@@ -993,9 +1025,6 @@ class ChromeHidDelegateServiceWorkerTestBase
  public:
   void SetUp() override {
     content::EmbeddedWorkerInstanceTestHarness::SetUp();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    SetUpUserManager();
-#endif
     SetUpHidConnectionTracker();
     BindHidManager();
     SetUpOriginUrl();
@@ -1004,9 +1033,7 @@ class ChromeHidDelegateServiceWorkerTestBase
 
   void TearDown() override {
     StopWorker();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    TearDownUserManager();
-#endif
+    profile_ = nullptr;
     content::EmbeddedWorkerInstanceTestHarness::TearDown();
   }
 
@@ -1029,10 +1056,19 @@ class ChromeHidDelegateServiceWorkerTestBase
 
   // content::EmbeddedWorkerInstanceTestHarness
   std::unique_ptr<content::BrowserContext> CreateBrowserContext() override {
+#if BUILDFLAG(IS_CHROMEOS)
+    // In ChromeOS, User seession needs to be created for web browser profile.
+    LogIn(kTestAccountId);
+#endif
+
     auto builder = TestingProfile::Builder();
     auto testing_profile = builder.Build();
     profile_ = testing_profile.get();
-    // TODO(crbug.com/1399310): Pass testing factory when creating profile.
+#if BUILDFLAG(IS_CHROMEOS)
+    // Tie the created Profile and the logged-in User for ChromeOS.
+    ash::AnnotatedAccountId::Set(profile_.get(), kTestAccountId);
+#endif
+    // TODO(crbug.com/40249783): Pass testing factory when creating profile.
     // Ideally, we should use TestingProfile::Builder::AddTestingFactory to
     // inject MockHidConnectionTracker. However, due to the fact that:
     // 1) TestingProfile::TestingProfile(...) will call BrowserContextShutdown
@@ -1050,8 +1086,9 @@ class ChromeHidDelegateServiceWorkerTestBase
   }
 
  private:
-  ScopedTestingLocalState testing_local_state_{
-      TestingBrowserProcess::GetGlobal()};
+  // EmbeddedWorkerInstanceTestHarness initializes the full device service.
+  // Override the UsbDeviceManager to prevent access to real devices.
+  device::ScopedUsbDeviceManagerOverrider usb_device_manager_overrider_;
 };
 
 class ChromeHidDelegateServiceWorkerTest
@@ -1062,18 +1099,6 @@ class ChromeHidDelegateServiceWorkerTest
 };
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-class DisableWebHidOnExtensionServiceWorkerHelper {
- public:
-  DisableWebHidOnExtensionServiceWorkerHelper() {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{},
-        /*disabled_features=*/{
-            features::kEnableWebHidOnExtensionServiceWorker});
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
 
 class ChromeHidDelegateExtensionServiceWorkerTest
     : public ChromeHidDelegateServiceWorkerTestBase {
@@ -1085,33 +1110,11 @@ class ChromeHidDelegateExtensionServiceWorkerTest
   void SetUpOriginUrl() override { SetUpExtensionOriginUrl(); }
 };
 
-class ChromeHidDelegateExtensionServiceWorkerFeatureDisabledTest
-    : public ChromeHidDelegateExtensionServiceWorkerTest,
-      public DisableWebHidOnExtensionServiceWorkerHelper {
- public:
-  ChromeHidDelegateExtensionServiceWorkerFeatureDisabledTest() {
-    // There is no hid connection tracker activity when
-    // features::kEnableWebHidOnExtensionServiceWorker is disabled.
-    supports_hid_connection_tracker_ = false;
-  }
-};
-
 class ChromeHidDelegateExtensionRenderFrameTest
     : public ChromeHidDelegateRenderFrameTestBase {
  public:
   ChromeHidDelegateExtensionRenderFrameTest() {
     supports_hid_connection_tracker_ = true;
-  }
-  // ChromeHidTestHelper
-  void SetUpOriginUrl() override { SetUpExtensionOriginUrl(); }
-};
-
-class ChromeHidDelegateExtensionRenderFrameFeatureDisabledTest
-    : public ChromeHidDelegateExtensionRenderFrameTest,
-      public DisableWebHidOnExtensionServiceWorkerHelper {
- public:
-  ChromeHidDelegateExtensionRenderFrameFeatureDisabledTest() {
-    supports_hid_connection_tracker_ = false;
   }
   // ChromeHidTestHelper
   void SetUpOriginUrl() override { SetUpExtensionOriginUrl(); }
@@ -1151,11 +1154,6 @@ TEST_F(ChromeHidDelegateRenderFrameTest, ConnectAndRemove) {
 
 TEST_F(ChromeHidDelegateRenderFrameTest, ConnectAndNavigateCrossDocument) {
   TestConnectAndNavigateCrossDocument(web_contents());
-}
-
-TEST_F(ChromeHidDelegateExtensionServiceWorkerFeatureDisabledTest,
-       HidServiceNotConnected) {
-  TestHidServiceNotConnected();
 }
 
 TEST_F(ChromeHidDelegateServiceWorkerTest, HidServiceNotConnected) {
@@ -1202,11 +1200,6 @@ TEST_F(ChromeHidDelegateExtensionRenderFrameTest,
   TestConnectAndNavigateCrossDocument(web_contents());
 }
 
-TEST_F(ChromeHidDelegateExtensionRenderFrameFeatureDisabledTest,
-       ConnectionTrackerOpenDeviceNoIndicatorNoNotification) {
-  TestConnectionTrackerOpenDeviceNoConnectionCountUpdate();
-}
-
 TEST_F(ChromeHidDelegateExtensionServiceWorkerTest, AddChangeRemoveDevice) {
   TestAddChangeRemoveDevice();
 }
@@ -1243,7 +1236,8 @@ TEST(ChromeHidDelegateBrowserContextTest, BrowserContextIsNull) {
   EXPECT_FALSE(chrome_hid_delegate.CanRequestDevicePermission(
       /*browser_context=*/nullptr, origin));
   EXPECT_FALSE(chrome_hid_delegate.HasDevicePermission(
-      /*browser_context=*/nullptr, origin, device::mojom::HidDeviceInfo()));
+      /*browser_context=*/nullptr, /*render_frame_host=*/nullptr, origin,
+      device::mojom::HidDeviceInfo()));
   EXPECT_EQ(nullptr,
             chrome_hid_delegate.GetHidManager(/*browser_context=*/nullptr));
   EXPECT_EQ(nullptr, chrome_hid_delegate.GetDeviceInfo(

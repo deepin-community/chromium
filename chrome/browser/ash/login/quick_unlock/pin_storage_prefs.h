@@ -7,7 +7,6 @@
 
 #include <string>
 
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "chromeos/ash/components/login/auth/public/key.h"
 
@@ -20,8 +19,6 @@ enum class Purpose;
 
 class PinStoragePrefs {
  public:
-  // TODO(sammiequon): Pull this value in from policy. See
-  // https://crbug.com/612271.
   static const int kMaximumUnlockAttempts = 3;
 
   // Registers profile prefs.

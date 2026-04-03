@@ -18,19 +18,16 @@ EnumTraits<mojo_base::mojom::ThreadType, base::ThreadType>::ToMojom(
       return mojo_base::mojom::ThreadType::kBackground;
     case base::ThreadType::kUtility:
       return mojo_base::mojom::ThreadType::kUtility;
-    case base::ThreadType::kResourceEfficient:
-      return mojo_base::mojom::ThreadType::kResourceEfficient;
     case base::ThreadType::kDefault:
       return mojo_base::mojom::ThreadType::kDefault;
-    case base::ThreadType::kCompositing:
-      return mojo_base::mojom::ThreadType::kCompositing;
-    case base::ThreadType::kDisplayCritical:
-      return mojo_base::mojom::ThreadType::kDisplayCritical;
+    case base::ThreadType::kPresentation:
+      return mojo_base::mojom::ThreadType::kPresentation;
+    case base::ThreadType::kAudioProcessing:
+      return mojo_base::mojom::ThreadType::kAudioProcessing;
     case base::ThreadType::kRealtimeAudio:
       return mojo_base::mojom::ThreadType::kRealtimeAudio;
   }
   NOTREACHED();
-  return mojo_base::mojom::ThreadType::kBackground;
 }
 
 // static
@@ -44,17 +41,14 @@ bool EnumTraits<mojo_base::mojom::ThreadType, base::ThreadType>::FromMojom(
     case mojo_base::mojom::ThreadType::kUtility:
       *out = base::ThreadType::kUtility;
       return true;
-    case mojo_base::mojom::ThreadType::kResourceEfficient:
-      *out = base::ThreadType::kResourceEfficient;
-      return true;
     case mojo_base::mojom::ThreadType::kDefault:
       *out = base::ThreadType::kDefault;
       return true;
-    case mojo_base::mojom::ThreadType::kCompositing:
-      *out = base::ThreadType::kCompositing;
+    case mojo_base::mojom::ThreadType::kPresentation:
+      *out = base::ThreadType::kPresentation;
       return true;
-    case mojo_base::mojom::ThreadType::kDisplayCritical:
-      *out = base::ThreadType::kDisplayCritical;
+    case mojo_base::mojom::ThreadType::kAudioProcessing:
+      *out = base::ThreadType::kAudioProcessing;
       return true;
     case mojo_base::mojom::ThreadType::kRealtimeAudio:
       *out = base::ThreadType::kRealtimeAudio;

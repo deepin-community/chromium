@@ -16,7 +16,7 @@ REPOSITORY_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir))
 
 sys.path.insert(0, REPOSITORY_ROOT)
-from components.cronet.tools.utils import run, run_shell, android_gn_gen, build  # pylint: disable=wrong-import-position
+from components.cronet.tools.utils import run, android_gn_gen, build  # pylint: disable=wrong-import-position
 
 
 def install(out_dir):
@@ -53,12 +53,6 @@ def debug(extra_options):
   ] + extra_options)
 
 
-def stack(out_dir):
-  return run_shell('adb logcat -d | CHROMIUM_OUTPUT_DIR=' +
-                   shlex.quote(out_dir) +
-                   ' third_party/android_platform/development/scripts/stack')
-
-
 def main():
   parser = argparse.ArgumentParser()
   parser.add_argument('command',
@@ -78,6 +72,9 @@ def main():
   parser.add_argument('--x64',
                       action='store_true',
                       help='build for Intel x86_64 architecture')
+  parser.add_argument('--arm',
+                      action='store_true',
+                      help='build for arm architecture')
   parser.add_argument('-R',
                       '--riscv64',
                       action='store_true',
@@ -106,6 +103,9 @@ def main():
   elif options.riscv64:
     target_cpu = 'riscv64'
     out_dir_suffix = '-riscv64'
+  elif options.arm:
+    target_cpu = 'arm'
+    out_dir_suffix = '-arm'
   else:
     target_cpu = 'arm64'
     out_dir_suffix = '-arm64'

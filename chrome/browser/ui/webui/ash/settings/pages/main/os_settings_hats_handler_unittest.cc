@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/webui/ash/settings/pages/main/os_settings_hats_handler.h"
+
 #include "chrome/browser/ui/webui/ash/settings/services/hats/os_settings_hats_manager.h"
 #include "chrome/browser/ui/webui/ash/settings/services/hats/os_settings_hats_manager_factory.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
@@ -67,13 +68,13 @@ class SettingsHatsHandlerTest : public testing::Test {
 };
 
 TEST_F(SettingsHatsHandlerTest, TestHandleSettingsUsedSearch) {
-  base::Value::List args;
+  base::ListValue args;
   EXPECT_CALL(*manager_handler_, SetSettingsUsedSearch(true)).Times(1);
   web_ui_.HandleReceivedMessage("settingsUsedSearch", args);
 }
 
 TEST_F(SettingsHatsHandlerTest, TestHandleSendSettingsHats) {
-  base::Value::List args;
+  base::ListValue args;
   EXPECT_CALL(*manager_handler_, MaybeSendSettingsHats()).Times(1);
   web_ui_.HandleReceivedMessage("sendSettingsHats", args);
 }

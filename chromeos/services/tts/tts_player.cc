@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 #include "chromeos/services/tts/tts_player.h"
+
 #include "base/task/single_thread_task_runner.h"
+#include "media/base/audio_bus.h"
 
 namespace chromeos {
 namespace tts {
@@ -65,7 +67,7 @@ int TtsPlayer::Render(base::TimeDelta delay,
     if (buffers_.empty())
       return 0;
 
-    float* channel = dest->channel(0);
+    auto channel = dest->channel(0);
 
     AudioBuffer* buffer = &buffers_.front();
     for (size_t output_index = 0; output_index < frame_count;

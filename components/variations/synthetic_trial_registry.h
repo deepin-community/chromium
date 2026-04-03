@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_VARIATIONS_SYNTHETIC_TRIAL_REGISTRY_H_
 #define COMPONENTS_VARIATIONS_SYNTHETIC_TRIAL_REGISTRY_H_
 
+#include <string_view>
 #include <vector>
 
 #include "base/component_export.h"
@@ -12,6 +13,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/observer_list.h"
+#include "base/types/pass_key.h"
 #include "components/variations/synthetic_trials.h"
 
 namespace metrics {
@@ -22,18 +24,17 @@ namespace content {
 class SyntheticTrialSyncer;
 }  // namespace content
 
-namespace tpcd::experiment {
-class ExperimentManagerImplBrowserTest;
-}  // namespace tpcd::experiment
+class UmaSessionStatsExternalExperimentRegistrar;
+
+namespace android_webview {
+class AwMetricsServiceAccessor;
+}  // namespace android_webview
 
 namespace variations {
-
 struct ActiveGroupId;
 class FieldTrialsProvider;
 class FieldTrialsProviderTest;
-class LimitedEntropySyntheticTrial;
 class SyntheticTrialRegistryTest;
-class LimitedEntropyRandomizationBrowserTest;
 
 namespace internal {
 COMPONENT_EXPORT(VARIATIONS) BASE_DECLARE_FEATURE(kExternalExperimentAllowlist);
@@ -63,31 +64,46 @@ class COMPONENT_EXPORT(VARIATIONS) SyntheticTrialRegistry {
   // Registers a list of experiment ids coming from an external application.
   // The input ids are in the VariationID format.
   //
-  // When |enable_external_experiment_allowlist| is true, the supplied ids must
-  // have corresponding entries in the "ExternalExperimentAllowlist" (coming via
-  // a feature param) to be applied. The allowlist also supplies the
-  // corresponding trial name that should be used for reporting to UMA.
-  //
-  // When |enable_external_experiment_allowlist| is false, |fallback_study_name|
-  // will be used as the trial name for all provided experiment ids.
+  // The supplied ids must have corresponding entries in the
+  // "ExternalExperimentAllowlist" (coming via a feature param) to be applied.
+  // The allowlist also supplies the corresponding trial name that should be
+  // used for reporting to UMA.
   //
   // If |mode| is kOverrideExistingIds, this API clears previously-registered
   // external experiment ids, replacing them with the new list (which may be
   // empty). If |mode| is kDoNotOverrideExistingIds, any new ids that are not
   // already registered will be added, but existing ones will not be replaced.
-  void RegisterExternalExperiments(const std::string& fallback_study_name,
-                                   const std::vector<int>& experiment_ids,
-                                   OverrideMode mode);
+  //
+  // Restricted to only be called by UmaSessionStatsExternalExperimentRegistrar
+  // for privacy reasons.
+  void RegisterExternalExperiments(
+      base::PassKey<UmaSessionStatsExternalExperimentRegistrar> pass_key,
+      const std::vector<int>& experiment_ids,
+      OverrideMode mode);
+
+  // As above, but restricted to only be called by
+  // android_webview::AwMetricsServiceAccessor.
+  void RegisterExternalExperiments(
+      base::PassKey<android_webview::AwMetricsServiceAccessor> pass_key,
+      const std::vector<int>& experiment_ids,
+      OverrideMode mode);
+
+  // As above, but for testing purposes only.
+  void RegisterExternalExperimentsForTesting(
+      const std::vector<int>& experiment_ids,
+      OverrideMode mode);
+
+  // Exposed publicly for testing purposes, it returns a full list of synthetic
+  // field trials that are either in the past or specify |kCurrentLog| as
+  // |annotation_mode|.
+  std::vector<ActiveGroupId> GetCurrentSyntheticFieldTrialsForTest() const;
 
  private:
   friend metrics::MetricsServiceAccessor;
-  friend LimitedEntropySyntheticTrial;
   friend FieldTrialsProvider;
   friend FieldTrialsProviderTest;
   friend SyntheticTrialRegistryTest;
-  friend ::tpcd::experiment::ExperimentManagerImplBrowserTest;
   friend content::SyntheticTrialSyncer;
-  friend LimitedEntropyRandomizationBrowserTest;
   FRIEND_TEST_ALL_PREFIXES(SyntheticTrialRegistryTest, RegisterSyntheticTrial);
   FRIEND_TEST_ALL_PREFIXES(SyntheticTrialRegistryTest,
                            GetSyntheticFieldTrialsOlderThanSuffix);
@@ -95,8 +111,17 @@ class COMPONENT_EXPORT(VARIATIONS) SyntheticTrialRegistry {
                            GetSyntheticFieldTrialActiveGroups);
   FRIEND_TEST_ALL_PREFIXES(SyntheticTrialRegistryTest, NotifyObserver);
   FRIEND_TEST_ALL_PREFIXES(VariationsCrashKeysTest, BasicFunctionality);
-  FRIEND_TEST_ALL_PREFIXES(LimitedEntropyRandomizationBrowserTest,
-                           MANUAL_SyntheticTrialAndStudyRegistrationSubTest);
+
+  // Result of parsing an external experiment from the allowlist.
+  struct ExternalExperiment {
+    std::string_view study_name;
+    std::string_view group_name;
+  };
+
+  // Internal implementation of RegisterExternalExperiments().
+  void RegisterExternalExperimentsInternal(
+      const std::vector<int>& experiment_ids,
+      SyntheticTrialRegistry::OverrideMode mode);
 
   // Registers a field trial name and group to be used to annotate UMA and UKM
   // reports with a particular Chrome configuration state.
@@ -119,13 +144,25 @@ class COMPONENT_EXPORT(VARIATIONS) SyntheticTrialRegistry {
   // RegisterExternalExperiments().
   void RegisterSyntheticFieldTrial(const SyntheticTrialGroup& trial_group);
 
-  // Returns the study name corresponding to |experiment_id| from the allowlist
-  // contained in |params| if the allowlist is enabled, otherwise returns
-  // |fallback_study_name|. An empty string piece is returned when the
-  // experiment is not in the allowlist.
-  base::StringPiece GetStudyNameForExpId(const std::string& fallback_study_name,
-                                         const base::FieldTrialParams& params,
-                                         const std::string& experiment_id);
+  // Returns the study and group name corresponding to |experiment_id| from the
+  // allowlist contained in |params|.
+  //
+  // The format of the value in |params| should be "StudyName,GroupName".
+  // - The study name is the part before the first comma.
+  // - The group name is the part after the first comma and before the second
+  //   comma (if any).
+  // - Any text after the second comma is ignored.
+  //
+  // If the group name is empty (e.g., "StudyName" or "StudyName,"), the
+  // |experiment_id| is used as the group name.
+  //
+  // Examples for experiment_id "100":
+  // - "StudyName" -> Study: "StudyName", Group: "100"
+  // - "StudyName,GroupName" -> Study: "StudyName", Group: "GroupName"
+  // - "StudyName,GroupName,Param" -> Study: "StudyName", Group: "GroupName"
+  // - "StudyName," -> Study: "StudyName", Group: "100"
+  ExternalExperiment GetExternalExperiment(const base::FieldTrialParams& params,
+                                           const std::string& experiment_id);
 
   // Returns a list of synthetic field trials that are either (1) older than
   // |time|, or (2) specify |kCurrentLog| as |annotation_mode|. The trial and
@@ -133,7 +170,7 @@ class COMPONENT_EXPORT(VARIATIONS) SyntheticTrialRegistry {
   void GetSyntheticFieldTrialsOlderThan(
       base::TimeTicks time,
       std::vector<ActiveGroupId>* synthetic_trials,
-      base::StringPiece suffix = "") const;
+      std::string_view suffix = "") const;
 
   // SyntheticTrialSyncer needs to know all current synthetic trial
   // groups after launching new child processes.

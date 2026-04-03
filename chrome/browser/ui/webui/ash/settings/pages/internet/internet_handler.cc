@@ -7,9 +7,6 @@
 #include <memory>
 #include <vector>
 
-#include "ash/components/arc/mojom/net.mojom.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
 #include "ash/constants/ash_pref_names.h"
 #include "base/functional/bind.h"
 #include "base/values.h"
@@ -25,6 +22,9 @@
 #include "chromeos/ash/components/network/network_event_log.h"
 #include "chromeos/ash/components/network/network_state.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
+#include "chromeos/ash/experiences/arc/mojom/net.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "components/onc/onc_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user_manager.h"
@@ -113,10 +113,9 @@ void InternetHandler::OnGmsCoreNotificationStateChanged() {
   SetGmsCoreNotificationsDisabledDeviceNames();
 }
 
-void InternetHandler::AddThirdPartyVpn(const base::Value::List& args) {
+void InternetHandler::AddThirdPartyVpn(const base::ListValue& args) {
   if (args.size() < 1 || !args[0].is_string()) {
     NOTREACHED() << "Invalid args for: " << kAddThirdPartyVpnMessage;
-    return;
   }
   const std::string& app_id = args[0].GetString();
   if (app_id.empty()) {
@@ -149,10 +148,9 @@ void InternetHandler::AddThirdPartyVpn(const base::Value::List& args) {
       ->SendShowAddDialogToExtension(app_id);
 }
 
-void InternetHandler::ConfigureThirdPartyVpn(const base::Value::List& args) {
+void InternetHandler::ConfigureThirdPartyVpn(const base::ListValue& args) {
   if (args.size() < 1 || !args[0].is_string()) {
     NOTREACHED() << "Invalid args for: " << kConfigureThirdPartyVpnMessage;
-    return;
   }
   const std::string& guid = args[0].GetString();
   if (profile_ != GetProfileForPrimaryUser()) {
@@ -204,34 +202,31 @@ void InternetHandler::ConfigureThirdPartyVpn(const base::Value::List& args) {
 }
 
 void InternetHandler::RequestGmsCoreNotificationsDisabledDeviceNames(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   SetGmsCoreNotificationsDisabledDeviceNames();
 }
 
-void InternetHandler::ShowCarrierAccountDetail(const base::Value::List& args) {
+void InternetHandler::ShowCarrierAccountDetail(const base::ListValue& args) {
   if (args.size() < 1 || !args[0].is_string()) {
     NOTREACHED() << "Invalid args for: " << kShowCarrierAccountDetail;
-    return;
   }
   const std::string& guid = args[0].GetString();
   NetworkConnect::Get()->ShowCarrierAccountDetail(guid);
 }
 
-void InternetHandler::ShowPortalSignin(const base::Value::List& args) {
+void InternetHandler::ShowPortalSignin(const base::ListValue& args) {
   if (args.size() < 1 || !args[0].is_string()) {
     NOTREACHED() << "Invalid args for: " << kShowPortalSignin;
-    return;
   }
   const std::string& guid = args[0].GetString();
   NetworkConnect::Get()->ShowPortalSignin(guid,
                                           NetworkConnect::Source::kSettings);
 }
 
-void InternetHandler::ShowCellularSetupUI(const base::Value::List& args) {
+void InternetHandler::ShowCellularSetupUI(const base::ListValue& args) {
   if (args.size() < 1 || !args[0].is_string()) {
     NOTREACHED() << "Invalid args for: " << kConfigureThirdPartyVpnMessage;
-    return;
   }
   const std::string& guid = args[0].GetString();
   NetworkConnect::Get()->ShowMobileSetup(guid);
@@ -261,7 +256,7 @@ void InternetHandler::SendGmsCoreNotificationsDisabledDeviceNames() {
     return;
   }
 
-  base::Value::List device_names_value;
+  base::ListValue device_names_value;
   for (const auto& device_name : device_names_without_notifications_) {
     device_names_value.Append(device_name.Clone());
   }

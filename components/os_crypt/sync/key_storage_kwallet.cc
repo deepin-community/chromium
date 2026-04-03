@@ -42,7 +42,8 @@ bool KeyStorageKWallet::InitWithKWalletDBus(
     dbus::Bus::Options options;
     options.bus_type = dbus::Bus::SESSION;
     options.connection_type = dbus::Bus::PRIVATE;
-    kwallet_dbus_->SetSessionBus(base::MakeRefCounted<dbus::Bus>(options));
+    kwallet_dbus_->SetSessionBus(
+        base::MakeRefCounted<dbus::Bus>(std::move(options)));
   }
 
   InitResult result = InitWallet();
@@ -82,7 +83,6 @@ KeyStorageKWallet::InitResult KeyStorageKWallet::InitWallet() {
   }
 
   NOTREACHED();
-  return InitResult::PERMANENT_FAIL;
 }
 
 std::optional<std::string> KeyStorageKWallet::GetKeyImpl() {

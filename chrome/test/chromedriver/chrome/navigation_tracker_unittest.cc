@@ -2,17 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/test/chromedriver/chrome/navigation_tracker.h"
+
 #include <string>
 #include <utility>
 
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "chrome/test/chromedriver/chrome/browser_info.h"
-#include "chrome/test/chromedriver/chrome/javascript_dialog_manager.h"
-#include "chrome/test/chromedriver/chrome/navigation_tracker.h"
 #include "chrome/test/chromedriver/chrome/status.h"
 #include "chrome/test/chromedriver/chrome/stub_devtools_client.h"
 #include "chrome/test/chromedriver/chrome/stub_web_view.h"
+#include "chrome/test/chromedriver/chrome/web_view.h"
 #include "chrome/test/chromedriver/chrome/web_view_impl.h"
 #include "chrome/test/chromedriver/net/timeout.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -31,7 +32,7 @@ class DeterminingLoadStateDevToolsClient : public StubDevToolsClient {
   DeterminingLoadStateDevToolsClient(bool has_empty_base_url,
                                      bool is_loading,
                                      const std::string& send_event_first,
-                                     base::Value::Dict* send_event_first_params)
+                                     base::DictValue* send_event_first_params)
       : has_empty_base_url_(has_empty_base_url),
         is_loading_(is_loading),
         send_event_first_(send_event_first),
@@ -40,8 +41,8 @@ class DeterminingLoadStateDevToolsClient : public StubDevToolsClient {
   ~DeterminingLoadStateDevToolsClient() override = default;
 
   Status SendCommandAndGetResult(const std::string& method,
-                                 const base::Value::Dict& params,
-                                 base::Value::Dict* result) override {
+                                 const base::DictValue& params,
+                                 base::DictValue* result) override {
     if (method == "DOM.describeNode") {
       if (has_empty_base_url_) {
         result->SetByDottedPath("node.baseURL", "about:blank");
@@ -82,7 +83,7 @@ class DeterminingLoadStateDevToolsClient : public StubDevToolsClient {
   bool has_empty_base_url_;
   bool is_loading_;
   std::string send_event_first_;
-  raw_ptr<base::Value::Dict> send_event_first_params_;
+  raw_ptr<base::DictValue> send_event_first_params_;
 };
 
 class EvaluateScriptWebView : public StubWebView {
@@ -109,8 +110,9 @@ class EvaluateScriptWebView : public StubWebView {
   Status CallFunctionWithTimeout(
       const std::string& frame,
       const std::string& function,
-      const base::Value::List& args,
+      const base::ListValue& args,
       const base::TimeDelta& timeout,
+      const CallFunctionOptions& options,
       std::unique_ptr<base::Value>* result) override {
     return Status{kOk};
   }
@@ -123,19 +125,18 @@ class EvaluateScriptWebView : public StubWebView {
 }  // namespace
 
 TEST(NavigationTracker, FrameLoadStartStop) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   BrowserInfo browser_info;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           false, true, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, &browser_info,
-                       std::move(client_uptr), std::nullopt,
-                       PageLoadStrategy::kNormal);
-  JavaScriptDialogManager dialog_manager(client_ptr);
-  NavigationTracker tracker(client_ptr, &web_view, &dialog_manager);
+  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, nullptr,
+                       &browser_info, std::move(client_uptr), std::nullopt,
+                       PageLoadStrategy::kNormal, true);
+  NavigationTracker tracker(client_ptr, &web_view);
 
-  base::Value::Dict params;
+  base::DictValue params;
   params.Set("frameId", client_ptr->GetId());
 
   ASSERT_EQ(
@@ -151,19 +152,18 @@ TEST(NavigationTracker, FrameLoadStartStop) {
 // can sometimes see two Page.frameStartedLoading events with only a single
 // Page.loadEventFired event.
 TEST(NavigationTracker, FrameLoadStartStartStop) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   BrowserInfo browser_info;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           false, true, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, &browser_info,
-                       std::move(client_uptr), std::nullopt,
-                       PageLoadStrategy::kNormal);
-  JavaScriptDialogManager dialog_manager(client_ptr);
-  NavigationTracker tracker(client_ptr, &web_view, &dialog_manager);
+  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, nullptr,
+                       &browser_info, std::move(client_uptr), std::nullopt,
+                       PageLoadStrategy::kNormal, true);
+  NavigationTracker tracker(client_ptr, &web_view);
 
-  base::Value::Dict params;
+  base::DictValue params;
   params.Set("frameId", client_ptr->GetId());
 
   ASSERT_EQ(
@@ -180,19 +180,18 @@ TEST(NavigationTracker, FrameLoadStartStartStop) {
 }
 
 TEST(NavigationTracker, MultipleFramesLoad) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   BrowserInfo browser_info;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           false, true, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, &browser_info,
-                       std::move(client_uptr), std::nullopt,
-                       PageLoadStrategy::kNormal);
-  JavaScriptDialogManager dialog_manager(client_ptr);
-  NavigationTracker tracker(client_ptr, &web_view, &dialog_manager);
+  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, nullptr,
+                       &browser_info, std::move(client_uptr), std::nullopt,
+                       PageLoadStrategy::kNormal, true);
+  NavigationTracker tracker(client_ptr, &web_view);
 
-  base::Value::Dict params;
+  base::DictValue params;
   std::string top_frame_id = client_ptr->GetId();
   params.Set("frameId", top_frame_id);
 
@@ -233,20 +232,19 @@ TEST(NavigationTracker, MultipleFramesLoad) {
 }
 
 TEST(NavigationTracker, NavigationScheduledForOtherFrame) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   BrowserInfo browser_info;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           false, true, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, &browser_info,
-                       std::move(client_uptr), std::nullopt,
-                       PageLoadStrategy::kNormal);
-  JavaScriptDialogManager dialog_manager(client_ptr);
+  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, nullptr,
+                       &browser_info, std::move(client_uptr), std::nullopt,
+                       PageLoadStrategy::kNormal, true);
   NavigationTracker tracker(client_ptr, NavigationTracker::kNotLoading,
-                            &web_view, &dialog_manager);
+                            &web_view);
 
-  base::Value::Dict params_scheduled;
+  base::DictValue params_scheduled;
   params_scheduled.Set("delay", 0);
   params_scheduled.Set("frameId", "other");
 
@@ -258,16 +256,15 @@ TEST(NavigationTracker, NavigationScheduledForOtherFrame) {
 }
 
 TEST(NavigationTracker, CurrentFrameLoading) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           false, false, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  JavaScriptDialogManager dialog_manager(client_ptr);
   EvaluateScriptWebView web_view(kOk);
-  NavigationTracker tracker(client_ptr, &web_view, &dialog_manager);
+  NavigationTracker tracker(client_ptr, &web_view);
 
-  base::Value::Dict params;
+  base::DictValue params;
   std::string top_frame_id = client_ptr->GetId();
   std::string current_frame_id = "2";
   params.Set("frameId", current_frame_id);
@@ -309,16 +306,15 @@ TEST(NavigationTracker, CurrentFrameLoading) {
 }
 
 TEST(NavigationTracker, FrameAttachDetach) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           false, false, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  JavaScriptDialogManager dialog_manager(client_ptr);
   EvaluateScriptWebView web_view(kOk);
-  NavigationTracker tracker(client_ptr, &web_view, &dialog_manager);
+  NavigationTracker tracker(client_ptr, &web_view);
 
-  base::Value::Dict params;
+  base::DictValue params;
   std::string top_frame_id = client_ptr->GetId();
   std::string current_frame_id = "2";
   params.Set("frameId", current_frame_id);
@@ -348,16 +344,15 @@ TEST(NavigationTracker, FrameAttachDetach) {
 }
 
 TEST(NavigationTracker, SetFrameNoFrame) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           false, false, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  JavaScriptDialogManager dialog_manager(client_ptr);
   EvaluateScriptWebView web_view(kOk);
-  NavigationTracker tracker(client_ptr, &web_view, &dialog_manager);
+  NavigationTracker tracker(client_ptr, &web_view);
 
-  base::Value::Dict params;
+  base::DictValue params;
   std::string top_frame_id = client_ptr->GetId();
   web_view.SetNextEvaluateScriptResult("uninitialized", kOk);
   ASSERT_NO_FATAL_FAILURE(tracker.SetFrame(std::string()));
@@ -392,8 +387,8 @@ class FailToEvalScriptDevToolsClient : public StubDevToolsClient {
   ~FailToEvalScriptDevToolsClient() override = default;
 
   Status SendCommandAndGetResult(const std::string& method,
-                                 const base::Value::Dict& params,
-                                 base::Value::Dict* result) override {
+                                 const base::DictValue& params,
+                                 base::DictValue* result) override {
     if (!is_dom_getDocument_requested_ && method == "DOM.describeNode") {
       is_dom_getDocument_requested_ = true;
       result->SetByDottedPath("node.baseURL", "http://chromedriver.test");
@@ -421,11 +416,10 @@ TEST(NavigationTracker, UnknownStateFailsToDetermineState) {
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<FailToEvalScriptDevToolsClient>();
   DevToolsClient* client_ptr = client_uptr.get();
-  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, &browser_info,
-                       std::move(client_uptr), std::nullopt,
-                       PageLoadStrategy::kNormal);
-  JavaScriptDialogManager dialog_manager(client_ptr);
-  NavigationTracker tracker(client_ptr, &web_view, &dialog_manager);
+  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, nullptr,
+                       &browser_info, std::move(client_uptr), std::nullopt,
+                       PageLoadStrategy::kNormal, true);
+  NavigationTracker tracker(client_ptr, &web_view);
 
   bool is_pending;
   ASSERT_EQ(kUnknownError,
@@ -433,48 +427,45 @@ TEST(NavigationTracker, UnknownStateFailsToDetermineState) {
 }
 
 TEST(NavigationTracker, UnknownStatePageNotLoadAtAll) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   BrowserInfo browser_info;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           true, true, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, &browser_info,
-                       std::move(client_uptr), std::nullopt,
-                       PageLoadStrategy::kNormal);
-  JavaScriptDialogManager dialog_manager(client_ptr);
-  NavigationTracker tracker(client_ptr, &web_view, &dialog_manager);
+  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, nullptr,
+                       &browser_info, std::move(client_uptr), std::nullopt,
+                       PageLoadStrategy::kNormal, true);
+  NavigationTracker tracker(client_ptr, &web_view);
 
   ASSERT_NO_FATAL_FAILURE(AssertPendingState(&tracker, true));
 }
 
 TEST(NavigationTracker, UnknownStateForcesStart) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           false, true, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  JavaScriptDialogManager dialog_manager(client_ptr);
   EvaluateScriptWebView web_view(kOk);
-  NavigationTracker tracker(client_ptr, &web_view, &dialog_manager);
+  NavigationTracker tracker(client_ptr, &web_view);
 
   ASSERT_NO_FATAL_FAILURE(AssertPendingState(&tracker, true));
 }
 
 TEST(NavigationTracker, UnknownStateForcesStartReceivesStop) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   BrowserInfo browser_info;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           false, true, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, &browser_info,
-                       std::move(client_uptr), std::nullopt,
-                       PageLoadStrategy::kNormal);
-  JavaScriptDialogManager dialog_manager(client_ptr);
-  NavigationTracker tracker(client_ptr, &web_view, &dialog_manager);
+  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, nullptr,
+                       &browser_info, std::move(client_uptr), std::nullopt,
+                       PageLoadStrategy::kNormal, true);
+  NavigationTracker tracker(client_ptr, &web_view);
 
-  base::Value::Dict params;
+  base::DictValue params;
   params.Set("frameId", client_ptr->GetId());
   ASSERT_EQ(kOk,
             tracker.OnEvent(client_ptr, "Page.loadEventFired", params).code());
@@ -482,18 +473,17 @@ TEST(NavigationTracker, UnknownStateForcesStartReceivesStop) {
 }
 
 TEST(NavigationTracker, OnSuccessfulNavigate) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           false, true, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  JavaScriptDialogManager dialog_manager(client_ptr);
   EvaluateScriptWebView web_view(kOk);
   NavigationTracker tracker(client_ptr, NavigationTracker::kNotLoading,
-                            &web_view, &dialog_manager);
+                            &web_view);
 
-  base::Value::Dict params;
-  base::Value::Dict result;
+  base::DictValue params;
+  base::DictValue result;
   result.Set("frameId", client_ptr->GetId());
   web_view.SetNextEvaluateScriptResult("loading", kOk);
   tracker.OnCommandSuccess(client_ptr, "Page.navigate", &result, Timeout());
@@ -504,18 +494,17 @@ TEST(NavigationTracker, OnSuccessfulNavigate) {
 }
 
 TEST(NavigationTracker, OnNetworkErroredNavigate) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           false, true, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  JavaScriptDialogManager dialog_manager(client_ptr);
   EvaluateScriptWebView web_view(kOk);
   NavigationTracker tracker(client_ptr, NavigationTracker::kNotLoading,
-                            &web_view, &dialog_manager);
+                            &web_view);
 
-  base::Value::Dict params;
-  base::Value::Dict result;
+  base::DictValue params;
+  base::DictValue result;
   result.Set("frameId", client_ptr->GetId());
   result.Set("errorText", "net::ERR_PROXY_CONNECTION_FAILED");
   web_view.SetNextEvaluateScriptResult("loading", kOk);
@@ -527,18 +516,17 @@ TEST(NavigationTracker, OnNetworkErroredNavigate) {
 }
 
 TEST(NavigationTracker, OnNonNetworkErroredNavigate) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<DeterminingLoadStateDevToolsClient>(
           false, true, std::string(), &dict);
   DevToolsClient* client_ptr = client_uptr.get();
-  JavaScriptDialogManager dialog_manager(client_ptr);
   EvaluateScriptWebView web_view(kOk);
   NavigationTracker tracker(client_ptr, NavigationTracker::kNotLoading,
-                            &web_view, &dialog_manager);
+                            &web_view);
 
-  base::Value::Dict params;
-  base::Value::Dict result;
+  base::DictValue params;
+  base::DictValue result;
   result.Set("frameId", client_ptr->GetId());
   result.Set("errorText", "net::ERR_CERT_COMMON_NAME_INVALID");
   web_view.SetNextEvaluateScriptResult("loading", kOk);
@@ -558,8 +546,8 @@ class TargetClosedDevToolsClient : public StubDevToolsClient {
   ~TargetClosedDevToolsClient() override = default;
 
   Status SendCommandAndGetResult(const std::string& method,
-                                 const base::Value::Dict& params,
-                                 base::Value::Dict* result) override {
+                                 const base::DictValue& params,
+                                 base::DictValue* result) override {
     return Status(kUnknownError, "Inspected target navigated or closed");
   }
 };
@@ -571,11 +559,10 @@ TEST(NavigationTracker, TargetClosedInIsPendingNavigation) {
   std::unique_ptr<DevToolsClient> client_uptr =
       std::make_unique<TargetClosedDevToolsClient>();
   DevToolsClient* client_ptr = client_uptr.get();
-  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, &browser_info,
-                       std::move(client_uptr), std::nullopt,
-                       PageLoadStrategy::kNormal);
-  JavaScriptDialogManager dialog_manager(client_ptr);
-  NavigationTracker tracker(client_ptr, &web_view, &dialog_manager);
+  WebViewImpl web_view(client_ptr->GetId(), true, nullptr, nullptr,
+                       &browser_info, std::move(client_uptr), std::nullopt,
+                       PageLoadStrategy::kNormal, true);
+  NavigationTracker tracker(client_ptr, &web_view);
 
   bool is_pending;
   ASSERT_EQ(kOk, tracker.IsPendingNavigation(nullptr, &is_pending).code());

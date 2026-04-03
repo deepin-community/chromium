@@ -5,6 +5,8 @@
 #ifndef ASH_PUBLIC_CPP_ROUNDED_IMAGE_VIEW_H_
 #define ASH_PUBLIC_CPP_ROUNDED_IMAGE_VIEW_H_
 
+#include <array>
+
 #include "ash/public/cpp/ash_public_export.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/geometry/size.h"
@@ -53,7 +55,8 @@ class ASH_PUBLIC_EXPORT RoundedImageView : public views::View {
   void SetCornerRadius(int corner_radius);
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnPaint(gfx::Canvas* canvas) override;
 
   const gfx::ImageSkia& original_image() const { return original_image_; }
@@ -64,7 +67,7 @@ class ASH_PUBLIC_EXPORT RoundedImageView : public views::View {
 
   gfx::ImageSkia original_image_;
   gfx::ImageSkia resized_image_;
-  int corner_radius_[4];
+  std::array<int, 4> corner_radius_;
 
   const Alignment alignment_;
 };

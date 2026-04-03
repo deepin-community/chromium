@@ -19,10 +19,16 @@
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "services/device/geolocation/geolocation_provider.h"
+#include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
 #include "services/device/public/cpp/geolocation/location_provider.h"
+#include "services/device/public/cpp/geolocation/location_system_permission_status.h"
 #include "services/device/public/mojom/geolocation_control.mojom.h"
 #include "services/device/public/mojom/geolocation_internals.mojom.h"
 #include "services/device/public/mojom/geoposition.mojom.h"
+
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+#include "base/scoped_observation.h"
+#endif  // BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
 
 namespace base {
 template <typename Type>
@@ -36,8 +42,6 @@ class SharedURLLoaderFactory;
 
 namespace device {
 
-class GeolocationManager;
-
 // Callback that returns the embedder's custom location provider. This callback
 // is provided to the Device Service by its embedder.
 using CustomLocationProviderCallback =
@@ -47,6 +51,10 @@ using CustomLocationProviderCallback =
 // API of the geolocation subsystem. Clients subscribe for location updates
 // with AddLocationUpdateCallback and cancel their subscription by destroying
 // the returned subscription object.
+//
+// It also implements GeolocationSystemPermissionManager::PermissionObserver on
+// supported platforms. Monitors system permission changes to manage the
+// LocationProviderManager and report permission errors to clients.
 //
 // THREADING
 //
@@ -61,19 +69,24 @@ using CustomLocationProviderCallback =
 // which generate new position estimates. LocationProviders must only run on
 // the geolocation thread. Providers report new position estimates by calling
 // OnLocationUpdate on the geolocation thread.
-class GeolocationProviderImpl : public GeolocationProvider,
-                                public mojom::GeolocationControl,
-                                public mojom::GeolocationInternals,
-                                public base::Thread {
+class GeolocationProviderImpl
+    : public GeolocationProvider,
+      public mojom::GeolocationControl,
+      public mojom::GeolocationInternals,
+      public base::Thread
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+    ,
+      public GeolocationSystemPermissionManager::PermissionObserver
+#endif
+{
  public:
   // GeolocationProvider implementation:
   base::CallbackListSubscription AddLocationUpdateCallback(
       const LocationUpdateCallback& callback,
       bool enable_high_accuracy) override;
-  bool HighAccuracyLocationInUse() override;
   void OverrideLocationForTesting(mojom::GeopositionResultPtr result) override;
 
-  // Callback from the LocationArbitrator. Public for testing.
+  // Callback from the LocationProviderManager. Public for testing.
   void OnLocationUpdate(const LocationProvider* provider,
                         mojom::GeopositionResultPtr result);
 
@@ -92,17 +105,20 @@ class GeolocationProviderImpl : public GeolocationProvider,
   // |api_key| : a Google API key for network geolocation requests.
   // |custom_location_provider_getter| : a callback which returns a custom
   // location provider from embedder.
-  // |geolocation_manager| : An object that holds the macOS CLLocationManager
-  // object in order to avoid multiple initializations. Should be a nullptr
-  // on all other platforms.
-  // |use_gms_core_location_provider| : For android only, a flag indicates
-  // whether using the GMS core location provider.
+  // |geolocation_system_permission_manager| : An object that holds the macOS
+  // CLLocationManager object in order to avoid multiple initializations. Should
+  // be a nullptr on all other platforms. |use_gms_core_location_provider| : For
+  // android only, a flag indicates whether using the GMS core location
+  // provider.
   static void SetGeolocationConfiguration(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const std::string& api_key,
       const CustomLocationProviderCallback& custom_location_provider_getter,
-      GeolocationManager* geolocation_manager,
+      GeolocationSystemPermissionManager* geolocation_system_permission_manager,
       bool use_gms_core_location_provider);
+
+  static void SetGeolocationSystemPermissionManagerForTesting(
+      GeolocationSystemPermissionManager* instance_for_testing);
 
   void BindGeolocationControlReceiver(
       mojo::PendingReceiver<mojom::GeolocationControl> receiver);
@@ -121,9 +137,14 @@ class GeolocationProviderImpl : public GeolocationProvider,
     user_did_opt_into_location_services_ = false;
   }
 
+  bool is_running_precise_for_testing() const { return is_running_precise_; }
+
+  // GeolocationProvider implementation:
+
   // Safe to call while there are no GeolocationProviderImpl clients
   // registered.
-  void SetArbitratorForTesting(std::unique_ptr<LocationProvider> arbitrator);
+  void SetLocationProviderManagerForTesting(
+      std::unique_ptr<LocationProvider> location_provider_manager);
 
   // mojom::GeolocationInternals implementation:
   void AddInternalsObserver(
@@ -133,6 +154,18 @@ class GeolocationProviderImpl : public GeolocationProvider,
   // Calls OnInternalsUpdated on the geolocation thread to simulate updated
   // diagnostics in tests.
   void SimulateInternalsUpdatedForTesting();
+
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+  // GeolocationSystemPermissionManager::PermissionObserver implementation.
+  void OnSystemPermissionUpdated(
+      LocationSystemPermissionStatus new_status) override;
+  void OnPermissionManagerShuttingDown() override;
+#endif
+
+  static constexpr char kSystemPermissionDeniedErrorMessage[] =
+      "User denied Geolocation";
+  static constexpr char kSystemPermissionDeniedErrorTechnical[] =
+      "User has not allowed access to system location";
 
  private:
   friend struct base::DefaultSingletonTraits<GeolocationProviderImpl>;
@@ -150,8 +183,8 @@ class GeolocationProviderImpl : public GeolocationProvider,
   void StopProviders();
 
   // Starts the geolocation providers or updates their options (delegates to
-  // arbitrator). If `enable_diagnostics` is true, also enables geolocation
-  // diagnostics.
+  // location_provider_manager). If `enable_diagnostics` is true, also enables
+  // geolocation diagnostics.
   void StartProviders(bool enable_high_accuracy, bool enable_diagnostics);
 
   // Updates the providers on the geolocation thread, which must be running.
@@ -202,13 +235,31 @@ class GeolocationProviderImpl : public GeolocationProvider,
   // Disables geolocation diagnostics. Must be called on the geolocation thread.
   void DisableDiagnosticsOnGeolocationThread();
 
+  // Called on main thread to post a task to start providers on geolocation
+  // thread.
+  void DoStartProvidersOnGeolocationThread();
+
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+  // Called on main thread to notify clients when system permission is denied.
+  void NotifyClientsSystemPermissionDenied();
+#endif
+
   base::RepeatingCallbackList<void(const mojom::GeopositionResult&)>
       high_accuracy_callbacks_;
   base::RepeatingCallbackList<void(const mojom::GeopositionResult&)>
       low_accuracy_callbacks_;
 
   bool user_did_opt_into_location_services_ = false;
+  // When the `kApproximateGeolocationPermission` feature is disabled, this
+  // field stores the most recent geoposition result, which is shared among all
+  // clients.
   mojom::GeopositionResultPtr result_;
+  // When the `kApproximateGeolocationPermission` feature is enabled, these
+  // fields store the most recent high and low accuracy geoposition results
+  // respectively. This ensures that callbacks registered with a specific
+  // accuracy level receive the correct location updates.
+  mojom::GeopositionResultPtr high_accuracy_result_;
+  mojom::GeopositionResultPtr low_accuracy_result_;
 
   // True only in testing, where we want to use a custom position.
   bool ignore_location_updates_ = false;
@@ -217,7 +268,7 @@ class GeolocationProviderImpl : public GeolocationProvider,
   const scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
 
   // Only to be used on the geolocation thread.
-  std::unique_ptr<LocationProvider> arbitrator_;
+  std::unique_ptr<LocationProvider> location_provider_manager_;
 
   mojo::Receiver<mojom::GeolocationControl> control_receiver_{this};
 
@@ -227,6 +278,20 @@ class GeolocationProviderImpl : public GeolocationProvider,
   // If enabled, calling OnInternalsUpdated collects diagnostic information and
   // sends it to `internals_observers_`.
   bool diagnostics_enabled_ = false;
+
+  // This indicate the accuracy mode of the location provider while it is
+  // running.
+  bool is_running_precise_ = false;
+
+#if BUILDFLAG(OS_LEVEL_GEOLOCATION_PERMISSION_SUPPORTED)
+  LocationSystemPermissionStatus system_permission_status_ =
+      LocationSystemPermissionStatus::kNotDetermined;
+
+  base::ScopedObservation<
+      GeolocationSystemPermissionManager,
+      GeolocationSystemPermissionManager::PermissionObserver>
+      geolocation_permission_observation_{this};
+#endif
 };
 
 }  // namespace device

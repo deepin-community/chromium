@@ -4,7 +4,6 @@
 
 #include "ash/drag_drop/tab_drag_drop_delegate.h"
 
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_features.h"
 #include "ash/drag_drop/tab_drag_drop_windows_hider.h"
 #include "ash/public/cpp/new_window_delegate.h"
@@ -23,8 +22,7 @@
 #include "ash/wm/wm_metrics.h"
 #include "base/pickle.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chromeos/crosapi/cpp/lacros_startup_state.h"
-#include "ui/aura/client/aura_constants.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/clipboard/custom_data_helper.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
@@ -40,7 +38,7 @@ namespace ash {
 namespace {
 
 // The following distances are copied from tablet_mode_window_drag_delegate.cc.
-// TODO(https://crbug.com/1069869): share these constants.
+// TODO(crbug.com/40126106): share these constants.
 
 // Items dragged to within |kDistanceFromEdgeDp| of the screen will get snapped
 // even if they have not moved by |kMinimumDragToSnapDistanceDp|.
@@ -64,12 +62,6 @@ constexpr char kTabDraggingInTabletModeMaxLatencyHistogram[] =
     "Ash.TabDrag.PresentationTime.MaxLatency.TabletMode";
 
 DEFINE_UI_CLASS_PROPERTY_KEY(bool, kIsSourceWindowForDrag, false)
-
-bool IsLacrosWindow(const aura::Window* window) {
-  auto app_type =
-      static_cast<AppType>(window->GetProperty(aura::client::kAppType));
-  return app_type == AppType::LACROS;
-}
 
 // Returns the overview session if overview mode is active, otherwise returns
 // nullptr.
@@ -164,9 +156,12 @@ void TabDragDropDelegate::DropAndDeleteSelf(
     const ui::OSExchangeData& drop_data) {
   tab_dragging_recorder_.reset();
 
+  // Release input capture in advance.
+  ReleaseCapture();
+
   auto closure = base::BindOnce(&TabDragDropDelegate::OnNewBrowserWindowCreated,
                                 base::Owned(this), location_in_screen);
-  NewWindowDelegate::GetPrimary()->NewWindowForDetachingTab(
+  NewWindowDelegate::GetInstance()->NewWindowForDetachingTab(
       source_window_, drop_data, std::move(closure));
 }
 
@@ -187,16 +182,10 @@ void TabDragDropDelegate::OnNewBrowserWindowCreated(
     return;
   }
 
-  auto is_lacros = IsLacrosWindow(source_window_);
-
   // https://crbug.com/1286203:
   // It's possible new window is created when the dragged WebContents
   // closes itself during the drag session.
   if (!new_window) {
-    if (is_lacros && !crosapi::lacros_startup_state::IsLacrosEnabled()) {
-      LOG(ERROR) << "New browser window creation for tab detaching failed.\n"
-                 << "Check whether Lacros is enabled";
-    }
     return;
   }
 
@@ -319,7 +308,9 @@ void TabDragDropDelegate::UpdateSourceWindowBoundsIfNecessary(
         SplitViewController::Get(source_window_)
             ->GetSnappedWindowBoundsInScreen(
                 opposite_position, source_window_,
-                window_util::GetSnapRatioForWindow(source_window_));
+                window_util::GetSnapRatioForWindow(source_window_),
+                /*account_for_divider_width=*/
+                display::Screen::Get()->InTabletMode());
   }
   wm::ConvertRectFromScreen(source_window_->parent(),
                             &new_source_window_bounds);

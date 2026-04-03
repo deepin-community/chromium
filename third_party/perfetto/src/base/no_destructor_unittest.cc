@@ -34,12 +34,16 @@ class SetFlagOnDestruct {
 
 TEST(NoDestructorTest, DoesNotDestruct) {
   bool destructor_called = false;
-  { SetFlagOnDestruct f(&destructor_called); }
+  {
+    SetFlagOnDestruct f(&destructor_called);
+  }
   ASSERT_TRUE(destructor_called);
 
   // Not destructed when wrapped.
   destructor_called = false;
-  { NoDestructor<SetFlagOnDestruct> f(&destructor_called); }
+  {
+    NoDestructor<SetFlagOnDestruct> f(&destructor_called);
+  }
   ASSERT_FALSE(destructor_called);
 }
 
@@ -53,14 +57,17 @@ class NonTrivial {
 };
 
 TEST(NoDestructorTest, ContainedObjectUsable) {
-  static NoDestructor<NonTrivial> x(std::vector<int>{1, 2, 3},
-                                    std::unique_ptr<int>(new int(42)));
+  NoDestructor<NonTrivial> x(std::vector<int>{1, 2, 3},
+                             std::unique_ptr<int>(new int(42)));
 
   ASSERT_THAT(x.ref().vec_, ::testing::ElementsAre(1, 2, 3));
   ASSERT_EQ(*x.ref().ptr_, 42);
 
   x.ref().vec_ = {4, 5, 6};
   ASSERT_THAT(x.ref().vec_, ::testing::ElementsAre(4, 5, 6));
+
+  // Manually invoke the destructor to avoid triggering lsan.
+  x.ref().~NonTrivial();
 }
 
 }  // namespace

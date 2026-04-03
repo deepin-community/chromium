@@ -10,10 +10,9 @@
             "builder_id": {
               "bucket": "ci",
               "builder": "Win Builder (dbg)",
-              "project": "chromium-m123"
+              "project": "chromium-m146"
             },
             "builder_spec": {
-              "build_gs_bucket": "chromium-win-archive",
               "builder_group": "chromium.win",
               "execution_mode": "COMPILE_AND_TEST",
               "legacy_chromium_config": {
@@ -36,7 +35,7 @@
         {
           "bucket": "ci",
           "builder": "Win Builder (dbg)",
-          "project": "chromium-m123"
+          "project": "chromium-m146"
         }
       ],
       "mirroring_builder_group_and_names": [
@@ -44,17 +43,21 @@
           "builder": "win_chromium_compile_dbg_ng",
           "group": "tryserver.chromium.win"
         }
-      ]
+      ],
+      "retry_failed_shards": true,
+      "targets_spec_directory": "infra/config/generated/builders/ci/Win Builder (dbg)/targets"
     }
   },
-  "$build/reclient": {
-    "bootstrap_env": {
-      "RBE_experimental_exit_on_stuck_actions": "true"
-    },
-    "instance": "rbe-chromium-trusted",
-    "jobs": 250,
-    "metrics_project": "chromium-reclient-metrics",
-    "scandeps_server": true
+  "$build/siso": {
+    "configs": [
+      "builder"
+    ],
+    "enable_cloud_monitoring": true,
+    "enable_cloud_trace": true,
+    "experiments": [],
+    "profile_mode": "cloud",
+    "project": "rbe-chromium-trusted",
+    "remote_jobs": 250
   },
   "$recipe_engine/resultdb/test_presentation": {
     "column_keys": [],
@@ -64,6 +67,9 @@
     ]
   },
   "builder_group": "chromium.win",
+  "gardener_rotations": [
+    "chrome_browser_release"
+  ],
   "recipe": "chromium",
   "sheriff_rotations": [
     "chrome_browser_release"

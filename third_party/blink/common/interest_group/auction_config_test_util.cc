@@ -4,7 +4,10 @@
 
 #include "third_party/blink/common/interest_group/auction_config_test_util.h"
 
+#include <optional>
+
 #include "base/containers/flat_map.h"
+#include "base/time/time.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -32,8 +35,13 @@ AuctionConfig CreateFullAuctionConfig() {
   const url::Origin buyer = url::Origin::Create(GURL("https://buyer.test"));
   auction_config.per_buyer_experiment_group_ids[buyer] = 3;
 
-  auction_config.deprecated_render_url_replacements = blink::AuctionConfig::
-      MaybePromiseDeprecatedRenderURLReplacements::FromValue({});
+  const std::vector<blink::AuctionConfig::AdKeywordReplacement>
+      deprecated_render_url_replacements = {
+          blink::AuctionConfig::AdKeywordReplacement(
+              {"${SELLER}", "ExampleSSP"})};
+  auction_config.non_shared_params.deprecated_render_url_replacements =
+      blink::AuctionConfig::MaybePromiseDeprecatedRenderURLReplacements::
+          FromValue(deprecated_render_url_replacements);
 
   AuctionConfig::NonSharedParams& non_shared_params =
       auction_config.non_shared_params;
@@ -43,7 +51,11 @@ AuctionConfig CreateFullAuctionConfig() {
       AuctionConfig::MaybePromiseJson::FromValue("[4]");
   non_shared_params.seller_signals =
       AuctionConfig::MaybePromiseJson::FromValue("[5]");
+  non_shared_params.seller_tkv_signals =
+      AuctionConfig::MaybePromiseJson::FromValue("[6]");
   non_shared_params.seller_timeout = base::Seconds(6);
+  non_shared_params.execution_mode =
+      InterestGroup::ExecutionMode::kGroupedByOriginMode;
 
   std::optional<base::flat_map<url::Origin, std::string>> per_buyer_signals;
   per_buyer_signals.emplace();
@@ -51,6 +63,9 @@ AuctionConfig CreateFullAuctionConfig() {
   non_shared_params.per_buyer_signals =
       blink::AuctionConfig::MaybePromisePerBuyerSignals::FromValue(
           std::move(per_buyer_signals));
+
+  non_shared_params.per_buyer_tkv_signals[buyer] =
+      AuctionConfig::MaybePromiseJson::FromValue("[8]");
 
   AuctionConfig::BuyerTimeouts buyer_timeouts;
   buyer_timeouts.per_buyer_timeouts.emplace();
@@ -60,16 +75,6 @@ AuctionConfig CreateFullAuctionConfig() {
       AuctionConfig::MaybePromiseBuyerTimeouts::FromValue(
           std::move(buyer_timeouts));
 
-  AuctionConfig::BuyerCurrencies buyer_currencies;
-  buyer_currencies.per_buyer_currencies.emplace();
-  (*buyer_currencies.per_buyer_currencies)[buyer] = AdCurrency::From("CAD");
-  buyer_currencies.all_buyers_currency = AdCurrency::From("USD");
-  non_shared_params.buyer_currencies =
-      AuctionConfig::MaybePromiseBuyerCurrencies::FromValue(
-          std::move(buyer_currencies));
-
-  non_shared_params.seller_currency = AdCurrency::From("EUR");
-
   AuctionConfig::BuyerTimeouts buyer_cumulative_timeouts;
   buyer_cumulative_timeouts.per_buyer_timeouts.emplace();
   (*buyer_cumulative_timeouts.per_buyer_timeouts)[buyer] = base::Seconds(432);
@@ -77,6 +82,17 @@ AuctionConfig CreateFullAuctionConfig() {
   non_shared_params.buyer_cumulative_timeouts =
       AuctionConfig::MaybePromiseBuyerTimeouts::FromValue(
           std::move(buyer_cumulative_timeouts));
+
+  non_shared_params.reporting_timeout = base::Seconds(7);
+  non_shared_params.seller_currency = AdCurrency::From("EUR");
+
+  AuctionConfig::BuyerCurrencies buyer_currencies;
+  buyer_currencies.per_buyer_currencies.emplace();
+  (*buyer_currencies.per_buyer_currencies)[buyer] = AdCurrency::From("CAD");
+  buyer_currencies.all_buyers_currency = AdCurrency::From("USD");
+  non_shared_params.buyer_currencies =
+      AuctionConfig::MaybePromiseBuyerCurrencies::FromValue(
+          std::move(buyer_currencies));
 
   non_shared_params.per_buyer_group_limits[buyer] = 10;
   non_shared_params.all_buyers_group_limit = 11;
@@ -113,6 +129,15 @@ AuctionConfig CreateFullAuctionConfig() {
 
   non_shared_params.auction_nonce = base::Uuid::GenerateRandomV4();
   non_shared_params.max_trusted_scoring_signals_url_length = 2560;
+  non_shared_params.trusted_scoring_signals_coordinator =
+      url::Origin::Create(GURL("https://example.test"));
+
+  non_shared_params.seller_real_time_reporting_type = AuctionConfig::
+      NonSharedParams::RealTimeReportingType::kDefaultLocalReporting;
+  non_shared_params.per_buyer_real_time_reporting_types.emplace();
+  (*non_shared_params.per_buyer_real_time_reporting_types)[buyer] =
+      AuctionConfig::NonSharedParams::RealTimeReportingType::
+          kDefaultLocalReporting;
 
   DirectFromSellerSignalsSubresource
       direct_from_seller_signals_per_buyer_signals_buyer;
@@ -148,6 +173,8 @@ AuctionConfig CreateFullAuctionConfig() {
 
   auction_config.aggregation_coordinator_origin =
       url::Origin::Create(GURL("https://example.com"));
+
+  auction_config.send_creative_scanning_metadata = true;
 
   return auction_config;
 }

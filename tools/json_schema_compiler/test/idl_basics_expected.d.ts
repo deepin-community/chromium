@@ -1,4 +1,4 @@
-// Copyright 2024 The Chromium Authors
+// Copyright 2026 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -45,9 +45,21 @@ declare global {
         x: string;
       }
 
+      export interface ChoiceWithArraysType {
+        entries: string|string[];
+      }
+
+      export interface ChoiceWithOptionalType {
+        entries?: string|string[];
+      }
+
       export interface UnionType {
         x?: EnumType|string;
         y: string|EnumType;
+      }
+
+      export interface IgnoreAdditionalPropertiesType {
+        x: string;
       }
 
       export function function1(): void;

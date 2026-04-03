@@ -51,8 +51,9 @@ typedef Eigen::GpuDevice GPUDevice;
 
 namespace {
 
-static Status AllocateOutputWithShape(OpKernelContext* ctx, const Tensor& shape,
-                                      int index, Tensor** output) {
+static absl::Status AllocateOutputWithShape(OpKernelContext* ctx,
+                                            const Tensor& shape, int index,
+                                            Tensor** output) {
   TensorShape tensor_shape;
   TF_RETURN_IF_ERROR(tensor::MakeShape(shape, &tensor_shape));
   return ctx->allocate_output(index, tensor_shape, output);
@@ -156,7 +157,7 @@ class RandomGammaOp : public OpKernel {
                     shape_t.DebugString()));
     TensorShape samples_shape;
     if (shape_t.dtype() == DataType::DT_INT32) {
-      auto vec = shape_t.flat<int32>();
+      auto vec = shape_t.flat<int32_t>();
       OP_REQUIRES_OK(ctx, TensorShapeUtils::MakeShape(vec.data(), vec.size(),
                                                       &samples_shape));
     } else if (shape_t.dtype() == DataType::DT_INT64) {

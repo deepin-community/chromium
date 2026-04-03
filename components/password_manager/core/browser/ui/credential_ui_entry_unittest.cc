@@ -4,9 +4,14 @@
 
 #include "components/password_manager/core/browser/ui/credential_ui_entry.h"
 
+#include <array>
+#include <optional>
 #include <vector>
 
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/time/time.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/passkey_credential.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -45,9 +50,10 @@ CredentialUIEntry CreateInsecureCredential(InsecureType insecure_type) {
 
 }  // namespace
 
-TEST(CredentialUIEntryTest, CredentialUIEntryFromForm) {
+TEST(CredentialUIEntryTest, CredentialUIEntryFromFormRecoveryFlagOn) {
   const std::u16string kUsername = u"testUsername00";
   const std::u16string kPassword = u"testPassword01";
+  const std::u16string kBackupPassword = u"backupPassword";
 
   PasswordForm form;
   form.app_display_name = "g.com";
@@ -57,6 +63,8 @@ TEST(CredentialUIEntryTest, CredentialUIEntryFromForm) {
   form.username_value = kUsername;
   form.password_value = kPassword;
   form.in_store = PasswordForm::Store::kProfileStore;
+  form.SetPasswordBackupNote(kBackupPassword);
+  auto backup_creation_timestamp = form.GetPasswordBackupDateCreated();
 
   CredentialUIEntry entry = CredentialUIEntry(form);
 
@@ -67,14 +75,18 @@ TEST(CredentialUIEntryTest, CredentialUIEntryFromForm) {
   EXPECT_EQ(entry.stored_in.size(), size);
   EXPECT_EQ(entry.username, kUsername);
   EXPECT_EQ(entry.password, kPassword);
+  EXPECT_EQ(entry.backup_password->value, kBackupPassword);
+  EXPECT_EQ(entry.backup_password->creation_timestamp,
+            backup_creation_timestamp);
   EXPECT_EQ(entry.blocked_by_user, false);
 }
 
 TEST(CredentialUIEntryTest,
-     CredentialUIEntryFromFormsVectorWithIdenticalNotes) {
+     CredentialUIEntryFromFormsVectorWithIdenticalNotesRecoveryFlagOn) {
   std::vector<PasswordForm> forms;
   const std::u16string kUsername = u"testUsername00";
   const std::u16string kPassword = u"testPassword01";
+  const std::u16string kBackupPassword = u"backupPassword";
   const std::u16string kNote = u"Test New Note \n";
 
   PasswordForm form;
@@ -97,6 +109,8 @@ TEST(CredentialUIEntryTest,
   form2.password_value = kPassword;
   form2.SetNoteWithEmptyUniqueDisplayName(kNote);
   form2.in_store = PasswordForm::Store::kAccountStore;
+  form2.SetPasswordBackupNote(kBackupPassword);
+  auto backup_creation_timestamp = form2.GetPasswordBackupDateCreated();
   forms.push_back(std::move(form2));
 
   PasswordForm form3;
@@ -119,6 +133,9 @@ TEST(CredentialUIEntryTest,
   EXPECT_EQ(entry.stored_in.size(), stored_in_size);
   EXPECT_EQ(entry.username, kUsername);
   EXPECT_EQ(entry.password, kPassword);
+  EXPECT_EQ(entry.backup_password->value, kBackupPassword);
+  EXPECT_EQ(entry.backup_password->creation_timestamp,
+            backup_creation_timestamp);
   EXPECT_EQ(entry.note, kNote);
   EXPECT_EQ(entry.blocked_by_user, false);
 }
@@ -126,11 +143,11 @@ TEST(CredentialUIEntryTest,
 TEST(CredentialUIEntryTest, CredentialUIEntryFromPasskey) {
   const std::vector<uint8_t> cred_id = {1, 2, 3, 4};
   const std::vector<uint8_t> user_id = {5, 6, 7, 4};
-  const std::u16string kUsername = u"marisa";
-  const std::u16string kDisplayName = u"Marisa Kirisame";
+  constexpr char16_t kUsername[] = u"marisa";
+  constexpr char16_t kDisplayName[] = u"Marisa Kirisame";
+  constexpr char kRpId[] = "rpid.com";
   PasskeyCredential passkey(
-      PasskeyCredential::Source::kAndroidPhone,
-      PasskeyCredential::RpId("rpid.com"),
+      PasskeyCredential::Source::kAndroidPhone, PasskeyCredential::RpId(kRpId),
       PasskeyCredential::CredentialId(cred_id),
       PasskeyCredential::UserId(user_id),
       PasskeyCredential::Username(base::UTF16ToUTF8(kUsername)),
@@ -139,6 +156,7 @@ TEST(CredentialUIEntryTest, CredentialUIEntryFromPasskey) {
   EXPECT_EQ(entry.passkey_credential_id, cred_id);
   EXPECT_EQ(entry.username, kUsername);
   EXPECT_EQ(entry.user_display_name, kDisplayName);
+  EXPECT_EQ(entry.rp_id, kRpId);
   ASSERT_EQ(entry.facets.size(), 1u);
   EXPECT_EQ(entry.facets.at(0).url, GURL("https://rpid.com/"));
   EXPECT_EQ(entry.facets.at(0).signon_realm, "https://rpid.com");
@@ -189,7 +207,8 @@ TEST(CredentialUIEntryTest, TestGetAffiliatedDomainsEmptyAndroidForm) {
 TEST(CredentialUIEntryTest,
      CredentialUIEntryFromFormsVectorWithDifferentNotes) {
   std::vector<PasswordForm> forms;
-  const std::u16string kNotes[] = {u"Note", u"", u"Another note"};
+  const auto kNotes =
+      std::to_array<std::u16string>({u"Note", u"", u"Another note"});
 
   for (const auto& kNote : kNotes) {
     PasswordForm form;
@@ -257,6 +276,16 @@ TEST(CredentialUIEntryTest, TestGetAffiliatedDuplicatesWithDifferentUrls) {
   EXPECT_THAT(entry.GetAffiliatedDomains(),
               UnorderedElementsAre(ExpectDomain("g.com", form1.url),
                                    ExpectDomain("g.com", form2.url)));
+}
+
+TEST(CredentialUIEntryTest, TestGetInvalidAffiliatedDomains) {
+  PasswordForm form;
+  form.signon_realm = "htt://g.com/";
+  form.url = GURL("htt://g.com/login/");
+
+  CredentialUIEntry entry = CredentialUIEntry({form});
+  EXPECT_THAT(entry.GetAffiliatedDomains(),
+              ElementsAre(ExpectDomain("htt://g.com/login/", form.url)));
 }
 
 TEST(CredentialUIEntryTest, TestGetChangeURLAndroid) {

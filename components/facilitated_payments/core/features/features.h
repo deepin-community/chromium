@@ -6,11 +6,20 @@
 #define COMPONENTS_FACILITATED_PAYMENTS_CORE_FEATURES_FEATURES_H_
 
 #include "base/feature_list.h"
+#include "build/build_config.h"
 
 namespace payments::facilitated {
 
-BASE_DECLARE_FEATURE(kEnablePixDetection);
-BASE_DECLARE_FEATURE(kEnablePixPayments);
+BASE_DECLARE_FEATURE(kEnablePixPaymentsInLandscapeMode);
+BASE_DECLARE_FEATURE(kUseRustPixCodeValidator);
+#if BUILDFLAG(IS_ANDROID)
+BASE_DECLARE_FEATURE(kDisableFacilitatedPaymentsMerchantAllowlist);
+BASE_DECLARE_FEATURE(kEnablePixAccountLinking);
+BASE_DECLARE_FEATURE(kEnableStaticQrCodeForPix);
+BASE_DECLARE_FEATURE(kEnableIframeForPix);
+BASE_DECLARE_FEATURE(kEwalletPayments);
+BASE_DECLARE_FEATURE(kFacilitatedPaymentsEnableA2APayment);
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace payments::facilitated
 

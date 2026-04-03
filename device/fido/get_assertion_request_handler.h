@@ -13,13 +13,17 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "device/fido/auth_token_requester.h"
 #include "device/fido/authenticator_get_assertion_response.h"
 #include "device/fido/ctap_get_assertion_request.h"
-#include "device/fido/fido_constants.h"
+#include "device/fido/discoverable_credential_metadata.h"
+#include "device/fido/fido_authenticator.h"
+#include "device/fido/fido_discovery_base.h"
 #include "device/fido/fido_request_handler_base.h"
-#include "device/fido/fido_transport_protocol.h"
-#include "device/fido/public_key_credential_descriptor.h"
+#include "device/fido/public/fido_constants.h"
+#include "device/fido/public/fido_transport_protocol.h"
+#include "device/fido/public/public_key_credential_descriptor.h"
 
 namespace base {
 class ElapsedTimer;
@@ -27,32 +31,11 @@ class ElapsedTimer;
 
 namespace device {
 
-class FidoAuthenticator;
 class FidoDiscoveryFactory;
 
 namespace pin {
 class TokenResponse;
 }  // namespace pin
-
-enum class GetAssertionStatus {
-  kSuccess,
-  kAuthenticatorResponseInvalid,
-  kUserConsentButCredentialNotRecognized,
-  kUserConsentDenied,
-  kAuthenticatorRemovedDuringPINEntry,
-  kSoftPINBlock,
-  kHardPINBlock,
-  kAuthenticatorMissingResidentKeys,
-  // TODO(agl): kAuthenticatorMissingUserVerification can
-  // also be returned when the authenticator supports UV, but
-  // there's no UI support for collecting a PIN. This could
-  // be clearer.
-  kAuthenticatorMissingUserVerification,
-  kWinNotAllowedError,
-  kHybridTransportError,
-  kICloudKeychainNoCredentials,
-  kEnclaveError,
-};
 
 class COMPONENT_EXPORT(DEVICE_FIDO) GetAssertionRequestHandler
     : public FidoRequestHandlerBase,
@@ -65,6 +48,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) GetAssertionRequestHandler
 
   GetAssertionRequestHandler(
       FidoDiscoveryFactory* fido_discovery_factory,
+      std::vector<std::unique_ptr<FidoDiscoveryBase>> additional_discoveries,
       const base::flat_set<FidoTransportProtocol>& supported_transports,
       CtapGetAssertionRequest request_parameter,
       CtapGetAssertionOptions request_options,
@@ -79,7 +63,11 @@ class COMPONENT_EXPORT(DEVICE_FIDO) GetAssertionRequestHandler
 
   // Filters the allow list of the get assertion request to the given
   // |credential|.
-  void PreselectAccount(PublicKeyCredentialDescriptor credential);
+  void PreselectAccount(DiscoverableCredentialMetadata credential);
+
+  // Delayed provision of ClientDataJson, which can be empty at the time of
+  // this class's construction.
+  void ProvideClientDataJson(std::string client_data_json);
 
   base::WeakPtr<GetAssertionRequestHandler> GetWeakPtr();
 
@@ -91,9 +79,12 @@ class COMPONENT_EXPORT(DEVICE_FIDO) GetAssertionRequestHandler
     kFinished,
   };
 
+  // Start any pending authenticator requests.
+  void RequestReady();
+
   // FidoRequestHandlerBase:
   void OnBluetoothAdapterEnumerated(bool is_present,
-                                    bool is_powered_on,
+                                    BleStatus ble_status,
                                     bool can_power_on,
                                     bool is_peripheral_role_supported) override;
   void DispatchRequest(FidoAuthenticator* authenticator) override;
@@ -123,14 +114,14 @@ class COMPONENT_EXPORT(DEVICE_FIDO) GetAssertionRequestHandler
   void HandleResponse(FidoAuthenticator* authenticator,
                       CtapGetAssertionRequest request,
                       base::ElapsedTimer request_timer,
-                      CtapDeviceResponseCode response_code,
+                      GetAssertionStatus response_code,
                       std::vector<AuthenticatorGetAssertionResponse> response);
   void TerminateUnsatisfiableRequestPostTouch(FidoAuthenticator* authenticator);
   void DispatchRequestWithToken(pin::TokenResponse token);
 
   CompletionCallback completion_callback_;
   State state_ = State::kWaitingForTouch;
-  const CtapGetAssertionRequest request_;
+  CtapGetAssertionRequest request_;
   CtapGetAssertionOptions options_;
 
   // If true, and if at the time the request is dispatched to the first
@@ -154,7 +145,12 @@ class COMPONENT_EXPORT(DEVICE_FIDO) GetAssertionRequestHandler
   // preselected_credential_ is set when the UI invokes `PreselectAccount()`. It
   // contains the credential chosen by the user during a request prior to
   // dispatching to the authenticator.
-  std::optional<PublicKeyCredentialDescriptor> preselected_credential_;
+  std::optional<DiscoverableCredentialMetadata> preselected_credential_;
+
+  // A list of Authenticators for which DispatchRequest has been called while
+  // the request is not yet ready. This is emptied and processed on a call to
+  // `RequestReady`.
+  std::vector<base::WeakPtr<FidoAuthenticator>> pending_authenticator_requests_;
 
   SEQUENCE_CHECKER(my_sequence_checker_);
   base::WeakPtrFactory<GetAssertionRequestHandler> weak_factory_{this};

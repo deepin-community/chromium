@@ -28,6 +28,7 @@ limitations under the License.
 #include "third_party/gpus/cuda/include/cuda_runtime.h"
 #include "xla/backends/profiler/gpu/cupti_collector.h"
 #endif  // GOOGLE_CUDA
+#include "xla/tsl/profiler/utils/tf_xplane_visitor.h"
 #include "tensorflow/core/common_runtime/direct_session.h"
 #include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/graph.pb.h"
@@ -50,7 +51,6 @@ limitations under the License.
 #include "tensorflow/core/profiler/utils/xplane_visitor.h"
 #include "tensorflow/core/public/session_options.h"
 #include "tensorflow/core/util/device_name_utils.h"
-#include "tsl/profiler/utils/tf_xplane_visitor.h"
 
 // TODO(b/186367334)
 #define CUPTI_NVBUG_3299481_WAR (10000 <= CUDA_VERSION && CUDA_VERSION < 11000)
@@ -68,13 +68,15 @@ namespace profiler {
 
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 std::unique_ptr<ProfilerInterface> CreateGpuTracer() {
-  ProfileOptions options = ProfilerSession::DefaultOptions();
+  ProfileOptions options = tsl::ProfilerSession::DefaultOptions();
   return xla::profiler::CreateGpuTracer(options);
 }
 
 #else
 // We don't have device tracer for non-cuda case.
-std::unique_ptr<ProfilerInterface> CreateGpuTracer() { return nullptr; }
+std::unique_ptr<tsl::profiler::ProfilerInterface> CreateGpuTracer() {
+  return nullptr;
+}
 #endif
 
 namespace {
@@ -118,7 +120,7 @@ class DeviceTracerTest : public ::testing::Test {
   }
 
  protected:
-  void ExpectFailure(const Status& status, error::Code code) {
+  void ExpectFailure(const absl::Status& status, error::Code code) {
     EXPECT_FALSE(status.ok()) << status;
     if (!status.ok()) {
       LOG(INFO) << "Status message: " << status.message();
@@ -126,9 +128,9 @@ class DeviceTracerTest : public ::testing::Test {
     }
   }
 
-  string x_;
-  string y_;
-  string y_neg_;
+  std::string x_;
+  std::string y_;
+  std::string y_neg_;
   GraphDef def_;
 };
 
@@ -159,7 +161,7 @@ TEST_F(DeviceTracerTest, CollectBeforeStop) {
   if (!tracer) return;
   TF_EXPECT_OK(tracer->Start());
   XSpace space;
-  Status status = tracer->CollectData(&space);
+  absl::Status status = tracer->CollectData(&space);
   ExpectFailure(status, tensorflow::error::FAILED_PRECONDITION);
   TF_EXPECT_OK(tracer->Stop());
 }
@@ -170,7 +172,7 @@ TEST_F(DeviceTracerTest, StartTwoTracers) {
   if (!tracer1 || !tracer2) return;
 
   TF_EXPECT_OK(tracer1->Start());
-  Status status = tracer2->Start();
+  absl::Status status = tracer2->Start();
   ExpectFailure(status, tensorflow::error::UNAVAILABLE);
   TF_EXPECT_OK(tracer1->Stop());
   TF_EXPECT_OK(tracer2->Start());
@@ -186,15 +188,15 @@ TEST_F(DeviceTracerTest, RunWithTracer) {
   auto session = CreateSession();
   ASSERT_TRUE(session != nullptr);
   TF_ASSERT_OK(session->Create(def_));
-  std::vector<std::pair<string, Tensor>> inputs;
+  std::vector<std::pair<std::string, Tensor>> inputs;
 
   // Request two targets: one fetch output and one non-fetched output.
-  std::vector<string> output_names = {y_ + ":0"};
-  std::vector<string> target_nodes = {y_neg_};
+  std::vector<std::string> output_names = {y_ + ":0"};
+  std::vector<std::string> target_nodes = {y_neg_};
   std::vector<Tensor> outputs;
 
   TF_ASSERT_OK(tracer->Start());
-  Status s = session->Run(inputs, output_names, target_nodes, &outputs);
+  absl::Status s = session->Run(inputs, output_names, target_nodes, &outputs);
   TF_ASSERT_OK(s);
   TF_ASSERT_OK(tracer->Stop());
   ASSERT_EQ(1, outputs.size());
@@ -210,19 +212,19 @@ TEST_F(DeviceTracerTest, RunWithTraceOption) {
   auto session = CreateSession();
   ASSERT_TRUE(session != nullptr);
   TF_ASSERT_OK(session->Create(def_));
-  std::vector<std::pair<string, Tensor>> inputs;
+  std::vector<std::pair<std::string, Tensor>> inputs;
 
   // Request two targets: one fetch output and one non-fetched output.
-  std::vector<string> output_names = {y_ + ":0"};
-  std::vector<string> target_nodes = {y_neg_};
+  std::vector<std::string> output_names = {y_ + ":0"};
+  std::vector<std::string> target_nodes = {y_neg_};
   std::vector<Tensor> outputs;
 
   // Prepares RunOptions and RunOutputs
   RunOptions run_options;
   run_options.set_trace_level(RunOptions::FULL_TRACE);
   RunMetadata run_metadata;
-  Status s = session->Run(run_options, inputs, output_names, target_nodes,
-                          &outputs, &run_metadata);
+  absl::Status s = session->Run(run_options, inputs, output_names, target_nodes,
+                                &outputs, &run_metadata);
   TF_ASSERT_OK(s);
   ASSERT_TRUE(run_metadata.has_step_stats());
   // Depending on whether this runs on CPU or GPU, we will have a
@@ -383,15 +385,21 @@ TEST_F(DeviceTracerTest, CudaRuntimeResource) {
   host_plane.ForEachLine([&](const tensorflow::profiler::XLineVisitor& line) {
     VLOG(3) << "Line " << line.Id() << "\n";
     line.ForEachEvent([&](const tensorflow::profiler::XEventVisitor& event) {
-      VLOG(3) << " Event " << *event.Type() << "\n";
+      if (event_idx < expected_event_stat_type.size()) {
+        VLOG(3) << " Event "
+                << (event.Type().has_value() ? std::to_string(*event.Type())
+                                             : "UNKNOWN_TYPE")
+                << "\n";
 
-      absl::optional<XStatVisitor> stat =
-          event.GetStat(expected_event_stat_type[event_idx]);
-      // The stat may not exist if we're looking at the wrong line.
-      if (stat.has_value()) {
-        event_idx += 1;
-        VLOG(3) << "  Stat name=" << stat->Name() << " type=" << *stat->Type()
-                << " " << stat->ToString() << "\n";
+        absl::optional<XStatVisitor> stat =
+            event.GetStat(expected_event_stat_type[event_idx]);
+        // The stat may not exist if we're looking at the wrong line.
+        if (stat.has_value()) {
+          event_idx += 1;
+          VLOG(3) << "  Stat name=" << stat->Name() << " type=" << *stat->Type()
+                  << " " << stat->ToString() << ", event_idx:" << event_idx
+                  << "\n";
+        }
       }
     });
   });

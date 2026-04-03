@@ -6,6 +6,7 @@
 #define GIN_FUNCTION_TEMPLATE_H_
 
 #include <stddef.h>
+
 #include <type_traits>
 #include <utility>
 
@@ -18,6 +19,7 @@
 #include "gin/converter.h"
 #include "gin/gin_export.h"
 #include "gin/per_isolate_data.h"
+#include "gin/public/gin_embedders.h"
 #include "v8/include/v8-external.h"
 #include "v8/include/v8-forward.h"
 #include "v8/include/v8-persistent-handle.h"
@@ -54,7 +56,7 @@ struct CallbackParamTraits<const T*> {
 //   that even _if_ we become garbage, we might never get collected!)
 // - If the isolate gets disposed.
 //
-// TODO(crbug.com/1285119): When gin::Wrappable gets migrated over to using
+// TODO(crbug.com/40210365): When gin::Wrappable gets migrated over to using
 //   cppgc, this class should also be considered for migration.
 
 // This simple base class is used so that we can share a single object template
@@ -175,14 +177,12 @@ struct ArgumentHolder {
 // a default constructor. To create an element of such a type, the isolate
 // has to be provided.
 template <size_t index, typename ArgType>
-struct ArgumentHolder<
-    index,
-    ArgType,
-    std::enable_if_t<!std::is_default_constructible_v<
-                         typename CallbackParamTraits<ArgType>::LocalType> &&
-                     std::is_constructible_v<
-                         typename CallbackParamTraits<ArgType>::LocalType,
-                         v8::Isolate*>>> {
+  requires(
+      !std::is_default_constructible_v<
+          typename CallbackParamTraits<ArgType>::LocalType> &&
+      std::is_constructible_v<typename CallbackParamTraits<ArgType>::LocalType,
+                              v8::Isolate*>)
+struct ArgumentHolder<index, ArgType> {
   using ArgLocalType = typename CallbackParamTraits<ArgType>::LocalType;
 
   ArgLocalType value;
@@ -253,7 +253,7 @@ struct Dispatcher<ReturnType(ArgTypes...)> {
     v8::Local<v8::External> v8_holder;
     CHECK(args->GetData(&v8_holder));
     CallbackHolderBase* holder_base = reinterpret_cast<CallbackHolderBase*>(
-        v8_holder->Value());
+        v8_holder->Value(kGinInternalCallbackHolderBaseTag));
 
     typedef CallbackHolder<ReturnType(ArgTypes...)> HolderT;
     HolderT* holder = static_cast<HolderT*>(holder_base);

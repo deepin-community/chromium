@@ -17,7 +17,6 @@
 #include "ash/quick_pair/fast_pair_handshake/fast_pair_handshake_lookup.h"
 #include "ash/quick_pair/pairing/fast_pair/fast_pair_pairer.h"
 #include "ash/quick_pair/pairing/fast_pair/fast_pair_pairer_impl.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/scoped_refptr.h"
@@ -131,7 +130,7 @@ void PairerBrokerImpl::StopPairing() {
 }
 
 void PairerBrokerImpl::PairFastPairDevice(scoped_refptr<Device> device) {
-  if (base::Contains(fast_pair_pairers_, device->metadata_id())) {
+  if (fast_pair_pairers_.contains(device->metadata_id())) {
     CD_LOG(WARNING, Feature::FP)
         << __func__ << ": Already pairing device" << device;
     RecordFastPairInitializePairingProcessEvent(
@@ -262,7 +261,7 @@ void PairerBrokerImpl::OnHandshakeFailure(scoped_refptr<Device> device,
 }
 
 void PairerBrokerImpl::StartBondingAttempt(scoped_refptr<Device> device) {
-  if (!base::Contains(pair_failure_counts_, device->metadata_id())) {
+  if (!pair_failure_counts_.contains(device->metadata_id())) {
     pair_failure_counts_[device->metadata_id()] = 0;
 
     // `OnPairingStart` is used in metrics to signal the beginning of the
@@ -286,6 +285,8 @@ void PairerBrokerImpl::StartBondingAttempt(scoped_refptr<Device> device) {
           base::BindOnce(&PairerBrokerImpl::OnFastPairBondingFailure,
                          weak_pointer_factory_.GetWeakPtr()),
           base::BindOnce(&PairerBrokerImpl::OnAccountKeyFailure,
+                         weak_pointer_factory_.GetWeakPtr()),
+          base::BindOnce(&PairerBrokerImpl::OnDisplayPasskey,
                          weak_pointer_factory_.GetWeakPtr()),
           base::BindOnce(&PairerBrokerImpl::OnFastPairProcedureComplete,
                          weak_pointer_factory_.GetWeakPtr()));
@@ -363,6 +364,15 @@ void PairerBrokerImpl::OnAccountKeyFailure(scoped_refptr<Device> device,
   }
 
   EraseHandshakeAndFromPairers(device);
+}
+
+void PairerBrokerImpl::OnDisplayPasskey(std::u16string device_name,
+                                        uint32_t passkey) {
+  CD_LOG(VERBOSE, Feature::FP) << __func__ << ": Device=" << device_name;
+
+  for (auto& observer : observers_) {
+    observer.OnDisplayPasskey(device_name, passkey);
+  }
 }
 
 void PairerBrokerImpl::OnFastPairProcedureComplete(

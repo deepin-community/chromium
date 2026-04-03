@@ -4,6 +4,11 @@
 // found in the LICENSE file.
 //
 // MulithreadingTest.cpp : Tests of multithreaded rendering
+//
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "test_utils/ANGLETest.h"
 #include "test_utils/MultiThreadSteps.h"
@@ -253,9 +258,7 @@ TEST_P(MultithreadingTest, MultiContextClear)
             EXPECT_PIXEL_COLOR_EQ(0, 0, color);
         }
     };
-    runMultithreadedGLTest(
-        testBody,
-        getEGLWindow()->isFeatureEnabled(Feature::SlowAsyncCommandQueueForTesting) ? 4 : 72);
+    runMultithreadedGLTest(testBody, 72);
 }
 
 // Verify that threads can interleave eglDestroyContext and draw calls without
@@ -283,6 +286,9 @@ TEST_P(MultithreadingTest, MultiContextDeleteDraw)
 
             EXPECT_EGL_TRUE(eglDestroyContext(dpy, ctx2));
             EXPECT_EGL_TRUE(eglDestroyContext(dpy, ctx1));
+
+            // Clean up
+            EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
         }
     });
 
@@ -326,6 +332,9 @@ TEST_P(MultithreadingTest, MultiContextDeleteDraw)
                 glDrawArrays(GL_TRIANGLES, 0, 6);
             }
         }
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
     });
 
     t1.join();
@@ -384,7 +393,7 @@ TEST_P(MultithreadingTest, MultiContextDrawWithSwapBuffers)
 {
     ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
 
-    // http://anglebug.com/5099
+    // http://anglebug.com/42263666
     ANGLE_SKIP_TEST_IF(IsAndroid() && IsOpenGLES());
 
     EGLWindow *window = getEGLWindow();
@@ -429,14 +438,11 @@ TEST_P(MultithreadingTest, MultiContextDrawWithSwapBuffers)
             EXPECT_PIXEL_COLOR_EQ(0, 0, color);
         }
     };
-    runMultithreadedGLTest(
-        testBody,
-        getEGLWindow()->isFeatureEnabled(Feature::SlowAsyncCommandQueueForTesting) ? 4 : 32);
+    runMultithreadedGLTest(testBody, 32);
 }
 
 // Test that ANGLE handles multiple threads creating and destroying resources (vertex buffer in this
-// case). Disable defer_flush_until_endrenderpass so that glFlush will issue work to GPU in order to
-// maximize the chance we resources can be destroyed at the wrong time.
+// case).
 TEST_P(MultithreadingTest, MultiContextCreateAndDeleteResources)
 {
     ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
@@ -485,14 +491,61 @@ TEST_P(MultithreadingTest, MultiContextCreateAndDeleteResources)
         }
         glFinish();
     };
-    runMultithreadedGLTest(
-        testBody,
-        getEGLWindow()->isFeatureEnabled(Feature::SlowAsyncCommandQueueForTesting) ? 4 : 32);
+    runMultithreadedGLTest(testBody, 32);
 }
 
+// Test that changing sampler parameters of textures in unrelated share groups is thread-safe.
+// Regression test for a bug in the Vulkan backend where the VkSampler cache was not thread-safe.
+TEST_P(MultithreadingTestES3, MultiContextTextureSampleParameters)
+{
+    ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
+
+    constexpr size_t kThreadCount = 16;
+    std::atomic<uint32_t> barrier(0);
+
+    auto testBody = [this, &barrier](EGLSurface surface, size_t thread) {
+        constexpr size_t kIterationsPerThread = 32;
+
+        ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Texture2D(), essl1_shaders::fs::Texture2D());
+        glUseProgram(program);
+        glUseProgram(program);
+        GLint textureUniformLocation =
+            glGetUniformLocation(program, angle::essl1_shaders::Texture2DUniform());
+        ASSERT_NE(textureUniformLocation, -1);
+        glUniform1i(textureUniformLocation, 0);
+        glActiveTexture(GL_TEXTURE0);
+
+        GLTexture texture;
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 1, 1);
+
+        barrier++;
+        while (barrier < kThreadCount)
+        {
+        }
+
+        for (size_t iteration = 0; iteration < kIterationsPerThread; iteration++)
+        {
+            // Change the sampling parameters of the texture.
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                            iteration % 2 == 0 ? GL_LINEAR : GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                            iteration % 3 == 0 ? GL_LINEAR : GL_NEAREST);
+
+            // Make sure the texture is synced.
+            drawQuad(program, essl1_shaders::PositionAttrib(), 0);
+            EXPECT_GL_NO_ERROR();
+        }
+        glFinish();
+    };
+
+    runMultithreadedGLTest(testBody, 16);
+}
+
+// Test that multiple threads can create contexts at the same time.
 TEST_P(MultithreadingTest, MultiCreateContext)
 {
-    // Supported by CGL, GLX, and WGL (https://anglebug.com/4725)
+    // Supported by CGL, GLX, and WGL (https://anglebug.com/42263324)
     // Not supported on Ozone (https://crbug.com/1103009)
     ANGLE_SKIP_TEST_IF(!(IsWindows() || IsLinux() || IsMac()) || IsOzone());
 
@@ -543,7 +596,7 @@ TEST_P(MultithreadingTest, MultiCreateContext)
 // Create multiple shared context and draw with shared vertex buffer simutanously
 TEST_P(MultithreadingTest, CreateMultiSharedContextAndDraw)
 {
-    // Supported by CGL, GLX, and WGL (https://anglebug.com/4725)
+    // Supported by CGL, GLX, and WGL (https://anglebug.com/42263324)
     // Not supported on Ozone (https://crbug.com/1103009)
     ANGLE_SKIP_TEST_IF(!(IsWindows() || IsLinux() || IsMac()) || IsOzone());
     EGLWindow *window             = getEGLWindow();
@@ -781,6 +834,9 @@ TEST_P(MultithreadingTest, EGLImageProduceConsume)
         }
 
         eglDestroyContext(dpy, ctx);
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
     });
 
     std::thread consumerThread([&]() {
@@ -849,6 +905,9 @@ TEST_P(MultithreadingTest, EGLImageProduceConsume)
             }
         }
         eglDestroyContext(dpy, ctx);
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
     });
 
     producerThread.join();
@@ -911,12 +970,15 @@ void MultithreadingTestES3::textureThreadFunction(bool useDraw)
 
     mSecondThreadSyncObj = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     ASSERT_GL_NO_ERROR();
-    // Force the fence to be created
-    glFlush();
 
     // Draw something
     while (!mExitThread)
     {
+        if (mMainThreadSyncObj == nullptr)
+        {
+            angle::Sleep(0);
+        }
+
         std::lock_guard<decltype(mMutex)> lock(mMutex);
 
         if (mMainThreadSyncObj != nullptr)
@@ -931,6 +993,8 @@ void MultithreadingTestES3::textureThreadFunction(bool useDraw)
         {
             continue;
         }
+
+        mDrawGreen = !mDrawGreen;
 
         glBindTexture(GL_TEXTURE_2D, mTexture2D);
         ASSERT_GL_NO_ERROR();
@@ -967,10 +1031,6 @@ void MultithreadingTestES3::textureThreadFunction(bool useDraw)
         ASSERT_EQ(mSecondThreadSyncObj.load(), nullptr);
         mSecondThreadSyncObj = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         ASSERT_GL_NO_ERROR();
-        // Force the fence to be created
-        glFlush();
-
-        mDrawGreen = !mDrawGreen;
     }
 
     // Clean up
@@ -984,8 +1044,6 @@ void MultithreadingTestES3::textureThreadFunction(bool useDraw)
 // Test fence sync with multiple threads drawing
 void MultithreadingTestES3::mainThreadDraw(bool useDraw)
 {
-    ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
-
     EGLWindow *window  = getEGLWindow();
     EGLDisplay dpy     = window->getDisplay();
     EGLContext ctx     = window->getContext();
@@ -1002,8 +1060,15 @@ void MultithreadingTestES3::mainThreadDraw(bool useDraw)
 
     for (int iterations = 0; iterations < kNumIterations; ++iterations)
     {
+        GLColor expectedDrawColor;
+
         for (int draws = 0; draws < kNumDraws;)
         {
+            if (mSecondThreadSyncObj == nullptr)
+            {
+                angle::Sleep(0);
+            }
+
             std::lock_guard<decltype(mMutex)> lock(mMutex);
 
             if (mSecondThreadSyncObj != nullptr)
@@ -1021,38 +1086,29 @@ void MultithreadingTestES3::mainThreadDraw(bool useDraw)
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glBindTexture(GL_TEXTURE_2D, mTexture2D);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glUseProgram(texProgram);
             drawQuad(texProgram, essl1_shaders::PositionAttrib(), 0.0f);
+
+            // mDrawGreen will be changed by the background thread past mMainThreadSyncObj
+            // as it will start drawing the next color to fbo. This shouldn't affect
+            // pixels of the current frame so save the expected color before unblocking the thread
+            expectedDrawColor = mDrawGreen ? GLColor::green : GLColor::red;
 
             ASSERT_EQ(mMainThreadSyncObj.load(), nullptr);
             mMainThreadSyncObj = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
             ASSERT_GL_NO_ERROR();
-            // Force the fence to be created
-            glFlush();
 
             ++draws;
         }
 
         ASSERT_GL_NO_ERROR();
+        EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, expectedDrawColor);
+
         swapBuffers();
     }
 
     mExitThread = true;
     textureThread.join();
-
-    ASSERT_GL_NO_ERROR();
-    GLColor color;
-    if (mDrawGreen)
-    {
-        color = GLColor::green;
-    }
-    else
-    {
-        color = GLColor::red;
-    }
-    EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, color);
 
     // Re-make current the test window's context for teardown.
     EXPECT_EGL_TRUE(eglMakeCurrent(dpy, surface, surface, ctx));
@@ -1087,8 +1143,7 @@ void MultithreadingTestES3::mainThreadDraw(bool useDraw)
 // application.
 TEST_P(MultithreadingTestES3, MultithreadFenceDraw)
 {
-    // http://anglebug.com/5418
-    ANGLE_SKIP_TEST_IF(IsLinux() && IsVulkan() && (IsIntel() || isSwiftshader()));
+    ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
 
     // Have the secondary thread use glDrawArrays()
     mainThreadDraw(true);
@@ -1098,11 +1153,7 @@ TEST_P(MultithreadingTestES3, MultithreadFenceDraw)
 // glDrawArrays.
 TEST_P(MultithreadingTestES3, MultithreadFenceTexImage)
 {
-    // http://anglebug.com/5418
-    ANGLE_SKIP_TEST_IF(IsLinux() && IsIntel() && IsVulkan());
-
-    // http://anglebug.com/5439
-    ANGLE_SKIP_TEST_IF(IsLinux() && isSwiftshader());
+    ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
 
     // Have the secondary thread use glTexImage2D()
     mainThreadDraw(false);
@@ -1188,6 +1239,9 @@ TEST_P(MultithreadingTest, CreateFenceThreadAClientWaitSyncThreadBDelayedFlush)
         constexpr GLuint64 kTimeout = 2'000'000'000;  // 2 seconds
         threadSynchronization.nextStep(Step::Thread0ClientWaitSync);
         ASSERT_EQ(EGL_CONDITION_SATISFIED_KHR, eglClientWaitSyncKHR(dpy, sync, 0, kTimeout));
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
 
         ASSERT_TRUE(threadSynchronization.waitForStep(Step::Finish));
     };
@@ -2674,7 +2728,7 @@ TEST_P(MultithreadingTestES3, RenderThenSampleDifferentContextPriorityUsingEGLIm
         // Create EGLImage.
         image = eglCreateImageKHR(
             dpy, ctx[0], EGL_GL_TEXTURE_2D_KHR,
-            reinterpret_cast<EGLClientBuffer>(static_cast<uintptr_t>(texture.get())), nullptr);
+            reinterpret_cast<EGLClientBuffer>(static_cast<uintptr_t>(texture)), nullptr);
         ASSERT_EGL_SUCCESS();
 
         // Notify second thread that draw is finished.
@@ -3017,6 +3071,9 @@ TEST_P(MultithreadingTestES3, MultithreadedTextureUploadAndDraw)
         glFlush();
         ASSERT_NE(sync, nullptr);
 
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+
         threadSynchronization.nextStep(Step::Thread0UploadFinish);
         ASSERT_TRUE(threadSynchronization.waitForStep(Step::Finish));
     };
@@ -3047,6 +3104,9 @@ TEST_P(MultithreadingTestES3, MultithreadedTextureUploadAndDraw)
         glFlush();
         ASSERT_GL_NO_ERROR();
         EXPECT_PIXEL_RECT_EQ(0, 0, kTexSize, kTexSize, GLColor::green);
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
 
         threadSynchronization.nextStep(Step::Finish);
     };
@@ -3177,6 +3237,9 @@ TEST_P(MultithreadingTestES3, CreateNewContextAfterTextureUploadOnMainThread)
 
         // Destroy the context.
         EXPECT_EGL_TRUE(eglDestroyContext(dpy, ctx1));
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
     });
 
     thread.join();
@@ -3334,6 +3397,9 @@ void main()
         ASSERT_NE(sync, nullptr);
         ASSERT_GL_NO_ERROR();
 
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+
         threadSynchronization.nextStep(Step::Thread0UploadFinish);
         ASSERT_TRUE(threadSynchronization.waitForStep(Step::Finish));
     };
@@ -3449,10 +3515,13 @@ void main()
 
         for (uint32_t x = 0; x < 8; ++x)
         {
-            // The compressed data is gibberish, just ensure it's not black.
-            EXPECT_PIXEL_COLOR_NEAR(x * w / 8, h / 4, GLColor(128, 128, 128, 128), 127);
+            // The compressed data is gibberish, just ensure it's not all black.
+            EXPECT_PIXEL_NE(x * w / 8, h / 4, 0, 0, 0, 0);
         }
         ASSERT_GL_NO_ERROR();
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
     };
 
     std::array<LockStepThreadFunc, 2> threadFuncs = {
@@ -3556,6 +3625,9 @@ void main()
         EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::yellow);
         ASSERT_GL_NO_ERROR();
 
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+
         threadSynchronization.nextStep(Step::Finish);
     };
 
@@ -3605,6 +3677,9 @@ void main()
         EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::magenta);
         ASSERT_GL_NO_ERROR();
 
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+
         // Tell the other thread to finish up.
         threadSynchronization.nextStep(Step::Thread1FinishedDrawing);
         ASSERT_TRUE(threadSynchronization.waitForStep(Step::Finish));
@@ -3620,18 +3695,645 @@ void main()
     ASSERT_NE(currentStep, Step::Abort);
 }
 
+// Test that observers are notified of a change in foveation state of a texture
+TEST_P(MultithreadingTestES3, SharedFoveatedTexture)
+{
+    ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_QCOM_texture_foveated"));
+
+    // Shared texture
+    GLTexture texture;
+
+    // Sync primitives
+    std::mutex mutex;
+    std::condition_variable condVar;
+
+    enum class Step
+    {
+        Start,
+        Thread0Draw,
+        Thread1Draw,
+        Thread0ConfiguredTextureFoveation,
+        Finish,
+        Abort,
+    };
+    Step currentStep = Step::Start;
+
+    // Thread to configure texture foveation.
+    auto thread0 = [&](EGLDisplay dpy, EGLSurface surface, EGLContext context) {
+        ThreadSynchronization<Step> threadSynchronization(&currentStep, &mutex, &condVar);
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, surface, surface, context));
+
+        // Create non-foveated framebuffer and attach shared texture as color attachment
+        GLFramebuffer framebuffer;
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, getWindowWidth(), getWindowHeight(), 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        EXPECT_GL_NO_ERROR();
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        ASSERT_GL_NO_ERROR();
+        EXPECT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+        // Render before configuring foveation on the texture
+        ANGLE_GL_PROGRAM(greenProgram, essl1_shaders::vs::Simple(), essl1_shaders::fs::Green());
+        glUseProgram(greenProgram);
+
+        // Draw
+        drawQuad(greenProgram, essl1_shaders::PositionAttrib(), 0.5f);
+        EXPECT_GL_NO_ERROR();
+
+        // Verify results
+        EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+        ASSERT_GL_NO_ERROR();
+
+        threadSynchronization.nextStep(Step::Thread0Draw);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread1Draw));
+
+        // Configure foveation for the texture
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_FOVEATED_FEATURE_BITS_QCOM,
+                        GL_FOVEATION_ENABLE_BIT_QCOM);
+        EXPECT_GL_NO_ERROR();
+        glTextureFoveationParametersQCOM(texture, 0, 0, 0.0f, 0.0f, 8.0f, 8.0f, 0.0f);
+        EXPECT_GL_NO_ERROR();
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+
+        threadSynchronization.nextStep(Step::Thread0ConfiguredTextureFoveation);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Finish));
+    };
+
+    auto thread1 = [&](EGLDisplay dpy, EGLSurface surface, EGLContext context) {
+        ThreadSynchronization<Step> threadSynchronization(&currentStep, &mutex, &condVar);
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, surface, surface, context));
+
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread0Draw));
+
+        // Create non-foveated framebuffer and attach shared texture as color attachment
+        GLFramebuffer framebuffer;
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        ASSERT_GL_NO_ERROR();
+        EXPECT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+        // Render before configuring foveation on the texture
+        ANGLE_GL_PROGRAM(redProgram, essl1_shaders::vs::Simple(), essl1_shaders::fs::Red());
+        glUseProgram(redProgram);
+
+        // Draw
+        drawQuad(redProgram, essl1_shaders::PositionAttrib(), 0.5f);
+        EXPECT_GL_NO_ERROR();
+
+        // Verify results
+        EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+        ASSERT_GL_NO_ERROR();
+
+        threadSynchronization.nextStep(Step::Thread1Draw);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread0ConfiguredTextureFoveation));
+
+        // Render after texture foveation was configured
+        ANGLE_GL_PROGRAM(blueProgram, essl1_shaders::vs::Simple(), essl1_shaders::fs::Blue());
+        glUseProgram(blueProgram);
+
+        // Draw
+        drawQuad(blueProgram, essl1_shaders::PositionAttrib(), 0.5f);
+        EXPECT_GL_NO_ERROR();
+
+        // Verify results
+        EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::blue);
+        ASSERT_GL_NO_ERROR();
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+
+        threadSynchronization.nextStep(Step::Finish);
+    };
+
+    std::array<LockStepThreadFunc, 2> threadFuncs = {
+        std::move(thread0),
+        std::move(thread1),
+    };
+
+    RunLockStepThreads(getEGLWindow(), threadFuncs.size(), threadFuncs.data());
+
+    ASSERT_NE(currentStep, Step::Abort);
+}
+
+// Test GL_EXT_sRGB_write_control works as expected when multiple contexts are used
+TEST_P(MultithreadingTestES3, SharedSrgbTextureMultipleContexts)
+{
+    ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_sRGB_write_control"));
+
+    constexpr angle::GLColor encodedToSrgbColor(64, 127, 191, 255);
+    constexpr angle::GLColor inputColor(13, 54, 133, 255);
+
+    EGLWindow *window   = getEGLWindow();
+    EGLDisplay dpy      = window->getDisplay();
+    EGLContext context1 = window->createContext(EGL_NO_CONTEXT, nullptr);
+    EGLContext context2 = window->createContext(context1, nullptr);
+
+    // Shared texture
+    GLTexture texture;
+
+    // Shared program
+    GLuint program;
+
+    // Sync primitives
+    std::mutex mutex;
+    std::condition_variable condVar;
+
+    enum class Step
+    {
+        Start,
+        Thread0Draw1,
+        Thread1Draw1,
+        Thread0Draw2,
+        Thread1Draw2,
+        Finish,
+        Abort,
+    };
+    Step currentStep = Step::Start;
+
+    // Thread0 rendering to shared texture.
+    auto thread0 = [&](EGLDisplay dpy, EGLSurface surface, EGLContext context) {
+        ThreadSynchronization<Step> threadSynchronization(&currentStep, &mutex, &condVar);
+
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, surface, surface, context1));
+        EXPECT_EGL_SUCCESS();
+
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB_ALPHA_EXT, 1, 1, 0, GL_SRGB_ALPHA_EXT,
+                     GL_UNSIGNED_BYTE, nullptr);
+
+        GLFramebuffer framebuffer;
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+
+        program = CompileProgram(essl1_shaders::vs::Simple(), essl1_shaders::fs::UniformColor());
+        ASSERT_NE(0u, program);
+
+        GLint colorLocation = glGetUniformLocation(program, essl1_shaders::ColorUniform());
+        ASSERT_NE(-1, colorLocation);
+
+        glUseProgram(program);
+        glUniform4fv(colorLocation, 1, inputColor.toNormalizedVector().data());
+
+        glDisable(GL_FRAMEBUFFER_SRGB_EXT);
+        drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+        EXPECT_PIXEL_COLOR_NEAR(0, 0, inputColor, 1.0);
+
+        threadSynchronization.nextStep(Step::Thread0Draw1);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread1Draw1));
+
+        glEnable(GL_FRAMEBUFFER_SRGB_EXT);
+        drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+        EXPECT_PIXEL_COLOR_NEAR(0, 0, encodedToSrgbColor, 1.0);
+
+        threadSynchronization.nextStep(Step::Thread0Draw2);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread1Draw2));
+
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+        EXPECT_EGL_SUCCESS();
+
+        threadSynchronization.nextStep(Step::Finish);
+    };
+
+    // Thread1 rendering to shared texture.
+    auto thread1 = [&](EGLDisplay dpy, EGLSurface surface, EGLContext context) {
+        ThreadSynchronization<Step> threadSynchronization(&currentStep, &mutex, &condVar);
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, surface, surface, context2));
+        EXPECT_EGL_SUCCESS();
+
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread0Draw1));
+
+        glBindTexture(GL_TEXTURE_2D, texture);
+        GLFramebuffer framebuffer;
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+
+        ASSERT_NE(0u, program);
+        GLint colorLocation = glGetUniformLocation(program, essl1_shaders::ColorUniform());
+        ASSERT_NE(-1, colorLocation);
+
+        glUseProgram(program);
+        glUniform4fv(colorLocation, 1, inputColor.toNormalizedVector().data());
+
+        drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+        EXPECT_PIXEL_COLOR_NEAR(0, 0, encodedToSrgbColor, 1.0);
+
+        threadSynchronization.nextStep(Step::Thread1Draw1);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread0Draw2));
+
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glDisable(GL_FRAMEBUFFER_SRGB_EXT);
+        drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+        EXPECT_PIXEL_COLOR_NEAR(0, 0, inputColor, 1.0);
+
+        threadSynchronization.nextStep(Step::Thread1Draw2);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Finish));
+
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+        EXPECT_EGL_SUCCESS();
+    };
+
+    std::array<LockStepThreadFunc, 2> threadFuncs = {
+        std::move(thread0),
+        std::move(thread1),
+    };
+
+    RunLockStepThreads(getEGLWindow(), threadFuncs.size(), threadFuncs.data());
+
+    // Cleanup
+    EXPECT_EGL_TRUE(eglDestroyContext(dpy, context1));
+    EXPECT_EGL_TRUE(eglDestroyContext(dpy, context2));
+    EXPECT_EGL_SUCCESS();
+
+    ASSERT_NE(currentStep, Step::Abort);
+}
+
+// Test that a program linked in one context can be bound in another context while link may be
+// happening in parallel.
+TEST_P(MultithreadingTest, ProgramLinkAndBind)
+{
+    ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
+
+    GLuint vs;
+    GLuint redfs;
+    GLuint greenfs;
+
+    GLuint program;
+
+    // Sync primitives
+    std::mutex mutex;
+    std::condition_variable condVar;
+
+    enum class Step
+    {
+        Start,
+        Thread1Ready,
+        Thread0ProgramLinked,
+        Thread1FinishedDrawing,
+        Finish,
+        Abort,
+    };
+    Step currentStep = Step::Start;
+
+    // Threads to create programs and draw.
+    auto thread0 = [&](EGLDisplay dpy, EGLSurface surface, EGLContext context) {
+        ThreadSynchronization<Step> threadSynchronization(&currentStep, &mutex, &condVar);
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, surface, surface, context));
+
+        // Wait for thread 1 to bind the program before linking it
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread1Ready));
+
+        glUseProgram(program);
+
+        // Link a program, but don't resolve link.
+        glDetachShader(program, greenfs);
+        glAttachShader(program, redfs);
+        glLinkProgram(program);
+
+        // Let the other thread bind and use the program.
+        threadSynchronization.nextStep(Step::Thread0ProgramLinked);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread1FinishedDrawing));
+
+        // Draw in this context too
+        drawQuad(program, essl1_shaders::PositionAttrib(), 0);
+
+        // Verify results
+        EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+        ASSERT_GL_NO_ERROR();
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+
+        threadSynchronization.nextStep(Step::Finish);
+    };
+
+    auto thread1 = [&](EGLDisplay dpy, EGLSurface surface, EGLContext context) {
+        ThreadSynchronization<Step> threadSynchronization(&currentStep, &mutex, &condVar);
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, surface, surface, context));
+
+        vs      = CompileShader(GL_VERTEX_SHADER, essl1_shaders::vs::Simple());
+        redfs   = CompileShader(GL_FRAGMENT_SHADER, essl1_shaders::fs::Red());
+        greenfs = CompileShader(GL_FRAGMENT_SHADER, essl1_shaders::fs::Green());
+        program = glCreateProgram();
+
+        glAttachShader(program, vs);
+        glAttachShader(program, greenfs);
+        glLinkProgram(program);
+        ASSERT_NE(CheckLinkStatusAndReturnProgram(program, true), 0u);
+
+        // Bind the program before it's relinked.  Otherwise the program is resolved before the
+        // binding happens.
+        glUseProgram(program);
+
+        threadSynchronization.nextStep(Step::Thread1Ready);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread0ProgramLinked));
+
+        // Unbind and rebind for extra testing
+        glUseProgram(0);
+        glUseProgram(program);
+
+        // Issue a draw call
+        drawQuad(program, essl1_shaders::PositionAttrib(), 0);
+
+        // Verify results
+        EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+        ASSERT_GL_NO_ERROR();
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+
+        // Tell the other thread to finish up.
+        threadSynchronization.nextStep(Step::Thread1FinishedDrawing);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Finish));
+    };
+
+    std::array<LockStepThreadFunc, 2> threadFuncs = {
+        std::move(thread0),
+        std::move(thread1),
+    };
+
+    RunLockStepThreads(getEGLWindow(), threadFuncs.size(), threadFuncs.data());
+
+    ASSERT_NE(currentStep, Step::Abort);
+}
+
+// Test that two contexts in share group can generate, delete and bind buffers for themselves in
+// parallel.
+TEST_P(MultithreadingTestES3, SimultaneousBufferBindAndGen)
+{
+    ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
+
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+
+layout(std140) uniform Block
+{
+    vec4 colorIn;
+};
+
+out vec4 color;
+
+void main()
+{
+    color = colorIn;
+})";
+
+    constexpr int kSurfaceWidth  = 32;
+    constexpr int kSurfaceHeight = 128;
+
+    // Sync primitives
+    std::mutex mutex;
+    std::condition_variable condVar;
+
+    enum class Step
+    {
+        Start,
+        Thread0Ready,
+        Thread1Ready,
+        Finish,
+        Abort,
+    };
+    Step currentStep = Step::Start;
+
+    auto threadFunc = [&](EGLDisplay dpy, EGLSurface surface, EGLContext context, uint32_t index) {
+        ThreadSynchronization<Step> threadSynchronization(&currentStep, &mutex, &condVar);
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, surface, surface, context));
+
+        ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+
+        // Make sure the two threads start work around the same time
+        if (index == 0)
+        {
+            threadSynchronization.nextStep(Step::Thread0Ready);
+            ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread1Ready));
+        }
+        else
+        {
+            ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread0Ready));
+            threadSynchronization.nextStep(Step::Thread1Ready);
+        }
+
+        std::vector<GLuint> buffers(kSurfaceWidth * kSurfaceHeight);
+
+        glEnable(GL_SCISSOR_TEST);
+        for (int y = 0; y < kSurfaceHeight; ++y)
+        {
+            for (int x = 0; x < kSurfaceWidth; ++x)
+            {
+                GLuint &buffer            = buffers[y * kSurfaceWidth + x];
+                const float bufferData[4] = {
+                    ((y * kSurfaceWidth + x + index * 100) % 255) / 255.0f,
+                    ((y * kSurfaceWidth + x + index * 100 + 1) % 255) / 255.0f,
+                    ((y * kSurfaceWidth + x + index * 100 + 2) % 255) / 255.0f,
+                    ((y * kSurfaceWidth + x + index * 100 + 3) % 255) / 255.0f,
+                };
+
+                // Generate one buffer per pixel and shade the pixel with it.
+                glGenBuffers(1, &buffer);
+                glBindBuffer(GL_UNIFORM_BUFFER, buffers[y * kSurfaceWidth + x]);
+                glBufferData(GL_UNIFORM_BUFFER, sizeof(bufferData), bufferData, GL_STATIC_DRAW);
+                glBindBufferBase(GL_UNIFORM_BUFFER, 0, buffer);
+
+                glScissor(x, y, 1, 1);
+                drawQuad(program, essl3_shaders::PositionAttrib(), 0);
+
+                if ((x + y) % 2 == 0)
+                {
+                    glDeleteBuffers(1, &buffer);
+                    buffer = 0;
+                }
+            }
+        }
+
+        // Verify the results
+        auto verify = [&](int x, int y) {
+            const GLColor expect((y * kSurfaceWidth + x + index * 100) % 255,
+                                 (y * kSurfaceWidth + x + index * 100 + 1) % 255,
+                                 (y * kSurfaceWidth + x + index * 100 + 2) % 255,
+                                 (y * kSurfaceWidth + x + index * 100 + 3) % 255);
+            EXPECT_PIXEL_COLOR_EQ(x, y, expect);
+        };
+
+        verify(0, 0);
+        verify(0, kSurfaceHeight - 1);
+        verify(kSurfaceWidth - 1, 0);
+        verify(kSurfaceWidth - 1, kSurfaceHeight - 1);
+        verify(kSurfaceWidth / 2, kSurfaceHeight / 2);
+        ASSERT_GL_NO_ERROR();
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+
+        if (index == 0)
+        {
+            threadSynchronization.nextStep(Step::Finish);
+        }
+        else
+        {
+            ASSERT_TRUE(threadSynchronization.waitForStep(Step::Finish));
+        }
+    };
+
+    auto thread0 = [&](EGLDisplay dpy, EGLSurface surface, EGLContext context) {
+        threadFunc(dpy, surface, context, 0);
+    };
+    auto thread1 = [&](EGLDisplay dpy, EGLSurface surface, EGLContext context) {
+        threadFunc(dpy, surface, context, 1);
+    };
+
+    std::array<LockStepThreadFunc, 2> threadFuncs = {
+        std::move(thread0),
+        std::move(thread1),
+    };
+
+    RunLockStepThreadsWithSize(getEGLWindow(), kSurfaceWidth, kSurfaceHeight, threadFuncs.size(),
+                               threadFuncs.data());
+
+    ASSERT_NE(currentStep, Step::Abort);
+}
+
+// Test that ref counting is thread-safe when the same buffer is used in multiple threads.
+TEST_P(MultithreadingTestES3, SimultaneousBufferBind)
+{
+    ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
+
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+
+layout(std140) uniform Block
+{
+    vec4 colorIn;
+};
+
+out vec4 color;
+
+void main()
+{
+    color = colorIn;
+})";
+
+    constexpr int kSurfaceWidth  = 32;
+    constexpr int kSurfaceHeight = 128;
+
+    GLuint buffer;
+    GLsync sync = nullptr;
+
+    // Sync primitives
+    std::mutex mutex;
+    std::condition_variable condVar;
+
+    enum class Step
+    {
+        Start,
+        Thread0Ready,
+        Thread1Ready,
+        Finish,
+        Abort,
+    };
+    Step currentStep = Step::Start;
+
+    auto thread0 = [&](EGLDisplay dpy, EGLSurface surface, EGLContext context) {
+        ThreadSynchronization<Step> threadSynchronization(&currentStep, &mutex, &condVar);
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, surface, surface, context));
+
+        ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+
+        // Create the buffer in this context
+        glGenBuffers(1, &buffer);
+
+        constexpr float kBufferData[4] = {
+            10.0f / 255.0f,
+            50.0f / 255.0f,
+            130.0f / 255.0f,
+            220.0f / 255.0f,
+        };
+        glBindBuffer(GL_UNIFORM_BUFFER, buffer);
+        glBufferData(GL_UNIFORM_BUFFER, sizeof(kBufferData), kBufferData, GL_STATIC_DRAW);
+
+        sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+
+        // Make sure the two threads start work around the same time
+        threadSynchronization.nextStep(Step::Thread0Ready);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread1Ready));
+
+        // Bind and unbind the buffer many times.  If ref counting is not thread safe, chances are
+        // the ref count would be incorrect in the end.  This can result in the buffer prematurely
+        // getting deleted.
+        for (uint32_t i = 0; i < 8000; ++i)
+        {
+            glBindBuffer(GL_UNIFORM_BUFFER, i % 2 == 0 ? 0 : buffer);
+        }
+        ASSERT_GL_NO_ERROR();
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+
+        threadSynchronization.nextStep(Step::Finish);
+    };
+    auto thread1 = [&](EGLDisplay dpy, EGLSurface surface, EGLContext context) {
+        ThreadSynchronization<Step> threadSynchronization(&currentStep, &mutex, &condVar);
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, surface, surface, context));
+
+        ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread0Ready));
+        threadSynchronization.nextStep(Step::Thread1Ready);
+
+        glWaitSync(sync, 0, GL_TIMEOUT_IGNORED);
+
+        // Bind and unbind the buffer many times.
+        for (uint32_t i = 0; i < 4000; ++i)
+        {
+            glBindBuffer(GL_UNIFORM_BUFFER, i % 2 == 0 ? buffer : 0);
+        }
+
+        // Draw with it to make sure buffer is still valid and not accidentally deleted due to bad
+        // ref counting.
+        glBindBuffer(GL_UNIFORM_BUFFER, buffer);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 0, buffer);
+        drawQuad(program, essl3_shaders::PositionAttrib(), 0);
+
+        // Verify the results
+        const GLColor expect(10, 50, 130, 220);
+        EXPECT_PIXEL_RECT_EQ(0, 0, kSurfaceWidth, kSurfaceHeight, expect);
+        ASSERT_GL_NO_ERROR();
+
+        // Clean up
+        EXPECT_EGL_TRUE(eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Finish));
+    };
+
+    std::array<LockStepThreadFunc, 2> threadFuncs = {
+        std::move(thread0),
+        std::move(thread1),
+    };
+
+    RunLockStepThreadsWithSize(getEGLWindow(), kSurfaceWidth, kSurfaceHeight, threadFuncs.size(),
+                               threadFuncs.data());
+
+    ASSERT_NE(currentStep, Step::Abort);
+}
+
 ANGLE_INSTANTIATE_TEST(
     MultithreadingTest,
+    ES2_METAL(),
+    ES3_METAL(),
     ES2_OPENGL(),
     ES3_OPENGL(),
     ES2_OPENGLES(),
     ES3_OPENGLES(),
     ES3_VULKAN(),
-    ES3_VULKAN_SWIFTSHADER().enable(Feature::AsyncCommandQueue),
-    ES3_VULKAN_SWIFTSHADER()
-        .enable(Feature::AsyncCommandQueue)
-        .enable(Feature::SlowAsyncCommandQueueForTesting),
-    ES3_VULKAN_SWIFTSHADER().disable(Feature::PreferMonolithicPipelinesOverLibraries),
     ES3_VULKAN_SWIFTSHADER().enable(Feature::PreferMonolithicPipelinesOverLibraries),
     ES3_VULKAN_SWIFTSHADER()
         .enable(Feature::PreferMonolithicPipelinesOverLibraries)
@@ -3656,11 +4358,6 @@ ANGLE_INSTANTIATE_TEST(
     ES3_OPENGL(),
     ES3_OPENGLES(),
     ES3_VULKAN(),
-    ES3_VULKAN_SWIFTSHADER().enable(Feature::AsyncCommandQueue),
-    ES3_VULKAN_SWIFTSHADER()
-        .enable(Feature::AsyncCommandQueue)
-        .enable(Feature::SlowAsyncCommandQueueForTesting),
-    ES3_VULKAN_SWIFTSHADER().disable(Feature::PreferMonolithicPipelinesOverLibraries),
     ES3_VULKAN_SWIFTSHADER().enable(Feature::PreferMonolithicPipelinesOverLibraries),
     ES3_VULKAN_SWIFTSHADER()
         .enable(Feature::PreferMonolithicPipelinesOverLibraries)

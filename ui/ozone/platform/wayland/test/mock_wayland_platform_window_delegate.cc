@@ -5,9 +5,26 @@
 #include "ui/ozone/platform/wayland/test/mock_wayland_platform_window_delegate.h"
 
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/ozone/platform/wayland/host/wayland_connection.h"
 #include "ui/ozone/platform/wayland/host/wayland_window.h"
 
 namespace ui {
+
+void MockWaylandPlatformWindowDelegate::OnWindowRemoved(WaylandWindow* window) {
+  if (wayland_window_ == window) {
+    wayland_window_ = nullptr;
+  }
+}
+
+MockWaylandPlatformWindowDelegate::MockWaylandPlatformWindowDelegate(
+    raw_ptr<WaylandConnection> connection)
+    : connection_(connection) {
+  connection_->window_manager()->AddObserver(this);
+}
+
+MockWaylandPlatformWindowDelegate::~MockWaylandPlatformWindowDelegate() {
+  connection_->window_manager()->RemoveObserver(this);
+}
 
 gfx::Rect MockWaylandPlatformWindowDelegate::ConvertRectToPixels(
     const gfx::Rect& rect_in_dp) const {
@@ -35,17 +52,21 @@ MockWaylandPlatformWindowDelegate::CreateWaylandWindow(
 int64_t MockWaylandPlatformWindowDelegate::OnStateUpdate(
     const PlatformWindowDelegate::State& old,
     const PlatformWindowDelegate::State& latest) {
+  if (old.window_state != latest.window_state) {
+    OnWindowStateChanged(old.window_state, latest.window_state);
+  }
+
   if (old.bounds_dip != latest.bounds_dip || old.size_px != latest.size_px ||
       old.window_scale != latest.window_scale) {
     bool origin_changed = old.bounds_dip.origin() != latest.bounds_dip.origin();
     OnBoundsChanged({origin_changed});
   }
 
-  if (old.occlusion_state != latest.occlusion_state) {
-    OnOcclusionStateChanged(latest.occlusion_state);
+  if (!on_state_update_callback_.is_null()) {
+    on_state_update_callback_.Run();
   }
 
-  if (!latest.ProducesFrameOnUpdateFrom(old)) {
+  if (!latest.WillProduceFrameOnUpdateFrom(old)) {
     return -1;
   }
 

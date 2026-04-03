@@ -7,7 +7,8 @@
 #include <memory>
 #include <utility>
 
-#include "base/android/build_info.h"
+#include "base/android/android_info.h"
+#include "base/android/locale_utils.h"
 #include "base/check.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -16,11 +17,15 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/types/pass_key.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/system_network_context_manager.h"
@@ -74,6 +79,22 @@ const char kOriginIds[] = "origin_ids";
 const char kLastProvisioningAttemptTimeToken[] =
     "last_provisioning_attempt_time";
 
+std::string_view GetDetailedUserAgent() {
+  // Use NoDestructor to avoid computing this string multiple times for every
+  // provisioning request.
+  static const base::NoDestructor<std::string> user_agent([] {
+    std::string locale = base::android::GetDefaultLocaleString();
+    // Example Format: Widevine CDM v1.0 (Linux; U; Android 35;
+    // en-US; Build/BP1A.250505.005; user)
+    return base::StringPrintf(
+        "Widevine CDM v1.0 (Linux; U; Android %d; %s; Build/%s; %s)",
+        base::android::android_info::sdk_int(), locale.c_str(),
+        base::android::android_info::android_build_id(),
+        base::android::android_info::build_type());
+  }());
+  return *user_agent;
+}
+
 // The maximum number of origin IDs to pre-provision. Chosen to be small to
 // minimize provisioning server load.
 // TODO(jrummell): Adjust this value if needed after initial launch.
@@ -119,7 +140,7 @@ void SetExpirableToken(PrefService* const pref_service) {
               base::TimeToValue(base::Time::Now() + kExpirationDelta));
 }
 
-void RemoveExpirableToken(base::Value::Dict& origin_id_dict) {
+void RemoveExpirableToken(base::DictValue& origin_id_dict) {
   DVLOG(3) << __func__;
   origin_id_dict.Remove(kExpirableToken);
 }
@@ -133,11 +154,11 @@ void RemoveExpirableToken(base::Value::Dict& origin_id_dict) {
 // TODO(b/253295050): Remove this workaround if Android R patched to fix this.
 
 bool IsAndroidR() {
-  return base::android::BuildInfo::GetInstance()->sdk_int() ==
-         base::android::SDK_VERSION_R;
+  return base::android::android_info::sdk_int() ==
+         base::android::android_info::SDK_VERSION_R;
 }
 
-bool ShouldAttemptProvisioning(base::Value::Dict& origin_id_dict) {
+bool ShouldAttemptProvisioning(base::DictValue& origin_id_dict) {
   DVLOG(3) << __func__;
   DCHECK(IsAndroidR());
 
@@ -160,7 +181,7 @@ bool ShouldAttemptProvisioning(base::Value::Dict& origin_id_dict) {
   return true;
 }
 
-void SetLastProvisioningTime(base::Value::Dict& origin_id_dict) {
+void SetLastProvisioningTime(base::DictValue& origin_id_dict) {
   DVLOG(3) << __func__;
   DCHECK(IsAndroidR());
 
@@ -168,7 +189,7 @@ void SetLastProvisioningTime(base::Value::Dict& origin_id_dict) {
                      base::TimeToValue(base::Time::Now()));
 }
 
-void RemoveLastProvisioningTime(base::Value::Dict& origin_id_dict) {
+void RemoveLastProvisioningTime(base::DictValue& origin_id_dict) {
   DVLOG(3) << __func__;
   DCHECK(IsAndroidR());
 
@@ -184,7 +205,7 @@ void RemoveLastProvisioningTime(base::Value::Dict& origin_id_dict) {
 // |kExpirableToken| is expired or corrupt, it will be removed for privacy
 // reasons.
 bool CanPreProvision(bool is_per_application_provisioning_supported,
-                     base::Value::Dict& origin_id_dict) {
+                     base::DictValue& origin_id_dict) {
   DVLOG(3) << __func__;
 
   // On devices that support per-application provisioning, this is always true.
@@ -212,10 +233,10 @@ bool CanPreProvision(bool is_per_application_provisioning_supported,
   return true;
 }
 
-int CountAvailableOriginIds(const base::Value::Dict& origin_id_dict) {
+int CountAvailableOriginIds(const base::DictValue& origin_id_dict) {
   DVLOG(3) << __func__;
 
-  const base::Value::List* origin_ids = origin_id_dict.FindList(kOriginIds);
+  const base::ListValue* origin_ids = origin_id_dict.FindList(kOriginIds);
   if (!origin_ids)
     return 0;
 
@@ -228,7 +249,7 @@ base::UnguessableToken TakeFirstOriginId(PrefService* const pref_service) {
 
   ScopedDictPrefUpdate update(pref_service, kMediaDrmOriginIds);
 
-  base::Value::List* origin_ids = update->FindList(kOriginIds);
+  base::ListValue* origin_ids = update->FindList(kOriginIds);
   if (!origin_ids)
     return base::UnguessableToken::Null();
 
@@ -242,10 +263,10 @@ base::UnguessableToken TakeFirstOriginId(PrefService* const pref_service) {
   return result.value_or(base::UnguessableToken::Null());
 }
 
-void AddOriginId(base::Value::Dict& origin_id_dict,
+void AddOriginId(base::DictValue& origin_id_dict,
                  const base::UnguessableToken& origin_id) {
   DVLOG(3) << __func__;
-  base::Value::List* origin_ids = origin_id_dict.EnsureList(kOriginIds);
+  base::ListValue* origin_ids = origin_id_dict.EnsureList(kOriginIds);
   origin_ids->Append(base::UnguessableTokenToValue(origin_id));
 }
 
@@ -263,9 +284,10 @@ class MediaDrmProvisionHelper {
     DVLOG(1) << __func__;
     DCHECK(pending_shared_url_loader_factory);
     create_fetcher_cb_ =
-        base::BindRepeating(&content::CreateProvisionFetcher,
+        base::BindRepeating(&content::CreateProvisionFetcherWithUserAgent,
                             network::SharedURLLoaderFactory::Create(
-                                std::move(pending_shared_url_loader_factory)));
+                                std::move(pending_shared_url_loader_factory)),
+                            GetDetailedUserAgent());
   }
 
   void Provision(ProvisionedOriginIdCB callback) {
@@ -275,15 +297,19 @@ class MediaDrmProvisionHelper {
     origin_id_ = base::UnguessableToken::Create();
 
     // Try provisioning for L3 first.
-    media_drm_bridge_ = media::MediaDrmBridge::CreateWithoutSessionSupport(
+    auto result = media::MediaDrmBridge::CreateWithoutSessionSupport(
         kWidevineKeySystem, origin_id_.ToString(),
-        media::MediaDrmBridge::SECURITY_LEVEL_3, create_fetcher_cb_);
-    if (!media_drm_bridge_) {
+        media::MediaDrmBridge::SECURITY_LEVEL_3, "L3 provisioning",
+        create_fetcher_cb_);
+    if (!result.has_value()) {
       // Unable to create mediaDrm for L3, so try L1.
-      DVLOG(1) << "Unable to create MediaDrmBridge for L3.";
+      DVLOG(1) << "Unable to create MediaDrmBridge for L3, CreateCdmStatus: "
+               << (media::StatusCodeType)result.code();
       ProvisionLevel1(false);
       return;
     }
+
+    media_drm_bridge_ = std::move(result).value();
 
     // Use of base::Unretained() is safe as ProvisionLevel1() eventually calls
     // ProvisionDone() which destructs this object.
@@ -301,16 +327,21 @@ class MediaDrmProvisionHelper {
 
     // Try L1. This replaces the previous |media_drm_bridge_| as it is no longer
     // needed.
-    media_drm_bridge_ = media::MediaDrmBridge::CreateWithoutSessionSupport(
+    media_drm_bridge_.reset();
+    auto result = media::MediaDrmBridge::CreateWithoutSessionSupport(
         kWidevineKeySystem, origin_id_.ToString(),
-        media::MediaDrmBridge::SECURITY_LEVEL_1, create_fetcher_cb_);
-    if (!media_drm_bridge_) {
+        media::MediaDrmBridge::SECURITY_LEVEL_1, "L1 provisioning",
+        create_fetcher_cb_);
+    if (!result.has_value()) {
       // Unable to create MediaDrm for L1, so quit. Note that L3 provisioning
       // may or may not have worked.
-      DVLOG(1) << "Unable to create MediaDrmBridge for L1.";
+      DVLOG(1) << "Unable to create MediaDrmBridge for L1, CreateCdmStatus: "
+               << (media::StatusCodeType)result.code();
       ProvisionDone(L3_success, false);
       return;
     }
+
+    media_drm_bridge_ = std::move(result).value();
 
     // Use of base::Unretained() is safe as ProvisionDone() destructs this
     // object.
@@ -394,9 +425,11 @@ class MediaDrmOriginIdManager::NetworkObserver
   }
 
   // network::NetworkConnectionTracker::NetworkConnectionObserver
-  void OnConnectionChanged(network::mojom::ConnectionType type) override {
-    if (type == network::mojom::ConnectionType::CONNECTION_NONE)
+  void OnConnectionChanged(
+      net::NetworkChangeNotifier::ConnectionType type) override {
+    if (type == net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE) {
       return;
+    }
 
     ++number_of_attempts_;
     parent_->PreProvisionIfNecessary();
@@ -414,7 +447,9 @@ void MediaDrmOriginIdManager::RegisterProfilePrefs(
   registry->RegisterDictionaryPref(kMediaDrmOriginIds);
 }
 
-MediaDrmOriginIdManager::MediaDrmOriginIdManager(PrefService* pref_service)
+MediaDrmOriginIdManager::MediaDrmOriginIdManager(
+    PrefService* pref_service,
+    base::PassKey<MediaDrmOriginIdManagerFactory>)
     : pref_service_(pref_service) {
   DVLOG(1) << __func__;
   DCHECK(pref_service_);

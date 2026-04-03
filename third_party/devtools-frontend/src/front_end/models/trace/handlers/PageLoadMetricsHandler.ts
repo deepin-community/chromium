@@ -1,11 +1,13 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 /**
  * This handler stores page load metrics, including web vitals,
  * and exports them in the shape of a map with the following shape:
- * Map(FrameId -> Map(navigationID -> metrics) )
+ * Map(FrameId -> Map(navigation -> metrics) )
+ *
+ * Includes soft navigations.
  *
  * It also exports all markers in a trace in an array.
  *
@@ -15,12 +17,14 @@
 
 import * as Platform from '../../../core/platform/platform.js';
 import * as Helpers from '../helpers/helpers.js';
-
-import {type TraceEventHandlerName} from './types.js';
-
 import * as Types from '../types/types.js';
 
 import {data as metaHandlerData} from './MetaHandler.js';
+import type {HandlerName} from './types.js';
+
+// Small helpers to make the below type easier to read.
+type FrameId = string;
+type AnyNavigationStart = Types.Events.NavigationStart|Types.Events.SoftNavigationStart;
 
 /**
  * This represents the metric scores for all navigations, for all frames in a trace.
@@ -28,23 +32,22 @@ import {data as metaHandlerData} from './MetaHandler.js';
  * The metric scores include the event related to the metric as well as the data regarding
  * the score itself.
  */
-const metricScoresByFrameId =
-    new Map</* Frame id */ string, Map</* navigation id */ string, Map<MetricName, MetricScore>>>();
+let metricScoresByFrameId = new Map<FrameId, Map<AnyNavigationStart, Map<MetricName, MetricScore>>>();
 
 /**
  * Page load events with no associated duration that happened in the
  * main frame.
  */
-let allMarkerEvents: Types.TraceEvents.PageLoadEvent[] = [];
+let allMarkerEvents: Types.Events.PageLoadEvent[] = [];
 
 export function reset(): void {
-  metricScoresByFrameId.clear();
+  metricScoresByFrameId = new Map();
   pageLoadEventsArray = [];
   allMarkerEvents = [];
-  selectedLCPCandidateEvents.clear();
+  selectedLCPCandidateEvents = new Set();
 }
 
-let pageLoadEventsArray: Types.TraceEvents.PageLoadEvent[] = [];
+let pageLoadEventsArray: Types.Events.PageLoadEvent[] = [];
 
 // Once we've found the LCP events in the trace we want to fetch their DOM Node
 // from the backend. We could do this by parsing through our Map of frame =>
@@ -54,51 +57,17 @@ let pageLoadEventsArray: Types.TraceEvents.PageLoadEvent[] = [];
 // trace, we store that and delete the prior event. When we've parsed the
 // entire trace this set will contain all the LCP events that were used - e.g.
 // the candidates that were the actual LCP events.
-const selectedLCPCandidateEvents = new Set<Types.TraceEvents.TraceEventLargestContentfulPaintCandidate>();
+let selectedLCPCandidateEvents = new Set<Types.Events.AnyLargestContentfulPaintCandidate>();
 
-export const MarkerName =
-    ['MarkDOMContent', 'MarkLoad', 'firstPaint', 'firstContentfulPaint', 'largestContentfulPaint::Candidate'] as const;
-
-const markerTypeGuards = [
-  Types.TraceEvents.isTraceEventMarkDOMContent,
-  Types.TraceEvents.isTraceEventMarkLoad,
-  Types.TraceEvents.isTraceEventFirstPaint,
-  Types.TraceEvents.isTraceEventFirstContentfulPaint,
-  Types.TraceEvents.isTraceEventLargestContentfulPaintCandidate,
-  Types.TraceEvents.isTraceEventNavigationStart,
-];
-
-interface MakerEvent extends Types.TraceEvents.TraceEventData {
-  name: typeof MarkerName[number];
-}
-
-export function isTraceEventMarkerEvent(event: Types.TraceEvents.TraceEventData): event is MakerEvent {
-  return markerTypeGuards.some(fn => fn(event));
-}
-
-const pageLoadEventTypeGuards = [
-  ...markerTypeGuards,
-  Types.TraceEvents.isTraceEventInteractiveTime,
-];
-
-export function eventIsPageLoadEvent(event: Types.TraceEvents.TraceEventData):
-    event is Types.TraceEvents.PageLoadEvent {
-  return pageLoadEventTypeGuards.some(fn => fn(event));
-}
-
-export function handleEvent(event: Types.TraceEvents.TraceEventData): void {
-  if (!eventIsPageLoadEvent(event)) {
+export function handleEvent(event: Types.Events.Event): void {
+  if (!Types.Events.eventIsPageLoadEvent(event)) {
     return;
   }
   pageLoadEventsArray.push(event);
 }
 
 function storePageLoadMetricAgainstNavigationId(
-    navigation: Types.TraceEvents.TraceEventNavigationStart, event: Types.TraceEvents.PageLoadEvent): void {
-  const navigationId = navigation.args.data?.navigationId;
-  if (!navigationId) {
-    throw new Error('Navigation event unexpectedly had no navigation ID.');
-  }
+    navigation: AnyNavigationStart, event: Types.Events.PageLoadEvent): void {
   const frameId = getFrameIdForPageLoadEvent(event);
   const {rendererProcessesByFrame} = metaHandlerData();
 
@@ -117,128 +86,99 @@ function storePageLoadMetricAgainstNavigationId(
     return;
   }
 
-  if (Types.TraceEvents.isTraceEventNavigationStart(event)) {
+  if (Types.Events.isNavigationStart(event)) {
     return;
   }
 
-  if (Types.TraceEvents.isTraceEventFirstContentfulPaint(event)) {
-    const fcpTime = Types.Timing.MicroSeconds(event.ts - navigation.ts);
-    const score = Helpers.Timing.formatMicrosecondsTime(fcpTime, {
-      format: Types.Timing.TimeUnit.SECONDS,
-      maximumFractionDigits: 2,
-    });
+  if (Types.Events.isFirstContentfulPaint(event)) {
+    const fcpTime = Types.Timing.Micro(event.ts - navigation.ts);
     const classification = scoreClassificationForFirstContentfulPaint(fcpTime);
-    const metricScore = {event, score, metricName: MetricName.FCP, classification, navigation};
-    storeMetricScore(frameId, navigationId, metricScore);
+    const metricScore = {event, metricName: MetricName.FCP, classification, navigation, timing: fcpTime};
+    storeMetricScore(frameId, navigation, metricScore);
     return;
   }
 
-  if (Types.TraceEvents.isTraceEventFirstPaint(event)) {
-    const paintTime = Types.Timing.MicroSeconds(event.ts - navigation.ts);
-    const score = Helpers.Timing.formatMicrosecondsTime(paintTime, {
-      format: Types.Timing.TimeUnit.SECONDS,
-      maximumFractionDigits: 2,
-    });
+  if (Types.Events.isFirstPaint(event)) {
+    const paintTime = Types.Timing.Micro(event.ts - navigation.ts);
     const classification = ScoreClassification.UNCLASSIFIED;
-    const metricScore = {event, score, metricName: MetricName.FP, classification, navigation};
-    storeMetricScore(frameId, navigationId, metricScore);
+    const metricScore = {event, metricName: MetricName.FP, classification, navigation, timing: paintTime};
+    storeMetricScore(frameId, navigation, metricScore);
     return;
   }
 
-  if (Types.TraceEvents.isTraceEventMarkDOMContent(event)) {
-    const dclTime = Types.Timing.MicroSeconds(event.ts - navigation.ts);
-    const score = Helpers.Timing.formatMicrosecondsTime(dclTime, {
-      format: Types.Timing.TimeUnit.SECONDS,
-      maximumFractionDigits: 2,
-    });
+  if (Types.Events.isMarkDOMContent(event)) {
+    const dclTime = Types.Timing.Micro(event.ts - navigation.ts);
     const metricScore = {
       event,
-      score,
       metricName: MetricName.DCL,
       classification: scoreClassificationForDOMContentLoaded(dclTime),
       navigation,
+      timing: dclTime,
     };
-    storeMetricScore(frameId, navigationId, metricScore);
+    storeMetricScore(frameId, navigation, metricScore);
     return;
   }
 
-  if (Types.TraceEvents.isTraceEventInteractiveTime(event)) {
-    const ttiValue = Types.Timing.MicroSeconds(event.ts - navigation.ts);
-    const ttiScore = Helpers.Timing.formatMicrosecondsTime(ttiValue, {
-      format: Types.Timing.TimeUnit.SECONDS,
-      maximumFractionDigits: 2,
-    });
+  if (Types.Events.isInteractiveTime(event)) {
+    const ttiValue = Types.Timing.Micro(event.ts - navigation.ts);
     const tti = {
       event,
-      score: ttiScore,
       metricName: MetricName.TTI,
       classification: scoreClassificationForTimeToInteractive(ttiValue),
       navigation,
+      timing: ttiValue,
     };
-    storeMetricScore(frameId, navigationId, tti);
+    storeMetricScore(frameId, navigation, tti);
 
-    const tbtValue =
-        Helpers.Timing.millisecondsToMicroseconds(Types.Timing.MilliSeconds(event.args.args.total_blocking_time_ms));
-    const tbtScore = Helpers.Timing.formatMicrosecondsTime(tbtValue, {
-      format: Types.Timing.TimeUnit.MILLISECONDS,
-      maximumFractionDigits: 2,
-    });
+    const tbtValue = Helpers.Timing.milliToMicro(Types.Timing.Milli(event.args.args.total_blocking_time_ms));
     const tbt = {
       event,
-      score: tbtScore,
       metricName: MetricName.TBT,
       classification: scoreClassificationForTotalBlockingTime(tbtValue),
       navigation,
+      timing: tbtValue,
     };
-    storeMetricScore(frameId, navigationId, tbt);
+    storeMetricScore(frameId, navigation, tbt);
     return;
   }
 
-  if (Types.TraceEvents.isTraceEventMarkLoad(event)) {
-    const loadTime = Types.Timing.MicroSeconds(event.ts - navigation.ts);
-    const score = Helpers.Timing.formatMicrosecondsTime(loadTime, {
-      format: Types.Timing.TimeUnit.SECONDS,
-      maximumFractionDigits: 2,
-    });
+  if (Types.Events.isMarkLoad(event)) {
+    const loadTime = Types.Timing.Micro(event.ts - navigation.ts);
     const metricScore = {
       event,
-      score,
       metricName: MetricName.L,
       classification: ScoreClassification.UNCLASSIFIED,
       navigation,
+      timing: loadTime,
     };
-    storeMetricScore(frameId, navigationId, metricScore);
+    storeMetricScore(frameId, navigation, metricScore);
     return;
   }
 
-  if (Types.TraceEvents.isTraceEventLargestContentfulPaintCandidate(event)) {
+  if (Types.Events.isAnyLargestContentfulPaintCandidate(event)) {
     const candidateIndex = event.args.data?.candidateIndex;
     if (!candidateIndex) {
-      throw new Error('Largest Contenful Paint unexpectedly had no candidateIndex.');
+      throw new Error('Largest Contentful Paint unexpectedly had no candidateIndex.');
     }
-    const lcpTime = Types.Timing.MicroSeconds(event.ts - navigation.ts);
-    const lcpScore = Helpers.Timing.formatMicrosecondsTime(lcpTime, {
-      format: Types.Timing.TimeUnit.SECONDS,
-      maximumFractionDigits: 2,
-    });
+    const lcpTime = Types.Timing.Micro(event.ts - navigation.ts);
     const lcp = {
       event,
-      score: lcpScore,
       metricName: MetricName.LCP,
       classification: scoreClassificationForLargestContentfulPaint(lcpTime),
       navigation,
+      timing: lcpTime,
     };
     const metricsByNavigation = Platform.MapUtilities.getWithDefault(metricScoresByFrameId, frameId, () => new Map());
-    const metrics = Platform.MapUtilities.getWithDefault(metricsByNavigation, navigationId, () => new Map());
+    const metrics = Platform.MapUtilities.getWithDefault(metricsByNavigation, navigation, () => new Map());
     const lastLCPCandidate = metrics.get(MetricName.LCP);
     if (lastLCPCandidate === undefined) {
       selectedLCPCandidateEvents.add(lcp.event);
-      storeMetricScore(frameId, navigationId, lcp);
+      storeMetricScore(frameId, navigation, lcp);
       return;
     }
     const lastLCPCandidateEvent = lastLCPCandidate.event;
 
-    if (!Types.TraceEvents.isTraceEventLargestContentfulPaintCandidate(lastLCPCandidateEvent)) {
+    if (!Types.Events.isAnyLargestContentfulPaintCandidate(lastLCPCandidateEvent)) {
       return;
     }
     const lastCandidateIndex = lastLCPCandidateEvent.args.data?.candidateIndex;
@@ -251,19 +191,22 @@ function storePageLoadMetricAgainstNavigationId(
     if (lastCandidateIndex < candidateIndex) {
       selectedLCPCandidateEvents.delete(lastLCPCandidateEvent);
       selectedLCPCandidateEvents.add(lcp.event);
-      storeMetricScore(frameId, navigationId, lcp);
+      storeMetricScore(frameId, navigation, lcp);
     }
     return;
   }
-  if (Types.TraceEvents.isTraceEventLayoutShift(event)) {
+  if (Types.Events.isLayoutShift(event)) {
+    return;
+  }
+  if (Types.Events.isSoftNavigationStart(event)) {
     return;
   }
   return Platform.assertNever(event, `Unexpected event type: ${event}`);
 }
 
-function storeMetricScore(frameId: string, navigationId: string, metricScore: MetricScore): void {
+function storeMetricScore(frameId: string, navigation: AnyNavigationStart, metricScore: MetricScore): void {
   const metricsByNavigation = Platform.MapUtilities.getWithDefault(metricScoresByFrameId, frameId, () => new Map());
-  const metrics = Platform.MapUtilities.getWithDefault(metricsByNavigation, navigationId, () => new Map());
+  const metrics = Platform.MapUtilities.getWithDefault(metricsByNavigation, navigation, () => new Map());
   // If an entry with that metric name is present, delete it so that the new entry that
   // will replace it is added at the end of the map. This way we guarantee the map entries
   // are ordered in ASC manner by timestamp.
@@ -271,15 +214,14 @@ function storeMetricScore(frameId: string, navigationId: string, metricScore: Me
   metrics.set(metricScore.metricName, metricScore);
 }
 
-export function getFrameIdForPageLoadEvent(event: Types.TraceEvents.PageLoadEvent): string {
-  if (Types.TraceEvents.isTraceEventFirstContentfulPaint(event) ||
-      Types.TraceEvents.isTraceEventInteractiveTime(event) ||
-      Types.TraceEvents.isTraceEventLargestContentfulPaintCandidate(event) ||
-      Types.TraceEvents.isTraceEventNavigationStart(event) || Types.TraceEvents.isTraceEventLayoutShift(event) ||
-      Types.TraceEvents.isTraceEventFirstPaint(event)) {
+export function getFrameIdForPageLoadEvent(event: Types.Events.PageLoadEvent): string {
+  if (Types.Events.isFirstContentfulPaint(event) || Types.Events.isInteractiveTime(event) ||
+      Types.Events.isAnyLargestContentfulPaintCandidate(event) || Types.Events.isNavigationStart(event) ||
+      Types.Events.isSoftNavigationStart(event) || Types.Events.isLayoutShift(event) ||
+      Types.Events.isFirstPaint(event)) {
     return event.args.frame;
   }
-  if (Types.TraceEvents.isTraceEventMarkDOMContent(event) || Types.TraceEvents.isTraceEventMarkLoad(event)) {
+  if (Types.Events.isMarkDOMContent(event) || Types.Events.isMarkLoad(event)) {
     const frameId = event.args.data?.frame;
     if (!frameId) {
       throw new Error('MarkDOMContent unexpectedly had no frame ID.');
@@ -289,17 +231,27 @@ export function getFrameIdForPageLoadEvent(event: Types.TraceEvents.PageLoadEven
   Platform.assertNever(event, `Unexpected event type: ${event}`);
 }
 
-function getNavigationForPageLoadEvent(event: Types.TraceEvents.PageLoadEvent):
-    Types.TraceEvents.TraceEventNavigationStart|null {
-  if (Types.TraceEvents.isTraceEventFirstContentfulPaint(event) ||
-      Types.TraceEvents.isTraceEventLargestContentfulPaintCandidate(event) ||
-      Types.TraceEvents.isTraceEventFirstPaint(event)) {
-    const navigationId = event.args.data?.navigationId;
-    if (!navigationId) {
-      throw new Error('Trace event unexpectedly had no navigation ID.');
+function getNavigationForPageLoadEvent(event: Types.Events.PageLoadEvent): AnyNavigationStart|null {
+  if (Types.Events.isFirstContentfulPaint(event) || Types.Events.isAnyLargestContentfulPaintCandidate(event) ||
+      Types.Events.isFirstPaint(event)) {
+    const {navigationsByNavigationId, softNavigationsById} = metaHandlerData();
+
+    let navigation;
+    if (event.name === Types.Events.Name.MARK_LCP_CANDIDATE_FOR_SOFT_NAVIGATION &&
+        event.args.data?.performanceTimelineNavigationId) {
+      navigation = softNavigationsById.get(event.args.data.performanceTimelineNavigationId);
+      if (!navigation) {
+        // The most recent soft navigation must have been before the trace started.
+        return null;
+      }
+    } else {
+      const navigationId = event.args.data?.navigationId;
+      if (!navigationId) {
+        throw new Error(`Trace event unexpectedly had no navigation ID: ${JSON.stringify(event, null, 2)}`);
+      }
+
+      navigation = navigationsByNavigationId.get(navigationId);
     }
-    const {navigationsByNavigationId} = metaHandlerData();
-    const navigation = navigationsByNavigationId.get(navigationId);
 
     if (!navigation) {
       // This event's navigation has been filtered out by the meta handler as a noise event.
@@ -308,14 +260,19 @@ function getNavigationForPageLoadEvent(event: Types.TraceEvents.PageLoadEvent):
     return navigation;
   }
 
-  if (Types.TraceEvents.isTraceEventMarkDOMContent(event) || Types.TraceEvents.isTraceEventInteractiveTime(event) ||
-      Types.TraceEvents.isTraceEventLayoutShift(event) || Types.TraceEvents.isTraceEventMarkLoad(event)) {
+  if (Types.Events.isSoftNavigationStart(event)) {
+    const {softNavigationsById} = metaHandlerData();
+    return softNavigationsById.get(event.args.context.performanceTimelineNavigationId) ?? null;
+  }
+
+  if (Types.Events.isMarkDOMContent(event) || Types.Events.isInteractiveTime(event) ||
+      Types.Events.isLayoutShift(event) || Types.Events.isMarkLoad(event)) {
     const frameId = getFrameIdForPageLoadEvent(event);
     const {navigationsByFrameId} = metaHandlerData();
     return Helpers.Trace.getNavigationForTraceEvent(event, frameId, navigationsByFrameId);
   }
 
-  if (Types.TraceEvents.isTraceEventNavigationStart(event)) {
+  if (Types.Events.isNavigationStart(event)) {
     // We don't want to compute metrics of the navigation relative to itself, so we'll avoid avoid all that.
     return null;
   }
@@ -327,10 +284,10 @@ function getNavigationForPageLoadEvent(event: Types.TraceEvents.PageLoadEvent):
  * Classifications sourced from
  * https://web.dev/fcp/
  */
-export function scoreClassificationForFirstContentfulPaint(fcpScoreInMicroseconds: Types.Timing.MicroSeconds):
+export function scoreClassificationForFirstContentfulPaint(fcpScoreInMicroseconds: Types.Timing.Micro):
     ScoreClassification {
-  const FCP_GOOD_TIMING = Helpers.Timing.secondsToMicroseconds(Types.Timing.Seconds(1.8));
-  const FCP_MEDIUM_TIMING = Helpers.Timing.secondsToMicroseconds(Types.Timing.Seconds(3.0));
+  const FCP_GOOD_TIMING = Helpers.Timing.secondsToMicro(Types.Timing.Seconds(1.8));
+  const FCP_MEDIUM_TIMING = Helpers.Timing.secondsToMicro(Types.Timing.Seconds(3.0));
   let scoreClassification = ScoreClassification.BAD;
   if (fcpScoreInMicroseconds <= FCP_MEDIUM_TIMING) {
     scoreClassification = ScoreClassification.OK;
@@ -346,10 +303,10 @@ export function scoreClassificationForFirstContentfulPaint(fcpScoreInMicrosecond
  * https://web.dev/interactive/#how-lighthouse-determines-your-tti-score
  */
 
-export function scoreClassificationForTimeToInteractive(ttiTimeInMicroseconds: Types.Timing.MicroSeconds):
+export function scoreClassificationForTimeToInteractive(ttiTimeInMicroseconds: Types.Timing.Micro):
     ScoreClassification {
-  const TTI_GOOD_TIMING = Helpers.Timing.secondsToMicroseconds(Types.Timing.Seconds(3.8));
-  const TTI_MEDIUM_TIMING = Helpers.Timing.secondsToMicroseconds(Types.Timing.Seconds(7.3));
+  const TTI_GOOD_TIMING = Helpers.Timing.secondsToMicro(Types.Timing.Seconds(3.8));
+  const TTI_MEDIUM_TIMING = Helpers.Timing.secondsToMicro(Types.Timing.Seconds(7.3));
   let scoreClassification = ScoreClassification.BAD;
   if (ttiTimeInMicroseconds <= TTI_MEDIUM_TIMING) {
     scoreClassification = ScoreClassification.OK;
@@ -365,10 +322,10 @@ export function scoreClassificationForTimeToInteractive(ttiTimeInMicroseconds: T
  * https://web.dev/lcp/#what-is-lcp
  */
 
-export function scoreClassificationForLargestContentfulPaint(lcpTimeInMicroseconds: Types.Timing.MicroSeconds):
+export function scoreClassificationForLargestContentfulPaint(lcpTimeInMicroseconds: Types.Timing.Micro):
     ScoreClassification {
-  const LCP_GOOD_TIMING = Helpers.Timing.secondsToMicroseconds(Types.Timing.Seconds(2.5));
-  const LCP_MEDIUM_TIMING = Helpers.Timing.secondsToMicroseconds(Types.Timing.Seconds(4));
+  const LCP_GOOD_TIMING = Helpers.Timing.secondsToMicro(Types.Timing.Seconds(2.5));
+  const LCP_MEDIUM_TIMING = Helpers.Timing.secondsToMicro(Types.Timing.Seconds(4));
   let scoreClassification = ScoreClassification.BAD;
   if (lcpTimeInMicroseconds <= LCP_MEDIUM_TIMING) {
     scoreClassification = ScoreClassification.OK;
@@ -382,7 +339,7 @@ export function scoreClassificationForLargestContentfulPaint(lcpTimeInMicrosecon
 /**
  * DCL does not have a classification.
  */
-export function scoreClassificationForDOMContentLoaded(_dclTimeInMicroseconds: Types.Timing.MicroSeconds):
+export function scoreClassificationForDOMContentLoaded(_dclTimeInMicroseconds: Types.Timing.Micro):
     ScoreClassification {
   return ScoreClassification.UNCLASSIFIED;
 }
@@ -392,10 +349,10 @@ export function scoreClassificationForDOMContentLoaded(_dclTimeInMicroseconds: T
  * https://web.dev/lighthouse-total-blocking-#time/
  */
 
-export function scoreClassificationForTotalBlockingTime(tbtTimeInMicroseconds: Types.Timing.MicroSeconds):
+export function scoreClassificationForTotalBlockingTime(tbtTimeInMicroseconds: Types.Timing.Micro):
     ScoreClassification {
-  const TBT_GOOD_TIMING = Helpers.Timing.millisecondsToMicroseconds(Types.Timing.MilliSeconds(200));
-  const TBT_MEDIUM_TIMING = Helpers.Timing.millisecondsToMicroseconds(Types.Timing.MilliSeconds(600));
+  const TBT_GOOD_TIMING = Helpers.Timing.milliToMicro(Types.Timing.Milli(200));
+  const TBT_MEDIUM_TIMING = Helpers.Timing.milliToMicro(Types.Timing.Milli(600));
   let scoreClassification = ScoreClassification.BAD;
   if (tbtTimeInMicroseconds <= TBT_MEDIUM_TIMING) {
     scoreClassification = ScoreClassification.OK;
@@ -410,14 +367,14 @@ export function scoreClassificationForTotalBlockingTime(tbtTimeInMicroseconds: T
  * Gets all the Largest Contentful Paint scores of all the frames in the
  * trace.
  */
-function gatherFinalLCPEvents(): Types.TraceEvents.PageLoadEvent[] {
-  const allFinalLCPEvents: Types.TraceEvents.PageLoadEvent[] = [];
+function gatherFinalLCPEvents(): Types.Events.PageLoadEvent[] {
+  const allFinalLCPEvents: Types.Events.PageLoadEvent[] = [];
   const dataForAllFrames = [...metricScoresByFrameId.values()];
   const dataForAllNavigations = dataForAllFrames.flatMap(frameData => [...frameData.values()]);
   for (let i = 0; i < dataForAllNavigations.length; i++) {
     const navigationData = dataForAllNavigations[i];
     const lcpInNavigation = navigationData.get(MetricName.LCP);
-    if (!lcpInNavigation || !lcpInNavigation.event) {
+    if (!lcpInNavigation?.event) {
       continue;
     }
 
@@ -442,37 +399,38 @@ export async function finalize(): Promise<void> {
   const mainFrame = metaHandlerData().mainFrameId;
   // Filter out LCP candidates to use only definitive LCP values
   const allEventsButLCP =
-      pageLoadEventsArray.filter(event => !Types.TraceEvents.isTraceEventLargestContentfulPaintCandidate(event));
-  const markerEvents = [...allFinalLCPEvents, ...allEventsButLCP].filter(isTraceEventMarkerEvent);
+      pageLoadEventsArray.filter(event => !Types.Events.isAnyLargestContentfulPaintCandidate(event));
+  const markerEvents = [...allFinalLCPEvents, ...allEventsButLCP].filter(Types.Events.isMarkerEvent);
   // Filter by main frame and sort.
   allMarkerEvents =
       markerEvents.filter(event => getFrameIdForPageLoadEvent(event) === mainFrame).sort((a, b) => a.ts - b.ts);
 }
 
-export type PageLoadMetricsData = {
-  metricScoresByFrameId: Map<string, Map<string, Map<MetricName, MetricScore>>>,
-  allMarkerEvents: Types.TraceEvents.PageLoadEvent[],
-};
+export interface PageLoadMetricsData {
+  /**
+   * This represents the metric scores for all navigations, for all frames in a trace.
+   * Given a frame id, the map points to another map from navigation id to metric scores.
+   * The metric scores include the event related to the metric as well as the data regarding
+   * the score itself.
+   *
+   * Includes soft navigations.
+   */
+  metricScoresByFrameId: Map<string, Map<AnyNavigationStart, Map<MetricName, MetricScore>>>;
+  /**
+   * Page load events with no associated duration that happened in the
+   * main frame.
+   */
+  allMarkerEvents: Types.Events.PageLoadEvent[];
+}
 
 export function data(): PageLoadMetricsData {
   return {
-    /**
-     * This represents the metric scores for all navigations, for all frames in a trace.
-     * Given a frame id, the map points to another map from navigation id to metric scores.
-     * The metric scores include the event related to the metric as well as the data regarding
-     * the score itself.
-     */
-    metricScoresByFrameId: new Map(metricScoresByFrameId),
-
-    /**
-     * Page load events with no associated duration that happened in the
-     * main frame.
-     */
-    allMarkerEvents: [...allMarkerEvents],
+    metricScoresByFrameId,
+    allMarkerEvents,
   };
 }
 
-export function deps(): TraceEventHandlerName[] {
+export function deps(): HandlerName[] {
   return ['Meta'];
 }
 
@@ -500,14 +458,29 @@ export const enum MetricName {
   TBT = 'TBT',
   // Cumulative Layout Shift
   CLS = 'CLS',
+  // Navigation
+  NAV = 'Nav',
+  // Soft Navigation and Soft Metrics
+  SOFT_NAV = 'Nav*',
+  SOFT_LCP = 'LCP*',
+  // Note: INP is handled in UserInteractionsHandler
 }
 
 export interface MetricScore {
-  score: string;
   metricName: MetricName;
   classification: ScoreClassification;
-  event?: Types.TraceEvents.PageLoadEvent;
-  // The last navigation that occured before this metric score.
-  navigation?: Types.TraceEvents.TraceEventNavigationStart;
+  event?: Types.Events.PageLoadEvent;
+  // The last navigation that occurred before this metric score.
+  navigation?: AnyNavigationStart;
   estimated?: boolean;
+  timing: Types.Timing.Micro;
+}
+
+export type LCPMetricScore = MetricScore&{
+  event: Types.Events.LargestContentfulPaintCandidate,
+  metricName: MetricName.LCP,
+};
+
+export function metricIsLCP(metric: MetricScore): metric is LCPMetricScore {
+  return metric.metricName === MetricName.LCP;
 }

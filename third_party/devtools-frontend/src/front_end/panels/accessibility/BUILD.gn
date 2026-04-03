@@ -1,10 +1,11 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("../../../scripts/build/ninja/devtools_entrypoint.gni")
 import("../../../scripts/build/ninja/devtools_module.gni")
 import("../../../scripts/build/ninja/generate_css.gni")
+import("../../../scripts/build/typescript/typescript.gni")
 import("../visibility.gni")
 
 generate_css("css_files") {
@@ -15,7 +16,7 @@ generate_css("css_files") {
   ]
 }
 
-devtools_module("accessibility") {
+devtools_ui_module("accessibility") {
   sources = [
     "ARIAAttributesView.ts",
     "ARIAMetadata.ts",
@@ -37,8 +38,11 @@ devtools_module("accessibility") {
     "../../generated",
     "../../generated:protocol",
     "../../ui/components/panel_feedback:bundle",
+    "../../ui/i18n:bundle",
     "../../ui/legacy:bundle",
+    "../../ui/lit:bundle",
     "../../ui/visual_logging:bundle",
+    "../common:bundle",
   ]
 }
 
@@ -54,7 +58,6 @@ devtools_entrypoint("bundle") {
 
   visibility = [
     ":*",
-    "../../../test/unittests/front_end/panels/accessibility/*",
     "../../entrypoints/*",
   ]
 
@@ -71,4 +74,18 @@ devtools_entrypoint("meta") {
   ]
 
   visibility = [ "../../entrypoints/*" ]
+}
+
+devtools_ui_module("unittests") {
+  testonly = true
+
+  sources = [
+    "ARIAAttributesView.test.ts",
+    "AccessibilitySidebarView.test.ts",
+  ]
+
+  deps = [
+    ":bundle",
+    "../../testing",
+  ]
 }

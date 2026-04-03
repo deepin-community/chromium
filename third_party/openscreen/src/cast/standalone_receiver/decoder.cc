@@ -20,7 +20,7 @@ namespace openscreen::cast {
 namespace {
 // The av_err2str macro uses a compound literal, which is a C99-only feature.
 // So instead, we roll our own here.
-// TODO(https://issuetracker.google.com/224642520): dedup with standalone
+// TODO(issuetracker.google.com/224642520): dedup with standalone
 // sender.
 std::string AvErrorToString(int error_num) {
   std::string out(AV_ERROR_MAX_STRING_SIZE, '\0');
@@ -71,7 +71,8 @@ Decoder::Decoder(const std::string& codec_name) : codec_name_(codec_name) {
 Decoder::~Decoder() = default;
 
 void Decoder::Decode(FrameId frame_id, const Decoder::Buffer& buffer) {
-  TRACE_DEFAULT_SCOPED(TraceCategory::kStandaloneReceiver);
+  TRACE_FLOW_STEP(TraceCategory::kStandaloneReceiver, "Frame.Decode.Begin",
+                  frame_id);
   if (!codec_ && !Initialize()) {
     return;
   }
@@ -98,7 +99,7 @@ void Decoder::Decode(FrameId frame_id, const Decoder::Buffer& buffer) {
   if (send_packet_result < 0) {
     // The result should not be EAGAIN because this code always pulls out all
     // the decoded frames after feeding-in each AVPacket.
-    OSP_DCHECK_NE(send_packet_result, AVERROR(EAGAIN));
+    OSP_CHECK_NE(send_packet_result, AVERROR(EAGAIN));
     OnError("avcodec_send_packet", send_packet_result, frame_id);
     return;
   }
@@ -116,6 +117,8 @@ void Decoder::Decode(FrameId frame_id, const Decoder::Buffer& buffer) {
       OnError("avcodec_receive_frame", receive_frame_result, decoded_frame_id);
       return;
     }
+    TRACE_FLOW_STEP(TraceCategory::kStandaloneReceiver, "Frame.Decode.End",
+                    decoded_frame_id);
     if (client_) {
       client_->OnFrameDecoded(decoded_frame_id, *decoded_frame_);
     }
@@ -183,7 +186,7 @@ bool Decoder::Initialize() {
 
 FrameId Decoder::DidReceiveFrameFromDecoder() {
   const auto it = frames_decoding_.begin();
-  OSP_DCHECK(it != frames_decoding_.end());
+  OSP_CHECK(it != frames_decoding_.end());
   const auto frame_id = *it;
   frames_decoding_.erase(it);
   return frame_id;

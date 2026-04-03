@@ -15,16 +15,16 @@ limitations under the License.
 
 #include <memory>
 
+#include "absl/log/check.h"
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
-#include "xla/client/global_data.h"
 #include "xla/client/local_client.h"
-#include "xla/client/xla_builder.h"
-#include "xla/client/xla_computation.h"
-#include "xla/statusor.h"
-#include "xla/test.h"
-#include "xla/test_helpers.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/test_helpers.h"
+#include "xla/service/service.h"
 #include "xla/tests/client_library_test_base.h"
-#include "xla/tests/test_macros.h"
 
 namespace xla {
 namespace {
@@ -40,7 +40,7 @@ class DeallocationTest : public ClientLibraryTestBase {
     XlaComputation computation = builder->Build().value();
     auto global_data =
         client_->Execute(computation, arguments, &execution_options_).value();
-    TF_CHECK_OK(client_->Transfer(*global_data).status());
+    CHECK_OK(client_->Transfer(*global_data).status());
     return global_data;
   }
 };
@@ -89,7 +89,7 @@ TEST_F(DeallocationTest, DeallocateEmptyVector) {
               HasSubstr("was previously deallocated"));
 }
 
-XLA_TEST_F(DeallocationTest, DeallocateTuple) {
+TEST_F(DeallocationTest, DeallocateTuple) {
   XlaBuilder builder(TestName());
   Tuple(&builder, {ConstantR0<float>(&builder, 42.0),
                    ConstantR1<float>(&builder, {1.0, 2.0, 3.0})});
@@ -103,7 +103,7 @@ XLA_TEST_F(DeallocationTest, DeallocateTuple) {
               HasSubstr("was previously deallocated"));
 }
 
-XLA_TEST_F(DeallocationTest, DeallocateTupleWithRepeatedElements) {
+TEST_F(DeallocationTest, DeallocateTupleWithRepeatedElements) {
   XlaBuilder builder(TestName());
   auto element = ConstantR0<float>(&builder, 42.0);
   auto inner_tuple =
@@ -119,7 +119,7 @@ XLA_TEST_F(DeallocationTest, DeallocateTupleWithRepeatedElements) {
               HasSubstr("was previously deallocated"));
 }
 
-XLA_TEST_F(DeallocationTest, DeallocateNestedTuple) {
+TEST_F(DeallocationTest, DeallocateNestedTuple) {
   XlaBuilder builder(TestName());
   auto inner_tuple =
       Tuple(&builder, {ConstantR0<float>(&builder, 42.0),

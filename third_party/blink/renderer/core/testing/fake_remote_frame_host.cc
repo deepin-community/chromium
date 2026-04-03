@@ -42,8 +42,8 @@ void FakeRemoteFrameHost::AdvanceFocus(
 
 void FakeRemoteFrameHost::RouteMessageEvent(
     const std::optional<LocalFrameToken>& source_frame_token,
-    const String& source_origin,
-    const String& target_origin,
+    const scoped_refptr<const SecurityOrigin>& source_origin,
+    const scoped_refptr<const SecurityOrigin>& target_origin,
     BlinkTransferableMessage message) {}
 
 void FakeRemoteFrameHost::PrintCrossProcessSubframe(const gfx::Rect& rect,

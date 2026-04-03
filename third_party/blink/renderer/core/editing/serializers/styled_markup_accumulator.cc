@@ -109,8 +109,7 @@ void StyledMarkupAccumulator::AppendTextWithInlineStyle(
 
     result_.Append("<span style=\"");
     MarkupFormatter::AppendAttributeValue(
-        result_, inline_style->Style()->AsText(), IsA<HTMLDocument>(document_),
-        *document_);
+        result_, inline_style->Style()->AsText(), IsA<HTMLDocument>(document_));
     result_.Append("\">");
   }
   if (!ShouldAnnotate()) {
@@ -155,8 +154,8 @@ void StyledMarkupAccumulator::AppendElementWithInlineStyle(
   }
   if (style && !style->IsEmpty()) {
     out.Append(" style=\"");
-    MarkupFormatter::AppendAttributeValue(
-        out, style->Style()->AsText(), document_is_html, element.GetDocument());
+    MarkupFormatter::AppendAttributeValue(out, style->Style()->AsText(),
+                                          document_is_html);
     out.Append('\"');
   }
   formatter_.AppendStartTagClose(out, element);
@@ -180,11 +179,10 @@ void StyledMarkupAccumulator::AppendAttribute(StringBuilder& result,
                                               const Attribute& attribute) {
   String value = formatter_.ResolveURLIfNeeded(element, attribute);
   if (formatter_.SerializeAsHTML()) {
-    MarkupFormatter::AppendAttributeAsHTML(result, attribute, value,
-                                           element.GetDocument());
+    MarkupFormatter::AppendAttributeAsHTML(result, attribute, value);
   } else {
-    MarkupFormatter::AppendAttributeAsXMLWithoutNamespace(
-        result, attribute, value, element.GetDocument());
+    MarkupFormatter::AppendAttributeAsXMLWithoutNamespace(result, attribute,
+                                                          value);
   }
 }
 
@@ -197,8 +195,8 @@ void StyledMarkupAccumulator::WrapWithStyleNode(CSSPropertyValueSet* style) {
 
   StringBuilder open_tag;
   open_tag.Append("<div style=\"");
-  MarkupFormatter::AppendAttributeValue(
-      open_tag, style->AsText(), IsA<HTMLDocument>(document_), *document_);
+  MarkupFormatter::AppendAttributeValue(open_tag, style->AsText(),
+                                        IsA<HTMLDocument>(document_));
   open_tag.Append("\">");
   reversed_preceding_markup_.push_back(open_tag.ToString());
 
@@ -227,8 +225,13 @@ String StyledMarkupAccumulator::RenderedText(Text& text_node) {
     start_offset = start_.Offset();
   if (end_.GetText() == text_node)
     end_offset = end_.Offset();
+
   return PlainText(EphemeralRange(Position(&text_node, start_offset),
-                                  Position(&text_node, end_offset)));
+                                  Position(&text_node, end_offset)),
+                   TextIteratorBehavior::Builder()
+                       .SetIgnoresCSSTextTransforms(
+                           options_.IgnoresCSSTextTransformsForRenderedText())
+                       .Build());
 }
 
 String StyledMarkupAccumulator::StringValueForRange(const Text& node) {

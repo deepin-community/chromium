@@ -16,7 +16,6 @@
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/signin/chrome_device_id_helper.h"
-#include "chrome/browser/signin/signin_features.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -25,12 +24,14 @@
 #include "chromeos/ash/components/login/auth/public/key.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "components/language/core/browser/pref_names.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/user_manager/fake_user_manager.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/test/browser_task_environment.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -98,7 +99,7 @@ class UserSessionManagerTest : public testing::Test {
   // Creates a dummy user with a testing profile and logs in.
   TestingProfile* LoginTestUser() {
     const AccountId account_id(
-        AccountId::FromUserEmailGaiaId("demo@test.com", "demo_user"));
+        AccountId::FromUserEmailGaiaId("demo@test.com", GaiaId("demo_user")));
     // TODO(http://b/310599489): We are logging a Gaia type user as a Public
     // Session user here. This is inconsistent.
     test_user_ = fake_user_manager_->AddPublicAccountUser(account_id);
@@ -280,7 +281,7 @@ TEST_F(UserSessionManagerTest, RespectLocale_Demo_WithoutProfileLocale) {
 
 TEST_F(UserSessionManagerTest, InitializeDeviceIdForNewUsers) {
   base::test::ScopedFeatureList features;
-  features.InitAndEnableFeature(kStableDeviceId);
+  features.InitAndEnableFeature(switches::kStableDeviceId);
   LoginTestUser();
   test::UserSessionManagerTestApi test_api(user_session_manager_.get());
   user_manager::KnownUser known_user(g_browser_process->local_state());
@@ -300,7 +301,7 @@ TEST_F(UserSessionManagerTest, InitializeDeviceIdForNewUsers) {
 
 TEST_F(UserSessionManagerTest, InitializeDeviceIdForExistingUsers) {
   base::test::ScopedFeatureList features;
-  features.InitAndEnableFeature(kStableDeviceId);
+  features.InitAndEnableFeature(switches::kStableDeviceId);
   LoginTestUser();
   test::UserSessionManagerTestApi test_api(user_session_manager_.get());
   user_manager::KnownUser known_user(g_browser_process->local_state());

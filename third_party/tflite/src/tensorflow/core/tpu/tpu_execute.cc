@@ -27,7 +27,9 @@ limitations under the License.
 
 #include "absl/base/casts.h"
 #include "absl/cleanup/cleanup.h"
+#include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/types/span.h"
@@ -46,9 +48,7 @@ limitations under the License.
 #include "xla/shape_layout.h"
 #include "xla/shape_tree.h"
 #include "xla/shape_util.h"
-#include "xla/status.h"
 #include "xla/status_macros.h"
-#include "xla/statusor.h"
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/tpu/c_api_conversions.h"
 #include "xla/stream_executor/tpu/c_api_decl.h"
@@ -60,6 +60,9 @@ limitations under the License.
 #include "xla/stream_executor/tpu/tpu_op_executable.h"
 #include "xla/stream_executor/tpu/tpu_ops_c_api.h"
 #include "xla/stream_executor/tpu/tpu_platform_interface.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/logging.h"  // IWYU pragma: keep
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
 #include "tensorflow/core/common_runtime/next_pluggable_device/c/outside_compilation_params.h"
@@ -69,9 +72,6 @@ limitations under the License.
 #include "tensorflow/core/platform/status.h"
 #include "tensorflow/core/profiler/lib/traceme.h"
 #include "tensorflow/core/tpu/kernels/tpu_executable_info.pb.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"  // IWYU pragma: keep
-#include "tsl/platform/statusor.h"
 
 namespace tensorflow {
 
@@ -104,27 +104,27 @@ int64_t ShapeSizeCompactRaw(const xla::Shape& shape) {
 
 // Given a tuple, fix all non-leaf nodes (tuples) such that the tuple tables
 // point to the correct leaf nodes.
-xla::Status FixTupleTableAsync(se::Stream* stream,
-                               const xla::Shape& tuple_shape,
-                               xla::ExecutionInput* mem,
-                               xla::TransferManager* transfer_manager) {
+absl::Status FixTupleTableAsync(se::Stream* stream,
+                                const xla::Shape& tuple_shape,
+                                xla::ExecutionInput* mem,
+                                xla::TransferManager* transfer_manager) {
   return xla::ShapeUtil::ForEachSubshapeWithStatus(
       tuple_shape,
       [&](const xla::Shape& element_shape,
-          const xla::ShapeIndex& index) -> Status {
+          const xla::ShapeIndex& index) -> absl::Status {
         if (!element_shape.IsTuple()) {
-          return OkStatus();
+          return absl::OkStatus();
         }
-        std::vector<se::DeviceMemoryBase> elements;
+        std::vector<stream_executor::DeviceAddressBase> elements;
         xla::ShapeIndex element_index = index;
         element_index.push_back(0);
-        for (int i = 0; i < element_shape.tuple_shapes_size(); ++i) {
+        for (int i = 0; i < element_shape.tuple_shapes().size(); ++i) {
           // Gather all children of the tuple element.
           element_index.back() = i;
-          elements.push_back(mem->Buffer(element_index).AsDeviceMemoryBase());
+          elements.push_back(mem->Buffer(element_index).AsDeviceAddress());
         }
-        se::DeviceMemoryBase tuple_table_addr =
-            mem->Buffer(index).AsDeviceMemoryBase();
+        stream_executor::DeviceAddressBase tuple_table_addr =
+            mem->Buffer(index).AsDeviceAddress();
         return transfer_manager->WriteSingleTupleIndexTable(
             stream, elements, element_shape, &tuple_table_addr);
       });
@@ -134,10 +134,10 @@ xla::Status FixTupleTableAsync(se::Stream* stream,
 // "bounded_shape".
 bool DynamicShapeIsCompatible(const xla::Shape& dynamic_shape,
                               const xla::Shape& bounded_shape) {
-  if (dynamic_shape.rank() != bounded_shape.rank()) {
+  if (dynamic_shape.dimensions().size() != bounded_shape.dimensions().size()) {
     return false;
   }
-  for (int64_t i = 0; i < dynamic_shape.rank(); ++i) {
+  for (int64_t i = 0; i < dynamic_shape.dimensions().size(); ++i) {
     if (dynamic_shape.dimensions(i) > bounded_shape.dimensions(i)) {
       return false;
     }
@@ -159,14 +159,14 @@ bool DynamicShapeIsCompatible(const xla::Shape& dynamic_shape,
 //
 // Metadata contains the sizes of shape without padding, eventually
 // representing the size of valid data.
-xla::Status UpdateDynamicInputs(
-    se::Stream* stream, se::DeviceMemoryAllocator* allocator,
+absl::Status UpdateDynamicInputs(
+    se::Stream* stream, stream_executor::DeviceAddressAllocator* allocator,
     std::vector<xla::ExecutionInput>* runtime_inputs,
     const std::vector<xla::Shape>& compile_time_shapes) {
   TF_RET_CHECK(runtime_inputs->size() == compile_time_shapes.size());
   TF_ASSIGN_OR_RETURN(
       auto transfer_manager,
-      xla::TransferManager::GetForPlatform(stream->parent()->platform()));
+      xla::TransferManager::GetForPlatform(stream->parent()->GetPlatform()));
   for (int64_t i = 0; i < compile_time_shapes.size(); i++) {
     // TODO(yunxing): Iterating over thousands of elements can be slow. One way
     // to optimize for fast path without dynamic shapes is add a field in
@@ -181,9 +181,9 @@ xla::Status UpdateDynamicInputs(
     TF_RETURN_IF_ERROR(xla::ShapeUtil::ForEachSubshapeWithStatus(
         compile_time_shapes_on_device,
         [&](const xla::Shape& compile_time_shape,
-            const xla::ShapeIndex& index) -> Status {
+            const xla::ShapeIndex& index) -> absl::Status {
           if (compile_time_shape.IsTuple() || compile_time_shape.is_static()) {
-            return OkStatus();
+            return absl::OkStatus();
           }
 
           const xla::Shape& runtime_shape =
@@ -193,44 +193,46 @@ xla::Status UpdateDynamicInputs(
           TF_RET_CHECK(
               DynamicShapeIsCompatible(runtime_shape, compile_time_shape));
 
-          xla::MaybeOwningDeviceMemory* mutable_input_mem =
+          xla::MaybeOwningDeviceAddress* mutable_input_mem =
               runtime_input.MutableBuffer(index);
           auto padded_data = std::make_shared<std::vector<int8_t>>(
               ShapeSizeCompact(compile_time_shape), -1);
           auto raw_input_runtime = std::make_shared<std::vector<uint32_t>>(
               ShapeSizeCompact(runtime_shape) / sizeof(uint32_t));
-          stream->ThenMemcpyD2H(
-              se::DeviceMemory<int8_t>(mutable_input_mem->AsDeviceMemoryBase()),
+          TF_RETURN_IF_ERROR(stream->MemcpyD2H(
+              stream_executor::DeviceAddress<int8_t>(
+                  mutable_input_mem->AsDeviceAddress()),
               absl::MakeSpan(absl::bit_cast<int8_t*>(raw_input_runtime->data()),
-                             ShapeSizeCompactRaw(runtime_shape)));
-          stream->ThenDoHostCallbackWithStatus([raw_input_runtime, padded_data,
-                                                runtime_shape,
-                                                compile_time_shape]() {
-            // After getting the data onto the host, transpose the data to
-            // the correct layout by delinearizing it and linearizing it again.
-            XLA_Shape c_runtime_shape, c_compile_time_shape;
-            ApiConverter::ToC(runtime_shape, &c_runtime_shape);
-            ApiConverter::ToC(compile_time_shape, &c_compile_time_shape);
-            StatusHelper status;
+                             ShapeSizeCompactRaw(runtime_shape))));
+          TF_RETURN_IF_ERROR(stream->DoHostCallbackWithStatus(
+              [raw_input_runtime, padded_data, runtime_shape,
+               compile_time_shape]() {
+                // After getting the data onto the host, transpose the data to
+                // the correct layout by delinearizing it and linearizing it
+                // again.
+                XLA_Shape c_runtime_shape, c_compile_time_shape;
+                ApiConverter::ToC(runtime_shape, &c_runtime_shape);
+                ApiConverter::ToC(compile_time_shape, &c_compile_time_shape);
+                StatusHelper status;
 
-            TpuExecute_RuntimeInputToPaddedData_Params params;
-            params.struct_size =
-                TpuExecute_RuntimeInputToPaddedData_Params_SIZE;
-            params.priv = nullptr;
-            params.runtime_input_ptr = raw_input_runtime->data();
-            params.runtime_input_size = raw_input_runtime->size();
-            params.padded_data_ptr = padded_data->data();
-            params.padded_data_size = padded_data->size();
-            params.runtime_shape = &c_runtime_shape;
-            params.compile_time_shape = &c_compile_time_shape;
-            params.status = status.c_status;
+                TpuExecute_RuntimeInputToPaddedData_Params params;
+                params.struct_size =
+                    TpuExecute_RuntimeInputToPaddedData_Params_SIZE;
+                params.priv = nullptr;
+                params.runtime_input_ptr = raw_input_runtime->data();
+                params.runtime_input_size = raw_input_runtime->size();
+                params.padded_data_ptr = padded_data->data();
+                params.padded_data_size = padded_data->size();
+                params.runtime_shape = &c_runtime_shape;
+                params.compile_time_shape = &c_compile_time_shape;
+                params.status = status.c_status;
 
-            stream_executor::tpu::OpsApiFn()
-                ->TpuExecute_RuntimeInputToPaddedDataFn(&params);
-            ApiConverter::Destroy(&c_runtime_shape);
-            ApiConverter::Destroy(&c_compile_time_shape);
-            return status.status();
-          });
+                stream_executor::tpu::OpsApiFn()
+                    ->TpuExecute_RuntimeInputToPaddedDataFn(&params);
+                ApiConverter::Destroy(&c_runtime_shape);
+                ApiConverter::Destroy(&c_compile_time_shape);
+                return status.status();
+              }));
           // Allocate new input and transfer the padded and transposed data to
           // the new input location.
           TF_ASSIGN_OR_RETURN(
@@ -238,18 +240,19 @@ xla::Status UpdateDynamicInputs(
               allocator->Allocate(stream->parent()->device_ordinal(),
                                   ShapeSizeCompact(compile_time_shape)));
           auto typed_new_input_memory =
-              se::DeviceMemory<int8_t>(new_input.cref());
-          stream->ThenMemcpyH2D<int8_t>(*padded_data, &typed_new_input_memory);
+              stream_executor::DeviceAddress<int8_t>(new_input.cref());
+          TF_RETURN_IF_ERROR(
+              stream->MemcpyH2D<int8_t>(*padded_data, &typed_new_input_memory));
 
           // Retain the memory until the end of the transfer.
-          stream->ThenDoHostCallback([padded_data] {});
+          TF_RETURN_IF_ERROR(stream->DoHostCallback([padded_data] {}));
 
           // Modify the memory location in the input shape tree to point to the
           // new input.
           *mutable_input_mem =
-              xla::MaybeOwningDeviceMemory(std::move(new_input));
+              xla::MaybeOwningDeviceAddress(std::move(new_input));
           element_modified = true;
-          return OkStatus();
+          return absl::OkStatus();
         }));
     if (element_modified) {
       // The input location has been modified, need to fix tuple table to
@@ -259,13 +262,13 @@ xla::Status UpdateDynamicInputs(
                                             &runtime_input, transfer_manager));
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 void TPUCancelExecution(int device_ordinal) {
   if (tpu_cancellation_closes_chips) {
     LOG(INFO) << "TPUCancelExecution CloseTPUHost on device " << device_ordinal;
-    Status status = TpuNodeContext::CloseTpuHost();
+    absl::Status status = TpuNodeContext::CloseTpuHost();
     LOG(INFO) << "TPUCancelExecution CloseTPUHost done: " << status
               << " on device " << device_ordinal;
   } else {
@@ -343,38 +346,44 @@ void UnregisterCancellation(OpKernelContext* ctx,
   // the frequency of back-to-back programs (which are most efficient because
   // they don't require host synchronization). Instead, borrow a substream and
   // have the substream wait on the compute stream.
-  se::Stream* deregister_stream = stream->GetOrCreateSubStream();
-  deregister_stream->ThenWaitFor(stream);
-  deregister_stream->ThenDoHostCallback([=]() {
-    // We must deregister the callback in the success case, to avoid closing all
-    // devices. In the failure case we must NOT call DeregisterCallback as that
-    // waits for all previous cancellation callbacks to complete and any call
-    // to XlaDevice::Sync() will cause deadlock. Consider:
-    //   1) CancellationManager::StartCancel() is in progress (state is
-    //      cancelling_).
-    //   2) The call below to DeregisterCallback will block until state is
-    //   cancelled_ (all callbacks are completed).
-    //   3) A different cancellation callback has called XlaDevice::Sync(),
-    //   which will block until (2) is done.
-    //   4) StartCancel() in (1) cannot complete until (3) is done.
-    //
-    // Instead, call TryDeregisterCallback. The functional difference is
-    // TryDeregisterCallback will not block if cancellation is in progress
-    // so makes no guarantees as to the state of any callbacks.
-    // This is not a problem, as our cancellation handler does not rely on
-    // any external state.
-    VLOG(1) << "cancellation_manager->TryDeregisterCallback on device "
-            << device_ordinal;
-    cancellation_manager->TryDeregisterCallback(token);
-    VLOG(1) << "cancellation_manager->TryDeregisterCallback done on device "
-            << device_ordinal;
+  se::Stream* deregister_stream =
+      stream->GetOrCreateSubStream().value_or(nullptr);
+  if (deregister_stream == nullptr) {
+    return;
+  }
+  deregister_stream->WaitFor(stream).IgnoreError();
+  deregister_stream
+      ->DoHostCallback([=]() {
+        // We must deregister the callback in the success case, to avoid closing
+        // all devices. In the failure case we must NOT call DeregisterCallback
+        // as that waits for all previous cancellation callbacks to complete and
+        // any call to XlaDevice::Sync() will cause deadlock. Consider:
+        //   1) CancellationManager::StartCancel() is in progress (state is
+        //      cancelling_).
+        //   2) The call below to DeregisterCallback will block until state is
+        //   cancelled_ (all callbacks are completed).
+        //   3) A different cancellation callback has called XlaDevice::Sync(),
+        //   which will block until (2) is done.
+        //   4) StartCancel() in (1) cannot complete until (3) is done.
+        //
+        // Instead, call TryDeregisterCallback. The functional difference is
+        // TryDeregisterCallback will not block if cancellation is in progress
+        // so makes no guarantees as to the state of any callbacks.
+        // This is not a problem, as our cancellation handler does not rely on
+        // any external state.
+        VLOG(1) << "cancellation_manager->TryDeregisterCallback on device "
+                << device_ordinal;
+        cancellation_manager->TryDeregisterCallback(token);
+        VLOG(1) << "cancellation_manager->TryDeregisterCallback done on device "
+                << device_ordinal;
 
-    // ExecutorState is held alive until at least this point to ensure
-    // cancellation_manager is valid. After all outstanding
-    // dec_num_deferred_ops_function are called, ExecutorState::Finish will be
-    // allowed to proceed.
-    dec_num_deferred_ops_function();
-  });
+        // ExecutorState is held alive until at least this point to ensure
+        // cancellation_manager is valid. After all outstanding
+        // dec_num_deferred_ops_function are called, ExecutorState::Finish will
+        // be allowed to proceed.
+        dec_num_deferred_ops_function();
+      })
+      .IgnoreError();
   stream->ReturnSubStream(deregister_stream);
 }
 
@@ -397,7 +406,7 @@ OcParamsPtr CreateOcParams(const std::string& rendezvous_key_base,
 
 }  // namespace
 
-xla::StatusOr<xla::ExecutionOutput> TPUExecute(
+absl::StatusOr<xla::ExecutionOutput> TPUExecute(
     const TPUExecutableInfoProto& executable,
     const TPUHostTransferInfoProto& host_transfers,
     const xla::HloProto& hlo_metadata,
@@ -408,7 +417,7 @@ xla::StatusOr<xla::ExecutionOutput> TPUExecute(
     stream_executor::Stream* stream,
     stream_executor::Stream* host_to_device_stream,
     const XLA_TpuProgram* tpu_program) {
-  profiler::TraceMe traceme("TPUExecute", 2);
+  tsl::profiler::TraceMe traceme("TPUExecute", 2);
   TF_RET_CHECK(tpu::TpuPlatformInterface::GetRegisteredPlatform() != nullptr);
   TF_RET_CHECK(tpu_program != nullptr);
   const int device_ordinal = node_context->device_ordinal();
@@ -427,10 +436,11 @@ xla::StatusOr<xla::ExecutionOutput> TPUExecute(
   std::unique_ptr<xla::HloModule> module;
   std::vector<xla::Shape> input_shapes;
   {
-    xla::ComputationLayout computation_layout(
-        xla::ShapeLayout(xla::Shape(executable.output_shape())));
+    TF_ASSIGN_OR_RETURN(xla::Shape output_shape,
+                        xla::Shape::FromProto(executable.output_shape()));
+    xla::ComputationLayout computation_layout(xla::ShapeLayout{output_shape});
     for (const xla::ShapeProto& shape_proto : executable.input_shapes()) {
-      xla::Shape shape(shape_proto);
+      TF_ASSIGN_OR_RETURN(xla::Shape shape, xla::Shape::FromProto(shape_proto));
       computation_layout.add_parameter_layout(xla::ShapeLayout(shape));
       input_shapes.push_back(std::move(shape));
     }
@@ -465,7 +475,7 @@ xla::StatusOr<xla::ExecutionOutput> TPUExecute(
   VLOG(1) << "TPUExecute: Updating TPUEmbedding memory addresses on "
           << device_ordinal;
 
-  SE_DeviceMemoryBase* device_memory_addrs = nullptr;
+  SE_DeviceAddressBase* device_memory_addrs = nullptr;
   size_t device_memory_addrs_count;
   auto device_memory_cleanup =
       absl::MakeCleanup([device_memory_addrs, device_ordinal]() {
@@ -490,9 +500,9 @@ xla::StatusOr<xla::ExecutionOutput> TPUExecute(
   VLOG(1) << "TPUExecute: Adding " << device_memory_addrs_count
           << " TPUEmbedding memory addresses to HLO parameters.";
   for (int i = 0; i < device_memory_addrs_count; ++i) {
-    xla::ShapeTree<xla::MaybeOwningDeviceMemory> tree(
+    xla::ShapeTree<xla::MaybeOwningDeviceAddress> tree(
         xla::ShapeUtil::MakeOpaqueShape());
-    const SE_DeviceMemoryBase& addr = device_memory_addrs[i];
+    const SE_DeviceAddressBase& addr = device_memory_addrs[i];
     VLOG(2) << absl::StrFormat("Device memory addr[%i] = {%p, %llu, %llu}", i,
                                addr.opaque, addr.size, addr.payload);
     *tree.mutable_element({}) = ApiConverter::FromC(addr);
@@ -519,10 +529,9 @@ xla::StatusOr<xla::ExecutionOutput> TPUExecute(
         "RPC cancelled, not running TPU program on device ", device_ordinal));
   }
 
-  xla::StatusOr<xla::ExecutionOutput> output =
+  absl::StatusOr<xla::ExecutionOutput> output =
       tpu_executable->ExecuteAsyncOnStream(&service_run_options,
-                                           std::move(arguments),
-                                           /*hlo_execution_profile=*/nullptr);
+                                           std::move(arguments));
 
   // If !output.ok(), it means we failed to enqueue the program the TPU. This is
   // possibly caused by a failed cancellation callback closing the chips.

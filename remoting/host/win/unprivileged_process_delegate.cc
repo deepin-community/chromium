@@ -7,14 +7,16 @@
 
 #include "remoting/host/win/unprivileged_process_delegate.h"
 
+// clang-format off
 #include <windows.h>  // Must be in front of other Windows header files.
+// clang-format on
 
 #include <sddl.h>
 
+#include <optional>
 #include <string>
 #include <utility>
 
-#include <optional>
 #include "base/command_line.h"
 #include "base/files/file.h"
 #include "base/logging.h"
@@ -29,11 +31,12 @@
 #include "base/win/sid.h"
 #include "ipc/ipc_channel.h"
 #include "ipc/ipc_channel_proxy.h"
-#include "ipc/ipc_message.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/invitation.h"
+#include "remoting/base/crash/breakpad_utils.h"
 #include "remoting/base/typed_buffer.h"
 #include "remoting/host/base/switches.h"
+#include "remoting/host/usage_stats_consent.h"
 #include "remoting/host/win/launch_process_with_token.h"
 #include "remoting/host/win/security_descriptor.h"
 #include "remoting/host/win/window_station_and_desktop.h"
@@ -162,7 +165,7 @@ bool CreateWindowStationAndDesktop(ScopedSid logon_sid,
   // Generate a unique window station name.
   std::string window_station_name = base::StringPrintf(
       "chromoting-%" CrPRIdPid "-%d", base::GetCurrentProcId(),
-      base::RandInt(1, std::numeric_limits<int>::max()));
+      base::RandIntInclusive(1, std::numeric_limits<int>::max()));
 
   // Make sure that a new window station will be created instead of opening
   // an existing one.
@@ -230,13 +233,12 @@ UnprivilegedProcessDelegate::UnprivilegedProcessDelegate(
     scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
     std::unique_ptr<base::CommandLine> target_command)
     : io_task_runner_(io_task_runner),
-      target_command_(std::move(target_command)),
-      event_handler_(nullptr) {}
+      target_command_(std::move(target_command)) {}
 
 UnprivilegedProcessDelegate::~UnprivilegedProcessDelegate() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!channel_);
-  DCHECK(!worker_process_.IsValid());
+  DCHECK(!worker_process_.is_valid());
 }
 
 void UnprivilegedProcessDelegate::LaunchProcess(
@@ -303,11 +305,32 @@ void UnprivilegedProcessDelegate::LaunchProcess(
       handles.desktop(),
       handles.window_station(),
   };
+
+  // Create a handle for crash server pipe and provide it to the child process.
+  // A named pipe will not exist if the user has not opted into crash reporting.
+  ScopedHandle crash_server_pipe;
+  if (IsUsageStatsAllowed()) {
+    crash_server_pipe = GetClientHandleForCrashServerPipe();
+    if (crash_server_pipe.get()) {
+      // In order to pass the handle on the command line we need to convert it
+      // to a string. The handle is a pointer and the conversion utilities don't
+      // provide helpers for pointer -> string conversions so we cast to a
+      // 64-bit value to make this conversion insensitive to the bitness of the
+      // binary. Since the client and server will be the same bitness, the
+      // child process will cast this value back to the correct bitness.
+      command_line.AppendSwitchASCII(
+          kCrashServerPipeHandle,
+          base::NumberToString(
+              reinterpret_cast<uint64_t>(crash_server_pipe.get())));
+      handles_to_inherit.push_back(crash_server_pipe.get());
+    }
+  }
+
   mojo::PlatformChannel channel;
   channel.PrepareToPassRemoteEndpoint(&handles_to_inherit, &command_line);
 
   // Try to launch the worker process. The launched process inherits
-  // the window station, desktop and pipe handles, created above.
+  // the window station, desktop, and pipe handles, created above.
   ScopedHandle worker_process;
   ScopedHandle worker_thread;
   if (!LaunchProcessWithToken(
@@ -352,17 +375,10 @@ void UnprivilegedProcessDelegate::KillProcess() {
   CloseChannel();
   event_handler_ = nullptr;
 
-  if (worker_process_.IsValid()) {
+  if (worker_process_.is_valid()) {
     TerminateProcess(worker_process_.Get(), CONTROL_C_EXIT);
     worker_process_.Close();
   }
-}
-
-bool UnprivilegedProcessDelegate::OnMessageReceived(
-    const IPC::Message& message) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  NOTREACHED() << "Received unexpected IPC type: " << message.type();
-  return false;
 }
 
 void UnprivilegedProcessDelegate::OnChannelConnected(int32_t peer_pid) {
@@ -410,16 +426,13 @@ void UnprivilegedProcessDelegate::ReportFatalError() {
 void UnprivilegedProcessDelegate::ReportProcessLaunched(
     base::win::ScopedHandle worker_process) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(!worker_process_.IsValid());
-
-  worker_process_ = std::move(worker_process);
 
   // Report a handle that can be used to wait for the worker process completion,
   // query information about the process and duplicate handles.
   DWORD desired_access =
       SYNCHRONIZE | PROCESS_DUP_HANDLE | PROCESS_QUERY_INFORMATION;
   HANDLE temp_handle;
-  if (!DuplicateHandle(GetCurrentProcess(), worker_process_.Get(),
+  if (!DuplicateHandle(GetCurrentProcess(), worker_process.Get(),
                        GetCurrentProcess(), &temp_handle, desired_access, FALSE,
                        0)) {
     PLOG(ERROR) << "Failed to duplicate a handle";
@@ -428,7 +441,7 @@ void UnprivilegedProcessDelegate::ReportProcessLaunched(
   }
   ScopedHandle limited_handle(temp_handle);
 
-  event_handler_->OnProcessLaunched(std::move(limited_handle));
+  WatchProcess(std::move(limited_handle));
 }
 
 }  // namespace remoting

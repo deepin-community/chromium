@@ -25,7 +25,13 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/439062058): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "dawn/common/GPUInfo.h"
+#include "dawn/common/GPUInfo_autogen.h"
 
 #include <algorithm>
 #include <array>
@@ -38,22 +44,9 @@ namespace dawn::gpu_info {
 namespace {
 // Intel
 // Referenced from the following Mesa source code:
-// https://github.com/mesa3d/mesa/blob/main/include/pci_ids/iris_pci_ids.h
+// https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/include/pci_ids/iris_pci_ids.h
 // gen9
-const std::array<uint32_t, 25> Skylake = {{0x1902, 0x1906, 0x190A, 0x190B, 0x190E, 0x1912, 0x1913,
-                                           0x1915, 0x1916, 0x1917, 0x191A, 0x191B, 0x191D, 0x191E,
-                                           0x1921, 0x1923, 0x1926, 0x1927, 0x192A, 0x192B, 0x192D,
-                                           0x1932, 0x193A, 0x193B, 0x193D}};
-
-// According to Intel graphics driver version schema, build number is generated from the
-// last two fields.
-// See https://www.intel.com/content/www/us/en/support/articles/000005654/graphics.html for
-// more details.
-uint32_t GetIntelWindowsDriverBuildNumber(const DriverVersion& driverVersion) {
-    size_t size = driverVersion.size();
-    DAWN_ASSERT(size >= 2);
-    return driverVersion[size - 2] * 10000 + driverVersion[size - 1];
-}
+const std::array<PCIDeviceID, 2> IrisPlus655 = {{0x3EA5, 0x3EA8}};
 
 }  // anonymous namespace
 
@@ -61,61 +54,100 @@ DriverVersion::DriverVersion() = default;
 
 DriverVersion::DriverVersion(const std::initializer_list<uint16_t>& version) {
     DAWN_ASSERT(version.size() <= kMaxVersionFields);
-    mDriverVersion->assign(version.begin(), version.end());
+    mDriverVersion.assign(version.begin(), version.end());
 }
 
 uint16_t& DriverVersion::operator[](size_t i) {
-    return mDriverVersion->operator[](i);
+    return mDriverVersion.operator[](i);
 }
 
 const uint16_t& DriverVersion::operator[](size_t i) const {
-    return mDriverVersion->operator[](i);
+    return mDriverVersion.operator[](i);
 }
 
 uint32_t DriverVersion::size() const {
-    return mDriverVersion->size();
+    return mDriverVersion.size();
 }
 
 std::string DriverVersion::ToString() const {
     std::ostringstream oss;
-    if (mDriverVersion->size() > 0) {
+    if (!mDriverVersion.empty()) {
         // Convert all but the last element to avoid a trailing "."
-        std::copy(mDriverVersion->begin(), mDriverVersion->end() - 1,
+        std::copy(mDriverVersion.begin(), mDriverVersion.end() - 1,
                   std::ostream_iterator<uint16_t>(oss, "."));
         // Add the last element
-        oss << mDriverVersion->back();
+        oss << mDriverVersion.back();
     }
 
     return oss.str();
 }
 
-int CompareWindowsDriverVersion(PCIVendorID vendorId,
-                                const DriverVersion& version1,
-                                const DriverVersion& version2) {
-    if (IsIntel(vendorId)) {
-        uint32_t buildNumber1 = GetIntelWindowsDriverBuildNumber(version1);
-        uint32_t buildNumber2 = GetIntelWindowsDriverBuildNumber(version2);
-        return buildNumber1 < buildNumber2 ? -1 : (buildNumber1 == buildNumber2 ? 0 : 1);
-    }
-
-    // TODO(crbug.com/dawn/823): support other GPU vendors
-    DAWN_UNREACHABLE();
-    return 0;
+std::strong_ordering DriverVersion::operator<=>(const DriverVersion& other) const {
+    return std::lexicographical_compare_three_way(mDriverVersion.begin(), mDriverVersion.end(),
+                                                  other.mDriverVersion.begin(),
+                                                  other.mDriverVersion.end());
 }
 
-int CompareIntelMesaDriverVersion(const DriverVersion& version1, const DriverVersion& version2) {
-    for (uint32_t i = 0; i < 3; ++i) {
-        int diff = static_cast<int32_t>(version1[i]) - static_cast<int32_t>(version2[i]);
-        if (diff != 0) {
-            return diff;
-        }
-    }
-    return 0;
+// According to Intel graphics driver version schema, build number is generated from the
+// last two fields.
+// See https://www.intel.com/content/www/us/en/support/articles/000005654/graphics.html for
+// more details.
+IntelWindowsDriverVersion::IntelWindowsDriverVersion(const DriverVersion& driverVersion) {
+    size_t size = driverVersion.size();
+    DAWN_ASSERT(size >= 2);
+    mBuildNumber = driverVersion[size - 2] * 10000 + driverVersion[size - 1];
 }
+
+IntelWindowsDriverVersion::IntelWindowsDriverVersion(const std::initializer_list<uint16_t>& version)
+    : IntelWindowsDriverVersion(DriverVersion(version)) {}
 
 // Intel GPUs
 bool IsSkylake(PCIDeviceID deviceId) {
-    return std::find(Skylake.cbegin(), Skylake.cend(), deviceId) != Skylake.cend();
+    return (deviceId & 0xFF00) == 0x1900;
+}
+
+bool IsIrisPlus655(PCIDeviceID deviceId) {
+    return std::find(IrisPlus655.cbegin(), IrisPlus655.cend(), deviceId) != IrisPlus655.cend();
+}
+
+IntelGen GetIntelGen(PCIVendorID venderId, PCIDeviceID deviceId) {
+    DAWN_CHECK(gpu_info::IsIntel(venderId));
+
+    if (gpu_info::IsIntelGen7(venderId, deviceId)) {
+        return IntelGen::Gen7;
+    } else if (gpu_info::IsIntelGen8(venderId, deviceId)) {
+        return IntelGen::Gen8;
+    } else if (gpu_info::IsIntelGen9(venderId, deviceId)) {
+        return IntelGen::Gen9;
+    } else if (gpu_info::IsIntelGen11(venderId, deviceId)) {
+        return IntelGen::Gen11;
+    } else if (gpu_info::IsIntelGen12LP(venderId, deviceId)) {
+        return IntelGen::Xe;
+    } else if (gpu_info::IsIntelGen12HP(venderId, deviceId)) {
+        return IntelGen::Xe;
+    } else if (gpu_info::IsIntelXeLPG(venderId, deviceId)) {
+        return IntelGen::Xe;
+    } else if (gpu_info::IsIntelXe2LPG(venderId, deviceId)) {
+        return IntelGen::Xe2;
+    } else if (gpu_info::IsIntelXe2HPG(venderId, deviceId)) {
+        return IntelGen::Xe2;
+    } else if (gpu_info::IsIntelXe3LPG(venderId, deviceId)) {
+        return IntelGen::Xe3;
+    } else {
+        return IntelGen::Unknown;
+    }
+}
+
+QualcommACPIGen GetQualcommACPIGen(PCIVendorID venderId, PCIDeviceID deviceId) {
+    DAWN_CHECK(gpu_info::IsQualcommACPI(venderId));
+
+    if (gpu_info::IsQualcommACPIAdreno6xx(venderId, deviceId)) {
+        return QualcommACPIGen::Adreno6xx;
+    } else if (gpu_info::IsQualcommACPIAdreno7xx(venderId, deviceId)) {
+        return QualcommACPIGen::Adreno7xx;
+    } else {
+        return QualcommACPIGen::Unknown;
+    }
 }
 
 }  // namespace dawn::gpu_info

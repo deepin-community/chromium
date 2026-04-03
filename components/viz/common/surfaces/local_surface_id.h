@@ -12,11 +12,17 @@
 #include <limits>
 #include <string>
 
-#include "base/tracing/protos/chrome_track_event.pbzero.h"
 #include "base/unguessable_token.h"
 #include "components/viz/common/viz_common_export.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
-#include "third_party/perfetto/include/perfetto/tracing/traced_proto.h"
+
+namespace perfetto {
+template <typename MessageType>
+class TracedProto;
+namespace protos::pbzero {
+class LocalSurfaceId;
+}
+}  // namespace perfetto
 
 namespace viz {
 namespace mojom {
@@ -135,6 +141,10 @@ class VIZ_COMMON_EXPORT LocalSurfaceId {
   // case where both `this` and `other` have advanced separate sequences, then
   // this will return false.
   bool IsNewerThan(const LocalSurfaceId& other) const;
+
+  // Returns whether this LocalSurfaceId was generated after `other`. Same as
+  // IsNewerThan but ignores whether the embedding token is different.
+  bool IsNewerThanIgnoringEmbedToken(const LocalSurfaceId& other) const;
 
   // Returns whether this LocalSurfaceId was generated after |other|. In the
   // case where both `this` and `other` have advanced separate sequences, then

@@ -30,7 +30,7 @@ std::optional<std::string> GetCountryCodeFromTimezoneIfAvailable(
 std::u16string GetCurrentTimezoneName();
 
 // Creates a list of pairs of each timezone's ID and name.
-base::Value::List GetTimezoneList();
+base::ListValue GetTimezoneList();
 
 // Returns true if device is managed and has SystemTimezonePolicy set.
 bool HasSystemTimezonePolicy();
@@ -40,6 +40,7 @@ void ApplyTimeZone(const TimeZoneResponseData* timezone);
 
 // Returns true if given timezone preference is enterprise-managed.
 // Works for:
+// - kSystemTimezone
 // - prefs::kUserTimezone
 // - prefs::kResolveTimezoneByGeolocationMethod
 bool IsTimezonePrefsManaged(const std::string& pref_name);
@@ -48,6 +49,11 @@ bool IsTimezonePrefsManaged(const std::string& pref_name);
 // This is called from `Preferences` after updating profile
 // preferences to apply new value to system time zone.
 void UpdateSystemTimezone(Profile* profile);
+
+// Returns true if the given user is allowed to set the system timezone - that
+// is, the single timezone at TimezoneSettings::GetInstance()->GetTimezone(),
+// which is also stored in a file at /var/lib/timezone/localtime.
+bool CanSetSystemTimezone(const user_manager::User* user);
 
 // Set system timezone to the given |timezone_id|, as long as the given |user|
 // is allowed to set it (so not a guest or public account).

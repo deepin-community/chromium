@@ -27,12 +27,6 @@ sys.path.extend(os.path.join(_REPO_PATH, p) for p in _IMPORT_SUBFOLDERS)
 from checkdeps import DepsChecker  # pylint: disable=wrong-import-position
 import licenses  # pylint: disable=wrong-import-position
 
-# Opt-in to using Python3 instead of Python2, as part of the ongoing Python2
-# deprecation. For more information, see
-# https://issuetracker.google.com/173766869.
-USE_PYTHON3 = True
-
-
 def _CheckLicenses(input_api, output_api):
     """Checks third party licenses and returns a list of violations."""
     # NOTE: the licenses check is confused by the fact that we don't actually
@@ -42,7 +36,8 @@ def _CheckLicenses(input_api, output_api):
         os.path.join('buildtools', 'third_party'),
         os.path.join('third_party', 'libc++'),
         os.path.join('third_party', 'libc++abi'),
-        os.path.join('third_party', 'rust-toolchain')
+        os.path.join('third_party', 'rust-toolchain'),
+        os.path.join('third_party', 'depot_tools')
         ])
 
     if any(s.LocalPath().startswith('third_party')
@@ -53,6 +48,18 @@ def _CheckLicenses(input_api, output_api):
         ]
     return []
 
+
+def _CheckGeneratedInfraFiles(input_api, output_api):
+    files = input_api.UnixLocalPaths()
+    if (any(f.endswith('.star') for f in files)
+            and all(not f.endswith('.cfg') for f in files)):
+        return [
+            output_api.PresubmitPromptWarning(
+                'You changed .star files, but didn\'t run `lucicfg generate '
+                'infra/config/global/main.star`')
+        ]
+
+    return []
 
 def _CheckDeps(input_api, output_api):
     """Checks DEPS rules and returns a list of violations."""
@@ -270,6 +277,8 @@ def _CommonChecks(input_api, output_api):
 
     # Run tools/licenses on code change.
     results.extend(_CheckLicenses(input_api, output_api))
+
+    results.extend(_CheckGeneratedInfraFiles(input_api, output_api))
 
     return results
 

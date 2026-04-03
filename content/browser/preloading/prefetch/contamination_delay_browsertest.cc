@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <optional>
+
+#include "base/strings/string_number_conversions.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
@@ -11,13 +15,18 @@
 #include "content/browser/preloading/prefetch/prefetch_document_manager.h"
 #include "content/browser/preloading/prefetch/prefetch_features.h"
 #include "content/browser/preloading/prefetch/prefetch_service.h"
+#include "content/browser/renderer_host/browsing_context_group_swap.h"
+#include "content/browser/renderer_host/navigation_request.h"
 #include "content/public/browser/prefetch_service_delegate.h"
-#include "content/public/common/content_features.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/referrer.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/prefetch_test_util.h"
+#include "content/public/test/preloading_test_util.h"
 #include "content/shell/browser/shell.h"
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -28,12 +37,39 @@
 namespace content {
 namespace {
 
+class BrowsingContextGroupSwapObserver : public WebContentsObserver {
+ public:
+  explicit BrowsingContextGroupSwapObserver(WebContents* web_contents)
+      : WebContentsObserver(web_contents) {}
+
+  void DidFinishNavigation(NavigationHandle* navigation_handle) override {
+    latest_swap_ = NavigationRequest::From(navigation_handle)
+                       ->browsing_context_group_swap();
+  }
+
+  const BrowsingContextGroupSwap& Get() const { return latest_swap_.value(); }
+
+ private:
+  std::optional<BrowsingContextGroupSwap> latest_swap_;
+};
+
 class ContaminationDelayBrowserTest : public ContentBrowserTest {
  protected:
   ContaminationDelayBrowserTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kPrefetchStateContaminationMitigation,
-         features::kPrefetchRedirects},
+    scoped_feature_list_.InitWithFeaturesAndParameters(
+        {{features::kPrefetchStateContaminationMitigation,
+          {{"swaps_bcg", "true"}}},
+         // This is needed specifically for CrOS MSAN, where we apply a 10x
+         // multiplier to all test timeouts, which happens to be enough to push
+         // the response delay in this test (which is scaled in that way to
+         // match the slowdown of everything else) over the default prefetch
+         // timeout. To be resilient also to changes in that value, it is
+         // expressly overridden here to be a timeout that is much longer and
+         // scales with the timeout multiplier.
+         {features::kPrefetchUseContentRefactor,
+          {{"prefetch_timeout_ms",
+            base::NumberToString(
+                TestTimeouts::action_max_timeout().InMilliseconds())}}}},
         {});
   }
 
@@ -58,30 +94,32 @@ class ContaminationDelayBrowserTest : public ContentBrowserTest {
     auto candidate = blink::mojom::SpeculationCandidate::New();
     candidate->url = url;
     candidate->action = blink::mojom::SpeculationAction::kPrefetch;
-    candidate->eagerness = blink::mojom::SpeculationEagerness::kEager;
+    candidate->eagerness = blink::mojom::SpeculationEagerness::kImmediate;
     candidate->referrer = Referrer::SanitizeForRequest(
         url, blink::mojom::Referrer(
                  shell()->web_contents()->GetURL(),
                  network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin));
     std::vector<blink::mojom::SpeculationCandidatePtr> candidates;
     candidates.push_back(std::move(candidate));
-    prefetch_document_manager->ProcessCandidates(candidates,
-                                                 /*devtools_observer=*/nullptr);
+    prefetch_document_manager->ProcessCandidates(candidates);
     ASSERT_TRUE(base::test::RunUntil([&] {
       return prefetch_document_manager->GetReferringPageMetrics()
                  .prefetch_successful_count >= 1;
-    })) << "timed out waiting for prefetch to complete";
+    })) << "timed out waiting for prefetch to complete ("
+        << prefetch_document_manager->GetReferringPageMetrics()
+               .prefetch_attempted_count
+        << " attempted)";
   }
 
  private:
   std::unique_ptr<net::test_server::HttpResponse> MaybeServeRequest(
       const net::test_server::HttpRequest& request) {
     GURL url = request.GetURL();
-    if (url.path_piece() == "/delayed") {
+    if (url.path() == "/delayed") {
       return std::make_unique<net::test_server::DelayedHttpResponse>(
           response_delay());
     }
-    if (url.path_piece() == "/redirect-cross-site") {
+    if (url.path() == "/redirect-cross-site") {
       auto response = std::make_unique<net::test_server::DelayedHttpResponse>(
           response_delay());
       response->set_code(net::HTTP_TEMPORARY_REDIRECT);
@@ -108,18 +146,22 @@ IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, CrossSite) {
   ASSERT_TRUE(NavigateToURL(shell(), referrer_url));
   Prefetch(prefetch_url);
 
+  scoped_refptr<SiteInstance> site_instance =
+      shell()->web_contents()->GetSiteInstance();
+  base::HistogramTester histogram_tester;
+  BrowsingContextGroupSwapObserver swap_observer(shell()->web_contents());
   base::ElapsedTimer timer;
   ASSERT_TRUE(NavigateToURLFromRenderer(shell(), prefetch_url));
   EXPECT_GE(timer.Elapsed(), response_delay());
+  EXPECT_EQ(BrowsingContextGroupSwapType::kSecuritySwap,
+            swap_observer.Get().type());
+  EXPECT_FALSE(site_instance->IsRelatedSiteInstance(
+      shell()->web_contents()->GetSiteInstance()));
+  histogram_tester.ExpectUniqueSample(
+      "Preloading.PrefetchBCGSwap.RelatedActiveContents", 1, 1);
 }
 
-// TODO(crbug.com/325359478): Fix and re-enable for MSAN.
-#if defined(MEMORY_SANITIZER)
-#define MAYBE_IgnoresSameOrigin DISABLED_IgnoresSameOrigin
-#else
-#define MAYBE_IgnoresSameOrigin IgnoresSameOrigin
-#endif
-IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, MAYBE_IgnoresSameOrigin) {
+IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, IgnoresSameOrigin) {
   GURL referrer_url =
       embedded_test_server()->GetURL("referrer.localhost", "/title1.html");
   GURL prefetch_url =
@@ -127,18 +169,16 @@ IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, MAYBE_IgnoresSameOrigin) {
   ASSERT_TRUE(NavigateToURL(shell(), referrer_url));
   Prefetch(prefetch_url);
 
+  BrowsingContextGroupSwapObserver swap_observer(shell()->web_contents());
   base::ElapsedTimer timer;
   ASSERT_TRUE(NavigateToURLFromRenderer(shell(), prefetch_url));
   EXPECT_LT(timer.Elapsed(), response_delay());
+  EXPECT_THAT(swap_observer.Get().type(),
+              ::testing::AnyOf(BrowsingContextGroupSwapType::kNoSwap,
+                               BrowsingContextGroupSwapType::kProactiveSwap));
 }
 
-// TODO(crbug.com/325359478): Fix and re-enable for MSAN.
-#if defined(MEMORY_SANITIZER)
-#define MAYBE_IgnoresSameSite DISABLED_IgnoresSameSite
-#else
-#define MAYBE_IgnoresSameSite IgnoresSameSite
-#endif
-IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, MAYBE_IgnoresSameSite) {
+IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, IgnoresSameSite) {
   GURL referrer_url =
       embedded_test_server()->GetURL("referrer.localhost", "/title1.html");
   GURL prefetch_url =
@@ -146,18 +186,16 @@ IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, MAYBE_IgnoresSameSite) {
   ASSERT_TRUE(NavigateToURL(shell(), referrer_url));
   Prefetch(prefetch_url);
 
+  BrowsingContextGroupSwapObserver swap_observer(shell()->web_contents());
   base::ElapsedTimer timer;
   ASSERT_TRUE(NavigateToURLFromRenderer(shell(), prefetch_url));
   EXPECT_LT(timer.Elapsed(), response_delay());
+  EXPECT_THAT(swap_observer.Get().type(),
+              ::testing::AnyOf(BrowsingContextGroupSwapType::kNoSwap,
+                               BrowsingContextGroupSwapType::kProactiveSwap));
 }
 
-// TODO(crbug.com/325359478): Fix and re-enable for MSAN.
-#if defined(MEMORY_SANITIZER)
-#define MAYBE_IgnoresIfExempt DISABLED_IgnoresIfExempt
-#else
-#define MAYBE_IgnoresIfExempt IgnoresIfExempt
-#endif
-IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, MAYBE_IgnoresIfExempt) {
+IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, IgnoresIfExempt) {
   GURL referrer_url =
       embedded_test_server()->GetURL("referrer.localhost", "/title1.html");
   GURL prefetch_url =
@@ -166,7 +204,8 @@ IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, MAYBE_IgnoresIfExempt) {
   auto* prefetch_service = PrefetchService::GetFromFrameTreeNodeId(
       shell()->web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId());
   auto owned_delegate = std::make_unique<MockPrefetchServiceDelegate>();
-  EXPECT_CALL(*owned_delegate, IsContaminationExempt(referrer_url))
+  EXPECT_CALL(*owned_delegate,
+              IsContaminationExempt(url::Origin::Create(referrer_url)))
       .WillRepeatedly(testing::Return(true));
   prefetch_service->SetPrefetchServiceDelegateForTesting(
       std::move(owned_delegate));
@@ -174,9 +213,68 @@ IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, MAYBE_IgnoresIfExempt) {
   ASSERT_TRUE(NavigateToURL(shell(), referrer_url));
   Prefetch(prefetch_url);
 
+  BrowsingContextGroupSwapObserver swap_observer(shell()->web_contents());
   base::ElapsedTimer timer;
   ASSERT_TRUE(NavigateToURLFromRenderer(shell(), prefetch_url));
   EXPECT_LT(timer.Elapsed(), response_delay());
+  EXPECT_THAT(swap_observer.Get().type(),
+              ::testing::AnyOf(BrowsingContextGroupSwapType::kNoSwap,
+                               BrowsingContextGroupSwapType::kProactiveSwap));
+}
+
+#ifndef NDEBUG
+// TODO(http://crbug.com/404944178): This test is flaky on debug builds.
+// https://ci.chromium.org/ui/test/chromium/ninja%3A%2F%2Fcontent%2Ftest%3Acontent_browsertests%2FContaminationDelayBrowserTest.IgnoresIfExempt_BrowserInitiated
+#define MAYBE_IgnoresIfExempt_BrowserInitiated \
+  DISABLED_IgnoresIfExempt_BrowserInitiated
+#else
+#define MAYBE_IgnoresIfExempt_BrowserInitiated IgnoresIfExempt_BrowserInitiated
+#endif
+IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest,
+                       MAYBE_IgnoresIfExempt_BrowserInitiated) {
+  url::Origin referring_origin = url::Origin::Create(
+      embedded_test_server()->GetURL("referrer.localhost", "/title1.html"));
+  GURL prefetch_url =
+      embedded_test_server()->GetURL("prefetch.localhost", "/delayed");
+
+  auto* prefetch_service = PrefetchService::GetFromFrameTreeNodeId(
+      shell()->web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId());
+  // TODO(crbug.com/40946257): Currently `OnPrefetchLikely` will never be called
+  // for browser-initiated triggers, so we set `num_on_prefetch_likely_calls` to
+  // 0 here, and instead use `TestPrefetchWatcher` to confirm whether prefetch
+  // is actually triggered.
+  auto owned_delegate = std::make_unique<MockPrefetchServiceDelegate>(
+      /*num_on_prefetch_likely_calls=*/0);
+  EXPECT_CALL(*owned_delegate, IsContaminationExempt(referring_origin))
+      .WillRepeatedly(testing::Return(true));
+  prefetch_service->SetPrefetchServiceDelegateForTesting(
+      std::move(owned_delegate));
+
+  auto test_prefetch_watcher = std::make_unique<test::TestPrefetchWatcher>();
+  auto handle = shell()->web_contents()->StartPrefetch(
+      prefetch_url, /*use_prefetch_proxy=*/false,
+      test::kPreloadingEmbedderHistgramSuffixForTesting,
+      blink::mojom::Referrer(), referring_origin,
+      /*no_vary_search_hint=*/std::nullopt,
+      /*priority=*/std::nullopt,
+      PreloadPipelineInfo::Create(
+          /*planned_max_preloading_type=*/PreloadingType::kPrefetch),
+      /*attempt=*/nullptr,
+      /*holdback_status_override=*/PreloadingHoldbackStatus::kUnspecified,
+      /*ttl=*/std::nullopt);
+  test_prefetch_watcher->WaitUntilPrefetchResponseCompleted(std::nullopt,
+                                                            prefetch_url);
+
+  BrowsingContextGroupSwapObserver swap_observer(shell()->web_contents());
+  base::ElapsedTimer timer;
+  ASSERT_TRUE(NavigateToURL(shell(), prefetch_url));
+  EXPECT_TRUE(test_prefetch_watcher->PrefetchUsedInLastNavigation());
+  EXPECT_LT(timer.Elapsed(), response_delay());
+  EXPECT_THAT(swap_observer.Get().type(),
+              ::testing::AnyOf(BrowsingContextGroupSwapType::kNoSwap,
+                               BrowsingContextGroupSwapType::kProactiveSwap));
+  test_prefetch_watcher.reset();
+  handle.reset();
 }
 
 IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, DelayAfterRedirect) {
@@ -192,10 +290,47 @@ IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest, DelayAfterRedirect) {
   ASSERT_TRUE(NavigateToURL(shell(), referrer_url));
   Prefetch(prefetch_url);
 
+  scoped_refptr<SiteInstance> site_instance =
+      shell()->web_contents()->GetSiteInstance();
+  BrowsingContextGroupSwapObserver swap_observer(shell()->web_contents());
   base::ElapsedTimer timer;
   ASSERT_TRUE(NavigateToURLFromRenderer(shell(), prefetch_url, commit_url));
   EXPECT_LT(timer.Elapsed(), response_delay() * 2);
   EXPECT_GE(timer.Elapsed(), response_delay());
+  EXPECT_EQ(BrowsingContextGroupSwapType::kSecuritySwap,
+            swap_observer.Get().type());
+  EXPECT_FALSE(site_instance->IsRelatedSiteInstance(
+      shell()->web_contents()->GetSiteInstance()));
+}
+
+IN_PROC_BROWSER_TEST_F(ContaminationDelayBrowserTest,
+                       CrossSiteWithRelatedContents) {
+  set_response_delay(TestTimeouts::tiny_timeout() * 4);
+
+  GURL referrer_url =
+      embedded_test_server()->GetURL("referrer.localhost", "/title1.html");
+  GURL prefetch_url =
+      embedded_test_server()->GetURL("prefetch.localhost", "/delayed");
+  ASSERT_TRUE(NavigateToURL(shell(), referrer_url));
+  Prefetch(prefetch_url);
+  Shell::CreateNewWindow(
+      shell()->web_contents()->GetBrowserContext(),
+      embedded_test_server()->GetURL("referrer.localhost", "/title2.html"),
+      shell()->web_contents()->GetSiteInstance(), {800, 600});
+
+  scoped_refptr<SiteInstance> site_instance =
+      shell()->web_contents()->GetSiteInstance();
+  base::HistogramTester histogram_tester;
+  BrowsingContextGroupSwapObserver swap_observer(shell()->web_contents());
+  base::ElapsedTimer timer;
+  ASSERT_TRUE(NavigateToURLFromRenderer(shell(), prefetch_url));
+  EXPECT_GE(timer.Elapsed(), response_delay());
+  EXPECT_EQ(BrowsingContextGroupSwapType::kSecuritySwap,
+            swap_observer.Get().type());
+  EXPECT_FALSE(site_instance->IsRelatedSiteInstance(
+      shell()->web_contents()->GetSiteInstance()));
+  histogram_tester.ExpectUniqueSample(
+      "Preloading.PrefetchBCGSwap.RelatedActiveContents", 2, 1);
 }
 
 }  // namespace

@@ -12,11 +12,13 @@
 #include "ash/webui/diagnostics_ui/backend/common/histogram_util.h"
 #include "ash/webui/diagnostics_ui/backend/common/routine_properties.h"
 #include "ash/webui/diagnostics_ui/backend/system/cros_healthd_helpers.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -77,7 +79,6 @@ mojom::StandardRoutineResult TestStatusToResult(
     case healthd::DiagnosticRoutineStatusEnum::kCancelling:
     case healthd::DiagnosticRoutineStatusEnum::kUnknown:
       NOTREACHED();
-      return mojom::StandardRoutineResult::kExecutionError;
   }
 }
 
@@ -196,8 +197,8 @@ void SystemRoutineController::OnAvailableRoutinesFetched(
   base::flat_set<healthd::DiagnosticRoutineEnum> healthd_routines(
       available_routines);
   for (size_t i = 0; i < kRoutinePropertiesLength; i++) {
-    const RoutineProperties& routine = kRoutineProperties[i];
-    if (base::Contains(healthd_routines, routine.healthd_type)) {
+    const RoutineProperties& routine = UNSAFE_TODO(kRoutineProperties[i]);
+    if (healthd_routines.contains(routine.healthd_type)) {
       supported_routines_.push_back(routine.type);
     }
   }
@@ -578,21 +579,13 @@ void SystemRoutineController::OnPowerRoutineResultFetched(
     return;
   }
 
-  data_decoder::DataDecoder::ParseJsonIsolated(
-      file_contents,
-      base::BindOnce(&SystemRoutineController::OnPowerRoutineJsonParsed,
-                     weak_factory_.GetWeakPtr(), routine_type));
-  return;
-}
-
-void SystemRoutineController::OnPowerRoutineJsonParsed(
-    mojom::RoutineType routine_type,
-    data_decoder::DataDecoder::ValueOrError result) {
+  std::optional<base::Value> result = base::JSONReader::Read(
+      file_contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!result.has_value()) {
     OnPowerRoutineResult(routine_type,
                          mojom::StandardRoutineResult::kExecutionError,
                          /*percent_change=*/0, /*seconds_elapsed=*/0);
-    DVLOG(2) << "JSON parsing failed: " << result.error();
+    DVLOG(2) << "JSON parsing failed";
     return;
   }
 
@@ -604,8 +597,8 @@ void SystemRoutineController::OnPowerRoutineJsonParsed(
     return;
   }
 
-  const base::Value::Dict& parsed_json = result->GetDict();
-  const base::Value::Dict* result_details_dict =
+  const base::DictValue& parsed_json = result->GetDict();
+  const base::DictValue* result_details_dict =
       parsed_json.FindDict(kResultDetailsKey);
   if (!result_details_dict) {
     OnPowerRoutineResult(routine_type,

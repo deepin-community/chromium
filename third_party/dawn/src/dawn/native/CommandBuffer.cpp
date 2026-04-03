@@ -25,13 +25,15 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <utility>
+
 #include "dawn/native/CommandBuffer.h"
 
-#include "dawn/common/BitSetIterator.h"
 #include "dawn/native/Buffer.h"
 #include "dawn/native/CommandEncoder.h"
 #include "dawn/native/CommandValidation.h"
 #include "dawn/native/Commands.h"
+#include "dawn/native/Device.h"
 #include "dawn/native/Format.h"
 #include "dawn/native/ObjectType_autogen.h"
 #include "dawn/native/Texture.h"
@@ -43,17 +45,16 @@ CommandBufferBase::CommandBufferBase(CommandEncoder* encoder,
     : ApiObjectBase(encoder->GetDevice(), descriptor->label),
       mCommands(encoder->AcquireCommands()),
       mResourceUsages(encoder->AcquireResourceUsages()),
+      mIndirectDrawMetadata(encoder->AcquireIndirectDrawMetadata()),
       mEncoderLabel(encoder->GetLabel()) {
     GetObjectTrackingList()->Track(this);
 }
 
-CommandBufferBase::CommandBufferBase(DeviceBase* device,
-                                     ObjectBase::ErrorTag tag,
-                                     const char* label)
+CommandBufferBase::CommandBufferBase(DeviceBase* device, ObjectBase::ErrorTag tag, StringView label)
     : ApiObjectBase(device, tag, label) {}
 
 // static
-Ref<CommandBufferBase> CommandBufferBase::MakeError(DeviceBase* device, const char* label) {
+Ref<CommandBufferBase> CommandBufferBase::MakeError(DeviceBase* device, StringView label) {
     return AcquireRef(new CommandBufferBase(device, ObjectBase::kError, label));
 }
 
@@ -90,7 +91,9 @@ MaybeError CommandBufferBase::ValidateCanUseInSubmitNow() const {
     return {};
 }
 
-void CommandBufferBase::DestroyImpl() {
+void CommandBufferBase::DestroyImpl(DestroyReason reason) {
+    // These metadatas hold raw_ptr to the commands, so they need to be cleared first.
+    mIndirectDrawMetadata.clear();
     FreeCommands(&mCommands);
     mResourceUsages = {};
 }
@@ -99,17 +102,21 @@ const CommandBufferResourceUsage& CommandBufferBase::GetResourceUsages() const {
     return mResourceUsages;
 }
 
+const std::vector<IndirectDrawMetadata>& CommandBufferBase::GetIndirectDrawMetadata() {
+    return mIndirectDrawMetadata;
+}
+
 CommandIterator* CommandBufferBase::GetCommandIteratorForTesting() {
     return &mCommands;
 }
 
 bool IsCompleteSubresourceCopiedTo(const TextureBase* texture,
-                                   const Extent3D& copySize,
+                                   const TexelExtent3D& copySize,
                                    const uint32_t mipLevel,
                                    Aspect aspect) {
     DAWN_ASSERT(HasOneBit(aspect) || aspect == (Aspect::Depth | Aspect::Stencil));
 
-    Extent3D extent = texture->GetMipLevelSingleSubresourcePhysicalSize(mipLevel, aspect);
+    TexelExtent3D extent = texture->GetMipLevelSingleSubresourcePhysicalSize(mipLevel, aspect);
 
     switch (texture->GetDimension()) {
         case wgpu::TextureDimension::e1D:
@@ -126,21 +133,26 @@ bool IsCompleteSubresourceCopiedTo(const TextureBase* texture,
 }
 
 bool IsCompleteSubresourceCopiedTo(const TextureBase* texture,
-                                   const Extent3D& copySize,
+                                   const TexelExtent3D& copySize,
                                    const uint32_t mipLevel,
                                    wgpu::TextureAspect textureAspect) {
     auto aspect = SelectFormatAspects(texture->GetFormat(), textureAspect);
     return IsCompleteSubresourceCopiedTo(texture, copySize, mipLevel, aspect);
 }
 
-SubresourceRange GetSubresourcesAffectedByCopy(const TextureCopy& copy, const Extent3D& copySize) {
+SubresourceRange GetSubresourcesAffectedByCopy(const TextureCopy& copy,
+                                               const TexelExtent3D& copySize) {
     switch (copy.texture->GetDimension()) {
         case wgpu::TextureDimension::e1D:
-            DAWN_ASSERT(copy.origin.z == 0 && copySize.depthOrArrayLayers == 1);
+            DAWN_ASSERT(copy.origin.z == TexelCount{0} &&
+                        copySize.depthOrArrayLayers == TexelCount{1});
             DAWN_ASSERT(copy.mipLevel == 0);
             return {copy.aspect, {0, 1}, {0, 1}};
         case wgpu::TextureDimension::e2D:
-            return {copy.aspect, {copy.origin.z, copySize.depthOrArrayLayers}, {copy.mipLevel, 1}};
+            return {copy.aspect,
+                    {static_cast<uint32_t>(copy.origin.z),
+                     static_cast<uint32_t>(copySize.depthOrArrayLayers)},
+                    {copy.mipLevel, 1}};
         case wgpu::TextureDimension::e3D:
             return {copy.aspect, {0, 1}, {copy.mipLevel, 1}};
         case wgpu::TextureDimension::Undefined:
@@ -149,8 +161,12 @@ SubresourceRange GetSubresourcesAffectedByCopy(const TextureCopy& copy, const Ex
     DAWN_UNREACHABLE();
 }
 
-void LazyClearRenderPassAttachments(BeginRenderPassCmd* renderPass) {
-    for (auto i : IterateBitSet(renderPass->attachmentState->GetColorAttachmentsMask())) {
+void LazyClearRenderPassAttachments(DeviceBase* device, BeginRenderPassCmd* renderPass) {
+    if (!device->IsToggleEnabled(Toggle::LazyClearResourceOnFirstUse)) {
+        return;
+    }
+
+    for (auto i : renderPass->attachmentState->GetColorAttachmentsMask()) {
         auto& attachmentInfo = renderPass->colorAttachments[i];
         TextureViewBase* view = attachmentInfo.view.Get();
         bool hasResolveTarget = attachmentInfo.resolveTarget != nullptr;
@@ -264,37 +280,38 @@ void LazyClearRenderPassAttachments(BeginRenderPassCmd* renderPass) {
 
 bool IsFullBufferOverwrittenInTextureToBufferCopy(const CopyTextureToBufferCmd* copy) {
     DAWN_ASSERT(copy != nullptr);
+    return IsFullBufferOverwrittenInTextureToBufferCopy(copy->source, copy->destination,
+                                                        copy->copySize);
+}
 
-    if (copy->destination.offset > 0) {
+bool IsFullBufferOverwrittenInTextureToBufferCopy(const TextureCopy& source,
+                                                  const BufferCopy& destination,
+                                                  const TexelExtent3D& copySize_in) {
+    if (destination.offset > 0) {
         // The copy doesn't touch the start of the buffer.
         return false;
     }
 
-    const TextureBase* texture = copy->source.texture.Get();
-    const TexelBlockInfo& blockInfo = texture->GetFormat().GetAspectInfo(copy->source.aspect).block;
-    const uint64_t widthInBlocks = copy->copySize.width / blockInfo.width;
-    const uint64_t heightInBlocks = copy->copySize.height / blockInfo.height;
-    const bool multiSlice = copy->copySize.depthOrArrayLayers > 1;
-    const bool multiRow = multiSlice || heightInBlocks > 1;
+    const TypedTexelBlockInfo& blockInfo = GetBlockInfo(source);
+    BlockExtent3D copySize = blockInfo.ToBlock(copySize_in);
+    const bool multiSlice = copySize.depthOrArrayLayers > BlockCount{1};
+    const bool multiRow = multiSlice || copySize.height > BlockCount{1};
 
-    if (multiSlice && copy->destination.rowsPerImage > heightInBlocks) {
+    if (multiSlice && destination.rowsPerImage > copySize.height) {
         // There are gaps between slices that aren't overwritten
         return false;
     }
 
-    const uint64_t copyTextureDataSizePerRow = widthInBlocks * blockInfo.byteSize;
-    if (multiRow && copy->destination.bytesPerRow > copyTextureDataSizePerRow) {
+    if (multiRow && destination.blocksPerRow > copySize.width) {
         // There are gaps between rows that aren't overwritten
         return false;
     }
 
     // After the above checks, we're sure the copy has no gaps.
     // Now, compute the total number of bytes written.
-    const uint64_t writtenBytes =
-        ComputeRequiredBytesInCopy(blockInfo, copy->copySize, copy->destination.bytesPerRow,
-                                   copy->destination.rowsPerImage)
-            .AcquireSuccess();
-    if (!copy->destination.buffer->IsFullBufferRange(copy->destination.offset, writtenBytes)) {
+    const uint64_t writtenBytes = ComputeRequiredBytesInCopy(
+        blockInfo, copySize, destination.blocksPerRow, destination.rowsPerImage);
+    if (!destination.buffer->IsFullBufferRange(destination.offset, writtenBytes)) {
         // The written bytes don't cover the whole buffer.
         return false;
     }

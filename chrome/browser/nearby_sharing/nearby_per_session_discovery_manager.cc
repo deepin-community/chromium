@@ -4,12 +4,11 @@
 
 #include "chrome/browser/nearby_sharing/nearby_per_session_discovery_manager.h"
 
+#include <algorithm>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/nearby_sharing/attachment.h"
 #include "chrome/browser/nearby_sharing/nearby_confirmation_manager.h"
@@ -154,7 +153,7 @@ void NearbyPerSessionDiscoveryManager::OnShareTargetDiscovered(
   // Update metrics.
   UpdateFurthestDiscoveryProgressIfNecessary(
       DiscoveryProgress::kDiscoveredShareTargetNothingSent);
-  if (!base::Contains(discovered_share_targets_, share_target.id)) {
+  if (!discovered_share_targets_.contains(share_target.id)) {
     ++num_discovered_;
     if (num_discovered_ == 1) {
       base::UmaHistogramMediumTimes(
@@ -169,10 +168,10 @@ void NearbyPerSessionDiscoveryManager::OnShareTargetDiscovered(
   // Dedup by the more stable device ID if possible.
   if (share_target.device_id) {
     auto it =
-        base::ranges::find(discovered_share_targets_, share_target.device_id,
-                           [](const auto& id_share_target_pair) {
-                             return id_share_target_pair.second.device_id;
-                           });
+        std::ranges::find(discovered_share_targets_, share_target.device_id,
+                          [](const auto& id_share_target_pair) {
+                            return id_share_target_pair.second.device_id;
+                          });
 
     if (it != discovered_share_targets_.end()) {
       CD_LOG(VERBOSE, Feature::NS)
@@ -201,7 +200,7 @@ void NearbyPerSessionDiscoveryManager::OnShareTargetLost(
 
   // It is possible that we already removed a ShareTarget from the map when
   // deduping by ShareTarget device_id.
-  if (!base::Contains(discovered_share_targets_, share_target.id)) {
+  if (!discovered_share_targets_.contains(share_target.id)) {
     CD_LOG(VERBOSE, Feature::NS)
         << "NearbyPerSessionDiscoveryManager::" << __func__
         << ": Share target id=" << share_target.id

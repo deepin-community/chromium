@@ -17,6 +17,7 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -25,14 +26,14 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/logging.h"
+#include "xla/tsl/platform/types.h"
 #include "tensorflow/core/framework/dataset.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/types.pb.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"
 #include "tsl/platform/mutex.h"
-#include "tsl/platform/types.h"
 
 namespace tensorflow {
 namespace data {
@@ -82,7 +83,7 @@ absl::Status IndexSplitProvider::Restore(
 int64_t IndexSplitProvider::Cardinality() const {
   // RandomDataset uses kint64max to simulate infinite splits.
   // See RandomDatasetOp::Dataset::MakeSplitProviders.
-  if (n_ == tsl::kint64max) {
+  if (n_ == std::numeric_limits<int64_t>::max()) {
     return kInfiniteCardinality;
   }
   return n_;

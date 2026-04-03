@@ -13,11 +13,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <string>
 #include <vector>
+
+#include "absl/status/status.h"
 #include "tensorflow/cc/framework/grad_op_registry.h"
 #include "tensorflow/cc/framework/gradients.h"
 #include "tensorflow/cc/ops/image_ops_internal.h"
 #include "tensorflow/cc/ops/standard_ops.h"
+#include "tensorflow/core/framework/types.pb.h"
 
 namespace tensorflow {
 namespace ops {
@@ -29,9 +33,9 @@ REGISTER_NO_GRADIENT_OP("NonMaxSuppressionV3");
 REGISTER_NO_GRADIENT_OP("NonMaxSuppressionV4");
 REGISTER_NO_GRADIENT_OP("NonMaxSuppressionV5");
 
-Status ResizeNearestNeighborGradHelper(const Scope& scope, const Operation& op,
-                                       const std::vector<Output>& grad_inputs,
-                                       std::vector<Output>* grad_outputs) {
+absl::Status ResizeNearestNeighborGradHelper(
+    const Scope& scope, const Operation& op,
+    const std::vector<Output>& grad_inputs, std::vector<Output>* grad_outputs) {
   bool align_corners;
   TF_RETURN_IF_ERROR(
       GetNodeAttr(op.node()->attrs(), "align_corners", &align_corners));
@@ -51,9 +55,9 @@ Status ResizeNearestNeighborGradHelper(const Scope& scope, const Operation& op,
 }
 REGISTER_GRADIENT_OP("ResizeNearestNeighbor", ResizeNearestNeighborGradHelper);
 
-Status ResizeBilinearGradHelper(const Scope& scope, const Operation& op,
-                                const std::vector<Output>& grad_inputs,
-                                std::vector<Output>* grad_outputs) {
+absl::Status ResizeBilinearGradHelper(const Scope& scope, const Operation& op,
+                                      const std::vector<Output>& grad_inputs,
+                                      std::vector<Output>* grad_outputs) {
   bool align_corners;
   TF_RETURN_IF_ERROR(
       GetNodeAttr(op.node()->attrs(), "align_corners", &align_corners));
@@ -69,9 +73,9 @@ Status ResizeBilinearGradHelper(const Scope& scope, const Operation& op,
 }
 REGISTER_GRADIENT_OP("ResizeBilinear", ResizeBilinearGradHelper);
 
-Status ResizeBicubicGradHelper(const Scope& scope, const Operation& op,
-                               const std::vector<Output>& grad_inputs,
-                               std::vector<Output>* grad_outputs) {
+absl::Status ResizeBicubicGradHelper(const Scope& scope, const Operation& op,
+                                     const std::vector<Output>& grad_inputs,
+                                     std::vector<Output>* grad_outputs) {
   bool align_corners;
   TF_RETURN_IF_ERROR(
       GetNodeAttr(op.node()->attrs(), "align_corners", &align_corners));
@@ -88,10 +92,11 @@ Status ResizeBicubicGradHelper(const Scope& scope, const Operation& op,
 }
 REGISTER_GRADIENT_OP("ResizeBicubic", ResizeBicubicGradHelper);
 
-Status ScaleAndTranslateGradHelper(const Scope& scope, const Operation& op,
-                                   const std::vector<Output>& grad_inputs,
-                                   std::vector<Output>* grad_outputs) {
-  string kernel_type;
+absl::Status ScaleAndTranslateGradHelper(const Scope& scope,
+                                         const Operation& op,
+                                         const std::vector<Output>& grad_inputs,
+                                         std::vector<Output>* grad_outputs) {
+  std::string kernel_type;
   TF_RETURN_IF_ERROR(
       GetNodeAttr(op.node()->attrs(), "kernel_type", &kernel_type));
   bool antialias;
@@ -109,11 +114,11 @@ Status ScaleAndTranslateGradHelper(const Scope& scope, const Operation& op,
 
 REGISTER_GRADIENT_OP("ScaleAndTranslate", ScaleAndTranslateGradHelper);
 
-Status CropAndResizeGradHelper(const Scope& scope, const Operation& op,
-                               const std::vector<Output>& grad_inputs,
-                               std::vector<Output>* grad_outputs) {
+absl::Status CropAndResizeGradHelper(const Scope& scope, const Operation& op,
+                                     const std::vector<Output>& grad_inputs,
+                                     std::vector<Output>* grad_outputs) {
   DataType input_type;
-  string method;
+  std::string method;
   TF_RETURN_IF_ERROR(GetNodeAttr(op.node()->attrs(), "method", &method));
   TF_RETURN_IF_ERROR(GetNodeAttr(op.node()->attrs(), "T", &input_type));
   auto image_shape = Shape(scope, op.input(0));

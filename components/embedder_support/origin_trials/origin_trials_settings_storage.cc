@@ -15,11 +15,11 @@ OriginTrialsSettingsStorage::OriginTrialsSettingsStorage() {
 OriginTrialsSettingsStorage::~OriginTrialsSettingsStorage() = default;
 
 void OriginTrialsSettingsStorage::PopulateSettings(
-    const base::Value::List& disabled_tokens_list) {
+    const base::ListValue& disabled_tokens_list) {
   SetDisabledTokens(std::move(disabled_tokens_list));
 }
 void OriginTrialsSettingsStorage::SetDisabledTokens(
-    const base::Value::List& disabled_tokens_list) {
+    const base::ListValue& disabled_tokens_list) {
   if (disabled_tokens_list.size() > kMaxDisabledTokens) {
     LOG(WARNING) << "Input has " << disabled_tokens_list.size()
                  << " disabled tokens, which exceeds max of "
@@ -31,7 +31,7 @@ void OriginTrialsSettingsStorage::SetDisabledTokens(
   disabled_tokens.reserve(disabled_tokens_list.size());
   for (const auto& item : disabled_tokens_list) {
     if (item.is_string()) {
-      // TODO(crbug.com/1431177): Investigate storing the decoded strings.
+      // TODO(crbug.com/40263412): Investigate storing the decoded strings.
       disabled_tokens.push_back(item.GetString());
     }
   }

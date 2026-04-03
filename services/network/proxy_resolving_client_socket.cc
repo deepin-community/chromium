@@ -14,6 +14,7 @@
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_address.h"
@@ -21,6 +22,7 @@
 #include "net/base/net_errors.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/privacy_mode.h"
+#include "net/base/proxy_delegate.h"
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/http/http_auth_controller.h"
 #include "net/http/http_network_session.h"
@@ -179,7 +181,7 @@ bool ProxyResolvingClientSocket::WasEverUsed() const {
 net::NextProto ProxyResolvingClientSocket::GetNegotiatedProtocol() const {
   if (socket_)
     return socket_->GetNegotiatedProtocol();
-  return net::kProtoUnknown;
+  return net::NextProto::kProtoUnknown;
 }
 
 bool ProxyResolvingClientSocket::GetSSLInfo(net::SSLInfo* ssl_info) {
@@ -227,8 +229,6 @@ int ProxyResolvingClientSocket::DoLoop(int result) {
         break;
       default:
         NOTREACHED() << "bad state";
-        rv = net::ERR_FAILED;
-        break;
     }
   } while (rv != net::ERR_IO_PENDING && next_state_ != STATE_NONE);
   return rv;
@@ -238,14 +238,12 @@ int ProxyResolvingClientSocket::DoProxyResolve() {
   next_state_ = STATE_PROXY_RESOLVE_COMPLETE;
   // base::Unretained(this) is safe because resolution request is canceled when
   // |proxy_resolve_request_| is destroyed.
-  //
-  // TODO(https://crbug.com/1023439): Pass along a NetworkAnonymizationKey.
   return network_session_->proxy_resolution_service()->ResolveProxy(
       url_, net::HttpRequestHeaders::kPostMethod, network_anonymization_key_,
       &proxy_info_,
       base::BindOnce(&ProxyResolvingClientSocket::OnIOComplete,
                      base::Unretained(this)),
-      &proxy_resolve_request_, net_log_);
+      &proxy_resolve_request_, net_log_, net::DEFAULT_PRIORITY);
 }
 
 int ProxyResolvingClientSocket::DoProxyResolveComplete(int result) {
@@ -253,8 +251,9 @@ int ProxyResolvingClientSocket::DoProxyResolveComplete(int result) {
   if (result == net::OK) {
     // Removes unsupported proxies from the list. Currently, this removes
     // just the SCHEME_QUIC proxy.
-    // TODO(crbug.com/876885): Allow QUIC proxy once net::QuicProxyClientSocket
-    // supports ReadIfReady() and CancelReadIfReady().
+    // TODO(crbug.com/41409577): Allow QUIC proxy once
+    // net::QuicProxyClientSocket supports ReadIfReady() and
+    // CancelReadIfReady().
     proxy_info_.RemoveProxiesWithoutScheme(
         net::ProxyServer::SCHEME_HTTP | net::ProxyServer::SCHEME_HTTPS |
         net::ProxyServer::SCHEME_SOCKS4 | net::ProxyServer::SCHEME_SOCKS5);
@@ -283,12 +282,6 @@ int ProxyResolvingClientSocket::DoInitConnection() {
                               : std::optional<net::NetworkTrafficAnnotationTag>(
                                     proxy_info_.traffic_annotation());
 
-  // Now that the proxy is resolved, create and start a ConnectJob. Using an
-  // empty NetworkAnonymizationKey means that tunnels over H2 or QUIC proxies
-  // will be shared, which may result in privacy leaks, depending on the nature
-  // of the consumer.
-  //
-  // TODO(mmenke): Investigate that.
   connect_job_ = connect_job_factory_->CreateConnectJob(
       use_tls_, net::HostPortPair::FromURL(url_), proxy_info_.proxy_chain(),
       proxy_annotation_tag, /*force_tunnel=*/true, net::PRIVACY_MODE_DISABLED,
@@ -350,8 +343,9 @@ int ProxyResolvingClientSocket::ReconsiderProxyAfterError(int error) {
   DCHECK_NE(error, net::ERR_IO_PENDING);
 
   // Check if the error was a proxy failure.
-  if (!net::CanFalloverToNextProxy(proxy_info_.proxy_chain(), error, &error,
-                                   proxy_info_.is_for_ip_protection())) {
+  if (!net::CanFalloverToNextProxy(
+          proxy_info_.proxy_chain(), error, &error,
+          common_connect_job_params_->proxy_delegate)) {
     return error;
   }
 

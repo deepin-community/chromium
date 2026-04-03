@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "base/values.h"
@@ -21,13 +22,14 @@ BaseWebUIHandler::~BaseWebUIHandler() = default;
 
 void BaseWebUIHandler::OnJavascriptAllowed() {
   auto deferred_calls = std::exchange(deferred_calls_, {});
-  for (auto& call : deferred_calls)
+  for (auto& call : deferred_calls) {
     std::move(call).Run();
+  }
 
   InitAfterJavascriptAllowed();
 }
 
-void BaseWebUIHandler::GetLocalizedStrings(base::Value::Dict* dict) {
+void BaseWebUIHandler::GetLocalizedStrings(base::DictValue* dict) {
   auto builder = std::make_unique<::login::LocalizedValuesBuilder>(dict);
   DeclareLocalizedValues(builder.get());
   GetAdditionalParameters(dict);
@@ -37,13 +39,14 @@ void BaseWebUIHandler::RegisterMessages() {
   DeclareJSCallbacks();
 }
 
-void BaseWebUIHandler::GetAdditionalParameters(base::Value::Dict* dict) {}
+void BaseWebUIHandler::GetAdditionalParameters(base::DictValue* dict) {}
 
 void BaseWebUIHandler::InitAfterJavascriptAllowed() {}
 
 void BaseWebUIHandler::ShowScreenDeprecated(OobeScreenId screen) {
-  if (!GetOobeUI())
+  if (!GetOobeUI()) {
     return;
+  }
   GetOobeUI()->GetCoreOobe()->ShowScreenWithData(screen, std::nullopt);
 }
 
@@ -53,8 +56,9 @@ OobeUI* BaseWebUIHandler::GetOobeUI() {
 
 OobeScreenId BaseWebUIHandler::GetCurrentScreen() {
   OobeUI* oobe_ui = GetOobeUI();
-  if (!oobe_ui)
+  if (!oobe_ui) {
     return OOBE_SCREEN_UNKNOWN;
+  }
   return oobe_ui->current_screen();
 }
 

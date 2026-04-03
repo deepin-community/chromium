@@ -7,22 +7,24 @@
 
 #include <string>
 
-#include "ash/ime/ime_controller_impl.h"
+#include "ash/auth/views/auth_textfield.h"
+#include "ash/login/ui/non_accessible_view.h"
+#include "ash/public/cpp/ime_controller.h"
+#include "ash/style/system_textfield_controller.h"
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chromeos/ash/components/auth_panel/impl/auth_factor_store.h"
+#include "chromeos/ash/components/auth_panel/impl/auth_panel.h"
 #include "chromeos/ash/components/auth_panel/impl/factor_auth_view.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/models/image_model.h"
-#include "ui/views/controls/textfield/textfield_controller.h"
 
 namespace views {
 
 class BoxLayout;
 class ImageView;
-class Textfield;
 class ToggleImageButton;
 
 }  // namespace views
@@ -30,7 +32,6 @@ class ToggleImageButton;
 namespace ash {
 
 class ArrowButtonView;
-class LoginTextfield;
 class AuthPanelEventDispatcher;
 
 // This class encapsulates a textfield, toggle display password eye icon, and
@@ -43,11 +44,24 @@ class AuthPanelEventDispatcher;
 // payload. The password submission logic does not live in this class. Here, we
 // only handle UI behavior.
 class PasswordAuthView : public FactorAuthView,
-                         public views::TextfieldController,
-                         public ImeControllerImpl::Observer {
+                         public ImeController::Observer,
+                         public AuthTextfield::Observer {
   METADATA_HEADER(PasswordAuthView, FactorAuthView)
 
  public:
+  class TestApi {
+   public:
+    explicit TestApi(PasswordAuthView* password_auth_view)
+        : password_auth_view_(password_auth_view) {}
+
+    views::Textfield* GetPasswordTextfield();
+
+    views::View* GetSubmitPasswordButton();
+
+   private:
+    raw_ptr<PasswordAuthView> password_auth_view_;
+  };
+
   PasswordAuthView(AuthPanelEventDispatcher* dispatcher,
                    AuthFactorStore* store);
   ~PasswordAuthView() override;
@@ -56,18 +70,18 @@ class PasswordAuthView : public FactorAuthView,
   AshAuthFactor GetFactor() override;
   void OnStateChanged(const AuthFactorStore::State& state) override;
 
-  // views::TextfieldController:
-  void ContentsChanged(views::Textfield* sender,
-                       const std::u16string& new_contents) override;
-
   // views::View:
-  bool OnKeyPressed(const ui::KeyEvent& event) override;
   void RequestFocus() override;
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
 
-  // ImeControllerImpl::Observer
+  // ImeController::Observer:
   void OnCapsLockChanged(bool enabled) override;
   void OnKeyboardLayoutNameChanged(const std::string& layout_name) override {}
+
+  // AuthTextfield::Observer:
+  void OnSubmit() override;
+  void OnEscape() override;
 
  private:
   class LoginPasswordRow;
@@ -76,7 +90,7 @@ class PasswordAuthView : public FactorAuthView,
   void ConfigureRootLayout();
   void CreateAndConfigurePasswordRow();
   void CreateAndConfigureCapslockIcon();
-  void CreateAndConfigureLoginTextfield();
+  void CreateAndConfigureTextfieldContainer();
   void CreateAndConfigureDisplayPasswordButton();
   void CreateAndConfigureSubmitButton();
 
@@ -84,7 +98,15 @@ class PasswordAuthView : public FactorAuthView,
   void OnDisplayPasswordButtonPressed();
   void SetCapsLockIconHighlighted(bool highlight);
 
-  raw_ptr<AuthPanelEventDispatcher> dispatcher_ = nullptr;
+  void UpdateTextfield(
+      const AuthFactorStore::State::AuthTextfieldState& auth_textfield_state);
+
+  // AuthTextfield::Delegate:
+  void OnTextfieldBlur() override;
+  void OnTextfieldFocus() override;
+  void OnContentsChanged(std::u16string_view new_contents) override;
+
+  raw_ptr<AuthPanelEventDispatcher, DanglingUntriaged> dispatcher_ = nullptr;
 
   raw_ptr<LoginPasswordRow> password_row_ = nullptr;
 
@@ -92,15 +114,15 @@ class PasswordAuthView : public FactorAuthView,
 
   raw_ptr<views::ImageView> capslock_icon_ = nullptr;
 
-  raw_ptr<LoginTextfield> textfield_ = nullptr;
-
   raw_ptr<views::ToggleImageButton> display_password_button_ = nullptr;
 
   raw_ptr<ArrowButtonView> submit_button_ = nullptr;
 
+  raw_ptr<AuthTextfield> auth_textfield_ = nullptr;
+
   base::CallbackListSubscription auth_factor_store_subscription_;
 
-  base::ScopedObservation<ImeControllerImpl, ImeControllerImpl::Observer>
+  base::ScopedObservation<ImeController, ImeController::Observer>
       input_methods_observer_{this};
 
   ui::ImageModel capslock_icon_highlighted_;
@@ -112,4 +134,4 @@ class PasswordAuthView : public FactorAuthView,
 
 }  // namespace ash
 
-#endif  // CHROMEOS_ASH_COMPONENTS_AUTH_PANEL_IMPL_PASSWORD_AUTH_VIEW_H_
+#endif  // CHROMEOS_ASH_COMPONENTS_AUTH_PANEL_IMPL_VIEWS_PASSWORD_AUTH_VIEW_H_

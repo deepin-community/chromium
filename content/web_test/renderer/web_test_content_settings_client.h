@@ -7,7 +7,6 @@
 
 #include "base/memory/raw_ptr.h"
 #include "content/public/renderer/render_frame_observer.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/platform/web_content_settings_client.h"
 #include "url/origin.h"
 
@@ -34,17 +33,12 @@ class WebTestContentSettingsClient : public RenderFrameObserver,
   void OnDestruct() override;
 
   // blink::WebContentSettingsClient:
-  bool AllowImage(bool enabled_per_settings,
-                  const blink::WebURL& image_url) override;
-  bool AllowScriptFromSource(bool enabled_per_settings,
-                             const blink::WebURL& script_url) override;
   bool AllowStorageAccessSync(StorageType storage_type) override;
   bool AllowRunningInsecureContent(bool enabled_per_settings,
                                    const blink::WebURL& url) override;
-  bool IncreaseViewTransitionCallbackTimeout() const override;
 
  private:
-  const raw_ptr<TestRunner, ExperimentalRenderer> test_runner_;
+  const raw_ptr<TestRunner> test_runner_;
 };
 
 }  // namespace content

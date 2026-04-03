@@ -341,8 +341,8 @@ class FusedResizeAndPadConvFunctor {
     // use TensorFlow's resource management to ensure that the memory will be
     // released when the session is over.
     Im2ColBufferResource<T1, kMaxChunkSize>* im2col_buffer_resource;
-    std::function<Status(Im2ColBufferResource<T1, kMaxChunkSize>**)> creator =
-        [](Im2ColBufferResource<T1, kMaxChunkSize>** resource) {
+    std::function<absl::Status(Im2ColBufferResource<T1, kMaxChunkSize>**)>
+        creator = [](Im2ColBufferResource<T1, kMaxChunkSize>** resource) {
           *resource = new Im2ColBufferResource<T1, kMaxChunkSize>();
           return absl::OkStatus();
         };
@@ -378,7 +378,7 @@ class FusedResizeAndPadConvFunctor {
                 (needed_resize_cache_count * sizeof(T1)) <= kResizeCacheSize,
                 errors::InvalidArgument("Input too large for resize cache"));
     Im2ColBufferResource<T1, kResizeCacheSize>* resize_cache_resource;
-    std::function<Status(Im2ColBufferResource<T1, kResizeCacheSize>**)>
+    std::function<absl::Status(Im2ColBufferResource<T1, kResizeCacheSize>**)>
         resize_creator =
             [](Im2ColBufferResource<T1, kResizeCacheSize>** resource) {
               *resource = new Im2ColBufferResource<T1, kResizeCacheSize>();
@@ -711,7 +711,7 @@ class FusedResizeConv2DUsingGemmOp : public OpKernel {
 
     // Compute the shape of the output tensor, and allocate it.
     TensorShape padded_shape;
-    TTypes<int32>::ConstMatrix paddings_matrix = paddings.matrix<int32>();
+    TTypes<int32_t>::ConstMatrix paddings_matrix = paddings.matrix<int32_t>();
     for (int d = 0; d < dims; ++d) {
       const int32_t before =
           paddings_matrix(d, 0);  // Pad before existing elements.
@@ -867,7 +867,7 @@ class FusedResizeConv2DUsingGemmOp : public OpKernel {
   }
 
  private:
-  std::vector<int32> strides_;
+  std::vector<int32_t> strides_;
   Padding padding_;
   bool align_corners_;
   int offset_;

@@ -19,6 +19,7 @@
 #include "net/base/net_errors.h"
 #include "net/socket/socket_test_util.h"
 #include "net/ssl/ssl_info.h"
+#include "net/storage_access_api/status.h"
 #include "net/test/test_with_task_environment.h"
 #include "net/websockets/websocket_event_interface.h"
 #include "net/websockets/websocket_test_util.h"
@@ -63,7 +64,7 @@ class WebSocketStreamCreateTestBase : public WithTaskEnvironment {
                               const std::vector<std::string>& sub_protocols,
                               const url::Origin& origin,
                               const SiteForCookies& site_for_cookies,
-                              bool has_storage_access,
+                              StorageAccessApiStatus storage_access_api_status,
                               const IsolationInfo& isolation_info,
                               const HttpRequestHeaders& additional_headers,
                               std::unique_ptr<base::OneShotTimer> timer);
@@ -84,6 +85,10 @@ class WebSocketStreamCreateTestBase : public WithTaskEnvironment {
   // Runs |run_loop_waiting_for_on_auth_required_| until OnAuthRequired() is
   // called.
   void WaitUntilOnAuthRequired();
+
+  // Runs |run_loop_waiting_on_url_request_connected_| until
+  // OnURLRequestConnected() is called.
+  void WaitUntilOnURLRequestConnected();
 
   // A simple function to make the tests more readable.
   std::vector<std::string> NoSubProtocols();
@@ -111,6 +116,12 @@ class WebSocketStreamCreateTestBase : public WithTaskEnvironment {
   std::optional<AuthCredentials> auth_credentials_;
   // OnAuthRequired returns this value.
   int on_auth_required_rv_ = OK;
+
+  // Used to control the behaviour of OnURLRequestConnected()
+  CompletionOnceCallback on_url_request_connected_callback_;
+  int on_url_request_connected_rv_ = OK;
+
+  base::RunLoop run_loop_waiting_on_url_request_connected_;
 
   base::RunLoop connect_run_loop_;
 

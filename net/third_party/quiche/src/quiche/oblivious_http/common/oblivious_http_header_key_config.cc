@@ -1,12 +1,19 @@
 #include "quiche/oblivious_http/common/oblivious_http_header_key_config.h"
 
-#include <algorithm>
+#include <stdbool.h>
+
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "absl/memory/memory.h"
+#include "absl/container/btree_map.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/escaping.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
@@ -14,19 +21,20 @@
 #include "openssl/hpke.h"
 #include "quiche/common/platform/api/quiche_bug_tracker.h"
 #include "quiche/common/platform/api/quiche_logging.h"
+#include "quiche/common/quiche_data_reader.h"
 #include "quiche/common/quiche_data_writer.h"
-#include "quiche/common/quiche_endian.h"
+#include "quiche/common/quiche_status_utils.h"
 
 namespace quiche {
 namespace {
 
-// Size of KEM ID is 2 bytes. Refer to OHTTP Key Config in the spec,
-// https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-06.html#name-a-single-key-configuration
+// Size of KEM ID is 2 bytes. Refer to OHTTP Key Config in the RFC:
+// https://www.rfc-editor.org/rfc/rfc9458.html#section-3.1-2
 constexpr size_t kSizeOfHpkeKemId = 2;
 
 // Size of Symmetric algorithms is 2 bytes(16 bits) each.
-// Refer to HPKE Symmetric Algorithms configuration in the spec,
-// https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-06.html#name-a-single-key-configuration
+// Refer to HPKE Symmetric Algorithms configuration in the RFC:
+// https://www.rfc-editor.org/rfc/rfc9458.html#section-3.1-2
 constexpr size_t kSizeOfSymmetricAlgorithmHpkeKdfId = 2;
 constexpr size_t kSizeOfSymmetricAlgorithmHpkeAeadId = 2;
 
@@ -73,10 +81,7 @@ absl::StatusOr<ObliviousHttpHeaderKeyConfig>
 ObliviousHttpHeaderKeyConfig::Create(uint8_t key_id, uint16_t kem_id,
                                      uint16_t kdf_id, uint16_t aead_id) {
   ObliviousHttpHeaderKeyConfig instance(key_id, kem_id, kdf_id, aead_id);
-  auto is_config_ok = instance.ValidateKeyConfig();
-  if (!is_config_ok.ok()) {
-    return is_config_ok;
-  }
+  QUICHE_RETURN_IF_ERROR(instance.ValidateKeyConfig());
   return instance;
 }
 
@@ -130,10 +135,7 @@ std::string ObliviousHttpHeaderKeyConfig::SerializeRecipientContextInfo(
   return info;
 }
 
-/**
- * Follows IETF Ohttp spec, section 4.1 (Encapsulation of Requests).
- * https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#section-4.1-10
- */
+// https://www.rfc-editor.org/rfc/rfc9458.html#section-4.3
 absl::Status ObliviousHttpHeaderKeyConfig::ParseOhttpPayloadHeader(
     absl::string_view payload_bytes) const {
   if (payload_bytes.empty()) {
@@ -224,7 +226,7 @@ absl::StatusOr<std::string> SerializeOhttpKeyWithPublicKey(
     uint8_t key_id, absl::string_view public_key,
     const std::vector<ObliviousHttpHeaderKeyConfig>& ohttp_configs) {
   auto ohttp_config = ohttp_configs[0];
-  // Check if `ohttp_config` match spec's encoding guidelines.
+  // Check if `ohttp_config` match the RFC's encoding guidelines.
   static_assert(sizeof(ohttp_config.GetHpkeKemId()) == kSizeOfHpkeKemId &&
                     sizeof(ohttp_config.GetHpkeKdfId()) ==
                         kSizeOfSymmetricAlgorithmHpkeKdfId &&
@@ -298,7 +300,7 @@ std::string GetDebugStringForFailedKeyConfig(
 // Verifies if the `key_config` contains all valid combinations of [kem_id,
 // kdf_id, aead_id] that comprises Single Key configuration encoding as
 // specified in
-// https://www.ietf.org/archive/id/draft-ietf-ohai-ohttp-03.html#name-a-single-key-configuration.
+// https://www.rfc-editor.org/rfc/rfc9458.html#section-3.1-2
 absl::Status StoreKeyConfigIfValid(
     ObliviousHttpKeyConfigs::OhttpKeyConfig key_config,
     absl::btree_map<uint8_t, std::vector<ObliviousHttpHeaderKeyConfig>,
@@ -430,11 +432,7 @@ absl::Status ObliviousHttpKeyConfigs::ReadSingleKeyConfig(
   }
 
   // Public key length depends on the kem_id.
-  auto maybe_key_length = KeyLength(kem_id);
-  if (!maybe_key_length.ok()) {
-    return maybe_key_length.status();
-  }
-  const int key_length = maybe_key_length.value();
+  QUICHE_ASSIGN_OR_RETURN(uint16_t key_length, KeyLength(kem_id));
   std::string key_str(key_length, '\0');
   if (!reader.ReadBytes(key_str.data(), key_length)) {
     return absl::InvalidArgumentError("Invalid key_config!");
@@ -457,16 +455,93 @@ absl::Status ObliviousHttpKeyConfigs::ReadSingleKeyConfig(
       return absl::InvalidArgumentError("Invalid key_config!");
     }
 
-    absl::StatusOr<ObliviousHttpHeaderKeyConfig> maybe_cfg =
-        ObliviousHttpHeaderKeyConfig::Create(key_id, kem_id, kdf_id, aead_id);
-    if (!maybe_cfg.ok()) {
-      // TODO(kmg): Add support to ignore key types in the server response that
-      // aren't supported by the client.
-      return maybe_cfg.status();
-    }
-    configs[key_id].emplace_back(std::move(maybe_cfg.value()));
+    // TODO(kmg): Add support to ignore key types in the server response that
+    // aren't supported by the client.
+    QUICHE_ASSIGN_OR_RETURN(
+        ObliviousHttpHeaderKeyConfig cfg,
+        ObliviousHttpHeaderKeyConfig::Create(key_id, kem_id, kdf_id, aead_id));
+    configs[key_id].emplace_back(std::move(cfg));
   }
   return absl::OkStatus();
+}
+
+// https://www.iana.org/assignments/hpke
+
+std::string ObliviousHttpKemIdToString(uint16_t kem_id) {
+  switch (kem_id) {
+    case EVP_HPKE_DHKEM_X25519_HKDF_SHA256:
+      return "X25519-SHA256";
+    case EVP_HPKE_DHKEM_P256_HKDF_SHA256:
+      return "P256-SHA256";
+    default:
+      return absl::StrCat("UnknownKEM(", kem_id, ")");
+  }
+}
+
+std::string ObliviousHttpKdfIdToString(uint16_t kdf_id) {
+  switch (kdf_id) {
+    case EVP_HPKE_HKDF_SHA256:
+      return "SHA256";
+    default:
+      return absl::StrCat("UnknownKDF(", kdf_id, ")");
+  }
+}
+
+std::string ObliviousHttpAeadIdToString(uint16_t aead_id) {
+  switch (aead_id) {
+    case EVP_HPKE_AES_128_GCM:
+      return "AES-128-GCM";
+    case EVP_HPKE_AES_256_GCM:
+      return "AES-256-GCM";
+    case EVP_HPKE_CHACHA20_POLY1305:
+      return "CHACHA20-POLY1305";
+    default:
+      return absl::StrCat("UnknownAEAD(", aead_id, ")");
+  }
+}
+
+std::string ObliviousHttpHeaderKeyConfig::DebugString() const {
+  return absl::StrCat("[key_id: ", static_cast<uint16_t>(key_id_),
+                      ", kem_id: ", ObliviousHttpKemIdToString(kem_id_),
+                      ", kdf_id: ", ObliviousHttpKdfIdToString(kdf_id_),
+                      ", aead_id: ", ObliviousHttpAeadIdToString(aead_id_),
+                      "]");
+}
+
+std::string ObliviousHttpKeyConfigs::SymmetricAlgorithmsConfig::DebugString()
+    const {
+  return absl::StrCat(ObliviousHttpKdfIdToString(kdf_id), "+",
+                      ObliviousHttpAeadIdToString(aead_id));
+}
+
+std::string ObliviousHttpKeyConfigs::OhttpKeyConfig::DebugString() const {
+  std::string s;
+  bool first = true;
+  for (const SymmetricAlgorithmsConfig& sym : symmetric_algorithms) {
+    absl::StrAppend(&s, (first ? "" : ", "), sym.DebugString());
+    first = false;
+  }
+  return absl::StrCat("[key_id: ", static_cast<uint16_t>(key_id),
+                      ", kem_id: ", ObliviousHttpKemIdToString(kem_id), ", {",
+                      s, "}, public_key: ", absl::BytesToHexString(public_key),
+                      "]");
+}
+
+std::string ObliviousHttpKeyConfigs::DebugString() const {
+  std::string s;
+  for (const auto& [key_id, ohttp_configs] : configs_) {
+    absl::StrAppend(&s, "[key_id: ", static_cast<uint16_t>(key_id), ", {");
+    for (const ObliviousHttpHeaderKeyConfig& ohttp_config : ohttp_configs) {
+      absl::StrAppend(&s, "\n  ", ohttp_config.DebugString());
+    }
+    std::string public_key;
+    auto it = public_keys_.find(key_id);
+    if (it != public_keys_.end()) {
+      public_key = absl::BytesToHexString(it->second);
+    }
+    absl::StrAppend(&s, "\n}, public_key: ", public_key, "]");
+  }
+  return s;
 }
 
 }  // namespace quiche

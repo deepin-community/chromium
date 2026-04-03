@@ -5,13 +5,12 @@
 #ifndef COMPONENTS_SEGMENTATION_PLATFORM_EMBEDDER_INPUT_DELEGATE_TAB_RANK_DISPATCHER_H_
 #define COMPONENTS_SEGMENTATION_PLATFORM_EMBEDDER_INPUT_DELEGATE_TAB_RANK_DISPATCHER_H_
 
-#include <map>
 #include <queue>
+
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
 #include "base/supports_user_data.h"
 #include "base/time/time.h"
 #include "components/segmentation_platform/embedder/tab_fetcher.h"

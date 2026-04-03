@@ -10,10 +10,9 @@
             "builder_id": {
               "bucket": "try",
               "builder": "mac_optional_gpu_tests_rel",
-              "project": "chromium-m123"
+              "project": "chromium-m146"
             },
             "builder_spec": {
-              "build_gs_bucket": "chromium-gpu-fyi-archive",
               "builder_group": "tryserver.chromium.mac",
               "execution_mode": "COMPILE_AND_TEST",
               "legacy_chromium_config": {
@@ -27,9 +26,6 @@
                 "target_platform": "mac"
               },
               "legacy_gclient_config": {
-                "apply_configs": [
-                  "angle_internal"
-                ],
                 "config": "chromium"
               }
             }
@@ -40,19 +36,26 @@
         {
           "bucket": "try",
           "builder": "mac_optional_gpu_tests_rel",
-          "project": "chromium-m123"
+          "project": "chromium-m146"
         }
-      ]
+      ],
+      "targets_spec_directory": "infra/config/generated/builders/try/mac_optional_gpu_tests_rel/targets"
     }
   },
   "$build/flakiness": {
     "check_for_flakiness": true,
     "check_for_flakiness_with_resultdb": true
   },
-  "$build/reclient": {
-    "instance": "rbe-chromium-untrusted",
-    "metrics_project": "chromium-reclient-metrics",
-    "scandeps_server": true
+  "$build/siso": {
+    "configs": [
+      "builder"
+    ],
+    "enable_cloud_monitoring": true,
+    "enable_cloud_trace": true,
+    "experiments": [],
+    "keep_going": 3,
+    "profile_mode": "cloud",
+    "project": "rbe-chromium-untrusted"
   },
   "$recipe_engine/resultdb/test_presentation": {
     "column_keys": [],

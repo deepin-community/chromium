@@ -1,36 +1,13 @@
-/*
- * Copyright (C) 2013 Google Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// Copyright 2013 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+/* eslint-disable @devtools/no-imperative-dom-api */
 
 import * as Common from '../../core/common/common.js';
 import * as Host from '../../core/host/host.js';
 import * as i18n from '../../core/i18n/i18n.js';
+import * as SettingsUI from '../../ui/legacy/components/settings_ui/settings_ui.js';
 import * as UI from '../../ui/legacy/legacy.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 
@@ -52,7 +29,7 @@ const UIStrings = {
    * (regions) of the page that were shifted (where a 'layout shift' occurred). A layout shift is
    * where elements on the webpage move around and cause other nearby elements to move as well.
    */
-  layoutShiftRegions: 'Layout Shift Regions',
+  layoutShiftRegions: 'Layout shift regions',
   /**
    * @description Explanation text for the 'Layout Shift Regions' setting in the Rendering tool.
    */
@@ -89,22 +66,13 @@ const UIStrings = {
       'Highlights elements (teal) that can slow down scrolling, including touch & wheel event handlers and other main-thread scrolling situations.',
   /**
    * @description The name of a checkbox setting in the Rendering tool. This setting highlights the
-   * rendering frames for ads that are found on the page.
+   * rendering elements for ads that are found on the page.
    */
-  highlightAdFrames: 'Highlight ad frames',
+  highlightAds: 'Highlight ads',
   /**
-   * @description Explanation text for the 'Highlight ad frames' setting in the Rendering tool.
+   * @description Explanation text for the 'Highlight ads' setting in the Rendering tool.
    */
-  highlightsFramesRedDetectedToBe: 'Highlights frames (red) detected to be ads.',
-  /**
-   * @description The name of a checkbox setting in the Rendering tool. This setting shows an overlay
-   * with Core Web Vitals. Core Web Vitals: https://support.google.com/webmasters/answer/9205520?hl=en
-   */
-  coreWebVitals: 'Core Web Vitals',
-  /**
-   * @description Explanation text for the 'Core Web Vitals' setting in the Rendering tool.
-   */
-  showsAnOverlayWithCoreWebVitals: 'Shows an overlay with Core Web Vitals.',
+  highlightsElementsRedDetectedToBe: 'Highlights elements (red) detected to be ads.',
   /**
    * @description The name of a checkbox setting in the Rendering tool. This setting prevents the
    * webpage from loading 'local' fonts. Local fonts are fonts that are installed on the user's
@@ -168,6 +136,10 @@ const UIStrings = {
    */
   forcesVisionDeficiencyEmulation: 'Forces vision deficiency emulation',
   /**
+   * @description Explanation text for the 'Emulate OS text scale' setting in the Rendering tool.
+   */
+  forcesOsTextScaleEmulation: 'Forces OS text scale emulation',
+  /**
    * @description The name of a checkbox setting in the Rendering tool. This setting disables the
    * page from loading images with the AVIF format.
    */
@@ -186,7 +158,7 @@ const UIStrings = {
    * @description Explanation text for the 'Forces CSS forced-colors' setting in the Rendering tool.
    */
   forcesCssForcedColors: 'Forces CSS forced-colors media feature',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('entrypoints/inspector_main/RenderingOptions.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
@@ -214,7 +186,8 @@ const supportsPrefersContrast = (): boolean => {
 
 export class RenderingOptionsView extends UI.Widget.VBox {
   constructor() {
-    super(true);
+    super({useShadowDom: true});
+    this.registerRequiredCSS(renderingOptionsStyles);
 
     this.element.setAttribute('jslog', `${VisualLogging.panel('rendering').track({resize: true})}`);
 
@@ -234,11 +207,8 @@ export class RenderingOptionsView extends UI.Widget.VBox {
         i18nString(UIStrings.scrollingPerformanceIssues), i18nString(UIStrings.highlightsElementsTealThatCan),
         Common.Settings.Settings.instance().moduleSetting('show-scroll-bottleneck-rects'));
     this.#appendCheckbox(
-        i18nString(UIStrings.highlightAdFrames), i18nString(UIStrings.highlightsFramesRedDetectedToBe),
+        i18nString(UIStrings.highlightAds), i18nString(UIStrings.highlightsElementsRedDetectedToBe),
         Common.Settings.Settings.instance().moduleSetting('show-ad-highlights'));
-    this.#appendCheckbox(
-        i18nString(UIStrings.coreWebVitals), i18nString(UIStrings.showsAnOverlayWithCoreWebVitals),
-        Common.Settings.Settings.instance().moduleSetting('show-web-vitals'));
     this.#appendCheckbox(
         i18nString(UIStrings.disableLocalFonts), i18nString(UIStrings.disablesLocalSourcesInFontface),
         Common.Settings.Settings.instance().moduleSetting('local-fonts-disabled'));
@@ -290,6 +260,12 @@ export class RenderingOptionsView extends UI.Widget.VBox {
 
     this.contentElement.createChild('div').classList.add('panel-section-separator');
 
+    this.#appendSelect(
+        i18nString(UIStrings.forcesOsTextScaleEmulation),
+        Common.Settings.Settings.instance().moduleSetting('emulated-os-text-scale'));
+
+    this.contentElement.createChild('div').classList.add('panel-section-separator');
+
     this.#appendCheckbox(
         i18nString(UIStrings.disableAvifImageFormat), i18nString(UIStrings.requiresAPageReloadToApplyAnd),
         Common.Settings.Settings.instance().moduleSetting('avif-format-disabled'));
@@ -302,23 +278,19 @@ export class RenderingOptionsView extends UI.Widget.VBox {
   }
 
   #appendCheckbox(
-      label: string, subtitle: string, setting: Common.Settings.Setting<boolean>,
-      metric?: UI.SettingsUI.UserMetricOptions): UI.UIUtils.CheckboxLabel {
+      label: Common.UIString.LocalizedString, subtitle: Common.UIString.LocalizedString,
+      setting: Common.Settings.Setting<boolean>, metric?: UI.UIUtils.UserMetricOptions): UI.UIUtils.CheckboxLabel {
     const checkbox = UI.UIUtils.CheckboxLabel.create(label, false, subtitle, setting.name);
-    UI.SettingsUI.bindCheckbox(checkbox.checkboxElement, setting, metric);
+    UI.UIUtils.bindCheckbox(checkbox, setting, metric);
     this.contentElement.appendChild(checkbox);
     return checkbox;
   }
 
   #appendSelect(label: string, setting: Common.Settings.Setting<unknown>): void {
-    const control = UI.SettingsUI.createControlForSetting(setting, label);
+    const control = SettingsUI.SettingsUI.createControlForSetting(setting, label);
     if (control) {
       this.contentElement.appendChild(control);
     }
-  }
-  override wasShown(): void {
-    super.wasShown();
-    this.registerCSSFiles([renderingOptionsStyles]);
   }
 }
 

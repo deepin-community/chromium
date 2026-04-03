@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/audio/fuchsia/audio_input_stream_fuchsia.h"
 
 #include <fuchsia/media/cpp/fidl_test_base.h>
@@ -11,6 +16,7 @@
 #include "base/fuchsia/test_component_context_for_process.h"
 #include "base/test/task_environment.h"
 #include "media/audio/audio_device_description.h"
+#include "media/base/audio_bus.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/channel_layout.h"
 #include "media/fuchsia/audio/fake_audio_capturer.h"

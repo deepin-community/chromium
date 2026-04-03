@@ -83,7 +83,6 @@ class GenericSensorBrowserTest : public ContentBrowserTest {
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
     mock_cert_verifier_.SetUpCommandLine(command_line);
   }
 
@@ -122,7 +121,7 @@ IN_PROC_BROWSER_TEST_F(GenericSensorBrowserTest, AmbientLightSensorTest) {
   GURL test_url =
       GetTestUrl("generic_sensor", "ambient_light_sensor_test.html");
   NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 2);
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(GenericSensorBrowserTest,
@@ -145,7 +144,7 @@ IN_PROC_BROWSER_TEST_F(GenericSensorBrowserTest,
   content::RenderFrameHost* iframe =
       ChildFrameAt(shell()->web_contents()->GetPrimaryMainFrame(), 0);
   ASSERT_TRUE(iframe);
-  EXPECT_EQ("pass", iframe->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", iframe->GetLastCommittedURL().GetRef());
 }
 
 IN_PROC_BROWSER_TEST_F(GenericSensorBrowserTest, SensorProviderUnavailable) {
@@ -155,7 +154,7 @@ IN_PROC_BROWSER_TEST_F(GenericSensorBrowserTest, SensorProviderUnavailable) {
   GURL test_url = GetTestUrl("generic_sensor",
                              "ambient_light_sensor_unavailable_test.html");
   NavigateToURLBlockUntilNavigationsComplete(shell(), test_url, 2);
-  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().ref());
+  EXPECT_EQ("pass", shell()->web_contents()->GetLastCommittedURL().GetRef());
 }
 
 }  //  namespace

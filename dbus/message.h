@@ -288,7 +288,13 @@ class CHROME_DBUS_EXPORT MessageWriter {
   void AppendInt64(int64_t value);
   void AppendUint64(uint64_t value);
   void AppendDouble(double value);
-  void AppendString(std::string_view value);
+  // This function intentionally takes a `std::string` to ensure the data that
+  // should be appended is correctly null-terminated; other data types, e.g.
+  // `std::string_view`, do not necessarily have the same end as the
+  // `std::string` that owns the underlying data. This can result in more data
+  // than intended being appended since the end of the `std::string` is used
+  // instead of the end of the `std::string_view`.
+  void AppendString(const std::string& value);
   void AppendObjectPath(const ObjectPath& value);
 
   // Appends a file descriptor to the message.
@@ -431,19 +437,18 @@ class CHROME_DBUS_EXPORT MessageReader {
   // Arrays of bytes are often used for exchanging binary blobs hence it's
   // worth having a specialized function.
   //
-  // Ownership of the memory pointed to by |bytes| remains with the
-  // MessageReader; |bytes| must be copied if the contents will be referenced
-  // after the MessageReader is destroyed.
-  bool PopArrayOfBytes(const uint8_t** bytes, size_t* length);
+  // The returned span points to memory owned by the message reader. The
+  // caller must not access the span after the message reader is destroyed.
+  bool PopArrayOfBytes(base::span<const uint8_t>* bytes);
 
   // Gets the array of int32_ts at the current iterator position.
-  bool PopArrayOfInt32s(const int32_t** signed_ints, size_t* length);
+  bool PopArrayOfInt32s(base::span<const int32_t>* signed_ints);
 
   // Gets the array of uint32_ts at the current iterator position.
-  bool PopArrayOfUint32s(const uint32_t** unsigned_ints, size_t* length);
+  bool PopArrayOfUint32s(base::span<const uint32_t>* unsigned_ints);
 
   // Gets the array of doubles at the current iterator position.
-  bool PopArrayOfDoubles(const double** doubles, size_t* length);
+  bool PopArrayOfDoubles(base::span<const double>* doubles);
 
   // Gets the array of strings at the current iterator position. |strings| is
   // cleared before being modified. Returns true and advances the iterator on

@@ -8,6 +8,7 @@
 
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/test/test_timeouts.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "components/metrics/log_decoder.h"
@@ -16,7 +17,6 @@
 #include "components/metrics/structured/structured_metrics_service.h"
 #include "components/metrics/structured/test/test_event_storage.h"
 #include "components/metrics/structured/test/test_key_data_provider.h"
-#include "components/metrics/structured/test/test_structured_metrics_provider.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
 
 namespace {
@@ -66,27 +66,23 @@ void StructuredMetricsMixin::SetUpOnMainThread() {
   base::FilePath profile_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("profile"));
 
+  auto key_data_provider =
+      std::make_unique<TestKeyDataProvider>(device_keys_path);
+
+  if (setup_profile_) {
+    // Setup test profile directory immediately so that recording can happen.
+    key_data_provider->OnProfileAdded(profile_path);
+  }
+
   // Create test key data provider and initialize key data provider.
   // TODO(andrewbregger) make sure that all tests that rely on the persistent
   // storage are moved.
   auto recorder = std::make_unique<StructuredMetricsRecorder>(
-      std::make_unique<TestKeyDataProvider>(device_keys_path),
-      std::make_unique<TestEventStorage>());
+      std::move(key_data_provider), std::make_unique<TestEventStorage>());
 
-  // TODO(b/282057109): Cleanup provider code once feature is removed.
-  if (base::FeatureList::IsEnabled(kEnabledStructuredMetricsService)) {
-    g_browser_process->GetMetricsServicesManager()
-        ->GetStructuredMetricsService()
-        ->SetRecorderForTest(std::move(recorder));
-  } else {
-    structured_metrics_provider_ =
-        std::make_unique<TestStructuredMetricsProvider>(std::move(recorder));
-  }
-
-  if (setup_profile_) {
-    // Setup test profile directory immediately so that recording can happen.
-    GetRecorder()->OnProfileAdded(profile_path);
-  }
+  g_browser_process->GetMetricsServicesManager()
+      ->GetStructuredMetricsService()
+      ->SetRecorderForTest(std::move(recorder));
 }
 
 StructuredMetricsRecorder* StructuredMetricsMixin::GetRecorder() {
@@ -114,13 +110,20 @@ std::vector<StructuredEventProto> StructuredMetricsMixin::FindEvents(
     uint64_t event_name_hash) {
   std::vector<StructuredEventProto> events_vector;
 
-  const EventsProto& events = *GetEventStorage()->events();
-  for (const auto& event : events.non_uma_events()) {
+  // TODO(andrewbregger): Create an API to allow events to be iterated over
+  // without copying.
+  const EventStorage<StructuredEventProto>* storage = GetEventStorage();
+
+  EventsProto events;
+  storage->CopyEvents(&events);
+
+  for (const auto& event : events.events()) {
     if (event.project_name_hash() == project_name_hash &&
         event.event_name_hash() == event_name_hash) {
       events_vector.push_back(event);
     }
   }
+
   return events_vector;
 }
 
@@ -146,12 +149,12 @@ void StructuredMetricsMixin::WaitUntilEventRecorded(uint64_t project_name_hash,
       });
   GetRecorder()->SetEventRecordCallbackForTest(std::move(callback));
 
-  // The timeout for this is set to 3 seconds because this should be ample time
-  // for the event to show up after Event::Record() has been called. There is
-  // normally a delay between flushes but this delay has been set to 0 for
-  // testing.
-  base::test::ScopedRunLoopTimeout shortened_timeout{FROM_HERE,
-                                                     base::Seconds(3)};
+  // The timeout for this is set to about 3 seconds (scaled accordingly for
+  // debug and sanitizer builds) because this should be ample time for the event
+  // to show up after Event::Record() has been called. There is normally a delay
+  // between flushes but this delay has been set to 0 for testing.
+  base::test::ScopedRunLoopTimeout shortened_timeout{
+      FROM_HERE, TestTimeouts::action_timeout() / 3};
   record_run_loop_->Run();
 }
 
@@ -167,8 +170,7 @@ void StructuredMetricsMixin::UpdateRecordingState(bool state) {
   recording_state_ = state;
 
   // Triggers rechecking of metrics state.
-  g_browser_process->GetMetricsServicesManager()->UpdateUploadPermissions(
-      /*may_upload=*/true);
+  g_browser_process->GetMetricsServicesManager()->UpdateUploadPermissions();
 }
 
 std::unique_ptr<ChromeUserMetricsExtension>
@@ -200,10 +202,8 @@ StructuredMetricsMixin::GetUmaProto() {
   return uma_proto;
 }
 
-TestEventStorage* StructuredMetricsMixin::GetEventStorage() {
-  // The mix-in initializes the recorder with a `TestEventStorage`, making this
-  // safe to do.
-  return static_cast<TestEventStorage*>(GetRecorder()->event_storage());
+EventStorage<StructuredEventProto>* StructuredMetricsMixin::GetEventStorage() {
+  return GetRecorder()->event_storage();
 }
 
 }  // namespace metrics::structured

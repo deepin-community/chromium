@@ -1,6 +1,16 @@
 // Copyright 2015 The Chromium Authors
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "verify_certificate_chain.h"
 
@@ -8,23 +18,29 @@
 #include <cassert>
 
 #include <openssl/base.h>
+#include <openssl/bytestring.h>
+#include <openssl/mem.h>
+#include <openssl/sha2.h>
+#include <openssl/span.h>
+
 #include "cert_error_params.h"
 #include "cert_errors.h"
 #include "common_cert_errors.h"
 #include "extended_key_usage.h"
 #include "input.h"
+#include "merkle_tree.h"
 #include "name_constraints.h"
 #include "parse_certificate.h"
+#include "parse_values.h"
 #include "signature_algorithm.h"
 #include "trust_store.h"
 #include "verify_signed_data.h"
 
-namespace bssl {
+BSSL_NAMESPACE_BEGIN
 
 namespace {
 
-bool IsHandledCriticalExtension(const ParsedExtension &extension,
-                                const ParsedCertificate &cert) {
+bool IsHandledCriticalExtension(const ParsedExtension &extension) {
   if (extension.oid == der::Input(kBasicConstraintsOid)) {
     return true;
   }
@@ -70,13 +86,6 @@ bool IsHandledCriticalExtension(const ParsedExtension &extension,
   if (extension.oid == der::Input(kInhibitAnyPolicyOid)) {
     return true;
   }
-  if (extension.oid == der::Input(kMSApplicationPoliciesOid)) {
-    // Per https://crbug.com/1439638 and
-    // https://learn.microsoft.com/en-us/windows/win32/seccertenroll/supported-extensions#msapplicationpolicies
-    // The MSApplicationPolicies extension may be ignored if the
-    // extendedKeyUsage extension is also present.
-    return cert.has_extended_key_usage();
-  }
 
   return false;
 }
@@ -85,16 +94,33 @@ bool IsHandledCriticalExtension(const ParsedExtension &extension,
 // extensions.
 void VerifyNoUnconsumedCriticalExtensions(const ParsedCertificate &cert,
                                           CertErrors *errors,
-                                          bool allow_precertificate) {
+                                          bool allow_precertificate,
+                                          KeyPurpose key_purpose) {
   for (const auto &it : cert.extensions()) {
     const ParsedExtension &extension = it.second;
-    if (allow_precertificate && extension.oid == der::Input(kCtPoisonOid)) {
-      continue;
-    }
-    if (extension.critical && !IsHandledCriticalExtension(extension, cert)) {
-      errors->AddError(cert_errors::kUnconsumedCriticalExtension,
-                       CreateCertErrorParams2Der("oid", extension.oid, "value",
-                                                 extension.value));
+    if (extension.critical) {
+      if (key_purpose == KeyPurpose::RCS_MLS_CLIENT_AUTH) {
+        if (extension.oid == der::Input(kRcsMlsParticipantInformation) ||
+            extension.oid == der::Input(kRcsMlsAcsParticipantInformation)) {
+          continue;
+        }
+      }
+      if (allow_precertificate && extension.oid == der::Input(kCtPoisonOid)) {
+        continue;
+      }
+      if (extension.oid == der::Input(kMSApplicationPoliciesOid) &&
+          cert.has_extended_key_usage()) {
+        // Per https://crbug.com/1439638 and
+        // https://learn.microsoft.com/en-us/windows/win32/seccertenroll/supported-extensions#msapplicationpolicies
+        // The MSApplicationPolicies extension may be ignored if the
+        // extendedKeyUsage extension is also present.
+        continue;
+      }
+      if (!IsHandledCriticalExtension(extension)) {
+        errors->AddError(cert_errors::kUnconsumedCriticalExtension,
+                         CreateCertErrorParams2Der("oid", extension.oid,
+                                                   "value", extension.value));
+      }
     }
   }
 }
@@ -206,8 +232,13 @@ void VerifyExtendedKeyUsage(const ParsedCertificate &cert,
   bool has_code_signing_eku = false;
   bool has_time_stamping_eku = false;
   bool has_ocsp_signing_eku = false;
+  bool has_rcs_mls_client_eku = false;
+  bool has_document_signing_eku = false;
+  bool has_email_protection_eku = false;
+  size_t eku_oid_count = 0;
   if (cert.has_extended_key_usage()) {
     for (const auto &key_purpose_oid : cert.extended_key_usage()) {
+      eku_oid_count++;
       if (key_purpose_oid == der::Input(kAnyEKU)) {
         has_any_eku = true;
       }
@@ -226,6 +257,96 @@ void VerifyExtendedKeyUsage(const ParsedCertificate &cert,
       if (key_purpose_oid == der::Input(kOCSPSigning)) {
         has_ocsp_signing_eku = true;
       }
+      if (key_purpose_oid == der::Input(kRcsMlsClient)) {
+        has_rcs_mls_client_eku = true;
+      }
+      if (key_purpose_oid == der::Input(kEmailProtection)) {
+        has_email_protection_eku = true;
+      }
+      if (key_purpose_oid == der::Input(kDocumentSigning)) {
+        has_document_signing_eku = true;
+      }
+    }
+  }
+
+  if (required_key_purpose == KeyPurpose::RCS_MLS_CLIENT_AUTH) {
+    // Enforce the key usage restriction for a leaf from section A.3.8.3 here
+    // as well.
+    if (is_target_cert &&
+        (!cert.has_key_usage() ||
+         // This works to enforce that digital signature is the only bit because
+         // digital signature is bit 0.
+         !cert.key_usage().AssertsBit(KEY_USAGE_BIT_DIGITAL_SIGNATURE) ||
+         cert.key_usage().bytes().size() != 1 ||
+         cert.key_usage().unused_bits() != 7)) {
+      errors->AddError(cert_errors::kKeyUsageIncorrectForRcsMlsClient);
+    }
+    // Rules for MLS client auth. For the leaf and all intermediates, EKU must
+    // be present and have exactly one EKU which is rcsMlsClient.
+    if (!cert.has_extended_key_usage()) {
+      errors->AddError(cert_errors::kEkuNotPresent);
+    } else if (eku_oid_count != 1 || !has_rcs_mls_client_eku) {
+      errors->AddError(cert_errors::kEkuIncorrectForRcsMlsClient);
+    }
+    return;
+  }
+
+  if (required_key_purpose == KeyPurpose::C2PA_TIMESTAMPING) {
+    // https://c2pa.org/specifications/specifications/2.1/specs/C2PA_Specification.html#_certificate_profiles
+    // For time stamp signing, C2PA requires that the leaf:
+    // 1) must have EKU
+    // 2) must not have EKU ANY, OCSP signing, document signing, or email protection
+    // 3) must have time stamping
+    // 4) should tolerate other EKU's being present.
+    if (is_target_cert) {
+      if (!cert.has_extended_key_usage()) {
+        errors->AddError(cert_errors::kEkuNotPresent);
+      }
+      if (has_any_eku || has_ocsp_signing_eku || has_document_signing_eku ||
+          has_email_protection_eku || !has_time_stamping_eku) {
+        errors->AddError(cert_errors::kEkuIncorrectForC2PATimeStamping);
+      }
+    }
+    return;
+  }
+
+  if (required_key_purpose == KeyPurpose::C2PA_MANIFEST) {
+    // https://c2pa.org/specifications/specifications/2.1/specs/C2PA_Specification.html#_certificate_profiles
+    // For manifest signing, C2PA requires that the leaf:
+    // 1) must have EKU
+    // 2) must not have EKU ANY, time stamping, or OCSP signing
+    // 3) should have document signing and/or email protection
+    // 4) should tolerate other EKU's being present.
+    if (is_target_cert) {
+      if (!cert.has_extended_key_usage()) {
+        errors->AddError(cert_errors::kEkuNotPresent);
+      }
+      if (!cert.has_key_usage() ||
+          !cert.key_usage().AssertsBit(KEY_USAGE_BIT_DIGITAL_SIGNATURE) ||
+          has_any_eku || has_ocsp_signing_eku || has_time_stamping_eku ||
+          (!has_email_protection_eku && !has_document_signing_eku)) {
+        errors->AddError(cert_errors::kEkuIncorrectForC2PAManifest);
+      }
+    }
+    return;
+  }
+
+  // Rules TLS client and server authentication variants.
+
+  // Apply strict only to leaf certificates in these cases.
+  if (required_key_purpose == KeyPurpose::CLIENT_AUTH_STRICT_LEAF) {
+    if (!is_target_cert) {
+      required_key_purpose = KeyPurpose::CLIENT_AUTH;
+    } else {
+      required_key_purpose = KeyPurpose::CLIENT_AUTH_STRICT;
+    }
+  }
+
+  if (required_key_purpose == KeyPurpose::SERVER_AUTH_STRICT_LEAF) {
+    if (!is_target_cert) {
+      required_key_purpose = KeyPurpose::SERVER_AUTH;
+    } else {
+      required_key_purpose = KeyPurpose::SERVER_AUTH_STRICT;
     }
   }
 
@@ -300,6 +421,11 @@ void VerifyExtendedKeyUsage(const ParsedCertificate &cert,
 
   switch (required_key_purpose) {
     case KeyPurpose::ANY_EKU:
+    case KeyPurpose::CLIENT_AUTH_STRICT_LEAF:
+    case KeyPurpose::SERVER_AUTH_STRICT_LEAF:
+    case KeyPurpose::RCS_MLS_CLIENT_AUTH:
+    case KeyPurpose::C2PA_TIMESTAMPING:
+    case KeyPurpose::C2PA_MANIFEST:
       assert(0);  // NOTREACHED
       return;
     case KeyPurpose::SERVER_AUTH:
@@ -620,7 +746,7 @@ class PathVerifier {
  public:
   // Same parameters and meaning as VerifyCertificateChain().
   void Run(const ParsedCertificateList &certs,
-           const CertificateTrust &last_cert_trust,
+           const TrustAnchor &last_cert_trust,
            VerifyCertificateChainDelegate *delegate,
            const der::GeneralizedTime &time, KeyPurpose required_key_purpose,
            InitialExplicitPolicy initial_explicit_policy,
@@ -657,7 +783,7 @@ class PathVerifier {
   // This function corresponds to RFC 5280 section 6.1.4's "Preparation for
   // Certificate i+1" procedure. |cert| is expected to be an intermediate.
   void PrepareForNextCertificate(const ParsedCertificate &cert,
-                                 CertErrors *errors);
+                                 KeyPurpose key_purpose, CertErrors *errors);
 
   // This function corresponds with RFC 5280 section 6.1.5's "Wrap-Up
   // Procedure". It does processing for the final certificate (the target cert).
@@ -665,7 +791,7 @@ class PathVerifier {
               const std::set<der::Input> &user_initial_policy_set,
               bool allow_precertificate, CertErrors *errors);
 
-  // Enforces trust anchor constraints compatibile with RFC 5937.
+  // Enforces trust anchor constraints compatible with RFC 5937.
   //
   // Note that the anchor constraints are encoded via the attached certificate
   // itself.
@@ -676,7 +802,7 @@ class PathVerifier {
   // Initializes the path validation algorithm given anchor constraints. This
   // follows the description in RFC 5937
   void ProcessRootCertificate(const ParsedCertificate &cert,
-                              const CertificateTrust &trust,
+                              const TrustAnchor &trust_anchor,
                               const der::GeneralizedTime &time,
                               KeyPurpose required_key_purpose,
                               CertErrors *errors,
@@ -756,7 +882,7 @@ class PathVerifier {
   //    * working_public_key_parameters
   //
   // They are combined for simplicity since the signature verification takes an
-  // EVP_PKEY, and the parameter inheritence is not applicable for the supported
+  // EVP_PKEY, and the parameter inheritance is not applicable for the supported
   // key types. |working_public_key_| may be null if parsing failed.
   //
   // An approximate explanation of |working_public_key_| is this description
@@ -772,6 +898,13 @@ class PathVerifier {
   //    working_issuer_name:  the issuer distinguished name expected
   //    in the next certificate in the chain.
   der::Input working_normalized_issuer_name_;
+
+  // |working_mtc_anchor_| is the trusted MTC Anchor that the chain-to-verify
+  // claims issued the next certificate in the chain, and should be used to
+  // verify that certificate. It is analogous to |working_public_key_|, except
+  // that MTCs don't have an EVP_PKEY that can be used to verify their
+  // "signature" and instead have an MTCAnchor used for verification.
+  const MTCAnchor *working_mtc_anchor_ = nullptr;
 
   // |max_path_length_| corresponds with the same named variable in RFC 5280
   // section 6.1.2.
@@ -990,6 +1123,145 @@ void PathVerifier::ApplyPolicyConstraints(const ParsedCertificate &cert) {
   }
 }
 
+// This function implements draft-davidben-tls-merkle-tree-certs-08 section 7.2:
+// Verifying Certificate Signatures.
+static bool VerifyMTC(const ParsedCertificate &cert,
+                      const MTCAnchor *mtc_anchor) {
+  // Step 1: Check that the TBSCertificate's signature field is id-alg-mtcProof
+  // (kMtcProofDraftDavidben08) with omitted parameters.
+  if (cert.signature_algorithm() !=
+      SignatureAlgorithm::kMtcProofDraftDavidben08) {
+    // When we parse the signature algorithm, we check that the parameters are
+    // omitted.
+    return false;
+  }
+
+  // Step 2: Decode the signatureValue as an MTCProof.
+  CBS mtc_proof(cert.signature_value().bytes());
+  uint64_t start, end;
+  CBS inclusion_proof, signatures;
+  if (!CBS_get_u64(&mtc_proof, &start) || !CBS_get_u64(&mtc_proof, &end) ||
+      !CBS_get_u16_length_prefixed(&mtc_proof, &inclusion_proof) ||
+      !CBS_get_u16_length_prefixed(&mtc_proof, &signatures) ||
+      CBS_len(&mtc_proof) != 0) {
+    return false;
+  }
+
+  // Step 3: Let index be the certificate's serial number.
+  uint64_t index;
+  if (!der::ParseUint64(cert.tbs().serial_number, &index)) {
+    return false;
+  }
+  // Step 3's revocation check is not performed in this function. The caller is
+  // responsible for performing revocation checks.
+
+  // Steps 5 and 4 are done in reverse order. Step 4 builds a value that gets
+  // embedded in step 5's MerkleTreeCertEntry |entry|, and then step 5 proceeds
+  // to prepend a value to |entry| and run all of that through a hash function.
+  // The input to the hash function is built up in a single buffer, which means
+  // steps 5 and 4 are effectively done in reverse order.
+  //
+  // Step 5:
+  //
+  //   Construct a MerkleTreeCertEntry of type tbs_cert_entry with contents the
+  //   TBSCertificateLogEntry. Let entry_hash be the hash of the entry,
+  //   MTH({entry}) = HASH(0x00 || entry), as defined in Section 2.1.1 of
+  //   [RFC9162].
+  //
+  // A MerkleTreeCertEntry is defined as follows (section 5.3):
+  //
+  //   struct {
+  //       MerkleTreeCertEntryType type;
+  //       select (type) {
+  //          case null_entry: Empty;
+  //          case tbs_cert_entry: opaque tbs_cert_entry_data[N];
+  //          /* May be extended with future types. */
+  //       }
+  //   } MerkleTreeCertEntry;
+  //
+  // When type = tbs_cert_entry (0x0001), the MerkleTreeCertEntry entry - the
+  // input to HASH(0x00 || entry) - consists of the 16-bit value 0x0001 followed
+  // by the TBSCertificateLogEntry (constructed according to the instructions in
+  // step 4). The variable `entry` below corresponds to the input to HASH, i.e.
+  // it contains 0x00 (the MTH domain separator), 0x0001
+  // (MerkleTreeCertEntryType of tbs_cert_entry), and then the
+  // TBSCertificateLogEntry.
+  ScopedCBB entry;
+  CBB tbs_cert_log_entry;
+  if (!CBB_init(entry.get(), 0) ||
+      !CBB_add_u8(entry.get(), 0 /* MTH domain separator */) ||
+      !CBB_add_u16(entry.get(), 1 /* tbs_cert_entry */) ||
+      !CBB_add_asn1(entry.get(), &tbs_cert_log_entry, CBS_ASN1_SEQUENCE)) {
+    return false;
+  }
+  // Add version (if not V1):
+  CBB version;
+  if (cert.tbs().version != CertificateVersion::V1 &&
+      (!CBB_add_asn1(&tbs_cert_log_entry, &version,
+                     CBS_ASN1_CONTEXT_SPECIFIC | CBS_ASN1_CONSTRUCTED | 0) ||
+       !CBB_add_asn1_uint64(&version,
+                            static_cast<uint64_t>(cert.tbs().version)))) {
+    return false;
+  }
+  // Add issuer, validity, subject:
+  if (!CBB_add_bytes(&tbs_cert_log_entry, cert.tbs().issuer_tlv.data(),
+                     cert.tbs().issuer_tlv.size()) ||
+      !CBB_add_bytes(&tbs_cert_log_entry, cert.tbs().validity_tlv.data(),
+                     cert.tbs().validity_tlv.size()) ||
+      !CBB_add_bytes(&tbs_cert_log_entry, cert.tbs().subject_tlv.data(),
+                     cert.tbs().subject_tlv.size())) {
+    return false;
+  }
+  // Hash SPKI and add to entry.
+  CBB spki_hash;
+  uint8_t *hash_buf;
+  if (!CBB_add_asn1(&tbs_cert_log_entry, &spki_hash, CBS_ASN1_OCTETSTRING) ||
+      !CBB_add_space(&spki_hash, &hash_buf, SHA256_DIGEST_LENGTH)) {
+    return false;
+  }
+  SHA256(cert.tbs().spki_tlv.data(), cert.tbs().spki_tlv.size(), hash_buf);
+  // Add the stuff from the cert after the SPKI (issuerUniqueID,
+  // subjectUniqueID, extensions):
+  if (!CBB_add_bytes(&tbs_cert_log_entry, cert.tbs().bytes_after_spki.data(),
+                     cert.tbs().bytes_after_spki.size())) {
+    return false;
+  }
+
+  // Finally done assembling `entry` - compute its hash:
+  if (!CBB_flush(entry.get())) {
+    return false;
+  }
+  TreeHash entry_hash;
+  SHA256(CBB_data(entry.get()), CBB_len(entry.get()), entry_hash.data());
+
+  // Step 6: Let expected_subtree_hash be the result of evaluating the
+  // MTCProof's inclusion_proof.
+  Subtree range{start, end};
+  std::optional<TreeHash> expected_subtree_hash =
+      EvaluateMerkleSubtreeInclusionProof(inclusion_proof, index, entry_hash,
+                                          range);
+  if (!expected_subtree_hash) {
+    return false;
+  }
+
+  // Step 7: If [start, end) matches a trusted subtree (Section 7.4), check that
+  // expected_subtree_hash is equal to the trusted subtree's hash. Return
+  // success if it matches and failure if it does not.
+  if (!mtc_anchor) {
+    return false;
+  }
+  std::optional<TreeHashConstSpan> trusted_subtree_hash =
+      mtc_anchor->SubtreeHash(range);
+  if (!trusted_subtree_hash) {
+    // Step 8 would check the MTCProof's signatures if there's no matching
+    // trusted subtree. This implementation does not support that check yet.
+    return false;
+  }
+  return CRYPTO_memcmp(expected_subtree_hash->data(),
+                       trusted_subtree_hash->data(),
+                       expected_subtree_hash->size()) == 0;
+}
+
 void PathVerifier::BasicCertificateProcessing(
     const ParsedCertificate &cert, bool is_target_cert,
     bool is_target_cert_issuer, const der::GeneralizedTime &time,
@@ -1023,6 +1295,23 @@ void PathVerifier::BasicCertificateProcessing(
       *shortcircuit_chain_validation = true;
       errors->AddError(cert_errors::kVerifySignedDataFailed);
     }
+  } else if (working_mtc_anchor_) {
+    if (!is_target_cert) {
+      *shortcircuit_chain_validation = true;
+      errors->AddError(cert_errors::kMaxPathLengthViolated);
+    } else if (!VerifyMTC(cert, working_mtc_anchor_)) {
+      *shortcircuit_chain_validation = true;
+      errors->AddError(cert_errors::kVerifySignedDataFailed);
+    }
+  } else {
+    // If `working_public_key_` is null, that indicates the SPKI of the issuer
+    // could not be parsed. Handle this the same way as an invalid signature by
+    // shortcircuiting the rest of verification.
+    // An error should already have been added by ParseAndCheckPublicKey, but
+    // it's added on the CertErrors for the issuer, so we can't BSSL_CHECK
+    // errors->ContainsAnyErrorWithSeverity here. (It will be BSSL_CHECKed when
+    // the shortcircuit_chain_validation is acted on in PathVerifier::Run.)
+    *shortcircuit_chain_validation = true;
   }
   if (*shortcircuit_chain_validation) {
     return;
@@ -1060,12 +1349,13 @@ void PathVerifier::BasicCertificateProcessing(
   // The key purpose is checked not just for the end-entity certificate, but
   // also interpreted as a constraint when it appears in intermediates. This
   // goes beyond what RFC 5280 describes, but is the de-facto standard. See
-  // https://wiki.mozilla.org/CA:CertificatePolicyV2.1#Frequently_Asked_Questions
+  // https://wiki.mozilla.org/CA/CertificatePolicyV2.1#Frequently_Asked_Questions
   VerifyExtendedKeyUsage(cert, required_key_purpose, errors, is_target_cert,
                          is_target_cert_issuer);
 }
 
 void PathVerifier::PrepareForNextCertificate(const ParsedCertificate &cert,
+                                             KeyPurpose key_purpose,
                                              CertErrors *errors) {
   // RFC 5280 section 6.1.4 step a-b
   VerifyPolicyMappings(cert, errors);
@@ -1079,6 +1369,7 @@ void PathVerifier::PrepareForNextCertificate(const ParsedCertificate &cert,
   //
   //    Assign the certificate subjectPublicKey to working_public_key.
   working_public_key_ = ParseAndCheckPublicKey(cert.tbs().spki_tlv, errors);
+  working_mtc_anchor_ = nullptr;
 
   // Note that steps e and f are omitted as they are handled by
   // the assignment to |working_spki| above. See the definition
@@ -1169,8 +1460,8 @@ void PathVerifier::PrepareForNextCertificate(const ParsedCertificate &cert,
   //    the certificate.  Process any other recognized non-critical
   //    extension present in the certificate that is relevant to path
   //    processing.
-  VerifyNoUnconsumedCriticalExtensions(cert, errors,
-                                       delegate_->AcceptPreCertificates());
+  VerifyNoUnconsumedCriticalExtensions(
+      cert, errors, delegate_->AcceptPreCertificates(), key_purpose);
 }
 
 // Checks if the target certificate has the CA bit set. If it does, add
@@ -1192,6 +1483,11 @@ void VerifyTargetCertIsNotCA(const ParsedCertificate &cert,
         break;
       case KeyPurpose::SERVER_AUTH_STRICT:
       case KeyPurpose::CLIENT_AUTH_STRICT:
+      case KeyPurpose::CLIENT_AUTH_STRICT_LEAF:
+      case KeyPurpose::SERVER_AUTH_STRICT_LEAF:
+      case KeyPurpose::RCS_MLS_CLIENT_AUTH:
+      case KeyPurpose::C2PA_TIMESTAMPING:
+      case KeyPurpose::C2PA_MANIFEST:
         errors->AddError(cert_errors::kTargetCertShouldNotBeCa);
         break;
     }
@@ -1230,7 +1526,8 @@ void PathVerifier::WrapUp(const ParsedCertificate &cert,
   //
   // Note that this is duplicated by PrepareForNextCertificate() so as to
   // directly match the procedures in RFC 5280's section 6.1.
-  VerifyNoUnconsumedCriticalExtensions(cert, errors, allow_precertificate);
+  VerifyNoUnconsumedCriticalExtensions(cert, errors, allow_precertificate,
+                                       required_key_purpose);
 
   // This calculates the intersection from RFC 5280 section 6.1.5 step g, as
   // well as applying the deferred recursive node that were skipped earlier in
@@ -1332,16 +1629,18 @@ void PathVerifier::ApplyTrustAnchorConstraints(const ParsedCertificate &cert,
   //    constraints are enforced, clients MUST reject certification paths
   //    containing a trust anchor with unrecognized critical extensions.
   VerifyNoUnconsumedCriticalExtensions(cert, errors,
-                                       /*allow_precertificate=*/false);
+                                       /*allow_precertificate=*/false,
+                                       required_key_purpose);
 }
 
 void PathVerifier::ProcessRootCertificate(const ParsedCertificate &cert,
-                                          const CertificateTrust &trust,
+                                          const TrustAnchor &trust_anchor,
                                           const der::GeneralizedTime &time,
                                           KeyPurpose required_key_purpose,
                                           CertErrors *errors,
                                           bool *shortcircuit_chain_validation) {
   *shortcircuit_chain_validation = false;
+  const CertificateTrust &trust = trust_anchor.CertTrust();
   switch (trust.type) {
     case CertificateTrustType::UNSPECIFIED:
     case CertificateTrustType::TRUSTED_LEAF:
@@ -1381,7 +1680,12 @@ void PathVerifier::ProcessRootCertificate(const ParsedCertificate &cert,
   }
 
   // Use the certificate's SPKI and subject when verifying the next certificate.
-  working_public_key_ = ParseAndCheckPublicKey(cert.tbs().spki_tlv, errors);
+  const MTCAnchor *mtc_anchor = trust_anchor.MTCAnchor().get();
+  if (mtc_anchor) {
+    working_mtc_anchor_ = mtc_anchor;
+  } else {
+    working_public_key_ = ParseAndCheckPublicKey(cert.tbs().spki_tlv, errors);
+  }
   working_normalized_issuer_name_ = cert.normalized_subject();
 }
 
@@ -1435,7 +1739,8 @@ void PathVerifier::ProcessSingleCertChain(const ParsedCertificate &cert,
   // Checking for unknown critical extensions matches Windows, but is stricter
   // than the Mac verifier.
   VerifyNoUnconsumedCriticalExtensions(cert, errors,
-                                       /*allow_precertificate=*/false);
+                                       /*allow_precertificate=*/false,
+                                       required_key_purpose);
 }
 
 bssl::UniquePtr<EVP_PKEY> PathVerifier::ParseAndCheckPublicKey(
@@ -1456,7 +1761,7 @@ bssl::UniquePtr<EVP_PKEY> PathVerifier::ParseAndCheckPublicKey(
 }
 
 void PathVerifier::Run(
-    const ParsedCertificateList &certs, const CertificateTrust &last_cert_trust,
+    const ParsedCertificateList &certs, const TrustAnchor &last_cert_trust,
     VerifyCertificateChainDelegate *delegate, const der::GeneralizedTime &time,
     KeyPurpose required_key_purpose,
     InitialExplicitPolicy initial_explicit_policy,
@@ -1480,7 +1785,7 @@ void PathVerifier::Run(
   // Verifying a trusted leaf certificate isn't a well-specified operation, so
   // it's handled separately from the RFC 5280 defined verification process.
   if (certs.size() == 1) {
-    ProcessSingleCertChain(*certs.front(), last_cert_trust, time,
+    ProcessSingleCertChain(*certs.front(), last_cert_trust.CertTrust(), time,
                            required_key_purpose, errors->GetErrorsForCert(0));
     return;
   }
@@ -1570,15 +1875,15 @@ void PathVerifier::Run(
                                time, required_key_purpose, cert_errors,
                                &shortcircuit_chain_validation);
     if (shortcircuit_chain_validation) {
-      // Signature errors should short-circuit the rest of the verification, as
-      // accumulating more errors from untrusted certificates would not be
-      // meaningful.
+      // Signature errors or unparsable SPKIs should short-circuit the rest of
+      // the verification, as accumulating more errors from untrusted
+      // certificates would not be meaningful.
       BSSL_CHECK(
-          cert_errors->ContainsAnyErrorWithSeverity(CertError::SEVERITY_HIGH));
+          errors->ContainsAnyErrorWithSeverity(CertError::SEVERITY_HIGH));
       return;
     }
     if (!is_target_cert) {
-      PrepareForNextCertificate(cert, cert_errors);
+      PrepareForNextCertificate(cert, required_key_purpose, cert_errors);
     } else {
       WrapUp(cert, required_key_purpose, user_initial_policy_set,
              delegate->AcceptPreCertificates(), cert_errors);
@@ -1600,7 +1905,7 @@ void PathVerifier::Run(
 VerifyCertificateChainDelegate::~VerifyCertificateChainDelegate() = default;
 
 void VerifyCertificateChain(
-    const ParsedCertificateList &certs, const CertificateTrust &last_cert_trust,
+    const ParsedCertificateList &certs, const TrustAnchor &last_cert_trust,
     VerifyCertificateChainDelegate *delegate, const der::GeneralizedTime &time,
     KeyPurpose required_key_purpose,
     InitialExplicitPolicy initial_explicit_policy,
@@ -1647,4 +1952,4 @@ bool VerifyCertificateIsSelfSigned(const ParsedCertificate &cert,
   return true;
 }
 
-}  // namespace bssl
+BSSL_NAMESPACE_END

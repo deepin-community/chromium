@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
@@ -47,7 +46,7 @@ class LockTable {
   void RemoveLock(const base::FilePath& path) {
     const base::FilePath normalized_path = path.NormalizePathSeparators();
     base::AutoLock lock(lock_);
-    DCHECK(base::Contains(lock_paths_, normalized_path));
+    DCHECK(lock_paths_.contains(normalized_path));
     lock_paths_.erase(normalized_path);
   }
 
@@ -162,7 +161,6 @@ void FilesystemImpl::OpenFile(const base::FilePath& path,
       break;
     default:
       NOTREACHED();
-      return;
   }
 
   switch (read_access) {
@@ -173,7 +171,6 @@ void FilesystemImpl::OpenFile(const base::FilePath& path,
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   switch (write_access) {
@@ -187,7 +184,6 @@ void FilesystemImpl::OpenFile(const base::FilePath& path,
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   if (client_type_ == ClientType::kUntrusted) {
@@ -239,7 +235,8 @@ void FilesystemImpl::RenameFile(const base::FilePath& old_path,
 
 void FilesystemImpl::LockFile(const base::FilePath& path,
                               LockFileCallback callback) {
-  ASSIGN_OR_RETURN(base::File result, LockFileLocal(MakeAbsolute(path)),
+  ASSIGN_OR_RETURN(base::File result,
+                   LockFileLocal(MakeAbsolute(path), nullptr),
                    [&](base::File::Error error) {
                      std::move(callback).Run(error, mojo::NullRemote());
                    });
@@ -251,29 +248,29 @@ void FilesystemImpl::LockFile(const base::FilePath& path,
   std::move(callback).Run(base::File::FILE_OK, std::move(lock));
 }
 
-void FilesystemImpl::SetOpenedFileLength(base::File file,
-                                         uint64_t length,
-                                         SetOpenedFileLengthCallback callback) {
-  bool success = file.SetLength(length);
-  std::move(callback).Run(success, std::move(file));
-}
-
 // static
 base::FileErrorOr<base::File> FilesystemImpl::LockFileLocal(
-    const base::FilePath& path) {
+    const base::FilePath& path,
+    bool* same_process_failure) {
   DCHECK(path.IsAbsolute());
   base::File file(path, base::File::FLAG_OPEN_ALWAYS | base::File::FLAG_READ |
                             base::File::FLAG_WRITE);
   if (!file.IsValid())
     return base::unexpected(file.error_details());
 
-  if (!GetLockTable().AddLock(path))
+  if (!GetLockTable().AddLock(path)) {
+    if (same_process_failure) {
+      *same_process_failure = true;
+    }
     return base::unexpected(base::File::FILE_ERROR_IN_USE);
+  }
 
 #if !BUILDFLAG(IS_FUCHSIA)
   base::File::Error error = file.Lock(base::File::LockMode::kExclusive);
-  if (error != base::File::FILE_OK)
+  if (error != base::File::FILE_OK) {
+    UnlockFileLocal(path);
     return base::unexpected(error);
+  }
 #endif
 
   return file;

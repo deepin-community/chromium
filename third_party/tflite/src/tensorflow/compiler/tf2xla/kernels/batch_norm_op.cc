@@ -15,6 +15,7 @@ limitations under the License.
 
 // XLA implementation of BatchNorm operations.
 #include <algorithm>
+#include <cstdint>
 #include <numeric>
 #include <string>
 #include <vector>
@@ -25,10 +26,12 @@ limitations under the License.
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/lib/math.h"
-#include "xla/client/xla_builder.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/lib/math.h"
+#include "xla/hlo/builder/xla_builder.h"
 #include "xla/util.h"
+#include "xla/xla_data.pb.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/util/tensor_format.h"
 
 namespace tensorflow {
@@ -45,7 +48,7 @@ class FusedBatchNormOp : public XlaOpKernel {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("is_training", &is_training_));
     OP_REQUIRES_OK(
         ctx, ctx->GetAttr("exponential_avg_factor", &exponential_avg_factor_));
-    string data_format_str;
+    std::string data_format_str;
     OP_REQUIRES_OK(ctx, ctx->GetAttr("data_format", &data_format_str));
     OP_REQUIRES(
         ctx, FormatFromString(data_format_str, &data_format_),
@@ -58,7 +61,7 @@ class FusedBatchNormOp : public XlaOpKernel {
                   errors::InvalidArgument(
                       "FusedBatchNormEx supports at most 1 side input."));
       add_side_input_ = (num_side_inputs == 1);
-      string activation_mode;
+      std::string activation_mode;
       OP_REQUIRES_OK(ctx, ctx->GetAttr("activation_mode", &activation_mode));
       OP_REQUIRES(ctx,
                   activation_mode == "Identity" || activation_mode == "Relu",
@@ -246,7 +249,7 @@ class FusedBatchNormGradOp : public XlaOpKernel {
   explicit FusedBatchNormGradOp(OpKernelConstruction* ctx) : XlaOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("epsilon", &epsilon_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("is_training", &is_training_));
-    string data_format_str;
+    std::string data_format_str;
     OP_REQUIRES_OK(ctx, ctx->GetAttr("data_format", &data_format_str));
     OP_REQUIRES(
         ctx, FormatFromString(data_format_str, &data_format_),

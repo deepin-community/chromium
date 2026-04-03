@@ -6,13 +6,23 @@
 
 #include "base/check.h"
 #include "components/enterprise/client_certificates/core/private_key_types.h"
+#include "components/enterprise/client_certificates/core/ssl_key_converter.h"
 #include "crypto/unexportable_key.h"
+#include "net/ssl/ssl_private_key.h"
 
 namespace client_certificates {
 
 UnexportablePrivateKey::UnexportablePrivateKey(
     std::unique_ptr<crypto::UnexportableSigningKey> key)
-    : PrivateKey(PrivateKeySource::kUnexportableKey), key_(std::move(key)) {
+    : UnexportablePrivateKey(std::move(key),
+                             PrivateKeySource::kUnexportableKey) {}
+
+UnexportablePrivateKey::UnexportablePrivateKey(
+    std::unique_ptr<crypto::UnexportableSigningKey> key,
+    PrivateKeySource key_source)
+    : PrivateKey(key_source,
+                 SSLPrivateKeyFromUnexportableSigningKeySlowly(*key)),
+      key_(std::move(key)) {
   CHECK(key_);
 }
 
@@ -38,6 +48,15 @@ client_certificates_pb::PrivateKey UnexportablePrivateKey::ToProto() const {
   auto wrapped = key_->GetWrappedKey();
   private_key.set_wrapped_key(std::string(wrapped.begin(), wrapped.end()));
   return private_key;
+}
+
+base::DictValue UnexportablePrivateKey::ToDict() const {
+  std::vector<uint8_t> wrapped = key_->GetWrappedKey();
+  if (wrapped.size() == 0) {
+    return base::DictValue();
+  }
+
+  return BuildSerializedPrivateKey(wrapped);
 }
 
 }  // namespace client_certificates

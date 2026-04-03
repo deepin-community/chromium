@@ -6,10 +6,12 @@
 #define COMPONENTS_PASSWORD_MANAGER_CORE_BROWSER_MOCK_PASSWORD_REUSE_MANAGER_H_
 
 #include "components/password_manager/core/browser/password_reuse_manager.h"
-#include "components/password_manager/core/browser/password_store_signin_notifier.h"
+#include "components/password_manager/core/browser/password_reuse_manager_signin_notifier.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace password_manager {
+
+class HashPasswordManager;
 
 // Mocked PasswordReuseManager used by unit tests.
 class MockPasswordReuseManager : public PasswordReuseManager {
@@ -57,14 +59,9 @@ class MockPasswordReuseManager : public PasswordReuseManager {
   MOCK_METHOD(void, ClearAllEnterprisePasswordHash, (), (override));
 
   MOCK_METHOD(void, ClearAllNonGmailPasswordHash, (), (override));
-  MOCK_METHOD(base::CallbackListSubscription,
-              RegisterStateCallbackOnHashPasswordManager,
-              (const base::RepeatingCallback<void(const std::string& username)>&
-                   callback),
-              (override));
   MOCK_METHOD(void,
-              SetPasswordStoreSigninNotifier,
-              (std::unique_ptr<PasswordStoreSigninNotifier> notifier),
+              SetPasswordReuseManagerSigninNotifier,
+              (std::unique_ptr<PasswordReuseManagerSigninNotifier> notifier),
               (override));
   MOCK_METHOD(void, ScheduleEnterprisePasswordURLUpdate, (), (override));
   MOCK_METHOD(void,
@@ -72,6 +69,9 @@ class MockPasswordReuseManager : public PasswordReuseManager {
               (const PasswordForm* submitted_form,
                PasswordManagerClient* client),
               (override));
+  MOCK_METHOD(HashPasswordManager*, GetHashPasswordManager, (), (override));
+  MOCK_METHOD(void, AddObserver, (Observer * observer), (override));
+  MOCK_METHOD(void, RemoveObserver, (Observer * observer), (override));
 };
 
 }  // namespace password_manager

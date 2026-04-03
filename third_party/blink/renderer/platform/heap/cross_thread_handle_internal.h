@@ -7,7 +7,7 @@
 
 #include "base/functional/bind.h"
 #include "base/threading/platform_thread.h"
-#include "third_party/blink/renderer/platform/heap/heap_buildflags.h"
+#include "third_party/blink/public/public_buildflags.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
 #include "v8/include/cppgc/cross-thread-persistent.h"
 #include "v8/include/cppgc/source-location.h"
@@ -127,24 +127,8 @@ class BasicUnwrappingCrossThreadHandle final
 };
 
 }  // namespace internal
+
 }  // namespace blink
-
-namespace WTF {
-
-template <typename T, typename WeaknessPolicy>
-struct CrossThreadCopier<
-    blink::internal::BasicCrossThreadHandle<T, WeaknessPolicy>>
-    : public CrossThreadCopierPassThrough<
-          blink::internal::BasicCrossThreadHandle<T, WeaknessPolicy>> {};
-
-template <typename T, typename WeaknessPolicy>
-struct CrossThreadCopier<
-    blink::internal::BasicUnwrappingCrossThreadHandle<T, WeaknessPolicy>>
-    : public CrossThreadCopierPassThrough<
-          blink::internal::BasicUnwrappingCrossThreadHandle<T,
-                                                            WeaknessPolicy>> {};
-
-}  // namespace WTF
 
 namespace base {
 

@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/logging.h"
 #include "base/sequence_checker.h"
@@ -56,8 +55,9 @@ class ParsedMetadata {
     for (const std::string& entry : service_description.metadata) {
       const std::string_view key_value(entry);
       const size_t equal_pos = key_value.find("=");
-      if (equal_pos == base::StringPiece::npos)
+      if (equal_pos == std::string_view::npos) {
         continue;
+      }
 
       const std::string_view key = key_value.substr(0, equal_pos);
       const std::string_view value = key_value.substr(equal_pos + 1);
@@ -261,6 +261,8 @@ class ZeroconfScannerDetectorImpl final : public ZeroconfScannerDetector {
     lister_entry->second->DiscoverNewDevices();
   }
 
+  void OnPermissionRejected() override {}
+
  private:
   // Creates a new device lister for the given |service_type| and adds it to the
   // ones managed by this object.
@@ -269,7 +271,7 @@ class ZeroconfScannerDetectorImpl final : public ZeroconfScannerDetector {
         this, discovery_client_.get(), service_type);
     lister->Start();
     lister->DiscoverNewDevices();
-    DCHECK(!base::Contains(device_listers_, service_type));
+    DCHECK(!device_listers_.contains(service_type));
     device_listers_[service_type] = std::move(lister);
   }
 

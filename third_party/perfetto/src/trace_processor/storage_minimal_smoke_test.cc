@@ -20,9 +20,11 @@
 #include <json/reader.h>
 #include <json/value.h>
 
+#include "perfetto/ext/base/file_utils.h"
 #include "perfetto/ext/trace_processor/export_json.h"
 #include "perfetto/trace_processor/basic_types.h"
 #include "perfetto/trace_processor/trace_processor_storage.h"
+#include "src/base/test/status_matchers.h"
 #include "src/base/test/utils.h"
 #include "test/gtest_and_gmock.h"
 
@@ -32,9 +34,9 @@ namespace {
 
 class JsonStringOutputWriter : public json::OutputWriter {
  public:
-  util::Status AppendString(const std::string& string) override {
+  base::Status AppendString(const std::string& string) override {
     buffer += string;
-    return util::OkStatus();
+    return base::OkStatus();
   }
   std::string buffer;
 };
@@ -50,12 +52,13 @@ class StorageMinimalSmokeTest : public ::testing::Test {
 
 TEST_F(StorageMinimalSmokeTest, GraphicEventsIgnored) {
   const size_t MAX_SIZE = 1 << 20;
-  auto f = fopen(base::GetTestDataPath("test/data/gpu_trace.pb").c_str(), "rb");
+  auto f =
+      base::OpenFstream(base::GetTestDataPath("test/data/gpu_trace.pb"), "r");
   std::unique_ptr<uint8_t[]> buf(new uint8_t[MAX_SIZE]);
-  auto rsize = fread(reinterpret_cast<char*>(buf.get()), 1, MAX_SIZE, f);
-  util::Status status = storage_->Parse(std::move(buf), rsize);
+  auto rsize = fread(reinterpret_cast<char*>(buf.get()), 1, MAX_SIZE, *f);
+  base::Status status = storage_->Parse(std::move(buf), rsize);
   ASSERT_TRUE(status.ok());
-  storage_->NotifyEndOfFile();
+  ASSERT_OK(storage_->NotifyEndOfFile());
 
   JsonStringOutputWriter output_writer;
   json::ExportJson(storage_.get(), &output_writer);
@@ -74,22 +77,23 @@ TEST_F(StorageMinimalSmokeTest, GraphicEventsIgnored) {
 TEST_F(StorageMinimalSmokeTest, SystraceReturnsError) {
   const size_t MAX_SIZE = 1 << 20;
   auto f =
-      fopen(base::GetTestDataPath("test/data/systrace.html").c_str(), "rb");
+      base::OpenFstream(base::GetTestDataPath("test/data/systrace.html"), "r");
   std::unique_ptr<uint8_t[]> buf(new uint8_t[MAX_SIZE]);
-  auto rsize = fread(reinterpret_cast<char*>(buf.get()), 1, MAX_SIZE, f);
-  util::Status status = storage_->Parse(std::move(buf), rsize);
+  auto rsize = fread(reinterpret_cast<char*>(buf.get()), 1, MAX_SIZE, *f);
+  base::Status status = storage_->Parse(std::move(buf), rsize);
 
   ASSERT_FALSE(status.ok());
 }
 
 TEST_F(StorageMinimalSmokeTest, TrackEventsImported) {
   const size_t MAX_SIZE = 1 << 20;
-  auto f = fopen("test/data/track_event_typed_args.pb", "rb");
+  auto f = base::OpenFstream(
+      base::GetTestDataPath("test/data/track_event_typed_args.pb"), "r");
   std::unique_ptr<uint8_t[]> buf(new uint8_t[MAX_SIZE]);
-  auto rsize = fread(reinterpret_cast<char*>(buf.get()), 1, MAX_SIZE, f);
-  util::Status status = storage_->Parse(std::move(buf), rsize);
+  auto rsize = fread(reinterpret_cast<char*>(buf.get()), 1, MAX_SIZE, *f);
+  base::Status status = storage_->Parse(std::move(buf), rsize);
   ASSERT_TRUE(status.ok());
-  storage_->NotifyEndOfFile();
+  ASSERT_OK(storage_->NotifyEndOfFile());
 
   JsonStringOutputWriter output_writer;
   json::ExportJson(storage_.get(), &output_writer);

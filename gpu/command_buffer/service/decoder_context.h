@@ -8,8 +8,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <string>
-
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -29,17 +27,14 @@ class GLSurface;
 
 namespace gpu {
 class TextureBase;
-struct ContextCreationAttribs;
 
 namespace gles2 {
-class AbstractTexture;
 class ContextGroup;
 class ErrorState;
 class FeatureInfo;
 class GpuFenceManager;
 class Outputter;
 class Texture;
-struct DisallowedFeatures;
 }  // namespace gles2
 
 // Abstract interface implemented by {Raster,GLES2}Decoder. It is called a
@@ -54,24 +49,6 @@ class GPU_GLES2_EXPORT DecoderContext : public AsyncAPIInterface,
   //
   // Methods required by CommandBufferStub.
   //
-  // Initializes the graphics context. Can create an offscreen
-  // decoder with a frame buffer that can be referenced from the parent.
-  // Takes ownership of GLContext.
-  // Parameters:
-  //  surface: the GL surface to render to.
-  //  context: the GL context to render to.
-  //  offscreen: whether to make the context offscreen or not. When FBO 0 is
-  //      bound, offscreen contexts render to an internal buffer, onscreen ones
-  //      to the surface.
-  //  offscreen_size: the size if the GL context is offscreen.
-  // Returns:
-  //   true if successful.
-  virtual gpu::ContextResult Initialize(
-      const scoped_refptr<gl::GLSurface>& surface,
-      const scoped_refptr<gl::GLContext>& context,
-      bool offscreen,
-      const gles2::DisallowedFeatures& disallowed_features,
-      const ContextCreationAttribs& attrib_helper) = 0;
 
   // Destroys the graphics context.
   virtual void Destroy(bool have_context) = 0;
@@ -161,17 +138,12 @@ class GPU_GLES2_EXPORT DecoderContext : public AsyncAPIInterface,
   //
   virtual gles2::ContextGroup* GetContextGroup() = 0;
   virtual gles2::ErrorState* GetErrorState() = 0;
-#if !BUILDFLAG(IS_ANDROID)
-  virtual std::unique_ptr<gpu::gles2::AbstractTexture> CreateAbstractTexture(
-      unsigned /* GLenum */ target,
-      unsigned /* GLenum */ internal_format,
-      int /* GLsizei */ width,
-      int /* GLsizei */ height,
-      int /* GLsizei */ depth,
-      int /* GLint */ border,
-      unsigned /* GLenum */ format,
-      unsigned /* GLenum */ type) = 0;
-#endif
+
+  //
+  // Methods required by GLES2 Decoder helpers
+  //
+  // Bind the framebuffer `service_id` and perform any workarounds needed.
+  virtual void BindFramebuffer(unsigned target, uint32_t service_id) const = 0;
 
   //
   // Methods required by Texture.

@@ -42,16 +42,10 @@ class UnsafeAPIValidationTest : public ValidationTest {
   protected:
     // UnsafeAPIValidationTest create the device with the AllowUnsafeAPIs toggle explicitly
     // disabled, which overrides the inheritance.
-    WGPUDevice CreateTestDevice(native::Adapter dawnAdapter,
-                                wgpu::DeviceDescriptor descriptor) override {
+    std::vector<const char*> GetDisabledToggles() override {
         // Disable the AllowUnsafeAPIs toggles in device toggles descriptor to override the
         // inheritance and create a device disallowing unsafe apis.
-        wgpu::DawnTogglesDescriptor deviceTogglesDesc;
-        descriptor.nextInChain = &deviceTogglesDesc;
-        const char* toggle = "allow_unsafe_apis";
-        deviceTogglesDesc.disabledToggles = &toggle;
-        deviceTogglesDesc.disabledToggleCount = 1;
-        return dawnAdapter.CreateDevice(&descriptor);
+        return {"allow_unsafe_apis"};
     }
 };
 
@@ -70,29 +64,52 @@ TEST_F(UnsafeAPIValidationTest, chromium_disable_uniformity_analysis) {
     )"));
 }
 
-// Check that create 3D texture for the render attachment is validated as unsafe.
-TEST_F(UnsafeAPIValidationTest, Create3DTextureForRenderAttachment) {
-    wgpu::TextureDescriptor descriptor;
-    descriptor.dimension = wgpu::TextureDimension::e3D;
-    descriptor.size = {1, 1};
-    descriptor.format = wgpu::TextureFormat::RGBA8Unorm;
-    descriptor.usage = wgpu::TextureUsage::RenderAttachment;
-    ASSERT_DEVICE_ERROR(device.CreateTexture(&descriptor));
+// Check that using bindingArraySize > 1 is an unsafe API.
+TEST_F(UnsafeAPIValidationTest, BindGroupLayoutEntryArraySize) {
+    wgpu::BindGroupLayoutEntry entry;
+    entry.binding = 0;
+    entry.visibility = wgpu::ShaderStage::Fragment;
+    entry.texture.sampleType = wgpu::TextureSampleType::Float;
+
+    wgpu::BindGroupLayoutDescriptor desc;
+    desc.entryCount = 1;
+    desc.entries = &entry;
+
+    entry.bindingArraySize = 0;
+    device.CreateBindGroupLayout(&desc);
+
+    entry.bindingArraySize = 1;
+    device.CreateBindGroupLayout(&desc);
+
+    entry.bindingArraySize = 2;
+    ASSERT_DEVICE_ERROR(device.CreateBindGroupLayout(&desc));
+}
+
+// Check that using a binding_array statically in an entry point is an unsafe API.
+TEST_F(UnsafeAPIValidationTest, BindingArrayInWGSL) {
+    ASSERT_DEVICE_ERROR(utils::CreateShaderModule(device, R"(
+        @group(0) @binding(0) var textures : binding_array<texture_2d<f32>, 3>;
+        @fragment fn fs() -> @location(0) u32 {
+            let _ = textures[0];
+            return 0;
+        }
+    )"));
+
+    // Even an array of size 1 is an error.
+    ASSERT_DEVICE_ERROR(utils::CreateShaderModule(device, R"(
+        @group(0) @binding(0) var textures : binding_array<texture_2d<f32>, 1>;
+        @fragment fn fs() -> @location(0) u32 {
+            let _ = textures[0];
+            return 0;
+        }
+    )"));
 }
 
 class TimestampQueryUnsafeAPIValidationTest : public ValidationTest {
   protected:
-    WGPUDevice CreateTestDevice(native::Adapter dawnAdapter,
-                                wgpu::DeviceDescriptor descriptor) override {
-        wgpu::DawnTogglesDescriptor deviceTogglesDesc;
-        descriptor.nextInChain = &deviceTogglesDesc;
-        const char* toggle = "allow_unsafe_apis";
-        deviceTogglesDesc.disabledToggles = &toggle;
-        deviceTogglesDesc.disabledToggleCount = 1;
-        wgpu::FeatureName requiredFeatures[1] = {wgpu::FeatureName::TimestampQuery};
-        descriptor.requiredFeatures = requiredFeatures;
-        descriptor.requiredFeatureCount = 1;
-        return dawnAdapter.CreateDevice(&descriptor);
+    std::vector<const char*> GetDisabledToggles() override { return {"allow_unsafe_apis"}; }
+    std::vector<wgpu::FeatureName> GetRequiredFeatures() override {
+        return {wgpu::FeatureName::TimestampQuery};
     }
 };
 

@@ -16,11 +16,12 @@ limitations under the License.
 // This transformation pass takes TensorFlow executor dialect IslandOps and
 // merges the one that contains operation marked to run on TPU.
 
-#include <algorithm>
-#include <iterator>
+#include <cassert>
+#include <memory>
 #include <optional>
 #include <queue>
 #include <tuple>
+#include <vector>
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
@@ -224,10 +225,11 @@ IslandOp CreateMergedIsland(IslandOp island, SmallVector<IslandOp, 16>& islands,
     }
   }
 
-  IslandOp new_island = OpBuilder(island).create<IslandOp>(
-      island.getLoc(), result_types,
-      /*control=*/ControlType::get(island.getContext()),
-      /*controlInputs=*/island.getOperands());
+  OpBuilder builder(island);
+  IslandOp new_island =
+      IslandOp::create(builder, island.getLoc(), result_types,
+                       /*control=*/ControlType::get(island.getContext()),
+                       /*controlInputs=*/island.getOperands());
   new_island.getBody().push_back(new Block);
 
   // Move the operations in the new island, gather the results of the new yield.
@@ -247,8 +249,8 @@ IslandOp CreateMergedIsland(IslandOp island, SmallVector<IslandOp, 16>& islands,
         yield_operands.push_back(std::get<1>(result));
     }
   }
-  OpBuilder::atBlockEnd(&island_body)
-      .create<YieldOp>(new_island.getLoc(), yield_operands);
+  builder.setInsertionPointToEnd(&island_body);
+  YieldOp::create(builder, new_island.getLoc(), yield_operands);
 
   // remap results of the new islands to the user outside of the island.
   int current_result = 0;
@@ -395,7 +397,7 @@ bool is_valid_special_tpu_op(
 
     bool op_has_inconsistent_cluster_name =
         wrapped_op_cluster_name.has_value() &&
-        !wrapped_op_cluster_name.value().equals(cluster_name);
+        wrapped_op_cluster_name.value() != cluster_name;
 
     if (op_has_inconsistent_cluster_name) {
       return false;
@@ -624,7 +626,7 @@ void TpuV1BridgeExecutorIslandCoarsening::runOnOperation() {
     assert(!funcs_for_cluster->second.empty());
     if (funcs_for_cluster->second.size() == 1) return false;
     for (NamedAttribute attr : op->getAttrs()) {
-      auto symbol_ref = attr.getValue().dyn_cast<FlatSymbolRefAttr>();
+      auto symbol_ref = mlir::dyn_cast<FlatSymbolRefAttr>(attr.getValue());
       if (!symbol_ref) continue;
       func::FuncOp callee =
           symbol_table.lookup<func::FuncOp>(symbol_ref.getValue());

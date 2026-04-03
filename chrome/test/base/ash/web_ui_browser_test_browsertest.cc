@@ -80,16 +80,9 @@ IN_PROC_BROWSER_TEST_F(WebUIBrowserExpectFailTest, TestRuntimeErrorFailsFast) {
                        "result.is_bool()");
 }
 
-// Test times out in debug builds: https://crbug.com/902310
-#if !defined(NDEBUG)
-#define MAYBE_TestFailsAsyncFast DISABLED_TestFailsAsyncFast
-#else
-#define MAYBE_TestFailsAsyncFast TestFailsAsyncFast
-#endif
-
 // Test that bogus javascript fails async test fast as well - no timeout waiting
 // for result.
-IN_PROC_BROWSER_TEST_F(WebUIBrowserExpectFailTest, MAYBE_TestFailsAsyncFast) {
+IN_PROC_BROWSER_TEST_F(WebUIBrowserExpectFailTest, TestFailsAsyncFast) {
   AddLibrary(base::FilePath(FILE_PATH_LITERAL("sample_downloads.js")));
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), GURL(chrome::kChromeUIDownloadsURL)));
@@ -119,7 +112,7 @@ class WebUIBrowserAsyncTest : public WebUIBrowserTest {
   }
 
  protected:
-  WebUIBrowserAsyncTest() {}
+  WebUIBrowserAsyncTest() = default;
 
   // Class to synchronize asynchronous javascript activity with the tests.
   class AsyncWebUIMessageHandler : public WebUIMessageHandler {
@@ -129,9 +122,9 @@ class WebUIBrowserAsyncTest : public WebUIBrowserTest {
     AsyncWebUIMessageHandler& operator=(const AsyncWebUIMessageHandler&) =
         delete;
 
-    MOCK_METHOD1(HandleTestContinues, void(const base::Value::List&));
-    MOCK_METHOD1(HandleTestFails, void(const base::Value::List&));
-    MOCK_METHOD1(HandleTestPasses, void(const base::Value::List&));
+    MOCK_METHOD1(HandleTestContinues, void(const base::ListValue&));
+    MOCK_METHOD1(HandleTestFails, void(const base::ListValue&));
+    MOCK_METHOD1(HandleTestPasses, void(const base::ListValue&));
 
    private:
     void RegisterMessages() override {
@@ -154,7 +147,7 @@ class WebUIBrowserAsyncTest : public WebUIBrowserTest {
     }
 
     // Starts the test in |list_value|[0] with the runAsync wrapper.
-    void HandleStartAsyncTest(const base::Value::List& list_value) {
+    void HandleStartAsyncTest(const base::ListValue& list_value) {
       const base::Value& test_name = list_value[0];
       web_ui()->CallJavascriptFunctionUnsafe("runAsync", test_name);
     }

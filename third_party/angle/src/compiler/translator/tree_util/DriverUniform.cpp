@@ -14,7 +14,6 @@
 #include "compiler/translator/SymbolTable.h"
 #include "compiler/translator/tree_util/FindMain.h"
 #include "compiler/translator/tree_util/IntermNode_util.h"
-#include "compiler/translator/tree_util/IntermTraverse.h"
 #include "compiler/translator/util.h"
 
 namespace sh
@@ -22,9 +21,6 @@ namespace sh
 
 namespace
 {
-constexpr ImmutableString kEmulatedDepthRangeParams = ImmutableString("ANGLEDepthRangeParams");
-constexpr ImmutableString kDriverUniformsBlockName  = ImmutableString("ANGLEUniformBlock");
-constexpr ImmutableString kDriverUniformsVarName    = ImmutableString("ANGLEUniforms");
 
 constexpr const char kAcbBufferOffsets[] = "acbBufferOffsets";
 constexpr const char kDepthRange[]       = "depthRange";
@@ -69,9 +65,11 @@ bool DriverUniform::addComputeDriverUniformsToShader(TIntermBlock *root, TSymbol
     layoutQualifier.blockStorage     = EbsStd140;
     layoutQualifier.pushConstant     = true;
 
-    mDriverUniforms = DeclareInterfaceBlock(root, symbolTable, driverFieldList, EvqUniform,
-                                            layoutQualifier, TMemoryQualifier::Create(), 0,
-                                            kDriverUniformsBlockName, kDriverUniformsVarName);
+    const TInterfaceBlock *interfaceBlock = DeclareInterfaceBlock(
+        symbolTable, driverFieldList, layoutQualifier, kDriverUniformsBlockName);
+    mDriverUniforms = DeclareInterfaceBlockVariable(root, symbolTable, EvqUniform, interfaceBlock,
+                                                    layoutQualifier, TMemoryQualifier::Create(), 0,
+                                                    kDriverUniformsVarName);
     return mDriverUniforms != nullptr;
 }
 
@@ -170,9 +168,11 @@ bool DriverUniform::addGraphicsDriverUniformsToShader(TIntermBlock *root, TSymbo
         layoutQualifier.blockStorage     = EbsStd140;
         layoutQualifier.pushConstant     = true;
 
-        mDriverUniforms = DeclareInterfaceBlock(root, symbolTable, driverFieldList, EvqUniform,
-                                                layoutQualifier, TMemoryQualifier::Create(), 0,
-                                                kDriverUniformsBlockName, kDriverUniformsVarName);
+        const TInterfaceBlock *interfaceBlock = DeclareInterfaceBlock(
+            symbolTable, driverFieldList, layoutQualifier, kDriverUniformsBlockName);
+        mDriverUniforms = DeclareInterfaceBlockVariable(
+            root, symbolTable, EvqUniform, interfaceBlock, layoutQualifier,
+            TMemoryQualifier::Create(), 0, kDriverUniformsVarName);
     }
     else
     {
@@ -284,9 +284,8 @@ TIntermTyped *DriverUniform::getHalfRenderArea() const
 TIntermTyped *DriverUniform::getFlipXY(TSymbolTable *symbolTable, DriverUniformFlip stage) const
 {
     TIntermTyped *flipXY = createDriverUniformRef(kFlipXY);
-    TIntermTyped *values = CreateBuiltInUnaryFunctionCallNode(
-        "unpackSnorm4x8", flipXY, *symbolTable,
-        GetESSLOrGLSLVersion(symbolTable->getShaderSpec(), 310, 400));
+    TIntermTyped *values =
+        CreateBuiltInUnaryFunctionCallNode("unpackSnorm4x8", flipXY, *symbolTable, 310);
 
     if (stage == DriverUniformFlip::Fragment)
     {
@@ -381,6 +380,22 @@ TIntermTyped *DriverUniform::getAlphaToCoverage() const
 
     TIntermSequence args = {
         alphaToCoverage,
+    };
+    return TIntermAggregate::CreateConstructor(*StaticType::GetBasic<EbtBool, EbpUndefined>(),
+                                               &args);
+}
+
+TIntermTyped *DriverUniform::getLayeredFramebuffer() const
+{
+    TIntermTyped *miscRef            = createDriverUniformRef(kMisc);
+    TIntermTyped *layeredFramebuffer = new TIntermBinary(
+        EOpBitShiftRight, miscRef, CreateUIntNode(vk::kDriverUniformsMiscLayeredFramebufferOffset));
+    layeredFramebuffer =
+        new TIntermBinary(EOpBitwiseAnd, layeredFramebuffer,
+                          CreateUIntNode(vk::kDriverUniformsMiscLayeredFramebufferMask));
+
+    TIntermSequence args = {
+        layeredFramebuffer,
     };
     return TIntermAggregate::CreateConstructor(*StaticType::GetBasic<EbtBool, EbpUndefined>(),
                                                &args);

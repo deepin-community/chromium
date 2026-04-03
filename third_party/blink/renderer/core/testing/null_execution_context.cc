@@ -5,7 +5,7 @@
 #include "third_party/blink/renderer/core/testing/null_execution_context.h"
 
 #include "base/task/single_thread_task_runner.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
@@ -31,6 +31,7 @@ NullExecutionContext::NullExecutionContext(
                        MakeGarbageCollected<Agent>(
                            scheduler->GetAgentGroupScheduler()->Isolate(),
                            base::UnguessableToken::Create(),
+                           blink::Agent::AgentType::kDocument,
                            v8::MicrotaskQueue::New(
                                scheduler->GetAgentGroupScheduler()->Isolate(),
                                v8::MicrotasksPolicy::kScoped))),

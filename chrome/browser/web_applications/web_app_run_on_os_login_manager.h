@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_RUN_ON_OS_LOGIN_MANAGER_H_
 #define CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_RUN_ON_OS_LOGIN_MANAGER_H_
 
+#include "base/auto_reset.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -40,13 +41,15 @@ class WebAppRunOnOsLoginManager
   void SetCompletedClosureForTesting(base::OnceClosure completed_closure);
 
  private:
-  void RunAppsOnOsLogin(AllAppsLock& lock, base::Value::Dict& debug_value);
+  void RunAppsOnOsLogin(AllAppsLock& lock, base::DictValue& debug_value);
 
-  void OnInitialConnectionTypeReceived(network::mojom::ConnectionType type);
+  void OnInitialConnectionTypeReceived(
+      net::NetworkChangeNotifier::ConnectionType type);
 
   // network::NetworkConnectionTracker::NetworkConnectionObserver
   // implementation. Observes network change events.
-  void OnConnectionChanged(network::mojom::ConnectionType type) override;
+  void OnConnectionChanged(
+      net::NetworkChangeNotifier::ConnectionType type) override;
 
   void RunOsLoginAppsAndMaybeUnregisterObserver();
 

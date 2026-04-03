@@ -122,7 +122,7 @@ class ViewportTest : public DawnTest {
         pipelineDesc.primitive.topology = wgpu::PrimitiveTopology::PointList;
         wgpu::DepthStencilState* depthStencil =
             pipelineDesc.EnableDepthStencil(wgpu::TextureFormat::Depth32Float);
-        depthStencil->depthWriteEnabled = true;
+        depthStencil->depthWriteEnabled = wgpu::OptionalBool::True;
         wgpu::RenderPipeline pipeline = device.CreateRenderPipeline(&pipelineDesc);
 
         // Create the texture that will store the post-viewport-transform depth.
@@ -188,18 +188,20 @@ TEST_P(ViewportTest, SubBoxes) {
 
 // Test that by default the [0, 1] depth range is used.
 TEST_P(ViewportTest, DefaultViewportDepth) {
-    // TODO(crbug.com/dawn/667): Work around the fact that some platforms do not support reading
-    // depth.
-    DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("disable_depth_read"));
+    // TODO(crbug.com/473870505): [Capture] support depth/stencil and multi-planar textures.
+    DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
 
     TestViewportDepth(0.0, 1.0, false);
 }
 
 // Test various viewport depth ranges
 TEST_P(ViewportTest, ViewportDepth) {
-    // TODO(crbug.com/dawn/667): Work around the fact that some platforms do not support reading
-    // depth.
-    DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("disable_depth_read"));
+    // TODO(crbug.com/473870505): [Capture] support depth/stencil and multi-planar textures.
+    DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
 
     TestViewportDepth(0.0, 0.5);
     TestViewportDepth(0.5, 1.0);
@@ -241,7 +243,8 @@ DAWN_INSTANTIATE_TEST(ViewportTest,
                       MetalBackend(),
                       OpenGLBackend(),
                       OpenGLESBackend(),
-                      VulkanBackend());
+                      VulkanBackend(),
+                      WebGPUBackend());
 
 }  // anonymous namespace
 }  // namespace dawn

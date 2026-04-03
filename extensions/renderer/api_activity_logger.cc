@@ -59,8 +59,7 @@ void APIActivityLogger::AddRoutes() {
 
 // static
 bool APIActivityLogger::IsLoggingEnabled() {
-  const Dispatcher* dispatcher =
-      ExtensionsRendererClient::Get()->GetDispatcher();
+  const Dispatcher* dispatcher = ExtensionsRendererClient::Get()->dispatcher();
   return (dispatcher &&  // dispatcher can be null in unittests.
           dispatcher->activity_logging_enabled()) ||
          g_log_for_testing;
@@ -85,7 +84,7 @@ void APIActivityLogger::LogAPICall(
   converter->SetFunctionAllowed(true);
   converter->SetStrategy(&strategy);
 
-  base::Value::List value_args;
+  base::ListValue value_args;
   value_args.reserve(arguments.size());
   // TODO(devlin): This doesn't protect against custom properties, so it might
   // not perfectly reflect the passed arguments.
@@ -108,7 +107,7 @@ void APIActivityLogger::LogAPICall(
 void APIActivityLogger::LogEvent(IPCMessageSender* ipc_sender,
                                  ScriptContext* script_context,
                                  const std::string& event_name,
-                                 base::Value::List arguments) {
+                                 base::ListValue arguments) {
   if (!IsLoggingEnabled())
     return;
 
@@ -152,7 +151,7 @@ void APIActivityLogger::LogForJS(
   }
 
   // Get the array of call arguments.
-  base::Value::List arguments;
+  base::ListValue arguments;
   v8::Local<v8::Array> arg_array = v8::Local<v8::Array>::Cast(args[2]);
   if (arg_array->Length() > 0) {
     arguments.reserve(arg_array->Length());
@@ -162,7 +161,7 @@ void APIActivityLogger::LogForJS(
     converter->SetFunctionAllowed(true);
     converter->SetStrategy(&strategy);
     for (size_t i = 0; i < arg_array->Length(); ++i) {
-      // TODO(crbug.com/913942): Possibly replace ToLocalChecked here with
+      // TODO(crbug.com/40605992): Possibly replace ToLocalChecked here with
       // actual error handling.
       std::unique_ptr<base::Value> converted_arg = converter->FromV8Value(
           arg_array->Get(context, i).ToLocalChecked(), context);

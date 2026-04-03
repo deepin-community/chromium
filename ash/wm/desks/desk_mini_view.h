@@ -10,9 +10,10 @@
 #include "ash/ash_export.h"
 #include "ash/wm/desks/desk.h"
 #include "ash/wm/desks/desks_controller.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/views/animation/animation_abort_handle.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
@@ -27,6 +28,7 @@ class DeskBarViewBase;
 class DeskNameView;
 class DeskPreviewView;
 class DeskProfilesButton;
+class WindowOcclusionCalculator;
 
 // A view that acts as a mini representation (a.k.a. desk thumbnail) of a
 // virtual desk in the desk bar view when overview mode is active. This view
@@ -48,9 +50,11 @@ class ASH_EXPORT DeskMiniView : public views::View,
   // which it resides.
   static gfx::Rect GetDeskPreviewBounds(aura::Window* root_window);
 
-  DeskMiniView(DeskBarViewBase* owner_bar,
-               aura::Window* root_window,
-               Desk* desk);
+  DeskMiniView(
+      DeskBarViewBase* owner_bar,
+      aura::Window* root_window,
+      Desk* desk,
+      base::WeakPtr<WindowOcclusionCalculator> window_occlusion_calculator);
 
   DeskMiniView(const DeskMiniView&) = delete;
   DeskMiniView& operator=(const DeskMiniView&) = delete;
@@ -66,6 +70,7 @@ class ASH_EXPORT DeskMiniView : public views::View,
 
   const DeskActionView* desk_action_view() const { return desk_action_view_; }
   DeskActionView* desk_action_view() { return desk_action_view_; }
+  DeskActionContextMenu* context_menu() { return context_menu_.get(); }
 
   DeskProfilesButton* desk_profiles_button() { return desk_profile_button_; }
 
@@ -128,7 +133,7 @@ class ASH_EXPORT DeskMiniView : public views::View,
   // `views::MenuRunner::FIXED_ANCHOR` run type parameter, but the
   // `MenuRunner::RunMenuAt` function still requires this parameter, so we pass
   // it down to the function through this parameter.
-  void OpenContextMenu(ui::MenuSourceType source);
+  void OpenContextMenu(ui::mojom::MenuSourceType source);
 
   // Closes context menu on this mini view if one exists.
   void MaybeCloseContextMenu();
@@ -143,8 +148,8 @@ class ASH_EXPORT DeskMiniView : public views::View,
 
   // views::View:
   void Layout(PassKey) override;
-  gfx::Size CalculatePreferredSize() const override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnThemeChanged() override;
 
   // Desk::Observer:
@@ -171,13 +176,17 @@ class ASH_EXPORT DeskMiniView : public views::View,
   // visible.
   void OnContextMenuClosed();
 
-  // Callback for when a user selects a lacros profile from `context_menu_`.
-  void OnSetLacrosProfileId(uint64_t lacros_profile_id);
-
   void OnDeskPreviewPressed();
+
+  // Callbacks for when a user selects the save desk options in the context
+  // menu.
+  void OnSaveDeskAsTemplateButtonPressed();
+  void OnSaveDeskForLaterButtonPressed();
 
   // Layout |desk_name_view_| given the current bounds of the desk preview.
   void LayoutDeskNameView(const gfx::Rect& preview_bounds);
+
+  void UpdateAccessibleName();
 
   const raw_ptr<DeskBarViewBase> owner_bar_;
 
@@ -217,10 +226,6 @@ class ASH_EXPORT DeskMiniView : public views::View,
   // We force showing desk buttons when the mini_view is long pressed or
   // tapped using touch gestures.
   bool force_show_desk_buttons_ = false;
-
-  // Prevents `desk_action_view_` from becoming visible while `context_menu_` is
-  // open.
-  bool is_context_menu_open_ = false;
 
   // When the DeskNameView is focused, we select all its text. However, if it is
   // focused via a mouse press event, on mouse release will clear the selection.

@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/html/custom/custom_element.h"
 
+#include <array>
 #include <ios>
 #include <memory>
 
@@ -36,22 +37,6 @@ static void TestIsPotentialCustomElementName(const AtomicString& str,
   }
 }
 
-static void TestIsPotentialCustomElementNameChar(UChar32 c, bool expected) {
-  LChar str8[] = "a-X";
-  UChar str16[] = {'a', '-', 'X', '\0', '\0'};
-  AtomicString str;
-  if (c <= 0xFF) {
-    str8[2] = c;
-    str = AtomicString(str8);
-  } else {
-    size_t i = 2;
-    U16_APPEND_UNSAFE(str16, i, c);
-    str16[i] = 0;
-    str = AtomicString(str16);
-  }
-  TestIsPotentialCustomElementName(str, expected);
-}
-
 TEST(CustomElementTest, TestIsValidNamePotentialCustomElementName) {
   test::TaskEnvironment task_environment;
   struct {
@@ -79,66 +64,6 @@ TEST(CustomElementTest, TestIsValidNamePotentialCustomElementName) {
   };
   for (auto test : tests)
     TestIsPotentialCustomElementName(test.str, test.expected);
-}
-
-TEST(CustomElementTest, TestIsValidNamePotentialCustomElementNameChar) {
-  test::TaskEnvironment task_environment;
-  struct {
-    UChar32 from, to;
-  } ranges[] = {
-      // "-" | "." need to merge to test -1/+1.
-      {'-', '.'},
-      {'0', '9'},
-      {'_', '_'},
-      {'a', 'z'},
-      {0xB7, 0xB7},
-      {0xC0, 0xD6},
-      {0xD8, 0xF6},
-      // [#xF8-#x2FF] | [#x300-#x37D] need to merge to test -1/+1.
-      {0xF8, 0x37D},
-      {0x37F, 0x1FFF},
-      {0x200C, 0x200D},
-      {0x203F, 0x2040},
-      {0x2070, 0x218F},
-      {0x2C00, 0x2FEF},
-      {0x3001, 0xD7FF},
-      {0xF900, 0xFDCF},
-      {0xFDF0, 0xFFFD},
-      {0x10000, 0xEFFFF},
-  };
-  for (auto range : ranges) {
-    TestIsPotentialCustomElementNameChar(range.from - 1, false);
-    for (UChar32 c = range.from; c <= range.to; ++c)
-      TestIsPotentialCustomElementNameChar(c, true);
-    TestIsPotentialCustomElementNameChar(range.to + 1, false);
-  }
-}
-
-TEST(CustomElementTest, TestIsValidNamePotentialCustomElementName8BitChar) {
-  test::TaskEnvironment task_environment;
-  // isPotentialCustomElementName8BitChar must match
-  // isPotentialCustomElementNameChar, so we just test it returns
-  // the same result throughout its range.
-  for (UChar ch = 0x0; ch <= 0xff; ++ch) {
-    EXPECT_EQ(Character::IsPotentialCustomElementName8BitChar(ch),
-              Character::IsPotentialCustomElementNameChar(ch))
-        << "isPotentialCustomElementName8BitChar must agree with "
-        << "isPotentialCustomElementNameChar: 0x" << std::hex
-        << static_cast<uint16_t>(ch);
-  }
-}
-
-TEST(CustomElementTest, TestIsValidNamePotentialCustomElementNameCharFalse) {
-  test::TaskEnvironment task_environment;
-  struct {
-    UChar32 from, to;
-  } ranges[] = {
-      {'A', 'Z'},
-  };
-  for (auto range : ranges) {
-    for (UChar32 c = range.from; c <= range.to; ++c)
-      TestIsPotentialCustomElementNameChar(c, false);
-  }
 }
 
 TEST(CustomElementTest, TestIsValidNameHyphenContainingElementNames) {
@@ -174,7 +99,8 @@ TEST(CustomElementTest, StateByParser) {
       "<font-face id=v0></font-face>";
   auto page_holder = std::make_unique<DummyPageHolder>();
   Document& document = page_holder->GetDocument();
-  document.body()->setInnerHTML(String::FromUTF8(body_content));
+  document.body()->SetInnerHTMLWithoutTrustedTypes(
+      String::FromUTF8(body_content));
 
   struct {
     const char* id;
@@ -231,7 +157,7 @@ TEST(CustomElementTest,
       scope.GetFrame().DomWindow()->customElements();
   NonThrowableExceptionState should_not_throw;
   {
-    CEReactionsScope reactions;
+    CEReactionsScope reactions(scope.GetIsolate());
     TestCustomElementDefinitionBuilder builder;
     registry->DefineInternal(script_state, AtomicString("a-a"), builder,
                              ElementDefinitionOptions::Create(),

@@ -4,9 +4,11 @@
 
 #include "chrome/browser/ui/android/hats/survey_ui_delegate_android.h"
 
-#include "chrome/browser/ui/android/hats/internal/jni_headers/SurveyUiDelegateBridge_jni.h"
 #include "components/messages/android/message_wrapper.h"
 #include "ui/android/window_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/ui/android/hats/internal/jni_headers/SurveyUiDelegateBridge_jni.h"
 
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
@@ -32,9 +34,9 @@ SurveyUiDelegateAndroid::~SurveyUiDelegateAndroid() = default;
 
 void SurveyUiDelegateAndroid::ShowSurveyInvitation(
     JNIEnv* env,
-    const JavaParamRef<jobject>& on_accepted_callback,
-    const JavaParamRef<jobject>& on_declined_callback,
-    const JavaParamRef<jobject>& on_presentation_failed_callback) {
+    const JavaRef<jobject>& on_accepted_callback,
+    const JavaRef<jobject>& on_declined_callback,
+    const JavaRef<jobject>& on_presentation_failed_callback) {
   LOG(WARNING) << "Unimplemented SurveyUiDelegateAndroid::ShowSurveyInvitation";
 }
 
@@ -48,3 +50,5 @@ const JavaRef<jobject>& SurveyUiDelegateAndroid::GetJavaObject(
 }
 
 }  // namespace hats
+
+DEFINE_JNI(SurveyUiDelegateBridge)

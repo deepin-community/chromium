@@ -1,17 +1,15 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import {
   createTextContent,
-} from
-    '../../../../third_party/puppeteer/package/lib/esm/puppeteer/injected/TextContent.js';
+} from '../../../../third_party/puppeteer/package/lib/esm/puppeteer/injected/TextContent.js';
 import {
   textQuerySelectorAll,
-} from
-    '../../../../third_party/puppeteer/package/lib/esm/puppeteer/injected/TextQuerySelector.js';
+} from '../../../../third_party/puppeteer/package/lib/esm/puppeteer/injected/TextQuerySelector.js';
 
-import {type Selector} from './Selector.js';
+import type {Selector} from './Selector.js';
 
 const MINIMUM_TEXT_LENGTH = 12;
 const MAXIMUM_TEXT_LENGTH = 64;
@@ -31,10 +29,10 @@ const collect = <T>(iter: Iterable<T>, max = Infinity): T[] => {
 /**
  * Computes the text selector for a node.
  *
- * @param node - The node to compute.
+ * @internal
+ * @param node The node to compute.
  * @returns The computed text selector.
  *
- * @internal
  */
 export const computeTextSelector = (node: Node): Selector|undefined => {
   const content = createTextContent(node).full.trim();

@@ -51,13 +51,13 @@ TEST_F(SamplerValidationTest, InvalidLOD) {
     {
         wgpu::SamplerDescriptor samplerDesc;
         samplerDesc.lodMaxClamp = INFINITY;
-        device.CreateSampler(&samplerDesc);
+        ASSERT_DEVICE_ERROR(device.CreateSampler(&samplerDesc));
     }
     {
         wgpu::SamplerDescriptor samplerDesc;
         samplerDesc.lodMaxClamp = INFINITY;
         samplerDesc.lodMinClamp = INFINITY;
-        device.CreateSampler(&samplerDesc);
+        ASSERT_DEVICE_ERROR(device.CreateSampler(&samplerDesc));
     }
 }
 
@@ -132,6 +132,15 @@ TEST_F(SamplerValidationTest, ValidFilterAnisotropic) {
         samplerDesc.maxAnisotropy = 0xFFFF;
         device.CreateSampler(&samplerDesc);
     }
+}
+
+TEST_F(SamplerValidationTest, ValidFilterAnisotropicWithUndefined) {
+    wgpu::SamplerDescriptor kValidAnisoSamplerDesc = {};
+    kValidAnisoSamplerDesc.maxAnisotropy = 2;
+    kValidAnisoSamplerDesc.minFilter = wgpu::FilterMode::Undefined;
+    kValidAnisoSamplerDesc.magFilter = wgpu::FilterMode::Undefined;
+    kValidAnisoSamplerDesc.mipmapFilter = wgpu::MipmapFilterMode::Undefined;
+    { device.CreateSampler(); }
 }
 
 }  // anonymous namespace

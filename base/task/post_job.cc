@@ -40,8 +40,9 @@ JobDelegate::JobDelegate(
 }
 
 JobDelegate::~JobDelegate() {
-  if (task_id_ != kInvalidTaskId)
+  if (task_id_ != kInvalidTaskId) {
     task_source_->ReleaseTaskId(task_id_);
+  }
 }
 
 bool JobDelegate::ShouldYield() {
@@ -61,7 +62,7 @@ bool JobDelegate::ShouldYield() {
 }
 
 void JobDelegate::YieldIfNeeded() {
-  // TODO(crbug.com/839091): Implement this.
+  // TODO(crbug.com/40574605): Implement this.
 }
 
 void JobDelegate::NotifyConcurrencyIncrease() {
@@ -69,8 +70,9 @@ void JobDelegate::NotifyConcurrencyIncrease() {
 }
 
 uint8_t JobDelegate::GetTaskId() {
-  if (task_id_ == kInvalidTaskId)
+  if (task_id_ == kInvalidTaskId) {
     task_id_ = task_source_->AcquireTaskId();
+  }
   return task_id_;
 }
 
@@ -118,11 +120,8 @@ void JobHandle::NotifyConcurrencyIncrease() {
 void JobHandle::Join() {
   DCHECK(internal::PooledTaskRunnerDelegate::MatchesCurrentDelegate(
       task_source_->delegate()));
-  DCHECK_GE(internal::GetTaskPriorityForCurrentThread(),
-            task_source_->priority_racy())
-      << "Join may not be called on Job with higher priority than the current "
-         "thread.";
-  UpdatePriority(internal::GetTaskPriorityForCurrentThread());
+  // TODO(crbug.com/470337728): Use thread type once implemented.
+  UpdatePriority(TaskPriority::USER_BLOCKING);
   if (task_source_->GetRemainingConcurrency() != 0) {
     // Make sure the task source is in the queue if not enough workers are
     // contributing. This is necessary for CreateJob(...).Join(). This is a
@@ -130,8 +129,9 @@ void JobHandle::Join() {
     task_source_->delegate()->EnqueueJobTaskSource(task_source_);
   }
   bool must_run = task_source_->WillJoin();
-  while (must_run)
+  while (must_run) {
     must_run = task_source_->RunJoinTask();
+  }
   // Remove |task_source_| from the ThreadPool to prevent access to
   // |max_concurrency_callback| after Join().
   task_source_->delegate()->RemoveJobTaskSource(task_source_);

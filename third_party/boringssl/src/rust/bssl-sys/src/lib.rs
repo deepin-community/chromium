@@ -1,12 +1,28 @@
+#![no_std]
+
+// unnecessary_transmutes, needed to work around a Rust bug, is not available in
+// older Rusts. Stable lacks any way to condition code on Rust version, so the
+// workaround for a Rust bug below needs this additional Rust workaround.
+#![allow(unknown_lints)]
+
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
+
+// Work around https://github.com/rust-lang/rust-bindgen/issues/2807
+#![allow(unnecessary_transmutes)]
 
 use core::ffi::c_ulong;
 
 // Wrap the bindgen output in a module and re-export it, so we can override it
 // as needed.
 mod bindgen {
+    #[cfg(not(bindgen_rs_file))]
+    include!(concat!(env!("OUT_DIR"), "/bindgen.rs"));
+    // Some static build systems (e.g. bazel) do not support the `OUT_DIR`
+    // configuration used by Cargo. They can specify a complete path to the
+    // generated bindings as an environment variable.
+    #[cfg(bindgen_rs_file)]
     include!(env!("BINDGEN_RS_FILE"));
 }
 pub use bindgen::*;
@@ -40,24 +56,7 @@ pub const XN_FLAG_DUMP_UNKNOWN_FIELDS: c_ulong = bindgen::XN_FLAG_DUMP_UNKNOWN_F
 pub const XN_FLAG_RFC2253: c_ulong = bindgen::XN_FLAG_RFC2253 as c_ulong;
 pub const XN_FLAG_ONELINE: c_ulong = bindgen::XN_FLAG_ONELINE as c_ulong;
 
-// TODO(crbug.com/boringssl/596): Remove these wrappers.
-#[cfg(unsupported_inline_wrappers)]
-pub fn ERR_GET_LIB(packed_error: u32) -> i32 {
-    unsafe { ERR_GET_LIB_RUST(packed_error) }
-}
-
-#[cfg(unsupported_inline_wrappers)]
-pub fn ERR_GET_REASON(packed_error: u32) -> i32 {
-    unsafe { ERR_GET_REASON_RUST(packed_error) }
-}
-
-#[cfg(unsupported_inline_wrappers)]
-pub fn ERR_GET_FUNC(packed_error: u32) -> i32 {
-    unsafe { ERR_GET_FUNC_RUST(packed_error) }
-}
-
 pub fn init() {
-    unsafe {
-        CRYPTO_library_init();
-    }
+    // This function does nothing.
+    // TODO(davidben): Remove rust-openssl's dependency on this and remove this.
 }

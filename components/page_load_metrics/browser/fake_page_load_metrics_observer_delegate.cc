@@ -45,7 +45,7 @@ std::optional<base::TimeDelta> TimeDiff(
 
 std::optional<base::TimeDelta>
 FakePageLoadMetricsObserverDelegate::GetTimeToFirstForeground() const {
-  return std::optional<base::TimeDelta>();
+  return std::nullopt;
 }
 
 std::optional<base::TimeDelta>
@@ -76,6 +76,10 @@ bool FakePageLoadMetricsObserverDelegate::StartedInForeground() const {
 PageVisibility FakePageLoadMetricsObserverDelegate::GetVisibilityAtActivation()
     const {
   return visibility_at_activation_;
+}
+
+bool FakePageLoadMetricsObserverDelegate::IsReloadAfterDiscard() const {
+  return is_discarded_page_reload_;
 }
 
 bool FakePageLoadMetricsObserverDelegate::
@@ -111,7 +115,7 @@ FakePageLoadMetricsObserverDelegate::GetPageEndUserInitiatedInfo() const {
 
 std::optional<base::TimeDelta>
 FakePageLoadMetricsObserverDelegate::GetTimeToPageEnd() const {
-  return std::optional<base::TimeDelta>();
+  return std::nullopt;
 }
 
 const base::TimeTicks& FakePageLoadMetricsObserverDelegate::GetPageEndTime()
@@ -145,20 +149,15 @@ const NormalizedCLSData& FakePageLoadMetricsObserverDelegate::
   return normalized_cls_data_;
 }
 
-const ResponsivenessMetricsNormalization&
-FakePageLoadMetricsObserverDelegate::GetResponsivenessMetricsNormalization()
+const InteractionToNextPaintCalculator&
+FakePageLoadMetricsObserverDelegate::GetInteractionToNextPaintCalculator()
     const {
-  return responsiveness_metrics_normalization_;
+  return interaction_to_next_paint_calculator_;
 }
 
-const ResponsivenessMetricsNormalization& FakePageLoadMetricsObserverDelegate::
-    GetSoftNavigationIntervalResponsivenessMetricsNormalization() const {
-  return responsiveness_metrics_normalization_;
-}
-
-const mojom::InputTiming&
-FakePageLoadMetricsObserverDelegate::GetPageInputTiming() const {
-  return page_input_timing_;
+const InteractionToNextPaintCalculator& FakePageLoadMetricsObserverDelegate::
+    GetSoftNavigationIntervalInteractionToNextPaintCalculator() const {
+  return interaction_to_next_paint_calculator_;
 }
 
 const std::optional<blink::SubresourceLoadMetrics>&
@@ -201,13 +200,8 @@ FakePageLoadMetricsObserverDelegate::GetSoftNavigationMetrics() const {
 }
 
 ukm::SourceId
-FakePageLoadMetricsObserverDelegate::GetUkmSourceIdForSoftNavigation() const {
-  return ukm::kInvalidSourceId;
-}
-
-ukm::SourceId
-FakePageLoadMetricsObserverDelegate::GetPreviousUkmSourceIdForSoftNavigation()
-    const {
+FakePageLoadMetricsObserverDelegate::GetUkmSourceIdForSameDocumentNavigation(
+    base::UnguessableToken same_document_metrics_token) const {
   return ukm::kInvalidSourceId;
 }
 
@@ -221,6 +215,11 @@ bool FakePageLoadMetricsObserverDelegate::IsOriginVisit() const {
 }
 
 bool FakePageLoadMetricsObserverDelegate::IsTerminalVisit() const {
+  return false;
+}
+
+bool FakePageLoadMetricsObserverDelegate::ShouldObserveScheme(
+    std::string_view scheme) const {
   return false;
 }
 

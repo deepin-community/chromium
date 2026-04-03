@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/modules/sensor/sensor_provider_proxy.h"
 
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/modules/sensor/sensor_proxy_impl.h"
 
 namespace blink {
@@ -21,8 +21,8 @@ void SensorProviderProxy::InitializeIfNeeded() {
       sensor_provider_.BindNewPipeAndPassReceiver(
           GetSupplementable()->GetTaskRunner(TaskType::kSensor)));
   sensor_provider_.set_disconnect_handler(
-      WTF::BindOnce(&SensorProviderProxy::OnSensorProviderConnectionError,
-                    WrapWeakPersistent(this)));
+      BindOnce(&SensorProviderProxy::OnSensorProviderConnectionError,
+               WrapWeakPersistent(this)));
 }
 
 // static

@@ -8,6 +8,7 @@
 
 #include "ash/public/cpp/notifier_metadata.h"
 #include "base/functional/bind.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
@@ -16,7 +17,6 @@
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/app_update.h"
 #include "components/services/app_service/public/cpp/permission.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 #include "ui/message_center/public/cpp/message_center_constants.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
 
@@ -147,8 +147,9 @@ void ArcApplicationNotifierController::SetIcon(const std::string& app_id,
 
 void ArcApplicationNotifierController::OnAppUpdate(
     const apps::AppUpdate& update) {
-  if (!base::Contains(package_to_app_ids_, update.PublisherId()))
+  if (!package_to_app_ids_.contains(update.PublisherId())) {
     return;
+  }
 
   if (update.PermissionsChanged()) {
     for (const auto& permission : update.Permissions()) {

@@ -14,12 +14,17 @@
 #include "base/numerics/checked_math.h"
 #include "build/build_config.h"
 #include "gpu/config/gpu_finch_features.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "third_party/skia/include/core/SkMallocPixelRef.h"
 #include "third_party/skia/include/core/SkPixelRef.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
-#include "third_party/skia/include/gpu/GrRecordingContext.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/GrRecordingContext.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace cc {
 namespace {
@@ -36,7 +41,6 @@ UIResourceBitmap::UIResourceFormat SkColorTypeToUIResourceFormat(
       break;
     default:
       NOTREACHED() << "Invalid SkColorType for UIResourceBitmap: " << sk_type;
-      break;
   }
   return format;
 }
@@ -68,6 +72,20 @@ void UIResourceBitmap::DrawToCanvas(SkCanvas* canvas, SkPaint* paint) {
   }
 }
 
+base::span<const uint8_t> UIResourceBitmap::GetPixels() const {
+  if (!pixel_ref_) {
+    return {};
+  }
+  // TODO(crbug.com/40285824): Check if this is guaranteed safe. The pixel
+  // memory must be at least row_bytes * height but it's not well defined if
+  // memory past the end of the last row is allocated when row_bytes > width *
+  // bytes_per_pixel. UIResourceBitmap has an implicit assumption that row_bytes
+  // == width * bytes_per_pixel but if that assumption is violated this span
+  // could be too large.
+  return UNSAFE_TODO(base::span(
+      static_cast<const uint8_t*>(pixel_ref_->pixels()), SizeInBytes()));
+}
+
 size_t UIResourceBitmap::SizeInBytes() const {
   if (!pixel_ref_)
     return 0u;
@@ -82,7 +100,18 @@ UIResourceBitmap::UIResourceBitmap(const SkBitmap& skbitmap) {
   const SkBitmap* target = &skbitmap;
 #if BUILDFLAG(IS_ANDROID)
   SkBitmap copy;
-  if (features::IsDrDcEnabled()) {
+  if (features::ShouldEnableDrDc() ||
+      base::android::device_info::is_desktop()) {
+    // On android desktop, where JavaBitmap ensures 4 byte alignment, uploading
+    // ALPHA_8 to angle_vulkan_image_backing may fail because it expects 1 byte
+    // alignment stride. Workaround via copying it to N32.
+    // TODO(https://crbug.com/485286876): Remove this workaround once stride
+    // information is passed along with pixel_data to shared_image.
+
+    // If GpuFeatureInfo is available, replace ShouldEnableDrDc() with
+    // IsDrDcEnabled(gpu_feature_info) which is set after checking drdc
+    // workarounds;
+
     // TODO(vikassoni): Forcing everything to N32 while android backing cannot
     // support some other formats. Note that DrDc is disabled on some gl
     // renderers and hence gpus via gpu driver bug workaround. That workaround

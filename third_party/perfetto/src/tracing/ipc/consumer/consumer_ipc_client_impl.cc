@@ -282,7 +282,7 @@ void ConsumerIPCClientImpl::Attach(const std::string& key) {
           const TraceConfig& trace_config = response->trace_config();
 
           // If attached successfully, also attach to the end-of-trace
-          // notificaton callback, via EnableTracing(attach_notification_only).
+          // notification callback, via EnableTracing(attach_notification_only).
           protos::gen::EnableTracingRequest enable_req;
           enable_req.set_attach_notification_only(true);
           ipc::Deferred<protos::gen::EnableTracingResponse> enable_resp;
@@ -464,17 +464,48 @@ void ConsumerIPCClientImpl::SaveTraceForBugreport(
   consumer_port_.SaveTraceForBugreport(req, std::move(async_response));
 }
 
-void ConsumerIPCClientImpl::CloneSession(TracingSessionID tsid,
-                                         CloneSessionArgs args) {
+void ConsumerIPCClientImpl::CloneSession(CloneSessionArgs args) {
   if (!connected_) {
     PERFETTO_DLOG("Cannot CloneSession(), not connected to tracing service");
     return;
   }
 
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+  if (args.output_file_fd) {
+    consumer_->OnSessionCloned(
+        {false,
+         "Passing FDs into CloneSession is not supported on Windows",
+         {},
+         false});
+    return;
+  }
+#endif
+
   protos::gen::CloneSessionRequest req;
-  req.set_session_id(tsid);
+  if (args.tsid) {
+    req.set_session_id(args.tsid);
+  }
+  if (!args.unique_session_name.empty()) {
+    req.set_unique_session_name(args.unique_session_name);
+  }
   req.set_skip_trace_filter(args.skip_trace_filter);
   req.set_for_bugreport(args.for_bugreport);
+  if (!args.clone_trigger_name.empty()) {
+    req.set_clone_trigger_name(args.clone_trigger_name);
+  }
+  if (!args.clone_trigger_producer_name.empty()) {
+    req.set_clone_trigger_producer_name(args.clone_trigger_producer_name);
+  }
+  if (args.clone_trigger_trusted_producer_uid != 0) {
+    req.set_clone_trigger_trusted_producer_uid(
+        static_cast<int32_t>(args.clone_trigger_trusted_producer_uid));
+  }
+  if (args.clone_trigger_boot_time_ns != 0) {
+    req.set_clone_trigger_boot_time_ns(args.clone_trigger_boot_time_ns);
+  }
+  if (args.clone_trigger_delay_ms != 0) {
+    req.set_clone_trigger_delay_ms(args.clone_trigger_delay_ms);
+  }
   ipc::Deferred<protos::gen::CloneSessionResponse> async_response;
   auto weak_this = weak_ptr_factory_.GetWeakPtr();
 
@@ -487,13 +518,17 @@ void ConsumerIPCClientImpl::CloneSession(TracingSessionID tsid,
           // If the IPC fails, we are talking to an older version of the service
           // that didn't support CloneSession at all.
           weak_this->consumer_->OnSessionCloned(
-              {false, "CloneSession IPC not supported", {}});
+              {false, "CloneSession IPC not supported", {}, false});
         } else {
           base::Uuid uuid(response->uuid_lsb(), response->uuid_msb());
           weak_this->consumer_->OnSessionCloned(
-              {response->success(), response->error(), uuid});
+              {response->success(), response->error(), uuid,
+               response->was_write_into_file()});
         }
       });
-  consumer_port_.CloneSession(req, std::move(async_response));
+  // |args.output_file_fd| will be closed when this function returns, but it's
+  // fine because the IPC layer dup()'s it when sending the IPC.
+  consumer_port_.CloneSession(req, std::move(async_response),
+                              *args.output_file_fd);
 }
 }  // namespace perfetto

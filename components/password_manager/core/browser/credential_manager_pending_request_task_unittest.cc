@@ -84,12 +84,10 @@ class CredentialManagerPendingRequestTaskTest : public ::testing::Test {
  public:
   CredentialManagerPendingRequestTaskTest() {
     profile_store_ = new TestPasswordStore(IsAccountStore(false));
-    profile_store_->Init(/*prefs=*/nullptr,
-                         /*affiliated_match_helper=*/nullptr);
+    profile_store_->Init(/*affiliated_match_helper=*/nullptr);
 
     account_store_ = new TestPasswordStore(IsAccountStore(true));
-    account_store_->Init(/*prefs=*/nullptr,
-                         /*affiliated_match_helper=*/nullptr);
+    account_store_->Init(/*affiliated_match_helper=*/nullptr);
 
     prefs_.registry()->RegisterBooleanPref(
         prefs::kWasAutoSignInFirstRunExperienceShown, true);
@@ -203,7 +201,10 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
   RunAllPendingTasks();
 
   std::vector<std::unique_ptr<PasswordForm>> expected_forms;
-  expected_forms.push_back(std::make_unique<PasswordForm>(account_form));
+  PasswordForm expected_form = form_;
+  expected_form.in_store =
+      PasswordForm::Store::kProfileStore | PasswordForm::Store::kAccountStore;
+  expected_forms.push_back(std::make_unique<PasswordForm>(expected_form));
   EXPECT_CALL(*client(),
               PromptUserToChooseCredentials(
                   UnorderedPasswordFormElementsAre(&expected_forms), _, _));
@@ -220,7 +221,7 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
   // This is testing that when two federated credentials have the same username
   // for the same origin, the account store version is passed to the UI.
   GURL federation_url("https://google.com/");
-  form_.federation_origin = url::Origin::Create(federation_url);
+  form_.federation_origin = url::SchemeHostPort(federation_url);
   form_.password_value = std::u16string();
   form_.signon_realm = "federation://www.example.com/google.com";
 
@@ -241,8 +242,8 @@ TEST_F(CredentialManagerPendingRequestTaskTest,
 
   CredentialManagerPendingRequestTask task(
       &delegate_mock_, /*callback=*/base::DoNothing(),
-      CredentialMediationRequirement::kOptional, /*include_passwords=*/false,
-      {federation_url}, GetFormDigest());
+      CredentialMediationRequirement::kOptional,
+      /*include_passwords=*/false, {federation_url}, GetFormDigest());
   RunAllPendingTasks();
 }
 

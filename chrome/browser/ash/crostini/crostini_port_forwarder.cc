@@ -6,17 +6,17 @@
 
 #include <fcntl.h>
 
+#include <algorithm>
+
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/no_destructor.h"
-#include "base/ranges/algorithm.h"
 #include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/ash/crostini/crostini_pref_names.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/guest_os/guest_os_pref_names.h"
 #include "chrome/browser/ash/guest_os/guest_os_session_tracker.h"
+#include "chrome/browser/ash/guest_os/guest_os_session_tracker_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chromeos/ash/components/network/device_state.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
@@ -31,45 +31,6 @@ const char kPortNumberKey[] = "port_number";
 const char kPortProtocolKey[] = "protocol_type";
 const char kPortLabelKey[] = "label";
 const char kPortContainerIdKey[] = "container_id";
-
-class CrostiniPortForwarderFactory : public ProfileKeyedServiceFactory {
- public:
-  static CrostiniPortForwarder* GetForProfile(Profile* profile) {
-    return static_cast<CrostiniPortForwarder*>(
-        GetInstance()->GetServiceForBrowserContext(profile, true));
-  }
-
-  static CrostiniPortForwarderFactory* GetInstance() {
-    static base::NoDestructor<CrostiniPortForwarderFactory> factory;
-    return factory.get();
-  }
-
- private:
-  friend class base::NoDestructor<CrostiniPortForwarderFactory>;
-
-  CrostiniPortForwarderFactory()
-      : ProfileKeyedServiceFactory(
-            "CrostiniPortForwarderService",
-            ProfileSelections::Builder()
-                .WithRegular(ProfileSelection::kOriginalOnly)
-                // TODO(crbug.com/1418376): Check if this service is needed in
-                // Guest mode.
-                .WithGuest(ProfileSelection::kOriginalOnly)
-                .Build()) {}
-
-  ~CrostiniPortForwarderFactory() override = default;
-
-  // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
-      content::BrowserContext* context) const override {
-    Profile* profile = Profile::FromBrowserContext(context);
-    return new CrostiniPortForwarder(profile);
-  }
-};
-
-CrostiniPortForwarder* CrostiniPortForwarder::GetForProfile(Profile* profile) {
-  return CrostiniPortForwarderFactory::GetForProfile(profile);
-}
 
 CrostiniPortForwarder::CrostiniPortForwarder(Profile* profile)
     : profile_(profile) {
@@ -130,12 +91,13 @@ void CrostiniPortForwarder::AddNewPortPreference(const PortRuleKey& key,
   PrefService* pref_service = profile_->GetPrefs();
   ScopedListPrefUpdate update(pref_service,
                               crostini::prefs::kCrostiniPortForwarding);
-  base::Value::List& all_ports = update.Get();
-  base::Value::Dict new_port_metadata;
+  base::ListValue& all_ports = update.Get();
+  base::DictValue new_port_metadata;
   new_port_metadata.Set(kPortNumberKey, key.port_number);
   new_port_metadata.Set(kPortProtocolKey, static_cast<int>(key.protocol_type));
   new_port_metadata.Set(kPortLabelKey, label);
   new_port_metadata.Set(guest_os::prefs::kVmNameKey, key.container_id.vm_name);
+  new_port_metadata.Set(guest_os::prefs::kVmTypeKey, key.container_id.vm_type);
   new_port_metadata.Set(guest_os::prefs::kContainerNameKey,
                         key.container_id.container_name);
   all_ports.Append(std::move(new_port_metadata));
@@ -145,8 +107,8 @@ bool CrostiniPortForwarder::RemovePortPreference(const PortRuleKey& key) {
   PrefService* pref_service = profile_->GetPrefs();
   ScopedListPrefUpdate update(pref_service,
                               crostini::prefs::kCrostiniPortForwarding);
-  base::Value::List& update_list = update.Get();
-  auto it = base::ranges::find_if(update_list, [&key, this](const auto& dict) {
+  base::ListValue& update_list = update.Get();
+  auto it = std::ranges::find_if(update_list, [&key, this](const auto& dict) {
     return MatchPortRuleDict(dict, key);
   });
   if (it == update_list.end()) {
@@ -159,9 +121,9 @@ bool CrostiniPortForwarder::RemovePortPreference(const PortRuleKey& key) {
 std::optional<base::Value> CrostiniPortForwarder::ReadPortPreference(
     const PortRuleKey& key) {
   PrefService* pref_service = profile_->GetPrefs();
-  const base::Value::List& all_ports =
+  const base::ListValue& all_ports =
       pref_service->GetList(crostini::prefs::kCrostiniPortForwarding);
-  auto it = base::ranges::find_if(all_ports, [&key, this](const auto& dict) {
+  auto it = std::ranges::find_if(all_ports, [&key, this](const auto& dict) {
     return MatchPortRuleDict(dict, key);
   });
   if (it == all_ports.end()) {
@@ -194,8 +156,9 @@ void CrostiniPortForwarder::TryActivatePort(
     const PortRuleKey& key,
     const guest_os::GuestId& container_id,
     base::OnceCallback<void(bool)> result_callback) {
-  auto info = guest_os::GuestOsSessionTracker::GetForProfile(profile_)->GetInfo(
-      container_id);
+  auto info =
+      guest_os::GuestOsSessionTrackerFactory::GetForProfile(profile_)->GetInfo(
+          container_id);
   if (!info) {
     LOG(ERROR) << "Inactive container to make port rules for.";
     std::move(result_callback).Run(false);
@@ -241,9 +204,8 @@ void CrostiniPortForwarder::TryDeactivatePort(
     const PortRuleKey& key,
     const guest_os::GuestId& container_id,
     base::OnceCallback<void(bool)> result_callback) {
-  bool running =
-      guest_os::GuestOsSessionTracker::GetForProfile(profile_)->IsRunning(
-          container_id);
+  bool running = guest_os::GuestOsSessionTrackerFactory::GetForProfile(profile_)
+                     ->IsRunning(container_id);
   if (!running) {
     LOG(ERROR) << "Inactive container to make port rules for.";
     std::move(result_callback).Run(false);
@@ -403,10 +365,10 @@ void CrostiniPortForwarder::RemoveAllPorts(
   DeactivateAllActivePorts(container_id);
 }
 
-base::Value::List CrostiniPortForwarder::GetActivePorts() {
-  base::Value::List forwarded_ports_list;
+base::ListValue CrostiniPortForwarder::GetActivePorts() {
+  base::ListValue forwarded_ports_list;
   for (const auto& port : forwarded_ports_) {
-    base::Value::Dict port_info;
+    base::DictValue port_info;
     port_info.Set(kPortNumberKey, port.first.port_number);
     port_info.Set(kPortProtocolKey, static_cast<int>(port.first.protocol_type));
     port_info.Set(kPortContainerIdKey, port.first.container_id.ToDictValue());
@@ -415,8 +377,8 @@ base::Value::List CrostiniPortForwarder::GetActivePorts() {
   return forwarded_ports_list;
 }
 
-base::Value::List CrostiniPortForwarder::GetActiveNetworkInfo() {
-  base::Value::List network_info;
+base::ListValue CrostiniPortForwarder::GetActiveNetworkInfo() {
+  base::ListValue network_info;
   network_info.Append(base::Value(current_interface_));
   network_info.Append(base::Value(ip_address_));
   return network_info;
@@ -456,11 +418,6 @@ void CrostiniPortForwarder::ActiveNetworksChanged(
     observer.OnActiveNetworkChanged(base::Value(interface),
                                     base::Value(ip_address));
   }
-}
-
-// static
-void CrostiniPortForwarder::EnsureFactoryBuilt() {
-  CrostiniPortForwarderFactory::GetInstance();
 }
 
 }  // namespace crostini

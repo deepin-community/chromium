@@ -11,6 +11,7 @@
 #include "chrome/browser/ash/extensions/file_manager/private_api_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/drive/event_logger.h"
+#include "extensions/browser/extension_function.h"
 
 namespace extensions {
 
@@ -39,11 +40,11 @@ void LoggedExtensionFunction::OnResponded() {
   std::string request_id_str = request_uuid().AsLowercaseString();
   if (logger && log_on_completion_) {
     DCHECK(response_type());
-    bool success = *response_type() == SUCCEEDED;
-    logger->Log(logging::LOGGING_INFO,
-                "%s[%s] %s. (elapsed time: %" PRId64 "ms)", name(),
-                request_id_str.c_str(), success ? "succeeded" : "failed",
-                elapsed.InMilliseconds());
+    bool success = *response_type() == ResponseType::kSucceeded;
+    UNSAFE_TODO(logger->Log(
+        logging::LOGGING_INFO, "%s[%s] %s. (elapsed time: %" PRId64 "ms)",
+        name(), request_id_str.c_str(), success ? "succeeded" : "failed",
+        elapsed.InMilliseconds()));
   }
 
   // Log performance issues separately from completion.
@@ -57,10 +58,10 @@ void LoggedExtensionFunction::OnResponded() {
                            "PERFORMANCE WARNING: " + log_message);
     }
   } else if (logger && elapsed >= slow_threshold_) {
-    logger->Log(logging::LOGGING_WARNING,
-                "PERFORMANCE WARNING: %s[%s] was slow. (elapsed time: %" PRId64
-                "ms)",
-                name(), request_id_str.c_str(), elapsed.InMilliseconds());
+    UNSAFE_TODO(logger->Log(
+        logging::LOGGING_WARNING,
+        "PERFORMANCE WARNING: %s[%s] was slow. (elapsed time: %" PRId64 "ms)",
+        name(), request_id_str.c_str(), elapsed.InMilliseconds()));
   }
   ExtensionFunction::OnResponded();
 }

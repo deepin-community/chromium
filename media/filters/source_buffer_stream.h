@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/logging.h"
 #include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -95,17 +96,6 @@ class MEDIA_EXPORT SourceBufferStream {
   // |media_time| is current playback position.
   bool GarbageCollectIfNeeded(base::TimeDelta media_time, size_t newDataSize);
 
-  // Gets invoked when the system is experiencing memory pressure, i.e. there's
-  // not enough free memory. The |media_time| is the media playback position at
-  // the time of memory pressure notification (needed for accurate GC). The
-  // |memory_pressure_level| indicates memory pressure severity. The
-  // |force_instant_gc| is used to force the MSE garbage collection algorithm to
-  // be run right away, without waiting for the next append.
-  void OnMemoryPressure(
-      base::TimeDelta media_time,
-      base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level,
-      bool force_instant_gc);
-
   // Changes the SourceBufferStream's state so that it will start returning
   // buffers starting from the closest keyframe before |timestamp|.
   void Seek(base::TimeDelta timestamp);
@@ -145,8 +135,8 @@ class MEDIA_EXPORT SourceBufferStream {
   // then base::TimeDelta() is returned.
   base::TimeDelta GetBufferedDuration() const;
 
-  // Returns the size of the buffered data in bytes.
-  size_t GetBufferedSize() const;
+  // Returns the memory usage of the buffered data in bytes.
+  size_t GetMemoryUsage() const;
 
   // Notifies this object that end of stream has been signalled.
   void MarkEndOfStream();
@@ -177,7 +167,11 @@ class MEDIA_EXPORT SourceBufferStream {
   base::TimeDelta GetMaxInterbufferDistance() const;
 
   void set_memory_limit(size_t memory_limit) {
+    DVLOG(2) << __func__ << ": Override memory limit from " << memory_limit_
+             << " to " << memory_limit << ".";
+
     memory_limit_ = memory_limit;
+    memory_limit_overridden_ = true;
   }
 
   // A helper function for detecting video/audio config change, so that we
@@ -487,9 +481,6 @@ class MEDIA_EXPORT SourceBufferStream {
   // Stores the largest distance between two adjacent buffers in this stream.
   base::TimeDelta max_interbuffer_distance_;
 
-  base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level_ =
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE;
-
   // The maximum amount of data in bytes the stream will keep in memory.
   // |memory_limit_| is initialized based on the audio/video configuration in
   // the constructor, but either user-setting of |memory_limit_| or
@@ -497,6 +488,11 @@ class MEDIA_EXPORT SourceBufferStream {
   // eviction heuristic can cause the result to vary from the value set in
   // constructor.
   size_t memory_limit_;
+
+  // Set to true in |set_memory_limit()| to signal that the |memory_limit_| has
+  // been overridden, and |memory_limit_| shouldn't be updated again in
+  // |UpdateAudioConfig()| or |UpdateVideoConfig()|.
+  bool memory_limit_overridden_ = false;
 
   // Indicates that a kConfigChanged status has been reported by GetNextBuffer()
   // and GetCurrentXXXDecoderConfig() must be called to update the current

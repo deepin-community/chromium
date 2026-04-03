@@ -2,23 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/memory/raw_ptr.h"
-#include "content/browser/media/session/media_session_impl.h"
-
 #include <map>
 #include <memory>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
+#include "content/browser/media/session/media_session_impl.h"
 #include "content/browser/media/session/media_session_player_observer.h"
 #include "content/browser/media/session/mock_media_session_service_impl.h"
 #include "content/public/test/test_media_session_client.h"
 #include "content/test/test_render_view_host.h"
 #include "content/test/test_web_contents.h"
 #include "media/base/media_content_type.h"
+#include "media/base/picture_in_picture_events_info.h"
 #include "services/media_session/public/cpp/media_metadata.h"
 #include "services/media_session/public/cpp/test/mock_media_session.h"
 #include "services/media_session/public/mojom/constants.mojom.h"
@@ -75,6 +75,17 @@ class MockMediaSessionPlayerObserver : public MediaSessionPlayerObserver {
                void(int player_id, const std::string& raw_device_id));
   MOCK_METHOD2(OnSetMute, void(int player_id, bool mute));
   MOCK_METHOD(void, OnRequestMediaRemoting, (int player_id), (override));
+  MOCK_METHOD(void,
+              OnRequestVisibility,
+              (int player_id,
+               RequestVisibilityCallback request_visibility_callback),
+              (override));
+  MOCK_METHOD(void,
+              OnAutoPictureInPictureInfoChanged,
+              (int player_id,
+               const media::PictureInPictureEventsInfo::AutoPipInfo&
+                   auto_picture_in_picture_info),
+              (override));
 
   std::optional<media_session::MediaPosition> GetPosition(
       int player_id) const override {
@@ -90,6 +101,10 @@ class MockMediaSessionPlayerObserver : public MediaSessionPlayerObserver {
     return false;
   }
 
+  bool HasSufficientlyVisibleVideo(int player_id) const override {
+    return false;
+  }
+
   bool HasAudio(int player_id) const override {
     return audio_video_state_ == MediaAudioVideoState::kAudioOnly ||
            audio_video_state_ == MediaAudioVideoState::kAudioVideo;
@@ -99,6 +114,8 @@ class MockMediaSessionPlayerObserver : public MediaSessionPlayerObserver {
     return audio_video_state_ == MediaAudioVideoState::kVideoOnly ||
            audio_video_state_ == MediaAudioVideoState::kAudioVideo;
   }
+
+  bool IsPaused(int player_id) const override { return false; }
 
   std::string GetAudioOutputSinkId(int player_id) const override { return ""; }
 
@@ -130,14 +147,13 @@ class MediaSessionImplServiceRoutingTest
     : public RenderViewHostImplTestHarness {
  public:
   MediaSessionImplServiceRoutingTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        blink::features::kMediaSessionEnterPictureInPicture);
-
     actions_.insert(MediaSessionAction::kPlay);
     actions_.insert(MediaSessionAction::kPause);
     actions_.insert(MediaSessionAction::kStop);
     actions_.insert(MediaSessionAction::kSeekTo);
     actions_.insert(MediaSessionAction::kScrubTo);
+    actions_.insert(MediaSessionAction::kSeekForward);
+    actions_.insert(MediaSessionAction::kSeekBackward);
   }
 
   ~MediaSessionImplServiceRoutingTest() override = default;
@@ -224,7 +240,11 @@ class MediaSessionImplServiceRoutingTest
   }
 
   MediaSessionServiceImpl* ComputeServiceForRouting() {
-    return MediaSessionImpl::Get(contents())->ComputeServiceForRouting();
+    auto* frame = static_cast<TestRenderFrameHost*>(
+        MediaSessionImpl::Get(contents())
+            ->ComputeFrameForRouting(/*ensure_service=*/true));
+    return services_.find(frame) != services_.end() ? services_[frame].get()
+                                                    : nullptr;
   }
 
   MediaSessionImpl* GetMediaSession() {
@@ -267,8 +287,6 @@ class MediaSessionImplServiceRoutingTest
   media_session::MediaMetadata empty_metadata_;
 
   std::set<MediaSessionAction> actions_;
-
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(MediaSessionImplServiceRoutingTest, NoFrameProducesAudio) {
@@ -412,89 +430,6 @@ TEST_F(MediaSessionImplServiceRoutingTest,
 }
 
 TEST_F(MediaSessionImplServiceRoutingTest,
-       NotifyMetadataAndActionsChangeWhenTurningControllable) {
-  media_session::MediaMetadata expected_metadata;
-  expected_metadata.title = u"title";
-  expected_metadata.artist = u"artist";
-  expected_metadata.album = u"album";
-  expected_metadata.source_title = GetSourceTitleForNonEmptyMetadata();
-
-  CreateServiceForFrame(sub_frame_);
-
-  {
-    blink::mojom::SpecMediaMetadataPtr spec_metadata(
-        blink::mojom::SpecMediaMetadata::New());
-    spec_metadata->title = u"title";
-    spec_metadata->artist = u"artist";
-    spec_metadata->album = u"album";
-
-    services_[sub_frame_]->SetMetadata(std::move(spec_metadata));
-  }
-
-  services_[sub_frame_]->EnableAction(MediaSessionAction::kSeekForward);
-
-  {
-    media_session::test::MockMediaSessionMojoObserver observer(
-        *GetMediaSession());
-
-    observer.WaitForEmptyActions();
-    observer.WaitForExpectedMetadata(empty_metadata());
-  }
-
-  {
-    media_session::test::MockMediaSessionMojoObserver observer(
-        *GetMediaSession());
-
-    StartPlayerForFrame(sub_frame_);
-
-    observer.WaitForExpectedMetadata(expected_metadata);
-    observer.WaitForExpectedActions(
-        GetDefaultActionsWithExtra(MediaSessionAction::kSeekForward));
-  }
-}
-
-TEST_F(MediaSessionImplServiceRoutingTest,
-       NotifyActionsAndMetadataChangeWhenTurningUncontrollable) {
-  media_session::MediaMetadata expected_metadata;
-  expected_metadata.title = u"title";
-  expected_metadata.artist = u"artist";
-  expected_metadata.album = u"album";
-  expected_metadata.source_title = GetSourceTitleForNonEmptyMetadata();
-
-  CreateServiceForFrame(sub_frame_);
-
-  {
-    blink::mojom::SpecMediaMetadataPtr spec_metadata(
-        blink::mojom::SpecMediaMetadata::New());
-    spec_metadata->title = u"title";
-    spec_metadata->artist = u"artist";
-    spec_metadata->album = u"album";
-
-    services_[sub_frame_]->SetMetadata(std::move(spec_metadata));
-  }
-
-  StartPlayerForFrame(sub_frame_);
-
-  {
-    media_session::test::MockMediaSessionMojoObserver observer(
-        *GetMediaSession());
-
-    observer.WaitForExpectedActions(default_actions());
-    observer.WaitForExpectedMetadata(expected_metadata);
-  }
-
-  {
-    media_session::test::MockMediaSessionMojoObserver observer(
-        *GetMediaSession());
-
-    ClearPlayersForFrame(sub_frame_);
-
-    observer.WaitForEmptyActions();
-    observer.WaitForExpectedMetadata(empty_metadata());
-  }
-}
-
-TEST_F(MediaSessionImplServiceRoutingTest,
        NotifyActionsAndMetadataChangeWhenUncontrollableForMainFrame) {
   // When no frames have playback and the main frame has a service, observers
   // should be notified of actions and metadata on the main frame's service.
@@ -525,6 +460,35 @@ TEST_F(MediaSessionImplServiceRoutingTest,
     observer.WaitForExpectedMetadata(expected_metadata);
     observer.WaitForExpectedActions({MediaSessionAction::kSeekForward});
   }
+}
+
+TEST_F(MediaSessionImplServiceRoutingTest,
+       RoutesTopMostFrameWhenNoFrameIsHasPlayers) {
+  // When no services exist, we should not route any service.
+  EXPECT_EQ(nullptr, ComputeServiceForRouting());
+
+  // Create a service with no players.
+  CreateServiceForFrame(sub_frame_);
+
+  // Since we have no other service with players, we should route the subframe's
+  // service.
+  EXPECT_EQ(services_[sub_frame_].get(), ComputeServiceForRouting());
+
+  // Create another service with no players on the main frame.
+  CreateServiceForFrame(main_frame_);
+
+  // Since the main frame is above the subframe, we should route that one
+  // instead.
+  EXPECT_EQ(services_[main_frame_].get(), ComputeServiceForRouting());
+
+  // If the subframe has players, then it should then become the routed frame
+  // since the main frame has no players.
+  StartPlayerForFrame(sub_frame_);
+  EXPECT_EQ(services_[sub_frame_].get(), ComputeServiceForRouting());
+
+  // If the main frame then has players, then that one should be used.
+  StartPlayerForFrame(main_frame_);
+  EXPECT_EQ(services_[main_frame_].get(), ComputeServiceForRouting());
 }
 
 TEST_F(MediaSessionImplServiceRoutingTest,
@@ -573,8 +537,6 @@ TEST_F(MediaSessionImplServiceRoutingTest,
 
 TEST_F(MediaSessionImplServiceRoutingTest,
        TestReceivingPauseActionWhenNoServiceRouted) {
-  CreateServiceForFrame(sub_frame_);
-
   EXPECT_EQ(nullptr, ComputeServiceForRouting());
 
   // This should not crash.
@@ -1412,6 +1374,28 @@ TEST_F(MediaSessionImplServiceRoutingTest,
 
     observer.WaitForExpectedMetadata(expected_metadata);
   }
+}
+
+TEST_F(MediaSessionImplServiceRoutingTest, GetRoutedFrameForPlayers) {
+  StartPlayerForFrame(main_frame_);
+  ASSERT_EQ(main_frame_, GetMediaSession()->GetRoutedFrame());
+  StartPlayerForFrame(sub_frame_);
+  ASSERT_EQ(main_frame_, GetMediaSession()->GetRoutedFrame());
+  ClearPlayersForFrame(main_frame_);
+  ASSERT_EQ(sub_frame_, GetMediaSession()->GetRoutedFrame());
+  ClearPlayersForFrame(sub_frame_);
+  ASSERT_EQ(nullptr, GetMediaSession()->GetRoutedFrame());
+}
+
+TEST_F(MediaSessionImplServiceRoutingTest, GetRoutedFrameForServices) {
+  CreateServiceForFrame(main_frame_);
+  ASSERT_EQ(main_frame_, GetMediaSession()->GetRoutedFrame());
+  CreateServiceForFrame(sub_frame_);
+  ASSERT_EQ(main_frame_, GetMediaSession()->GetRoutedFrame());
+  DestroyServiceForFrame(main_frame_);
+  ASSERT_EQ(sub_frame_, GetMediaSession()->GetRoutedFrame());
+  DestroyServiceForFrame(sub_frame_);
+  ASSERT_EQ(nullptr, GetMediaSession()->GetRoutedFrame());
 }
 
 // Test duration duration update throttle behavior for routed service.

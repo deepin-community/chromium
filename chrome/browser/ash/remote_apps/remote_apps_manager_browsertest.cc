@@ -21,7 +21,6 @@
 #include "ash/test/ash_test_base.h"
 #include "base/barrier_closure.h"
 #include "base/functional/callback.h"
-#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
@@ -38,7 +37,6 @@
 #include "chrome/browser/ash/app_list/app_list_client_impl.h"
 #include "chrome/browser/ash/app_list/app_list_syncable_service_factory.h"
 #include "chrome/browser/ash/login/test/session_manager_state_waiter.h"
-#include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
 #include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -70,6 +68,7 @@
 #include "ui/base/resource/resource_scale_factor.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/image/image_unittest_util.h"
 
 namespace ash {
@@ -135,11 +134,7 @@ class MockRemoteAppLaunchObserver
 class RemoteAppsManagerBrowsertest
     : public policy::DevicePolicyCrosBrowserTest {
  public:
-  RemoteAppsManagerBrowsertest() {
-    // Quick App is used for the current implementation of app pinning.
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kHomeButtonQuickAppAccess);
-  }
+  RemoteAppsManagerBrowsertest() = default;
 
   // DevicePolicyCrosBrowserTest:
   void SetUp() override {
@@ -620,7 +615,7 @@ IN_PROC_BROWSER_TEST_F(RemoteAppsManagerBrowsertest, AddToFront) {
 }
 
 // Test that app launched events are only dispatched to the extension which
-// added the app, and the all events are dispatched to the Lacros observer.
+// added the app.
 IN_PROC_BROWSER_TEST_F(RemoteAppsManagerBrowsertest, OnAppLaunched) {
   AddScreenplayTag();
 
@@ -628,10 +623,6 @@ IN_PROC_BROWSER_TEST_F(RemoteAppsManagerBrowsertest, OnAppLaunched) {
       on_remote_app_launched_with_app_id1_future;
   base::test::TestFuture<std::string>
       on_remote_app_launched_with_app_id2_future;
-  base::test::TestFuture<std::string>
-      on_remote_app_launched_with_app_id1_to_proxy_future;
-  base::test::TestFuture<std::string>
-      on_remote_app_launched_with_app_id2_to_proxy_future;
 
   testing::StrictMock<MockRemoteAppLaunchObserver> mockObserver1;
   EXPECT_CALL(mockObserver1, OnRemoteAppLaunched(kId1, kExtensionId1))
@@ -659,20 +650,6 @@ IN_PROC_BROWSER_TEST_F(RemoteAppsManagerBrowsertest, OnAppLaunched) {
       kExtensionId2, remote2.BindNewPipeAndPassReceiver(),
       observer2.BindNewPipeAndPassRemote());
 
-  testing::StrictMock<MockRemoteAppLaunchObserver> mockObserver3;
-  mojo::Remote<chromeos::remote_apps::mojom::RemoteApps> remote3;
-  mojo::Receiver<chromeos::remote_apps::mojom::RemoteAppLaunchObserver>
-      proxyObserver{&mockObserver3};
-  manager_->BindRemoteAppsAndAppLaunchObserverForLacros(
-      remote3.BindNewPipeAndPassReceiver(),
-      proxyObserver.BindNewPipeAndPassRemote());
-
-  EXPECT_CALL(mockObserver3, OnRemoteAppLaunched(kId1, kExtensionId1))
-      .WillOnce([&on_remote_app_launched_with_app_id1_to_proxy_future](
-                    const std::string& app_id, const std::string& source_id) {
-        on_remote_app_launched_with_app_id1_to_proxy_future.SetValue(app_id);
-      });
-
   // App has id kId1, added by kExtensionId1.
   AddAppAndWaitForIconChange(kExtensionId1, kId1, "name", std::string(),
                              GURL("icon_url"), CreateTestIcon(32, SK_ColorRED),
@@ -685,18 +662,10 @@ IN_PROC_BROWSER_TEST_F(RemoteAppsManagerBrowsertest, OnAppLaunched) {
 
   manager_->LaunchApp(kId1);
   ASSERT_EQ(kId1, on_remote_app_launched_with_app_id1_future.Get());
-  ASSERT_EQ(kId1, on_remote_app_launched_with_app_id1_to_proxy_future.Get());
   ASSERT_FALSE(on_remote_app_launched_with_app_id2_future.IsReady());
-
-  EXPECT_CALL(mockObserver3, OnRemoteAppLaunched(kId2, kExtensionId2))
-      .WillOnce([&on_remote_app_launched_with_app_id2_to_proxy_future](
-                    const std::string& app_id, const std::string& source_id) {
-        on_remote_app_launched_with_app_id2_to_proxy_future.SetValue(app_id);
-      });
 
   manager_->LaunchApp(kId2);
   ASSERT_EQ(kId2, on_remote_app_launched_with_app_id2_future.Get());
-  ASSERT_EQ(kId2, on_remote_app_launched_with_app_id2_to_proxy_future.Get());
 }
 
 // Remote app list items are not supposed to be synced. This test verifies that
@@ -721,9 +690,9 @@ IN_PROC_BROWSER_TEST_F(RemoteAppsManagerBrowsertest, RemoteAppsNotSynced) {
   EXPECT_TRUE(item->GetMetadata()->is_ephemeral);
 
   // Remote app sync item not added to local storage.
-  const base::Value::Dict& local_items =
+  const base::DictValue& local_items =
       profile_->GetPrefs()->GetDict(prefs::kAppListLocalState);
-  const base::Value::Dict* dict_item = local_items.FindDict(kId1);
+  const base::DictValue* dict_item = local_items.FindDict(kId1);
   EXPECT_FALSE(dict_item);
 
   // Remote app sync item not uploaded to sync data.
@@ -760,9 +729,9 @@ IN_PROC_BROWSER_TEST_F(RemoteAppsManagerBrowsertest, RemoteFoldersNotSynced) {
   EXPECT_TRUE(item->GetMetadata()->is_ephemeral);
 
   // Remote folder sync item not added to local storage.
-  const base::Value::Dict& local_items =
+  const base::DictValue& local_items =
       profile_->GetPrefs()->GetDict(prefs::kAppListLocalState);
-  const base::Value::Dict* dict_item = local_items.FindDict(kId1);
+  const base::DictValue* dict_item = local_items.FindDict(kId1);
   EXPECT_FALSE(dict_item);
 
   // Remote folder sync item not uploaded to sync data.

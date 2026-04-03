@@ -13,11 +13,11 @@
 #include "third_party/blink/public/mojom/input/input_handler.mojom-shared.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
-#include "ui/base/pointer/touch_editing_controller.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/base/ui_base_types.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "ui/touch_selection/touch_editing_controller.h"
 
 namespace content {
 
@@ -95,7 +95,8 @@ void TouchSelectionControllerClientChildFrame::ShowTouchSelectionContextMenu(
     const gfx::Point& location) {
   // |location| should be in root-view coordinates, and RenderWidgetHostImpl
   // will do the conversion to renderer coordinates.
-  rwhv_->host()->ShowContextMenuAtPoint(location, ui::MENU_SOURCE_TOUCH_HANDLE);
+  rwhv_->host()->ShowContextMenuAtPoint(
+      location, ui::mojom::MenuSourceType::kTouchHandle);
 }
 
 // Since an active touch selection in a child frame can have its screen position
@@ -120,7 +121,6 @@ gfx::Point TouchSelectionControllerClientChildFrame::ConvertFromRoot(
 
 bool TouchSelectionControllerClientChildFrame::SupportsAnimation() const {
   NOTREACHED();
-  return false;
 }
 
 void TouchSelectionControllerClientChildFrame::SetNeedsAnimate() {
@@ -164,7 +164,6 @@ void TouchSelectionControllerClientChildFrame::OnDragUpdate(
 std::unique_ptr<ui::TouchHandleDrawable>
 TouchSelectionControllerClientChildFrame::CreateDrawable() {
   NOTREACHED();
-  return nullptr;
 }
 
 bool TouchSelectionControllerClientChildFrame::IsCommandIdEnabled(
@@ -173,26 +172,26 @@ bool TouchSelectionControllerClientChildFrame::IsCommandIdEnabled(
   bool readable = rwhv_->GetTextInputType() != ui::TEXT_INPUT_TYPE_PASSWORD;
   bool has_selection = !rwhv_->GetSelectedText().empty();
   switch (command_id) {
-    case ui::TouchEditable::kCut:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kCut):
       return editable && readable && has_selection;
-    case ui::TouchEditable::kCopy:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kCopy):
       return readable && has_selection;
-    case ui::TouchEditable::kPaste: {
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kPaste): {
       std::u16string result;
       ui::DataTransferEndpoint data_dst = ui::DataTransferEndpoint(
-          ui::EndpointType::kDefault, /*notify_if_restricted=*/false);
+          ui::EndpointType::kDefault, {.notify_if_restricted = false});
       ui::Clipboard::GetForCurrentThread()->ReadText(
           ui::ClipboardBuffer::kCopyPaste, &data_dst, &result);
       return editable && !result.empty();
     }
-    case ui::TouchEditable::kSelectAll: {
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll): {
       gfx::Range text_range;
       if (rwhv_->GetTextRange(&text_range)) {
         return text_range.length() > rwhv_->GetSelectedText().length();
       }
       return true;
     }
-    case ui::TouchEditable::kSelectWord: {
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord): {
       gfx::Range text_range;
       if (rwhv_->GetTextRange(&text_range)) {
         return readable && !has_selection && !text_range.is_empty();
@@ -206,30 +205,31 @@ bool TouchSelectionControllerClientChildFrame::IsCommandIdEnabled(
 
 void TouchSelectionControllerClientChildFrame::ExecuteCommand(int command_id,
                                                               int event_flags) {
-  const bool should_dismiss_handles =
-      command_id != ui::TouchEditable::kSelectAll &&
-      command_id != ui::TouchEditable::kSelectWord;
-  manager_->GetTouchSelectionController()->OnMenuCommand(
-      should_dismiss_handles);
-
+  if (command_id !=
+          std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll) &&
+      command_id !=
+          std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord)) {
+    manager_->GetTouchSelectionController()
+        ->HideAndDisallowShowingAutomatically();
+  }
   RenderWidgetHostDelegate* host_delegate = rwhv_->host()->delegate();
   if (!host_delegate)
     return;
 
   switch (command_id) {
-    case ui::TouchEditable::kCut:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kCut):
       host_delegate->Cut();
       break;
-    case ui::TouchEditable::kCopy:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kCopy):
       host_delegate->Copy();
       break;
-    case ui::TouchEditable::kPaste:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kPaste):
       host_delegate->Paste();
       break;
-    case ui::TouchEditable::kSelectAll:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kSelectAll):
       host_delegate->SelectAll();
       break;
-    case ui::TouchEditable::kSelectWord:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kSelectWord):
       host_delegate->SelectAroundCaret(
           blink::mojom::SelectionGranularity::kWord,
           /*should_show_handle=*/true,
@@ -237,7 +237,6 @@ void TouchSelectionControllerClientChildFrame::ExecuteCommand(int command_id,
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -249,8 +248,9 @@ void TouchSelectionControllerClientChildFrame::RunContextMenu() {
   gfx::PointF origin = rwhv_->TransformPointToRootCoordSpaceF(gfx::PointF());
   anchor_point.Offset(-origin.x(), -origin.y());
   RenderWidgetHostImpl* host = rwhv_->host();
-  host->GetAssociatedFrameWidget()->ShowContextMenu(
-      ui::MENU_SOURCE_TOUCH_EDIT_MENU, gfx::ToRoundedPoint(anchor_point));
+  host->GetRenderInputRouter()->ShowContextMenuAtPoint(
+      gfx::ToRoundedPoint(anchor_point),
+      ui::mojom::MenuSourceType::kTouchEditMenu);
 
   // Hide selection handles after getting rect-between-bounds from touch
   // selection controller; otherwise, rect would be empty and the above

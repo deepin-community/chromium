@@ -6,9 +6,10 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include <optional>
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
@@ -40,7 +41,7 @@ class NativeMessagingReaderTest : public testing::Test {
   void WriteMessage(const std::string& message);
 
   // Writes some data to the write-end of the pipe.
-  void WriteData(const char* data, int length);
+  void WriteData(base::span<const uint8_t> data);
 
  protected:
   std::unique_ptr<NativeMessagingReader> reader_;
@@ -91,13 +92,12 @@ void NativeMessagingReaderTest::OnError() {
 
 void NativeMessagingReaderTest::WriteMessage(const std::string& message) {
   uint32_t length = message.length();
-  WriteData(reinterpret_cast<char*>(&length), 4);
-  WriteData(message.data(), length);
+  WriteData(base::byte_span_from_ref(length));
+  WriteData(base::as_byte_span(message));
 }
 
-void NativeMessagingReaderTest::WriteData(const char* data, int length) {
-  int written = write_file_.WriteAtCurrentPos(data, length);
-  ASSERT_EQ(length, written);
+void NativeMessagingReaderTest::WriteData(base::span<const uint8_t> data) {
+  ASSERT_TRUE(write_file_.WriteAtCurrentPosAndCheck(data));
 }
 
 TEST_F(NativeMessagingReaderTest, ReaderDestroyedByClosingPipe) {
@@ -114,7 +114,7 @@ TEST_F(NativeMessagingReaderTest, ReaderDestroyedByClosingPipe) {
 #if BUILDFLAG(IS_WIN)
 // This scenario is only a problem on Windows as closing the write pipe there
 // does not trigger the parent process to close the read pipe.
-// TODO(crbug.com/1313610) Disabled because it's flaky.
+// TODO(crbug.com/40221037) Disabled because it's flaky.
 TEST_F(NativeMessagingReaderTest, DISABLED_ReaderDestroyedByOwner) {
   WriteMessage("{\"foo\": 42}");
   RunAndWaitForOperationComplete();
@@ -184,7 +184,7 @@ TEST_F(NativeMessagingReaderTest, MultipleGoodMessages) {
 
 TEST_F(NativeMessagingReaderTest, InvalidLength) {
   uint32_t length = 0xffffffff;
-  WriteData(reinterpret_cast<char*>(&length), 4);
+  WriteData(base::byte_span_from_ref(length));
   RunAndWaitForOperationComplete();
   ASSERT_FALSE(message_);
   ASSERT_TRUE(on_error_signaled_);
@@ -199,7 +199,7 @@ TEST_F(NativeMessagingReaderTest, EmptyFile) {
 
 TEST_F(NativeMessagingReaderTest, ShortHeader) {
   // Write only 3 bytes - the message length header is supposed to be 4 bytes.
-  WriteData("xxx", 3);
+  WriteData(base::as_byte_span(std::string_view("xxx")));
   write_file_.Close();
   RunAndWaitForOperationComplete();
   ASSERT_FALSE(message_);
@@ -208,7 +208,7 @@ TEST_F(NativeMessagingReaderTest, ShortHeader) {
 
 TEST_F(NativeMessagingReaderTest, EmptyBody) {
   uint32_t length = 1;
-  WriteData(reinterpret_cast<char*>(&length), 4);
+  WriteData(base::byte_span_from_ref(length));
   write_file_.Close();
   RunAndWaitForOperationComplete();
   ASSERT_FALSE(message_);
@@ -217,10 +217,10 @@ TEST_F(NativeMessagingReaderTest, EmptyBody) {
 
 TEST_F(NativeMessagingReaderTest, ShortBody) {
   uint32_t length = 2;
-  WriteData(reinterpret_cast<char*>(&length), 4);
+  WriteData(base::byte_span_from_ref(length));
 
   // Only write 1 byte, where the header indicates there should be 2 bytes.
-  WriteData("x", 1);
+  WriteData(base::as_byte_span(std::string_view("x")));
   write_file_.Close();
   RunAndWaitForOperationComplete();
   ASSERT_FALSE(message_);

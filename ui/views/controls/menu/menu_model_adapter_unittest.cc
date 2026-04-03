@@ -5,6 +5,7 @@
 #include "ui/views/controls/menu/menu_model_adapter.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -36,7 +37,6 @@ class MenuModelBase : public ui::MenuModel {
   ~MenuModelBase() override = default;
 
   // ui::MenuModel implementation:
-
   size_t GetItemCount() const override { return items_.size(); }
 
   ItemType GetTypeAt(size_t index) const override { return items_[index].type; }
@@ -88,6 +88,11 @@ class MenuModelBase : public ui::MenuModel {
     return items_[index].new_feature;
   }
 
+  std::optional<ui::NewBadgeType> GetNewBadgeTypeAt(
+      size_t index) const override {
+    return items_[index].new_badge_type;
+  }
+
   MenuModel* GetSubmenuModelAt(size_t index) const override {
     return items_[index].submenu;
   }
@@ -129,6 +134,7 @@ class MenuModelBase : public ui::MenuModel {
     bool visible = true;
     bool alerted = false;
     bool new_feature = false;
+    std::optional<ui::NewBadgeType> new_badge_type = std::nullopt;
   };
 
   const Item& GetItemDefinition(size_t index) { return items_[index]; }
@@ -147,7 +153,7 @@ class MenuModelBase : public ui::MenuModel {
   std::optional<size_t> last_activation_;
 };
 
-class SubmenuModel : public MenuModelBase {
+class SubmenuModel final : public MenuModelBase {
  public:
   SubmenuModel() : MenuModelBase(kSubmenuIdBase) {
     items_.emplace_back(TYPE_COMMAND, "submenu item 0", nullptr, false, true);
@@ -159,23 +165,38 @@ class SubmenuModel : public MenuModelBase {
   SubmenuModel& operator=(const SubmenuModel&) = delete;
 
   ~SubmenuModel() override = default;
+
+  base::WeakPtr<ui::MenuModel> AsWeakPtr() override {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
+ private:
+  base::WeakPtrFactory<SubmenuModel> weak_ptr_factory_{this};
 };
 
-class ActionableSubmenuModel : public MenuModelBase {
+class ActionableSubmenuModel final : public MenuModelBase {
  public:
   ActionableSubmenuModel() : MenuModelBase(kActionableSubmenuIdBase) {
     items_.emplace_back(TYPE_COMMAND, "actionable submenu item 0", nullptr);
     items_.emplace_back(TYPE_COMMAND, "actionable submenu item 1", nullptr);
     items_[1].new_feature = true;
+    items_[1].new_badge_type = ui::NewBadgeType::kNew;
   }
 
   ActionableSubmenuModel(const ActionableSubmenuModel&) = delete;
   ActionableSubmenuModel& operator=(const ActionableSubmenuModel&) = delete;
 
   ~ActionableSubmenuModel() override = default;
+
+  base::WeakPtr<ui::MenuModel> AsWeakPtr() override {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
+ private:
+  base::WeakPtrFactory<ActionableSubmenuModel> weak_ptr_factory_{this};
 };
 
-class RootModel : public MenuModelBase {
+class RootModel final : public MenuModelBase {
  public:
   RootModel() : MenuModelBase(kRootIdBase) {
     submenu_model_ = std::make_unique<SubmenuModel>();
@@ -198,9 +219,14 @@ class RootModel : public MenuModelBase {
     items_.clear();
   }
 
+  base::WeakPtr<ui::MenuModel> AsWeakPtr() override {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  private:
   std::unique_ptr<MenuModel> submenu_model_;
   std::unique_ptr<MenuModel> actionable_submenu_model_;
+  base::WeakPtrFactory<RootModel> weak_ptr_factory_{this};
 };
 
 void CheckSubmenu(const RootModel& model,
@@ -267,7 +293,9 @@ void CheckSubmenu(const RootModel& model,
     EXPECT_EQ(model_item.alerted, item->is_alerted());
 
     // Check new feature flag.
-    EXPECT_EQ(model_item.new_feature, item->is_new());
+    const bool is_new = item->new_badge_type().has_value() &&
+                        (item->new_badge_type() == ui::NewBadgeType::kNew);
+    EXPECT_EQ(model_item.new_feature, is_new);
 
     // Check activation.
     static_cast<views::MenuDelegate*>(delegate)->ExecuteCommand(id);
@@ -351,7 +379,9 @@ TEST_F(MenuModelAdapterTest, BasicTest) {
     EXPECT_EQ(model_item.alerted, item->is_alerted());
 
     // Check new feature flag.
-    EXPECT_EQ(model_item.new_feature, item->is_new());
+    const bool is_new = item->new_badge_type().has_value() &&
+                        (item->new_badge_type() == ui::NewBadgeType::kNew);
+    EXPECT_EQ(model_item.new_feature, is_new);
 
     // Check activation.
     static_cast<views::MenuDelegate*>(&delegate)->ExecuteCommand(id);

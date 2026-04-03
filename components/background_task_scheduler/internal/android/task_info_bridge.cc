@@ -5,6 +5,8 @@
 #include "components/background_task_scheduler/internal/android/task_info_bridge.h"
 
 #include "base/android/jni_string.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/background_task_scheduler/internal/jni_headers/TaskInfoBridge_jni.h"
 
 namespace background_task {
@@ -47,9 +49,11 @@ base::android::ScopedJavaLocalRef<jobject> TaskInfoBridge::CreateTaskInfo(
 
   auto j_extras = base::android::ConvertUTF8ToJavaString(env, task_info.extras);
   return Java_TaskInfoBridge_createTaskInfo(
-      env, task_info.task_id, j_timing_info, j_extras,
+      env, static_cast<int>(task_info.task_id), j_timing_info, j_extras,
       static_cast<int>(task_info.network_type), task_info.requires_charging,
       task_info.is_persisted, task_info.update_current);
 }
 
 }  // namespace background_task
+
+DEFINE_JNI(TaskInfoBridge)

@@ -11,18 +11,17 @@
 #include "base/test/test_mock_time_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/extensions/api/identity/web_auth_flow_info_bar_delegate.h"
+#include "chrome/browser/extensions/browser_window_util.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/nuke_profile_directory_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sessions/session_restore.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_window.h"
-#include "chrome/test/base/in_process_browser_test.h"
-#include "components/keep_alive_registry/keep_alive_types.h"
-#include "components/keep_alive_registry/scoped_keep_alive.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/test/base/platform_browser_test.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
@@ -31,6 +30,14 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/base_window.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "chrome/browser/sessions/session_restore.h"
+#include "chrome/test/base/ui_test_utils.h"
+#include "components/keep_alive_registry/keep_alive_types.h"
+#include "components/keep_alive_registry/scoped_keep_alive.h"
+#endif
 
 namespace extensions {
 
@@ -41,10 +48,10 @@ class MockWebAuthFlowDelegate : public WebAuthFlow::Delegate {
   MOCK_METHOD(void, OnAuthFlowFailure, (WebAuthFlow::Failure), (override));
 };
 
-class WebAuthFlowBrowserTest : public InProcessBrowserTest {
+class WebAuthFlowBrowserTest : public PlatformBrowserTest {
  public:
   void SetUpOnMainThread() override {
-    InProcessBrowserTest::SetUpOnMainThread();
+    PlatformBrowserTest::SetUpOnMainThread();
     ASSERT_TRUE(embedded_test_server()->Start());
 
     // Delete the flow early if OnAuthFlowFailure is called. Simulates real
@@ -70,7 +77,7 @@ class WebAuthFlowBrowserTest : public InProcessBrowserTest {
     // in |DeleteWebAuthFlow| as it can be called from `timeout_task_runner_`'s
     // loop.
     base::RunLoop().RunUntilIdle();
-    InProcessBrowserTest::TearDownOnMainThread();
+    PlatformBrowserTest::TearDownOnMainThread();
   }
 
   void StartWebAuthFlow(
@@ -82,7 +89,7 @@ class WebAuthFlowBrowserTest : public InProcessBrowserTest {
       std::optional<base::TimeDelta> timeout_for_non_interactive = std::nullopt,
       std::optional<gfx::Rect> popup_bounds = std::nullopt) {
     if (!profile)
-      profile = browser()->profile();
+      profile = GetProfile();
 
     web_auth_flow_ = std::make_unique<WebAuthFlow>(
         &mock_web_auth_flow_delegate_, profile, url, mode,
@@ -102,6 +109,18 @@ class WebAuthFlowBrowserTest : public InProcessBrowserTest {
       return nullptr;
     }
     return web_auth_flow_->web_contents();
+  }
+
+  BrowserWindowInterface* GetFirstActivatedBrowser() {
+    BrowserWindowInterface* first_activated_browser = nullptr;
+    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+        [&first_activated_browser](
+            BrowserWindowInterface* browser_window_interface) {
+          // The first activated browser is the one at the end of the vector.
+          first_activated_browser = browser_window_interface;
+          return true;
+        });
+    return first_activated_browser;
   }
 
   MockWebAuthFlowDelegate& mock() { return mock_web_auth_flow_delegate_; }
@@ -441,12 +460,11 @@ IN_PROC_BROWSER_TEST_F(WebAuthFlowFencedFrameTest,
 }
 
 // This test is in two parts:
-// - First create a WebAuthFlow in interactive mode that will create a new tab
-// with the auth_url.
-// - Close the new created tab, simulating the user declining the consent by
-// closing the tab.
+// - First create a WebAuthFlow in interactive mode that will create a popup
+// window with the auth_url.
+// - Close the new created window, simulating the user declining the consent.
 //
-// These two tests are combined into one in order not to re-test the tab
+// These two tests are combined into one in order not to re-test the window
 // creation twice.
 IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest,
                        InteractivePopupWindowCreatedWithAuthURL_ThenCloseTab) {
@@ -462,11 +480,17 @@ IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest,
 
   navigation_observer.Wait();
 
-  Browser* popup_browser = chrome::FindBrowserWithTab(web_contents());
-  EXPECT_EQ(popup_browser->type(), Browser::Type::TYPE_POPUP);
-  EXPECT_NE(browser(), popup_browser);
-  TabStripModel* tabs = popup_browser->tab_strip_model();
-  EXPECT_EQ(tabs->GetActiveWebContents()->GetLastCommittedURL(), auth_url);
+// TODO(crbug.com/434156398): Enable these checks on Android.
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  BrowserWindowInterface* popup_browser =
+      extensions::browser_window_util::GetBrowserForTabContents(
+          *web_contents());
+  EXPECT_EQ(popup_browser->GetType(), BrowserWindowInterface::TYPE_POPUP);
+  EXPECT_NE(GetFirstActivatedBrowser(), popup_browser);
+  TabListInterface* tabs = TabListInterface::From(popup_browser);
+  EXPECT_EQ(tabs->GetActiveTab()->GetContents()->GetLastCommittedURL(),
+            auth_url);
+#endif
 
   // Check info bar exists and displays proper message with extension name.
   base::WeakPtr<WebAuthFlowInfoBarDelegate> infobar_delegate =
@@ -481,8 +505,11 @@ IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest,
   //---------------------------------------------------------------------
   // Part of the test that closes the tab, simulating declining the consent.
   //---------------------------------------------------------------------
+  // TODO(crbug.com/434156398): Enable this check on Android.
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   EXPECT_CALL(mock(), OnAuthFlowFailure(WebAuthFlow::Failure::WINDOW_CLOSED));
-  tabs->CloseWebContentsAt(tabs->active_index(), 0);
+  tabs->GetActiveTab()->Close();
+#endif
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -511,9 +538,14 @@ IN_PROC_BROWSER_TEST_F(
       web_auth_flow()->GetInfoBarDelegateForTesting();
   ASSERT_TRUE(auth_info_bar);
 
-  Browser* popup_browser = chrome::FindBrowserWithTab(web_contents());
-  EXPECT_EQ(popup_browser->type(), Browser::Type::TYPE_POPUP);
-  EXPECT_NE(browser(), popup_browser);
+// TODO(crbug.com/434156398): Enable these checks on Android.
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  BrowserWindowInterface* popup_browser =
+      extensions::browser_window_util::GetBrowserForTabContents(
+          *web_contents());
+  EXPECT_EQ(popup_browser->GetType(), BrowserWindowInterface::TYPE_POPUP);
+  EXPECT_NE(GetFirstActivatedBrowser(), popup_browser);
+#endif
 
   // Simulate an internal navigation, such as an authentication that needs an
   // input of username and password on two different pages/urls.
@@ -524,7 +556,7 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(web_contents()->GetURL(), new_url);
 
   EXPECT_CALL(mock(), OnAuthFlowURLChange(auth_url));
-  // TODO(https://crbug.com/1454772): Need to disable BackForwardCaching as it
+  // TODO(crbug.com/40272465): Need to disable BackForwardCaching as it
   // causes crashes since the WebContent is initially loaded in an
   // unattached mode.
   content::DisableBackForwardCacheForTesting(
@@ -533,25 +565,36 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(content::HistoryGoBack(web_contents()));
 
   EXPECT_EQ(web_contents()->GetURL(), auth_url);
+
+// TODO(crbug.com/434156398): Enable these checks on Android.
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   // Popup window is still active.
   EXPECT_TRUE(popup_browser);
-  EXPECT_EQ(chrome::FindBrowserWithTab(web_contents()), popup_browser);
+  EXPECT_EQ(extensions::browser_window_util::GetBrowserForTabContents(
+                *web_contents()),
+            popup_browser);
+#endif
+
   // Infobar should not be closed on navigation.
   EXPECT_TRUE(auth_info_bar);
 }
 
+// TODO(crbug.com/434156398): Find the Android equivalent of KeepAliveRegistry
+// and enable these tests on all platforms.
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 IN_PROC_BROWSER_TEST_F(
     WebAuthFlowBrowserTest,
     InteractiveNoBrowser_WebAuthCreatesBrowserWithPopupWindow) {
-  Profile* profile = browser()->profile();
+  Profile* profile = GetProfile();
   // Simulates an extension being opened, in order for the profile not to be
   // added for destruction.
   ScopedProfileKeepAlive profile_keep_alive(
       profile, ProfileKeepAliveOrigin::kBackgroundMode);
   ScopedKeepAlive keep_alive{KeepAliveOrigin::BROWSER,
                              KeepAliveRestartOption::DISABLED};
-  CloseBrowserSynchronously(browser());
-  ASSERT_FALSE(chrome::FindBrowserWithProfile(profile));
+  CloseBrowserSynchronously(GetFirstActivatedBrowser());
+  ASSERT_FALSE(extensions::browser_window_util::GetLastActiveBrowserWithProfile(
+      *profile, /*include_incognito_or_parent=*/false));
 
   const GURL auth_url = embedded_test_server()->GetURL("/title1.html");
   content::TestNavigationObserver navigation_observer(auth_url);
@@ -562,11 +605,14 @@ IN_PROC_BROWSER_TEST_F(
 
   navigation_observer.Wait();
 
-  Browser* new_browser = chrome::FindBrowserWithProfile(profile);
+  BrowserWindowInterface* new_browser =
+      extensions::browser_window_util::GetLastActiveBrowserWithProfile(
+          *profile, /*include_incognito_or_parent=*/false);
   EXPECT_TRUE(new_browser);
-  EXPECT_EQ(new_browser->type(), Browser::Type::TYPE_POPUP);
-  EXPECT_EQ(new_browser->tab_strip_model()
-                ->GetActiveWebContents()
+  EXPECT_EQ(new_browser->GetType(), BrowserWindowInterface::TYPE_POPUP);
+  EXPECT_EQ(TabListInterface::From(new_browser)
+                ->GetActiveTab()
+                ->GetContents()
                 ->GetLastCommittedURL(),
             auth_url);
 }
@@ -575,7 +621,7 @@ IN_PROC_BROWSER_TEST_F(
 // window does not trigger Session restore.
 IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest,
                        InteractiveNoBrowser_NotActivatingSessionRestore) {
-  Profile* profile = browser()->profile();
+  Profile* profile = GetProfile();
 
   // Enable SessionRestore to last used pages.
   SessionStartupPref startup_pref(SessionStartupPref::LAST);
@@ -586,8 +632,9 @@ IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest,
       profile, ProfileKeepAliveOrigin::kBackgroundMode);
   ScopedKeepAlive keep_alive{KeepAliveOrigin::BROWSER,
                              KeepAliveRestartOption::DISABLED};
-  CloseBrowserSynchronously(browser());
-  ASSERT_FALSE(chrome::FindBrowserWithProfile(profile));
+  CloseBrowserSynchronously(GetFirstActivatedBrowser());
+  ASSERT_FALSE(extensions::browser_window_util::GetLastActiveBrowserWithProfile(
+      *profile, /*include_incognito_or_parent*/false));
 
   const GURL auth_url = embedded_test_server()->GetURL("/title1.html");
   content::TestNavigationObserver navigation_observer(auth_url);
@@ -600,20 +647,28 @@ IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest,
   // Makes sure only one browser is created and profile is not trying to restore
   // previous tabs.
   EXPECT_FALSE(SessionRestore::IsRestoring(profile));
-  EXPECT_EQ(chrome::FindAllBrowsersWithProfile(profile).size(), 1u);
+  EXPECT_EQ(GetAllBrowserWindowInterfaces().size(), 1u);
 
-  Browser* new_browser = chrome::FindBrowserWithProfile(profile);
+  BrowserWindowInterface* new_browser =
+      extensions::browser_window_util::GetLastActiveBrowserWithProfile(
+          *profile, /*include_incognito_or_parent=*/false);
   EXPECT_TRUE(new_browser);
-  EXPECT_EQ(new_browser->type(), Browser::Type::TYPE_POPUP);
-  EXPECT_EQ(new_browser->tab_strip_model()
-                ->GetActiveWebContents()
+  EXPECT_EQ(new_browser->GetType(), BrowserWindowInterface::TYPE_POPUP);
+  EXPECT_EQ(TabListInterface::From(new_browser)
+                ->GetActiveTab()
+                ->GetContents()
                 ->GetLastCommittedURL(),
             auth_url);
 }
+#endif
 
 IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest, SilentNewTabNotCreated) {
-  TabStripModel* tabs = browser()->tab_strip_model();
-  int initial_tab_count = tabs->count();
+  Profile* profile = GetProfile();
+
+  TabListInterface* tabs = TabListInterface::From(
+      extensions::browser_window_util::GetLastActiveBrowserWithProfile(
+          *profile, /*include_incognito_or_parent=*/false));
+  int initial_tab_count = tabs->GetTabCount();
 
   const GURL auth_url = embedded_test_server()->GetURL("/title1.html");
   content::TestNavigationObserver navigation_observer(auth_url);
@@ -627,7 +682,7 @@ IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest, SilentNewTabNotCreated) {
   navigation_observer.Wait();
 
   // Tab not created, tab count did not increase.
-  EXPECT_EQ(tabs->count(), initial_tab_count);
+  EXPECT_EQ(tabs->GetTabCount(), initial_tab_count);
 }
 
 IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest,
@@ -641,10 +696,16 @@ IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest,
 
   navigation_observer.Wait();
 
-  Browser* popup_browser = chrome::FindBrowserWithTab(web_contents());
-  TabStripModel* tabs = popup_browser->tab_strip_model();
-  EXPECT_NE(browser(), popup_browser);
-  EXPECT_EQ(tabs->GetActiveWebContents()->GetLastCommittedURL(), auth_url);
+  // TODO(crbug.com/434156398): Enable these checks on Android.
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  BrowserWindowInterface* popup_browser =
+      extensions::browser_window_util::GetBrowserForTabContents(
+          *web_contents());
+  TabListInterface* tabs = TabListInterface::From(popup_browser);
+  EXPECT_NE(GetFirstActivatedBrowser(), popup_browser);
+  EXPECT_EQ(tabs->GetActiveTab()->GetContents()->GetLastCommittedURL(),
+            auth_url);
+#endif
 
   // Check info bar is not created if not set via
   // `SetShouldShowInfoBar())`.
@@ -655,7 +716,7 @@ IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest,
                        PopupWindowOpened_ThenCloseWindow) {
-  size_t initial_browser_count = chrome::GetTotalBrowserCount();
+  size_t initial_browser_count = GetAllBrowserWindowInterfaces().size();
 
   const GURL auth_url = embedded_test_server()->GetURL("/title1.html");
   content::TestNavigationObserver navigation_observer(auth_url);
@@ -667,29 +728,37 @@ IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest,
   navigation_observer.Wait();
 
   // New popup window is a browser, browser count should increment by 1.
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), initial_browser_count + 1);
+  EXPECT_EQ(GetAllBrowserWindowInterfaces().size(), initial_browser_count + 1);
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   // Retrieve the browser used in the WebAuthFlow, the popup window.
-  Browser* popup_window_browser = chrome::FindBrowserWithTab(web_contents());
-  EXPECT_NE(popup_window_browser, browser());
+  BrowserWindowInterface* popup_window_browser =
+      extensions::browser_window_util::GetBrowserForTabContents(
+          *web_contents());
+  EXPECT_NE(popup_window_browser, GetFirstActivatedBrowser());
 
-  TabStripModel* popup_tabs = popup_window_browser->tab_strip_model();
-  EXPECT_EQ(popup_tabs->count(), 1);
-  EXPECT_EQ(popup_tabs->GetActiveWebContents()->GetLastCommittedURL(),
+  TabListInterface* popup_tabs = TabListInterface::From(popup_window_browser);
+  EXPECT_EQ(popup_tabs->GetTabCount(), 1);
+  EXPECT_EQ(popup_tabs->GetActiveTab()->GetContents()->GetLastCommittedURL(),
             auth_url);
 
   //---------------------------------------------------------------------
   // Closing the browser popup window, simulating declining the consent.
   //---------------------------------------------------------------------
   EXPECT_CALL(mock(), OnAuthFlowFailure(WebAuthFlow::Failure::WINDOW_CLOSED));
-  CloseBrowserSynchronously(popup_window_browser);
+  popup_window_browser->GetWindow()->Close();
+#else
+  // TODO(crbug.com/434156398): Remove this skip and support the entire test on
+  // desktop Android.
+  GTEST_SKIP();
+#endif
 }
 
 IN_PROC_BROWSER_TEST_F(
     WebAuthFlowBrowserTest,
     Interactive_MarkedForDeletionProfileNotAllowedToCreatePopupWindow) {
   // Marking active profile for deletion.
-  MarkProfileDirectoryForDeletion(browser()->profile()->GetPath());
+  MarkProfileDirectoryForDeletion(GetProfile()->GetPath());
 
   const GURL auth_url = embedded_test_server()->GetURL("/title1.html");
 
@@ -706,7 +775,7 @@ IN_PROC_BROWSER_TEST_F(
 }
 
 IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest, PopupWindowOpened_WithBounds) {
-  size_t initial_browser_count = chrome::GetTotalBrowserCount();
+  size_t initial_browser_count = GetAllBrowserWindowInterfaces().size();
 
   const GURL auth_url = embedded_test_server()->GetURL("/title1.html");
   content::TestNavigationObserver navigation_observer(auth_url);
@@ -720,19 +789,68 @@ IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest, PopupWindowOpened_WithBounds) {
   navigation_observer.Wait();
 
   // New popup window is a browser, browser count should increment by 1.
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), initial_browser_count + 1);
+  EXPECT_EQ(GetAllBrowserWindowInterfaces().size(), initial_browser_count + 1);
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   // Retrieve the browser used in the WebAuthFlow, the popup window.
-  Browser* popup_window_browser = chrome::FindBrowserWithTab(web_contents());
-  EXPECT_NE(popup_window_browser, browser());
+  BrowserWindowInterface* popup_window_browser =
+      extensions::browser_window_util::GetBrowserForTabContents(
+          *web_contents());
+  EXPECT_NE(popup_window_browser, GetFirstActivatedBrowser());
 
-  gfx::Rect bounds = popup_window_browser->window()->GetBounds();
+  gfx::Rect bounds = popup_window_browser->GetWindow()->GetBounds();
   EXPECT_EQ(bounds.x(), test_bounds.x());
   EXPECT_EQ(bounds.y(), test_bounds.y());
   // The final width and height can contain platform-specific offsets for the
   // window title bar, which we don't want to assert exactly here.
   EXPECT_GE(bounds.width(), test_bounds.width());
   EXPECT_GE(bounds.height(), test_bounds.height());
+#else
+  // TODO(crbug.com/434156398): Remove this skip and support the entire test on
+  // desktop Android.
+  GTEST_SKIP();
+#endif
+}
+
+IN_PROC_BROWSER_TEST_F(WebAuthFlowBrowserTest,
+                       WebContentsDestroyedBeforeProfileShutDown) {
+  // Default mock implementation of OnAuthFlowFailure deletes the flow. We do
+  // not want that behavior in this test because we want to verify WebAuthFlow's
+  // internal state before destruction.
+  ON_CALL(mock(), OnAuthFlowFailure)
+      .WillByDefault([](WebAuthFlow::Failure failure) {});
+
+  size_t initial_browser_count = GetAllBrowserWindowInterfaces().size();
+
+  // Start a WebAuthFlow that will create a popup window.
+  const GURL auth_url = embedded_test_server()->GetURL("/title1.html");
+  content::TestNavigationObserver navigation_observer(auth_url);
+  navigation_observer.StartWatchingNewWebContents();
+  StartWebAuthFlow(auth_url, WebAuthFlow::Mode::INTERACTIVE);
+  navigation_observer.Wait();
+
+  // Authentication flow should have created a popup window.
+  EXPECT_EQ(GetAllBrowserWindowInterfaces().size(), initial_browser_count + 1);
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  BrowserWindowInterface* popup =
+      extensions::browser_window_util::GetBrowserForTabContents(
+          *web_contents());
+
+  // Simulate profile destruction notification and wait for the auth popup to
+  // close.
+  ui_test_utils::BrowserDestroyedObserver observer(popup);
+  static_cast<ProfileObserver*>(web_auth_flow())
+      ->OnProfileWillBeDestroyed(GetProfile());
+  observer.Wait();
+  // Verify that WebAuthFlow closed the WebContents.
+  EXPECT_TRUE(web_auth_flow());
+  EXPECT_FALSE(web_auth_flow()->web_contents());
+  EXPECT_EQ(GetAllBrowserWindowInterfaces().size(), initial_browser_count);
+#else
+  // TODO(crbug.com/434156398): Remove this skip and support the entire test on
+  // desktop Android.
+  GTEST_SKIP();
+#endif
 }
 
 }  //  namespace extensions

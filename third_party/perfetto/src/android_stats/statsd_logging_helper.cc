@@ -16,10 +16,12 @@
 
 #include "src/android_stats/statsd_logging_helper.h"
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "perfetto/base/build_config.h"
-#include "perfetto/base/compiler.h"
+#include "src/android_stats/perfetto_atoms.h"
 
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) && \
     PERFETTO_BUILDFLAG(PERFETTO_ANDROID_BUILD)
@@ -27,8 +29,7 @@
 #include "src/android_internal/statsd_logging.h"       // nogncheck
 #endif
 
-namespace perfetto {
-namespace android_stats {
+namespace perfetto::android_stats {
 
 // Make sure we don't accidentally log on non-Android tree build. Note that even
 // removing this ifdef still doesn't make uploads work on OS_ANDROID.
@@ -48,20 +49,11 @@ void MaybeLogUploadEvent(PerfettoStatsdAtom atom,
 }
 
 void MaybeLogTriggerEvent(PerfettoTriggerAtom atom,
+                          int64_t uuid_lsb,
                           const std::string& trigger_name) {
   PERFETTO_LAZY_LOAD(android_internal::StatsdLogTriggerEvent, log_event_fn);
   if (log_event_fn) {
-    log_event_fn(atom, trigger_name.c_str());
-  }
-}
-
-void MaybeLogTriggerEvents(PerfettoTriggerAtom atom,
-                           const std::vector<std::string>& triggers) {
-  PERFETTO_LAZY_LOAD(android_internal::StatsdLogTriggerEvent, log_event_fn);
-  if (log_event_fn) {
-    for (const std::string& trigger_name : triggers) {
-      log_event_fn(atom, trigger_name.c_str());
-    }
+    log_event_fn(atom, uuid_lsb, trigger_name.c_str());
   }
 }
 
@@ -70,10 +62,7 @@ void MaybeLogUploadEvent(PerfettoStatsdAtom,
                          int64_t,
                          int64_t,
                          const std::string&) {}
-void MaybeLogTriggerEvent(PerfettoTriggerAtom, const std::string&) {}
-void MaybeLogTriggerEvents(PerfettoTriggerAtom,
-                           const std::vector<std::string>&) {}
+void MaybeLogTriggerEvent(PerfettoTriggerAtom, int64_t, const std::string&) {}
 #endif
 
-}  // namespace android_stats
-}  // namespace perfetto
+}  // namespace perfetto::android_stats

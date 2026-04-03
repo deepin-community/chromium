@@ -4,18 +4,17 @@
 
 #include "chrome/browser/ui/extensions/extensions_overrides/simple_overrides.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/strings/string_split.h"
-#include "chrome/common/extensions/api/chrome_url_overrides.h"
 #include "chrome/common/extensions/api/omnibox.h"
 #include "chrome/common/extensions/api/side_panel.h"
+#include "extensions/common/api/chrome_url_overrides.h"
 #include "extensions/common/api/content_scripts.h"
 #include "extensions/common/api/cross_origin_isolation.h"
 #include "extensions/common/api/declarative_net_request.h"
@@ -38,7 +37,7 @@ namespace {
 // encompass every feature. This ensures that when developers add a new
 // feature, they consider whether it should be allowed for "simple override"
 // extensions.
-const char* kDisallowedFeatures[] = {
+constexpr const char* kDisallowedFeatures[] = {
     // Manifest constants.
     extensions::manifest_keys::kAction,
     extensions::manifest_keys::kApp,
@@ -73,7 +72,6 @@ const char* kDisallowedFeatures[] = {
     extensions::manifest_keys::kLinkedAppIcons,
     extensions::manifest_keys::kMIMETypes,
     extensions::manifest_keys::kMimeTypesHandler,
-    extensions::manifest_keys::kNaClModules,
     extensions::manifest_keys::kNativelyConnectable,
     extensions::manifest_keys::kOptionalHostPermissions,
     extensions::manifest_keys::kOptionalPermissions,
@@ -81,9 +79,9 @@ const char* kDisallowedFeatures[] = {
     extensions::manifest_keys::kPermissions,
     extensions::manifest_keys::kPlatformAppBackground,
     extensions::manifest_keys::kPlatformAppContentSecurityPolicy,
+    extensions::manifest_keys::kProtocolHandlers,
     extensions::manifest_keys::kReplacementWebApp,
     extensions::manifest_keys::kSockets,
-    extensions::manifest_keys::kSystemIndicator,
     extensions::manifest_keys::kTheme,
     extensions::manifest_keys::kTrialTokens,
     extensions::manifest_keys::kTtsEngine,
@@ -127,6 +125,7 @@ const char* kDisallowedFeatures[] = {
     // and thus not exposed in a .h).
     "chrome_url_overrides.activationmessage",
     "chrome_url_overrides.keyboard",
+    "nacl_modules",
     "oauth2.auto_approve",
     "platforms",
     "sandbox",
@@ -155,18 +154,18 @@ TEST(ExtensionSimpleOverridesTest,
   // Verify that all disallowed features are recognized and that none are in
   // both the disallowed and allowed feature sets.
   for (const auto& feature : disallowed_features) {
-    EXPECT_TRUE(base::Contains(known_features, feature))
+    EXPECT_TRUE(known_features.contains(feature))
         << "Unknown feature: " << feature;
-    EXPECT_FALSE(base::Contains(allowlisted_features, feature))
+    EXPECT_FALSE(std::ranges::contains(allowlisted_features, feature))
         << "Feature in both allowed and disallowed: " << feature;
   }
 
   // Verify that all allowed features are recognized and that none are in
   // both the disallowed and allowed feature sets.
   for (const auto& feature : allowlisted_features) {
-    EXPECT_TRUE(base::Contains(known_features, feature))
+    EXPECT_TRUE(known_features.contains(feature))
         << "Unknown feature: " << feature;
-    EXPECT_FALSE(base::Contains(disallowed_features, feature))
+    EXPECT_FALSE(std::ranges::contains(disallowed_features, feature))
         << "Feature in both allowed and disallowed: " << feature;
   }
 
@@ -177,8 +176,8 @@ TEST(ExtensionSimpleOverridesTest,
     // Review the comment in simple_overrides.cc above the allowed feature
     // list and evaluate whether your new feature belongs in the allowed or
     // disallowed features list (it should likely be disallowed).
-    EXPECT_TRUE(base::Contains(disallowed_features, key) ||
-                base::Contains(allowlisted_features, key))
+    EXPECT_TRUE(std::ranges::contains(disallowed_features, key) ||
+                std::ranges::contains(allowlisted_features, key))
         << "Unknown feature: " << key;
   }
 }
@@ -202,7 +201,7 @@ TEST(ExtensionSimpleOverridesTest,
 TEST(ExtensionSimpleOverridesTest,
      ExtensionWithPermissionsIsNotConsideredSimple) {
   scoped_refptr<const extensions::Extension> extension =
-      extensions::ExtensionBuilder("alpha").AddPermission("tabs").Build();
+      extensions::ExtensionBuilder("alpha").AddAPIPermission("tabs").Build();
   EXPECT_FALSE(simple_overrides::IsSimpleOverrideExtension(*extension));
 }
 

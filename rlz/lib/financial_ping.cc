@@ -4,13 +4,20 @@
 //
 // Library functions related to the Financial Server ping.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "rlz/lib/financial_ping.h"
 
 #include <stdint.h>
 
+#include <atomic>
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "base/atomicops.h"
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
 #include "base/no_destructor.h"
@@ -23,6 +30,7 @@
 #include "base/task/thread_pool.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
+#include "net/http/http_response_headers.h"
 #include "rlz/lib/assert.h"
 #include "rlz/lib/lib_values.h"
 #include "rlz/lib/machine_id.h"
@@ -47,8 +55,6 @@
 #include "url/gurl.h"
 
 namespace rlz_lib {
-
-using base::subtle::AtomicWord;
 
 bool FinancialPing::FormRequest(Product product,
     const AccessPoint* access_points, const char* product_signature,
@@ -192,18 +198,14 @@ class RefCountedWaitableEvent
 // RefCountedWaitableEvent when the load completes.
 void OnURLLoadComplete(std::unique_ptr<network::SimpleURLLoader> url_loader,
                        scoped_refptr<RefCountedWaitableEvent> event,
-                       std::unique_ptr<std::string> response_body) {
+                       std::optional<std::string> response_body) {
   int response_code = -1;
   if (url_loader->ResponseInfo() && url_loader->ResponseInfo()->headers) {
     response_code = url_loader->ResponseInfo()->headers->response_code();
   }
 
-  std::string response;
-  if (response_body) {
-    response = std::move(*response_body);
-  }
-
-  event->SignalFetchComplete(response_code, std::move(response));
+  event->SignalFetchComplete(response_code,
+                             std::move(response_body).value_or(""));
 }
 
 bool send_financial_ping_interrupted_for_test = false;
@@ -221,12 +223,11 @@ scoped_refptr<RefCountedWaitableEvent>& GetPingResultEvent() {
 // The pointer to URLRequestContextGetter used by FinancialPing::PingServer().
 // It is atomic pointer because it can be accessed and modified by multiple
 // threads.
-AtomicWord g_URLLoaderFactory;
+std::atomic<network::mojom::URLLoaderFactory*> g_URLLoaderFactory;
 
 bool FinancialPing::SetURLLoaderFactory(
     network::mojom::URLLoaderFactory* factory) {
-  base::subtle::Release_Store(&g_URLLoaderFactory,
-                              reinterpret_cast<AtomicWord>(factory));
+  g_URLLoaderFactory.store(factory, std::memory_order_release);
   scoped_refptr<RefCountedWaitableEvent> event = GetPingResultEvent();
   if (!factory && event) {
     send_financial_ping_interrupted_for_test = true;
@@ -241,8 +242,7 @@ void PingRlzServer(std::string url,
   // in different thread. The instance is guaranteed to exist while
   // the method is running.
   network::mojom::URLLoaderFactory* url_loader_factory =
-      reinterpret_cast<network::mojom::URLLoaderFactory*>(
-          base::subtle::Acquire_Load(&g_URLLoaderFactory));
+      g_URLLoaderFactory.load(std::memory_order_acquire);
 
   // Browser shutdown will cause the factory to be reset to NULL.
   // ShutdownCheck will catch this.

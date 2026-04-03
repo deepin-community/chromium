@@ -7,9 +7,9 @@
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
@@ -87,7 +87,7 @@ void BackgroundFetchDelegateImpl::UpdateUI(
   if (title && job_details->fetch_description->title != *title)
     job_details->fetch_description->title = *title;
 
-  DCHECK(base::Contains(ui_state_map_, job_id));
+  DCHECK(ui_state_map_.contains(job_id));
   UiState& ui_state = ui_state_map_[job_id];
 
   if (icon) {
@@ -145,6 +145,11 @@ void BackgroundFetchDelegateImpl::ResumeDownload(
     const offline_items_collection::ContentId& id) {
   UpdateOfflineItem(id.id);
   BackgroundFetchDelegateBase::ResumeDownload(id.id);
+}
+
+void BackgroundFetchDelegateImpl::ValidateDangerousDownload(
+    const offline_items_collection::ContentId& id) {
+  NOTREACHED();
 }
 
 void BackgroundFetchDelegateImpl::GetItemById(
@@ -219,7 +224,7 @@ BackgroundFetchDelegateImpl::GetDownloadService() {
 
 void BackgroundFetchDelegateImpl::OnJobDetailsCreated(
     const std::string& job_id) {
-  DCHECK(!base::Contains(ui_state_map_, job_id));
+  DCHECK(!ui_state_map_.contains(job_id));
   UiState& ui_state = ui_state_map_[job_id];
   offline_items_collection::OfflineItem offline_item(
       offline_items_collection::ContentId(provider_namespace_, job_id));
@@ -321,7 +326,6 @@ void BackgroundFetchDelegateImpl::UpdateOfflineItem(const std::string& job_id) {
     case JobState::kJobComplete:
       // There shouldn't be any updates at this point.
       NOTREACHED();
-      break;
     default:
       offline_item->state = OfflineItemState::IN_PROGRESS;
   }

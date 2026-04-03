@@ -48,10 +48,10 @@ enum SyncAllConfig { SYNC_ALL_OS_TYPES, CHOOSE_WHAT_TO_SYNC };
 
 // Creates a dictionary with the key/value pairs appropriate for a call to
 // HandleSetOsSyncDatatypes().
-base::Value::Dict CreateOsSyncPrefs(SyncAllConfig sync_all,
-                                    UserSelectableOsTypeSet types,
-                                    bool wallpaper_enabled) {
-  base::Value::Dict result;
+base::DictValue CreateOsSyncPrefs(SyncAllConfig sync_all,
+                                  UserSelectableOsTypeSet types,
+                                  bool wallpaper_enabled) {
+  base::DictValue result;
   result.Set("syncAllOsTypes", sync_all == SYNC_ALL_OS_TYPES);
   // Add all of our data types.
   result.Set("osAppsSynced", types.Has(UserSelectableOsType::kOsApps));
@@ -66,7 +66,7 @@ base::Value::Dict CreateOsSyncPrefs(SyncAllConfig sync_all,
 
 // Checks whether the passed |dictionary| contains a |key| with the given
 // |expected_value|.
-void CheckBool(const base::Value::Dict& dictionary,
+void CheckBool(const base::DictValue& dictionary,
                const std::string& key,
                bool expected_value) {
   EXPECT_THAT(dictionary.FindBool(key), Optional(expected_value))
@@ -75,7 +75,7 @@ void CheckBool(const base::Value::Dict& dictionary,
 
 // Checks to make sure that the values stored in |dictionary| match the values
 // expected by the JS layer.
-void CheckConfigDataTypeArguments(const base::Value::Dict& dictionary,
+void CheckConfigDataTypeArguments(const base::DictValue& dictionary,
                                   SyncAllConfig config,
                                   UserSelectableOsTypeSet types,
                                   bool wallpaper_enabled) {
@@ -137,17 +137,9 @@ class OsSyncHandlerTest : public ChromeRenderViewHostTestHarness {
     web_ui_ = std::make_unique<content::TestWebUI>();
     web_ui_->AddMessageHandler(std::move(handler));
     web_ui_->set_web_contents(web_contents());
-
-    // Initialize NewWindowDelegate things.
-    auto instance = std::make_unique<MockNewWindowDelegate>();
-    auto primary = std::make_unique<MockNewWindowDelegate>();
-    new_window_delegate_primary_ = primary.get();
-    new_window_provider_ = std::make_unique<TestNewWindowDelegateProvider>(
-        std::move(instance), std::move(primary));
   }
 
   void TearDown() override {
-    new_window_provider_.reset();
     web_ui_.reset();
     identity_test_env_adaptor_.reset();
     ChromeRenderViewHostTestHarness::TearDown();
@@ -160,7 +152,7 @@ class OsSyncHandlerTest : public ChromeRenderViewHostTestHarness {
 
   // Expects that an "os-sync-prefs-changed" event was sent to the WebUI and
   // returns the data passed to that event.
-  base::Value::Dict ExpectOsSyncPrefsSent() {
+  base::DictValue ExpectOsSyncPrefsSent() {
     const TestWebUI::CallData& call_data = *web_ui_->call_data().back();
     EXPECT_EQ("cr.webUIListenerCallback", call_data.function_name());
 
@@ -170,7 +162,7 @@ class OsSyncHandlerTest : public ChromeRenderViewHostTestHarness {
     EXPECT_EQ(*event, "os-sync-prefs-changed");
 
     EXPECT_TRUE(call_data.arg2());
-    const base::Value::Dict* dict = call_data.arg2()->GetIfDict();
+    const base::DictValue* dict = call_data.arg2()->GetIfDict();
     EXPECT_TRUE(dict);
     return dict->Clone();
   }
@@ -184,6 +176,8 @@ class OsSyncHandlerTest : public ChromeRenderViewHostTestHarness {
                                              enabled);
   }
 
+  MockNewWindowDelegate& new_window_delegate() { return new_window_delegate_; }
+
   raw_ptr<syncer::TestSyncService, DanglingUntriaged> sync_service_ = nullptr;
   raw_ptr<syncer::SyncUserSettings, DanglingUntriaged> user_settings_ = nullptr;
   std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
@@ -192,13 +186,13 @@ class OsSyncHandlerTest : public ChromeRenderViewHostTestHarness {
   TestWebUIProvider test_web_ui_provider_;
   std::unique_ptr<TestChromeWebUIControllerFactory> test_web_ui_factory_;
   raw_ptr<OSSyncHandler, DanglingUntriaged> handler_;
-  raw_ptr<MockNewWindowDelegate, DanglingUntriaged>
-      new_window_delegate_primary_;
-  std::unique_ptr<TestNewWindowDelegateProvider> new_window_provider_;
+
+ private:
+  MockNewWindowDelegate new_window_delegate_;
 };
 
 TEST_F(OsSyncHandlerTest, OsSyncPrefsSentOnNavigateToPage) {
-  handler_->HandleDidNavigateToOsSyncPage(base::Value::List());
+  handler_->HandleDidNavigateToOsSyncPage(base::ListValue());
 
   ASSERT_EQ(1U, web_ui_->call_data().size());
   const TestWebUI::CallData& call_data = *web_ui_->call_data().back();
@@ -209,16 +203,17 @@ TEST_F(OsSyncHandlerTest, OsSyncPrefsSentOnNavigateToPage) {
 
 TEST_F(OsSyncHandlerTest, OpenConfigPageBeforeSyncEngineInitialized) {
   // Sync engine is stopped initially and will start up later.
-  sync_service_->SetTransportState(SyncService::TransportState::START_DEFERRED);
+  sync_service_->SetMaxTransportState(
+      SyncService::TransportState::START_DEFERRED);
 
   // Navigate to the page.
-  handler_->HandleDidNavigateToOsSyncPage(base::Value::List());
+  handler_->HandleDidNavigateToOsSyncPage(base::ListValue());
 
   // No data is sent yet, because the engine is not initialized.
   EXPECT_EQ(0U, web_ui_->call_data().size());
 
   // Now, act as if the SyncService has started up.
-  sync_service_->SetTransportState(SyncService::TransportState::ACTIVE);
+  sync_service_->SetMaxTransportState(SyncService::TransportState::ACTIVE);
   handler_->OnStateChanged(sync_service_);
 
   // Update for sync prefs is sent.
@@ -230,7 +225,7 @@ TEST_F(OsSyncHandlerTest, OpenConfigPageBeforeSyncEngineInitialized) {
 }
 
 TEST_F(OsSyncHandlerTest, TestSyncEverything) {
-  base::Value::List list_args;
+  base::ListValue list_args;
   list_args.Append(CreateOsSyncPrefs(SYNC_ALL_OS_TYPES,
                                      UserSelectableOsTypeSet::All(),
                                      /*wallpaper_enabled=*/true));
@@ -243,7 +238,7 @@ TEST_F(OsSyncHandlerTest, TestSyncEverything) {
 TEST_F(OsSyncHandlerTest, TestSyncIndividualTypes) {
   for (UserSelectableOsType type : UserSelectableOsTypeSet::All()) {
     UserSelectableOsTypeSet types = {type};
-    base::Value::List list_args;
+    base::ListValue list_args;
     list_args.Append(CreateOsSyncPrefs(CHOOSE_WHAT_TO_SYNC, types,
                                        /*wallpaper_enabled=*/false));
 
@@ -253,7 +248,7 @@ TEST_F(OsSyncHandlerTest, TestSyncIndividualTypes) {
   }
 
   // Special case for wallpaper.
-  base::Value::List list_args;
+  base::ListValue list_args;
   list_args.Append(CreateOsSyncPrefs(CHOOSE_WHAT_TO_SYNC, /*types=*/{},
                                      /*wallpaper_enabled=*/true));
   handler_->HandleSetOsSyncDatatypes(list_args);
@@ -262,7 +257,7 @@ TEST_F(OsSyncHandlerTest, TestSyncIndividualTypes) {
 }
 
 TEST_F(OsSyncHandlerTest, TestSyncAllManually) {
-  base::Value::List list_args;
+  base::ListValue list_args;
   list_args.Append(CreateOsSyncPrefs(CHOOSE_WHAT_TO_SYNC,
                                      UserSelectableOsTypeSet::All(),
                                      /*wallpaper_enabled=*/true));
@@ -277,9 +272,9 @@ TEST_F(OsSyncHandlerTest, ShowSetupSyncEverything) {
   user_settings_->SetSelectedOsTypes(/*sync_all_os_types=*/true,
                                      UserSelectableOsTypeSet::All());
   SetWallperEnabledPref(true);
-  handler_->HandleDidNavigateToOsSyncPage(base::Value::List());
+  handler_->HandleDidNavigateToOsSyncPage(base::ListValue());
 
-  base::Value::Dict dictionary = ExpectOsSyncPrefsSent();
+  base::DictValue dictionary = ExpectOsSyncPrefsSent();
   CheckBool(dictionary, "syncAllOsTypes", true);
   CheckBool(dictionary, "osAppsRegistered", true);
   CheckBool(dictionary, "osPreferencesRegistered", true);
@@ -293,9 +288,9 @@ TEST_F(OsSyncHandlerTest, ShowSetupManuallySyncAll) {
   user_settings_->SetSelectedOsTypes(/*sync_all_os_types=*/false,
                                      UserSelectableOsTypeSet::All());
   SetWallperEnabledPref(true);
-  handler_->HandleDidNavigateToOsSyncPage(base::Value::List());
+  handler_->HandleDidNavigateToOsSyncPage(base::ListValue());
 
-  base::Value::Dict dictionary = ExpectOsSyncPrefsSent();
+  base::DictValue dictionary = ExpectOsSyncPrefsSent();
   CheckConfigDataTypeArguments(dictionary, CHOOSE_WHAT_TO_SYNC,
                                UserSelectableOsTypeSet::All(),
                                /*wallpaper_enabled=*/true);
@@ -305,9 +300,9 @@ TEST_F(OsSyncHandlerTest, ShowSetupSyncForAllTypesIndividually) {
   for (UserSelectableOsType type : UserSelectableOsTypeSet::All()) {
     const UserSelectableOsTypeSet types = {type};
     user_settings_->SetSelectedOsTypes(/*sync_all_os_types=*/false, types);
-    handler_->HandleDidNavigateToOsSyncPage(base::Value::List());
+    handler_->HandleDidNavigateToOsSyncPage(base::ListValue());
 
-    base::Value::Dict dictionary = ExpectOsSyncPrefsSent();
+    base::DictValue dictionary = ExpectOsSyncPrefsSent();
     CheckConfigDataTypeArguments(dictionary, CHOOSE_WHAT_TO_SYNC, types,
                                  /*wallpaper_enabled=*/false);
   }
@@ -315,20 +310,20 @@ TEST_F(OsSyncHandlerTest, ShowSetupSyncForAllTypesIndividually) {
   // Special case for wallpaper.
   user_settings_->SetSelectedOsTypes(/*sync_all_os_types=*/false, /*types=*/{});
   SetWallperEnabledPref(true);
-  handler_->HandleDidNavigateToOsSyncPage(base::Value::List());
-  base::Value::Dict dictionary = ExpectOsSyncPrefsSent();
+  handler_->HandleDidNavigateToOsSyncPage(base::ListValue());
+  base::DictValue dictionary = ExpectOsSyncPrefsSent();
   CheckConfigDataTypeArguments(dictionary, CHOOSE_WHAT_TO_SYNC, /*types=*/{},
                                /*wallpaper_enabled=*/true);
 }
 
 TEST_F(OsSyncHandlerTest, OpenBrowserSyncSettings) {
   EXPECT_CALL(
-      *new_window_delegate_primary_,
+      new_window_delegate(),
       OpenUrl(
           GURL(chrome::kChromeUISettingsURL).Resolve(chrome::kSyncSetupSubPage),
           ash::NewWindowDelegate::OpenUrlFrom::kUserInteraction,
           ash::NewWindowDelegate::Disposition::kSwitchToTab));
-  base::Value::List empty_args;
+  base::ListValue empty_args;
   web_ui_->HandleReceivedMessage("OpenBrowserSyncSettings", empty_args);
 }
 

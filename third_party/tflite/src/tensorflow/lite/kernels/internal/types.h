@@ -19,6 +19,7 @@ limitations under the License.
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
+#include <type_traits>
 
 #include "tensorflow/lite/kernels/internal/compatibility.h"
 #include "tensorflow/lite/kernels/internal/runtime_shape.h"
@@ -32,6 +33,11 @@ enum class FusedActivationFunctionType : uint8_t {
   kRelu
 };
 enum class PaddingType : uint8_t { kNone, kSame, kValid };
+
+// Empty struct to allow using a distinct type for Int4.
+struct Int4 {
+  uint8_t val;
+};
 
 struct PaddingValues {
   int16_t width;

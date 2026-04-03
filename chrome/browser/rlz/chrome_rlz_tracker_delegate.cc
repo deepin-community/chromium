@@ -4,15 +4,15 @@
 
 #include "chrome/browser/rlz/chrome_rlz_tracker_delegate.h"
 
+#include <algorithm>
+
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/google/google_brand.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
@@ -36,20 +36,20 @@
 #include "chrome/installer/util/google_update_settings.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_switches.h"
 #endif
 
-ChromeRLZTrackerDelegate::ChromeRLZTrackerDelegate() {}
+ChromeRLZTrackerDelegate::ChromeRLZTrackerDelegate() = default;
 
-ChromeRLZTrackerDelegate::~ChromeRLZTrackerDelegate() {}
+ChromeRLZTrackerDelegate::~ChromeRLZTrackerDelegate() = default;
 
 // static
 void ChromeRLZTrackerDelegate::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
 #if BUILDFLAG(ENABLE_RLZ)
   int rlz_ping_delay_seconds = 90;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           ash::switches::kRlzPingDelay)) {
     // Use a switch for overwriting the default delay because it doesn't seem
@@ -100,8 +100,8 @@ bool ChromeRLZTrackerDelegate::IsGoogleInStartpages(Profile* profile) {
       StartupBrowserCreator::GetSessionStartupPref(
           *base::CommandLine::ForCurrentProcess(), profile);
   if (session_startup_prefs.type == SessionStartupPref::URLS) {
-    is_google_in_startpages = base::Contains(session_startup_prefs.urls, true,
-                                             google_util::IsGoogleHomePageUrl);
+    is_google_in_startpages = std::ranges::contains(
+        session_startup_prefs.urls, true, google_util::IsGoogleHomePageUrl);
   }
   return is_google_in_startpages;
 }

@@ -36,11 +36,6 @@ export interface PaymentsManagerProxy {
   removeCreditCard(guid: string): void;
 
   /**
-   * @param guid The GUID to credit card to remove from the cache.
-   */
-  clearCachedCreditCard(guid: string): void;
-
-  /**
    * Saves the given credit card.
    */
   saveCreditCard(creditCard: chrome.autofillPrivate.CreditCardEntry): void;
@@ -54,11 +49,6 @@ export interface PaymentsManagerProxy {
   saveIban(iban: chrome.autofillPrivate.IbanEntry): void;
 
   /**
-   * Migrate the local credit cards.
-   */
-  migrateCreditCards(): void;
-
-  /**
    * Logs that the server cards edit link was clicked.
    */
   logServerCardLinkClicked(): void;
@@ -69,11 +59,6 @@ export interface PaymentsManagerProxy {
   logServerIbanLinkClicked(): void;
 
   /**
-   * Enables FIDO authentication for card unmasking.
-   */
-  setCreditCardFidoAuthEnabledState(enabled: boolean): void;
-
-  /**
    * Enrolls the card into virtual cards.
    */
   addVirtualCard(cardId: string): void;
@@ -82,6 +67,12 @@ export interface PaymentsManagerProxy {
    * Unenrolls the card from virtual cards.
    */
   removeVirtualCard(cardId: string): void;
+
+  /**
+   * Request the list of pay over time issuers.
+   */
+  getPayOverTimeIssuerList():
+      Promise<chrome.autofillPrivate.PayOverTimeIssuerEntry[]>;
 
   /**
    * A null response means that there is no platform authenticator.
@@ -102,7 +93,7 @@ export interface PaymentsManagerProxy {
   getLocalCard(guid: string):
       Promise<chrome.autofillPrivate.CreditCardEntry|null>;
 
-  // <if expr="is_win or is_macosx">
+  // <if expr="is_win or is_macosx or is_chromeos">
   /**
    * Returns true if there is authentication available on this device (biometric
    * or screen lock), false otherwise.
@@ -143,11 +134,7 @@ export class PaymentsManagerImpl implements PaymentsManagerProxy {
   }
 
   removeCreditCard(guid: string) {
-    chrome.autofillPrivate.removeEntry(guid);
-  }
-
-  clearCachedCreditCard(guid: string) {
-    chrome.autofillPrivate.maskCreditCard(guid);
+    chrome.autofillPrivate.removePaymentsEntity(guid);
   }
 
   saveCreditCard(creditCard: chrome.autofillPrivate.CreditCardEntry) {
@@ -159,11 +146,7 @@ export class PaymentsManagerImpl implements PaymentsManagerProxy {
   }
 
   removeIban(guid: string) {
-    chrome.autofillPrivate.removeEntry(guid);
-  }
-
-  migrateCreditCards() {
-    chrome.autofillPrivate.migrateCreditCards();
+    chrome.autofillPrivate.removePaymentsEntity(guid);
   }
 
   logServerCardLinkClicked() {
@@ -174,16 +157,16 @@ export class PaymentsManagerImpl implements PaymentsManagerProxy {
     chrome.autofillPrivate.logServerIbanLinkClicked();
   }
 
-  setCreditCardFidoAuthEnabledState(enabled: boolean) {
-    chrome.autofillPrivate.setCreditCardFIDOAuthEnabledState(enabled);
-  }
-
   addVirtualCard(cardId: string) {
     chrome.autofillPrivate.addVirtualCard(cardId);
   }
 
   removeVirtualCard(serverId: string) {
     chrome.autofillPrivate.removeVirtualCard(serverId);
+  }
+
+  getPayOverTimeIssuerList() {
+    return chrome.autofillPrivate.getPayOverTimeIssuerList();
   }
 
   isUserVerifyingPlatformAuthenticatorAvailable() {
@@ -203,7 +186,7 @@ export class PaymentsManagerImpl implements PaymentsManagerProxy {
     return chrome.autofillPrivate.getLocalCard(guid);
   }
 
-  // <if expr="is_win or is_macosx">
+  // <if expr="is_win or is_macosx or is_chromeos">
   checkIfDeviceAuthAvailable() {
     return chrome.autofillPrivate.checkIfDeviceAuthAvailable();
   }

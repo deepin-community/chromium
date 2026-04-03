@@ -10,7 +10,6 @@
 #include <optional>
 
 #include "base/functional/callback_forward.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
@@ -86,6 +85,8 @@ class MEDIA_EXPORT AudioThreadHangMonitor final {
   class SharedAtomicFlag final
       : public base::RefCountedThreadSafe<SharedAtomicFlag> {
    public:
+    REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
     SharedAtomicFlag();
 
     std::atomic_bool flag_ = {false};

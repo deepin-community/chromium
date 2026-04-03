@@ -8,7 +8,7 @@
  * prefs.homepage
  */
 import 'chrome://resources/cr_elements/cr_input/cr_input.js';
-import 'chrome://resources/cr_elements/policy/cr_policy_pref_indicator.js';
+import '/shared/settings/controls/cr_policy_pref_indicator.js';
 
 import type {CrPolicyPrefMixinInterface} from '/shared/settings/controls/cr_policy_pref_mixin.js';
 import {CrPolicyPrefMixin} from '/shared/settings/controls/cr_policy_pref_mixin.js';
@@ -63,11 +63,11 @@ export class HomeUrlInputElement extends HomeUrlInputElementBase {
     };
   }
 
-  pref: chrome.settingsPrivate.PrefObject<string>|undefined;
-  disabled: boolean;
-  canTab: boolean;
-  invalid: boolean;
-  value: string;
+  declare pref: chrome.settingsPrivate.PrefObject<string>|undefined;
+  declare disabled: boolean;
+  declare canTab: boolean;
+  declare invalid: boolean;
+  declare value: string;
   private browserProxy_: AppearanceBrowserProxy =
       AppearanceBrowserProxyImpl.getInstance();
 

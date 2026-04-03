@@ -13,11 +13,13 @@
 // limitations under the License.
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/strings/match.h"
 #include "absl/strings/strip.h"
@@ -58,9 +60,10 @@ namespace mpms = mediapipe::mediasequence;
 // Sink calculator to package streams into tf.SequenceExamples.
 //
 // The calculator takes a tf.SequenceExample as a side input and then adds
-// the data from inputs to the SequenceExample with timestamps. Additional
-// context features can be supplied verbatim in the calculator's options. The
-// SequenceExample will conform to the description in media_sequence.h.
+// the data from inputs to the SequenceExample with timestamps. If no SidePacket
+// is provided, an empty SequenceExample is created. Additional context features
+// can be supplied verbatim in the calculator's options. The SequenceExample
+// will conform to the description in media_sequence.h.
 //
 // The supported input stream tags are:
 // * "IMAGE", which stores the encoded images from the
@@ -104,6 +107,8 @@ namespace mpms = mediapipe::mediasequence;
 //   }
 // }
 namespace {
+constexpr int kMaxProtoBytes = std::numeric_limits<int>::max();
+
 uint8_t ConvertFloatToByte(const float float_value) {
   float clamped_value = std::clamp(0.0f, 1.0f, float_value);
   return static_cast<uint8_t>(clamped_value * 255.0 + .5f);
@@ -113,8 +118,12 @@ uint8_t ConvertFloatToByte(const float float_value) {
 class PackMediaSequenceCalculator : public CalculatorBase {
  public:
   static absl::Status GetContract(CalculatorContract* cc) {
-    RET_CHECK(cc->InputSidePackets().HasTag(kSequenceExampleTag));
-    cc->InputSidePackets().Tag(kSequenceExampleTag).Set<tf::SequenceExample>();
+    if (cc->InputSidePackets().HasTag(kSequenceExampleTag)) {
+      cc->InputSidePackets()
+          .Tag(kSequenceExampleTag)
+          .Set<tf::SequenceExample>();
+    }
+
     if (cc->InputSidePackets().HasTag(kClipMediaIdTag)) {
       cc->InputSidePackets().Tag(kClipMediaIdTag).Set<std::string>();
     }
@@ -211,10 +220,14 @@ class PackMediaSequenceCalculator : public CalculatorBase {
   }
 
   absl::Status Open(CalculatorContext* cc) override {
-    sequence_ = ::absl::make_unique<tf::SequenceExample>(
-        cc->InputSidePackets()
-            .Tag(kSequenceExampleTag)
-            .Get<tf::SequenceExample>());
+    if (cc->InputSidePackets().HasTag(kSequenceExampleTag)) {
+      sequence_ = ::absl::make_unique<tf::SequenceExample>(
+          cc->InputSidePackets()
+              .Tag(kSequenceExampleTag)
+              .Get<tf::SequenceExample>());
+    } else {
+      sequence_ = ::absl::make_unique<tf::SequenceExample>();
+    }
     if (cc->InputSidePackets().HasTag(kClipMediaIdTag) &&
         !cc->InputSidePackets().Tag(kClipMediaIdTag).IsEmpty()) {
       clip_media_id_ =
@@ -360,14 +373,21 @@ class PackMediaSequenceCalculator : public CalculatorBase {
     }
   }
 
-  absl::Status VerifySize() {
-    const int64_t MAX_PROTO_BYTES = 1073741823;
+  absl::Status VerifySize(const PackMediaSequenceCalculatorOptions& options) {
+    if (!options.skip_large_sequences()) {
+      return absl::OkStatus();
+    }
+
+    const int max_bytes = (options.max_sequence_bytes() > 0)
+                              ? options.max_sequence_bytes()
+                              : kMaxProtoBytes;
+
     std::string id = mpms::HasExampleId(*sequence_)
                          ? mpms::GetExampleId(*sequence_)
                          : "example";
-    RET_CHECK_LT(sequence_->ByteSizeLong(), MAX_PROTO_BYTES)
-        << "sequence '" << id
-        << "' would be too many bytes to serialize after adding features.";
+    RET_CHECK_LT(sequence_->ByteSizeLong(), max_bytes)
+        << "sequence '" << id << "' with " << sequence_->ByteSizeLong()
+        << " bytes would be more than " << max_bytes << " bytes.";
     return absl::OkStatus();
   }
 
@@ -379,9 +399,7 @@ class PackMediaSequenceCalculator : public CalculatorBase {
           options.reconcile_region_annotations(), sequence_.get()));
     }
 
-    if (options.skip_large_sequences()) {
-      RET_CHECK_OK(VerifySize());
-    }
+    RET_CHECK_OK(VerifySize(options));
     if (options.output_only_if_all_present()) {
       absl::Status status = VerifySequence();
       if (!status.ok()) {
@@ -416,6 +434,26 @@ class PackMediaSequenceCalculator : public CalculatorBase {
       if (!cc->Inputs().Tag(tag).IsEmpty()) {
         features_present_[tag] = true;
       }
+      if (absl::StartsWith(tag, kEncodedMediaStartTimestamp) &&
+          !cc->Inputs().Tag(tag).IsEmpty()) {
+        int64_t encoded_video_start_timestamp =
+            cc->Inputs().Tag(tag).Get<Timestamp>().Value();
+        std::string key =
+            std::string(absl::StripPrefix(tag, kEncodedMediaStartTimestamp));
+        key = absl::StripPrefix(key, "_");
+        mpms::SetClipEncodedMediaStartTimestamp(
+            key, encoded_video_start_timestamp, sequence_.get());
+      } else if (absl::StartsWith(tag, kEncodedMediaBytes) &&
+                 !cc->Inputs().Tag(tag).IsEmpty()) {
+        const std::string& encoded_video_bytes =
+            cc->Inputs().Tag(tag).Get<std::string>();
+        std::string key =
+            std::string(absl::StripPrefix(tag, kEncodedMediaBytes));
+        key = absl::StripPrefix(key, "_");
+        mpms::SetClipEncodedMediaBytes(key, encoded_video_bytes,
+                                       sequence_.get());
+      }
+
       if (absl::StartsWith(tag, kImageTag) &&
           !cc->Inputs().Tag(tag).IsEmpty()) {
         std::string key = "";
@@ -515,7 +553,14 @@ class PackMediaSequenceCalculator : public CalculatorBase {
         const std::string& key = tag.substr(
             sizeof(kClipLabelPrefixTag) / sizeof(*kClipLabelPrefixTag) - 1);
         const Detection& detection = cc->Inputs().Tag(tag).Get<Detection>();
+        bool add_empty_labels =
+            cc->Options<PackMediaSequenceCalculatorOptions>()
+                .add_empty_labels();
         if (detection.score().empty()) {
+          if (add_empty_labels) {
+            mpms::SetClipLabelString(key, {}, sequence_.get());
+            mpms::SetClipLabelConfidence(key, {}, sequence_.get());
+          }
           continue;
         }
         if (detection.label().empty() && detection.label_id().empty()) {
@@ -636,16 +681,16 @@ class PackMediaSequenceCalculator : public CalculatorBase {
         std::vector<int> predicted_label_ids;
         for (auto& detection :
              cc->Inputs().Tag(tag).Get<std::vector<Detection>>()) {
-          if (detection.location_data().format() ==
-                  LocationData::BOUNDING_BOX ||
-              detection.location_data().format() ==
-                  LocationData::RELATIVE_BOUNDING_BOX) {
+          auto location_format = detection.location_data().format();
+          if (location_format == LocationData::BOUNDING_BOX ||
+              location_format == LocationData::RELATIVE_BOUNDING_BOX) {
             if (mpms::HasImageHeight(*sequence_) &&
                 mpms::HasImageWidth(*sequence_)) {
               image_height = mpms::GetImageHeight(*sequence_);
               image_width = mpms::GetImageWidth(*sequence_);
             }
-            if (image_height == -1 || image_width == -1) {
+            if (location_format != LocationData::RELATIVE_BOUNDING_BOX &&
+                (image_height == -1 || image_width == -1)) {
               return ::mediapipe::InvalidArgumentErrorBuilder(MEDIAPIPE_LOC)
                      << "Images must be provided with bounding boxes or the "
                         "image "

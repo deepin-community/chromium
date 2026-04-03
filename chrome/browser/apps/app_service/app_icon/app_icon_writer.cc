@@ -2,14 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "chrome/browser/apps/app_service/app_icon/app_icon_writer.h"
 
 #include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_util.h"
+#include "chrome/browser/apps/app_service/app_icon/compressed_icon_getter.h"
 #include "chrome/browser/apps/app_service/app_icon/dip_px_util.h"
-#include "chrome/browser/apps/app_service/publishers/compressed_icon_getter.h"
 #include "chrome/browser/profiles/profile.h"
 #include "ui/base/resource/resource_scale_factor.h"
 
@@ -31,17 +32,11 @@ bool WriteIconFiles(const base::FilePath& base_path,
         apps::GetForegroundIconPath(base_path, id, icon_size_in_px);
     const auto background_icon_path =
         apps::GetBackgroundIconPath(base_path, id, icon_size_in_px);
-    if (!base::CreateDirectory(foreground_icon_path.DirName()) ||
-        !base::CreateDirectory(background_icon_path.DirName())) {
-      return false;
-    }
-
-    auto foreground_icon_data = base::make_span(
-        &iv->foreground_icon_png_data[0], iv->foreground_icon_png_data.size());
-    auto background_icon_data = base::make_span(
-        &iv->background_icon_png_data[0], iv->background_icon_png_data.size());
-    return base::WriteFile(foreground_icon_path, foreground_icon_data) &&
-           base::WriteFile(background_icon_path, background_icon_data);
+    return base::CreateDirectory(foreground_icon_path.DirName()) &&
+           base::CreateDirectory(background_icon_path.DirName()) &&
+           base::WriteFile(foreground_icon_path,
+                           iv->foreground_icon_png_data) &&
+           base::WriteFile(background_icon_path, iv->background_icon_png_data);
   }
 
   if (iv->compressed.empty()) {
@@ -50,12 +45,8 @@ bool WriteIconFiles(const base::FilePath& base_path,
 
   const auto icon_path =
       apps::GetIconPath(base_path, id, icon_size_in_px, iv->is_maskable_icon);
-  if (!base::CreateDirectory(icon_path.DirName())) {
-    return false;
-  }
-
-  auto icon_data = base::make_span(&iv->compressed[0], iv->compressed.size());
-  return base::WriteFile(icon_path, icon_data);
+  return base::CreateDirectory(icon_path.DirName()) &&
+         base::WriteFile(icon_path, iv->compressed);
 }
 
 }  // namespace

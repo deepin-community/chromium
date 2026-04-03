@@ -9,7 +9,6 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
 #include "chromeos/ash/components/dbus/shill/shill_device_client.h"
@@ -233,7 +232,7 @@ TEST_F(NetworkConnectTest, ConfigureAndConnectToNetwork_NoConfiguration) {
               ShowNetworkConnectError(NetworkConnectionHandler::kErrorNotFound,
                                       "bad guid"));
 
-  base::Value::Dict properties;
+  base::DictValue properties;
   NetworkConnect::Get()->ConfigureNetworkIdAndConnect("bad guid", properties,
                                                       true);
 }
@@ -244,7 +243,7 @@ TEST_F(NetworkConnectTest,
               ShowNetworkConnectError(
                   NetworkConnectionHandler::kErrorConfigureFailed, kWiFi1Guid));
 
-  base::Value::Dict properties;
+  base::DictValue properties;
   NetworkConnect::Get()->ConfigureNetworkIdAndConnect(kWiFi1Guid, properties,
                                                       false);
 }
@@ -306,8 +305,6 @@ TEST_F(NetworkConnectTest, ActivateCellular) {
 }
 
 TEST_F(NetworkConnectTest, CarrierUnlock) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kCellularCarrierLock);
   EXPECT_CALL(*mock_delegate_, ShowCarrierUnlockNotification());
   NetworkConnect::Get()->ShowCarrierUnlockNotification();
 }
@@ -364,9 +361,6 @@ TEST_F(NetworkConnectTest, ConnectToCellularNetwork_SimLocked) {
 }
 
 TEST_F(NetworkConnectTest, ConnectToCellularNetwork_SimCarrierLocked) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kCellularCarrierLock);
-
   EXPECT_CALL(*mock_delegate_, ShowNetworkSettings(kCellular1Guid)).Times(0);
 
   service_test_->SetServiceProperty(kCellular1ServicePath,

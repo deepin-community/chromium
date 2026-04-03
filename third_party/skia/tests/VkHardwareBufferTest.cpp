@@ -16,18 +16,20 @@
 #include "include/core/SkColorSpace.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkSurface.h"
-#include "include/gpu/GrBackendSemaphore.h"
-#include "include/gpu/GrDirectContext.h"
-#include "include/gpu/GrTypes.h"
 #include "include/gpu/MutableTextureState.h"
+#include "include/gpu/ganesh/GrBackendSemaphore.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
+#include "include/gpu/ganesh/GrTypes.h"
 #include "include/gpu/ganesh/SkImageGanesh.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "include/gpu/ganesh/gl/GrGLBackendSurface.h"
 #include "include/gpu/ganesh/vk/GrVkBackendSemaphore.h"
 #include "include/gpu/ganesh/vk/GrVkBackendSurface.h"
 #include "include/gpu/ganesh/vk/GrVkDirectContext.h"
-#include "include/gpu/vk/GrVkBackendContext.h"
+#include "include/gpu/ganesh/vk/GrVkTypes.h"
+#include "include/gpu/vk/VulkanBackendContext.h"
 #include "include/gpu/vk/VulkanExtensions.h"
+#include "include/gpu/vk/VulkanMemoryAllocator.h"
 #include "include/gpu/vk/VulkanMutableTextureState.h"
 #include "src/base/SkAutoMalloc.h"
 #include "src/gpu/ganesh/GrDirectContextPriv.h"
@@ -37,7 +39,7 @@
 #include "src/gpu/ganesh/gl/GrGLDefines.h"
 #include "src/gpu/ganesh/gl/GrGLUtil.h"
 #include "tests/Test.h"
-#include "tools/gpu/GrContextFactory.h"
+#include "tools/ganesh/GrContextFactory.h"
 #include "tools/gpu/vk/VkTestUtils.h"
 
 #include <android/hardware_buffer.h>
@@ -441,8 +443,8 @@ public:
             fDevice = VK_NULL_HANDLE;
         }
 #ifdef SK_ENABLE_VK_LAYERS
-        if (fDebugCallback != VK_NULL_HANDLE) {
-            fDestroyDebugCallback(fBackendContext.fInstance, fDebugCallback, nullptr);
+        if (fDebugMessenger != VK_NULL_HANDLE) {
+            fDestroyDebugCallback(fBackendContext.fInstance, fDebugMessenger, nullptr);
         }
 #endif
         if (fBackendContext.fInstance != VK_NULL_HANDLE) {
@@ -451,8 +453,6 @@ public:
         }
 
         delete fExtensions;
-
-        sk_gpu_test::FreeVulkanFeaturesStructs(fFeatures);
         delete fFeatures;
     }
 
@@ -515,17 +515,17 @@ private:
     VkImage fImage = VK_NULL_HANDLE;
     VkDeviceMemory fMemory = VK_NULL_HANDLE;
 
-    skgpu::VulkanExtensions*            fExtensions = nullptr;
-    VkPhysicalDeviceFeatures2*          fFeatures = nullptr;
-    VkDebugReportCallbackEXT            fDebugCallback = VK_NULL_HANDLE;
-    PFN_vkDestroyDebugReportCallbackEXT fDestroyDebugCallback = nullptr;
+    skgpu::VulkanExtensions* fExtensions = nullptr;
+    sk_gpu_test::TestVkFeatures* fFeatures = nullptr;
+    VkDebugUtilsMessengerEXT fDebugMessenger = VK_NULL_HANDLE;
+    PFN_vkDestroyDebugUtilsMessengerEXT fDestroyDebugCallback = nullptr;
 
     // We hold on to the semaphore so we can delete once the GPU is done.
     VkSemaphore fSignalSemaphore = VK_NULL_HANDLE;
 
     VkDevice fDevice = VK_NULL_HANDLE;
 
-    GrVkBackendContext fBackendContext;
+    skgpu::VulkanBackendContext fBackendContext;
     sk_sp<GrDirectContext> fDirectContext;
 };
 
@@ -536,24 +536,21 @@ bool VulkanTestHelper::init(skiatest::Reporter* reporter) {
     }
 
     fExtensions = new skgpu::VulkanExtensions();
-    fFeatures = new VkPhysicalDeviceFeatures2;
-    memset(fFeatures, 0, sizeof(VkPhysicalDeviceFeatures2));
-    fFeatures->sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    fFeatures->pNext = nullptr;
+    fFeatures = new sk_gpu_test::TestVkFeatures;
 
     fBackendContext.fInstance = VK_NULL_HANDLE;
     fBackendContext.fDevice = VK_NULL_HANDLE;
 
-    if (!sk_gpu_test::CreateVkBackendContext(instProc, &fBackendContext, fExtensions,
-                                             fFeatures, &fDebugCallback)) {
+    if (!sk_gpu_test::CreateVkBackendContext(
+                instProc, &fBackendContext, fExtensions, fFeatures, &fDebugMessenger)) {
         return false;
     }
     fDevice = fBackendContext.fDevice;
     auto getProc = fBackendContext.fGetProc;
 
-    if (fDebugCallback != VK_NULL_HANDLE) {
-        fDestroyDebugCallback = (PFN_vkDestroyDebugReportCallbackEXT) instProc(
-                fBackendContext.fInstance, "vkDestroyDebugReportCallbackEXT");
+    if (fDebugMessenger != VK_NULL_HANDLE) {
+        fDestroyDebugCallback = (PFN_vkDestroyDebugUtilsMessengerEXT)instProc(
+                fBackendContext.fInstance, "vkDestroyDebugUtilsMessengerEXT");
     }
 
     ACQUIRE_INST_VK_PROC(DestroyInstance);

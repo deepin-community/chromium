@@ -16,67 +16,89 @@
 
 #include "src/trace_processor/storage/trace_storage.h"
 
-#include <string.h>
-#include <algorithm>
-#include <limits>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <variant>
+#include <vector>
 
-#include "perfetto/ext/base/no_destructor.h"
+#include "perfetto/base/logging.h"
+#include "perfetto/trace_processor/basic_types.h"
+#include "src/trace_processor/core/dataframe/dataframe.h"
+#include "src/trace_processor/core/dataframe/specs.h"
+#include "src/trace_processor/tables/all_tables_fwd.h"
+#include "src/trace_processor/tables/android_tables_py.h"   // IWYU pragma: keep
+#include "src/trace_processor/tables/counter_tables_py.h"   // IWYU pragma: keep
+#include "src/trace_processor/tables/etm_tables_py.h"       // IWYU pragma: keep
+#include "src/trace_processor/tables/flow_tables_py.h"      // IWYU pragma: keep
+#include "src/trace_processor/tables/jit_tables_py.h"       // IWYU pragma: keep
+#include "src/trace_processor/tables/memory_tables_py.h"    // IWYU pragma: keep
+#include "src/trace_processor/tables/metadata_tables_py.h"  // IWYU pragma: keep
+#include "src/trace_processor/tables/perf_tables_py.h"      // IWYU pragma: keep
+#include "src/trace_processor/tables/profiler_tables_py.h"  // IWYU pragma: keep
+#include "src/trace_processor/tables/sched_tables_py.h"     // IWYU pragma: keep
+#include "src/trace_processor/tables/slice_tables_py.h"     // IWYU pragma: keep
+#include "src/trace_processor/tables/trace_proto_tables_py.h"  // IWYU pragma: keep
+#include "src/trace_processor/tables/track_tables_py.h"     // IWYU pragma: keep
+#include "src/trace_processor/tables/v8_tables_py.h"        // IWYU pragma: keep
+#include "src/trace_processor/tables/winscope_tables_py.h"  // IWYU pragma: keep
+#include "src/trace_processor/types/variadic.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
 namespace {
 
-void DbTableMaybeUpdateMinMax(const TypedColumn<int64_t>& ts_col,
-                              int64_t* min_value,
-                              int64_t* max_value,
-                              const TypedColumn<int64_t>* dur_col = nullptr) {
-  if (ts_col.overlay().empty())
-    return;
+// Struct holding the parameters needed to initialize a table.
+struct TableInitParams {
+  uint32_t column_count;
+  const char* const* column_names;
+  const dataframe::ColumnSpec* column_specs;
+};
 
-  int64_t col_min = ts_col.Min()->AsLong();
-  int64_t col_max = ts_col.Max()->AsLong();
+template <class Variant, class T>
+struct table_init_params;
 
-  if (dur_col) {
-    PERFETTO_CHECK(ts_col.IsSorted());
-    PERFETTO_CHECK(dur_col->overlay().size() == ts_col.overlay().size());
-    for (uint32_t i = 0; i < dur_col->overlay().size(); i++) {
-      col_max = std::max(ts_col[i] + (*dur_col)[i], col_max);
-    }
-  }
+template <class T, class... Ts>
+struct table_init_params<std::variant<Ts...>, T> {
+  static constexpr std::array<TableInitParams, sizeof...(Ts)> value = {
+      {{decltype(Ts::kSpec)::kColumnCount, Ts::kSpec.column_names.data(),
+        Ts::kSpec.column_specs.data()}...}};
+};
 
-  *min_value = std::min(*min_value, col_min);
-  *max_value = std::max(*max_value, col_max);
-}
+// Array of initialization parameters for all tables, in the same order as
+// AllTables variant. This allows us to initialize all tables in a simple loop
+// without template instantiation bloat.
+constexpr std::array kTableInitParams =
+    table_init_params<tables::AllTables, void>::value;
 
-std::vector<NullTermStringView> CreateRefTypeStringMap() {
-  std::vector<NullTermStringView> map(static_cast<size_t>(RefType::kRefMax));
-  map[static_cast<size_t>(RefType::kRefNoRef)] = NullTermStringView();
-  map[static_cast<size_t>(RefType::kRefUtid)] = "utid";
-  map[static_cast<size_t>(RefType::kRefCpuId)] = "cpu";
-  map[static_cast<size_t>(RefType::kRefGpuId)] = "gpu";
-  map[static_cast<size_t>(RefType::kRefIrq)] = "irq";
-  map[static_cast<size_t>(RefType::kRefSoftIrq)] = "softirq";
-  map[static_cast<size_t>(RefType::kRefUpid)] = "upid";
-  map[static_cast<size_t>(RefType::kRefTrack)] = "track";
-  return map;
-}
+static_assert(
+    std::size(kTableInitParams) == tables::kTableCount,
+    "kTableInitParams must have the same number of entries as tables");
 
 }  // namespace
 
-const std::vector<NullTermStringView>& GetRefTypeStringMap() {
-  static const base::NoDestructor<std::vector<NullTermStringView>> map(
-      CreateRefTypeStringMap());
-  return map.ref();
-}
-
 TraceStorage::TraceStorage(const Config&) {
+  // Initialize all tables using placement new in a simple loop.
+  for (size_t i = 0; i < tables::kTableCount; ++i) {
+    const auto& params = kTableInitParams[i];
+    new (&tables_storage_[i * sizeof(dataframe::Dataframe)])
+        dataframe::Dataframe(&string_pool_, params.column_count,
+                             params.column_names, params.column_specs);
+  }
   for (uint32_t i = 0; i < variadic_type_ids_.size(); ++i) {
     variadic_type_ids_[i] = InternString(Variadic::kTypeNames[i]);
   }
 }
 
-TraceStorage::~TraceStorage() {}
+TraceStorage::~TraceStorage() {
+  // Destroy all tables in reverse order of construction.
+  for (size_t i = tables::kTableCount; i > 0; --i) {
+    reinterpret_cast<dataframe::Dataframe*>(
+        &tables_storage_[(i - 1) * sizeof(dataframe::Dataframe)])
+        ->~Dataframe();
+  }
+}
 
 uint32_t TraceStorage::SqlStats::RecordQueryBegin(const std::string& query,
                                                   int64_t time_started) {
@@ -115,34 +137,4 @@ void TraceStorage::SqlStats::RecordQueryEnd(uint32_t row, int64_t time_ended) {
   times_ended_[queue_row] = time_ended;
 }
 
-std::pair<int64_t, int64_t> TraceStorage::GetTraceTimestampBoundsNs() const {
-  int64_t start_ns = std::numeric_limits<int64_t>::max();
-  int64_t end_ns = std::numeric_limits<int64_t>::min();
-
-  DbTableMaybeUpdateMinMax(raw_table_.ts(), &start_ns, &end_ns);
-  DbTableMaybeUpdateMinMax(sched_slice_table_.ts(), &start_ns, &end_ns,
-                           &sched_slice_table_.dur());
-  DbTableMaybeUpdateMinMax(counter_table_.ts(), &start_ns, &end_ns);
-  DbTableMaybeUpdateMinMax(slice_table_.ts(), &start_ns, &end_ns,
-                           &slice_table_.dur());
-  DbTableMaybeUpdateMinMax(heap_profile_allocation_table_.ts(), &start_ns,
-                           &end_ns);
-  DbTableMaybeUpdateMinMax(thread_state_table_.ts(), &start_ns, &end_ns);
-  DbTableMaybeUpdateMinMax(android_log_table_.ts(), &start_ns, &end_ns);
-  DbTableMaybeUpdateMinMax(heap_graph_object_table_.graph_sample_ts(),
-                           &start_ns, &end_ns);
-  DbTableMaybeUpdateMinMax(perf_sample_table_.ts(), &start_ns, &end_ns);
-  DbTableMaybeUpdateMinMax(cpu_profile_stack_sample_table_.ts(), &start_ns,
-                           &end_ns);
-
-  if (start_ns == std::numeric_limits<int64_t>::max()) {
-    return std::make_pair(0, 0);
-  }
-  if (start_ns == end_ns) {
-    end_ns += 1;
-  }
-  return std::make_pair(start_ns, end_ns);
-}
-
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

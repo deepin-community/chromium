@@ -4,19 +4,28 @@
 
 #include "chrome/browser/web_applications/isolated_web_apps/remove_isolated_web_app_data.h"
 
+#include <variant>
+
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_install_command_helper.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_location.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_reader_registry.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_reader_registry_factory.h"
-#include "chrome/common/url_constants.h"
+#include "chrome/browser/web_applications/isolated_web_apps/commands/isolated_web_app_install_command_helper.h"
+#include "chrome/browser/web_applications/web_app_utils.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings.h"
+#include "components/webapps/isolated_web_apps/bundle_operations/bundle_operations.h"
+#include "components/webapps/isolated_web_apps/scheme.h"
+#include "components/webapps/isolated_web_apps/types/source.h"
+#include "components/webapps/isolated_web_apps/types/storage_location.h"
 #include "content/public/browser/browsing_data_filter_builder.h"
 #include "content/public/browser/browsing_data_remover.h"
+#include "content/public/browser/isolated_web_apps_policy.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "url/origin.h"
 
 namespace web_app {
@@ -45,40 +54,38 @@ class RemovalObserver : public content::BrowsingDataRemover::Observer {
   base::OnceClosure callback_;  // Owns `this`.
 };
 
-struct ClearReaderCacheVisitor {
-  ClearReaderCacheVisitor(Profile* profile, base::OnceClosure callback)
-      : profile_(profile), callback_(std::move(callback)) {}
-  void operator()(const InstalledBundle& bundle_location) {
-    CloseReaderForBundle(bundle_location.path);
-  }
-  void operator()(const DevModeBundle& dev_mode_location) {
-    CloseReaderForBundle(dev_mode_location.path);
-  }
-  void operator()(const DevModeProxy& proxy_location) {
-    // There is no reader for proxy mode.
-    std::move(callback_).Run();
+void CloseBundle(Profile* profile,
+                 const IwaSource& source,
+                 base::OnceClosure callback) {
+  if (!content::AreIsolatedWebAppsEnabled(profile)) {
+    // A previously installed IWA can be uninstalled even if the IWA feature
+    // flag is off; in this case the reader registry will not exist.
+    return;
   }
 
- private:
-  void CloseReaderForBundle(const base::FilePath& path_to_bundle) {
-    auto* reader_registry =
-        IsolatedWebAppReaderRegistryFactory::GetForProfile(profile_);
-    if (!reader_registry) {
-      std::move(callback_).Run();
-      return;
-    }
-    reader_registry->ClearCacheForPath(path_to_bundle, std::move(callback_));
-  }
-  raw_ptr<Profile> profile_;
-  base::OnceClosure callback_;
-};
+  std::visit(
+      absl::Overload{
+          [&](const IwaSourceBundle& bundle) {
+            web_app::CloseBundle(profile, bundle.path(), std::move(callback));
+          },
+          [&](const IwaSourceProxy& proxy) { std::move(callback).Run(); },
+      },
+      source.variant());
+}
 
 }  // namespace
 
 void RemoveIsolatedWebAppBrowsingData(Profile* profile,
                                       const url::Origin& iwa_origin,
                                       base::OnceClosure callback) {
-  CHECK(iwa_origin.scheme() == chrome::kIsolatedAppScheme);
+  CHECK(iwa_origin.scheme() == webapps::kIsolatedAppScheme);
+
+  // Content settings for this Isolated Web App (IWA) are reset to default
+  // because `BrowseDataRemover` does not clear them. This prevents stale
+  // entries for the uninstalled IWA from appearing in Chrome's site settings
+  // page (e.g., showing granted permissions for an app that's no longer
+  //  present).
+  ResetAllContentSettingsForWebApp(profile, iwa_origin.GetURL());
 
   auto filter = content::BrowsingDataFilterBuilder::Create(
       content::BrowsingDataFilterBuilder::Mode::kDelete);
@@ -114,14 +121,13 @@ void RemoveIsolatedWebAppBrowsingData(Profile* profile,
 }
 
 void CloseAndDeleteBundle(Profile* profile,
-                          const IsolatedWebAppLocation& location,
+                          const IsolatedWebAppStorageLocation& location,
                           base::OnceClosure callback) {
-  base::OnceClosure cleanup_location_callback =
+  CloseBundle(
+      profile,
+      IwaSourceWithMode::FromStorageLocation(profile->GetPath(), location),
       base::BindOnce(CleanupLocationIfOwned, profile->GetPath(), location,
-                     std::move(callback));
-  absl::visit(
-      ClearReaderCacheVisitor(profile, std::move(cleanup_location_callback)),
-      location);
+                     std::move(callback)));
 }
 
 }  // namespace web_app

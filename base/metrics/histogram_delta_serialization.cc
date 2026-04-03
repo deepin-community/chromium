@@ -4,7 +4,9 @@
 
 #include "base/metrics/histogram_delta_serialization.h"
 
+#include "base/containers/span.h"
 #include "base/logging.h"
+#include "base/metrics/histogram.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/histogram_snapshot_manager.h"
 #include "base/metrics/statistics_recorder.h"
@@ -20,8 +22,9 @@ namespace {
 // Silently returns when seeing any data problem in the pickle.
 void DeserializeHistogramAndAddSamples(PickleIterator* iter) {
   HistogramBase* histogram = DeserializeHistogramInfo(iter);
-  if (!histogram)
+  if (!histogram) {
     return;
+  }
 
   if (histogram->HasFlags(HistogramBase::kIPCSerializationSourceFlag)) {
     DVLOG(1) << "Single process mode, histogram observed and not copied: "
@@ -32,10 +35,6 @@ void DeserializeHistogramAndAddSamples(PickleIterator* iter) {
 }
 
 }  // namespace
-
-HistogramDeltaSerialization::HistogramDeltaSerialization(
-    const std::string& caller_name)
-    : histogram_snapshot_manager_(this), serialized_deltas_(nullptr) {}
 
 HistogramDeltaSerialization::~HistogramDeltaSerialization() = default;
 
@@ -48,19 +47,18 @@ void HistogramDeltaSerialization::PrepareAndSerializeDeltas(
   // Note: Before serializing, we set the kIPCSerializationSourceFlag for all
   // the histograms, so that the receiving process can distinguish them from the
   // local histograms.
-  StatisticsRecorder::PrepareDeltas(
-      include_persistent, Histogram::kIPCSerializationSourceFlag,
-      Histogram::kNoFlags, &histogram_snapshot_manager_);
+  StatisticsRecorder::PrepareDeltas(include_persistent,
+                                    Histogram::kIPCSerializationSourceFlag,
+                                    Histogram::kNoFlags, this);
   serialized_deltas_ = nullptr;
 }
 
 // static
 void HistogramDeltaSerialization::DeserializeAndAddSamples(
     const std::vector<std::string>& serialized_deltas) {
-  for (auto it = serialized_deltas.begin(); it != serialized_deltas.end();
-       ++it) {
-    Pickle pickle(it->data(), it->size());
-    PickleIterator iter(pickle);
+  for (const std::string& serialized_delta : serialized_deltas) {
+    PickleIterator iter =
+        PickleIterator::WithData(as_byte_span(serialized_delta));
     DeserializeHistogramAndAddSamples(&iter);
   }
 }
@@ -74,7 +72,7 @@ void HistogramDeltaSerialization::RecordDelta(
   Pickle pickle;
   histogram.SerializeInfo(&pickle);
   snapshot.Serialize(&pickle);
-  serialized_deltas_->emplace_back(pickle.data_as_char(), pickle.size());
+  serialized_deltas_->emplace_back(pickle.AsStringView());
 }
 
 }  // namespace base

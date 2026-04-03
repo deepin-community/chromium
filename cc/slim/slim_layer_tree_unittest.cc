@@ -48,8 +48,7 @@ class SlimLayerTreeTest : public testing::Test {
         BEGINFRAME_FROM_HERE,
         /*source_id=*/1, ++sequence_id_, frame_time, frame_time + interval,
         interval, viz::BeginFrameArgs::NORMAL);
-    sink->OnBeginFrame(begin_frame_args, /*timing_details=*/{},
-                       /*frame_ack=*/false, {});
+    sink->OnBeginFrame(begin_frame_args, /*timing_details=*/{}, {});
   }
 
   base::WeakPtr<TestFrameSinkImpl> SetupLayerTreeForDraw() {
@@ -98,8 +97,6 @@ TEST_F(SlimLayerTreeTest, SmokeTest) {
 
   layer_tree_->set_display_transform_hint(
       gfx::OVERLAY_TRANSFORM_FLIP_HORIZONTAL);
-
-  layer_tree_->UpdateTopControlsVisibleHeight(20.0f);
 }
 
 TEST_F(SlimLayerTreeTest, InitAndReleaseFrameSink) {

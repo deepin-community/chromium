@@ -45,20 +45,34 @@ class SamplingState : ThreadLocalState<SamplingState<PA>> {
     TLS::InitIfNeeded();
   }
 
+  void SetSampleSizeRestriction(size_t sampling_min_size,
+                                size_t sampling_max_size) {
+    sampling_min_size_ = sampling_min_size;
+    sampling_max_size_ = sampling_max_size;
+  }
+
   // Return true if this allocation should be sampled.
-  ALWAYS_INLINE bool Sample() {
+  ALWAYS_INLINE bool Sample(size_t alloc_size = 0) {
     // For a new thread the initial TLS value will be zero, we do not want to
     // sample on zero as it will always sample the first allocation on thread
     // creation and heavily bias allocations towards that particular call site.
     //
     // Instead, use zero to mean 'get a new counter value' and one to mean
     // that this allocation should be sampled.
-    size_t samples_left = TLS::GetState();
-    if (UNLIKELY(!samples_left))
-      samples_left = NextSample();
+    if (alloc_size != 0 &&
+        (alloc_size < sampling_min_size_ || sampling_max_size_ < alloc_size)) {
+      // Skip sampling to increase chance of catching an OOB issue
+      return false;
+    }
 
-    TLS::SetState(samples_left - 1);
-    return (samples_left == 1);
+    size_t samples_left = TLS::GetState();
+    if (samples_left == 0) [[unlikely]] {
+      samples_left = NextSample();
+    }
+
+    --samples_left;
+    TLS::SetState(samples_left);
+    return samples_left == 0;
   }
 
  private:
@@ -70,6 +84,8 @@ class SamplingState : ThreadLocalState<SamplingState<PA>> {
     return distribution(generator) + 1;
   }
 
+  size_t sampling_min_size_ = 0;
+  size_t sampling_max_size_ = std::numeric_limits<size_t>::max();
   double sampling_probability_ = 0;
 };
 

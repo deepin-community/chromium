@@ -40,6 +40,12 @@ class ErrorScreen : public BaseScreen,
   // Toggles the guest sign-in prompt.
   void AllowGuestSignin(bool allowed);
 
+  // Disallows offline login option. We can't expose publicly an opportunity to
+  // allow offline login as it can be controlled by policy.
+  // TODO(https://crbug.com/1241511): Should be removed or refactored together
+  // with removing the global variables for the offline login allowance.
+  void DisallowOfflineLogin();
+
   // Toggles the offline sign-in.
   static void AllowOfflineLogin(bool allowed);
 
@@ -89,21 +95,24 @@ class ErrorScreen : public BaseScreen,
   // been created.
   void MaybeInitCaptivePortalWindowProxy(content::WebContents* web_contents);
 
-  void ShowNetworkErrorMessage(NetworkStateInformer::State state,
-                               NetworkError::ErrorReason reason);
+  void ShowNetworkErrorMessage(
+      NetworkStateInformer::State state,
+      NetworkError::ErrorReason reason,
+      bool show_offline_login_option_if_allowed = true);
 
  protected:
   // BaseScreen:
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
 
  private:
   // Handle user action to open captive portal page.
   void ShowCaptivePortal();
 
   // NetworkConnectionObserver overrides:
-  void ConnectToNetworkRequested(const std::string& service_path) override;
+  ConnectToNetworkRequestVerdict ConnectToNetworkRequested(
+      const std::string& service_path) override;
 
   // Default hide_closure for Hide().
   void DefaultHideCallback();
@@ -144,6 +153,8 @@ class ErrorScreen : public BaseScreen,
       DeviceSettingsService::OwnershipStatus ownership_status);
 
   bool is_persistent_ = false;
+
+  bool is_offline_login_link_shown_ = false;
 
   base::WeakPtr<ErrorScreenView> view_;
 

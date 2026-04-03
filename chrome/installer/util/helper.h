@@ -9,6 +9,10 @@
 
 #include "base/files/file_path.h"
 
+namespace base {
+class Version;
+}
+
 namespace installer {
 
 class InitialPreferences;
@@ -36,6 +40,18 @@ base::FilePath GetDefaultChromeInstallPath(bool system_install);
 // - The default path for a new installation based on the binary's bitness.
 base::FilePath GetChromeInstallPathWithPrefs(bool system_install,
                                              const InitialPreferences& prefs);
+
+// Returns the path that seemingly contains an installation at `system_level` of
+// `version`, including the version directory (e.g., ...\Chromium\W.X.Y.Z).
+base::FilePath FindInstallPath(bool system_install,
+                               const base::Version& version);
+
+// Returns true if the current process seems to be properly installed. "Properly
+// installed" means that there is a Chrome at the current level (per-machine or
+// per-user) and install mode registered with the updater, and the current
+// process appears to reside in that Chrome's installation directory.
+bool IsCurrentProcessInstalled();
+
 }  // namespace installer
 
 #endif  // CHROME_INSTALLER_UTIL_HELPER_H_

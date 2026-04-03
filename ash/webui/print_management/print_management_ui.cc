@@ -2,19 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ash/webui/print_management/print_management_ui.h"
 
 #include <memory>
 #include <utility>
 
-#include "ash/constants/ash_features.h"
 #include "ash/webui/common/trusted_types_util.h"
 #include "ash/webui/grit/ash_print_management_resources.h"
 #include "ash/webui/grit/ash_print_management_resources_map.h"
 #include "ash/webui/print_management/backend/print_management_delegate.h"
 #include "ash/webui/print_management/backend/print_management_handler.h"
 #include "ash/webui/print_management/url_constants.h"
-#include "base/feature_list.h"
 #include "chromeos/components/print_management/mojom/printing_manager.mojom.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "content/public/browser/web_contents.h"
@@ -23,8 +22,7 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/base/webui/web_ui_util.h"
-#include "ui/resources/grit/webui_resources.h"
-#include "ui/webui/color_change_listener/color_change_handler.h"
+#include "ui/webui/resources/grit/webui_resources.h"
 
 namespace ash {
 namespace printing {
@@ -42,9 +40,6 @@ void SetUpWebUIDataSource(content::WebUIDataSource* source,
   source->AddResourcePath("test_loader.js", IDR_WEBUI_JS_TEST_LOADER_JS);
   source->AddResourcePath("test_loader_util.js",
                           IDR_WEBUI_JS_TEST_LOADER_UTIL_JS);
-  source->AddBoolean("isSetupAssistanceEnabled",
-                     base::FeatureList::IsEnabled(
-                         ash::features::kPrintManagementSetupAssistance));
 }
 
 void AddPrintManagementStrings(content::WebUIDataSource* html_source) {
@@ -147,9 +142,7 @@ PrintManagementUI::PrintManagementUI(
       "script-src chrome://resources chrome://webui-test 'self';");
   ash::EnableTrustedTypesCSP(html_source);
 
-  const auto resources = base::make_span(kAshPrintManagementResources,
-                                         kAshPrintManagementResourcesSize);
-  SetUpWebUIDataSource(html_source, resources,
+  SetUpWebUIDataSource(html_source, kAshPrintManagementResources,
                        IDR_ASH_PRINT_MANAGEMENT_INDEX_HTML);
 
   html_source->AddResourcePath(
@@ -173,12 +166,6 @@ void PrintManagementUI::BindInterface(
         chromeos::printing::printing_manager::mojom::PrintManagementHandler>
         receiver) {
   print_management_handler_->BindInterface(std::move(receiver));
-}
-
-void PrintManagementUI::BindInterface(
-    mojo::PendingReceiver<color_change_listener::mojom::PageHandler> receiver) {
-  color_provider_handler_ = std::make_unique<ui::ColorChangeHandler>(
-      web_ui()->GetWebContents(), std::move(receiver));
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(PrintManagementUI)

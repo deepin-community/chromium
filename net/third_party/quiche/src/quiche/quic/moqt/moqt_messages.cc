@@ -4,102 +4,182 @@
 
 #include "quiche/quic/moqt/moqt_messages.h"
 
+#include <array>
+#include <cstdint>
 #include <string>
 
+#include "absl/algorithm/container.h"
+#include "absl/strings/str_cat.h"
+#include "quiche/quic/core/quic_time.h"
+#include "quiche/quic/core/quic_types.h"
+#include "quiche/quic/moqt/moqt_error.h"
+#include "quiche/quic/moqt/moqt_key_value_pair.h"
 #include "quiche/quic/platform/api/quic_bug_tracker.h"
 
 namespace moqt {
 
+void MoqtSessionParameters::ToSetupParameters(SetupParameters& out) const {
+  if (perspective == quic::Perspective::IS_CLIENT && !using_webtrans) {
+    out.path = path;
+    out.authority = authority;
+  }
+  if (max_request_id != kDefaultMaxRequestId) {
+    out.max_request_id = max_request_id;
+  }
+  if (max_auth_token_cache_size != kDefaultMaxAuthTokenCacheSize) {
+    out.max_auth_token_cache_size = max_auth_token_cache_size;
+  }
+  if (support_object_acks != kDefaultSupportObjectAcks) {
+    out.support_object_acks = support_object_acks;
+  }
+  if (!moqt_implementation.empty()) {
+    out.moqt_implementation = moqt_implementation;
+  }
+  for (const AuthToken& token : authorization_token) {
+    out.authorization_tokens.push_back(token);
+  }
+}
+
+MoqtObjectStatus IntegerToObjectStatus(uint64_t integer) {
+  if (integer >=
+      static_cast<uint64_t>(MoqtObjectStatus::kInvalidObjectStatus)) {
+    return MoqtObjectStatus::kInvalidObjectStatus;
+  }
+  return static_cast<MoqtObjectStatus>(integer);
+}
+
+MoqtError SetupParametersAllowedByMessage(const SetupParameters& parameters,
+                                          MoqtMessageType message_type,
+                                          bool webtrans) {
+  bool should_have_path_and_authority =
+      !webtrans && message_type == MoqtMessageType::kClientSetup;
+  if (should_have_path_and_authority != parameters.path.has_value()) {
+    return MoqtError::kInvalidPath;
+  }
+  if (should_have_path_and_authority != parameters.authority.has_value()) {
+    return MoqtError::kInvalidAuthority;
+  }
+  return MoqtError::kNoError;
+}
+
+const std::array<MoqtMessageType, 9> kAllowsAuthorization = {
+    MoqtMessageType::kClientSetup,
+    MoqtMessageType::kServerSetup,
+    MoqtMessageType::kPublish,
+    MoqtMessageType::kSubscribe,
+    MoqtMessageType::kSubscribeUpdate,
+    MoqtMessageType::kSubscribeNamespace,
+    MoqtMessageType::kPublishNamespace,
+    MoqtMessageType::kTrackStatus,
+    MoqtMessageType::kFetch};
+const std::array<MoqtMessageType, 7> kAllowsDeliveryTimeout = {
+    MoqtMessageType::kTrackStatus,    MoqtMessageType::kRequestOk,
+    MoqtMessageType::kPublish,        MoqtMessageType::kPublishOk,
+    MoqtMessageType::kSubscribe,      MoqtMessageType::kSubscribeOk,
+    MoqtMessageType::kSubscribeUpdate};
+const std::array<MoqtMessageType, 4> kAllowsMaxCacheDuration = {
+    MoqtMessageType::kSubscribeOk, MoqtMessageType::kRequestOk,
+    MoqtMessageType::kFetchOk, MoqtMessageType::kPublish};
+bool VersionSpecificParametersAllowedByMessage(
+    const VersionSpecificParameters& parameters, MoqtMessageType message_type) {
+  if (!parameters.authorization_tokens.empty() &&
+      !absl::c_linear_search(kAllowsAuthorization, message_type)) {
+    return false;
+  }
+  if (parameters.delivery_timeout != quic::QuicTimeDelta::Infinite() &&
+      !absl::c_linear_search(kAllowsDeliveryTimeout, message_type)) {
+    return false;
+  }
+  if (parameters.max_cache_duration != quic::QuicTimeDelta::Infinite() &&
+      !absl::c_linear_search(kAllowsMaxCacheDuration, message_type)) {
+    return false;
+  }
+  return true;
+}
+
 std::string MoqtMessageTypeToString(const MoqtMessageType message_type) {
   switch (message_type) {
-    case MoqtMessageType::kObjectStream:
-      return "OBJECT_STREAM";
-    case MoqtMessageType::kObjectPreferDatagram:
-      return "OBJECT_PREFER_DATAGRAM";
     case MoqtMessageType::kClientSetup:
       return "CLIENT_SETUP";
     case MoqtMessageType::kServerSetup:
       return "SERVER_SETUP";
     case MoqtMessageType::kSubscribe:
-      return "SUBSCRIBE_REQUEST";
+      return "SUBSCRIBE";
     case MoqtMessageType::kSubscribeOk:
       return "SUBSCRIBE_OK";
-    case MoqtMessageType::kSubscribeError:
-      return "SUBSCRIBE_ERROR";
+    case MoqtMessageType::kRequestError:
+      return "REQUEST_ERROR";
     case MoqtMessageType::kUnsubscribe:
       return "UNSUBSCRIBE";
-    case MoqtMessageType::kSubscribeFin:
-      return "SUBSCRIBE_FIN";
-    case MoqtMessageType::kSubscribeRst:
-      return "SUBSCRIBE_RST";
-    case MoqtMessageType::kAnnounce:
-      return "ANNOUNCE";
-    case MoqtMessageType::kAnnounceOk:
-      return "ANNOUNCE_OK";
-    case MoqtMessageType::kAnnounceError:
-      return "ANNOUNCE_ERROR";
-    case MoqtMessageType::kUnannounce:
-      return "UNANNOUNCE";
+    case MoqtMessageType::kPublishDone:
+      return "PUBLISH_DONE";
+    case MoqtMessageType::kSubscribeUpdate:
+      return "SUBSCRIBE_UPDATE";
+    case MoqtMessageType::kPublishNamespaceCancel:
+      return "PUBLISH_NAMESPACE_CANCEL";
+    case MoqtMessageType::kTrackStatus:
+      return "TRACK_STATUS";
+    case MoqtMessageType::kPublishNamespace:
+      return "PUBLISH_NAMESPACE";
+    case MoqtMessageType::kNamespace:
+      return "NAMESPACE";
+    case MoqtMessageType::kNamespaceDone:
+      return "NAMESPACE_DONE";
+    case MoqtMessageType::kRequestOk:
+      return "REQUEST_OK";
+    case MoqtMessageType::kPublishNamespaceDone:
+      return "PUBLISH_NAMESPACE_DONE";
     case MoqtMessageType::kGoAway:
       return "GOAWAY";
-    case MoqtMessageType::kStreamHeaderTrack:
-      return "STREAM_HEADER_TRACK";
-    case MoqtMessageType::kStreamHeaderGroup:
-      return "STREAM_HEADER_GROUP";
+    case MoqtMessageType::kSubscribeNamespace:
+      return "SUBSCRIBE_NAMESPACE";
+    case MoqtMessageType::kUnsubscribeNamespace:
+      return "UNSUBSCRIBE_NAMESPACE";
+    case MoqtMessageType::kMaxRequestId:
+      return "MAX_REQUEST_ID";
+    case MoqtMessageType::kPublish:
+      return "PUBLISH";
+    case MoqtMessageType::kPublishOk:
+      return "PUBLISH_OK";
+    case MoqtMessageType::kFetch:
+      return "FETCH";
+    case MoqtMessageType::kFetchCancel:
+      return "FETCH_CANCEL";
+    case MoqtMessageType::kFetchOk:
+      return "FETCH_OK";
+    case MoqtMessageType::kRequestsBlocked:
+      return "REQUESTS_BLOCKED";
+    case MoqtMessageType::kObjectAck:
+      return "OBJECT_ACK";
   }
   return "Unknown message " + std::to_string(static_cast<int>(message_type));
+}
+
+std::string MoqtDataStreamTypeToString(MoqtDataStreamType type) {
+  if (type.IsPadding()) {
+    return "PADDING";
+  } else if (type.IsFetch()) {
+    return "STREAM_HEADER_FETCH";
+  }
+  return absl::StrCat("STREAM_HEADER_SUBGROUP_", type.value());
+}
+
+std::string MoqtDatagramTypeToString(MoqtDatagramType type) {
+  return absl::StrCat("DATAGRAM", type.has_status() ? "_STATUS" : "",
+                      type.has_extension() ? "_EXTENSION" : "");
 }
 
 std::string MoqtForwardingPreferenceToString(
     MoqtForwardingPreference preference) {
   switch (preference) {
-    case MoqtForwardingPreference::kObject:
-      return "OBJECT";
     case MoqtForwardingPreference::kDatagram:
       return "DATAGRAM";
-    case MoqtForwardingPreference::kTrack:
-      return "TRACK";
-    case MoqtForwardingPreference::kGroup:
-      return "GROUP";
+    case MoqtForwardingPreference::kSubgroup:
+      return "SUBGROUP";
   }
   QUIC_BUG(quic_bug_bad_moqt_message_type_01)
       << "Unknown preference " << std::to_string(static_cast<int>(preference));
   return "Unknown preference " + std::to_string(static_cast<int>(preference));
-}
-
-MoqtForwardingPreference GetForwardingPreference(MoqtMessageType type) {
-  switch (type) {
-    case MoqtMessageType::kObjectStream:
-      return MoqtForwardingPreference::kObject;
-    case MoqtMessageType::kObjectPreferDatagram:
-      return MoqtForwardingPreference::kDatagram;
-    case MoqtMessageType::kStreamHeaderTrack:
-      return MoqtForwardingPreference::kTrack;
-    case MoqtMessageType::kStreamHeaderGroup:
-      return MoqtForwardingPreference::kGroup;
-    default:
-      break;
-  }
-  QUIC_BUG(quic_bug_bad_moqt_message_type_02)
-      << "Message type does not indicate forwarding preference";
-  return MoqtForwardingPreference::kObject;
-};
-
-MoqtMessageType GetMessageTypeForForwardingPreference(
-    MoqtForwardingPreference preference) {
-  switch (preference) {
-    case MoqtForwardingPreference::kObject:
-      return MoqtMessageType::kObjectStream;
-    case MoqtForwardingPreference::kDatagram:
-      return MoqtMessageType::kObjectPreferDatagram;
-    case MoqtForwardingPreference::kTrack:
-      return MoqtMessageType::kStreamHeaderTrack;
-    case MoqtForwardingPreference::kGroup:
-      return MoqtMessageType::kStreamHeaderGroup;
-  }
-  QUIC_BUG(quic_bug_bad_moqt_message_type_03)
-      << "Forwarding preference does not indicate message type";
-  return MoqtMessageType::kObjectStream;
 }
 
 }  // namespace moqt

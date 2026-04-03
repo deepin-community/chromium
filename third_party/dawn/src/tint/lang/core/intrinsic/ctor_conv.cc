@@ -34,6 +34,8 @@
 //                       Do not modify this file directly
 ////////////////////////////////////////////////////////////////////////////////
 
+// clang-format off
+
 #include "src/tint/lang/core/intrinsic/ctor_conv.h"
 
 namespace tint::core::intrinsic {
@@ -76,8 +78,16 @@ const char* str(CtorConv i) {
             return "mat4x3";
         case CtorConv::kMat4x4:
             return "mat4x4";
+        case CtorConv::kSubgroup_matrix_left:
+            return "subgroup_matrix_left";
+        case CtorConv::kSubgroup_matrix_right:
+            return "subgroup_matrix_right";
+        case CtorConv::kSubgroup_matrix_result:
+            return "subgroup_matrix_result";
     }
     return "<unknown>";
 }
 
 }  // namespace tint::core::intrinsic
+
+// clang-format on

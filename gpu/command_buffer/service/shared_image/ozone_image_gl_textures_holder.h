@@ -17,7 +17,6 @@
 
 namespace gfx {
 class NativePixmap;
-class Size;
 }  // namespace gfx
 
 namespace ui {
@@ -38,8 +37,7 @@ class GPU_GLES2_EXPORT OzoneImageGLTexturesHolder
   // Creates an OzoneImageGLTexturesHolder with gles2::TexturePassthroughs.
   static scoped_refptr<OzoneImageGLTexturesHolder> CreateAndInitTexturesHolder(
       SharedImageBacking* backing,
-      scoped_refptr<gfx::NativePixmap> pixmap,
-      gfx::BufferPlane plane);
+      scoped_refptr<gfx::NativePixmap> pixmap);
 
   void MarkContextLost();
   bool WasContextLost();
@@ -67,18 +65,10 @@ class GPU_GLES2_EXPORT OzoneImageGLTexturesHolder
   explicit OzoneImageGLTexturesHolder();
   ~OzoneImageGLTexturesHolder();
 
-  // Initializes this holder with gles2::TexturePassthroughs. On failure,
-  // returns false.
-  bool Initialize(SharedImageBacking* backing,
-                  scoped_refptr<gfx::NativePixmap> pixmap,
-                  gfx::BufferPlane plane);
-
-  // Creates and stores a gles2::TexturePassthrough. On failure, returns false.
+  // Initializes the holder and creates and stores a gles2::TexturePassthrough.
+  // On failure, returns false.
   bool CreateAndStoreTexture(SharedImageBacking* backing,
-                             scoped_refptr<gfx::NativePixmap> pixmap,
-                             gfx::BufferFormat buffer_format,
-                             gfx::BufferPlane buffer_plane,
-                             const gfx::Size& size);
+                             scoped_refptr<gfx::NativePixmap> pixmap);
 
   // A counter that is used by OzoneImageBacking to identify how many times this
   // holder has been cached.

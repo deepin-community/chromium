@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/metrics/histogram_functions.h"
@@ -22,7 +23,7 @@
 #include "chrome/browser/offline_pages/offliner_user_data.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_preferences_util.h"
-#include "chrome/browser/ssl/security_state_tab_helper.h"
+#include "chrome/browser/ssl/chrome_security_state_tab_helper.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
 #include "components/offline_pages/core/background/offliner_policy.h"
@@ -78,12 +79,12 @@ BackgroundLoaderOffliner::BackgroundLoaderOffliner(
     load_termination_listener_->set_offliner(this);
 
   for (int i = 0; i < ResourceDataType::RESOURCE_DATA_TYPE_COUNT; ++i) {
-    stats_[i].requested = 0;
-    stats_[i].completed = 0;
+    UNSAFE_TODO(stats_[i]).requested = 0;
+    UNSAFE_TODO(stats_[i]).completed = 0;
   }
 }
 
-BackgroundLoaderOffliner::~BackgroundLoaderOffliner() {}
+BackgroundLoaderOffliner::~BackgroundLoaderOffliner() = default;
 
 // static
 BackgroundLoaderOffliner* BackgroundLoaderOffliner::FromWebContents(
@@ -148,6 +149,7 @@ bool BackgroundLoaderOffliner::Cancel(CancelCallback callback) {
   // in RequestCoordinator this should not happen.
   if (!pending_request_)
     return false;
+  completion_callback_.Reset();
 
   // TODO(chili): We are not able to cancel a pending
   // OfflinePageModel::SaveSnapshot() operation. We will notify caller that
@@ -166,8 +168,9 @@ bool BackgroundLoaderOffliner::Cancel(CancelCallback callback) {
 }
 
 void BackgroundLoaderOffliner::TerminateLoadIfInProgress() {
-  if (!pending_request_)
+  if (!pending_request_ || !completion_callback_) {
     return;
+  }
 
   Cancel(base::BindOnce(HandleLoadTerminationCancel,
                         std::move(completion_callback_)));
@@ -215,9 +218,7 @@ void BackgroundLoaderOffliner::CanDownload(
   std::move(callback).Run(should_allow_downloads);
   SavePageRequest request(*pending_request_.get());
   std::move(completion_callback_).Run(request, final_status);
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&BackgroundLoaderOffliner::ResetState,
-                                weak_ptr_factory_.GetWeakPtr()));
+  ResetState();
 }
 
 void BackgroundLoaderOffliner::MarkLoadStartTime() {
@@ -245,10 +246,11 @@ void BackgroundLoaderOffliner::DocumentOnLoadCompletedInPrimaryMainFrame() {
 
 void BackgroundLoaderOffliner::PrimaryMainFrameRenderProcessGone(
     base::TerminationStatus status) {
-  if (pending_request_) {
+  if (pending_request_ && completion_callback_) {
     SavePageRequest request(*pending_request_.get());
     switch (status) {
       case base::TERMINATION_STATUS_OOM:
+      case base::TERMINATION_STATUS_EVICTED_FOR_MEMORY:
       case base::TERMINATION_STATUS_PROCESS_CRASHED:
       case base::TERMINATION_STATUS_STILL_RUNNING:
         std::move(completion_callback_)
@@ -306,7 +308,7 @@ void BackgroundLoaderOffliner::ObserveResourceLoading(
     bool started) {
   // Add the signal to extra data, and use for tracking.
 
-  RequestStats& found_stats = stats_[type];
+  RequestStats& found_stats = UNSAFE_TODO(stats_[type]);
   if (started)
     ++found_stats.requested;
   else
@@ -348,7 +350,6 @@ void BackgroundLoaderOffliner::StartSnapshot() {
       default:
         // We should've already checked for Success before entering here.
         NOTREACHED();
-        status = Offliner::RequestStatus::LOADING_FAILED;
     }
 
     std::move(completion_callback_).Run(request, status);
@@ -453,8 +454,8 @@ void BackgroundLoaderOffliner::ResetState() {
   loader_.reset();
 
   for (int i = 0; i < ResourceDataType::RESOURCE_DATA_TYPE_COUNT; ++i) {
-    stats_[i].requested = 0;
-    stats_[i].completed = 0;
+    UNSAFE_TODO(stats_[i]).requested = 0;
+    UNSAFE_TODO(stats_[i]).completed = 0;
   }
 }
 
@@ -469,7 +470,7 @@ void BackgroundLoaderOffliner::ResetLoader() {
       Profile::FromBrowserContext(browser_context_));
   content_settings::PageSpecificContentSettings::CreateForWebContents(
       loader_->web_contents(),
-      std::make_unique<chrome::PageSpecificContentSettingsDelegate>(
+      std::make_unique<PageSpecificContentSettingsDelegate>(
           loader_->web_contents()));
 }
 
@@ -521,7 +522,7 @@ BackgroundLoaderOffliner::GetVisibleSecurityState(
     content::WebContents* web_contents) {
   // Note: this tab helper needs to be created here as in the background it is
   // not created by default.
-  SecurityStateTabHelper::CreateForWebContents(web_contents);
+  ChromeSecurityStateTabHelper::CreateForWebContents(web_contents);
   SecurityStateTabHelper* helper =
       SecurityStateTabHelper::FromWebContents(web_contents);
   DCHECK(helper);

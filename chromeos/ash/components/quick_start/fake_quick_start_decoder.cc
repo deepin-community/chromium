@@ -4,8 +4,6 @@
 
 #include "fake_quick_start_decoder.h"
 
-#include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom-forward.h"
-#include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom-shared.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom.h"
 
 namespace ash::quick_start {
@@ -24,6 +22,7 @@ FakeQuickStartDecoder::GetRemote() {
 void FakeQuickStartDecoder::DecodeQuickStartMessage(
     const std::optional<std::vector<uint8_t>>& data,
     DecodeQuickStartMessageCallback callback) {
+  has_decode_been_called_ = true;
   CHECK(!results_.empty());
   auto [quick_start_message, error] = std::move(results_.front());
   results_.pop();

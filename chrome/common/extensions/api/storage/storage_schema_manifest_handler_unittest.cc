@@ -12,11 +12,14 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/values.h"
 #include "components/version_info/version_info.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/features/feature_channel.h"
 #include "extensions/common/file_util.h"
 #include "extensions/common/manifest.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -25,7 +28,7 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
   StorageSchemaManifestHandlerTest()
       : scoped_channel_(version_info::Channel::DEV) {}
 
-  ~StorageSchemaManifestHandlerTest() override {}
+  ~StorageSchemaManifestHandlerTest() override = default;
 
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
@@ -36,7 +39,7 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
   }
 
   scoped_refptr<Extension> CreateExtension(const std::string& schema) {
-    std::string error;
+    std::u16string error;
     scoped_refptr<Extension> extension = Extension::Create(
         temp_dir_.GetPath(), mojom::ManifestLocation::kUnpacked, manifest_,
         Extension::NO_FLAGS, "", &error);
@@ -57,7 +60,7 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
     scoped_refptr<Extension> extension = CreateExtension(schema);
     if (!extension.get())
       return testing::AssertionFailure() << "Failed to create test extension";
-    std::string error;
+    std::u16string error;
     std::vector<InstallWarning> warnings;
     if (file_util::ValidateExtension(extension.get(), &error, &warnings))
       return testing::AssertionSuccess();
@@ -66,7 +69,7 @@ class StorageSchemaManifestHandlerTest : public testing::Test {
 
   base::ScopedTempDir temp_dir_;
   ScopedCurrentChannel scoped_channel_;
-  base::Value::Dict manifest_;
+  base::DictValue manifest_;
 };
 
 TEST_F(StorageSchemaManifestHandlerTest, Parse) {
@@ -85,7 +88,7 @@ TEST_F(StorageSchemaManifestHandlerTest, Parse) {
 }
 
 TEST_F(StorageSchemaManifestHandlerTest, Validate) {
-  base::Value::List permissions;
+  base::ListValue permissions;
   permissions.Append("storage");
   manifest_.Set("permissions", std::move(permissions));
 

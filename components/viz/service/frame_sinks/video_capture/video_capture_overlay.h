@@ -12,8 +12,9 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/heap_array.h"
 #include "base/functional/callback.h"
-#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
 #include "components/viz/service/frame_sinks/video_capture/capturable_frame_sink.h"
@@ -84,7 +85,7 @@ class VIZ_SERVICE_EXPORT VideoCaptureOverlay
 
   // |frame_source| must outlive this instance.
   VideoCaptureOverlay(
-      FrameSource* frame_source,
+      FrameSource& frame_source,
       mojo::PendingReceiver<mojom::FrameSinkVideoCaptureOverlay> receiver);
 
   VideoCaptureOverlay(const VideoCaptureOverlay&) = delete;
@@ -209,14 +210,14 @@ class VIZ_SERVICE_EXPORT VideoCaptureOverlay
     // not interlaved: Instead, there are 5 planes of data (one minus alpha, Y,
     // subsampled one minus alpha, U, V). For both formats, the color components
     // are premultiplied for more-efficient Blit()'s.
-    std::unique_ptr<float[]> transformed_image_;
+    base::HeapArray<float> transformed_image_;
   };
 
   // Computes the region of the source that, if changed, would require
   // re-rendering the overlay.
   gfx::Rect ComputeSourceMutationRect() const;
 
-  const raw_ptr<FrameSource> frame_source_;
+  const raw_ref<FrameSource> frame_source_;
 
   mojo::Receiver<mojom::FrameSinkVideoCaptureOverlay> receiver_;
 

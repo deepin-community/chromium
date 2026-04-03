@@ -26,11 +26,11 @@
 // and the rollup bundler in --watch mode. Any other attempt, leads to O(10s)
 // incremental-build times.
 // This script allows mixing build tools that support --watch mode (tsc and
-// rollup) and auto-triggering-on-file-change rules via node-watch.
+// rollup) and auto-triggering-on-file-change rules via fs.watch.
 // When invoked without any argument (e.g., for production builds), this script
 // just runs all the build tasks serially. It doesn't to do any mtime-based
 // check, it always re-runs all the tasks.
-// When invoked with --watch, it mounts a pipeline of tasks based on node-watch
+// When invoked with --watch, it mounts a pipeline of tasks based on fs.watch
 // and runs them together with tsc --watch and rollup --watch.
 // The output directory structure is carefully crafted so that any change to UI
 // sources causes cascading triggers of the next steps.
@@ -71,7 +71,6 @@ const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
-const fswatch = require('node-watch');  // Like fs.watch(), but works on Linux.
 const pjoin = path.join;
 
 const ROOT_DIR = path.dirname(__dirname);  // The repo root.
@@ -79,6 +78,7 @@ const VERSION_SCRIPT = pjoin(ROOT_DIR, 'tools/write_version_header.py');
 const GEN_IMPORTS_SCRIPT = pjoin(ROOT_DIR, 'tools/gen_ui_imports');
 
 const cfg = {
+  minifyJs: '',
   watch: false,
   verbose: false,
   debug: false,
@@ -86,7 +86,8 @@ const cfg = {
   startHttpServer: false,
   httpServerListenHost: '127.0.0.1',
   httpServerListenPort: 10000,
-  wasmModules: ['trace_processor', 'traceconv'],
+  onlyWasmMemory64: false,
+  wasmModules: [],
   crossOriginIsolation: false,
   testFilter: '',
   noOverrideGnArgs: false,
@@ -110,34 +111,44 @@ const cfg = {
   outDistDir: '',
   outExtDir: '',
   outBigtraceDistDir: '',
+  outOpenPerfettoTraceDistDir: '',
+  outWatchLockFile: '',
 };
 
 const RULES = [
   {r: /ui\/src\/assets\/index.html/, f: copyIndexHtml},
   {r: /ui\/src\/assets\/bigtrace.html/, f: copyBigtraceHtml},
+  {r: /ui\/src\/open_perfetto_trace\/index.html/, f: copyOpenPerfettoTraceHtml},
   {r: /ui\/src\/assets\/((.*)[.]png)/, f: copyAssets},
+  {r: /ui\/src\/assets\/(explore_page\/base-page\.json)/, f: copyAssets},
+  {r: /ui\/src\/assets\/(explore_page\/examples\/(.*)[.]json)/, f: copyAssets},
+  {r: /ui\/src\/assets\/(explore_page\/node_info\/(.*)[.]md)/, f: copyAssets},
   {r: /buildtools\/typefaces\/(.+[.]woff2)/, f: copyAssets},
   {r: /buildtools\/catapult_trace_viewer\/(.+(js|html))/, f: copyAssets},
-  {r: /ui\/src\/assets\/.+[.]scss/, f: compileScss},
+  {r: /ui\/src\/assets\/.+[.]scss|ui\/src\/(?:plugins|core_plugins)\/.+[.]scss/, f: compileScss},
   {r: /ui\/src\/chrome_extension\/.*/, f: copyExtensionAssets},
-  {
-    r: /ui\/src\/test\/diff_viewer\/(.+[.](?:html|js))/,
-    f: copyUiTestArtifactsAssets,
-  },
   {r: /.*\/dist\/.+\/(?!manifest\.json).*/, f: genServiceWorkerManifestJson},
-  {r: /.*\/dist\/.*/, f: notifyLiveServer},
+  {r: /.*\/dist\/.*[.](js|html|css|wasm)$/, f: notifyLiveServer},
 ];
 
 const tasks = [];
 let tasksTot = 0;
 let tasksRan = 0;
 const httpWatches = [];
-const tStart = Date.now();
+const tStart = performance.now();
 const subprocesses = [];
+const LIVE_SERVER_DEBOUNCE_MS = 250;
+let liveServerDebounceTimerId = 0;
+const notifyLiveServerPendingFiles = new Set();
+
 
 async function main() {
   const parser = new argparse.ArgumentParser();
   parser.add_argument('--out', {help: 'Output directory'});
+  parser.add_argument('--minify-js', {
+    help: 'Minify js files',
+    choices: ['preserve_comments', 'all'],
+  });
   parser.add_argument('--watch', '-w', {action: 'store_true'});
   parser.add_argument('--serve', '-s', {action: 'store_true'});
   parser.add_argument('--serve-host', {help: '--serve bind host'});
@@ -145,10 +156,11 @@ async function main() {
   parser.add_argument('--verbose', '-v', {action: 'store_true'});
   parser.add_argument('--no-build', '-n', {action: 'store_true'});
   parser.add_argument('--no-wasm', '-W', {action: 'store_true'});
+  parser.add_argument('--only-wasm-memory64', {action: 'store_true'});
   parser.add_argument('--run-unittests', '-t', {action: 'store_true'});
-  parser.add_argument('--run-integrationtests', '-T', {action: 'store_true'});
   parser.add_argument('--debug', '-d', {action: 'store_true'});
   parser.add_argument('--bigtrace', {action: 'store_true'});
+  parser.add_argument('--open-perfetto-trace', {action: 'store_true'});
   parser.add_argument('--interactive', '-i', {action: 'store_true'});
   parser.add_argument('--rebaseline', '-r', {action: 'store_true'});
   parser.add_argument('--no-depscheck', {action: 'store_true'});
@@ -170,15 +182,27 @@ async function main() {
   cfg.outDistDir = ensureDir(pjoin(cfg.outDistRootDir, cfg.version));
   cfg.outTscDir = ensureDir(pjoin(cfg.outUiDir, 'tsc'));
   cfg.outGenDir = ensureDir(pjoin(cfg.outUiDir, 'tsc/gen'));
+  cfg.outWatchLockFile = pjoin(cfg.outDir, "watch.lock");
   cfg.testFilter = args.test_filter || '';
   cfg.watch = !!args.watch;
+  if (cfg.watch) {
+    prepareWatchLock();
+  }
   cfg.verbose = !!args.verbose;
   cfg.debug = !!args.debug;
   cfg.bigtrace = !!args.bigtrace;
+  cfg.openPerfettoTrace = !!args.open_perfetto_trace;
   cfg.startHttpServer = args.serve;
   cfg.noOverrideGnArgs = !!args.no_override_gn_args;
+  if (args.minify_js) {
+    cfg.minifyJs = args.minify_js;
+  }
   if (args.bigtrace) {
     cfg.outBigtraceDistDir = ensureDir(pjoin(cfg.outDistDir, 'bigtrace'));
+  }
+  if (cfg.openPerfettoTrace) {
+    cfg.outOpenPerfettoTraceDistDir = ensureDir(pjoin(cfg.outDistRootDir,
+                                                      'open_perfetto_trace'));
   }
   if (args.serve_host) {
     cfg.httpServerListenHost = args.serve_host;
@@ -195,12 +219,19 @@ async function main() {
   if (args.cross_origin_isolation) {
     cfg.crossOriginIsolation = true;
   }
+  cfg.onlyWasmMemory64 = !!args.only_wasm_memory64;
+  cfg.wasmModules = ['traceconv', 'trace_config_utils', 'trace_processor_memory64'];
+  if (!cfg.onlyWasmMemory64) {
+    cfg.wasmModules.push('trace_processor');
+  }
 
   process.on('SIGINT', () => {
     console.log('\nSIGINT received. Killing all child processes and exiting');
     for (const proc of subprocesses) {
-      if (proc) proc.kill('SIGINT');
+      if (proc) proc.kill('SIGKILL');
     }
+    releaseWatchLock();
+    process.kill(0, 'SIGKILL');  // Kill the whole process group.
     process.exit(130);  // 130 -> Same behavior of bash when killed by SIGINT.
   });
 
@@ -238,26 +269,36 @@ async function main() {
     updateSymlinks();  // Links //ui/out -> //out/xxx/ui/
 
     buildWasm(args.no_wasm);
+    generateImports('ui/src/core_plugins', 'all_core_plugins');
+    generateImports('ui/src/plugins', 'all_plugins');
     scanDir('ui/src/assets');
+    scanDir('ui/src/plugins', /[.]scss$/);
+    scanDir('ui/src/core_plugins', /[.]scss$/);
     scanDir('ui/src/chrome_extension');
-    scanDir('ui/src/test/diff_viewer');
     scanDir('buildtools/typefaces');
     scanDir('buildtools/catapult_trace_viewer');
-    generateImports('ui/src/tracks', 'all_tracks.ts');
-    generateImports('ui/src/plugins', 'all_plugins.ts');
     compileProtos();
     genVersion();
-    transpileTsProject('ui');
-    transpileTsProject('ui/src/service_worker');
-    if (cfg.bigtrace) {
-      transpileTsProject('ui/src/bigtrace');
+    generateStdlibDocs();
+
+    const tsProjects = [
+      'ui',
+      'ui/src/service_worker'
+    ];
+    if (cfg.bigtrace) tsProjects.push('ui/src/bigtrace');
+    if (cfg.openPerfettoTrace) {
+      scanDir('ui/src/open_perfetto_trace');
+      tsProjects.push('ui/src/open_perfetto_trace');
+    }
+
+
+    for (const prj of tsProjects) {
+      transpileTsProject(prj);
     }
 
     if (cfg.watch) {
-      transpileTsProject('ui', {watch: cfg.watch});
-      transpileTsProject('ui/src/service_worker', {watch: cfg.watch});
-      if (cfg.bigtrace) {
-        transpileTsProject('ui/src/bigtrace', {watch: cfg.watch});
+      for (const prj of tsProjects) {
+        transpileTsProject(prj, {watch: cfg.watch});
       }
     }
 
@@ -277,9 +318,9 @@ async function main() {
     console.log('In case of execution error, re-run without --no-build.');
   }
   if (!args.no_build) {
-    const tStart = Date.now();
+    const tStart = performance.now();
     while (!isDistComplete()) {
-      const secs = Math.ceil((Date.now() - tStart) / 1000);
+      const secs = Math.ceil((performance.now() - tStart) / 1000);
       process.stdout.write(
           `\t\tWaiting for first build to complete... ${secs} s\r`);
       await new Promise((r) => setTimeout(r, 500));
@@ -292,9 +333,6 @@ async function main() {
   }
   if (args.run_unittests) {
     runTests('jest.unittest.config.js');
-  }
-  if (args.run_integrationtests) {
-    runTests('jest.integrationtest.config.js');
   }
 }
 
@@ -350,6 +388,12 @@ function copyBigtraceHtml(src) {
   }
 }
 
+function copyOpenPerfettoTraceHtml(src) {
+  if (cfg.openPerfettoTrace) {
+    addTask(cp, [src, pjoin(cfg.outOpenPerfettoTraceDistDir, 'index.html')]);
+  }
+}
+
 function copyAssets(src, dst) {
   addTask(cp, [src, pjoin(cfg.outDistDir, 'assets', dst)]);
   if (cfg.bigtrace) {
@@ -380,20 +424,11 @@ function compileScss() {
 function compileProtos() {
   const dstJs = pjoin(cfg.outGenDir, 'protos.js');
   const dstTs = pjoin(cfg.outGenDir, 'protos.d.ts');
-  // We've ended up pulling in all the protos (via trace.proto,
-  // trace_packet.proto) below which means |dstJs| ends up being
-  // 23k lines/12mb. We should probably not do that.
-  // TODO(hjd): Figure out how to use lazy with pbjs/pbts.
   const inputs = [
-    'protos/perfetto/common/trace_stats.proto',
-    'protos/perfetto/common/tracing_service_capabilities.proto',
-    'protos/perfetto/config/perfetto_config.proto',
     'protos/perfetto/ipc/consumer_port.proto',
     'protos/perfetto/ipc/wire_protocol.proto',
-    'protos/perfetto/metrics/metrics.proto',
     'protos/perfetto/trace/perfetto/perfetto_metatrace.proto',
-    'protos/perfetto/trace/trace.proto',
-    'protos/perfetto/trace/trace_packet.proto',
+    'protos/perfetto/perfetto_sql/structured_query.proto',
     'protos/perfetto/trace_processor/trace_processor.proto',
   ];
   // Can't put --no-comments here - The comments are load bearing for
@@ -443,6 +478,25 @@ function genVersion() {
   addTask(exec, [cmd, args]);
 }
 
+function generateStdlibDocs() {
+  const cmd = pjoin(ROOT_DIR, 'tools/gen_stdlib_docs_json.py');
+  const stdlibDir = pjoin(ROOT_DIR, 'src/trace_processor/perfetto_sql/stdlib');
+
+  const stdlibFiles =
+    listFilesRecursive(stdlibDir)
+    .filter((filePath) => path.extname(filePath) === '.sql');
+
+  addTask(exec, [
+    cmd,
+    [
+      '--json-out',
+      pjoin(cfg.outDistDir, 'stdlib_docs.json'),
+      '--minify',
+      ...stdlibFiles,
+    ],
+  ]);
+}
+
 function updateSymlinks() {
   // /ui/out -> /out/ui.
   mklink(cfg.outUiDir, pjoin(ROOT_DIR, 'ui/out'));
@@ -471,17 +525,21 @@ function updateSymlinks() {
 function buildWasm(skipWasmBuild) {
   if (!skipWasmBuild) {
     if (!cfg.noOverrideGnArgs) {
-      const gnArgs = ['gen', `--args=is_debug=${cfg.debug}`, cfg.outDir];
+      let gnVars = `is_debug=${cfg.debug}`;
+      if (childProcess.spawnSync('which', ['ccache']).status === 0) {
+        gnVars += ` cc_wrapper="ccache"`;
+      }
+      const gnArgs = ['gen', `--args=${gnVars}`, cfg.outDir];
       addTask(exec, [pjoin(ROOT_DIR, 'tools/gn'), gnArgs]);
     }
-
     const ninjaArgs = ['-C', cfg.outDir];
     ninjaArgs.push(...cfg.wasmModules.map((x) => `${x}_wasm`));
     addTask(exec, [pjoin(ROOT_DIR, 'tools/ninja'), ninjaArgs]);
   }
 
-  const wasmOutDir = pjoin(cfg.outDir, 'wasm');
   for (const wasmMod of cfg.wasmModules) {
+    const isMem64 = wasmMod.endsWith('_memory64');
+    const wasmOutDir = pjoin(cfg.outDir, isMem64 ? 'wasm_memory64' : 'wasm');
     // The .wasm file goes directly into the dist dir (also .map in debug)
     for (const ext of ['.wasm'].concat(cfg.debug ? ['.wasm.map'] : [])) {
       const src = `${wasmOutDir}/${wasmMod}${ext}`;
@@ -515,6 +573,15 @@ function bundleJs(cfgName) {
   if (cfg.bigtrace) {
     args.push('--environment', 'ENABLE_BIGTRACE:true');
   }
+  if (cfg.openPerfettoTrace) {
+    args.push('--environment', 'ENABLE_OPEN_PERFETTO_TRACE:true');
+  }
+  if (cfg.minifyJs) {
+    args.push('--environment', `MINIFY_JS:${cfg.minifyJs}`);
+  }
+  if (cfg.onlyWasmMemory64) {
+    args.push('--environment', `IS_MEMORY64_ONLY:${cfg.onlyWasmMemory64}`);
+  }
   args.push(...(cfg.verbose ? [] : ['--silent']));
   if (cfg.watch) {
     // --waitForBundleInput is sadly quite busted so it is required ts
@@ -546,9 +613,10 @@ function genServiceWorkerManifestJson() {
 }
 
 function startServer() {
+  const host = cfg.httpServerListenHost == '127.0.0.1' ? 'localhost' : cfg.httpServerListenHost;
   console.log(
       'Starting HTTP server on',
-      `http://${cfg.httpServerListenHost}:${cfg.httpServerListenPort}`);
+      `http://${host}:${cfg.httpServerListenPort}`);
   http.createServer(function(req, res) {
         console.debug(req.method, req.url);
         let uri = req.url.split('?', 1)[0];
@@ -626,8 +694,8 @@ function isDistComplete() {
     'frontend_bundle.js',
     'engine_bundle.js',
     'traceconv_bundle.js',
-    'trace_processor.wasm',
     'perfetto.css',
+    ...cfg.wasmModules.map((wasmMod) => `${wasmMod}.wasm`),
   ];
   const relPaths = new Set();
   walk(cfg.outDistDir, (absPath) => {
@@ -639,14 +707,28 @@ function isDistComplete() {
   return true;
 }
 
-// Called whenever a change in the out/dist directory is detected. It sends a
-// Server-Side-Event to the live_reload.ts script.
 function notifyLiveServer(changedFile) {
-  for (const cli of httpWatches) {
-    if (cli === undefined) continue;
-    cli.write(
-        'data: ' + path.relative(cfg.outDistRootDir, changedFile) + '\n\n');
+  // Add file to pending set
+  notifyLiveServerPendingFiles.add(changedFile);
+
+  // Clear existing timeout if any
+  if (liveServerDebounceTimerId > 0) {
+    clearTimeout(liveServerDebounceTimerId);
   }
+
+  // Set new timeout to batch notifications
+  liveServerDebounceTimerId = setTimeout(() => {
+    // Send all pending files in one batch
+    for (const cli of httpWatches) {
+      if (cli === undefined) continue;
+      for (const file of notifyLiveServerPendingFiles) {
+        cli.write(
+            'data: ' + path.relative(cfg.outDistRootDir, file) + '\n\n');
+      }
+    }
+    notifyLiveServerPendingFiles.clear();
+    liveServerDebounceTimerId = 0;
+  }, LIVE_SERVER_DEBOUNCE_MS);
 }
 
 function copyExtensionAssets() {
@@ -682,8 +764,8 @@ function runTasks() {
     const DIM = '\u001b[2m';
     const BRT = '\u001b[37m';
     const RST = '\u001b[0m';
-    const ms = (new Date(Date.now() - tStart)).toISOString().slice(17, -1);
-    const ts = `[${DIM}${ms}${RST}]`;
+    const ms = (performance.now() - tStart) / 1000;;
+    const ts = `[${DIM}${ms.toFixed(3)}${RST}]`;
     const descr = task.description.substr(0, 80);
     console.log(`${ts} ${BRT}${++tasksRan}/${tasksTot}${RST}\t${descr}`);
     task.func.apply(/* this=*/ undefined, task.args);
@@ -711,7 +793,8 @@ function scanDir(dir, regex) {
   const absDir = path.isAbsolute(dir) ? dir : pjoin(ROOT_DIR, dir);
   // Add a fs watch if in watch mode.
   if (cfg.watch) {
-    fswatch(absDir, {recursive: true}, (_eventType, filePath) => {
+    fs.watch(absDir, {recursive: true}, (_eventType, relFilePath) => {
+      const filePath = pjoin(absDir, relFilePath);
       if (!filterFn(filePath)) return;
       if (cfg.verbose) {
         console.log('File change detected', _eventType, filePath);
@@ -801,6 +884,18 @@ function walk(dir, callback, skipRegex) {
   }
 }
 
+// Recursively build a list of files in a given directory and return a list of
+// file paths, similar to `find -type f`.
+function listFilesRecursive(dir) {
+  const fileList = [];
+
+  walk(dir, (filePath) => {
+    fileList.push(filePath);
+  });
+
+  return fileList;
+}
+
 function ensureDir(dirPath, clean) {
   const exists = fs.existsSync(dirPath);
   if (exists && clean) {
@@ -831,6 +926,39 @@ function mklink(src, dst) {
     }
   }
   fs.symlinkSync(src, dst);
+}
+
+function prepareWatchLock() {
+  if (fs.existsSync(cfg.outWatchLockFile)) {
+    const oldPid = fs.readFileSync(cfg.outWatchLockFile, 'utf8').trim();
+    let running = true;
+    try {
+      // Check if oldPid exists.
+      process.kill(parseInt(oldPid), 0);
+    } catch (e) {
+      running = false;
+    }
+    if (running) {
+      console.error(`Error: a build.js with --watch instance is already running (${cfg.outWatchLockFile} PID=${oldPid}).`);
+      process.exit(1);
+    } else {
+      console.log(`Removing stale lock file for PID ${oldPid}`);
+      fs.unlinkSync(cfg.outWatchLockFile);
+    }
+  }
+  fs.writeFileSync(cfg.outWatchLockFile, process.pid.toString());
+  process.on('exit', () => releaseWatchLock());
+}
+
+function releaseWatchLock() {
+  if (fs.existsSync(cfg.outWatchLockFile)) {
+    const pid = fs.readFileSync(cfg.outWatchLockFile, 'utf8').trim();
+    if (pid === process.pid.toString()) {
+      fs.unlinkSync(cfg.outWatchLockFile);
+    } else {
+      console.warn(`Ignoring stale lock file PID ${pid}`)
+    }
+  }
 }
 
 main();

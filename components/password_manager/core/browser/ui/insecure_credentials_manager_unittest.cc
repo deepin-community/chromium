@@ -4,8 +4,10 @@
 
 #include "components/password_manager/core/browser/ui/insecure_credentials_manager.h"
 
+#include <string_view>
+
+#include "base/location.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -37,13 +39,11 @@ constexpr char16_t kPassword1[] = u"fnlsr4@cm^mdls@fkspnsg3d";
 constexpr char16_t kPassword216[] =
     u"pmsFlsnoab4nsl#losb@skpfnsbkjb^klsnbs!cns";
 
-#if !BUILDFLAG(IS_ANDROID)
 constexpr char16_t kWeakPassword1[] = u"123456";
 constexpr char16_t kWeakPassword216[] =
     u"abcdabcdabcdabcdabcdabcdabcdabcdabcdabcda";
 // Delay in milliseconds.
 constexpr int kDelay = 2;
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 using affiliations::FacetURI;
 using ::testing::ElementsAre;
@@ -60,10 +60,10 @@ using StrictMockInsecureCredentialsManagerObserver =
     ::testing::StrictMock<MockInsecureCredentialsManagerObserver>;
 
 PasswordForm MakeSavedPassword(
-    base::StringPiece signon_realm,
-    base::StringPiece16 username,
-    base::StringPiece16 password,
-    base::StringPiece16 username_element = u"",
+    std::string_view signon_realm,
+    std::u16string_view username,
+    std::u16string_view password,
+    std::u16string_view username_element = u"",
     PasswordForm::Store store = PasswordForm::Store::kProfileStore) {
   PasswordForm form;
   form.signon_realm = std::string(signon_realm);
@@ -75,8 +75,8 @@ PasswordForm MakeSavedPassword(
   return form;
 }
 
-LeakCheckCredential MakeLeakCredential(base::StringPiece16 username,
-                                       base::StringPiece16 password) {
+LeakCheckCredential MakeLeakCredential(std::u16string_view username,
+                                       std::u16string_view password) {
   return LeakCheckCredential(std::u16string(username),
                              std::u16string(password));
 }
@@ -84,7 +84,7 @@ LeakCheckCredential MakeLeakCredential(base::StringPiece16 username,
 class InsecureCredentialsManagerTest : public testing::TestWithParam<bool> {
  protected:
   InsecureCredentialsManagerTest() {
-    store_->Init(/*prefs=*/nullptr, /*affiliated_match_helper=*/nullptr);
+    store_->Init(/*affiliated_match_helper=*/nullptr);
     presenter_.Init();
     RunUntilIdle();
   }
@@ -117,14 +117,6 @@ class InsecureCredentialsManagerTest : public testing::TestWithParam<bool> {
 
   void AdvanceClock(base::TimeDelta time) { task_env_.AdvanceClock(time); }
 
-  constexpr bool IsGroupingEnabled() {
-#if BUILDFLAG(IS_ANDROID)
-    return false;
-#else
-    return true;
-#endif
-  }
-
  private:
   base::test::TaskEnvironment task_env_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
@@ -133,8 +125,7 @@ class InsecureCredentialsManagerTest : public testing::TestWithParam<bool> {
   affiliations::FakeAffiliationService affiliation_service_;
   SavedPasswordsPresenter presenter_{&affiliation_service_, store_,
                                      /*account_store=*/nullptr};
-  InsecureCredentialsManager provider_{&presenter_, store_,
-                                       /*account_store=*/nullptr};
+  InsecureCredentialsManager provider_{&presenter_};
 };
 
 }  // namespace
@@ -199,7 +190,7 @@ TEST_F(InsecureCredentialsManagerTest,
 
   // Removing a saved password should notify observers.
   EXPECT_CALL(observer, OnInsecureCredentialsChanged);
-  store().RemoveLogin(saved_password);
+  store().RemoveLogin(FROM_HERE, saved_password);
   RunUntilIdle();
 
   // After an observer is removed it should no longer receive notifications.
@@ -274,12 +265,12 @@ TEST_F(InsecureCredentialsManagerTest, ReactToChangesInBothTables) {
               testing::UnorderedElementsAre(CredentialUIEntry(password1),
                                             CredentialUIEntry(password2)));
 
-  store().RemoveLogin(password1);
+  store().RemoveLogin(FROM_HERE, password1);
   RunUntilIdle();
   EXPECT_THAT(provider().GetInsecureCredentialEntries(),
               ElementsAre(CredentialUIEntry(password2)));
 
-  store().RemoveLogin(password2);
+  store().RemoveLogin(FROM_HERE, password2);
   RunUntilIdle();
   EXPECT_THAT(provider().GetInsecureCredentialEntries(), IsEmpty());
 }
@@ -326,7 +317,6 @@ TEST_F(InsecureCredentialsManagerTest, JoinWithMultipleRepeatedPasswords) {
               ElementsAre(CredentialUIEntry(password1)));
 }
 
-#if !BUILDFLAG(IS_ANDROID)
 TEST_F(InsecureCredentialsManagerTest, StartWeakCheckNotifiesOnCompletion) {
   base::MockOnceClosure closure;
   provider().StartWeakCheck(closure.Get());
@@ -551,7 +541,6 @@ TEST_F(InsecureCredentialsManagerTest, SingleCredentialIsWeakAndCompromised) {
   histogram_tester.ExpectUniqueSample("PasswordManager.WeakCheck.PasswordScore",
                                       0, 1);
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 // Test verifies that saving LeakCheckCredential via provider adds expected
 // compromised credential.
@@ -929,23 +918,13 @@ TEST_F(InsecureCredentialsManagerTest, MuteWeakPasswordNoOp) {
   store().AddLogin(password);
   RunUntilIdle();
 
-#if BUILDFLAG(IS_ANDROID)
-  // Weak passwords are filtered on Android.
-  ASSERT_THAT(provider().GetInsecureCredentialEntries(), IsEmpty());
-#else
   ASSERT_THAT(provider().GetInsecureCredentialEntries(), SizeIs(1));
-#endif
 
   EXPECT_FALSE(provider().MuteCredential(CredentialUIEntry(password)));
 
   RunUntilIdle();
 
-#if BUILDFLAG(IS_ANDROID)
-  // Weak passwords are filtered on Android.
-  EXPECT_THAT(provider().GetInsecureCredentialEntries(), IsEmpty());
-#else
   EXPECT_THAT(provider().GetInsecureCredentialEntries(), SizeIs(1));
-#endif
   EXPECT_FALSE(store()
                    .stored_passwords()
                    .at(kExampleCom)
@@ -966,23 +945,13 @@ TEST_F(InsecureCredentialsManagerTest, UnMuteWeakPasswordNoOp) {
   store().AddLogin(password);
   RunUntilIdle();
 
-#if BUILDFLAG(IS_ANDROID)
-  // Weak passwords are filtered on Android.
-  ASSERT_THAT(provider().GetInsecureCredentialEntries(), IsEmpty());
-#else
   ASSERT_THAT(provider().GetInsecureCredentialEntries(), SizeIs(1));
-#endif
 
   EXPECT_FALSE(provider().UnmuteCredential(CredentialUIEntry(password)));
 
   RunUntilIdle();
 
-#if BUILDFLAG(IS_ANDROID)
-  // Weak passwords are filtered on Android.
-  EXPECT_THAT(provider().GetInsecureCredentialEntries(), IsEmpty());
-#else
   EXPECT_THAT(provider().GetInsecureCredentialEntries(), SizeIs(1));
-#endif
 
   EXPECT_TRUE(store()
                   .stored_passwords()
@@ -1004,23 +973,13 @@ TEST_F(InsecureCredentialsManagerTest, MuteReusedPasswordNoOp) {
   store().AddLogin(password);
   RunUntilIdle();
 
-#if BUILDFLAG(IS_ANDROID)
-  // Reused passwords are filtered on Android.
-  ASSERT_THAT(provider().GetInsecureCredentialEntries(), IsEmpty());
-#else
   ASSERT_THAT(provider().GetInsecureCredentialEntries(), SizeIs(1));
-#endif
 
   EXPECT_FALSE(provider().MuteCredential(CredentialUIEntry(password)));
 
   RunUntilIdle();
 
-#if BUILDFLAG(IS_ANDROID)
-  // Reused passwords are filtered on Android.
-  EXPECT_THAT(provider().GetInsecureCredentialEntries(), IsEmpty());
-#else
   EXPECT_THAT(provider().GetInsecureCredentialEntries(), SizeIs(1));
-#endif
   EXPECT_FALSE(store()
                    .stored_passwords()
                    .at(kExampleCom)
@@ -1041,23 +1000,13 @@ TEST_F(InsecureCredentialsManagerTest, UnMuteReusedPasswordNoOp) {
   store().AddLogin(password);
   RunUntilIdle();
 
-#if BUILDFLAG(IS_ANDROID)
-  // Reused passwords are filtered on Android.
-  ASSERT_THAT(provider().GetInsecureCredentialEntries(), IsEmpty());
-#else
   ASSERT_THAT(provider().GetInsecureCredentialEntries(), SizeIs(1));
-#endif
 
   EXPECT_FALSE(provider().UnmuteCredential(CredentialUIEntry(password)));
 
   RunUntilIdle();
 
-#if BUILDFLAG(IS_ANDROID)
-  // Reused passwords are filtered on Android.
-  EXPECT_THAT(provider().GetInsecureCredentialEntries(), IsEmpty());
-#else
   EXPECT_THAT(provider().GetInsecureCredentialEntries(), SizeIs(1));
-#endif
   EXPECT_TRUE(store()
                   .stored_passwords()
                   .at(kExampleCom)
@@ -1086,7 +1035,6 @@ TEST_F(InsecureCredentialsManagerTest, UpdateCompromisedPassword) {
   EXPECT_TRUE(provider().GetInsecureCredentialEntries().empty());
 }
 
-#if !BUILDFLAG(IS_ANDROID)
 // Test verifies that editing a weak credential to another weak credential
 // continues to be treated weak.
 TEST_F(InsecureCredentialsManagerTest, UpdatedWeakPasswordBecomesStrong) {
@@ -1253,13 +1201,10 @@ TEST_F(InsecureCredentialsManagerTest, IrrelevantUpdatesDontCauseReuseCheck) {
 }
 
 TEST_F(InsecureCredentialsManagerTest, ReuseCheckUsesAffiliationInfo) {
-  if (!IsGroupingEnabled()) {
-    return;
-  }
   affiliations::MockAffiliationService mock_affiliation_service;
   SavedPasswordsPresenter presenter{&mock_affiliation_service, &store(),
                                     nullptr};
-  InsecureCredentialsManager provider{&presenter, &store(), nullptr};
+  InsecureCredentialsManager provider{&presenter};
   presenter.Init();
   RunUntilIdle();
 
@@ -1287,29 +1232,6 @@ TEST_F(InsecureCredentialsManagerTest, ReuseCheckUsesAffiliationInfo) {
   EXPECT_THAT(provider.GetInsecureCredentialEntries(), IsEmpty());
 }
 
-#else
-
-TEST_F(InsecureCredentialsManagerTest, GetInsecureCredentialsFiltersWeak) {
-  PasswordForm password1 =
-      MakeSavedPassword(kExampleCom, kUsername1, kPassword1);
-  PasswordForm password2 =
-      MakeSavedPassword(kExampleCom, kUsername2, kPassword216);
-
-  password1.password_issues.insert(
-      {InsecureType::kLeaked, InsecurityMetadata()});
-  password2.password_issues.insert({InsecureType::kWeak, InsecurityMetadata()});
-
-  store().AddLogin(password1);
-  store().AddLogin(password2);
-
-  RunUntilIdle();
-
-  EXPECT_THAT(provider().GetInsecureCredentialEntries(),
-              ElementsAre(CredentialUIEntry(password1)));
-}
-
-#endif  // !BUILDFLAG(IS_ANDROID)
-
 TEST_F(InsecureCredentialsManagerTest,
        GetInsecureCredentialsFiltersDuplicates) {
   PasswordForm password1 =
@@ -1335,10 +1257,8 @@ namespace {
 class InsecureCredentialsManagerWithTwoStoresTest : public ::testing::Test {
  protected:
   InsecureCredentialsManagerWithTwoStoresTest() {
-    profile_store_->Init(/*prefs=*/nullptr,
-                         /*affiliated_match_helper=*/nullptr);
-    account_store_->Init(/*prefs=*/nullptr,
-                         /*affiliated_match_helper=*/nullptr);
+    profile_store_->Init(/*affiliated_match_helper=*/nullptr);
+    account_store_->Init(/*affiliated_match_helper=*/nullptr);
     presenter_.Init();
     RunUntilIdle();
   }
@@ -1364,8 +1284,7 @@ class InsecureCredentialsManagerWithTwoStoresTest : public ::testing::Test {
   affiliations::FakeAffiliationService affiliation_service_;
   SavedPasswordsPresenter presenter_{&affiliation_service_, profile_store_,
                                      account_store_};
-  InsecureCredentialsManager provider_{&presenter_, profile_store_,
-                                       account_store_};
+  InsecureCredentialsManager provider_{&presenter_};
 };
 }  // namespace
 
@@ -1436,7 +1355,6 @@ TEST_F(InsecureCredentialsManagerWithTwoStoresTest, SaveCompromisedPassword) {
                     .password_issues.size());
 }
 
-#if !BUILDFLAG(IS_ANDROID)
 TEST_F(InsecureCredentialsManagerWithTwoStoresTest,
        GetInsecureCredentialsWeak) {
   profile_store().AddLogin(
@@ -1455,7 +1373,5 @@ TEST_F(InsecureCredentialsManagerWithTwoStoresTest,
   EXPECT_THAT(provider().GetInsecureCredentialEntries(),
               ElementsAre(CredentialUIEntry(expected_form)));
 }
-
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace password_manager

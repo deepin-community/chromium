@@ -4,10 +4,10 @@
 
 #include "content/browser/media/active_media_session_controller.h"
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/unguessable_token.h"
 #include "content/browser/browser_main_loop.h"
@@ -31,41 +31,22 @@ ActiveMediaSessionController::ActiveMediaSessionController(
       controller_manager_remote_.BindNewPipeAndPassReceiver());
 
   if (request_id == base::UnguessableToken::Null()) {
-    // ID is null for all scenarios where kWebAppSystemMediaControlsWin is not
-    // supported. ie. Mac, Linux, Windows with the feature flag off.
-    // Create a media controller that follows the active session for this case.
+    // Create a controller that automatically follows the active session.
     controller_manager_remote_->CreateActiveMediaController(
         media_controller_remote_.BindNewPipeAndPassReceiver());
   } else {
-    // Create a media controller tied to |request_id| when
-    // kWebAppSystemMediaControlsWin is enabled (on Windows OS).
+    // Create a controller for the media session with ID `request_id`.
     controller_manager_remote_->CreateMediaControllerForSession(
         media_controller_remote_.BindNewPipeAndPassReceiver(), request_id);
   }
 
-  // Observe the active media controller for changes to playback state and
+  // Observe the media controller for changes to playback state and
   // supported actions.
   media_controller_remote_->AddObserver(
       media_controller_observer_receiver_.BindNewPipeAndPassRemote());
 }
 
 ActiveMediaSessionController::~ActiveMediaSessionController() = default;
-
-void ActiveMediaSessionController::RebindMojoForNewID(
-    base::UnguessableToken request_id) {
-  media_controller_remote_.reset();
-  media_controller_observer_receiver_.reset();
-
-  // Don't think this is necessary for browser as we pass it to
-  // Start/StopWatchingMediaKey which only uses it for PWAs, but probably good
-  // to keep it up to date.
-  request_id_ = request_id;
-
-  controller_manager_remote_->CreateMediaControllerForSession(
-      media_controller_remote_.BindNewPipeAndPassReceiver(), request_id);
-  media_controller_remote_->AddObserver(
-      media_controller_observer_receiver_.BindNewPipeAndPassRemote());
-}
 
 void ActiveMediaSessionController::MediaSessionInfoChanged(
     media_session::mojom::MediaSessionInfoPtr session_info) {
@@ -95,7 +76,7 @@ void ActiveMediaSessionController::MediaSessionActionsChanged(
         MediaSessionActionToKeyCode(action);
     if (!action_key_code.has_value())
       continue;
-    if (!base::Contains(actions, action))
+    if (!std::ranges::contains(actions, action))
       media_keys_listener_manager->StopWatchingMediaKey(*action_key_code, this,
                                                         request_id_);
   }
@@ -174,8 +155,7 @@ void ActiveMediaSessionController::OnSeek(const base::TimeDelta& time) {
 }
 
 void ActiveMediaSessionController::OnSeekTo(const base::TimeDelta& time) {
-  if (base::Contains(actions_,
-                     media_session::mojom::MediaSessionAction::kSeekTo)) {
+  if (actions_.contains(media_session::mojom::MediaSessionAction::kSeekTo)) {
     media_controller_remote_->SeekTo(time);
   } else if (position_) {
     auto time_diff =
@@ -238,7 +218,7 @@ void ActiveMediaSessionController::PerformAction(MediaSessionAction action) {
     case MediaSessionAction::kPreviousSlide:
     case MediaSessionAction::kNextSlide:
     case MediaSessionAction::kEnterAutoPictureInPicture:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 
@@ -259,7 +239,7 @@ MediaSessionAction ActiveMediaSessionController::KeyCodeToMediaSessionAction(
     case ui::KeyboardCode::VKEY_MEDIA_PREV_TRACK:
       return MediaSessionAction::kPreviousTrack;
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 

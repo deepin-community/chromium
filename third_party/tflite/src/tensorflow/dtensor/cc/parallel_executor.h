@@ -23,15 +23,15 @@ limitations under the License.
 #include "llvm/ADT/StringRef.h"
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "tensorflow/c/eager/c_api_experimental.h"
-#include "xla/pjrt/pjrt_future.h"
+#include "xla/future.h"
 #include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/cc/tensor_with_layout.h"
 
 namespace tensorflow {
 namespace dtensor {
 
-template <typename T>
-using Future = ::xla::PjRtFuture<T>;
+template <typename T = void>
+using Future = ::xla::Future<T>;
 
 // ParallelExecutor Interface
 // Note: The interface is under development and APIs are subject to change.
@@ -53,7 +53,7 @@ class ParallelExecutor {
   // raw pointers.
   // The client is responsible for the ownership of the outputs.
   struct ExecutionResult {
-    Future<Status> status;
+    Future<> status;
     // The pointed data of `outputs` are filled after `status` future resolves
     // as ok.
     std::vector<TensorWithLayout*> outputs;
@@ -68,7 +68,7 @@ class ParallelExecutor {
       TensorWithLayout* t) = 0;
 
   // Returns a tensor copied from `t` when `t` contains only a single device.
-  virtual Future<StatusOr<Tensor>> ToHostBuffer(TensorWithLayout* t) = 0;
+  virtual Future<Tensor> ToHostBuffer(TensorWithLayout* t) = 0;
 };
 
 // Factory method for Default ParallelExecutor instance.

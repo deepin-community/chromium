@@ -67,7 +67,7 @@ bool PopulateMojoEnumValueIfValid(int possible_enum, T* valid_enum_out) {
 }
 
 std::string CreatePayload(ash::cros_healthd::mojom::RoutineUpdatePtr update) {
-  auto root_dict = base::Value::Dict().Set(
+  auto root_dict = base::DictValue().Set(
       kProgressPercentFieldName, static_cast<int>(update->progress_percent));
   if (update->output.is_valid()) {
     // TODO(crbug.com/1056323): Serialize update->output. For now, set a dummy
@@ -80,7 +80,7 @@ std::string CreatePayload(ash::cros_healthd::mojom::RoutineUpdatePtr update) {
     const auto& noninteractive_update =
         routine_update_union->get_noninteractive_update();
     auto noninteractive_dict =
-        base::Value::Dict()
+        base::DictValue()
             .Set(kStatusFieldName,
                  static_cast<int>(noninteractive_update->status))
             .Set(kStatusMessageFieldName,
@@ -88,16 +88,14 @@ std::string CreatePayload(ash::cros_healthd::mojom::RoutineUpdatePtr update) {
     root_dict.Set(kNonInteractiveUpdateFieldName,
                   std::move(noninteractive_dict));
   } else if (routine_update_union->is_interactive_update()) {
-    auto interactive_dict = base::Value::Dict().Set(
+    auto interactive_dict = base::DictValue().Set(
         kUserMessageFieldName,
         static_cast<int>(
             routine_update_union->get_interactive_update()->user_message));
     root_dict.Set(kInteractiveUpdateFieldName, std::move(interactive_dict));
   }
 
-  std::string payload;
-  base::JSONWriter::Write(root_dict, &payload);
-  return payload;
+  return base::WriteJson(root_dict).value_or("");
 }
 
 }  // namespace
@@ -116,17 +114,14 @@ em::RemoteCommand_Type DeviceCommandGetRoutineUpdateJob::GetType() const {
 
 bool DeviceCommandGetRoutineUpdateJob::ParseCommandPayload(
     const std::string& command_payload) {
-  std::optional<base::Value> root(base::JSONReader::Read(command_payload));
-  if (!root.has_value()) {
-    return false;
-  }
-  if (!root->is_dict()) {
+  std::optional<base::DictValue> root = base::JSONReader::ReadDict(
+      command_payload, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!root) {
     return false;
   }
 
-  const base::Value::Dict& dict = root->GetDict();
   // Make sure the command payload specified a valid integer for the routine ID.
-  std::optional<int> id = dict.FindInt(kIdFieldName);
+  std::optional<int> id = root->FindInt(kIdFieldName);
   if (!id.has_value()) {
     return false;
   }
@@ -134,7 +129,7 @@ bool DeviceCommandGetRoutineUpdateJob::ParseCommandPayload(
 
   // Make sure the command payload specified a valid
   // DiagnosticRoutineCommandEnum.
-  std::optional<int> command_enum = dict.FindInt(kCommandFieldName);
+  std::optional<int> command_enum = root->FindInt(kCommandFieldName);
   if (!command_enum.has_value()) {
     return false;
   }
@@ -145,7 +140,7 @@ bool DeviceCommandGetRoutineUpdateJob::ParseCommandPayload(
   }
 
   // Make sure the command payload specified a boolean for include_output.
-  std::optional<bool> include_output = dict.FindBool(kIncludeOutputFieldName);
+  std::optional<bool> include_output = root->FindBool(kIncludeOutputFieldName);
   if (!include_output.has_value()) {
     return false;
   }

@@ -43,17 +43,17 @@ class CPDF_Action {
     kLast = kGoTo3DView
   };
 
-  explicit CPDF_Action(RetainPtr<const CPDF_Dictionary> pDict);
+  explicit CPDF_Action(RetainPtr<const CPDF_Dictionary> dict);
   CPDF_Action(const CPDF_Action& that);
   ~CPDF_Action();
 
-  bool HasDict() const { return !!m_pDict; }
-  const CPDF_Dictionary* GetDict() const { return m_pDict.Get(); }
+  bool HasDict() const { return !!dict_; }
+  const CPDF_Dictionary* GetDict() const { return dict_.Get(); }
 
   Type GetType() const;
-  CPDF_Dest GetDest(CPDF_Document* pDoc) const;
+  CPDF_Dest GetDest(CPDF_Document* doc) const;
   WideString GetFilePath() const;
-  ByteString GetURI(const CPDF_Document* pDoc) const;
+  ByteString GetURI(const CPDF_Document* doc) const;
   bool GetHideStatus() const;
   ByteString GetNamedAction() const;
   uint32_t GetFlags() const;
@@ -68,12 +68,12 @@ class CPDF_Action {
   WideString GetJavaScript() const;
 
   size_t GetSubActionsCount() const;
-  CPDF_Action GetSubAction(size_t iIndex) const;
+  CPDF_Action GetSubAction(size_t index) const;
 
  private:
   RetainPtr<const CPDF_Object> GetJavaScriptObject() const;
 
-  RetainPtr<const CPDF_Dictionary> const m_pDict;
+  RetainPtr<const CPDF_Dictionary> const dict_;
 };
 
 #endif  // CORE_FPDFDOC_CPDF_ACTION_H_

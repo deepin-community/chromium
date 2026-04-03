@@ -10,7 +10,9 @@
 #include <string>
 
 #include "base/values.h"
+#include "chrome/browser/ash/login/enrollment/timebound_user_context_holder.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
+#include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "chromeos/ash/components/osauth/public/common_types.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom.h"
 
@@ -43,9 +45,23 @@ class WizardContext {
     kChildSignin,
     kReauth,
     kSamlRedirect,
+    kQuickStartFallback,
+  };
+
+  // Reflects if Gaia screen first shows a Gaia page or a SAML IdP
+  // page. This has some UI implications for the screen.
+  enum GaiaScreenMode {
+    // Gaia page is the first one to be shown.
+    kDefault = 0,
+
+    // SAML IdP page is the first one to be shown.
+    kSamlRedirect = 1,
   };
 
   struct GaiaConfig {
+    GaiaConfig();
+    ~GaiaConfig();
+
     // GAIA path to be loaded the next time GAIA Sign-in screen is shown.
     // This is usually set just before showing the GAIA screen and reset
     // to the default value when hiding the screen.
@@ -58,6 +74,13 @@ class WizardContext {
     // The account ID to be used in the next loading of GAIA webview.
     // The value is reset to `EmptyAccountId()` when hiding the screen.
     AccountId prefilled_account = EmptyAccountId();
+
+    // The URL path and parameters to be used when showing the 'fallback' URL
+    // flow of QuickStart. Only exists when Gaia demands an extra verification.
+    std::optional<std::string> quick_start_fallback_path_contents;
+
+    // The type of Gaia screen to show.
+    GaiaScreenMode screen_mode = GaiaScreenMode::kDefault;
   };
 
   struct RecoverySetup {
@@ -84,6 +107,16 @@ class WizardContext {
   // allowing screen to correctly display/handle Back button.
   enum class DataLossBackOptions { kNone, kBackToOnlineAuth, kBackToLocalAuth };
 
+  // The mode in which the PinSetupScreen will be surfaced.
+  enum class PinSetupMode {
+    kSetupAsPrimaryFactor,
+    kSetupAsSecondaryFactor,
+    kRecovery,
+    // Setup modes that reflect the past user choice.
+    kAlreadyPerformed,
+    kUserChosePasswordInstead,
+  };
+
   struct KnowledgeFactorSetup {
     // Whether usage of local password is forced.
     bool local_password_forced = false;
@@ -93,6 +126,8 @@ class WizardContext {
     DataLossBackOptions data_loss_back_option = DataLossBackOptions::kNone;
 
     AuthFactorsSet modified_factors;
+
+    PinSetupMode pin_setup_mode = PinSetupMode::kSetupAsSecondaryFactor;
   };
 
   enum class OSAuthErrorKind {
@@ -111,7 +146,7 @@ class WizardContext {
   // version rollback.
   // Set by WizardController.
   // Used by multiple screens.
-  base::Value::Dict configuration;
+  base::DictValue configuration;
 
   // Indicates that enterprise enrollment was triggered early in the OOBE
   // process, so Update screen should be skipped and Enrollment start right
@@ -139,7 +174,9 @@ class WizardContext {
   bool skip_to_update_for_tests = false;
 
   // Whether the post login screens should be skipped. Used in MaybeSkip by
-  // screens in tests. Is set by WizardController::SkipPostLoginScreensForTests.
+  // screens in tests. Is set by WizardController::SkipPostLoginScreensForTests
+  // and LoginDisplayHost::SkipPostLoginScreensForDemoMode.
+  // TODO(crbug.com/376527458): Rename to `skip_post_login_screens`.
   bool skip_post_login_screens_for_tests = false;
 
   // Whether CHOOBE screen should be skipped. Setting this flag will force skip
@@ -147,6 +184,12 @@ class WizardContext {
   // To test an optional screen without selecting the screen from CHOOBE screen,
   // set this flag to true before logging in as a new user.
   bool skip_choobe_for_tests = false;
+
+  // When true, skips the Auto Enrollment Check screen during OOBE for tests.
+  // `ShowAutoEnrollmentCheckScreen()` will directly trigger
+  // `OnAutoEnrollmentCheckScreenExit()` instead of attempting to show the auto
+  // enrollment check screen.
+  bool skip_auto_enrollment_check_for_tests = false;
 
   // Whether user creation screen is enabled (could be disabled due to disabled
   // feature or on managed device). It determines the behavior of back button
@@ -184,8 +227,10 @@ class WizardContext {
 
   std::optional<OSAuthErrorKind> osauth_error;
 
-  // Same as above, but the actual context is stored in AuthSessionStorage,
-  // and the token can be used to retrieve it.
+  // Token used for retrieving the `UserContext` from `AuthSessionStorage`.
+  // Once authenticated, the `UserContext` is stored in `AuthSessionStorage` and
+  // this token is used for borrowing it in order to perform operations such as
+  // adding extra factors. See https://crrev.com/c/4729372 for history.
   std::optional<AuthProofToken> extra_factors_token;
 
   // If the onboarding flow wasn't completed by the user we will try to show
@@ -237,9 +282,12 @@ class WizardContext {
   // selected screen.
   bool return_to_choobe_screen = false;
 
-  // Information that is used during Cryptohome recovery or password changed
-  // flow.
+  // Information that is used during Cryptohome recovery or password changed.
   std::unique_ptr<UserContext> user_context;
+
+  // Holds the UserContext for the flow which allows to skip the gaia
+  // screen. The wrapper manages the lifetime of the UserContext inside.
+  std::unique_ptr<TimeboundUserContextHolder> timebound_user_context_holder;
 
   // Configuration for GAIA screen. If the configs needs to be updated, it
   // should be updated before showing the GAIA screen. If the GAIA screen is

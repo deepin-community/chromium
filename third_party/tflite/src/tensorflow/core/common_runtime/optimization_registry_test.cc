@@ -23,7 +23,7 @@ namespace tensorflow {
 class TestOptimization : public GraphOptimizationPass {
  public:
   static int count_;
-  Status Run(const GraphOptimizationPassOptions& options) override {
+  absl::Status Run(const GraphOptimizationPassOptions& options) override {
     ++count_;
     return absl::OkStatus();
   }
@@ -51,7 +51,7 @@ TEST(OptimizationRegistry, OptimizationPass) {
 
 class UpdateFuncLibPass : public GraphOptimizationPass {
  public:
-  Status Run(const GraphOptimizationPassOptions& options) override {
+  absl::Status Run(const GraphOptimizationPassOptions& options) override {
     return options.flib_def->AddFunctionDef(test::function::WXPlusB());
   }
 };
@@ -78,7 +78,7 @@ class OptimizationPassTest : public ::testing::Test {
                   OptimizationPassRegistry::POST_REWRITE_FOR_EXEC, options));
   }
 
-  const FunctionDef* GetFunctionDef(const string& func) const {
+  const FunctionDef* GetFunctionDef(const std::string& func) const {
     return flib_def_->Find(func);
   }
 

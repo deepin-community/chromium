@@ -28,6 +28,7 @@
 #define FUZZTEST_FUZZTEST_INTERNAL_COVERAGE_H_
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -39,6 +40,12 @@
 #if defined(__linux__)
 #define FUZZTEST_INTERNAL_ENABLE_STACK_SIZE_CHECK 1
 #include <pthread.h>
+#endif
+
+#if defined(__has_builtin)
+#if __has_builtin(__builtin_frame_address)
+#define FUZZTEST_INTERNAL_HAS_BUILTIN_FRAME_ADDRESS 1
+#endif
 #endif
 
 namespace fuzztest::internal {
@@ -106,7 +113,7 @@ class ExecutionCoverage {
   }
 
   static char* GetCurrentStackFrame() {
-#if defined(__has_builtin) && __has_builtin(__builtin_frame_address)
+#if defined(FUZZTEST_INTERNAL_HAS_BUILTIN_FRAME_ADDRESS)
     return reinterpret_cast<char*>(__builtin_frame_address(0));
 #else
     return nullptr;
@@ -129,11 +136,13 @@ class ExecutionCoverage {
 
   // Flag marking if the control flow is currently in target codes.
   // We don't want to collect unrelated updates to cmp score and dictionary.
-  bool IsTracing() { return is_tracing_; }
+  bool IsTracing() { return is_tracing_.load(std::memory_order_relaxed); }
 
   // Right before target run, call this method with true; right after
   // target run, call this method with false.
-  void SetIsTracing(bool is_tracing) { is_tracing_ = is_tracing; }
+  void SetIsTracing(bool is_tracing) {
+    is_tracing_.store(is_tracing, std::memory_order_relaxed);
+  }
 
   // Update the PC->max stack usage map for `PC`.
   // It compares the current stack frame against the stack frame specified in
@@ -184,7 +193,7 @@ class ExecutionCoverage {
   std::atomic<bool> new_coverage_{false};
 
   TablesOfRecentCompares tables_of_recent_compares_ = {};
-  bool is_tracing_ = false;
+  std::atomic<bool> is_tracing_{false};
 };
 
 // Set the singleton ExecutionCoverage object.

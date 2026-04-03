@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {Size} from 'chrome://resources/mojo/ui/gfx/geometry/mojom/geometry.mojom-webui.js';
-import {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
+import type {Size} from 'chrome://resources/mojo/ui/gfx/geometry/mojom/geometry.mojom-webui.js';
+import type {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
 
 // LINT.IfChange
 
@@ -62,6 +62,11 @@ export interface EmojiVariants {
   groupedGender?: boolean;
 }
 
+export interface EmojiHistoryItem extends EmojiVariants {
+  // Timestamp is in milliseconds since unix epoch.
+  timestamp?: number;
+}
+
 export interface EmojiGroup {
   category: CategoryEnum;
   group: string;
@@ -75,6 +80,7 @@ export interface VisualContent {
   id: string;
   url: {full: Url, preview: Url, previewImage: Url};
   previewSize: Size;
+  // `fullSize` is currently unused by Emoji Picker.
 }
 
 export interface SubcategoryData {

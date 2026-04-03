@@ -7,7 +7,13 @@
 //   D3D11-specific functionality associated with a GL Context.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/d3d/d3d11/Context11.h"
+
+#include <utility>
 
 #include "common/entry_points_enum_autogen.h"
 #include "common/string_utils.h"
@@ -15,6 +21,7 @@
 #include "libANGLE/Context.h"
 #include "libANGLE/Context.inl.h"
 #include "libANGLE/MemoryProgramCache.h"
+#include "libANGLE/histogram_macros.h"
 #include "libANGLE/renderer/OverlayImpl.h"
 #include "libANGLE/renderer/d3d/CompilerD3D.h"
 #include "libANGLE/renderer/d3d/ProgramExecutableD3D.h"
@@ -45,31 +52,13 @@ ANGLE_INLINE bool DrawCallHasDynamicAttribs(const gl::Context *context)
     return vertexArray11->hasActiveDynamicAttrib(context);
 }
 
-bool InstancedPointSpritesActive(RendererD3D *renderer,
-                                 ProgramExecutableD3D *executableD3D,
-                                 gl::PrimitiveMode mode)
-{
-    return executableD3D->usesPointSize() &&
-           executableD3D->usesInstancedPointSpriteEmulation(renderer) &&
-           mode == gl::PrimitiveMode::Points;
-}
-
 bool DrawCallHasStreamingVertexArrays(const gl::Context *context, gl::PrimitiveMode mode)
 {
-    RendererD3D *renderer = GetImplAs<Context11>(context)->getRenderer();
-
     // Direct drawing doesn't support dynamic attribute storage since it needs the first and count
     // to translate when applyVertexBuffer. GL_LINE_LOOP and GL_TRIANGLE_FAN are not supported
     // either since we need to simulate them in D3D.
     if (DrawCallHasDynamicAttribs(context) || mode == gl::PrimitiveMode::LineLoop ||
         mode == gl::PrimitiveMode::TriangleFan)
-    {
-        return true;
-    }
-
-    ProgramExecutableD3D *executableD3D =
-        GetImplAs<ProgramExecutableD3D>(context->getState().getProgramExecutable());
-    if (InstancedPointSpritesActive(renderer, executableD3D, mode))
     {
         return true;
     }
@@ -144,26 +133,22 @@ Context11::Context11(const gl::State &state, gl::ErrorSet *errorSet, Renderer11 
 
 Context11::~Context11() {}
 
-angle::Result Context11::initialize()
+angle::Result Context11::initialize(const angle::ImageLoadContext &imageLoadContext)
 {
+    mImageLoadContext = imageLoadContext;
     return angle::Result::Continue;
 }
 
 void Context11::onDestroy(const gl::Context *context)
 {
     mIncompleteTextures.onDestroy(context);
+
+    mImageLoadContext = {};
 }
 
 CompilerImpl *Context11::createCompiler()
 {
-    if (mRenderer->getRenderer11DeviceCaps().featureLevel <= D3D_FEATURE_LEVEL_9_3)
-    {
-        return new CompilerD3D(SH_HLSL_4_0_FL9_3_OUTPUT);
-    }
-    else
-    {
-        return new CompilerD3D(SH_HLSL_4_1_OUTPUT);
-    }
+    return new CompilerD3D(SH_HLSL_4_1_OUTPUT);
 }
 
 ShaderImpl *Context11::createShader(const gl::ShaderState &data)
@@ -227,9 +212,10 @@ BufferImpl *Context11::createBuffer(const gl::BufferState &state)
     return buffer;
 }
 
-VertexArrayImpl *Context11::createVertexArray(const gl::VertexArrayState &data)
+VertexArrayImpl *Context11::createVertexArray(const gl::VertexArrayState &data,
+                                              const gl::VertexArrayBuffers &vertexArrayBuffers)
 {
-    return new VertexArray11(data);
+    return new VertexArray11(data, vertexArrayBuffers);
 }
 
 QueryImpl *Context11::createQuery(gl::QueryType type)
@@ -345,7 +331,8 @@ ANGLE_INLINE angle::Result Context11::drawElementsImpl(const gl::Context *contex
     {
         gl::IndexRange indexRange;
         ANGLE_TRY(context->getState().getVertexArray()->getIndexRange(
-            context, indexType, indexCount, indices, &indexRange));
+            context, indexType, indexCount, indices,
+            context->getState().isPrimitiveRestartEnabled(), &indexRange));
         GLint startVertex;
         ANGLE_TRY(ComputeStartVertex(GetImplAs<Context11>(context), indexRange, baseVertex,
                                      &startVertex));
@@ -451,6 +438,11 @@ angle::Result Context11::drawArraysIndirect(const gl::Context *context,
         const gl::DrawArraysIndirectCommand *cmd = nullptr;
         ANGLE_TRY(ReadbackIndirectBuffer(context, indirect, &cmd));
 
+        if (cmd->count == 0)
+        {
+            return angle::Result::Continue;
+        }
+
         ANGLE_TRY(mRenderer->getStateManager()->updateState(
             context, mode, cmd->first, cmd->count, gl::DrawElementsType::InvalidEnum, nullptr,
             cmd->instanceCount, 0, 0, true));
@@ -476,6 +468,11 @@ angle::Result Context11::drawElementsIndirect(const gl::Context *context,
         const gl::DrawElementsIndirectCommand *cmd = nullptr;
         ANGLE_TRY(ReadbackIndirectBuffer(context, indirect, &cmd));
 
+        if (cmd->count == 0)
+        {
+            return angle::Result::Continue;
+        }
+
         const GLuint typeBytes = gl::GetDrawElementsTypeSize(type);
         const void *indices =
             reinterpret_cast<const void *>(static_cast<uintptr_t>(cmd->firstIndex * typeBytes));
@@ -484,8 +481,9 @@ angle::Result Context11::drawElementsIndirect(const gl::Context *context,
         // make sure we are using the correct 'baseVertex'. This parameter does not exist for the
         // direct drawElements.
         gl::IndexRange indexRange;
-        ANGLE_TRY(context->getState().getVertexArray()->getIndexRange(context, type, cmd->count,
-                                                                      indices, &indexRange));
+        ANGLE_TRY(context->getState().getVertexArray()->getIndexRange(
+            context, type, cmd->count, indices, context->getState().isPrimitiveRestartEnabled(),
+            &indexRange));
 
         GLint startVertex;
         ANGLE_TRY(ComputeStartVertex(GetImplAs<Context11>(context), indexRange, cmd->baseVertex,
@@ -494,7 +492,7 @@ angle::Result Context11::drawElementsIndirect(const gl::Context *context,
         ANGLE_TRY(mRenderer->getStateManager()->updateState(
             context, mode, startVertex, cmd->count, type, indices, cmd->primCount, cmd->baseVertex,
             cmd->baseInstance, true));
-        return mRenderer->drawElements(context, mode, static_cast<GLint>(indexRange.start),
+        return mRenderer->drawElements(context, mode, static_cast<GLint>(indexRange.start()),
                                        cmd->count, type, indices, cmd->primCount, 0,
                                        cmd->baseInstance, true);
     }
@@ -561,7 +559,6 @@ angle::Result Context11::drawElementsIndirect(const gl::Context *context,
             ASSERT(counts[drawID] > 0);                                                        \
             DRAW_CALL(drawType, instanced, bvbi);                                              \
             ANGLE_MARK_TRANSFORM_FEEDBACK_USAGE(instanced);                                    \
-            gl::MarkShaderStorageUsage(context);                                               \
         }                                                                                      \
         /* reset the uniform to zero for non-multi-draw uses of the program */                 \
         ANGLE_SET_DRAW_ID_UNIFORM(hasDrawID)(0);                                               \
@@ -796,12 +793,11 @@ angle::Result Context11::pushGroupMarker(GLsizei length, const char *marker)
 
 angle::Result Context11::popGroupMarker()
 {
-    const char *marker = nullptr;
     if (!mMarkerStack.empty())
     {
-        marker = mMarkerStack.top().c_str();
+        std::string marker = std::move(mMarkerStack.top());
         mMarkerStack.pop();
-        mRenderer->getDebugAnnotatorContext()->endEvent(marker,
+        mRenderer->getDebugAnnotatorContext()->endEvent(marker.c_str(),
                                                         angle::EntryPoint::GLPopGroupMarkerEXT);
     }
     return angle::Result::Continue;
@@ -925,19 +921,7 @@ gl::Caps Context11::getNativeCaps() const
     // version:
     // - If current context is ES 3.0 and below, we use D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT(8)
     //   as the value of max draw buffers because UAVs are not used.
-    // - If current context is ES 3.1 and the feature level is 11_0, the RTVs and UAVs share 8
-    //   slots. As ES 3.1 requires at least 1 atomic counter buffer in compute shaders, the value
-    //   of max combined shader output resources is limited to 7, thus only 7 RTV slots can be
-    //   used simultaneously.
-    // - If current context is ES 3.1 and the feature level is 11_1, the RTVs and UAVs share 64
-    //   slots. Currently we allocate 60 slots for combined shader output resources, so we can use
-    //   at most D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT(8) RTVs simultaneously.
-    if (mState.getClientVersion() >= gl::ES_3_1 &&
-        mRenderer->getRenderer11DeviceCaps().featureLevel == D3D_FEATURE_LEVEL_11_0)
-    {
-        caps.maxDrawBuffers      = caps.maxCombinedShaderOutputResources;
-        caps.maxColorAttachments = caps.maxCombinedShaderOutputResources;
-    }
+    // - ES 3.1 is not supported.
 
     return caps;
 }
@@ -967,12 +951,14 @@ angle::Result Context11::dispatchCompute(const gl::Context *context,
                                          GLuint numGroupsY,
                                          GLuint numGroupsZ)
 {
-    return mRenderer->dispatchCompute(context, numGroupsX, numGroupsY, numGroupsZ);
+    UNIMPLEMENTED();
+    return angle::Result::Stop;
 }
 
 angle::Result Context11::dispatchComputeIndirect(const gl::Context *context, GLintptr indirect)
 {
-    return mRenderer->dispatchComputeIndirect(context, indirect);
+    UNIMPLEMENTED();
+    return angle::Result::Stop;
 }
 
 angle::Result Context11::triggerDrawCallProgramRecompilation(const gl::Context *context,
@@ -986,6 +972,7 @@ angle::Result Context11::triggerDrawCallProgramRecompilation(const gl::Context *
 
     executableD3D->updateCachedInputLayout(mRenderer, va11->getCurrentStateSerial(), glState);
     executableD3D->updateCachedOutputLayout(context, drawFBO);
+    executableD3D->updateCachedImage2DBindLayout(context, gl::ShaderType::Fragment);
 
     bool recompileVS = !executableD3D->hasVertexExecutableForCachedInputLayout();
     bool recompileGS =
@@ -1052,46 +1039,6 @@ angle::Result Context11::triggerDrawCallProgramRecompilation(const gl::Context *
     return angle::Result::Continue;
 }
 
-angle::Result Context11::triggerDispatchCallProgramRecompilation(const gl::Context *context)
-{
-    const auto &glState                 = context->getState();
-    gl::ProgramExecutable *executable   = glState.getProgramExecutable();
-    ProgramExecutableD3D *executableD3D = GetImplAs<ProgramExecutableD3D>(executable);
-
-    executableD3D->updateCachedComputeImage2DBindLayout(context);
-
-    bool recompileCS = !executableD3D->hasComputeExecutableForCachedImage2DBindLayout();
-
-    if (!recompileCS)
-    {
-        return angle::Result::Continue;
-    }
-
-    // Load the compiler if necessary and recompile the programs.
-    ANGLE_TRY(mRenderer->ensureHLSLCompilerInitialized(this));
-
-    gl::InfoLog infoLog;
-
-    ShaderExecutableD3D *computeExe = nullptr;
-    ANGLE_TRY(executableD3D->getComputeExecutableForImage2DBindLayout(this, mRenderer, &computeExe,
-                                                                      &infoLog));
-    if (!executableD3D->hasComputeExecutableForCachedImage2DBindLayout())
-    {
-        ASSERT(infoLog.getLength() > 0);
-        ERR() << "Dynamic recompilation error log: " << infoLog.str();
-        ANGLE_TRY_HR(this, E_FAIL, "Error compiling dynamic compute executable");
-    }
-
-    // Refresh the program cache entry.
-    gl::Program *program = glState.getProgram();
-    if (mMemoryProgramCache && IsSameExecutable(&program->getExecutable(), executable))
-    {
-        ANGLE_TRY(mMemoryProgramCache->updateProgram(context, program));
-    }
-
-    return angle::Result::Continue;
-}
-
 angle::Result Context11::memoryBarrier(const gl::Context *context, GLbitfield barriers)
 {
     return angle::Result::Continue;
@@ -1117,7 +1064,7 @@ angle::Result Context11::initializeMultisampleTextureToBlack(const gl::Context *
     TextureD3D *textureD3D        = GetImplAs<TextureD3D>(glTexture);
     gl::ImageIndex index          = gl::ImageIndex::Make2DMultisample();
     RenderTargetD3D *renderTarget = nullptr;
-    GLsizei texSamples            = textureD3D->getRenderToTextureSamples();
+    GLsizei texSamples            = 0;
     ANGLE_TRY(textureD3D->getRenderTarget(context, index, texSamples, &renderTarget));
     return mRenderer->clearRenderTarget(context, renderTarget, gl::ColorF(0.0f, 0.0f, 0.0f, 1.0f),
                                         1.0f, 0);
@@ -1140,16 +1087,13 @@ void Context11::handleResult(HRESULT hr,
     {
         HRESULT removalReason = mRenderer->getDevice()->GetDeviceRemovedReason();
         errorStream << " (removal reason: " << gl::FmtHR(removalReason) << ")";
+        ANGLE_HISTOGRAM_SPARSE_SLOWLY("GPU.ANGLE.D3DDeviceRemovedReason",
+                                      static_cast<int>(removalReason));
         mRenderer->notifyDeviceLost();
     }
 
     errorStream << ": " << message;
 
     mErrors->handleError(glErrorCode, errorStream.str().c_str(), file, function, line);
-}
-
-angle::ImageLoadContext Context11::getImageLoadContext() const
-{
-    return getRenderer()->getDisplay()->getImageLoadContext();
 }
 }  // namespace rx

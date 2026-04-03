@@ -11,7 +11,10 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/kernels/data/experimental/auto_shard_dataset_op.h"
 
+#include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "tensorflow/core/common_runtime/type_inference.h"
 #include "tensorflow/core/data/dataset_test_base.h"
@@ -33,7 +36,7 @@ class AutoShardDatasetParams : public DatasetParams {
                          int64_t index, int auto_shard_policy,
                          int64_t num_replicas, DataTypeVector output_dtypes,
                          std::vector<PartialTensorShape> output_shapes,
-                         string node_name)
+                         std::string node_name)
       : DatasetParams(std::move(output_dtypes), std::move(output_shapes),
                       std::move(node_name)),
         num_workers_(num_workers),
@@ -50,7 +53,8 @@ class AutoShardDatasetParams : public DatasetParams {
     return CreateTensors<int64_t>(TensorShape({}), {{num_workers_}, {index_}});
   }
 
-  Status GetInputNames(std::vector<string>* input_names) const override {
+  absl::Status GetInputNames(
+      std::vector<std::string>* input_names) const override {
     input_names->clear();
     input_names->emplace_back(AutoShardDatasetOp::kInputDataset);
     input_names->emplace_back(AutoShardDatasetOp::kNumWorkers);
@@ -58,7 +62,7 @@ class AutoShardDatasetParams : public DatasetParams {
     return absl::OkStatus();
   }
 
-  Status GetAttributes(AttributeVector* attr_vector) const override {
+  absl::Status GetAttributes(AttributeVector* attr_vector) const override {
     attr_vector->clear();
     attr_vector->emplace_back(AutoShardDatasetOp::kAutoShardPolicy,
                               auto_shard_policy_);
@@ -69,7 +73,7 @@ class AutoShardDatasetParams : public DatasetParams {
     return absl::OkStatus();
   }
 
-  string dataset_type() const override {
+  std::string dataset_type() const override {
     return AutoShardDatasetOp::kDatasetType;
   }
 
@@ -215,7 +219,7 @@ static void add_identity_nodes(Node* node, Graph& graph,
 }
 
 // Runs type inference pass on graph
-static Status type_inference(Graph& graph) {
+static absl::Status type_inference(Graph& graph) {
   GraphOptimizationPassOptions opt_options;
   std::unique_ptr<Graph> graph_ptr(new Graph(OpRegistry::Global()));
   graph_ptr->Copy(graph);

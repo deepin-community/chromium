@@ -18,12 +18,14 @@
 import pytest
 
 from selenium.webdriver import Firefox
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
 
 
 @pytest.fixture
-def capabilities():
-    capabilities = {'marionette': True}
-    return capabilities
+def options():
+    options = FirefoxOptions()
+    options.add_argument("-remote-allow-system-access")
+    return options
 
 
 @pytest.fixture
@@ -32,8 +34,8 @@ def driver_class():
 
 
 @pytest.fixture
-def driver_kwargs(capabilities):
-    return {'capabilities': capabilities}
+def driver_kwargs(options):
+    return {"options": options}
 
 
 @pytest.fixture

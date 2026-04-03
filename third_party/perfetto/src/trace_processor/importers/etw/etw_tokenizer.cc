@@ -14,24 +14,29 @@
  * limitations under the License.
  */
 
-#include <optional>
-
 #include "src/trace_processor/importers/etw/etw_tokenizer.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <utility>
 
 #include "perfetto/base/status.h"
 #include "perfetto/ext/base/status_or.h"
 #include "perfetto/protozero/proto_decoder.h"
 #include "perfetto/protozero/proto_utils.h"
-#include "src/trace_processor/importers/proto/packet_sequence_state.h"
-#include "src/trace_processor/sorter/trace_sorter.h"
-#include "src/trace_processor/storage/trace_storage.h"
+#include "perfetto/public/compiler.h"
+#include "perfetto/trace_processor/ref_counted.h"
+#include "perfetto/trace_processor/trace_blob_view.h"
+#include "src/trace_processor/importers/common/parser_types.h"
+#include "src/trace_processor/importers/proto/packet_sequence_state_generation.h"
+#include "src/trace_processor/importers/proto/proto_importer_module.h"
 
 #include "protos/perfetto/common/builtin_clock.pbzero.h"
 #include "protos/perfetto/trace/etw/etw_event.pbzero.h"
 #include "protos/perfetto/trace/etw/etw_event_bundle.pbzero.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
 using protozero::ProtoDecoder;
 using protozero::proto_utils::MakeTagVarInt;
@@ -41,8 +46,9 @@ using protos::pbzero::BuiltinClock;
 using protos::pbzero::EtwTraceEventBundle;
 
 PERFETTO_ALWAYS_INLINE
-base::Status EtwTokenizer::TokenizeEtwBundle(TraceBlobView bundle,
-                                             PacketSequenceState* state) {
+base::Status EtwTokenizer::TokenizeEtwBundle(
+    TraceBlobView bundle,
+    RefPtr<PacketSequenceStateGeneration> state) {
   protos::pbzero::EtwTraceEventBundle::Decoder decoder(bundle.data(),
                                                        bundle.length());
   // Cpu id can either be in the etw bundle or inside the individual
@@ -50,16 +56,18 @@ base::Status EtwTokenizer::TokenizeEtwBundle(TraceBlobView bundle,
   // in case the EtwTraceEvent does not contain the cpu.
   std::optional<uint32_t> bundle_cpu =
       decoder.has_cpu() ? std::make_optional(decoder.cpu()) : std::nullopt;
-  auto it = decoder.event();
-  return TokenizeEtwEvent(bundle_cpu, bundle.slice(it->data(), it->size()),
-                          state);
+
+  for (auto it = decoder.event(); it; ++it) {
+    TokenizeEtwEvent(bundle_cpu, bundle.slice(it->data(), it->size()), state);
+  }
+  return base::OkStatus();
 }
 
 PERFETTO_ALWAYS_INLINE
 base::Status EtwTokenizer::TokenizeEtwEvent(
     std::optional<uint32_t> fallback_cpu,
     TraceBlobView event,
-    PacketSequenceState* state) {
+    RefPtr<PacketSequenceStateGeneration> state) {
   const uint8_t* data = event.data();
   const size_t length = event.length();
   ProtoDecoder decoder(data, length);
@@ -100,12 +108,10 @@ base::Status EtwTokenizer::TokenizeEtwEvent(
   if (!timestamp.ok()) {
     return timestamp.status();
   }
-
-  context_->sorter->PushEtwEvent(cpu, *timestamp, std::move(event),
-                                 state->current_generation());
+  module_context_->PushEtwEvent(
+      cpu, *timestamp, TracePacketData{std::move(event), std::move(state)});
 
   return base::OkStatus();
 }
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

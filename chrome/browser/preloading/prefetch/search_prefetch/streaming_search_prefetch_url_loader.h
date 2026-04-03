@@ -8,10 +8,12 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_request.h"
@@ -137,14 +139,12 @@ class StreamingSearchPrefetchURLLoader
         const std::optional<GURL>& new_url) override;
     void SetPriority(net::RequestPriority priority,
                      int32_t intra_priority_value) override;
-    void PauseReadingBodyFromNet() override;
-    void ResumeReadingBodyFromNet() override;
 
     // Sets date pipe up between this instance and its client.
     void StartReadingResponseFromData(
         network::mojom::URLResponseHeadPtr& resource_response);
 
-    // TODO(https://crbug.com/1400881): These methods will replace the
+    // TODO(crbug.com/40250486): These methods will replace the
     // `StreamingSearchPrefetchURLLoader`'s.
     // Pushes the received data into the producer end of the data pipe.
     void PushData();
@@ -212,7 +212,7 @@ class StreamingSearchPrefetchURLLoader
     std::optional<network::URLLoaderCompletionStatus>
         url_loader_completion_status_;
 
-    // TODO(crbug.com/1400881): We'd have a failure strategy to determine
+    // TODO(crbug.com/40250486): We'd have a failure strategy to determine
     // whether to fallback real navigation or to discard the reader's caller.
   };
 
@@ -233,7 +233,7 @@ class StreamingSearchPrefetchURLLoader
 
   // Similar to `GetCallbackForReadingViaResponseReader`, but support direct
   // forwarding.
-  // TODO(crbug.com/1400881): Unify the logic and delete this entry.
+  // TODO(crbug.com/40250486): Unify the logic and delete this entry.
   static RequestHandler GetServingResponseHandler(
       scoped_refptr<StreamingSearchPrefetchURLLoader> loader);
 
@@ -242,9 +242,8 @@ class StreamingSearchPrefetchURLLoader
   // on mojo channels closing or other errors occurring.
   void ClearOwnerPointer();
 
-  // Record whether the navigation url and the |prefetch_url_| match. Only
-  // recorded when |navigation_prefetch_| is true.
-  void RecordNavigationURLHistogram(const GURL& navigation_url);
+  // Returns whether the resource response is available.
+  bool HasResourceResponse() const { return !!resource_response_; }
 
   void set_on_destruction_callback_for_testing(
       base::OnceClosure on_destruction_callback_for_testing) {
@@ -259,7 +258,7 @@ class StreamingSearchPrefetchURLLoader
   ~StreamingSearchPrefetchURLLoader() override;
 
   // mojo::DataPipeDrainer::Client:
-  void OnDataAvailable(const void* data, size_t num_bytes) override;
+  void OnDataAvailable(base::span<const uint8_t> data) override;
   void OnDataComplete() override;
 
   // network::mojom::URLLoader:
@@ -270,8 +269,6 @@ class StreamingSearchPrefetchURLLoader
       const std::optional<GURL>& new_url) override;
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override;
-  void PauseReadingBodyFromNet() override;
-  void ResumeReadingBodyFromNet() override;
 
   // network::mojom::URLLoaderClient
   void OnReceiveEarlyHints(network::mojom::EarlyHintsPtr early_hints) override;
@@ -315,11 +312,11 @@ class StreamingSearchPrefetchURLLoader
 
   // Returns the view of `body_content_`, starting from the `writing_position`
   // and ending at the end of the string.
-  // Returns an invalid StringPiece (note, not an empty StringPiece) if there is
-  // no more valid data. Returns an empty StringPiece if writing_position
-  // reaches the end of the current response body but `this` is waiting for the
-  // network to produce more data.
-  base::StringPiece GetMoreDataFromCache(int writing_position) const;
+  // Returns an invalid std::string_view (note, not an empty std::string_view)
+  // if there is no more valid data. Returns an empty std::string_view if
+  // writing_position reaches the end of the current response body but `this` is
+  // waiting for the network to produce more data.
+  std::string_view GetMoreDataFromCache(size_t writing_position) const;
 
   // Push data into |producer_handle_|.
   void PushData();
@@ -356,9 +353,6 @@ class StreamingSearchPrefetchURLLoader
   // Forwards all queued events to |forwarding_client_|.
   void RunEventQueue();
 
-  // Marks the parent prefetch request as servable. Called as delayed task.
-  void MarkPrefetchAsServable();
-
   // Called on `this` receives servable response.
   void OnServableResponseCodeReceived();
 
@@ -385,10 +379,8 @@ class StreamingSearchPrefetchURLLoader
   // The status returned from |network_url_loader_|.
   std::optional<network::URLLoaderCompletionStatus> status_;
 
-  // Total amount of bytes to transfer.
-  int bytes_of_raw_data_to_transfer_ = 0;
   // Bytes sent to |producer_handle_| already.
-  int write_position_ = 0;
+  size_t write_position_ = 0;
   // The request body.
   std::string body_content_;
   int estimated_length_ = 0;
@@ -404,7 +396,7 @@ class StreamingSearchPrefetchURLLoader
   // URL Loader Events that occur before serving to the navigation stack should
   // be queued internally until the request is being served.
   std::vector<base::OnceClosure> event_queue_;
-  // TODO(https://crbug.com/1400881): Migrate `receiver_`, `forwarding_client_`,
+  // TODO(crbug.com/40250486): Migrate `receiver_`, `forwarding_client_`,
   // `producer_handle_`, `handle_watcher_` and `write_position_` into
   // ResponseReader.
   // Forwarding client receiver.
@@ -420,7 +412,7 @@ class StreamingSearchPrefetchURLLoader
   // `receiver_` is disconnected or encountered a failure.
   scoped_refptr<StreamingSearchPrefetchURLLoader> self_pointer_;
 
-  // TODO(https://crbug.com/1400881): Make it a generic reader.
+  // TODO(crbug.com/40250486): Make it a generic reader.
   std::unique_ptr<ResponseReader> response_reader_for_prerender_;
   // The number of times that this loader created a reader and served the
   // response to prerendering navigation.
@@ -438,17 +430,9 @@ class StreamingSearchPrefetchURLLoader
   // Whether fallback has started.
   bool is_in_fallback_ = false;
 
-  // If the navigation path paused the url loader. Used to pause the network url
-  // loader on fallback.
-  bool paused_ = false;
-
   // Whenever an error is reported, it needs to be reported to the service via
   // this callback.
   base::OnceCallback<void(bool)> report_error_callback_;
-
-  // Track if the request has already been marked as servable, and if so, don't
-  // report it again.
-  bool marked_as_servable_ = false;
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
@@ -457,11 +441,12 @@ class StreamingSearchPrefetchURLLoader
   // Whether this loader is created specifically for a navigation prefetch.
   bool navigation_prefetch_;
 
-  // The prefetch URL, used to record whether the prefetch and navigation URLs
-  // match when this is a navigation prefetch.
-  GURL prefetch_url_;
+  // Whether the SearchPrefetchService selected to use this loader to serve a
+  // real navigation.
+  bool should_be_serving_to_activation_navigation_ = false;
 
-  // Whether this url loader was activated via the navigation stack.
+  // Whether this url loader was activated via the navigation stack. Set after
+  // the call to `SetUpForwardingClient`.
   bool is_activated_ = false;
 
   base::OnceClosure on_destruction_callback_for_testing_;

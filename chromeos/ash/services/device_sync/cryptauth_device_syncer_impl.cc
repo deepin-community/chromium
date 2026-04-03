@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
@@ -265,7 +264,6 @@ void CryptAuthDeviceSyncerImpl::AttemptNextStep() {
     }
     case State::kFinished:
       NOTREACHED();
-      return;
   }
 }
 
@@ -353,8 +351,8 @@ void CryptAuthDeviceSyncerImpl::OnSyncMetadataFinished(
     case CryptAuthDeviceSyncResult::ResultType::kSuccess:
       // At a minimum, the local device metadata should be returned if no fatal
       // error occurred.
-      DCHECK(base::Contains(id_to_device_metadata_packet_map_,
-                            request_context_.device_id()));
+      DCHECK(id_to_device_metadata_packet_map_.contains(
+          request_context_.device_id()));
 
       // A group key should be established by now if no fatal error occurred.
       DCHECK(key_registry_->GetActiveKey(
@@ -429,8 +427,8 @@ void CryptAuthDeviceSyncerImpl::OnGetFeatureStatusesFinished(
     case CryptAuthDeviceSyncResult::ResultType::kSuccess:
       // We require that the local device feature statuses are returned; the
       // local device is needed in the registry.
-      if (!base::Contains(id_to_device_software_feature_info_map,
-                          request_context_.device_id())) {
+      if (!id_to_device_software_feature_info_map.contains(
+              request_context_.device_id())) {
         FinishAttempt(CryptAuthDeviceSyncResult::ResultCode::
                           kErrorMissingLocalDeviceFeatureStatuses);
         return;
@@ -497,7 +495,7 @@ void CryptAuthDeviceSyncerImpl::ProcessEncryptedGroupPrivateKey() {
   }
 
   if (encrypted_group_private_key_->encrypted_private_key().empty()) {
-    // TODO(https://crbug.com/936273): Log metrics for empty private key.
+    // TODO(crbug.com/41443836): Log metrics for empty private key.
     PA_LOG(ERROR) << "Group private key from CryptAuth unexpectedly empty.";
     did_non_fatal_error_occur_ = true;
     group_private_key_status_ =

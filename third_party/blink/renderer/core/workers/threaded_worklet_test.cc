@@ -53,7 +53,7 @@ class ThreadedWorkletObjectProxyForTest final
   }
 
  private:
-  std::bitset<static_cast<size_t>(WebFeature::kNumberOfFeatures)>
+  std::bitset<static_cast<size_t>(WebFeature::kMaxValue) + 1>
       reported_features_;
 };
 
@@ -71,8 +71,6 @@ class ThreadedWorkletThreadForTest : public WorkerThread {
     return *worklet_thread_holder->GetThread();
   }
 
-  void ClearWorkerBackingThread() override {}
-
   static void EnsureSharedBackingThread() {
     DCHECK(IsMainThread());
     WorkletThreadHolder<ThreadedWorkletThreadForTest>::EnsureInstance(
@@ -85,7 +83,7 @@ class ThreadedWorkletThreadForTest : public WorkerThread {
     WorkletThreadHolder<ThreadedWorkletThreadForTest>::ClearInstance();
   }
 
-  void TestSecurityOrigin(WTF::CrossThreadOnceClosure quit_closure) {
+  void TestSecurityOrigin(CrossThreadOnceClosure quit_closure) {
     WorkletGlobalScope* global_scope = To<WorkletGlobalScope>(GlobalScope());
     // The SecurityOrigin for a worklet should be a unique opaque origin, while
     // the owner Document's SecurityOrigin shouldn't.
@@ -96,14 +94,14 @@ class ThreadedWorkletThreadForTest : public WorkerThread {
   }
 
   void TestAgentCluster(base::UnguessableToken owner_agent_cluster_id,
-                        WTF::CrossThreadOnceClosure quit_closure) {
+                        CrossThreadOnceClosure quit_closure) {
     ASSERT_TRUE(owner_agent_cluster_id);
     EXPECT_EQ(GlobalScope()->GetAgentClusterID(), owner_agent_cluster_id);
     PostCrossThreadTask(*GetParentTaskRunnerForTesting(), FROM_HERE,
                         CrossThreadBindOnce(std::move(quit_closure)));
   }
 
-  void TestContentSecurityPolicy(WTF::CrossThreadOnceClosure quit_closure) {
+  void TestContentSecurityPolicy(CrossThreadOnceClosure quit_closure) {
     EXPECT_TRUE(IsCurrentThread());
     ContentSecurityPolicy* csp = GlobalScope()->GetContentSecurityPolicy();
     KURL main_document_url = KURL("https://example.com/script.js");
@@ -131,8 +129,7 @@ class ThreadedWorkletThreadForTest : public WorkerThread {
 
   // Test that having an invalid CSP does not result in an exception.
   // See bugs: 844383,844317
-  void TestInvalidContentSecurityPolicy(
-      WTF::CrossThreadOnceClosure quit_closure) {
+  void TestInvalidContentSecurityPolicy(CrossThreadOnceClosure quit_closure) {
     EXPECT_TRUE(IsCurrentThread());
 
     // At this point check that the CSP that was set is indeed invalid.
@@ -148,8 +145,7 @@ class ThreadedWorkletThreadForTest : public WorkerThread {
   }
 
   // Emulates API use on threaded WorkletGlobalScope.
-  void CountFeature(WebFeature feature,
-                    WTF::CrossThreadOnceClosure quit_closure) {
+  void CountFeature(WebFeature feature, CrossThreadOnceClosure quit_closure) {
     EXPECT_TRUE(IsCurrentThread());
     GlobalScope()->CountUse(feature);
     PostCrossThreadTask(*GetParentTaskRunnerForTesting(), FROM_HERE,
@@ -158,14 +154,14 @@ class ThreadedWorkletThreadForTest : public WorkerThread {
 
   // Emulates deprecated API use on threaded WorkletGlobalScope.
   void CountDeprecation(WebFeature feature,
-                        WTF::CrossThreadOnceClosure quit_closure) {
+                        CrossThreadOnceClosure quit_closure) {
     EXPECT_TRUE(IsCurrentThread());
     Deprecation::CountDeprecation(GlobalScope(), feature);
     PostCrossThreadTask(*GetParentTaskRunnerForTesting(), FROM_HERE,
                         CrossThreadBindOnce(std::move(quit_closure)));
   }
 
-  void TestTaskRunner(WTF::CrossThreadOnceClosure quit_closure) {
+  void TestTaskRunner(CrossThreadOnceClosure quit_closure) {
     EXPECT_TRUE(IsCurrentThread());
     scoped_refptr<base::SingleThreadTaskRunner> task_runner =
         GlobalScope()->GetTaskRunner(TaskType::kInternalTest);
@@ -252,8 +248,7 @@ class ThreadedWorkletTest : public testing::Test {
     page_ = std::make_unique<DummyPageHolder>();
     KURL url("https://example.com/");
     page_->GetFrame().Loader().CommitNavigation(
-        WebNavigationParams::CreateWithHTMLBufferForTesting(
-            SharedBuffer::Create(), url),
+        WebNavigationParams::CreateWithEmptyHTMLForTesting(url),
         nullptr /* extra_data */);
     blink::test::RunPendingTasks();
     ASSERT_EQ(url.GetString(), GetDocument().Url().GetString());

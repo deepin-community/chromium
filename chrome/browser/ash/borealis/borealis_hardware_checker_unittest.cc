@@ -32,7 +32,7 @@ bool check(std::string board,
   SetCpuForTesting(&cpu);
   // For some reason we're not allowed to pretend to have 0 memory.
   base::test::ScopedAmountOfPhysicalMemoryOverride mem_override(
-      std::max(1024 * mem_gib, uint64_t(1)));
+      std::max(base::GiBU(mem_gib), base::MiBU(1)));
 
   // Now do the actual check
   base::test::TestFuture<bool> result_f;
@@ -81,9 +81,9 @@ TEST(BorealisHardwareCheckerTest, Volteer) {
   EXPECT_FALSE(
       check("volteer", "lindar", "11th Gen Intel(R) Core(TM) 5 NOT_A_CPU", 2));
 
-  // Bad model
-  EXPECT_FALSE(check("volteer", "not_a_real_model",
-                     "11th Gen Intel(R) Core(TM) i5-1145G7 @ 2.60GHz", 8));
+  // Any random model
+  EXPECT_TRUE(check("volteer", "not_a_real_model",
+                    "11th Gen Intel(R) Core(TM) i5-1145G7 @ 2.60GHz", 8));
 }
 
 TEST(BorealisHardwareCheckerTest, GuybrushMajolica) {

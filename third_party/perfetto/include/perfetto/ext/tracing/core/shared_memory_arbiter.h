@@ -20,6 +20,7 @@
 #include <stddef.h>
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -55,8 +56,7 @@ class PERFETTO_EXPORT_COMPONENT SharedMemoryArbiter {
   // only BufferExhaustedPolicy::kDrop is supported.
   virtual std::unique_ptr<TraceWriter> CreateTraceWriter(
       BufferID target_buffer,
-      BufferExhaustedPolicy buffer_exhausted_policy =
-          BufferExhaustedPolicy::kDefault) = 0;
+      BufferExhaustedPolicy buffer_exhausted_policy) = 0;
 
   // Creates a TraceWriter that will commit to the target buffer with the given
   // reservation ID (creating a new reservation for this ID if none exists yet).
@@ -163,6 +163,14 @@ class PERFETTO_EXPORT_COMPONENT SharedMemoryArbiter {
   // bound.
   virtual void FlushPendingCommitDataRequests(
       std::function<void()> callback = {}) = 0;
+
+  // Called when SMB scraping needs to occur on the producer-side. This only
+  // happens on producers using shmem emulation, given the tracing service
+  // doesn't have access to the SMB. If uncommitted chunks are found in the
+  // buffer they are marked completed, forcing a commit of the chunks to the
+  // tracing service.
+  virtual void ScrapeEmulatedSharedMemoryBuffer(
+      const std::map<WriterID, BufferID>& buffer_for_writers) = 0;
 
   // Attempts to shut down this arbiter. This function prevents new trace
   // writers from being created for this this arbiter, but if there are any

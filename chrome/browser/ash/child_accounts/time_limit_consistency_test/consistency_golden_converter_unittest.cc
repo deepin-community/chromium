@@ -4,9 +4,9 @@
 
 #include "chrome/browser/ash/child_accounts/time_limit_consistency_test/consistency_golden_converter.h"
 
+#include "base/test/protobuf_matchers.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/child_accounts/time_limit_consistency_test/consistency_test_utils.h"
-#include "chrome/browser/ash/child_accounts/time_limit_consistency_test/proto_matcher.h"
 #include "chrome/browser/ash/child_accounts/time_limit_test_utils.h"
 #include "chrome/browser/ash/child_accounts/usage_time_limit_processor.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -18,6 +18,7 @@ namespace consistency_utils = time_limit_consistency_utils;
 
 namespace time_limit_consistency {
 
+using base::test::EqualsProto;
 using ConsistencyGoldenConverterTest = testing::Test;
 
 // A timestamp used during the tests. Nothing special about the date it
@@ -32,9 +33,9 @@ const base::Time kTestLastUpdated =
 TEST_F(ConsistencyGoldenConverterTest, ConvertInputWhenEmpty) {
   ConsistencyGoldenInput input;
 
-  base::Value::Dict actual_output = ConvertGoldenInputToProcessorInput(input);
+  base::DictValue actual_output = ConvertGoldenInputToProcessorInput(input);
 
-  base::Value::Dict expected_output =
+  base::DictValue expected_output =
       utils::CreateTimeLimitPolicy(base::Hours(6));
 
   EXPECT_TRUE(actual_output == expected_output);
@@ -42,7 +43,7 @@ TEST_F(ConsistencyGoldenConverterTest, ConvertInputWhenEmpty) {
 
 TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithBedtimes) {
   ConsistencyGoldenInput input;
-  base::Value::Dict expected_output =
+  base::DictValue expected_output =
       utils::CreateTimeLimitPolicy(base::Hours(6));
 
   // First window: Wednesday, 22:30 to 8:00
@@ -61,14 +62,14 @@ TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithBedtimes) {
                             utils::CreateTime(18, 45),
                             utils::CreateTime(22, 30), kTestLastUpdated);
 
-  base::Value::Dict actual_output = ConvertGoldenInputToProcessorInput(input);
+  base::DictValue actual_output = ConvertGoldenInputToProcessorInput(input);
 
   EXPECT_TRUE(actual_output == expected_output);
 }
 
 TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithBedtimesLastUpdated) {
   ConsistencyGoldenInput input;
-  base::Value::Dict expected_output =
+  base::DictValue expected_output =
       utils::CreateTimeLimitPolicy(base::Hours(6));
 
   // First window: Wednesday, 22:30 to 8:00
@@ -80,14 +81,14 @@ TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithBedtimesLastUpdated) {
       utils::CreateTime(8, 0),
       base::Time::FromMillisecondsSinceUnixEpoch(kTestTimestamp));
 
-  base::Value::Dict actual_output = ConvertGoldenInputToProcessorInput(input);
+  base::DictValue actual_output = ConvertGoldenInputToProcessorInput(input);
 
   EXPECT_TRUE(actual_output == expected_output);
 }
 
 TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithUsageLimit) {
   ConsistencyGoldenInput input;
-  base::Value::Dict expected_output =
+  base::DictValue expected_output =
       utils::CreateTimeLimitPolicy(utils::CreateTime(17, 30));
 
   input.mutable_usage_limit_resets_at()->set_hour(17);
@@ -105,14 +106,14 @@ TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithUsageLimit) {
   utils::AddTimeUsageLimit(&expected_output, utils::kFriday, base::Minutes(30),
                            kTestLastUpdated);
 
-  base::Value::Dict actual_output = ConvertGoldenInputToProcessorInput(input);
+  base::DictValue actual_output = ConvertGoldenInputToProcessorInput(input);
 
   EXPECT_TRUE(actual_output == expected_output);
 }
 
 TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithUsageLimitDefaultReset) {
   ConsistencyGoldenInput input;
-  base::Value::Dict expected_output =
+  base::DictValue expected_output =
       utils::CreateTimeLimitPolicy(base::Hours(6));
 
   // First quota: Tuesday, 60 minutes
@@ -127,14 +128,14 @@ TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithUsageLimitDefaultReset) {
   utils::AddTimeUsageLimit(&expected_output, utils::kFriday, base::Minutes(30),
                            kTestLastUpdated);
 
-  base::Value::Dict actual_output = ConvertGoldenInputToProcessorInput(input);
+  base::DictValue actual_output = ConvertGoldenInputToProcessorInput(input);
 
   EXPECT_TRUE(actual_output == expected_output);
 }
 
 TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithUsageLimitLastUpdated) {
   ConsistencyGoldenInput input;
-  base::Value::Dict expected_output =
+  base::DictValue expected_output =
       utils::CreateTimeLimitPolicy(base::Hours(6));
 
   // First quota: Tuesday, 60 minutes
@@ -144,14 +145,14 @@ TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithUsageLimitLastUpdated) {
       &expected_output, utils::kTuesday, base::Minutes(60),
       base::Time::FromMillisecondsSinceUnixEpoch(kTestTimestamp));
 
-  base::Value::Dict actual_output = ConvertGoldenInputToProcessorInput(input);
+  base::DictValue actual_output = ConvertGoldenInputToProcessorInput(input);
 
   EXPECT_TRUE(actual_output == expected_output);
 }
 
 TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithOverride) {
   ConsistencyGoldenInput input;
-  base::Value::Dict expected_output =
+  base::DictValue expected_output =
       utils::CreateTimeLimitPolicy(base::Hours(6));
 
   // Override: Unlock bedtime
@@ -161,14 +162,14 @@ TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithOverride) {
       &expected_output, usage_time_limit::TimeLimitOverride::Action::kUnlock,
       base::Time::FromMillisecondsSinceUnixEpoch(kTestTimestamp));
 
-  base::Value::Dict actual_output = ConvertGoldenInputToProcessorInput(input);
+  base::DictValue actual_output = ConvertGoldenInputToProcessorInput(input);
 
   EXPECT_TRUE(actual_output == expected_output);
 }
 
 TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithTimedOverride) {
   ConsistencyGoldenInput input;
-  base::Value::Dict expected_output =
+  base::DictValue expected_output =
       utils::CreateTimeLimitPolicy(base::Hours(6));
   const int64_t override_duration_millis = 10000;
 
@@ -180,7 +181,7 @@ TEST_F(ConsistencyGoldenConverterTest, ConvertInputWithTimedOverride) {
       base::Time::FromMillisecondsSinceUnixEpoch(kTestTimestamp),
       base::Milliseconds(override_duration_millis));
 
-  base::Value::Dict actual_output = ConvertGoldenInputToProcessorInput(input);
+  base::DictValue actual_output = ConvertGoldenInputToProcessorInput(input);
 
   EXPECT_TRUE(actual_output == expected_output);
 }

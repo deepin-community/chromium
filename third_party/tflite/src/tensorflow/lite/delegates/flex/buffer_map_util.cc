@@ -24,9 +24,8 @@ limitations under the License.
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/typed_allocator.h"
 #include "tensorflow/core/framework/types.pb.h"
-#include "tensorflow/core/platform/status.h"
+#include "tensorflow/lite/c/c_api_types.h"
 #include "tensorflow/lite/delegates/flex/util.h"
-#include "tensorflow/lite/experimental/resource/resource_variable.h"
 #include "tensorflow/lite/string_util.h"
 
 namespace tflite {
@@ -135,10 +134,11 @@ StringTfLiteTensorBuffer::StringTfLiteTensorBuffer(const TfLiteTensor* tensor,
   }
 }
 
-tensorflow::Status SetTfTensorFromTfLite(const TfLiteTensor* tensor,
-                                         tensorflow::Tensor* tf_tensor,
-                                         bool allow_reusing) {
-  if (resource::IsBuiltinResource(tensor)) {
+absl::Status SetTfTensorFromTfLite(const TfLiteTensor* tensor,
+                                   tensorflow::Tensor* tf_tensor,
+                                   bool allow_reusing) {
+  if (tensor->type == kTfLiteResource &&
+      tensor->bytes != kTensorflowResourceTensorBytes) {
     // If this is native TF Lite resource variable, then we create a TF resource
     // tensor where the tensor handle encodes the identifier of the TF Lite
     // resource.
@@ -152,7 +152,7 @@ tensorflow::Status SetTfTensorFromTfLite(const TfLiteTensor* tensor,
     handle.set_name(TfLiteResourceIdentifier(tensor));
     t.flat<tensorflow::ResourceHandle>()(0) = handle;
     *tf_tensor = t;
-    return ::tensorflow::OkStatus();
+    return absl::OkStatus();
   } else if (IsResourceOrVariant(tensor)) {
     // TODO(b/179094265): This is an experimental implementation, subject to
     // change. This can be re-implemented with life cycle management mechanism
@@ -169,7 +169,7 @@ tensorflow::Status SetTfTensorFromTfLite(const TfLiteTensor* tensor,
     const tensorflow::Tensor** tf_tensor_ptr =
         reinterpret_cast<const tensorflow::Tensor**>(tensor->data.raw);
     *tf_tensor = **tf_tensor_ptr;
-    return ::tensorflow::OkStatus();
+    return absl::OkStatus();
   }
 
   tensorflow::TensorShape shape;
@@ -192,7 +192,7 @@ tensorflow::Status SetTfTensorFromTfLite(const TfLiteTensor* tensor,
   buf->Unref();
 
   *tf_tensor = std::move(t);
-  return ::tensorflow::OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace flex

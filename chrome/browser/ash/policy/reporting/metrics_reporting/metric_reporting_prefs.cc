@@ -6,10 +6,9 @@
 
 #include <optional>
 
-#include "base/containers/contains.h"
 #include "base/values.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/chromeos/reporting/metric_default_utils.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/reporting/metrics/reporting_settings.h"
 #include "components/services/app_service/public/cpp/app_types.h"
@@ -39,7 +38,6 @@ std::optional<std::string> GetAppReportingCategoryForType(
   switch (app_type) {
     case ::apps::AppType::kArc:
       return kAppCategoryAndroidApps;
-    case ::apps::AppType::kBuiltIn:
     case ::apps::AppType::kSystemWeb:
       return kAppCategorySystemApps;
     case ::apps::AppType::kCrostini:
@@ -47,14 +45,10 @@ std::optional<std::string> GetAppReportingCategoryForType(
       return kAppCategoryLinuxApps;
     case ::apps::AppType::kChromeApp:
     case ::apps::AppType::kRemote:
-    case ::apps::AppType::kStandaloneBrowserChromeApp:
     case ::apps::AppType::kExtension:
-    case ::apps::AppType::kStandaloneBrowserExtension:
       return kAppCategoryChromeAppsExtensions;
     case ::apps::AppType::kWeb:
       return kAppCategoryPWA;
-    case ::apps::AppType::kStandaloneBrowser:
-      return kAppCategoryBrowser;
     case ::apps::AppType::kBorealis:
       return kAppCategoryGames;
     case ::apps::AppType::kPluginVm:  // Only applies to MGS, so we skip.
@@ -67,7 +61,7 @@ bool IsAppTypeAllowed(::apps::AppType app_type,
                       const ::reporting::ReportingSettings* reporting_settings,
                       const std::string& policy_setting) {
   CHECK(reporting_settings);
-  const base::Value::List* allowed_app_types;
+  const base::ListValue* allowed_app_types;
   if (!reporting_settings->GetList(policy_setting, &allowed_app_types)) {
     // Policy likely unset. Disallow app usage reporting regardless of app type.
     return false;
@@ -75,7 +69,7 @@ bool IsAppTypeAllowed(::apps::AppType app_type,
   const std::optional<std::string> app_category =
       GetAppReportingCategoryForType(app_type);
   return app_category.has_value() &&
-         base::Contains(*allowed_app_types, app_category.value());
+         allowed_app_types->contains(app_category.value());
 }
 
 }  // namespace ash::reporting

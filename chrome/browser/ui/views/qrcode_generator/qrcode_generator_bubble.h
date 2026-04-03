@@ -41,7 +41,7 @@ class QRCodeGeneratorBubble : public QRCodeGeneratorBubbleView,
   METADATA_HEADER(QRCodeGeneratorBubble, LocationBarBubbleDelegateView)
 
  public:
-  QRCodeGeneratorBubble(views::View* anchor_view,
+  QRCodeGeneratorBubble(views::BubbleAnchor anchor,
                         base::WeakPtr<content::WebContents> web_contents,
                         base::OnceClosure on_closing,
                         base::OnceClosure on_back_button_pressed,
@@ -59,14 +59,6 @@ class QRCodeGeneratorBubble : public QRCodeGeneratorBubbleView,
   // Returns a suggested download filename for a given URL.
   // e.g.: www.foo.com may suggest qrcode_foo.png.
   static const std::u16string GetQRCodeFilenameForURL(const GURL& url);
-
-  // Given an image |image| of a QR code, adds the required "quiet zone" padding
-  // around the outside of it. The |size| size is given in QR code tiles, not in
-  // pixels or dips. Both |image| and |size| must be square, and the resulting
-  // image is also square.
-  static gfx::ImageSkia AddQRCodeQuietZone(const gfx::ImageSkia& image,
-                                           const gfx::Size& size,
-                                           SkColor background_color);
 
   views::ImageView* image_for_testing() { return qr_code_image_; }
   views::Textfield* textfield_for_testing() { return textfield_url_; }
@@ -126,6 +118,8 @@ class QRCodeGeneratorBubble : public QRCodeGeneratorBubbleView,
   // URL for which the QR code is being generated.
   // Used for validation.
   GURL url_;
+
+  base::WeakPtr<actions::ActionItem> qrcode_action_item_ = nullptr;
 
   // Pointers to subviews that we need to update the contents or visibility of
   // after creation.

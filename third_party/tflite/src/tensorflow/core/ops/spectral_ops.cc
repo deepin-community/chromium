@@ -92,7 +92,8 @@ REGISTER_OP("IFFTND")
       return shape_inference::UnchangedShapeWithRankAtLeast(c, 1);
     });
 
-Status RFFTShape(InferenceContext* c, const bool forward, const int rank) {
+absl::Status RFFTShape(InferenceContext* c, const bool forward,
+                       const int rank) {
   ShapeHandle out;
   TF_RETURN_IF_ERROR(c->WithRankAtLeast(c->input(0), rank, &out));
 
@@ -114,7 +115,7 @@ Status RFFTShape(InferenceContext* c, const bool forward, const int rank) {
       TF_RETURN_IF_ERROR(c->ReplaceDim(out, -rank + i, c->UnknownDim(), &out));
     }
   } else {
-    auto fft_length_as_vec = fft_length_tensor->vec<int32>();
+    auto fft_length_as_vec = fft_length_tensor->vec<int32_t>();
     for (int i = 0; i < rank; ++i) {
       // For RFFT, replace the last dimension with fft_length/2 + 1.
       auto dim = forward && i == rank - 1 && fft_length_as_vec(i) != 0
@@ -125,7 +126,7 @@ Status RFFTShape(InferenceContext* c, const bool forward, const int rank) {
   }
 
   c->set_output(0, out);
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 REGISTER_OP("RFFT")

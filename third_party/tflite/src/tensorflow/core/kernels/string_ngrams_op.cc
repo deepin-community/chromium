@@ -14,6 +14,8 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <locale>
 #include <string>
 
@@ -50,8 +52,9 @@ class StringNGramsOp : public tensorflow::OpKernel {
                     ngram_width - 1);
   }
 
-  StatusOr<int> get_num_ngrams(const int length, const int ngram_width) const {
-    int64 limit = kint32max;
+  absl::StatusOr<int> get_num_ngrams(const int length,
+                                     const int ngram_width) const {
+    int64_t limit = std::numeric_limits<int32_t>::max();
     int pad_width = get_pad_width(ngram_width);
     if (pad_width > limit / 2 - length) {
       return errors::InvalidArgument(

@@ -8,8 +8,8 @@
 
 #include "base/atomic_sequence_num.h"
 #include "base/command_line.h"
-#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/task/current_thread.h"
 #include "components/exo/data_exchange_delegate.h"
@@ -20,6 +20,7 @@
 #include "components/exo/server/wayland_server_handle.h"
 #include "components/exo/toast_surface_manager.h"
 #include "components/exo/wayland/server.h"
+#include "components/exo/window_occlusion_manager.h"
 #include "components/exo/wm_helper.h"
 
 namespace exo {
@@ -50,7 +51,7 @@ WaylandServerController* WaylandServerController::Get() {
 }
 
 WaylandServerController::~WaylandServerController() {
-  // TODO(https://crbug.com/1124106): Investigate if we can eliminate Shutdown
+  // TODO(crbug.com/40717074): Investigate if we can eliminate Shutdown
   // methods.
   display_->Shutdown();
   wayland::Server::SetServerGetter(base::NullCallback());
@@ -84,7 +85,8 @@ WaylandServerController::WaylandServerController(
           std::make_unique<Display>(std::move(notification_surface_manager),
                                     std::move(input_method_surface_manager),
                                     std::move(toast_surface_manager),
-                                    std::move(data_exchange_delegate))) {
+                                    std::move(data_exchange_delegate))),
+      window_occlusion_manager_(std::make_unique<WindowOcclusionManager>()) {
   DCHECK(!g_instance);
   g_instance = this;
   default_server_ =

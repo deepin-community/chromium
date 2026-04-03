@@ -18,8 +18,10 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
+#include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/time/time.h"
+#include "mlir/IR/MLIRContext.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/utils/hlo_query.h"
@@ -29,7 +31,7 @@ limitations under the License.
 #include "xla/service/hlo_cost_analysis.h"
 #include "xla/service/latency_hiding_scheduler.h"
 #include "xla/stream_executor/device_description.h"
-#include "tsl/platform/status.h"
+#include "xla/tsl/platform/status.h"
 
 namespace xla {
 namespace gpu {
@@ -61,9 +63,8 @@ LatencyEstimator::TimeCost AnalyticalLatencyEstimator::NodeCost(
   }
 
   absl::Duration total_estimated_time =
-      GpuPerformanceModel::EstimateRunTimeForInstruction(
-          instr, &*cost_analysis_,
-          GpuPerformanceModelOptions::ForModule(instr->GetModule()))
+      gpu_performance_model_.Get()
+          .EstimateRunTimeForInstruction(instr, &*cost_analysis_)
           .exec_time;
   LatencyEstimator::TimeCost cost_in_us =
       absl::ToDoubleMicroseconds(total_estimated_time);
@@ -77,17 +78,19 @@ AnalyticalLatencyEstimator::AnalyticalLatencyEstimator(
     std::unique_ptr<LatencyEstimator> latency_estimator,
     const se::DeviceDescription& gpu_info,
     HloCostAnalysis::ShapeSizeFunction shape_size_function,
-    HloComputation* computation)
+    HloComputation* computation, mlir::MLIRContext* mlir_context)
     : config_(config),
       gpu_info_(gpu_info),
+      gpu_performance_model_(gpu_info, mlir_context),
       latency_estimator_(std::move(latency_estimator)),
       shape_size_function_(shape_size_function) {
   cost_analysis_.emplace(
       GpuHloCostAnalysis::Options{shape_size_function_,
                                   /*per_second_rates=*/{},
+                                  /*min_latencies_seconds=*/{},
                                   /*count_multiple_input_accesses=*/true},
-      &gpu_info_);
-  TF_CHECK_OK(computation->Accept(&cost_analysis_.value()));
+      gpu_info_);
+  CHECK_OK(computation->Accept(&cost_analysis_.value()));
 }
 
 }  // namespace gpu

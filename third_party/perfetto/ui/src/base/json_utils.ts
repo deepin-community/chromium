@@ -16,9 +16,40 @@
 // Bigints are simply serialized to a string, so the original object cannot be
 // recovered with JSON.parse(), as bigints will turn into strings.
 // Useful for e.g. tracing, where string arg values are required.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function stringifyJsonWithBigints(object: any): string {
+export function stringifyJsonWithBigints(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  object: any,
+  space?: string | number,
+): string {
   return JSON.stringify(
     object,
-    (_, value) => typeof value === 'bigint' ? value.toString() : value);
+    (_, value) => (typeof value === 'bigint' ? value.toString() : value),
+    space,
+  );
+}
+
+// Typescript bindings do not pass `context` to the reviver, so this helper works around that.
+function parseJson(
+  text: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  reviver?: (key: string, value: any, context: {source: string}) => any,
+) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return JSON.parse(text, reviver as (key: string, value: any) => any);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function parseJsonWithBigints(text: string): any {
+  return parseJson(text, (_, value, context) => {
+    if (typeof value === 'number') {
+      // Even an integer value can be spelled as '1.0', which can't be converted to BigInt,
+      // so we try converting sources for all values to BigInt and fallback to the original value if it fails.
+      try {
+        return BigInt(context.source);
+      } catch (e) {
+        return value;
+      }
+    }
+    return value;
+  });
 }

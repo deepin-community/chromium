@@ -47,6 +47,7 @@ static const AVOption options[] = {
 
 static const AVClass amrwb_class = {
     .class_name = "libvo_amrwbenc",
+    .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
@@ -152,6 +153,5 @@ const FFCodec ff_libvo_amrwbenc_encoder = {
     .init           = amr_wb_encode_init,
     FF_CODEC_ENCODE_CB(amr_wb_encode_frame),
     .close          = amr_wb_encode_close,
-    .p.sample_fmts  = (const enum AVSampleFormat[]){ AV_SAMPLE_FMT_S16,
-                                                     AV_SAMPLE_FMT_NONE },
+    CODEC_SAMPLEFMTS(AV_SAMPLE_FMT_S16),
 };

@@ -16,54 +16,37 @@
 
 #include "src/trace_processor/perfetto_sql/intrinsics/functions/import.h"
 
-#include <numeric>
+#include <cstddef>
 
 #include "perfetto/base/status.h"
 #include "perfetto/ext/base/string_utils.h"
-#include "perfetto/ext/base/string_view.h"
 #include "perfetto/trace_processor/basic_types.h"
-#include "src/trace_processor/sqlite/scoped_db.h"
 #include "src/trace_processor/sqlite/sql_source.h"
-#include "src/trace_processor/sqlite/sqlite_table.h"
 #include "src/trace_processor/sqlite/sqlite_utils.h"
-#include "src/trace_processor/tp_metatrace.h"
-#include "src/trace_processor/util/sql_modules.h"
-#include "src/trace_processor/util/status_macros.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
-base::Status Import::Run(Import::Context* ctx,
-                         size_t argc,
-                         sqlite3_value** argv,
-                         SqlValue&,
-                         Destructors&) {
-  if (argc != 1) {
-    return base::ErrStatus(
-        "IMPORT: invalid number of args; expected 1, received "
-        "%zu",
-        argc);
-  }
-  sqlite3_value* import_val = argv[0];
+void Import::Step(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+  PERFETTO_DCHECK(argc == 1);
 
-  // Type check
-  {
-    base::Status status =
-        sqlite_utils::TypeCheckSqliteValue(import_val, SqlValue::Type::kString);
-    if (!status.ok()) {
-      return base::ErrStatus("IMPORT(%s): %s", sqlite3_value_text(import_val),
-                             status.c_message());
-    }
+  auto* engine = GetUserData(ctx);
+
+  if (sqlite::value::Type(argv[0]) != sqlite::Type::kText) {
+    return sqlite::utils::SetError(ctx, "IMPORT: argument must be string");
   }
 
-  const char* import_key =
-      reinterpret_cast<const char*>(sqlite3_value_text(import_val));
+  const char* import_key = sqlite::value::Text(argv[0]);
   base::StackString<1024> create("INCLUDE PERFETTO MODULE %s;", import_key);
-  return ctx->engine
-      ->Execute(
-          SqlSource::FromTraceProcessorImplementation(create.ToStdString()))
-      .status();
+  auto status = engine
+                    ->Execute(SqlSource::FromTraceProcessorImplementation(
+                        create.ToStdString()))
+                    .status();
+  if (!status.ok()) {
+    return sqlite::utils::SetError(ctx, status);
+  }
+
+  // IMPORT returns no value (void function)
+  return sqlite::utils::ReturnVoidFromFunction(ctx);
 }
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

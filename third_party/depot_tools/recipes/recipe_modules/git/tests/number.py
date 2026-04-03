@@ -4,16 +4,19 @@
 
 from recipe_engine import post_process
 
-PYTHON_VERSION_COMPATIBILITY = 'PY3'
 
 DEPS = [
     'git',
     'recipe_engine/assertions',
+    'recipe_engine/path',
     'recipe_engine/properties',
 ]
 
 
 def RunSteps(api):
+  # Set the checkout_dir because the `git` module implicitly uses this.
+  api.path.checkout_dir = api.path.cache_dir / 'builder'
+
   numbers = api.git.number(
       commitrefs=api.properties.get('commitrefs'),
       test_values=api.properties.get('test_values'),

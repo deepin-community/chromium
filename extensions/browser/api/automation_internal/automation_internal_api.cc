@@ -16,7 +16,6 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/chromeos_buildflags.h"
-#include "content/public/browser/ax_event_notification_details.h"
 #include "content/public/browser/browser_accessibility_state.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_plugin_guest_manager.h"
@@ -44,6 +43,8 @@
 #include "ui/accessibility/ax_action_handler_base.h"
 #include "ui/accessibility/ax_action_handler_registry.h"
 #include "ui/accessibility/ax_enum_util.h"
+#include "ui/accessibility/ax_location_and_scroll_updates.h"
+#include "ui/accessibility/ax_updates_and_events.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/env.h"
@@ -68,7 +69,7 @@ AutomationInternalPerformActionFunction::Result ConvertToAXActionData(
     int32_t automation_node_id,
     const std::string& action_type_string,
     int request_id,
-    const base::Value::Dict& additional_properties,
+    const base::DictValue& additional_properties,
     const ExtensionId& extension_id,
     ui::AXActionData* action) {
   AutomationInternalPerformActionFunction::Result validation_error_result;
@@ -290,6 +291,9 @@ AutomationInternalPerformActionFunction::Result ConvertToAXActionData(
     case api::automation::ActionType::kLongClick:
       action->action = ax::mojom::Action::kLongClick;
       break;
+    case api::automation::ActionType::kRequestLayoutBasedAction:
+      action->action = ax::mojom::Action::kRequestLayoutBasedAction;
+      break;
     case api::automation::ActionType::kAnnotatePageImages:
     case api::automation::ActionType::kSignalEndOfTest:
     case api::automation::ActionType::kStitchChildTree:
@@ -339,25 +343,29 @@ class AutomationWebContentsObserver
   }
 
   // content::WebContentsObserver overrides.
-  void AccessibilityEventReceived(const content::AXEventNotificationDetails&
-                                      content_event_bundle) override {
+  void AccessibilityEventReceived(
+      const ui::AXUpdatesAndEvents& content_event_bundle) override {
     gfx::Point mouse_location;
 #if defined(USE_AURA)
     mouse_location = aura::Env::GetInstance()->last_mouse_location();
 #endif
+
     AutomationEventRouter* router = AutomationEventRouter::GetInstance();
     router->DispatchAccessibilityEvents(
-        std::move(content_event_bundle.ax_tree_id),
-        std::move(content_event_bundle.updates), mouse_location,
-        std::move(content_event_bundle.events));
+        content_event_bundle.ax_tree_id, content_event_bundle.updates,
+        mouse_location, content_event_bundle.events);
   }
 
   void AccessibilityLocationChangesReceived(
-      const std::vector<content::AXLocationChangeNotificationDetails>& details)
-      override {
+      const ui::AXTreeID& tree_id,
+      ui::AXLocationAndScrollUpdates& details) override {
     AutomationEventRouter* router = AutomationEventRouter::GetInstance();
-    for (const auto& src : details) {
-      router->DispatchAccessibilityLocationChange(src);
+    for (const auto& src : details.location_changes) {
+      router->DispatchAccessibilityLocationChange(tree_id, src);
+    }
+
+    for (const auto& change : details.scroll_changes) {
+      router->DispatchAccessibilityScrollChange(tree_id, change);
     }
   }
 
@@ -368,7 +376,7 @@ class AutomationWebContentsObserver
     if (!render_frame_host)
       return;
 
-    content::AXEventNotificationDetails content_event_bundle;
+    ui::AXUpdatesAndEvents content_event_bundle;
     content_event_bundle.ax_tree_id = render_frame_host->GetAXTreeID();
     content_event_bundle.events.resize(1);
     content_event_bundle.events[0].event_type =
@@ -385,7 +393,7 @@ class AutomationWebContentsObserver
     if (!render_frame_host)
       return;
 
-    content::AXEventNotificationDetails content_event_bundle;
+    ui::AXUpdatesAndEvents content_event_bundle;
     content_event_bundle.ax_tree_id = render_frame_host->GetAXTreeID();
     content_event_bundle.events.resize(1);
     content_event_bundle.events[0].event_type =
@@ -405,7 +413,7 @@ class AutomationWebContentsObserver
       // On ChromeOS Ash, the automation api is the native accessibility api.
       // For the purposes of tracking web contents accessibility like other
       // desktop platforms, record the same UMA metric as those platforms.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       UMA_HISTOGRAM_ENUMERATION(
           "Accessibility.ModeFlag",
           ui::AXMode::ModeFlagHistogramValue::UMA_AX_MODE_WEB_CONTENTS,
@@ -434,7 +442,7 @@ class AutomationWebContentsObserver
           "Accessibility.ModeFlag",
           ui::AXMode::ModeFlagHistogramValue::UMA_AX_MODE_PDF,
           ui::AXMode::ModeFlagHistogramValue::UMA_AX_MODE_MAX);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
     }
   }
 
@@ -453,7 +461,7 @@ class AutomationWebContentsObserver
         return;
       }
 
-      content::AXEventNotificationDetails content_event_bundle;
+      ui::AXUpdatesAndEvents content_event_bundle;
       content_event_bundle.ax_tree_id = render_frame_host->GetAXTreeID();
       content_event_bundle.events.resize(1);
       content_event_bundle.events[0].event_type =
@@ -563,7 +571,7 @@ AutomationInternalPerformActionFunction::PerformAction(
         // If |extension| is nullptr, then Lacros is receiving a crosapi request
         // from ash to perform an action. We make the assumption this this is
         // allowed.
-        // TODO(https://crbug.com/1185764): Confirm whether this assumption is
+        // TODO(crbug.com/40753344): Confirm whether this assumption is
         // valid.
       }
 

@@ -8,7 +8,7 @@
 #include "base/android/jni_android.h"
 #include "components/segmentation_platform/public/prediction_options.h"
 
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 
 namespace segmentation_platform {
 
@@ -19,8 +19,10 @@ class PredictionOptionsAndroid {
       const base::android::JavaRef<jobject>& j_prediction_options);
 
   static void FromJavaParams(JNIEnv* env,
-                             const jlong target,
-                             const jboolean on_demand_execution);
+                             const int64_t target,
+                             const bool on_demand_execution,
+                             const bool can_update_cache_for_future_requests,
+                             const bool fallback_allowed);
 };
 
 }  // namespace segmentation_platform

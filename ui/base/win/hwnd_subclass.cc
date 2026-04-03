@@ -4,12 +4,12 @@
 
 #include "ui/base/win/hwnd_subclass.h"
 
+#include <algorithm>
+
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
-#include "base/ranges/algorithm.h"
 #include "ui/base/win/touch_input.h"
 #include "ui/gfx/win/hwnd_util.h"
 
@@ -96,13 +96,14 @@ HWNDSubclass* HWNDSubclass::GetHwndSubclassForTarget(HWND target) {
 
 void HWNDSubclass::AddFilter(HWNDMessageFilter* filter) {
   DCHECK(filter);
-  if (!base::Contains(filters_, filter))
+  if (!std::ranges::contains(filters_, filter)) {
     filters_.push_back(filter);
+  }
 }
 
 void HWNDSubclass::RemoveFilter(HWNDMessageFilter* filter) {
   std::vector<raw_ptr<HWNDMessageFilter, VectorExperimental>>::iterator it =
-      base::ranges::find(filters_, filter);
+      std::ranges::find(filters_, filter);
   if (it != filters_.end())
     filters_.erase(it);
 }

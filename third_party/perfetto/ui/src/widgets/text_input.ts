@@ -13,16 +13,58 @@
 // limitations under the License.
 
 import m from 'mithril';
-
 import {HTMLInputAttrs} from './common';
+import {Icon} from './icon'; // Import Icon component
 
-// For now, this component is just a simple wrapper around a plain old input
-// element, which does no more than specify a class. However, in the future we
-// might want to add more features such as an optional icon or button (e.g. a
-// clear button), at which point the benefit of having this as a component would
-// become more apparent.
-export class TextInput implements m.ClassComponent<HTMLInputAttrs> {
-  view({attrs}: m.CVnode<HTMLInputAttrs>) {
-    return m('input.pf-text-input', attrs);
+export type TextInputAttrs = HTMLInputAttrs & {
+  // Whether the input should autofocus when it is created.
+  readonly autofocus?: boolean;
+  // Optional icon to display on the left of the text field.
+  readonly leftIcon?: string;
+  // Callback fired when the input value changes (on every keystroke).
+  readonly onInput?: (value: string) => void;
+  // Callback fired when the input loses focus or enter is pressed.
+  readonly onChange?: (value: string) => void;
+};
+
+export class TextInput implements m.ClassComponent<TextInputAttrs> {
+  oncreate(vnode: m.CVnodeDOM<TextInputAttrs>) {
+    if (vnode.attrs.autofocus) {
+      // Focus the actual input element inside the wrapper
+      const inputElement = vnode.dom.querySelector('input');
+      if (inputElement) {
+        inputElement.focus();
+      }
+    }
+  }
+
+  view({attrs}: m.CVnode<TextInputAttrs>) {
+    const {leftIcon, className, onInput, onChange, ...inputAttrs} = attrs;
+
+    return m(
+      '.pf-text-input',
+      {
+        className,
+      },
+      leftIcon &&
+        m(Icon, {icon: leftIcon, className: 'pf-text-input__left-icon'}),
+      m('input.pf-text-input__input', {
+        ...inputAttrs,
+        oninput: onInput
+          ? (e: InputEvent) => {
+              inputAttrs.oninput?.(e);
+              const target = e.target as HTMLInputElement;
+              onInput(target.value);
+            }
+          : inputAttrs.oninput,
+        onchange: onChange
+          ? (e: InputEvent) => {
+              inputAttrs.onchange?.(e);
+              const target = e.target as HTMLInputElement;
+              onChange(target.value);
+            }
+          : inputAttrs.onchange,
+      }),
+    );
   }
 }

@@ -16,36 +16,12 @@ android_device = None
 here = os.path.abspath(os.path.dirname(__file__))
 wpt_root = os.path.abspath(os.path.join(here, os.pardir, os.pardir))
 
-
-NDK_VERSION = "r25c"
-CMDLINE_TOOLS_VERSION_STRING = "11.0"
-CMDLINE_TOOLS_VERSION = "9644228"
+CMDLINE_TOOLS_VERSION_STRING = "12.0"
+CMDLINE_TOOLS_VERSION = "11076708"
 
 AVD_MANIFEST_X86_64 = {
-    "emulator_package": "system-images;android-24;default;x86_64",
-    "emulator_avd_name": "mozemulator-x86_64",
-    "emulator_extra_args": [
-        "-skip-adb-auth",
-        "-verbose",
-        "-show-kernel",
-        "-ranchu",
-        "-selinux", "permissive",
-        "-memory", "3072",
-        "-cores", "4",
-        "-skin", "800x1280",
-        "-gpu", "on",
-        "-no-snapstorage",
-        "-no-snapshot",
-        "-no-window",
-        "-no-accel",
-        "-prop", "ro.test_harness=true"
-    ],
-    "emulator_extra_config": {
-        "hw.keyboard": "yes",
-        "hw.lcd.density": "320",
-        "disk.dataPartition.size": "4000MB",
-        "sdcard.size": "600M"
-    }
+    "emulator_package": "system-images;android-34;google_apis;x86_64",
+    "emulator_avd_name": "mozemulator-android34-x86_64"
 }
 
 
@@ -59,13 +35,36 @@ def do_delayed_imports(paths):
                                                 "tooltool",
                                                 "tooltool.py")
     android_device.EMULATOR_HOME_DIR = paths["emulator_home"]
+    android_device.AVD_DICT["x86_64"] = android_device.AvdInfo(
+        "Android x86_64",
+        "mozemulator-android34-x86_64",
+        [
+            "-skip-adb-auth",
+            "-verbose",
+            "-show-kernel",
+            "-ranchu",
+            "-selinux",
+            "permissive",
+            "-memory",
+            "4096",
+            "-cores",
+            "8",
+            "-prop",
+            "ro.test_harness=true",
+            "-no-snapstorage",
+            "-no-snapshot",
+            "-skin",
+            "1080x1920",
+        ],
+        True,
+    )
 
 
 def get_parser_install():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--path", dest="dest", action="store", default=None,
+    parser.add_argument("--path", dest="dest",
                         help="Root path to use for emulator tooling")
-    parser.add_argument("--reinstall", action="store_true", default=False,
+    parser.add_argument("--reinstall", action="store_true",
                         help="Force reinstall even if the emulator already exists")
     parser.add_argument("--prompt", action="store_true",
                         help="Enable confirmation prompts")
@@ -76,46 +75,9 @@ def get_parser_install():
 
 def get_parser_start():
     parser = get_parser_install()
-    parser.add_argument("--device-serial", action="store", default=None,
+    parser.add_argument("--device-serial",
                         help="Device serial number for Android emulator, if not emulator-5554")
     return parser
-
-
-def install_fixed_emulator_version(logger, paths):
-    # Downgrade to a pinned emulator version
-    # See https://developer.android.com/studio/emulator_archive for what we're doing here
-    from xml.etree import ElementTree
-
-    version = "32.1.15"
-    urls = {"linux": "https://redirector.gvt1.com/edgedl/android/repository/emulator-linux_x64-10696886.zip"}
-
-    os_name = platform.system().lower()
-    if os_name not in urls:
-        logger.error(f"Don't know how to install old emulator for {os_name}, using latest version")
-        # For now try with the latest version if this fails
-        return
-
-    logger.info(f"Downgrading emulator to {version}")
-    url = urls[os_name]
-
-    emulator_path = os.path.join(paths["sdk"], "emulator")
-    latest_emulator_path = os.path.join(paths["sdk"], "emulator_latest")
-    os.rename(emulator_path, latest_emulator_path)
-
-    download_and_extract(url, paths["sdk"])
-    package_path = os.path.join(emulator_path, "package.xml")
-    shutil.copyfile(os.path.join(latest_emulator_path, "package.xml"),
-                    package_path)
-
-    with open(package_path) as f:
-        tree = ElementTree.parse(f)
-    node = tree.find("localPackage").find("revision")
-    assert len(node) == 3
-    parts = version.split(".")
-    for version_part, node in zip(parts, node):
-        node.text = version_part
-    with open(package_path, "wb") as f:
-        tree.write(f, encoding="utf8")
 
 
 def get_paths(dest):
@@ -288,15 +250,13 @@ def install(logger, dest=None, reinstall=False, prompt=True):
 
         if new_install:
             packages = ["platform-tools",
-                        "build-tools;34.0.0",
-                        "platforms;android-34",
+                        "build-tools;36.0.0",
+                        "platforms;android-36",
                         "emulator"]
 
             install_android_packages(logger, paths, packages, prompt=prompt)
 
             install_avd(logger, paths, prompt=prompt)
-
-            install_fixed_emulator_version(logger, paths)
 
         emulator = get_emulator(paths)
     return emulator
@@ -323,7 +283,16 @@ def start(logger, dest=None, reinstall=False, prompt=True, device_serial=None):
         emulator.start()
         timer = threading.Timer(300, cancel_start(threading.get_ident()))
         timer.start()
-        emulator.wait_for_start()
+        for i in range(10):
+            logger.info(f"Wait for emulator to start attempt {i + 1}/10")
+            try:
+                emulator.wait_for_start()
+            except Exception:
+                import traceback
+                logger.warning(f"""emulator.wait_for_start() failed:
+{traceback.format_exc()}""")
+            else:
+                break
         timer.cancel()
     return emulator
 

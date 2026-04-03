@@ -14,35 +14,37 @@
 #include "core/fxcrt/bytestring.h"
 #include "core/fxcrt/fx_codepage_forward.h"
 #include "core/fxcrt/retain_ptr.h"
+#include "core/fxcrt/unowned_ptr.h"
 #include "core/fxge/cfx_face.h"
-#include "core/fxge/freetype/fx_freetype.h"
 
 class CFPF_SkiaFont;
 class CFPF_SkiaPathFont;
+class CFX_FontMgr;
 
 class CFPF_SkiaFontMgr {
  public:
-  CFPF_SkiaFontMgr();
+  explicit CFPF_SkiaFontMgr(CFX_FontMgr* font_mgr);
   ~CFPF_SkiaFontMgr();
 
-  void LoadSystemFonts();
-  CFPF_SkiaFont* CreateFont(ByteStringView bsFamilyname,
-                            FX_Charset uCharset,
-                            uint32_t dwStyle);
+  void LoadFonts(const char** user_paths);
+  CFPF_SkiaFont* CreateFont(ByteStringView family_name,
+                            FX_Charset charset,
+                            uint32_t style);
 
-  bool InitFTLibrary();
-  RetainPtr<CFX_Face> GetFontFace(ByteStringView bsFile, int32_t iFaceIndex);
+  RetainPtr<CFX_Face> GetFontFace(ByteStringView path, int32_t face_index);
 
  private:
   void ScanPath(const ByteString& path);
   void ScanFile(const ByteString& file);
   std::unique_ptr<CFPF_SkiaPathFont> ReportFace(RetainPtr<CFX_Face> face,
-                                                const ByteString& file);
+                                                const ByteString& file,
+                                                int face_index);
 
-  bool m_bLoaded = false;
-  ScopedFXFTLibraryRec m_FTLibrary;
-  std::vector<std::unique_ptr<CFPF_SkiaPathFont>> m_FontFaces;
-  std::map<uint32_t, std::unique_ptr<CFPF_SkiaFont>> m_FamilyFonts;
+  bool loaded_fonts_ = false;
+  UnownedPtr<CFX_FontMgr> const font_mgr_;
+  std::vector<std::unique_ptr<CFPF_SkiaPathFont>> font_faces_;
+  // Key is a hash based on CreateFont() parameters.
+  std::map<uint32_t, std::unique_ptr<CFPF_SkiaFont>> family_font_map_;
 };
 
 #endif  // CORE_FXGE_ANDROID_CFPF_SKIAFONTMGR_H_

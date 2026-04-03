@@ -10,13 +10,14 @@
 #include <limits>
 #include <memory>
 #include <utility>
+#include <vector>
 
+#include "quiche/quic/core/flow_label.h"
 #include "quiche/quic/platform/api/quic_ip_address.h"
 #include "quiche/quic/platform/api/quic_test.h"
 #include "quiche/quic/test_tools/quic_mock_syscall_wrapper.h"
 
 using testing::_;
-using testing::Invoke;
 using testing::StrictMock;
 
 namespace quic {
@@ -268,10 +269,10 @@ TEST_F(QuicGsoBatchWriterTest, WriteSuccess) {
   ASSERT_EQ(WriteResult(WRITE_STATUS_OK, 0), WritePacket(&writer, 1000));
 
   EXPECT_CALL(mock_syscalls_, Sendmsg(_, _, _))
-      .WillOnce(Invoke([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
+      .WillOnce([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
         EXPECT_EQ(1100u, PacketLength(msg));
         return 1100;
-      }));
+      });
   ASSERT_EQ(WriteResult(WRITE_STATUS_OK, 1100), WritePacket(&writer, 100));
   ASSERT_EQ(0u, writer.batch_buffer().SizeInUse());
   ASSERT_EQ(0u, writer.buffered_writes().size());
@@ -284,11 +285,11 @@ TEST_F(QuicGsoBatchWriterTest, WriteBlockDataNotBuffered) {
   ASSERT_EQ(WriteResult(WRITE_STATUS_OK, 0), WritePacket(&writer, 100));
 
   EXPECT_CALL(mock_syscalls_, Sendmsg(_, _, _))
-      .WillOnce(Invoke([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
+      .WillOnce([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
         EXPECT_EQ(200u, PacketLength(msg));
         errno = EWOULDBLOCK;
         return -1;
-      }));
+      });
   ASSERT_EQ(WriteResult(WRITE_STATUS_BLOCKED, EWOULDBLOCK),
             WritePacket(&writer, 150));
   ASSERT_EQ(200u, writer.batch_buffer().SizeInUse());
@@ -302,11 +303,11 @@ TEST_F(QuicGsoBatchWriterTest, WriteBlockDataBuffered) {
   ASSERT_EQ(WriteResult(WRITE_STATUS_OK, 0), WritePacket(&writer, 100));
 
   EXPECT_CALL(mock_syscalls_, Sendmsg(_, _, _))
-      .WillOnce(Invoke([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
+      .WillOnce([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
         EXPECT_EQ(250u, PacketLength(msg));
         errno = EWOULDBLOCK;
         return -1;
-      }));
+      });
   ASSERT_EQ(WriteResult(WRITE_STATUS_BLOCKED_DATA_BUFFERED, EWOULDBLOCK),
             WritePacket(&writer, 50));
 
@@ -323,11 +324,11 @@ TEST_F(QuicGsoBatchWriterTest, WriteErrorWithoutDataBuffered) {
   ASSERT_EQ(WriteResult(WRITE_STATUS_OK, 0), WritePacket(&writer, 100));
 
   EXPECT_CALL(mock_syscalls_, Sendmsg(_, _, _))
-      .WillOnce(Invoke([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
+      .WillOnce([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
         EXPECT_EQ(200u, PacketLength(msg));
         errno = EPERM;
         return -1;
-      }));
+      });
   WriteResult error_result = WritePacket(&writer, 150);
   ASSERT_EQ(WriteResult(WRITE_STATUS_ERROR, EPERM), error_result);
 
@@ -343,11 +344,11 @@ TEST_F(QuicGsoBatchWriterTest, WriteErrorAfterDataBuffered) {
   ASSERT_EQ(WriteResult(WRITE_STATUS_OK, 0), WritePacket(&writer, 100));
 
   EXPECT_CALL(mock_syscalls_, Sendmsg(_, _, _))
-      .WillOnce(Invoke([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
+      .WillOnce([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
         EXPECT_EQ(250u, PacketLength(msg));
         errno = EPERM;
         return -1;
-      }));
+      });
   WriteResult error_result = WritePacket(&writer, 50);
   ASSERT_EQ(WriteResult(WRITE_STATUS_ERROR, EPERM), error_result);
 
@@ -363,11 +364,11 @@ TEST_F(QuicGsoBatchWriterTest, FlushError) {
   ASSERT_EQ(WriteResult(WRITE_STATUS_OK, 0), WritePacket(&writer, 100));
 
   EXPECT_CALL(mock_syscalls_, Sendmsg(_, _, _))
-      .WillOnce(Invoke([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
+      .WillOnce([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
         EXPECT_EQ(200u, PacketLength(msg));
         errno = EINVAL;
         return -1;
-      }));
+      });
   WriteResult error_result = writer.Flush();
   ASSERT_EQ(WriteResult(WRITE_STATUS_ERROR, EINVAL), error_result);
 
@@ -404,11 +405,11 @@ TEST_F(QuicGsoBatchWriterTest, ReleaseTime) {
   // The 3rd packet has more delay and does not allow burst.
   // The first 2 packets are flushed due to different release time.
   EXPECT_CALL(mock_syscalls_, Sendmsg(_, _, _))
-      .WillOnce(Invoke([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
+      .WillOnce([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
         EXPECT_EQ(2700u, PacketLength(msg));
         errno = 0;
         return 0;
-      }));
+      });
   params.release_time_delay = QuicTime::Delta::FromMilliseconds(5);
   params.allow_burst = false;
   result = WritePacketWithParams(writer.get(), params);
@@ -426,11 +427,11 @@ TEST_F(QuicGsoBatchWriterTest, ReleaseTime) {
   // The 5th packet has same delay, allows burst, but is shorter.
   // Packets 3,4 and 5 are flushed.
   EXPECT_CALL(mock_syscalls_, Sendmsg(_, _, _))
-      .WillOnce(Invoke([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
+      .WillOnce([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
         EXPECT_EQ(3000u, PacketLength(msg));
         errno = 0;
         return 0;
-      }));
+      });
   params.allow_burst = true;
   EXPECT_EQ(MillisToNanos(6),
             writer->GetReleaseTime(params).actual_release_time);
@@ -474,7 +475,7 @@ TEST_F(QuicGsoBatchWriterTest, EcnCodepoint) {
   // The first 2 packets are flushed due to different codepoint.
   params.ecn_codepoint = ECN_ECT1;
   EXPECT_CALL(mock_syscalls_, Sendmsg(_, _, _))
-      .WillOnce(Invoke([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
+      .WillOnce([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
         const int kEct0 = 0x02;
         EXPECT_EQ(2700u, PacketLength(msg));
         msghdr mutable_msg;
@@ -488,7 +489,7 @@ TEST_F(QuicGsoBatchWriterTest, EcnCodepoint) {
         }
         errno = 0;
         return 0;
-      }));
+      });
   result = WritePacketWithParams(writer.get(), params);
   ASSERT_EQ(WriteResult(WRITE_STATUS_OK, 2700), result);
 }
@@ -520,7 +521,7 @@ TEST_F(QuicGsoBatchWriterTest, EcnCodepointIPv6) {
   // The first 2 packets are flushed due to different codepoint.
   params.ecn_codepoint = ECN_ECT1;
   EXPECT_CALL(mock_syscalls_, Sendmsg(_, _, _))
-      .WillOnce(Invoke([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
+      .WillOnce([](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
         const int kEct0 = 0x02;
         EXPECT_EQ(2700u, PacketLength(msg));
         msghdr mutable_msg;
@@ -535,9 +536,55 @@ TEST_F(QuicGsoBatchWriterTest, EcnCodepointIPv6) {
         }
         errno = 0;
         return 0;
-      }));
+      });
   result = WritePacketWithParams(writer.get(), params);
   ASSERT_EQ(WriteResult(WRITE_STATUS_OK, 2700), result);
+}
+
+TEST_F(QuicGsoBatchWriterTest, FlowLabelIPv6) {
+  const WriteResult write_buffered(WRITE_STATUS_OK, 0);
+
+  self_address_ = QuicIpAddress::Any6();
+  peer_address_ = QuicSocketAddress(QuicIpAddress::Any6(), 443);
+  auto writer = TestQuicGsoBatchWriter::NewInstanceWithReleaseTimeSupport();
+
+  QuicPacketWriterParams params;
+  EXPECT_TRUE(params.release_time_delay.IsZero());
+  EXPECT_FALSE(params.allow_burst);
+
+  for (uint32_t i = 1; i < 5; ++i) {
+    // Generate flow label which are on both side of zero to test
+    // coverage when the in-memory label is larger than 20 bits.
+    params.flow_label = i - 2;
+    WriteResult result = WritePacketWithParams(writer.get(), params);
+    ASSERT_EQ(write_buffered, result);
+
+    EXPECT_CALL(mock_syscalls_, Sendmsg(_, _, _))
+        .WillOnce(
+            [&params](int /*sockfd*/, const msghdr* msg, int /*flags*/) {
+              EXPECT_EQ(1350u, PacketLength(msg));
+              msghdr mutable_msg;
+              memcpy(&mutable_msg, msg, sizeof(*msg));
+              bool found_flow_label = false;
+              for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&mutable_msg);
+                   cmsg != NULL; cmsg = CMSG_NXTHDR(&mutable_msg, cmsg)) {
+                if (cmsg->cmsg_level == IPPROTO_IPV6 &&
+                    cmsg->cmsg_type == IPV6_FLOWINFO) {
+                  found_flow_label = true;
+                  uint32_t cmsg_flow_label =
+                      ntohl(*reinterpret_cast<uint32_t*> CMSG_DATA(cmsg));
+                  EXPECT_EQ(params.flow_label & 0xFFFFF, cmsg_flow_label);
+                  break;
+                }
+              }
+              // As long as the flow label is not zero, it should be present.
+              EXPECT_EQ(params.flow_label != 0, found_flow_label);
+              errno = 0;
+              return 0;
+            });
+    WriteResult error_result = writer->Flush();
+    ASSERT_EQ(WriteResult(WRITE_STATUS_OK, 1350), error_result);
+  }
 }
 
 }  // namespace

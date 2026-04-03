@@ -64,12 +64,7 @@ static typename Eigen::NumTraits<Scalar>::Real SLogDet(
     auto diag = LU.diagonal().array().eval();
     auto abs_diag = diag.cwiseAbs().eval();
     log_abs_det += abs_diag.log().sum();
-    *sign *= (diag / abs_diag).prod();
-  }
-  if (!Eigen::numext::isfinite(log_abs_det)) {
-    *sign = 0;
-    log_abs_det =
-        log_abs_det > 0 ? -std::log(RealScalar(0)) : std::log(RealScalar(0));
+    *sign *= diag.array().sign().prod();
   }
   return log_abs_det;
 }
@@ -164,8 +159,7 @@ class DeterminantOpGpu : public AsyncOpKernel {
       return;
     }
 
-    // TODO(rmlarsen): Convert to absl::make_unique when available.
-    std::unique_ptr<GpuSolver> solver(new GpuSolver(context));
+    auto solver = std::make_unique<GpuSolver>(context);
 
     // Reuse the input buffer or make a copy for the factorization step,
     // depending on whether this ops owns it exclusively.
@@ -194,7 +188,7 @@ class DeterminantOpGpu : public AsyncOpKernel {
     // Prepare pointer arrays for cuBlas' batch interface.
     // TODO(rmlarsen): Find a way to encode pointer arrays in pinned host memory
     // without the ugly casting.
-    auto input_copy_ptrs = solver->GetScratchSpace<uint8>(
+    auto input_copy_ptrs = solver->GetScratchSpace<uint8_t>(
         sizeof(Scalar*) * batch_size, "input_copy_ptrs",
         /* on_host */ true);
     auto output_reshaped = out->template flat_inner_dims<Scalar, 1>();
@@ -241,9 +235,9 @@ class DeterminantOpGpu : public AsyncOpKernel {
 
     // Register callback to check info after kernels finish.
     auto info_checker = [context, done](
-                            const Status& status,
+                            const absl::Status& status,
                             const std::vector<HostLapackInfo>& host_infos) {
-      if (!status.ok() && errors::IsInvalidArgument(status) &&
+      if (!status.ok() && absl::IsInvalidArgument(status) &&
           !host_infos.empty()) {
         for (int i = 0; i < host_infos[0].size(); ++i) {
           // It is OK for a matrix to be singular (signaled by info > 0),
@@ -309,8 +303,7 @@ class LogDeterminantOpGpu : public AsyncOpKernel {
       return;
     }
 
-    // TODO(rmlarsen): Convert to absl::make_unique when available.
-    std::unique_ptr<GpuSolver> solver(new GpuSolver(context));
+    auto solver = std::make_unique<GpuSolver>(context);
 
     // Reuse the input buffer or make a copy for the factorization step,
     // depending on whether this ops owns it exclusively.
@@ -339,7 +332,7 @@ class LogDeterminantOpGpu : public AsyncOpKernel {
     // Prepare pointer arrays for cuBlas' batch interface.
     // TODO(rmlarsen): Find a way to encode pointer arrays in pinned host memory
     // without the ugly casting.
-    auto input_copy_ptrs = solver->GetScratchSpace<uint8>(
+    auto input_copy_ptrs = solver->GetScratchSpace<uint8_t>(
         sizeof(Scalar*) * batch_size, "input_copy_ptrs",
         /* on_host */ true);
 
@@ -388,9 +381,9 @@ class LogDeterminantOpGpu : public AsyncOpKernel {
 
     // Register callback to check info after kernels finish.
     auto info_checker = [context, done](
-                            const Status& status,
+                            const absl::Status& status,
                             const std::vector<HostLapackInfo>& host_infos) {
-      if (!status.ok() && errors::IsInvalidArgument(status) &&
+      if (!status.ok() && absl::IsInvalidArgument(status) &&
           !host_infos.empty()) {
         for (int i = 0; i < host_infos[0].size(); ++i) {
           // It is OK for a matrix to be singular (signaled by info > 0),

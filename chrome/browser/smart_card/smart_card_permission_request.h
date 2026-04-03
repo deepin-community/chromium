@@ -5,21 +5,22 @@
 #ifndef CHROME_BROWSER_SMART_CARD_SMART_CARD_PERMISSION_REQUEST_H_
 #define CHROME_BROWSER_SMART_CARD_SMART_CARD_PERMISSION_REQUEST_H_
 
+#include <optional>
+
+#include "base/gtest_prod_util.h"
 #include "components/permissions/permission_request.h"
 
 namespace url {
 class Origin;
 }
 
+namespace permissions {
+struct PermissionPromptDecision;
+}  // namespace permissions
+
 class SmartCardPermissionRequest : public permissions::PermissionRequest {
  public:
-  enum class Result {
-    kAllowOnce = 0,
-    kAllowAlways = 1,
-    kDontAllow = 2,
-  };
-
-  using ResultCallback = base::OnceCallback<void(Result)>;
+  using ResultCallback = base::OnceCallback<void(PermissionDecision)>;
 
   SmartCardPermissionRequest(const url::Origin& requesting_origin,
                              const std::string& reader_name,
@@ -27,17 +28,22 @@ class SmartCardPermissionRequest : public permissions::PermissionRequest {
   ~SmartCardPermissionRequest() override;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(SmartCardPermissionRequestTest, IsDuplicateOf);
+  FRIEND_TEST_ALL_PREFIXES(SmartCardPermissionRequestTest,
+                           IsDuplicateOf_DifferentReader);
+  FRIEND_TEST_ALL_PREFIXES(SmartCardPermissionRequestTest,
+                           IsDuplicateOf_DifferentOrigin);
+
   // permissions::PermissionRequest:
   bool IsDuplicateOf(
       permissions::PermissionRequest* other_request) const override;
   std::u16string GetMessageTextFragment() const override;
   std::optional<std::u16string> GetAllowAlwaysText() const override;
+  std::optional<std::u16string> GetBlockText() const override;
 
-  void OnPermissionDecided(ContentSetting result,
-                           bool is_one_time,
-                           bool is_final_decision);
-
-  void DeleteRequest();
+  void OnPermissionDecided(
+      const permissions::PermissionPromptDecision& decision,
+      const permissions::PermissionRequestData& request_data);
 
   std::string reader_name_;
   ResultCallback result_callback_;

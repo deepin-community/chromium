@@ -15,7 +15,8 @@ import {BatteryType} from 'chrome://resources/ash/common/bluetooth/bluetooth_typ
 import {getBatteryPercentage, hasAnyDetailedBatteryInfo, hasDefaultImage, hasTrueWirelessImages} from 'chrome://resources/ash/common/bluetooth/bluetooth_utils.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {assertNotReached} from 'chrome://resources/js/assert.js';
-import {BluetoothDeviceProperties, DeviceConnectionState} from 'chrome://resources/mojo/chromeos/ash/services/bluetooth_config/public/mojom/cros_bluetooth_config.mojom-webui.js';
+import type {BluetoothDeviceProperties} from 'chrome://resources/mojo/chromeos/ash/services/bluetooth_config/public/mojom/cros_bluetooth_config.mojom-webui.js';
+import {DeviceConnectionState} from 'chrome://resources/mojo/chromeos/ash/services/bluetooth_config/public/mojom/cros_bluetooth_config.mojom-webui.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {getTemplate} from './os_bluetooth_true_wireless_images.html.js';
@@ -44,15 +45,13 @@ export class SettingsBluetoothTrueWirelessImagesElement extends
        * A BatteryType is passed between html and JS for
        * certain UI elements to determine their state.
        */
-      BatteryType: {
+      BatteryTypeEnum_: {
         type: Object,
         value: BatteryType,
       },
     };
   }
 
-  /* eslint-disable-next-line @typescript-eslint/naming-convention */
-  BatteryType: BatteryType;
   device: BluetoothDeviceProperties;
 
   /**
@@ -114,13 +113,13 @@ export class SettingsBluetoothTrueWirelessImagesElement extends
       device: BluetoothDeviceProperties, batteryType: BatteryType): string {
     switch (batteryType) {
       case BatteryType.DEFAULT:
-        return device.imageInfo!.defaultImageUrl!.url;
+        return device.imageInfo!.defaultImageUrl!;
       case BatteryType.LEFT_BUD:
-        return device.imageInfo!.trueWirelessImages!.leftBudImageUrl.url;
+        return device.imageInfo!.trueWirelessImages!.leftBudImageUrl;
       case BatteryType.CASE:
-        return device.imageInfo!.trueWirelessImages!.caseImageUrl.url;
+        return device.imageInfo!.trueWirelessImages!.caseImageUrl;
       case BatteryType.RIGHT_BUD:
-        return device.imageInfo!.trueWirelessImages!.rightBudImageUrl.url;
+        return device.imageInfo!.trueWirelessImages!.rightBudImageUrl;
       default:
         assertNotReached();
     }

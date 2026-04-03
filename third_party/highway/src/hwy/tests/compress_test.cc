@@ -15,11 +15,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>  // memset
+#include <stdio.h>
 
 #include <array>  // IWYU pragma: keep
-
-#include "hwy/base.h"
 
 #undef HWY_TARGET_INCLUDE
 #define HWY_TARGET_INCLUDE "tests/compress_test.cc"
@@ -30,6 +28,7 @@
 HWY_BEFORE_NAMESPACE();
 namespace hwy {
 namespace HWY_NAMESPACE {
+namespace {
 
 // Regenerate tables used in the implementation, instead of testing.
 #define HWY_PRINT_TABLES 0
@@ -73,6 +72,7 @@ struct TestCompress {
     using TU = MakeUnsigned<T>;
     const Rebind<TI, D> di;
     const size_t N = Lanes(d);
+    const size_t bits_size = RoundUpTo((N + 7) / 8, 8);
 
     for (int frac : {0, 2, 3}) {
       // For CompressStore
@@ -83,19 +83,18 @@ struct TestCompress {
       auto garbage = AllocateAligned<TU>(N);
       auto expected = AllocateAligned<T>(N);
       auto actual_a = AllocateAligned<T>(misalign + N);
-      T* actual_u = actual_a.get() + misalign;
-
-      const size_t bits_size = RoundUpTo((N + 7) / 8, 8);
       auto bits = AllocateAligned<uint8_t>(bits_size);
-      memset(bits.get(), 0, bits_size);  // for MSAN
+      HWY_ASSERT(in_lanes && mask_lanes && garbage && expected && actual_a &&
+                 bits);
+
+      T* actual_u = actual_a.get() + misalign;
+      ZeroBytes(bits.get(), bits_size);  // for MSAN
 
       // Each lane should have a chance of having mask=true.
       for (size_t rep = 0; rep < AdjustedReps(200); ++rep) {
         size_t expected_pos = 0;
         for (size_t i = 0; i < N; ++i) {
-          const uint64_t r = Random32(&rng);
-          in_lanes[i] = T();  // cannot initialize float16_t directly.
-          CopyBytes<sizeof(T)>(&r, &in_lanes[i]);  // not same size
+          in_lanes[i] = RandomFiniteValue<T>(&rng);
           mask_lanes[i] = (Random32(&rng) & 1024) ? TI(1) : TI(0);
           if (mask_lanes[i] > 0) {
             expected[expected_pos++] = in_lanes[i];
@@ -125,20 +124,20 @@ struct TestCompress {
         StoreMaskBits(d, mask, bits.get());
 
         // Compress
-        memset(actual_u, 0, N * sizeof(T));
+        ZeroBytes(actual_u, N * sizeof(T));
         StoreU(Compress(in, mask), d, actual_u);
         CheckStored(d, di, "Compress", expected_pos, expected_pos, num_to_check,
                     in_lanes, mask_lanes, expected, actual_u, __LINE__);
 
         // CompressNot
-        memset(actual_u, 0, N * sizeof(T));
+        ZeroBytes(actual_u, N * sizeof(T));
         StoreU(CompressNot(in, Not(mask)), d, actual_u);
         CheckStored(d, di, "CompressNot", expected_pos, expected_pos,
                     num_to_check, in_lanes, mask_lanes, expected, actual_u,
                     __LINE__);
 
         // CompressStore
-        memset(actual_u, 0, N * sizeof(T));
+        ZeroBytes(actual_u, N * sizeof(T));
         const size_t size1 = CompressStore(in, mask, d, actual_u);
         // expected_pos instead of num_to_check because this op is not
         // affected by CompressIsPartition.
@@ -163,14 +162,14 @@ struct TestCompress {
         }
 
         // CompressBits
-        memset(actual_u, 0, N * sizeof(T));
+        ZeroBytes(actual_u, N * sizeof(T));
         StoreU(CompressBits(in, bits.get()), d, actual_u);
         CheckStored(d, di, "CompressBits", expected_pos, expected_pos,
                     num_to_check, in_lanes, mask_lanes, expected, actual_u,
                     __LINE__);
 
         // CompressBitsStore
-        memset(actual_u, 0, N * sizeof(T));
+        ZeroBytes(actual_u, N * sizeof(T));
         const size_t size3 = CompressBitsStore(in, bits.get(), d, actual_u);
         // expected_pos instead of num_to_check because this op is not
         // affected by CompressIsPartition.
@@ -203,15 +202,14 @@ struct TestCompressBlocks {
     auto mask_lanes = AllocateAligned<TI>(N);
     auto expected = AllocateAligned<T>(N);
     auto actual = AllocateAligned<T>(N);
+    HWY_ASSERT(in_lanes && mask_lanes && expected && actual);
 
     // Each lane should have a chance of having mask=true.
     for (size_t rep = 0; rep < AdjustedReps(200); ++rep) {
       size_t expected_pos = 0;
       for (size_t i = 0; i < N; i += 2) {
-        const uint64_t bits = Random32(&rng);
-        in_lanes[i + 1] = in_lanes[i] = T();  // cannot set float16_t directly.
-        CopyBytes<sizeof(T)>(&bits, &in_lanes[i]);      // not same size
-        CopyBytes<sizeof(T)>(&bits, &in_lanes[i + 1]);  // not same size
+        in_lanes[i] = RandomFiniteValue<T>(&rng);
+        in_lanes[i + 1] = RandomFiniteValue<T>(&rng);
         mask_lanes[i + 1] = mask_lanes[i] = TI{(Random32(&rng) & 8) ? 1 : 0};
         if (mask_lanes[i] > 0) {
           expected[expected_pos++] = in_lanes[i];
@@ -239,7 +237,7 @@ struct TestCompressBlocks {
       const auto mask = RebindMask(d, Gt(Load(di, mask_lanes.get()), Zero(di)));
 
       // CompressBlocksNot
-      memset(actual.get(), 0, N * sizeof(T));
+      ZeroBytes(actual.get(), N * sizeof(T));
       StoreU(CompressBlocksNot(in, Not(mask)), d, actual.get());
       CheckStored(d, di, "CompressBlocksNot", expected_pos, expected_pos,
                   num_to_check, in_lanes, mask_lanes, expected, actual.get(),
@@ -256,8 +254,6 @@ HWY_NOINLINE void TestAllCompressBlocks() {
 #endif  // !HWY_PRINT_TABLES
 
 #if HWY_PRINT_TABLES || HWY_IDE
-namespace detail {  // for code folding
-
 void PrintCompress8x8Tables() {
   printf("======================================= 8x8\n");
   constexpr size_t N = 8;
@@ -786,40 +782,39 @@ void PrintCompressNot64x2Tables() {
   printf("\n");
 }
 
-}  // namespace detail
-
 HWY_NOINLINE void PrintTables() {
   // Only print once.
 #if HWY_TARGET == HWY_STATIC_TARGET
-  detail::PrintCompress32x8Tables();
-  detail::PrintCompressNot32x8Tables();
-  detail::PrintCompress64x4NibbleTables();
-  detail::PrintCompressNot64x4NibbleTables();
-  detail::PrintCompressNot64x2NibbleTables();
-  detail::PrintCompress64x4Tables();
-  detail::PrintCompressNot64x4Tables();
-  detail::PrintCompress32x4Tables();
-  detail::PrintCompressNot32x4Tables();
-  detail::PrintCompress64x2Tables();
-  detail::PrintCompressNot64x2Tables();
-  detail::PrintCompress64x4PairTables();
-  detail::PrintCompressNot64x4PairTables();
-  detail::PrintCompress16x8Tables();
-  detail::PrintCompress8x8Tables();
-  detail::PrintCompressNot16x8Tables();
+  PrintCompress32x8Tables();
+  PrintCompressNot32x8Tables();
+  PrintCompress64x4NibbleTables();
+  PrintCompressNot64x4NibbleTables();
+  PrintCompressNot64x2NibbleTables();
+  PrintCompress64x4Tables();
+  PrintCompressNot64x4Tables();
+  PrintCompress32x4Tables();
+  PrintCompressNot32x4Tables();
+  PrintCompress64x2Tables();
+  PrintCompressNot64x2Tables();
+  PrintCompress64x4PairTables();
+  PrintCompressNot64x4PairTables();
+  PrintCompress16x8Tables();
+  PrintCompress8x8Tables();
+  PrintCompressNot16x8Tables();
 #endif
 }
 
 #endif  // HWY_PRINT_TABLES
 
+}  // namespace
 // NOLINTNEXTLINE(google-readability-namespace-comments)
 }  // namespace HWY_NAMESPACE
 }  // namespace hwy
 HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
-
 namespace hwy {
+namespace {
 HWY_BEFORE_TEST(HwyCompressTest);
 #if HWY_PRINT_TABLES
 // Only print instead of running tests; this will be visible in the log.
@@ -828,6 +823,8 @@ HWY_EXPORT_AND_TEST_P(HwyCompressTest, PrintTables);
 HWY_EXPORT_AND_TEST_P(HwyCompressTest, TestAllCompress);
 HWY_EXPORT_AND_TEST_P(HwyCompressTest, TestAllCompressBlocks);
 #endif
+HWY_AFTER_TEST();
+}  // namespace
 }  // namespace hwy
-
-#endif
+HWY_TEST_MAIN();
+#endif  // HWY_ONCE

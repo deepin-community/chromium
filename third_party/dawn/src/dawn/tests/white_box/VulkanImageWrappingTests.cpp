@@ -80,6 +80,13 @@ class VulkanImageWrappingTestBase : public DawnTestWithParams<ImageWrappingParam
         DAWN_SUPPRESS_TEST_IF(IsLinux() && IsNvidia() && GetParam().mUseDedicatedAllocation &&
                               GetParam().mDetectDedicatedAllocation);
 
+        // TODO(crbug.com/438257193): Nvidia is crashing for all tests that use DMA buffers.
+        DAWN_SUPPRESS_TEST_IF(IsLinux() && IsNvidia() &&
+                              GetParam().mExternalImageType == ExternalImageType::DmaBuf);
+
+        // TODO(crbug.com/342213634): Crashes on ChromeOS volteer devices.
+        DAWN_SUPPRESS_TEST_IF(IsChromeOS() && IsIntel() && IsBackendValidationEnabled());
+
         switch (GetParam().mExternalImageType) {
             case ExternalImageType::OpaqueFD:
                 mBackend = CreateOpaqueFDBackend(device);
@@ -119,8 +126,8 @@ class VulkanImageWrappingTestBase : public DawnTestWithParams<ImageWrappingParam
             return;
         }
 
-        testTextures = {};
         defaultTexture = nullptr;
+        testTextures = {};
         mBackend = nullptr;
         DawnTestWithParams::TearDown();
     }
@@ -187,8 +194,7 @@ class VulkanImageWrappingTestBase : public DawnTestWithParams<ImageWrappingParam
 
     wgpu::TextureDescriptor defaultDescriptor;
     std::array<std::unique_ptr<ExternalTexture>, kTestTexturesCount> testTextures;
-    // TODO(https://crbug.com/dawn/2346): Investigate `DanglingUntriaged` pointers in dawn/test.
-    raw_ptr<ExternalTexture, DanglingUntriaged> defaultTexture;
+    raw_ptr<ExternalTexture> defaultTexture;
 };
 
 using VulkanImageWrappingValidationTests = VulkanImageWrappingTestBase;
@@ -217,7 +223,7 @@ TEST_P(VulkanImageWrappingValidationTests, SuccessfulImportWithInternalUsageDesc
 // Test an error occurs if an invalid sType is the nextInChain
 TEST_P(VulkanImageWrappingValidationTests, InvalidTextureDescriptor) {
     wgpu::ChainedStruct chainedDescriptor;
-    chainedDescriptor.sType = wgpu::SType::SurfaceDescriptorFromWindowsSwapChainPanel;
+    chainedDescriptor.sType = wgpu::SType::SurfaceDescriptorFromWindowsUWPSwapChainPanel;
     defaultDescriptor.nextInChain = &chainedDescriptor;
 
     ASSERT_DEVICE_ERROR(wgpu::Texture texture = WrapVulkanImage(device, &defaultDescriptor,
@@ -267,17 +273,6 @@ TEST_P(VulkanImageWrappingValidationTests, DoubleSignalSemaphoreExport) {
         WrapVulkanImage(device, &defaultDescriptor, defaultTexture, {}, true, true);
     ASSERT_NE(texture.Get(), nullptr);
     IgnoreSignalSemaphore(texture);
-
-    ExternalImageExportInfoVkForTesting exportInfo = GetExternalImageExportInfo();
-    ASSERT_DEVICE_ERROR(bool success = mBackend->ExportImage(texture, &exportInfo));
-    ASSERT_FALSE(success);
-    ASSERT_EQ(exportInfo.semaphores.size(), 0u);
-}
-
-// Test an error occurs if we try to export the signal semaphore from a normal texture
-TEST_P(VulkanImageWrappingValidationTests, NormalTextureSignalSemaphoreExport) {
-    wgpu::Texture texture = device.CreateTexture(&defaultDescriptor);
-    ASSERT_NE(texture.Get(), nullptr);
 
     ExternalImageExportInfoVkForTesting exportInfo = GetExternalImageExportInfo();
     ASSERT_DEVICE_ERROR(bool success = mBackend->ExportImage(texture, &exportInfo));
@@ -377,8 +372,10 @@ class VulkanImageWrappingUsageTests : public VulkanImageWrappingTestBase {
                                     wgpu::Queue dawnQueue,
                                     wgpu::Texture source,
                                     wgpu::Texture destination) {
-        wgpu::ImageCopyTexture copySrc = utils::CreateImageCopyTexture(source, 0, {0, 0, 0});
-        wgpu::ImageCopyTexture copyDst = utils::CreateImageCopyTexture(destination, 0, {0, 0, 0});
+        wgpu::TexelCopyTextureInfo copySrc =
+            utils::CreateTexelCopyTextureInfo(source, 0, {0, 0, 0});
+        wgpu::TexelCopyTextureInfo copyDst =
+            utils::CreateTexelCopyTextureInfo(destination, 0, {0, 0, 0});
 
         wgpu::Extent3D copySize = {1, 1, 1};
 
@@ -420,6 +417,12 @@ TEST_P(VulkanImageWrappingUsageTests, ClearImageAcrossDevices) {
 // This is intended to verify that waiting on the signalFd for one external texture does not affect
 // those of other external textures.
 TEST_P(VulkanImageWrappingUsageTests, ClearTwoImagesAcrossDevices) {
+    // TODO(crbug.com/341124484): Fails on Linux/Intel UHD 770.
+    DAWN_SUPPRESS_TEST_IF(IsLinux() && IsBackendValidationEnabled() && IsIntelGen12());
+
+    // crbug.com/358408563
+    DAWN_SUPPRESS_TEST_IF(IsLinux() && IsNvidia() && IsVulkan() && IsBackendValidationEnabled());
+
     static_assert(kTestTexturesCount >= 2);
 
     std::vector<wgpu::Texture> wrappedTextures;
@@ -584,9 +587,9 @@ TEST_P(VulkanImageWrappingUsageTests, CopyTextureToBufferSrcSync) {
     wgpu::Buffer copyDstBuffer = device.CreateBuffer(&bufferDesc);
 
     // Copy |deviceWrappedTexture| into |copyDstBuffer|
-    wgpu::ImageCopyTexture copySrc =
-        utils::CreateImageCopyTexture(deviceWrappedTexture, 0, {0, 0, 0});
-    wgpu::ImageCopyBuffer copyDst = utils::CreateImageCopyBuffer(copyDstBuffer, 0, 256);
+    wgpu::TexelCopyTextureInfo copySrc =
+        utils::CreateTexelCopyTextureInfo(deviceWrappedTexture, 0, {0, 0, 0});
+    wgpu::TexelCopyBufferInfo copyDst = utils::CreateTexelCopyBufferInfo(copyDstBuffer, 0, 256);
 
     wgpu::Extent3D copySize = {1, 1, 1};
 
@@ -635,9 +638,9 @@ TEST_P(VulkanImageWrappingUsageTests, CopyBufferToTextureDstSync) {
         utils::CreateBufferFromData(secondDevice, wgpu::BufferUsage::CopySrc, {0x04030201});
 
     // Copy |copySrcBuffer| into |secondDeviceWrappedTexture|
-    wgpu::ImageCopyBuffer copySrc = utils::CreateImageCopyBuffer(copySrcBuffer, 0, 256);
-    wgpu::ImageCopyTexture copyDst =
-        utils::CreateImageCopyTexture(secondDeviceWrappedTexture, 0, {0, 0, 0});
+    wgpu::TexelCopyBufferInfo copySrc = utils::CreateTexelCopyBufferInfo(copySrcBuffer, 0, 256);
+    wgpu::TexelCopyTextureInfo copyDst =
+        utils::CreateTexelCopyTextureInfo(secondDeviceWrappedTexture, 0, {0, 0, 0});
 
     wgpu::Extent3D copySize = {1, 1, 1};
 
@@ -837,9 +840,10 @@ TEST_P(VulkanImageWrappingUsageTests, LargerImage) {
     {
         wgpu::Buffer copySrcBuffer = utils::CreateBufferFromData(
             secondDevice, data.data(), data.size(), wgpu::BufferUsage::CopySrc);
-        wgpu::ImageCopyBuffer copySrc = utils::CreateImageCopyBuffer(copySrcBuffer, 0, bytesPerRow);
-        wgpu::ImageCopyTexture copyDst =
-            utils::CreateImageCopyTexture(wrappedTexture, 0, {0, 0, 0});
+        wgpu::TexelCopyBufferInfo copySrc =
+            utils::CreateTexelCopyBufferInfo(copySrcBuffer, 0, bytesPerRow);
+        wgpu::TexelCopyTextureInfo copyDst =
+            utils::CreateTexelCopyTextureInfo(wrappedTexture, 0, {0, 0, 0});
         wgpu::Extent3D copySize = {width, height, 1};
 
         wgpu::CommandEncoder encoder = secondDevice.CreateCommandEncoder();
@@ -861,9 +865,10 @@ TEST_P(VulkanImageWrappingUsageTests, LargerImage) {
     copyDesc.usage = wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::CopyDst;
     wgpu::Buffer copyDstBuffer = device.CreateBuffer(&copyDesc);
     {
-        wgpu::ImageCopyTexture copySrc =
-            utils::CreateImageCopyTexture(nextWrappedTexture, 0, {0, 0, 0});
-        wgpu::ImageCopyBuffer copyDst = utils::CreateImageCopyBuffer(copyDstBuffer, 0, bytesPerRow);
+        wgpu::TexelCopyTextureInfo copySrc =
+            utils::CreateTexelCopyTextureInfo(nextWrappedTexture, 0, {0, 0, 0});
+        wgpu::TexelCopyBufferInfo copyDst =
+            utils::CreateTexelCopyBufferInfo(copyDstBuffer, 0, bytesPerRow);
 
         wgpu::Extent3D copySize = {width, height, 1};
 
@@ -902,7 +907,7 @@ TEST_P(VulkanImageWrappingUsageTests, SRGBReinterpretation) {
                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     ASSERT_NE(texture.Get(), nullptr);
 
-    wgpu::ImageCopyTexture dst = {};
+    wgpu::TexelCopyTextureInfo dst = {};
     dst.texture = texture;
     std::array<utils::RGBA8, 4> rgbaTextureData = {
         utils::RGBA8(180, 0, 0, 255),
@@ -911,7 +916,7 @@ TEST_P(VulkanImageWrappingUsageTests, SRGBReinterpretation) {
         utils::RGBA8(62, 180, 84, 90),
     };
 
-    wgpu::TextureDataLayout dataLayout = {};
+    wgpu::TexelCopyBufferLayout dataLayout = {};
     dataLayout.bytesPerRow = textureDesc.size.width * sizeof(utils::RGBA8);
 
     queue.WriteTexture(&dst, rgbaTextureData.data(), rgbaTextureData.size() * sizeof(utils::RGBA8),
@@ -998,6 +1003,12 @@ class VulkanImageWrappingMultithreadTests : public VulkanImageWrappingUsageTests
 
 // Test that wrapping multiple VulkanImage and clear them on multiple threads work.
 TEST_P(VulkanImageWrappingMultithreadTests, WrapAndClear_OnMultipleThreads) {
+    // TODO(crbug.com/341124484): Crashes on Linux/Intel UHD 770.
+    DAWN_SUPPRESS_TEST_IF(IsLinux() && IsBackendValidationEnabled() && IsIntelGen12());
+
+    // crbug.com/358408563
+    DAWN_SUPPRESS_TEST_IF(IsLinux() && IsNvidia() && IsVulkan() && IsBackendValidationEnabled());
+
     std::vector<std::unique_ptr<ExternalTexture>> testTextures(10);
     for (auto& testTexture : testTextures) {
         testTexture =

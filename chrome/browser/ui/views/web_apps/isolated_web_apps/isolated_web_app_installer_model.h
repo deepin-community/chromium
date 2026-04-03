@@ -7,13 +7,14 @@
 
 #include <optional>
 #include <string>
+#include <variant>
 
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
 #include "base/observer_list.h"
 #include "base/version.h"
 #include "chrome/browser/web_applications/isolated_web_apps/signed_web_bundle_metadata.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
+#include "components/webapps/isolated_web_apps/types/source.h"
 
 namespace web_app {
 
@@ -49,19 +50,23 @@ class IsolatedWebAppInstallerModel {
     base::RepeatingClosure learn_more_callback;
   };
   struct InstallationFailedDialog {};
+  struct BundleNotAllowlistedForUserInstallationDialog {
+    std::u16string bundle_name;
+  };
 
-  using Dialog = absl::variant<BundleInvalidDialog,
-                               BundleAlreadyInstalledDialog,
-                               ConfirmInstallationDialog,
-                               InstallationFailedDialog>;
+  using Dialog = std::variant<BundleInvalidDialog,
+                              BundleAlreadyInstalledDialog,
+                              ConfirmInstallationDialog,
+                              InstallationFailedDialog,
+                              BundleNotAllowlistedForUserInstallationDialog>;
 
-  explicit IsolatedWebAppInstallerModel(const base::FilePath& bundle_path);
+  explicit IsolatedWebAppInstallerModel(const IwaSourceBundleWithMode& source);
   ~IsolatedWebAppInstallerModel();
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
-  const base::FilePath& bundle_path() { return bundle_path_; }
+  const IwaSourceBundleWithMode& source() { return source_; }
 
   void SetStep(Step step);
   Step step() { return step_; }
@@ -76,7 +81,7 @@ class IsolatedWebAppInstallerModel {
 
  private:
   base::ObserverList<Observer> observers_;
-  base::FilePath bundle_path_;
+  IwaSourceBundleWithMode source_;
   Step step_;
   std::optional<SignedWebBundleMetadata> bundle_metadata_;
   std::optional<Dialog> dialog_;

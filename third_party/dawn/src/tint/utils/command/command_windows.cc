@@ -27,6 +27,11 @@
 
 // GEN_BUILD:CONDITION(tint_build_is_win)
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/439062058): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "src/tint/utils/command/command.h"
 
 #define WIN32_LEAN_AND_MEAN 1
@@ -35,6 +40,7 @@
 #include <string>
 
 #include "src/tint/utils/macros/defer.h"
+#include "src/tint/utils/system/executable_path.h"
 #include "src/tint/utils/text/string_stream.h"
 
 namespace tint {
@@ -73,7 +79,7 @@ class Handle {
     operator HANDLE() { return handle_; }
 
     /// @returns true if the handle is not invalid
-    operator bool() { return handle_ != nullptr; }
+    explicit operator bool() { return handle_ != nullptr; }
 
   private:
     Handle(const Handle&) = delete;
@@ -106,7 +112,7 @@ class Pipe {
     }
 
     /// @returns true if the pipe has an open read or write file
-    operator bool() { return read || write; }
+    explicit operator bool() { return read || write; }
 
     /// The reader end of the pipe
     Handle read;
@@ -129,6 +135,7 @@ bool ExecutableExists(const std::string& path) {
     }
 
     void* addr_header = MapViewOfFileEx(map, FILE_MAP_READ, 0, 0, 0, nullptr);
+    TINT_DEFER(UnmapViewOfFile(addr_header));
 
     // Dynamically obtain the address of, and call ImageNtHeader. This is done to avoid tint.exe
     // needing to statically link Dbghelp.lib.
@@ -145,13 +152,36 @@ bool ExecutableExists(const std::string& path) {
     return false;
 }
 
+std::string GetCWD() {
+    char cwd[MAX_PATH] = "";
+    GetCurrentDirectoryA(sizeof(cwd), cwd);
+    return cwd;
+}
+
 std::string FindExecutable(const std::string& name) {
+    auto in_cwd = GetCWD() + "/" + name;
+    if (ExecutableExists(in_cwd)) {
+        return in_cwd;
+    }
+    if (ExecutableExists(in_cwd + ".exe")) {
+        return in_cwd + ".exe";
+    }
+
+    auto in_exe_path = tint::ExecutableDirectory() + "/" + name;
+    if (ExecutableExists(in_exe_path)) {
+        return in_exe_path;
+    }
+    if (ExecutableExists(in_exe_path + ".exe")) {
+        return in_exe_path + ".exe";
+    }
+
     if (ExecutableExists(name)) {
         return name;
     }
     if (ExecutableExists(name + ".exe")) {
         return name + ".exe";
     }
+
     if (name.find("/") == std::string::npos && name.find("\\") == std::string::npos) {
         char* path_env = nullptr;
         size_t path_env_len = 0;

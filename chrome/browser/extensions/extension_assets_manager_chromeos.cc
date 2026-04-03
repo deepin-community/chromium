@@ -100,7 +100,7 @@ class ExtensionAssetsManagerHelper {
                          PendingInstallList* pending_installs) {
     InstallQueue::iterator it = install_queue_.find(
         InstallQueue::key_type(id, version));
-    DCHECK(it != install_queue_.end());
+    CHECK(it != install_queue_.end());
     pending_installs->swap(it->second);
     install_queue_.erase(it);
   }
@@ -139,11 +139,6 @@ ExtensionAssetsManagerChromeOS::~ExtensionAssetsManagerChromeOS() {
 }
 
 // static
-ExtensionAssetsManagerChromeOS* ExtensionAssetsManagerChromeOS::GetInstance() {
-  return base::Singleton<ExtensionAssetsManagerChromeOS>::get();
-}
-
-// static
 void ExtensionAssetsManagerChromeOS::RegisterPrefs(
     PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(kSharedExtensions);
@@ -153,7 +148,7 @@ void ExtensionAssetsManagerChromeOS::InstallExtension(
     const Extension* extension,
     const base::FilePath& unpacked_extension_root,
     const base::FilePath& local_install_dir,
-    Profile* profile,
+    content::BrowserContext* browser_context,
     InstallExtensionCallback callback,
     bool updates_from_webstore_or_empty_update_url) {
   if (!CanShareAssets(extension, unpacked_extension_root,
@@ -164,6 +159,7 @@ void ExtensionAssetsManagerChromeOS::InstallExtension(
     return;
   }
 
+  Profile* profile = Profile::FromBrowserContext(browser_context);
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(&ExtensionAssetsManagerChromeOS::CheckSharedExtension,
@@ -220,7 +216,7 @@ bool ExtensionAssetsManagerChromeOS::CleanUpSharedExtensions(
     return false;
 
   ScopedDictPrefUpdate shared_extensions(local_state, kSharedExtensions);
-  base::Value::Dict& shared_extension_dict = shared_extensions.Get();
+  base::DictValue& shared_extension_dict = shared_extensions.Get();
 
   std::vector<std::string> extensions;
   extensions.reserve(shared_extension_dict.size());
@@ -228,10 +224,9 @@ bool ExtensionAssetsManagerChromeOS::CleanUpSharedExtensions(
     extensions.push_back(it.first);
 
   for (const std::string& id : extensions) {
-    base::Value::Dict* extension_info = shared_extension_dict.FindDict(id);
+    base::DictValue* extension_info = shared_extension_dict.FindDict(id);
     if (!extension_info) {
       NOTREACHED();
-      return false;
     }
     if (!CleanUpExtension(id, *extension_info, live_extension_paths)) {
       return false;
@@ -260,9 +255,9 @@ bool ExtensionAssetsManagerChromeOS::CanShareAssets(
     return false;
   }
 
-  // TODO(crbug.com/1166539): Investigate why do we allow sharing assets in case
-  // of empty update URL and if the empty update URL is not required, update
-  // this to consider only the updates from webstore.
+  // TODO(crbug.com/40742161): Investigate why do we allow sharing assets in
+  // case of empty update URL and if the empty update URL is not required,
+  // update this to consider only the updates from webstore.
   if (!updates_from_webstore_or_empty_update_url)
     return false;
 
@@ -286,7 +281,6 @@ void ExtensionAssetsManagerChromeOS::CheckSharedExtension(
   user_manager::UserManager* user_manager = user_manager::UserManager::Get();
   if (!user_manager) {
     NOTREACHED();
-    return;
   }
 
   if (user_manager->IsUserNonCryptohomeDataEphemeral(
@@ -305,9 +299,9 @@ void ExtensionAssetsManagerChromeOS::CheckSharedExtension(
   PrefService* local_state = g_browser_process->local_state();
   ScopedDictPrefUpdate shared_extensions(local_state, kSharedExtensions);
   std::string* shared_path = nullptr;
-  base::Value::List* users = nullptr;
-  if (base::Value::Dict* extension_info = shared_extensions->FindDict(id)) {
-    if (base::Value::Dict* version_info = extension_info->FindDict(version)) {
+  base::ListValue* users = nullptr;
+  if (base::DictValue* extension_info = shared_extensions->FindDict(id)) {
+    if (base::DictValue* version_info = extension_info->FindDict(version)) {
       shared_path = version_info->FindString(kSharedExtensionPath);
       users = version_info->FindList(kSharedExtensionUsers);
     }
@@ -392,13 +386,13 @@ void ExtensionAssetsManagerChromeOS::InstallSharedExtensionDone(
 
   PrefService* local_state = g_browser_process->local_state();
   ScopedDictPrefUpdate shared_extensions(local_state, kSharedExtensions);
-  base::Value::Dict* extension_info_weak = shared_extensions->EnsureDict(id);
+  base::DictValue* extension_info_weak = shared_extensions->EnsureDict(id);
 
   CHECK(!shared_extensions->Find(version));
-  base::Value::Dict version_info;
+  base::DictValue version_info;
   version_info.Set(kSharedExtensionPath, shared_version_dir.value());
 
-  base::Value::List users;
+  base::ListValue users;
   for (size_t i = 0; i < pending_installs.size(); i++) {
     ExtensionAssetsManagerHelper::PendingInstallInfo& info =
         pending_installs[i];
@@ -431,11 +425,10 @@ void ExtensionAssetsManagerChromeOS::MarkSharedExtensionUnused(
 
   PrefService* local_state = g_browser_process->local_state();
   ScopedDictPrefUpdate shared_extensions(local_state, kSharedExtensions);
-  base::Value::Dict& shared_extensions_dict = shared_extensions.Get();
-  base::Value::Dict* extension_info = shared_extensions_dict.FindDict(id);
+  base::DictValue& shared_extensions_dict = shared_extensions.Get();
+  base::DictValue* extension_info = shared_extensions_dict.FindDict(id);
   if (!extension_info) {
     NOTREACHED();
-    return;
   }
 
   std::vector<std::string> versions;
@@ -447,21 +440,18 @@ void ExtensionAssetsManagerChromeOS::MarkSharedExtensionUnused(
   base::Value user_name(profile_user_name);
   for (std::vector<std::string>::const_iterator it = versions.begin();
        it != versions.end(); it++) {
-    base::Value::Dict* version_info = extension_info->FindDict(*it);
+    base::DictValue* version_info = extension_info->FindDict(*it);
     if (!version_info) {
       NOTREACHED();
-      continue;
     }
-    base::Value::List* users = version_info->FindList(kSharedExtensionUsers);
+    base::ListValue* users = version_info->FindList(kSharedExtensionUsers);
     if (!users) {
       NOTREACHED();
-      continue;
     }
     if (users->EraseValue(user_name) && users->empty()) {
       std::string* shared_path = version_info->FindString(kSharedExtensionPath);
       if (!shared_path) {
         NOTREACHED();
-        continue;
       }
       GetExtensionFileTaskRunner()->PostTask(
           FROM_HERE,
@@ -488,12 +478,11 @@ void ExtensionAssetsManagerChromeOS::DeleteSharedVersion(
 // static
 bool ExtensionAssetsManagerChromeOS::CleanUpExtension(
     const std::string& id,
-    base::Value::Dict& extension_info,
+    base::DictValue& extension_info,
     std::multimap<std::string, base::FilePath>* live_extension_paths) {
   user_manager::UserManager* user_manager = user_manager::UserManager::Get();
   if (!user_manager) {
     NOTREACHED();
-    return false;
   }
 
   std::vector<std::string> versions;
@@ -504,25 +493,21 @@ bool ExtensionAssetsManagerChromeOS::CleanUpExtension(
 
   for (std::vector<std::string>::const_iterator it = versions.begin();
        it != versions.end(); it++) {
-    base::Value::Dict* version_info = extension_info.FindDict(*it);
+    base::DictValue* version_info = extension_info.FindDict(*it);
     if (!version_info) {
       NOTREACHED();
-      return false;
     }
-    base::Value::List* users_list =
-        version_info->FindList(kSharedExtensionUsers);
+    base::ListValue* users_list = version_info->FindList(kSharedExtensionUsers);
     const std::string* shared_path =
         version_info->FindString(kSharedExtensionPath);
     if (!users_list || !shared_path) {
       NOTREACHED();
-      return false;
     }
 
     for (auto iter = users_list->begin(); iter != users_list->end();) {
       const std::string* user_id = iter->GetIfString();
       if (!user_id) {
         NOTREACHED();
-        return false;
       }
       const user_manager::User* user =
           user_manager->FindUser(AccountId::FromUserEmail(*user_id));

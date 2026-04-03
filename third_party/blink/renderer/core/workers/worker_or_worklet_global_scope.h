@@ -11,11 +11,13 @@
 #include "base/unguessable_token.h"
 #include "services/network/public/mojom/fetch_api.mojom-blink-forward.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-blink-forward.h"
+#include "third_party/blink/public/common/fingerprinting_protection/noise_token.h"
 #include "third_party/blink/public/mojom/loader/code_cache.mojom-forward.h"
 #include "third_party/blink/public/mojom/v8_cache_options.mojom-blink.h"
 #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
 #include "third_party/blink/public/platform/web_content_settings_client.h"
 #include "third_party/blink/public/platform/web_url_request.h"
+#include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -25,8 +27,8 @@
 #include "third_party/blink/renderer/core/loader/back_forward_cache_loader_helper_impl.h"
 #include "third_party/blink/renderer/core/script/modulator.h"
 #include "third_party/blink/renderer/core/workers/worker_clients.h"
-#include "third_party/blink/renderer/core/workers/worker_navigator.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_persistent.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_scheduler.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
 #include "third_party/blink/renderer/platform/scheduler/public/worker_scheduler.h"
@@ -43,6 +45,7 @@ class WorkerResourceTimingNotifier;
 class SubresourceFilter;
 class WebContentSettingsClient;
 class WebWorkerFetchContext;
+class WorkerNavigator;
 class WorkerOrWorkletScriptController;
 class WorkerReportingProxy;
 class WorkerThread;
@@ -51,7 +54,8 @@ class CORE_EXPORT WorkerOrWorkletGlobalScope
     : public EventTarget,
       public ExecutionContext,
       public scheduler::WorkerScheduler::Delegate,
-      public BackForwardCacheLoaderHelperImpl::Delegate {
+      public BackForwardCacheLoaderHelperImpl::Delegate,
+      public ActiveScriptWrappable<WorkerOrWorkletGlobalScope> {
  public:
   WorkerOrWorkletGlobalScope(
       v8::Isolate*,
@@ -92,9 +96,8 @@ class CORE_EXPORT WorkerOrWorkletGlobalScope
       BlockingDetails details) override {}
 
   // BackForwardCacheLoaderHelperImpl::Delegate
-  void EvictFromBackForwardCache(
-      mojom::blink::RendererEvictionReason reason,
-      std::unique_ptr<SourceLocation> source_location) override {}
+  void EvictFromBackForwardCache(mojom::blink::RendererEvictionReason reason,
+                                 SourceLocation* source_location) override {}
   void DidBufferLoadWhileInBackForwardCache(bool update_process_wide_count,
                                             size_t num_bytes) override {}
 
@@ -113,6 +116,9 @@ class CORE_EXPORT WorkerOrWorkletGlobalScope
   // UseCounter
   void CountUse(WebFeature feature) final;
   void CountDeprecation(WebFeature feature) final;
+  void CountWebDXFeature(WebDXFeature feature) final;
+
+  bool HasPendingActivity() const override;
 
   // May return nullptr if this global scope is not threaded (i.e.,
   // WorkletGlobalScope for the main thread) or after Dispose() is called.
@@ -120,14 +126,6 @@ class CORE_EXPORT WorkerOrWorkletGlobalScope
 
   // Returns nullptr if this global scope is a WorkletGlobalScope
   virtual WorkerNavigator* navigator() const { return nullptr; }
-
-  // Returns true when we should reject a response without
-  // cross-origin-embedder-policy: require-corp.
-  // TODO(crbug.com/1064920): Remove this once PlzDedicatedWorker ships.
-  virtual RejectCoepUnsafeNone ShouldRejectCoepUnsafeNoneTopModuleScript()
-      const {
-    return RejectCoepUnsafeNone(false);
-  }
 
   // Returns the resource fetcher for subresources (a.k.a. inside settings
   // resource fetcher). See core/workers/README.md for details.
@@ -177,10 +175,6 @@ class CORE_EXPORT WorkerOrWorkletGlobalScope
   void SetDefersLoadingForResourceFetchers(LoaderFreezeMode);
 
   virtual int GetOutstandingThrottledLimit() const;
-
-  // TODO(crbug.com/1146824): Remove this once PlzDedicatedWorker and
-  // PlzServiceWorker ship.
-  virtual bool IsInitialized() const = 0;
 
   // TODO(crbug/964467): Currently all workers fetch cached code but only
   // services workers use them. Dedicated / Shared workers don't use the cached
@@ -232,11 +226,6 @@ class CORE_EXPORT WorkerOrWorkletGlobalScope
   const Vector<network::mojom::blink::ContentSecurityPolicyPtr>&
   OutsideContentSecurityPolicies() const {
     return outside_content_security_policies_;
-  }
-
-  void SetIsOfflineMode(bool is_offline_mode) {
-    DCHECK(web_worker_fetch_context_);
-    web_worker_fetch_context_->SetIsOfflineMode(is_offline_mode);
   }
 
   WebWorkerFetchContext* web_worker_fetch_context() const {
@@ -301,8 +290,10 @@ class CORE_EXPORT WorkerOrWorkletGlobalScope
   WorkerReportingProxy& reporting_proxy_;
 
   // This is the set of features that this worker has used.
-  std::bitset<static_cast<size_t>(WebFeature::kNumberOfFeatures)>
-      used_features_;
+  std::bitset<static_cast<size_t>(WebFeature::kMaxValue) + 1> used_features_;
+  // This is the set of WebDXFeatures that this worker has used.
+  std::bitset<static_cast<size_t>(WebDXFeature::kMaxValue) + 1>
+      used_webdx_features_;
 
   // This tracks deprecation features that have been used.
   Deprecation deprecation_;

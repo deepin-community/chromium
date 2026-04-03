@@ -32,7 +32,7 @@ constexpr char kRemovingDeskGuidKey[] = "removing_desk_guid";
 RestoreData::RestoreData() = default;
 
 RestoreData::RestoreData(base::Value restore_data_value) {
-  base::Value::Dict* dict = restore_data_value.GetIfDict();
+  base::DictValue* dict = restore_data_value.GetIfDict();
   if (!dict) {
     DVLOG(0) << "Fail to parse full restore data. "
              << "Cannot find the full restore data dict.";
@@ -48,7 +48,7 @@ RestoreData::RestoreData(base::Value restore_data_value) {
   for (auto iter : *dict) {
     // `key` can be an app ID or `kRemovingDeskGuidKey`.
     const std::string& key = iter.first;
-    base::Value::Dict* value = iter.second.GetIfDict();
+    base::DictValue* value = iter.second.GetIfDict();
 
     // Skip the removing desk GUID because we already covered this before the
     // loop.
@@ -72,7 +72,7 @@ RestoreData::RestoreData(base::Value restore_data_value) {
         continue;
       }
 
-      base::Value::Dict* app_restore_data_dict = data_iter.second.GetIfDict();
+      base::DictValue* app_restore_data_dict = data_iter.second.GetIfDict();
       if (!app_restore_data_dict) {
         DVLOG(0) << "Fail to parse app restore data. "
                  << "Cannot find the app restore data dict.";
@@ -110,13 +110,13 @@ std::unique_ptr<RestoreData> RestoreData::Clone() const {
 }
 
 base::Value RestoreData::ConvertToValue() const {
-  base::Value::Dict restore_data_dict;
+  base::DictValue restore_data_dict;
   for (const auto& [app_id, launch_list] : app_id_to_launch_list_) {
     if (launch_list.empty()) {
       continue;
     }
 
-    base::Value::Dict info_dict;
+    base::DictValue info_dict;
     for (const auto& [window_id, app_restore_data] : launch_list) {
       info_dict.Set(base::NumberToString(window_id),
                     app_restore_data->ConvertToValue());
@@ -138,7 +138,7 @@ bool RestoreData::HasAppTypeBrowser() const {
   if (it == app_id_to_launch_list_.end())
     return false;
 
-  return base::ranges::any_of(
+  return std::ranges::any_of(
       it->second,
       [](const std::pair<const int, std::unique_ptr<AppRestoreData>>& data) {
         return data.second->browser_extra_info.app_type_browser.value_or(false);
@@ -150,7 +150,7 @@ bool RestoreData::HasBrowser() const {
   if (it == app_id_to_launch_list_.end())
     return false;
 
-  return base::ranges::any_of(
+  return std::ranges::any_of(
       it->second,
       [](const std::pair<const int, std::unique_ptr<AppRestoreData>>& data) {
         return !data.second->browser_extra_info.app_type_browser.value_or(
@@ -276,7 +276,7 @@ int32_t RestoreData::FetchRestoreWindowId(const std::string& app_id) {
 
   // Move to the next window_id.
   auto data_it = it->second.find(window_id);
-  DCHECK(data_it != it->second.end());
+  CHECK(data_it != it->second.end());
   ++data_it;
   if (data_it == it->second.end())
     chrome_app_id_to_current_window_id_.erase(app_id);
@@ -329,17 +329,6 @@ RestoreData::MakeWindowIdsUniqueForDeskTemplate() {
 
   has_unique_window_ids_for_desk_template_ = true;
   return mapping;
-}
-
-void RestoreData::UpdateBrowserAppIdToLacros() {
-  auto app_launch_list_iter =
-      app_id_to_launch_list_.find(app_constants::kChromeAppId);
-  if (app_launch_list_iter == app_id_to_launch_list_.end()) {
-    return;
-  }
-  app_id_to_launch_list_[app_constants::kLacrosAppId] =
-      std::move(app_launch_list_iter->second);
-  RemoveApp(app_constants::kChromeAppId);
 }
 
 std::string RestoreData::ToString() const {

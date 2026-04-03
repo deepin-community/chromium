@@ -13,6 +13,7 @@
 #include "services/network/public/cpp/content_security_policy/content_security_policy.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "url/url_canon.h"
+#include "url/url_features.h"
 #include "url/url_util.h"
 
 namespace network {
@@ -27,11 +28,12 @@ bool DecodePath(std::string_view path, std::string* output) {
   url::RawCanonOutputT<char16_t> unescaped;
   url::DecodeURLEscapeSequences(path, url::DecodeURLMode::kUTF8OrIsomorphic,
                                 &unescaped);
-  return base::UTF16ToUTF8(unescaped.data(), unescaped.length(), output);
+  std::u16string_view view = unescaped.view();
+  return base::UTF16ToUTF8(view.data(), view.length(), output);
 }
 
 int DefaultPortForScheme(const std::string& scheme) {
-  return url::DefaultPortForScheme(scheme.data(), scheme.size());
+  return url::DefaultPortForScheme(scheme);
 }
 
 // NotMatching is the only negative member, the rest are different types of
@@ -67,7 +69,7 @@ SchemeMatchingResult SourceAllowScheme(const mojom::CSPSource& source,
   const std::string& allowed_scheme =
       source.scheme.empty() ? self_source.scheme : source.scheme;
 
-  return MatchScheme(allowed_scheme, url.scheme());
+  return MatchScheme(allowed_scheme, url.GetScheme());
 }
 
 bool SourceAllowHost(const mojom::CSPSource& source, const std::string& host) {
@@ -78,15 +80,24 @@ bool SourceAllowHost(const mojom::CSPSource& source, const std::string& host) {
     // The renderer version of this function counts how many times it happens.
     // It might be useful to do it outside of blink too.
     // See third_party/blink/renderer/core/frame/csp/csp_source.cc
-    return base::EndsWith(host, '.' + source.host,
-                          base::CompareCase::INSENSITIVE_ASCII);
+    return base::EndsWith(host, '.' + source.host);
   } else {
-    return base::EqualsCaseInsensitiveASCII(host, source.host);
+    return host == source.host;
   }
 }
 
 bool SourceAllowHost(const mojom::CSPSource& source, const GURL& url) {
-  return SourceAllowHost(source, url.host());
+  // Chromium currently has an issue handling non-special URLs. The url.host()
+  // function returns an empty string for them. See
+  // crbug.com/40063064 for details.
+  //
+  // In the future, once non-special URLs are fully supported, we might consider
+  // checking the host information for them too.
+  //
+  // For now, we check `url.IsStandard()` to maintain consistent behavior
+  // regardless of the url::StandardCompliantNonSpecialSchemeURLParsing feature
+  // state.
+  return SourceAllowHost(source, url.IsStandard() ? url.GetHost() : "");
 }
 
 PortMatchingResult SourceAllowPort(const mojom::CSPSource& source,
@@ -126,7 +137,7 @@ PortMatchingResult SourceAllowPort(const mojom::CSPSource& source,
 
 PortMatchingResult SourceAllowPort(const mojom::CSPSource& source,
                                    const GURL& url) {
-  return SourceAllowPort(source, url.EffectiveIntPort(), url.scheme());
+  return SourceAllowPort(source, url.EffectiveIntPort(), url.GetScheme());
 }
 
 bool SourceAllowPath(const mojom::CSPSource& source, const std::string& path) {
@@ -156,7 +167,7 @@ bool SourceAllowPath(const mojom::CSPSource& source,
   if (has_followed_redirect)
     return true;
 
-  return SourceAllowPath(source, url.path());
+  return SourceAllowPath(source, url.GetPath());
 }
 
 bool requiresUpgrade(PortMatchingResult result) {
@@ -191,10 +202,10 @@ bool CheckCSPSource(const mojom::CSPSource& source,
                     bool has_followed_redirect,
                     bool is_opaque_fenced_frame) {
   // Opaque fenced frames only allow https urls.
-  // TODO(crbug.com/1243568): Update the DCHECK and the return condition below
+  // TODO(crbug.com/40195488): Update the DCHECK and the return condition below
   // if opaque fenced frames can map to non-https potentially trustworthy urls.
   if (is_opaque_fenced_frame)
-    DCHECK_EQ(url.scheme(), url::kHttpsScheme);
+    DCHECK_EQ(url.GetScheme(), url::kHttpsScheme);
 
   if (CSPSourceIsSchemeOnly(source)) {
     // Opaque fenced frames only match 'https:' scheme source. Returns true for

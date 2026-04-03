@@ -30,12 +30,8 @@
 
 #include <string>
 
+#include "src/tint/lang/core/interpolation.h"
 #include "src/tint/lang/wgsl/ast/attribute.h"
-
-// Forward declarations
-namespace tint::ast {
-class Expression;
-}
 
 namespace tint::ast {
 
@@ -43,32 +39,17 @@ namespace tint::ast {
 class InterpolateAttribute final : public Castable<InterpolateAttribute, Attribute> {
   public:
     /// Create an interpolate attribute.
-    /// @param pid the identifier of the program that owns this node
     /// @param nid the unique node identifier
     /// @param src the source of this node
-    /// @param type the interpolation type
-    /// @param sampling the interpolation sampling
-    InterpolateAttribute(GenerationID pid,
-                         NodeID nid,
-                         const Source& src,
-                         const Expression* type,
-                         const Expression* sampling);
+    /// @param interpolation the interpolate attribute values
+    InterpolateAttribute(NodeID nid, const Source& src, core::Interpolation interpolation);
     ~InterpolateAttribute() override;
 
     /// @returns the WGSL name for the attribute
     std::string Name() const override;
 
-    /// Clones this node and all transitive child nodes using the `CloneContext`
-    /// `ctx`.
-    /// @param ctx the clone context
-    /// @return the newly cloned node
-    const InterpolateAttribute* Clone(CloneContext& ctx) const override;
-
-    /// The interpolation type
-    const Expression* const type;
-
-    /// The interpolation sampling
-    const Expression* const sampling;
+    /// The interpolation attribute values
+    const core::Interpolation interpolation;
 };
 
 }  // namespace tint::ast

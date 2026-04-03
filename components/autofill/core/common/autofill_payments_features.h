@@ -5,72 +5,139 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_COMMON_AUTOFILL_PAYMENTS_FEATURES_H_
 #define COMPONENTS_AUTOFILL_CORE_COMMON_AUTOFILL_PAYMENTS_FEATURES_H_
 
+#include "base/component_export.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "build/build_config.h"
 
-namespace autofill {
-namespace features {
+namespace autofill::features {
 
 // All features in alphabetical order.
-BASE_DECLARE_FEATURE(kAutofillEnableAndroidNKeyForFidoAuthentication);
-BASE_DECLARE_FEATURE(kAutofillEnableCardArtImage);
-BASE_DECLARE_FEATURE(kAutofillEnableCardArtServerSideStretching);
-BASE_DECLARE_FEATURE(kAutofillEnableCardBenefits);
-BASE_DECLARE_FEATURE(kAutofillEnableCardProductName);
-BASE_DECLARE_FEATURE(kAutofillEnableCvcStorageAndFilling);
-BASE_DECLARE_FEATURE(kAutofillEnableFIDOProgressDialog);
-BASE_DECLARE_FEATURE(kAutofillEnableFpanRiskBasedAuthentication);
 
-#if BUILDFLAG(IS_ANDROID)
-BASE_DECLARE_FEATURE(kAutofillEnableIbanAndroidBottomSheet);
-#endif
-
-BASE_DECLARE_FEATURE(kAutofillEnableManualFallbackForVirtualCards);
-BASE_DECLARE_FEATURE(kAutofillEnableMerchantDomainInUnmaskCardRequest);
-BASE_DECLARE_FEATURE(kAutofillEnableMovingGPayLogoToTheRightOnDesktop);
-BASE_DECLARE_FEATURE(kAutofillEnableMovingGPayLogoToTheRightOnClank);
-BASE_DECLARE_FEATURE(kAutofillEnableNewCardArtAndNetworkImages);
-BASE_DECLARE_FEATURE(kAutofillEnableNewSaveCardBubbleUi);
-BASE_DECLARE_FEATURE(kAutofillEnableOffersInClankKeyboardAccessory);
-
-#if BUILDFLAG(IS_ANDROID)
-BASE_DECLARE_FEATURE(kAutofillEnablePaymentsAndroidBottomSheet);
-BASE_DECLARE_FEATURE(kAutofillEnablePaymentsAndroidBottomSheetAccountEmail);
-#endif
-
-BASE_DECLARE_FEATURE(kAutofillEnablePaymentsMandatoryReauth);
-BASE_DECLARE_FEATURE(kAutofillEnableRemadeDownstreamMetrics);
-BASE_DECLARE_FEATURE(kAutofillEnableSaveCardLoadingAndConfirmation);
-BASE_DECLARE_FEATURE(kAutofillEnableSaveCardLocalSaveFallback);
-BASE_DECLARE_FEATURE(kAutofillEnableServerIban);
-BASE_DECLARE_FEATURE(kAutofillEnableStickyManualFallbackForCards);
-
-#if BUILDFLAG(IS_ANDROID)
-BASE_DECLARE_FEATURE(kAutofillEnableSyncingOfPixBankAccounts);
-#endif
-
-BASE_DECLARE_FEATURE(kAutofillEnableUpdateVirtualCardEnrollment);
-BASE_DECLARE_FEATURE(kAutofillEnableUserAvatarInSaveCardFooter);
-BASE_DECLARE_FEATURE(kAutofillEnableVcn3dsAuthentication);
-BASE_DECLARE_FEATURE(kAutofillEnableVcnEnrollLoadingAndConfirmation);
-BASE_DECLARE_FEATURE(kAutofillEnableVirtualCardEnrollMetricsLogger);
-BASE_DECLARE_FEATURE(kAutofillEnableVirtualCardMetadata);
-BASE_DECLARE_FEATURE(kAutofillParseVcnCardOnFileStandaloneCvcFields);
-BASE_DECLARE_FEATURE(kAutofillSuggestServerCardInsteadOfLocalCard);
-BASE_DECLARE_FEATURE(kAutofillUpdateChromeSettingsLinkToGPayWeb);
-BASE_DECLARE_FEATURE(kAutofillUpstream);
-
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillAiBasedAmountExtractionIgnoreSeenTermsForTesting);
 #if BUILDFLAG(IS_IOS)
-BASE_DECLARE_FEATURE(kAutofillUseTwoDotsForLastFourDigits);
-BASE_DECLARE_FEATURE(kAutofillEnableVirtualCards);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillCreditCardScannerIos);
 #endif
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillDisableBnplCountryCheckForTesting);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableAiBasedAmountExtraction);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableAmountExtraction);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableAmountExtractionTesting);
+#if BUILDFLAG(IS_IOS)
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableBottomSheetScanCardAndFill);
+#endif
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableBuyNowPayLater);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableBuyNowPayLaterForExternallyLinked);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableBuyNowPayLaterForKlarna);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableBuyNowPayLaterSyncing);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(
+    kAutofillEnableBuyNowPayLaterUpdatedSuggestionSecondLineString);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableCardBenefitsForAmericanExpress);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableCardBenefitsForBmo);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableCardBenefitsSync);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableCardInfoRuntimeRetrieval);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableCvcStorageAndFilling);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableCvcStorageAndFillingEnhancement);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(
+    kAutofillEnableCvcStorageAndFillingStandaloneFormEnhancement);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableDownstreamCardAwarenessIph);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableFlatRateCardBenefitsBlocklist);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableFlatRateCardBenefitsFromCurinos);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableFpanRiskBasedAuthentication);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableNewCardBenefitsToggleText);
+#if BUILDFLAG(IS_ANDROID)
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableNewFopDisplayAndroid);
+#endif
+
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableOffersInClankKeyboardAccessory);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnablePayNowPayLaterTabs);
+
+#if BUILDFLAG(IS_CHROMEOS)
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnablePaymentsMandatoryReauthChromeOs);
+#endif
+
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnablePrefetchingRiskDataForRetrieval);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableSaveAndFill);
+#if BUILDFLAG(IS_ANDROID)
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableSeparatePixPreferenceItem);
+#endif
+#if BUILDFLAG(IS_ANDROID)
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableTouchToFillReshowForBnpl);
+#endif
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableVcn3dsAuthentication);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableVirtualCardJavaPaymentsDataManager);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillEnableWalletBranding);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillParseVcnCardOnFileStandaloneCvcFields);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillPreferBuyNowPayLaterBlocklists);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillPrioritizeSaveCardOverMandatoryReauth);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillRetryImageFetchOnFailure);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillSharedStorageServerCardData);
+#if BUILDFLAG(IS_IOS)
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillShowManualFillForVirtualCards);
+#endif
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillSkipSaveCardForTabModalPopup);
+#if BUILDFLAG(IS_ANDROID)
+COMPONENT_EXPORT(AUTOFILL) BASE_DECLARE_FEATURE(kAutofillSyncEwalletAccounts);
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillTouchToFillShowManualFillForVcnFix);
+#endif
+
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillUnmaskCardRequestTimeout);
+
+COMPONENT_EXPORT(AUTOFILL) BASE_DECLARE_FEATURE(kAutofillUpstream);
+
+COMPONENT_EXPORT(AUTOFILL)
+BASE_DECLARE_FEATURE(kAutofillVcnEnrollStrikeExpiryTime);
+COMPONENT_EXPORT(AUTOFILL)
+extern const base::FeatureParam<int> kAutofillVcnEnrollStrikeExpiryTimeDays;
 
 // Return whether a [No thanks] button and new messaging is shown in the save
 // card bubbles. This will be called only on desktop platforms.
+COMPONENT_EXPORT(AUTOFILL)
 bool ShouldShowImprovedUserConsentForCreditCardSave();
 
-}  // namespace features
-}  // namespace autofill
+}  // namespace autofill::features
 
 #endif  // COMPONENTS_AUTOFILL_CORE_COMMON_AUTOFILL_PAYMENTS_FEATURES_H_

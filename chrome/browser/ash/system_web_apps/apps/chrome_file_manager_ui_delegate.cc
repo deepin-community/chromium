@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/system_web_apps/apps/chrome_file_manager_ui_delegate.h"
 
+#include "base/check_deref.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
@@ -30,11 +31,12 @@ ChromeFileManagerUIDelegate::ChromeFileManagerUIDelegate(content::WebUI* web_ui)
 
 ChromeFileManagerUIDelegate::~ChromeFileManagerUIDelegate() = default;
 
-base::Value::Dict ChromeFileManagerUIDelegate::GetLoadTimeData() const {
-  base::Value::Dict dict = GetFileManagerStrings();
-
-  const std::string locale = g_browser_process->GetApplicationLocale();
-  AddFileManagerFeatureStrings(locale, Profile::FromWebUI(web_ui_), &dict);
+base::DictValue ChromeFileManagerUIDelegate::GetLoadTimeData() const {
+  const std::string& locale = g_browser_process->GetApplicationLocale();
+  base::DictValue dict = GetFileManagerStrings(locale);
+  AddFileManagerFeatureStrings(
+      locale, locale, CHECK_DEREF(g_browser_process->variations_service()),
+      Profile::FromWebUI(web_ui_), &dict);
   return dict;
 }
 

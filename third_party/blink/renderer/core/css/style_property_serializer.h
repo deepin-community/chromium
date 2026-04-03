@@ -25,15 +25,19 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_STYLE_PROPERTY_SERIALIZER_H_
 
 #include <bitset>
+
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/css/css_value_list.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
 
 class CSSPropertyName;
 class CSSPropertyValueSet;
 class StylePropertyShorthand;
+
+enum class CSSGapDecorationPropertyDirection : int;
 
 class CORE_EXPORT StylePropertySerializer {
   STACK_ALLOCATED();
@@ -51,12 +55,32 @@ class CORE_EXPORT StylePropertySerializer {
                              const StylePropertyShorthand&) const;
   String BorderImagePropertyValue() const;
   String BorderRadiusValue() const;
+  String CornerShapeValue() const;
+  String CornersValue() const;
   String GetLayeredShorthandValue(const StylePropertyShorthand&) const;
   String Get2Values(const StylePropertyShorthand&) const;
   String Get4Values(const StylePropertyShorthand&) const;
   String PageBreakPropertyValue(const StylePropertyShorthand&) const;
   String GetShorthandValue(const StylePropertyShorthand&,
                            String separator = " ") const;
+  String GetShorthandValueForRule(const StylePropertyShorthand&,
+                                  const StylePropertyShorthand&) const;
+  String GetShorthandValueForBidirectionalGapRuleInset(
+      const StylePropertyShorthand&) const;
+  String GetShorthandValueForBidirectionalGapRuleEdgeInteriorInset(
+      const StylePropertyShorthand&) const;
+  String GetShorthandValueForBidirectionalGapRules(
+      const StylePropertyShorthand&) const;
+  String GetShorthandValueForGapDecorationsRule(
+      const StylePropertyShorthand&,
+      CSSGapDecorationPropertyDirection direction) const;
+  String GetShorthandValueForGapDecorationsRuleInset(
+      const StylePropertyShorthand&,
+      CSSGapDecorationPropertyDirection direction) const;
+  String GetShorthandValueForGapDecorationsRuleEdgeInteriorInset(
+      const StylePropertyShorthand&,
+      CSSGapDecorationPropertyDirection direction,
+      bool is_edge) const;
   String GetShorthandValueForColumnRule(const StylePropertyShorthand&) const;
   String GetShorthandValueForColumns(const StylePropertyShorthand&) const;
   // foo || bar || ... || baz
@@ -67,26 +91,28 @@ class CORE_EXPORT StylePropertySerializer {
   String GetShorthandValueForGridArea(const StylePropertyShorthand&) const;
   String GetShorthandValueForGridLine(const StylePropertyShorthand&) const;
   String GetShorthandValueForGridTemplate(const StylePropertyShorthand&) const;
+  String GetShorthandValueForGridLanes(const StylePropertyShorthand&) const;
   String ContainerValue() const;
   String TimelineValue(const StylePropertyShorthand&) const;
   String ScrollTimelineValue() const;
   String ViewTimelineValue() const;
-  String AlternativeViewTimelineWithInsetValue() const;
-  String AnimationDelayShorthandValue() const;
   String AnimationRangeShorthandValue() const;
+  String TimelineTriggerActivationRangeShorthandValue() const;
+  String TimelineTriggerExitRangeShorthandValue() const;
   String FontValue() const;
   String FontSynthesisValue() const;
   String FontVariantValue() const;
   bool AppendFontLonghandValueIfNotNormal(const CSSProperty&,
                                           StringBuilder& result) const;
   String OffsetValue() const;
+  String TextBoxValue() const;
   String TextDecorationValue() const;
   String TextSpacingValue() const;
+  String TextWrapValue() const;
   String ContainIntrinsicSizeValue() const;
   String WhiteSpaceValue() const;
-  String ScrollStartValue() const;
-  String ScrollStartTargetValue() const;
-  String PositionTryValue() const;
+  String LineClampValue(bool is_webkit_line_clamp) const;
+  String PositionTryValue(const StylePropertyShorthand&) const;
   String GetPropertyText(const CSSPropertyName&,
                          const String& value,
                          bool is_important,
@@ -110,25 +136,22 @@ class CORE_EXPORT StylePropertySerializer {
     STACK_ALLOCATED();
 
    public:
-    explicit PropertyValueForSerializer(
-        CSSPropertyValueSet::PropertyReference property)
-        : value_(&property.Value()),
+    explicit PropertyValueForSerializer(const CSSPropertyValue& property)
+        : value_(property.Value()),
           name_(property.Name()),
           is_important_(property.IsImportant()) {}
 
-    // TODO(sashab): Make this take a const CSSValue&.
     PropertyValueForSerializer(const CSSPropertyName& name,
-                               const CSSValue* value,
+                               const CSSValue& value,
                                bool is_important)
         : value_(value), name_(name), is_important_(is_important) {}
 
     const CSSPropertyName& Name() const { return name_; }
-    const CSSValue* Value() const { return value_; }
+    const CSSValue& Value() const { return value_; }
     bool IsImportant() const { return is_important_; }
-    bool IsValid() const { return value_; }
 
    private:
-    const CSSValue* value_;
+    const CSSValue& value_;
     CSSPropertyName name_;
     bool is_important_;
   };

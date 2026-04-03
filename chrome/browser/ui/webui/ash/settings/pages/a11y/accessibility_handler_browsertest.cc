@@ -7,9 +7,11 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string_view>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/ash_switches.h"
 #include "base/containers/adapters.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/input_method/mock_input_method_engine.h"
@@ -23,8 +25,10 @@
 #include "components/language/core/browser/pref_names.h"
 #include "components/language/core/common/locale_util.h"
 #include "components/prefs/pref_service.h"
+#include "components/user_manager/test_helper.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_web_ui.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/base/ime/ash/input_method_descriptor.h"
@@ -40,7 +44,8 @@ namespace {
 
 // Use a real domain to avoid policy loading problems.
 constexpr char kTestUserName[] = "owner@gmail.com";
-constexpr char kTestUserGaiaId[] = "9876543210";
+constexpr char kTestUserHash[] = "1234567890-hash";
+constexpr GaiaId::Literal kTestUserGaiaId{"9876543210"};
 
 }  // namespace
 
@@ -63,6 +68,20 @@ class AccessibilityHandlerTest : public InProcessBrowserTest {
   void SetUpCommandLine(base::CommandLine* command_line) override {
     scoped_feature_list_.InitWithFeatures(
         {features::kOnDeviceSpeechRecognition}, {});
+
+    // Use a persisted user.
+    command_line->AppendSwitchASCII(ash::switches::kLoginUser, kTestUserName);
+    command_line->AppendSwitchASCII(ash::switches::kLoginProfile,
+                                    kTestUserHash);
+  }
+
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    InProcessBrowserTest::SetUpLocalStatePrefService(local_state);
+
+    // Register a persisted user.
+    user_manager::TestHelper::RegisterPersistedUser(
+        *local_state,
+        AccountId::FromUserEmailGaiaId(kTestUserName, kTestUserGaiaId));
   }
 
   void SetUpOnMainThread() override {
@@ -111,7 +130,7 @@ class AccessibilityHandlerTest : public InProcessBrowserTest {
   }
 
   bool GetWebUIListenerArgumentListValue(const std::string& expected_listener,
-                                         const base::Value::List*& argument) {
+                                         const base::ListValue*& argument) {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
          base::Reversed(web_ui_.call_data())) {
       std::string listener;
@@ -138,25 +157,6 @@ class AccessibilityHandlerTest : public InProcessBrowserTest {
         prefs::kAccessibilityDictationLocale, locale);
   }
 
-  void CreateSession(const AccountId& account_id) {
-    auto* session_manager = session_manager::SessionManager::Get();
-    session_manager->CreateSession(account_id, account_id.GetUserEmail(),
-                                   false);
-  }
-
-  void StartUserSession(const AccountId& account_id) {
-    profiles::testing::CreateProfileSync(
-        g_browser_process->profile_manager(),
-        BrowserContextHelper::Get()->GetBrowserContextPathByUserIdHash(
-            user_manager::UserManager::Get()
-                ->FindUser(account_id)
-                ->username_hash()));
-
-    auto* session_manager = session_manager::SessionManager::Get();
-    session_manager->NotifyUserProfileLoaded(account_id);
-    session_manager->SessionStarted();
-  }
-
   speech::SodaInstaller* soda_installer() {
     return speech::SodaInstaller::GetInstance();
   }
@@ -166,9 +166,6 @@ class AccessibilityHandlerTest : public InProcessBrowserTest {
   content::TestWebUI* web_ui() { return &web_ui_; }
 
   std::unique_ptr<input_method::MockInputMethodEngine> mock_ime_engine_handler_;
-
-  const AccountId test_account_id_ =
-      AccountId::FromUserEmailGaiaId(kTestUserName, kTestUserGaiaId);
 
  private:
   std::unique_ptr<TestingProfile> profile_;
@@ -253,7 +250,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityHandlerTest, DictationLocalesCalculation) {
     std::string application_locale;
     std::vector<std::string> ime_locales;
     std::string preferred_languages;
-    std::set<base::StringPiece> expected_recommended_prefixes;
+    std::set<std::string_view> expected_recommended_prefixes;
   } kTestCases[] = {
       {"en-US", {}, "", {"en"}},
       {"en", {}, "", {"en"}},
@@ -296,12 +293,12 @@ IN_PROC_BROWSER_TEST_F(AccessibilityHandlerTest, DictationLocalesCalculation) {
 
     MaybeAddDictationLocales();
 
-    const base::Value::List* argument = nullptr;
+    const base::ListValue* argument = nullptr;
     ASSERT_TRUE(
         GetWebUIListenerArgumentListValue("dictation-locales-set", argument));
     for (const base::Value& it : *argument) {
-      const base::Value::Dict& dict = it.GetDict();
-      base::StringPiece language_code =
+      const base::DictValue& dict = it.GetDict();
+      std::string_view language_code =
           language::SplitIntoMainAndTail(*(dict.FindString("value"))).first;
       // Only expect some locales to be recommended based on application and
       // IME languages.
@@ -321,33 +318,32 @@ IN_PROC_BROWSER_TEST_F(AccessibilityHandlerTest,
   speech::SodaInstaller::GetInstance()->NotifySodaInstalledForTesting();
   speech::SodaInstaller::GetInstance()->NotifySodaInstalledForTesting(en_us());
   MaybeAddDictationLocales();
-  const base::Value::List* argument = nullptr;
+  const base::ListValue* argument = nullptr;
   ASSERT_TRUE(
       GetWebUIListenerArgumentListValue("dictation-locales-set", argument));
 
   for (auto& it : *argument) {
-    const base::Value::Dict& dict = it.GetDict();
+    const base::DictValue& dict = it.GetDict();
     const std::string locale = *dict.FindString("value");
     bool works_offline = dict.FindBool("worksOffline").value();
     bool installed = dict.FindBool("installed").value();
     if (locale == speech::kUsEnglishLocale) {
-      ASSERT_TRUE(works_offline);
-      ASSERT_TRUE(installed);
+      EXPECT_TRUE(works_offline);
+      EXPECT_TRUE(installed);
     } else {
-      ASSERT_FALSE(works_offline);
-      ASSERT_FALSE(installed);
+      // Some locales other than en-us can be installed offline, but should not
+      // be.
+      EXPECT_FALSE(installed) << " for locale " << locale;
     }
   }
 }
 
 IN_PROC_BROWSER_TEST_F(AccessibilityHandlerTest, GetStartupSoundEnabled) {
-  CreateSession(test_account_id_);
-  StartUserSession(test_account_id_);
   AccessibilityManager::Get()->SetStartupSoundEnabled(true);
 
   size_t call_data_count_before_call = web_ui()->call_data().size();
 
-  base::Value::List empty_args;
+  base::ListValue empty_args;
   web_ui()->HandleReceivedMessage("getStartupSoundEnabled", empty_args);
 
   ASSERT_EQ(call_data_count_before_call + 1u, web_ui()->call_data().size());

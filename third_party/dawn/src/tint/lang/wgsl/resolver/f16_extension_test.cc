@@ -53,7 +53,7 @@ TEST_F(ResolverF16ExtensionTest, TypeUsedWithoutExtension) {
     GlobalVar("v", ty.f16(Source{{12, 34}}), core::AddressSpace::kPrivate);
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: f16 type used without 'f16' extension enabled");
+    EXPECT_EQ(r()->error(), "12:34 error: 'f16' type used without 'f16' extension enabled");
 }
 
 TEST_F(ResolverF16ExtensionTest, Vec2TypeUsedWithExtension) {
@@ -71,7 +71,7 @@ TEST_F(ResolverF16ExtensionTest, Vec2TypeUsedWithoutExtension) {
     GlobalVar("v", ty.vec2(ty.f16(Source{{12, 34}})), core::AddressSpace::kPrivate);
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: f16 type used without 'f16' extension enabled");
+    EXPECT_EQ(r()->error(), "12:34 error: 'f16' type used without 'f16' extension enabled");
 }
 
 TEST_F(ResolverF16ExtensionTest, Vec2TypeInitUsedWithExtension) {
@@ -89,7 +89,7 @@ TEST_F(ResolverF16ExtensionTest, Vec2TypeInitUsedWithoutExtension) {
     GlobalVar("v", Call(ty.vec2(ty.f16(Source{{12, 34}}))), core::AddressSpace::kPrivate);
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: f16 type used without 'f16' extension enabled");
+    EXPECT_EQ(r()->error(), "12:34 error: 'f16' type used without 'f16' extension enabled");
 }
 
 TEST_F(ResolverF16ExtensionTest, Vec2TypeConvUsedWithExtension) {
@@ -108,7 +108,7 @@ TEST_F(ResolverF16ExtensionTest, Vec2TypeConvUsedWithoutExtension) {
               core::AddressSpace::kPrivate);
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: f16 type used without 'f16' extension enabled");
+    EXPECT_EQ(r()->error(), "12:34 error: 'f16' type used without 'f16' extension enabled");
 }
 
 TEST_F(ResolverF16ExtensionTest, F16LiteralUsedWithExtension) {
@@ -126,7 +126,7 @@ TEST_F(ResolverF16ExtensionTest, F16LiteralUsedWithoutExtension) {
     GlobalVar("v", Expr(Source{{12, 34}}, 16_h), core::AddressSpace::kPrivate);
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: f16 type used without 'f16' extension enabled");
+    EXPECT_EQ(r()->error(), "12:34 error: 'f16' type used without 'f16' extension enabled");
 }
 
 using ResolverF16ExtensionBuiltinTypeAliasTest = ResolverTestWithParam<const char*>;
@@ -136,17 +136,17 @@ TEST_P(ResolverF16ExtensionBuiltinTypeAliasTest, Vec2hTypeUsedWithExtension) {
     // var<private> v : vec2h;
     Enable(wgsl::Extension::kF16);
 
-    GlobalVar("v", ty(Source{{12, 34}}, GetParam()), core::AddressSpace::kPrivate);
+    GlobalVar("v", ty.AsType(Source{{12, 34}}, GetParam()), core::AddressSpace::kPrivate);
 
     EXPECT_TRUE(r()->Resolve()) << r()->error();
 }
 
 TEST_P(ResolverF16ExtensionBuiltinTypeAliasTest, Vec2hTypeUsedWithoutExtension) {
     // var<private> v : vec2h;
-    GlobalVar("v", ty(Source{{12, 34}}, GetParam()), core::AddressSpace::kPrivate);
+    GlobalVar("v", ty.AsType(Source{{12, 34}}, GetParam()), core::AddressSpace::kPrivate);
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), "12:34 error: f16 type used without 'f16' extension enabled");
+    EXPECT_EQ(r()->error(), "12:34 error: 'f16' type used without 'f16' extension enabled");
 }
 
 INSTANTIATE_TEST_SUITE_P(ResolverF16ExtensionBuiltinTypeAliasTest,

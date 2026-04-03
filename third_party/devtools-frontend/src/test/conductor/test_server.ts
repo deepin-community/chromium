@@ -1,18 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {spawn, type ChildProcess} from 'child_process';
-import * as path from 'path';
+import {type ChildProcess, spawn} from 'node:child_process';
+import * as path from 'node:path';
 
 const HOSTED_MODE_SERVER_PATH = path.join(__dirname, '..', '..', 'scripts', 'hosted_mode', 'server.js');
-const COMPONENT_DOCS_SERVER_PATH = path.join(__dirname, '..', '..', 'scripts', 'component_server', 'server.js');
 const cwd = path.join(__dirname, '..', '..');
-let runningServer: ChildProcess;
+let runningServer: ChildProcess|undefined;
 
-// Starts a hosted mode server on any available port and returns the port number
-// once the server is ready to receive requests.
-export function startServer(server: 'hosted-mode'|'component-docs'): Promise<number> {
+/**
+ * Starts a hosted mode server on any available port and returns the port number
+ * once the server is ready to receive requests.
+ **/
+export function startServer(server: 'hosted-mode', commandLineArgs: string[]): Promise<number> {
   if (runningServer) {
     throw new Error('Server was already started.');
   }
@@ -22,7 +23,6 @@ export function startServer(server: 'hosted-mode'|'component-docs'): Promise<num
 
   const serverExecutable = {
     'hosted-mode': HOSTED_MODE_SERVER_PATH,
-    'component-docs': COMPONENT_DOCS_SERVER_PATH,
   }[server];
 
   // Copy the current env and append the port.
@@ -33,13 +33,7 @@ export function startServer(server: 'hosted-mode'|'component-docs'): Promise<num
     // used back to us. For parallel test mode, we need to avoid specifying a
     // port directly and instead request any free port, which is what port 0
     // signifies to the OS.
-    const processArguments = [serverExecutable];
-    // The component docs server can take extra flags to configure it, so we
-    // allow those to be set via an environment variable.
-    const extraFlags = process.env.TEST_SERVER_COMMAND_LINE_FLAGS;
-    if (extraFlags) {
-      processArguments.push(extraFlags);
-    }
+    const processArguments = [serverExecutable, ...commandLineArgs];
     runningServer = spawn(process.execPath, processArguments, {cwd, env, stdio: ['pipe', 'pipe', 'pipe', 'ipc']});
     runningServer.on('message', message => {
       if (message === 'ERROR') {
@@ -55,6 +49,7 @@ export function startServer(server: 'hosted-mode'|'component-docs'): Promise<num
   });
 }
 
+process.on('exit', stopServer);
 export function stopServer() {
-  runningServer.kill();
+  runningServer?.kill();
 }

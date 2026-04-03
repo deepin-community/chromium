@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <memory>
 
-#include "ash/constants/ash_features.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/system/anchored_nudge_data.h"
 #include "ash/public/cpp/system/anchored_nudge_manager.h"
@@ -56,36 +55,25 @@ OnboardingNudgeController::OnboardingNudgeController(
 OnboardingNudgeController::~OnboardingNudgeController() = default;
 
 void OnboardingNudgeController::ShowNudgeIfNeeded() {
-  if (!IsInPhoneHubNudgeExperimentGroup()) {
-    return;
-  }
-
   if (!ShouldShowNudge()) {
     return;
   }
-  PA_LOG(INFO)
-      << "Phone Hub onboarding nudge is being shown for text experiment group "
-      << (features::kPhoneHubNotifierTextGroup.Get() ==
-                  features::PhoneHubNotifierTextGroup::kNotifierTextGroupA
-              ? "A."
-              : "B.");
+  PA_LOG(INFO) << "Phone Hub onboarding nudge is being shown.";
 
   std::u16string nudge_text = l10n_util::GetStringUTF16(
-      features::kPhoneHubNotifierTextGroup.Get() ==
-              features::PhoneHubNotifierTextGroup::kNotifierTextGroupA
-          ? IDS_ASH_MULTI_DEVICE_SETUP_NOTIFIER_TEXT_WITH_PHONE_HUB
-          : IDS_ASH_MULTI_DEVICE_SETUP_NOTIFIER_TEXT_WITHOUT_PHONE_HUB);
+      IDS_ASH_MULTI_DEVICE_SETUP_NOTIFIER_TEXT_WITHOUT_PHONE_HUB);
   AnchoredNudgeData nudge_data = {kPhoneHubNudgeId, NudgeCatalogName::kPhoneHub,
                                   nudge_text, anchored_view_};
   nudge_data.anchored_to_shelf = true;
-  nudge_data.hover_state_change_callback =
+  nudge_data.hover_changed_callback =
       base::BindRepeating(&OnboardingNudgeController::OnNudgeHoverStateChanged,
-                          base::Unretained(this));
-  nudge_data.click_callback = base::BindRepeating(
-      &OnboardingNudgeController::OnNudgeClicked, base::Unretained(this));
+                          weak_ptr_factory_.GetWeakPtr());
+  nudge_data.click_callback =
+      base::BindRepeating(&OnboardingNudgeController::OnNudgeClicked,
+                          weak_ptr_factory_.GetWeakPtr());
   nudge_data.dismiss_callback = stop_animation_callback_.Then(
       base::BindRepeating(&OnboardingNudgeController::OnNudgeDismissed,
-                          base::Unretained(this)));
+                          weak_ptr_factory_.GetWeakPtr()));
   AnchoredNudgeManager::Get()->Show(nudge_data);
 
   if (AnchoredNudgeManager::Get()->IsNudgeShown(kPhoneHubNudgeId)) {
@@ -100,9 +88,6 @@ void OnboardingNudgeController::ShowNudgeIfNeeded() {
 }
 
 void OnboardingNudgeController::HideNudge() {
-  if (!IsInPhoneHubNudgeExperimentGroup()) {
-    return;
-  }
   if (AnchoredNudgeManager::Get()->IsNudgeShown(kPhoneHubNudgeId)) {
     // `HideNudge()` is only invoked when Phone Hub icon is clicked. If the
     // nudge is visible, it should be counted as interaction.
@@ -116,18 +101,11 @@ void OnboardingNudgeController::HideNudge() {
 }
 
 void OnboardingNudgeController::MaybeRecordNudgeAction() {
-  if (!IsInPhoneHubNudgeExperimentGroup()) {
-    return;
-  }
   AnchoredNudgeManager::Get()->MaybeRecordNudgeAction(
       NudgeCatalogName::kPhoneHub);
 }
 
 void OnboardingNudgeController::OnNudgeHoverStateChanged(bool is_hovering) {
-  if (!IsInPhoneHubNudgeExperimentGroup()) {
-    return;
-  }
-
   if (is_hovering) {
     PrefService* pref_service = GetPrefService();
     pref_service->SetTime(kPhoneHubNudgeLastActionTime, clock_->Now());
@@ -135,10 +113,6 @@ void OnboardingNudgeController::OnNudgeHoverStateChanged(bool is_hovering) {
 }
 
 void OnboardingNudgeController::OnNudgeClicked() {
-  if (!IsInPhoneHubNudgeExperimentGroup()) {
-    return;
-  }
-
   is_nudge_clicked_ = true;
 
   // Action can be click or hover so define `kPhoneHubNudgeLastActionTime` on
@@ -150,10 +124,6 @@ void OnboardingNudgeController::OnNudgeClicked() {
 }
 
 void OnboardingNudgeController::OnNudgeDismissed() {
-  if (!IsInPhoneHubNudgeExperimentGroup()) {
-    return;
-  }
-
   if (is_nudge_clicked_ || is_phone_hub_icon_clicked_) {
     PrefService* pref_service = GetPrefService();
     base::UmaHistogramTimes(
@@ -198,11 +168,11 @@ void OnboardingNudgeController::OnEligiblePhoneHubHostFound(
 void OnboardingNudgeController::AddToEligibleDevicesPref(
     const multidevice::RemoteDeviceRef& device) {
   PrefService* pref_service = GetPrefService();
-  const base::Value::List& devices_in_pref =
+  const base::ListValue& devices_in_pref =
       pref_service->GetList(kSyncedDevices);
-  base::Value::List updated_device_list = devices_in_pref.Clone();
+  base::ListValue updated_device_list = devices_in_pref.Clone();
   updated_device_list.Append(device.instance_id());
-  pref_service->SetList(kSyncedDevices, updated_device_list.Clone());
+  pref_service->SetList(kSyncedDevices, std::move(updated_device_list));
 }
 
 void OnboardingNudgeController::ResetNudgePrefs() {
@@ -219,14 +189,9 @@ void OnboardingNudgeController::ResetNudgePrefs() {
 bool OnboardingNudgeController::IsDeviceStoredInPref(
     const multidevice::RemoteDeviceRef& device) {
   PrefService* pref_service = GetPrefService();
-  const base::Value::List& devices_in_pref =
+  const base::ListValue& devices_in_pref =
       pref_service->GetList(kSyncedDevices);
-  return base::Contains(devices_in_pref, base::Value(device.instance_id()));
-}
-
-bool OnboardingNudgeController::IsInPhoneHubNudgeExperimentGroup() {
-  return features::IsPhoneHubOnboardingNotifierRevampEnabled() &&
-         features::kPhoneHubOnboardingNotifierUseNudge.Get();
+  return devices_in_pref.contains(device.instance_id());
 }
 
 bool OnboardingNudgeController::ShouldShowNudge() {
@@ -237,9 +202,9 @@ bool OnboardingNudgeController::ShouldShowNudge() {
   }
 
   if (pref_service->GetInteger(kPhoneHubNudgeTotalAppearances) >=
-      features::kPhoneHubNudgeTotalAppearancesAllowed.Get()) {
+      kPhoneHubNudgeTotalAppearancesAllowed) {
     PA_LOG(INFO) << "Nudge has been shown "
-                 << features::kPhoneHubNudgeTotalAppearancesAllowed.Get()
+                 << kPhoneHubNudgeTotalAppearancesAllowed
                  << " times. Do not show again.";
     return false;
   }
@@ -249,11 +214,10 @@ bool OnboardingNudgeController::ShouldShowNudge() {
   }
 
   if ((clock_->Now() - pref_service->GetTime(kPhoneHubNudgeLastShownTime)) >=
-      features::kPhoneHubNudgeDelay.Get()) {
+      kPhoneHubNudgeDelay) {
     return true;
   }
-  PA_LOG(INFO) << "Nudge was shown less than "
-               << features::kPhoneHubNudgeDelay.Get()
+  PA_LOG(INFO) << "Nudge was shown less than " << kPhoneHubNudgeDelay
                << " hours ago. Not being shown this time.";
   return false;
 }

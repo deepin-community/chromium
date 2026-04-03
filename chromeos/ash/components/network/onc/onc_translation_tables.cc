@@ -6,6 +6,7 @@
 
 #include <cstddef>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "chromeos/ash/components/network/network_type_pattern.h"
@@ -137,9 +138,7 @@ const FieldTranslationEntry wireguard_peer_fields[] = {
      shill::kWireGuardPeerPersistentKeepalive},
     {nullptr}};
 
-const FieldTranslationEntry arc_vpn_fields[] = {
-    {::onc::arc_vpn::kTunnelChrome, shill::kArcVpnTunnelChromeProperty},
-    {nullptr}};
+const FieldTranslationEntry arc_vpn_fields[] = {{nullptr}};
 
 const FieldTranslationEntry verify_x509_fields[] = {
     {::onc::verify_x509::kName, shill::kOpenVPNVerifyX509NameProperty},
@@ -291,14 +290,14 @@ const FieldTranslationEntry static_or_saved_ipconfig_fields[] = {
     {::onc::ipconfig::kSearchDomains, shill::kSearchDomainsProperty},
     {::onc::ipconfig::kIncludedRoutes, shill::kIncludedRoutesProperty},
     {::onc::ipconfig::kExcludedRoutes, shill::kExcludedRoutesProperty},
+    {::onc::ipconfig::kMTU, shill::kMtuProperty},
     {nullptr}};
 
 struct OncValueTranslationEntry {
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #global-scope
+  // These fields are not raw_ptr<>s because each layer of pointer only ever
+  // points to statically-allocated data which is never freed, and thus can
+  // never dangle.
   RAW_PTR_EXCLUSION const chromeos::onc::OncValueSignature* onc_signature;
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #global-scope
   RAW_PTR_EXCLUSION const FieldTranslationEntry* field_translation_table;
 };
 
@@ -334,12 +333,11 @@ const OncValueTranslationEntry onc_value_translation_table[] = {
     {nullptr}};
 
 struct NestedShillDictionaryEntry {
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #global-scope
+  // These fields are not raw_ptr<>s because each layer of pointer only ever
+  // points to statically-allocated data which is never freed, and thus can
+  // never dangle.
   RAW_PTR_EXCLUSION const chromeos::onc::OncValueSignature* onc_signature;
   // nullptr terminated list of Shill property keys.
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #global-scope
   RAW_PTR_EXCLUSION const char* const* shill_property_path;
 };
 
@@ -465,6 +463,19 @@ const StringTranslationEntry kApnIpTypeTranslationTable[] = {
     {::onc::cellular_apn::kIpTypeIpv4Ipv6, shill::kApnIpTypeV4V6},
     {nullptr}};
 
+const StringTranslationEntry kApnSourceTranslationTable[] = {
+    {::onc::cellular_apn::kSourceModem, shill::kApnSourceModem},
+    {::onc::cellular_apn::kSourceModb, shill::kApnSourceMoDb},
+    {::onc::cellular_apn::kSourceAdmin, shill::kApnSourceAdmin},
+    {::onc::cellular_apn::kSourceUi, shill::kApnSourceUi},
+    {nullptr}};
+
+const StringTranslationEntry kCheckCaptivePortalTranslationTable[] = {
+    {::onc::check_captive_portal::kFalse, "false"},
+    {::onc::check_captive_portal::kHTTPOnly, "http-only"},
+    {::onc::check_captive_portal::kTrue, "true"},
+    {nullptr}};
+
 // This must contain only Shill Device properties and no Service properties.
 // For Service properties see cellular_fields.
 const FieldTranslationEntry kCellularDeviceTable[] = {
@@ -501,7 +512,7 @@ const FieldTranslationEntry kIPsecIKEv2Table[] = {
 const FieldTranslationEntry* GetFieldTranslationTable(
     const chromeos::onc::OncValueSignature& onc_signature) {
   for (const OncValueTranslationEntry* it = onc_value_translation_table;
-       it->onc_signature != nullptr; ++it) {
+       it->onc_signature != nullptr; UNSAFE_TODO(++it)) {
     if (it->onc_signature == &onc_signature) {
       return it->field_translation_table;
     }
@@ -537,10 +548,10 @@ std::vector<std::string> GetPathToNestedShillDictionary(
     const chromeos::onc::OncValueSignature& onc_signature) {
   std::vector<std::string> shill_property_path;
   for (const NestedShillDictionaryEntry* it = nested_shill_dictionaries;
-       it->onc_signature != nullptr; ++it) {
+       it->onc_signature != nullptr; UNSAFE_TODO(++it)) {
     if (it->onc_signature == &onc_signature) {
       for (const char* const* key = it->shill_property_path; *key != nullptr;
-           ++key) {
+           UNSAFE_TODO(++key)) {
         shill_property_path.push_back(std::string(*key));
       }
       break;
@@ -553,7 +564,7 @@ bool GetShillPropertyName(const std::string& onc_field_name,
                           const FieldTranslationEntry table[],
                           std::string* shill_property_name) {
   for (const FieldTranslationEntry* it = table; it->onc_field_name != nullptr;
-       ++it) {
+       UNSAFE_TODO(++it)) {
     if (it->onc_field_name != onc_field_name) {
       continue;
     }
@@ -566,11 +577,11 @@ bool GetShillPropertyName(const std::string& onc_field_name,
 bool TranslateStringToShill(const StringTranslationEntry table[],
                             const std::string& onc_value,
                             std::string* shill_value) {
-  for (int i = 0; table[i].onc_value != nullptr; ++i) {
-    if (onc_value != table[i].onc_value) {
+  for (int i = 0; UNSAFE_TODO(table[i]).onc_value != nullptr; ++i) {
+    if (onc_value != UNSAFE_TODO(table[i]).onc_value) {
       continue;
     }
-    *shill_value = table[i].shill_value;
+    *shill_value = UNSAFE_TODO(table[i]).shill_value;
     return true;
   }
   LOG(ERROR) << "Value '" << onc_value << "' cannot be translated to Shill"
@@ -582,11 +593,11 @@ bool TranslateStringToShill(const StringTranslationEntry table[],
 bool TranslateStringToONC(const StringTranslationEntry table[],
                           const std::string& shill_value,
                           std::string* onc_value) {
-  for (int i = 0; table[i].shill_value != nullptr; ++i) {
-    if (shill_value != table[i].shill_value) {
+  for (int i = 0; UNSAFE_TODO(table[i]).shill_value != nullptr; ++i) {
+    if (shill_value != UNSAFE_TODO(table[i]).shill_value) {
       continue;
     }
-    *onc_value = table[i].onc_value;
+    *onc_value = UNSAFE_TODO(table[i]).onc_value;
     return true;
   }
   LOG(ERROR) << "Value '" << shill_value << "' cannot be translated to ONC"

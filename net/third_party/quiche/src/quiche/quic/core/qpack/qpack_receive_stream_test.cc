@@ -4,6 +4,8 @@
 
 #include "quiche/quic/core/qpack/qpack_receive_stream.h"
 
+#include <vector>
+
 #include "absl/strings/string_view.h"
 #include "quiche/quic/core/quic_utils.h"
 #include "quiche/quic/platform/api/quic_test.h"
@@ -37,7 +39,7 @@ std::vector<TestParams> GetTestParams() {
   std::vector<TestParams> params;
   ParsedQuicVersionVector all_supported_versions = AllSupportedVersions();
   for (const auto& version : AllSupportedVersions()) {
-    if (!VersionUsesHttp3(version.transport_version)) {
+    if (!VersionIsIetfQuic(version.transport_version)) {
       continue;
     }
     for (Perspective p : {Perspective::IS_SERVER, Perspective::IS_CLIENT}) {
@@ -56,9 +58,9 @@ class QpackReceiveStreamTest : public QuicTestWithParam<TestParams> {
         session_(connection_) {
     EXPECT_CALL(session_, OnCongestionWindowChange(_)).Times(AnyNumber());
     session_.Initialize();
-    EXPECT_CALL(
-        static_cast<const MockQuicCryptoStream&>(*session_.GetCryptoStream()),
-        encryption_established())
+    EXPECT_CALL(absl::down_cast<const MockQuicCryptoStream&>(
+                    *session_.GetCryptoStream()),
+                encryption_established())
         .WillRepeatedly(testing::Return(true));
     QuicStreamId id = perspective() == Perspective::IS_SERVER
                           ? GetNthClientInitiatedUnidirectionalStreamId(

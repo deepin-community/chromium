@@ -1,11 +1,13 @@
 Name: Puppeteer Core
 Short Name: Puppeteer Core
 URL: https://github.com/puppeteer/puppeteer/tree/main/packages/puppeteer-core
-Version: 22.1.0
+Version: 24.37.2
 License: Apache-2.0
 License File: LICENSE
+Revision: b163ce4593a8f014b86d67d53825fbeb679045ca
 Security Critical: no
 Shipped: yes
+Update Mechanism: Autoroll
 
 Description:
 Puppeteer is a Node library which provides a high-level API to control Chrome or Chromium over the DevTools Protocol.

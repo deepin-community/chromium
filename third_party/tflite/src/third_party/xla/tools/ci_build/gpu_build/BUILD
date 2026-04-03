@@ -2,8 +2,9 @@
 # TensorFlow is a computational framework, primarily for use in machine
 # learning applications.
 
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
 package(
-    default_visibility = ["//visibility:public"],
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     licenses = ["notice"],
 )
@@ -22,5 +23,5 @@ filegroup(
             "**/OWNERS",
         ],
     ),
-    visibility = ["//visibility:public"],
+    visibility = ["//visibility:private"],
 )

@@ -6,7 +6,6 @@
 
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/user_metrics_action.h"
-#include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/events/gesture_event.h"
@@ -16,6 +15,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
+#include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/html/time_ranges.h"
 #include "third_party/blink/renderer/core/html_names.h"
@@ -31,7 +31,9 @@
 #include "third_party/blink/renderer/modules/media_controls/media_controls_shared_helper.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "ui/display/screen_info.h"
+#include "ui/strings/grit/ax_strings.h"
 
 namespace {
 
@@ -101,7 +103,7 @@ void MediaControlTimelineElement::UpdateAria() {
 void MediaControlTimelineElement::SetPosition(double current_time,
                                               bool suppress_aria) {
   if (is_live_ && !live_anchor_time_ && current_time != 0) {
-    live_anchor_time_.emplace();
+    live_anchor_time_.emplace(LiveAnchorTime());
     live_anchor_time_->clock_time_ = base::TimeTicks::Now();
     live_anchor_time_->media_time_ = MediaElement().currentTime();
   }
@@ -170,7 +172,7 @@ void MediaControlTimelineElement::DefaultEventHandler(Event& event) {
     return;
   }
 
-  double time = Value().ToDouble();
+  double time = StringToDouble(Value()).value_or(0);
   double duration = MediaElement().duration();
   // Workaround for floating point error - it's possible for this element's max
   // attribute to be rounded to a value slightly higher than the duration. If
@@ -256,8 +258,8 @@ void MediaControlTimelineElement::RenderBarSegments() {
   // Calculate |current_time| and |duration| for live media base on the timeline
   // value since timeline's minimum value is not necessarily zero.
   if (is_live_) {
-    current_time =
-        Value().ToDouble() - GetFloatingPointAttribute(html_names::kMinAttr);
+    current_time = StringToDouble(Value()).value_or(0) -
+                   GetFloatingPointAttribute(html_names::kMinAttr);
     duration = GetFloatingPointAttribute(html_names::kMaxAttr) -
                GetFloatingPointAttribute(html_names::kMinAttr);
   }

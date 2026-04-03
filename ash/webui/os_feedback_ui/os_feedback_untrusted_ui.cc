@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ash/webui/os_feedback_ui/os_feedback_untrusted_ui.h"
 
 #include <memory>
@@ -17,7 +18,6 @@
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
-#include "ui/webui/color_change_listener/color_change_handler.h"
 #include "url/gurl.h"
 
 namespace ash {
@@ -48,16 +48,10 @@ void AddLocalizedStrings(content::WebUIDataSource* source) {
 }  // namespace
 
 OsFeedbackUntrustedUIConfig::OsFeedbackUntrustedUIConfig()
-    : WebUIConfig(content::kChromeUIUntrustedScheme,
-                  kChromeUIOSFeedbackUntrustedHost) {}
+    : DefaultWebUIConfig(content::kChromeUIUntrustedScheme,
+                         kChromeUIOSFeedbackUntrustedHost) {}
 
 OsFeedbackUntrustedUIConfig::~OsFeedbackUntrustedUIConfig() = default;
-
-std::unique_ptr<content::WebUIController>
-OsFeedbackUntrustedUIConfig::CreateWebUIController(content::WebUI* web_ui,
-                                                   const GURL& url) {
-  return std::make_unique<OsFeedbackUntrustedUI>(web_ui);
-}
 
 OsFeedbackUntrustedUI::OsFeedbackUntrustedUI(content::WebUI* web_ui)
     : ui::UntrustedWebUIController(web_ui) {
@@ -66,8 +60,7 @@ OsFeedbackUntrustedUI::OsFeedbackUntrustedUI(content::WebUI* web_ui)
           web_ui->GetWebContents()->GetBrowserContext(),
           kChromeUIOSFeedbackUntrustedUrl);
 
-  untrusted_source->AddResourcePaths(base::make_span(
-      kAshOsFeedbackUntrustedResources, kAshOsFeedbackUntrustedResourcesSize));
+  untrusted_source->AddResourcePaths(kAshOsFeedbackUntrustedResources);
   untrusted_source->AddResourcePath("help_content.js",
                                     IDR_ASH_OS_FEEDBACK_HELP_CONTENT_JS);
   untrusted_source->AddResourcePath("help_content.html.js",
@@ -91,7 +84,6 @@ OsFeedbackUntrustedUI::OsFeedbackUntrustedUI(content::WebUI* web_ui)
   untrusted_source->AddFrameAncestor(GURL(kChromeUIOSFeedbackUrl));
 
   ash::EnableTrustedTypesCSP(untrusted_source);
-  // TODO(b/194964287): Audit and tighten CSP.
   untrusted_source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::DefaultSrc, "");
 
@@ -101,12 +93,6 @@ OsFeedbackUntrustedUI::OsFeedbackUntrustedUI(content::WebUI* web_ui)
 }
 
 OsFeedbackUntrustedUI::~OsFeedbackUntrustedUI() = default;
-
-void OsFeedbackUntrustedUI::BindInterface(
-    mojo::PendingReceiver<color_change_listener::mojom::PageHandler> receiver) {
-  color_provider_handler_ = std::make_unique<ui::ColorChangeHandler>(
-      web_ui()->GetWebContents(), std::move(receiver));
-}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(OsFeedbackUntrustedUI)
 }  // namespace feedback

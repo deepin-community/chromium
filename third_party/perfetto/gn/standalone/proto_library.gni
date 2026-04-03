@@ -22,6 +22,14 @@ if (host_os == "win") {
 
 template("proto_library") {
   assert(defined(invoker.sources))
+
+  # This is used in chromium build.
+  not_needed(invoker,
+             [
+               "generator_visibility",
+               "proto_deps",
+             ])
+
   proto_sources = invoker.sources
 
   # All the proto imports should be relative to the project root.
@@ -140,6 +148,7 @@ template("proto_library") {
 
   # The XXX_gen action that generates the .pb.{cc,h} files.
   action(action_name) {
+    forward_variables_from(invoker, [ "testonly" ])
     if (generate_descriptor == "") {
       visibility = [ ":$source_set_name" ]
     }
@@ -154,7 +163,7 @@ template("proto_library") {
                     _host_executable_suffix
       protoc_rebased_path = "./" + rebase_path(protoc_path, root_build_dir)
     }
-    script = "//gn/standalone/protoc.py"
+    script = "//gn/run_binary.py"
     args = [
       # Path should be rebased because |root_build_dir| for current toolchain
       # may be different from |root_out_dir| of protoc built on host toolchain.
@@ -168,6 +177,10 @@ template("proto_library") {
         "--proto_path",
         rebase_path(path, root_build_dir),
       ]
+    }
+
+    metadata = {
+      proto_import_dirs = import_dirs
     }
 
     if (generate_cc) {
@@ -218,13 +231,6 @@ template("proto_library") {
       deps = []
     }
 
-    # TODO(hjd): Avoid adding to deps here this.
-    # When we generate BUILD files we need find the transitive proto,
-    # dependencies, so also add link_deps to actual deps so they show up
-    # in gn desc.
-    if (defined(invoker.link_deps)) {
-      deps += invoker.link_deps
-    }
     if (generate_with_plugin) {
       inputs += [ plugin_path ]
       if (defined(plugin_host_label)) {
@@ -233,8 +239,11 @@ template("proto_library") {
       }
     }
 
-    if (defined(invoker.deps)) {
+    if (generate_descriptor != "") {
       deps += invoker.deps
+    }
+    if (defined(invoker.link_deps)) {
+      deps += invoker.link_deps
     }
   }  # action(action_name)
 
@@ -281,11 +290,7 @@ template("proto_library") {
         configs += [ ":$config_name" ]
       }
 
-      # Use protobuf_full only for tests.
-      if (defined(invoker.use_protobuf_full) &&
-          invoker.use_protobuf_full == true) {
-        deps = [ "//gn:protobuf_full" ]
-      } else if (generate_cc) {
+      if (generate_cc) {
         deps = [ "//gn:protobuf_lite" ]
       } else {
         deps = []
@@ -294,6 +299,9 @@ template("proto_library") {
       deps += [ ":$action_name" ]
       if (defined(invoker.deps)) {
         deps += invoker.deps
+      }
+      if (defined(invoker.link_deps)) {
+        deps += invoker.link_deps
       }
     }  # source_set(source_set_name)
   }

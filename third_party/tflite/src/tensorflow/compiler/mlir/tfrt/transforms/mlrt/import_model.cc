@@ -14,6 +14,7 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/compiler/mlir/tfrt/transforms/mlrt/import_model.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -21,12 +22,14 @@ limitations under the License.
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "llvm/ADT/StringRef.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/OwningOpRef.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "mlir/Transforms/Passes.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/tensorflow/utils/data_dumper_logger_config.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/dump_mlir_util.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/error_util.h"
 #include "tensorflow/compiler/mlir/tfrt/transforms/mlrt/assign_op_key.h"
@@ -38,6 +41,7 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tfrt/translate/mlrt/mlir_to_bytecode.h"
 #include "tensorflow/compiler/mlir/tfrt/translate/tfrt_compile_options.h"
 #include "tensorflow/compiler/mlir/tfrt/utils/export.h"
+#include "xla/tsl/platform/errors.h"
 #include "tensorflow/core/framework/function.pb.h"
 #include "tensorflow/core/platform/status.h"
 #include "tensorflow/core/platform/statusor.h"
@@ -46,12 +50,32 @@ limitations under the License.
 #include "tensorflow/core/tfrt/mlrt/attribute/attribute.h"
 #include "tensorflow/core/tfrt/mlrt/bytecode/bytecode.h"
 #include "tensorflow/core/tfrt/runtime/runtime.h"
-#include "tsl/platform/errors.h"
+#include "tensorflow/core/util/debug_data_dumper.h"
 
 namespace tensorflow {
 namespace mlrt_compiler {
+namespace {
+// Setup the input pass manager to enable IR dumping after each pass.
+// Note a side effect of this method is that multi threading will be disabled.
+void EnablePassIRPrinting(mlir::PassManager& pm,
+                          const std::string& dump_group_name,
+                          llvm::StringRef module_name) {
+  // Print the whole module after each pass, which requires disabling
+  // multi-threading as well.
+  pm.getContext()->disableMultithreading();
+  pm.enableIRPrinting(std::make_unique<::tensorflow::DataDumperLoggerConfig>(
+      [module_name, dump_group_name](const std::string& pass_tag_name,
+                                     mlir::Operation* op) {
+        return DEBUG_DATA_DUMPER()->GetDumpFilename(
+            module_name.str(), dump_group_name, pass_tag_name);
+      },
+      /*pass_prefix=*/"",
+      /*print_module_scope=*/true));
+  pm.enableTiming();
+}
+}  // namespace
 
-StatusOr<mlrt::bc::Buffer> ConvertTfMlirToBytecode(
+absl::StatusOr<mlrt::bc::Buffer> ConvertTfMlirToBytecode(
     const TfrtCompileOptions& options, tfrt_stub::FallbackState& fallback_state,
     mlir::ModuleOp module, tfrt_stub::ModelRuntimeContext& model_context,
     mlir::OwningOpRef<mlir::ModuleOp>* module_with_op_keys,
@@ -59,37 +83,39 @@ StatusOr<mlrt::bc::Buffer> ConvertTfMlirToBytecode(
   mlrt::bc::Buffer bytecode_buffer;
   TF_RETURN_IF_ERROR(ConvertTfMlirToRuntimeExecutable(
       options, module,
-      [&bytecode_buffer, &fallback_state, &model_context, module_with_op_keys](
-          mlir::PassManager& pm, mlir::ModuleOp module,
-          const TfrtPipelineOptions& options) {
-        if (auto* flib_def = model_context.function_library_definition()) {
-          // Copy the module before exporting as exporting to graph will
-          // transform the MLIR to TFG dialect.
-          mlir::OwningOpRef<mlir::ModuleOp> copy(module.clone());
-          TF_RETURN_IF_ERROR(
-              ExportFunctionDefs(*copy, [flib_def](FunctionDef function_def) {
-                VLOG(1) << absl::StrCat(
-                    "Exporting MLIR function as function_def: ",
-                    // clang-tidy off
-                    function_def.DebugString()
-                    // clang-tidy on
-                );
+      [&bytecode_buffer, &fallback_state, &model_context,
+       backend_compiler = options.backend_compiler,
+       module_with_op_keys](mlir::PassManager& pm, mlir::ModuleOp module,
+                            const TfrtPipelineOptions& options) {
+        if (backend_compiler) {
+          if (auto* flib_def = model_context.function_library_definition()) {
+            // Copy the module before exporting as exporting to graph will
+            // transform the MLIR to TFG dialect.
+            mlir::OwningOpRef<mlir::ModuleOp> copy(module.clone());
+            TF_RETURN_IF_ERROR(
+                ExportFunctionDefs(*copy, [flib_def](FunctionDef function_def) {
+                  VLOG(1) << absl::StrCat(
+                      "Exporting MLIR function as function_def: ",
+                      // NOLINTNEXTLINE
+                      function_def.DebugString());
 
-                // The TF MLIR compiler may change the function name. Then we
-                // need to retrieve the original name from the
-                // _original_func_name attribute.
-                auto iter = function_def.attr().find("_original_func_name");
-                if (iter != function_def.attr().end()) {
-                  function_def.mutable_signature()->set_name(iter->second.s());
-                }
+                  // The TF MLIR compiler may change the function name. Then we
+                  // need to retrieve the original name from the
+                  // _original_func_name attribute.
+                  auto iter = function_def.attr().find("_original_func_name");
+                  if (iter != function_def.attr().end()) {
+                    function_def.mutable_signature()->set_name(
+                        iter->second.s());
+                  }
 
-                const auto& name = function_def.signature().name();
-                if (flib_def->Contains(name)) {
-                  TF_RETURN_IF_ERROR(flib_def->RemoveFunction(name));
-                }
+                  const auto& name = function_def.signature().name();
+                  if (flib_def->Contains(name)) {
+                    TF_RETURN_IF_ERROR(flib_def->RemoveFunction(name));
+                  }
 
-                return flib_def->AddFunctionDef(function_def);
-              }));
+                  return flib_def->AddFunctionDef(function_def);
+                }));
+          }
         }
 
         mlir::StatusScopedDiagnosticHandler diag_handler(module.getContext());
@@ -98,13 +124,18 @@ StatusOr<mlrt::bc::Buffer> ConvertTfMlirToBytecode(
         // Remove unreachable private functions after map_fn conversion.
         pm.addPass(mlir::createSymbolDCEPass());
 
-        tensorflow::CreateTFExecutorToTFInvariantOptimizationPipelineHelper(
-            pm, options);
+        tensorflow::CreateTFInvariantOptimizationPipelineHelper(pm, options);
         // TODO(b/283481729): Add test to cover unused constants that do not
         // cause op_key discontinuity
         pm.addNestedPass<mlir::func::FuncOp>(mlir::createCanonicalizerPass());
         pm.addPass(mlrt_compiler::CreateAssignOpKeyPass());
+
         // Run passes until (including) AssignOpKeyPass.
+        if (VLOG_IS_ON(4)) {
+          EnablePassIRPrinting(pm, "mlrt_runtime_lowering_tf",
+                               "mlrt_runtime_lowering_tf");
+        }
+
         if (mlir::failed(pm.run(module))) {
           return diag_handler.Combine(absl::InternalError(
               "failed to finish passes before (including) assign op keys."));
@@ -132,13 +163,13 @@ StatusOr<mlrt::bc::Buffer> ConvertTfMlirToBytecode(
         auto statusor = mlrt::EmitExecutable(registry, module);
         if (!statusor.ok()) return statusor.status();
         bytecode_buffer = std::move(*statusor);
-        return OkStatus();
+        return absl::OkStatus();
       },
       model_context, &fallback_state, added_xla_function_names));
   return bytecode_buffer;
 }
 
-StatusOr<mlrt::bc::Buffer> ConvertTfMlirWithOpKeysToBytecode(
+absl::StatusOr<mlrt::bc::Buffer> ConvertTfMlirWithOpKeysToBytecode(
     const TfrtCompileOptions& options,
     const tfrt_stub::FallbackState& fallback_state,
     mlir::ModuleOp module_with_op_keys,

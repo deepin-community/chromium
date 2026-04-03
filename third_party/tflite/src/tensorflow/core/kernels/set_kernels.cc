@@ -16,7 +16,7 @@ limitations under the License.
 // Ops for operating with sets. They are not checked in
 // to TensorFlow because we would first like to demonstrate successful
 // end-to-end use of these ops in eval and polish the api a bit like taking two
-// SparseTensor rather than on edense and one sparse.
+// SparseTensor rather than one dense and one sparse.
 
 #define EIGEN_USE_THREADS
 
@@ -28,6 +28,7 @@ limitations under the License.
 
 #include "absl/container/btree_set.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/strings/ascii.h"
 #include "unsupported/Eigen/CXX11/Tensor"  // from @eigen_archive
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -52,7 +53,8 @@ void CheckRankAtLeast2(OpKernelContext* ctx, const TensorShape& shape) {
 }
 
 // Return group shape, which is the 1st n-1 dimensions of shape.
-Status GroupShape(const VarDimArray& input_shape, ShapeArray* grouped_shape) {
+absl::Status GroupShape(const VarDimArray& input_shape,
+                        ShapeArray* grouped_shape) {
   if (input_shape.size() < 2) {
     // TODO(irving): Why can't 2 be 1 here?
     return errors::InvalidArgument("Shape [", absl::StrJoin(input_shape, ","),
@@ -65,9 +67,10 @@ Status GroupShape(const VarDimArray& input_shape, ShapeArray* grouped_shape) {
 
 // Build `SparseTensor` from indices, values, and shape in inputs
 // [base_index, base_index + 3), and validate its rank and indices.
-Status SparseTensorFromContext(OpKernelContext* ctx, const int32_t base_index,
-                               const bool validate_indices,
-                               sparse::SparseTensor* tensor) {
+absl::Status SparseTensorFromContext(OpKernelContext* ctx,
+                                     const int32_t base_index,
+                                     const bool validate_indices,
+                                     sparse::SparseTensor* tensor) {
   // Assume row-major order.
   TensorShape shape;
   const Tensor& shape_tensor = ctx->input(base_index + 2);
@@ -80,7 +83,7 @@ Status SparseTensorFromContext(OpKernelContext* ctx, const int32_t base_index,
   std::vector<int64_t> order(shape.dims());
   std::iota(order.begin(), order.end(), 0);
 
-  Status status = sparse::SparseTensor::Create(
+  absl::Status status = sparse::SparseTensor::Create(
       ctx->input(base_index), ctx->input(base_index + 1), shape, order, tensor);
 
   if (!validate_indices || !status.ok()) return status;
@@ -275,8 +278,8 @@ void SetSizeOp<T>::Compute(OpKernelContext* ctx) {
                  TensorShapeUtils::MakeShape(output_shape, &output_shape_ts));
   Tensor* out_t;
   OP_REQUIRES_OK(ctx, ctx->allocate_output(0, output_shape_ts, &out_t));
-  auto out = out_t->flat<int32>();
-  out.device(ctx->eigen_cpu_device()) = out.constant(static_cast<int32>(0.0));
+  auto out = out_t->flat<int32_t>();
+  out.device(ctx->eigen_cpu_device()) = out.constant(static_cast<int32_t>(0.0));
 
   // Group by all but last dimension, create a set of group values, and add set
   // size to output.
@@ -299,12 +302,12 @@ void SetSizeOp<T>::Compute(OpKernelContext* ctx) {
   REGISTER_KERNEL_BUILDER(                                       \
       Name("SetSize").Device(DEVICE_CPU).TypeConstraint<T>("T"), \
       SetSizeOp<T>);
-_SET_SIZE_REGISTER_KERNEL_BUILDER(int8);
-_SET_SIZE_REGISTER_KERNEL_BUILDER(int16);
-_SET_SIZE_REGISTER_KERNEL_BUILDER(int32);
+_SET_SIZE_REGISTER_KERNEL_BUILDER(int8_t);
+_SET_SIZE_REGISTER_KERNEL_BUILDER(int16_t);
+_SET_SIZE_REGISTER_KERNEL_BUILDER(int32_t);
 _SET_SIZE_REGISTER_KERNEL_BUILDER(int64_t);
-_SET_SIZE_REGISTER_KERNEL_BUILDER(uint8);
-_SET_SIZE_REGISTER_KERNEL_BUILDER(uint16);
+_SET_SIZE_REGISTER_KERNEL_BUILDER(uint8_t);
+_SET_SIZE_REGISTER_KERNEL_BUILDER(uint16_t);
 _SET_SIZE_REGISTER_KERNEL_BUILDER(tstring);
 #undef _SET_SIZE_REGISTER_KERNEL_BUILDER
 
@@ -317,12 +320,11 @@ enum InputTypes {
 enum SetOperation { A_MINUS_B = 0, B_MINUS_A = 1, INTERSECTION = 2, UNION = 3 };
 
 SetOperation SetOperationFromContext(OpKernelConstruction* ctx) {
-  string set_operation_str;
+  std::string set_operation_str;
   if (!ctx->GetAttr("set_operation", &set_operation_str).ok()) {
     ctx->CtxFailure(errors::InvalidArgument("Missing set_operation."));
   } else {
-    std::transform(set_operation_str.begin(), set_operation_str.end(),
-                   set_operation_str.begin(), ::tolower);
+    absl::AsciiStrToLower(&set_operation_str);
     if ("a-b" == set_operation_str) {
       return A_MINUS_B;
     }
@@ -419,7 +421,7 @@ void SetOperationOp<T>::ApplySetOperation(const absl::flat_hash_set<T>& set1,
 }
 
 // Validate shapes have the same dimensions.
-Status CheckShapesMatch(VarDimArray shape1, VarDimArray shape2) {
+absl::Status CheckShapesMatch(VarDimArray shape1, VarDimArray shape2) {
   if (shape1 != shape2) {
     return errors::InvalidArgument("Mismatched shapes [",
                                    absl::StrJoin(shape1, ","), "] vs [",
@@ -430,8 +432,8 @@ Status CheckShapesMatch(VarDimArray shape1, VarDimArray shape2) {
 
 // Validate ranks are the same, and all but last dimension are the same.
 // Return GroupShape.
-Status GroupShapeFromInputs(VarDimArray shape1, VarDimArray shape2,
-                            ShapeArray* group_shape) {
+absl::Status GroupShapeFromInputs(VarDimArray shape1, VarDimArray shape2,
+                                  ShapeArray* group_shape) {
   ShapeArray group_shape_1;
   TF_RETURN_IF_ERROR(GroupShape(shape1, &group_shape_1));
   ShapeArray group_shape_2;
@@ -747,12 +749,12 @@ class DenseToDenseSetOperationOp : public SetOperationOp<T> {
                               .Device(DEVICE_CPU)                \
                               .TypeConstraint<T>("T"),           \
                           DenseToDenseSetOperationOp<T>);
-_DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int8);
-_DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int16);
-_DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int32);
+_DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int8_t);
+_DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int16_t);
+_DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int32_t);
 _DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int64_t);
-_DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(uint8);
-_DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(uint16);
+_DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(uint8_t);
+_DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(uint16_t);
 _DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(tstring);
 #undef _DENSE_TO_DENSE_SET_OPERATION_REGISTER_KERNEL_BUILDER
 
@@ -768,12 +770,12 @@ class DenseToSparseSetOperationOp : public SetOperationOp<T> {
                               .Device(DEVICE_CPU)                 \
                               .TypeConstraint<T>("T"),            \
                           DenseToSparseSetOperationOp<T>);
-_DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int8);
-_DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int16);
-_DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int32);
+_DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int8_t);
+_DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int16_t);
+_DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int32_t);
 _DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int64_t);
-_DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(uint8);
-_DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(uint16);
+_DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(uint8_t);
+_DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(uint16_t);
 _DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(tstring);
 #undef _DENSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER
 
@@ -789,12 +791,12 @@ class SparseToSparseSetOperationOp : public SetOperationOp<T> {
                               .Device(DEVICE_CPU)                  \
                               .TypeConstraint<T>("T"),             \
                           SparseToSparseSetOperationOp<T>);
-_SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int8);
-_SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int16);
-_SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int32);
+_SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int8_t);
+_SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int16_t);
+_SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int32_t);
 _SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(int64_t);
-_SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(uint8);
-_SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(uint16);
+_SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(uint8_t);
+_SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(uint16_t);
 _SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER(tstring);
 #undef _SPARSE_TO_SPARSE_SET_OPERATION_REGISTER_KERNEL_BUILDER
 

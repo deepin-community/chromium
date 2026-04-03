@@ -47,7 +47,7 @@ namespace dawn::native {
 struct RenderBundleDescriptor;
 class RenderBundleEncoder;
 
-class RenderBundleBase final : public ApiObjectBase {
+class RenderBundleBase : public ApiObjectBase {
   public:
     RenderBundleBase(RenderBundleEncoder* encoder,
                      const RenderBundleDescriptor* descriptor,
@@ -57,7 +57,7 @@ class RenderBundleBase final : public ApiObjectBase {
                      RenderPassResourceUsage resourceUsage,
                      IndirectDrawMetadata indirectDrawMetadata);
 
-    static Ref<RenderBundleBase> MakeError(DeviceBase* device, const char* label);
+    static Ref<RenderBundleBase> MakeError(DeviceBase* device, StringView label);
 
     ObjectType GetType() const override;
     void FormatLabel(absl::FormatSink* s) const override;
@@ -74,10 +74,11 @@ class RenderBundleBase final : public ApiObjectBase {
     const RenderPassResourceUsage& GetResourceUsage() const;
     const IndirectDrawMetadata& GetIndirectDrawMetadata();
 
-  private:
-    RenderBundleBase(DeviceBase* device, ErrorTag errorTag, const char* label);
+  protected:
+    void DestroyImpl(DestroyReason reason) override;
 
-    void DestroyImpl() override;
+  private:
+    RenderBundleBase(DeviceBase* device, ErrorTag errorTag, StringView label);
 
     CommandIterator mCommands;
     IndirectDrawMetadata mIndirectDrawMetadata;

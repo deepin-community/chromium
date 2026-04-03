@@ -6,10 +6,11 @@
  * @fileoverview Polymer mixin for dealing with Cellular setup subflows.
  * It includes some methods and property shared between subflows.
  */
-import {assertNotReached} from 'chrome://resources/js/assert.js';
-import {dedupingMixin, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {assertNotReached} from '//resources/js/assert.js';
+import type {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {dedupingMixin} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {ButtonBarState} from './cellular_types.js';
+import type {ButtonBarState} from './cellular_types.js';
 
 type Constructor<T> = new (...args: any[]) => T;
 
@@ -36,10 +37,6 @@ export const SubflowMixin = dedupingMixin(
           assertNotReached();
         }
 
-        navigateBackward(): void {
-          assertNotReached();
-        }
-
         maybeFocusPageElement(): boolean {
           return false;
         }
@@ -52,6 +49,5 @@ export interface SubflowMixinInterface {
   buttonState: ButtonBarState;
   initSubflow(): void;
   navigateForward(): void;
-  navigateBackward(): void;
   maybeFocusPageElement(): boolean;
 }

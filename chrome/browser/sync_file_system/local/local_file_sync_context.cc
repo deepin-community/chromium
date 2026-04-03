@@ -7,7 +7,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -74,7 +73,7 @@ void LocalFileSyncContext::MaybeInitializeFileSystemContext(
     FileSystemContext* file_system_context,
     SyncStatusCallback callback) {
   DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
-  if (base::Contains(file_system_contexts_, file_system_context)) {
+  if (file_system_contexts_.contains(file_system_context)) {
     // The context has been already initialized. Just dispatch the callback
     // with SYNC_STATUS_OK.
     ui_task_runner_->PostTask(
@@ -307,7 +306,6 @@ void LocalFileSyncContext::ApplyRemoteChange(
       return;
   }
   NOTREACHED();
-  std::move(callback).Run(SYNC_STATUS_FAILED);
 }
 
 void LocalFileSyncContext::HandleRemoteDelete(
@@ -578,8 +576,7 @@ void LocalFileSyncContext::OnWriteEnabled(const FileSystemURL& url) {
   // Nothing to do for now.
 }
 
-LocalFileSyncContext::~LocalFileSyncContext() {
-}
+LocalFileSyncContext::~LocalFileSyncContext() = default;
 
 void LocalFileSyncContext::ScheduleNotifyChangesUpdatedOnIOThread(
     base::OnceClosure callback) {
@@ -752,8 +749,8 @@ void LocalFileSyncContext::DidInitialize(
     return;
   }
   DCHECK(ui_task_runner_->RunsTasksInCurrentSequence());
-  DCHECK(!base::Contains(file_system_contexts_, file_system_context));
-  DCHECK(base::Contains(pending_initialize_callbacks_, file_system_context));
+  DCHECK(!file_system_contexts_.contains(file_system_context));
+  DCHECK(pending_initialize_callbacks_.contains(file_system_context));
 
   SyncFileSystemBackend* backend =
       SyncFileSystemBackend::GetBackend(file_system_context);

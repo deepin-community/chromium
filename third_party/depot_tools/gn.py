@@ -33,20 +33,41 @@ def PruneVirtualEnv():
     ])
 
 
-def findGnInPath():
-    env_path = os.getenv('PATH')
-    if not env_path:
-        return
-    exe = 'gn'
-    if sys.platform in ('win32', 'cygwin'):
-        exe += '.exe'
-    for bin_dir in env_path.split(os.pathsep):
-        if bin_dir.rstrip(os.sep).endswith('depot_tools'):
-            # skip depot_tools to avoid calling gn.py infinitely.
-            continue
-        gn_path = os.path.join(bin_dir, exe)
-        if os.path.isfile(gn_path):
+def FindGnTool():
+    # Try in primary solution location first, with the gn binary having been
+    # downloaded by cipd in the projects DEPS.
+    primary_solution_path = gclient_paths.GetPrimarySolutionPath()
+    if primary_solution_path:
+        gn_path = os.path.join(primary_solution_path, 'third_party', 'gn',
+                               'gn' + gclient_paths.GetExeSuffix())
+        if os.path.exists(gn_path):
             return gn_path
+
+    # Otherwise try the old .sha1 and download_from_google_storage locations
+    # inside of buildtools.
+    bin_path = gclient_paths.GetBuildtoolsPlatformBinaryPath()
+    if not bin_path:
+        gn_path = gclient_paths.FindInPath('gn')
+        if gn_path:
+            return gn_path
+        print('gn.py: Unable to find gn in your $PATH', file=sys.stderr)
+        print('Hint: `which -a gn` should output two entries', file=sys.stderr)
+        return None
+    # TODO(b/328065301): Once chromium/src CL has landed to migrate
+    # buildtools/<platform>/gn to buildtools/<platform>/gn/gn, only return
+    # gn/gn path.
+    old_gn_path = os.path.join(bin_path, 'gn' + gclient_paths.GetExeSuffix())
+    new_gn_path = os.path.join(bin_path, 'gn',
+                               'gn' + gclient_paths.GetExeSuffix())
+    paths = [new_gn_path, old_gn_path]
+    for path in paths:
+        if os.path.isfile(path):
+            return path
+    print('gn.py: Could not find gn executable at: %s' % paths, file=sys.stderr)
+    print(
+        "Either GN isn't installed on your system, or you're not running in " +
+        "a checkout with a preinstalled gn binary.",
+        file=sys.stderr)
 
 
 def main(args):
@@ -55,37 +76,13 @@ def main(args):
     # Invocations of `python` from GN should never inherit the gn.py's own
     # VirtualEnv. This also helps to ensure that generated ninja files do not
     # reference python.exe from the VirtualEnv generated from depot_tools' own
-    # .vpython file (or lack thereof), but instead reference the default python
+    # .vpython3 file (or lack thereof), but instead reference the default python
     # from the PATH.
     PruneVirtualEnv()
-
-    # Try in primary solution location first, with the gn binary having been
-    # downloaded by cipd in the projects DEPS.
-    primary_solution_path = gclient_paths.GetPrimarySolutionPath()
-    if primary_solution_path:
-        gn_path = os.path.join(primary_solution_path, 'third_party', 'gn',
-                               'gn' + gclient_paths.GetExeSuffix())
-        if os.path.exists(gn_path):
-            return subprocess.call([gn_path] + args[1:])
-
-    # Otherwise try the old .sha1 and download_from_google_storage locations
-    # inside of buildtools.
-    bin_path = gclient_paths.GetBuildtoolsPlatformBinaryPath()
-    if not bin_path:
-        gn_path = findGnInPath()
-        if gn_path:
-            return subprocess.call([gn_path] + args[1:])
-        print(
-            'gn.py: Could not find checkout in any parent of the current '
-            'path.\nThis must be run inside a checkout.',
-            file=sys.stderr)
-        return 1
-    gn_path = os.path.join(bin_path, 'gn' + gclient_paths.GetExeSuffix())
-    if not os.path.exists(gn_path):
-        print('gn.py: Could not find gn executable at: %s' % gn_path,
-              file=sys.stderr)
-        return 2
-    return subprocess.call([gn_path] + args[1:])
+    gn = FindGnTool()
+    if gn:
+        return subprocess.call([gn] + args[1:])
+    return 2
 
 
 if __name__ == '__main__':

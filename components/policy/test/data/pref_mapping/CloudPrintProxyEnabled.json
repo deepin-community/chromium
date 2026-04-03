@@ -1,22 +1,5 @@
 [
   {
-    "os": [
-      "win",
-      "linux",
-      "mac",
-      "fuchsia"
-    ],
-    "policy_pref_mapping_tests": [
-      {
-        "policies": {
-          "CloudPrintProxyEnabled": true
-        },
-        "prefs": {
-          "cloud_print.enabled": {
-            "value": true
-          }
-        }
-      }
-    ]
+    "reason_for_missing_test": "Policy is being removed"
   }
 ]

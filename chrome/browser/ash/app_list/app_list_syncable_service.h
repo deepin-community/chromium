@@ -21,6 +21,7 @@
 #include "base/one_shot_event.h"
 #include "base/scoped_observation_traits.h"
 #include "build/build_config.h"
+#include "chrome/browser/apps/app_preload_service/preload_app_definition.h"
 #include "chrome/browser/ash/app_list/reorder/app_list_reorder_delegate.h"
 #include "chrome/browser/sync/glue/sync_start_util.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -29,11 +30,11 @@
 #include "components/sync/model/sync_change_processor.h"
 #include "components/sync/model/syncable_service.h"
 #include "components/sync/protocol/app_list_specifics.pb.h"
+#include "extensions/browser/extension_registrar.h"
 
 class AppListModelUpdater;
 class AppServiceAppModelBuilder;
 class AppServicePromiseAppModelBuilder;
-class AppServiceShortcutModelBuilder;
 class ChromeAppListItem;
 class Profile;
 
@@ -92,6 +93,16 @@ class AppListSyncableService : public syncer::SyncableService,
     // https://crbug.com/1306913.
     bool empty_item_ordinal_fixable = true;
 
+    // If set with value equal to `item_ordinal`, indicates that the item
+    // ordinal should be reset to a value used by default for new apps. Used for
+    // default installed apps that need to be added to default app order for new
+    // users, but positioned to the front (as if it was a newly installed app)
+    // of the app list for existing users. This will be set if the app position
+    // is set to the default order before initial sync completes (as initial
+    // sync may change whether the  user is considered new or existing).
+    std::optional<syncer::StringOrdinal>
+        ordinal_to_undo_on_non_empty_initial_sync;
+
     // Indicates whether the sync item is ephemeral - i.e. an app or a folder
     // that does not persist across sessions. These items have a uniquely
     // generated ID per-session.
@@ -99,24 +110,6 @@ class AppListSyncableService : public syncer::SyncableService,
     // nor be synced, in order to avoid growing the App List indefinitely with
     // IDs of obsolete ephemeral items.
     bool is_ephemeral = false;
-
-    // Whether the app was pinned to shelf by the user or not.
-    // The eventual consistency (a sufficient amount of time after rollout)
-    // we're aspiring to reach here is for this field to be interleaved with the
-    // pin ordinal: `item_pin_ordinal.IsValid() <=> is_user_pinned.has_value()`.
-    // However, it's okay for this contract to be violated in the meantine.
-    //
-    //  * missing value indicates that either `item_pin_ordinal` is invalid or
-    //    this field is new and hasn't yet been processed by sync.
-    //  * `true` means that the app was pinned by the user.
-    //    We are using this definition in a relaxed way -- for instance, default
-    //    OS apps that are shown in the shelf (like Chrome itself) also have
-    //    this set to true.
-    //  * `false` means that the app was pinned by PinnedLauncherApps policy.
-    //    Note that user pin has priority: if an app was first pinned by the
-    //    user and then additionally specified in PinnedLauncherApps, this value
-    //    will be set to true.
-    std::optional<bool> is_user_pinned;
 
     // Whether the item is considered new - i.e. first added during the current
     // user session. This will be false if the sync item was created when
@@ -148,7 +141,8 @@ class AppListSyncableService : public syncer::SyncableService,
   static std::unique_ptr<base::ScopedClosureRunner>
   SetScopedModelUpdaterFactoryForTest(ModelUpdaterFactoryCallback callback);
 
-  using SyncItemMap = std::map<std::string, std::unique_ptr<SyncItem>>;
+  using SyncItemMap =
+      std::map<std::string, std::unique_ptr<SyncItem>, std::less<>>;
 
   // Populates the model when |profile|'s extension system is ready.
   explicit AppListSyncableService(Profile* profile);
@@ -243,12 +237,9 @@ class AppListSyncableService : public syncer::SyncableService,
   virtual syncer::StringOrdinal GetPinPosition(const std::string& app_id);
 
   // Sets pin position and how it is pinned for the app specified by |app_id|.
-  // |item_pin_ordinal| must be valid.
-  // |pinned_by_policy| tells whether this item is pinned to the shelf by the
-  // `PinnedLauncherApps` policy.
+  // Empty |item_pin_ordinal| indicates that the app has no pin.
   virtual void SetPinPosition(const std::string& app_id,
-                              const syncer::StringOrdinal& item_pin_ordinal,
-                              bool pinned_by_policy);
+                              const syncer::StringOrdinal& item_pin_ordinal);
 
   // Copies a promise app sync item attributes from a sync item  with
   // `promise_app_id` to a sync item with `target_id`. No-op if the source sync
@@ -257,11 +248,6 @@ class AppListSyncableService : public syncer::SyncableService,
   // attributes the the sync item associated with the installed app.
   void CopyPromiseItemAttributesToItem(const std::string& promise_app_id,
                                        const std::string& target_id);
-
-  // Sets |is_user_pinned| to false for the given item specified by |item_id|.
-  // Item must exist, |item_pin_ordinal| must be valid, and |is_user_pinned|
-  // must be unset by the time of the call.
-  void SetIsPolicyPinned(const std::string& app_id);
 
   // Removes pin position for the app specified by |app_id|.
   virtual void RemovePinPosition(const std::string& app_id);
@@ -290,6 +276,16 @@ class AppListSyncableService : public syncer::SyncableService,
     return oem_folder_name_;
   }
 
+  // Receives launcher ordering when AppPreloadService is ready, and merges with
+  // `preload_service_ordinals_` to precalculate the ordinals for any of the
+  // default apps to be installed by APS.
+  void OnGetLauncherOrdering(const apps::LauncherOrdering& launcher_ordering);
+
+  const std::map<apps::LauncherItem, syncer::StringOrdinal>&
+  GetDefaultOrdinalsForTest() const {
+    return preload_service_ordinals_;
+  }
+
   void PopulateSyncItemsForTest(std::vector<std::unique_ptr<SyncItem>>&& items);
 
   virtual const SyncItemMap& sync_items() const;
@@ -297,15 +293,17 @@ class AppListSyncableService : public syncer::SyncableService,
   // syncer::SyncableService
   void WaitUntilReadyToSync(base::OnceClosure done) override;
   std::optional<syncer::ModelError> MergeDataAndStartSyncing(
-      syncer::ModelType type,
+      syncer::DataType type,
       const syncer::SyncDataList& initial_sync_data,
       std::unique_ptr<syncer::SyncChangeProcessor> sync_processor) override;
-  void StopSyncing(syncer::ModelType type) override;
+  void StopSyncing(syncer::DataType type) override;
   syncer::SyncDataList GetAllSyncDataForTesting() const;
   std::optional<syncer::ModelError> ProcessSyncChanges(
       const base::Location& from_here,
       const syncer::SyncChangeList& change_list) override;
   base::WeakPtr<SyncableService> AsWeakPtr() override;
+  std::string GetClientTag(
+      const syncer::EntityData& entity_data) const override;
 
   // KeyedService
   void Shutdown() override;
@@ -317,6 +315,11 @@ class AppListSyncableService : public syncer::SyncableService,
       const ash::AppListItemMetadata& metadata,
       syncer::StringOrdinal* target_position) const override;
   ash::AppListSortOrder GetPermanentSortingOrder() const override;
+
+  void set_app_default_positioned_for_new_users_only_for_test(
+      const std::string& app_id) {
+    app_default_positioned_for_new_users_only_ = app_id;
+  }
 
  private:
   friend class AppListSyncModelSanitizer;
@@ -372,10 +375,8 @@ class AppListSyncableService : public syncer::SyncableService,
   // after a sync item is removed (which may result in an empty folder).
   void PruneEmptySyncFolders();
 
-  // Creates or updates a SyncItem from |specifics|. Returns true if a new item
-  // was created.
-  // TODO(crbug.com/1057577): Change return type to void.
-  bool ProcessSyncItemSpecifics(const sync_pb::AppListSpecifics& specifics);
+  // Creates or updates a SyncItem from |specifics|.
+  void ProcessSyncItemSpecifics(const sync_pb::AppListSpecifics& specifics);
 
   // Handles a newly created sync item (e.g. creates a new AppItem and adds it
   // to the model or uninstalls a deleted default item.
@@ -432,6 +433,19 @@ class AppListSyncableService : public syncer::SyncableService,
   bool UpdateSyncItemFromAppItem(const ChromeAppListItem* app_item,
                                  AppListSyncableService::SyncItem* sync_item);
 
+  // If `new_item` is found in AppPreloadServer `launcher_ordering`, this
+  // function returns true and sets `position`. Additionally sets `folder_id`,
+  // `folder_name`, and `folder_position` if the item is not in the root folder.
+  bool GetAppPreloadServiceInfo(const ChromeAppListItem* new_item,
+                                syncer::StringOrdinal* position,
+                                std::string* folder_id,
+                                std::string* folder_name,
+                                syncer::StringOrdinal* folder_position) const;
+
+  // Sets OEM folder name if any OEM folder is specified in the root folder.
+  void SetOemFolderNameFromAppPreloadService(
+      const apps::LauncherOrdering& launcher_ordering);
+
   // Initializes `new_item`'s position. This function should be called before
   // adding `new_item` to `model_updater_`.
   void InitNewItemPosition(ChromeAppListItem* new_item);
@@ -443,9 +457,12 @@ class AppListSyncableService : public syncer::SyncableService,
   void ApplyAppAttributes(const std::string& app_id,
                           std::unique_ptr<SyncItem> attributes);
 
-  // Creates a `ChromeAppListItem` and a sync item for OEM folder, if they don't
-  // already exist.
-  void EnsureOemFolderExists();
+  // Creates a `ChromeAppListItem` and a sync item for the specified folder if
+  // it doesn't already exist. `folder_position` is used if it is valid, and
+  // this item does not already have sync data.
+  void EnsureFolderExists(const std::string& folder_id,
+                          const std::string& folder_name,
+                          syncer::StringOrdinal folder_position);
 
   // Creates or updates a GuestOS folder's sync data if the folder is
   // missing.
@@ -457,9 +474,15 @@ class AppListSyncableService : public syncer::SyncableService,
   bool MaybeCreateFolderBeforeAddingItem(ChromeAppListItem* app_item,
                                          const std::string& folder_id);
 
+  // Returns whether the app with `app_id` should be positioned in the default
+  // app order for new users only (for existing users, the app will be added to
+  // front of the app list when installed).
+  bool IsAppDefaultPositionedForNewUsersOnly(const std::string& app_id) const;
+
   raw_ptr<Profile> profile_;
   raw_ptr<extensions::ExtensionSystem> extension_system_;
   raw_ptr<extensions::ExtensionRegistry> extension_registry_;
+  raw_ptr<extensions::ExtensionRegistrar> extension_registrar_;
   std::unique_ptr<AppListModelUpdater> model_updater_;
   std::unique_ptr<ModelUpdaterObserver> model_updater_observer_;
   std::unique_ptr<AppListSyncModelSanitizer> sync_model_sanitizer_;
@@ -467,14 +490,13 @@ class AppListSyncableService : public syncer::SyncableService,
   std::unique_ptr<AppServiceAppModelBuilder> app_service_apps_builder_;
   std::unique_ptr<AppServicePromiseAppModelBuilder>
       app_service_promise_apps_builder_;
-  std::unique_ptr<AppServiceShortcutModelBuilder>
-      app_service_shortcuts_builder_;
   std::unique_ptr<syncer::SyncChangeProcessor> sync_processor_;
   SyncItemMap sync_items_;
   // Map that keeps pending request to transfer attributes from one app to
   // another.
   SyncItemMap pending_transfer_map_;
   syncer::SyncableService::StartSyncFlare flare_;
+  bool local_state_initially_empty_ = false;
   bool initial_sync_data_processed_ = false;
   bool first_app_list_sync_ = true;
   // Whether OEM folder position is set to a provisional value - the default OEM
@@ -495,6 +517,17 @@ class AppListSyncableService : public syncer::SyncableService,
   // Map from a promise app item to an app sync item linked with the promise app
   // - created by `CreateLinkedPromiseSyncItemIfAvailable()`.
   std::map<std::string, std::string> items_linked_to_promise_item_;
+
+  // Used in tests to add an extra app whose default position is used for new
+  // users only. `IsAppDefaultPositionedForNewUsersOnly()` will return true for
+  // this app.
+  std::optional<std::string> app_default_positioned_for_new_users_only_;
+
+  // Launcher ordering from AppPreloadService.
+  apps::LauncherOrdering preload_service_order_;
+
+  // Map of ordinals for AppPreloadService ordering.
+  std::map<apps::LauncherItem, syncer::StringOrdinal> preload_service_ordinals_;
 
   // List of observers.
   base::ObserverList<Observer> observer_list_;

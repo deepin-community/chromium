@@ -2,13 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <algorithm>
-
-#include <ntstatus.h>
 #include <windows.h>
-#include <winioctl.h>
 #include <winternl.h>
 
+#include <ntstatus.h>
+#include <winioctl.h>
+
+#include <algorithm>
+
+#include "base/compiler_specific.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_number_conversions_win.h"
 #include "base/strings/string_util_win.h"
 #include "base/win/scoped_handle.h"
 #include "sandbox/win/src/filesystem_policy.h"
@@ -27,6 +31,11 @@
 
 namespace sandbox {
 
+namespace {
+constexpr wchar_t kNTDevicePrefix[] = L"\\Device\\";
+constexpr size_t kNTDevicePrefixLen = std::size(kNTDevicePrefix) - 1;
+}  // namespace
+
 const ULONG kSharing = FILE_SHARE_WRITE | FILE_SHARE_READ | FILE_SHARE_DELETE;
 
 // Creates a file using different desired access. Returns if the call succeeded
@@ -39,10 +48,12 @@ SBOX_TESTS_COMMAND int File_Create(int argc, wchar_t** argv) {
   std::wstring operation(argv[0]);
 
   if (operation == L"Read") {
-    base::win::ScopedHandle file1(CreateFile(
-        argv[1], GENERIC_READ, kSharing, nullptr, OPEN_EXISTING, 0, nullptr));
-    base::win::ScopedHandle file2(CreateFile(
-        argv[1], FILE_EXECUTE, kSharing, nullptr, OPEN_EXISTING, 0, nullptr));
+    base::win::ScopedHandle file1(CreateFile(UNSAFE_TODO(argv[1]), GENERIC_READ,
+                                             kSharing, nullptr, OPEN_EXISTING,
+                                             0, nullptr));
+    base::win::ScopedHandle file2(CreateFile(UNSAFE_TODO(argv[1]), FILE_EXECUTE,
+                                             kSharing, nullptr, OPEN_EXISTING,
+                                             0, nullptr));
 
     if (file1.is_valid() == file2.is_valid()) {
       return file1.is_valid() ? SBOX_TEST_SUCCEEDED : SBOX_TEST_DENIED;
@@ -50,12 +61,12 @@ SBOX_TESTS_COMMAND int File_Create(int argc, wchar_t** argv) {
     return file1.is_valid() ? SBOX_TEST_FIRST_ERROR : SBOX_TEST_SECOND_ERROR;
 
   } else if (operation == L"Write") {
-    base::win::ScopedHandle file1(
-        CreateFile(argv[1], GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE,
-                   kSharing, nullptr, OPEN_EXISTING, 0, nullptr));
+    base::win::ScopedHandle file1(CreateFile(
+        UNSAFE_TODO(argv[1]), GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE,
+        kSharing, nullptr, OPEN_EXISTING, 0, nullptr));
     base::win::ScopedHandle file2(
-        CreateFile(argv[1], GENERIC_READ | FILE_WRITE_DATA, kSharing, nullptr,
-                   OPEN_EXISTING, 0, nullptr));
+        CreateFile(UNSAFE_TODO(argv[1]), GENERIC_READ | FILE_WRITE_DATA,
+                   kSharing, nullptr, OPEN_EXISTING, 0, nullptr));
 
     if (file1.is_valid() == file2.is_valid()) {
       return file1.is_valid() ? SBOX_TEST_SUCCEEDED : SBOX_TEST_DENIED;
@@ -63,10 +74,12 @@ SBOX_TESTS_COMMAND int File_Create(int argc, wchar_t** argv) {
     return file1.is_valid() ? SBOX_TEST_FIRST_ERROR : SBOX_TEST_SECOND_ERROR;
 
   } else if (operation == L"ReadCreate") {
-    base::win::ScopedHandle file2(CreateFile(argv[1], GENERIC_READ, kSharing,
-                                             nullptr, CREATE_NEW, 0, nullptr));
-    base::win::ScopedHandle file1(CreateFile(
-        argv[1], GENERIC_READ, kSharing, nullptr, CREATE_ALWAYS, 0, nullptr));
+    base::win::ScopedHandle file2(CreateFile(UNSAFE_TODO(argv[1]), GENERIC_READ,
+                                             kSharing, nullptr, CREATE_NEW, 0,
+                                             nullptr));
+    base::win::ScopedHandle file1(CreateFile(UNSAFE_TODO(argv[1]), GENERIC_READ,
+                                             kSharing, nullptr, CREATE_ALWAYS,
+                                             0, nullptr));
 
     if (file1.is_valid() == file2.is_valid()) {
       return file1.is_valid() ? SBOX_TEST_SUCCEEDED : SBOX_TEST_DENIED;
@@ -109,8 +122,9 @@ SBOX_TESTS_COMMAND int File_CreateSys32(int argc, wchar_t** argv) {
     return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
   }
 
-  if (argc != 1)
+  if (argc < 1 || argc > 2) {
     return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
+  }
 
   std::wstring file(argv[0]);
   if (0 != _wcsnicmp(file.c_str(), kNTDevicePrefix, kNTDevicePrefixLen))
@@ -123,11 +137,16 @@ SBOX_TESTS_COMMAND int File_CreateSys32(int argc, wchar_t** argv) {
   InitializeObjectAttributes(&obj_attributes, &object_name,
                              OBJ_CASE_INSENSITIVE, nullptr, nullptr);
 
+  unsigned options = 0;
+  if (argc == 2 && !base::StringToUint(UNSAFE_TODO(argv[1]), &options)) {
+    return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
+  }
+
   HANDLE handle;
   IO_STATUS_BLOCK io_block = {};
   NTSTATUS status =
       NtCreateFile(&handle, FILE_READ_DATA, &obj_attributes, &io_block, nullptr,
-                   0, kSharing, FILE_OPEN, 0, nullptr, 0);
+                   0, kSharing, FILE_OPEN, options, nullptr, 0);
   if (NT_SUCCESS(status)) {
     ::CloseHandle(handle);
     return SBOX_TEST_SUCCEEDED;
@@ -147,8 +166,9 @@ SBOX_TESTS_COMMAND int File_OpenSys32(int argc, wchar_t** argv) {
     return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
   }
 
-  if (argc != 1)
+  if (argc < 1 || argc > 2) {
     return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
+  }
 
   std::wstring file = MakePathToSys(argv[0], true);
   UNICODE_STRING object_name;
@@ -158,10 +178,15 @@ SBOX_TESTS_COMMAND int File_OpenSys32(int argc, wchar_t** argv) {
   InitializeObjectAttributes(&obj_attributes, &object_name,
                              OBJ_CASE_INSENSITIVE, nullptr, nullptr);
 
+  unsigned options = 0;
+  if (argc == 2 && !base::StringToUint(UNSAFE_TODO(argv[1]), &options)) {
+    return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
+  }
+
   HANDLE handle;
   IO_STATUS_BLOCK io_block = {};
   NTSTATUS status = NtOpenFile(&handle, FILE_READ_DATA, &obj_attributes,
-                               &io_block, kSharing, 0);
+                               &io_block, kSharing, options);
   if (NT_SUCCESS(status)) {
     ::CloseHandle(handle);
     return SBOX_TEST_SUCCEEDED;
@@ -202,8 +227,9 @@ SBOX_TESTS_COMMAND int File_Rename(int argc, wchar_t** argv) {
   if (argc != 2)
     return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
 
-  if (::MoveFileEx(argv[0], argv[1], 0))
+  if (::MoveFileEx(argv[0], UNSAFE_TODO(argv[1]), 0)) {
     return SBOX_TEST_SUCCEEDED;
+  }
 
   if (::GetLastError() != ERROR_ACCESS_DENIED)
     return SBOX_TEST_FAILED;
@@ -226,7 +252,7 @@ SBOX_TESTS_COMMAND int File_QueryAttributes(int argc, wchar_t** argv) {
   if (argc != 2)
     return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
 
-  bool expect_directory = (L'd' == argv[1][0]);
+  bool expect_directory = (L'd' == UNSAFE_TODO(argv[1])[0]);
 
   UNICODE_STRING object_name;
   std::wstring file = MakePathToSys(argv[0], true);
@@ -370,7 +396,6 @@ TEST(FilePolicyTest, AllowImplicitDeviceName) {
   ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name), 0u);
 
   std::wstring path(temp_file_name);
-  EXPECT_TRUE(ConvertToLongPath(&path));
   auto opt_nt_path = GetNtPathFromWin32Path(path);
   EXPECT_TRUE(opt_nt_path);
   path = opt_nt_path->substr(sandbox::kNTDevicePrefixLen);
@@ -399,7 +424,7 @@ TEST(FilePolicyTest, AllowWildcard) {
   ASSERT_NE(::GetTempPath(MAX_PATH, temp_directory), 0u);
   ASSERT_NE(::GetTempFileName(temp_directory, L"test", 0, temp_file_name), 0u);
 
-  wcscat_s(temp_directory, MAX_PATH, L"*");
+  UNSAFE_TODO(wcscat_s(temp_directory, MAX_PATH, L"*"));
   EXPECT_TRUE(runner.AllowFileAccess(FileSemantics::kAllowAny, temp_directory));
 
   wchar_t command_write[MAX_PATH + 20] = {};
@@ -676,9 +701,9 @@ TEST(FilePolicyTest, TestReparsePoint) {
   EXPECT_TRUE(SetReparsePoint(dir, temp_dir_nt.c_str()));
   EXPECT_TRUE(::CloseHandle(dir));
 
-  // Try to open the file again.
+  // Try to open the file again. This should still work.
   runner = ReparsePointRunner(temp_dir_wildcard);
-  EXPECT_EQ(SBOX_TEST_DENIED, runner->RunTest(command_write.c_str()));
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED, runner->RunTest(command_write.c_str()));
 
   // Remove the reparse point.
   dir = ::CreateFile(subfolder.c_str(), FILE_WRITE_DATA,
@@ -692,30 +717,6 @@ TEST(FilePolicyTest, TestReparsePoint) {
   // Cleanup.
   EXPECT_TRUE(::DeleteFile(temp_file_in_temp.c_str()));
   EXPECT_TRUE(::RemoveDirectory(subfolder.c_str()));
-}
-
-TEST(FilePolicyTest, CheckExistingNTPrefixEscape) {
-  std::wstring name = L"\\??\\NAME";
-
-  std::wstring result = FixNTPrefixForMatch(name);
-
-  EXPECT_STREQ(result.c_str(), L"\\/?/?\\NAME");
-}
-
-TEST(FilePolicyTest, CheckEscapedNTPrefixNoEscape) {
-  std::wstring name = L"\\/?/?\\NAME";
-
-  std::wstring result = FixNTPrefixForMatch(name);
-
-  EXPECT_STREQ(result.c_str(), name.c_str());
-}
-
-TEST(FilePolicyTest, CheckMissingNTPrefixEscape) {
-  std::wstring name = L"C:\\NAME";
-
-  std::wstring result = FixNTPrefixForMatch(name);
-
-  EXPECT_STREQ(result.c_str(), L"\\/?/?\\C:\\NAME");
 }
 
 TEST(FilePolicyTest, TestCopyFile) {
@@ -733,6 +734,22 @@ TEST(FilePolicyTest, TestCopyFile) {
             SBOX_ALL_OK);
 
   ASSERT_EQ(SBOX_TEST_SUCCEEDED, runner.RunTest(L"File_CopyFile"));
+}
+
+TEST(FilePolicyTest, DenyOpenById) {
+  std::wstring option = base::NumberToWString(FILE_OPEN_BY_FILE_ID);
+  auto runner = AllowNotepadRunner();
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED,
+            runner->RunTest(L"File_CreateSys32 notepad.exe 0"));
+  runner = AllowNotepadRunner();
+  std::wstring test = L"File_CreateSys32 notepad.exe " + option;
+  EXPECT_EQ(SBOX_TEST_DENIED, runner->RunTest(test.c_str()));
+  runner = AllowNotepadRunner();
+  EXPECT_EQ(SBOX_TEST_SUCCEEDED,
+            runner->RunTest(L"File_OpenSys32 notepad.exe 0"));
+  runner = AllowNotepadRunner();
+  test = L"File_OpenSys32 notepad.exe " + option;
+  EXPECT_EQ(SBOX_TEST_DENIED, runner->RunTest(test.c_str()));
 }
 
 }  // namespace sandbox

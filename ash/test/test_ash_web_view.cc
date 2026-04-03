@@ -6,6 +6,7 @@
 
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/unguessable_token.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/view.h"
 
@@ -72,6 +73,10 @@ bool TestAshWebView::IsErrorDocument() {
 
 void TestAshWebView::SetCornerRadii(const gfx::RoundedCornersF& corner_radii) {
   // Not yet implemented for unittests.
+}
+
+const base::UnguessableToken& TestAshWebView::GetMediaSessionRequestId() {
+  return base::UnguessableToken::Null();
 }
 
 BEGIN_METADATA(TestAshWebView)

@@ -122,6 +122,9 @@ class ExtendedDragSource::DraggedWindowHolder : public aura::WindowObserver,
   void OnSurfaceDestroying(Surface* surface) override {
     if (surface_ == surface) {
       surface_->RemoveSurfaceObserver(this);
+      if (surface_->window()->HasObserver(this)) {
+        surface_->window()->RemoveObserver(this);
+      }
       surface_ = nullptr;
     }
   }
@@ -332,7 +335,7 @@ void ExtendedDragSource::StartDrag(aura::Window* toplevel) {
       },
       weak_factory_.GetWeakPtr());
 
-  // TODO(crbug.com/1167581): Experiment setting |update_gesture_target| back
+  // TODO(crbug.com/40164668): Experiment setting |update_gesture_target| back
   // to true when capture is removed from drag and drop.
 
   gfx::PointF pointer_location_in_parent(pointer_location_);
@@ -380,8 +383,7 @@ void ExtendedDragSource::OnDraggedWindowVisibilityChanged(bool visible) {
 
   auto toplevel_bounds =
       gfx::Rect({screen_location, toplevel->bounds().size()});
-  auto display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(toplevel);
+  auto display = display::Screen::Get()->GetDisplayNearestWindow(toplevel);
   toplevel->SetBoundsInScreen(toplevel_bounds, display);
 
   DVLOG(1) << "Dragged window mapped. toplevel=" << toplevel

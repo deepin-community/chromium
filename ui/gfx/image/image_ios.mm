@@ -28,14 +28,13 @@ UIImage* CreateErrorUIImage(float scale) {
   base::apple::ScopedCFTypeRef<CGColorSpaceRef> color_space(
       CGColorSpaceCreateDeviceRGB());
   base::apple::ScopedCFTypeRef<CGContextRef> context(CGBitmapContextCreate(
-      nullptr,  // Allow CG to allocate memory.
-      16,       // width
-      16,       // height
-      8,        // bitsPerComponent
-      0,        // CG will calculate by default.
-      color_space.get(),
-      kCGImageAlphaPremultipliedFirst |
-          static_cast<CGImageAlphaInfo>(kCGBitmapByteOrder32Host)));
+      nullptr,
+      /*width=*/16,
+      /*height=*/16,
+      /*bitsPerComponent=*/8,
+      /*bytesPerRow=*/0, color_space.get(),
+      static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedFirst) |
+          kCGImageByteOrder32Host));
   CGContextSetRGBFillColor(context.get(), 1.0, 0.0, 0.0, 1.0);
   CGContextFillRect(context.get(), CGRectMake(0.0, 0.0, 16, 16));
   base::apple::ScopedCFTypeRef<CGImageRef> cg_image(
@@ -109,8 +108,8 @@ scoped_refptr<base::RefCountedMemory> Get1xPNGBytesFromUIImage(
 
   scoped_refptr<base::RefCountedBytes> png_bytes(
       new base::RefCountedBytes());
-  png_bytes->data().resize(data.length);
-  [data getBytes:&png_bytes->data().at(0) length:data.length];
+  png_bytes->as_vector().resize(data.length);
+  [data getBytes:&png_bytes->as_vector().at(0) length:data.length];
   return png_bytes;
 }
 

@@ -73,7 +73,7 @@ Reader::Config::~Config() = default;
 
 Reader::Reader(base::span<const uint8_t> data)
     : rest_(data), error_code_(DecoderError::CBOR_NO_ERROR) {}
-Reader::~Reader() {}
+Reader::~Reader() = default;
 
 // static
 std::optional<Value> Reader::Read(base::span<uint8_t const> data,
@@ -289,8 +289,6 @@ std::optional<Value> Reader::DecodeToSimpleValueOrFloat(
       }
       default:
         NOTREACHED();
-        error_code_ = DecoderError::UNSUPPORTED_SIMPLE_VALUE;
-        return std::nullopt;
     }
   }
 
@@ -407,10 +405,11 @@ std::optional<Value> Reader::ReadMapContent(
 
   Value::MapValue map;
   map.reserve(cbor_map.size());
-  // TODO(crbug/1271599): when Chromium switches to C++17, this code can be
-  // optimized using std::map::extract().
-  for (auto& it : cbor_map)
-    map.emplace_hint(map.end(), it.first.Clone(), std::move(it.second));
+  while (!cbor_map.empty()) {
+    auto node = cbor_map.extract(cbor_map.begin());
+    map.emplace_hint(map.end(), std::move(node.key()),
+                     std::move(node.mapped()));
+  }
   return Value(std::move(map));
 }
 
@@ -503,7 +502,6 @@ const char* Reader::ErrorCodeToString(DecoderError error) {
       return kUnknownError;
     default:
       NOTREACHED();
-      return "Unknown error code.";
   }
 }
 

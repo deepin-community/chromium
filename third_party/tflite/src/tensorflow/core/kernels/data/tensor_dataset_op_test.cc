@@ -29,14 +29,15 @@ constexpr char kNodeName[] = "tensor_dataset";
 
 class TensorDatasetParams : public DatasetParams {
  public:
-  TensorDatasetParams(std::vector<Tensor> components, string node_name)
+  TensorDatasetParams(std::vector<Tensor> components, std::string node_name)
       : DatasetParams(TensorDtypes(components), TensorShapes(components),
                       std::move(node_name)),
         components_(std::move(components)) {}
 
   std::vector<Tensor> GetInputTensors() const override { return components_; }
 
-  Status GetInputNames(std::vector<string>* input_names) const override {
+  absl::Status GetInputNames(
+      std::vector<std::string>* input_names) const override {
     input_names->reserve(components_.size());
     for (int i = 0; i < components_.size(); ++i) {
       input_names->emplace_back(
@@ -45,14 +46,16 @@ class TensorDatasetParams : public DatasetParams {
     return absl::OkStatus();
   }
 
-  Status GetAttributes(AttributeVector* attr_vector) const override {
+  absl::Status GetAttributes(AttributeVector* attr_vector) const override {
     *attr_vector = {{"Toutput_types", output_dtypes_},
                     {"output_shapes", output_shapes_},
                     {"metadata", ""}};
     return absl::OkStatus();
   }
 
-  string dataset_type() const override { return TensorDatasetOp::kDatasetType; }
+  std::string dataset_type() const override {
+    return TensorDatasetOp::kDatasetType;
+  }
 
  private:
   DataTypeVector TensorDtypes(const std::vector<Tensor>& input_components) {

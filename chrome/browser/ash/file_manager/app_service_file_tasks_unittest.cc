@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/file_manager/app_service_file_tasks.h"
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -12,6 +13,7 @@
 #include "ash/constants/ash_features.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/escape.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_base.h"
@@ -21,7 +23,6 @@
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/crostini/crostini_test_helper.h"
 #include "chrome/browser/ash/crostini/fake_crostini_features.h"
-#include "chrome/browser/ash/file_manager/app_id.h"
 #include "chrome/browser/ash/file_manager/file_manager_test_util.h"
 #include "chrome/browser/ash/file_manager/file_tasks.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
@@ -31,6 +32,7 @@
 #include "chrome/browser/chromeos/policy/dlp/test/mock_dlp_rules_manager.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/components/file_manager/app_id.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/intent_filter.h"
@@ -38,11 +40,13 @@
 #include "components/services/app_service/public/cpp/intent_util.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/test_helper.h"
 #include "components/user_manager/user_type.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/entry_info.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_features.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "storage/browser/file_system/external_mount_points.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -139,8 +143,8 @@ class AppServiceFileTasksTest : public testing::Test {
     file_tasks::FindAppServiceTasks(profile(), entries, file_urls,
                                     dlp_source_urls, &resulting_tasks->tasks);
     // Sort by app ID so we don't rely on ordering.
-    base::ranges::sort(
-        resulting_tasks->tasks, base::ranges::less(),
+    std::ranges::sort(
+        resulting_tasks->tasks, std::ranges::less(),
         [](const auto& task) { return task.task_descriptor.app_id; });
 
     return resulting_tasks;
@@ -178,24 +182,24 @@ class AppServiceFileTasksTest : public testing::Test {
   void AddChromeApp() {
     extensions::ExtensionBuilder baz_app;
     baz_app.SetManifest(
-        base::Value::Dict()
+        base::DictValue()
             .Set("name", "Baz")
             .Set("version", "1.0.0")
             .Set("manifest_version", 2)
-            .Set("app", base::Value::Dict().Set(
-                            "background",
-                            base::Value::Dict().Set(
-                                "scripts",
-                                base::Value::List().Append("background.js"))))
+            .Set("app",
+                 base::DictValue().Set(
+                     "background",
+                     base::DictValue().Set(
+                         "scripts", base::ListValue().Append("background.js"))))
             .Set("file_handlers",
-                 base::Value::Dict()
+                 base::DictValue()
                      .Set("any",
-                          base::Value::Dict().Set(
+                          base::DictValue().Set(
                               "extensions",
-                              base::Value::List().Append("*").Append("bar")))
-                     .Set("image", base::Value::Dict().Set(
-                                       "types", base::Value::List().Append(
-                                                    "image/*")))));
+                              base::ListValue().Append("*").Append("bar")))
+                     .Set("image",
+                          base::DictValue().Set(
+                              "types", base::ListValue().Append("image/*")))));
     baz_app.SetID(kChromeAppId);
     auto filters =
         apps_util::CreateIntentFiltersForChromeApp(baz_app.Build().get());
@@ -207,48 +211,48 @@ class AppServiceFileTasksTest : public testing::Test {
   void AddChromeAppWithVerbs() {
     extensions::ExtensionBuilder foo_app;
     foo_app.SetManifest(
-        base::Value::Dict()
+        base::DictValue()
             .Set("name", "Foo")
             .Set("version", "1.0.0")
             .Set("manifest_version", 2)
-            .Set("app", base::Value::Dict().Set(
-                            "background",
-                            base::Value::Dict().Set(
-                                "scripts",
-                                base::Value::List().Append("background.js"))))
+            .Set("app",
+                 base::DictValue().Set(
+                     "background",
+                     base::DictValue().Set(
+                         "scripts", base::ListValue().Append("background.js"))))
             .Set("file_handlers",
-                 base::Value::Dict()
+                 base::DictValue()
                      .Set("any_with_directories",
-                          base::Value::Dict()
+                          base::DictValue()
                               .Set("include_directories", true)
-                              .Set("types", base::Value::List().Append("*"))
+                              .Set("types", base::ListValue().Append("*"))
                               .Set("verb", "open_with"))
                      .Set("html_handler",
-                          base::Value::Dict()
+                          base::DictValue()
                               .Set("title", "Html")
                               .Set("types",
-                                   base::Value::List().Append("text/html"))
+                                   base::ListValue().Append("text/html"))
                               .Set("verb", "open_with"))
                      .Set("plain_text",
-                          base::Value::Dict()
+                          base::DictValue()
                               .Set("title", "Plain")
                               .Set("types",
-                                   base::Value::List().Append("text/plain")))
+                                   base::ListValue().Append("text/plain")))
                      .Set("share_plain_text",
-                          base::Value::Dict()
+                          base::DictValue()
                               .Set("title", "Share Plain")
                               .Set("types",
-                                   base::Value::List().Append("text/plain"))
+                                   base::ListValue().Append("text/plain"))
                               .Set("verb", "share_with"))
                      .Set("any_pack",
-                          base::Value::Dict()
-                              .Set("types", base::Value::List().Append("*"))
+                          base::DictValue()
+                              .Set("types", base::ListValue().Append("*"))
                               .Set("verb", "pack_with"))
                      .Set("plain_text_add_to",
-                          base::Value::Dict()
+                          base::DictValue()
                               .Set("title", "Plain")
                               .Set("types",
-                                   base::Value::List().Append("text/plain"))
+                                   base::ListValue().Append("text/plain"))
                               .Set("verb", "add_to"))));
     foo_app.SetID(kChromeAppWithVerbsId);
     auto filters =
@@ -262,19 +266,18 @@ class AppServiceFileTasksTest : public testing::Test {
   void AddExtension() {
     extensions::ExtensionBuilder fbh_app;
     fbh_app.SetManifest(
-        base::Value::Dict()
+        base::DictValue()
             .Set("name", "Fbh")
             .Set("version", "1.0.0")
             .Set("manifest_version", 2)
-            .Set("permissions",
-                 base::Value::List().Append("fileBrowserHandler"))
+            .Set("permissions", base::ListValue().Append("fileBrowserHandler"))
             .Set("file_browser_handlers",
-                 base::Value::List().Append(
-                     base::Value::Dict()
+                 base::ListValue().Append(
+                     base::DictValue()
                          .Set("id", "open")
                          .Set("default_title", "open title")
-                         .Set("file_filters", base::Value::List().Append(
-                                                  "filesystem:*.txt")))));
+                         .Set("file_filters",
+                              base::ListValue().Append("filesystem:*.txt")))));
     fbh_app.SetID(kExtensionId);
     auto filters =
         apps_util::CreateIntentFiltersForExtension(fbh_app.Build().get());
@@ -284,7 +287,7 @@ class AppServiceFileTasksTest : public testing::Test {
   }
 
   // Load an extension from the supplied manifest, then add intent filters.
-  void LoadExtension(const std::string manifest) {
+  void LoadExtension(std::string_view manifest) {
     scoped_refptr<const extensions::Extension> extension =
         extensions::ExtensionBuilder("file handlers").AddJSON(manifest).Build();
     auto filters = apps_util::CreateIntentFiltersForExtension(extension.get());
@@ -355,44 +358,9 @@ class AppServiceFileTasksTest : public testing::Test {
   apps::AppServiceTest app_service_test_;
 };
 
-class AppServiceFileTasksTestEnabled : public AppServiceFileTasksTest {
- public:
-  AppServiceFileTasksTestEnabled() {
-    feature_list_.InitWithFeatures({blink::features::kFileHandlingAPI,
-                                    ash::features::kArcFileTasksUseAppService},
-                                   {});
-  }
-};
-
-class AppServiceFileTasksTestDisabled : public AppServiceFileTasksTest {
- public:
-  AppServiceFileTasksTestDisabled() {
-    feature_list_.InitWithFeatures({},
-                                   {ash::features::kArcFileTasksUseAppService});
-  }
-};
-
-// ARC apps should not be found when kArcFileTasksUseAppService is
-// disabled.
-TEST_F(AppServiceFileTasksTestDisabled, FindAppServiceArcApp) {
-  std::string text_mime_type = "text/plain";
-
-  // Create an app with a text file filter.
-  std::string text_package_name = "com.example.textViewer";
-  std::string text_activity = "TextViewerActivity";
-  std::string text_app_id = AddArcAppWithIntentFilter(
-      text_package_name, text_activity,
-      CreateMimeTypeFileIntentFilter(apps_util::kIntentActionView,
-                                     text_mime_type));
-
-  std::vector<FullTaskDescriptor> tasks =
-      FindAppServiceTasks({{"foo.txt", text_mime_type}});
-  ASSERT_EQ(0U, tasks.size());
-}
-
 // An app which does not handle intents should not be found even if the filters
 // match.
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceFileTasksHandlesIntent) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceFileTasksHandlesIntent) {
   AddFakeWebApp(kAppIdImage, kMimeTypeImage, kFileExtensionImage,
                 kActivityLabelImage, false, app_service_proxy_);
   std::vector<FullTaskDescriptor> tasks =
@@ -402,7 +370,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceFileTasksHandlesIntent) {
 
 // Test that between an image app and text app, the text app can be
 // found for an text file entry.
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceFileTasksText) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceFileTasksText) {
   AddTextApp();
   AddImageApp();
   // Find apps for a "text/plain" file.
@@ -416,7 +384,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceFileTasksText) {
 
 // Test that between an image app and text app, the image app can be
 // found for an image file entry.
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceFileTasksImage) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceFileTasksImage) {
   AddTextApp();
   AddImageApp();
   // Find apps for a "image/jpeg" file.
@@ -431,7 +399,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceFileTasksImage) {
 // Test that between an image app, text app and an app that can handle every
 // file, the app that can handle every file can be found for an image file entry
 // and text file entry.
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceFileTasksMultiple) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceFileTasksMultiple) {
   AddTextApp();
   AddImageApp();
   AddAnyApp();
@@ -444,7 +412,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceFileTasksMultiple) {
 }
 
 // Don't register any apps and check that we get no matches.
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceWebFileTasksNoTasks) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceWebFileTasksNoTasks) {
   // Find web apps for a "text/plain" file.
   std::vector<FullTaskDescriptor> tasks =
       FindAppServiceTasks({{"foo.txt", kMimeTypeText}});
@@ -452,8 +420,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceWebFileTasksNoTasks) {
 }
 
 // Register a text handler and check we get no matches with an image.
-TEST_F(AppServiceFileTasksTestEnabled,
-       FindAppServiceWebFileTasksNoMatchingTask) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceWebFileTasksNoMatchingTask) {
   AddTextApp();
   // Find apps for a "image/jpeg" file.
   std::vector<FullTaskDescriptor> tasks =
@@ -462,7 +429,7 @@ TEST_F(AppServiceFileTasksTestEnabled,
 }
 
 // Check we get a match for a text file + web app.
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceWebFileTasksText) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceWebFileTasksText) {
   AddTextApp();
   // Find web apps for a "text/plain" file.
   std::vector<FullTaskDescriptor> tasks =
@@ -475,8 +442,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceWebFileTasksText) {
 
 // Check that a web app that only handles text does not match when we have both
 // a text file and an image.
-TEST_F(AppServiceFileTasksTestEnabled,
-       FindAppServiceWebFileTasksTwoFilesNoMatch) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceWebFileTasksTwoFilesNoMatch) {
   AddTextApp();
   std::vector<FullTaskDescriptor> tasks = FindAppServiceTasks(
       {{"foo.txt", kMimeTypeText}, {"bar.jpeg", kMimeTypeImage}});
@@ -484,7 +450,7 @@ TEST_F(AppServiceFileTasksTestEnabled,
 }
 
 // Check we get a match for a text file + text wildcard filter.
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceWebFileTasksTextWild) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceWebFileTasksTextWild) {
   AddTextWildApp();
   AddTextApp();
   // Find web apps for a "text/plain" file.
@@ -498,8 +464,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceWebFileTasksTextWild) {
 }
 
 // Check we get a match for a text file and HTML file + text wildcard filter.
-TEST_F(AppServiceFileTasksTestEnabled,
-       FindAppServiceWebFileTasksTextWildMultiple) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceWebFileTasksTextWildMultiple) {
   AddTextWildApp();
   AddTextApp();   // Should not be matched.
   AddImageApp();  // Should not be matched.
@@ -513,8 +478,7 @@ TEST_F(AppServiceFileTasksTestEnabled,
 // An edge case where we have one file that matches the mime type but not the
 // file extension, and another file that matches the file extension but not the
 // mime type. This should still match the handler.
-TEST_F(AppServiceFileTasksTestEnabled,
-       FindAppServiceWebFileTasksAllFilesMatchEither) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceWebFileTasksAllFilesMatchEither) {
   AddTextApp();
 
   // First check that each file alone matches the text app.
@@ -534,7 +498,7 @@ TEST_F(AppServiceFileTasksTestEnabled,
 }
 
 // Check that Baz's ".*" handler, which is generic, is matched.
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceChromeAppText) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceChromeAppText) {
   AddChromeApp();
   std::vector<FullTaskDescriptor> tasks =
       FindAppServiceTasks({{"foo.txt", kMimeTypeText}});
@@ -549,7 +513,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceChromeAppText) {
 
 // File extension matches with bar, but there is a generic * type as well,
 // so the overall match should still be generic.
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceChromeAppBar) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceChromeAppBar) {
   AddChromeApp();
   std::vector<FullTaskDescriptor> tasks =
       FindAppServiceTasks({{"foo.bar", kMimeTypeText}});
@@ -563,7 +527,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceChromeAppBar) {
 }
 
 // Check that we can get web apps and Chrome apps in the same call.
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceMultiAppType) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceMultiAppType) {
   AddTextApp();
   AddChromeApp();
   std::vector<FullTaskDescriptor> tasks =
@@ -580,7 +544,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceMultiAppType) {
 // Check that Baz's "image/*" handler is picked because it is not generic,
 // because it matches the mime type directly, even though there is an earlier
 // generic handler.
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceChromeAppImage) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceChromeAppImage) {
   AddChromeApp();
   std::vector<FullTaskDescriptor> tasks =
       FindAppServiceTasks({{"bar.jpeg", kMimeTypeImage}});
@@ -593,7 +557,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceChromeAppImage) {
   EXPECT_FALSE(tasks[0].is_file_extension_match);
 }
 
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceChromeAppWithVerbs) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceChromeAppWithVerbs) {
   AddChromeAppWithVerbs();
   std::vector<FullTaskDescriptor> tasks =
       FindAppServiceTasks({{"foo.txt", kMimeTypeText}});
@@ -608,7 +572,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceChromeAppWithVerbs) {
   EXPECT_FALSE(tasks[0].is_file_extension_match);
 }
 
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceChromeAppWithVerbs_Html) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceChromeAppWithVerbs_Html) {
   AddChromeAppWithVerbs();
   std::vector<FullTaskDescriptor> tasks =
       FindAppServiceTasks({{"foo.html", kMimeTypeHtml}});
@@ -622,8 +586,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceChromeAppWithVerbs_Html) {
   EXPECT_FALSE(tasks[0].is_file_extension_match);
 }
 
-TEST_F(AppServiceFileTasksTestEnabled,
-       FindAppServiceChromeAppWithVerbs_Directory) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceChromeAppWithVerbs_Directory) {
   AddChromeAppWithVerbs();
   std::vector<FullTaskDescriptor> tasks =
       FindAppServiceTasks({{"dir", "", true}});
@@ -637,7 +600,7 @@ TEST_F(AppServiceFileTasksTestEnabled,
   EXPECT_FALSE(tasks[0].is_file_extension_match);
 }
 
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceExtension) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceExtension) {
   AddExtension();
   std::vector<FullTaskDescriptor> tasks =
       FindAppServiceTasks({{"foo.txt", kMimeTypeText}});
@@ -650,8 +613,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceExtension) {
   EXPECT_FALSE(tasks[0].is_file_extension_match);
 }
 
-TEST_F(AppServiceFileTasksTestEnabled,
-       FindAppServiceArcAppWithExtensionMatching) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceArcAppWithExtensionMatching) {
   // Create an app with a text file filter.
   std::string package_name = "com.example.xyzViewer";
   std::string activity = "xyzViewerActivity";
@@ -665,20 +627,8 @@ TEST_F(AppServiceFileTasksTestEnabled,
   EXPECT_TRUE(tasks[0].is_file_extension_match);
 }
 
-// Enable MV3 File Handlers.
-class AppServiceFileHandlersTest : public AppServiceFileTasksTestEnabled {
- public:
-  AppServiceFileHandlersTest() {
-    feature_list_.InitAndEnableFeature(
-        extensions_features::kExtensionWebFileHandlers);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
 // Verify App Service tasks for extensions with MV3 File Handlers.
-TEST_F(AppServiceFileHandlersTest, FindAppServiceExtension) {
+TEST_F(AppServiceFileTasksTest, FileHandlersFindAppServiceExtension) {
   static constexpr char kAction[] = "/open.html";
   const std::string manifest = base::StringPrintf(R"(
     "version": "0.0.1",
@@ -703,7 +653,7 @@ TEST_F(AppServiceFileHandlersTest, FindAppServiceExtension) {
   EXPECT_FALSE(tasks[0].is_file_extension_match);
 }
 
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceArcApp) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceArcApp) {
   std::string text_mime_type = "text/plain";
   std::string image_mime_type = "image/jpeg";
 
@@ -732,7 +682,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceArcApp) {
   EXPECT_FALSE(tasks[0].is_file_extension_match);
 }
 
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceCrostiniApp) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceCrostiniApp) {
   std::string file_name = "foo.txt";
   std::string text_app_id = "Text app";
   AddGuestOsAppWithIntentFilter(
@@ -751,7 +701,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceCrostiniApp) {
 
 // Checks that we can detect when the file paths can/ can't be shared for
 // Crostini and PluginVm.
-TEST_F(AppServiceFileTasksTestEnabled, CheckPathsCanBeShared) {
+TEST_F(AppServiceFileTasksTest, CheckPathsCanBeShared) {
   std::string file_name = "foo.txt";
   std::string text_app_id = "Text app";
   AddGuestOsAppWithIntentFilter(
@@ -773,7 +723,7 @@ TEST_F(AppServiceFileTasksTestEnabled, CheckPathsCanBeShared) {
   ASSERT_EQ(0U, tasks.size());
 }
 
-TEST_F(AppServiceFileTasksTestEnabled, FindMultipleAppServiceCrostiniApps) {
+TEST_F(AppServiceFileTasksTest, FindMultipleAppServiceCrostiniApps) {
   std::string file_name = "foo.txt";
   std::string app_id_1 = "Text app 1";
   std::string app_id_2 = "Text app 2";
@@ -803,7 +753,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindMultipleAppServiceCrostiniApps) {
 // When we encounter a file with an unknown mime-type (i.e.
 // application/octet-stream), we rely on matching with the extension type. Check
 // whether extension matching works for Crostini.
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceCrostiniAppWithExtension) {
+TEST_F(AppServiceFileTasksTest, FindAppServiceCrostiniAppWithExtension) {
   std::string extension = "randomExtension";
   std::string mime_type = "test/randomMimeType";
   std::string file_name = "foo." + extension;
@@ -821,7 +771,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServiceCrostiniAppWithExtension) {
   EXPECT_EQ(app_id, tasks[0].task_descriptor.app_id);
 }
 
-TEST_F(AppServiceFileTasksTestEnabled, FindAppServicePluginVmApp) {
+TEST_F(AppServiceFileTasksTest, FindAppServicePluginVmApp) {
   std::string file_ext = "txt";
   std::string file_name = "foo." + file_ext;
   std::string text_app_id = "Text app";
@@ -837,7 +787,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindAppServicePluginVmApp) {
   EXPECT_TRUE(tasks[0].is_file_extension_match);
 }
 
-TEST_F(AppServiceFileTasksTestEnabled, FindMultipleAppServicePluginVmApps) {
+TEST_F(AppServiceFileTasksTest, FindMultipleAppServicePluginVmApps) {
   std::string file_ext = "txt";
   std::string file_name = "foo." + file_ext;
   std::string app_id_1 = "Text app 1";
@@ -862,7 +812,7 @@ TEST_F(AppServiceFileTasksTestEnabled, FindMultipleAppServicePluginVmApps) {
   EXPECT_TRUE(tasks[1].is_file_extension_match);
 }
 
-TEST_F(AppServiceFileTasksTestEnabled,
+TEST_F(AppServiceFileTasksTest,
        FindAppServicePluginVmApp_IgnoringExtensionCase) {
   std::string file_ext = "Txt";
   std::string file_name = "foo.txT";
@@ -879,7 +829,7 @@ TEST_F(AppServiceFileTasksTestEnabled,
   EXPECT_TRUE(tasks[0].is_file_extension_match);
 }
 
-TEST_F(AppServiceFileTasksTestEnabled, NoPluginVmAppsForFileSelection) {
+TEST_F(AppServiceFileTasksTest, NoPluginVmAppsForFileSelection) {
   std::string image_file_name = "foo.jpeg";
   std::string image_app_id = "Image app";
   std::string text_file_name = "foo.txt";
@@ -901,7 +851,7 @@ TEST_F(AppServiceFileTasksTestEnabled, NoPluginVmAppsForFileSelection) {
   ASSERT_EQ(0U, tasks.size());
 }
 
-TEST_F(AppServiceFileTasksTestEnabled, CrositiniTasksControlledByPolicy) {
+TEST_F(AppServiceFileTasksTest, CrositiniTasksControlledByPolicy) {
   std::string tini_task_name = "chrome://file-manager/?import-crostini-image";
   std::string deb_task_name = "chrome://file-manager/?install-linux-package";
   std::vector<apps::IntentFilterPtr> filters;
@@ -948,7 +898,7 @@ TEST_F(AppServiceFileTasksTestEnabled, CrositiniTasksControlledByPolicy) {
 }
 
 // Tests applying policies when listing tasks.
-class AppServiceFileTasksPolicyTest : public AppServiceFileTasksTestEnabled {
+class AppServiceFileTasksPolicyTest : public AppServiceFileTasksTest {
  protected:
   class MockFilesController : public policy::DlpFilesControllerAsh {
    public:
@@ -975,18 +925,16 @@ class AppServiceFileTasksPolicyTest : public AppServiceFileTasksTestEnabled {
   }
 
   void SetUp() override {
-    AppServiceFileTasksTestEnabled::SetUp();
+    AppServiceFileTasksTest::SetUp();
 
     AccountId account_id =
-        AccountId::FromUserEmailGaiaId("test@example.com", "12345");
+        AccountId::FromUserEmailGaiaId("test@example.com", GaiaId("12345"));
     profile_->SetIsNewProfile(true);
-    user_manager::User* user =
-        fake_user_manager_->AddUserWithAffiliationAndTypeAndProfile(
-            account_id, /*is_affiliated=*/false,
-            user_manager::UserType::kRegular, profile_.get());
-    fake_user_manager_->UserLoggedIn(account_id, user->username_hash(),
-                                     /*browser_restart=*/false,
-                                     /*is_child=*/false);
+    fake_user_manager_->AddUserWithAffiliationAndTypeAndProfile(
+        account_id, /*is_affiliated=*/false, user_manager::UserType::kRegular,
+        profile_.get());
+    fake_user_manager_->UserLoggedIn(
+        account_id, user_manager::TestHelper::GetFakeUsernameHash(account_id));
     fake_user_manager_->SimulateUserProfileLoad(account_id);
 
     policy::DlpRulesManagerFactory::GetInstance()->SetTestingFactory(

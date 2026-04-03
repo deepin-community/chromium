@@ -4,7 +4,6 @@
 
 #include "components/segmentation_platform/internal/stats.h"
 
-#include "base/functional/callback_forward.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
@@ -225,45 +224,6 @@ TEST_F(StatsTest, SegmentComputedWithMultiOutput) {
                                    base::Bucket(2, 1)));
 }
 
-TEST_F(StatsTest, BooleanSegmentSwitch) {
-  std::string histogram(
-      "SegmentationPlatform.ChromeStartAndroidV2.SegmentSwitched");
-  base::HistogramTester tester;
-  Config config;
-  config.segmentation_key = kChromeStartAndroidV2SegmentationKey;
-  config.segmentation_uma_name = kChromeStartAndroidV2UmaName;
-  config.auto_execute_and_cache = true;
-  config.is_boolean_segment = true;
-
-  // Start to none.
-  RecordSegmentSelectionComputed(
-      config, SegmentId::OPTIMIZATION_TARGET_UNKNOWN,
-      SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_CHROME_START_ANDROID_V2);
-
-  tester.ExpectTotalCount(histogram, 1);
-  EXPECT_THAT(tester.GetAllSamples(histogram),
-              testing::ElementsAre(base::Bucket(
-                  static_cast<int>(BooleanSegmentSwitch::kEnabledToNone), 1)));
-  // None to start.
-  RecordSegmentSelectionComputed(
-      config,
-      SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_CHROME_START_ANDROID_V2,
-      std::nullopt);
-
-  tester.ExpectTotalCount(histogram, 2);
-
-  EXPECT_THAT(
-      tester.GetAllSamples(histogram),
-      testing::ElementsAre(
-          base::Bucket(static_cast<int>(BooleanSegmentSwitch::kNoneToEnabled),
-                       1),
-          base::Bucket(static_cast<int>(BooleanSegmentSwitch::kEnabledToNone),
-                       1)));
-  tester.ExpectTotalCount(
-      "SegmentationPlatform.ChromeStartAndroidV2.SegmentSelection.Computed2",
-      2);
-}
-
 TEST_F(StatsTest, SignalsListeningCount) {
   base::HistogramTester tester;
   std::set<uint64_t> user_actions{1, 2, 3, 4};
@@ -342,13 +302,42 @@ TEST_F(StatsTest, RecordModelExecutionResultForMultiOutput) {
       tester.GetBucketCount(
           "SegmentationPlatform.ModelExecution.Result.0.AdaptiveToolbar", 40));
   EXPECT_EQ(
+      1, tester.GetBucketCount(
+             "SegmentationPlatform.ModelExecution.Result.0.AdaptiveToolbar.Raw",
+             0));
+  EXPECT_EQ(1,
+            tester.GetBucketCount(
+                "SegmentationPlatform.ModelExecution.Result.0.AdaptiveToolbar."
+                "Scaled100",
+                40));
+
+  EXPECT_EQ(
       1,
       tester.GetBucketCount(
           "SegmentationPlatform.ModelExecution.Result.1.AdaptiveToolbar", 90));
   EXPECT_EQ(
+      1, tester.GetBucketCount(
+             "SegmentationPlatform.ModelExecution.Result.1.AdaptiveToolbar.Raw",
+             1));
+  EXPECT_EQ(1,
+            tester.GetBucketCount(
+                "SegmentationPlatform.ModelExecution.Result.1.AdaptiveToolbar."
+                "Scaled100",
+                90));
+
+  EXPECT_EQ(
       1,
       tester.GetBucketCount(
           "SegmentationPlatform.ModelExecution.Result.2.AdaptiveToolbar", 15));
+  EXPECT_EQ(
+      1, tester.GetBucketCount(
+             "SegmentationPlatform.ModelExecution.Result.2.AdaptiveToolbar.Raw",
+             0));
+  EXPECT_EQ(1,
+            tester.GetBucketCount(
+                "SegmentationPlatform.ModelExecution.Result.2.AdaptiveToolbar."
+                "Scaled100",
+                15));
 
   // Binned classifier is recorded as is.
   proto::SegmentationModelMetadata model_metadata;
@@ -361,6 +350,20 @@ TEST_F(StatsTest, RecordModelExecutionResultForMultiOutput) {
       1,
       tester.GetBucketCount(
           "SegmentationPlatform.ModelExecution.Result.0.PowerUserSegment", 5));
+  EXPECT_EQ(
+      1,
+      tester.GetBucketCount(
+          "SegmentationPlatform.ModelExecution.Result.0.PowerUserSegment.Raw",
+          5));
+
+  // Binned classifiers output integers > 1, causing the .Scaled100 metric to
+  // overflow. This is expected; for these models, we rely on the .Raw metric
+  // instead.
+  EXPECT_EQ(1,
+            tester.GetBucketCount(
+                "SegmentationPlatform.ModelExecution.Result.0.PowerUserSegment."
+                "Scaled100",
+                500));
 }
 
 TEST_F(StatsTest, SegmentIdToHistogramVariant) {
@@ -368,10 +371,6 @@ TEST_F(StatsTest, SegmentIdToHistogramVariant) {
             SegmentIdToHistogramVariant(SegmentId::CROSS_DEVICE_USER_SEGMENT));
   EXPECT_EQ("NewTab", SegmentIdToHistogramVariant(
                           SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_NEW_TAB));
-  EXPECT_EQ(
-      "ChromeStartAndroidV2",
-      SegmentIdToHistogramVariant(
-          SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_CHROME_START_ANDROID_V2));
   EXPECT_EQ("WebAppInstallationPromo",
             SegmentIdToHistogramVariant(
                 SegmentId::OPTIMIZATION_TARGET_WEB_APP_INSTALLATION_PROMO));

@@ -333,8 +333,32 @@ void ConsumerIPCService::CloneSession(
   ConsumerEndpoint::CloneSessionArgs args;
   args.skip_trace_filter = req.skip_trace_filter();
   args.for_bugreport = req.for_bugreport();
-  remote_consumer->service_endpoint->CloneSession(req.session_id(),
-                                                  std::move(args));
+  if (req.has_session_id()) {
+    args.tsid = req.session_id();
+  }
+  if (req.has_unique_session_name()) {
+    args.unique_session_name = req.unique_session_name();
+  }
+  if (req.has_clone_trigger_name()) {
+    args.clone_trigger_name = req.clone_trigger_name();
+  }
+  if (req.has_clone_trigger_producer_name()) {
+    args.clone_trigger_producer_name = req.clone_trigger_producer_name();
+  }
+  if (req.has_clone_trigger_trusted_producer_uid()) {
+    args.clone_trigger_trusted_producer_uid =
+        static_cast<uid_t>(req.clone_trigger_trusted_producer_uid());
+  }
+  if (req.has_clone_trigger_boot_time_ns()) {
+    args.clone_trigger_boot_time_ns = req.clone_trigger_boot_time_ns();
+  }
+  if (req.has_clone_trigger_delay_ms()) {
+    args.clone_trigger_delay_ms = req.clone_trigger_delay_ms();
+  }
+  // The client (perfetto_cmd) always sends the file descriptor, but the traced
+  // uses it only if the session to clone is 'write_into_file' session.
+  args.output_file_fd = ipc::Service::TakeReceivedFD();
+  remote_consumer->service_endpoint->CloneSession(std::move(args));
 }
 
 // Called by the service in response to
@@ -496,6 +520,7 @@ void ConsumerIPCService::RemoteConsumer::OnSessionCloned(
   resp->set_error(args.error);
   resp->set_uuid_msb(args.uuid.msb());
   resp->set_uuid_lsb(args.uuid.lsb());
+  resp->set_was_write_into_file(args.was_write_into_file);
   std::move(clone_session_response).Resolve(std::move(resp));
 }
 

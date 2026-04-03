@@ -1,27 +1,24 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import * as Helpers from '../helpers/helpers.js';
 import * as Types from '../types/types.js';
 
-import {HandlerState} from './types.js';
-
-const animations: Types.TraceEvents.TraceEventAnimation[] = [];
-const animationsSyntheticEvents: Types.TraceEvents.SyntheticAnimationPair[] = [];
+let animations: Types.Events.Animation[] = [];
+let animationsSyntheticEvents: Types.Events.SyntheticAnimationPair[] = [];
 
 export interface AnimationData {
-  animations: readonly Types.TraceEvents.SyntheticAnimationPair[];
+  animations: readonly Types.Events.SyntheticAnimationPair[];
 }
-let handlerState = HandlerState.UNINITIALIZED;
 
 export function reset(): void {
-  animations.length = 0;
-  animationsSyntheticEvents.length = 0;
+  animations = [];
+  animationsSyntheticEvents = [];
 }
 
-export function handleEvent(event: Types.TraceEvents.TraceEventData): void {
-  if (Types.TraceEvents.isTraceEventAnimation(event)) {
+export function handleEvent(event: Types.Events.Event): void {
+  if (Types.Events.isAnimation(event)) {
     animations.push(event);
     return;
   }
@@ -30,15 +27,10 @@ export function handleEvent(event: Types.TraceEvents.TraceEventData): void {
 export async function finalize(): Promise<void> {
   const syntheticEvents = Helpers.Trace.createMatchedSortedSyntheticEvents(animations);
   animationsSyntheticEvents.push(...syntheticEvents);
-  handlerState = HandlerState.FINALIZED;
 }
 
 export function data(): AnimationData {
-  if (handlerState !== HandlerState.FINALIZED) {
-    throw new Error('Animation handler is not finalized');
-  }
-
   return {
-    animations: Array.from(animationsSyntheticEvents),
+    animations: animationsSyntheticEvents,
   };
 }

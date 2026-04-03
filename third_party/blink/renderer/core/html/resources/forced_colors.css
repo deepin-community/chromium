@@ -197,7 +197,7 @@
     -internal-forced-color: CanvasText;
   }
 
-  select:not(:-internal-list-box):not(:-internal-select-author-button) {
+  select:not(:-internal-list-box) {
     background-color: Canvas;
     -internal-forced-background-color: Canvas;
   }
@@ -245,4 +245,15 @@
     -internal-forced-color: CanvasText !important;
   }
 
+  /* The duplicated :not(:-internal-list-box):not([multiple]) is to ensure specificity over
+   * another stylesheet. TODO(crbug.com/378869807): Replace this with at-rules to
+   * ensure correct specificity. */
+  select:not(:-internal-list-box):not([multiple]):not(:-internal-list-box):not([multiple]) {
+    background-color: -internal-auto-base(Canvas, color-mix(in lab, currentColor 10%, transparent));
+  }
+
+  /* Undoes opacity: -internal-auto-base(0.7, unset) from html.css */
+  select:not(:-internal-list-box):not([multiple]):not(:-internal-list-box):not([multiple]):disabled {
+    opacity: 1;
+  }
 }

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,6 @@ export const enum FormatterActions {
   PARSE_CSS = 'parseCSS',
   JAVASCRIPT_SUBSTITUTE = 'javaScriptSubstitute',
   JAVASCRIPT_SCOPE_TREE = 'javaScriptScopeTree',
-  EVALUATE_JAVASCRIPT_SUBSTRING = 'evaluatableJavaScriptSubstring',
 }
 
 export const enum FormattableMediaTypes {
@@ -17,7 +16,6 @@ export const enum FormattableMediaTypes {
   TEXT_CSS = 'text/css',
   TEXT_HTML = 'text/html',
   TEXT_JAVASCRIPT = 'text/javascript',
-  TEXT_X_SCSS = 'text/x-scss',
 }
 
 export const FORMATTABLE_MEDIA_TYPES: string[] = [
@@ -27,7 +25,6 @@ export const FORMATTABLE_MEDIA_TYPES: string[] = [
   FormattableMediaTypes.TEXT_CSS,
   FormattableMediaTypes.TEXT_HTML,
   FormattableMediaTypes.TEXT_JAVASCRIPT,
-  FormattableMediaTypes.TEXT_X_SCSS,
 ];
 
 export interface FormatMapping {
@@ -41,15 +38,26 @@ export interface FormatResult {
 }
 
 export const enum DefinitionKind {
-  None = 0,
-  Let = 1,
-  Var = 2,
-  Fixed = 3,
+  NONE = 0,
+  LET = 1,
+  VAR = 2,
+  FIXED = 3,
+}
+
+export const enum ScopeKind {
+  BLOCK = 1,
+  FUNCTION = 2,
+  GLOBAL = 3,
+  ARROW_FUNCTION = 4,
 }
 
 export interface ScopeTreeNode {
-  variables: {name: string, kind: DefinitionKind, offsets: number[]}[];
+  variables: Array<{name: string, kind: DefinitionKind, offsets: number[]}>;
   start: number;
   end: number;
+  // If present, apply source map mappings to these locations to figure out the original function name.
+  nameMappingLocations?: number[];
+  name?: string;
+  kind: ScopeKind;
   children: ScopeTreeNode[];
 }

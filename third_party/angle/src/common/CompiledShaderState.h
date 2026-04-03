@@ -5,7 +5,7 @@
 //
 // CompiledShaderState.h:
 //   Defines a struct containing any data that is needed to build
-//   a ShaderState from a TCompiler.
+//   a CompiledShaderState from a TCompiler.
 //
 
 #ifndef COMMON_COMPILEDSHADERSTATE_H_
@@ -44,12 +44,16 @@ void LoadShInterfaceBlock(gl::BinaryInputStream *stream, sh::InterfaceBlock *blo
 
 bool CompareShaderVar(const sh::ShaderVariable &x, const sh::ShaderVariable &y);
 
+std::string JoinShaderSources(GLsizei count, const char *const *string, const GLint *length);
+
 struct CompiledShaderState
 {
     CompiledShaderState(gl::ShaderType shaderType);
     ~CompiledShaderState();
 
-    void buildCompiledShaderState(const ShHandle compilerHandle, const bool isBinaryOutput);
+    void buildCompiledShaderState(const ShHandle compilerHandle,
+                                  ShShaderOutput outputType);
+    void buildPassthroughCompiledShaderState(std::shared_ptr<const std::string> inputShaderSource);
 
     void serialize(gl::BinaryOutputStream &stream) const;
     void deserialize(gl::BinaryInputStream &stream);
@@ -70,7 +74,7 @@ struct CompiledShaderState
     const gl::ShaderType shaderType;
 
     int shaderVersion;
-    std::string translatedSource;
+    std::shared_ptr<const std::string> translatedSource;
     sh::BinaryBlob compiledBinary;
     sh::WorkGroupSize localSize;
 
@@ -102,6 +106,10 @@ struct CompiledShaderState
     GLenum tessGenSpacing;
     GLenum tessGenVertexOrder;
     GLenum tessGenPointMode;
+
+    // ANGLE_shader_pixel_local_storage: A mapping from binding index to the PLS uniform format at
+    // that index.
+    std::vector<ShPixelLocalStorageFormat> pixelLocalStorageFormats;
 };
 
 using SharedCompiledShaderState = std::shared_ptr<CompiledShaderState>;

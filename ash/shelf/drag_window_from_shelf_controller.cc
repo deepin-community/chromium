@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "ash/shelf/drag_window_from_shelf_controller.h"
-#include "base/memory/raw_ptr.h"
 
 #include <algorithm>
 
@@ -14,7 +13,6 @@
 #include "ash/public/cpp/window_backdrop.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/root_window_controller.h"
-#include "ash/scoped_animation_disabler.h"
 #include "ash/screen_util.h"
 #include "ash/shelf/hotseat_widget.h"
 #include "ash/shelf/shelf.h"
@@ -39,12 +37,13 @@
 #include "ash/wm/window_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/hit_test.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
+#include "ui/compositor/layer_tree_owner.h"
 #include "ui/compositor/presentation_time_recorder.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/display/screen.h"
@@ -52,6 +51,7 @@
 #include "ui/gfx/geometry/transform_util.h"
 #include "ui/views/animation/animation_builder.h"
 #include "ui/wm/core/coordinate_conversion.h"
+#include "ui/wm/core/scoped_animation_disabler.h"
 #include "ui/wm/core/window_util.h"
 
 namespace ash {
@@ -130,8 +130,8 @@ class OtherWindowCopyAnimation {
 
 }  // namespace
 
-// Hide all visible windows expect the dragged windows or the window showing in
-// splitview during dragging.
+// Hide all visible windows except the dragged windows and the other window
+// which is not dragged if there is a floating window while dragging.
 class DragWindowFromShelfController::WindowsHider
     : public aura::WindowObserver {
  public:
@@ -139,16 +139,23 @@ class DragWindowFromShelfController::WindowsHider
       : dragged_window_(dragged_window) {
     std::vector<raw_ptr<aura::Window, VectorExperimental>> windows =
         Shell::Get()->mru_window_tracker()->BuildMruWindowList(kActiveDesk);
+    auto* split_view_controller = SplitViewController::Get(dragged_window);
+
     for (aura::Window* window : windows) {
-      if (window == dragged_window_ || window == other_window) {
+      if (window == dragged_window_ || window == other_window ||
+          window == split_view_controller->primary_window() ||
+          window == split_view_controller->secondary_window()) {
         continue;
       }
-      if (wm::HasTransientAncestor(window, dragged_window_))
+
+      if (::wm::GetTransientParent(window)) {
         continue;
-      if (!window->IsVisible())
+      }
+
+      if (!window->IsVisible()) {
         continue;
-      if (SplitViewController::Get(window)->IsWindowInSplitView(window))
-        continue;
+      }
+
       auto* overview_controller = Shell::Get()->overview_controller();
       if (overview_controller->InOverviewSession() &&
           overview_controller->overview_session()->IsWindowInOverview(window)) {
@@ -176,7 +183,7 @@ class DragWindowFromShelfController::WindowsHider
   void RestoreWindowsVisibility() {
     for (aura::Window* window : hidden_windows_) {
       window->RemoveObserver(this);
-      ScopedAnimationDisabler disabler(window);
+      wm::ScopedAnimationDisabler disabler(window);
       window->Show();
       window->ClearProperty(kHideDuringWindowDragging);
     }
@@ -187,7 +194,7 @@ class DragWindowFromShelfController::WindowsHider
   // minimize asynchronously so they may not be truly minimized after |this| is
   // constructed.
   bool WindowsMinimized() {
-    return base::ranges::all_of(hidden_windows_, [](const aura::Window* w) {
+    return std::ranges::all_of(hidden_windows_, [](const aura::Window* w) {
       return WindowState::Get(w)->IsMinimized();
     });
   }
@@ -195,7 +202,7 @@ class DragWindowFromShelfController::WindowsHider
   // aura::WindowObserver:
   void OnWindowDestroying(aura::Window* window) override {
     window->RemoveObserver(this);
-    hidden_windows_.erase(base::ranges::find(hidden_windows_, window));
+    hidden_windows_.erase(std::ranges::find(hidden_windows_, window));
   }
 
  private:
@@ -288,18 +295,19 @@ void DragWindowFromShelfController::Drag(const gfx::PointF& location_in_screen,
   presentation_time_recorder_->RequestNext();
   UpdateDraggedWindow(location_in_screen);
 
-  // Open overview if the window has been dragged far enough and the scroll
-  // delta has decreased to kOpenOverviewThreshold. Wait until all windows are
-  // minimized or they will not show up in overview.
   DCHECK(windows_hider_);
   OverviewController* overview_controller = Shell::Get()->overview_controller();
   if (std::abs(scroll_y) <= kOpenOverviewThreshold &&
-      !overview_controller->InOverviewSession() &&
       windows_hider_->WindowsMinimized()) {
-    overview_controller->StartOverview(
-        OverviewStartAction::kDragWindowFromShelf,
-        OverviewEnterExitType::kImmediateEnter);
-    OnWindowDragStartedInOverview();
+    // Open overview if the window has been dragged far enough and the scroll
+    // delta has decreased to `kOpenOverviewThreshold`. Wait until all windows
+    // are minimized or they will not show up in overview.
+    if (!overview_controller->InOverviewSession() &&
+        overview_controller->StartOverview(
+            OverviewStartAction::kDragWindowFromShelf,
+            OverviewEnterExitType::kImmediateEnter)) {
+      OnWindowDragStartedInOverview();
+    }
   }
 
   // If overview is active, update its splitview indicator during dragging if
@@ -567,7 +575,7 @@ void DragWindowFromShelfController::UpdateDraggedWindow(
   // minimum scale |kMinimumWindowScaleDuringDragging|. Calculate the desired
   // scale based on the current y position.
   const gfx::Rect display_bounds =
-      display::Screen::GetScreen()
+      display::Screen::Get()
           ->GetDisplayNearestPoint(gfx::ToRoundedPoint(location_in_screen))
           .bounds();
   const float min_y = display_bounds.y() +
@@ -669,7 +677,7 @@ bool DragWindowFromShelfController::ShouldRestoreToOriginalBounds(
     const gfx::PointF& location_in_screen,
     std::optional<float> velocity_y) const {
   const gfx::Rect display_bounds =
-      display::Screen::GetScreen()
+      display::Screen::Get()
           ->GetDisplayNearestPoint(gfx::ToRoundedPoint(location_in_screen))
           .bounds();
   gfx::RectF transformed_window_bounds =
@@ -801,8 +809,7 @@ void DragWindowFromShelfController::ScaleDownWindowAfterDrag() {
   // home screen and shelf start updating their state as the window is
   // minimizing.
   Shell::Get()->app_list_controller()->OnHomeLauncherPositionChanged(
-      /*percent_shown=*/100,
-      display::Screen::GetScreen()->GetPrimaryDisplay().id());
+      /*percent_shown=*/100, display::Screen::Get()->GetPrimaryDisplay().id());
 
   (new WindowScaleAnimation(
        WindowScaleAnimation::WindowScaleType::kScaleDownToShelf,
@@ -819,7 +826,7 @@ void DragWindowFromShelfController::OnWindowScaledDownAfterDrag() {
     return;
 
   app_list_controller->OnHomeLauncherAnimationComplete(
-      /*shown=*/true, display::Screen::GetScreen()->GetPrimaryDisplay().id());
+      /*shown=*/true, display::Screen::Get()->GetPrimaryDisplay().id());
 }
 
 void DragWindowFromShelfController::ScaleUpToRestoreWindowAfterDrag() {
@@ -835,7 +842,12 @@ void DragWindowFromShelfController::ScaleUpToRestoreWindowAfterDrag() {
 void DragWindowFromShelfController::OnWindowRestoredToOriginalBounds(
     bool end_overview) {
   base::AutoReset<bool> auto_reset(&during_window_restoration_, true);
-  if (end_overview) {
+  // If `last_overview_drag_session_ptr_` is null, that means another party
+  // started an overview session between the time the drag finished and the
+  // `WindowScaleAnimation` was able to restore the window to the original
+  // bounds. Don't end overview in this case since doing so would disrupt the
+  // latest overview activity.
+  if (end_overview && last_overview_drag_session_ptr_) {
     Shell::Get()->overview_controller()->EndOverview(
         OverviewEndAction::kDragWindowFromShelf,
         OverviewEnterExitType::kImmediateExit);
@@ -847,6 +859,7 @@ void DragWindowFromShelfController::OnWindowDragStartedInOverview() {
   OverviewSession* overview_session =
       Shell::Get()->overview_controller()->overview_session();
   DCHECK(overview_session);
+  last_overview_drag_session_ptr_ = overview_session->GetWeakPtr();
   overview_session->OnWindowDragStarted(window_, /*animate=*/false);
   if (ShouldAllowSplitView())
     overview_session->SetSplitViewDragIndicatorsDraggedWindow(window_);

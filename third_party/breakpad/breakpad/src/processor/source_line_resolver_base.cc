@@ -42,6 +42,7 @@
 #include <sys/stat.h>
 
 #include <map>
+#include <string>
 #include <utility>
 
 #include "google_breakpad/processor/source_line_resolver_base.h"
@@ -70,11 +71,11 @@ SourceLineResolverBase::~SourceLineResolverBase() {
   }
   // Delete the map of modules.
   delete modules_;
-  modules_ = NULL;
+  modules_ = nullptr;
 
   // Delete the set of corrupt modules.
   delete corrupt_modules_;
-  corrupt_modules_ = NULL;
+  corrupt_modules_ = nullptr;
 
   MemoryMap::iterator iter = memory_buffers_->begin();
   for (; iter != memory_buffers_->end(); ++iter) {
@@ -82,16 +83,16 @@ SourceLineResolverBase::~SourceLineResolverBase() {
   }
   // Delete the map of memory buffers.
   delete memory_buffers_;
-  memory_buffers_ = NULL;
+  memory_buffers_ = nullptr;
 
   delete module_factory_;
-  module_factory_ = NULL;
+  module_factory_ = nullptr;
 }
 
-bool SourceLineResolverBase::ReadSymbolFile(const string& map_file,
+bool SourceLineResolverBase::ReadSymbolFile(const std::string& map_file,
                                             char** symbol_data,
                                             size_t* symbol_data_size) {
-  if (symbol_data == NULL || symbol_data_size == NULL) {
+  if (symbol_data == nullptr || symbol_data_size == nullptr) {
     BPLOG(ERROR) << "Could not Read file into Null memory pointer";
     return false;
   }
@@ -99,7 +100,7 @@ bool SourceLineResolverBase::ReadSymbolFile(const string& map_file,
   struct stat buf;
   int error_code = stat(map_file.c_str(), &buf);
   if (error_code == -1) {
-    string error_string;
+    std::string error_string;
     error_code = ErrnoString(&error_string);
     BPLOG(ERROR) << "Could not open " << map_file <<
         ", error " << error_code << ": " << error_string;
@@ -113,7 +114,7 @@ bool SourceLineResolverBase::ReadSymbolFile(const string& map_file,
   *symbol_data_size = file_size + 1;
   *symbol_data = new char[file_size + 1];
 
-  if (*symbol_data == NULL) {
+  if (*symbol_data == nullptr) {
     BPLOG(ERROR) << "Could not allocate memory for " << map_file;
     return false;
   }
@@ -122,12 +123,12 @@ bool SourceLineResolverBase::ReadSymbolFile(const string& map_file,
 
   FILE* f = fopen(map_file.c_str(), "rt");
   if (!f) {
-    string error_string;
+    std::string error_string;
     error_code = ErrnoString(&error_string);
     BPLOG(ERROR) << "Could not open " << map_file <<
         ", error " << error_code << ": " << error_string;
     delete [] (*symbol_data);
-    *symbol_data = NULL;
+    *symbol_data = nullptr;
     return false;
   }
 
@@ -138,12 +139,12 @@ bool SourceLineResolverBase::ReadSymbolFile(const string& map_file,
   items_read = fread(*symbol_data, 1, file_size, f);
 
   if (items_read != file_size) {
-    string error_string;
+    std::string error_string;
     error_code = ErrnoString(&error_string);
     BPLOG(ERROR) << "Could not slurp " << map_file <<
         ", error " << error_code << ": " << error_string;
     delete [] (*symbol_data);
-    *symbol_data = NULL;
+    *symbol_data = nullptr;
     return false;
   }
 
@@ -152,8 +153,8 @@ bool SourceLineResolverBase::ReadSymbolFile(const string& map_file,
 }
 
 bool SourceLineResolverBase::LoadModule(const CodeModule* module,
-                                        const string& map_file) {
-  if (module == NULL)
+                                        const std::string& map_file) {
+  if (module == nullptr)
     return false;
 
   // Make sure we don't already have a module with the given name.
@@ -189,11 +190,11 @@ bool SourceLineResolverBase::LoadModule(const CodeModule* module,
 }
 
 bool SourceLineResolverBase::LoadModuleUsingMapBuffer(
-    const CodeModule* module, const string& map_buffer) {
+    const CodeModule* module, const std::string& map_buffer) {
   BPLOG(INFO) << "SourceLineResolverBase::LoadModuleUsingMapBuffer(module = "
               << module->code_file()
               << ", map_buffer.size() = " << map_buffer.size() << ")";
-  if (module == NULL)
+  if (module == nullptr)
     return false;
 
   // Make sure we don't already have a module with the given name.
@@ -205,7 +206,7 @@ bool SourceLineResolverBase::LoadModuleUsingMapBuffer(
 
   size_t memory_buffer_size = map_buffer.size() + 1;
   char* memory_buffer = new char[memory_buffer_size];
-  if (memory_buffer == NULL) {
+  if (memory_buffer == nullptr) {
     BPLOG(ERROR) << "Could not allocate memory for " << module->code_file();
     return false;
   }
@@ -321,7 +322,7 @@ WindowsFrameInfo* SourceLineResolverBase::FindWindowsFrameInfo(
       return it->second->FindWindowsFrameInfo(frame);
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 CFIFrameInfo* SourceLineResolverBase::FindCFIFrameInfo(
@@ -332,16 +333,16 @@ CFIFrameInfo* SourceLineResolverBase::FindCFIFrameInfo(
       return it->second->FindCFIFrameInfo(frame);
     }
   }
-  return NULL;
+  return nullptr;
 }
 
 bool SourceLineResolverBase::CompareString::operator()(
-    const string& s1, const string& s2) const {
+    const std::string& s1, const std::string& s2) const {
   return strcmp(s1.c_str(), s2.c_str()) < 0;
 }
 
 bool SourceLineResolverBase::Module::ParseCFIRuleSet(
-    const string& rule_set, CFIFrameInfo* frame_info) const {
+    const std::string& rule_set, CFIFrameInfo* frame_info) const {
   CFIFrameInfoParseHandler handler(frame_info);
   CFIRuleParser parser(&handler);
   return parser.Parse(rule_set);

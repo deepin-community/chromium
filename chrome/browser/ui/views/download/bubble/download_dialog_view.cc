@@ -4,8 +4,9 @@
 
 #include "chrome/browser/ui/views/download/bubble/download_dialog_view.h"
 
+#include <string_view>
+
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/logging.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/chrome_pages.h"
@@ -14,6 +15,7 @@
 #include "chrome/browser/ui/views/accessibility/non_accessible_image_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/controls/rich_hover_button.h"
+#include "chrome/browser/ui/views/download/bubble/download_bubble_navigation_handler.h"
 #include "chrome/browser/ui/views/download/bubble/download_bubble_row_list_view.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/safe_browsing/core/common/features.h"
@@ -21,7 +23,6 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -50,9 +51,6 @@
 
 namespace {
 
-constexpr char kFullBubbleVisibleHistogramName[] =
-    "Download.Bubble.FullView.VisibleTime";
-
 class ShowAllDownloadsButton : public RichHoverButton {
   METADATA_HEADER(ShowAllDownloadsButton, RichHoverButton)
 
@@ -61,17 +59,13 @@ class ShowAllDownloadsButton : public RichHoverButton {
       base::RepeatingClosure show_all_downloads_callback)
       : RichHoverButton(
             std::move(show_all_downloads_callback),
-            /*main_image_icon=*/ui::ImageModel(),
+            /*icon=*/ui::ImageModel(),
             l10n_util::GetStringUTF16(IDS_DOWNLOAD_BUBBLE_FOOTER_LABEL),
-            /*secondary_text=*/std::u16string(),
-            l10n_util::GetStringUTF16(IDS_DOWNLOAD_BUBBLE_FOOTER_TOOLTIP_LABEL),
             /*subtitle_text=*/std::u16string(),
             ui::ImageModel::FromVectorIcon(
-                features::IsChromeRefresh2023()
-                    ? vector_icons::kLaunchChromeRefreshIcon
-                    : vector_icons::kLaunchIcon,
+                vector_icons::kLaunchChromeRefreshIcon,
                 kColorDownloadBubbleShowAllDownloadsIcon,
-                GetLayoutConstant(DOWNLOAD_ICON_SIZE))) {
+                GetLayoutConstant(LayoutConstant::kDownloadIconSize))) {
     // Override the table layout from RichHoverButton, in order to control the
     // spacing/padding. Code below is copied from rich_hover_button.cc but with
     // padding columns rearranged.
@@ -85,21 +79,15 @@ class ShowAllDownloadsButton : public RichHoverButton {
         .AddColumn(views::LayoutAlignment::kStretch,
                    views::LayoutAlignment::kCenter, 1.0f,
                    views::TableLayout::ColumnSize::kUsePreferred, 0, 0)
-        // Column for |secondary_text|.
-        .AddColumn(views::LayoutAlignment::kEnd,
-                   views::LayoutAlignment::kStretch,
-                   views::TableLayout::kFixedSize,
-                   views::TableLayout::ColumnSize::kUsePreferred, 0, 0)
         // Column for |action_icon|.
         .AddColumn(views::LayoutAlignment::kCenter,
                    views::LayoutAlignment::kCenter,
                    views::TableLayout::kFixedSize,
                    views::TableLayout::ColumnSize::kFixed,
-                   GetLayoutConstant(DOWNLOAD_ICON_SIZE), 0)
-        .AddPaddingColumn(views::TableLayout::kFixedSize,
-                          features::IsChromeRefresh2023()
-                              ? 0
-                              : GetLayoutInsets(DOWNLOAD_ICON).right())
+                   GetLayoutConstant(LayoutConstant::kDownloadIconSize), 0)
+        // TODO(chlily): Look into whether the is necessary to have the empty
+        // padding column.
+        .AddPaddingColumn(views::TableLayout::kFixedSize, 0)
         .AddRows(1, views::TableLayout::kFixedSize,
                  // Force row to have sufficient height for full line-height of
                  // the title.
@@ -111,6 +99,9 @@ class ShowAllDownloadsButton : public RichHoverButton {
     image_container_view()->SetProperty(views::kViewIgnoredByLayoutKey, true);
     label()->SetProperty(views::kViewIgnoredByLayoutKey, true);
     ink_drop_container()->SetProperty(views::kViewIgnoredByLayoutKey, true);
+
+    SetTooltipText(
+        l10n_util::GetStringUTF16(IDS_DOWNLOAD_BUBBLE_FOOTER_TOOLTIP_LABEL));
 
     DeprecatedLayoutImmediately();
   }
@@ -152,27 +143,21 @@ void DownloadDialogView::AddHeader() {
                                views::MaximumFlexSizeRule::kUnbounded,
                                /*adjust_height_for_width=*/true));
   title->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  if (features::IsChromeRefresh2023()) {
-    title->SetTextStyle(views::style::STYLE_HEADLINE_4);
-  }
+  title->SetTextStyle(views::style::STYLE_HEADLINE_4);
 
   close_button_ =
       header->AddChildView(views::CreateVectorImageButtonWithNativeTheme(
           base::BindRepeating(&DownloadDialogView::CloseBubble,
                               base::Unretained(this)),
-          features::IsChromeRefresh2023()
-              ? vector_icons::kCloseChromeRefreshIcon
-              : vector_icons::kCloseRoundedIcon,
-          GetLayoutConstant(DOWNLOAD_ICON_SIZE)));
+          vector_icons::kCloseChromeRefreshIcon,
+          GetLayoutConstant(LayoutConstant::kDownloadIconSize)));
   InstallCircleHighlightPathGenerator(close_button_);
   close_button_->SetTooltipText(l10n_util::GetStringUTF16(IDS_APP_CLOSE));
   close_button_->SetProperty(views::kCrossAxisAlignmentKey,
                              views::LayoutAlignment::kStart);
-  if (features::IsChromeRefresh2023()) {
-    // Remove the extra padding of ImageButton that causes the right padding of
-    // the title row to appear larger than the left padding.
-    close_button_->SetBorder(nullptr);
-  }
+  // Remove the extra padding of ImageButton that causes the right padding of
+  // the title row to appear larger than the left padding.
+  close_button_->SetBorder(nullptr);
 }
 
 void DownloadDialogView::AddFooter() {
@@ -196,17 +181,7 @@ DownloadDialogView::DownloadDialogView(
   AddFooter();
 }
 
-DownloadDialogView::~DownloadDialogView() {
-  LogVisibleTimeMetrics();
-}
-
-base::StringPiece DownloadDialogView::GetVisibleTimeHistogramName() const {
-  return kFullBubbleVisibleHistogramName;
-}
-
-bool DownloadDialogView::IsPartialView() const {
-  return false;
-}
+DownloadDialogView::~DownloadDialogView() = default;
 
 BEGIN_METADATA(DownloadDialogView)
 END_METADATA

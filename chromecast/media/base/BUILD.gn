@@ -4,6 +4,7 @@
 
 import("//build/buildflag_header.gni")
 import("//chromecast/chromecast.gni")
+import("//testing/test.gni")
 import("//third_party/widevine/cdm/widevine.gni")
 
 buildflag_header("buildflags") {
@@ -95,23 +96,6 @@ cast_source_set("slew_volume") {
   ]
 }
 
-cast_source_set("video_plane_controller") {
-  sources = [
-    "video_plane_controller.cc",
-    "video_plane_controller.h",
-  ]
-
-  public_deps = [ "//chromecast/public" ]
-
-  deps = [
-    "//base",
-    "//chromecast/media:libcast_media",
-    "//media",
-    "//ui/gfx",
-    "//ui/gfx/geometry",
-  ]
-}
-
 cast_source_set("monotonic_clock") {
   sources = [
     "default_monotonic_clock.cc",
@@ -120,6 +104,6 @@ cast_source_set("monotonic_clock") {
   deps = [
     ":buildflags",
     "//base",
-    "//chromecast/media/api:api",
+    "//chromecast/media/api",
   ]
 }

@@ -5,25 +5,22 @@
 #include "chrome/browser/metrics/chromeos_metrics_provider.h"
 
 #include <stddef.h>
+
 #include <string>
 #include <vector>
 
-#include "ash/components/arc/arc_features_parser.h"
-#include "ash/components/arc/metrics/stability_metrics_manager.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "base/barrier_closure.h"
+#include "base/command_line.h"
 #include "base/feature_list.h"
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/hash/md5.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/sys_byteorder.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
@@ -41,6 +38,8 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
+#include "chromeos/ash/experiences/arc/arc_features_parser.h"
+#include "chromeos/ash/experiences/arc/metrics/stability_metrics_manager.h"
 #include "chromeos/ash/services/multidevice_setup/public/cpp/multidevice_setup_client.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager_client.h"
@@ -160,13 +159,6 @@ void ChromeOSMetricsProvider::ProvideSystemProfileMetrics(
       system_profile_proto);
 }
 
-void ChromeOSMetricsProvider::ProvideAccessibilityMetrics() {
-  bool is_spoken_feedback_enabled =
-      ash::AccessibilityManager::Get()->IsSpokenFeedbackEnabled();
-  UMA_HISTOGRAM_BOOLEAN("Accessibility.CrosSpokenFeedback.EveryReport",
-                        is_spoken_feedback_enabled);
-}
-
 void ChromeOSMetricsProvider::ProvideSuggestedContentMetrics() {
   UMA_HISTOGRAM_BOOLEAN(
       "Apps.AppList.SuggestedContent.Enabled",
@@ -219,7 +211,6 @@ void ChromeOSMetricsProvider::ProvideStabilityMetrics(
 
 void ChromeOSMetricsProvider::ProvideCurrentSessionData(
     metrics::ChromeUserMetricsExtension* uma_proto) {
-  ProvideAccessibilityMetrics();
   ProvideSuggestedContentMetrics();
   ProvideMetrics(uma_proto->mutable_system_profile(),
                  /*should_include_arc_metrics=*/!emitted_);

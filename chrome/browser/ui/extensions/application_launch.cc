@@ -18,16 +18,12 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
 #include "chrome/browser/apps/platform_apps/platform_app_launch.h"
-#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/app_tab_helper.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/file_handlers/file_handling_launch_utils.h"
-#include "chrome/browser/extensions/launch_util.h"
-#include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -37,6 +33,8 @@
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow_delegate.h"
 #include "chrome/browser/ui/extensions/web_file_handlers/multiclient_util.h"
@@ -45,11 +43,13 @@
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/url_constants.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_prefs.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
-#include "extensions/browser/extension_system.h"
+#include "extensions/browser/launch_util.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/features/feature.h"
@@ -57,6 +57,7 @@
 #include "extensions/common/manifest_handlers/options_page_info.h"
 #include "extensions/common/manifest_handlers/web_file_handlers_info.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/display/scoped_display_for_new_windows.h"
 #include "ui/gfx/geometry/rect.h"
@@ -64,8 +65,8 @@
 using content::WebContents;
 using extensions::Extension;
 using extensions::ExtensionPrefs;
+using extensions::ExtensionRegistrar;
 using extensions::ExtensionRegistry;
-using extensions::ExtensionService;
 
 namespace {
 
@@ -73,12 +74,12 @@ namespace {
 // This class manages its own lifetime.
 class EnableViaDialogFlow : public ExtensionEnableFlowDelegate {
  public:
-  EnableViaDialogFlow(ExtensionService* service,
+  EnableViaDialogFlow(ExtensionRegistrar* registrar,
                       ExtensionRegistry* registry,
                       Profile* profile,
                       const std::string& extension_id,
                       base::OnceClosure callback)
-      : service_(service),
+      : registrar_(registrar),
         registry_(registry),
         profile_(profile),
         extension_id_(extension_id),
@@ -90,7 +91,7 @@ class EnableViaDialogFlow : public ExtensionEnableFlowDelegate {
   ~EnableViaDialogFlow() override = default;
 
   void Run() {
-    DCHECK(!service_->IsExtensionEnabled(extension_id_));
+    DCHECK(!registrar_->IsExtensionEnabled(extension_id_));
     flow_ =
         std::make_unique<ExtensionEnableFlow>(profile_, extension_id_, this);
     flow_->Start();
@@ -101,15 +102,16 @@ class EnableViaDialogFlow : public ExtensionEnableFlowDelegate {
   void ExtensionEnableFlowFinished() override {
     const Extension* extension =
         registry_->enabled_extensions().GetByID(extension_id_);
-    if (!extension)
+    if (!extension) {
       return;
+    }
     std::move(callback_).Run();
     delete this;
   }
 
   void ExtensionEnableFlowAborted(bool user_initiated) override { delete this; }
 
-  const raw_ptr<ExtensionService> service_;
+  const raw_ptr<ExtensionRegistrar> registrar_;
   const raw_ptr<ExtensionRegistry> registry_;
   const raw_ptr<Profile> profile_;
   extensions::ExtensionId extension_id_;
@@ -119,8 +121,9 @@ class EnableViaDialogFlow : public ExtensionEnableFlowDelegate {
 
 const Extension* GetExtension(Profile* profile,
                               const apps::AppLaunchParams& params) {
-  if (params.app_id.empty())
+  if (params.app_id.empty()) {
     return nullptr;
+  }
   ExtensionRegistry* registry = ExtensionRegistry::Get(profile);
   return registry->GetExtensionById(
       params.app_id, ExtensionRegistry::ENABLED | ExtensionRegistry::DISABLED |
@@ -129,11 +132,13 @@ const Extension* GetExtension(Profile* profile,
 
 bool IsAllowedToOverrideURL(const extensions::Extension* extension,
                             const GURL& override_url) {
-  if (extension->web_extent().MatchesURL(override_url))
+  if (extension->web_extent().MatchesURL(override_url)) {
     return true;
+  }
 
-  if (override_url.DeprecatedGetOriginAsURL() == extension->url())
+  if (override_url.DeprecatedGetOriginAsURL() == extension->url()) {
     return true;
+  }
 
   return false;
 }
@@ -167,29 +172,33 @@ GURL UrlForExtension(const extensions::Extension* extension,
   return url;
 }
 
-ui::WindowShowState DetermineWindowShowState(Profile* profile,
-                                             apps::LaunchContainer container,
-                                             const Extension* extension) {
-  if (!extension || container != apps::LaunchContainer::kLaunchContainerWindow)
-    return ui::SHOW_STATE_DEFAULT;
+ui::mojom::WindowShowState DetermineWindowShowState(
+    Profile* profile,
+    apps::LaunchContainer container,
+    const Extension* extension) {
+  if (!extension ||
+      container != apps::LaunchContainer::kLaunchContainerWindow) {
+    return ui::mojom::WindowShowState::kDefault;
+  }
 
-  if (chrome::IsRunningInForcedAppMode())
-    return ui::SHOW_STATE_FULLSCREEN;
+  if (IsRunningInForcedAppMode()) {
+    return ui::mojom::WindowShowState::kFullscreen;
+  }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // In ash, LAUNCH_TYPE_FULLSCREEN launches in a maximized app window and
-  // LAUNCH_TYPE_WINDOW launches in a default app window.
+#if BUILDFLAG(IS_CHROMEOS)
+  // In ChromeOS, LaunchType::kFullscreen launches in a maximized app window and
+  // LaunchType::kWindow launches in a default app window.
   extensions::LaunchType launch_type =
       extensions::GetLaunchType(ExtensionPrefs::Get(profile), extension);
-  if (launch_type == extensions::LAUNCH_TYPE_FULLSCREEN) {
-    return ui::SHOW_STATE_MAXIMIZED;
+  if (launch_type == extensions::LaunchType::kFullscreen) {
+    return ui::mojom::WindowShowState::kMaximized;
   }
-  if (launch_type == extensions::LAUNCH_TYPE_WINDOW) {
-    return ui::SHOW_STATE_DEFAULT;
+  if (launch_type == extensions::LaunchType::kWindow) {
+    return ui::mojom::WindowShowState::kDefault;
   }
 #endif
 
-  return ui::SHOW_STATE_DEFAULT;
+  return ui::mojom::WindowShowState::kDefault;
 }
 
 WebContents* OpenApplicationTab(Profile* profile,
@@ -226,8 +235,9 @@ WebContents* OpenApplicationTab(Profile* profile,
       extensions::GetLaunchType(ExtensionPrefs::Get(profile), extension);
 
   int add_type = AddTabTypes::ADD_ACTIVE;
-  if (launch_type == extensions::LAUNCH_TYPE_PINNED)
+  if (launch_type == extensions::LaunchType::kPinned) {
     add_type |= AddTabTypes::ADD_PINNED;
+  }
 
   ui::PageTransition transition = ui::PAGE_TRANSITION_AUTO_BOOKMARK;
   NavigateParams params(browser, url, transition);
@@ -240,12 +250,15 @@ WebContents* OpenApplicationTab(Profile* profile,
     TabStripModel* model = browser->tab_strip_model();
     int tab_index = model->GetIndexOfWebContents(existing_tab);
 
-    existing_tab->OpenURL(content::OpenURLParams(
-        url,
-        content::Referrer::SanitizeForRequest(
-            url, content::Referrer(existing_tab->GetURL(),
-                                   network::mojom::ReferrerPolicy::kDefault)),
-        disposition, transition, false));
+    existing_tab->OpenURL(
+        content::OpenURLParams(
+            url,
+            content::Referrer::SanitizeForRequest(
+                url,
+                content::Referrer(existing_tab->GetURL(),
+                                  network::mojom::ReferrerPolicy::kDefault)),
+            disposition, transition, false),
+        /*navigation_handle_callback=*/{});
     // Reset existing_tab as OpenURL() may have clobbered it.
     existing_tab = browser->tab_strip_model()->GetActiveWebContents();
     if (params.tabstrip_add_types & AddTabTypes::ADD_PINNED) {
@@ -265,20 +278,20 @@ WebContents* OpenApplicationTab(Profile* profile,
     contents = params.navigated_or_inserted_contents;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // In ash, LAUNCH_FULLSCREEN launches in the OpenApplicationWindow function
-  // i.e. it should not reach here.
-  DCHECK(launch_type != extensions::LAUNCH_TYPE_FULLSCREEN);
+#if BUILDFLAG(IS_CHROMEOS)
+  // In ChromeOS, extensions::LaunchType::kFullscreen launches in the
+  // OpenApplicationWindow function i.e. it should not reach here.
+  DCHECK(launch_type != extensions::LaunchType::kFullscreen);
 #else
   // TODO(skerner):  If we are already in full screen mode, and the user set the
   // app to open as a regular or pinned tab, what should happen? Today we open
   // the tab, but stay in full screen mode.  Should we leave full screen mode in
   // this case?
-  if (launch_type == extensions::LAUNCH_TYPE_FULLSCREEN &&
+  if (launch_type == extensions::LaunchType::kFullscreen &&
       !browser->window()->IsFullscreen()) {
-    chrome::ToggleFullscreenMode(browser);
+    chrome::ToggleFullscreenMode(browser, /*user_initiated=*/false);
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
   return contents;
 }
 
@@ -326,6 +339,9 @@ WebContents* OpenEnabledApplicationHelper(Profile* profile,
     // `params.intent->activity_name` is actually the `action` url set in the
     // manifest of the extension.
     url = extension.GetResourceURL(params.intent->activity_name.value());
+    if (!url.is_valid()) {
+      return nullptr;
+    }
   } else {
     url = UrlForExtension(&extension, profile, params);
   }
@@ -337,7 +353,6 @@ WebContents* OpenEnabledApplicationHelper(Profile* profile,
   switch (params.container) {
     case apps::LaunchContainer::kLaunchContainerNone: {
       NOTREACHED();
-      break;
     }
     // Panels are deprecated. Launch a normal window instead.
     case apps::LaunchContainer::kLaunchContainerPanelDeprecated:
@@ -350,7 +365,6 @@ WebContents* OpenEnabledApplicationHelper(Profile* profile,
     }
     default:
       NOTREACHED();
-      break;
   }
 
   if (supports_web_file_handlers) {
@@ -368,12 +382,6 @@ WebContents* OpenEnabledApplication(Profile* profile,
   if (!extension) {
     return nullptr;
   }
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  if (!profile->IsMainProfile()) {
-    return nullptr;
-  }
-#endif
 
   if (extensions::WebFileHandlers::SupportsWebFileHandlers(*extension)) {
     // If the extension supports Web File Handlers, File Handlers are required.
@@ -406,6 +414,24 @@ WebContents* OpenEnabledApplication(Profile* profile,
   // This is the default case. Alternatively, Web File Handlers could also reach
   // this point if they have a single-client launch_type, which is the default.
   return OpenEnabledApplicationHelper(profile, params, *extension);
+}
+
+BrowserWindowInterface* FindBrowserForApp(Profile* profile,
+                                          const std::string& app_id) {
+  BrowserWindowInterface* browser_for_app = nullptr;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [&](BrowserWindowInterface* browser) {
+        std::string browser_app_id = web_app::GetAppIdFromApplicationName(
+            browser->GetBrowserForMigrationOnly()->app_name());
+        if (profile == browser->GetProfile() &&
+            browser->GetType() == BrowserWindowInterface::TYPE_APP &&
+            app_id == browser_app_id) {
+          browser_for_app = browser;
+          return false;  // stop iterating
+        }
+        return true;  // continue iterating
+      });
+  return browser_for_app;
 }
 
 }  // namespace
@@ -471,17 +497,18 @@ WebContents* NavigateApplicationWindow(Browser* browser,
 
   NavigateParams nav_params(browser, url, transition);
   nav_params.disposition = disposition;
+  nav_params.pwa_navigation_capturing_force_off = true;
   Navigate(&nav_params);
 
   WebContents* const web_contents = nav_params.navigated_or_inserted_contents;
 
   // Before MV3, an extension reaching this point must have been an app. MV3
-  // added support for Web File Handlers, which don't use extension TabHelper.
+  // added support for Web File Handlers, which don't use extension
+  // AppTabHelper.
   if (extension && extension->is_app()) {
-    extensions::TabHelper::FromWebContents(web_contents)
+    extensions::AppTabHelper::FromWebContents(web_contents)
         ->SetExtensionApp(extension);
   }
-  web_app::SetAppPrefsForWebContents(web_contents);
 
   return web_contents;
 }
@@ -505,17 +532,17 @@ WebContents* OpenApplicationWindow(Profile* profile,
 void OpenApplicationWithReenablePrompt(Profile* profile,
                                        apps::AppLaunchParams&& params) {
   const Extension* extension = GetExtension(profile, params);
-  if (!extension)
+  if (!extension) {
     return;
+  }
 
-  ExtensionService* service =
-      extensions::ExtensionSystem::Get(profile)->extension_service();
+  auto* registrar = extensions::ExtensionRegistrar::Get(profile);
   ExtensionRegistry* registry = ExtensionRegistry::Get(profile);
-  if (!service->IsExtensionEnabled(extension->id()) ||
+  if (!registrar->IsExtensionEnabled(extension->id()) ||
       registry->terminated_extensions().GetByID(extension->id())) {
     // Self deleting.
     auto* flow = new EnableViaDialogFlow(
-        service, registry, profile, extension->id(),
+        registrar, registry, profile, extension->id(),
         base::BindOnce(base::IgnoreResult(OpenEnabledApplication), profile,
                        std::move(params)));
     flow->Run();
@@ -546,44 +573,26 @@ void LaunchAppWithCallback(
     const std::string& app_id,
     const base::CommandLine& command_line,
     const base::FilePath& current_directory,
-    base::OnceCallback<void(Browser* browser, apps::LaunchContainer container)>
-        callback) {
+    base::OnceCallback<void(BrowserWindowInterface* browser,
+                            apps::LaunchContainer container)> callback) {
   apps::LaunchContainer container;
+  BrowserWindowInterface* app_browser = nullptr;
   if (apps::OpenExtensionApplicationWindow(profile, app_id, command_line,
                                            current_directory)) {
     container = apps::LaunchContainer::kLaunchContainerWindow;
-  } else if (apps::OpenExtensionApplicationTab(profile, app_id)) {
-    container = apps::LaunchContainer::kLaunchContainerTab;
+    app_browser = FindBrowserForApp(profile, app_id);
   } else {
-    // Open an empty browser window as the app_id is invalid.
-    apps::CreateBrowserWithNewTabPage(profile);
-    container = apps::LaunchContainer::kLaunchContainerNone;
+    content::WebContents* app_tab =
+        apps::OpenExtensionApplicationTab(profile, app_id);
+    if (app_tab) {
+      container = apps::LaunchContainer::kLaunchContainerTab;
+      app_browser = chrome::FindBrowserWithTab(app_tab);
+    } else {
+      // Open an empty browser window as the app_id is invalid.
+      app_browser = apps::CreateBrowserWithNewTabPage(profile);
+      container = apps::LaunchContainer::kLaunchContainerNone;
+    }
   }
-  std::move(callback).Run(BrowserList::GetInstance()->GetLastActive(),
-                          container);
+
+  std::move(callback).Run(app_browser, container);
 }
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-bool ShowBrowserForProfile(Profile* profile,
-                           const apps::AppLaunchParams& params) {
-  Browser* browser = chrome::FindTabbedBrowser(
-      profile, /*match_original_profiles=*/false, params.display_id);
-  if (browser) {
-    // For existing browser, ensure its window is shown and activated.
-    browser->window()->Show();
-    browser->window()->Activate();
-    return true;
-  }
-
-  // No browser for this profile, need to open a new one.
-  if (Browser::GetCreationStatusForProfile(profile) ==
-      Browser::CreationStatus::kOk) {
-    browser = Browser::Create(
-        Browser::CreateParams(Browser::TYPE_NORMAL, profile, true));
-    browser->window()->Show();
-    return true;
-  }
-
-  return false;
-}
-#endif

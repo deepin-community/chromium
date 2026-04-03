@@ -4,7 +4,9 @@
 
 #include <string>
 
+#include "ash/constants/ash_features.h"
 #include "base/memory/raw_ptr.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/test/cryptohome_mixin.h"
@@ -22,7 +24,6 @@ namespace ash {
 
 using testing::_;
 using testing::AnyNumber;
-using testing::Invoke;
 
 // This test currently uses mocks as consumers.
 // Once there is an AuthPanel implementation / In-Session auth dialog,
@@ -30,21 +31,21 @@ using testing::Invoke;
 class AuthHubTest : public LoginManagerTest {
  public:
   AuthHubTest() {
+    feature_list_.InitAndDisableFeature(ash::features::kUseAuthPanelInSession);
   }
   ~AuthHubTest() override = default;
 
   void ExpectAuthenticationStarted() {
     EXPECT_CALL(attempt_consumer_, OnUserAuthAttemptConfirmed(_, _))
-        .WillOnce(Invoke([&](AuthHubConnector* connector,
-                             raw_ptr<AuthFactorStatusConsumer>& out_consumer) {
+        .WillOnce([&](AuthHubConnector* connector,
+                      raw_ptr<AuthFactorStatusConsumer>& out_consumer) {
           connector_ = connector;
           out_consumer = &status_consumer_;
-        }));
+        });
     EXPECT_CALL(status_consumer_, InitializeUi(_, _))
-        .WillOnce(
-            Invoke([&](AuthFactorsSet factors, AuthHubConnector* connector) {
-              connector_ = connector;
-            }));
+        .WillOnce([&](AuthFactorsSet factors, AuthHubConnector* connector) {
+          connector_ = connector;
+        });
     EXPECT_CALL(status_consumer_, OnFactorStatusesChanged(_))
         .Times(AnyNumber());
   }
@@ -52,9 +53,9 @@ class AuthHubTest : public LoginManagerTest {
   void ExpectSuccessfulAuthentication() {
     EXPECT_CALL(status_consumer_, OnFactorAuthSuccess(_));
     EXPECT_CALL(attempt_consumer_, OnUserAuthSuccess(_, _))
-        .WillOnce(Invoke([&](AshAuthFactor factor, AuthProofToken token) {
+        .WillOnce([&](AshAuthFactor factor, AuthProofToken token) {
           auth_token_ = token;
-        }));
+        });
   }
 
  protected:
@@ -77,6 +78,8 @@ class AuthHubTest : public LoginManagerTest {
       {gaia_password_user_, gaia_password_and_pin_user_},
       nullptr,
       &cryptohome_mixin_};
+
+  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(AuthHubTest, LoginScreenWithPasswordOnly) {

@@ -1,23 +1,50 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import * as Debugging from './Debugging.js';
 import type * as LoggableModule from './Loggable.js';
 import * as LoggingConfig from './LoggingConfig.js';
 import * as LoggingDriver from './LoggingDriver.js';
+import * as LoggingEvents from './LoggingEvents.js';
 import * as NonDomState from './NonDomState.js';
 
 export type Loggable = LoggableModule.Loggable;
-export {startLogging, stopLogging, addDocument} from './LoggingDriver.js';
-export {logClick, logImpressions} from './LoggingEvents.js';
-export {registerContextProvider, registerParentProvider} from './LoggingState.js';
+export {DebugLoggingFormat, setVeDebuggingEnabled, setVeDebugLoggingEnabled} from './Debugging.js';
+export {addDocument, startLogging, stopLogging} from './LoggingDriver.js';
+export {logImpressions, logSettingAccess, logFunctionCall} from './LoggingEvents.js';
+export const logClick = (loggable: Loggable, event: Event, options: {doubleClick?: boolean} = {}): void =>
+    LoggingEvents.logClick(LoggingDriver.clickLogThrottler)(loggable, event, options);
 
-export function registerLoggable(loggable: Loggable, config: string, parent: Loggable|null): void {
+export const logResize = (l: Loggable, s: DOMRect): void => LoggingEvents.logResize(l, s);
+export const logKeyDown = async(l: Loggable|null, e: Event, context?: string): Promise<void> =>
+    await LoggingEvents.logKeyDown(LoggingDriver.keyboardLogThrottler)(l, e, context);
+export {registerParentProvider, setMappedParent} from './LoggingState.js';
+
+export function registerLoggable(loggable: Loggable, config: string, parent: Loggable|null, size: DOMRect): void {
   if (!LoggingDriver.isLogging()) {
     return;
   }
-  NonDomState.registerLoggable(loggable, LoggingConfig.parseJsLog(config), parent || undefined);
-  LoggingDriver.scheduleProcessing();
+  NonDomState.registerLoggable(loggable, LoggingConfig.parseJsLog(config), parent || undefined, size);
+  void LoggingDriver.scheduleProcessing();
+}
+
+export async function isUnderInspection(origin?: string): Promise<boolean> {
+  if (!origin) {
+    return false;
+  }
+  const context = await LoggingEvents.contextAsNumber(origin);
+  if (!context) {
+    return false;
+  }
+  return [431010711, -1313957874, -1093325535].includes(context);
+}
+
+export function setHighlightedVe(veKey: string|null): void {
+  Debugging.setHighlightedVe(veKey);
+  if (veKey) {
+    void LoggingDriver.process();
+  }
 }
 
 /**
@@ -28,26 +55,23 @@ export function registerLoggable(loggable: Loggable, config: string, parent: Log
  * Ideally the `action`s context should match the ID of an `UI.ActionRegistration.Action`.
  */
 export const action = LoggingConfig.makeConfigStringBuilder.bind(null, 'Action');
+export const adorner = LoggingConfig.makeConfigStringBuilder.bind(null, 'Adorner');
 export const animationClip = LoggingConfig.makeConfigStringBuilder.bind(null, 'AnimationClip');
+export const badge = LoggingConfig.makeConfigStringBuilder.bind(null, 'Badge');
 export const bezierCurveEditor = LoggingConfig.makeConfigStringBuilder.bind(null, 'BezierCurveEditor');
-export const bezierEditor = LoggingConfig.makeConfigStringBuilder.bind(null, 'BezierEditor');
 export const bezierPresetCategory = LoggingConfig.makeConfigStringBuilder.bind(null, 'BezierPresetCategory');
 export const breakpointMarker = LoggingConfig.makeConfigStringBuilder.bind(null, 'BreakpointMarker');
 export const canvas = LoggingConfig.makeConfigStringBuilder.bind(null, 'Canvas');
 export const close = LoggingConfig.makeConfigStringBuilder.bind(null, 'Close');
 export const colorEyeDropper = LoggingConfig.makeConfigStringBuilder.bind(null, 'ColorEyeDropper');
-export const colorPicker = LoggingConfig.makeConfigStringBuilder.bind(null, 'ColorPicker');
 export const counter = LoggingConfig.makeConfigStringBuilder.bind(null, 'Counter');
 /**
  * Visual element to denote a moveable control point such as the ones exist in BezierEditor
  * for bezier control points or keyframes in AnimationUI.
  */
 export const controlPoint = LoggingConfig.makeConfigStringBuilder.bind(null, 'ControlPoint');
-export const cssAngleEditor = LoggingConfig.makeConfigStringBuilder.bind(null, 'CssAngleEditor');
 export const cssColorMix = LoggingConfig.makeConfigStringBuilder.bind(null, 'CssColorMix');
-export const cssFlexboxEditor = LoggingConfig.makeConfigStringBuilder.bind(null, 'CssFlexboxEditor');
-export const cssGridEditor = LoggingConfig.makeConfigStringBuilder.bind(null, 'CssGridEditor');
-export const cssShadowEditor = LoggingConfig.makeConfigStringBuilder.bind(null, 'CssShadowEditor');
+export const cssRuleHeader = LoggingConfig.makeConfigStringBuilder.bind(null, 'CSSRuleHeader');
 export const deviceModeRuler = LoggingConfig.makeConfigStringBuilder.bind(null, 'DeviceModeRuler');
 export const domBreakpoint = LoggingConfig.makeConfigStringBuilder.bind(null, 'DOMBreakpoint');
 export const drawer = LoggingConfig.makeConfigStringBuilder.bind(null, 'Drawer');
@@ -55,7 +79,8 @@ export const dropDown = LoggingConfig.makeConfigStringBuilder.bind(null, 'DropDo
 export const elementsBreadcrumbs = LoggingConfig.makeConfigStringBuilder.bind(null, 'ElementsBreadcrumbs');
 export const expand = LoggingConfig.makeConfigStringBuilder.bind(null, 'Expand');
 export const filterDropdown = LoggingConfig.makeConfigStringBuilder.bind(null, 'FilterDropdown');
-export const infoBar = LoggingConfig.makeConfigStringBuilder.bind(null, 'InfoBar');
+export const gutter = LoggingConfig.makeConfigStringBuilder.bind(null, 'Gutter');
+export const dialog = LoggingConfig.makeConfigStringBuilder.bind(null, 'Dialog');
 export const item = LoggingConfig.makeConfigStringBuilder.bind(null, 'Item');
 export const key = LoggingConfig.makeConfigStringBuilder.bind(null, 'Key');
 
@@ -90,7 +115,7 @@ export const showStyleEditor = LoggingConfig.makeConfigStringBuilder.bind(null, 
 export const slider = LoggingConfig.makeConfigStringBuilder.bind(null, 'Slider');
 export const section = LoggingConfig.makeConfigStringBuilder.bind(null, 'Section');
 export const sectionHeader = LoggingConfig.makeConfigStringBuilder.bind(null, 'SectionHeader');
-export const stylesSelector = LoggingConfig.makeConfigStringBuilder.bind(null, 'StylesSelector');
+export const tableRow = LoggingConfig.makeConfigStringBuilder.bind(null, 'TableRow');
 export const tableCell = LoggingConfig.makeConfigStringBuilder.bind(null, 'TableCell');
 export const tableHeader = LoggingConfig.makeConfigStringBuilder.bind(null, 'TableHeader');
 

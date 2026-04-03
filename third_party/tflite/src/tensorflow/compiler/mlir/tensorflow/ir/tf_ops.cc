@@ -15,16 +15,10 @@ limitations under the License.
 
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 
-#include <algorithm>
-#include <cstdint>
 #include <functional>
-#include <limits>
-#include <numeric>
-#include <string>
-#include <tuple>
-#include <type_traits>
 #include <utility>
 
+#include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
@@ -191,10 +185,11 @@ struct TFInlinerInterface : public DialectInlinerInterface {
   Operation *materializeCallConversion(OpBuilder &builder, Value input,
                                        Type result_type,
                                        Location conversion_loc) const final {
-    if (!result_type.isa<TensorType>() || !input.getType().isa<TensorType>())
+    if (!mlir::isa<TensorType>(result_type) ||
+        !mlir::isa<TensorType>(input.getType()))
       return nullptr;
-    return builder.create<TF::CastOp>(conversion_loc, result_type, input,
-                                      /*truncate=*/builder.getBoolAttr(false));
+    return TF::CastOp::create(builder, conversion_loc, result_type, input,
+                              /*truncate=*/builder.getBoolAttr(false));
   }
 
   void processInlinedCallBlocks(
@@ -259,7 +254,7 @@ void *TensorFlowDialect::getRegisteredInterfaceForOp(
 
     // Only use fallback interface for known not-stateful ops.
     const tensorflow::OpRegistrationData *op_reg_data = nullptr;
-    tensorflow::Status s = tensorflow::OpRegistry::Global()->LookUp(
+    absl::Status s = tensorflow::OpRegistry::Global()->LookUp(
         opName.stripDialect().str(), &op_reg_data);
     return (s.ok() && !op_reg_data->op_def.is_stateful())
                ? fallback_effect_op_interface_
@@ -311,7 +306,7 @@ TensorFlowDialect::TensorFlowDialect(MLIRContext *context)
       >();
   addOperations<
 #define GET_OP_LIST
-#include "tensorflow/compiler/mlir/tensorflow/ir/tfrt_ops.cc.inc"
+#include "tensorflow/compiler/mlir/tensorflow/ir/host_runtime/tfrt_ops.cc.inc"
       >();
   addInterfaces<TFInlinerInterface, TFConstantFoldInterface>();
   fallback_effect_op_interface_ =
@@ -350,7 +345,7 @@ Attribute TensorFlowDialect::parseAttribute(DialectAsmParser &parser,
 Operation *TensorFlowDialect::materializeConstant(OpBuilder &builder,
                                                   Attribute value, Type type,
                                                   Location loc) {
-  return builder.create<ConstOp>(loc, type, value);
+  return ConstOp::create(builder, loc, type, value);
 }
 
 }  // namespace TF

@@ -2,7 +2,8 @@ Name: Lit-HTML
 Short Name: lit-html
 URL: https://lit-html.polymer-project.org/
 Version: 1.3.0
-License: BSD-3
+Update Mechanism: Manual
+License: BSD-3-Clause
 License File: LICENSE
 Shipped: no
 Security Critical: no

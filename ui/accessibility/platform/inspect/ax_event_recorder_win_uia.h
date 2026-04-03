@@ -6,9 +6,10 @@
 #define UI_ACCESSIBILITY_PLATFORM_INSPECT_AX_EVENT_RECORDER_WIN_UIA_H_
 
 #include <ole2.h>
+
 #include <stdint.h>
-#include <uiautomation.h>
 #include <wrl/client.h>
+
 #include <string>
 #include <utility>
 #include <vector>
@@ -23,6 +24,8 @@
 #include "base/win/atl.h"
 #include "ui/accessibility/platform/inspect/ax_event_recorder.h"
 #include "ui/accessibility/platform/inspect/ax_inspect.h"
+
+#include <uiautomation.h>
 
 namespace ui {
 
@@ -139,6 +142,8 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXEventRecorderWinUia
   Thread thread_;
   base::RunLoop shutdown_loop_;
   base::PlatformThreadHandle thread_handle_;
+  bool thread_joined_ = false;
+  bool wait_for_done_recording_called_ = false;
 };
 
 }  // namespace ui

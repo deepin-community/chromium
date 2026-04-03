@@ -9,18 +9,22 @@
 #include "extensions/browser/api/web_request/extension_web_request_event_router.h"
 #include "extensions/browser/api/web_request/permission_helper.h"
 #include "extensions/browser/event_router_factory.h"
+#include "extensions/browser/extension_navigation_registry.h"
 #include "extensions/browser/extension_registry_factory.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/process_map_factory.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using content::BrowserContext;
 
 namespace extensions {
 
 // static
-KeyedWebRequestEventRouter* WebRequestEventRouterFactory::GetForBrowserContext(
+WebRequestEventRouter* WebRequestEventRouterFactory::GetForBrowserContext(
     BrowserContext* context) {
-  return static_cast<KeyedWebRequestEventRouter*>(
+  return static_cast<WebRequestEventRouter*>(
       GetInstance()->GetServiceForBrowserContext(context, true));
 }
 
@@ -37,13 +41,15 @@ WebRequestEventRouterFactory::WebRequestEventRouterFactory()
   DependsOn(ExtensionRegistryFactory::GetInstance());
   DependsOn(PermissionHelper::GetFactoryInstance());
   DependsOn(ProcessMapFactory::GetInstance());
+  DependsOn(ExtensionNavigationRegistry::GetFactoryInstance());
 }
 
 WebRequestEventRouterFactory::~WebRequestEventRouterFactory() = default;
 
-KeyedService* WebRequestEventRouterFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+WebRequestEventRouterFactory::BuildServiceInstanceForBrowserContext(
     BrowserContext* context) const {
-  return new KeyedWebRequestEventRouter(context);
+  return std::make_unique<WebRequestEventRouter>(context);
 }
 
 BrowserContext* WebRequestEventRouterFactory::GetBrowserContextToUse(
@@ -51,7 +57,7 @@ BrowserContext* WebRequestEventRouterFactory::GetBrowserContextToUse(
   // WebRequestAPI shares an instance between regular and incognito profiles,
   // so this must do the same.
   return ExtensionsBrowserClient::Get()->GetContextRedirectedToOriginal(
-      context, /*force_guest_profile=*/true);
+      context);
 }
 
 bool WebRequestEventRouterFactory::ServiceIsCreatedWithBrowserContext() const {

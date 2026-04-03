@@ -14,7 +14,6 @@
 #include "base/task/task_traits.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/performance_manager/graph/process_node_impl.h"
 #include "components/performance_manager/public/graph/node_data_describer_registry.h"
 #include "components/performance_manager/public/graph/process_node.h"
@@ -50,7 +49,7 @@ std::string ContentTypeToString(ProcessNode::ContentType content_type) {
 std::string HostedProcessTypesToString(
     ProcessNode::ContentTypes hosted_content_types) {
   std::vector<std::string> content_types_vector;
-  content_types_vector.reserve(hosted_content_types.Size());
+  content_types_vector.reserve(hosted_content_types.size());
   for (ProcessNode::ContentType content_type : hosted_content_types)
     content_types_vector.push_back(ContentTypeToString(content_type));
 
@@ -61,22 +60,8 @@ std::string HostedProcessTypesToString(
   return str;
 }
 
-#if !BUILDFLAG(IS_APPLE)
-const char* GetProcessPriorityString(const base::Process& process) {
-  switch (process.GetPriority()) {
-    case base::Process::Priority::kBestEffort:
-      return "Best effort";
-    case base::Process::Priority::kUserVisible:
-      return "User visible";
-    case base::Process::Priority::kUserBlocking:
-      return "User blocking";
-  }
-  NOTREACHED_NORETURN();
-}
-#endif
-
 base::Value GetProcessValueDict(const base::Process& process) {
-  base::Value::Dict ret;
+  base::DictValue ret;
 
   // On Windows, handle is a void *. On Fuchsia it's an int. On other platforms
   // it is equal to the pid, so don't bother to record it.
@@ -92,7 +77,7 @@ base::Value GetProcessValueDict(const base::Process& process) {
     ret.Set("is_current", true);
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (process.GetPidInNamespace() != base::kNullProcessId) {
     ret.Set("pid_in_namespace", process.GetPidInNamespace());
   }
@@ -109,7 +94,7 @@ base::Value GetProcessValueDict(const base::Process& process) {
     // These properties can only be accessed for valid processes.
     ret.Set("os_priority", process.GetOSPriority());
 #if !BUILDFLAG(IS_APPLE)
-    ret.Set("priority", GetProcessPriorityString(process));
+    ret.Set("priority", base::ProcessPriorityToString(process.GetPriority()));
 #endif
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_WIN)
     ret.Set("creation_time",
@@ -148,11 +133,11 @@ void ProcessNodeImplDescriber::OnTakenFromGraph(Graph* graph) {
   graph->GetNodeDataDescriberRegistry()->UnregisterDescriber(this);
 }
 
-base::Value::Dict ProcessNodeImplDescriber::DescribeProcessNodeData(
+base::DictValue ProcessNodeImplDescriber::DescribeProcessNodeData(
     const ProcessNode* node) const {
   const ProcessNodeImpl* impl = ProcessNodeImpl::FromNode(node);
 
-  base::Value::Dict ret;
+  base::DictValue ret;
 
   ret.Set("pid", base::NumberToString(impl->GetProcessId()));
 
@@ -170,16 +155,16 @@ base::Value::Dict ProcessNodeImplDescriber::DescribeProcessNodeData(
     ret.Set("metrics_name", impl->GetMetricsName());
   }
 
-  ret.Set("priority", base::TaskPriorityToString(impl->GetPriority()));
+  ret.Set("priority", base::ProcessPriorityToString(impl->GetPriority()));
 
-  if (impl->GetPrivateFootprintKb()) {
+  if (!impl->GetPrivateFootprint().is_zero()) {
     ret.Set("private_footprint_kb",
-            base::saturated_cast<int>(impl->GetPrivateFootprintKb()));
+            base::saturated_cast<int>(impl->GetPrivateFootprint().InKiB()));
   }
 
-  if (impl->GetResidentSetKb()) {
+  if (!impl->GetResidentSet().is_zero()) {
     ret.Set("resident_set_kb",
-            base::saturated_cast<int>(impl->GetResidentSetKb()));
+            base::saturated_cast<int>(impl->GetResidentSet().InKiB()));
   }
 
   // The content function returns "Tab" for renderers - whereas "Renderer" is

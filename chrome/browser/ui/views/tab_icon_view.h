@@ -9,6 +9,7 @@
 #include "base/time/time.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/button/menu_button.h"
+#include "ui/views/metadata/view_factory.h"
 
 class TabIconViewModel;
 
@@ -33,7 +34,8 @@ class TabIconView : public views::MenuButton {
 
  private:
   // views::MenuButton:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void PaintButtonContents(gfx::Canvas* canvas) override;
 
   void PaintThrobber(gfx::Canvas* canvas);

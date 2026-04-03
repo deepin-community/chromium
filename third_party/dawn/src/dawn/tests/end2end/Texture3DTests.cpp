@@ -108,10 +108,11 @@ TEST_P(Texture3DTests, Sampling) {
 
     wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
 
-    wgpu::ImageCopyBuffer imageCopyBuffer =
-        utils::CreateImageCopyBuffer(buffer, 0, bytesPerRow, copySize.height);
-    wgpu::ImageCopyTexture imageCopyTexture = utils::CreateImageCopyTexture(texture, 0, {0, 0, 0});
-    encoder.CopyBufferToTexture(&imageCopyBuffer, &imageCopyTexture, &copySize);
+    wgpu::TexelCopyBufferInfo texelCopyBufferInfo =
+        utils::CreateTexelCopyBufferInfo(buffer, 0, bytesPerRow, copySize.height);
+    wgpu::TexelCopyTextureInfo texelCopyTextureInfo =
+        utils::CreateTexelCopyTextureInfo(texture, 0, {0, 0, 0});
+    encoder.CopyBufferToTexture(&texelCopyBufferInfo, &texelCopyTextureInfo, &copySize);
 
     wgpu::BindGroup bindGroup = utils::MakeBindGroup(device, pipeline.GetBindGroupLayout(0),
                                                      {{0, sampler}, {1, textureView}});
@@ -174,7 +175,7 @@ TEST_P(Texture3DTests, LatestMipClampsDepthSizeForStorageTextures) {
 
 // Test 3d texture slices used as render attachments.
 TEST_P(Texture3DTests, Rendering) {
-    // TODO(crbug.com/dawn/1217): D3D12 debug layer reports the same subresource of 3d texture
+    // TODO(crbug.com/dawn/2275): D3D12 debug layer reports the same subresource of 3d texture
     // cannot be written at the same time, which is a bug of D3D12 debug layer.
     // Remove this suppression once the issue is fixed.
     DAWN_SUPPRESS_TEST_IF(IsD3D12() && IsBackendValidationEnabled());
@@ -269,7 +270,8 @@ DAWN_INSTANTIATE_TEST(Texture3DTests,
                       MetalBackend(),
                       OpenGLBackend(),
                       OpenGLESBackend(),
-                      VulkanBackend());
+                      VulkanBackend(),
+                      WebGPUBackend());
 
 }  // anonymous namespace
 }  // namespace dawn

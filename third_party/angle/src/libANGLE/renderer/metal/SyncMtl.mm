@@ -51,7 +51,6 @@ class SyncImpl
 };
 
 // SharedEvent is only available on iOS 12.0+ or mac 10.14+
-#if ANGLE_MTL_EVENT_AVAILABLE
 class SharedEventSyncImpl : public SyncImpl
 {
   public:
@@ -64,7 +63,7 @@ class SharedEventSyncImpl : public SyncImpl
                       uint64_t signalValue,
                       bool enqueueEvent)
     {
-        mMetalSharedEvent.retainAssign(sharedEvent);
+        mMetalSharedEvent = std::move(sharedEvent);
         mSignalValue = signalValue;
 
         if (enqueueEvent)
@@ -101,7 +100,7 @@ class SharedEventSyncImpl : public SyncImpl
         // onDestroy(), but the callback might still not be fired yet.
         std::shared_ptr<std::condition_variable> cvRef = mCv;
         std::shared_ptr<std::mutex> lockRef            = mLock;
-        AutoObjCObj<MTLSharedEventListener> eventListener =
+        angle::ObjCPtr<MTLSharedEventListener> eventListener =
             contextMtl->getDisplay()->getOrCreateSharedEventListener();
         [mMetalSharedEvent.get() notifyListener:eventListener
                                         atValue:mSignalValue
@@ -137,13 +136,12 @@ class SharedEventSyncImpl : public SyncImpl
     }
 
   private:
-    AutoObjCPtr<id<MTLSharedEvent>> mMetalSharedEvent;
+    angle::ObjCPtr<id<MTLSharedEvent>> mMetalSharedEvent;
     uint64_t mSignalValue = 0;
 
     std::shared_ptr<std::condition_variable> mCv;
     std::shared_ptr<std::mutex> mLock;
 };
-#endif  // ANGLE_MTL_EVENT_AVAILABLE
 
 class EventSyncImpl : public SyncImpl
 {
@@ -207,8 +205,78 @@ class EventSyncImpl : public SyncImpl
     }
 
   private:
-    AutoObjCPtr<id<MTLEvent>> mMetalEvent;
+    angle::ObjCPtr<id<MTLEvent>> mMetalEvent;
     uint64_t mEncodedCommandBufferSerial = 0;
+};
+
+class CommandsScheduledSyncImpl : public SyncImpl
+{
+  public:
+    CommandsScheduledSyncImpl()           = default;
+    ~CommandsScheduledSyncImpl() override = default;
+
+    angle::Result set(ContextMtl *contextMtl)
+    {
+        contextMtl->addCommandBufferScheduledCallback([state = mState] {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->signaled = true;
+            state->cv.notify_one();
+        });
+        contextMtl->flushCommandBuffer(mtl::NoWait);
+        return angle::Result::Continue;
+    }
+
+    angle::Result clientWait(ContextMtl *contextMtl,
+                             bool flushCommands,
+                             uint64_t timeout,
+                             GLenum *outResult) override
+    {
+        std::unique_lock<std::mutex> lock(mState->mutex);
+        if (mState->signaled)
+        {
+            *outResult = GL_ALREADY_SIGNALED;
+            return angle::Result::Continue;
+        }
+
+        if (timeout == 0)
+        {
+            *outResult = GL_TIMEOUT_EXPIRED;
+            return angle::Result::Continue;
+        }
+
+        if (!mState->cv.wait_for(lock, std::chrono::nanoseconds(SanitizeTimeout(timeout)),
+                                 [state = mState] { return state->signaled; }))
+        {
+            *outResult = GL_TIMEOUT_EXPIRED;
+            return angle::Result::Continue;
+        }
+
+        ASSERT(mState->signaled);
+        *outResult = GL_CONDITION_SATISFIED;
+        return angle::Result::Continue;
+    }
+
+    angle::Result serverWait(ContextMtl *contextMtl) override
+    {
+        // Not supported for this sync type.
+        return angle::Result::Continue;
+    }
+
+    angle::Result getStatus(DisplayMtl *displayMtl, bool *signaled) override
+    {
+        std::lock_guard<std::mutex> lock(mState->mutex);
+        *signaled = mState->signaled;
+        return angle::Result::Continue;
+    }
+
+  private:
+    struct State
+    {
+        std::condition_variable cv;
+        std::mutex mutex;
+        bool signaled = false;
+    };
+    std::shared_ptr<State> mState{std::make_shared<State>()};
 };
 }  // namespace mtl
 
@@ -224,7 +292,6 @@ void FenceNVMtl::onDestroy(const gl::Context *context)
 
 angle::Result FenceNVMtl::set(const gl::Context *context, GLenum condition)
 {
-#if ANGLE_MTL_EVENT_AVAILABLE
     ASSERT(condition == GL_ALL_COMPLETED_NV);
     ContextMtl *contextMtl = mtl::GetImpl(context);
 
@@ -233,10 +300,6 @@ angle::Result FenceNVMtl::set(const gl::Context *context, GLenum condition)
     mSync = std::move(impl);
 
     return angle::Result::Continue;
-#else
-    UNREACHABLE();
-    return angle::Result::Stop;
-#endif  // ANGLE_MTL_EVENT_AVAILABLE
 }
 
 angle::Result FenceNVMtl::test(const gl::Context *context, GLboolean *outFinished)
@@ -271,7 +334,6 @@ void SyncMtl::onDestroy(const gl::Context *context)
 
 angle::Result SyncMtl::set(const gl::Context *context, GLenum condition, GLbitfield flags)
 {
-#if ANGLE_MTL_EVENT_AVAILABLE
     ASSERT(condition == GL_SYNC_GPU_COMMANDS_COMPLETE);
     ASSERT(flags == 0);
 
@@ -281,10 +343,6 @@ angle::Result SyncMtl::set(const gl::Context *context, GLenum condition, GLbitfi
     mSync = std::move(impl);
 
     return angle::Result::Continue;
-#else
-    UNREACHABLE();
-    return angle::Result::Stop;
-#endif  // ANGLE_MTL_EVENT_AVAILABLE
 }
 
 angle::Result SyncMtl::clientWait(const gl::Context *context,
@@ -340,7 +398,6 @@ egl::Error EGLSyncMtl::initialize(const egl::Display *display,
     ContextMtl *contextMtl = mtl::GetImpl(context);
     switch (type)
     {
-#if ANGLE_MTL_EVENT_AVAILABLE
         case EGL_SYNC_FENCE_KHR:
         {
             std::unique_ptr<mtl::EventSyncImpl> impl = std::make_unique<mtl::EventSyncImpl>();
@@ -349,14 +406,13 @@ egl::Error EGLSyncMtl::initialize(const egl::Display *display,
                 return egl::Error(EGL_BAD_ALLOC, "eglCreateSyncKHR failed to create sync object");
             }
             mSync = std::move(impl);
-
             break;
         }
 
         case EGL_SYNC_METAL_SHARED_EVENT_ANGLE:
         {
-            mSharedEvent.retainAssign((__bridge id<MTLSharedEvent>)reinterpret_cast<void *>(
-                attribs.get(EGL_SYNC_METAL_SHARED_EVENT_OBJECT_ANGLE, 0)));
+            mSharedEvent = (__bridge id<MTLSharedEvent>)reinterpret_cast<void *>(
+                attribs.get(EGL_SYNC_METAL_SHARED_EVENT_OBJECT_ANGLE, 0));
             if (!mSharedEvent)
             {
                 mSharedEvent = contextMtl->getMetalDevice().newSharedEvent();
@@ -391,13 +447,24 @@ egl::Error EGLSyncMtl::initialize(const egl::Display *display,
             mSync = std::move(impl);
             break;
         }
-#endif  // ANGLE_MTL_EVENT_AVAILABLE
+
+        case EGL_SYNC_METAL_COMMANDS_SCHEDULED_ANGLE:
+        {
+            auto impl = std::make_unique<mtl::CommandsScheduledSyncImpl>();
+            if (IsError(impl->set(contextMtl)))
+            {
+                return egl::Error(EGL_BAD_ALLOC, "eglCreateSyncKHR failed to create sync object");
+            }
+            mSync = std::move(impl);
+            break;
+        }
 
         default:
             UNREACHABLE();
             return egl::Error(EGL_BAD_ALLOC);
     }
 
+    mType = type;
     return egl::NoError();
 }
 
@@ -409,9 +476,15 @@ egl::Error EGLSyncMtl::clientWait(const egl::Display *display,
 {
     ASSERT((flags & ~EGL_SYNC_FLUSH_COMMANDS_BIT_KHR) == 0);
 
+    // Allow null context only for EGL_SYNC_METAL_COMMANDS_SCHEDULED_ANGLE.
+    if (mType != EGL_SYNC_METAL_COMMANDS_SCHEDULED_ANGLE && !context)
+    {
+        return egl::Error(EGL_BAD_CONTEXT);
+    }
+
     bool flush             = (flags & EGL_SYNC_FLUSH_COMMANDS_BIT_KHR) != 0;
     GLenum result          = GL_NONE;
-    ContextMtl *contextMtl = mtl::GetImpl(context);
+    ContextMtl *contextMtl = context ? mtl::GetImpl(context) : nullptr;
     if (IsError(mSync->clientWait(contextMtl, flush, static_cast<uint64_t>(timeout), &result)))
     {
         return egl::Error(EGL_BAD_ALLOC);
@@ -473,7 +546,7 @@ egl::Error EGLSyncMtl::copyMetalSharedEventANGLE(const egl::Display *display, vo
 {
     ASSERT(mSharedEvent != nil);
 
-    mtl::AutoObjCPtr<id<MTLSharedEvent>> copySharedEvent = mSharedEvent;
+    angle::ObjCPtr<id<MTLSharedEvent>> copySharedEvent = mSharedEvent;
     *result = reinterpret_cast<void *>(copySharedEvent.leakObject());
 
     return egl::NoError();
@@ -482,7 +555,7 @@ egl::Error EGLSyncMtl::copyMetalSharedEventANGLE(const egl::Display *display, vo
 egl::Error EGLSyncMtl::dupNativeFenceFD(const egl::Display *display, EGLint *result) const
 {
     UNREACHABLE();
-    return egl::EglBadDisplay();
+    return egl::Error(EGL_BAD_DISPLAY);
 }
 
 }  // namespace rx

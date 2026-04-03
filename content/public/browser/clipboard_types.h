@@ -5,12 +5,15 @@
 #ifndef CONTENT_PUBLIC_BROWSER_CLIPBOARD_TYPES_H_
 #define CONTENT_PUBLIC_BROWSER_CLIPBOARD_TYPES_H_
 
-#include "base/functional/callback_helpers.h"
+#include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/types/optional_ref.h"
 #include "content/common/content_export.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
-#include "ui/base/clipboard/clipboard_sequence_number_token.h"
+#include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
 
 namespace base {
@@ -27,18 +30,24 @@ class WebContents;
 struct CONTENT_EXPORT ClipboardPasteData {
   ClipboardPasteData();
   ClipboardPasteData(const ClipboardPasteData&);
+  ClipboardPasteData& operator=(const ClipboardPasteData&);
   ClipboardPasteData(ClipboardPasteData&&);
   ClipboardPasteData& operator=(ClipboardPasteData&&);
   ~ClipboardPasteData();
 
   // Returns true if all the filds in the struct are null/empty.
-  bool empty();
+  bool empty() const;
 
   // Returns the sum of the size of all fields except `file_paths`.
   // Since the meaning of that size could be ambiguous given the differences
   // between what fields actually represent, this should only be used when only
   // one field has been populated.
-  size_t size();
+  size_t size() const;
+
+  // Override the members of `this` with non-empty members in `other`. This is
+  // used to merge `ClipboardPasteData` objects representing a single type of
+  // clipboard data into one representing all of them.
+  void Merge(ClipboardPasteData other);
 
   // UTF-16 encoded plain text data to scan.
   std::u16string text;
@@ -55,11 +64,14 @@ struct CONTENT_EXPORT ClipboardPasteData {
   // PNG bytes to scan.
   std::vector<uint8_t> png;
 
+  // Bitmap to scan.
+  SkBitmap bitmap;
+
   // A list of full file paths to scan.
   std::vector<base::FilePath> file_paths;
 
   // Custom data to scan, keyed by type.
-  std::map<std::u16string, std::u16string> custom_data;
+  base::flat_map<std::u16string, std::u16string> custom_data;
 };
 
 // Class representing an endpoint tied to a clipboard interaction. This can
@@ -119,18 +131,29 @@ class CONTENT_EXPORT ClipboardEndpoint {
   base::WeakPtr<WebContents> web_contents_;
 };
 
-// Struct that holds metadata for data being copied or pasted that is relevant
-// to evaluating enterprise policies.
-struct ClipboardMetadata {
-  // Size of the clipboard data. null when files are copied.
-  std::optional<size_t> size;
+// Chromium-only type to associate clipboard data to the RFH it originated from.
+// This should only be used internally by the browser process to retrieve RFHs,
+// renderers should never have access to a serialized token.
+const ui::ClipboardFormatType& SourceRFHTokenType();
 
-  // Format type of clipboard data.
-  ui::ClipboardFormatType format_type;
+// Returns a representation of the last source ClipboardEndpoint. This will
+// either match the last clipboard write if there is an RFH token in the
+// clipboard, or an endpoint built from `Clipboard::GetSource()` called with
+// `clipboard_buffer` otherwise.
+//
+// //content maintains additional metadata on top of what the //ui layer already
+// tracks about clipboard data's source, e.g. the WebContents that provided the
+// data. This function allows retrieving both the //ui metadata and the
+// //content metadata in a single call.
+CONTENT_EXPORT ClipboardEndpoint
+GetSourceClipboardEndpoint(const ui::DataTransferEndpoint* data_dst,
+                           ui::ClipboardBuffer clipboard_buffer);
 
-  // Sequence number of the clipboard interaction.
-  ui::ClipboardSequenceNumberToken seqno;
-};
+// Adds source-tracking metadata to `clipboard_writer` to mark its data as
+// originating from `rfh`.
+CONTENT_EXPORT void AddSourceDataToClipboardWriter(
+    ui::ScopedClipboardWriter& clipboard_writer,
+    content::RenderFrameHost& rfh);
 
 }  // namespace content
 

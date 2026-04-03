@@ -18,13 +18,16 @@ import argparse
 import datetime
 import hashlib
 import http.server
+import json
 import os
 import re
 import shutil
+import signal
 import socketserver
 import subprocess
 import sys
 import time
+import urllib.parse
 import webbrowser
 
 from perfetto.prebuilts.manifests.tracebox import *
@@ -80,7 +83,7 @@ class HttpHandler(http.server.SimpleHTTPRequestHandler):
     self.send_error(404, "File not found")
 
 
-def main():
+def setup_arguments():
   atexit.register(kill_all_subprocs_on_exit)
   default_out_dir_str = '~/traces/'
   default_out_dir = os.path.expanduser(default_out_dir_str)
@@ -108,6 +111,17 @@ def main():
 
   help = 'The web address used to open trace files'
   parser.add_argument('--origin', default='https://ui.perfetto.dev', help=help)
+
+  help = (
+      'Advanced: The URL Params to pass to browser when open the trace file. '
+      'For UI startup commands, use --ui-startup-commands instead')
+  parser.add_argument('--ui-url-params', nargs='+', default=None, help=help)
+
+  help = (
+      'Commands to execute on UI startup in the browser (JSON array of command objects). '
+      'Example: \'[{"id":"dev.perfetto.PinTracksByRegex","args":[".*sched.*"]}]\''
+  )
+  parser.add_argument('--ui-startup-commands', default=None, help=help)
 
   help = 'Force the use of the sideloaded binaries rather than system daemons'
   parser.add_argument('--sideload', action='store_true', help=help)
@@ -209,6 +223,22 @@ def main():
     parser.print_help()
     sys.exit(1)
 
+  return args
+
+
+class SignalException(Exception):
+  pass
+
+
+def signal_handler(sig, frame):
+  raise SignalException('Received signal ' + str(sig))
+
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+
+def start_trace(args, print_log=True):
   perfetto_cmd = 'perfetto'
   device_dir = '/data/misc/perfetto-traces/'
 
@@ -310,7 +340,8 @@ def main():
     shutil.os.makedirs(host_dir)
 
   with open(on_host_config or os.devnull, 'rb') as f:
-    print('Running ' + ' '.join(cmd))
+    if print_log:
+      print('Running ' + ' '.join(cmd))
     proc = adb('shell', *cmd, stdin=f, stdout=subprocess.PIPE)
     proc_out = proc.communicate()[0].decode().strip()
     if on_device_config is not None:
@@ -333,8 +364,11 @@ def main():
     sys.exit(1)
 
   prt('Trace started. Press CTRL+C to stop', ANSI.BLACK + ANSI.BG_BLUE)
-  logcat = adb('logcat', '-v', 'brief', '-s', 'perfetto', '-b', 'main', '-T',
-               '1')
+  log_level = "-v"
+  if not print_log:
+    log_level = "-e"
+  logcat = adb('logcat', log_level, 'brief', '-s', 'perfetto', '-b', 'main',
+               '-T', '1')
 
   ctrl_c_count = 0
   adb_failure_count = 0
@@ -365,17 +399,19 @@ def main():
         prt('Too many unrecoverable ADB failures, bailing out', ANSI.RED)
         sys.exit(1)
       time.sleep(2)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SignalException):
       sig = 'TERM' if ctrl_c_count == 0 else 'KILL'
       ctrl_c_count += 1
-      prt('Stopping the trace (SIG%s)' % sig, ANSI.BLACK + ANSI.BG_YELLOW)
+      if print_log:
+        prt('Stopping the trace (SIG%s)' % sig, ANSI.BLACK + ANSI.BG_YELLOW)
       adb('shell', 'kill -%s %s' % (sig, bg_pid)).wait()
 
   logcat.kill()
   logcat.wait()
 
   if args.reporter_api:
-    prt('Waiting a few seconds to allow reporter to copy trace')
+    if print_log:
+      prt('Waiting a few seconds to allow reporter to copy trace')
     time.sleep(5)
 
     ret = adb(
@@ -386,16 +422,26 @@ def main():
       prt('Failed to extract reporter trace', ANSI.RED)
       sys.exit(1)
 
-  prt('\n')
-  prt('Pulling into %s' % host_file, ANSI.BOLD)
+  if print_log:
+    prt('\n')
+    prt('Pulling into %s' % host_file, ANSI.BOLD)
   adb('pull', device_file, host_file).wait()
   adb('shell', 'rm -f ' + device_file).wait()
 
   if not args.no_open:
-    prt('\n')
-    prt('Opening the trace (%s) in the browser' % host_file)
+    if print_log:
+      prt('\n')
+      prt('Opening the trace (%s) in the browser' % host_file)
     open_browser = not args.no_open_browser
-    open_trace_in_browser(host_file, open_browser, args.origin)
+    open_trace_in_browser(host_file, open_browser, args.origin,
+                          args.ui_url_params, args.ui_startup_commands)
+
+  return host_file
+
+
+def main():
+  args = setup_arguments()
+  start_trace(args)
 
 
 def prt(msg, colors=ANSI.END):
@@ -423,7 +469,11 @@ def find_adb():
     sys.exit(1)
 
 
-def open_trace_in_browser(path, open_browser, origin):
+def open_trace_in_browser(path,
+                          open_browser,
+                          origin,
+                          url_params,
+                          startup_commands=None):
   # We reuse the HTTP+RPC port because it's the only one allowed by the CSP.
   PORT = 9001
   path = os.path.abspath(path)
@@ -432,6 +482,28 @@ def open_trace_in_browser(path, open_browser, origin):
   socketserver.TCPServer.allow_reuse_address = True
   with socketserver.TCPServer(('127.0.0.1', PORT), HttpHandler) as httpd:
     address = f'{origin}/#!/?url=http://127.0.0.1:{PORT}/{fname}&referrer=record_android_trace'
+
+    # Build URL parameters list
+    params = []
+    if url_params:
+      params.extend(url_params)
+
+    # Add startup commands if provided
+    if startup_commands:
+      try:
+        # Validate that startup_commands is valid JSON
+        json.loads(startup_commands)  # Validate JSON format
+
+        # URL-encode the startup commands parameter
+        encoded_commands = urllib.parse.quote(startup_commands)
+        params.append(f'startupCommands={encoded_commands}')
+      except (json.JSONDecodeError, TypeError) as e:
+        prt(f'Warning: Invalid startup commands JSON, ignoring. Error: {e}',
+            ANSI.RED)
+
+    if params:
+      address += '&' + '&'.join(params)
+
     if open_browser:
       webbrowser.open_new_tab(address)
     else:
@@ -444,14 +516,15 @@ def open_trace_in_browser(path, open_browser, origin):
       httpd.handle_request()
 
 
-def adb(*args, stdin=devnull, stdout=None):
+def adb(*args, stdin=devnull, stdout=None, stderr=None):
   cmd = [adb_path, *args]
   setpgrp = None
   if os.name != 'nt':
     # On Linux/Mac, start a new process group so all child processes are killed
     # on exit. Unsupported on Windows.
     setpgrp = lambda: os.setpgrp()
-  proc = subprocess.Popen(cmd, stdin=stdin, stdout=stdout, preexec_fn=setpgrp)
+  proc = subprocess.Popen(
+      cmd, stdin=stdin, stdout=stdout, stderr=stderr, preexec_fn=setpgrp)
   procs.append(proc)
   return proc
 

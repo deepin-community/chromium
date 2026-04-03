@@ -11,23 +11,28 @@
 #include "include/gpu/graphite/Context.h"
 #include "include/gpu/graphite/Recorder.h"
 #include "include/gpu/graphite/Recording.h"
+#include "include/gpu/graphite/TextureInfo.h"
 #include "src/gpu/graphite/Buffer.h"
+#include "src/gpu/graphite/BufferManager.h"
 #include "src/gpu/graphite/Caps.h"
 #include "src/gpu/graphite/ComputePipelineDesc.h"
-#include "src/gpu/graphite/ComputeTask.h"
 #include "src/gpu/graphite/ComputeTypes.h"
 #include "src/gpu/graphite/ContextPriv.h"
-#include "src/gpu/graphite/CopyTask.h"
 #include "src/gpu/graphite/RecorderPriv.h"
 #include "src/gpu/graphite/ResourceProvider.h"
-#include "src/gpu/graphite/SynchronizeToCpuTask.h"
+#include "src/gpu/graphite/TextureProxy.h"
 #include "src/gpu/graphite/UniformManager.h"
-#include "src/gpu/graphite/UploadTask.h"
 #include "src/gpu/graphite/compute/ComputeStep.h"
 #include "src/gpu/graphite/compute/DispatchGroup.h"
+#include "src/gpu/graphite/task/ComputeTask.h"
+#include "src/gpu/graphite/task/CopyTask.h"
+#include "src/gpu/graphite/task/SynchronizeToCpuTask.h"
+#include "src/gpu/graphite/task/UploadTask.h"
+
 #include "tools/graphite/GraphiteTestContext.h"
 
 using namespace skgpu::graphite;
+using namespace skiatest::graphite;
 
 namespace {
 
@@ -58,8 +63,11 @@ sk_sp<Buffer> sync_buffer_to_cpu(Recorder* recorder, const Buffer* buffer) {
     }
 
     // The backend requires a transfer buffer for CPU read-back
-    auto xferBuffer = recorder->priv().resourceProvider()->findOrCreateBuffer(
-            buffer->size(), BufferType::kXferGpuToCpu, AccessPattern::kHostVisible);
+    auto xferBuffer = recorder->priv().resourceProvider()->findOrCreateNonShareableBuffer(
+            buffer->size(),
+            BufferType::kXferGpuToCpu,
+            AccessPattern::kHostVisible,
+            "ComputeTest_TransferToCpu");
     SkASSERT(xferBuffer);
 
     recorder->priv().add(CopyBufferToBufferTask::Make(buffer,
@@ -70,9 +78,30 @@ sk_sp<Buffer> sync_buffer_to_cpu(Recorder* recorder, const Buffer* buffer) {
     return xferBuffer;
 }
 
+std::unique_ptr<Recording> submit_recording(Context* context,
+                                            GraphiteTestContext* testContext,
+                                            Recorder* recorder) {
+    std::unique_ptr<Recording> recording = recorder->snap();
+    if (!recording) {
+        return nullptr;
+    }
+
+    InsertRecordingInfo insertInfo;
+    insertInfo.fRecording = recording.get();
+    context->insertRecording(insertInfo);
+    testContext->syncedSubmit(context);
+
+    return recording;
+}
+
 bool is_dawn_or_metal_context_type(skiatest::GpuContextType ctxType) {
     return skiatest::IsDawnContextType(ctxType) || skiatest::IsMetalContextType(ctxType);
 }
+
+// These tests often need to write one float parameter into a uniform declared as a float4 in
+// the shader (or as a float with the next field at an explicit 16 byte offset). This is the
+// number of bytes to zero out to keep the BufferWriter in sync.
+static constexpr size_t kFloatToFloat4Padding = 3 * sizeof(float);
 
 }  // namespace
 
@@ -102,12 +131,12 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_SingleDispatchTest,
 
     class TestComputeStep : public ComputeStep {
     public:
-        // TODO(skia:40045541): SkSL doesn't support std430 layout well, so the buffers
+        // TODO(skbug.com/40045541): SkSL doesn't support std430 layout well, so the buffers
         // below all pack their data into vectors to be compatible with SPIR-V/WGSL.
         TestComputeStep() : ComputeStep(
                 /*name=*/"TestArrayMultiply",
                 /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     // Input buffer:
                     {
                         // TODO(b/299979165): Declare this binding as read-only.
@@ -128,7 +157,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_SingleDispatchTest,
                         /*slot=*/0,
                         /*sksl=*/"outputBlock { float4 out_data[]; }",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep() override = default;
 
         // A kernel that multiplies a large array of floats by a supplied factor.
@@ -153,20 +182,17 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_SingleDispatchTest,
 
         void prepareStorageBuffer(int resourceIndex,
                                   const ResourceDesc& r,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             // Only initialize the input buffer.
             if (resourceIndex != 0) {
                 return;
             }
             SkASSERT(r.fFlow == DataFlow::kPrivate);
 
-            size_t dataCount = sizeof(float) * (kProblemSize + 4);
-            SkASSERT(bufferSize == dataCount);
-            SkSpan<float> inData(static_cast<float*>(buffer), dataCount);
-            inData[0] = kFactor;
+            writer.write(kFactor);
+            writer.zeroBytes(kFloatToFloat4Padding);
             for (unsigned int i = 0; i < kProblemSize; ++i) {
-                inData[i + 4] = i + 1;
+                writer.write((float) (i + 1));
             }
         }
 
@@ -244,12 +270,12 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_DispatchGroupTest,
 
     class TestComputeStep1 : public ComputeStep {
     public:
-        // TODO(skia:40045541): SkSL doesn't support std430 layout well, so the buffers
+        // TODO(skbug.com/40045541): SkSL doesn't support std430 layout well, so the buffers
         // below all pack their data into vectors to be compatible with SPIR-V/WGSL.
         TestComputeStep1() : ComputeStep(
                 /*name=*/"TestArrayMultiplyFirstPass",
                 /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     // Input buffer:
                     {
                         // TODO(b/299979165): Declare this binding as read-only.
@@ -276,7 +302,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_DispatchGroupTest,
                         /*slot=*/1,
                         /*sksl=*/"outputBlock2 { float2 extra_data; }",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep1() override = default;
 
         // A kernel that multiplies a large array of floats by a supplied factor.
@@ -312,18 +338,15 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_DispatchGroupTest,
 
         void prepareStorageBuffer(int resourceIndex,
                                   const ResourceDesc& r,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             if (resourceIndex != 0) {
                 return;
             }
 
-            size_t dataCount = sizeof(float) * (kProblemSize + 4);
-            SkASSERT(bufferSize == dataCount);
-            SkSpan<float> inData(static_cast<float*>(buffer), dataCount);
-            inData[0] = kFactor1;
+            writer.write(kFactor1);
+            writer.zeroBytes(kFloatToFloat4Padding);
             for (unsigned int i = 0; i < kProblemSize; ++i) {
-                inData[i + 4] = i + 1;
+                writer.write((float) (i + 1));
             }
         }
 
@@ -337,7 +360,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_DispatchGroupTest,
         TestComputeStep2() : ComputeStep(
                 /*name=*/"TestArrayMultiplySecondPass",
                 /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     // Input buffer:
                     {
                         /*type=*/ResourceType::kStorageBuffer,
@@ -360,7 +383,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_DispatchGroupTest,
                         /*slot=*/2,
                         /*sksl=*/"outputBlock { float4 out_data[]; }",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep2() override = default;
 
         // A kernel that multiplies a large array of floats by a supplied factor.
@@ -386,13 +409,12 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_DispatchGroupTest,
 
         void prepareStorageBuffer(int resourceIndex,
                                   const ResourceDesc& r,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             if (resourceIndex != 1) {
                 return;
             }
             SkASSERT(r.fFlow == DataFlow::kPrivate);
-            *static_cast<float*>(buffer) = kFactor2;
+            writer.write(kFactor2);
         }
 
         WorkgroupSize calculateGlobalDispatchSize() const override {
@@ -408,7 +430,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_DispatchGroupTest,
     // from step 1 while slot 2 contains the result of the second multiplication pass from step 1.
     // Slot 0 is not mappable.
     REPORTER_ASSERT(reporter,
-                    std::holds_alternative<BufferView>(builder.outputTable().fSharedSlots[0]),
+                    std::holds_alternative<BindBufferInfo>(builder.outputTable().fSharedSlots[0]),
                     "shared resource at slot 0 is missing");
     BindBufferInfo outputInfo = builder.getSharedBufferResource(2);
     if (!outputInfo) {
@@ -495,7 +517,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_UniformBufferTest,
         TestComputeStep() : ComputeStep(
                 /*name=*/"TestArrayMultiply",
                 /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     // Uniform buffer:
                     {
                         /*type=*/ResourceType::kUniformBuffer,
@@ -519,7 +541,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_UniformBufferTest,
                         /*slot=*/0,
                         /*sksl=*/"outputBlock { float4 out_data[]; }",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep() override = default;
 
         // A kernel that multiplies a large array of floats by a supplied factor.
@@ -548,18 +570,14 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_UniformBufferTest,
 
         void prepareStorageBuffer(int resourceIndex,
                                   const ResourceDesc& r,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             // Only initialize the input storage buffer.
             if (resourceIndex != 1) {
                 return;
             }
             SkASSERT(r.fFlow == DataFlow::kPrivate);
-            size_t dataCount = sizeof(float) * kProblemSize;
-            SkASSERT(bufferSize == dataCount);
-            SkSpan<float> inData(static_cast<float*>(buffer), dataCount);
             for (unsigned int i = 0; i < kProblemSize; ++i) {
-                inData[i] = i + 1;
+                writer.write((float) (i + 1));
             }
         }
 
@@ -569,7 +587,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_UniformBufferTest,
             SkASSERT(resourceIndex == 0);
             SkDEBUGCODE(
                 const Uniform uniforms[] = {{"factor", SkSLType::kFloat}};
-                mgr->setExpectedUniforms(uniforms);
+                mgr->setExpectedUniforms(uniforms, /*isSubstruct=*/false);
             )
             mgr->write(kFactor);
         }
@@ -643,7 +661,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_ExternallyAssignedBuffer,
         TestComputeStep() : ComputeStep(
                 /*name=*/"ExternallyAssignedBuffer",
                 /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     // Input buffer:
                     {
                         /*type=*/ResourceType::kStorageBuffer,
@@ -663,7 +681,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_ExternallyAssignedBuffer,
                         /*slot=*/0,
                         /*sksl=*/"outputBlock { float4 out_data[]; }",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep() override = default;
 
         // A kernel that multiplies a large array of floats by a supplied factor.
@@ -683,29 +701,27 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_ExternallyAssignedBuffer,
 
         void prepareStorageBuffer(int resourceIndex,
                                   const ResourceDesc& r,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             SkASSERT(resourceIndex == 0);
             SkASSERT(r.fFlow == DataFlow::kPrivate);
 
-            size_t dataCount = sizeof(float) * (kProblemSize + 4);
-            SkASSERT(bufferSize == dataCount);
-            SkSpan<float> inData(static_cast<float*>(buffer), dataCount);
-            inData[0] = kFactor;
+            writer.write(kFactor);
+            writer.zeroBytes(kFloatToFloat4Padding);
             for (unsigned int i = 0; i < kProblemSize; ++i) {
-                inData[i + 4] = i + 1;
+                writer.write((float) (i + 1));
             }
         }
     } step;
 
     // We allocate a buffer and directly assign it to the DispatchGroup::Builder. The ComputeStep
     // will not participate in the creation of this buffer.
-    auto [_, outputInfo] =
-            recorder->priv().drawBufferManager()->getStoragePointer(sizeof(float) * kProblemSize);
+    auto [_, outputInfo, alloc] = recorder->priv().drawBufferManager()->getMappedStorageBuffer(
+            kProblemSize, sizeof(float));
     REPORTER_ASSERT(reporter, outputInfo, "Failed to allocate output buffer");
 
     DispatchGroup::Builder builder(recorder.get());
-    builder.assignSharedBuffer({outputInfo, sizeof(float) * kProblemSize}, 0);
+    builder.assignSharedBuffer(outputInfo, 0);
+    alloc.reset();
 
     // Initialize the step with a pre-determined global size
     if (!builder.appendStep(&step, {WorkgroupSize(1, 1, 1)})) {
@@ -752,16 +768,16 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_StorageTexture,
                                               testContext) {
     std::unique_ptr<Recorder> recorder = context->makeRecorder();
 
-    // For this test we allocate a 16x16 tile which is written to by a single workgroup of the same
+    // For this test we allocate a 8x8 tile which is written to by a single workgroup of the same
     // size.
-    constexpr uint32_t kDim = 16;
+    constexpr uint32_t kDim = 8;
 
     class TestComputeStep : public ComputeStep {
     public:
         TestComputeStep() : ComputeStep(
                 /*name=*/"TestStorageTexture",
                 /*localDispatchSize=*/{kDim, kDim, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     {
                         /*type=*/ResourceType::kWriteOnlyStorageTexture,
                         /*flow=*/DataFlow::kShared,
@@ -769,7 +785,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_StorageTexture,
                         /*slot=*/0,
                         /*sksl=*/"dst",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep() override = default;
 
         std::string computeSkSL() const override {
@@ -854,16 +870,16 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_StorageTextureReadAndWrite
                                               testContext) {
     std::unique_ptr<Recorder> recorder = context->makeRecorder();
 
-    // For this test we allocate a 16x16 tile which is written to by a single workgroup of the same
+    // For this test we allocate a 8x8 tile which is written to by a single workgroup of the same
     // size.
-    constexpr uint32_t kDim = 16;
+    constexpr uint32_t kDim = 8;
 
     class TestComputeStep : public ComputeStep {
     public:
         TestComputeStep() : ComputeStep(
                 /*name=*/"TestStorageTextureReadAndWrite",
                 /*localDispatchSize=*/{kDim, kDim, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     {
                         /*type=*/ResourceType::kReadOnlyTexture,
                         /*flow=*/DataFlow::kShared,
@@ -878,7 +894,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_StorageTextureReadAndWrite
                         /*slot=*/1,
                         /*sksl=*/"dst",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep() override = default;
 
         std::string computeSkSL() const override {
@@ -916,21 +932,34 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_StorageTextureReadAndWrite
         }
     }
 
+    auto texInfo = context->priv().caps()->getDefaultSampledTextureInfo(kRGBA_8888_SkColorType,
+                                                                        skgpu::Mipmapped::kNo,
+                                                                        skgpu::Protected::kNo,
+                                                                        skgpu::Renderable::kNo);
     sk_sp<TextureProxy> srcProxy = TextureProxy::Make(context->priv().caps(),
+                                                      recorder->priv().resourceProvider(),
                                                       {kDim, kDim},
-                                                      kRGBA_8888_SkColorType,
-                                                      skgpu::Mipmapped::kNo,
-                                                      skgpu::Protected::kNo,
-                                                      skgpu::Renderable::kNo,
+                                                      texInfo,
+                                                      "ComputeTestSrcProxy",
                                                       skgpu::Budgeted::kNo);
     MipLevel mipLevel;
     mipLevel.fPixels = srcPixels.addr();
     mipLevel.fRowBytes = srcPixels.rowBytes();
+    UploadSource uploadSource = UploadSource::Make(context->priv().caps(),
+                                                   *srcProxy,
+                                                   srcPixels.info().colorInfo(),
+                                                   srcPixels.info().colorInfo(),
+                                                   SKSPAN_INIT_ONE(mipLevel),
+                                                   SkIRect::MakeWH(kDim, kDim));
+    if (!uploadSource.isValid()) {
+        ERRORF(reporter, "Could not create UploadSource");
+        return;
+    }
     UploadInstance upload = UploadInstance::Make(recorder.get(),
                                                  srcProxy,
                                                  srcPixels.info().colorInfo(),
                                                  srcPixels.info().colorInfo(),
-                                                 {mipLevel},
+                                                 uploadSource,
                                                  SkIRect::MakeWH(kDim, kDim),
                                                  std::make_unique<ImageUploadContext>());
     if (!upload.isValid()) {
@@ -1007,16 +1036,16 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_ReadOnlyStorageBuffer,
                                               testContext) {
     std::unique_ptr<Recorder> recorder = context->makeRecorder();
 
-    // For this test we allocate a 16x16 tile which is written to by a single workgroup of the same
+    // For this test we allocate a 8x8 tile which is written to by a single workgroup of the same
     // size.
-    constexpr uint32_t kDim = 16;
+    constexpr uint32_t kDim = 8;
 
     class TestComputeStep : public ComputeStep {
     public:
         TestComputeStep() : ComputeStep(
                 /*name=*/"TestReadOnlyStorageBuffer",
                 /*localDispatchSize=*/{kDim, kDim, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     {
                         /*type=*/ResourceType::kReadOnlyStorageBuffer,
                         /*flow=*/DataFlow::kShared,
@@ -1031,13 +1060,13 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_ReadOnlyStorageBuffer,
                         /*slot=*/1,
                         /*sksl=*/"dst",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep() override = default;
 
         std::string computeSkSL() const override {
             return R"(
                 void main() {
-                    uint ix = sk_LocalInvocationID.y * 16 + sk_LocalInvocationID.x;
+                    uint ix = sk_LocalInvocationID.y * 8 + sk_LocalInvocationID.x;
                     uint value = in_data[ix];
                     half4 splat = half4(
                         half(value & 0xFF),
@@ -1057,17 +1086,13 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_ReadOnlyStorageBuffer,
 
         void prepareStorageBuffer(int index,
                                   const ResourceDesc&,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             SkASSERT(index == 0);
-            SkASSERT(bufferSize == kDim * kDim * sizeof(uint32_t));
-
-            uint32_t* inputs = reinterpret_cast<uint32_t*>(buffer);
             for (uint32_t y = 0; y < kDim; ++y) {
                 for (uint32_t x = 0; x < kDim; ++x) {
                     uint32_t value =
                             ((x * 256 / kDim) & 0xFF) | ((y * 256 / kDim) & 0xFF) << 8 | 255 << 24;
-                    *(inputs++) = value;
+                    writer.write(value);
                 }
             }
         }
@@ -1151,9 +1176,9 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_StorageTextureMultipleComp
                                               testContext) {
     std::unique_ptr<Recorder> recorder = context->makeRecorder();
 
-    // For this test we allocate a 16x16 tile which is written to by a single workgroup of the same
+    // For this test we allocate a 8x8 tile which is written to by a single workgroup of the same
     // size.
-    constexpr uint32_t kDim = 16;
+    constexpr uint32_t kDim = 8;
 
     // Writes to a texture in slot 0.
     class TestComputeStep1 : public ComputeStep {
@@ -1161,7 +1186,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_StorageTextureMultipleComp
         TestComputeStep1() : ComputeStep(
                 /*name=*/"TestStorageTexturesFirstPass",
                 /*localDispatchSize=*/{kDim, kDim, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     {
                         /*type=*/ResourceType::kWriteOnlyStorageTexture,
                         /*flow=*/DataFlow::kShared,
@@ -1169,7 +1194,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_StorageTextureMultipleComp
                         /*slot=*/0,
                         /*sksl=*/"dst",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep1() override = default;
 
         std::string computeSkSL() const override {
@@ -1197,7 +1222,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_StorageTextureMultipleComp
         TestComputeStep2() : ComputeStep(
                 /*name=*/"TestStorageTexturesSecondPass",
                 /*localDispatchSize=*/{kDim, kDim, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     {
                         /*type=*/ResourceType::kReadOnlyTexture,
                         /*flow=*/DataFlow::kShared,
@@ -1212,7 +1237,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_StorageTextureMultipleComp
                         /*slot=*/1,
                         /*sksl=*/"dst",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep2() override = default;
 
         std::string computeSkSL() const override {
@@ -1298,11 +1323,11 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_SampledTexture,
                                               testContext) {
     std::unique_ptr<Recorder> recorder = context->makeRecorder();
 
-    // The first ComputeStep initializes a 16x16 texture with a checkerboard pattern of alternating
+    // The first ComputeStep initializes a 8x8 texture with a checkerboard pattern of alternating
     // red and black pixels. The second ComputeStep downsamples this texture into a 4x4 using
     // bilinear filtering at pixel borders, intentionally averaging the values of each 4x4 tile in
     // the source texture, and writes the result to the destination texture.
-    constexpr uint32_t kSrcDim = 16;
+    constexpr uint32_t kSrcDim = 8;
     constexpr uint32_t kDstDim = 4;
 
     class TestComputeStep1 : public ComputeStep {
@@ -1310,7 +1335,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_SampledTexture,
         TestComputeStep1() : ComputeStep(
                 /*name=*/"Test_SampledTexture_Init",
                 /*localDispatchSize=*/{kSrcDim, kSrcDim, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     {
                         /*type=*/ResourceType::kWriteOnlyStorageTexture,
                         /*flow=*/DataFlow::kShared,
@@ -1318,7 +1343,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_SampledTexture,
                         /*slot=*/0,
                         /*sksl=*/"dst",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep1() override = default;
 
         std::string computeSkSL() const override {
@@ -1347,7 +1372,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_SampledTexture,
         TestComputeStep2() : ComputeStep(
                 /*name=*/"Test_SampledTexture_Sample",
                 /*localDispatchSize=*/{kDstDim, kDstDim, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     // Declare the storage texture before the sampled texture. This tests that
                     // binding index assignment works consistently across all backends when a
                     // sampler-less texture and a texture+sampler pair are intermixed and sampler
@@ -1366,7 +1391,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_SampledTexture,
                         /*slot=*/0,
                         /*sksl=*/"src",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep2() override = default;
 
         std::string computeSkSL() const override {
@@ -1394,8 +1419,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_SampledTexture,
         SamplerDesc calculateSamplerParameters(int index, const ResourceDesc&) const override {
             SkASSERT(index == 1);
             // Use the repeat tile mode to sample an infinite checkerboard.
-            constexpr SkTileMode kTileModes[2] = {SkTileMode::kRepeat, SkTileMode::kRepeat};
-            return {SkFilterMode::kLinear, kTileModes};
+            return {SkFilterMode::kLinear, SkTileMode::kRepeat};
         }
 
         WorkgroupSize calculateGlobalDispatchSize() const override {
@@ -1471,14 +1495,14 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_AtomicOperationsTest,
     std::unique_ptr<Recorder> recorder = context->makeRecorder();
 
     constexpr uint32_t kWorkgroupCount = 32;
-    constexpr uint32_t kWorkgroupSize = 256;
+    constexpr uint32_t kWorkgroupSize = 128;
 
     class TestComputeStep : public ComputeStep {
     public:
         TestComputeStep() : ComputeStep(
                 /*name=*/"TestAtomicOperations",
                 /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     {
                         /*type=*/ResourceType::kStorageBuffer,
                         /*flow=*/DataFlow::kShared,
@@ -1486,7 +1510,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_AtomicOperationsTest,
                         /*slot=*/0,
                         /*sksl=*/"ssbo { atomicUint globalCounter; }",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep() override = default;
 
         // A kernel that increments a global (device memory) counter across multiple workgroups.
@@ -1537,10 +1561,9 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_AtomicOperationsTest,
 
         void prepareStorageBuffer(int resourceIndex,
                                   const ResourceDesc& r,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             SkASSERT(resourceIndex == 0);
-            *static_cast<uint32_t*>(buffer) = 0;
+            writer.zeroBytes(sizeof(uint32_t));
         }
     } step;
 
@@ -1579,7 +1602,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_AtomicOperationsTest,
             map_buffer(context, testContext, buffer.get(), info.fOffset))[0];
     REPORTER_ASSERT(reporter,
                     result == kExpectedCount,
-                    "expected '%d', found '%d'",
+                    "expected '%u', found '%u'",
                     kExpectedCount,
                     result);
 }
@@ -1601,14 +1624,14 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_AtomicOperationsOverArrayA
     std::unique_ptr<Recorder> recorder = context->makeRecorder();
 
     constexpr uint32_t kWorkgroupCount = 32;
-    constexpr uint32_t kWorkgroupSize = 256;
+    constexpr uint32_t kWorkgroupSize = 128;
 
     class TestComputeStep : public ComputeStep {
     public:
         TestComputeStep() : ComputeStep(
                 /*name=*/"TestAtomicOperationsOverArrayAndStruct",
                 /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     {
                         /*type=*/ResourceType::kStorageBuffer,
                         /*flow=*/DataFlow::kShared,
@@ -1619,7 +1642,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_AtomicOperationsOverArrayA
                             "   atomicUint globalCountsSecondHalf;\n"
                             "}\n"
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep() override = default;
 
         // Construct a kernel that increments a two global (device memory) counters across multiple
@@ -1630,7 +1653,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_AtomicOperationsOverArrayA
         // and workgroup address spaces.
         std::string computeSkSL() const override {
             return R"(
-                const uint WORKGROUP_SIZE = 256;
+                const uint WORKGROUP_SIZE = 128;
 
                 workgroup atomicUint localCounts[2];
 
@@ -1676,12 +1699,9 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_AtomicOperationsOverArrayA
 
         void prepareStorageBuffer(int resourceIndex,
                                   const ResourceDesc& r,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             SkASSERT(resourceIndex == 0);
-            uint32_t* data = static_cast<uint32_t*>(buffer);
-            data[0] = 0;
-            data[1] = 0;
+            writer.zeroBytes(2 * sizeof(uint32_t));
         }
     } step;
 
@@ -1723,12 +1743,12 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_AtomicOperationsOverArrayA
     const uint32_t secondHalfCount = ssboData[1];
     REPORTER_ASSERT(reporter,
                     firstHalfCount == kExpectedCount,
-                    "expected '%d', found '%d'",
+                    "expected '%u', found '%u'",
                     kExpectedCount,
                     firstHalfCount);
     REPORTER_ASSERT(reporter,
                     secondHalfCount == kExpectedCount,
-                    "expected '%d', found '%d'",
+                    "expected '%u', found '%u'",
                     kExpectedCount,
                     secondHalfCount);
 }
@@ -1752,7 +1772,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_ClearedBuffer,
         TestComputeStep() : ComputeStep(
                 /*name=*/"TestClearedBuffer",
                 /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     // Zero initialized input buffer
                     {
                         // TODO(b/299979165): Declare this binding as read-only.
@@ -1770,7 +1790,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_ClearedBuffer,
                         /*slot=*/0,
                         /*sksl=*/"outputBlock { uint4 out_data[]; }\n",
                     }
-                }) {}
+                }}) {}
         ~TestComputeStep() override = default;
 
         std::string computeSkSL() const override {
@@ -1787,8 +1807,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_ClearedBuffer,
 
         void prepareStorageBuffer(int resourceIndex,
                                   const ResourceDesc& r,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             // Should receive this call only for the mapped buffer.
             SkASSERT(resourceIndex == 1);
         }
@@ -1841,6 +1860,242 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_ClearedBuffer,
     }
 }
 
+DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_ClearOrdering,
+                                              reporter,
+                                              context,
+                                              testContext) {
+    // Initiate two independent DispatchGroups operating on the same buffer. The first group
+    // writes garbage to the buffer and the second group copies the contents to an output buffer.
+    // This test validates that the reads, writes, and clear occur in the expected order.
+    constexpr uint32_t kWorkgroupSize = 64;
+
+    // Initialize buffer with non-zero data.
+    class FillWithGarbage : public ComputeStep {
+    public:
+        FillWithGarbage() : ComputeStep(
+                /*name=*/"FillWithGarbage",
+                /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
+                /*resources=*/{{
+                    {
+                        /*type=*/ResourceType::kStorageBuffer,
+                        /*flow=*/DataFlow::kShared,
+                        /*policy=*/ResourcePolicy::kNone,
+                        /*slot=*/0,
+                        /*sksl=*/"outputBlock { uint4 out_data[]; }\n",
+                    }
+                }}) {}
+        ~FillWithGarbage() override = default;
+
+        std::string computeSkSL() const override {
+            return R"(
+                void main() {
+                    out_data[sk_GlobalInvocationID.x] = uint4(0xFE);
+                }
+            )";
+        }
+    } garbageStep;
+
+    // Second stage just copies the data to a destination buffer. This is only to verify that this
+    // stage, issued in a separate DispatchGroup, observes the clear.
+    class CopyBuffer : public ComputeStep {
+    public:
+        CopyBuffer() : ComputeStep(
+                /*name=*/"CopyBuffer",
+                /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
+                /*resources=*/{{
+                    {
+                        /*type=*/ResourceType::kStorageBuffer,
+                        /*flow=*/DataFlow::kShared,
+                        /*policy=*/ResourcePolicy::kNone,
+                        /*slot=*/0,
+                        /*sksl=*/"inputBlock { uint4 in_data[]; }\n",
+                    },
+                    {
+                        /*type=*/ResourceType::kStorageBuffer,
+                        /*flow=*/DataFlow::kShared,
+                        /*policy=*/ResourcePolicy::kNone,
+                        /*slot=*/1,
+                        /*sksl=*/"outputBlock { uint4 out_data[]; }\n",
+                    }
+                }}) {}
+        ~CopyBuffer() override = default;
+
+        std::string computeSkSL() const override {
+            return R"(
+                void main() {
+                    out_data[sk_GlobalInvocationID.x] = in_data[sk_GlobalInvocationID.x];
+                }
+            )";
+        }
+    } copyStep;
+
+    std::unique_ptr<Recorder> recorder = context->makeRecorder();
+    DispatchGroup::Builder builder(recorder.get());
+
+    constexpr size_t kElementCount = 4 * kWorkgroupSize;
+    constexpr size_t kBufferSize = sizeof(uint32_t) * kElementCount;
+    auto input = recorder->priv().drawBufferManager()->getStorage(kBufferSize);
+    auto [_, output, alloc] = recorder->priv().drawBufferManager()->getMappedStorageBuffer(
+            kElementCount, sizeof(uint32_t));
+    alloc.reset();
+
+    ComputeTask::DispatchGroupList groups;
+
+    // First group.
+    builder.assignSharedBuffer(input, 0);
+    builder.appendStep(&garbageStep, {{1, 1, 1}});
+    groups.push_back(builder.finalize());
+
+    // Second group.
+    builder.reset();
+    builder.assignSharedBuffer(input, 0, ClearBuffer::kYes);
+    builder.assignSharedBuffer(output, 1);
+    builder.appendStep(&copyStep, {{1, 1, 1}});
+    groups.push_back(builder.finalize());
+
+    recorder->priv().add(ComputeTask::Make(std::move(groups)));
+    // Ensure the output buffer is synchronized to the CPU once the GPU submission has finished.
+    auto outputBuffer = sync_buffer_to_cpu(recorder.get(), output.fBuffer);
+
+    // Submit the work and wait for it to complete.
+    std::unique_ptr<Recording> recording = submit_recording(context, testContext, recorder.get());
+    if (!recording) {
+        ERRORF(reporter, "Failed to make recording");
+        return;
+    }
+
+    // Verify the contents of the output buffer.
+    uint32_t* outData = static_cast<uint32_t*>(
+            map_buffer(context, testContext, outputBuffer.get(), output.fOffset));
+    SkASSERT(outputBuffer->isMapped() && outData != nullptr);
+    for (unsigned int i = 0; i < kElementCount; ++i) {
+        const uint32_t found = outData[i];
+        REPORTER_ASSERT(reporter, 0u == found, "expected '0u', found '%u'", found);
+    }
+}
+
+DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_ClearOrderingScratchBuffers,
+                                              reporter,
+                                              context,
+                                              testContext) {
+    // This test is the same as the ClearOrdering test but the two stages write to a recycled
+    // ScratchBuffer. This is primarily to test ScratchBuffer reuse.
+    constexpr uint32_t kWorkgroupSize = 64;
+
+    // Initialize buffer with non-zero data.
+    class FillWithGarbage : public ComputeStep {
+    public:
+        FillWithGarbage() : ComputeStep(
+                /*name=*/"FillWithGarbage",
+                /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
+                /*resources=*/{{
+                    {
+                        /*type=*/ResourceType::kStorageBuffer,
+                        /*flow=*/DataFlow::kShared,
+                        /*policy=*/ResourcePolicy::kNone,
+                        /*slot=*/0,
+                        /*sksl=*/"outputBlock { uint4 out_data[]; }\n",
+                    }
+                }}) {}
+        ~FillWithGarbage() override = default;
+
+        std::string computeSkSL() const override {
+            return R"(
+                void main() {
+                    out_data[sk_GlobalInvocationID.x] = uint4(0xFE);
+                }
+            )";
+        }
+    } garbageStep;
+
+    // Second stage just copies the data to a destination buffer. This is only to verify that this
+    // stage (issued in a separate DispatchGroup) sees the changes.
+    class CopyBuffer : public ComputeStep {
+    public:
+        CopyBuffer() : ComputeStep(
+                /*name=*/"CopyBuffer",
+                /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
+                /*resources=*/{{
+                    {
+                        /*type=*/ResourceType::kStorageBuffer,
+                        /*flow=*/DataFlow::kShared,
+                        /*policy=*/ResourcePolicy::kNone,
+                        /*slot=*/0,
+                        /*sksl=*/"inputBlock { uint4 in_data[]; }\n",
+                    },
+                    {
+                        /*type=*/ResourceType::kStorageBuffer,
+                        /*flow=*/DataFlow::kShared,
+                        /*policy=*/ResourcePolicy::kNone,
+                        /*slot=*/1,
+                        /*sksl=*/"outputBlock { uint4 out_data[]; }\n",
+                    }
+                }}) {}
+        ~CopyBuffer() override = default;
+
+        std::string computeSkSL() const override {
+            return R"(
+                void main() {
+                    out_data[sk_GlobalInvocationID.x] = in_data[sk_GlobalInvocationID.x];
+                }
+            )";
+        }
+    } copyStep;
+
+    std::unique_ptr<Recorder> recorder = context->makeRecorder();
+    DispatchGroup::Builder builder(recorder.get());
+
+    constexpr size_t kElementCount = 4 * kWorkgroupSize;
+    constexpr size_t kBufferSize = sizeof(uint32_t) * kElementCount;
+    auto [_, output, alloc] = recorder->priv().drawBufferManager()->getMappedStorageBuffer(
+            kElementCount, sizeof(uint32_t));
+    alloc.reset();
+
+    ComputeTask::DispatchGroupList groups;
+
+    // First group.
+    {
+        auto scratch = recorder->priv().drawBufferManager()->getScratchStorage(kBufferSize);
+        auto input = scratch.getSubrange(kElementCount, sizeof(uint32_t));
+        builder.assignSharedBuffer(input, 0);
+
+        // `scratch` returns to the scratch buffer pool when it goes out of scope
+    }
+    builder.appendStep(&garbageStep, {{1, 1, 1}});
+    groups.push_back(builder.finalize());
+
+    // Second group.
+    builder.reset();
+    {
+        auto scratch = recorder->priv().drawBufferManager()->getScratchStorage(kBufferSize);
+        auto input = scratch.getSubrange(kElementCount, sizeof(uint32_t));
+        builder.assignSharedBuffer(input, 0, ClearBuffer::kYes);
+    }
+    builder.assignSharedBuffer(output, 1);
+    builder.appendStep(&copyStep, {{1, 1, 1}});
+    groups.push_back(builder.finalize());
+
+    recorder->priv().add(ComputeTask::Make(std::move(groups)));
+    // Ensure the output buffer is synchronized to the CPU once the GPU submission has finished.
+    auto outputBuffer = sync_buffer_to_cpu(recorder.get(), output.fBuffer);
+
+    // Submit the work and wait for it to complete.
+    std::unique_ptr<Recording> recording = submit_recording(context, testContext, recorder.get());
+    if (!recording) {
+        ERRORF(reporter, "Failed to make recording");
+        return;
+    }
+
+    // Verify the contents of the output buffer.
+    uint32_t* outData = static_cast<uint32_t*>(
+            map_buffer(context, testContext, outputBuffer.get(), output.fOffset));
+    SkASSERT(outputBuffer->isMapped() && outData != nullptr);
+    for (unsigned int i = 0; i < kElementCount; ++i) {
+        const uint32_t found = outData[i];
+        REPORTER_ASSERT(reporter, 0u == found, "expected '0u', found '%u'", found);
+    }
+}
+
 DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_IndirectDispatch,
                                               reporter,
                                               context,
@@ -1865,7 +2120,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_IndirectDispatch,
                           /*name=*/"TestIndirectDispatch_IndirectStep",
                           /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
                           /*resources=*/
-                          {{
+                          {{{
                                   /*type=*/ResourceType::kIndirectBuffer,
                                   /*flow=*/DataFlow::kShared,
                                   /*policy=*/ResourcePolicy::kClear,
@@ -1874,7 +2129,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_IndirectDispatch,
                                   // type `IndirectDispatchArgs` struct type. SkSL modules don't
                                   // support struct declarations so this is currently not possible.
                                   /*sksl=*/"ssbo { uint indirect[]; }",
-                          }}) {}
+                          }}}) {}
         ~IndirectStep() override = default;
 
         // Kernel that specifies a workgroup size of `kWorkgroupCount` to be used by the indirect
@@ -1913,13 +2168,13 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_IndirectDispatch,
                           /*name=*/"TestIndirectDispatch_CountStep",
                           /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
                           /*resources=*/
-                          {{
+                          {{{
                                   /*type=*/ResourceType::kStorageBuffer,
                                   /*flow=*/DataFlow::kShared,
                                   /*policy=*/ResourcePolicy::kMapped,
                                   /*slot=*/1,
                                   /*sksl=*/"ssbo { atomicUint globalCounter; }",
-                          }}) {}
+                          }}}) {}
         ~CountStep() override = default;
 
         std::string computeSkSL() const override {
@@ -1960,10 +2215,9 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_IndirectDispatch,
 
         void prepareStorageBuffer(int resourceIndex,
                                   const ResourceDesc& r,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             SkASSERT(resourceIndex == 0);
-            *static_cast<uint32_t*>(buffer) = 0;
+            writer.zeroBytes(sizeof(uint32_t));
         }
     } countStep;
 
@@ -1974,7 +2228,8 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_IndirectDispatch,
         ERRORF(reporter, "Shared resource at slot 0 is missing");
         return;
     }
-    builder.appendStepIndirect(&countStep, {indirectBufferInfo, kIndirectDispatchArgumentSize});
+    REPORTER_ASSERT(reporter, indirectBufferInfo.fSize == kIndirectDispatchArgumentSize);
+    builder.appendStepIndirect(&countStep, indirectBufferInfo);
 
     BindBufferInfo info = builder.getSharedBufferResource(1);
     if (!info) {
@@ -2008,7 +2263,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_AND_METAL_CONTEXTS(Compute_IndirectDispatch,
             map_buffer(context, testContext, buffer.get(), info.fOffset))[0];
     REPORTER_ASSERT(reporter,
                     result == kExpectedCount,
-                    "expected '%d', found '%d'",
+                    "expected '%u', found '%u'",
                     kExpectedCount,
                     result);
 }
@@ -2027,14 +2282,14 @@ DEF_GRAPHITE_TEST_FOR_METAL_CONTEXT(Compute_NativeShaderSourceMetal,
         TestComputeStep() : ComputeStep(
                 /*name=*/"TestAtomicOperationsMetal",
                 /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     {
                         /*type=*/ResourceType::kStorageBuffer,
                         /*flow=*/DataFlow::kShared,
                         /*policy=*/ResourcePolicy::kMapped,
                         /*slot=*/0,
                     }
-                },
+                }},
                 /*workgroupBuffers=*/{},
                 /*baseFlags=*/Flags::kSupportsNativeShader) {}
         ~TestComputeStep() override = default;
@@ -2089,10 +2344,9 @@ DEF_GRAPHITE_TEST_FOR_METAL_CONTEXT(Compute_NativeShaderSourceMetal,
 
         void prepareStorageBuffer(int resourceIndex,
                                   const ResourceDesc& r,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             SkASSERT(resourceIndex == 0);
-            *static_cast<uint32_t*>(buffer) = 0;
+            writer.zeroBytes(sizeof(uint32_t));
         }
     } step;
 
@@ -2131,7 +2385,7 @@ DEF_GRAPHITE_TEST_FOR_METAL_CONTEXT(Compute_NativeShaderSourceMetal,
             map_buffer(context, testContext, buffer.get(), info.fOffset))[0];
     REPORTER_ASSERT(reporter,
                     result == kExpectedCount,
-                    "expected '%d', found '%d'",
+                    "expected '%u', found '%u'",
                     kExpectedCount,
                     result);
 }
@@ -2150,20 +2404,20 @@ DEF_GRAPHITE_TEST_FOR_METAL_CONTEXT(Compute_WorkgroupBufferDescMetal,
         TestComputeStep() : ComputeStep(
                 /*name=*/"TestAtomicOperationsMetal",
                 /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     {
                         /*type=*/ResourceType::kStorageBuffer,
                         /*flow=*/DataFlow::kShared,
                         /*policy=*/ResourcePolicy::kMapped,
                         /*slot=*/0,
                     }
-                },
-                /*workgroupBuffers=*/{
+                }},
+                /*workgroupBuffers=*/{{
                     {
                         /*size=*/sizeof(uint32_t),
                         /*index=*/0u,
                     }
-                },
+                }},
                 /*baseFlags=*/Flags::kSupportsNativeShader) {}
         ~TestComputeStep() override = default;
 
@@ -2219,10 +2473,9 @@ DEF_GRAPHITE_TEST_FOR_METAL_CONTEXT(Compute_WorkgroupBufferDescMetal,
 
         void prepareStorageBuffer(int resourceIndex,
                                   const ResourceDesc& r,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             SkASSERT(resourceIndex == 0);
-            *static_cast<uint32_t*>(buffer) = 0;
+            writer.zeroBytes(sizeof(uint32_t));
         }
     } step;
 
@@ -2261,7 +2514,7 @@ DEF_GRAPHITE_TEST_FOR_METAL_CONTEXT(Compute_WorkgroupBufferDescMetal,
             map_buffer(context, testContext, buffer.get(), info.fOffset))[0];
     REPORTER_ASSERT(reporter,
                     result == kExpectedCount,
-                    "expected '%d', found '%d'",
+                    "expected '%u', found '%u'",
                     kExpectedCount,
                     result);
 }
@@ -2275,21 +2528,22 @@ DEF_GRAPHITE_TEST_FOR_DAWN_CONTEXT(Compute_NativeShaderSourceWGSL, reporter, con
     std::unique_ptr<Recorder> recorder = context->makeRecorder();
 
     constexpr uint32_t kWorkgroupCount = 32;
-    constexpr uint32_t kWorkgroupSize = 256;  // The WebGPU default workgroup size limit is 256
+    // The WebGPU compat default workgroup size limit is 128.
+    constexpr uint32_t kWorkgroupSize = 128;
 
     class TestComputeStep : public ComputeStep {
     public:
         TestComputeStep() : ComputeStep(
                 /*name=*/"TestAtomicOperationsWGSL",
                 /*localDispatchSize=*/{kWorkgroupSize, 1, 1},
-                /*resources=*/{
+                /*resources=*/{{
                     {
                         /*type=*/ResourceType::kStorageBuffer,
                         /*flow=*/DataFlow::kShared,
                         /*policy=*/ResourcePolicy::kMapped,
                         /*slot=*/0,
                     }
-                },
+                }},
                 /*workgroupBuffers=*/{},
                 /*baseFlags=*/Flags::kSupportsNativeShader) {}
         ~TestComputeStep() override = default;
@@ -2301,7 +2555,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_CONTEXT(Compute_NativeShaderSourceWGSL, reporter, con
 
                 var<workgroup> localCounter: atomic<u32>;
 
-                @compute @workgroup_size(256)
+                @compute @workgroup_size(128)
                 fn atomicCount(@builtin(local_invocation_id) localId: vec3u) {
                     // Initialize the local counter.
                     if localId.x == 0u {
@@ -2342,10 +2596,9 @@ DEF_GRAPHITE_TEST_FOR_DAWN_CONTEXT(Compute_NativeShaderSourceWGSL, reporter, con
 
         void prepareStorageBuffer(int resourceIndex,
                                   const ResourceDesc& r,
-                                  void* buffer,
-                                  size_t bufferSize) const override {
+                                  skgpu::BufferWriter&& writer) const override {
             SkASSERT(resourceIndex == 0);
-            *static_cast<uint32_t*>(buffer) = 0;
+            writer.zeroBytes(sizeof(uint32_t));
         }
     } step;
 
@@ -2384,7 +2637,7 @@ DEF_GRAPHITE_TEST_FOR_DAWN_CONTEXT(Compute_NativeShaderSourceWGSL, reporter, con
             map_buffer(context, testContext, buffer.get(), info.fOffset))[0];
     REPORTER_ASSERT(reporter,
                     result == kExpectedCount,
-                    "expected '%d', found '%d'",
+                    "expected '%u', found '%u'",
                     kExpectedCount,
                     result);
 }

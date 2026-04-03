@@ -31,7 +31,6 @@ struct EnumTraits<media_router::mojom::Issue_Severity,
         return media_router::mojom::Issue_Severity::NOTIFICATION;
     }
     NOTREACHED() << "Unknown issue severity " << static_cast<int>(severity);
-    return media_router::mojom::Issue_Severity::WARNING;
   }
 
   static bool FromMojom(media_router::mojom::Issue_Severity input,
@@ -173,7 +172,6 @@ struct EnumTraits<media_router::mojom::SinkIconType,
         break;
     }
     NOTREACHED() << "Unknown sink icon type " << static_cast<int>(icon_type);
-    return media_router::mojom::SinkIconType::GENERIC;
   }
 
   static bool FromMojom(media_router::mojom::SinkIconType input,
@@ -248,7 +246,6 @@ struct EnumTraits<media_router::mojom::RouteControllerType,
     }
     NOTREACHED() << "Unknown controller type "
                  << static_cast<int>(controller_type);
-    return media_router::mojom::RouteControllerType::kNone;
   }
 
   static bool FromMojom(media_router::mojom::RouteControllerType input,

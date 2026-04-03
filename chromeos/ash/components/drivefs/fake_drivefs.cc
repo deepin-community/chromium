@@ -4,20 +4,20 @@
 
 #include "chromeos/ash/components/drivefs/fake_drivefs.h"
 
+#include <algorithm>
 #include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
+#include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
+#include "base/notimplemented.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/task/thread_pool.h"
@@ -25,7 +25,6 @@
 #include "chromeos/ash/components/dbus/cros_disks/cros_disks_client.h"
 #include "chromeos/ash/components/dbus/cros_disks/fake_cros_disks_client.h"
 #include "chromeos/ash/components/drivefs/drivefs_util.h"
-#include "chromeos/ash/components/drivefs/mojom/drivefs.mojom-shared.h"
 #include "chromeos/ash/components/drivefs/mojom/drivefs.mojom.h"
 #include "chromeos/components/drivefs/mojom/drivefs_native_messaging.mojom.h"
 #include "components/drive/file_errors.h"
@@ -59,7 +58,7 @@ base::FilePath MaybeMountDriveFs(
     const std::vector<std::string>& mount_options) {
   GURL source_url(source_path);
   DCHECK(source_url.is_valid());
-  if (source_url.scheme() != "drivefs") {
+  if (source_url.GetScheme() != "drivefs") {
     return {};
   }
   std::string datadir_suffix;
@@ -82,7 +81,6 @@ base::FilePath MaybeMountDriveFs(
     }
   }
   NOTREACHED() << datadir_suffix;
-  return {};
 }
 
 }  // namespace
@@ -185,15 +183,14 @@ class FakeDriveFs::SearchQuery : public mojom::SearchQuery {
       }
 
       // Filter out non-matching results.
-      base::EraseIf(results_, [=](const auto& item_ptr) {
+      std::erase_if(results_, [=, this](const auto& item_ptr) {
         if (!item_ptr->metadata) {
           return true;
         }
         const base::FilePath path = item_ptr->path;
         const drivefs::mojom::FileMetadata* metadata = item_ptr->metadata.get();
         if (!query.empty()) {
-          if (!base::Contains(base::ToLowerASCII(path.BaseName().value()),
-                              query)) {
+          if (!base::ToLowerASCII(path.BaseName().value()).contains(query)) {
             return true;
           }
         }
@@ -244,7 +241,7 @@ class FakeDriveFs::SearchQuery : public mojom::SearchQuery {
           // If we do not know the MIME type the file may or may not match. Thus
           // we only test MIME type match if we know the files MIME type.
           if (!content_mime_type.empty()) {
-            if (base::ranges::none_of(
+            if (std::ranges::none_of(
                     mime_types,
                     [content_mime_type](const std::string& mime_type) {
                       return net::MatchesMimeType(mime_type, content_mime_type);
@@ -625,7 +622,7 @@ void FakeDriveFs::LocateFilesByItemIds(
       const auto& stored_metadata =
           metadata_[base::FilePath("/").Append(relative_path)];
       if (!stored_metadata.doc_id.empty() &&
-          base::Contains(item_ids, stored_metadata.doc_id)) {
+          std::ranges::contains(item_ids, stored_metadata.doc_id)) {
         results[stored_metadata.doc_id] = relative_path;
       }
       path = enumerator.Next();
@@ -699,7 +696,7 @@ void FakeDriveFs::ToggleSyncForPath(
     syncing_paths_.push_back(path);
   } else {
     // status == drivefs::mojom::MirrorPathStatus::kStop.
-    auto element = base::ranges::find(syncing_paths_, path);
+    auto element = std::ranges::find(syncing_paths_, path);
     syncing_paths_.erase(element);
   }
   std::move(callback).Run(drive::FileError::FILE_ERROR_OK);
@@ -723,6 +720,18 @@ void FakeDriveFs::GetDocsOfflineStats(
   drivefs::mojom::DocsOfflineStatsPtr stats =
       drivefs::mojom::DocsOfflineStats::New();
   std::move(callback).Run(drive::FILE_ERROR_OK, std::move(stats));
+}
+
+void FakeDriveFs::GetMirrorSyncStatusForFile(
+    const base::FilePath& path,
+    drivefs::mojom::DriveFs::GetMirrorSyncStatusForFileCallback callback) {
+  std::move(callback).Run(drivefs::mojom::MirrorItemSyncingStatus::kSynced);
+}
+
+void FakeDriveFs::GetMirrorSyncStatusForDirectory(
+    const base::FilePath& path,
+    drivefs::mojom::DriveFs::GetMirrorSyncStatusForDirectoryCallback callback) {
+  std::move(callback).Run(drivefs::mojom::MirrorItemSyncingStatus::kSynced);
 }
 
 }  // namespace drivefs

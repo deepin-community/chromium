@@ -12,7 +12,7 @@
 #include "include/core/SkRect.h"
 #include "include/core/SkSize.h"
 #include "include/core/SkString.h"
-#include "include/gpu/GrDirectContext.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
 #include "src/base/SkRectMemcpy.h"
 #include "src/core/SkCanvasPriv.h"
 #include "src/core/SkConvertPixels.h"
@@ -26,7 +26,7 @@
 #include "src/gpu/ganesh/SkGr.h"
 #include "src/gpu/ganesh/SurfaceDrawContext.h"
 #include "src/gpu/ganesh/effects/GrTextureEffect.h"
-#include "tools/gpu/ProxyUtils.h"
+#include "tools/ganesh/ProxyUtils.h"
 
 static GrSurfaceProxyView create_view(GrDirectContext* dContext,
                                       const SkBitmap& src,
@@ -228,7 +228,8 @@ protected:
                 SkRect contentRect = SkRect::MakeXYWH(x+kContentSize/2, y+kContentSize/2,
                                                       kContentSize, kContentSize);
 
-                SkMatrix texMatrix = SkMatrix::RectToRect(contentRect, SkRect::Make(fContentRect));
+                SkMatrix texMatrix = SkMatrix::RectToRectOrIdentity(contentRect,
+                                                                    SkRect::Make(fContentRect));
 
                 draw_texture(rContext->priv().caps(),
                              sdc,

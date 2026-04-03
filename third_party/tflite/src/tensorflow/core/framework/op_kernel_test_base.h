@@ -54,13 +54,13 @@ static std::vector<DeviceType> DeviceTypes() {
 class OpKernelBuilderTest : public ::testing::Test {
  protected:
   // Each attr is described by a "name|type|value".
-  NodeDef CreateNodeDef(const string& op_type,
-                        const std::vector<string>& attrs) {
+  NodeDef CreateNodeDef(const std::string& op_type,
+                        const std::vector<std::string>& attrs) {
     NodeDef node_def;
     node_def.set_name(op_type + "-op");
     node_def.set_op(op_type);
-    for (const string& attr_desc : attrs) {
-      std::vector<string> parts = str_util::Split(attr_desc, '|');
+    for (const std::string& attr_desc : attrs) {
+      std::vector<std::string> parts = str_util::Split(attr_desc, '|');
       CHECK_EQ(parts.size(), 3);
       AttrValue attr_value;
       CHECK(ParseAttrValue(parts[1], parts[2], &attr_value)) << attr_desc;
@@ -70,11 +70,11 @@ class OpKernelBuilderTest : public ::testing::Test {
     return node_def;
   }
 
-  std::unique_ptr<OpKernel> ExpectSuccess(const string& op_type,
+  std::unique_ptr<OpKernel> ExpectSuccess(const std::string& op_type,
                                           const DeviceType& device_type,
-                                          const std::vector<string>& attrs,
+                                          const std::vector<std::string>& attrs,
                                           DataTypeSlice input_types = {}) {
-    Status status;
+    absl::Status status;
     NodeDef def = CreateNodeDef(op_type, attrs);
     for (size_t i = 0; i < input_types.size(); ++i) {
       def.add_input("a:0");
@@ -110,9 +110,9 @@ class OpKernelBuilderTest : public ::testing::Test {
     return op;
   }
 
-  void ExpectFailure(const string& op_type, const DeviceType& device_type,
-                     const std::vector<string>& attrs, error::Code code) {
-    Status status;
+  void ExpectFailure(const std::string& op_type, const DeviceType& device_type,
+                     const std::vector<std::string>& attrs, error::Code code) {
+    absl::Status status;
     const NodeDef def = CreateNodeDef(op_type, attrs);
     Env* env = Env::Default();
     DeviceBase device(env);
@@ -135,25 +135,25 @@ class OpKernelBuilderTest : public ::testing::Test {
           EXPECT_NE(dt.first, device_type);
         }
       } else {
-        Status status2 =
+        absl::Status status2 =
             SupportedDeviceTypesForNode(DeviceTypes(), def, &devices);
         EXPECT_EQ(status.code(), status2.code());
       }
     }
   }
 
-  string GetKernelClassName(const string& op_type,
-                            const DeviceType& device_type,
-                            const std::vector<string>& attrs,
-                            DataTypeSlice input_types = {}) {
+  std::string GetKernelClassName(const std::string& op_type,
+                                 const DeviceType& device_type,
+                                 const std::vector<std::string>& attrs,
+                                 DataTypeSlice input_types = {}) {
     NodeDef def = CreateNodeDef(op_type, attrs);
     for (size_t i = 0; i < input_types.size(); ++i) {
       def.add_input("a:0");
     }
 
     const KernelDef* kernel_def = nullptr;
-    string kernel_class_name;
-    const Status status =
+    std::string kernel_class_name;
+    const absl::Status status =
         FindKernelDef(device_type, def, &kernel_def, &kernel_class_name);
     if (status.ok()) {
       return kernel_class_name;

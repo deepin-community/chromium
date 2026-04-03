@@ -12,16 +12,14 @@
 #include "build/build_config.h"
 #include "cc/paint/paint_flags.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/grit/theme_resources.h"
 #include "extensions/browser/extension_action.h"
 #include "third_party/skia/include/core/SkColor.h"
-#include "ui/base/resource/resource_bundle.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/font.h"
+#include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image_skia_operations.h"
@@ -29,8 +27,12 @@
 #include "ui/gfx/render_text.h"
 #include "ui/gfx/shadow_value.h"
 #include "ui/gfx/skia_paint_util.h"
+
+// Typography is not supported in Android yet.
+#if !BUILDFLAG(IS_ANDROID)
 #include "ui/views/style/typography.h"
 #include "ui/views/style/typography_provider.h"
+#endif
 
 namespace {
 
@@ -48,6 +50,7 @@ gfx::ImageSkiaRep ScaleImageSkiaRep(const gfx::ImageSkiaRep& rep,
 }
 
 // Make sure the background color is opaque. See http://crbug.com/619499
+// TODO(crbug.com/441643015): Remove ui color deps and use Android color system
 SkColor GetBadgeBackgroundColor(IconWithBadgeImageSource::Badge* badge,
                                 const ui::ColorProvider* color_provider) {
   return SkColorGetA(badge->background_color) == SK_AlphaTRANSPARENT
@@ -67,7 +70,7 @@ IconWithBadgeImageSource::Badge::Badge(const std::string& text,
                                        SkColor background_color)
     : text(text), text_color(text_color), background_color(background_color) {}
 
-IconWithBadgeImageSource::Badge::~Badge() {}
+IconWithBadgeImageSource::Badge::~Badge() = default;
 
 IconWithBadgeImageSource::IconWithBadgeImageSource(
     const gfx::Size& size,
@@ -86,8 +89,9 @@ void IconWithBadgeImageSource::SetIcon(const gfx::Image& icon) {
 void IconWithBadgeImageSource::SetBadge(std::unique_ptr<Badge> badge) {
   badge_ = std::move(badge);
 
-  if (!badge_ || badge_->text.empty())
+  if (!badge_ || badge_->text.empty()) {
     return;
+  }
 
   // Generate the badge's render text. Make sure it contrasts with the badge
   // background if it is transparent (also occurs when text color has not yet
@@ -98,33 +102,21 @@ void IconWithBadgeImageSource::SetBadge(std::unique_ptr<Badge> badge) {
                 badge_.get(), get_color_provider_callback_.Run()))
           : badge_->text_color;
 
-  const int badge_height = features::IsChromeRefresh2023() ? 14 : 12;
-  ui::ResourceBundle* rb = &ui::ResourceBundle::GetSharedInstance();
+  constexpr int badge_height = 14;
+
+#if BUILDFLAG(IS_ANDROID)
+  // Since typography is not currently supported on Android, we use a hardcode
+  // way to set the text now.
+  constexpr int kBadgeFontSize = 11;
   gfx::FontList base_font =
-      features::IsChromeRefresh2023()
-          ? views::TypographyProvider::Get().GetFont(
-                views::style::CONTEXT_BADGE, views::style::STYLE_SECONDARY)
-          : rb->GetFontList(ui::ResourceBundle::BaseFont)
-                .DeriveWithHeightUpperBound(badge_height);
+      gfx::FontList(gfx::Font(std::string(), kBadgeFontSize));
+#else
+  gfx::FontList base_font = views::TypographyProvider::Get().GetFont(
+      views::style::CONTEXT_BADGE, views::style::STYLE_SECONDARY);
+#endif
+
   std::u16string utf16_text = base::UTF8ToUTF16(badge_->text);
 
-  if (!features::IsChromeRefresh2023()) {
-    // See if we can squeeze a slightly larger font into the badge given the
-    // actual string that is to be displayed.
-    constexpr int kMaxIncrementAttempts = 5;
-    for (size_t i = 0; i < kMaxIncrementAttempts; ++i) {
-      int w = 0;
-      int h = 0;
-      gfx::FontList bigger_font =
-          base_font.Derive(1, 0, gfx::Font::Weight::BOLD);
-      gfx::Canvas::SizeStringInt(utf16_text, bigger_font, &w, &h, 0,
-                                 gfx::Canvas::NO_ELLIPSIS);
-      if (h > badge_height) {
-        break;
-      }
-      base_font = bigger_font;
-    }
-  }
   constexpr int kMaxTextWidth = 23;
   const int text_width = std::min(
       kMaxTextWidth, gfx::Canvas::GetStringWidth(utf16_text, base_font));
@@ -137,8 +129,9 @@ void IconWithBadgeImageSource::SetBadge(std::unique_ptr<Badge> badge) {
 
   // Force the pixel width of badge to be either odd (if the icon width is odd)
   // or even otherwise. If there is a mismatch you get http://crbug.com/26400.
-  if (icon_area.width() != 0 && (badge_width % 2 != icon_area.width() % 2))
+  if (icon_area.width() != 0 && (badge_width % 2 != icon_area.width() % 2)) {
     badge_width += 1;
+  }
   badge_width = std::max(badge_height, badge_width);
 
   // The minimum width for center-aligning the badge.
@@ -154,22 +147,15 @@ void IconWithBadgeImageSource::SetBadge(std::unique_ptr<Badge> badge) {
                 badge_width, badge_height);
   gfx::Rect badge_rect = badge_background_rect_;
 
-  if (features::IsChromeRefresh2023()) {
-    const int top_inset = (badge_height - base_font.GetHeight()) / 2;
-    const int bottom_inset = (badge_height - base_font.GetHeight()) - top_inset;
-    const int left_inset = (badge_rect.width() - text_width) / 2;
-    const int right_inset = (badge_rect.width() - text_width) - left_inset;
-    badge_rect.Inset(
-        gfx::Insets::TLBR(top_inset, left_inset, bottom_inset, right_inset));
-  } else {
-    badge_rect.Inset(gfx::Insets::TLBR(
-        badge_height - base_font.GetHeight(),
-        std::max(kPadding, (badge_rect.width() - text_width) / 2), 0,
-        kPadding));
-  }
+  const int top_inset = (badge_height - base_font.GetHeight()) / 2;
+  const int bottom_inset = (badge_height - base_font.GetHeight()) - top_inset;
+  const int left_inset = (badge_rect.width() - text_width) / 2;
+  const int right_inset = (badge_rect.width() - text_width) - left_inset;
+  badge_rect.Inset(
+      gfx::Insets::TLBR(top_inset, left_inset, bottom_inset, right_inset));
+
   badge_text_ = gfx::RenderText::CreateRenderText();
-  badge_text_->SetHorizontalAlignment(
-      features::IsChromeRefresh2023() ? gfx::ALIGN_CENTER : gfx::ALIGN_LEFT);
+  badge_text_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   badge_text_->SetCursorEnabled(false);
   badge_text_->SetFontList(base_font);
   badge_text_->SetColor(text_color);
@@ -178,14 +164,16 @@ void IconWithBadgeImageSource::SetBadge(std::unique_ptr<Badge> badge) {
 }
 
 void IconWithBadgeImageSource::Draw(gfx::Canvas* canvas) {
-  // TODO(https://crbug.com/842856): There should be a cleaner delineation
+  // TODO(crbug.com/40576276): There should be a cleaner delineation
   // between what is drawn here and what is handled by the button itself.
 
-  if (icon_.IsEmpty())
+  if (icon_.IsEmpty()) {
     return;
+  }
 
-  if (paint_blocked_actions_decoration_)
+  if (paint_blocked_actions_decoration_) {
     PaintBlockedActionDecoration(canvas);
+  }
 
   gfx::ImageSkia skia = icon_.AsImageSkia();
   gfx::ImageSkiaRep rep = skia.GetRepresentation(canvas->image_scale());
@@ -194,8 +182,9 @@ void IconWithBadgeImageSource::Draw(gfx::Canvas* canvas) {
         ScaleImageSkiaRep(rep, extensions::ExtensionAction::ActionIconSize(),
                           canvas->image_scale()));
   }
-  if (grayscale_)
+  if (grayscale_) {
     skia = gfx::ImageSkiaOperations::CreateHSLShiftedImage(skia, {-1, 0, 0.6});
+  }
 
   int x_offset = std::floor(
       (size().width() - extensions::ExtensionAction::ActionIconSize()) / 2.0);
@@ -209,8 +198,9 @@ void IconWithBadgeImageSource::Draw(gfx::Canvas* canvas) {
 
 // Paints badge with specified parameters to |canvas|.
 void IconWithBadgeImageSource::PaintBadge(gfx::Canvas* canvas) {
-  if (!badge_text_)
+  if (!badge_text_) {
     return;
+  }
 
   SkColor background_color =
       GetBadgeBackgroundColor(badge_.get(), get_color_provider_callback_.Run());
@@ -225,9 +215,7 @@ void IconWithBadgeImageSource::PaintBadge(gfx::Canvas* canvas) {
   cc::PaintFlags cutout_flags = rect_flags;
   cutout_flags.setBlendMode(SkBlendMode::kClear);
   constexpr int kOuterCornerRadius = 3;
-  const int corner_radius_for_badge_background_rect =
-      features::IsChromeRefresh2023() ? kOuterCornerRadius + 1
-                                      : kOuterCornerRadius - 1;
+  const int corner_radius_for_badge_background_rect = kOuterCornerRadius + 1;
   canvas->DrawRoundRect(cutout_rect, kOuterCornerRadius, cutout_flags);
 
   // Paint the backdrop.

@@ -47,11 +47,14 @@ MockSession::~MockSession() = default;
 MockSessionManager::MockSessionManager() = default;
 MockSessionManager::~MockSessionManager() = default;
 
+MockSessionObserver::MockSessionObserver() = default;
+MockSessionObserver::~MockSessionObserver() = default;
+
 MockPairingRegistryDelegate::MockPairingRegistryDelegate() = default;
 MockPairingRegistryDelegate::~MockPairingRegistryDelegate() = default;
 
-base::Value::List MockPairingRegistryDelegate::LoadAll() {
-  base::Value::List result;
+base::ListValue MockPairingRegistryDelegate::LoadAll() {
+  base::ListValue result;
   for (Pairings::const_iterator i = pairings_.begin(); i != pairings_.end();
        ++i) {
     result.Append(i->second.ToValue());

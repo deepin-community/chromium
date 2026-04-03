@@ -24,12 +24,9 @@ const BlockBreakToken* CreateBreakToken(
   ConstraintSpaceBuilder space_builder(writing_direction.GetWritingMode(),
                                        writing_direction,
                                        /* is_new_fc */ true);
-  BoxFragmentBuilder fragment_builder(node, &node.Style(),
-                                      space_builder.ToConstraintSpace(),
-                                      writing_direction);
-  DCHECK(!fragment_builder.HasBreakTokenData());
-  fragment_builder.SetBreakTokenData(
-      MakeGarbageCollected<BlockBreakTokenData>());
+  BoxFragmentBuilder fragment_builder(
+      node, &node.Style(), space_builder.ToConstraintSpace(), writing_direction,
+      /*previous_break_token=*/nullptr);
   if (has_seen_all_children) {
     fragment_builder.SetHasSeenAllChildren();
   }

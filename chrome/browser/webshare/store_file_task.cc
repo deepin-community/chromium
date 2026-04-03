@@ -4,7 +4,10 @@
 
 #include "chrome/browser/webshare/store_file_task.h"
 
+#include "base/containers/span.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/net_errors.h"
@@ -83,10 +86,9 @@ void StoreFileTask::OnDataPipeReadable(MojoResult result) {
   }
 
   while (true) {
-    uint32_t buffer_num_bytes;
-    const void* buffer;
-    MojoResult pipe_result = consumer_handle_->BeginReadData(
-        &buffer, &buffer_num_bytes, MOJO_READ_DATA_FLAG_NONE);
+    base::span<const uint8_t> buffer;
+    MojoResult pipe_result =
+        consumer_handle_->BeginReadData(MOJO_READ_DATA_FLAG_NONE, buffer);
     if (pipe_result == MOJO_RESULT_SHOULD_WAIT)
       return;
 
@@ -103,17 +105,15 @@ void StoreFileTask::OnDataPipeReadable(MojoResult result) {
     }
 
     // Defend against compromised renderer process sending too much data.
-    if (buffer_num_bytes > total_bytes_ - bytes_received_ ||
-        output_file_.WriteAtCurrentPos(static_cast<const char*>(buffer),
-                                       buffer_num_bytes) !=
-            static_cast<int>(buffer_num_bytes)) {
+    if (buffer.size() > total_bytes_ - bytes_received_ ||
+        !output_file_.WriteAtCurrentPosAndCheck(buffer)) {
       std::move(callback_).Run(blink::mojom::ShareError::INTERNAL_ERROR);
       return;
     }
-    bytes_received_ += buffer_num_bytes;
+    bytes_received_ += buffer.size();
     DCHECK_LE(bytes_received_, total_bytes_);
 
-    consumer_handle_->EndReadData(buffer_num_bytes);
+    consumer_handle_->EndReadData(buffer.size());
     if (bytes_received_ == total_bytes_) {
       received_all_data_ = true;
       if (received_on_complete_)

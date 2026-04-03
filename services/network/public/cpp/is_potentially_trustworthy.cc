@@ -4,6 +4,7 @@
 
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 
+#include <algorithm>
 #include <iterator>
 #include <optional>
 #include <string_view>
@@ -11,23 +12,21 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/numerics/checked_math.h"
-#include "base/ranges/algorithm.h"
 #include "base/sequence_checker.h"
 #include "base/strings/pattern.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "net/base/ip_address.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/base/url_util.h"
 #include "services/network/public/cpp/network_switches.h"
+#include "url/gurl.h"
 #include "url/origin.h"
 #include "url/scheme_host_port.h"
 #include "url/url_canon.h"
@@ -160,15 +159,12 @@ std::string CanonicalizePatternComponents(const std::string& hostname_pattern) {
       current = hostname_pattern.length();
 
     // Try to append the canonicalized version of this component.
-    int current_len = base::checked_cast<int>(current - begin);
-    if (hostname_pattern.substr(begin, current_len) == "*" ||
-        !url::CanonicalizeHostSubstring(
-            hostname_pattern.data(),
-            url::Component(base::checked_cast<int>(begin), current_len),
-            &canon_output)) {
+    std::string_view hostname =
+        std::string_view(hostname_pattern).substr(begin, current - begin);
+    if (hostname == "*" ||
+        !url::CanonicalizeHostSubstring(hostname, &canon_output)) {
       // Failed to canonicalize this component; append as-is.
-      canon_output.Append(hostname_pattern.substr(begin, current_len).data(),
-                          current_len);
+      canon_output.Append(hostname);
     }
 
     if (current < hostname_pattern.length())
@@ -238,7 +234,7 @@ std::vector<std::string> ParseSecureOriginAllowlistFromCmdline() {
 
   std::vector<std::string> origin_patterns =
       ParseSecureOriginAllowlist(origins_str);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // For Crostini, we allow access to the default VM/container as a secure
   // origin via the hostname penguin.linux.test. We are required to use a
   // wildcard for the prefix because we do not know what the port number is.
@@ -250,7 +246,7 @@ std::vector<std::string> ParseSecureOriginAllowlistFromCmdline() {
 
 bool IsAllowlisted(const std::vector<std::string>& allowlist,
                    const url::Origin& origin) {
-  if (base::Contains(allowlist, origin.Serialize()))
+  if (std::ranges::contains(allowlist, origin.Serialize()))
     return true;
 
   for (const std::string& origin_or_pattern : allowlist) {
@@ -278,8 +274,8 @@ bool IsSchemeConsideredAuthenticated(std::string_view scheme) {
   //   content::ContentClient::Schemes::secure_schemes
   // - url::AddLocalScheme
   // - url::AddSecureScheme
-  return base::Contains(url::GetSecureSchemes(), scheme) ||
-         base::Contains(url::GetLocalSchemes(), scheme);
+  return std::ranges::contains(url::GetSecureSchemes(), scheme) ||
+         std::ranges::contains(url::GetLocalSchemes(), scheme);
 }
 
 }  // namespace
@@ -351,7 +347,7 @@ bool IsUrlPotentiallyTrustworthy(const GURL& url) {
   //    context in which they were created. Therefore, blobs created in a
   //    trustworthy origin will themselves be potentially trustworthy.
   url::Origin origin = url::Origin::Create(url);
-  if (origin.opaque() && IsSchemeConsideredAuthenticated(url.scheme_piece())) {
+  if (origin.opaque() && IsSchemeConsideredAuthenticated(url.scheme())) {
     // Authenticated schemes should be treated as trustworthy, even if they
     // translate into an opaque origin (e.g. because some of them might also be
     // registered as a no-access, like the //content-layer chrome-error:// or
@@ -373,8 +369,8 @@ std::vector<std::string> SecureOriginAllowlist::GetCurrentAllowlist() {
 
   std::vector<std::string> result;
   result.reserve(cmdline_allowlist_.size() + auxiliary_allowlist_.size());
-  base::ranges::copy(cmdline_allowlist_, std::back_inserter(result));
-  base::ranges::copy(auxiliary_allowlist_, std::back_inserter(result));
+  std::ranges::copy(cmdline_allowlist_, std::back_inserter(result));
+  std::ranges::copy(auxiliary_allowlist_, std::back_inserter(result));
   return result;
 }
 

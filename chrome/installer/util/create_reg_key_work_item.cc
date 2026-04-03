@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 
+#include "base/check.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/win/registry.h"
@@ -29,7 +30,7 @@ void UpOneDirectoryOrEmpty(std::wstring* dir) {
 
 }  // namespace
 
-CreateRegKeyWorkItem::~CreateRegKeyWorkItem() {}
+CreateRegKeyWorkItem::~CreateRegKeyWorkItem() = default;
 
 CreateRegKeyWorkItem::CreateRegKeyWorkItem(HKEY predefined_root,
                                            const std::wstring& path,

@@ -6,7 +6,6 @@
 
 #include <algorithm>
 
-#include "base/containers/contains.h"
 #include "base/notreached.h"
 #include "media/base/eme_constants.h"
 #include "media/base/key_system_names.h"
@@ -57,7 +56,7 @@ bool ExternalClearKeyKeySystemInfo::IsSupportedKeySystem(
     const std::string& key_system) const {
   return (key_system == key_system_ ||
           media::IsSubKeySystemOf(key_system, key_system_)) &&
-         !base::Contains(excluded_key_systems_, key_system);
+         !std::ranges::contains(excluded_key_systems_, key_system);
 }
 
 bool ExternalClearKeyKeySystemInfo::IsSupportedInitDataType(
@@ -72,7 +71,6 @@ bool ExternalClearKeyKeySystemInfo::IsSupportedInitDataType(
       return false;
   }
   NOTREACHED();
-  return false;
 }
 
 std::optional<media::EmeConfig>
@@ -86,7 +84,6 @@ ExternalClearKeyKeySystemInfo::GetEncryptionSchemeConfigRule(
       break;
   }
   NOTREACHED();
-  return media::EmeConfig::UnsupportedRule();
 }
 
 media::SupportedCodecs ExternalClearKeyKeySystemInfo::GetSupportedCodecs()

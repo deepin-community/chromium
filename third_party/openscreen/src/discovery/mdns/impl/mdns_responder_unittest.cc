@@ -62,7 +62,6 @@ void ExpectContainsNsecRecordType(const std::vector<MdnsRecord>& records,
 
 using testing::_;
 using testing::Args;
-using testing::Invoke;
 using testing::Return;
 using testing::StrictMock;
 
@@ -70,7 +69,10 @@ class MockRecordHandler : public MdnsResponder::RecordHandler {
  public:
   void AddRecord(MdnsRecord record) { records_.push_back(record); }
 
-  MOCK_METHOD3(HasRecords, bool(const DomainName&, DnsType, DnsClass));
+  MOCK_METHOD(bool,
+              HasRecords,
+              (const DomainName&, DnsType, DnsClass),
+              (override));
 
   std::vector<MdnsRecord::ConstRef> GetRecords(const DomainName& name,
                                                DnsType type,
@@ -102,34 +104,38 @@ class MockRecordHandler : public MdnsResponder::RecordHandler {
 
 class MockMdnsSender : public MdnsSender {
  public:
-  explicit MockMdnsSender(UdpSocket* socket) : MdnsSender(socket) {}
+  explicit MockMdnsSender(UdpSocket& socket) : MdnsSender(socket) {}
 
-  MOCK_METHOD1(SendMulticast, Error(const MdnsMessage& message));
-  MOCK_METHOD2(SendMessage,
-               Error(const MdnsMessage& message, const IPEndpoint& endpoint));
+  MOCK_METHOD(Error, SendMulticast, (const MdnsMessage& message), (override));
+  MOCK_METHOD(Error,
+              SendMessage,
+              (const MdnsMessage& message, const IPEndpoint& endpoint),
+              (override));
 };
 
 class MockProbeManager : public MdnsProbeManager {
  public:
-  MOCK_CONST_METHOD1(IsDomainClaimed, bool(const DomainName&));
-  MOCK_METHOD2(RespondToProbeQuery,
-               void(const MdnsMessage&, const IPEndpoint&));
+  MOCK_METHOD(bool, IsDomainClaimed, (const DomainName&), (const, override));
+  MOCK_METHOD(void,
+              RespondToProbeQuery,
+              (const MdnsMessage&, const IPEndpoint&),
+              (override));
 };
 
 class MdnsResponderTest : public testing::Test {
  public:
   MdnsResponderTest()
       : clock_(Clock::now()),
-        task_runner_(&clock_),
-        sender_(&socket_),
+        task_runner_(clock_),
+        sender_(socket_),
         receiver_(config_),
-        responder_(&record_handler_,
-                   &probe_manager_,
-                   &sender_,
-                   &receiver_,
+        responder_(record_handler_,
+                   probe_manager_,
+                   sender_,
+                   receiver_,
                    task_runner_,
                    FakeClock::now,
-                   &random_,
+                   random_,
                    config_) {}
 
  protected:
@@ -305,10 +311,6 @@ TEST_F(MdnsResponderTest, MulticastMessageSentOverMulticast) {
 
 // Validate that records are added as expected based on the query type, and that
 // additional records are populated as specified in RFC 6762 and 6763.
-
-// TODO(issuetracker.google.com/203003316): Refactor shared code from these
-// tests into the test fixture, or consider a data driven test approach, to
-// remove lots of duplication
 TEST_F(MdnsResponderTest, AnyQueryResultsAllApplied) {
   EXPECT_CALL(probe_manager_, IsDomainClaimed(_)).WillOnce(Return(true));
   EXPECT_CALL(record_handler_, HasRecords(_, _, _))

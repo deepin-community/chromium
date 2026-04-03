@@ -1,10 +1,12 @@
+load("//xla:xla.default.bzl", "xla_cc_test")
 load("//xla/stream_executor:build_defs.bzl", "stream_executor_friends")
-load("@local_tsl//tsl:tsl.bzl", "set_external_visibility")
-load("@local_tsl//tsl/platform:build_config.bzl", "tf_stream_executor_deps")
-load("@local_tsl//tsl/platform:rules_cc.bzl", "cc_library")
+load("//xla/tsl:tsl.bzl", "internal_visibility")
+load("//xla/tsl/platform:build_config.bzl", "tf_stream_executor_deps")
+load("//xla/tsl/platform:rules_cc.bzl", "cc_library")
 
 package(
-    default_visibility = ["//visibility:public"],
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
+    default_visibility = internal_visibility([":friends"]),
     licenses = ["notice"],
 )
 
@@ -14,25 +16,48 @@ package_group(
 )
 
 cc_library(
-    name = "platform",
-    textual_hdrs = [
+    name = "initialize",
+    hdrs = [
         "initialize.h",
-        "platform.h",
-        "port.h",
     ],
-    visibility = ["//visibility:public"],
     deps = [
-        "@local_tsl//tsl/platform:logging",
-        "@local_tsl//tsl/platform:macros",
-        "@local_tsl//tsl/platform:types",
+        "//xla/tsl/platform:logging",
+        "//xla/tsl/platform:macros",
+        "//xla/tsl/platform:types",
+        "@tsl//tsl/platform",
     ] + tf_stream_executor_deps("platform", "//xla/stream_executor/platform/"),
 )
 
 cc_library(
-    name = "dso_loader",
-    hdrs = ["dso_loader.h"],
-    visibility = ["//visibility:public"],
+    name = "platform_object_registry",
+    srcs = ["platform_object_registry.cc"],
+    hdrs = ["platform_object_registry.h"],
     deps = [
-        ":platform",
-    ] + tf_stream_executor_deps("dso_loader", "//xla/stream_executor/platform/"),
+        ":initialize",
+        "//xla/stream_executor:platform",
+        "//xla/stream_executor:platform_manager",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+    ],
+)
+
+xla_cc_test(
+    name = "platform_object_registry_test",
+    srcs = ["platform_object_registry_test.cc"],
+    deps = [
+        ":platform_object_registry",
+        "//xla/stream_executor/cuda:cuda_platform_id",
+        "//xla/stream_executor/rocm:rocm_platform_id",
+        "//xla/tsl/platform:env",
+        "//xla/tsl/platform:statusor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:status_matchers",
+        "@com_google_googletest//:gtest_main",
+    ],
 )

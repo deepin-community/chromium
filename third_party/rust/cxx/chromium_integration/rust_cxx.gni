@@ -5,6 +5,7 @@
 import("//build/config/clang/clang.gni")
 import("//build/config/rust.gni")
 import("//build/config/sysroot.gni")
+import("//build/rust/gni_impl/rustc_print_cfg.gni")
 
 set_defaults("rust_cxx") {
   native_header_deps = []
@@ -111,12 +112,16 @@ template("rust_cxx") {
     inputs = [
       cxxbridge_executable,
       script,
+      rustc_print_cfg_path,
     ]
     outputs = [
       output_h,
       output_cc,
     ]
-    deps = [ cxxbridge_target ]
+    deps = [
+      "//build/rust/gni_impl:rustc_print_cfg",
+      cxxbridge_target,
+    ]
 
     args = [
       "--exe",
@@ -125,9 +130,19 @@ template("rust_cxx") {
       output_h,
       "--cc",
       output_cc,
-      "{{source}}",
+      "--rustc-print-cfg-path",
+      rebase_path(rustc_print_cfg_path, root_build_dir),
       "--",
+      "{{rustflags}}",
+      "RUSTFLAGS_SEPARATOR",
+      "{{source}}",
     ]
+
+    # To ensure that `--rustflags` above sees the same `--cfg=...` flags as the
+    # main Rust library.
+    if (defined(invoker.configs)) {
+      configs = invoker.configs
+    }
 
     if (invoker.export_symbols) {
       # See explanation of 'export_symbols' above for what this does.
@@ -151,7 +166,11 @@ template("rust_cxx") {
   }
 
   static_library(target_name) {
-    forward_variables_from(invoker, [ "deps" ])
+    forward_variables_from(invoker,
+                           [
+                             "deps",
+                             "allow_circular_includes_from",
+                           ])
 
     testonly = _testonly
     if (defined(invoker.visibility)) {

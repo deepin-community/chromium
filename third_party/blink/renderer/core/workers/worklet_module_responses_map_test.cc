@@ -37,14 +37,6 @@ class WorkletModuleResponsesMapTest : public PageTestBase {
       : PageTestBase(base::test::TaskEnvironment::TimeSource::MOCK_TIME),
         url_("https://example.test"),
         security_origin_(SecurityOrigin::Create(url_)) {
-    if (!task_environment()) {
-      // TODO(crbug.com/1315595): Remove once TaskEnvironment becomes the
-      // default in blink_unittests_v2
-      test_task_runner_ = base::MakeRefCounted<base::TestMockTimeTaskRunner>(
-          base::TestMockTimeTaskRunner::Type::kStandalone);
-      test_task_runner_->AdvanceMockTickClock(
-          base::Seconds(1));  // For non-zero DocumentParserTimings
-    }
   }
 
   void SetUp() override {
@@ -103,15 +95,15 @@ class WorkletModuleResponsesMapTest : public PageTestBase {
         const ModuleScriptCreationParams& params) override {
       ASSERT_EQ(Result::kInitial, result_);
       result_ = Result::kOK;
-      params_.emplace(std::move(params));
+      has_params_ = true;
     }
 
     Result GetResult() const { return result_; }
-    bool HasParams() const { return params_.has_value(); }
+    bool HasParams() const { return has_params_; }
 
    private:
     Result result_ = Result::kInitial;
-    std::optional<ModuleScriptCreationParams> params_;
+    bool has_params_ = false;
   };
 
   void Fetch(const KURL& url, ClientImpl* client) {
@@ -126,8 +118,10 @@ class WorkletModuleResponsesMapTest : public PageTestBase {
     WorkletModuleScriptFetcher* module_fetcher =
         MakeGarbageCollected<WorkletModuleScriptFetcher>(
             global_scope_, ModuleScriptLoader::CreatePassKeyForTests());
-    module_fetcher->Fetch(fetch_params, ModuleType::kJavaScript, fetcher_.Get(),
-                          ModuleGraphLevel::kTopLevelModuleFetch, client);
+    module_fetcher->Fetch(fetch_params, ModuleType::kJavaScriptOrWasm,
+                          fetcher_.Get(),
+                          ModuleGraphLevel::kTopLevelModuleFetch, client,
+                          ModuleImportPhase::kEvaluation);
   }
 
   void RunUntilIdle() {
@@ -136,14 +130,10 @@ class WorkletModuleResponsesMapTest : public PageTestBase {
   }
 
   const base::TickClock* GetTickClock() override {
-    if (test_task_runner_) {
-      return test_task_runner_->GetMockTickClock();
-    }
     return PageTestBase::GetTickClock();
   }
 
  protected:
-  scoped_refptr<base::TestMockTimeTaskRunner> test_task_runner_;
   ScopedTestingPlatformSupport<FetchTestingPlatformSupport> platform_;
 
   const KURL url_;

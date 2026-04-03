@@ -6,9 +6,7 @@
 #define COMPONENTS_WEBAPPS_BROWSER_INSTALLABLE_ML_INSTALLABILITY_PROMOTER_H_
 
 #include <memory>
-#include <optional>
 
-#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
@@ -44,7 +42,8 @@ class AppBannerManager;
 class MlInstallOperationTracker;
 class SiteManifestMetricsTask;
 
-constexpr base::TimeDelta kTimeToWaitForWebContentsObservers = base::Seconds(3);
+constexpr base::TimeDelta kTimeToWaitForWebContentsObservers =
+    base::Seconds(10);
 
 struct SiteInstallMetrics {
   bool is_fully_installed;
@@ -96,6 +95,7 @@ class MLInstallabilityPromoter
       public content::WebContentsUserData<MLInstallabilityPromoter> {
  public:
   static constexpr char kShowInstallPromptLabel[] = "ShowInstallPrompt";
+  static constexpr char kDontShowLabel[] = "DontShow";
 
   ~MLInstallabilityPromoter() override;
 
@@ -113,8 +113,12 @@ class MLInstallabilityPromoter
       scoped_refptr<base::SequencedTaskRunner> task_runner);
   void AwaitMetricsCollectionTasksCompleteForTesting();
 
-  bool IsPendingVisibilityForTesting() {
+  bool IsPendingVisibilityForTesting() const {
     return state_ == MLPipelineState::kWaitingForVisibility;
+  }
+
+  bool IsCompleteForTesting() const {
+    return state_ == MLPipelineState::kComplete;
   }
 
  private:
@@ -160,7 +164,9 @@ class MLInstallabilityPromoter
 
   // content::ServiceWorkerContextObserver overrides
   void OnRegistrationStored(int64_t registration_id,
-                            const GURL& scope) override;
+                            const GURL& scope,
+                            const content::ServiceWorkerRegistrationInformation&
+                                service_worker_info) override;
   void OnDestruct(content::ServiceWorkerContext* context) override;
 
   void ResetRunningStagesAndTasksMaybeReportResult();
@@ -179,7 +185,7 @@ class MLInstallabilityPromoter
 
   // These variables are set on page load.
   GURL site_url_;
-  // TODO(https://crbug.com/1455521) Use raw_ptr when this class is owned by
+  // TODO(crbug.com/40272826) Use raw_ptr when this class is owned by
   // AppBannerManager.
   base::WeakPtr<AppBannerManager> app_banner_manager_;
 

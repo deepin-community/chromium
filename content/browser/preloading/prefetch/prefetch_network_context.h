@@ -5,45 +5,37 @@
 #ifndef CONTENT_BROWSER_PRELOADING_PREFETCH_PREFETCH_NETWORK_CONTEXT_H_
 #define CONTENT_BROWSER_PRELOADING_PREFETCH_PREFETCH_NETWORK_CONTEXT_H_
 
-#include <optional>
-
 #include "base/memory/scoped_refptr.h"
-#include "content/browser/preloading/prefetch/prefetch_type.h"
 #include "content/common/content_export.h"
-#include "content/public/browser/global_routing_id.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "net/base/isolation_info.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
-#include "services/network/public/mojom/url_loader_factory.mojom.h"
 
 namespace content {
 
-class BrowserContext;
-class PrefetchService;
+class PrefetchRequest;
 
 // An isolated network context used for prefetches. The purpose of using a
 // separate network context is to set a custom proxy configuration, and separate
 // any cookies.
 class CONTENT_EXPORT PrefetchNetworkContext {
  public:
+  // Creates the `URLLoaderFactory` inside ctor.
+  // If `use_isolated_network_context` is true, a valid
+  // `isolated_network_context` should be passed.
   PrefetchNetworkContext(
       bool use_isolated_network_context,
-      const PrefetchType& prefetch_type,
-      const GlobalRenderFrameHostId& referring_render_frame_host_id);
+      mojo::Remote<network::mojom::NetworkContext> isolated_network_context,
+      const PrefetchRequest& prefetch_request);
   ~PrefetchNetworkContext();
 
   PrefetchNetworkContext(const PrefetchNetworkContext&) = delete;
   const PrefetchNetworkContext operator=(const PrefetchNetworkContext&) =
       delete;
 
-  // Get a reference to |url_loader_factory_|. If it is null, then
-  // |network_context_| is bound and configured, and a new
-  // |SharedURLLoaderFactory| is created.
-  network::mojom::URLLoaderFactory* GetURLLoaderFactory(
-      PrefetchService* service);
+  // Get a reference to |url_loader_factory_|.
+  scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory();
 
   // Get a reference to |cookie_manager_|. If it is null, then it is bound to
   // the cookie manager of |network_context_|.
@@ -54,25 +46,13 @@ class CONTENT_EXPORT PrefetchNetworkContext {
 
  private:
   // Returns a URLLoaderFactory associated with the given |network_context|.
-  scoped_refptr<network::SharedURLLoaderFactory> CreateNewURLLoaderFactory(
-      BrowserContext* browser_context,
-      network::mojom::NetworkContext* network_context);
-
-  // Bind |network_context_| to a new network context and configure it to use
-  // the prefetch proxy. Also set up |url_loader_factory_| as a new URL loader
-  // factory for |network_context_|.
-  void CreateIsolatedURLLoaderFactory(PrefetchService* service);
+  static scoped_refptr<network::SharedURLLoaderFactory>
+  CreateNewURLLoaderFactory(network::mojom::NetworkContext* network_context,
+                            const PrefetchRequest& prefetch_request);
 
   // Whether an isolated network context or the default network context should
   // be used.
   const bool use_isolated_network_context_;
-
-  // Used to determine if the prefetch proxy should be used.
-  const PrefetchType prefetch_type_;
-
-  // The referring RenderFrameHost is used when considering to proxy
-  // |url_loader_factory_| by calling WillCreateURLLoaderFactory.
-  const GlobalRenderFrameHostId referring_render_frame_host_id_;
 
   // The network context and URL loader factory to use when making prefetches.
   mojo::Remote<network::mojom::NetworkContext> network_context_;

@@ -25,7 +25,6 @@ namespace {
 constexpr char kAppNameKey[] = "name";
 constexpr char kAppIdKey[] = "value";
 constexpr char kAppPreferredKey[] = "preferred";
-constexpr char kAppLockScreenSupportKey[] = "lockScreenSupport";
 
 }  // namespace
 
@@ -49,11 +48,6 @@ void StylusHandler::RegisterMessages() {
       "setPreferredNoteTakingApp",
       base::BindRepeating(&StylusHandler::HandleSetPreferredNoteTakingApp,
                           base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(
-      "setPreferredNoteTakingAppEnabledOnLockScreen",
-      base::BindRepeating(
-          &StylusHandler::HandleSetPreferredNoteTakingAppEnabledOnLockScreen,
-          base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "showPlayStoreApps",
       base::BindRepeating(&StylusHandler::HandleShowPlayStoreApps,
@@ -87,7 +81,7 @@ void StylusHandler::OnDeviceListsComplete() {
 void StylusHandler::UpdateNoteTakingApps() {
   bool waiting_for_android = false;
   note_taking_app_ids_.clear();
-  base::Value::List apps_list;
+  base::ListValue apps_list;
 
   NoteTakingHelper* helper = NoteTakingHelper::Get();
   if (helper->play_store_enabled() && !helper->android_apps_received()) {
@@ -98,12 +92,10 @@ void StylusHandler::UpdateNoteTakingApps() {
     std::vector<NoteTakingAppInfo> available_apps =
         helper->GetAvailableApps(Profile::FromWebUI(web_ui()));
     for (const NoteTakingAppInfo& info : available_apps) {
-      apps_list.Append(base::Value::Dict()
+      apps_list.Append(base::DictValue()
                            .Set(kAppNameKey, info.name)
                            .Set(kAppIdKey, info.app_id)
-                           .Set(kAppPreferredKey, info.preferred)
-                           .Set(kAppLockScreenSupportKey,
-                                static_cast<int>(info.lock_screen_support)));
+                           .Set(kAppPreferredKey, info.preferred));
 
       note_taking_app_ids_.insert(info.app_id);
     }
@@ -113,13 +105,13 @@ void StylusHandler::UpdateNoteTakingApps() {
                     base::Value(waiting_for_android));
 }
 
-void StylusHandler::HandleRequestApps(const base::Value::List& unused_args) {
+void StylusHandler::HandleRequestApps(const base::ListValue& unused_args) {
   AllowJavascript();
   UpdateNoteTakingApps();
 }
 
 void StylusHandler::HandleSetPreferredNoteTakingApp(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   const std::string& app_id = args[0].GetString();
 
   // Sanity check: make sure that the ID we got back from WebUI is in the
@@ -133,17 +125,7 @@ void StylusHandler::HandleSetPreferredNoteTakingApp(
                                            app_id);
 }
 
-void StylusHandler::HandleSetPreferredNoteTakingAppEnabledOnLockScreen(
-    const base::Value::List& args) {
-  bool enabled = false;
-  CHECK(args[0].is_bool());
-  enabled = args[0].GetBool();
-
-  NoteTakingHelper::Get()->SetPreferredAppEnabledOnLockScreen(
-      Profile::FromWebUI(web_ui()), enabled);
-}
-
-void StylusHandler::HandleInitialize(const base::Value::List& args) {
+void StylusHandler::HandleInitialize(const base::ListValue& args) {
   AllowJavascript();
   if (ui::DeviceDataManager::GetInstance()->AreDeviceListsComplete()) {
     SendHasStylus();
@@ -156,7 +138,7 @@ void StylusHandler::SendHasStylus() {
                     base::Value(stylus_utils::HasStylusInput()));
 }
 
-void StylusHandler::HandleShowPlayStoreApps(const base::Value::List& args) {
+void StylusHandler::HandleShowPlayStoreApps(const base::ListValue& args) {
   const std::string& apps_url = !args.empty() ? args[0].GetString() : "";
   Profile* profile = Profile::FromWebUI(web_ui());
   if (!arc::IsArcAllowedForProfile(profile)) {

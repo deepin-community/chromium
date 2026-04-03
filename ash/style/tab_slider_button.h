@@ -36,8 +36,10 @@ class ASH_EXPORT TabSliderButton : public views::Button {
 
  public:
   TabSliderButton(PressedCallback callback, const std::u16string& tooltip_text);
+
   TabSliderButton(const TabSliderButton&) = delete;
   TabSliderButton& operator=(const TabSliderButton&) = delete;
+
   ~TabSliderButton() override;
 
   bool selected() const { return selected_; }
@@ -49,10 +51,7 @@ class ASH_EXPORT TabSliderButton : public views::Button {
   void SetSelected(bool selected);
 
   // Returns the recommended color id for the current button state.
-  SkColor GetColorIdOnButtonState();
-
-  // views::Button:
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+  ui::ColorId GetColorIdOnButtonState();
 
  private:
   // Called when the button selected state is changed.
@@ -114,15 +113,17 @@ class ASH_EXPORT LabelSliderButton : public TabSliderButton {
   void OnSelectedChanged() override;
 
   // views::Button:
-  int GetHeightForWidth(int w) const override;
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void StateChanged(ButtonState old_state) override;
 
   // Owned by the view hierarchy.
   raw_ptr<views::Label> label_;
 };
 
-// A `TabSliderButton` which shows an icon above a label.
+// A `TabSliderButton` which shows an icon either:
+// - Next to a label (`horizontal == true`).
+// - Above a label (`horizontal == false`).
 class ASH_EXPORT IconLabelSliderButton : public TabSliderButton {
   METADATA_HEADER(IconLabelSliderButton, TabSliderButton)
 
@@ -137,12 +138,17 @@ class ASH_EXPORT IconLabelSliderButton : public TabSliderButton {
   IconLabelSliderButton(PressedCallback callback,
                         const gfx::VectorIcon* icon,
                         const std::u16string& text,
-                        const std::u16string& tooltip_text_base = u"");
+                        const std::u16string& tooltip_text_base = u"",
+                        bool horizontal = false);
   IconLabelSliderButton(const IconLabelSliderButton&) = delete;
   IconLabelSliderButton& operator=(const IconLabelSliderButton&) = delete;
   ~IconLabelSliderButton() override;
 
  private:
+  // views::View:
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
+
   // Update label color according to the current button state.
   void UpdateColors();
 

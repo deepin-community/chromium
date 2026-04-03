@@ -13,20 +13,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
+import multiprocessing
 import os
 import signal
-from typing import List
-import subprocess
+import sys
+import time
+from typing import Any, Dict, IO, List
 
-from google.protobuf import descriptor_pb2, message_factory, text_format
+from google.protobuf import descriptor_pb2, message_factory
+from python.generators.diff_tests import models
 
-from python.generators.diff_tests import testing
+# PID of the main process, used to distinguish from forked workers
+_main_pid = None
+
+
+class ProtoManager:
+  """A helper class for all proto related tasks."""
+
+  def __init__(self, descriptor_file_paths: List[str]):
+    files = []
+    for file_path in descriptor_file_paths:
+      files.extend(self.read_descriptor(file_path).file)
+    self.messages = message_factory.GetMessages(files)
+
+  def read_descriptor(self, file_name: str) -> descriptor_pb2.FileDescriptorSet:
+    """Reads a file descriptor set from a file."""
+    with open(file_name, 'rb') as f:
+      contents = f.read()
+
+    descriptor = descriptor_pb2.FileDescriptorSet()
+    descriptor.MergeFromString(contents)
+
+    return descriptor
+
+  def create_message(self, proto_type: str) -> Any:
+    return self.messages[proto_type]
+
 
 USE_COLOR_CODES = sys.stderr.isatty()
 
 
 class ColorFormatter:
+  """A helper class for color formatting in the terminal."""
 
   def __init__(self, no_colors: bool):
     self.no_colors = no_colors
@@ -53,91 +81,85 @@ class ColorFormatter:
     return self.__yellow_str() + s + self.__end_color()
 
 
-def get_env(root_dir):
+def get_env(root_dir: str) -> Dict[str, str]:
+  """Returns the environment variables for running trace_processor."""
   env = {
       'PERFETTO_BINARY_PATH': os.path.join(root_dir, 'test', 'data'),
+      'PATH': os.environ['PATH'],
   }
   if sys.platform.startswith('linux'):
     env['PATH'] = os.path.join(root_dir, 'buildtools', 'linux64', 'clang',
-                               'bin')
+                               'bin') + ':' + env['PATH']
   elif sys.platform.startswith('darwin'):
     # Sadly, on macOS we need to check out the Android deps to get
     # llvm symbolizer.
     env['PATH'] = os.path.join(root_dir, 'buildtools', 'ndk', 'toolchains',
-                               'llvm', 'prebuilt', 'darwin-x86_64', 'bin')
+                               'llvm', 'prebuilt', 'darwin-x86_64',
+                               'bin') + ':' + env['PATH']
   elif sys.platform.startswith('win32'):
-    env['PATH'] = os.path.join(root_dir, 'buildtools', 'win', 'clang', 'bin')
+    env['PATH'] = os.path.join(root_dir, 'buildtools', 'win', 'clang',
+                               'bin') + ';' + env['PATH']
   return env
 
 
-def ctrl_c_handler(_num, _frame):
-  # Send a sigkill to the whole process group. Our process group looks like:
-  # - Main python interpreter running the main()
-  #   - N python interpreters coming from ProcessPoolExecutor workers.
-  #     - 1 trace_processor_shell subprocess coming from the subprocess.Popen().
-  # We don't need any graceful termination as the diff tests are stateless and
-  # don't write any file. Just kill them all immediately.
-  os.killpg(os.getpid(), signal.SIGKILL)
+def ctrl_c_handler(_num: int, _frame: Any):
+  """Handles Ctrl+C by waiting for child processes to exit, then exiting.
+
+  When Ctrl+C is pressed, the terminal sends SIGINT to the entire foreground
+  process group. Child processes (executor workers, trace_processor_shell)
+  receive SIGINT directly and will terminate. We just wait for them to finish,
+  then exit cleanly.
+  """
+  global _main_pid
+
+  # Child processes just exit silently
+  if _main_pid is not None and os.getpid() != _main_pid:
+    os._exit(0)
+
+  # Main process: print message and wait for children to exit
+  os.write(sys.stderr.fileno(), b'\nShutting down...\n')
+
+  # Wait for child processes to terminate (they got SIGINT too)
+  deadline = time.time() + 3.0
+  while time.time() < deadline:
+    if not multiprocessing.active_children():
+      break
+    time.sleep(0.01)
+
+  # If any children are still alive after timeout, kill them
+  for child in multiprocessing.active_children():
+    child.kill()
+
+  os._exit(0)
 
 
-def create_message_factory(descriptor_file_paths, proto_type):
-  files = []
-  for file_path in descriptor_file_paths:
-    files.extend(read_descriptor(file_path).file)
-
-  # We use this method rather than working directly with DescriptorPool
-  # because, when the pure-Python protobuf runtime is used, extensions
-  # need to be explicitly registered with the message type. See
-  # https://github.com/protocolbuffers/protobuf/blob/9e09343a49e9e75be576b31ed7402bf8502b080c/python/google/protobuf/message_factory.py#L145
-  return message_factory.GetMessages(files)[proto_type]
+def setup_ctrl_c_handler():
+  """Sets up Ctrl+C handler. Must be called once at start of main()."""
+  global _main_pid
+  _main_pid = os.getpid()
+  signal.signal(signal.SIGINT, ctrl_c_handler)
 
 
-def create_metrics_message_factory(metrics_descriptor_paths):
-  return create_message_factory(metrics_descriptor_paths,
-                                'perfetto.protos.TraceMetrics')
+def serialize_textproto_trace(trace_descriptor_path: str,
+                              extension_descriptor_paths: List[str],
+                              text_proto_path: str, out_stream: IO[bytes]):
+  from python.generators.diff_tests.trace_generator import TraceGenerator
+  TraceGenerator(trace_descriptor_path,
+                 extension_descriptor_paths).serialize_textproto_trace(
+                     text_proto_path, out_stream)
 
 
-def read_descriptor(file_name):
-  with open(file_name, 'rb') as f:
-    contents = f.read()
-
-  descriptor = descriptor_pb2.FileDescriptorSet()
-  descriptor.MergeFromString(contents)
-
-  return descriptor
-
-
-def serialize_textproto_trace(trace_descriptor_path, extension_descriptor_paths,
-                              text_proto_path, out_stream):
-  proto = create_message_factory([trace_descriptor_path] +
-                                 extension_descriptor_paths,
-                                 'perfetto.protos.Trace')()
-
-  with open(text_proto_path, 'r') as text_proto_file:
-    text_format.Merge(text_proto_file.read(), proto)
-  out_stream.write(proto.SerializeToString())
-  out_stream.flush()
-
-
-def serialize_python_trace(root_dir, trace_descriptor_path, python_trace_path,
-                           out_stream):
-  python_cmd = [
-      'python3',
-      python_trace_path,
-      trace_descriptor_path,
-  ]
-
-  # Add the test dir to the PYTHONPATH to allow synth_common to be found.
-  env = os.environ.copy()
-  if 'PYTHONPATH' in env:
-    env['PYTHONPATH'] = "{}:{}".format(
-        os.path.join(root_dir, 'test'), env['PYTHONPATH'])
-  else:
-    env['PYTHONPATH'] = os.path.join(root_dir, 'test')
-  subprocess.check_call(python_cmd, env=env, stdout=out_stream)
+def serialize_python_trace(root_dir: str, trace_descriptor_path: str,
+                           extension_descriptor_paths: List[str],
+                           python_trace_path: str, out_stream: IO[bytes]):
+  from python.generators.diff_tests.trace_generator import TraceGenerator
+  TraceGenerator(trace_descriptor_path,
+                 extension_descriptor_paths).serialize_python_trace(
+                     root_dir, python_trace_path, out_stream)
 
 
 def get_trace_descriptor_path(out_path: str, trace_descriptor: str):
+  """Returns the path to the trace descriptor."""
   if trace_descriptor:
     return trace_descriptor
 
@@ -149,12 +171,18 @@ def get_trace_descriptor_path(out_path: str, trace_descriptor: str):
   return trace_descriptor_path
 
 
-def read_all_tests(name_filter: str, root_dir: str) -> List[testing.TestCase]:
-  # Import
-  INCLUDE_PATH = os.path.join(root_dir, 'test', 'trace_processor', 'diff_tests')
-  sys.path.append(INCLUDE_PATH)
-  from include_index import fetch_all_diff_tests
-  sys.path.pop()
-  diff_tests = fetch_all_diff_tests(INCLUDE_PATH)
+def read_all_tests(name_filter: str,
+                   root_dir: os.PathLike) -> List[models.TestCase]:
+  """Reads all diff tests from the given directory."""
+  from python.generators.diff_tests.test_loader import TestLoader
+  return TestLoader(root_dir).discover_and_load_tests(name_filter)
 
-  return [test for test in diff_tests if test.validate(name_filter)]
+
+def write_diff(expected: str, actual: str) -> str:
+  """Returns a unified diff of the two strings."""
+  import difflib
+  expected_lines = expected.splitlines(True)
+  actual_lines = actual.splitlines(True)
+  diff = difflib.unified_diff(
+      expected_lines, actual_lines, fromfile='expected', tofile='actual')
+  return "".join(list(diff))

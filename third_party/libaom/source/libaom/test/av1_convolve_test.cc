@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2020, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -9,14 +9,16 @@
  * PATENTS file, you can obtain it at www.aomedia.org/license/patent.
  */
 
+#include <cstddef>
+#include <cstdint>
 #include <ostream>
 #include <set>
 #include <vector>
 #include "config/av1_rtcd.h"
 #include "config/aom_dsp_rtcd.h"
-#include "test/acm_random.h"
 #include "aom_ports/aom_timer.h"
-#include "third_party/googletest/src/googletest/include/gtest/gtest.h"
+#include "gtest/gtest.h"
+#include "test/acm_random.h"
 
 namespace {
 
@@ -316,16 +318,17 @@ class AV1ConvolveTest : public ::testing::TestWithParam<TestParam<T>> {
 ////////////////////////////////////////////////////////
 // Single reference convolve-x functions (low bit-depth)
 ////////////////////////////////////////////////////////
-typedef void (*convolve_x_func)(const uint8_t *src, int src_stride,
-                                uint8_t *dst, int dst_stride, int w, int h,
-                                const InterpFilterParams *filter_params_x,
-                                const int subpel_x_qn,
-                                ConvolveParams *conv_params);
+using convolve_x_func = void (*)(const uint8_t *src, int src_stride,
+                                 uint8_t *dst, int dst_stride, int w, int h,
+                                 const InterpFilterParams *filter_params_x,
+                                 const int subpel_x_qn,
+                                 ConvolveParams *conv_params);
 
 class AV1ConvolveXTest : public AV1ConvolveTest<convolve_x_func> {
  public:
   void RunTest() {
-    for (int sub_x = 0; sub_x < 16; ++sub_x) {
+    // Do not test the no-op filter.
+    for (int sub_x = 1; sub_x < 16; ++sub_x) {
       for (int filter = EIGHTTAP_REGULAR; filter <= INTERP_FILTERS_ALL;
            ++filter) {
         InterpFilter f = static_cast<InterpFilter>(filter);
@@ -398,7 +401,7 @@ class AV1ConvolveXTest : public AV1ConvolveTest<convolve_x_func> {
     }
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
-    printf("%d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n", filter, width, height, time1,
+    printf("%d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n", filter, width, height, time1,
            time2, time1 / time2);
   }
 };
@@ -433,6 +436,11 @@ INSTANTIATE_TEST_SUITE_P(NEON_DOTPROD, AV1ConvolveXTest,
 #if HAVE_NEON_I8MM
 INSTANTIATE_TEST_SUITE_P(NEON_I8MM, AV1ConvolveXTest,
                          BuildLowbdParams(av1_convolve_x_sr_neon_i8mm));
+#endif
+
+#if HAVE_RVV
+INSTANTIATE_TEST_SUITE_P(RVV, AV1ConvolveXTest,
+                         BuildLowbdParams(av1_convolve_x_sr_rvv));
 #endif
 
 ////////////////////////////////////////////////////////////////
@@ -501,7 +509,7 @@ class AV1ConvolveXIntraBCTest : public AV1ConvolveTest<convolve_x_func> {
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
 
-    printf("%d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n", filter, width, height, time1,
+    printf("%d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n", filter, width, height, time1,
            time2, time1 / time2);
   }
 };
@@ -518,19 +526,25 @@ INSTANTIATE_TEST_SUITE_P(NEON, AV1ConvolveXIntraBCTest,
                          BuildLowbdParams(av1_convolve_x_sr_intrabc_neon));
 #endif
 
+#if HAVE_RVV
+INSTANTIATE_TEST_SUITE_P(RVV, AV1ConvolveXIntraBCTest,
+                         BuildLowbdParams(av1_convolve_x_sr_intrabc_rvv));
+#endif
+
 #if CONFIG_AV1_HIGHBITDEPTH
 /////////////////////////////////////////////////////////
 // Single reference convolve-x functions (high bit-depth)
 /////////////////////////////////////////////////////////
-typedef void (*highbd_convolve_x_func)(
-    const uint16_t *src, int src_stride, uint16_t *dst, int dst_stride, int w,
-    int h, const InterpFilterParams *filter_params_x, const int subpel_x_qn,
-    ConvolveParams *conv_params, int bd);
+using highbd_convolve_x_func =
+    void (*)(const uint16_t *src, int src_stride, uint16_t *dst, int dst_stride,
+             int w, int h, const InterpFilterParams *filter_params_x,
+             const int subpel_x_qn, ConvolveParams *conv_params, int bd);
 
 class AV1ConvolveXHighbdTest : public AV1ConvolveTest<highbd_convolve_x_func> {
  public:
   void RunTest() {
-    for (int sub_x = 0; sub_x < 16; ++sub_x) {
+    // Do not test the no-op filter.
+    for (int sub_x = 1; sub_x < 16; ++sub_x) {
       for (int filter = EIGHTTAP_REGULAR; filter <= INTERP_FILTERS_ALL;
            ++filter) {
         InterpFilter f = static_cast<InterpFilter>(filter);
@@ -604,7 +618,7 @@ class AV1ConvolveXHighbdTest : public AV1ConvolveTest<highbd_convolve_x_func> {
     }
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
-    printf("%d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n", filter, width, height, time1,
+    printf("%d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n", filter, width, height, time1,
            time2, time1 / time2);
   }
 };
@@ -629,6 +643,16 @@ INSTANTIATE_TEST_SUITE_P(AVX2, AV1ConvolveXHighbdTest,
 #if HAVE_NEON
 INSTANTIATE_TEST_SUITE_P(NEON, AV1ConvolveXHighbdTest,
                          BuildHighbdParams(av1_highbd_convolve_x_sr_neon));
+#endif
+
+#if HAVE_SVE2
+INSTANTIATE_TEST_SUITE_P(SVE2, AV1ConvolveXHighbdTest,
+                         BuildHighbdParams(av1_highbd_convolve_x_sr_sve2));
+#endif
+
+#if HAVE_RVV
+INSTANTIATE_TEST_SUITE_P(RVV, AV1ConvolveXHighbdTest,
+                         BuildHighbdParams(av1_highbd_convolve_x_sr_rvv));
 #endif
 
 /////////////////////////////////////////////////////////////////
@@ -701,7 +725,7 @@ class AV1ConvolveXHighbdIntraBCTest
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
 
-    printf("%d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n", filter, width, height, time1,
+    printf("%d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n", filter, width, height, time1,
            time2, time1 / time2);
   }
 };
@@ -719,20 +743,27 @@ INSTANTIATE_TEST_SUITE_P(
     BuildHighbdParams(av1_highbd_convolve_x_sr_intrabc_neon));
 #endif
 
+#if HAVE_RVV
+INSTANTIATE_TEST_SUITE_P(
+    RVV, AV1ConvolveXHighbdIntraBCTest,
+    BuildHighbdParams(av1_highbd_convolve_x_sr_intrabc_rvv));
+#endif
+
 #endif  // CONFIG_AV1_HIGHBITDEPTH
 
 ////////////////////////////////////////////////////////
 // Single reference convolve-y functions (low bit-depth)
 ////////////////////////////////////////////////////////
-typedef void (*convolve_y_func)(const uint8_t *src, int src_stride,
-                                uint8_t *dst, int dst_stride, int w, int h,
-                                const InterpFilterParams *filter_params_y,
-                                const int subpel_y_qn);
+using convolve_y_func = void (*)(const uint8_t *src, int src_stride,
+                                 uint8_t *dst, int dst_stride, int w, int h,
+                                 const InterpFilterParams *filter_params_y,
+                                 const int subpel_y_qn);
 
 class AV1ConvolveYTest : public AV1ConvolveTest<convolve_y_func> {
  public:
   void RunTest() {
-    for (int sub_y = 0; sub_y < 16; ++sub_y) {
+    // Do not test the no-op filter.
+    for (int sub_y = 1; sub_y < 16; ++sub_y) {
       for (int filter = EIGHTTAP_REGULAR; filter <= INTERP_FILTERS_ALL;
            ++filter) {
         InterpFilter f = static_cast<InterpFilter>(filter);
@@ -795,7 +826,7 @@ class AV1ConvolveYTest : public AV1ConvolveTest<convolve_y_func> {
     }
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
-    printf("%d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n", filter, width, height, time1,
+    printf("%d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n", filter, width, height, time1,
            time2, time1 / time2);
   }
 };
@@ -820,6 +851,21 @@ INSTANTIATE_TEST_SUITE_P(AVX2, AV1ConvolveYTest,
 #if HAVE_NEON
 INSTANTIATE_TEST_SUITE_P(NEON, AV1ConvolveYTest,
                          BuildLowbdParams(av1_convolve_y_sr_neon));
+#endif
+
+#if HAVE_NEON_DOTPROD
+INSTANTIATE_TEST_SUITE_P(NEON_DOTPROD, AV1ConvolveYTest,
+                         BuildLowbdParams(av1_convolve_y_sr_neon_dotprod));
+#endif
+
+#if HAVE_NEON_I8MM
+INSTANTIATE_TEST_SUITE_P(NEON_I8MM, AV1ConvolveYTest,
+                         BuildLowbdParams(av1_convolve_y_sr_neon_i8mm));
+#endif
+
+#if HAVE_RVV
+INSTANTIATE_TEST_SUITE_P(RVV, AV1ConvolveYTest,
+                         BuildLowbdParams(av1_convolve_y_sr_rvv));
 #endif
 
 ////////////////////////////////////////////////////////////////
@@ -879,7 +925,7 @@ class AV1ConvolveYIntraBCTest : public AV1ConvolveTest<convolve_y_func> {
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
 
-    printf("%d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n", filter, width, height, time1,
+    printf("%d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n", filter, width, height, time1,
            time2, time1 / time2);
   }
 };
@@ -896,19 +942,25 @@ INSTANTIATE_TEST_SUITE_P(NEON, AV1ConvolveYIntraBCTest,
                          BuildLowbdParams(av1_convolve_y_sr_intrabc_neon));
 #endif
 
+#if HAVE_RVV
+INSTANTIATE_TEST_SUITE_P(RVV, AV1ConvolveYIntraBCTest,
+                         BuildLowbdParams(av1_convolve_y_sr_intrabc_rvv));
+#endif
+
 #if CONFIG_AV1_HIGHBITDEPTH
 /////////////////////////////////////////////////////////
 // Single reference convolve-y functions (high bit-depth)
 /////////////////////////////////////////////////////////
-typedef void (*highbd_convolve_y_func)(
-    const uint16_t *src, int src_stride, uint16_t *dst, int dst_stride, int w,
-    int h, const InterpFilterParams *filter_params_y, const int subpel_y_qn,
-    int bd);
+using highbd_convolve_y_func =
+    void (*)(const uint16_t *src, int src_stride, uint16_t *dst, int dst_stride,
+             int w, int h, const InterpFilterParams *filter_params_y,
+             const int subpel_y_qn, int bd);
 
 class AV1ConvolveYHighbdTest : public AV1ConvolveTest<highbd_convolve_y_func> {
  public:
   void RunTest() {
-    for (int sub_y = 0; sub_y < 16; ++sub_y) {
+    // Do not test the no-op filter.
+    for (int sub_y = 1; sub_y < 16; ++sub_y) {
       for (int filter = EIGHTTAP_REGULAR; filter <= INTERP_FILTERS_ALL;
            ++filter) {
         InterpFilter f = static_cast<InterpFilter>(filter);
@@ -971,7 +1023,7 @@ class AV1ConvolveYHighbdTest : public AV1ConvolveTest<highbd_convolve_y_func> {
     }
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
-    printf("%d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n", filter, width, height, time1,
+    printf("%d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n", filter, width, height, time1,
            time2, time1 / time2);
   }
 };
@@ -996,6 +1048,16 @@ INSTANTIATE_TEST_SUITE_P(AVX2, AV1ConvolveYHighbdTest,
 #if HAVE_NEON
 INSTANTIATE_TEST_SUITE_P(NEON, AV1ConvolveYHighbdTest,
                          BuildHighbdParams(av1_highbd_convolve_y_sr_neon));
+#endif
+
+#if HAVE_SVE2
+INSTANTIATE_TEST_SUITE_P(SVE2, AV1ConvolveYHighbdTest,
+                         BuildHighbdParams(av1_highbd_convolve_y_sr_sve2));
+#endif
+
+#if HAVE_RVV
+INSTANTIATE_TEST_SUITE_P(RVV, AV1ConvolveYHighbdTest,
+                         BuildHighbdParams(av1_highbd_convolve_y_sr_rvv));
 #endif
 
 /////////////////////////////////////////////////////////////////
@@ -1060,7 +1122,7 @@ class AV1ConvolveYHighbdIntraBCTest
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
 
-    printf("%d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n", filter, width, height, time1,
+    printf("%d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n", filter, width, height, time1,
            time2, time1 / time2);
   }
 };
@@ -1078,14 +1140,20 @@ INSTANTIATE_TEST_SUITE_P(
     BuildHighbdParams(av1_highbd_convolve_y_sr_intrabc_neon));
 #endif
 
+#if HAVE_RVV
+INSTANTIATE_TEST_SUITE_P(
+    RVV, AV1ConvolveYHighbdIntraBCTest,
+    BuildHighbdParams(av1_highbd_convolve_y_sr_intrabc_rvv));
+#endif
+
 #endif  // CONFIG_AV1_HIGHBITDEPTH
 
 //////////////////////////////////////////////////////////////
 // Single reference convolve-copy functions (low bit-depth)
 //////////////////////////////////////////////////////////////
-typedef void (*convolve_copy_func)(const uint8_t *src, ptrdiff_t src_stride,
-                                   uint8_t *dst, ptrdiff_t dst_stride, int w,
-                                   int h);
+using convolve_copy_func = void (*)(const uint8_t *src, ptrdiff_t src_stride,
+                                    uint8_t *dst, ptrdiff_t dst_stride, int w,
+                                    int h);
 
 class AV1ConvolveCopyTest : public AV1ConvolveTest<convolve_copy_func> {
  public:
@@ -1127,9 +1195,9 @@ INSTANTIATE_TEST_SUITE_P(NEON, AV1ConvolveCopyTest,
 ///////////////////////////////////////////////////////////////
 // Single reference convolve-copy functions (high bit-depth)
 ///////////////////////////////////////////////////////////////
-typedef void (*highbd_convolve_copy_func)(const uint16_t *src,
-                                          ptrdiff_t src_stride, uint16_t *dst,
-                                          ptrdiff_t dst_stride, int w, int h);
+using highbd_convolve_copy_func = void (*)(const uint16_t *src,
+                                           ptrdiff_t src_stride, uint16_t *dst,
+                                           ptrdiff_t dst_stride, int w, int h);
 
 class AV1ConvolveCopyHighbdTest
     : public AV1ConvolveTest<highbd_convolve_copy_func> {
@@ -1173,18 +1241,19 @@ INSTANTIATE_TEST_SUITE_P(NEON, AV1ConvolveCopyHighbdTest,
 /////////////////////////////////////////////////////////
 // Single reference convolve-2D functions (low bit-depth)
 /////////////////////////////////////////////////////////
-typedef void (*convolve_2d_func)(const uint8_t *src, int src_stride,
-                                 uint8_t *dst, int dst_stride, int w, int h,
-                                 const InterpFilterParams *filter_params_x,
-                                 const InterpFilterParams *filter_params_y,
-                                 const int subpel_x_qn, const int subpel_y_qn,
-                                 ConvolveParams *conv_params);
+using convolve_2d_func = void (*)(const uint8_t *src, int src_stride,
+                                  uint8_t *dst, int dst_stride, int w, int h,
+                                  const InterpFilterParams *filter_params_x,
+                                  const InterpFilterParams *filter_params_y,
+                                  const int subpel_x_qn, const int subpel_y_qn,
+                                  ConvolveParams *conv_params);
 
 class AV1Convolve2DTest : public AV1ConvolveTest<convolve_2d_func> {
  public:
   void RunTest() {
-    for (int sub_x = 0; sub_x < 16; ++sub_x) {
-      for (int sub_y = 0; sub_y < 16; ++sub_y) {
+    // Do not test the no-op filter.
+    for (int sub_x = 1; sub_x < 16; ++sub_x) {
+      for (int sub_y = 1; sub_y < 16; ++sub_y) {
         for (int h_f = EIGHTTAP_REGULAR; h_f <= INTERP_FILTERS_ALL; ++h_f) {
           for (int v_f = EIGHTTAP_REGULAR; v_f <= INTERP_FILTERS_ALL; ++v_f) {
             if (((h_f == MULTITAP_SHARP2) && (v_f < MULTITAP_SHARP2)) ||
@@ -1269,7 +1338,7 @@ class AV1Convolve2DTest : public AV1ConvolveTest<convolve_2d_func> {
     }
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
-    printf("%d - %d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n", h_f, v_f, width, height,
+    printf("%d - %d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n", h_f, v_f, width, height,
            time1, time2, time1 / time2);
   }
 };
@@ -1304,6 +1373,16 @@ INSTANTIATE_TEST_SUITE_P(NEON_DOTPROD, AV1Convolve2DTest,
 #if HAVE_NEON_I8MM
 INSTANTIATE_TEST_SUITE_P(NEON_I8MM, AV1Convolve2DTest,
                          BuildLowbdParams(av1_convolve_2d_sr_neon_i8mm));
+#endif
+
+#if HAVE_SVE2
+INSTANTIATE_TEST_SUITE_P(SVE2, AV1Convolve2DTest,
+                         BuildLowbdParams(av1_convolve_2d_sr_sve2));
+#endif
+
+#if HAVE_RVV
+INSTANTIATE_TEST_SUITE_P(RVV, AV1Convolve2DTest,
+                         BuildLowbdParams(av1_convolve_2d_sr_rvv));
 #endif
 
 /////////////////////////////////////////////////////////////////
@@ -1377,7 +1456,7 @@ class AV1Convolve2DIntraBCTest : public AV1ConvolveTest<convolve_2d_func> {
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
 
-    printf("%d - %d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n", h_f, v_f, width, height,
+    printf("%d - %d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n", h_f, v_f, width, height,
            time1, time2, time1 / time2);
   }
 };
@@ -1394,23 +1473,29 @@ INSTANTIATE_TEST_SUITE_P(NEON, AV1Convolve2DIntraBCTest,
                          BuildLowbdParams(av1_convolve_2d_sr_intrabc_neon));
 #endif
 
+#if HAVE_RVV
+INSTANTIATE_TEST_SUITE_P(RVV, AV1Convolve2DIntraBCTest,
+                         BuildLowbdParams(av1_convolve_2d_sr_intrabc_rvv));
+#endif
+
 #if CONFIG_AV1_HIGHBITDEPTH
 //////////////////////////////////////////////////////////
 // Single reference convolve-2d functions (high bit-depth)
 //////////////////////////////////////////////////////////
 
-typedef void (*highbd_convolve_2d_func)(
-    const uint16_t *src, int src_stride, uint16_t *dst, int dst_stride, int w,
-    int h, const InterpFilterParams *filter_params_x,
-    const InterpFilterParams *filter_params_y, const int subpel_x_qn,
-    const int subpel_y_qn, ConvolveParams *conv_params, int bd);
+using highbd_convolve_2d_func =
+    void (*)(const uint16_t *src, int src_stride, uint16_t *dst, int dst_stride,
+             int w, int h, const InterpFilterParams *filter_params_x,
+             const InterpFilterParams *filter_params_y, const int subpel_x_qn,
+             const int subpel_y_qn, ConvolveParams *conv_params, int bd);
 
 class AV1Convolve2DHighbdTest
     : public AV1ConvolveTest<highbd_convolve_2d_func> {
  public:
   void RunTest() {
-    for (int sub_x = 0; sub_x < 16; ++sub_x) {
-      for (int sub_y = 0; sub_y < 16; ++sub_y) {
+    // Do not test the no-op filter.
+    for (int sub_x = 1; sub_x < 16; ++sub_x) {
+      for (int sub_y = 1; sub_y < 16; ++sub_y) {
         for (int h_f = EIGHTTAP_REGULAR; h_f <= INTERP_FILTERS_ALL; ++h_f) {
           for (int v_f = EIGHTTAP_REGULAR; v_f <= INTERP_FILTERS_ALL; ++v_f) {
             if (((h_f == MULTITAP_SHARP2) && (v_f < MULTITAP_SHARP2)) ||
@@ -1496,7 +1581,7 @@ class AV1Convolve2DHighbdTest
     }
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
-    printf("%d - %d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n", h_f, v_f, width, height,
+    printf("%d - %d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n", h_f, v_f, width, height,
            time1, time2, time1 / time2);
   }
 };
@@ -1521,6 +1606,16 @@ INSTANTIATE_TEST_SUITE_P(AVX2, AV1Convolve2DHighbdTest,
 #if HAVE_NEON
 INSTANTIATE_TEST_SUITE_P(NEON, AV1Convolve2DHighbdTest,
                          BuildHighbdParams(av1_highbd_convolve_2d_sr_neon));
+#endif
+
+#if HAVE_SVE2
+INSTANTIATE_TEST_SUITE_P(SVE2, AV1Convolve2DHighbdTest,
+                         BuildHighbdParams(av1_highbd_convolve_2d_sr_sve2));
+#endif
+
+#if HAVE_RVV
+INSTANTIATE_TEST_SUITE_P(RVV, AV1Convolve2DHighbdTest,
+                         BuildHighbdParams(av1_highbd_convolve_2d_sr_rvv));
 #endif
 
 //////////////////////////////////////////////////////////////////
@@ -1601,7 +1696,7 @@ class AV1Convolve2DHighbdIntraBCTest
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
 
-    printf("%d - %d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n", h_f, v_f, width, height,
+    printf("%d - %d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n", h_f, v_f, width, height,
            time1, time2, time1 / time2);
   }
 };
@@ -1618,6 +1713,12 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     NEON, AV1Convolve2DHighbdIntraBCTest,
     BuildHighbdParams(av1_highbd_convolve_2d_sr_intrabc_neon));
+#endif
+
+#if HAVE_RVV
+INSTANTIATE_TEST_SUITE_P(
+    RVV, AV1Convolve2DHighbdIntraBCTest,
+    BuildHighbdParams(av1_highbd_convolve_2d_sr_intrabc_rvv));
 #endif
 
 #endif  // CONFIG_AV1_HIGHBITDEPTH
@@ -1756,7 +1857,8 @@ class AV1ConvolveXCompoundTest : public AV1ConvolveTest<convolve_x_func> {
  public:
   void RunTest() {
     auto compound_params = GetCompoundParams();
-    for (int sub_pix = 0; sub_pix < 16; ++sub_pix) {
+    // Do not test the no-op filter.
+    for (int sub_pix = 1; sub_pix < 16; ++sub_pix) {
       for (int f = EIGHTTAP_REGULAR; f < INTERP_FILTERS_ALL; ++f) {
         for (const auto &c : compound_params) {
           TestConvolve(sub_pix, static_cast<InterpFilter>(f), c);
@@ -1858,7 +1960,8 @@ class AV1ConvolveXHighbdCompoundTest
  public:
   void RunTest() {
     auto compound_params = GetCompoundParams();
-    for (int sub_pix = 0; sub_pix < 16; ++sub_pix) {
+    // Do not test the no-op filter.
+    for (int sub_pix = 1; sub_pix < 16; ++sub_pix) {
       for (int f = EIGHTTAP_REGULAR; f < INTERP_FILTERS_ALL; ++f) {
         for (const auto &c : compound_params) {
           TestConvolve(sub_pix, static_cast<InterpFilter>(f), c);
@@ -1943,6 +2046,12 @@ INSTANTIATE_TEST_SUITE_P(
     BuildHighbdLumaParams(av1_highbd_dist_wtd_convolve_x_neon));
 #endif
 
+#if HAVE_SVE2
+INSTANTIATE_TEST_SUITE_P(
+    SVE2, AV1ConvolveXHighbdCompoundTest,
+    BuildHighbdLumaParams(av1_highbd_dist_wtd_convolve_x_sve2));
+#endif
+
 #endif  // CONFIG_AV1_HIGHBITDEPTH
 
 ////////////////////////////////////////////////
@@ -1981,6 +2090,18 @@ INSTANTIATE_TEST_SUITE_P(AVX2, AV1ConvolveYCompoundTest,
 #if HAVE_NEON
 INSTANTIATE_TEST_SUITE_P(NEON, AV1ConvolveYCompoundTest,
                          BuildLowbdLumaParams(av1_dist_wtd_convolve_y_neon));
+#endif
+
+#if HAVE_NEON_DOTPROD
+INSTANTIATE_TEST_SUITE_P(
+    NEON_DOTPROD, AV1ConvolveYCompoundTest,
+    BuildLowbdLumaParams(av1_dist_wtd_convolve_y_neon_dotprod));
+#endif
+
+#if HAVE_NEON_I8MM
+INSTANTIATE_TEST_SUITE_P(
+    NEON_I8MM, AV1ConvolveYCompoundTest,
+    BuildLowbdLumaParams(av1_dist_wtd_convolve_y_neon_i8mm));
 #endif
 
 #if CONFIG_AV1_HIGHBITDEPTH
@@ -2023,14 +2144,20 @@ INSTANTIATE_TEST_SUITE_P(
     BuildHighbdLumaParams(av1_highbd_dist_wtd_convolve_y_neon));
 #endif
 
+#if HAVE_SVE2
+INSTANTIATE_TEST_SUITE_P(
+    SVE2, AV1ConvolveYHighbdCompoundTest,
+    BuildHighbdLumaParams(av1_highbd_dist_wtd_convolve_y_sve2));
+#endif
+
 #endif  // CONFIG_AV1_HIGHBITDEPTH
 
 //////////////////////////////////////////////////////
 // Compound convolve-2d-copy functions (low bit-depth)
 //////////////////////////////////////////////////////
-typedef void (*compound_conv_2d_copy_func)(const uint8_t *src, int src_stride,
-                                           uint8_t *dst, int dst_stride, int w,
-                                           int h, ConvolveParams *conv_params);
+using compound_conv_2d_copy_func = void (*)(const uint8_t *src, int src_stride,
+                                            uint8_t *dst, int dst_stride, int w,
+                                            int h, ConvolveParams *conv_params);
 
 class AV1Convolve2DCopyCompoundTest
     : public AV1ConvolveTest<compound_conv_2d_copy_func> {
@@ -2103,7 +2230,7 @@ class AV1Convolve2DCopyCompoundTest
     }
     aom_usec_timer_mark(&timer);
     const double time2 = static_cast<double>(aom_usec_timer_elapsed(&timer));
-    printf("Dist Weighted: %d %3dx%-3d:%7.2f/%7.2fns (%3.2f)\n",
+    printf("Dist Weighted: %d %3dx%-3d:%7.2f/%7.2fus (%3.2f)\n",
            compound.UseDistWtdCompAvg(), width, height, time1, time2,
            time1 / time2);
   }
@@ -2151,11 +2278,9 @@ INSTANTIATE_TEST_SUITE_P(
 ///////////////////////////////////////////////////////
 // Compound convolve-2d-copy functions (high bit-depth)
 ///////////////////////////////////////////////////////
-typedef void (*highbd_compound_conv_2d_copy_func)(const uint16_t *src,
-                                                  int src_stride, uint16_t *dst,
-                                                  int dst_stride, int w, int h,
-                                                  ConvolveParams *conv_params,
-                                                  int bd);
+using highbd_compound_conv_2d_copy_func =
+    void (*)(const uint16_t *src, int src_stride, uint16_t *dst, int dst_stride,
+             int w, int h, ConvolveParams *conv_params, int bd);
 
 class AV1Convolve2DCopyHighbdCompoundTest
     : public AV1ConvolveTest<highbd_compound_conv_2d_copy_func> {
@@ -2245,8 +2370,9 @@ class AV1Convolve2DCompoundTest : public AV1ConvolveTest<convolve_2d_func> {
     auto compound_params = GetCompoundParams();
     for (int h_f = EIGHTTAP_REGULAR; h_f < INTERP_FILTERS_ALL; ++h_f) {
       for (int v_f = EIGHTTAP_REGULAR; v_f < INTERP_FILTERS_ALL; ++v_f) {
-        for (int sub_x = 0; sub_x < 16; ++sub_x) {
-          for (int sub_y = 0; sub_y < 16; ++sub_y) {
+        // Do not test the no-op filter.
+        for (int sub_x = 1; sub_x < 16; ++sub_x) {
+          for (int sub_y = 1; sub_y < 16; ++sub_y) {
             for (const auto &compound : compound_params) {
               TestConvolve(static_cast<InterpFilter>(h_f),
                            static_cast<InterpFilter>(v_f), sub_x, sub_y,
@@ -2351,8 +2477,9 @@ class AV1Convolve2DHighbdCompoundTest
     auto compound_params = GetCompoundParams();
     for (int h_f = EIGHTTAP_REGULAR; h_f < INTERP_FILTERS_ALL; ++h_f) {
       for (int v_f = EIGHTTAP_REGULAR; v_f < INTERP_FILTERS_ALL; ++v_f) {
-        for (int sub_x = 0; sub_x < 16; ++sub_x) {
-          for (int sub_y = 0; sub_y < 16; ++sub_y) {
+        // Do not test the no-op filter.
+        for (int sub_x = 1; sub_x < 16; ++sub_x) {
+          for (int sub_y = 1; sub_y < 16; ++sub_y) {
             for (const auto &compound : compound_params) {
               TestConvolve(static_cast<InterpFilter>(h_f),
                            static_cast<InterpFilter>(v_f), sub_x, sub_y,
@@ -2435,6 +2562,12 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     NEON, AV1Convolve2DHighbdCompoundTest,
     BuildHighbdLumaParams(av1_highbd_dist_wtd_convolve_2d_neon));
+#endif
+
+#if HAVE_SVE2
+INSTANTIATE_TEST_SUITE_P(
+    SVE2, AV1Convolve2DHighbdCompoundTest,
+    BuildHighbdLumaParams(av1_highbd_dist_wtd_convolve_2d_sve2));
 #endif
 
 #endif  // CONFIG_AV1_HIGHBITDEPTH

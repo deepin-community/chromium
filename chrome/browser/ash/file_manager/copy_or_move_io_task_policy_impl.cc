@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/file_manager/copy_or_move_io_task_policy_impl.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -14,7 +15,6 @@
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/ranges/algorithm.h"
 #include "chrome/browser/ash/file_manager/copy_or_move_io_task_impl.h"
 #include "chrome/browser/ash/file_manager/file_manager_copy_or_move_hook_delegate.h"
 #include "chrome/browser/ash/file_manager/file_manager_copy_or_move_hook_file_check_delegate.h"
@@ -71,8 +71,8 @@ void DoReportOnlyScanning(
   std::unique_ptr<enterprise_connectors::FileTransferAnalysisDelegate>
       file_transfer_analysis_delegate =
           enterprise_connectors::FileTransferAnalysisDelegate::Create(
-              safe_browsing::DeepScanAccessPoint::FILE_TRANSFER, sources[idx],
-              outputs[idx], profile, file_system_context.get(),
+              enterprise_connectors::DeepScanAccessPoint::FILE_TRANSFER,
+              sources[idx], outputs[idx], profile, file_system_context.get(),
               std::move(settings[idx].value()));
 
   // Manage lifetime of the file_transfer_analysis_delegate by binding it to the
@@ -179,7 +179,7 @@ CopyOrMoveIOTaskPolicyImpl::CopyOrMoveIOTaskPolicyImpl(
   if (!settings_.empty()) {
     // The value of `block_until_verdict` is consistent for all settings, so we
     // just check the value for the first valid setting.
-    auto valid_setting = base::ranges::find_if(
+    auto valid_setting = std::ranges::find_if(
         settings_,
         [](const std::optional<enterprise_connectors::AnalysisSettings>&
                setting) { return setting.has_value(); });
@@ -291,8 +291,7 @@ void CopyOrMoveIOTaskPolicyImpl::VerifyTransfer() {
       transferred_urls.push_back(entry.url);
     }
     bool is_move =
-        progress_->type == file_manager::io_task::OperationType::kMove ? true
-                                                                       : false;
+        progress_->type == file_manager::io_task::OperationType::kMove;
     files_controller->CheckIfTransferAllowed(
         progress_->task_id, std::move(transferred_urls),
         progress_->GetDestinationFolder(), is_move,
@@ -375,7 +374,7 @@ void CopyOrMoveIOTaskPolicyImpl::MaybeScanForDisallowedFiles(size_t idx) {
 
   file_transfer_analysis_delegates_[idx] =
       enterprise_connectors::FileTransferAnalysisDelegate::Create(
-          safe_browsing::DeepScanAccessPoint::FILE_TRANSFER,
+          enterprise_connectors::DeepScanAccessPoint::FILE_TRANSFER,
           progress_->sources[idx].url, progress_->GetDestinationFolder(),
           profile_, file_system_context_.get(),
           std::move(settings_[idx].value()));
@@ -432,7 +431,7 @@ bool CopyOrMoveIOTaskPolicyImpl::MaybeShowConnectorsWarning() {
   // delegates as the number of sources. A delegate in
   // `file_transfer_analysis_delegates_` is valid if for the
   // source-destination-pair scanning is enabled, nullptr otherwise.
-  auto delegate_it = base::ranges::find_if(
+  auto delegate_it = std::ranges::find_if(
       file_transfer_analysis_delegates_,
       [](const std::unique_ptr<
           enterprise_connectors::FileTransferAnalysisDelegate>& delegate) {
@@ -478,12 +477,12 @@ void CopyOrMoveIOTaskPolicyImpl::OnConnectorsWarnDialogResult(
   // If the user has proceeded the warning, then we need to notify the
   // `FileTransferAnalysisDelegate`s to report the bypass of the warning and to
   // mark warned files as allowed for a transfer.
-  base::ranges::for_each(file_transfer_analysis_delegates_,
-                         [&user_justification](const auto& delegate) {
-                           if (delegate) {
-                             delegate->BypassWarnings(user_justification);
-                           }
-                         });
+  std::ranges::for_each(file_transfer_analysis_delegates_,
+                        [&user_justification](const auto& delegate) {
+                          if (delegate) {
+                            delegate->BypassWarnings(user_justification);
+                          }
+                        });
   StartTransfer();
 }
 
@@ -501,8 +500,7 @@ void CopyOrMoveIOTaskPolicyImpl::IsTransferAllowed(
   // If a file is blocked by DLP, skip Enterprise Connectors scanning for it
   // since Enterprise Connectors won't be able to scan it anyway. The file be
   // blocked by the DLP daemon later.
-  if (result.IsAllowed() ||
-      base::Contains(dlp_blocked_files_, source_url.path())) {
+  if (result.IsAllowed() || dlp_blocked_files_.contains(source_url.path())) {
     std::move(callback).Run(base::File::FILE_OK);
     return;
   }

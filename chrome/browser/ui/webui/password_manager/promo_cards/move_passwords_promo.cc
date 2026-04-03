@@ -4,11 +4,12 @@
 
 #include "chrome/browser/ui/webui/password_manager/promo_cards/move_passwords_promo.h"
 
+#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_service_utils.h"
@@ -29,9 +30,13 @@ syncer::SyncService* GetSyncService(Profile* profile) {
 }
 
 // Checks if there are passwords saved only to this device.
-bool HasLocalPasswords(extensions::PasswordsPrivateDelegate* delegate) {
+// TODO(crbug.com/410001569): The dialog now shows the Batch Upload dialog,
+// which uses the sync service to show the local data. Align whether or not
+// promo is shown and the content shown in the dialog to use the same API: the
+// sync service API.
+int GetLocalPasswordsCount(extensions::PasswordsPrivateDelegate* delegate) {
   if (!delegate) {
-    return false;
+    return 0;
   }
 
   auto is_entry_saved_locally = [](const PasswordUiEntry& entry) {
@@ -41,14 +46,13 @@ bool HasLocalPasswords(extensions::PasswordsPrivateDelegate* delegate) {
                extensions::api::passwords_private::PasswordStoreSet::kDevice;
   };
 
-  auto has_credential_group_with_local_passwords =
-      [&is_entry_saved_locally](const CredentialGroup& credential_group) {
-        return std::ranges::any_of(credential_group.entries,
-                                   is_entry_saved_locally);
-      };
+  int local_passwords_count = 0;
+  for (const auto& credential_group : delegate->GetCredentialGroups()) {
+    local_passwords_count +=
+        std::ranges::count_if(credential_group.entries, is_entry_saved_locally);
+  }
 
-  return std::ranges::any_of(delegate->GetCredentialGroups(),
-                             has_credential_group_with_local_passwords);
+  return local_passwords_count;
 }
 
 std::u16string GetPrimaryAccountEmailFromProfile(Profile* profile) {
@@ -91,8 +95,8 @@ bool MovePasswordsPromo::ShouldShowPromo() const {
   CHECK(profile_);
   syncer::SyncService* sync_service = GetSyncService(profile_);
   if (!sync_service ||
-      !password_manager::features_util::IsOptedInForAccountStorage(
-          profile_->GetPrefs(), sync_service)) {
+      !password_manager::features_util::IsAccountStorageActive(sync_service) ||
+      !sync_service->IsEngineInitialized()) {
     return false;
   }
 
@@ -106,24 +110,31 @@ bool MovePasswordsPromo::ShouldShowPromo() const {
       !should_suppress ||
       base::Time().Now() - last_time_shown_ > kMovePasswordsPromoPeriod;
 
-  return bubble_is_not_over_prompted && HasLocalPasswords(delegate_.get()) &&
-         base::FeatureList::IsEnabled(
-             password_manager::features::kButterOnDesktopFollowup);
+  return bubble_is_not_over_prompted &&
+         GetLocalPasswordsCount(delegate_.get()) > 0;
 }
 
 std::u16string MovePasswordsPromo::GetTitle() const {
   return l10n_util::GetStringUTF16(
-      IDS_PASSWORD_MANAGER_UI_MOVE_PASSWORDS_PROMO_CARD_TITLE);
+      base::FeatureList::IsEnabled(switches::kPasswordUploadUiUpdate)
+          ? IDS_PASSWORD_MANAGER_UI_BATCH_UPLOAD_PROMO_CARD_TITLE
+          : IDS_PASSWORD_MANAGER_UI_MOVE_PASSWORDS_PROMO_CARD_TITLE);
 }
 
 std::u16string MovePasswordsPromo::GetDescription() const {
   CHECK(profile_);
-  return l10n_util::GetStringFUTF16(
-      IDS_PASSWORD_MANAGER_UI_MOVE_PASSWORDS_PROMO_CARD_DESCRIPTION,
-      GetPrimaryAccountEmailFromProfile(profile_));
+  return base::FeatureList::IsEnabled(switches::kPasswordUploadUiUpdate)
+             ? l10n_util::GetPluralStringFUTF16(
+                   IDS_BATCH_UPLOAD_SUBTITLE_DESCRIPTION_PASSWORDS_COMBO,
+                   GetLocalPasswordsCount(delegate_.get()))
+             : l10n_util::GetStringFUTF16(
+                   IDS_PASSWORD_MANAGER_UI_MOVE_PASSWORDS_PROMO_CARD_DESCRIPTION,
+                   GetPrimaryAccountEmailFromProfile(profile_));
 }
 
 std::u16string MovePasswordsPromo::GetActionButtonText() const {
   return l10n_util::GetStringUTF16(
-      IDS_PASSWORD_MANAGER_UI_MOVE_PASSWORDS_PROMO_CARD_ACTION_BUTTON);
+      base::FeatureList::IsEnabled(switches::kPasswordUploadUiUpdate)
+          ? IDS_PASSWORD_MANAGER_UI_BATCH_UPLOAD_PROMO_CARD_ACTION_BUTTON
+          : IDS_PASSWORD_MANAGER_UI_MOVE_PASSWORDS_PROMO_CARD_ACTION_BUTTON);
 }

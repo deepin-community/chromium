@@ -20,13 +20,8 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
 #include "ui/webui/mojo_web_ui_controller.h"
-#include "ui/webui/resources/cr_components/color_change_listener/color_change_listener.mojom.h"
 
 class NearbySharingService;
-
-namespace ui {
-class ColorChangeHandler;
-}  // namespace ui
 
 namespace views {
 class WebView;
@@ -72,16 +67,10 @@ class NearbyShareDialogUI : public ui::MojoWebUIController,
   // keyed service.
   void BindInterface(
       mojo::PendingReceiver<nearby_share::mojom::ContactManager> receiver);
-  // Instantiates the implementor of the mojom::PageHandler mojo interface
-  // passing the pending receiver that will be internally bound.
-  void BindInterface(
-      mojo::PendingReceiver<color_change_listener::mojom::PageHandler>
-          receiver);
 
   // content::WebContentsDelegate:
-  bool HandleKeyboardEvent(
-      content::WebContents* source,
-      const content::NativeWebKeyboardEvent& event) override;
+  bool HandleKeyboardEvent(content::WebContents* source,
+                           const input::NativeWebKeyboardEvent& event) override;
   void WebContentsCreated(content::WebContents* source_contents,
                           int opener_render_process_id,
                           int opener_render_frame_id,
@@ -90,7 +79,7 @@ class NearbyShareDialogUI : public ui::MojoWebUIController,
                           content::WebContents* new_contents) override;
 
  private:
-  void HandleClose(const base::Value::List& args);
+  void HandleClose(const base::ListValue& args);
 
   // Search for a query parameter such as file, text, address, phone, or url,
   // then use it to populate an attachment, if found; otherwise, do nothing.
@@ -109,7 +98,6 @@ class NearbyShareDialogUI : public ui::MojoWebUIController,
   raw_ptr<NearbySharingService> nearby_service_;
   raw_ptr<views::WebView> web_view_ = nullptr;
   views::UnhandledKeyboardEventHandler unhandled_keyboard_event_handler_;
-  std::unique_ptr<ui::ColorChangeHandler> color_provider_handler_;
 
   WEB_UI_CONTROLLER_TYPE_DECL();
 };

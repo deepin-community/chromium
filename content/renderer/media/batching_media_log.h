@@ -15,7 +15,6 @@
 #include "base/time/time.h"
 #include "content/common/content_export.h"
 #include "media/base/media_log.h"
-#include "url/gurl.h"
 
 namespace base {
 class TickClock;
@@ -62,6 +61,7 @@ class CONTENT_EXPORT BatchingMediaLog : public media::MediaLog {
   // Posted as a delayed task on |task_runner_| to throttle ipc message
   // frequency.
   void SendQueuedMediaEvents();
+  void SendQueuedMediaEvents_Locked();
 
   void MaybeQueueEvent_Locked(std::unique_ptr<media::MediaLogRecord> event);
 
@@ -76,8 +76,7 @@ class CONTENT_EXPORT BatchingMediaLog : public media::MediaLog {
   // guarantees provided by MediaLog, since SendQueuedMediaEvents must also
   // be synchronized with respect to AddEvent.
   mutable base::Lock lock_;
-  raw_ptr<const base::TickClock, ExperimentalRenderer> tick_clock_
-      GUARDED_BY(lock_);
+  raw_ptr<const base::TickClock> tick_clock_ GUARDED_BY(lock_);
   base::TimeTicks last_ipc_send_time_ GUARDED_BY(lock_);
   std::vector<media::MediaLogRecord> queued_media_events_ GUARDED_BY(lock_);
 
@@ -93,8 +92,14 @@ class CONTENT_EXPORT BatchingMediaLog : public media::MediaLog {
   // Limits the number of events we send over IPC to one.
   std::optional<media::MediaLogRecord> last_duration_changed_event_
       GUARDED_BY(lock_);
-  std::optional<media::MediaLogRecord> last_buffering_state_event_
+  std::optional<media::MediaLogRecord> last_audio_buffering_state_
       GUARDED_BY(lock_);
+  std::optional<media::MediaLogRecord> last_video_buffering_state_
+      GUARDED_BY(lock_);
+  std::optional<media::MediaLogRecord> last_pipeline_buffering_state_
+      GUARDED_BY(lock_);
+  std::optional<media::MediaLogRecord> last_play_event_;
+  std::optional<media::MediaLogRecord> last_pause_event_;
 
   // Holds the earliest MEDIA_ERROR_LOG_ENTRY event added to this log. This is
   // most likely to contain the most specific information available describing

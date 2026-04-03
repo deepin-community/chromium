@@ -6,10 +6,13 @@
 #define REMOTING_HOST_MOJOM_REMOTING_MOJOM_TRAITS_H_
 
 #include <stddef.h>
-#include <memory>
-#include <string>
 
+#include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
+
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/numerics/safe_conversions.h"
@@ -23,14 +26,15 @@
 #include "mojo/public/cpp/bindings/map_traits_protobuf.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "remoting/base/result.h"
+#include "remoting/base/source_location.h"
 #include "remoting/host/base/desktop_environment_options.h"
 #include "remoting/host/base/screen_resolution.h"
 #include "remoting/host/mojom/desktop_session.mojom-shared.h"
 #include "remoting/host/mojom/remoting_host.mojom-shared.h"
 #include "remoting/host/mojom/webrtc_types.mojom-shared.h"
-#include "remoting/host/mojom/wrapped_primitives.mojom-shared.h"
 #include "remoting/proto/audio.pb.h"
 #include "remoting/proto/control.pb.h"
+#include "remoting/proto/coordinates.pb.h"
 #include "remoting/proto/event.pb.h"
 #include "remoting/proto/file_transfer.pb.h"
 #include "remoting/protocol/file_transfer_helpers.h"
@@ -41,52 +45,6 @@
 #include "ui/gfx/geometry/mojom/geometry_mojom_traits.h"
 
 namespace mojo {
-
-template <>
-class StructTraits<remoting::mojom::BoolDataView, bool> {
- public:
-  static bool value(bool value) { return value; }
-
-  static bool Read(remoting::mojom::BoolDataView data_view, bool* out_value) {
-    *out_value = data_view.value();
-    return true;
-  }
-};
-
-template <>
-class StructTraits<remoting::mojom::FloatDataView, float> {
- public:
-  static float value(float value) { return value; }
-
-  static bool Read(remoting::mojom::FloatDataView data_view, float* out_value) {
-    *out_value = data_view.value();
-    return true;
-  }
-};
-
-template <>
-class StructTraits<remoting::mojom::Int32DataView, int32_t> {
- public:
-  static int32_t value(int32_t value) { return value; }
-
-  static bool Read(remoting::mojom::Int32DataView data_view,
-                   int32_t* out_value) {
-    *out_value = data_view.value();
-    return true;
-  }
-};
-
-template <>
-class StructTraits<remoting::mojom::UInt32DataView, uint32_t> {
- public:
-  static uint32_t value(uint32_t value) { return value; }
-
-  static bool Read(remoting::mojom::UInt32DataView data_view,
-                   uint32_t* out_value) {
-    *out_value = data_view.value();
-    return true;
-  }
-};
 
 template <>
 class StructTraits<remoting::mojom::DesktopCaptureOptionsDataView,
@@ -137,31 +95,9 @@ class StructTraits<remoting::mojom::DesktopEnvironmentOptionsDataView,
     return options.terminate_upon_input();
   }
 
-  static bool enable_file_transfer(
-      const ::remoting::DesktopEnvironmentOptions& options) {
-    return options.enable_file_transfer();
-  }
-
-  static bool enable_remote_open_url(
-      const ::remoting::DesktopEnvironmentOptions& options) {
-    return options.enable_remote_open_url();
-  }
-
   static bool enable_remote_webauthn(
       const ::remoting::DesktopEnvironmentOptions& options) {
     return options.enable_remote_webauthn();
-  }
-
-  static std::optional<uint32_t> clipboard_size(
-      const ::remoting::DesktopEnvironmentOptions& options) {
-    if (!options.clipboard_size().has_value()) {
-      return std::nullopt;
-    }
-
-    size_t clipboard_size = options.clipboard_size().value();
-    return base::IsValueInRangeForNumericType<int>(clipboard_size)
-               ? clipboard_size
-               : INT_MAX;
   }
 
   static const webrtc::DesktopCaptureOptions& desktop_capture_options(
@@ -188,7 +124,6 @@ struct EnumTraits<remoting::mojom::DesktopCaptureResult,
     }
 
     NOTREACHED();
-    return remoting::mojom::DesktopCaptureResult::kSuccess;
   }
 
   static bool FromMojom(remoting::mojom::DesktopCaptureResult input,
@@ -206,7 +141,6 @@ struct EnumTraits<remoting::mojom::DesktopCaptureResult,
     }
 
     NOTREACHED();
-    return false;
   }
 };
 
@@ -274,8 +208,9 @@ class StructTraits<remoting::mojom::MouseCursorDataView,
         ::webrtc::DesktopFrame::kBytesPerPixel);
     buffer_size *= image_size.width();
     buffer_size *= image_size.height();
-    return base::span<const uint8_t>(cursor.image()->data(),
-                                     buffer_size.ValueOrDie());
+    CHECK_EQ(cursor.image()->pixel_format(), webrtc::FOURCC_ARGB);
+    return UNSAFE_TODO(base::span<const uint8_t>(cursor.image()->data(),
+                                                 buffer_size.ValueOrDie()));
   }
 
   static const webrtc::DesktopVector& hotspot(
@@ -310,7 +245,6 @@ struct EnumTraits<remoting::mojom::MouseButton,
     }
 
     NOTREACHED();
-    return remoting::mojom::MouseButton::kUndefined;
   }
 
   static bool FromMojom(remoting::mojom::MouseButton input,
@@ -337,7 +271,6 @@ struct EnumTraits<remoting::mojom::MouseButton,
     }
 
     NOTREACHED();
-    return false;
   }
 };
 
@@ -354,7 +287,6 @@ struct EnumTraits<remoting::mojom::AudioPacket_BytesPerSample,
     }
 
     NOTREACHED();
-    return remoting::mojom::AudioPacket_BytesPerSample::kInvalid;
   }
 
   static bool FromMojom(remoting::mojom::AudioPacket_BytesPerSample input,
@@ -369,7 +301,6 @@ struct EnumTraits<remoting::mojom::AudioPacket_BytesPerSample,
     }
 
     NOTREACHED();
-    return false;
   }
 };
 
@@ -400,7 +331,6 @@ struct EnumTraits<remoting::mojom::AudioPacket_Channels,
     }
 
     NOTREACHED();
-    return remoting::mojom::AudioPacket_Channels::kInvalid;
   }
 
   static bool FromMojom(remoting::mojom::AudioPacket_Channels input,
@@ -436,7 +366,6 @@ struct EnumTraits<remoting::mojom::AudioPacket_Channels,
     }
 
     NOTREACHED();
-    return false;
   }
 };
 
@@ -455,7 +384,6 @@ struct EnumTraits<remoting::mojom::AudioPacket_Encoding,
     }
 
     NOTREACHED();
-    return remoting::mojom::AudioPacket_Encoding::kInvalid;
   }
 
   static bool FromMojom(remoting::mojom::AudioPacket_Encoding input,
@@ -473,7 +401,6 @@ struct EnumTraits<remoting::mojom::AudioPacket_Encoding,
     }
 
     NOTREACHED();
-    return false;
   }
 };
 
@@ -492,7 +419,6 @@ struct EnumTraits<remoting::mojom::AudioPacket_SamplingRate,
     }
 
     NOTREACHED();
-    return remoting::mojom::AudioPacket_SamplingRate::kInvalid;
   }
 
   static bool FromMojom(remoting::mojom::AudioPacket_SamplingRate input,
@@ -510,7 +436,6 @@ struct EnumTraits<remoting::mojom::AudioPacket_SamplingRate,
     }
 
     NOTREACHED();
-    return false;
   }
 };
 
@@ -586,7 +511,6 @@ class UnionTraits<
       return remoting::mojom::ReadChunkResultDataView::Tag::kError;
 
     NOTREACHED();
-    return remoting::mojom::ReadChunkResultDataView::Tag::kError;
   }
 
   static const std::vector<uint8_t>& data(
@@ -670,7 +594,6 @@ struct EnumTraits<remoting::mojom::FileTransferError_Type,
     }
 
     NOTREACHED();
-    return remoting::mojom::FileTransferError_Type::kUnknown;
   }
 
   static bool FromMojom(remoting::mojom::FileTransferError_Type input,
@@ -703,7 +626,6 @@ struct EnumTraits<remoting::mojom::FileTransferError_Type,
     }
 
     NOTREACHED();
-    return false;
   }
 };
 
@@ -724,7 +646,6 @@ class UnionTraits<
       return remoting::mojom::FileChooserResultDataView::Tag::kError;
 
     NOTREACHED();
-    return remoting::mojom::FileChooserResultDataView::Tag::kError;
   }
 
   static const base::FilePath& filepath(
@@ -775,9 +696,6 @@ class UnionTraits<remoting::mojom::KeyActionDataView,
         return remoting::mojom::KeyActionDataView::Tag::kCharacter;
       case ::remoting::protocol::KeyboardLayout_KeyAction::ACTION_NOT_SET:
         NOTREACHED();
-        // Returning a value to make the compiler happy and ensure that any
-        // future enum values must be added to this switch.
-        return remoting::mojom::KeyActionDataView::Tag::kCharacter;
     }
   }
 
@@ -947,7 +865,6 @@ struct EnumTraits<remoting::mojom::LayoutKeyFunction,
     }
 
     NOTREACHED();
-    return remoting::mojom::LayoutKeyFunction::kUnknown;
   }
 
   static bool FromMojom(remoting::mojom::LayoutKeyFunction input,
@@ -1149,7 +1066,6 @@ struct EnumTraits<remoting::mojom::LayoutKeyFunction,
     }
 
     NOTREACHED();
-    return false;
   }
 };
 
@@ -1357,7 +1273,6 @@ struct EnumTraits<remoting::mojom::TouchEventType,
     }
 
     NOTREACHED();
-    return remoting::mojom::TouchEventType::kUndefined;
   }
 
   static bool FromMojom(remoting::mojom::TouchEventType input,
@@ -1381,7 +1296,6 @@ struct EnumTraits<remoting::mojom::TouchEventType,
     }
 
     NOTREACHED();
-    return false;
   }
 };
 
@@ -1419,7 +1333,6 @@ struct EnumTraits<remoting::mojom::TransportRouteType,
     }
 
     NOTREACHED();
-    return remoting::mojom::TransportRouteType::kUndefined;
   }
 
   static bool FromMojom(remoting::mojom::TransportRouteType input,
@@ -1441,7 +1354,6 @@ struct EnumTraits<remoting::mojom::TransportRouteType,
     }
 
     NOTREACHED();
-    return false;
   }
 };
 
@@ -1517,10 +1429,28 @@ struct EnumTraits<remoting::mojom::ProtocolErrorCode,
             kLocationAuthzPolicyCheckFailed;
       case ::remoting::protocol::ErrorCode::UNAUTHORIZED_ACCOUNT:
         return remoting::mojom::ProtocolErrorCode::kUnauthorizedAccount;
+      case ::remoting::protocol::ErrorCode::REAUTHZ_POLICY_CHECK_FAILED:
+        return remoting::mojom::ProtocolErrorCode::kReauthzPolicyCheckFailed;
+      case ::remoting::protocol::ErrorCode::NO_COMMON_AUTH_METHOD:
+        return remoting::mojom::ProtocolErrorCode::kNoCommonAuthMethod;
+      case ::remoting::protocol::ErrorCode::LOGIN_SCREEN_NOT_SUPPORTED:
+        return remoting::mojom::ProtocolErrorCode::kLoginScreenNotSupported;
+      case ::remoting::protocol::ErrorCode::SESSION_POLICIES_CHANGED:
+        return remoting::mojom::ProtocolErrorCode::kSessionPoliciesChanged;
+      case ::remoting::protocol::ErrorCode::UNEXPECTED_AUTHENTICATOR_ERROR:
+        return remoting::mojom::ProtocolErrorCode::
+            kUnexpectedAuthenticatorError;
+      case ::remoting::protocol::ErrorCode::INVALID_STATE:
+        return remoting::mojom::ProtocolErrorCode::kInvalidState;
+      case ::remoting::protocol::ErrorCode::INVALID_ARGUMENT:
+        return remoting::mojom::ProtocolErrorCode::kInvalidArgument;
+      case ::remoting::protocol::ErrorCode::NETWORK_FAILURE:
+        return remoting::mojom::ProtocolErrorCode::kNetworkFailure;
+      case ::remoting::protocol::ErrorCode::OPERATION_TIMEOUT:
+        return remoting::mojom::ProtocolErrorCode::kOperationTimeout;
     }
 
     NOTREACHED();
-    return remoting::mojom::ProtocolErrorCode::kUnknownError;
   }
 
   static bool FromMojom(remoting::mojom::ProtocolErrorCode input,
@@ -1590,10 +1520,36 @@ struct EnumTraits<remoting::mojom::ProtocolErrorCode,
       case remoting::mojom::ProtocolErrorCode::kUnauthorizedAccount:
         *out = ::remoting::protocol::ErrorCode::UNAUTHORIZED_ACCOUNT;
         return true;
+      case remoting::mojom::ProtocolErrorCode::kReauthzPolicyCheckFailed:
+        *out = ::remoting::protocol::ErrorCode::REAUTHZ_POLICY_CHECK_FAILED;
+        return true;
+      case remoting::mojom::ProtocolErrorCode::kNoCommonAuthMethod:
+        *out = ::remoting::protocol::ErrorCode::NO_COMMON_AUTH_METHOD;
+        return true;
+      case remoting::mojom::ProtocolErrorCode::kLoginScreenNotSupported:
+        *out = ::remoting::protocol::ErrorCode::LOGIN_SCREEN_NOT_SUPPORTED;
+        return true;
+      case remoting::mojom::ProtocolErrorCode::kSessionPoliciesChanged:
+        *out = ::remoting::protocol::ErrorCode::SESSION_POLICIES_CHANGED;
+        return true;
+      case remoting::mojom::ProtocolErrorCode::kUnexpectedAuthenticatorError:
+        *out = ::remoting::protocol::ErrorCode::UNEXPECTED_AUTHENTICATOR_ERROR;
+        return true;
+      case remoting::mojom::ProtocolErrorCode::kInvalidState:
+        *out = ::remoting::protocol::ErrorCode::INVALID_STATE;
+        return true;
+      case remoting::mojom::ProtocolErrorCode::kInvalidArgument:
+        *out = ::remoting::protocol::ErrorCode::INVALID_ARGUMENT;
+        return true;
+      case remoting::mojom::ProtocolErrorCode::kNetworkFailure:
+        *out = ::remoting::protocol::ErrorCode::NETWORK_FAILURE;
+        return true;
+      case remoting::mojom::ProtocolErrorCode::kOperationTimeout:
+        *out = ::remoting::protocol::ErrorCode::OPERATION_TIMEOUT;
+        return true;
     }
 
     NOTREACHED();
-    return false;
   }
 };
 
@@ -1650,8 +1606,60 @@ class StructTraits<remoting::mojom::VideoTrackLayoutDataView,
     return {track.x_dpi(), track.y_dpi()};
   }
 
+  static const std::string& display_name(
+      const ::remoting::protocol::VideoTrackLayout& track) {
+    return track.display_name();
+  }
+
   static bool Read(remoting::mojom::VideoTrackLayoutDataView data_view,
                    ::remoting::protocol::VideoTrackLayout* out_track);
+};
+
+template <>
+class StructTraits<remoting::mojom::SourceLocationDataView,
+                   ::remoting::SourceLocation> {
+ public:
+  static std::optional<std::string_view> function_name(
+      const ::remoting::SourceLocation& source_info) {
+    return source_info.function_name()
+               ? std::optional<std::string_view>(source_info.function_name())
+               : std::nullopt;
+  }
+
+  static std::optional<std::string_view> file_name(
+      const ::remoting::SourceLocation& source_info) {
+    return source_info.file_name()
+               ? std::optional<std::string_view>(source_info.file_name())
+               : std::nullopt;
+  }
+
+  static int32_t line_number(const ::remoting::SourceLocation& source_info) {
+    return source_info.line_number();
+  }
+
+  static bool Read(remoting::mojom::SourceLocationDataView data_view,
+                   ::remoting::SourceLocation* out_source_info);
+};
+
+template <>
+class StructTraits<remoting::mojom::FractionalCoordinateDataView,
+                   ::remoting::protocol::FractionalCoordinate> {
+ public:
+  static int64_t screen_id(
+      const ::remoting::protocol::FractionalCoordinate& coordinate) {
+    return coordinate.screen_id();
+  }
+
+  static float x(const ::remoting::protocol::FractionalCoordinate& coordinate) {
+    return coordinate.x();
+  }
+
+  static float y(const ::remoting::protocol::FractionalCoordinate& coordinate) {
+    return coordinate.y();
+  }
+
+  static bool Read(remoting::mojom::FractionalCoordinateDataView data_view,
+                   ::remoting::protocol::FractionalCoordinate* out_coordinate);
 };
 
 }  // namespace mojo

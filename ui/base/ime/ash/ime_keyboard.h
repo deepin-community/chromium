@@ -48,7 +48,7 @@ class COMPONENT_EXPORT(UI_BASE_IME_ASH) ImeKeyboard {
   // be ran immediately with no delay.
   virtual void SetCurrentKeyboardLayoutByName(
       const std::string& layout_name,
-      base::OnceCallback<void(bool)> callback);
+      base::OnceCallback<void(bool success)> callback) = 0;
 
   // Gets the current keyboard layout name.
   const std::string& GetCurrentKeyboardLayoutName() const {
@@ -81,8 +81,20 @@ class COMPONENT_EXPORT(UI_BASE_IME_ASH) ImeKeyboard {
   // non-UI threads.
   virtual bool SetAutoRepeatRate(const AutoRepeatRate& rate) = 0;
 
+  // Enables or disables the Slow Keys a11y functionality on the keyboard.
+  // Do not call the function from non-UI threads.
+  virtual void SetSlowKeysEnabled(bool enabled) = 0;
+
+  // Returns whether Slow Keys is enabled.
+  virtual bool IsSlowKeysEnabled() const = 0;
+
+  // Sets the amount of delay for Slow Keys.
+  // Do not call the function from non-UI threads.
+  virtual void SetSlowKeysDelay(base::TimeDelta delay) = 0;
+
  protected:
-  bool SetCurrentKeyboardLayoutByNameImpl(const std::string& layout_name);
+  enum class Result { kSuccessNoOp, kSuccessNewlySet };
+  Result SetCurrentKeyboardLayoutByNameImplBase(const std::string& layout_name);
 
  private:
   bool caps_lock_is_enabled_ = false;

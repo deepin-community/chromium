@@ -30,6 +30,8 @@
 
 #include "third_party/blink/renderer/core/exported/web_settings_impl.h"
 
+#include <optional>
+
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
@@ -149,11 +151,6 @@ void WebSettingsImpl::SetRequireTransientActivationForShowFileOrDirectoryPicker(
       required);
 }
 
-void WebSettingsImpl::SetRequireTransientActivationForHtmlFullscreen(
-    bool required) {
-  settings_->SetRequireTransientActivationForHtmlFullscreen(required);
-}
-
 void WebSettingsImpl::SetAutoZoomFocusedEditableToLegibleScale(
     bool auto_zoom_focused_editable_to_legible_scale) {
   auto_zoom_focused_editable_to_legible_scale_ =
@@ -164,8 +161,9 @@ void WebSettingsImpl::SetTextAutosizingEnabled(bool enabled) {
   dev_tools_emulator_->SetTextAutosizingEnabled(enabled);
 }
 
+// TODO(pdr): Rename this OSTextScaleFactor.
 void WebSettingsImpl::SetAccessibilityFontScaleFactor(float font_scale_factor) {
-  settings_->SetAccessibilityFontScaleFactor(font_scale_factor);
+  dev_tools_emulator_->SetAccessibilityFontScaleFactor(font_scale_factor);
 }
 
 void WebSettingsImpl::SetAccessibilityTextSizeContrastFactor(
@@ -273,7 +271,7 @@ void WebSettingsImpl::SetShouldReuseGlobalForUnownedMainFrame(bool enabled) {
 }
 
 void WebSettingsImpl::SetPluginsEnabled(bool enabled) {
-  dev_tools_emulator_->SetPluginsEnabled(enabled);
+  settings_->SetPluginsEnabled(enabled);
 }
 
 void WebSettingsImpl::SetAvailablePointerTypes(int pointers) {
@@ -330,9 +328,19 @@ void WebSettingsImpl::SetAllowScriptsToCloseWindows(bool allow) {
   settings_->SetAllowScriptsToCloseWindows(allow);
 }
 
+void WebSettingsImpl::SetAllowWindowFocusWithoutUserGesture(bool allow) {
+  settings_->SetAllowWindowFocusWithoutUserGesture(allow);
+}
+
 void WebSettingsImpl::SetWideViewportQuirkEnabled(
     bool wide_viewport_quirk_enabled) {
   settings_->SetWideViewportQuirkEnabled(wide_viewport_quirk_enabled);
+}
+
+void WebSettingsImpl::SetScaleAllFontsIfNoMetaTextScaleTag(
+    bool scale_all_fonts_if_no_meta_text_scale_tag) {
+  settings_->SetScaleAllFontsIfNoMetaTextScaleTag(
+      scale_all_fonts_if_no_meta_text_scale_tag);
 }
 
 void WebSettingsImpl::SetUseWideViewport(bool use_wide_viewport) {
@@ -352,6 +360,10 @@ void WebSettingsImpl::SetDoubleTapToZoomEnabled(
 
 void WebSettingsImpl::SetDownloadableBinaryFontsEnabled(bool enabled) {
   settings_->SetDownloadableBinaryFontsEnabled(enabled);
+}
+
+void WebSettingsImpl::SetDynamicSafeAreaInsetsEnabled(bool enabled) {
+  settings_->SetDynamicSafeAreaInsetsEnabled(enabled);
 }
 
 void WebSettingsImpl::SetJavaScriptCanAccessClipboard(bool enabled) {
@@ -541,16 +553,16 @@ void WebSettingsImpl::SetStrictMixedContentCheckingForPlugin(bool enabled) {
   settings_->SetStrictMixedContentCheckingForPlugin(enabled);
 }
 
-void WebSettingsImpl::SetStrictPowerfulFeatureRestrictions(bool enabled) {
-  settings_->SetStrictPowerfulFeatureRestrictions(enabled);
-}
-
 void WebSettingsImpl::SetStrictlyBlockBlockableMixedContent(bool enabled) {
   settings_->SetStrictlyBlockBlockableMixedContent(enabled);
 }
 
-void WebSettingsImpl::SetPasswordEchoEnabled(bool flag) {
-  settings_->SetPasswordEchoEnabled(flag);
+void WebSettingsImpl::SetPasswordEchoEnabledPhysical(bool flag) {
+  settings_->SetPasswordEchoEnabledPhysical(flag);
+}
+
+void WebSettingsImpl::SetPasswordEchoEnabledTouch(bool flag) {
+  settings_->SetPasswordEchoEnabledTouch(flag);
 }
 
 void WebSettingsImpl::SetPasswordEchoDurationInSeconds(
@@ -639,8 +651,8 @@ void WebSettingsImpl::SetTargetBlankImpliesNoOpenerEnabledWillBeRemoved(
   settings_->SetTargetBlankImpliesNoOpenerEnabledWillBeRemoved(enabled);
 }
 
-void WebSettingsImpl::SetAllowNonEmptyNavigatorPlugins(bool enabled) {
-  settings_->SetAllowNonEmptyNavigatorPlugins(enabled);
+void WebSettingsImpl::SetIgnorePermissionForDeviceChangedEvent(bool enabled) {
+  settings_->SetIgnorePermissionForDeviceChangedEvent(enabled);
 }
 
 void WebSettingsImpl::SetCaretBrowsingEnabled(bool enabled) {
@@ -753,6 +765,20 @@ void WebSettingsImpl::SetForceDarkModeEnabled(bool enabled) {
   settings_->SetForceDarkModeEnabled(enabled);
 }
 
+void WebSettingsImpl::SetInForcedColors(bool in_forced_colors) {
+  settings_->SetInForcedColors(in_forced_colors);
+}
+
+void WebSettingsImpl::SetIsForcedColorsDisabled(
+    bool is_forced_colors_disabled) {
+  settings_->SetIsForcedColorsDisabled(is_forced_colors_disabled);
+}
+
+void WebSettingsImpl::SetPreferredRootScrollbarColorScheme(
+    mojom::blink::PreferredColorScheme color_scheme) {
+  settings_->SetPreferredRootScrollbarColorScheme(color_scheme);
+}
+
 void WebSettingsImpl::SetPreferredColorScheme(
     mojom::blink::PreferredColorScheme color_scheme) {
   settings_->SetPreferredColorScheme(color_scheme);
@@ -772,12 +798,12 @@ void WebSettingsImpl::SetAriaModalPrunesAXTree(bool enabled) {
   settings_->SetAriaModalPrunesAXTree(enabled);
 }
 
-void WebSettingsImpl::SetUseAXMenuList(bool enabled) {
-  settings_->SetUseAXMenuList(enabled);
-}
-
 void WebSettingsImpl::SetSelectionClipboardBufferAvailable(bool available) {
   settings_->SetSelectionClipboardBufferAvailable(available);
+}
+
+void WebSettingsImpl::SetMiddleClickPasteAllowed(bool allowed) {
+  settings_->SetMiddleClickPasteAllowed(allowed);
 }
 
 void WebSettingsImpl::SetAccessibilityIncludeSvgGElement(bool include) {
@@ -798,6 +824,11 @@ void WebSettingsImpl::
         bool is_required) {
   settings_->SetRequireTransientActivationAndAuthorizationForSubAppsAPI(
       is_required);
+}
+
+void WebSettingsImpl::SetRootScrollbarThemeColor(
+    std::optional<SkColor> theme_color) {
+  settings_->SetRootScrollbarThemeColor(theme_color);
 }
 
 }  // namespace blink

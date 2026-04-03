@@ -22,7 +22,7 @@ namespace content {
 using SharedStorageReportingMap = base::flat_map<std::string, ::GURL>;
 
 FrameTreeNode* GetFencedFrameRootNode(FrameTreeNode* node) {
-  int inner_node_id =
+  FrameTreeNodeId inner_node_id =
       node->current_frame_host()->inner_tree_main_frame_tree_node_id();
   return FrameTreeNode::GloballyFindByID(inner_node_id);
 }
@@ -69,7 +69,7 @@ void FencedFrameURLMappingTestPeer::GetSharedStorageReportingMap(
   DCHECK(out_reporting_map);
 
   auto urn_it = fenced_frame_url_mapping_->urn_uuid_to_url_map_.find(urn_uuid);
-  DCHECK(urn_it != fenced_frame_url_mapping_->urn_uuid_to_url_map_.end());
+  CHECK(urn_it != fenced_frame_url_mapping_->urn_uuid_to_url_map_.end());
 
   scoped_refptr<FencedFrameReporter> fenced_frame_reporter =
       urn_it->second.fenced_frame_reporter();
@@ -104,7 +104,7 @@ bool PollUntilEvalToTrue(const std::string& script, RenderFrameHost* rfh) {
   while (base::Time::Now() - start_time < timeout) {
     EvalJsResult result = EvalJs(rfh, script);
 
-    if (!result.error.empty()) {
+    if (!result.is_ok()) {
       return false;
     } else if (result.ExtractBool()) {
       return true;

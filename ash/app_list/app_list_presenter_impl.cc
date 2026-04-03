@@ -4,6 +4,7 @@
 
 #include "ash/app_list/app_list_presenter_impl.h"
 
+#include <algorithm>
 #include <optional>
 #include <utility>
 
@@ -18,20 +19,16 @@
 #include "ash/app_list/views/search_box_view.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
-#include "ash/public/cpp/assistant/controller/assistant_ui_controller.h"
 #include "ash/public/cpp/metrics_util.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/wm/container_finder.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
-#include "chromeos/ash/services/assistant/public/cpp/assistant_enums.h"
 #include "ui/aura/client/focus_client.h"
 #include "ui/aura/window.h"
 #include "ui/compositor/animation_throughput_reporter.h"
@@ -52,8 +49,6 @@
 namespace ash {
 namespace {
 
-using assistant::AssistantExitPoint;
-
 // The target scale to which (or from which) the fullscreen launcher will
 // animate between tablet <-> clamshell mode transition.
 constexpr float kFullscreenLauncherFadeAnimationScale = 0.92f;
@@ -66,7 +61,9 @@ constexpr base::TimeDelta kFullscreenLauncherTransitionDuration =
 // record UMA of input latency.
 void DidPresentCompositorFrame(base::TimeTicks event_time_stamp,
                                bool is_showing,
-                               base::TimeTicks presentation_timestamp) {
+                               const viz::FrameTimingDetails& details) {
+  base::TimeTicks presentation_timestamp =
+      details.presentation_feedback.timestamp;
   if (presentation_timestamp.is_null() || event_time_stamp.is_null() ||
       presentation_timestamp < event_time_stamp) {
     return;
@@ -229,23 +226,8 @@ void AppListPresenterImpl::Show(AppListViewState preferred_state,
   shelf_observer_.Reset();
   shelf_observer_.Observe(shelf);
 
-  // By setting us as a drag-and-drop recipient, the app list knows that we can
-  // handle items. Do this on every show because |view_| can be reused after a
-  // monitor is disconnected but that monitor's ShelfView and
-  // ScrollableShelfView are deleted. https://crbug.com/1163332
-  view_->SetDragAndDropHostOfCurrentAppList(
-      shelf->shelf_widget()->GetDragAndDropHostForAppList());
   std::unique_ptr<AppListView::ScopedAccessibilityAnnouncementLock>
       scoped_accessibility_lock;
-
-  // App list view state accessibility alerts should be suppressed when the app
-  // list view is shown by the assistant. The assistant UI should handle its
-  // own accessibility notifications.
-  if (show_source && *show_source == AppListShowSource::kAssistantEntryPoint) {
-    scoped_accessibility_lock =
-        std::make_unique<AppListView::ScopedAccessibilityAnnouncementLock>(
-            view_);
-  }
 
   auto* layer = view_->GetWidget()->GetNativeWindow()->layer();
 
@@ -369,8 +351,6 @@ void AppListPresenterImpl::Dismiss(base::TimeTicks event_time_stamp) {
     view_->SetState(AppListViewState::kClosed);
   }
 
-  view_->SetDragAndDropHostOfCurrentAppList(nullptr);
-
   base::RecordAction(base::UserMetricsAction("Launcher_Dismiss"));
 }
 
@@ -484,21 +464,6 @@ void AppListPresenterImpl::UpdateScaleAndOpacityForHomeLauncher(
   layer->SetTransform(transform);
 }
 
-void AppListPresenterImpl::ShowEmbeddedAssistantUI(bool show) {
-  if (view_)
-    view_->app_list_main_view()->contents_view()->ShowEmbeddedAssistantUI(show);
-}
-
-bool AppListPresenterImpl::IsShowingEmbeddedAssistantUI() const {
-  if (view_) {
-    return view_->app_list_main_view()
-        ->contents_view()
-        ->IsShowingEmbeddedAssistantUI();
-  }
-
-  return false;
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 // AppListPresenterImpl, private:
 
@@ -531,7 +496,7 @@ int64_t AppListPresenterImpl::GetDisplayId() const {
   views::Widget* widget = view_ ? view_->GetWidget() : nullptr;
   if (!widget)
     return display::kInvalidDisplayId;
-  return display::Screen::GetScreen()
+  return display::Screen::Get()
       ->GetDisplayNearestView(widget->GetNativeView())
       .id();
 }
@@ -578,8 +543,8 @@ void AppListPresenterImpl::OnWindowFocused(aura::Window* gained_focus,
   // change since the app list is still visible for the most part.
   const bool gained_focus_hides_app_list =
       gained_focus_container_id != kShellWindowId_Invalid &&
-      !base::Contains(kIdsOfContainersThatWontHideAppList,
-                      gained_focus_container_id);
+      !std::ranges::contains(kIdsOfContainersThatWontHideAppList,
+                             gained_focus_container_id);
 
   const bool app_list_gained_focus = applist_window->Contains(gained_focus) ||
                                      applist_container->Contains(gained_focus);
@@ -598,11 +563,6 @@ void AppListPresenterImpl::OnWindowFocused(aura::Window* gained_focus,
       view_->OnHomeLauncherGainingFocusWithoutAnimation();
 
     OnVisibilityChanged(visible, GetDisplayId());
-  } else {
-    // In tablet mode, when Assistant UI lost focus after other new App window
-    // opened, we should reset the view.
-    if (app_list_lost_focus && IsShowingEmbeddedAssistantUI())
-      view_->Back();
   }
 
   if (app_list_gained_focus)
@@ -661,8 +621,6 @@ void AppListPresenterImpl::OnDisplayMetricsChanged(
 
 void AppListPresenterImpl::OnShelfShuttingDown() {
   shelf_observer_.Reset();
-  if (view_)
-    view_->SetDragAndDropHostOfCurrentAppList(nullptr);
 }
 
 void AppListPresenterImpl::SnapAppListBoundsToDisplayEdge() {

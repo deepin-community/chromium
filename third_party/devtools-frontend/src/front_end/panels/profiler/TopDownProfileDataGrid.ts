@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,15 +27,15 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+import type * as CPUProfile from '../../models/cpu_profile/cpu_profile.js';
 import type * as UI from '../../ui/legacy/legacy.js';
 
-import {ProfileDataGridNode, ProfileDataGridTree, type Formatter} from './ProfileDataGrid.js';
-import type * as CPUProfile from '../../models/cpu_profile/cpu_profile.js';
+import {type Formatter, ProfileDataGridNode, ProfileDataGridTree} from './ProfileDataGrid.js';
 
 export class TopDownProfileDataGridNode extends ProfileDataGridNode {
   remainingChildren: CPUProfile.ProfileTreeModel.ProfileNode[];
   constructor(profileNode: CPUProfile.ProfileTreeModel.ProfileNode, owningTree: TopDownProfileDataGridTree) {
-    const hasChildren = Boolean(profileNode.children && profileNode.children.length);
+    const hasChildren = Boolean(profileNode.children?.length);
 
     super(profileNode, owningTree, hasChildren);
 

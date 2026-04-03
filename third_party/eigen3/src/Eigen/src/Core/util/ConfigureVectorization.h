@@ -11,6 +11,18 @@
 #ifndef EIGEN_CONFIGURE_VECTORIZATION_H
 #define EIGEN_CONFIGURE_VECTORIZATION_H
 
+// Prepare for using the generic clang backend if requested.
+#if defined(EIGEN_VECTORIZE_GENERIC) && !defined(EIGEN_DONT_VECTORIZE) && !defined(EIGEN_DONT_ALIGN)
+#if !EIGEN_ARCH_VECTOR_EXTENSIONS
+#error "The compiler does not support clang vector extensions."
+#endif
+#define EIGEN_VECTORIZE
+#ifndef EIGEN_GENERIC_VECTOR_SIZE_BYTES
+#define EIGEN_GENERIC_VECTOR_SIZE_BYTES 64
+#endif
+#define EIGEN_MAX_ALIGN_BYTES EIGEN_GENERIC_VECTOR_SIZE_BYTES
+#endif
+
 //------------------------------------------------------------------------------------------
 // Static and dynamic alignment control
 //
@@ -38,6 +50,19 @@
 #define EIGEN_ALIGNOF(x) alignof(x)
 #endif
 
+// Align to the boundary that avoids false sharing.
+//   https://en.cppreference.com/w/cpp/thread/hardware_destructive_interference_size
+// There is a bug in android NDK < r26 where the macro is defined but std::hardware_destructive_interference_size
+// still does not exist.
+#if defined(__cpp_lib_hardware_interference_size) && __cpp_lib_hardware_interference_size >= 201603 && \
+    (!EIGEN_OS_ANDROID || __NDK_MAJOR__ + 0 >= 26)
+#include <new>
+#define EIGEN_ALIGN_TO_AVOID_FALSE_SHARING EIGEN_ALIGN_TO_BOUNDARY(std::hardware_destructive_interference_size)
+#else
+// Overalign for the cache line size of 128 bytes (Apple M1)
+#define EIGEN_ALIGN_TO_AVOID_FALSE_SHARING EIGEN_ALIGN_TO_BOUNDARY(128)
+#endif
+
 // If the user explicitly disable vectorization, then we also disable alignment
 #if defined(EIGEN_DONT_VECTORIZE)
 #if defined(EIGEN_GPUCC)
@@ -55,6 +80,8 @@
 #define EIGEN_IDEAL_MAX_ALIGN_BYTES 32
 #elif defined __HVX__ && (__HVX_LENGTH__ == 128)
 #define EIGEN_IDEAL_MAX_ALIGN_BYTES 128
+#elif defined(EIGEN_RISCV64_USE_RVV10)
+#define EIGEN_IDEAL_MAX_ALIGN_BYTES 64
 #else
 #define EIGEN_IDEAL_MAX_ALIGN_BYTES 16
 #endif
@@ -90,8 +117,8 @@
 // certain common platform (compiler+architecture combinations) to avoid these problems.
 // Only static alignment is really problematic (relies on nonstandard compiler extensions),
 // try to keep heap alignment even when we have to disable static alignment.
-#if EIGEN_COMP_GNUC && \
-    !(EIGEN_ARCH_i386_OR_x86_64 || EIGEN_ARCH_ARM_OR_ARM64 || EIGEN_ARCH_PPC || EIGEN_ARCH_IA64 || EIGEN_ARCH_MIPS)
+#if EIGEN_COMP_GNUC && !(EIGEN_ARCH_i386_OR_x86_64 || EIGEN_ARCH_ARM_OR_ARM64 || EIGEN_ARCH_PPC || EIGEN_ARCH_IA64 || \
+                         EIGEN_ARCH_MIPS || EIGEN_ARCH_LOONGARCH64 || EIGEN_ARCH_RISCV)
 #define EIGEN_GCC_AND_ARCH_DOESNT_WANT_STACK_ALIGNMENT 1
 #else
 #define EIGEN_GCC_AND_ARCH_DOESNT_WANT_STACK_ALIGNMENT 0
@@ -187,7 +214,7 @@
 #endif
 #endif
 
-#if !(defined(EIGEN_DONT_VECTORIZE) || defined(EIGEN_GPUCC))
+#if !(defined(EIGEN_DONT_VECTORIZE) || defined(EIGEN_GPUCC) || defined(EIGEN_VECTORIZE_GENERIC))
 
 #if defined(EIGEN_SSE2_ON_NON_MSVC) || defined(EIGEN_SSE2_ON_MSVC_2008_OR_LATER)
 
@@ -215,7 +242,7 @@
 #define EIGEN_VECTORIZE_SSE4_2
 #endif
 #ifdef __AVX__
-#ifndef EIGEN_USE_SYCL
+#if !defined(EIGEN_USE_SYCL) && !EIGEN_COMP_EMSCRIPTEN
 #define EIGEN_VECTORIZE_AVX
 #endif
 #define EIGEN_VECTORIZE_SSE3
@@ -266,9 +293,14 @@
 #ifdef __AVX512BF16__
 #define EIGEN_VECTORIZE_AVX512BF16
 #endif
+#ifdef __AVX512VL__
+#define EIGEN_VECTORIZE_AVX512VL
+#endif
 #ifdef __AVX512FP16__
 #ifdef __AVX512VL__
 #define EIGEN_VECTORIZE_AVX512FP16
+// Built-in _Float16.
+#define EIGEN_HAS_BUILTIN_FLOAT16 1
 #else
 #if EIGEN_COMP_GNUC
 #error Please add -mavx512vl to your compiler flags: compiling with -mavx512fp16 alone without AVX512-VL is not supported.
@@ -388,13 +420,58 @@ extern "C" {
 #define EIGEN_VECTORIZE_SVE
 #include <arm_sve.h>
 
-// Since we depend on knowing SVE vector lengths at compile-time, we need
-// to ensure a fixed lengths is set
+// Since we depend on knowing SVE vector length at compile-time, we need
+// to ensure a fixed length is set
 #if defined __ARM_FEATURE_SVE_BITS
 #define EIGEN_ARM64_SVE_VL __ARM_FEATURE_SVE_BITS
 #else
 #error "Eigen requires a fixed SVE lector length but EIGEN_ARM64_SVE_VL is not set."
 #endif
+
+#elif EIGEN_ARCH_RISCV
+
+#if defined(__riscv_zfh)
+#define EIGEN_HAS_BUILTIN_FLOAT16
+#endif
+
+// We currently require RVV to be enabled explicitly via EIGEN_RISCV64_USE_RVV and
+// will not select the backend automatically
+#if (defined EIGEN_RISCV64_USE_RVV10)
+
+#define EIGEN_VECTORIZE
+#define EIGEN_VECTORIZE_RVV10
+#include <riscv_vector.h>
+
+// Since we depend on knowing RVV vector length at compile-time, we need
+// to ensure a fixed length is set
+#if defined(__riscv_v_fixed_vlen)
+#define EIGEN_RISCV64_RVV_VL __riscv_v_fixed_vlen
+#if __riscv_v_fixed_vlen >= 256
+#undef EIGEN_GCC_AND_ARCH_DOESNT_WANT_STACK_ALIGNMENT
+#define EIGEN_GCC_AND_ARCH_DOESNT_WANT_STACK_ALIGNMENT 1
+#endif
+#else
+#error "Eigen requires a fixed RVV vector length but -mrvv-vector-bits=zvl is not set."
+#endif
+
+#undef EIGEN_STACK_ALLOCATION_LIMIT
+#define EIGEN_STACK_ALLOCATION_LIMIT 196608
+
+#if defined(__riscv_zvfh) && defined(__riscv_zfh)
+#define EIGEN_VECTORIZE_RVV10FP16
+#elif defined(__riscv_zvfh)
+#if defined(__GNUC__) || defined(__clang__)
+#warning "The Eigen::Half vectorization requires Zfh and Zvfh extensions."
+#elif defined(_MSC_VER)
+#pragma message("The Eigen::Half vectorization requires Zfh and Zvfh extensions.")
+#endif
+#endif
+
+#if defined(__riscv_zvfbfwma)
+#define EIGEN_VECTORIZE_RVV10BF16
+#endif
+
+#endif  // defined(EIGEN_ARCH_RISCV)
 
 #elif (defined __s390x__ && defined __VEC__)
 
@@ -416,6 +493,12 @@ extern "C" {
 #define EIGEN_VECTORIZE_MSA
 #include <msa.h>
 #endif
+
+#elif (defined __loongarch64 && defined __loongarch_sx)
+
+#define EIGEN_VECTORIZE
+#define EIGEN_VECTORIZE_LSX
+#include <lsxintrin.h>
 
 #elif defined __HVX__ && (__HVX_LENGTH__ == 128)
 
@@ -474,13 +557,20 @@ extern "C" {
 #include <hip/hip_bfloat16.h>
 #endif
 
+#if defined(__riscv)
+// Defines the default LMUL for RISC-V
+#ifndef EIGEN_RISCV64_DEFAULT_LMUL
+#define EIGEN_RISCV64_DEFAULT_LMUL 1
+#endif
+#endif
+
 /** \brief Namespace containing all symbols from the %Eigen library. */
 // IWYU pragma: private
 #include "../InternalHeaderCheck.h"
 
 namespace Eigen {
 
-inline static const char *SimdInstructionSetsInUse(void) {
+inline static const char* SimdInstructionSetsInUse(void) {
 #if defined(EIGEN_VECTORIZE_AVX512)
   return "AVX512, FMA, AVX2, AVX, SSE, SSE2, SSE3, SSSE3, SSE4.1, SSE4.2";
 #elif defined(EIGEN_VECTORIZE_AVX)
@@ -507,6 +597,8 @@ inline static const char *SimdInstructionSetsInUse(void) {
   return "S390X ZVECTOR";
 #elif defined(EIGEN_VECTORIZE_MSA)
   return "MIPS MSA";
+#elif defined(EIGEN_VECTORIZE_LSX)
+  return "LOONGARCH64 LSX";
 #else
   return "None";
 #endif

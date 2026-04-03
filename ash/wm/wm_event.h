@@ -108,11 +108,13 @@ enum WMEventType {
 
   // A user requested to pin a window for a trusted application. This is similar
   // WM_EVENT_PIN but does not allow user to exit the mode by shortcut key.
-  WM_EVENT_TRUSTED_PIN,
+  WM_EVENT_LOCKED_FULLSCREEN,
 
   // A user requested to float a window.
   WM_EVENT_FLOAT,
 };
+
+ASH_EXPORT std::ostream& operator<<(std::ostream& out, WMEventType type);
 
 class SetBoundsWMEvent;
 class DisplayMetricsChangedWMEvent;
@@ -142,7 +144,7 @@ class ASH_EXPORT WMEvent {
   // depending on the current state.
   bool IsCompoundEvent() const;
 
-  // WM_EVENT_PIN or WM_EVENT_TRUSTD_PIN.
+  // WM_EVENT_PIN or WM_EVENT_LOCKED_FULLSCREEN.
   bool IsPinEvent() const;
 
   // True If the event requurests bounds change, e.g. SET_BOUNDS
@@ -166,21 +168,24 @@ class ASH_EXPORT WMEvent {
   WMEventType type_;
 };
 
-// An WMEvent to request new bounds for the window.
+// A WMEvent to request new bounds for the window in parent coordinates.
 class ASH_EXPORT SetBoundsWMEvent : public WMEvent {
  public:
   explicit SetBoundsWMEvent(
-      const gfx::Rect& requested_bounds,
+      const gfx::Rect& requested_bounds_in_parent,
       bool animate = false,
       base::TimeDelta duration = WindowState::kBoundsChangeSlideDuration);
-  SetBoundsWMEvent(const gfx::Rect& requested_bounds, int64_t display_id);
+  SetBoundsWMEvent(const gfx::Rect& requested_bounds_in_parent,
+                   int64_t display_id);
 
   SetBoundsWMEvent(const SetBoundsWMEvent&) = delete;
   SetBoundsWMEvent& operator=(const SetBoundsWMEvent&) = delete;
 
   ~SetBoundsWMEvent() override;
 
-  const gfx::Rect& requested_bounds() const { return requested_bounds_; }
+  const gfx::Rect& requested_bounds_in_parent() const {
+    return requested_bounds_in_parent_;
+  }
 
   bool animate() const { return animate_; }
 
@@ -192,7 +197,7 @@ class ASH_EXPORT SetBoundsWMEvent : public WMEvent {
   const SetBoundsWMEvent* AsSetBoundsWMEvent() const override;
 
  private:
-  const gfx::Rect requested_bounds_;
+  const gfx::Rect requested_bounds_in_parent_;
   const int64_t display_id_ = display::kInvalidDisplayId;
   const bool animate_;
   const base::TimeDelta duration_;

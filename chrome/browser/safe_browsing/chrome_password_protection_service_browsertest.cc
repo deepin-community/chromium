@@ -7,13 +7,13 @@
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/password_manager/password_reuse_manager_factory.h"
+#include "chrome/browser/password_manager/factories/password_reuse_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ssl/security_state_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/hats/mock_trust_safety_sentiment_service.h"
@@ -26,7 +26,8 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
-#include "components/password_manager/core/browser/features/password_features.h"
+#include "components/os_crypt/async/browser/os_crypt_async.h"
+#include "components/os_crypt/async/browser/test_utils.h"
 #include "components/password_manager/core/browser/hash_password_manager.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
@@ -34,7 +35,6 @@
 #include "components/password_manager/core/browser/password_reuse_manager.h"
 #include "components/password_manager/core/browser/password_store/fake_password_store_backend.h"
 #include "components/password_manager/core/browser/ui/password_check_referrer.h"
-#include "components/password_manager/core/common/password_manager_features.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -43,13 +43,14 @@
 #include "components/safe_browsing/content/browser/password_protection/password_protection_request_content.h"
 #include "components/safe_browsing/content/browser/password_protection/password_protection_test_util.h"
 #include "components/safe_browsing/core/browser/password_protection/metrics_util.h"
-#include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/security_state/core/security_state.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "components/signin/public/identity_manager/signin_constants.h"
 #include "components/user_manager/user_names.h"
-#include "components/variations/service/variations_service.h"
+#include "components/variations/pref_names.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
@@ -64,6 +65,7 @@
 using password_manager::FakePasswordStoreBackend;
 using password_manager::PasswordForm;
 using password_manager::PasswordStoreInterface;
+using signin::constants::kNoHostedDomainFound;
 using ::testing::_;
 using ::testing::ElementsAre;
 
@@ -106,7 +108,9 @@ namespace safe_browsing {
 
 class ChromePasswordProtectionServiceBrowserTest : public InProcessBrowserTest {
  public:
-  ChromePasswordProtectionServiceBrowserTest() {}
+  ChromePasswordProtectionServiceBrowserTest()
+      : os_crypt_async_(os_crypt_async::GetTestOSCryptAsyncForTesting(
+            /*is_sync_for_unittests=*/true)) {}
 
   ChromePasswordProtectionServiceBrowserTest(
       const ChromePasswordProtectionServiceBrowserTest&) = delete;
@@ -125,6 +129,15 @@ class ChromePasswordProtectionServiceBrowserTest : public InProcessBrowserTest {
   }
 
   void TearDownOnMainThread() override { identity_test_env_adaptor_.reset(); }
+
+  std::optional<os_crypt_async::Encryptor> CreateEncryptor() {
+    std::optional<os_crypt_async::Encryptor> encryptor;
+    os_crypt_async_->GetInstance(base::BindLambdaForTesting(
+        [&](os_crypt_async::Encryptor new_encryptor) {
+          encryptor = std::move(new_encryptor);
+        }));
+    return encryptor;
+  }
 
   ChromePasswordProtectionService* GetService(bool is_incognito) {
     return ChromePasswordProtectionService::GetPasswordProtectionService(
@@ -183,7 +196,7 @@ class ChromePasswordProtectionServiceBrowserTest : public InProcessBrowserTest {
 
     CoreAccountInfo account_info =
         identity_test_env()->MakePrimaryAccountAvailable(
-            user_manager::kStubUserEmail, signin::ConsentLevel::kSync);
+            user_manager::kStubUserEmail, signin::ConsentLevel::kSignin);
 
     ASSERT_EQ(account_info.email, user_manager::kStubUserEmail);
 
@@ -217,21 +230,22 @@ class ChromePasswordProtectionServiceBrowserTest : public InProcessBrowserTest {
   std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
       identity_test_env_adaptor_;
   base::CallbackListSubscription create_services_subscription_;
+  std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
 };
 
 IN_PROC_BROWSER_TEST_F(ChromePasswordProtectionServiceBrowserTest,
                        VerifyIsInExcludedCountry) {
-  variations::VariationsService* variations_service =
-      g_browser_process->variations_service();
   const std::string non_excluded_countries[] = {"be", "br", "ca", "de", "es",
                                                 "fr", "ie", "in", "jp", "nl",
                                                 "ru", "se", "us"};
   ChromePasswordProtectionService* service = GetService(/*is_incognito=*/false);
   for (auto country : non_excluded_countries) {
-    variations_service->OverrideStoredPermanentCountry(country);
+    g_browser_process->local_state()->SetString(
+        variations::prefs::kVariationsCountry, country);
     EXPECT_FALSE(service->IsInExcludedCountry());
   }
-  variations_service->OverrideStoredPermanentCountry("cn");
+  g_browser_process->local_state()->SetString(
+      variations::prefs::kVariationsCountry, "cn");
   EXPECT_TRUE(service->IsInExcludedCountry());
 }
 
@@ -414,7 +428,7 @@ IN_PROC_BROWSER_TEST_F(
   AddFormToStore(password_store.get(), form);
 
   std::vector<password_manager::MatchingReusedCredential> credentials = {
-      {kSignonRealm, kUsername}};
+      {kSignonRealm, GURL(kSignonRealm), kUsername}};
 
   service->set_saved_passwords_matching_reused_credentials({credentials});
 
@@ -837,7 +851,10 @@ IN_PROC_BROWSER_TEST_F(ChromePasswordProtectionServiceBrowserTest,
       prefs::kPasswordProtectionWarningTrigger,
       PasswordProtectionTrigger::PASSWORD_PROTECTION_OFF);
 
-  password_manager::HashPasswordManager hash_password_manager;
+  auto encryptor = CreateEncryptor();
+  ASSERT_TRUE(encryptor);
+  password_manager::HashPasswordManager hash_password_manager(
+      std::move(*encryptor));
   hash_password_manager.set_prefs(profile->GetPrefs());
   EXPECT_FALSE(hash_password_manager.HasPasswordHash(
       user_manager::kStubUserEmail, /*is_gaia_password=*/true));
@@ -866,27 +883,24 @@ IN_PROC_BROWSER_TEST_F(ChromePasswordProtectionServiceBrowserTest,
       /*is_primary_account=*/false,
       password_manager::metrics_util::GaiaPasswordHashChange::
           CHANGED_IN_CONTENT_AREA);
-  if (base::FeatureList::IsEnabled(
-          password_manager::features::kLocalStateEnterprisePasswordHashes)) {
-    ASSERT_EQ(1u, profile->GetPrefs()
-                      ->GetList(password_manager::prefs::kPasswordHashDataList)
-                      .size());
-    ASSERT_EQ(1u,
-              g_browser_process->local_state()
-                  ->GetList(password_manager::prefs::kLocalPasswordHashDataList)
-                  .size());
-  } else {
-    ASSERT_EQ(2u, profile->GetPrefs()
-                      ->GetList(password_manager::prefs::kPasswordHashDataList)
-                      .size());
-  }
+
+  ASSERT_EQ(1u, profile->GetPrefs()
+                    ->GetList(password_manager::prefs::kPasswordHashDataList)
+                    .size());
+  ASSERT_EQ(1u,
+            g_browser_process->local_state()
+                ->GetList(password_manager::prefs::kLocalPasswordHashDataList)
+                .size());
 
   // Turn off trigger
   profile->GetPrefs()->SetInteger(
       prefs::kPasswordProtectionWarningTrigger,
       PasswordProtectionTrigger::PASSWORD_PROTECTION_OFF);
 
-  password_manager::HashPasswordManager hash_password_manager;
+  auto encryptor = CreateEncryptor();
+  ASSERT_TRUE(encryptor);
+  password_manager::HashPasswordManager hash_password_manager(
+      std::move(*encryptor));
   hash_password_manager.set_prefs(profile->GetPrefs());
   hash_password_manager.set_local_prefs(g_browser_process->local_state());
   EXPECT_FALSE(hash_password_manager.HasPasswordHash(
@@ -897,6 +911,146 @@ IN_PROC_BROWSER_TEST_F(ChromePasswordProtectionServiceBrowserTest,
   EXPECT_EQ(0u, profile->GetPrefs()
                     ->GetList(password_manager::prefs::kPasswordHashDataList)
                     .size());
+}
+
+IN_PROC_BROWSER_TEST_F(ChromePasswordProtectionServiceBrowserTest,
+                       OtpPhishingVerdictCallbackInvoked) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/simple.html")));
+  ChromePasswordProtectionService* service = GetService(/*is_incognito=*/false);
+  content::WebContents* web_contents = GetWebContents();
+
+  // --- Test PHISHING verdict ---
+  {
+    base::RunLoop run_loop;
+    bool is_phishing_verdict = false;
+    PasswordProtectionRequest::OtpPhishingVerdictCallback callback =
+        base::BindLambdaForTesting([&](bool verdict) {
+          EXPECT_TRUE(verdict);
+          is_phishing_verdict = verdict;
+          run_loop.Quit();
+        });
+
+    // Start a request with the OTP trigger and our callback.
+    service->StartRequestForTesting(
+        web_contents, web_contents->GetLastCommittedURL(), GURL(), GURL(), "",
+        PasswordType::PASSWORD_TYPE_UNKNOWN, {},
+        LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+        /*password_field_exists=*/false, std::move(callback));
+
+    ASSERT_EQ(1u, service->get_pending_requests_for_testing().size());
+    scoped_refptr<PasswordProtectionRequest> request =
+        *service->get_pending_requests_for_testing().begin();
+
+    // Finish the request with a PHISHING verdict.
+    auto phishing_response = std::make_unique<LoginReputationClientResponse>();
+    phishing_response->set_verdict_type(
+        LoginReputationClientResponse::PHISHING);
+    request->finish_for_testing(RequestOutcome::SUCCEEDED,
+                                std::move(phishing_response));
+
+    run_loop.Run();
+    EXPECT_TRUE(is_phishing_verdict);
+  }
+
+  // --- Test SAFE verdict ---
+  {
+    base::RunLoop run_loop;
+    bool is_phishing_verdict = true;  // Start with opposite value
+    PasswordProtectionRequest::OtpPhishingVerdictCallback callback =
+        base::BindLambdaForTesting([&](bool verdict) {
+          EXPECT_FALSE(verdict);
+          is_phishing_verdict = verdict;
+          run_loop.Quit();
+        });
+
+    service->StartRequestForTesting(
+        web_contents, web_contents->GetLastCommittedURL(), GURL(), GURL(), "",
+        PasswordType::PASSWORD_TYPE_UNKNOWN, {},
+        LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+        /*password_field_exists=*/false, std::move(callback));
+
+    ASSERT_EQ(1u, service->get_pending_requests_for_testing().size());
+    scoped_refptr<PasswordProtectionRequest> request =
+        *service->get_pending_requests_for_testing().begin();
+
+    // Finish the request with a SAFE verdict.
+    auto safe_response = std::make_unique<LoginReputationClientResponse>();
+    safe_response->set_verdict_type(LoginReputationClientResponse::SAFE);
+    request->finish_for_testing(RequestOutcome::SUCCEEDED,
+                                std::move(safe_response));
+
+    run_loop.Run();
+    EXPECT_FALSE(is_phishing_verdict);
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(ChromePasswordProtectionServiceBrowserTest,
+                       VerifyPasswordReuseLookupUserEventRecorded) {
+  base::HistogramTester histogram_tester;
+  SetUpPrimaryAccountWithHostedDomain(kNoHostedDomainFound);
+  ChromePasswordProtectionService* service = GetService(/*is_incognito=*/false);
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  // Initialize and verify initial state.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL(kLoginPageUrl)));
+  ASSERT_EQ(1, browser()->tab_strip_model()->count());
+  ASSERT_FALSE(
+      ChromePasswordProtectionService::ShouldShowPasswordReusePageInfoBubble(
+          web_contents, PasswordType::PRIMARY_ACCOUNT_PASSWORD));
+  ASSERT_EQ(security_state::NONE, GetSecurityLevel(web_contents));
+  ASSERT_EQ(security_state::MALICIOUS_CONTENT_STATUS_NONE,
+            GetVisibleSecurityState(web_contents)->malicious_content_status);
+
+  // Shows modal dialog on current web_contents.
+  ReusedPasswordAccountType account_type;
+  account_type.set_account_type(ReusedPasswordAccountType::GSUITE);
+  account_type.set_is_account_syncing(true);
+  scoped_refptr<PasswordProtectionRequest> request =
+      CreateDummyRequest(web_contents);
+  service->ShowModalWarning(
+      request.get(), LoginReputationClientResponse::VERDICT_TYPE_UNSPECIFIED,
+      "unused_token", account_type);
+  base::RunLoop().RunUntilIdle();
+  ASSERT_TRUE(
+      ChromePasswordProtectionService::ShouldShowPasswordReusePageInfoBubble(
+          web_contents, PasswordType::PRIMARY_ACCOUNT_PASSWORD));
+  ASSERT_EQ(security_state::DANGEROUS, GetSecurityLevel(web_contents));
+  ASSERT_EQ(
+      security_state::MALICIOUS_CONTENT_STATUS_SIGNED_IN_SYNC_PASSWORD_REUSE,
+      GetVisibleSecurityState(web_contents)->malicious_content_status);
+
+  // Simulates clicking "Ignore" button on the modal dialog.
+  service->OnUserAction(web_contents, account_type, RequestOutcome::UNKNOWN,
+                        LoginReputationClientResponse::VERDICT_TYPE_UNSPECIFIED,
+                        "unused_token", WarningUIType::MODAL_DIALOG,
+                        WarningAction::IGNORE_WARNING);
+  // Ensures that all asynchronous tasks are completed before verifying the
+  // histogram sample.
+  content::RunAllTasksUntilIdle();
+  histogram_tester.ExpectUniqueSample(
+      "SafeBrowsing.ClientSafeBrowsingReport.PasswordReuse.RepeatVisit2", false,
+      1);
+
+  // Navigate to a different page, then navigate back.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/")));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL(kLoginPageUrl)));
+
+  // Simulates clicking "Change password" button on the modal dialog.
+  service->OnUserAction(web_contents, account_type, RequestOutcome::UNKNOWN,
+                        LoginReputationClientResponse::VERDICT_TYPE_UNSPECIFIED,
+                        "unused_token", WarningUIType::MODAL_DIALOG,
+                        WarningAction::CHANGE_PASSWORD);
+  // Ensures that all asynchronous tasks are completed before verifying the
+  // histogram sample.
+  content::RunAllTasksUntilIdle();
+  histogram_tester.ExpectBucketCount(
+      "SafeBrowsing.ClientSafeBrowsingReport.PasswordReuse.RepeatVisit2", true,
+      1);
 }
 
 // Test fixture for testing the navigation deferral mechanism while a modal
@@ -916,12 +1070,19 @@ class ChromePasswordProtectionServiceNavigationDeferralBrowserTest
     const std::string kSignonRealm = "https://example.test";
     const std::u16string kUsername = u"username1";
     std::vector<password_manager::MatchingReusedCredential> credentials = {
-        {kSignonRealm, kUsername}};
+        {kSignonRealm, GURL(kSignonRealm), kUsername}};
 
     service->StartRequestForTesting(
-        GetWebContents(), GURL(), GURL(), GURL(), "",
-        PasswordType::SAVED_PASSWORD, credentials,
-        LoginReputationClientRequest::PASSWORD_REUSE_EVENT, true);
+        /*web_contents=*/GetWebContents(),
+        /*main_frame_url=*/GURL(),
+        /*password_form_action=*/GURL(),
+        /*password_form_frame_url=*/GURL(),
+        /*username=*/"",
+        /*password_type=*/PasswordType::SAVED_PASSWORD,
+        /*matching_reused_credentials=*/credentials,
+        /*trigger_type=*/LoginReputationClientRequest::PASSWORD_REUSE_EVENT,
+        /*password_field_exists=*/true,
+        /*otp_phishing_verdict_callback=*/std::nullopt);
     if (service->get_pending_requests_for_testing().size() != 1ul)
       return nullptr;
 
@@ -1253,8 +1414,7 @@ IN_PROC_BROWSER_TEST_F(
   const GURL kPrerenderUrl = embedded_test_server()->GetURL("/simple.html");
   prerender_helper_.AddPrerender(kPrerenderUrl);
 
-  ASSERT_NE(prerender_helper_.GetHostForUrl(kPrerenderUrl),
-            content::RenderFrameHost::kNoFrameTreeNodeId);
+  ASSERT_TRUE(prerender_helper_.GetHostForUrl(kPrerenderUrl));
 
   // Navigate to the prerendered URL. Ensure the activation navigation is
   // deferred until the request finishes without showing a modal.

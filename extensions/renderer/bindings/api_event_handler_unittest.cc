@@ -5,6 +5,7 @@
 #include "extensions/renderer/bindings/api_event_handler.h"
 
 #include <optional>
+
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
@@ -20,6 +21,8 @@
 #include "gin/converter.h"
 #include "gin/public/context_holder.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "v8/include/v8-object.h"
+#include "v8/include/v8-primitive.h"
 
 namespace extensions {
 
@@ -30,6 +33,13 @@ using MockEventChangeHandler = ::testing::StrictMock<
 
 std::string GetContextOwner(v8::Local<v8::Context> context) {
   return "context";
+}
+
+size_t GetNumListeners(v8::Isolate* isolate, v8::Local<v8::Object> event) {
+  EventEmitter* emitter = nullptr;
+  gin::Converter<EventEmitter*>::FromV8(isolate, event, &emitter);
+  CHECK(emitter);
+  return emitter->GetNumListenersForTesting();
 }
 
 // Note: Not function-local to RemoveListener() because it's used in one place
@@ -45,6 +55,20 @@ void AddListener(v8::Local<v8::Context> context,
   v8::Local<v8::Function> add_listener =
       FunctionFromString(context, kAddListenerFunction);
   v8::Local<v8::Value> argv[] = {event, listener};
+  RunFunction(add_listener, context, std::size(argv), argv);
+}
+
+void AddFilteredListener(v8::Local<v8::Context> context,
+                         v8::Local<v8::Function> listener,
+                         v8::Local<v8::Object> event,
+                         v8::Local<v8::Object> filter) {
+  constexpr char kAddListenerFunction[] =
+      R"((function(event, listener, filter) {
+            event.addListener(listener, filter);
+         }))";
+  v8::Local<v8::Function> add_listener =
+      FunctionFromString(context, kAddListenerFunction);
+  v8::Local<v8::Value> argv[] = {event, listener, filter};
   RunFunction(add_listener, context, std::size(argv), argv);
 }
 
@@ -106,7 +130,7 @@ TEST_F(APIEventHandlerTest, AddingRemovingAndQueryingEventListeners) {
       kEventName, false, true, binding::kNoListenerMax, true, context);
   ASSERT_FALSE(event.IsEmpty());
 
-  EXPECT_EQ(0u, handler()->GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(0u, GetNumListeners(isolate(), event));
 
   const char kListenerFunction[] = "(function() {})";
   v8::Local<v8::Function> listener_function =
@@ -114,12 +138,11 @@ TEST_F(APIEventHandlerTest, AddingRemovingAndQueryingEventListeners) {
   ASSERT_FALSE(listener_function.IsEmpty());
 
   AddListener(context, listener_function, event);
-  // There should only be one listener on the event.
-  EXPECT_EQ(1u, handler()->GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), event));
 
   AddListener(context, listener_function, event);
   // Trying to add the same listener again should be a no-op.
-  EXPECT_EQ(1u, handler()->GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), event));
 
   // Test hasListener returns true for a listener that is present.
   const char kHasListenerFunction[] =
@@ -163,7 +186,7 @@ TEST_F(APIEventHandlerTest, AddingRemovingAndQueryingEventListeners) {
   }
 
   RemoveListener(context, listener_function, event);
-  EXPECT_EQ(0u, handler()->GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(0u, GetNumListeners(isolate(), event));
 
   {
     v8::Local<v8::Value> argv[] = {event};
@@ -219,8 +242,8 @@ TEST_F(APIEventHandlerTest, FiringEvents) {
   AddListener(context, alpha_listener2, alpha_event);
   AddListener(context, beta_listener, beta_event);
 
-  EXPECT_EQ(2u, handler()->GetNumEventListenersForTesting(kAlphaName, context));
-  EXPECT_EQ(1u, handler()->GetNumEventListenersForTesting(kBetaName, context));
+  EXPECT_EQ(2u, GetNumListeners(isolate(), alpha_event));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), beta_event));
 
   auto get_fired_count = [&context](const char* name) {
     v8::Local<v8::Value> res =
@@ -229,7 +252,7 @@ TEST_F(APIEventHandlerTest, FiringEvents) {
       return 0;
     int32_t count = 0;
     EXPECT_TRUE(
-        gin::Converter<int32_t>::FromV8(context->GetIsolate(), res, &count))
+        gin::Converter<int32_t>::FromV8(v8::Isolate::GetCurrent(), res, &count))
         << name;
     return count;
   };
@@ -238,23 +261,22 @@ TEST_F(APIEventHandlerTest, FiringEvents) {
   EXPECT_EQ(0, get_fired_count("alphaCount2"));
   EXPECT_EQ(0, get_fired_count("betaCount"));
 
-  handler()->FireEventInContext(kAlphaName, context, base::Value::List(),
+  handler()->FireEventInContext(kAlphaName, context, base::ListValue(),
                                 nullptr);
-  EXPECT_EQ(2u, handler()->GetNumEventListenersForTesting(kAlphaName, context));
-  EXPECT_EQ(1u, handler()->GetNumEventListenersForTesting(kBetaName, context));
+  EXPECT_EQ(2u, GetNumListeners(isolate(), alpha_event));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), beta_event));
 
   EXPECT_EQ(1, get_fired_count("alphaCount1"));
   EXPECT_EQ(1, get_fired_count("alphaCount2"));
   EXPECT_EQ(0, get_fired_count("betaCount"));
 
-  handler()->FireEventInContext(kAlphaName, context, base::Value::List(),
+  handler()->FireEventInContext(kAlphaName, context, base::ListValue(),
                                 nullptr);
   EXPECT_EQ(2, get_fired_count("alphaCount1"));
   EXPECT_EQ(2, get_fired_count("alphaCount2"));
   EXPECT_EQ(0, get_fired_count("betaCount"));
 
-  handler()->FireEventInContext(kBetaName, context, base::Value::List(),
-                                nullptr);
+  handler()->FireEventInContext(kBetaName, context, base::ListValue(), nullptr);
   EXPECT_EQ(2, get_fired_count("alphaCount1"));
   EXPECT_EQ(2, get_fired_count("alphaCount2"));
   EXPECT_EQ(1, get_fired_count("betaCount"));
@@ -279,7 +301,7 @@ TEST_F(APIEventHandlerTest, EventArguments) {
   AddListener(context, listener_function, event);
 
   const char kArguments[] = "['foo',1,{'prop1':'bar'}]";
-  base::Value::List event_args = ListValueFromString(kArguments);
+  base::ListValue event_args = ListValueFromString(kArguments);
   handler()->FireEventInContext(kEventName, context, event_args, nullptr);
 
   EXPECT_EQ(
@@ -314,20 +336,16 @@ TEST_F(APIEventHandlerTest, MultipleContexts) {
 
   // Add two separate listeners to the event, one in each context.
   AddListener(context_a, listener_a, event_a);
-  EXPECT_EQ(1u,
-            handler()->GetNumEventListenersForTesting(kEventName, context_a));
-  EXPECT_EQ(0u,
-            handler()->GetNumEventListenersForTesting(kEventName, context_b));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), event_a));
+  EXPECT_EQ(0u, GetNumListeners(isolate(), event_b));
 
   AddListener(context_b, listener_b, event_b);
-  EXPECT_EQ(1u,
-            handler()->GetNumEventListenersForTesting(kEventName, context_a));
-  EXPECT_EQ(1u,
-            handler()->GetNumEventListenersForTesting(kEventName, context_b));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), event_a));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), event_b));
 
   // Dispatch the event in context_a - the listener in context_b should not be
   // notified.
-  base::Value::List arguments_a = ListValueFromString("['result_a:']");
+  base::ListValue arguments_a = ListValueFromString("['result_a:']");
   handler()->FireEventInContext(kEventName, context_a, arguments_a, nullptr);
   {
     EXPECT_EQ("\"result_a:alpha\"",
@@ -341,7 +359,7 @@ TEST_F(APIEventHandlerTest, MultipleContexts) {
 
   // Dispatch the event in context_b - the listener in context_a should not be
   // notified.
-  base::Value::List arguments_b = ListValueFromString("['result_b:']");
+  base::ListValue arguments_b = ListValueFromString("['result_b:']");
   handler()->FireEventInContext(kEventName, context_b, arguments_b, nullptr);
   {
     EXPECT_EQ("\"result_a:alpha\"",
@@ -375,7 +393,7 @@ TEST_F(APIEventHandlerTest, DifferentCallingMethods) {
         "Uncaught TypeError: Illegal invocation: Function must be called on "
         "an object of type Event");
   }
-  EXPECT_EQ(0u, handler()->GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(0u, GetNumListeners(isolate(), event));
 
   const char kAddListenerOnEvent[] =
       "(function(event) {\n"
@@ -386,7 +404,7 @@ TEST_F(APIEventHandlerTest, DifferentCallingMethods) {
     RunFunction(FunctionFromString(context, kAddListenerOnEvent),
                 context, 1, args);
   }
-  EXPECT_EQ(1u, handler()->GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), event));
 
   // Call addListener with a function that captures the event, creating a cycle.
   // If we don't properly clean up, the context will leak.
@@ -401,7 +419,7 @@ TEST_F(APIEventHandlerTest, DifferentCallingMethods) {
     RunFunction(FunctionFromString(context, kAddListenerOnEventWithCapture),
                 context, 1, args);
   }
-  EXPECT_EQ(2u, handler()->GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(2u, GetNumListeners(isolate(), event));
 }
 
 TEST_F(APIEventHandlerTest, TestDispatchFromJs) {
@@ -475,11 +493,10 @@ TEST_F(APIEventHandlerTest, RemovingListenersWhileHandlingEvent) {
     AddListener(context, listener, event);
 
   // Fire the event. All listeners should be removed (and we shouldn't crash).
-  EXPECT_EQ(kNumListeners,
-            handler()->GetNumEventListenersForTesting(kEventName, context));
-  handler()->FireEventInContext(kEventName, context, base::Value::List(),
+  EXPECT_EQ(kNumListeners, GetNumListeners(isolate(), event));
+  handler()->FireEventInContext(kEventName, context, base::ListValue(),
                                 nullptr);
-  EXPECT_EQ(0u, handler()->GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(0u, GetNumListeners(isolate(), event));
 
   // TODO(devlin): Another possible test: register listener a and listener b,
   // where a removes b and b removes a. Theoretically, only one should be
@@ -523,9 +540,9 @@ TEST_F(APIEventHandlerTest, TestEventListenersThrowingExceptions) {
         FunctionFromString(context, kListenerFunction);
     AddListener(context, listener, event);
   }
-  EXPECT_EQ(2u, handler()->GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(2u, GetNumListeners(isolate(), event));
 
-  base::Value::List event_args = ListValueFromString("[42]");
+  base::ListValue event_args = ListValueFromString("[42]");
 
   {
     TestJSRunner::AllowErrors allow_errors;
@@ -581,23 +598,20 @@ TEST_F(APIEventHandlerTest, CallbackNotifications) {
     AddListener(context_a, listener1, event1_a);
     ::testing::Mock::VerifyAndClearExpectations(&change_handler);
   }
-  EXPECT_EQ(1u,
-            handler()->GetNumEventListenersForTesting(kEventName1, context_a));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), event1_a));
 
   // Add a second listener to the same event. We should not be notified, since
   // the event already had listeners.
   v8::Local<v8::Function> listener2 =
       FunctionFromString(context_a, "(function() {})");
   AddListener(context_a, listener2, event1_a);
-  EXPECT_EQ(2u,
-            handler()->GetNumEventListenersForTesting(kEventName1, context_a));
+  EXPECT_EQ(2u, GetNumListeners(isolate(), event1_a));
 
   // Remove the first listener of the event. Again, since the event has
   // listeners, we shouldn't be notified.
   RemoveListener(context_a, listener1, event1_a);
 
-  EXPECT_EQ(1u,
-            handler()->GetNumEventListenersForTesting(kEventName1, context_a));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), event1_a));
 
   // Remove the final listener from the event. We should be notified that the
   // event no longer has listeners.
@@ -611,8 +625,7 @@ TEST_F(APIEventHandlerTest, CallbackNotifications) {
     RemoveListener(context_a, listener2, event1_a);
     ::testing::Mock::VerifyAndClearExpectations(&change_handler);
   }
-  EXPECT_EQ(0u,
-            handler()->GetNumEventListenersForTesting(kEventName1, context_a));
+  EXPECT_EQ(0u, GetNumListeners(isolate(), event1_a));
 
   // Add a listener to a separate event to ensure we receive the right
   // notifications.
@@ -628,8 +641,7 @@ TEST_F(APIEventHandlerTest, CallbackNotifications) {
     AddListener(context_a, listener3, event2_a);
     ::testing::Mock::VerifyAndClearExpectations(&change_handler);
   }
-  EXPECT_EQ(1u,
-            handler()->GetNumEventListenersForTesting(kEventName2, context_a));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), event2_a));
 
   {
     EXPECT_CALL(change_handler,
@@ -645,8 +657,7 @@ TEST_F(APIEventHandlerTest, CallbackNotifications) {
     AddListener(context_b, listener, event1_b);
     ::testing::Mock::VerifyAndClearExpectations(&change_handler);
   }
-  EXPECT_EQ(1u,
-            handler()->GetNumEventListenersForTesting(kEventName1, context_b));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), event1_b));
 
   // When the contexts are invalidated, we should receive listener removed
   // notifications. Additionally, since this was the context being torn down,
@@ -698,7 +709,7 @@ TEST_F(APIEventHandlerTest, TestArgumentMassagers) {
   AddListener(context, listener_function, event);
 
   const char kArguments[] = "['first','second']";
-  base::Value::List event_args = ListValueFromString(kArguments);
+  base::ListValue event_args = ListValueFromString(kArguments);
   handler()->FireEventInContext(kEventName, context, event_args, nullptr);
 
   EXPECT_EQ(
@@ -707,6 +718,73 @@ TEST_F(APIEventHandlerTest, TestArgumentMassagers) {
   EXPECT_EQ(
       "[\"primary\",\"secondary\"]",
       GetStringPropertyFromObject(context->Global(), context, "eventArgs"));
+}
+
+TEST_F(APIEventHandlerTest, TestFilteredEventWithMassager) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> context = MainContext();
+
+  context->Global()
+      ->Set(
+          context,
+          v8::String::NewFromUtf8(isolate(), "dispatchCount").ToLocalChecked(),
+          v8::Integer::New(isolate(), 0))
+      .Check();
+
+  const char kEventName[] = "alpha";
+  v8::Local<v8::Object> event = handler()->CreateEventInstance(
+      kEventName, true, true, binding::kNoListenerMax, true, context);
+  ASSERT_FALSE(event.IsEmpty());
+
+  const char kArgumentMassager[] = R"(
+    (function(originalArgs, dispatch) {
+        this.originalArgs = originalArgs;
+        dispatch(['primary', 'secondary']);
+    });
+    )";
+  v8::Local<v8::Function> massager =
+      FunctionFromString(context, kArgumentMassager);
+  handler()->RegisterArgumentMassager(context, kEventName, massager);
+
+  const char kListenerFunction[] = R"(
+        (function() {
+            this.eventArgs = Array.from(arguments);
+            dispatchCount++;
+        })
+        )";
+  v8::Local<v8::Function> listener_function =
+      FunctionFromString(context, kListenerFunction);
+  ASSERT_FALSE(listener_function.IsEmpty());
+  auto filter =
+      V8ValueFromScriptSource(context, "({url: [{hostSuffix: 'test.com'}]})")
+          .As<v8::Object>();
+
+  mojom::EventFilteringInfoPtr matched_filter_info =
+      mojom::EventFilteringInfo::New();
+  matched_filter_info->url = GURL("https://test.com");
+  mojom::EventFilteringInfoPtr unmatched_filter_info =
+      mojom::EventFilteringInfo::New();
+  unmatched_filter_info->url = GURL("https://testfoo.com");
+
+  AddFilteredListener(context, listener_function, event, filter);
+
+  const char kArgs[] = "['first','second']";
+  base::ListValue event_args = ListValueFromString(kArgs);
+
+  handler()->FireEventInContext(kEventName, context, event_args,
+                                std::move(matched_filter_info));
+  handler()->FireEventInContext(kEventName, context, event_args,
+                                std::move(unmatched_filter_info));
+
+  EXPECT_EQ(
+      "[\"first\",\"second\"]",
+      GetStringPropertyFromObject(context->Global(), context, "originalArgs"));
+  EXPECT_EQ(
+      "[\"primary\",\"secondary\"]",
+      GetStringPropertyFromObject(context->Global(), context, "eventArgs"));
+  EXPECT_EQ(1, GetBaseValuePropertyFromObject(context->Global(), context,
+                                              "dispatchCount")
+                   ->GetIfInt());
 }
 
 // Test registering an argument massager for a given event and dispatching
@@ -738,7 +816,7 @@ TEST_F(APIEventHandlerTest, TestArgumentMassagersAsyncDispatch) {
   AddListener(context, listener_function, event);
 
   const char kArguments[] = "['first','second']";
-  base::Value::List event_args = ListValueFromString(kArguments);
+  base::ListValue event_args = ListValueFromString(kArguments);
   handler()->FireEventInContext(kEventName, context, event_args, nullptr);
 
   // The massager should have been triggered, but since it doesn't call
@@ -788,7 +866,7 @@ TEST_F(APIEventHandlerTest, TestArgumentMassagersNeverDispatch) {
 
   AddListener(context, listener_function, event);
 
-  handler()->FireEventInContext(kEventName, context, base::Value::List(),
+  handler()->FireEventInContext(kEventName, context, base::ListValue(),
                                 nullptr);
 
   // Nothing should blow up. (We tested in the previous test that the event
@@ -826,7 +904,7 @@ TEST_F(APIEventHandlerTest, TestArgumentMassagersDispatchResult) {
   ASSERT_FALSE(listener_function.IsEmpty());
   AddListener(context, listener_function, event);
 
-  handler()->FireEventInContext(kEventName, context, base::Value::List(),
+  handler()->FireEventInContext(kEventName, context, base::ListValue(),
                                 nullptr);
 
   EXPECT_EQ(
@@ -912,7 +990,7 @@ TEST_F(APIEventHandlerTest, TestUnmanagedEvents) {
 
   auto fail_on_notified = [](const std::string& event_name,
                              binding::EventListenersChanged changed,
-                             const base::Value::Dict* filter, bool was_manual,
+                             const base::DictValue* filter, bool was_manual,
                              v8::Local<v8::Context> context) { ADD_FAILURE(); };
 
   APIEventHandler handler(base::BindRepeating(fail_on_notified),
@@ -927,7 +1005,7 @@ TEST_F(APIEventHandlerTest, TestUnmanagedEvents) {
   v8::Local<v8::Function> listener = FunctionFromString(context, kListener);
   AddListener(context, listener, event);
 
-  EXPECT_EQ(1u, handler.GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), event));
 
   handler.FireEventInContext(kEventName, context,
                              ListValueFromString("[1, 'foo']"), nullptr);
@@ -937,7 +1015,7 @@ TEST_F(APIEventHandlerTest, TestUnmanagedEvents) {
 
   RemoveListener(context, listener, event);
 
-  EXPECT_EQ(0u, handler.GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(0u, GetNumListeners(isolate(), event));
 }
 
 // Test callback notifications for events that don't support lazy listeners.
@@ -1027,7 +1105,7 @@ TEST_F(APIEventHandlerTest, TestDispatchingEventsWhileScriptSuspended) {
     // Suspend script and fire an event. The listener should *not* be notified
     // while script is suspended.
     TestJSRunner::Suspension script_suspension;
-    handler()->FireEventInContext(kEventName, context, base::Value::List(),
+    handler()->FireEventInContext(kEventName, context, base::ListValue(),
                                   nullptr);
     base::RunLoop().RunUntilIdle();
     EXPECT_EQ("undefined", GetStringPropertyFromObject(context->Global(),
@@ -1076,7 +1154,7 @@ TEST_F(APIEventHandlerTest,
     // Suspend script and fire an event. The listener should not be notified,
     // and no errors should be logged.
     TestJSRunner::Suspension script_suspension;
-    handler()->FireEventInContext(kEventName, context, base::Value::List(),
+    handler()->FireEventInContext(kEventName, context, base::ListValue(),
                                   nullptr);
     base::RunLoop().RunUntilIdle();
     EXPECT_EQ("undefined", GetStringPropertyFromObject(context->Global(),
@@ -1116,7 +1194,7 @@ TEST_F(APIEventHandlerTest,
   // Add two event listeners.
   AddListener(context, listener1, event);
   AddListener(context, listener2, event);
-  EXPECT_EQ(2u, handler()->GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(2u, GetNumListeners(isolate(), event));
 
   {
     // Suspend script, and then queue up a call to remove the first listener.
@@ -1124,17 +1202,16 @@ TEST_F(APIEventHandlerTest,
     v8::Local<v8::Function> remove_listener_function =
         FunctionFromString(context, kRemoveListenerFunction);
     {
-      v8::Local<v8::Value> argv[] = {event, listener1};
+      v8::Local<v8::Value> args[] = {event, listener1};
       // Note: Use JSRunner() so that script suspension is respected.
       JSRunner::Get(context)->RunJSFunction(remove_listener_function, context,
-                                            std::size(argv), argv);
+                                            args);
     }
 
     // Since script has been suspended, there should still be two listeners, and
     // neither should have been notified.
-    EXPECT_EQ(2u,
-              handler()->GetNumEventListenersForTesting(kEventName, context));
-    handler()->FireEventInContext(kEventName, context, base::Value::List(),
+    EXPECT_EQ(2u, GetNumListeners(isolate(), event));
+    handler()->FireEventInContext(kEventName, context, base::ListValue(),
                                   nullptr);
     base::RunLoop().RunUntilIdle();
     EXPECT_EQ("undefined", GetStringPropertyFromObject(context->Global(),
@@ -1147,7 +1224,7 @@ TEST_F(APIEventHandlerTest,
   // event should have been fired. Since the listener was removed before the
   // event dispatch ran in JS, the first listener should *not* have been
   // notified.
-  EXPECT_EQ(1u, handler()->GetNumEventListenersForTesting(kEventName, context));
+  EXPECT_EQ(1u, GetNumListeners(isolate(), event));
   EXPECT_EQ("undefined", GetStringPropertyFromObject(context->Global(), context,
                                                      "eventFired1"));
   EXPECT_EQ("true", GetStringPropertyFromObject(context->Global(), context,

@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -66,9 +67,7 @@ void AddEntries(FileNetLogObserver* logger,
   NetLogEntry base_entry(NetLogEventType::PAC_JAVASCRIPT_ERROR, source,
                          NetLogEventPhase::BEGIN, base::TimeTicks::Now(),
                          NetLogParamsWithString("message", ""));
-  base::Value::Dict value = base_entry.ToDict();
-  std::string json;
-  base::JSONWriter::Write(value, &json);
+  std::string json = base::WriteJson(base_entry.ToDict()).value_or("");
   size_t base_entry_size = json.size();
 
   // The maximum value of base::TimeTicks::Now() will be the maximum value of
@@ -104,20 +103,20 @@ void AddEntries(FileNetLogObserver* logger,
 struct ParsedNetLog {
   base::expected<void, std::string> InitFromFileContents(
       const std::string& input);
-  const base::Value::Dict* GetEvent(size_t i) const;
+  const base::DictValue* GetEvent(size_t i) const;
 
   // Initializes the ParsedNetLog by parsing a JSON file.
   // Owner for the Value tree and a dictionary for the entire netlog.
   base::Value root;
 
   // The constants dictionary.
-  raw_ptr<const base::Value::Dict> constants = nullptr;
+  raw_ptr<const base::DictValue> constants = nullptr;
 
   // The events list.
-  raw_ptr<const base::Value::List> events = nullptr;
+  raw_ptr<const base::ListValue> events = nullptr;
 
   // The optional polled data (may be nullptr).
-  raw_ptr<const base::Value::Dict> polled_data = nullptr;
+  raw_ptr<const base::DictValue> polled_data = nullptr;
 };
 
 base::expected<void, std::string> ParsedNetLog::InitFromFileContents(
@@ -126,10 +125,12 @@ base::expected<void, std::string> ParsedNetLog::InitFromFileContents(
     return base::unexpected("input is empty");
   }
 
-  ASSIGN_OR_RETURN(root, base::JSONReader::ReadAndReturnValueWithError(input),
+  ASSIGN_OR_RETURN(root,
+                   base::JSONReader::ReadAndReturnValueWithError(
+                       input, base::JSON_PARSE_CHROMIUM_EXTENSIONS),
                    &base::JSONReader::Error::message);
 
-  const base::Value::Dict* dict = root.GetIfDict();
+  const base::DictValue* dict = root.GetIfDict();
   if (!dict) {
     return base::unexpected("Not a dictionary");
   }
@@ -151,7 +152,7 @@ base::expected<void, std::string> ParsedNetLog::InitFromFileContents(
 }
 
 // Returns the event at index |i|, or nullptr if there is none.
-const base::Value::Dict* ParsedNetLog::GetEvent(size_t i) const {
+const base::DictValue* ParsedNetLog::GetEvent(size_t i) const {
   if (!events || i >= events->size())
     return nullptr;
 
@@ -188,7 +189,7 @@ void VerifyEventsInLog(const ParsedNetLog* log,
   // The last |num_events_saved| should all be sequential, with the last one
   // being numbered |num_events_emitted - 1|.
   for (size_t i = 0; i < num_events_saved; ++i) {
-    const base::Value::Dict* event = log->GetEvent(i);
+    const base::DictValue* event = log->GetEvent(i);
     ASSERT_TRUE(event);
 
     size_t expected_source_id = num_events_emitted - num_events_saved + i;
@@ -200,7 +201,7 @@ void VerifyEventsInLog(const ParsedNetLog* log,
 
 // Helper that checks whether |dict| has a string property at |key| having
 // |value|.
-void ExpectDictionaryContainsProperty(const base::Value::Dict& dict,
+void ExpectDictionaryContainsProperty(const base::DictValue& dict,
                                       const std::string& key,
                                       const std::string& value) {
   const std::string* actual_value = dict.FindStringByDottedPath(key);
@@ -226,7 +227,7 @@ class FileNetLogObserverTest : public ::testing::TestWithParam<bool>,
   bool IsBounded() const { return GetParam(); }
 
   void CreateAndStartObserving(
-      std::unique_ptr<base::Value::Dict> constants,
+      std::unique_ptr<base::DictValue> constants,
       NetLogCaptureMode capture_mode = NetLogCaptureMode::kDefault) {
     if (IsBounded()) {
       logger_ = FileNetLogObserver::CreateBoundedForTests(
@@ -240,15 +241,31 @@ class FileNetLogObserverTest : public ::testing::TestWithParam<bool>,
     logger_->StartObserving(NetLog::Get());
   }
 
+  void CreateAndStartObservingBoundedFile(
+      int max_file_size,
+      std::unique_ptr<base::DictValue> constants) {
+    base::File file(log_path_,
+                    base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+    EXPECT_TRUE(file.IsValid());
+    // Stick in some nonsense to make sure the file gets cleared properly
+    file.WriteAtCurrentPos(base::as_byte_span("not json"));
+
+    logger_ = FileNetLogObserver::CreateBoundedFile(
+        std::move(file), max_file_size, NetLogCaptureMode::kDefault,
+        std::move(constants));
+
+    logger_->StartObserving(NetLog::Get());
+  }
+
   void CreateAndStartObservingPreExisting(
-      std::unique_ptr<base::Value::Dict> constants) {
+      std::unique_ptr<base::DictValue> constants) {
     ASSERT_TRUE(scratch_dir_.CreateUniqueTempDir());
 
     base::File file(log_path_,
                     base::File::FLAG_CREATE | base::File::FLAG_WRITE);
     EXPECT_TRUE(file.IsValid());
     // Stick in some nonsense to make sure the file gets cleared properly
-    file.Write(0, "not json", 8);
+    file.WriteAtCurrentPos(base::as_byte_span("not json"));
 
     if (IsBounded()) {
       logger_ = FileNetLogObserver::CreateBoundedPreExisting(
@@ -292,7 +309,7 @@ class FileNetLogObserverBoundedTest : public ::testing::Test,
     RunUntilIdle();
   }
 
-  void CreateAndStartObserving(std::unique_ptr<base::Value::Dict> constants,
+  void CreateAndStartObserving(std::unique_ptr<base::DictValue> constants,
                                uint64_t total_file_size,
                                int num_files) {
     logger_ = FileNetLogObserver::CreateBoundedForTests(
@@ -471,6 +488,87 @@ TEST_P(FileNetLogObserverTest, GeneratesValidJSONWithOneEventPreExisting) {
   ASSERT_EQ(1u, log->events->size());
 }
 
+TEST_P(FileNetLogObserverTest,
+       GeneratesValidJSONWithNoEventsCreateBoundedFile) {
+  TestClosure closure;
+
+  CreateAndStartObservingBoundedFile(kLargeFileSize, nullptr);
+
+  logger_->StopObserving(nullptr, closure.closure());
+
+  closure.WaitForResult();
+
+  // Verify the written log.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ParsedNetLog> log,
+                       ReadNetLogFromDisk(log_path_));
+  ASSERT_EQ(0u, log->events->size());
+}
+
+TEST_P(FileNetLogObserverTest,
+       GeneratesValidJSONWithOneEventCreateBoundedFile) {
+  TestClosure closure;
+
+  CreateAndStartObservingBoundedFile(kLargeFileSize, nullptr);
+
+  // Send dummy event.
+  AddEntries(logger_.get(), 1, kDummyEventSize);
+
+  logger_->StopObserving(nullptr, closure.closure());
+
+  closure.WaitForResult();
+
+  // Verify the written log.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ParsedNetLog> log,
+                       ReadNetLogFromDisk(log_path_));
+  ASSERT_EQ(1u, log->events->size());
+}
+
+// Sends exactly enough events to the observer to completely fill the file.
+TEST_P(FileNetLogObserverTest, BoundedFileFillsFile) {
+  const int kTotalFileSize = 10000;
+  const int kEventSize = 200;
+  const int kFileSize = kTotalFileSize;
+  const int kNumEvents = kFileSize / kEventSize;
+  TestClosure closure;
+
+  CreateAndStartObservingBoundedFile(kTotalFileSize, nullptr);
+
+  // Send dummy events.
+  AddEntries(logger_.get(), kNumEvents, kEventSize);
+
+  logger_->StopObserving(nullptr, closure.closure());
+
+  closure.WaitForResult();
+
+  // Verify the written log.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ParsedNetLog> log,
+                       ReadNetLogFromDisk(log_path_));
+  VerifyEventsInLog(log.get(), kNumEvents, kNumEvents);
+}
+
+// Sends twice as many events as will fill the file to the observer
+TEST_P(FileNetLogObserverTest, BoundedFileTruncatesEventsAfterLimit) {
+  const int kTotalFileSize = 10000;
+  const int kEventSize = 200;
+  const int kFileSize = kTotalFileSize;
+  const int kNumEvents = kFileSize / kEventSize;
+  TestClosure closure;
+
+  CreateAndStartObservingBoundedFile(kTotalFileSize, nullptr);
+
+  // Send dummy events.
+  AddEntries(logger_.get(), kNumEvents * 2, kEventSize);
+
+  logger_->StopObserving(nullptr, closure.closure());
+
+  closure.WaitForResult();
+
+  // Verify the written log.
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<ParsedNetLog> log,
+                       ReadNetLogFromDisk(log_path_));
+  VerifyEventsInLog(log.get(), kNumEvents, kNumEvents);
+}
+
 TEST_P(FileNetLogObserverTest, PreExistingFileBroken) {
   // Test that pre-existing output file not being successfully open is
   // tolerated.
@@ -498,11 +596,11 @@ TEST_P(FileNetLogObserverTest, CustomConstants) {
 
   const char kConstantKey[] = "magic";
   const char kConstantString[] = "poney";
-  base::Value::Dict constants;
+  base::DictValue constants;
   constants.SetByDottedPath(kConstantKey, kConstantString);
 
   CreateAndStartObserving(
-      std::make_unique<base::Value::Dict>(std::move(constants)));
+      std::make_unique<base::DictValue>(std::move(constants)));
 
   logger_->StopObserving(nullptr, closure.closure());
 
@@ -525,7 +623,7 @@ TEST_P(FileNetLogObserverTest, GeneratesValidJSONWithPolledData) {
   // Create dummy polled data
   const char kDummyPolledDataPath[] = "dummy_path";
   const char kDummyPolledDataString[] = "dummy_info";
-  base::Value::Dict dummy_polled_data;
+  base::DictValue dummy_polled_data;
   dummy_polled_data.SetByDottedPath(kDummyPolledDataPath,
                                     kDummyPolledDataString);
 
@@ -575,7 +673,7 @@ TEST_P(FileNetLogObserverTest, AddEventsFromMultipleThreads) {
   std::vector<std::unique_ptr<base::Thread>> threads(kNumThreads);
 
 #if BUILDFLAG(IS_FUCHSIA)
-  // TODO(https://crbug.com/959245): Diagnosting logging to determine where
+  // TODO(crbug.com/40625862): Diagnosting logging to determine where
   // this test sometimes hangs.
   LOG(ERROR) << "Create and start threads.";
 #endif
@@ -959,7 +1057,7 @@ TEST_F(FileNetLogObserverBoundedTest, PreExistingUsesSpecifiedDir) {
   ASSERT_TRUE(file.IsValid());
 
   // Stick in some nonsense to make sure the file gets cleared properly
-  file.Write(0, "not json", 8);
+  file.WriteAtCurrentPos(base::as_byte_span("not json"));
 
   logger_ = FileNetLogObserver::CreateBoundedPreExisting(
       scratch_dir.GetPath(), std::move(file), kLargeFileSize,

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/support_tool/support_tool_ui.h"
 
+#include <algorithm>
 #include <optional>
 #include <set>
 #include <string>
@@ -15,11 +16,9 @@
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/platform_util.h"
@@ -28,12 +27,11 @@
 #include "chrome/browser/signin/signin_ui_util.h"
 #include "chrome/browser/support_tool/data_collection_module.pb.h"
 #include "chrome/browser/support_tool/data_collector.h"
-#include "chrome/browser/support_tool/screenshot_data_collector.h"
 #include "chrome/browser/support_tool/support_tool_handler.h"
 #include "chrome/browser/support_tool/support_tool_util.h"
 #include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/support_tool/support_tool_ui_utils.h"
-#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
@@ -50,10 +48,17 @@
 #include "content/public/browser/web_ui_message_handler.h"
 #include "net/base/url_util.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "ui/shell_dialogs/selected_file_info.h"
+#include "ui/webui/webui_util.h"
 #include "url/gurl.h"
+
+bool SupportToolUIConfig::IsWebUIEnabled(
+    content::BrowserContext* browser_context) {
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  return SupportToolUI::IsEnabled(profile);
+}
 
 namespace {
 
@@ -76,9 +81,9 @@ void RecordOpenPageMetric(const GURL& url) {
     return;
   }
   std::string trimmed_path;
-  // We remove '/' characters from the path. `url.path_piece()` will return the
+  // We remove '/' characters from the path. `url.path()` will return the
   // '/' along with the path value.
-  base::TrimString(url.path_piece(), "/", &trimmed_path);
+  base::TrimString(url.path(), "/", &trimmed_path);
   // Check if the path is URL generator path.
   if (trimmed_path.compare(kUrlGeneratorPath) == 0) {
     base::UmaHistogramEnumeration(
@@ -96,14 +101,10 @@ void CreateAndAddSupportToolHTMLSource(Profile* profile, const GURL& url) {
       profile, chrome::kChromeUISupportToolHost);
 
   source->AddString("caseId", GetSupportCaseIDFromURL(url));
-  source->AddBoolean("enableScreenshot", base::FeatureList::IsEnabled(
-                                             features::kSupportToolScreenshot));
-
   source->AddLocalizedStrings(SupportToolUI::GetLocalizedStrings());
 
-  webui::SetupWebUIDataSource(
-      source, base::make_span(kSupportToolResources, kSupportToolResourcesSize),
-      IDR_SUPPORT_TOOL_SUPPORT_TOOL_CONTAINER_HTML);
+  webui::SetupWebUIDataSource(source, kSupportToolResources,
+                              IDR_SUPPORT_TOOL_SUPPORT_TOOL_CONTAINER_HTML);
 
   source->AddResourcePath(kUrlGeneratorPath,
                           IDR_SUPPORT_TOOL_URL_GENERATOR_CONTAINER_HTML);
@@ -135,45 +136,37 @@ class SupportToolMessageHandler : public content::WebUIMessageHandler,
   // WebUIMessageHandler implementation.
   void RegisterMessages() override;
 
-  void HandleGetEmailAddresses(const base::Value::List& args);
+  void HandleGetEmailAddresses(const base::ListValue& args);
 
-  void HandleGetDataCollectors(const base::Value::List& args);
+  void HandleGetDataCollectors(const base::ListValue& args);
 
-  void HandleGetAllDataCollectors(const base::Value::List& args);
+  void HandleGetAllDataCollectors(const base::ListValue& args);
 
-  void HandleTakeScreenshot(const base::Value::List& args);
+  void HandleStartDataCollection(const base::ListValue& args);
 
-  void HandleStartDataCollection(const base::Value::List& args);
+  void HandleCancelDataCollection(const base::ListValue& args);
 
-  void HandleCancelDataCollection(const base::Value::List& args);
+  void HandleStartDataExport(const base::ListValue& args);
 
-  void HandleStartDataExport(const base::Value::List& args);
+  void HandleShowExportedDataInFolder(const base::ListValue& args);
 
-  void HandleShowExportedDataInFolder(const base::Value::List& args);
+  void HandleGenerateCustomizedURL(const base::ListValue& args);
 
-  void HandleGenerateCustomizedURL(const base::Value::List& args);
-
-  void HandleGenerateSupportToken(const base::Value::List& args);
+  void HandleGenerateSupportToken(const base::ListValue& args);
 
   // SelectFileDialog::Listener implementation.
-  void FileSelected(const ui::SelectedFileInfo& file,
-                    int index,
-                    void* params) override;
+  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
 
-  void FileSelectionCanceled(void* params) override;
+  void FileSelectionCanceled() override;
 
  private:
-  base::Value::List GetAccountsList();
-
-  void OnScreenshotTaken(std::optional<SupportToolError> error);
+  base::ListValue GetAccountsList();
 
   void OnDataCollectionDone(const PIIMap& detected_pii,
                             std::set<SupportToolError> errors);
 
   void OnDataExportDone(base::FilePath path, std::set<SupportToolError> errors);
 
-  bool include_screenshot_ = false;
-  std::unique_ptr<ScreenshotDataCollector> screenshot_data_collector_;
   std::set<redaction::PIIType> selected_pii_to_keep_;
   base::FilePath data_path_;
   std::unique_ptr<SupportToolHandler> handler_;
@@ -206,10 +199,6 @@ void SupportToolMessageHandler::RegisterMessages() {
       base::BindRepeating(&SupportToolMessageHandler::HandleStartDataCollection,
                           weak_ptr_factory_.GetWeakPtr()));
   web_ui()->RegisterMessageCallback(
-      "takeScreenshot",
-      base::BindRepeating(&SupportToolMessageHandler::HandleTakeScreenshot,
-                          weak_ptr_factory_.GetWeakPtr()));
-  web_ui()->RegisterMessageCallback(
       "cancelDataCollection",
       base::BindRepeating(
           &SupportToolMessageHandler::HandleCancelDataCollection,
@@ -235,9 +224,9 @@ void SupportToolMessageHandler::RegisterMessages() {
           weak_ptr_factory_.GetWeakPtr()));
 }
 
-base::Value::List SupportToolMessageHandler::GetAccountsList() {
+base::ListValue SupportToolMessageHandler::GetAccountsList() {
   Profile* profile = Profile::FromWebUI(web_ui());
-  base::Value::List account_list;
+  base::ListValue account_list;
 
   // Guest session and incognito mode do not have a primary account (or an
   // IdentityManager).
@@ -258,7 +247,7 @@ base::Value::List SupportToolMessageHandler::GetAccountsList() {
 }
 
 void SupportToolMessageHandler::HandleGetEmailAddresses(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   CHECK_EQ(1U, args.size());
   const base::Value& callback_id = args[0];
@@ -267,7 +256,7 @@ void SupportToolMessageHandler::HandleGetEmailAddresses(
 }
 
 void SupportToolMessageHandler::HandleGetDataCollectors(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   CHECK_EQ(1U, args.size());
   const base::Value& callback_id = args[0];
@@ -281,53 +270,24 @@ void SupportToolMessageHandler::HandleGetDataCollectors(
 }
 
 void SupportToolMessageHandler::HandleGetAllDataCollectors(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   CHECK_EQ(1U, args.size());
   const base::Value& callback_id = args[0];
   ResolveJavascriptCallback(callback_id, GetAllDataCollectorItems());
 }
 
-void SupportToolMessageHandler::HandleTakeScreenshot(
-    const base::Value::List& args) {
-  screenshot_data_collector_ = std::make_unique<ScreenshotDataCollector>();
-  screenshot_data_collector_->CollectDataAndDetectPII(
-      base::BindOnce(&SupportToolMessageHandler::OnScreenshotTaken,
-                     weak_ptr_factory_.GetWeakPtr()),
-      /*task_runner_for_redaction_tool=*/nullptr,
-      /*redaction_tool_container=*/nullptr);
-}
-
-void SupportToolMessageHandler::OnScreenshotTaken(
-    std::optional<SupportToolError> error) {
-  if (error) {
-    LOG(ERROR) << error.value().error_message;
-  }
-  AllowJavascript();
-  FireWebUIListener("screenshot-received",
-                    screenshot_data_collector_->GetScreenshotBase64());
-}
-
 // Starts data collection with the issue details and selected set of data
 // collectors that are sent from UI. Returns the result to UI in the format UI
 // accepts.
 void SupportToolMessageHandler::HandleStartDataCollection(
-    const base::Value::List& args) {
-  CHECK_EQ(4U, args.size());
+    const base::ListValue& args) {
+  CHECK_EQ(3U, args.size());
   const base::Value& callback_id = args[0];
-  const base::Value::Dict* issue_details = args[1].GetIfDict();
+  const base::DictValue* issue_details = args[1].GetIfDict();
   DCHECK(issue_details);
-  const base::Value::List* data_collectors = args[2].GetIfList();
+  const base::ListValue* data_collectors = args[2].GetIfList();
   DCHECK(data_collectors);
-  const std::string* editedScreenshotBase64 = args[3].GetIfString();
-  DCHECK(editedScreenshotBase64);
-  if (*editedScreenshotBase64 != "") {
-    include_screenshot_ = true;
-    screenshot_data_collector_->SetScreenshotBase64(
-        std::move(*editedScreenshotBase64));
-  } else {
-    include_screenshot_ = false;
-  }
   std::set<support_tool::DataCollectorType> included_data_collectors =
       GetIncludedDataCollectorTypes(data_collectors);
   // Send error message to UI if there's no selected data collectors to include.
@@ -343,7 +303,7 @@ void SupportToolMessageHandler::HandleStartDataCollection(
       GetSupportToolHandler(*issue_details->FindString("caseId"),
                             *issue_details->FindString("emailAddress"),
                             *issue_details->FindString("issueDescription"),
-                            Profile::FromWebUI(web_ui()),
+                            std::nullopt, Profile::FromWebUI(web_ui()),
                             GetIncludedDataCollectorTypes(data_collectors));
   this->handler_->CollectSupportData(
       base::BindOnce(&SupportToolMessageHandler::OnDataCollectionDone,
@@ -362,7 +322,7 @@ void SupportToolMessageHandler::OnDataCollectionDone(
 }
 
 void SupportToolMessageHandler::HandleCancelDataCollection(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   base::UmaHistogramEnumeration(
       kSupportToolWebUIActionHistogram,
       SupportToolWebUIActionType::kCancelDataCollection);
@@ -373,9 +333,9 @@ void SupportToolMessageHandler::HandleCancelDataCollection(
 }
 
 void SupportToolMessageHandler::HandleStartDataExport(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
-  const base::Value::List* pii_items = args[0].GetIfList();
+  const base::ListValue* pii_items = args[0].GetIfList();
   DCHECK(pii_items);
   // Early return if the select file dialog is already active.
   if (select_file_dialog_) {
@@ -408,27 +368,23 @@ void SupportToolMessageHandler::HandleStartDataExport(
       /*file_types=*/&file_types,
       /*file_type_index=*/0,
       /*default_extension=*/base::FilePath::StringType(), owning_window,
-      /*params=*/nullptr);
+      /*caller=*/nullptr);
 }
 
 void SupportToolMessageHandler::FileSelected(const ui::SelectedFileInfo& file,
-                                             int index,
-                                             void* params) {
+                                             int index) {
   base::UmaHistogramEnumeration(
       kSupportToolWebUIActionHistogram,
       SupportToolWebUIActionType::kCreateSupportPacket);
   FireWebUIListener("support-data-export-started");
   select_file_dialog_.reset();
-  if (include_screenshot_) {
-    this->handler_->AddDataCollector(std::move(screenshot_data_collector_));
-  }
   this->handler_->ExportCollectedData(
       std::move(selected_pii_to_keep_), file.path(),
       base::BindOnce(&SupportToolMessageHandler::OnDataExportDone,
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
-void SupportToolMessageHandler::FileSelectionCanceled(void* params) {
+void SupportToolMessageHandler::FileSelectionCanceled() {
   selected_pii_to_keep_.clear();
   select_file_dialog_.reset();
 }
@@ -444,10 +400,10 @@ void SupportToolMessageHandler::OnDataExportDone(
     base::FilePath path,
     std::set<SupportToolError> errors) {
   data_path_ = path;
-  base::Value::Dict data_export_result;
+  base::DictValue data_export_result;
   const auto& export_error =
-      base::ranges::find(errors, SupportToolErrorCode::kDataExportError,
-                         &SupportToolError::error_code);
+      std::ranges::find(errors, SupportToolErrorCode::kDataExportError,
+                        &SupportToolError::error_code);
   if (export_error == errors.end()) {
     data_export_result.Set("success", true);
     data_export_result.Set("path", path.BaseName().AsUTF8Unsafe());
@@ -464,30 +420,30 @@ void SupportToolMessageHandler::OnDataExportDone(
 }
 
 void SupportToolMessageHandler::HandleShowExportedDataInFolder(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   platform_util::ShowItemInFolder(Profile::FromWebUI(web_ui()), data_path_);
 }
 
 void SupportToolMessageHandler::HandleGenerateCustomizedURL(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   base::UmaHistogramEnumeration(kSupportToolWebUIActionHistogram,
                                 SupportToolWebUIActionType::kGenerateURL);
   CHECK_EQ(3U, args.size());
   const base::Value& callback_id = args[0];
   std::string case_id = args[1].GetString();
-  const base::Value::List* data_collectors = args[2].GetIfList();
+  const base::ListValue* data_collectors = args[2].GetIfList();
   CHECK(data_collectors);
   ResolveJavascriptCallback(callback_id,
                             GenerateCustomizedURL(case_id, data_collectors));
 }
 
 void SupportToolMessageHandler::HandleGenerateSupportToken(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   base::UmaHistogramEnumeration(kSupportToolWebUIActionHistogram,
                                 SupportToolWebUIActionType::kGenerateToken);
   CHECK_EQ(2U, args.size());
   const base::Value& callback_id = args[0];
-  const base::Value::List* data_collectors = args[1].GetIfList();
+  const base::ListValue* data_collectors = args[1].GetIfList();
   CHECK(data_collectors);
   ResolveJavascriptCallback(callback_id, GenerateSupportToken(data_collectors));
 }
@@ -511,8 +467,8 @@ SupportToolUI::SupportToolUI(content::WebUI* web_ui) : WebUIController(web_ui) {
 SupportToolUI::~SupportToolUI() = default;
 
 // static
-base::Value::Dict SupportToolUI::GetLocalizedStrings() {
-  base::Value::Dict localized_strings;
+base::DictValue SupportToolUI::GetLocalizedStrings() {
+  base::DictValue localized_strings;
   localized_strings.Set(
       "issueDetailsPageTitle",
       l10n_util::GetStringUTF16(IDS_SUPPORT_TOOL_ISSUE_DETAILS_PAGE_TITLE));
@@ -602,8 +558,6 @@ base::Value::Dict SupportToolUI::GetLocalizedStrings() {
       l10n_util::GetStringUTF16(IDS_SUPPORT_TOOL_DONT_INCLUDE_EMAIL));
   localized_strings.Set("selectAll",
                         l10n_util::GetStringUTF16(IDS_SUPPORT_TOOL_SELECT_ALL));
-  localized_strings.Set(
-      "selectNone", l10n_util::GetStringUTF16(IDS_SUPPORT_TOOL_SELECT_NONE));
   return localized_strings;
 }
 

@@ -26,12 +26,12 @@ class CXFA_AttachNodeList final : public CXFA_TreeList {
   bool Append(CXFA_Node* pNode) override;
   bool Insert(CXFA_Node* pNewNode, CXFA_Node* pBeforeNode) override;
   void Remove(CXFA_Node* pNode) override;
-  CXFA_Node* Item(size_t iIndex) override;
+  CXFA_Node* Item(size_t index) override;
 
  private:
-  CXFA_AttachNodeList(CXFA_Document* pDocument, CXFA_Node* pAttachNode);
+  CXFA_AttachNodeList(CXFA_Document* document, CXFA_Node* pAttachNode);
 
-  cppgc::Member<CXFA_Node> const m_pAttachNode;
+  cppgc::Member<CXFA_Node> const attach_node_;
 };
 
 #endif  // XFA_FXFA_PARSER_CXFA_ATTACHNODELIST_H_

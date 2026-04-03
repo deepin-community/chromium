@@ -27,7 +27,6 @@ class ChromebookFlavor(ssh.SSHFlavor):
       lotties_dir    = self.chromeos_homedir + 'lotties',
       skp_dir        = self.chromeos_homedir + 'skps',
       svg_dir        = self.chromeos_homedir + 'svgs',
-      mskp_dir       = self.chromeos_homedir + 'mskp',
       tmp_dir        = self.chromeos_homedir,
       texttraces_dir = '')
 
@@ -41,7 +40,7 @@ class ChromebookFlavor(ssh.SSHFlavor):
   def _copy_dir(self, src, dest):
     script = self.module.resource('scp.py')
     self.m.step(str('scp -r %s %s' % (src, dest)),
-        cmd=['python3', script, src, dest],
+        cmd=['python3', script] + self._ssh_args + [src, dest],
         infra_step=True)
 
   def copy_directory_contents_to_device(self, host_path, device_path):

@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "base/notreached.h"
 #include "chrome/browser/ash/printing/oauth2/authorization_zone.h"
@@ -23,12 +22,12 @@
 #include "chrome/browser/ash/printing/oauth2/profile_auth_servers_sync_bridge.h"
 #include "chrome/browser/ash/printing/oauth2/status_code.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sync/model_type_store_service_factory.h"
+#include "chrome/browser/sync/data_type_store_service_factory.h"
 #include "chromeos/printing/uri.h"
 #include "components/device_event_log/device_event_log.h"
-#include "components/sync/model/model_type_change_processor.h"
-#include "components/sync/model/model_type_store.h"
-#include "components/sync/model/model_type_store_service.h"
+#include "components/sync/model/data_type_local_change_processor.h"
+#include "components/sync/model/data_type_store.h"
+#include "components/sync/model/data_type_store_service.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
 
@@ -55,7 +54,7 @@ void LogAndCall(StatusCallback callback,
 }
 
 void AddLoggingToCallback(StatusCallback& callback,
-                          const std::string_view method,
+                          std::string_view method,
                           const GURL& auth_server,
                           const chromeos::Uri& ipp_endpoint = chromeos::Uri()) {
   // Wrap the `callback` with the function LogAndCall() defined above.
@@ -72,7 +71,7 @@ class AuthorizationZonesManagerImpl
       : client_ids_database_(ClientIdsDatabase::Create()),
         sync_bridge_(ProfileAuthServersSyncBridge::Create(
             this,
-            ModelTypeStoreServiceFactory::GetForProfile(profile)
+            DataTypeStoreServiceFactory::GetForProfile(profile)
                 ->GetStoreFactory())),
         url_loader_factory_(profile->GetURLLoaderFactory()),
         auth_zone_creator_(base::BindRepeating(AuthorizationZone::Create,
@@ -83,8 +82,8 @@ class AuthorizationZonesManagerImpl
       Profile* profile,
       CreateAuthZoneCallback auth_zone_creator,
       std::unique_ptr<ClientIdsDatabase> client_ids_database,
-      std::unique_ptr<syncer::ModelTypeChangeProcessor> change_processor,
-      syncer::OnceModelTypeStoreFactory store_factory)
+      std::unique_ptr<syncer::DataTypeLocalChangeProcessor> change_processor,
+      syncer::OnceDataTypeStoreFactory store_factory)
       : client_ids_database_(std::move(client_ids_database)),
         sync_bridge_(ProfileAuthServersSyncBridge::CreateForTesting(
             this,
@@ -105,12 +104,12 @@ class AuthorizationZonesManagerImpl
     std::unique_ptr<AuthorizationZone> auth_zone =
         auth_zone_creator_.Run(auth_server, client_ids_database_.get());
     if (sync_bridge_->IsInitialized()) {
-      if (!base::Contains(servers_, auth_server)) {
+      if (!servers_.contains(auth_server)) {
         servers_.emplace(auth_server, std::move(auth_zone));
         sync_bridge_->AddAuthorizationServer(auth_server);
       }
     } else {
-      if (!base::Contains(waiting_servers_, auth_server)) {
+      if (!waiting_servers_.contains(auth_server)) {
         waiting_servers_[auth_server].server = std::move(auth_zone);
       }
     }
@@ -147,7 +146,7 @@ class AuthorizationZonesManagerImpl
 
     AuthorizationZone* zone = GetAuthorizationZone(auth_server);
     if (!zone) {
-      const StatusCode code = base::Contains(waiting_servers_, auth_server)
+      const StatusCode code = waiting_servers_.contains(auth_server)
                                   ? StatusCode::kAuthorizationNeeded
                                   : StatusCode::kUntrustedAuthorizationServer;
       std::move(callback).Run(code, "");
@@ -167,7 +166,7 @@ class AuthorizationZonesManagerImpl
 
     AuthorizationZone* zone = GetAuthorizationZone(auth_server);
     if (!zone) {
-      const StatusCode code = base::Contains(waiting_servers_, auth_server)
+      const StatusCode code = waiting_servers_.contains(auth_server)
                                   ? StatusCode::kAuthorizationNeeded
                                   : StatusCode::kUntrustedAuthorizationServer;
       std::move(callback).Run(code, "");
@@ -212,7 +211,7 @@ class AuthorizationZonesManagerImpl
     return it_server->second.get();
   }
 
-  syncer::ModelTypeSyncBridge* GetModelTypeSyncBridge() override {
+  syncer::DataTypeSyncBridge* GetDataTypeSyncBridge() override {
     return sync_bridge_.get();
   }
 
@@ -244,7 +243,7 @@ class AuthorizationZonesManagerImpl
       auth_zone->MarkAuthorizationZoneAsUntrusted();
     }
     for (const GURL& url : added) {
-      if (!base::Contains(servers_, url)) {
+      if (!servers_.contains(url)) {
         servers_.emplace(
             url, auth_zone_creator_.Run(url, client_ids_database_.get()));
       }
@@ -275,8 +274,8 @@ AuthorizationZonesManager::CreateForTesting(
     Profile* profile,
     CreateAuthZoneCallback auth_zone_creator,
     std::unique_ptr<ClientIdsDatabase> client_ids_database,
-    std::unique_ptr<syncer::ModelTypeChangeProcessor> change_processor,
-    syncer::OnceModelTypeStoreFactory store_factory) {
+    std::unique_ptr<syncer::DataTypeLocalChangeProcessor> change_processor,
+    syncer::OnceDataTypeStoreFactory store_factory) {
   DCHECK(profile);
   return std::make_unique<AuthorizationZonesManagerImpl>(
       profile, std::move(auth_zone_creator), std::move(client_ids_database),

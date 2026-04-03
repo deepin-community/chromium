@@ -4,18 +4,18 @@
 
 #include "sql/vfs_wrapper.h"
 
-#include <algorithm>
-#include <string>
-#include <vector>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <string_view>
 
+#include "base/check.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/debug/leak_annotations.h"
-#include "base/files/file_path.h"
-#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/notreached.h"
-#include "base/strings/string_piece.h"
 #include "build/build_config.h"
+#include "third_party/sqlite/sqlite3.h"
 
 #if BUILDFLAG(IS_APPLE)
 #include "base/apple/backup_util.h"
@@ -28,6 +28,10 @@
 
 namespace sql {
 namespace {
+
+#if !BUILDFLAG(IS_FUCHSIA)
+int Unlock(sqlite3_file* sqlite_file, int file_lock);
+#endif  // !BUILDFLAG(IS_FUCHSIA)
 
 // https://www.sqlite.org/vfs.html - documents the overall VFS system.
 //
@@ -52,12 +56,18 @@ sqlite3_file* GetWrappedFile(sqlite3_file* wrapper_file) {
 }
 
 int Close(sqlite3_file* sqlite_file) {
-#if BUILDFLAG(IS_FUCHSIA)
-  // Other platforms automatically unlock when the file descriptor is closed,
-  // but the fuchsia virtual implementation doesn't have that so it needs an
-  // explicit unlock on close.
+  // On Windows, the file lock is taken with a call to LockFileEx using the
+  // flags 'LOCKFILE_FAIL_IMMEDIATELY'. The documentation states the fhe lock
+  // will be released but it is also stating that it will "eventually" released
+  // and it's better that the application release it on exit.
+  //
+  // see:
+  // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex
+  //
+  // A side effect of not releasing the lock is that the next startup may get
+  // a database open error (kBusy). This will cause the next launch to not use
+  // the database.
   Unlock(sqlite_file, SQLITE_LOCK_NONE);
-#endif
 
   VfsFile* file = AsVfsFile(sqlite_file);
   int r = file->wrapped_file->pMethods->xClose(file->wrapped_file);
@@ -66,7 +76,7 @@ int Close(sqlite3_file* sqlite_file) {
   // Memory will be freed with sqlite3_free(), so the destructor needs to be
   // called explicitly.
   file->~VfsFile();
-  memset(file, '\0', sizeof(*file));
+  UNSAFE_TODO(memset(file, '\0', sizeof(*file)));
   return r;
 }
 
@@ -204,11 +214,11 @@ int Open(sqlite3_vfs* vfs, const char* file_name, sqlite3_file* wrapper_file,
   if (file_name && (desired_flags & kJournalFlags)) {
     // https://www.sqlite.org/c3ref/vfs.html indicates that the journal path
     // will have a suffix separated by "-" from the main database file name.
-    base::StringPiece file_name_string_piece(file_name);
+    std::string_view file_name_string_piece(file_name);
     size_t dash_index = file_name_string_piece.rfind('-');
-    if (dash_index != base::StringPiece::npos) {
+    if (dash_index != std::string_view::npos) {
       base::FilePath database_file_path(
-          base::StringPiece(file_name, dash_index));
+          std::string_view(file_name, dash_index));
       if (base::PathExists(database_file_path) &&
           base::apple::GetBackupExclusion(database_file_path)) {
         base::apple::SetBackupExclusion(base::FilePath(file_name_string_piece));
@@ -368,7 +378,7 @@ void EnsureVfsWrapper() {
   // use this code with any other VFS, you're not in a good place.
   std::string_view vfs_name(wrapped_vfs->zName);
   CHECK(vfs_name == "unix" || vfs_name == "win32" || vfs_name == "unix-none" ||
-        vfs_name == "storage-service")
+        vfs_name == "storage_service")
       << "Wrapping unexpected VFS " << vfs_name;
 
   std::unique_ptr<sqlite3_vfs, std::function<void(sqlite3_vfs*)>> wrapper_vfs(
@@ -376,7 +386,7 @@ void EnsureVfsWrapper() {
       [](sqlite3_vfs* v) {
         sqlite3_free(v);
       });
-  memset(wrapper_vfs.get(), '\0', sizeof(sqlite3_vfs));
+  UNSAFE_TODO(memset(wrapper_vfs.get(), '\0', sizeof(sqlite3_vfs)));
 
   // VFS implementations should always work with a SQLite that only knows about
   // earlier versions.

@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/thread_pool.h"
@@ -38,9 +37,12 @@ PlatformSensorProviderLinux::PlatformSensorProviderLinux()
 
 PlatformSensorProviderLinux::~PlatformSensorProviderLinux() = default;
 
+base::WeakPtr<PlatformSensorProvider> PlatformSensorProviderLinux::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 void PlatformSensorProviderLinux::CreateSensorInternal(
     mojom::SensorType type,
-    SensorReadingSharedBuffer* reading_buffer,
     CreateSensorCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
@@ -53,16 +55,15 @@ void PlatformSensorProviderLinux::CreateSensorInternal(
                      // PlatformSensorProviderLinux is deleted.
                      base::Unretained(sensor_device_manager_.get())),
       base::BindOnce(&PlatformSensorProviderLinux::DidEnumerateSensors,
-                     weak_ptr_factory_.GetWeakPtr(), type, reading_buffer,
+                     weak_ptr_factory_.GetWeakPtr(), type,
                      std::move(callback)));
 }
 
 void PlatformSensorProviderLinux::DidEnumerateSensors(
     mojom::SensorType type,
-    SensorReadingSharedBuffer* reading_buffer,
     CreateSensorCallback callback) {
   if (IsFusionSensorType(type)) {
-    CreateFusionSensor(type, reading_buffer, std::move(callback));
+    CreateFusionSensor(type, std::move(callback));
     return;
   }
 
@@ -73,7 +74,8 @@ void PlatformSensorProviderLinux::DidEnumerateSensors(
   }
 
   std::move(callback).Run(base::MakeRefCounted<PlatformSensorLinux>(
-      type, reading_buffer, this, sensor_device));
+      type, GetSensorReadingSharedBufferForType(type), AsWeakPtr(),
+      sensor_device));
 }
 
 void PlatformSensorProviderLinux::FreeResources() {
@@ -106,7 +108,7 @@ void PlatformSensorProviderLinux::OnDeviceAdded(
     std::unique_ptr<SensorInfoLinux> sensor_device) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   // At the moment, we support only one device per type.
-  if (base::Contains(sensor_devices_by_type_, type)) {
+  if (sensor_devices_by_type_.contains(type)) {
     DVLOG(1) << "Sensor ignored. Type " << type
              << ". Node: " << sensor_device->device_node;
     return;

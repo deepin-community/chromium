@@ -27,8 +27,8 @@
 #include "chrome/browser/ui/views/payments/payment_request_row_view.h"
 #include "chrome/browser/ui/views/payments/payment_request_views_util.h"
 #include "chrome/common/url_constants.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/personal_data_manager.h"
 #include "components/payments/content/payment_app.h"
 #include "components/payments/content/payment_request_spec.h"
 #include "components/payments/content/payment_request_state.h"
@@ -62,6 +62,7 @@
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/layout/table_layout.h"
 #include "ui/views/layout/table_layout_view.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/view.h"
 
 namespace payments {
@@ -100,12 +101,13 @@ class PreviewEliderLabel : public views::Label {
       std::u16string elided_string =
           base::i18n::MessageFormatter::FormatWithNumberedArgs(
               format_string_, "", elided_preview, n_);
-      if (gfx::GetStringWidth(elided_string, font_list()) <= pixel_width)
+      if (gfx::GetStringWidth(elided_string, font_list()) <= pixel_width) {
         return elided_string;
+      }
     }
 
-    // TODO(crbug.com/714776): Display something meaningful if the preview can't
-    // be elided enough for the string to fit.
+    // TODO(crbug.com/40517112): Display something meaningful if the preview
+    // can't be elided enough for the string to fit.
     return std::u16string();
   }
 
@@ -363,8 +365,9 @@ PaymentSheetViewController::PaymentSheetViewController(
 }
 
 PaymentSheetViewController::~PaymentSheetViewController() {
-  if (spec())
+  if (spec()) {
     spec()->RemoveObserver(this);
+  }
 
   state()->RemoveObserver(this);
 }
@@ -380,8 +383,9 @@ void PaymentSheetViewController::OnSelectedInformationChanged() {
 }
 
 void PaymentSheetViewController::ButtonPressed(base::RepeatingClosure closure) {
-  if (!dialog()->IsInteractive() || !spec())
+  if (!dialog()->IsInteractive() || !spec()) {
     return;
+  }
 
   std::move(closure).Run();
 
@@ -413,8 +417,9 @@ std::u16string PaymentSheetViewController::GetSheetTitle() {
 }
 
 void PaymentSheetViewController::FillContentView(views::View* content_view) {
-  if (!spec())
+  if (!spec()) {
     return;
+  }
 
   auto builder = views::Builder<views::View>(content_view)
                      .SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -428,23 +433,26 @@ void PaymentSheetViewController::FillContentView(views::View* content_view) {
   // The shipping address and contact info rows are optional.
   std::unique_ptr<PaymentRequestRowView> summary_row =
       CreatePaymentSheetSummaryRow();
-  if (!summary_row)
+  if (!summary_row) {
     return std::move(builder).BuildChildren();
+  }
 
   PaymentRequestRowView* previous_row = summary_row.get();
   builder.AddChild(views::Builder<views::View>(std::move(summary_row)));
 
   if (state()->ShouldShowShippingSection()) {
     std::unique_ptr<PaymentRequestRowView> shipping_row = CreateShippingRow();
-    if (!shipping_row)
+    if (!shipping_row) {
       return std::move(builder).BuildChildren();
+    }
 
     shipping_row->set_previous_row(previous_row->AsWeakPtr());
     previous_row = shipping_row.get();
     builder.AddChild(views::Builder<views::View>(std::move(shipping_row)));
     // It's possible for requestShipping to be true and for there to be no
     // shipping options yet (they will come in updateWith).
-    // TODO(crbug.com/707353): Put a better placeholder row, instead of no row.
+    // TODO(crbug.com/40513573): Put a better placeholder row, instead of no
+    // row.
     std::unique_ptr<PaymentRequestRowView> shipping_option_row =
         CreateShippingOptionRow();
     if (shipping_option_row) {
@@ -501,8 +509,9 @@ PaymentSheetViewController::GetWeakPtr() {
 // +----------------------------------------------+
 std::unique_ptr<PaymentRequestRowView>
 PaymentSheetViewController::CreatePaymentSheetSummaryRow() {
-  if (!spec())
+  if (!spec()) {
     return nullptr;
+  }
 
   constexpr int kItemSummaryPriceFixedWidth = 96;
   auto view_builder =
@@ -595,8 +604,9 @@ PaymentSheetViewController::CreateShippingSectionContent(
     std::u16string* accessible_content) {
   DCHECK(accessible_content);
   autofill::AutofillProfile* profile = state()->selected_shipping_profile();
-  if (!profile)
+  if (!profile) {
     return std::make_unique<views::Label>(std::u16string());
+  }
 
   return GetShippingAddressLabelWithMissingInfo(
       AddressStyleType::SUMMARY, state()->GetApplicationLocale(), *profile,
@@ -613,8 +623,9 @@ PaymentSheetViewController::CreateShippingSectionContent(
 // +----------------------------------------------+
 std::unique_ptr<PaymentRequestRowView>
 PaymentSheetViewController::CreateShippingRow() {
-  if (!spec())
+  if (!spec()) {
     return nullptr;
+  }
 
   std::unique_ptr<views::Button> section;
   PaymentSheetRowBuilder builder(
@@ -764,7 +775,7 @@ PaymentSheetViewController::CreateContactInfoRow() {
       autofill::EMAIL_ADDRESS};
   const std::u16string preview =
       state()->contact_profiles()[0]->ConstructInferredLabel(
-          kLabelFields, std::size(kLabelFields), std::size(kLabelFields),
+          kLabelFields, std::size(kLabelFields),
           state()->GetApplicationLocale());
   if (state()->contact_profiles().size() == 1) {
     return builder.CreateWithButton(preview,
@@ -923,7 +934,8 @@ void PaymentSheetViewController::AddContactInfoButtonPressed() {
 void PaymentSheetViewController::PossiblyIgnorePrimaryButtonPress(
     PaymentRequestSheetController::ButtonCallback callback,
     const ui::Event& event) {
-  if (input_protector_->IsPossiblyUnintendedInteraction(event)) {
+  if (input_protector_->IsPossiblyUnintendedInteraction(
+          event, /*allow_key_events=*/true)) {
     return;
   }
   callback.Run(event);

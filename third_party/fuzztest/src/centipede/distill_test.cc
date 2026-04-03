@@ -19,23 +19,26 @@
 #include <filesystem>  // NOLINT
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "absl/flags/reflection.h"
-#include "absl/log/check.h"
-#include "./centipede/blob_file.h"
-#include "./centipede/defs.h"
+#include "./centipede/corpus_io.h"
 #include "./centipede/environment.h"
 #include "./centipede/feature.h"
-#include "./centipede/shard_reader.h"
-#include "./centipede/test_util.h"
 #include "./centipede/util.h"
 #include "./centipede/workdir.h"
+#include "./common/blob_file.h"
+#include "./common/defs.h"
+#include "./common/logging.h"
+#include "./common/test_util.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 namespace {
+
+using testing::UnorderedElementsAreArray;
 
 struct TestCorpusRecord {
   ByteArray input;
@@ -63,28 +66,27 @@ using InputVec = std::vector<ByteArray>;
 void WriteToShard(const Environment &env, const TestCorpusRecord &record,
                   size_t shard_index) {
   const WorkDir wd{env};
-  const auto corpus_path = wd.CorpusFiles().ShardPath(shard_index);
-  const auto features_path = wd.FeaturesFiles().ShardPath(shard_index);
+  const auto corpus_path = wd.CorpusFilePaths().Shard(shard_index);
+  const auto features_path = wd.FeaturesFilePaths().Shard(shard_index);
   const auto corpus_appender = DefaultBlobFileWriterFactory(env.riegeli);
   const auto features_appender = DefaultBlobFileWriterFactory(env.riegeli);
-  CHECK_OK(corpus_appender->Open(corpus_path, "a"));
-  CHECK_OK(features_appender->Open(features_path, "a"));
-  CHECK_OK(corpus_appender->Write(record.input));
-  CHECK_OK(features_appender->Write(
+  FUZZTEST_CHECK_OK(corpus_appender->Open(corpus_path, "a"));
+  FUZZTEST_CHECK_OK(features_appender->Open(features_path, "a"));
+  FUZZTEST_CHECK_OK(corpus_appender->Write(record.input));
+  FUZZTEST_CHECK_OK(features_appender->Write(
       PackFeaturesAndHash(record.input, record.feature_vec)));
 }
 
 // Reads and returns the distilled corpus record from
 // `wd.DistilledCorpusPath()` and `wd.DistilledFeaturesPath()`.
 std::vector<TestCorpusRecord> ReadFromDistilled(const WorkDir &wd) {
-  const auto distilled_corpus_path = wd.DistilledCorpusFiles().MyShardPath();
+  const auto distilled_corpus_path = wd.DistilledCorpusFilePaths().MyShard();
   const auto distilled_features_path =
-      wd.DistilledFeaturesFiles().MyShardPath();
+      wd.DistilledFeaturesFilePaths().MyShard();
 
   std::vector<TestCorpusRecord> result;
-  auto shard_reader_callback = [&result](const ByteArray &input,
-                                         FeatureVec &features) {
-    result.push_back({input, features});
+  auto shard_reader_callback = [&result](ByteArray input, FeatureVec features) {
+    result.push_back({std::move(input), std::move(features)});
   };
   ReadShard(distilled_corpus_path, distilled_features_path,
             shard_reader_callback);
@@ -120,7 +122,7 @@ std::vector<TestCorpusRecord> TestDistill(
     }
   }
   // Distill.
-  DistillTask(env, shard_indices);
+  DistillForTests(env, shard_indices);
   // Read the result back.
   return ReadFromDistilled(wd);
 }
@@ -135,45 +137,50 @@ TEST(Distill, BasicDistill) {
 
   ShardVec shards = {
       // shard 0; note: distillation iterates the shards backwards.
-      {{in3, {10}}, {in0, {10, 20}}},
+      {
+          {in3, {10}},
+          {in0, {10, 20}},
+      },
       // shard 1
-      {{in1, {20, 30, usr0}}},
+      {
+          {in1, {20, 30, usr0}},
+      },
       // shard 2
-      {{in2, {30, 40, usr1}}},
+      {
+          {in2, {30, 40, usr1}},
+      },
   };
   // Distill these 3 shards in different orders, observe different results.
   EXPECT_THAT(TestDistill(shards, {0, 1, 2}, test_info_->name(), 0),
-              testing::ElementsAreArray({
+              UnorderedElementsAreArray({
                   EqualsTestCorpusRecord(in0, FeatureVec{10, 20}),
                   EqualsTestCorpusRecord(in1, FeatureVec{20, 30}),
                   EqualsTestCorpusRecord(in2, FeatureVec{30, 40}),
               }));
-
   EXPECT_THAT(TestDistill(shards, {2, 0, 1}, test_info_->name(), 0),
-              testing::ElementsAreArray({
+              UnorderedElementsAreArray({
                   EqualsTestCorpusRecord(in2, FeatureVec{30, 40}),
                   EqualsTestCorpusRecord(in0, FeatureVec{10, 20}),
               }));
   EXPECT_THAT(TestDistill(shards, {2, 0, 1}, test_info_->name(), 0x1),
-              testing::ElementsAreArray({
+              UnorderedElementsAreArray({
                   EqualsTestCorpusRecord(in2, FeatureVec{30, 40}),
                   EqualsTestCorpusRecord(in0, FeatureVec{10, 20}),
                   EqualsTestCorpusRecord(in1, FeatureVec{20, 30, usr0}),
               }));
   EXPECT_THAT(TestDistill(shards, {2, 0, 1}, test_info_->name(), 0x2),
-              testing::ElementsAreArray({
+              UnorderedElementsAreArray({
                   EqualsTestCorpusRecord(in2, FeatureVec{30, 40, usr1}),
                   EqualsTestCorpusRecord(in0, FeatureVec{10, 20}),
               }));
   EXPECT_THAT(TestDistill(shards, {2, 0, 1}, test_info_->name(), 0x3),
-              testing::ElementsAreArray({
+              UnorderedElementsAreArray({
                   EqualsTestCorpusRecord(in2, FeatureVec{30, 40, usr1}),
                   EqualsTestCorpusRecord(in0, FeatureVec{10, 20}),
                   EqualsTestCorpusRecord(in1, FeatureVec{20, 30, usr0}),
               }));
-
   EXPECT_THAT(TestDistill(shards, {1, 0, 2}, test_info_->name(), 0),
-              testing::ElementsAreArray({
+              UnorderedElementsAreArray({
                   EqualsTestCorpusRecord(in1, FeatureVec{20, 30}),
                   EqualsTestCorpusRecord(in0, FeatureVec{10, 20}),
                   EqualsTestCorpusRecord(in2, FeatureVec{30, 40}),
@@ -183,4 +190,4 @@ TEST(Distill, BasicDistill) {
 // TODO(kcc): add more tests once we settle on the testing code above.
 
 }  // namespace
-}  // namespace centipede
+}  // namespace fuzztest::internal

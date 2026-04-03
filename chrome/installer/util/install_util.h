@@ -9,8 +9,6 @@
 #ifndef CHROME_INSTALLER_UTIL_INSTALL_UTIL_H_
 #define CHROME_INSTALLER_UTIL_INSTALL_UTIL_H_
 
-#include <windows.h>
-
 #include <optional>
 #include <string>
 #include <string_view>
@@ -24,6 +22,7 @@
 #include "base/version.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_handle.h"
+#include "base/win/windows_types.h"
 #include "chrome/installer/util/util_constants.h"
 
 class WorkItemList;
@@ -87,6 +86,10 @@ class InstallUtil {
   // Test to see if a Start menu shortcut exists with the right toast activator
   // CLSID registered.
   static bool IsStartMenuShortcutWithActivatorGuidInstalled();
+
+  // Returns true if the current process has the interactive user token. False
+  // otherwise.
+  static bool IsRunningAsInteractiveUser();
 
   // Returns the toast activator registry path.
   static std::wstring GetToastActivatorRegistryPath();
@@ -165,11 +168,6 @@ class InstallUtil {
   // Returns the name of Chrome's shortcut in the Start Menu (among other
   // places).
   static std::wstring GetShortcutName();
-
-  // Returns the name of the subdirectory in which Chrome's Start Menu shortcut
-  // was once placed. This remains purely to migrate old installs to the new
-  // style.
-  static std::wstring GetChromeShortcutDirNameDeprecated();
 
   // Returns the name of the subdirectory in the Start Menu in which Chrome
   // apps' shortcuts are placed.

@@ -21,7 +21,6 @@
 #include "avfilter.h"
 #include "filters.h"
 #include "video.h"
-#include "internal.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/opt.h"
 #include "libavutil/lfg.h"
@@ -78,13 +77,13 @@ static const AVOption gradients_options[] = {
     {"duration",  "set video duration", OFFSET(duration),  AV_OPT_TYPE_DURATION,   {.i64=-1},        -1, INT64_MAX, FLAGS },
     {"d",         "set video duration", OFFSET(duration),  AV_OPT_TYPE_DURATION,   {.i64=-1},        -1, INT64_MAX, FLAGS },
     {"speed",     "set gradients rotation speed", OFFSET(speed), AV_OPT_TYPE_FLOAT,{.dbl=0.01},       0, 1, VFT },
-    {"type",      "set gradient type", OFFSET(type),       AV_OPT_TYPE_INT,        {.i64=0},          0, 4, VFT, "type" },
-    {"t",         "set gradient type", OFFSET(type),       AV_OPT_TYPE_INT,        {.i64=0},          0, 4, VFT, "type" },
-    { "linear",   "set linear gradient",          0,       AV_OPT_TYPE_CONST,      {.i64=0},          0, 0, VFT, "type" },
-    { "radial",   "set radial gradient",          0,       AV_OPT_TYPE_CONST,      {.i64=1},          0, 0, VFT, "type" },
-    { "circular", "set circular gradient",        0,       AV_OPT_TYPE_CONST,      {.i64=2},          0, 0, VFT, "type" },
-    { "spiral",   "set spiral gradient",          0,       AV_OPT_TYPE_CONST,      {.i64=3},          0, 0, VFT, "type" },
-    { "square",   "set square gradient",          0,       AV_OPT_TYPE_CONST,      {.i64=4},          0, 0, VFT, "type" },
+    {"type",      "set gradient type", OFFSET(type),       AV_OPT_TYPE_INT,        {.i64=0},          0, 4, VFT, .unit = "type" },
+    {"t",         "set gradient type", OFFSET(type),       AV_OPT_TYPE_INT,        {.i64=0},          0, 4, VFT, .unit = "type" },
+    { "linear",   "set linear gradient",          0,       AV_OPT_TYPE_CONST,      {.i64=0},          0, 0, VFT, .unit = "type" },
+    { "radial",   "set radial gradient",          0,       AV_OPT_TYPE_CONST,      {.i64=1},          0, 0, VFT, .unit = "type" },
+    { "circular", "set circular gradient",        0,       AV_OPT_TYPE_CONST,      {.i64=2},          0, 0, VFT, .unit = "type" },
+    { "spiral",   "set spiral gradient",          0,       AV_OPT_TYPE_CONST,      {.i64=3},          0, 0, VFT, .unit = "type" },
+    { "square",   "set square gradient",          0,       AV_OPT_TYPE_CONST,      {.i64=4},          0, 0, VFT, .unit = "type" },
     {NULL},
 };
 
@@ -334,6 +333,7 @@ static int draw_gradients_slice32_planar(AVFilterContext *ctx, void *arg, int jo
 static int config_output(AVFilterLink *outlink)
 {
     AVFilterContext *ctx = outlink->src;
+    FilterLink *l = ff_filter_link(outlink);
     GradientsContext *s = ctx->priv;
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(outlink->format);
 
@@ -344,7 +344,7 @@ static int config_output(AVFilterLink *outlink)
     outlink->h = s->h;
     outlink->time_base = av_inv_q(s->frame_rate);
     outlink->sample_aspect_ratio = (AVRational) {1, 1};
-    outlink->frame_rate = s->frame_rate;
+    l->frame_rate = s->frame_rate;
     if (s->seed == -1)
         s->seed = av_get_random_seed();
     av_lfg_init(&s->lfg, s->seed);
@@ -408,18 +408,7 @@ static int activate(AVFilterContext *ctx)
         if (!frame)
             return AVERROR(ENOMEM);
 
-#if FF_API_FRAME_KEY
-FF_DISABLE_DEPRECATION_WARNINGS
-        frame->key_frame           = 1;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
-
         frame->flags              |= AV_FRAME_FLAG_KEY;
-#if FF_API_INTERLACED_FRAME
-FF_DISABLE_DEPRECATION_WARNINGS
-        frame->interlaced_frame    = 0;
-FF_ENABLE_DEPRECATION_WARNINGS
-#endif
         frame->flags              &= ~AV_FRAME_FLAG_INTERLACED;
         frame->pict_type           = AV_PICTURE_TYPE_I;
         frame->sample_aspect_ratio = (AVRational) {1, 1};
@@ -443,15 +432,15 @@ static const AVFilterPad gradients_outputs[] = {
     },
 };
 
-const AVFilter ff_vsrc_gradients = {
-    .name          = "gradients",
-    .description   = NULL_IF_CONFIG_SMALL("Draw a gradients."),
+const FFFilter ff_vsrc_gradients = {
+    .p.name        = "gradients",
+    .p.description = NULL_IF_CONFIG_SMALL("Draw a gradients."),
+    .p.priv_class  = &gradients_class,
+    .p.inputs      = NULL,
+    .p.flags       = AVFILTER_FLAG_SLICE_THREADS,
     .priv_size     = sizeof(GradientsContext),
-    .priv_class    = &gradients_class,
-    .inputs        = NULL,
     FILTER_OUTPUTS(gradients_outputs),
     FILTER_PIXFMTS(AV_PIX_FMT_RGBA, AV_PIX_FMT_RGBA64, AV_PIX_FMT_GBRAPF32),
     .activate      = activate,
-    .flags         = AVFILTER_FLAG_SLICE_THREADS,
     .process_command = ff_filter_process_command,
 };

@@ -24,15 +24,15 @@
 
 namespace arc::input_overlay {
 
-constexpr char kKeyboard[] = "keyboard";
-constexpr char kMouse[] = "mouse";
+inline constexpr char kKeyboard[] = "keyboard";
+inline constexpr char kMouse[] = "mouse";
 
 class ActionView;
 class DisplayOverlayController;
 class TouchInjector;
 
 // Parse position from Json.
-std::unique_ptr<Position> ParsePosition(const base::Value::Dict& dict);
+std::unique_ptr<Position> ParsePosition(const base::DictValue& dict);
 // Log events for debugging.
 void LogEvent(const ui::Event& event);
 void LogTouchEvents(const std::list<ui::TouchEvent>& events);
@@ -42,8 +42,8 @@ void LogTouchEvents(const std::list<ui::TouchEvent>& events);
 //    "modifiers": [""] // optional: "ctrl", "shift", "alt".
 // }
 std::optional<std::pair<ui::DomCode, int>> ParseKeyboardKey(
-    const base::Value::Dict& value,
-    const std::string_view key_name);
+    const base::DictValue& value,
+    std::string_view key_name);
 
 // Return true if the `input_element` is bound.
 bool IsInputBound(const InputElement& input_element);
@@ -60,7 +60,7 @@ class Action {
   Action& operator=(const Action&) = delete;
   virtual ~Action();
 
-  virtual bool ParseFromJson(const base::Value::Dict& value);
+  virtual bool ParseFromJson(const base::DictValue& value);
   // Used to create an action from UI.
   virtual bool InitByAddingNewAction(const gfx::Point& target_pos);
   virtual void InitByChangingActionType(Action* action);
@@ -90,14 +90,8 @@ class Action {
 
   // This is called for editing the actions before change is saved. Or for
   // loading the customized data to override the default input mapping.
-  void PrepareToBindInput(std::unique_ptr<InputElement> input_element);
-  // Save `pending_input_` as `current_input_`.
-  void BindPending();
-  // Cancel `pending_input_` and `pending_position_`.
-  void CancelPendingBind();
-  void ResetPendingBind();
-
-  void PrepareToBindPosition(const gfx::Point& new_touch_center);
+  void BindInput(std::unique_ptr<InputElement> input_element);
+  void BindPosition(const gfx::Point& new_touch_center);
 
   // Restore the input binding back to the original binding.
   void RestoreToDefault();
@@ -137,12 +131,6 @@ class Action {
 
   InputElement* current_input() const { return current_input_.get(); }
   InputElement* original_input() const { return original_input_.get(); }
-  InputElement* pending_input() const { return pending_input_.get(); }
-  void set_pending_input(std::unique_ptr<InputElement> input) {
-    if (pending_input_)
-      pending_input_.reset();
-    pending_input_ = std::move(input);
-  }
   int id() { return id_; }
   const std::string& name() { return name_; }
   const std::vector<Position>& original_positions() const {
@@ -188,16 +176,11 @@ class Action {
   // Verify the key release event. If it is verified, it continues to simulate
   // the touch event. Otherwise, consider it as discard.
   bool VerifyOnKeyRelease(ui::DomCode code);
-  // Process after unbinding the input mapping.
-  void PostUnbindInputProcess();
 
   // Original input binding.
   std::unique_ptr<InputElement> original_input_;
   // Current input binding.
   std::unique_ptr<InputElement> current_input_;
-  // Pending input binding. It is used during the editing before it is saved.
-  // TODO(b/253646354): This will be removed when removing Beta flag.
-  std::unique_ptr<InputElement> pending_input_;
 
   // Unique ID for each action.
   int id_ = 0;
@@ -216,8 +199,6 @@ class Action {
   std::vector<Position> current_positions_;
   // Only support the reposition of the first touch position if there are more
   // than one touch position.
-  // TODO(b/253646354): This will be removed when removing Beta flag.
-  std::unique_ptr<Position> pending_position_;
   // Root locations of touch point.
   std::vector<gfx::PointF> touch_down_positions_;
   // If `require_mouse_locked_` == true, the action takes effect when the mouse
@@ -252,7 +233,7 @@ class Action {
                         const base::TimeTicks& time_stamp,
                         std::list<ui::TouchEvent>& touch_events);
 
-  void PrepareToBindPositionForTesting(std::unique_ptr<Position> position);
+  void BindPositionForTesting(std::unique_ptr<Position> position);
 };
 
 }  // namespace arc::input_overlay

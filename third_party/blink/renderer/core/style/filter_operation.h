@@ -26,6 +26,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_FILTER_OPERATION_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_FILTER_OPERATION_H_
 
+#include <iosfwd>
+
 #include "base/notreached.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/style/shadow_data.h"
@@ -38,10 +40,10 @@
 #include "third_party/blink/renderer/platform/graphics/filters/fe_turbulence.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "ui/gfx/geometry/rect_f.h"
-
-#include <iosfwd>
 
 namespace blink {
 
@@ -74,7 +76,6 @@ class CORE_EXPORT FilterOperation : public GarbageCollected<FilterOperation> {
     kComponentTransfer,
     kConvolveMatrix,
     kTurbulence,
-    kNone
   };
 
   static bool CanInterpolate(FilterOperation::OperationType type) {
@@ -98,11 +99,8 @@ class CORE_EXPORT FilterOperation : public GarbageCollected<FilterOperation> {
       case OperationType::kConvolveMatrix:
       case OperationType::kBoxReflect:
         return false;
-      case OperationType::kNone:
-        break;
     }
     NOTREACHED();
-    return false;
   }
 
   virtual ~FilterOperation() = default;
@@ -111,7 +109,6 @@ class CORE_EXPORT FilterOperation : public GarbageCollected<FilterOperation> {
   bool operator==(const FilterOperation& o) const {
     return IsSameType(o) && IsEqualAssumingSameType(o);
   }
-  bool operator!=(const FilterOperation& o) const { return !(*this == o); }
 
   OperationType GetType() const { return type_; }
   virtual bool IsSameType(const FilterOperation& o) const {
@@ -175,7 +172,7 @@ class CORE_EXPORT ReferenceFilterOperation : public FilterOperation {
 
   void Trace(Visitor*) const override;
 
-  String DebugString() const override { return "<ref: " + url_ + ">"; }
+  String DebugString() const override { return StrCat({"<ref: ", url_, ">"}); }
 
  protected:
   bool IsEqualAssumingSameType(const FilterOperation&) const override;
@@ -364,6 +361,11 @@ class CORE_EXPORT DropShadowFilterOperation : public FilterOperation {
   explicit DropShadowFilterOperation(const ShadowData& shadow)
       : FilterOperation(OperationType::kDropShadow), shadow_(shadow) {}
 
+  void Trace(Visitor* visitor) const override {
+    visitor->Trace(shadow_);
+    FilterOperation::Trace(visitor);
+  }
+
   const ShadowData& Shadow() const { return shadow_; }
 
   bool AffectsOpacity() const override { return true; }
@@ -374,23 +376,13 @@ class CORE_EXPORT DropShadowFilterOperation : public FilterOperation {
 
   gfx::RectF MapRect(const gfx::RectF&) const override;
 
-  String DebugString() const override {
-    std::stringstream ss;
-    ss << shadow_.GetColor();
-    char buf[256];
-    snprintf(buf, sizeof(buf),
-             "<drop shadow: x=%f y=%f blur=%f spread=%f opacity=%f color=%s>",
-             shadow_.X(), shadow_.Y(), shadow_.Blur(), shadow_.Spread(),
-             shadow_.Opacity(), ss.str().c_str());
-    return buf;
-  }
-
  protected:
   bool IsEqualAssumingSameType(const FilterOperation& o) const override {
     const DropShadowFilterOperation* other =
         static_cast<const DropShadowFilterOperation*>(&o);
     return shadow_ == other->shadow_;
   }
+  String DebugString() const override;
 
  private:
   ShadowData shadow_;

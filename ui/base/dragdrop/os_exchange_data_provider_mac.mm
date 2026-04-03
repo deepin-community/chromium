@@ -6,12 +6,16 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include <algorithm>
+#include <optional>
+#include <string_view>
+
 #include "base/apple/foundation_util.h"
 #include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/memory/ptr_util.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "base/pickle.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "net/base/filename_util.h"
@@ -174,16 +178,22 @@ bool OSExchangeDataProviderMac::IsFromPrivileged() const {
       containsObject:kUTTypeChromiumPrivilegedInitiatedDrag];
 }
 
-void OSExchangeDataProviderMac::SetString(const std::u16string& string) {
+void OSExchangeDataProviderMac::SetString(std::u16string_view string) {
   [GetPasteboard() setString:base::SysUTF16ToNSString(string)
                      forType:NSPasteboardTypeString];
 }
 
-void OSExchangeDataProviderMac::SetURL(const GURL& url,
-                                       const std::u16string& title) {
+void OSExchangeDataProviderMac::SetURLs(
+    base::span<const ClipboardUrlInfo> url_infos) {
+  if (url_infos.empty()) {
+    return;
+  }
+  // TODO(http://crbug.com/41011768): we should support multiple URLs,
+  // but currently only the first one is used.
+  const auto& url_info = url_infos.front();
   NSArray<NSPasteboardItem*>* items = clipboard_util::PasteboardItemsFromUrls(
-      @[ base::SysUTF8ToNSString(url.spec()) ],
-      @[ base::SysUTF16ToNSString(title) ]);
+      @[ base::SysUTF8ToNSString(url_info.url.spec()) ],
+      @[ base::SysUTF16ToNSString(url_info.title) ]);
   clipboard_util::AddDataToPasteboard(GetPasteboard(), items.firstObject);
 }
 
@@ -204,92 +214,65 @@ void OSExchangeDataProviderMac::SetPickledData(
   [GetPasteboard() setData:ns_data forType:format.ToNSString()];
 }
 
-bool OSExchangeDataProviderMac::GetString(std::u16string* data) const {
-  DCHECK(data);
+std::optional<std::u16string> OSExchangeDataProviderMac::GetString() const {
   NSString* item = [GetPasteboard() stringForType:NSPasteboardTypeString];
   if (item) {
-    *data = base::SysNSStringToUTF16(item);
-    return true;
+    return base::SysNSStringToUTF16(item);
   }
 
   // There was no NSString, check for an NSURL.
-  GURL url;
-  std::u16string title;
-  bool result = GetURLAndTitle(FilenameToURLPolicy::DO_NOT_CONVERT_FILENAMES,
-                               &url, &title);
-  if (result)
-    *data = base::UTF8ToUTF16(url.spec());
+  std::vector<ClipboardUrlInfo> url_infos =
+      GetURLs(FilenameToURLPolicy::DO_NOT_CONVERT_FILENAMES);
+  if (!url_infos.empty()) {
+    return base::UTF8ToUTF16(url_infos.front().url.spec());
+  }
 
-  return result;
+  return std::nullopt;
 }
 
-bool OSExchangeDataProviderMac::GetURLAndTitle(FilenameToURLPolicy policy,
-                                               GURL* url,
-                                               std::u16string* title) const {
-  DCHECK(url);
-  DCHECK(title);
-
+std::vector<ClipboardUrlInfo> OSExchangeDataProviderMac::GetURLs(
+    FilenameToURLPolicy policy) const {
   NSArray<URLAndTitle*>* urls_and_titles =
-      clipboard_util::URLsAndTitlesFromPasteboard(GetPasteboard(),
-                                                  /*include_files=*/false);
-  if (urls_and_titles.count) {
-    *url = GURL(base::SysNSStringToUTF8(urls_and_titles.firstObject.URL));
-    *title = base::SysNSStringToUTF16(urls_and_titles.firstObject.title);
-    return true;
+      clipboard_util::URLsAndTitlesFromPasteboard(
+          GetPasteboard(), policy == FilenameToURLPolicy::CONVERT_FILENAMES);
+  if (!urls_and_titles.count) {
+    return {};
   }
-
-  // If there are no URLs, try to convert a filename to a URL if the policy
-  // allows it. The title remains blank.
-  //
-  // This could be done in the call to `URLsAndTitlesFromPasteboard` above if
-  // `true` were passed in for the `include_files` parameter, but that function
-  // strips the trailing slashes off of paths and always returns the last path
-  // element as the title whereas no path conversion nor title is wanted.
-  //
-  // TODO(avi): What is going on here? This comment and code was written for the
-  // old pasteboard code; is this still true with the new pasteboard code? What
-  // uses this, and why does it care about titles or path conversion?
-  std::vector<ui::FileInfo> files;
-  if (policy != FilenameToURLPolicy::DO_NOT_CONVERT_FILENAMES &&
-      GetFilenames(&files) && !files.empty()) {
-    *url = net::FilePathToFileURL(files[0].path);
-    return true;
+  std::vector<ClipboardUrlInfo> local_urls;
+  for (URLAndTitle* url_and_title in urls_and_titles) {
+    local_urls.emplace_back(GURL(base::SysNSStringToUTF8(url_and_title.URL)),
+                            base::SysNSStringToUTF16(url_and_title.title));
   }
-
-  return false;
+  return local_urls;
 }
 
-bool OSExchangeDataProviderMac::GetFilenames(
-    std::vector<FileInfo>* filenames) const {
+std::optional<std::vector<FileInfo>> OSExchangeDataProviderMac::GetFilenames()
+    const {
   std::vector<FileInfo> files =
       clipboard_util::FilesFromPasteboard(GetPasteboard());
-  bool result = !files.empty();
-  base::ranges::move(files, std::back_inserter(*filenames));
-  return result;
+  if (files.empty()) {
+    return std::nullopt;
+  }
+
+  return files;
 }
 
-bool OSExchangeDataProviderMac::GetPickledData(
-    const ClipboardFormatType& format,
-    base::Pickle* data) const {
-  DCHECK(data);
+std::optional<base::Pickle> OSExchangeDataProviderMac::GetPickledData(
+    const ClipboardFormatType& format) const {
   NSData* ns_data = [GetPasteboard() dataForType:format.ToNSString()];
-  if (!ns_data)
-    return false;
+  if (!ns_data) {
+    return std::nullopt;
+  }
 
-  *data =
-      base::Pickle(static_cast<const char*>([ns_data bytes]), [ns_data length]);
-  return true;
+  return base::Pickle::WithData(base::apple::NSDataToSpan(ns_data));
 }
 
 bool OSExchangeDataProviderMac::HasString() const {
-  std::u16string string;
-  return GetString(&string);
+  return GetString().has_value();
 }
 
 bool OSExchangeDataProviderMac::HasURL(FilenameToURLPolicy policy) const {
-  GURL url;
-  std::u16string title;
-  return GetURLAndTitle(policy, &url, &title);
+  return !GetURLs(policy).empty();
 }
 
 bool OSExchangeDataProviderMac::HasFile() const {
@@ -307,11 +290,10 @@ void OSExchangeDataProviderMac::SetFileContents(
   NOTIMPLEMENTED();
 }
 
-bool OSExchangeDataProviderMac::GetFileContents(
-    base::FilePath* filename,
-    std::string* file_contents) const {
+std::optional<OSExchangeDataProvider::FileContentsInfo>
+OSExchangeDataProviderMac::GetFileContents() const {
   NOTIMPLEMENTED();
-  return false;
+  return std::nullopt;
 }
 
 bool OSExchangeDataProviderMac::HasFileContents() const {
@@ -364,8 +346,8 @@ NSArray<NSDraggingItem*>* OSExchangeDataProviderMac::GetDraggingItems() const {
 NSArray* OSExchangeDataProviderMac::SupportedPasteboardTypes() {
   return @[
     kUTTypeChromiumInitiatedDrag, kUTTypeChromiumPrivilegedInitiatedDrag,
-    kUTTypeChromiumRendererInitiatedDrag, kUTTypeChromiumWebCustomData,
-    kUTTypeWebKitWebURLsWithTitles, kUTTypeChromiumSourceURL,
+    kUTTypeChromiumRendererInitiatedDrag, kUTTypeChromiumDataTransferCustomData,
+    kUTTypeWebKitWebUrlsWithTitles, kUTTypeChromiumSourceUrl,
     NSPasteboardTypeFileURL, NSPasteboardTypeHTML, NSPasteboardTypeRTF,
     NSPasteboardTypeString, NSPasteboardTypeURL
   ];

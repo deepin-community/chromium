@@ -1,3 +1,4 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load(
     "//tensorflow:tensorflow.bzl",
     "tf_cc_test",
@@ -20,13 +21,13 @@ cc_library(
     deps = [
         "//tensorflow/c/experimental/ops/gen/common",
         "//tensorflow/c/experimental/ops/gen/cpp/renderers",
+        "//tensorflow/c/experimental/ops/gen/cpp/views",
         "//tensorflow/c/experimental/ops/gen/model",
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
         "//tensorflow/core:op_gen_lib",
         "//tensorflow/core:protos_all_cc",
-        "//tensorflow/core/platform:str_util",
         "@com_google_absl//absl/strings",
     ],
     alwayslink = 1,
@@ -39,11 +40,14 @@ tf_cc_test(
     data = ["//tensorflow/c/experimental/ops/gen/cpp/golden"],
     deps = [
         ":cpp",
+        "//tensorflow/c/experimental/ops/gen/common",
+        "//tensorflow/c/experimental/ops/gen/cpp/renderers",
         "//tensorflow/core:core_cpu",
         "//tensorflow/core:framework",
         "//tensorflow/core:lib",
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
         "//tensorflow/core:testlib",
+        "@xla//xla/tsl/platform:status",
     ],
 )

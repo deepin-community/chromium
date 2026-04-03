@@ -163,7 +163,7 @@ class FakeCrosHealthd final : public mojom::CrosHealthdDiagnosticsService,
   // Set expectation about the parameter that is passed to a call of
   // a Diagnostics routine (`Run*Routine`) and `GetRoutineUpdate`.
   void SetExpectedLastPassedDiagnosticsParametersForTesting(
-      base::Value::Dict expected_parameters);
+      base::DictValue expected_parameters);
 
   // Verifies that the actual passed parameters to Diagnostic
   // routines match the previously set expectations.
@@ -203,9 +203,6 @@ class FakeCrosHealthd final : public mojom::CrosHealthdDiagnosticsService,
   FakeCrosHealthd();
   ~FakeCrosHealthd() override;
 
-  // Binds a new mojo remote and disconnected the old one if exists.
-  mojo::Remote<mojom::CrosHealthdServiceFactory> BindNewRemote();
-
   // CrosHealthdDiagnosticsService overrides:
   void GetAvailableRoutines(GetAvailableRoutinesCallback callback) override;
   void GetRoutineUpdate(int32_t id,
@@ -231,12 +228,13 @@ class FakeCrosHealthd final : public mojom::CrosHealthdDiagnosticsService,
   void RunFloatingPointAccuracyRoutine(
       mojom::NullableUint32Ptr length_seconds,
       RunFloatingPointAccuracyRoutineCallback callback) override;
-  void DEPRECATED_RunNvmeWearLevelRoutine(
+  void DEPRECATED_RunNvmeWearLevelRoutineWithThreshold(
       uint32_t wear_level_threshold,
-      RunNvmeWearLevelRoutineCallback callback) override;
-  void RunNvmeWearLevelRoutine(
+      DEPRECATED_RunNvmeWearLevelRoutineWithThresholdCallback callback)
+      override;
+  void DEPRECATED_RunNvmeWearLevelRoutine(
       mojom::NullableUint32Ptr wear_level_threshold,
-      RunNvmeWearLevelRoutineCallback callback) override;
+      DEPRECATED_RunNvmeWearLevelRoutineCallback callback) override;
   void RunNvmeSelfTestRoutine(mojom::NvmeSelfTestTypeEnum nvme_self_test_type,
                               RunNvmeSelfTestRoutineCallback callback) override;
   void RunDiskReadRoutine(mojom::DiskReadRoutineTypeEnum type,
@@ -303,7 +301,7 @@ class FakeCrosHealthd final : public mojom::CrosHealthdDiagnosticsService,
   void DEPRECATED_RunAudioSetGainRoutine(
       uint64_t node_id,
       uint8_t gain,
-      bool mute_on,
+      bool deprecated_mute_on,
       DEPRECATED_RunAudioSetGainRoutineCallback callback) override;
   void RunBluetoothPowerRoutine(
       RunBluetoothPowerRoutineCallback callback) override;
@@ -415,9 +413,9 @@ class FakeCrosHealthd final : public mojom::CrosHealthdDiagnosticsService,
   std::optional<RoutineUpdateParams> routine_update_params_;
 
   // Expectation of the passed parameters.
-  base::Value::Dict expected_passed_parameters_;
+  base::DictValue expected_passed_parameters_;
   // Actually passed parameter.
-  base::Value::Dict actual_passed_parameters_;
+  base::DictValue actual_passed_parameters_;
 
   base::TimeDelta callback_delay_;
 };

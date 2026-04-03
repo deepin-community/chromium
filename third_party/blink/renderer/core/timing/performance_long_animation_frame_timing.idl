@@ -3,13 +3,16 @@
 // found in the LICENSE file.
 
 // https://github.com/w3c/longtasks/blob/loaf-explainer/loaf-explainer.md
-[Exposed=Window, RuntimeEnabled=LongAnimationFrameTiming]
+[Exposed=Window]
 interface PerformanceLongAnimationFrameTiming : PerformanceEntry {
     readonly attribute DOMHighResTimeStamp renderStart;
     readonly attribute DOMHighResTimeStamp styleAndLayoutStart;
     readonly attribute DOMHighResTimeStamp firstUIEventTimestamp;
     readonly attribute DOMHighResTimeStamp blockingDuration;
+    [RuntimeEnabled=LongAnimationFrameStyleDuration] readonly attribute DOMHighResTimeStamp styleDuration;
     [SameObject, SaveSameObject] readonly attribute FrozenArray<PerformanceScriptTiming> scripts;
 
     [CallWith=ScriptState, ImplementedAs=toJSONForBinding] object toJSON();
 };
+
+PerformanceLongAnimationFrameTiming includes PaintTimingMixin;

@@ -39,7 +39,6 @@ namespace {
 // The compute shader workgroup size is settled at compute pipeline creation time.
 // The validation code in dawn is in each backend (not including Null backend) thus this test needs
 // to be as part of a dawn_end2end_tests instead of the dawn_unittests
-// TODO(dawn:1504): Add support for GL backend.
 class WorkgroupSizeValidationTest : public DawnTest {
   public:
     wgpu::ShaderModule SetUpShaderWithValidDefaultValueConstants() {
@@ -109,8 +108,7 @@ override x: u32;
 
     void TestInitializedWithOutOfLimitValue(const wgpu::ShaderModule& module) {
         std::vector<wgpu::ConstantEntry> constants{
-            {nullptr, "x",
-             static_cast<double>(GetSupportedLimits().limits.maxComputeWorkgroupSizeX + 1)},
+            {nullptr, "x", static_cast<double>(GetSupportedLimits().maxComputeWorkgroupSizeX + 1)},
             {nullptr, "y", 1},
             {nullptr, "z", 1}};
         TestCreatePipeline(module, constants);
@@ -146,7 +144,7 @@ TEST_P(WorkgroupSizeValidationTest, WithFixedValues) {
         }
     };
 
-    wgpu::Limits supportedLimits = GetSupportedLimits().limits;
+    const auto& supportedLimits = GetSupportedLimits();
 
     CheckShaderWithWorkgroupSize(true, 1, 1, 1);
     CheckShaderWithWorkgroupSize(true, supportedLimits.maxComputeWorkgroupSizeX, 1, 1);
@@ -170,7 +168,7 @@ TEST_P(WorkgroupSizeValidationTest, WithFixedValues) {
 
 // Test workgroup size validation with fixed values (storage size limits validation).
 TEST_P(WorkgroupSizeValidationTest, WithFixedValuesStorageSizeLimits) {
-    wgpu::Limits supportedLimits = GetSupportedLimits().limits;
+    const auto& supportedLimits = GetSupportedLimits();
 
     constexpr uint32_t kVec4Size = 16;
     const uint32_t maxVec4Count = supportedLimits.maxComputeWorkgroupStorageSize / kVec4Size;
@@ -303,8 +301,7 @@ TEST_P(WorkgroupSizeValidationTest, PartialOverrides) {
     {
         // Error: invalid value (out of device limits)
         std::vector<wgpu::ConstantEntry> constants{
-            {nullptr, "x",
-             static_cast<double>(GetSupportedLimits().limits.maxComputeWorkgroupSizeX + 1)}};
+            {nullptr, "x", static_cast<double>(GetSupportedLimits().maxComputeWorkgroupSizeX + 1)}};
         ASSERT_DEVICE_ERROR(TestCreatePipeline(module, constants));
     }
     {
@@ -317,7 +314,7 @@ TEST_P(WorkgroupSizeValidationTest, PartialOverrides) {
 // Test workgroup size validation after being overrided with invalid values.
 TEST_P(WorkgroupSizeValidationTest, ValidationAfterOverride) {
     wgpu::ShaderModule module = SetUpShaderWithUninitializedConstants();
-    wgpu::Limits supportedLimits = GetSupportedLimits().limits;
+    const auto& supportedLimits = GetSupportedLimits();
     {
         // Error: exceed maxComputeWorkgroupSizeZ
         std::vector<wgpu::ConstantEntry> constants{
@@ -343,7 +340,7 @@ TEST_P(WorkgroupSizeValidationTest, ValidationAfterOverride) {
 // Test workgroup size validation after being overrided with invalid values (storage size limits
 // validation).
 TEST_P(WorkgroupSizeValidationTest, ValidationAfterOverrideStorageSize) {
-    wgpu::Limits supportedLimits = GetSupportedLimits().limits;
+    const auto& supportedLimits = GetSupportedLimits();
 
     constexpr uint32_t kVec4Size = 16;
     const uint32_t maxVec4Count = supportedLimits.maxComputeWorkgroupStorageSize / kVec4Size;
@@ -385,6 +382,8 @@ TEST_P(WorkgroupSizeValidationTest, ValidationAfterOverrideStorageSize) {
     CheckPipelineWithWorkgroupStorage(false, 0, maxMat4Count + 1);
 }
 
+// TODO(crbug.com/462151326): Fix pipeline creation error of the inner layer to surface up properly
+// in WebGPUBackend.
 DAWN_INSTANTIATE_TEST(WorkgroupSizeValidationTest,
                       D3D11Backend(),
                       D3D12Backend(),

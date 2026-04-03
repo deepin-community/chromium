@@ -4,14 +4,14 @@
 
 #include "chrome/browser/ui/autofill/address_editor_controller.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "base/callback_list.h"
-#include "base/ranges/algorithm.h"
 #include "base/test/mock_callback.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
-#include "components/autofill/core/browser/test_personal_data_manager.h"
+#include "components/autofill/core/browser/data_manager/test_personal_data_manager.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
 #include "components/autofill/core/browser/ui/country_combobox_model.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -26,7 +26,7 @@ using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::ReturnRef;
 
-// TODO(crbug.com/1470459): write more unit tests for AddressEditorController.
+// TODO(crbug.com/40277889): write more unit tests for AddressEditorController.
 class AddressEditorControllerTest : public testing::Test {
  public:
   AddressEditorControllerTest() = default;
@@ -37,7 +37,8 @@ class AddressEditorControllerTest : public testing::Test {
     pref_service_.registry()->RegisterBooleanPref(
         prefs::kAutofillCreditCardEnabled, true);
     pdm_.SetPrefService(&pref_service_);
-    pdm_.set_default_country_code("US");
+    pdm_.test_address_data_manager().SetDefaultCountryCode(
+        AddressCountryCode("US"));
   }
 
  protected:
@@ -55,10 +56,11 @@ class AddressEditorControllerTest : public testing::Test {
 TEST_F(AddressEditorControllerTest, SmokeTest) {
   CreateController(/*is_validatable=*/false);
   EXPECT_FALSE(controller_->is_validatable());
-  EXPECT_TRUE(controller_->is_valid());
+  EXPECT_FALSE(controller_->is_valid().has_value());
 
   controller_->SetIsValid(/*is_valid=*/false);
-  EXPECT_FALSE(controller_->is_valid());
+  EXPECT_TRUE(controller_->is_valid().has_value());
+  EXPECT_FALSE(*controller_->is_valid());
 }
 
 TEST_F(AddressEditorControllerTest, FieldValidation) {
@@ -109,7 +111,7 @@ TEST_F(AddressEditorControllerTest, ValidityRemainsSame) {
 
   base::MockRepeatingCallback<void(bool)> on_validity_changed;
   InSequence seq;
-  EXPECT_CALL(on_validity_changed, Run).Times(0);
+  EXPECT_CALL(on_validity_changed, Run).Times(1);
 
   base::CallbackListSubscription subscription =
       controller_->AddIsValidChangedCallback(on_validity_changed.Get());
@@ -124,24 +126,9 @@ TEST_F(AddressEditorControllerTest, GetCountryComboboxModel) {
   // `country` is null when it represents a separator. There must be exactly 1
   // separator in the country list.
   EXPECT_EQ(
-      base::ranges::count_if(controller_->GetCountryComboboxModel().countries(),
-                             [](const auto& country) { return !country; }),
+      std::ranges::count_if(controller_->GetCountryComboboxModel().countries(),
+                            [](const auto& country) { return !country; }),
       1l);
-}
-
-// TODO(crbug.com/1432505): remove this test once unsupported countries
-// filtering is removed.
-TEST_F(AddressEditorControllerTest, NonZeroCountriesFiltered) {
-  auto non_validatable_controller = std::make_unique<AddressEditorController>(
-      profile_, &pdm_, /*is_validatable=*/false);
-  auto validatable_controller = std::make_unique<AddressEditorController>(
-      profile_, &pdm_, /*is_validatable=*/true);
-
-  // Country list should be reduced in size after unsupported countries are
-  // filtered out.
-  EXPECT_GT(
-      non_validatable_controller->GetCountryComboboxModel().GetItemCount(),
-      validatable_controller->GetCountryComboboxModel().GetItemCount());
 }
 
 TEST_F(AddressEditorControllerTest, SetProfileInfo) {
@@ -169,7 +156,7 @@ TEST_F(AddressEditorControllerTest, StaticEditorFields) {
   // to the set of editor fields.
   for (auto type : std::vector<FieldType>{
            ADDRESS_HOME_COUNTRY, PHONE_HOME_WHOLE_NUMBER, EMAIL_ADDRESS}) {
-    EXPECT_EQ(base::ranges::count_if(
+    EXPECT_EQ(std::ranges::count_if(
                   controller_->editor_fields(),
                   [type](auto field) { return field.type == type; }),
               1);

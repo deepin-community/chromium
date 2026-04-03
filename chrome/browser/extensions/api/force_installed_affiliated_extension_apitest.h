@@ -47,11 +47,11 @@ class ForceInstalledAffiliatedExtensionApiTest
       const std::string& extension_path,
       const std::string& pem_path);
 
-  // Sets |custom_arg_value|, loads |page_url| and waits for an extension API
+  // Sets `custom_arg_value`, loads `page_url` and waits for an extension API
   // test pass/fail notification.
   void TestExtension(Browser* browser,
                      const GURL& page_url,
-                     const base::Value::Dict& custom_arg_value);
+                     const base::DictValue& custom_arg_value);
 
   testing::NiceMock<policy::MockConfigurationPolicyProvider> policy_provider_;
   ash::ScopedStubInstallAttributes test_install_attributes_;

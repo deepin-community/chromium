@@ -20,11 +20,11 @@
 #include <ostream>
 #include <string>
 
-#include "absl/log/check.h"
 #include "absl/types/span.h"
-#include "./centipede/defs.h"
+#include "./common/defs.h"
+#include "./common/logging.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
 bool PCInfo::operator==(const PCInfo &rhs) const {
   return this->pc == rhs.pc && this->flags == rhs.flags;
@@ -34,11 +34,11 @@ PCTable ReadPcTable(std::istream &in) {
   std::string input_string(std::istreambuf_iterator<char>(in), {});
 
   ByteArray pc_infos_as_bytes(input_string.begin(), input_string.end());
-  CHECK_EQ(pc_infos_as_bytes.size() % sizeof(PCInfo), 0);
+  FUZZTEST_CHECK_EQ(pc_infos_as_bytes.size() % sizeof(PCInfo), 0);
   size_t pc_table_size = pc_infos_as_bytes.size() / sizeof(PCInfo);
   const auto *pc_infos = reinterpret_cast<PCInfo *>(pc_infos_as_bytes.data());
   PCTable pc_table{pc_infos, pc_infos + pc_table_size};
-  CHECK_EQ(pc_table.size(), pc_table_size);
+  FUZZTEST_CHECK_EQ(pc_table.size(), pc_table_size);
 
   return pc_table;
 }
@@ -50,4 +50,4 @@ void WritePcTable(const PCTable &pc_table, std::ostream &out) {
   out.write(pc_infos_as_bytes.data(), pc_infos_as_bytes.size());
 }
 
-}  // namespace centipede
+}  // namespace fuzztest::internal

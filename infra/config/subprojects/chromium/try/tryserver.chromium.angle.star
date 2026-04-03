@@ -3,37 +3,56 @@
 # found in the LICENSE file.
 """Definitions of builders in the tryserver.chromium.angle builder group."""
 
-load("//lib/builders.star", "cpu", "os", "reclient")
-load("//lib/builder_config.star", "builder_config")
-load("//lib/consoles.star", "consoles")
-load("//lib/gn_args.star", "gn_args")
-load("//lib/try.star", "try_")
+load("@chromium-luci//builder_config.star", "builder_config")
+load("@chromium-luci//builders.star", "builders", "os")
+load("@chromium-luci//consoles.star", "consoles")
+load("@chromium-luci//gn_args.star", "gn_args")
+load("@chromium-luci//try.star", "try_")
+load("//lib/gpu.star", "gpu")
+load("//lib/siso.star", "siso")
+load("//lib/try_constants.star", "try_constants")
 
 try_.defaults.set(
-    executable = try_.DEFAULT_EXECUTABLE,
+    executable = "recipe:angle_chromium_trybot",
     builder_group = "tryserver.chromium.angle",
-    pool = try_.DEFAULT_POOL,
-    builderless = False,
+    pool = "luci.chromium.gpu.try",
+    builderless = True,
     cores = 8,
     os = os.LINUX_DEFAULT,
-    execution_timeout = try_.DEFAULT_EXECUTION_TIMEOUT,
-    reclient_instance = reclient.instance.DEFAULT_UNTRUSTED,
-    reclient_jobs = reclient.jobs.HIGH_JOBS_FOR_CQ,
-    service_account = try_.gpu.SERVICE_ACCOUNT,
+    ssd = None,
+    contact_team_email = "angle-team@google.com",
+    execution_timeout = try_constants.DEFAULT_EXECUTION_TIMEOUT,
+    experiments = {
+        "chromium_tests.resultdb_module": 100,
+    },
+    max_concurrent_builds = 5,
+    service_account = gpu.try_.SERVICE_ACCOUNT,
+    siso_keep_going = siso.KEEP_GOING,
+    siso_project = siso.project.DEFAULT_UNTRUSTED,
+    siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CQ,
 )
 
 consoles.list_view(
     name = "tryserver.chromium.angle",
 )
 
-try_.builder(
+def base_angle_builder(*, name, **kwargs):
+    return try_.builder(
+        name = name,
+        # For some reason, this cannot be set via try_.defaults.set(), as it
+        # complains about it being set twice.
+        free_space = None,
+        **kwargs
+    )
+
+base_angle_builder(
     name = "android-angle-chromium-try",
-    executable = "recipe:angle_chromium_trybot",
+    description_html = "Builds and tests ANGLE on arm64 Android using ToT ANGLE and a known good Chromium revision.",
     mirrors = [
         "ci/android-angle-chromium-arm64-builder",
-        "ci/android-angle-chromium-arm64-nexus5x",
+        "ci/android-angle-chromium-arm64-pixel2",
     ],
-    try_settings = builder_config.try_settings(
+    builder_config_settings = builder_config.try_settings(
         retry_failed_shards = False,
     ),
     gn_args = gn_args.config(
@@ -42,15 +61,16 @@ try_.builder(
             "no_symbols",
         ],
     ),
+    contact_team_email = "angle-team@google.com",
 )
 
-try_.builder(
+base_angle_builder(
     name = "fuchsia-angle-try",
-    executable = "recipe:angle_chromium_trybot",
+    description_html = "Builds ANGLE on x64 Fuchsia using ToT ANGLE and a known good Chromium revision. Compile-only.",
     mirrors = [
         "ci/fuchsia-angle-builder",
     ],
-    try_settings = builder_config.try_settings(
+    builder_config_settings = builder_config.try_settings(
         include_all_triggered_testers = True,
         is_compile_only = True,
     ),
@@ -62,15 +82,15 @@ try_.builder(
     ),
 )
 
-try_.builder(
+base_angle_builder(
     name = "linux-angle-chromium-try",
-    executable = "recipe:angle_chromium_trybot",
+    description_html = "Builds and tests ANGLE on x64 Linux using ToT ANGLE and a known good Chromium revision.",
     mirrors = [
         "ci/linux-angle-chromium-builder",
         "ci/linux-angle-chromium-intel",
         "ci/linux-angle-chromium-nvidia",
     ],
-    try_settings = builder_config.try_settings(
+    builder_config_settings = builder_config.try_settings(
         retry_failed_shards = False,
     ),
     gn_args = gn_args.config(
@@ -81,15 +101,23 @@ try_.builder(
     ),
 )
 
-try_.builder(
+def angle_mac_builder(**kwargs):
+    return base_angle_builder(
+        cores = None,
+        os = os.MAC_ANY,
+        cpu = None,
+        **kwargs
+    )
+
+angle_mac_builder(
     name = "mac-angle-chromium-try",
-    executable = "recipe:angle_chromium_trybot",
+    description_html = "Builds and tests ANGLE on x64 Mac using ToT ANGLE and a known good Chromium revision.",
     mirrors = [
         "ci/mac-angle-chromium-amd",
         "ci/mac-angle-chromium-builder",
         "ci/mac-angle-chromium-intel",
     ],
-    try_settings = builder_config.try_settings(
+    builder_config_settings = builder_config.try_settings(
         retry_failed_shards = False,
     ),
     gn_args = gn_args.config(
@@ -98,20 +126,24 @@ try_.builder(
             "no_symbols",
         ],
     ),
-    cores = None,
-    os = os.MAC_ANY,
-    cpu = cpu.ARM64,
 )
 
-try_.builder(
+def angle_win_builder(**kwargs):
+    return base_angle_builder(
+        os = os.WINDOWS_ANY,
+        ssd = builders.with_expiration(True, expiration = 5 * time.minute),
+        **kwargs
+    )
+
+angle_win_builder(
     name = "win-angle-chromium-x64-try",
-    executable = "recipe:angle_chromium_trybot",
+    description_html = "Builds and tests ANGLE on x64 Windows using ToT ANGLE and a known good Chromium revision.",
     mirrors = [
         "ci/win-angle-chromium-x64-builder",
         "ci/win10-angle-chromium-x64-intel",
         "ci/win10-angle-chromium-x64-nvidia",
     ],
-    try_settings = builder_config.try_settings(
+    builder_config_settings = builder_config.try_settings(
         retry_failed_shards = False,
     ),
     gn_args = gn_args.config(
@@ -120,16 +152,15 @@ try_.builder(
             "no_symbols",
         ],
     ),
-    os = os.WINDOWS_ANY,
 )
 
-try_.builder(
+angle_win_builder(
     name = "win-angle-chromium-x86-try",
-    executable = "recipe:angle_chromium_trybot",
+    description_html = "Builds and tests ANGLE on x86 Windows using ToT ANGLE and a known good Chromium revision.",
     mirrors = [
         "ci/win-angle-chromium-x86-builder",
     ],
-    try_settings = builder_config.try_settings(
+    builder_config_settings = builder_config.try_settings(
         include_all_triggered_testers = True,
         is_compile_only = True,
         retry_failed_shards = False,
@@ -140,5 +171,4 @@ try_.builder(
             "no_symbols",
         ],
     ),
-    os = os.WINDOWS_ANY,
 )

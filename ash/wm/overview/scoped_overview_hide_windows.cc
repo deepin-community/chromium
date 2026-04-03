@@ -3,11 +3,10 @@
 // found in the LICENSE file.
 
 #include "ash/wm/overview/scoped_overview_hide_windows.h"
-#include "base/memory/raw_ptr.h"
 
+#include "base/check.h"
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
-#include "base/notreached.h"
+#include "base/memory/raw_ptr.h"
 #include "ui/aura/window.h"
 
 namespace ash {
@@ -36,12 +35,16 @@ ScopedOverviewHideWindows::~ScopedOverviewHideWindows() {
 }
 
 bool ScopedOverviewHideWindows::HasWindow(aura::Window* window) const {
-  return base::Contains(window_visibility_, window);
+  return window_visibility_.contains(window);
 }
 
 void ScopedOverviewHideWindows::AddWindow(aura::Window* window) {
   window->AddObserver(this);
-  window_visibility_.emplace(window, window->IsVisible());
+
+  // Stores `TargetVisibility()` in `window_visibility_`, which directly
+  // assesses the window's target visibility, regardless of the visibility of
+  // its parent's layer.
+  window_visibility_.emplace(window, window->TargetVisibility());
   window->Hide();
 }
 
@@ -70,18 +73,22 @@ void ScopedOverviewHideWindows::OnWindowDestroying(aura::Window* window) {
 
 void ScopedOverviewHideWindows::OnWindowVisibilityChanged(aura::Window* window,
                                                           bool visible) {
-  if (!visible)
+  if (!visible) {
     return;
+  }
 
   // If it's not one of the registered windows, then it must be a child of the
   // registered windows. Early return in this case.
-  if (!HasWindow(window))
+  if (!HasWindow(window)) {
     return;
+  }
 
-  // It's expected that windows hidden in overview, unless they are forcefully
-  // hidden should not be shown while in overview.
-  if (!force_hidden_)
-    NOTREACHED();
+  // If the window is not forcefully hidden, we remove it from observations.
+  // Otherwise, keep it hidden and update the visibility.
+  if (!force_hidden_) {
+    RemoveWindow(window, visible);
+    return;
+  }
 
   // Do not let |window| change to visible during the lifetime of |this|. Also
   // update |window_visibility_| so that we can restore the window visibility

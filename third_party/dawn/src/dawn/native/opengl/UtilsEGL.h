@@ -28,16 +28,54 @@
 #ifndef SRC_DAWN_NATIVE_OPENGL_UTILSEGL_H_
 #define SRC_DAWN_NATIVE_OPENGL_UTILSEGL_H_
 
-#include <EGL/egl.h>
-
+#include "dawn/common/NonMovable.h"
+#include "dawn/common/RefCounted.h"
+#include "dawn/common/Time.h"
+#include "dawn/common/egl_platform.h"
 #include "dawn/native/Error.h"
+#include "dawn/native/opengl/DisplayEGL.h"
 
 namespace dawn::native::opengl {
 
-struct EGLFunctions;
+class Device;
+struct OpenGLFunctions;
 
 const char* EGLErrorAsString(EGLint error);
 MaybeError CheckEGL(const EGLFunctions& egl, EGLBoolean result, const char* context);
+
+class WrappedEGLSync : public RefCounted, NonMovable {
+  public:
+    // The `OpenGLFunctions` parameter is not used directly but enforces the requirement that a GL
+    // context is current when calling these methods.
+    static ResultOrError<Ref<WrappedEGLSync>> Create(DisplayEGL* display,
+                                                     const OpenGLFunctions&,
+                                                     EGLenum type,
+                                                     const EGLint* attribs);
+    static ResultOrError<Ref<WrappedEGLSync>> AcquireExternal(DisplayEGL* display, EGLSync sync);
+
+    EGLSync Get() const;
+
+    // Call eglSignalSync with given mode. Requires sync type of EGL_SYNC_REUSABLE_KHR.
+    MaybeError Signal(const OpenGLFunctions&, EGLenum mode);
+
+    // Call eglClientWaitSync
+    ResultOrError<EGLenum> ClientWait(const OpenGLFunctions&, EGLint flags, Nanoseconds timeout);
+
+    // Call eglWaitSync (server wait)
+    MaybeError Wait(const OpenGLFunctions&);
+
+    // Call eglDupNativeFenceFDANDROID
+    ResultOrError<EGLint> DupFD(const OpenGLFunctions&);
+
+  protected:
+    WrappedEGLSync(DisplayEGL* display, EGLSync sync, bool ownsSync);
+    ~WrappedEGLSync() override;
+
+  private:
+    Ref<DisplayEGL> mDisplay;
+    EGLSync mSync = nullptr;
+    bool mOwnsSync = false;
+};
 
 }  // namespace dawn::native::opengl
 

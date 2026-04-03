@@ -45,9 +45,10 @@ class RandomShuffleQueue : public TypedQueue<std::vector<Tensor> > {
   RandomShuffleQueue(int32_t capacity, int32_t min_after_dequeue, int64_t seed,
                      int64_t seed2, const DataTypeVector& component_dtypes,
                      const std::vector<TensorShape>& component_shapes,
-                     const string& name);
+                     const std::string& name);
 
-  Status Initialize() override;  // Must be called before any other method.
+  absl::Status Initialize()
+      override;  // Must be called before any other method.
 
   // Implementations of QueueInterface methods --------------------------------
   void TryEnqueue(const Tuple& tuple, OpKernelContext* ctx,
@@ -58,9 +59,9 @@ class RandomShuffleQueue : public TypedQueue<std::vector<Tensor> > {
   void TryDequeueMany(int num_elements, OpKernelContext* ctx,
                       bool allow_small_batch,
                       CallbackWithTuple callback) override;
-  Status MatchesNodeDef(const NodeDef& node_def) override;
+  absl::Status MatchesNodeDef(const NodeDef& node_def) override;
 
-  int32 size() const override {
+  int32_t size() const override {
     mutex_lock lock(mu_);
     return queues_[0].size();
   }
@@ -72,12 +73,12 @@ class RandomShuffleQueue : public TypedQueue<std::vector<Tensor> > {
   void DequeueLocked(OpKernelContext* ctx, Tuple* tuple)
       TF_EXCLUSIVE_LOCKS_REQUIRED(mu_);
 
-  static Status GetElementComponentFromBatch(const Tuple& tuple, int64_t index,
-                                             int component,
-                                             OpKernelContext* ctx,
-                                             Tensor* out_tensor);
+  static absl::Status GetElementComponentFromBatch(const Tuple& tuple,
+                                                   int64_t index, int component,
+                                                   OpKernelContext* ctx,
+                                                   Tensor* out_tensor);
 
-  const int32 min_after_dequeue_;
+  const int32_t min_after_dequeue_;
   const int64_t original_seed_;
   const int64_t original_seed2_;
 
@@ -92,7 +93,7 @@ class RandomShuffleQueue : public TypedQueue<std::vector<Tensor> > {
 RandomShuffleQueue::RandomShuffleQueue(
     int32_t capacity, int32_t min_after_dequeue, int64_t seed, int64_t seed2,
     const DataTypeVector& component_dtypes,
-    const std::vector<TensorShape>& component_shapes, const string& name)
+    const std::vector<TensorShape>& component_shapes, const std::string& name)
     : TypedQueue(capacity, component_dtypes, component_shapes, name),
       min_after_dequeue_(min_after_dequeue),
       original_seed_(seed),
@@ -106,7 +107,7 @@ RandomShuffleQueue::RandomShuffleQueue(
   parent_generator_ = random::PhiloxRandom(seed, seed2);
 }
 
-Status RandomShuffleQueue::Initialize() {
+absl::Status RandomShuffleQueue::Initialize() {
   TF_RETURN_IF_ERROR(TypedQueue::Initialize());
 
   mutex_lock lock(mu_);
@@ -165,11 +166,9 @@ void RandomShuffleQueue::TryEnqueue(const Tuple& tuple, OpKernelContext* ctx,
 }
 
 /* static */
-Status RandomShuffleQueue::GetElementComponentFromBatch(const Tuple& tuple,
-                                                        int64_t index,
-                                                        int component,
-                                                        OpKernelContext* ctx,
-                                                        Tensor* out_tensor) {
+absl::Status RandomShuffleQueue::GetElementComponentFromBatch(
+    const Tuple& tuple, int64_t index, int component, OpKernelContext* ctx,
+    Tensor* out_tensor) {
   TensorShape element_shape(tuple[component].shape());
   element_shape.RemoveDim(0);
   TF_RETURN_IF_ERROR(
@@ -314,8 +313,8 @@ void RandomShuffleQueue::TryDequeueMany(int num_elements, OpKernelContext* ctx,
       // an optimized case where the queue 'knows' what attributes to
       // use, and plumbs them through here.
       Tensor element;
-      Status s = ctx->allocate_temp(component_dtypes_[i], ManyOutShape(i, 0),
-                                    &element);
+      absl::Status s = ctx->allocate_temp(component_dtypes_[i],
+                                          ManyOutShape(i, 0), &element);
       if (!s.ok()) {
         ctx->SetStatus(s);
         callback(Tuple());
@@ -351,7 +350,7 @@ void RandomShuffleQueue::TryDequeueMany(int num_elements, OpKernelContext* ctx,
                      i >= 0; --i) {
                   for (int j = 0; j < num_components(); ++j) {
                     Tensor element;
-                    Status s = GetElementComponentFromBatch(
+                    absl::Status s = GetElementComponentFromBatch(
                         attempt->tuple, i, j, attempt->context, &element);
                     if (!s.ok()) {
                       attempt->context->SetStatus(
@@ -437,7 +436,7 @@ void RandomShuffleQueue::TryDequeueMany(int num_elements, OpKernelContext* ctx,
   }
 }
 
-Status RandomShuffleQueue::MatchesNodeDef(const NodeDef& node_def) {
+absl::Status RandomShuffleQueue::MatchesNodeDef(const NodeDef& node_def) {
   if (!MatchesNodeDefOp(node_def, "RandomShuffleQueue").ok() &&
       !MatchesNodeDefOp(node_def, "RandomShuffleQueueV2").ok()) {
     return errors::InvalidArgument("Expected RandomShuffleQueue, found ",
@@ -496,7 +495,7 @@ class RandomShuffleQueueOp : public TypedQueueOp {
   }
 
  private:
-  Status CreateResource(QueueInterface** ret) override
+  absl::Status CreateResource(QueueInterface** ret) override
       TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     RandomShuffleQueue* queue = new RandomShuffleQueue(
         capacity_, min_after_dequeue_, seed_, seed2_, component_types_,
@@ -504,7 +503,7 @@ class RandomShuffleQueueOp : public TypedQueueOp {
     return CreateTypedQueue(queue, ret);
   }
 
-  int32 min_after_dequeue_;
+  int32_t min_after_dequeue_;
   int64_t seed_;
   int64_t seed2_;
   std::vector<TensorShape> component_shapes_;

@@ -11,6 +11,7 @@
 #include "services/network/public/cpp/net_adapters.h"
 #include "storage/browser/blob/blob_data_handle.h"
 #include "third_party/blink/public/common/blob/blob_utils.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace storage {
 
@@ -20,8 +21,9 @@ void MojoBlobReader::Create(
     const net::HttpByteRange& range,
     std::unique_ptr<Delegate> delegate,
     mojo::ScopedDataPipeProducerHandle response_body_stream) {
-  new MojoBlobReader(handle, range, std::move(delegate),
-                     std::move(response_body_stream));
+  (new MojoBlobReader(handle, range, std::move(delegate),
+                      std::move(response_body_stream)))
+      ->Start();
 }
 
 MojoBlobReader::MojoBlobReader(
@@ -40,18 +42,15 @@ MojoBlobReader::MojoBlobReader(
           FROM_HERE,
           mojo::SimpleWatcher::ArmingPolicy::MANUAL,
           base::SequencedTaskRunner::GetCurrentDefault()) {
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN1("Blob", "BlobReader", TRACE_ID_LOCAL(this),
-                                    "uuid", handle->uuid());
+  TRACE_EVENT_BEGIN("Blob", "BlobReader", perfetto::Track::FromPointer(this),
+                    "uuid", handle->uuid());
   DCHECK(delegate_);
-  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&MojoBlobReader::Start, weak_factory_.GetWeakPtr()));
 }
 
 MojoBlobReader::~MojoBlobReader() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  TRACE_EVENT_NESTABLE_ASYNC_END1("Blob", "BlobReader", TRACE_ID_LOCAL(this),
-                                  "bytes_written", total_written_bytes_);
+  TRACE_EVENT_END("Blob", /*"BlobReader"*/ perfetto::Track::FromPointer(this),
+                  "bytes_written", total_written_bytes_);
 }
 
 void MojoBlobReader::Start() {
@@ -62,14 +61,14 @@ void MojoBlobReader::Start() {
     return;
   }
 
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("Blob", "BlobReader::CountSize",
-                                    TRACE_ID_LOCAL(this));
+  TRACE_EVENT_BEGIN("Blob", "BlobReader::CountSize",
+                    perfetto::Track::FromPointer(this));
   BlobReader::Status size_status = blob_reader_->CalculateSize(base::BindOnce(
       &MojoBlobReader::DidCalculateSize, base::Unretained(this)));
   switch (size_status) {
     case BlobReader::Status::NET_ERROR:
-      TRACE_EVENT_NESTABLE_ASYNC_END1("Blob", "BlobReader::CountSize",
-                                      TRACE_ID_LOCAL(this), "result", "error");
+      TRACE_EVENT_END("Blob", /*"BlobReader::CountSize"*/
+                      perfetto::Track::FromPointer(this), "result", "error");
       NotifyCompletedAndDeleteIfNeeded(blob_reader_->net_error());
       return;
     case BlobReader::Status::IO_PENDING:
@@ -104,15 +103,15 @@ void MojoBlobReader::DidCalculateSize(int result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (result != net::OK) {
-    TRACE_EVENT_NESTABLE_ASYNC_END1("Blob", "BlobReader::CountSize",
-                                    TRACE_ID_LOCAL(this), "result", "error");
+    TRACE_EVENT_END("Blob", /*"BlobReader::CountSize"*/
+                    perfetto::Track::FromPointer(this), "result", "error");
     NotifyCompletedAndDeleteIfNeeded(result);
     return;
   }
 
-  TRACE_EVENT_NESTABLE_ASYNC_END2("Blob", "BlobReader::CountSize",
-                                  TRACE_ID_LOCAL(this), "result", "success",
-                                  "size", blob_reader_->total_size());
+  TRACE_EVENT_END("Blob", /*"BlobReader::CountSize"*/
+                  perfetto::Track::FromPointer(this), "result", "success",
+                  "size", blob_reader_->total_size());
 
   // Apply the range requirement.
   if (!byte_range_.ComputeBounds(blob_reader_->total_size())) {
@@ -170,15 +169,14 @@ void MojoBlobReader::StartReading() {
                int result) {
               if (!reader)
                 return;
-              // NotifyCompletedAndDeleteIfNeeded takes a net error that
-              // doesn't include bytes read, so pass along the net error
-              // and not the |result| from the callback.
+              // `net_error()` is not set on `BlobReader` in the optimized path
+              // to read a single data item; pass on `result` directly.
+              DCHECK_LE(result, 0);
               if (result == net::OK) {
                 reader->total_written_bytes_ += num_bytes;
                 reader->delegate_->DidRead(num_bytes);
               }
-              auto error = reader->blob_reader_->net_error();
-              reader->NotifyCompletedAndDeleteIfNeeded(error);
+              reader->NotifyCompletedAndDeleteIfNeeded(result);
             },
             weak_factory_.GetWeakPtr(), num_bytes));
     return;
@@ -226,8 +224,8 @@ void MojoBlobReader::ReadMore() {
   uint32_t num_bytes = pending_write_->size();
   num_bytes = std::min(num_bytes, blink::BlobUtils::GetDataPipeChunkSize());
 
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("Blob", "BlobReader::ReadMore",
-                                    TRACE_ID_LOCAL(this));
+  TRACE_EVENT_BEGIN("Blob", "BlobReader::ReadMore",
+                    perfetto::Track::FromPointer(this));
   CHECK_GT(static_cast<uint32_t>(std::numeric_limits<int>::max()), num_bytes);
   DCHECK(pending_write_);
   auto buf = base::MakeRefCounted<network::NetToMojoIOBuffer>(pending_write_);
@@ -252,9 +250,9 @@ void MojoBlobReader::DidRead(bool completed_synchronously, int num_bytes) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (num_bytes < 0) {
-    TRACE_EVENT_NESTABLE_ASYNC_END2("Blob", "BlobReader::ReadMore",
-                                    TRACE_ID_LOCAL(this), "result", "error",
-                                    "net_error", num_bytes);
+    TRACE_EVENT_END("Blob", /*"BlobReader::ReadMore"*/
+                    perfetto::Track::FromPointer(this), "result", "error",
+                    "net_error", num_bytes);
     writable_handle_watcher_.Cancel();
     pending_write_->Complete(0);
     pending_write_ = nullptr;  // This closes the data pipe.
@@ -263,9 +261,9 @@ void MojoBlobReader::DidRead(bool completed_synchronously, int num_bytes) {
   }
   if (num_bytes > 0)
     delegate_->DidRead(num_bytes);
-  TRACE_EVENT_NESTABLE_ASYNC_END2("Blob", "BlobReader::ReadMore",
-                                  TRACE_ID_LOCAL(this), "result", "success",
-                                  "num_bytes", num_bytes);
+  TRACE_EVENT_END("Blob", /*"BlobReader::ReadMore"*/
+                  perfetto::Track::FromPointer(this), "result", "success",
+                  "num_bytes", num_bytes);
   response_body_stream_ = pending_write_->Complete(num_bytes);
   total_written_bytes_ += num_bytes;
   pending_write_ = nullptr;

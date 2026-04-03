@@ -2,18 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_POINTERS_RAW_PTR_ASAN_UNOWNED_IMPL_H_
-#define BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_POINTERS_RAW_PTR_ASAN_UNOWNED_IMPL_H_
+#ifndef PARTITION_ALLOC_POINTERS_RAW_PTR_ASAN_UNOWNED_IMPL_H_
+#define PARTITION_ALLOC_POINTERS_RAW_PTR_ASAN_UNOWNED_IMPL_H_
 
 #include <cstddef>
 #include <type_traits>
 
+#include "partition_alloc/buildflags.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
-#include "partition_alloc/partition_alloc_base/cxx20_is_constant_evaluated.h"
-#include "partition_alloc/partition_alloc_buildflags.h"
 #include "partition_alloc/partition_alloc_forward.h"
 
-#if !BUILDFLAG(USE_ASAN_UNOWNED_PTR)
+#if !PA_BUILDFLAG(USE_RAW_PTR_ASAN_UNOWNED_IMPL)
 #error "Included under wrong build option"
 #endif
 
@@ -39,7 +38,7 @@ struct RawPtrAsanUnownedImpl {
   // Notifies the allocator when a wrapped pointer is being removed or replaced.
   template <typename T>
   PA_ALWAYS_INLINE static constexpr void ReleaseWrappedPtr(T* wrapped_ptr) {
-    if (!partition_alloc::internal::base::is_constant_evaluated()) {
+    if (!std::is_constant_evaluated()) {
       ProbeForLowSeverityLifetimeIssue(wrapped_ptr);
     }
   }
@@ -58,7 +57,7 @@ struct RawPtrAsanUnownedImpl {
   template <typename T>
   PA_ALWAYS_INLINE static constexpr T* SafelyUnwrapPtrForExtraction(
       T* wrapped_ptr) {
-    if (!partition_alloc::internal::base::is_constant_evaluated()) {
+    if (!std::is_constant_evaluated()) {
       ProbeForLowSeverityLifetimeIssue(wrapped_ptr);
     }
     return wrapped_ptr;
@@ -88,7 +87,8 @@ struct RawPtrAsanUnownedImpl {
       typename Z,
       typename =
           std::enable_if_t<partition_alloc::internal::is_offset_type<Z>, void>>
-  PA_ALWAYS_INLINE static constexpr T* Advance(T* wrapped_ptr, Z delta_elems) {
+  PA_ALWAYS_INLINE static constexpr T*
+  Advance(T* wrapped_ptr, Z delta_elems, bool /*is_in_pointer_modification*/) {
     return wrapped_ptr + delta_elems;
   }
 
@@ -98,7 +98,8 @@ struct RawPtrAsanUnownedImpl {
       typename Z,
       typename =
           std::enable_if_t<partition_alloc::internal::is_offset_type<Z>, void>>
-  PA_ALWAYS_INLINE static constexpr T* Retreat(T* wrapped_ptr, Z delta_elems) {
+  PA_ALWAYS_INLINE static constexpr T*
+  Retreat(T* wrapped_ptr, Z delta_elems, bool /*is_in_pointer_modification*/) {
     return wrapped_ptr - delta_elems;
   }
 
@@ -151,4 +152,4 @@ struct RawPtrAsanUnownedImpl {
 
 }  // namespace base::internal
 
-#endif  // BASE_ALLOCATOR_PARTITION_ALLOCATOR_SRC_PARTITION_ALLOC_POINTERS_RAW_PTR_ASAN_UNOWNED_IMPL_H_
+#endif  // PARTITION_ALLOC_POINTERS_RAW_PTR_ASAN_UNOWNED_IMPL_H_

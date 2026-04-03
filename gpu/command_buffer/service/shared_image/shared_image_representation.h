@@ -10,19 +10,21 @@
 
 #include <memory>
 
-#include "base/functional/callback_helpers.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
+#include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing.h"
-#include "gpu/command_buffer/service/shared_image/shared_image_manager.h"
 #include "gpu/gpu_gles2_export.h"
 #include "gpu/vulkan/buildflags.h"
 #include "skia/buildflags.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkSurface.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
 #include "third_party/skia/include/gpu/ganesh/SkImageGanesh.h"
 #include "third_party/skia/include/gpu/graphite/BackendTexture.h"
 #include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
@@ -47,6 +49,7 @@ class VulkanImplementation;
 
 #if BUILDFLAG(IS_APPLE)
 #include "ui/gfx/mac/io_surface.h"
+#include "ui/gfx/mac/mtl_shared_event_fence.h"
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
@@ -57,6 +60,7 @@ extern "C" typedef struct AHardwareBuffer AHardwareBuffer;
 
 #if BUILDFLAG(IS_WIN)
 #include <d3d11.h>
+#include <d3d12.h>
 #include <wrl/client.h>
 #endif
 
@@ -73,11 +77,8 @@ namespace gfx {
 class NativePixmap;
 }  // namespace gfx
 
-namespace media {
-class VASurface;
-}  // namespace media
-
 namespace gpu {
+class SharedImageManager;
 class TextureBase;
 
 namespace gles2 {
@@ -113,8 +114,10 @@ class GPU_GLES2_EXPORT SharedImageRepresentation {
   const gfx::ColorSpace& color_space() const { return backing_->color_space(); }
   GrSurfaceOrigin surface_origin() const { return backing_->surface_origin(); }
   SkAlphaType alpha_type() const { return backing_->alpha_type(); }
-  uint32_t usage() const { return backing_->usage(); }
+  SharedImageUsageSet usage() const { return backing_->usage(); }
   const gpu::Mailbox& mailbox() const { return backing_->mailbox(); }
+  const std::string& debug_label() const { return backing_->debug_label(); }
+  const char* backing_name() const { return backing_->GetName(); }
   MemoryTypeTracker* tracker() { return tracker_; }
   bool IsCleared() const { return backing_->IsCleared(); }
   void SetCleared() { backing_->SetCleared(); }
@@ -165,13 +168,15 @@ class GPU_GLES2_EXPORT SharedImageRepresentation {
     }
 
    private:
-    const raw_ptr<RepresentationClass> representation_;
+    // RAW_PTR_EXCLUSION: Performance reasons (based on analysis of MotionMark).
+    RAW_PTR_EXCLUSION RepresentationClass* const representation_ = nullptr;
   };
 
  private:
-  const raw_ptr<SharedImageManager, DanglingUntriaged> manager_;
-  raw_ptr<SharedImageBacking> backing_;
-  const raw_ptr<MemoryTypeTracker> tracker_;
+  // RAW_PTR_EXCLUSION: Performance reasons (based on analysis of MotionMark).
+  RAW_PTR_EXCLUSION SharedImageManager* const manager_ = nullptr;
+  RAW_PTR_EXCLUSION SharedImageBacking* backing_ = nullptr;
+  RAW_PTR_EXCLUSION MemoryTypeTracker* const tracker_ = nullptr;
   bool has_context_ = true;
   AccessMode access_mode_ = AccessMode::kNone;
 };
@@ -190,23 +195,19 @@ class SharedImageRepresentationFactoryRef : public SharedImageRepresentation {
   const Mailbox& mailbox() const { return backing()->mailbox(); }
   void Update(std::unique_ptr<gfx::GpuFence> in_fence) {
     backing()->Update(std::move(in_fence));
-    backing()->OnWriteSucceeded();
   }
   void SetPurgeable(bool purgeable) { backing()->SetPurgeable(purgeable); }
   bool CopyToGpuMemoryBuffer() { return backing()->CopyToGpuMemoryBuffer(); }
+  void CopyToGpuMemoryBufferAsync(base::OnceCallback<void(bool)> callback) {
+    backing()->CopyToGpuMemoryBufferAsync(std::move(callback));
+  }
   void GetGpuMemoryBufferHandleInfo(gfx::GpuMemoryBufferHandle& handle,
-                                    viz::SharedImageFormat& format,
-                                    gfx::Size& size,
                                     gfx::BufferUsage& buffer_usage) {
     handle = backing()->GetGpuMemoryBufferHandle();
-    format = backing()->format();
-    size = backing()->size();
-    buffer_usage = backing()->buffer_usage();
+    buffer_usage = backing()->buffer_usage().value();
   }
-  bool PresentSwapChain() { return backing()->PresentSwapChain(); }
-  void RegisterImageFactory(SharedImageFactory* factory) {
-    DCHECK(is_primary_);
-    backing()->RegisterImageFactory(factory);
+  void SetSharedImagePoolId(SharedImagePoolId pool_id) {
+    backing()->SetSharedImagePoolId(std::move(pool_id));
   }
 
  private:
@@ -326,6 +327,21 @@ class GPU_GLES2_EXPORT GLTexturePassthroughImageRepresentation
 class GPU_GLES2_EXPORT SkiaImageRepresentation
     : public SharedImageRepresentation {
  public:
+  // Object that holds skgpu::graphite::BackendTexture.
+  class GPU_GLES2_EXPORT GraphiteTextureHolder
+      : public base::RefCountedThreadSafe<GraphiteTextureHolder> {
+   public:
+    explicit GraphiteTextureHolder(skgpu::graphite::BackendTexture texture);
+
+    const skgpu::graphite::BackendTexture& texture() { return texture_; }
+
+   protected:
+    friend class base::RefCountedThreadSafe<GraphiteTextureHolder>;
+    virtual ~GraphiteTextureHolder();
+
+    skgpu::graphite::BackendTexture texture_;
+  };
+
   class GPU_GLES2_EXPORT ScopedWriteAccess
       : public ScopedAccessBase<SkiaImageRepresentation> {
    public:
@@ -333,6 +349,7 @@ class GPU_GLES2_EXPORT SkiaImageRepresentation
 
     // NOTE: All references to the returned SkSurface(s) must be destroyed
     // before ScopedWriteAccess is destroyed.
+    bool has_surfaces() const { return !surfaces_.empty(); }
     SkSurface* surface() const {
       // Writes do not support external sampler.
       CHECK(representation()->format().is_single_plane());
@@ -347,9 +364,20 @@ class GPU_GLES2_EXPORT SkiaImageRepresentation
     }
 
     skgpu::graphite::BackendTexture graphite_texture(int plane_index) const {
-      return graphite_textures_[plane_index];
+      return graphite_texture_holder(plane_index)->texture();
     }
 
+    const scoped_refptr<GraphiteTextureHolder>& graphite_texture_holder(
+        int plane_index) const {
+      return graphite_texture_holders_[plane_index];
+    }
+
+    // Return the representations's implementation.
+    bool NeedGraphiteContextSubmit();
+
+    // NOTE: Implemented only for Ganesh.
+    // Checks if there's a need to apply skgpu::MutableTextureState.
+    virtual bool HasBackendSurfaceEndState() = 0;
     // NOTE: Implemented only for Ganesh.
     // Applies the skgpu::MutableTextureState for Vulkan layout and external
     // queue transitions needed for Vulkan/GL interop.
@@ -363,7 +391,7 @@ class GPU_GLES2_EXPORT SkiaImageRepresentation
         std::vector<sk_sp<GrPromiseImageTexture>> promise_image_textures);
     ScopedWriteAccess(
         SkiaImageRepresentation* representation,
-        std::vector<skgpu::graphite::BackendTexture> graphite_textures);
+        std::vector<scoped_refptr<GraphiteTextureHolder>> graphite_textures);
 
     // A vector of surfaces, promise textures and graphite backend textures
     // corresponding to the number of planes in SharedImageFormat.
@@ -371,7 +399,7 @@ class GPU_GLES2_EXPORT SkiaImageRepresentation
     // NOTE: Used only for Ganesh.
     std::vector<sk_sp<GrPromiseImageTexture>> promise_image_textures_;
     // NOTE: Used only for Graphite.
-    std::vector<skgpu::graphite::BackendTexture> graphite_textures_;
+    std::vector<scoped_refptr<GraphiteTextureHolder>> graphite_texture_holders_;
   };
 
   class GPU_GLES2_EXPORT ScopedReadAccess
@@ -392,8 +420,16 @@ class GPU_GLES2_EXPORT SkiaImageRepresentation
       return graphite_texture(0);
     }
     skgpu::graphite::BackendTexture graphite_texture(int plane_index) const {
-      return graphite_textures_[plane_index];
+      return graphite_texture_holder(plane_index)->texture();
     }
+
+    const scoped_refptr<GraphiteTextureHolder>& graphite_texture_holder(
+        int plane_index) const {
+      return graphite_texture_holders_[plane_index];
+    }
+
+    // Return the representations's implementation.
+    bool NeedGraphiteContextSubmit();
 
     // Creates an SkImage from BackendTexture for single planar formats or if
     // format prefers external sampler. Creates an SkImage from
@@ -406,10 +442,12 @@ class GPU_GLES2_EXPORT SkiaImageRepresentation
     // multiplanar formats.
     virtual sk_sp<SkImage> CreateSkImageForPlane(
         int plane_index,
-        SharedContextState* context_state) = 0;
+        SharedContextState* context_state,
+        SkImages::TextureReleaseProc texture_release_proc = nullptr,
+        SkImages::ReleaseContext release_context = nullptr) = 0;
 
     // NOTE: Implemented only for Ganesh.
-    // Checks if need to apply skgpu::MutableTextureState.
+    // Checks if there's a need to apply skgpu::MutableTextureState.
     virtual bool HasBackendSurfaceEndState() = 0;
     // Applies the skgpu::MutableTextureState for Vulkan layout and external
     // queue transitions needed for Vulkan/GL interop.
@@ -421,13 +459,13 @@ class GPU_GLES2_EXPORT SkiaImageRepresentation
         std::vector<sk_sp<GrPromiseImageTexture>> promise_image_textures);
     ScopedReadAccess(
         SkiaImageRepresentation* representation,
-        std::vector<skgpu::graphite::BackendTexture> graphite_textures);
+        std::vector<scoped_refptr<GraphiteTextureHolder>> graphite_textures);
 
     // A vector of promise textures and graphite backend textures corresponding
     // to the number of planes in SharedImageFormat. NOTE: Used only for Ganesh.
     std::vector<sk_sp<GrPromiseImageTexture>> promise_image_textures_;
     // NOTE: Used only for Graphite.
-    std::vector<skgpu::graphite::BackendTexture> graphite_textures_;
+    std::vector<scoped_refptr<GraphiteTextureHolder>> graphite_texture_holders_;
   };
 
   SkiaImageRepresentation(SharedImageManager* manager,
@@ -464,9 +502,17 @@ class GPU_GLES2_EXPORT SkiaImageRepresentation
       std::vector<GrBackendSemaphore>* begin_semaphores,
       std::vector<GrBackendSemaphore>* end_semaphores) = 0;
 
+  // Return whether we need to submit graphite's commands before EndAccess.
+  // NOTE: Implemented only for Graphite.
+  bool NeedGraphiteContextSubmitBeforeEndAccess();
+
   virtual bool SupportsMultipleConcurrentReadAccess();
 
  protected:
+  // Return whether the graphite context submission can be deferred even after
+  // the backing is destroyed.
+  virtual bool SupportsDeferredGraphiteSubmit();
+
   virtual void EndWriteAccess() = 0;
   virtual void EndReadAccess() = 0;
 };
@@ -491,6 +537,8 @@ class GPU_GLES2_EXPORT SkiaGaneshImageRepresentation
         std::unique_ptr<skgpu::MutableTextureState> end_state);
     ~ScopedGaneshWriteAccess() override;
 
+    // Checks if there's a need to apply skgpu::MutableTextureState.
+    bool HasBackendSurfaceEndState() override;
     // Applies the skgpu::MutableTextureState for Vulkan layout and external
     // queue transitions needed for Vulkan/GL interop.
     void ApplyBackendSurfaceEndState() override;
@@ -523,9 +571,11 @@ class GPU_GLES2_EXPORT SkiaGaneshImageRepresentation
     // multiplanar formats.
     sk_sp<SkImage> CreateSkImageForPlane(
         int plane_index,
-        SharedContextState* context_state) override;
+        SharedContextState* context_state,
+        SkImages::TextureReleaseProc texture_release_proc = nullptr,
+        SkImages::ReleaseContext release_context = nullptr) override;
 
-    // Checks if need to apply skgpu::MutableTextureState.
+    // Checks if there's a need to apply skgpu::MutableTextureState.
     bool HasBackendSurfaceEndState() override;
     // Applies the skgpu::MutableTextureState for Vulkan layout and external
     // queue transitions needed for Vulkan/GL interop.
@@ -644,11 +694,10 @@ class GPU_GLES2_EXPORT SkiaGraphiteImageRepresentation
     ScopedGraphiteWriteAccess(
         base::PassKey<SkiaGraphiteImageRepresentation> pass_key,
         SkiaImageRepresentation* representation,
-        std::vector<skgpu::graphite::BackendTexture> graphite_textures);
+        std::vector<scoped_refptr<GraphiteTextureHolder>> graphite_textures);
     ~ScopedGraphiteWriteAccess() override;
 
-    // Graphite-Dawn backend handles Vulkan transitions by itself, so nothing to
-    // do here.
+    bool HasBackendSurfaceEndState() override;
     void ApplyBackendSurfaceEndState() override;
   };
 
@@ -657,7 +706,7 @@ class GPU_GLES2_EXPORT SkiaGraphiteImageRepresentation
     ScopedGraphiteReadAccess(
         base::PassKey<SkiaGraphiteImageRepresentation> pass_key,
         SkiaImageRepresentation* representation,
-        std::vector<skgpu::graphite::BackendTexture> graphite_textures);
+        std::vector<scoped_refptr<GraphiteTextureHolder>> graphite_textures);
     ~ScopedGraphiteReadAccess() override;
 
     // Creates an SkImage from BackendTexture for single planar formats or if
@@ -671,10 +720,10 @@ class GPU_GLES2_EXPORT SkiaGraphiteImageRepresentation
     // multiplanar formats.
     sk_sp<SkImage> CreateSkImageForPlane(
         int plane_index,
-        SharedContextState* context_state) override;
+        SharedContextState* context_state,
+        SkImages::TextureReleaseProc texture_release_proc = nullptr,
+        SkImages::ReleaseContext release_context = nullptr) override;
 
-    // Graphite-Dawn backend handles Vulkan transitions by itself, so nothing to
-    // do here.
     bool HasBackendSurfaceEndState() override;
     void ApplyBackendSurfaceEndState() override;
   };
@@ -717,6 +766,8 @@ class GPU_GLES2_EXPORT SkiaGraphiteImageRepresentation
  protected:
   friend class WrappedSkiaGraphiteCompoundImageRepresentation;
 
+  std::string WrappedTextureDebugLabel(int plane) const;
+
   // Begin the write access. Returns an empty vector on failure.
   //
   // update_rect is a hint to the backend about the portion of the image that
@@ -725,10 +776,27 @@ class GPU_GLES2_EXPORT SkiaGraphiteImageRepresentation
   virtual std::vector<sk_sp<SkSurface>> BeginWriteAccess(
       const SkSurfaceProps& surface_props,
       const gfx::Rect& update_rect) = 0;
-  virtual std::vector<skgpu::graphite::BackendTexture> BeginWriteAccess() = 0;
 
-  // Returns an empty vector on failure.
-  virtual std::vector<skgpu::graphite::BackendTexture> BeginReadAccess() = 0;
+  // Returns a vector of ref counted GraphiteTextureHolder that holds
+  // skgpu::graphite::BackendTexture which graphite can use for writing.
+  // Notes:
+  // - If `NeedGraphiteContextSubmitBeforeEndAccess()` returns true: it's only
+  // safe to use the contained BackendTexture within the access' scope.
+  // - If `NeedGraphiteContextSubmitBeforeEndAccess()` returns false: the
+  // contained BackendTexture is safe to be used as long as the holder is
+  // intact. For example, in some scenarios the BackendTexture would be used in
+  // a command buffer, but its submission needs to be deferred later, even after
+  // the SI's backing is destroyed. In those cases, we can pass
+  // refptr<GraphiteTextureHolder> to Graphite's release proc in order to keep
+  // the BackendTexture alive until Graphite finishes using it.
+  // - This function will return an empty vector on failure.
+  virtual std::vector<scoped_refptr<GraphiteTextureHolder>>
+  BeginWriteAccess() = 0;
+
+  // Same as above but return holders of skgpu::graphite::BackendTexture for
+  // reading in graphite.
+  virtual std::vector<scoped_refptr<GraphiteTextureHolder>>
+  BeginReadAccess() = 0;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -770,6 +838,12 @@ class GPU_GLES2_EXPORT DawnImageRepresentation
       wgpu::TextureUsage usage,
       AllowUnclearedAccess allow_uncleared);
 
+  // Allawos passing internal usages to the created Dawn texture.
+  std::unique_ptr<ScopedAccess> BeginScopedAccess(
+      wgpu::TextureUsage usage,
+      wgpu::TextureUsage internal_usage,
+      AllowUnclearedAccess allow_uncleared);
+
   // For write usage, the update_rect is a hint to the backend about the portion
   // of the image that will be drawn to. Callers shouldn't draw outside of this
   // area, but aren't required to overwrite every pixel inside it.
@@ -779,16 +853,106 @@ class GPU_GLES2_EXPORT DawnImageRepresentation
       AllowUnclearedAccess allow_uncleared,
       const gfx::Rect& update_rect);
 
-  virtual bool SupportsMultipleConcurrentReadAccess();
+  std::unique_ptr<ScopedAccess> BeginScopedAccess(
+      wgpu::TextureUsage usage,
+      wgpu::TextureUsage internal_usage,
+      AllowUnclearedAccess allow_uncleared,
+      const gfx::Rect& update_rect);
 
  private:
   friend class WrappedDawnCompoundImageRepresentation;
 
   // This can return null in case of a Dawn validation error, for example if
   // usage is invalid.
-  virtual wgpu::Texture BeginAccess(wgpu::TextureUsage usage) = 0;
   virtual wgpu::Texture BeginAccess(wgpu::TextureUsage usage,
+                                    wgpu::TextureUsage internal_usage) = 0;
+  virtual wgpu::Texture BeginAccess(wgpu::TextureUsage usage,
+                                    wgpu::TextureUsage internal_usage,
                                     const gfx::Rect& update_rect);
+  virtual void EndAccess() = 0;
+};
+
+///////////////////////////////////////////////////////////////////////////////
+// DawnBufferRepresentation
+
+class GPU_GLES2_EXPORT DawnBufferRepresentation
+    : public SharedImageRepresentation {
+ public:
+  DawnBufferRepresentation(SharedImageManager* manager,
+                           SharedImageBacking* backing,
+                           MemoryTypeTracker* tracker)
+      : SharedImageRepresentation(manager, backing, tracker) {}
+
+  class GPU_GLES2_EXPORT ScopedAccess
+      : public ScopedAccessBase<DawnBufferRepresentation> {
+   public:
+    ScopedAccess(base::PassKey<DawnBufferRepresentation> pass_key,
+                 DawnBufferRepresentation* representation,
+                 wgpu::Buffer buffer,
+                 AccessMode access_mode);
+    ~ScopedAccess();
+
+    std::unique_ptr<ScopedAccess> BeginScopedAccess(wgpu::BufferUsage usage);
+
+    const wgpu::Buffer& buffer() const { return buffer_; }
+
+   private:
+    wgpu::Buffer buffer_;
+  };
+
+  // Allows passing usages to the created Dawn buffer.
+  std::unique_ptr<ScopedAccess> BeginScopedAccess(wgpu::BufferUsage usage);
+
+ protected:
+  friend class WrappedDawnBufferCompoundImageRepresentation;
+  virtual wgpu::Buffer BeginAccess(wgpu::BufferUsage usage) = 0;
+  virtual void EndAccess() = 0;
+};
+
+///////////////////////////////////////////////////////////////////////////////
+// WebNNTensorRepresentation
+
+class GPU_GLES2_EXPORT WebNNTensorRepresentation
+    : public SharedImageRepresentation {
+ public:
+  WebNNTensorRepresentation(SharedImageManager* manager,
+                            SharedImageBacking* backing,
+                            MemoryTypeTracker* tracker)
+      : SharedImageRepresentation(manager, backing, tracker) {}
+
+  class GPU_GLES2_EXPORT ScopedAccess
+      : public ScopedAccessBase<WebNNTensorRepresentation> {
+   public:
+    ScopedAccess(base::PassKey<WebNNTensorRepresentation> pass_key,
+                 WebNNTensorRepresentation* representation,
+                 AccessMode access_mode);
+    ~ScopedAccess();
+
+#if BUILDFLAG(IS_WIN)
+    scoped_refptr<gfx::D3DSharedFence> GetAcquireFence() const;
+    void SetReleaseFence(scoped_refptr<gfx::D3DSharedFence> release_fence);
+#endif
+  };
+
+  bool is_thread_safe() const;
+
+  std::unique_ptr<ScopedAccess> BeginScopedAccess();
+
+#if BUILDFLAG(IS_WIN)
+  virtual Microsoft::WRL::ComPtr<ID3D12Resource> GetD3D12Buffer() const;
+#endif  // BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_APPLE)
+  virtual IOSurfaceRef GetIOSurface() const;
+#endif  // BUILDFLAG(IS_APPLE)
+ protected:
+  friend class WrappedWebNNTensorCompoundImageRepresentation;
+
+#if BUILDFLAG(IS_WIN)
+  virtual scoped_refptr<gfx::D3DSharedFence> GetAcquireFence() const = 0;
+  virtual void SetReleaseFence(
+      scoped_refptr<gfx::D3DSharedFence> release_fence) = 0;
+#endif  // BUILDFLAG(IS_WIN)
+  virtual bool BeginAccess() = 0;
   virtual void EndAccess() = 0;
 };
 
@@ -833,6 +997,9 @@ class GPU_GLES2_EXPORT OverlayImageRepresentation
 #elif BUILDFLAG(IS_APPLE)
     gfx::ScopedIOSurface GetIOSurface() const {
       return representation()->GetIOSurface();
+    }
+    std::vector<gfx::MTLSharedEventFence> GetBackpressureFences() const {
+      return representation()->GetBackpressureFences();
     }
     bool IsInUseByWindowServer() const {
       return representation()->IsInUseByWindowServer();
@@ -881,6 +1048,7 @@ class GPU_GLES2_EXPORT OverlayImageRepresentation
   virtual std::optional<gl::DCLayerOverlayImage> GetDCLayerOverlayImage();
 #elif BUILDFLAG(IS_APPLE)
   virtual gfx::ScopedIOSurface GetIOSurface() const;
+  virtual std::vector<gfx::MTLSharedEventFence> GetBackpressureFences() const;
   // Return true if the macOS WindowServer is currently using the underlying
   // storage for the image.
   virtual bool IsInUseByWindowServer() const;
@@ -937,72 +1105,9 @@ class GPU_GLES2_EXPORT MemoryImageRepresentation
   std::unique_ptr<ScopedReadAccess> BeginScopedReadAccess();
 
  protected:
+  friend class WrappedMemoryCompoundImageRepresentation;
+
   virtual SkPixmap BeginReadAccess() = 0;
-};
-
-// An interface that allows a SharedImageBacking to hold a reference to VA-API
-// surface without depending on //media/gpu/vaapi targets.
-class VaapiDependencies {
- public:
-  virtual ~VaapiDependencies() = default;
-  virtual const media::VASurface* GetVaSurface() const = 0;
-  virtual bool SyncSurface() = 0;
-};
-
-// Interface that allows a SharedImageBacking to create VaapiDependencies from a
-// NativePixmap without depending on //media/gpu/vaapi targets.
-class VaapiDependenciesFactory {
- public:
-  virtual ~VaapiDependenciesFactory() = default;
-  // Returns a VaapiDependencies or nullptr on failure.
-  virtual std::unique_ptr<VaapiDependencies> CreateVaapiDependencies(
-      scoped_refptr<gfx::NativePixmap> pixmap) = 0;
-};
-
-///////////////////////////////////////////////////////////////////////////////
-// VaapiImageRepresentation
-
-// Representation of a SharedImageBacking as a VA-API surface.
-// This representation is currently only supported by OzoneImageBacking.
-//
-// Synchronized access is currently not required in this representation because:
-//
-// For reads:
-// We will be using this for the destination of decoding work, so no read access
-// synchronization is needed from the point of view of the VA-API.
-//
-// For writes:
-// Because of the design of the current video pipeline, we don't start the
-// decoding work until we're sure that the destination buffer is not being used
-// by the rest of the pipeline. However, we still need to keep track of write
-// accesses so that other representations can synchronize with the decoder.
-class GPU_GLES2_EXPORT VaapiImageRepresentation
-    : public SharedImageRepresentation {
- public:
-  class GPU_GLES2_EXPORT ScopedWriteAccess
-      : public ScopedAccessBase<VaapiImageRepresentation> {
-   public:
-    ScopedWriteAccess(base::PassKey<VaapiImageRepresentation> pass_key,
-                      VaapiImageRepresentation* representation);
-
-    ~ScopedWriteAccess();
-
-    const media::VASurface* va_surface();
-  };
-  VaapiImageRepresentation(SharedImageManager* manager,
-                           SharedImageBacking* backing,
-                           MemoryTypeTracker* tracker,
-                           VaapiDependencies* vaapi_dependency);
-  ~VaapiImageRepresentation() override;
-
-  std::unique_ptr<ScopedWriteAccess> BeginScopedWriteAccess();
-
- private:
-  friend class WrappedVaapiRepresentation;
-
-  raw_ptr<VaapiDependencies> vaapi_deps_;
-  virtual void EndAccess() = 0;
-  virtual void BeginAccess() = 0;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1085,38 +1190,83 @@ class GPU_GLES2_EXPORT RasterImageRepresentation
 };
 
 ///////////////////////////////////////////////////////////////////////////////
-// VideoDecodeImageRepresentation
+// VideoImageRepresentation
 
-class GPU_GLES2_EXPORT VideoDecodeImageRepresentation
+#if BUILDFLAG(IS_WIN)
+// Holds a D3D11 texture array, and index into it.
+struct GPU_GLES2_EXPORT D3D11TextureAndArrayIndex {
+  D3D11TextureAndArrayIndex(Microsoft::WRL::ComPtr<ID3D11Texture2D> texture,
+                            size_t array_index);
+  D3D11TextureAndArrayIndex(const D3D11TextureAndArrayIndex& other);
+  D3D11TextureAndArrayIndex(D3D11TextureAndArrayIndex&& other);
+
+  ~D3D11TextureAndArrayIndex();
+
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+  size_t array_index = 0;
+};
+#endif  // BUILDFLAG(IS_WIN)
+
+class GPU_GLES2_EXPORT VideoImageRepresentation
     : public SharedImageRepresentation {
  public:
   class GPU_GLES2_EXPORT ScopedWriteAccess
-      : public ScopedAccessBase<VideoDecodeImageRepresentation> {
+      : public ScopedAccessBase<VideoImageRepresentation> {
    public:
-    ScopedWriteAccess(base::PassKey<VideoDecodeImageRepresentation> pass_key,
-                      VideoDecodeImageRepresentation* representation);
+    ScopedWriteAccess(base::PassKey<VideoImageRepresentation> pass_key,
+                      VideoImageRepresentation* representation);
     ~ScopedWriteAccess();
 
 #if BUILDFLAG(IS_WIN)
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> GetD3D11Texture() const {
+    D3D11TextureAndArrayIndex GetD3D11Texture() const {
       return representation()->GetD3D11Texture();
     }
 #endif  // BUILDFLAG(IS_WIN)
   };
 
-  VideoDecodeImageRepresentation(SharedImageManager* manager,
-                                 SharedImageBacking* backing,
-                                 MemoryTypeTracker* tracker);
-  ~VideoDecodeImageRepresentation() override;
+  class GPU_GLES2_EXPORT ScopedReadAccess
+      : public ScopedAccessBase<VideoImageRepresentation> {
+   public:
+    ScopedReadAccess(base::PassKey<VideoImageRepresentation> pass_key,
+                     VideoImageRepresentation* representation);
+    ~ScopedReadAccess();
+
+#if BUILDFLAG(IS_WIN)
+    D3D11TextureAndArrayIndex GetD3D11Texture() const {
+      return representation()->GetD3D11Texture();
+    }
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_ANDROID)
+    AHardwareBuffer* GetAHardwareBuffer() const {
+      return representation()->GetAHardwareBuffer();
+    }
+#endif  // BUILDFLAG(IS_ANDROID)
+  };
+
+  VideoImageRepresentation(SharedImageManager* manager,
+                           SharedImageBacking* backing,
+                           MemoryTypeTracker* tracker);
+  ~VideoImageRepresentation() override;
 
   virtual std::unique_ptr<ScopedWriteAccess> BeginScopedWriteAccess();
+  virtual std::unique_ptr<ScopedReadAccess> BeginScopedReadAccess();
 
  protected:
+  friend class WrappedVideoCompoundImageRepresentation;
+
 #if BUILDFLAG(IS_WIN)
-  virtual Microsoft::WRL::ComPtr<ID3D11Texture2D> GetD3D11Texture() const = 0;
+  virtual D3D11TextureAndArrayIndex GetD3D11Texture() const = 0;
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_ANDROID)
+  virtual AHardwareBuffer* GetAHardwareBuffer() const = 0;
+#endif  // BUILDFLAG(IS_ANDROID)
+
   virtual bool BeginWriteAccess() = 0;
   virtual void EndWriteAccess() = 0;
+  virtual bool BeginReadAccess() = 0;
+  virtual void EndReadAccess() = 0;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1150,14 +1300,21 @@ class GPU_GLES2_EXPORT VulkanImageRepresentation
     VkSemaphore end_semaphore_;
   };
 
-  virtual std::unique_ptr<ScopedAccess> BeginScopedAccess(
+  std::unique_ptr<ScopedAccess> BeginScopedAccess(
       AccessMode access_mode,
       std::vector<VkSemaphore>& begin_semaphores,
-      std::vector<VkSemaphore>& end_semaphores) = 0;
+      std::vector<VkSemaphore>& end_semaphores);
+
+  virtual bool BeginAccess(AccessMode access_mode,
+                           std::vector<VkSemaphore>& begin_semaphores,
+                           std::vector<VkSemaphore>& end_semaphores) = 0;
+
+  virtual void EndAccess(bool is_read_only, VkSemaphore end_semaphore) = 0;
+
+  virtual gpu::VulkanImage& GetVulkanImage();
 
  protected:
-  virtual void EndScopedAccess(bool is_read_only,
-                               VkSemaphore end_semaphore) = 0;
+  friend class WrappedVulkanCompoundImageRepresentation;
 
   std::unique_ptr<gpu::VulkanImage> vulkan_image_;
   raw_ptr<gpu::VulkanDeviceQueue> vulkan_device_queue_;

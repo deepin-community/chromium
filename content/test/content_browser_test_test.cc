@@ -8,10 +8,10 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
+#include "base/immediate_crash.h"
 #include "base/location.h"
 #include "base/path_service.h"
 #include "base/process/launch.h"
@@ -103,7 +103,7 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTest, MANUAL_RendererCrash) {
 #endif
 
 // Tests that browser tests print the callstack when a child process crashes.
-// TODO(https://crbug.com/1317397): Enable this test on Fuchsia once the test
+// TODO(crbug.com/40834746): Enable this test on Fuchsia once the test
 // expectations have been updated.
 #if BUILDFLAG(IS_FUCHSIA)
 #define MAYBE_RendererCrashCallStack DISABLED_RendererCrashCallStack
@@ -118,6 +118,8 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTest, MAYBE_RendererCrashCallStack) {
                              "ContentBrowserTest.MANUAL_RendererCrash");
   new_test.AppendSwitch(switches::kRunManualTestsFlag);
   new_test.AppendSwitch(switches::kSingleProcessTests);
+  // Test needs to capture stderr so force logging to go there.
+  new_test.AppendSwitchASCII(switches::kEnableLogging, "stderr");
 
 #if defined(THREAD_SANITIZER)
   // TSan appears to not be able to report intentional crashes from sandboxed
@@ -138,7 +140,7 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTest, MAYBE_RendererCrashCallStack) {
       "#0 ";
 #endif
 
-  if (!base::Contains(output, crash_string)) {
+  if (!output.contains(crash_string)) {
     GTEST_FAIL() << "Couldn't find\n" << crash_string << "\n in output\n "
                  << output;
   }
@@ -149,7 +151,7 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTest, MAYBE_RendererCrashCallStack) {
 #pragma clang optimize off
 #endif
 IN_PROC_BROWSER_TEST_F(ContentBrowserTest, MANUAL_BrowserCrash) {
-  CHECK(false);
+  base::ImmediateCrash();
 }
 #ifdef __clang__
 #pragma clang optimize on
@@ -157,7 +159,7 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTest, MANUAL_BrowserCrash) {
 
 // Tests that browser tests print the callstack on asserts.
 // Disabled on Windows crbug.com/1034784
-// TODO(https://crbug.com/1317397): Enable this test on Fuchsia once the test
+// TODO(crbug.com/40834746): Enable this test on Fuchsia once the test
 // expectations have been updated.
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_FUCHSIA)
 #define MAYBE_BrowserCrashCallStack DISABLED_BrowserCrashCallStack
@@ -191,7 +193,7 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTest, MAYBE_BrowserCrashCallStack) {
       "#0 ";
 #endif
 
-  if (!base::Contains(output, crash_string)) {
+  if (!output.contains(crash_string)) {
     GTEST_FAIL() << "Couldn't find\n"
                  << crash_string << "\n in output\n " << output;
   }
@@ -243,21 +245,21 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTest, MAYBE_RunMockTests) {
   base::GetAppOutputAndError(command_line, &output);
 
   // Validate the resulting JSON file is the expected output.
-  std::optional<base::Value::Dict> root =
+  std::optional<base::DictValue> root =
       base::test_launcher_utils::ReadSummary(path);
   ASSERT_TRUE(root);
 
-  base::Value::Dict* dict = root->FindDict("test_locations");
+  base::DictValue* dict = root->FindDict("test_locations");
   ASSERT_TRUE(dict);
   EXPECT_EQ(3u, dict->size());
   EXPECT_TRUE(base::test_launcher_utils::ValidateTestLocations(
       *dict, "MockContentBrowserTest"));
 
-  base::Value::List* list = root->FindList("per_iteration_data");
+  base::ListValue* list = root->FindList("per_iteration_data");
   ASSERT_TRUE(list);
   ASSERT_EQ(1u, list->size());
 
-  base::Value::Dict* iteration_dict = (*list)[0].GetIfDict();
+  base::DictValue* iteration_dict = (*list)[0].GetIfDict();
   ASSERT_TRUE(iteration_dict);
   EXPECT_EQ(3u, iteration_dict->size());
   // We expect the result to be stripped of disabled prefix.
@@ -284,7 +286,7 @@ class ContentBrowserTestSanityTest : public ContentBrowserTest {
 
   void SetUp() override {
     ASSERT_FALSE(ran_);
-    BrowserTestBase::SetUp();
+    ContentBrowserTest::SetUp();
   }
 
   void SetUpOnMainThread() override { ASSERT_FALSE(ran_); }
@@ -306,7 +308,7 @@ class ContentBrowserTestSanityTest : public ContentBrowserTest {
 
   void TearDown() override {
     ASSERT_TRUE(ran_);
-    BrowserTestBase::TearDown();
+    ContentBrowserTest::TearDown();
   }
 
  private:
@@ -319,7 +321,8 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTestSanityTest, Basic) {
   Test();
 }
 
-IN_PROC_BROWSER_TEST_F(ContentBrowserTestSanityTest, SingleProcess) {
+// Flaky: crbug.com/378048895
+IN_PROC_BROWSER_TEST_F(ContentBrowserTestSanityTest, DISABLED_SingleProcess) {
   Test();
 }
 
@@ -382,7 +385,14 @@ IN_PROC_BROWSER_TEST_F(ContentBrowserTest, NonNestableTask) {
   ASSERT_TRUE(non_nested_task_ran);
 }
 
-IN_PROC_BROWSER_TEST_F(ContentBrowserTest, RunTimeoutInstalled) {
+// TODO(crbug.com/440535492): Flaky on Win dbg. Re-enable this test.
+#if BUILDFLAG(IS_WIN) && !defined(NDEBUG)
+// TODO(crbug.com/440535492): Flaky on Win dbg.
+#define MAYBE_RunTimeoutInstalled DISABLED_RunTimeoutInstalled
+#else
+#define MAYBE_RunTimeoutInstalled RunTimeoutInstalled
+#endif
+IN_PROC_BROWSER_TEST_F(ContentBrowserTest, MAYBE_RunTimeoutInstalled) {
   // Verify that a RunLoop timeout is installed and shorter than the test
   // timeout itself.
   const base::RunLoop::RunLoopTimeout* run_timeout =

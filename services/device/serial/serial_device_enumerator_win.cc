@@ -19,7 +19,6 @@
 #include <string_view>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/scoped_generic.h"
 #include "base/scoped_observation.h"
@@ -313,7 +312,7 @@ void SerialDeviceEnumeratorWin::EnumeratePort(HDEVINFO dev_info,
   // Check whether the currently enumerating port has been seen before since
   // the method above will generate duplicate enumerations for some ports.
   base::FilePath path = GetPath(*port_name);
-  if (base::Contains(paths_, path))
+  if (paths_.contains(path))
     return;
 
   std::optional<std::string> instance_id =
@@ -332,7 +331,7 @@ void SerialDeviceEnumeratorWin::EnumeratePort(HDEVINFO dev_info,
   info->path = path;
   info->device_instance_id = *instance_id;
 
-  // TODO(https://crbug.com/1015074): While the "bus reported device
+  // TODO(crbug.com/40653536): While the "bus reported device
   // description" is usually the USB product string this is still up to the
   // individual serial driver and could be equal to the "friendly name". It
   // would be more reliable to read the real USB strings here.

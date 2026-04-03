@@ -7,9 +7,9 @@
 
 #include <ws2tcpip.h>
 
-// iphlpapi.h must be included after ws2tcpip.h to use MIB_IF_TABLE2.
-#include <iphlpapi.h>  // NOLINT
+#include <iphlpapi.h>
 
+#include <cstdint>
 #include <vector>
 
 namespace media_router {

@@ -147,12 +147,16 @@ class WebCodecsDecoderSelectorTest : public ::testing::Test {
 
   MOCK_METHOD1_T(OnDecoderSelected, void(int));
 
-  void OnDecoderSelectedThunk(std::unique_ptr<Decoder> decoder) {
+  void OnDecoderSelectedThunk(
+      DecoderSelector<TypeParam::kStreamType>::DecoderOrError
+          decoder_or_error) {
     // Report only the id of the mock, since that's what the tests care
     // about. The decoder will be destructed immediately.
-    OnDecoderSelected(
-        decoder ? static_cast<MockDecoder*>(decoder.get())->GetDecoderId()
-                : kNoDecoder);
+    OnDecoderSelected(decoder_or_error.has_value()
+                          ? static_cast<MockDecoder*>(
+                                std::move(decoder_or_error).value().get())
+                                ->GetDecoderId()
+                          : kNoDecoder);
   }
 
   void AddMockDecoder(int decoder_id, DecoderCapability capability) {
@@ -181,15 +185,15 @@ class WebCodecsDecoderSelectorTest : public ::testing::Test {
     decoder_selector_ =
         std::make_unique<DecoderSelector<TypeParam::kStreamType>>(
             scheduler::GetSingleThreadTaskRunnerForTesting(),
-            WTF::BindRepeating(&Self::CreateDecoders, base::Unretained(this)),
-            WTF::BindRepeating(&Self::OnOutput, base::Unretained(this)));
+            BindRepeating(&Self::CreateDecoders, Unretained(this)), &media_log_,
+            blink::BindRepeating(&Self::OnOutput, Unretained(this)));
   }
 
   void SelectDecoder(DecoderConfig config = TypeParam::CreateConfig()) {
     last_set_decoder_config_ = config;
     decoder_selector_->SelectDecoder(
         config, low_delay_,
-        WTF::BindOnce(&Self::OnDecoderSelectedThunk, base::Unretained(this)));
+        BindOnce(&Self::OnDecoderSelectedThunk, Unretained(this)));
     RunUntilIdle();
   }
 

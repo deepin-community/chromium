@@ -14,11 +14,12 @@
 
 namespace media_router {
 
-const char kExpectedDisplayName[] = "test_device";
-const char kExpectedSinkId[] = "1234";
-const char kExpectedPort[] = "666";
-const char kExpectedIpV4[] = "192.0.2.146";
-const char kExpectedIpV6[] = "2001:0db8:85a3:0000:0000:8a2e:0370:7334";
+inline constexpr char kExpectedDisplayName[] = "test_device";
+inline constexpr char kExpectedSinkId[] = "1234";
+inline constexpr char kExpectedPort[] = "666";
+inline constexpr char kExpectedIpV4[] = "192.0.2.146";
+inline constexpr char kExpectedIpV6[] =
+    "2001:0db8:85a3:0000:0000:8a2e:0370:7334";
 
 using DiscoveryDevice = chrome_browser_media::proto::DiscoveryDevice;
 using NetworkInfo = chrome_browser_media::proto::NetworkInfo;
@@ -70,9 +71,9 @@ class MockAccessCodeCastPrefUpdater : public AccessCodeCastPrefUpdater {
   void UpdateDeviceAddedTimeDict(
       const MediaSink::Id sink_id,
       base::OnceClosure on_updated_callback) override;
-  void GetDevicesDict(base::OnceCallback<void(base::Value::Dict)>
-                          get_devices_callback) override;
-  void GetDeviceAddedTimeDict(base::OnceCallback<void(base::Value::Dict)>
+  void GetDevicesDict(
+      base::OnceCallback<void(base::DictValue)> get_devices_callback) override;
+  void GetDeviceAddedTimeDict(base::OnceCallback<void(base::DictValue)>
                                   get_device_added_time_callback) override;
   void RemoveSinkIdFromDevicesDict(
       const MediaSink::Id sink_id,
@@ -83,18 +84,20 @@ class MockAccessCodeCastPrefUpdater : public AccessCodeCastPrefUpdater {
   void ClearDevicesDict(base::OnceClosure on_cleared_callback) override;
   void ClearDeviceAddedTimeDict(base::OnceClosure on_cleared_callback) override;
 
-  MOCK_METHOD(void, UpdateDevicesDictForTest, (const MediaSinkInternal& sink));
+  MOCK_METHOD(void,
+              UpdateDevicesDictForTesting,
+              (const MediaSinkInternal& sink));
 
-  void set_devices_dict(base::Value::Dict dict);
-  void set_device_added_time_dict(base::Value::Dict dict);
-  const base::Value::Dict& devices_dict() { return devices_dict_; }
-  const base::Value::Dict& device_added_time_dict() {
+  void set_devices_dict(base::DictValue dict);
+  void set_device_added_time_dict(base::DictValue dict);
+  const base::DictValue& devices_dict() { return devices_dict_; }
+  const base::DictValue& device_added_time_dict() {
     return device_added_time_dict_;
   }
 
  private:
-  base::Value::Dict devices_dict_;
-  base::Value::Dict device_added_time_dict_;
+  base::DictValue devices_dict_;
+  base::DictValue device_added_time_dict_;
 };
 
 MediaRoute CreateRouteForTesting(const MediaSink::Id& sink_id);

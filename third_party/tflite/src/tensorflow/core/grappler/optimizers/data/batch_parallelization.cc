@@ -34,7 +34,7 @@ namespace {
 constexpr char kBatchDataset[] = "BatchDatasetV2";
 constexpr char kParallelBatchDataset[] = "ParallelBatchDataset";
 
-NodeDef MakeParallelBatch(const string& name, MutableGraphView* graph) {
+NodeDef MakeParallelBatch(const std::string& name, MutableGraphView* graph) {
   // The inputs of the node to be parallelized could be changed by the
   // optimization pass, so we need to look it up in the modified graph.
   int index = graph_utils::FindGraphNodeWithName(name, *graph->graph());
@@ -46,7 +46,7 @@ NodeDef MakeParallelBatch(const string& name, MutableGraphView* graph) {
   parallel_batch.set_op(kParallelBatchDataset);
   auto* num_parallel_calls =
       graph_utils::AddScalarConstNode(data::model::kAutotune, graph);
-  string drop_remainder_name = parallel_batch.input(2);
+  std::string drop_remainder_name = parallel_batch.input(2);
   parallel_batch.set_input(2, num_parallel_calls->name());
   parallel_batch.add_input(drop_remainder_name);
 
@@ -55,10 +55,9 @@ NodeDef MakeParallelBatch(const string& name, MutableGraphView* graph) {
 
 }  // namespace
 
-Status BatchParallelization::OptimizeAndCollectStats(Cluster* cluster,
-                                                     const GrapplerItem& item,
-                                                     GraphDef* output,
-                                                     OptimizationStats* stats) {
+absl::Status BatchParallelization::OptimizeAndCollectStats(
+    Cluster* cluster, const GrapplerItem& item, GraphDef* output,
+    OptimizationStats* stats) {
   *output = item.graph;
   if (!autotune_) {
     VLOG(1) << "The optimization batch_parallelization is not applied if "
@@ -73,7 +72,7 @@ Status BatchParallelization::OptimizeAndCollectStats(Cluster* cluster,
   if (graph_utils::IsItemDerivedFromFunctionDef(item, graph))
     return absl::OkStatus();
 
-  absl::flat_hash_set<string> nodes_to_delete;
+  absl::flat_hash_set<std::string> nodes_to_delete;
   FunctionLibraryDefinition function_library(OpRegistry::Global(),
                                              item.graph.library());
   auto get_batch_node = [](const NodeDef& node) -> const NodeDef* {

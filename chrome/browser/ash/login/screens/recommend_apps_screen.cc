@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ash/login/screens/recommend_apps_screen.h"
 
-#include "ash/components/arc/arc_prefs.h"
 #include "base/check_op.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/apps/app_discovery_service/app_discovery_service_factory.h"
@@ -16,6 +15,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/ash/login/recommend_apps_screen_handler.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "components/user_manager/user_manager.h"
 
 namespace ash {
@@ -59,6 +59,7 @@ void RecordUmaScreenAction(RecommendAppsScreenAction action) {
 
 // static
 std::string RecommendAppsScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::kSelected:
       return "Selected";
@@ -69,6 +70,7 @@ std::string RecommendAppsScreen::GetResultString(Result result) {
     case Result::kNotApplicable:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 RecommendAppsScreen::RecommendAppsScreen(
@@ -86,7 +88,7 @@ void RecommendAppsScreen::OnSkip() {
   exit_callback_.Run(Result::kSkipped);
 }
 
-void RecommendAppsScreen::OnInstall(base::Value::List apps) {
+void RecommendAppsScreen::OnInstall(base::ListValue apps) {
   CHECK_GT(recommended_app_count_, 0u);
   CHECK_GT(apps.size(), 0u);
   int selected_app_count = static_cast<int>(apps.size());
@@ -167,9 +169,9 @@ void RecommendAppsScreen::UnpackResultAndShow(
     const std::vector<apps::Result>& results) {
   if (!view_)
     return;
-  base::Value::List app_list;
+  base::ListValue app_list;
   for (const auto& app_result : results) {
-    base::Value::Dict app_info;
+    base::DictValue app_info;
     app_info.Set("title", base::Value(app_result.GetAppTitle()));
     auto* play_extras = app_result.GetSourceExtras()->AsPlayExtras();
     app_info.Set("icon_url", base::Value(play_extras->GetIconUrl().spec()));
@@ -207,7 +209,7 @@ void RecommendAppsScreen::OnParseResponseError() {
   exit_callback_.Run(Result::kSkipped);
 }
 
-void RecommendAppsScreen::OnUserAction(const base::Value::List& args) {
+void RecommendAppsScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionSkip) {
     OnSkip();

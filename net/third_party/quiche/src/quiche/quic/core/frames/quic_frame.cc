@@ -4,6 +4,12 @@
 
 #include "quiche/quic/core/frames/quic_frame.h"
 
+#include <ostream>
+#include <sstream>
+#include <string>
+#include <utility>
+
+#include "quiche/quic/core/frames/quic_immediate_ack_frame.h"
 #include "quiche/quic/core/frames/quic_new_connection_id_frame.h"
 #include "quiche/quic/core/frames/quic_reset_stream_at_frame.h"
 #include "quiche/quic/core/frames/quic_retire_connection_id_frame.h"
@@ -12,8 +18,8 @@
 #include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/platform/api/quic_bug_tracker.h"
 #include "quiche/quic/platform/api/quic_logging.h"
-#include "quiche/common/platform/api/quiche_mem_slice.h"
 #include "quiche/common/quiche_buffer_allocator.h"
+#include "quiche/common/quiche_mem_slice.h"
 
 namespace quic {
 
@@ -73,14 +79,17 @@ QuicFrame::QuicFrame(QuicPathChallengeFrame frame)
 
 QuicFrame::QuicFrame(QuicStopSendingFrame frame) : stop_sending_frame(frame) {}
 
-QuicFrame::QuicFrame(QuicMessageFrame* frame)
-    : type(MESSAGE_FRAME), message_frame(frame) {}
+QuicFrame::QuicFrame(QuicDatagramFrame* frame)
+    : type(DATAGRAM_FRAME), datagram_frame(frame) {}
 
 QuicFrame::QuicFrame(QuicNewTokenFrame* frame)
     : type(NEW_TOKEN_FRAME), new_token_frame(frame) {}
 
 QuicFrame::QuicFrame(QuicAckFrequencyFrame* frame)
     : type(ACK_FREQUENCY_FRAME), ack_frequency_frame(frame) {}
+
+QuicFrame::QuicFrame(QuicImmediateAckFrame frame)
+    : immediate_ack_frame(frame) {}
 
 QuicFrame::QuicFrame(QuicResetStreamAtFrame* frame)
     : type(RESET_STREAM_AT_FRAME), reset_stream_at_frame(frame) {}
@@ -103,7 +112,8 @@ void DeleteFrame(QuicFrame* frame) {
       frame->type != WINDOW_UPDATE_FRAME && frame->type != BLOCKED_FRAME &&
       frame->type != STOP_SENDING_FRAME &&
       frame->type != PATH_CHALLENGE_FRAME &&
-      frame->type != PATH_RESPONSE_FRAME) {
+      frame->type != PATH_RESPONSE_FRAME &&
+      frame->type != IMMEDIATE_ACK_FRAME) {
     QUICHE_CHECK(!frame->delete_forbidden) << *frame;
   }
 #endif  // QUIC_FRAME_DEBUG
@@ -122,6 +132,7 @@ void DeleteFrame(QuicFrame* frame) {
     case STOP_SENDING_FRAME:
     case PATH_CHALLENGE_FRAME:
     case PATH_RESPONSE_FRAME:
+    case IMMEDIATE_ACK_FRAME:
       break;
     case ACK_FRAME:
       delete frame->ack_frame;
@@ -141,8 +152,8 @@ void DeleteFrame(QuicFrame* frame) {
     case RETIRE_CONNECTION_ID_FRAME:
       delete frame->retire_connection_id_frame;
       break;
-    case MESSAGE_FRAME:
-      delete frame->message_frame;
+    case DATAGRAM_FRAME:
+      delete frame->datagram_frame;
       break;
     case CRYPTO_FRAME:
       delete frame->crypto_frame;
@@ -170,6 +181,15 @@ void RemoveFramesForStream(QuicFrames* frames, QuicStreamId stream_id) {
     }
     it = frames->erase(it);
   }
+}
+
+bool HasDatagramFrame(const QuicFrames& frames) {
+  for (const QuicFrame& frame : frames) {
+    if (frame.type == DATAGRAM_FRAME) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool IsControlFrame(QuicFrameType type) {
@@ -397,14 +417,16 @@ QuicFrame CopyQuicFrame(quiche::QuicheBufferAllocator* allocator,
     case STOP_SENDING_FRAME:
       copy = QuicFrame(QuicStopSendingFrame(frame.stop_sending_frame));
       break;
-    case MESSAGE_FRAME:
-      copy = QuicFrame(new QuicMessageFrame(frame.message_frame->message_id));
-      copy.message_frame->data = frame.message_frame->data;
-      copy.message_frame->message_length = frame.message_frame->message_length;
-      for (const auto& slice : frame.message_frame->message_data) {
+    case DATAGRAM_FRAME:
+      copy =
+          QuicFrame(new QuicDatagramFrame(frame.datagram_frame->datagram_id));
+      copy.datagram_frame->data = frame.datagram_frame->data;
+      copy.datagram_frame->datagram_length =
+          frame.datagram_frame->datagram_length;
+      for (const auto& slice : frame.datagram_frame->datagram_data) {
         quiche::QuicheBuffer buffer =
             quiche::QuicheBuffer::Copy(allocator, slice.AsStringView());
-        copy.message_frame->message_data.push_back(
+        copy.datagram_frame->datagram_data.push_back(
             quiche::QuicheMemSlice(std::move(buffer)));
       }
       break;
@@ -421,6 +443,9 @@ QuicFrame CopyQuicFrame(quiche::QuicheBufferAllocator* allocator,
       break;
     case ACK_FREQUENCY_FRAME:
       copy = QuicFrame(new QuicAckFrequencyFrame(*frame.ack_frequency_frame));
+      break;
+    case IMMEDIATE_ACK_FRAME:
+      copy = QuicFrame(QuicImmediateAckFrame(frame.immediate_ack_frame));
       break;
     case RESET_STREAM_AT_FRAME:
       copy =
@@ -516,8 +541,8 @@ std::ostream& operator<<(std::ostream& os, const QuicFrame& frame) {
     case STOP_SENDING_FRAME:
       os << "type { STOP_SENDING } " << frame.stop_sending_frame;
       break;
-    case MESSAGE_FRAME:
-      os << "type { MESSAGE_FRAME }" << *(frame.message_frame);
+    case DATAGRAM_FRAME:
+      os << "type { DATAGRAM_FRAME }" << *(frame.datagram_frame);
       break;
     case NEW_TOKEN_FRAME:
       os << "type { NEW_TOKEN_FRAME }" << *(frame.new_token_frame);
@@ -527,6 +552,9 @@ std::ostream& operator<<(std::ostream& os, const QuicFrame& frame) {
       break;
     case ACK_FREQUENCY_FRAME:
       os << "type { ACK_FREQUENCY_FRAME } " << *(frame.ack_frequency_frame);
+      break;
+    case IMMEDIATE_ACK_FRAME:
+      os << "type { IMMEDIATE_ACK_FRAME } " << frame.immediate_ack_frame;
       break;
     case RESET_STREAM_AT_FRAME:
       os << "type { RESET_STREAM_AT_FRAME } " << *(frame.reset_stream_at_frame);

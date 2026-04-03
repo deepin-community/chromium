@@ -8,12 +8,12 @@
 #include "cc/input/scroll_snap_data.h"
 #include "cc/input/snap_selection_strategy.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/css/css_primitive_value_mappings.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
+class Element;
 class LayoutBox;
 
 // Snap Coordinator keeps track of snap containers and all of their associated
@@ -38,11 +38,18 @@ class CORE_EXPORT SnapCoordinator final {
   // Calculate the SnapAreaData for the specific snap area in its snap
   // container.
   static cc::SnapAreaData CalculateSnapAreaData(
-      const LayoutBox& snap_area,
+      Element& snap_area,
       const LayoutBox& snap_container);
 
   // Returns true if the SnapContainerData actually changed.
   static bool UpdateSnapContainerData(LayoutBox&);
+
+ private:
+  static void AddOverscrollSnapAreas(
+      LayoutBox& snap_container,
+      cc::SnapContainerData& snap_container_data,
+      cc::TargetSnapAreaElementIds& new_target_ids,
+      const cc::TargetSnapAreaElementIds& old_target_ids);
 };
 
 }  // namespace blink

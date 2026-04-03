@@ -13,6 +13,7 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
+#include "base/strings/string_util.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/printing/print_preview_data_service.h"
 #include "chrome/browser/ui/webui/print_preview/parse_data_path.h"
@@ -27,22 +28,16 @@ namespace printing {
 namespace {
 
 bool ShouldHandleRequestCallback(const std::string& path) {
-  return !!ParseDataPath(path);
+  return ParseDataPath(path).has_value();
 }
 
 }  // namespace
 
 PrintPreviewUIUntrustedConfig::PrintPreviewUIUntrustedConfig()
-    : WebUIConfig(content::kChromeUIUntrustedScheme,
-                  chrome::kChromeUIPrintHost) {}
+    : DefaultWebUIConfig(content::kChromeUIUntrustedScheme,
+                         chrome::kChromeUIPrintHost) {}
 
 PrintPreviewUIUntrustedConfig::~PrintPreviewUIUntrustedConfig() = default;
-
-std::unique_ptr<content::WebUIController>
-PrintPreviewUIUntrustedConfig::CreateWebUIController(content::WebUI* web_ui,
-                                                     const GURL& url) {
-  return std::make_unique<PrintPreviewUIUntrusted>(web_ui);
-}
 
 PrintPreviewUIUntrusted::PrintPreviewUIUntrusted(content::WebUI* web_ui)
     : UntrustedWebUIController(web_ui) {
@@ -61,10 +56,10 @@ PrintPreviewUIUntrusted::GetPrintPreviewData(const std::string& path) {
   std::optional<PrintPreviewIdAndPageIndex> parsed = ParseDataPath(path);
   CHECK(parsed);
 
-  scoped_refptr<base::RefCountedMemory> data;
-  PrintPreviewDataService::GetInstance()->GetDataEntry(
-      parsed->ui_id, parsed->page_index, &data);
-  if (data.get()) {
+  scoped_refptr<base::RefCountedMemory> data =
+      PrintPreviewDataService::GetInstance()->GetDataEntry(parsed->ui_id,
+                                                           parsed->page_index);
+  if (data) {
     return data;
   }
 

@@ -5,6 +5,8 @@
 #ifndef REMOTING_HOST_PASSTHROUGH_REGISTER_SUPPORT_HOST_REQUEST_H_
 #define REMOTING_HOST_PASSTHROUGH_REGISTER_SUPPORT_HOST_REQUEST_H_
 
+#include <optional>
+
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -12,7 +14,6 @@
 #include "remoting/host/register_support_host_request.h"
 #include "remoting/protocol/errors.h"
 #include "remoting/signaling/signal_strategy.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace remoting {
 
@@ -38,9 +39,10 @@ class PassthroughRegisterSupportHostRequest final
 
   // RegisterSupportHostRequest implementation.
   void StartRequest(SignalStrategy* signal_strategy,
+                    std::unique_ptr<net::ClientCertStore> client_cert_store,
                     scoped_refptr<RsaKeyPair> key_pair,
                     const std::string& authorized_helper,
-                    absl::optional<ChromeOsEnterpriseParams> params,
+                    std::optional<ChromeOsEnterpriseParams> params,
                     RegisterCallback callback) override;
 
  private:

@@ -72,7 +72,7 @@ DeviceCompilationProfiler::~DeviceCompilationProfiler() {
   cluster_compile_stats_.clear();
 }
 
-StatusOr<DeviceCompilationProfiler::ClusterCompileStats>
+absl::StatusOr<DeviceCompilationProfiler::ClusterCompileStats>
 DeviceCompilationProfiler::GetCompileStats(const NameAttrList& function) const {
   mutex_lock lock(mu_);
 
@@ -94,7 +94,7 @@ void DeviceCompilationProfiler::RegisterExecution(
   RegisterExecutionForCluster(function, &it->second);
 }
 
-Status DeviceCompilationProfiler::RegisterCompilation(
+absl::Status DeviceCompilationProfiler::RegisterCompilation(
     const NameAttrList& function, int64_t compile_time_us,
     bool used_persistent_cache) {
   metrics::UpdateXlaCompilationTime(compile_time_us);
@@ -107,7 +107,7 @@ Status DeviceCompilationProfiler::RegisterCompilation(
       cluster_compile_stats_.emplace(function.name(), ClusterCompileStats{})
           .first;
 
-  const uint64 compile_time_s = compile_time_us / 1.0e6;
+  const uint64_t compile_time_s = compile_time_us / 1.0e6;
   it->second.compile_count++;
   it->second.cumulative_compile_time_us += compile_time_us;
   VLOG(1) << "Compiled " << function_name << " " << it->second.compile_count

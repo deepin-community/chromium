@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,7 +28,7 @@ export class LogManager implements SDK.TargetManager.SDKModelObserver<SDK.LogMod
 
   modelAdded(logModel: SDK.LogModel.LogModel): void {
     const eventListeners = [];
-    eventListeners.push(logModel.addEventListener(SDK.LogModel.Events.EntryAdded, this.logEntryAdded, this));
+    eventListeners.push(logModel.addEventListener(SDK.LogModel.Events.ENTRY_ADDED, this.logEntryAdded, this));
     modelToEventListeners.set(logModel, eventListeners);
   }
 

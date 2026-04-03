@@ -28,6 +28,11 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/logging.h"
+#include "xla/tsl/platform/status.h"
+#include "xla/tsl/platform/statusor.h"
 #include "tensorflow/core/common_runtime/composite_device.h"
 #include "tensorflow/core/common_runtime/device_set.h"
 #include "tensorflow/core/common_runtime/function_body.h"
@@ -41,6 +46,7 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/placer.h"
 #include "tensorflow/core/common_runtime/replicate_per_replica_nodes.h"
 #include "tensorflow/core/framework/device.h"
+#include "tensorflow/core/framework/function.h"
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/metrics.h"
 #include "tensorflow/core/framework/optimized_function_graph.pb.h"
@@ -50,18 +56,13 @@ limitations under the License.
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/refcount.h"
 #include "tensorflow/core/util/debug_data_dumper.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/errors.h"
 #include "tsl/platform/host_info.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/status.h"
-#include "tsl/platform/statusor.h"
 
 namespace tensorflow {
 namespace {
-Status ValidateNoListArguments(
+absl::Status ValidateNoListArguments(
     const protobuf::RepeatedPtrField<OpDef::ArgDef>& args, const char* arg_type,
-    const string& function_name) {
+    const std::string& function_name) {
   for (const OpDef::ArgDef& arg : args) {
     if (!arg.number_attr().empty() || !arg.type_list_attr().empty()) {
       return errors::InvalidArgument(
@@ -75,7 +76,7 @@ Status ValidateNoListArguments(
   return absl::OkStatus();
 }
 
-Status ValidateMultiDeviceOptions(
+absl::Status ValidateMultiDeviceOptions(
     const FunctionDef& fdef,
     const FunctionLibraryRuntime::InstantiateOptions& options) {
   const OpDef& signature = fdef.signature();
@@ -110,9 +111,10 @@ Status ValidateMultiDeviceOptions(
   return absl::OkStatus();
 }
 
-Status SetArgShape(const std::unordered_map<int, DtypeAndPartialTensorShape>&
-                       input_resource_dtypes_and_shapes,
-                   const std::vector<Node*>& arg_nodes) {
+absl::Status SetArgShape(
+    const std::unordered_map<int, DtypeAndPartialTensorShape>&
+        input_resource_dtypes_and_shapes,
+    const std::vector<Node*>& arg_nodes) {
   for (Node* n : arg_nodes) {
     int index;
     TF_RETURN_IF_ERROR(GetNodeAttr(n->def(), "index", &index));
@@ -136,7 +138,7 @@ Status SetArgShape(const std::unordered_map<int, DtypeAndPartialTensorShape>&
   return absl::OkStatus();
 }
 
-const string* AssignedOrRequestedDeviceName(const Node& node) {
+const std::string* AssignedOrRequestedDeviceName(const Node& node) {
   if (node.has_assigned_device_name()) {
     return &node.assigned_device_name();
   }
@@ -145,10 +147,11 @@ const string* AssignedOrRequestedDeviceName(const Node& node) {
 
 // Sets `group` to the first colocation group specified in `node`. If no
 // group is specified, does not touch `group`.
-void GetColocationGroup(const Node* node, string* group) {
+void GetColocationGroup(const Node* node, std::string* group) {
   // We hoist the conversion from C-style string literal to string here,
   // so that we can avoid the many repeated calls to strlen().
-  static const StringPiece kColocationAttrNameStringPiece(kColocationAttrName);
+  static const absl::string_view kColocationAttrNameStringPiece(
+      kColocationAttrName);
   const AttrValue* attr_value =
       node->attrs().Find(kColocationAttrNameStringPiece);
   if (attr_value != nullptr && attr_value->has_list() &&
@@ -159,13 +162,13 @@ void GetColocationGroup(const Node* node, string* group) {
 
 // Writes the OptimizedFunctionGraphInfo proto into a cache file.
 // Returns error if the cache file writing fails.
-Status WriteToCache(const std::string& dir_name, const std::string& file_name,
-                    OptimizedFunctionGraphInfo& optimized_function_graph_info,
-                    Env* env) {
+absl::Status WriteToCache(
+    const std::string& dir_name, const std::string& file_name,
+    OptimizedFunctionGraphInfo& optimized_function_graph_info, Env* env) {
   const absl::Time cache_writing_start_time = absl::Now();
 
   OptimizedFunctionGraph optimized_function_graph_proto;
-  string optimized_function_graph_proto_str;
+  std::string optimized_function_graph_proto_str;
   optimized_function_graph_proto =
       OptimizedFunctionGraphInfo::ToProto(optimized_function_graph_info);
   optimized_function_graph_proto.SerializeToString(
@@ -207,21 +210,21 @@ Status WriteToCache(const std::string& dir_name, const std::string& file_name,
 
 // Retrieves the OptimizedFunctionGraphInfo from a cache file.
 // Returns error if cache file loading fails.
-StatusOr<OptimizedFunctionGraphInfo> ReadFromCache(const string& file_name,
-                                                   Env* env) {
+absl::StatusOr<OptimizedFunctionGraphInfo> ReadFromCache(
+    const std::string& file_name, Env* env) {
   absl::Time cache_reading_start_time = absl::Now();
 
   OptimizedFunctionGraph optimized_function_graph_proto;
-  string optimized_function_graph_proto_str;
+  std::string optimized_function_graph_proto_str;
   TF_RETURN_IF_ERROR(tsl::ReadFileToString(
       env, file_name, &optimized_function_graph_proto_str));
 
   optimized_function_graph_proto.ParseFromString(
       optimized_function_graph_proto_str);
-  TF_ASSIGN_OR_RETURN(
-      StatusOr<OptimizedFunctionGraphInfo>
-          optimized_function_graph_info_restored,
-      OptimizedFunctionGraphInfo::FromProto(optimized_function_graph_proto));
+  TF_ASSIGN_OR_RETURN(absl::StatusOr<OptimizedFunctionGraphInfo>
+                          optimized_function_graph_info_restored,
+                      OptimizedFunctionGraphInfo::FromProto(
+                          std::move(optimized_function_graph_proto)));
 
   const absl::Duration cache_reading_duration =
       absl::Now() - cache_reading_start_time;
@@ -241,12 +244,14 @@ StatusOr<OptimizedFunctionGraphInfo> ReadFromCache(const string& file_name,
 // 2) Task ID.
 // 3) Function name (without UUID suffix).
 // 4) TF graph node count.
-string GetFileCacheName(const string& dir_name, const string& function_name,
-                        const FunctionDef* fdef) {
-  string plain_func_name = function_name;
+std::string GetFileCacheName(const std::string& dir_name,
+                             const std::string& function_name,
+                             const FunctionDef* fdef) {
+  std::string plain_func_name = function_name;
   // Remove the random UUID in the function name.
   if (absl::StrContains(function_name, "_")) {
-    std::vector<string> func_name_tokens = absl::StrSplit(function_name, '_');
+    std::vector<std::string> func_name_tokens =
+        absl::StrSplit(function_name, '_');
     func_name_tokens.pop_back();
     plain_func_name = absl::StrJoin(func_name_tokens, "_");
   }
@@ -258,15 +263,13 @@ string GetFileCacheName(const string& dir_name, const string& function_name,
 
 // Generates graph and return information given the input function name,
 // attributes and function definition.
-Status GetGraphAndArgRets(const string& function_name, AttrSlice attrs,
-                          core::RefCountPtr<FunctionRecord>&& fdef,
-                          const FunctionLibraryDefinition* lib_def,
-                          std::unique_ptr<Graph>* graph,
-                          std::vector<Node*>* arg_nodes,
-                          std::vector<Node*>* ret_nodes,
-                          std::vector<string>* ret_node_names,
-                          DataTypeVector* ret_types,
-                          std::vector<string>* control_ret_node_names) {
+absl::Status GetGraphAndArgRets(
+    const std::string& function_name, AttrSlice attrs,
+    core::RefCountPtr<FunctionRecord>&& fdef,
+    const FunctionLibraryDefinition* lib_def, std::unique_ptr<Graph>* graph,
+    std::vector<Node*>* arg_nodes, std::vector<Node*>* ret_nodes,
+    std::vector<std::string>* ret_node_names, DataTypeVector* ret_types,
+    std::vector<std::string>* control_ret_node_names) {
   std::unique_ptr<FunctionBody> fbody;
   TF_RETURN_IF_ERROR(
       FunctionDefToBodyHelper(std::move(fdef), attrs, lib_def, &fbody));
@@ -298,13 +301,13 @@ Status GetGraphAndArgRets(const string& function_name, AttrSlice attrs,
 }
 }  // namespace
 
-Status PinArgsAndRets(const std::vector<string>& input_devices,
-                      const std::vector<string>& output_devices,
-                      const DeviceSet& device_set,
-                      const std::vector<Node*>& arg_nodes,
-                      const std::vector<Node*>& ret_nodes,
-                      const FunctionLibraryDefinition* lib_def,
-                      Device* default_device) {
+absl::Status PinArgsAndRets(const std::vector<std::string>& input_devices,
+                            const std::vector<std::string>& output_devices,
+                            const DeviceSet& device_set,
+                            const std::vector<Node*>& arg_nodes,
+                            const std::vector<Node*>& ret_nodes,
+                            const FunctionLibraryDefinition* lib_def,
+                            Device* default_device) {
   // If output_devices are not specified, we want to set the output device
   // based on the device of the output producing node. The output producing
   // node can be an arg node because functions can simply return their
@@ -315,6 +318,9 @@ Status PinArgsAndRets(const std::vector<string>& input_devices,
     TF_RETURN_IF_ERROR(node->attrs().Find("index", &attr_value));
     int64_t index = attr_value->i();
     node->set_assigned_device_name(input_devices[index]);
+
+    VLOG(3) << "Setting device to " << input_devices[index] << " for node "
+            << node->name();
   }
 
   for (Node* node : ret_nodes) {
@@ -332,8 +338,9 @@ Status PinArgsAndRets(const std::vector<string>& input_devices,
         if (it->IsControlEdge()) continue;
 
         Node* src_node = it->src();
-        const string* src_device = AssignedOrRequestedDeviceName(*src_node);
-        string colocation_group = "";
+        const std::string* src_device =
+            AssignedOrRequestedDeviceName(*src_node);
+        std::string colocation_group = "";
         GetColocationGroup(src_node, &colocation_group);
         VLOG(3) << "Considering src: " << src_node->name()
                 << " src_device: " << *src_device
@@ -363,7 +370,7 @@ Status PinArgsAndRets(const std::vector<string>& input_devices,
         if (!colocation_group.empty()) {
           AttrValue::ListValue colo_attr;
           colo_attr.add_s(colocation_group);
-          std::vector<string> colo_slice = {colocation_group};
+          std::vector<std::string> colo_slice = {colocation_group};
           node->AddAttr(kColocationAttrName, colo_slice);
         } else if (!src_device->empty() && can_use_src_node_device) {
           // Do not copy device from src node for variants, unless it is a no-op
@@ -423,7 +430,7 @@ Status PinArgsAndRets(const std::vector<string>& input_devices,
             }
             // Convert a vector of devices to a string.
             // Using absl::StrJoin did not work in Android builds.
-            string devices = "[";
+            std::string devices = "[";
             for (Device* device : matching_devices) {
               devices.append(device->name());
               devices.append(", ");
@@ -463,8 +470,8 @@ Status PinArgsAndRets(const std::vector<string>& input_devices,
   return absl::OkStatus();
 }
 
-StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraph(
-    const string& function_name, AttrSlice attrs,
+absl::StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraph(
+    const std::string& function_name, AttrSlice attrs,
     const FunctionLibraryRuntime::InstantiateOptions& options,
     const DeviceSet& dev_set, const FunctionLibraryDefinition* input_lib_def,
     const std::vector<CompositeDevice*>& composite_devices, Device* cpu_device,
@@ -484,9 +491,9 @@ StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraph(
 
   std::unique_ptr<Graph> graph;
   std::vector<Node*> arg_nodes, ret_nodes;
-  std::vector<string> ret_node_names;
+  std::vector<std::string> ret_node_names;
   DataTypeVector ret_types;
-  std::vector<string> control_ret_node_names;
+  std::vector<std::string> control_ret_node_names;
 
   TF_RETURN_IF_ERROR(GetGraphAndArgRets(
       function_name, attrs, fdef.GetNewRef(), lib_def, &graph, &arg_nodes,
@@ -495,12 +502,13 @@ StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraph(
   DEBUG_DATA_DUMPER()->DumpOpCreationStackTraces(
       function_name, kDebugGroupOpStacktrace, "before_opt", graph.get());
 
-  GraphDef graph_def;
-  graph->ToGraphDef(&graph_def);
   FunctionLibraryDefinition reachable_lib_def =
-      lib_def->ReachableDefinitions(graph_def);
-  *graph_def.mutable_library() = reachable_lib_def.ToProto();
+      lib_def->ReachableDefinitions(*graph);
+
   if (options.graph_collector != nullptr) {
+    GraphDef graph_def;
+    graph->ToGraphDef(&graph_def);
+    *graph_def.mutable_library() = reachable_lib_def.ToProto();
     options.graph_collector->CollectRawGraph(graph_def);
   }
 
@@ -527,6 +535,10 @@ StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraph(
       ret_nodes, lib_def,
       options.config_proto.allow_soft_placement() ? default_device : nullptr));
 
+  DEBUG_DATA_DUMPER()->DumpGraph(function_name, kDebugGroupMain,
+                                 "before_bridge", graph.get(),
+                                 &reachable_lib_def, false);
+
   // The runtime shouldn't depend on duplication between the function library
   // owned by the graph and the one owned by the runtime. To ensure this, for
   // now we ensure that the graph function library is empty and the runtime
@@ -544,7 +556,7 @@ StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraph(
   }
 
   // Mapping from a function body node name to the control output name.
-  std::unordered_map<string, string> node_name_to_control_ret;
+  std::unordered_map<std::string, std::string> node_name_to_control_ret;
 
   bool control_rets_updated = false;
   if (should_run_optimization_passes) {
@@ -615,7 +627,7 @@ StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraph(
     DEBUG_DATA_DUMPER()->DumpGraph(function_name, kDebugGroupMain,
                                    "before_graph_optimization", graph.get(),
                                    &reachable_lib_def, false);
-    Status status = options.optimize_graph_fn(
+    absl::Status status = options.optimize_graph_fn(
         std::move(ret_node_names), std::move(control_ret_node_names),
         &reachable_lib_def, dev_set, cpu_device, &graph);
     if (!status.ok()) {
@@ -640,15 +652,20 @@ StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraph(
 
   graph->mutable_flib_def()->set_default_registry(nullptr);
   graph->mutable_flib_def()->Clear();
+
+  FunctionLibraryDefinition pruned_lib_def =
+      reachable_lib_def.ReachableDefinitions(*graph);
+
   return OptimizedFunctionGraphInfo(
-      function_name, std::move(graph), std::move(reachable_lib_def),
+      function_name, std::move(graph), std::move(pruned_lib_def),
       node_name_to_control_ret, ret_types, ret_nodes.size(),
       env->NowMicros() - graph_optimization_start_time_usecs,
       optimization_source);
 }
 
-StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraphOrReadFromFileCache(
-    const string& function_name, AttrSlice attrs,
+absl::StatusOr<OptimizedFunctionGraphInfo>
+OptimizeFunctionGraphOrReadFromFileCache(
+    const std::string& function_name, AttrSlice attrs,
     const FunctionLibraryRuntime::InstantiateOptions& options,
     const DeviceSet& dev_set, const FunctionLibraryDefinition* input_lib_def,
     const std::vector<CompositeDevice*>& composite_devices, Device* cpu_device,
@@ -660,7 +677,8 @@ StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraphOrReadFromFileCache(
   // (3) This function is eligible for caching and its cache does not exist.
 
   // Get the caching directory from Env variable.
-  const string dir_name = absl::StrCat(getenv(kGraphCachingEnvVariableName));
+  const std::string dir_name =
+      absl::StrCat(getenv(kGraphCachingEnvVariableName));
 
   // Scenario (1): Not eligible for caching. Run the optimization passes.
   if (dir_name.empty() || options.is_component_function) {
@@ -680,7 +698,7 @@ StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraphOrReadFromFileCache(
         "Failed to find function ", function_name,
         " in function library: ", lib_def->ToProto().DebugString()));
   }
-  const string file_name = GetFileCacheName(dir_name, function_name, fdef);
+  const std::string file_name = GetFileCacheName(dir_name, function_name, fdef);
 
   // Scenario (2): File cache exists for this function; restore from the cache.
   if (env->FileExists(file_name).ok()) {
@@ -688,7 +706,7 @@ StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraphOrReadFromFileCache(
         << "TensorFlow graph cache existed; reading from cache; function name: "
         << function_name << ", full cache file path: " << file_name;
 
-    StatusOr<OptimizedFunctionGraphInfo> optimized_function_graph_info =
+    absl::StatusOr<OptimizedFunctionGraphInfo> optimized_function_graph_info =
         ReadFromCache(file_name, env);
     if (optimized_function_graph_info.ok()) {
       metrics::UpdateFunctionGraphOptimizationSavingTime(
@@ -729,7 +747,7 @@ StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraphOrReadFromFileCache(
   // Step 1: Run the graph optimization passes normally.
   absl::Time optimization_start_time = absl::Now();
   TF_ASSIGN_OR_RETURN(
-      StatusOr<OptimizedFunctionGraphInfo> optimized_function_graph_info,
+      absl::StatusOr<OptimizedFunctionGraphInfo> optimized_function_graph_info,
       OptimizeFunctionGraph(function_name, attrs, options, dev_set,
                             input_lib_def, composite_devices, cpu_device,
                             default_device, env, OptimizedFunctionGraph::JIT));
@@ -744,8 +762,8 @@ StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraphOrReadFromFileCache(
     LOG(INFO)
         << "Writing the optimized TensorFlow graph into cache: function name: "
         << function_name << ", full cache file path: " << file_name;
-    Status s = WriteToCache(dir_name, file_name,
-                            optimized_function_graph_info.value(), env);
+    absl::Status s = WriteToCache(dir_name, file_name,
+                                  optimized_function_graph_info.value(), env);
     // If writing to cache failed, log the error message and move on without
     // failing the program.
     if (!s.ok()) {
@@ -765,7 +783,8 @@ StatusOr<OptimizedFunctionGraphInfo> OptimizeFunctionGraphOrReadFromFileCache(
   return optimized_function_graph_info;
 }
 
-StatusOr<std::unique_ptr<std::unordered_map<string, std::unique_ptr<Graph>>>>
+absl::StatusOr<
+    std::unique_ptr<std::unordered_map<std::string, std::unique_ptr<Graph>>>>
 PreprocessAndPartitionGraph(
     const std::string& function_name,
     OptimizedFunctionGraphInfo& input_optimized_graph,
@@ -798,8 +817,8 @@ PreprocessAndPartitionGraph(
                                  &input_optimized_graph.lib_def, VLOG_IS_ON(4));
 
   // Partition the graph.
-  auto device_name_to_subgraphs =
-      std::make_unique<std::unordered_map<string, std::unique_ptr<Graph>>>();
+  auto device_name_to_subgraphs = std::make_unique<
+      std::unordered_map<std::string, std::unique_ptr<Graph>>>();
   TF_RETURN_IF_ERROR(PartitionFunctionGraph(dev_set, std::move(graph),
                                             device_name_to_subgraphs.get()));
 

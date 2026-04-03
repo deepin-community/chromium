@@ -33,8 +33,10 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "cc/paint/paint_flags.h"
+#include "cc/paint/paint_image.h"
 #include "third_party/blink/renderer/platform/graphics/bitmap_image_metrics.h"
 #include "third_party/blink/renderer/platform/graphics/deferred_image_decoder.h"
+#include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 #include "third_party/blink/renderer/platform/graphics/image_observer.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_canvas.h"
@@ -44,6 +46,7 @@
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 #include "third_party/blink/renderer/platform/timer.h"
+#include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -52,10 +55,13 @@ namespace blink {
 
 int GetRepetitionCountWithPolicyOverride(
     int actual_count,
-    mojom::blink::ImageAnimationPolicy policy) {
+    mojom::blink::ImageAnimationPolicy policy,
+    ImageNodeAnimationInfo* node_info) {
   if (actual_count == kAnimationNone ||
       policy == mojom::blink::ImageAnimationPolicy::
-                    kImageAnimationPolicyNoAnimation) {
+                    kImageAnimationPolicyNoAnimation ||
+      (node_info &&
+       node_info->image_animation == ImageAnimationEnum::kPaused)) {
     return kAnimationNone;
   }
 
@@ -68,9 +74,7 @@ int GetRepetitionCountWithPolicyOverride(
   return actual_count;
 }
 
-BitmapImage::BitmapImage(ImageObserver* observer,
-                         bool is_multipart,
-                         bool is_transparent_placeholder)
+BitmapImage::BitmapImage(ImageObserver* observer, bool is_multipart)
     : Image(observer, is_multipart),
       animation_policy_(
           mojom::blink::ImageAnimationPolicy::kImageAnimationPolicyAllowed),
@@ -79,36 +83,19 @@ BitmapImage::BitmapImage(ImageObserver* observer,
       preferred_size_is_transposed_(false),
       size_available_(false),
       have_frame_count_(false),
-      is_transparent_placeholder_(is_transparent_placeholder),
       repetition_count_status_(kUnknown),
       repetition_count_(kAnimationNone),
       frame_count_(0) {}
 
 BitmapImage::~BitmapImage() {}
 
-scoped_refptr<BitmapImage> BitmapImage::MaybeCreateTransparentPlaceholderImage(
-    KURL url) {
-  CHECK(IsMainThread());
-  DEFINE_THREAD_SAFE_STATIC_LOCAL(
-      Vector<String>, known_transparent_gifs,
-      ({"data:image/gif;base64,R0lGODlhAQABAIAAAP///////"
-        "yH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
-        "data:image/gif;base64,R0lGODlhAQABAID/"
-        "AMDAwAAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="}));
-  if (known_transparent_gifs.Contains(url)) {
-    DEFINE_STATIC_REF(BitmapImage, transparent_placeholder_image,
-                      (base::AdoptRef(new BitmapImage(nullptr, false, true))));
-    return transparent_placeholder_image;
-  }
-  return nullptr;
-}
-
-bool BitmapImage::CurrentFrameHasSingleSecurityOrigin() const {
+bool BitmapImage::HasSingleSecurityOrigin() const {
   return true;
 }
 
 void BitmapImage::DestroyDecodedData() {
-  cached_frame_ = PaintImage();
+  paused_image_paint_image_id_ = -1;
+  cached_frames_.clear();
   NotifyMemoryChanged();
 }
 
@@ -131,8 +118,9 @@ void BitmapImage::NotifyMemoryChanged() {
 }
 
 size_t BitmapImage::TotalFrameBytes() {
-  if (cached_frame_)
+  if (!cached_frames_.empty()) {
     return ClampTo<size_t>(Size().Area64() * sizeof(ImageFrame::PixelData));
+  }
   return 0u;
 }
 
@@ -149,11 +137,28 @@ PaintImage BitmapImage::CreatePaintImage() {
   auto completion_state = all_data_received_
                               ? PaintImage::CompletionState::kDone
                               : PaintImage::CompletionState::kPartiallyDone;
+
+  PaintImage::Id paint_id = paint_image_id();
+
+  if (current_image_node_animation_info_) {
+    if (current_image_node_animation_info_->image_animation ==
+        ImageAnimationEnum::kPaused) {
+      if (paused_image_paint_image_id_ < 0) {
+        paused_image_paint_image_id_ = PaintImage::GetNextId();
+      }
+      paint_id = paused_image_paint_image_id_;
+    } else if (current_image_node_animation_info_->image_animation ==
+               ImageAnimationEnum::kRunning) {
+      paint_id = PaintImage::GetNextId();
+    }
+  }
+
   auto builder =
-      CreatePaintImageBuilder()
+      CreatePaintImageBuilder(paint_id)
           .set_paint_image_generator(std::move(generator))
           .set_repetition_count(GetRepetitionCountWithPolicyOverride(
-              RepetitionCount(), animation_policy_))
+              RepetitionCount(), animation_policy_,
+              current_image_node_animation_info_))
           .set_is_high_bit_depth(decoder_->ImageIsHighBitDepth())
           .set_completion_state(completion_state)
           .set_reset_animation_sequence_id(reset_animation_sequence_id_);
@@ -180,11 +185,6 @@ void BitmapImage::UpdateSize() const {
 }
 
 gfx::Size BitmapImage::SizeWithConfig(SizeConfig config) const {
-  if (is_transparent_placeholder_) {
-    static constexpr gfx::Size kSize{1, 1};
-    return kSize;
-  }
-
   UpdateSize();
   gfx::Size size = size_;
   if (config.apply_density && !density_corrected_size_.IsEmpty())
@@ -197,6 +197,12 @@ gfx::Size BitmapImage::SizeWithConfig(SizeConfig config) const {
 void BitmapImage::RecordDecodedImageType(UseCounter* use_counter) {
   BitmapImageMetrics::CountDecodedImageType(decoder_->FilenameExtension(),
                                             use_counter);
+}
+
+void BitmapImage::RecordDecodedImageC2PA(UseCounter* use_counter) {
+  if (decoder_->HasC2PAManifest()) {
+    BitmapImageMetrics::CountDecodedImageC2PA(use_counter);
+  }
 }
 
 bool BitmapImage::GetHotSpot(gfx::Point& hot_spot) const {
@@ -217,8 +223,6 @@ bool BitmapImage::ShouldReportByteSizeUMAs(bool data_now_completely_received) {
 
 Image::SizeAvailability BitmapImage::SetData(scoped_refptr<SharedBuffer> data,
                                              bool all_data_received) {
-  CHECK(!is_transparent_placeholder_ || !data);
-
   if (!data)
     return kSizeAvailable;
 
@@ -254,10 +258,11 @@ static inline uint64_t ImageDensityInCentiBpp(gfx::Size size,
 Image::SizeAvailability BitmapImage::DataChanged(bool all_data_received) {
   TRACE_EVENT0("blink", "BitmapImage::dataChanged");
 
-  // If the data was updated, clear the |cached_frame_| to push it to the
-  // compositor thread. Its necessary to clear the frame since more data
+  // If the data was updated, clear all caches to push them to the
+  // compositor thread. It's necessary to clear the frames since more data
   // requires a new PaintImageGenerator instance.
-  cached_frame_ = PaintImage();
+  cached_frames_.clear();
+  paused_image_paint_image_id_ = -1;
 
   // Report the image density metric right after we received all the data. The
   // SetData() call on the decoder_ (if there is one) should have decoded the
@@ -295,8 +300,33 @@ void BitmapImage::Draw(cc::PaintCanvas* canvas,
                        const gfx::RectF& src_rect,
                        const ImageDrawOptions& draw_options) {
   TRACE_EVENT0("skia", "BitmapImage::draw");
+  ImageNodeAnimationInfo node_animation_info =
+      draw_options.image_node_animation_info;
+
+  if (node_animation_info.node_id != kInvalidDOMNodeId) {
+    auto it = image_animation_map_.find(node_animation_info.node_id);
+    if (it != image_animation_map_.end()) {
+      ImageAnimationEnum cached_animation = it->value;
+      if (cached_animation != node_animation_info.image_animation) {
+        if ((cached_animation == ImageAnimationEnum::kNormal &&
+             node_animation_info.image_animation ==
+                 ImageAnimationEnum::kRunning)) {
+          node_animation_info.image_animation = ImageAnimationEnum::kNormal;
+        } else {
+          cached_frames_.erase(node_animation_info.node_id);
+        }
+      }
+    }
+
+    image_animation_map_.Set(node_animation_info.node_id,
+                             node_animation_info.image_animation);
+    current_image_node_animation_info_ = &node_animation_info;
+  }
 
   PaintImage image = PaintImageForCurrentFrame();
+
+  current_image_node_animation_info_ = nullptr;
+
   if (!image)
     return;  // It's too early and we don't have an image yet.
 
@@ -324,7 +354,7 @@ void BitmapImage::Draw(cc::PaintCanvas* canvas,
 
   ImageOrientation orientation = ImageOrientationEnum::kDefault;
   if (draw_options.respect_orientation == kRespectImageOrientation)
-    orientation = CurrentFrameOrientation();
+    orientation = Orientation();
 
   PaintCanvasAutoRestore auto_restore(canvas, false);
   gfx::RectF adjusted_dst_rect = dst_rect;
@@ -335,8 +365,8 @@ void BitmapImage::Draw(cc::PaintCanvas* canvas,
     canvas->translate(adjusted_dst_rect.x(), adjusted_dst_rect.y());
     adjusted_dst_rect.set_origin(gfx::PointF());
 
-    canvas->concat(AffineTransformToSkM44(
-        orientation.TransformFromDefault(adjusted_dst_rect.size())));
+    canvas->concat(
+        orientation.TransformFromDefault(adjusted_dst_rect.size()).ToSkM44());
 
     if (orientation.UsesWidthAsHeight()) {
       // The destination rect will have its width and height already reversed
@@ -357,11 +387,10 @@ void BitmapImage::Draw(cc::PaintCanvas* canvas,
         this, &dark_mode_flags.value(), gfx::RectFToSkRect(src_rect));
     image_flags = &dark_mode_flags.value();
   }
-  canvas->drawImageRect(
-      std::move(image), gfx::RectFToSkRect(adjusted_src_rect),
-      gfx::RectFToSkRect(adjusted_dst_rect), draw_options.sampling_options,
-      image_flags,
-      WebCoreClampingModeToSkiaRectConstraint(draw_options.clamping_mode));
+  canvas->drawImageRect(std::move(image), gfx::RectFToSkRect(adjusted_src_rect),
+                        gfx::RectFToSkRect(adjusted_dst_rect),
+                        draw_options.sampling_options, image_flags,
+                        ToSkiaRectConstraint(draw_options.clamping_mode));
 
   if (is_lazy_generated) {
     TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
@@ -396,26 +425,46 @@ bool BitmapImage::IsSizeAvailable() {
 }
 
 PaintImage BitmapImage::PaintImageForCurrentFrame() {
-  CHECK(!is_transparent_placeholder_ || !decoder_);
-
   auto alpha_type = decoder_ ? decoder_->AlphaType() : kUnknown_SkAlphaType;
-  if (cached_frame_ && cached_frame_.GetAlphaType() == alpha_type)
-    return cached_frame_;
 
-  cached_frame_ = CreatePaintImage();
+  DOMNodeId id = NORMAL_CACHED_FRAME_ID;
+
+  if (current_image_node_animation_info_) {
+    if (current_image_node_animation_info_->image_animation ==
+        ImageAnimationEnum::kPaused) {
+      id = PAUSED_CACHED_FRAME_ID;
+    }
+    if (current_image_node_animation_info_->image_animation ==
+        ImageAnimationEnum::kRunning) {
+      id = current_image_node_animation_info_->node_id;
+    }
+  }
+
+  auto it = cached_frames_.find(id);
+  if (it != cached_frames_.end()) {
+    const PaintImage& cached_frame = it->value;
+    if (cached_frame && cached_frame.GetAlphaType() == alpha_type) {
+      return cached_frame;
+    }
+  }
+
+  PaintImage new_frame = CreatePaintImage();
 
   // BitmapImage should not be texture backed.
-  DCHECK(!cached_frame_.IsTextureBacked());
+  DCHECK(!new_frame.IsTextureBacked());
 
   // Create the SkImage backing for this PaintImage here to ensure that copies
   // of the PaintImage share the same SkImage. Skia's caching of the decoded
   // output of this image is tied to the lifetime of the SkImage. So we create
   // the SkImage here and cache the PaintImage to keep the decode alive in
   // skia's cache.
-  cached_frame_.GetSwSkImage();
+  new_frame.GetSwSkImage();
+
+  cached_frames_.Set(id, new_frame);
+
   NotifyMemoryChanged();
 
-  return cached_frame_;
+  return new_frame;
 }
 
 scoped_refptr<Image> BitmapImage::ImageForDefaultFrame() {
@@ -438,22 +487,20 @@ scoped_refptr<Image> BitmapImage::ImageForDefaultFrame() {
   return Image::ImageForDefaultFrame();
 }
 
-bool BitmapImage::CurrentFrameKnownToBeOpaque() {
-  CHECK(!is_transparent_placeholder_ || !decoder_);
-
+bool BitmapImage::IsOpaque() {
   return decoder_ ? decoder_->AlphaType() == kOpaque_SkAlphaType : false;
 }
 
-bool BitmapImage::CurrentFrameIsComplete() {
+bool BitmapImage::FirstFrameIsComplete() {
   return decoder_ && decoder_->FrameIsReceivedAtIndex(0);
 }
 
-bool BitmapImage::CurrentFrameIsLazyDecoded() {
+bool BitmapImage::IsLazyDecoded() {
   // BitmapImage supports only lazy generated images.
   return true;
 }
 
-ImageOrientation BitmapImage::CurrentFrameOrientation() const {
+ImageOrientation BitmapImage::Orientation() const {
   return decoder_ ? decoder_->OrientationAtIndex(0)
                   : ImageOrientationEnum::kDefault;
 }
@@ -481,7 +528,8 @@ int BitmapImage::RepetitionCount() {
 }
 
 void BitmapImage::ResetAnimation() {
-  cached_frame_ = PaintImage();
+  cached_frames_.clear();
+  paused_image_paint_image_id_ = -1;
   reset_animation_sequence_id_++;
 }
 

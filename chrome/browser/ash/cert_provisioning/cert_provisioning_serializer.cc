@@ -20,11 +20,11 @@ namespace cert_provisioning {
 
 namespace {
 
+constexpr char kKeyNameProcessId[] = "process_id";
 constexpr char kKeyNameCertScope[] = "cert_scope";
 constexpr char kKeyNameCertProfile[] = "cert_profile";
 constexpr char kKeyNameState[] = "state";
 constexpr char kKeyNamePublicKey[] = "public_key";
-constexpr char kKeyNameInvalidationTopic[] = "invalidation_topic";
 constexpr char kKeyNameKeyLocation[] = "key_location";
 constexpr char kKeyNameAttemptedVaChallenge[] = "attempted_va_challenge";
 constexpr char kKeyNameAttemptedProofOfPossession[] =
@@ -38,6 +38,7 @@ constexpr char kKeyNameCertProfileVersion[] = "policy_version";
 constexpr char kKeyNameCertProfileProtocolVersion[] = "protocol_version";
 constexpr char kKeyNameCertProfileVaEnabled[] = "va_enabled";
 constexpr char kKeyNameCertProfileRenewalPeriod[] = "renewal_period";
+constexpr char kKeyNameCertProfileKeyType[] = "key_type";
 
 template <typename T>
 bool ConvertToEnum(int value, T* dst) {
@@ -49,7 +50,7 @@ bool ConvertToEnum(int value, T* dst) {
 }
 
 template <typename T>
-bool DeserializeEnumValue(const base::Value::Dict& parent_dict,
+bool DeserializeEnumValue(const base::DictValue& parent_dict,
                           const char* value_name,
                           T* dst) {
   std::optional<int> serialized_enum = parent_dict.FindInt(value_name);
@@ -59,7 +60,7 @@ bool DeserializeEnumValue(const base::Value::Dict& parent_dict,
   return ConvertToEnum<T>(*serialized_enum, dst);
 }
 
-bool DeserializeStringValue(const base::Value::Dict& parent_dict,
+bool DeserializeStringValue(const base::DictValue& parent_dict,
                             const char* value_name,
                             std::string* dst) {
   const std::string* serialized_string = parent_dict.FindString(value_name);
@@ -70,7 +71,7 @@ bool DeserializeStringValue(const base::Value::Dict& parent_dict,
   return true;
 }
 
-bool DeserializeBoolValue(const base::Value::Dict& parent_dict,
+bool DeserializeBoolValue(const base::DictValue& parent_dict,
                           const char* value_name,
                           bool* dst) {
   std::optional<bool> serialized_bool = parent_dict.FindBool(value_name);
@@ -81,7 +82,7 @@ bool DeserializeBoolValue(const base::Value::Dict& parent_dict,
   return true;
 }
 
-bool DeserializeRenewalPeriod(const base::Value::Dict& parent_dict,
+bool DeserializeRenewalPeriod(const base::DictValue& parent_dict,
                               const char* value_name,
                               base::TimeDelta* dst) {
   std::optional<int> serialized_time = parent_dict.FindInt(value_name);
@@ -89,7 +90,7 @@ bool DeserializeRenewalPeriod(const base::Value::Dict& parent_dict,
   return true;
 }
 
-bool DeserializeProtocolVersion(const base::Value::Dict& parent_value,
+bool DeserializeProtocolVersion(const base::DictValue& parent_value,
                                 const char* value_name,
                                 ProtocolVersion* dst) {
   std::optional<int> protocol_version_value = parent_value.FindInt(value_name);
@@ -102,19 +103,20 @@ bool DeserializeProtocolVersion(const base::Value::Dict& parent_value,
   return true;
 }
 
-base::Value::Dict SerializeCertProfile(const CertProfile& profile) {
-  static_assert(CertProfile::kVersion == 6, "This function should be updated");
+base::DictValue SerializeCertProfile(const CertProfile& profile) {
+  static_assert(CertProfile::kVersion == 7, "This function should be updated");
 
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set(kKeyNameCertProfileId, profile.profile_id);
   result.Set(kKeyNameCertProfileName, profile.name);
   result.Set(kKeyNameCertProfileVersion, profile.policy_version);
   result.Set(kKeyNameCertProfileVaEnabled, profile.is_va_enabled);
   if (profile.protocol_version != ProtocolVersion::kStatic) {
-    // Only set the protocol_version if it's not kStatic to avoid changing how
-    // "static flow" workers are serialized.
+    // Only set the protocol_version and key type if it's not kStatic to avoid
+    // changing how "static flow" workers are serialized.
     result.Set(kKeyNameCertProfileProtocolVersion,
                static_cast<int>(profile.protocol_version));
+    result.Set(kKeyNameCertProfileKeyType, static_cast<int>(profile.key_type));
   }
 
   if (!profile.renewal_period.is_zero()) {
@@ -125,13 +127,12 @@ base::Value::Dict SerializeCertProfile(const CertProfile& profile) {
   return result;
 }
 
-bool DeserializeCertProfile(const base::Value::Dict& parent_dict,
+bool DeserializeCertProfile(const base::DictValue& parent_dict,
                             const char* value_name,
                             CertProfile* dst) {
-  static_assert(CertProfile::kVersion == 6, "This function should be updated");
+  static_assert(CertProfile::kVersion == 7, "This function should be updated");
 
-  const base::Value::Dict* serialized_profile =
-      parent_dict.FindDict(value_name);
+  const base::DictValue* serialized_profile = parent_dict.FindDict(value_name);
 
   if (!serialized_profile) {
     return false;
@@ -156,6 +157,17 @@ bool DeserializeCertProfile(const base::Value::Dict& parent_dict,
   is_ok = is_ok && DeserializeProtocolVersion(
                        *serialized_profile, kKeyNameCertProfileProtocolVersion,
                        &(dst->protocol_version));
+
+  // The static protocol does not support key types other than RSA, and should
+  // not serialize the key type, so we hardcode it here instead.
+  if (is_ok && dst->protocol_version == ProtocolVersion::kStatic) {
+    dst->key_type = KeyType::kRsa;
+  } else {
+    is_ok = is_ok &&
+            DeserializeEnumValue(*serialized_profile,
+                                 kKeyNameCertProfileKeyType, &(dst->key_type));
+  }
+
   return is_ok;
 }
 
@@ -163,7 +175,7 @@ std::string SerializeBase64Encoded(const std::vector<uint8_t>& public_key) {
   return base::Base64Encode(public_key);
 }
 
-bool DeserializeBase64Encoded(const base::Value::Dict& parent_dict,
+bool DeserializeBase64Encoded(const base::DictValue& parent_dict,
                               const char* value_name,
                               std::vector<uint8_t>* dst) {
   const std::string* serialized_public_key = parent_dict.FindString(value_name);
@@ -189,7 +201,7 @@ void CertProvisioningSerializer::SerializeWorkerToPrefs(
     const CertProvisioningWorkerStatic& worker) {
   ScopedDictPrefUpdate scoped_dict_updater(
       pref_service, GetPrefNameForSerialization(worker.cert_scope_));
-  base::Value::Dict& saved_workers = scoped_dict_updater.Get();
+  base::DictValue& saved_workers = scoped_dict_updater.Get();
   saved_workers.Set(worker.cert_profile_.profile_id, SerializeWorker(worker));
 }
 
@@ -198,7 +210,7 @@ void CertProvisioningSerializer::SerializeWorkerToPrefs(
     const CertProvisioningWorkerDynamic& worker) {
   ScopedDictPrefUpdate scoped_dict_updater(
       pref_service, GetPrefNameForSerialization(worker.cert_scope_));
-  base::Value::Dict& saved_workers = scoped_dict_updater.Get();
+  base::DictValue& saved_workers = scoped_dict_updater.Get();
   saved_workers.Set(worker.cert_profile_.profile_id, SerializeWorker(worker));
 }
 
@@ -208,7 +220,7 @@ void CertProvisioningSerializer::DeleteWorkerFromPrefs(
   ScopedDictPrefUpdate scoped_dict_updater(
       pref_service, GetPrefNameForSerialization(worker.cert_scope_));
 
-  base::Value::Dict& saved_workers = scoped_dict_updater.Get();
+  base::DictValue& saved_workers = scoped_dict_updater.Get();
 
   saved_workers.Remove(worker.cert_profile_.profile_id);
 }
@@ -219,7 +231,7 @@ void CertProvisioningSerializer::DeleteWorkerFromPrefs(
   ScopedDictPrefUpdate scoped_dict_updater(
       pref_service, GetPrefNameForSerialization(worker.cert_scope_));
 
-  base::Value::Dict& saved_workers = scoped_dict_updater.Get();
+  base::DictValue& saved_workers = scoped_dict_updater.Get();
 
   saved_workers.Remove(worker.cert_profile_.profile_id);
 }
@@ -230,20 +242,19 @@ void CertProvisioningSerializer::DeleteWorkerFromPrefs(
 //   "cert_profile": <CertProfile>,
 //   "state": <number>,
 //   "public_key": <string>,
-//   "invalidation_topic": <string>,
 // }
-base::Value::Dict CertProvisioningSerializer::SerializeWorker(
+base::DictValue CertProvisioningSerializer::SerializeWorker(
     const CertProvisioningWorkerStatic& worker) {
-  static_assert(CertProvisioningWorkerStatic::kVersion == 1,
+  static_assert(CertProvisioningWorkerStatic::kVersion == 2,
                 "This function should be updated");
 
-  base::Value::Dict result;
+  base::DictValue result;
 
+  result.Set(kKeyNameProcessId, worker.process_id_);
   result.Set(kKeyNameCertProfile, SerializeCertProfile(worker.cert_profile_));
   result.Set(kKeyNameCertScope, static_cast<int>(worker.cert_scope_));
   result.Set(kKeyNameState, static_cast<int>(worker.state_));
   result.Set(kKeyNamePublicKey, SerializeBase64Encoded(worker.public_key_));
-  result.Set(kKeyNameInvalidationTopic, worker.invalidation_topic_);
   return result;
 }
 
@@ -253,23 +264,22 @@ base::Value::Dict CertProvisioningSerializer::SerializeWorker(
 //   "cert_profile": <CertProfile>,
 //   "state": <number>,
 //   "public_key": <string>,
-//   "invalidation_topic": <string>,
 //   "key_location": <number>,
 //   "attempted_va_challenge": <bool>,
 //   "proof_of_possession_count": <number>,
 // }
-base::Value::Dict CertProvisioningSerializer::SerializeWorker(
+base::DictValue CertProvisioningSerializer::SerializeWorker(
     const CertProvisioningWorkerDynamic& worker) {
-  static_assert(CertProvisioningWorkerStatic::kVersion == 1,
+  static_assert(CertProvisioningWorkerDynamic::kVersion == 3,
                 "This function should be updated");
 
-  base::Value::Dict result;
+  base::DictValue result;
 
+  result.Set(kKeyNameProcessId, worker.process_id_);
   result.Set(kKeyNameCertProfile, SerializeCertProfile(worker.cert_profile_));
   result.Set(kKeyNameCertScope, static_cast<int>(worker.cert_scope_));
   result.Set(kKeyNameState, static_cast<int>(worker.state_));
   result.Set(kKeyNamePublicKey, SerializeBase64Encoded(worker.public_key_));
-  result.Set(kKeyNameInvalidationTopic, worker.invalidation_topic_);
   result.Set(kKeyNameKeyLocation, static_cast<int>(worker.key_location_));
   result.Set(kKeyNameAttemptedVaChallenge, worker.attempted_va_challenge_);
   result.Set(kKeyNameAttemptedProofOfPossession,
@@ -280,9 +290,9 @@ base::Value::Dict CertProvisioningSerializer::SerializeWorker(
 }
 
 bool CertProvisioningSerializer::DeserializeWorker(
-    const base::Value::Dict& saved_worker,
+    const base::DictValue& saved_worker,
     CertProvisioningWorkerStatic* worker) {
-  static_assert(CertProvisioningWorkerStatic::kVersion == 1,
+  static_assert(CertProvisioningWorkerStatic::kVersion == 2,
                 "This function should be updated");
 
   // This will show to the scheduler that the worker is not doing anything yet
@@ -311,8 +321,8 @@ bool CertProvisioningSerializer::DeserializeWorker(
                                    &(worker->public_key_));
 
   is_ok = is_ok && ++error_code &&
-          DeserializeStringValue(saved_worker, kKeyNameInvalidationTopic,
-                                 &(worker->invalidation_topic_));
+          DeserializeStringValue(saved_worker, kKeyNameProcessId,
+                                 &(worker->process_id_));
 
   if (!is_ok) {
     LOG(ERROR)
@@ -327,9 +337,9 @@ bool CertProvisioningSerializer::DeserializeWorker(
 }
 
 bool CertProvisioningSerializer::DeserializeWorker(
-    const base::Value::Dict& saved_worker,
+    const base::DictValue& saved_worker,
     CertProvisioningWorkerDynamic* worker) {
-  static_assert(CertProvisioningWorkerDynamic::kVersion == 2,
+  static_assert(CertProvisioningWorkerDynamic::kVersion == 3,
                 "This function should be updated");
 
   // This will show to the scheduler that the worker is not doing anything yet
@@ -356,10 +366,6 @@ bool CertProvisioningSerializer::DeserializeWorker(
   is_ok = is_ok && ++error_code &&
           DeserializeBase64Encoded(saved_worker, kKeyNamePublicKey,
                                    &(worker->public_key_));
-
-  is_ok = is_ok && ++error_code &&
-          DeserializeStringValue(saved_worker, kKeyNameInvalidationTopic,
-                                 &(worker->invalidation_topic_));
 
   is_ok = is_ok && ++error_code &&
           DeserializeEnumValue<KeyLocation>(saved_worker, kKeyNameKeyLocation,
@@ -378,6 +384,10 @@ bool CertProvisioningSerializer::DeserializeWorker(
       DeserializeBase64Encoded(saved_worker, kKeyNameProofOfPossessionSignature,
                                &(worker->signature_));
 
+  is_ok = is_ok && ++error_code &&
+          DeserializeStringValue(saved_worker, kKeyNameProcessId,
+                                 &(worker->process_id_));
+
   if (!is_ok) {
     LOG(ERROR)
         << " Failed to deserialize cert provisioning worker, error code: "
@@ -391,7 +401,7 @@ bool CertProvisioningSerializer::DeserializeWorker(
 }
 
 std::optional<ProtocolVersion> CertProvisioningSerializer::GetProtocolVersion(
-    const base::Value::Dict& saved_worker) {
+    const base::DictValue& saved_worker) {
   CertProfile cert_profile;
   if (!DeserializeCertProfile(saved_worker, kKeyNameCertProfile,
                               &cert_profile)) {

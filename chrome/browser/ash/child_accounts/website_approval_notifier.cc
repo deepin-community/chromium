@@ -15,12 +15,13 @@
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/notifications/notification_display_service.h"
+#include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/supervised_user/supervised_user_settings_service_factory.h"
+#include "chrome/browser/supervised_user/family_link_settings_service_factory.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ui/vector_icons/vector_icons.h"
-#include "components/supervised_user/core/browser/supervised_user_settings_service.h"
+#include "components/supervised_user/core/browser/family_link_settings_service.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "url/gurl.h"
@@ -59,7 +60,7 @@ GURL GetURLToOpen(const std::string& allowed_host) {
 
 void OnNotificationClick(const GURL& url) {
   base::RecordAction(base::UserMetricsAction(kNotificationClickedActionName));
-  NewWindowDelegate::GetPrimary()->OpenUrl(
+  NewWindowDelegate::GetInstance()->OpenUrl(
       url, NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       NewWindowDelegate::Disposition::kNewForegroundTab);
 }
@@ -68,13 +69,14 @@ void OnNotificationClick(const GURL& url) {
 
 WebsiteApprovalNotifier::WebsiteApprovalNotifier(Profile* profile)
     : profile_(profile) {
-  supervised_user::SupervisedUserSettingsService* settings_service =
-      SupervisedUserSettingsServiceFactory::GetForKey(
+  supervised_user::FamilyLinkSettingsService* family_link_settings_service =
+      supervised_user::FamilyLinkSettingsServiceFactory::GetForKey(
           profile_->GetProfileKey());
   website_approval_subscription_ =
-      settings_service->SubscribeForNewWebsiteApproval(base::BindRepeating(
-          &WebsiteApprovalNotifier::MaybeShowApprovalNotification,
-          weak_ptr_factory_.GetWeakPtr()));
+      family_link_settings_service->SubscribeForNewWebsiteApproval(
+          base::BindRepeating(
+              &WebsiteApprovalNotifier::MaybeShowApprovalNotification,
+              weak_ptr_factory_.GetWeakPtr()));
 }
 
 WebsiteApprovalNotifier::~WebsiteApprovalNotifier() = default;
@@ -106,7 +108,7 @@ void WebsiteApprovalNotifier::MaybeShowApprovalNotification(
       chromeos::kNotificationSupervisedUserIcon,
       message_center::SystemNotificationWarningLevel::NORMAL);
   base::RecordAction(base::UserMetricsAction(kNotificationShownActionName));
-  NotificationDisplayService::GetForProfile(profile_)->Display(
+  NotificationDisplayServiceFactory::GetForProfile(profile_)->Display(
       NotificationHandler::Type::TRANSIENT, notification,
       /*metadata=*/nullptr);
 }

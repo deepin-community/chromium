@@ -25,12 +25,16 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_HTML_FORM_ELEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_HTML_FORM_ELEMENT_H_
 
+#include "base/functional/callback.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 #include "third_party/blink/renderer/core/html/forms/radio_button_group_scope.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/loader/form_submission.h"
+#include "third_party/blink/renderer/core/script_tools/model_context.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -60,6 +64,7 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
 
   HTMLFormControlsCollection* elements();
   void GetNamedElements(const AtomicString&, HeapVector<Member<Element>>&);
+  bool HasNamedElements(const AtomicString&);
 
   unsigned length() const;
   HTMLElement* item(unsigned index);
@@ -101,8 +106,6 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
 
   bool NoValidate() const;
 
-  const AtomicString& Action() const;
-
   String method() const;
   void setMethod(const AtomicString&);
   FormSubmission::SubmitMethod Method() const { return attributes_.Method(); }
@@ -120,28 +123,56 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
     return radio_button_group_scope_;
   }
 
-  const ListedElement::List& ListedElements(
-      bool include_shadow_trees = false) const;
+  const Node* GetListedElementsScope() const;
+  // Returns the scope that includes the highest reference target host.
+  const Node* GetReferenceTargetScope() const;
+
+  // Returns the listed elements (form controls) associated with `this`.
+  const ListedElement::List& ListedElements() const {
+    return CollectAndCacheListedElements(/*collect_for_autofill*/ false);
+  }
+
+  // Returns the contained form control elements associated with `this`, also
+  // including descendants of `this` that are form control elements and inside
+  // Shadow DOM. The result will contain the form control elements of <form>s
+  // nested inside `this`. In principle, form nesting is prohibited by the HTML
+  // standard, but in practice it can still occur - e.g., by dynamically
+  // appending <form> children to (a descendant of) `this`.
+  const ListedElement::List& AllContainedFormElementsForAutofill() const {
+    return CollectAndCacheListedElements(/*collect_for_autofill*/ true);
+  }
+
   const HeapVector<Member<HTMLImageElement>>& ImageElements();
 
   V8UnionElementOrRadioNodeList* AnonymousNamedGetter(const AtomicString& name);
+  bool NamedPropertyQuery(const AtomicString& name, ExceptionState&);
+  bool HasAnyNamedProperties() const;
+
   void InvalidateDefaultButtonStyle() const;
 
   // 'construct the entry list'
   // https://html.spec.whatwg.org/C/#constructing-the-form-data-set
   // Returns nullptr if this form is already running this function.
   FormData* ConstructEntryList(HTMLFormControlElement* submit_button,
-                               const WTF::TextEncoding& encoding);
+                               const TextEncoding& encoding);
 
-  void InvalidateListedElementsIncludingShadowTrees();
+  void InvalidateListedElementsForAutofill();
+  void UseCountPropertyAccess(v8::Local<v8::Name>&,
+                              const v8::PropertyCallbackInfo<v8::Value>&);
+
+  bool IsActiveToolSubmitButton(const HTMLFormControlElement* element) const;
+  bool MatchesToolFormActivePseudoClass() const;
 
  private:
+  friend class HTMLFormMcpToolTest;
+
   InsertionNotificationRequest InsertedInto(ContainerNode&) override;
   void RemovedFrom(ContainerNode&) override;
   void FinishParsingChildren() override;
 
   void HandleLocalEvents(Event&) override;
 
+  void AttributeChanged(const AttributeModificationParams&) override;
   void ParseAttribute(const AttributeModificationParams&) override;
   bool IsURLAttribute(const Attribute&) const override;
   bool HasLegalLinkAttribute(const QualifiedName&) const override;
@@ -154,12 +185,29 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
   void ScheduleFormSubmission(const Event*,
                               HTMLFormControlElement* submit_button);
 
-  void CollectListedElements(
+  void CollectListedElementsForReferenceTarget(
       const Node& root,
       ListedElement::List& elements,
-      ListedElement::List* elements_including_shadow_trees = nullptr,
+      ListedElement::List* elements_for_autofill = nullptr) const;
+  void CollectListedElements(
+      const Node* root,
+      ListedElement::List& elements,
+      ListedElement::List* elements_for_autofill = nullptr,
       bool in_shadow_tree = false) const;
   void CollectImageElements(Node& root, HeapVector<Member<HTMLImageElement>>&);
+
+  // Utility function used by ListedElements and
+  // AllContainedFormElementsForAutofill. Takes care of caching two lists of
+  // listed elements, one including shadow- contained elements, and one "normal"
+  // list without those. If `collect_for_autofill` is `true`, then the list will
+  // also contain descendants of `this` that are form control elements and
+  // inside Shadow DOM. Note that if `collect_for_autofill` is true, then,
+  // additionally, the result will contain the form control elements of <form>s
+  // nested inside `this`. In principle, form nesting is prohibited by the HTML
+  // standard, but in practice it can still occur - e.g., by dynamically
+  // appending <form> children to (a descendant of) `this`.
+  const ListedElement::List& CollectAndCacheListedElements(
+      bool collect_for_autofill) const;
 
   // Returns true if the submission should proceed.
   bool ValidateInteractively();
@@ -172,8 +220,12 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
   Element* ElementFromPastNamesMap(const AtomicString&);
   void AddToPastNamesMap(Element*, const AtomicString& past_name);
   void RemoveFromPastNamesMap(HTMLElement&);
+  bool PastNamesEmpty() const;
 
-  typedef HeapHashMap<AtomicString, Member<Element>> PastNamesMap;
+  bool IsValidWebMCPForm() const;
+  void UpdateMcpDefinitionsIfNeeded();
+
+  using PastNamesMap = GCedHeapHashMap<AtomicString, Member<Element>>;
 
   FormSubmission::Attributes attributes_;
   Member<PastNamesMap> past_names_map_;
@@ -182,20 +234,80 @@ class CORE_EXPORT HTMLFormElement final : public HTMLElement {
 
   // Do not access listed_elements_ directly. Use ListedElements() instead.
   ListedElement::List listed_elements_;
-  // Do not access listed_elements_including_shadow_trees_ directly. Use
-  // ListedElements(true) instead.
-  ListedElement::List listed_elements_including_shadow_trees_;
+  // Do not access listed_elements_for_autofill_ directly. Use
+  // AllContainedFormElementsForAutofill() instead.
+  ListedElement::List listed_elements_for_autofill_;
   // Do not access image_elements_ directly. Use ImageElements() instead.
   HeapVector<Member<HTMLImageElement>> image_elements_;
 
   base::OnceClosure cancel_last_submission_;
+
+  using McpToolCallbackResult =
+      base::expected<blink::String, blink::WebDocument::ScriptToolError>;
+  class CORE_EXPORT HTMLFormMcpTool final
+      : public GarbageCollected<HTMLFormMcpTool>,
+        public DeclarativeWebMCPTool {
+   public:
+    HTMLFormMcpTool() = delete;
+    HTMLFormMcpTool(const HTMLFormMcpTool&) = delete;
+    HTMLFormMcpTool& operator=(const HTMLFormMcpTool&) = delete;
+    HTMLFormMcpTool(HTMLFormElement& form,
+                    String tool_name,
+                    String tool_description)
+        : tool_name_(tool_name),
+          tool_description_(tool_description),
+          form_(form) {
+      CHECK(!tool_name.IsNull() && !tool_description.IsNull());
+    }
+    String ComputeInputSchema() override;
+    void ExecuteTool(
+        String input_arguments,
+        base::OnceCallback<void(McpToolCallbackResult)> done_callback) override;
+    // Fill form controls with data as provided by `input_arguments`.
+    //
+    // If no error is returned, then all specified tool parameters (form
+    // controls) were filled successfully. Otherwise, the state of all form
+    // controls are left unchanged.
+    std::optional<WebDocument::ScriptToolError> FillFormControls(
+        const String& input_arguments,
+        bool require_submit_button,
+        HTMLFormControlElement** submit_button);
+    String ToolName() const { return tool_name_; }
+    String ToolDescription() const { return tool_description_; }
+    bool IsValidTool() const { return !tool_name_.IsNull(); }
+    bool CurrentlyRunning() const {
+      return IsValidTool() && is_currently_running_;
+    }
+    HTMLFormControlElement* ActiveToolSubmitButton() const {
+      CHECK(is_currently_running_);
+      return active_submit_button_;
+    }
+    void CallDoneCallback(McpToolCallbackResult result);
+    void Trace(Visitor* visitor) const override;
+
+   private:
+    bool is_currently_running_ = false;
+    String tool_name_;
+    String tool_description_;
+    Member<HTMLFormElement> form_;
+    Member<HTMLFormControlElement> active_submit_button_;
+    base::OnceCallback<void(McpToolCallbackResult)> done_callback_;
+  };
+
+  void HandleWebMcpToolResponse(HTMLFormMcpTool* tool,
+                                bool resolved,
+                                ScriptState* script_state,
+                                ScriptValue value);
+
+  // Used only for (experimental) declarative WebMCP.
+  Member<HTMLFormMcpTool> active_webmcp_tool_;
 
   bool is_submitting_ = false;
   bool in_user_js_submit_event_ = false;
   bool is_constructing_entry_list_ = false;
 
   bool listed_elements_are_dirty_ : 1;
-  bool listed_elements_including_shadow_trees_are_dirty_ : 1;
+  bool listed_elements_for_autofill_are_dirty_ : 1;
   bool image_elements_are_dirty_ : 1;
   bool has_elements_associated_by_parser_ : 1;
   bool has_elements_associated_by_form_attribute_ : 1;

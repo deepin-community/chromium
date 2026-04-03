@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
@@ -142,7 +141,7 @@ void SensorProviderImpl::SensorCreated(
 
   init_params->memory = std::move(cloned_region);
   init_params->buffer_offset =
-      SensorReadingSharedBuffer::GetOffset(sensor->GetType());
+      GetSensorReadingSharedBufferOffset(sensor->GetType());
   init_params->mode = sensor->GetReportingMode();
 
   double maximum_frequency = sensor->GetMaximumSupportedFrequency();

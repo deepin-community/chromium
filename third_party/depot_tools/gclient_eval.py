@@ -101,6 +101,24 @@ def _NodeDictSchema(dict_schema):
     return validate
 
 
+def _IsConstant(node):
+    return isinstance(node, ast.Constant)
+
+
+def _IsStringConstant(node):
+    return _IsConstant(node) and isinstance(node.value, str)
+
+
+def _IsNameConstant(node):
+    return _IsConstant(node) \
+        and isinstance(node.value, (bool, type(None)))
+
+
+def _IsNumericConstant(node):
+    return _IsConstant(node) \
+        and isinstance(node.value, (int, float, complex)) \
+        and not isinstance(node.value, bool)
+
 # See https://github.com/keleshev/schema for docs how to configure schema.
 _GCLIENT_DEPS_SCHEMA = _NodeDictSchema({
     schema.Optional(str):
@@ -129,6 +147,33 @@ _GCLIENT_DEPS_SCHEMA = _NodeDictSchema({
             schema.Optional('condition'):
             str,
             schema.Optional('dep_type', default='cipd'):
+            str,
+        }),
+        # GCS content.
+        _NodeDictSchema({
+            'bucket':
+            str,
+            'objects': [
+                _NodeDictSchema({
+                    'object_name':
+                    str,
+                    'sha256sum':
+                    str,
+                    'size_bytes':
+                    int,
+                    'generation':
+                    int,
+                    schema.Optional('output_file'):
+                    str,
+                    # The object will only be processed if the condition
+                    # evaluates to True. This is AND with the parent condition.
+                    schema.Optional('condition'):
+                    str,
+                })
+            ],
+            schema.Optional('condition'):
+            str,
+            schema.Optional('dep_type', default='gcs'):
             str,
         }),
     ),
@@ -217,6 +262,11 @@ _GCLIENT_SCHEMA = schema.Schema(
         # Also see 'skip_child_includes' and 'specific_include_rules'.
         schema.Optional('include_rules'): [schema.Optional(str)],
 
+        # Commits that add include_rules entries on the paths with this set
+        # will require an OWNERS review from them.
+        schema.Optional('new_usages_require_review'):
+        bool,
+
         # Optionally discards rules from parent directories, similar to
         # "noparent" in OWNERS files. For example, if
         # //base/allocator/partition_allocator has "noparent = True" then it
@@ -284,18 +334,18 @@ def _gclient_eval(node_or_string, filename='<unknown>', vars_dict=None):
         node_or_string = node_or_string.body
 
     def _convert(node):
-        if isinstance(node, ast.Str):
+        if _IsStringConstant(node):
             if vars_dict is None:
-                return node.s
+                return node.value
             try:
-                return node.s.format(**vars_dict)
+                return node.value.format(**vars_dict)
             except KeyError as e:
                 raise KeyError(
                     '%s was used as a variable, but was not declared in the vars dict '
                     '(file %r, line %s)' %
                     (e.args[0], filename, getattr(node, 'lineno', '<unknown>')))
-        elif isinstance(node, ast.Num):
-            return node.n
+        elif _IsNameConstant(node) or _IsNumericConstant(node):
+            return node.value
         elif isinstance(node, ast.Tuple):
             return tuple(map(_convert, node.elts))
         elif isinstance(node, ast.List):
@@ -317,9 +367,6 @@ def _gclient_eval(node_or_string, filename='<unknown>', vars_dict=None):
                     'invalid name %r (file %r, line %s)' %
                     (node.id, filename, getattr(node, 'lineno', '<unknown>')))
             return _allowed_names[node.id]
-        elif not sys.version_info[:2] < (3, 4) and isinstance(
-                node, ast.NameConstant):  # Since Python 3.4
-            return node.value
         elif isinstance(node, ast.Call):
             if (not isinstance(node.func, ast.Name)
                     or (node.func.id not in ('Str', 'Var'))):
@@ -334,8 +381,8 @@ def _gclient_eval(node_or_string, filename='<unknown>', vars_dict=None):
                                                      '<unknown>')))
 
             if node.func.id == 'Str':
-                if isinstance(node.args[0], ast.Str):
-                    return ConstantString(node.args[0].s)
+                if _IsStringConstant(node.args[0]):
+                    return ConstantString(node.args[0].value)
                 raise ValueError(
                     'Passed a non-string to Str() (file %r, line%s)' %
                     (filename, getattr(node, 'lineno', '<unknown>')))
@@ -562,8 +609,8 @@ def EvaluateCondition(condition, variables, referenced_variables=None):
         main_node = main_node.body
 
     def _convert(node, allow_tuple=False):
-        if isinstance(node, ast.Str):
-            return node.s
+        if _IsStringConstant(node):
+            return node.value
 
         if isinstance(node, ast.Tuple) and allow_tuple:
             return tuple(map(_convert, node.elts))
@@ -595,8 +642,7 @@ def EvaluateCondition(condition, variables, referenced_variables=None):
             # be evaluated.
             return node.id
 
-        if not sys.version_info[:2] < (3, 4) and isinstance(
-                node, ast.NameConstant):  # Since Python 3.4
+        if _IsNameConstant(node):
             return node.value
 
         if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
@@ -664,11 +710,11 @@ def _UpdateAstString(tokens, node, value):
         node = node.args[0]
     position = node.lineno, node.col_offset
     quote_char = ''
-    if isinstance(node, ast.Str):
+    if _IsStringConstant(node):
         quote_char = tokens[position][1][0]
         value = value.encode('unicode_escape').decode('utf-8')
     tokens[position][1] = quote_char + value + quote_char
-    node.s = value
+    node.value = value
 
 
 def _ShiftLinesInTokens(tokens, delta, start):
@@ -761,12 +807,39 @@ def SetVar(gclient_dict, var_name, value):
 
 def _GetVarName(node):
     if isinstance(node, ast.Call):
-        return node.args[0].s
+        return node.args[0].value
 
-    if node.s.endswith('}'):
-        last_brace = node.s.rfind('{')
-        return node.s[last_brace + 1:-1]
+    if node.value.endswith('}'):
+        last_brace = node.value.rfind('{')
+        return node.value[last_brace + 1:-1]
     return None
+
+
+def SetGCS(gclient_dict, dep_name, new_objects):
+    if not isinstance(gclient_dict, _NodeDict) or gclient_dict.tokens is None:
+        raise ValueError(
+            "Can't use SetGCS for the given gclient dict. It contains no "
+            "formatting information.")
+    tokens = gclient_dict.tokens
+
+    if 'deps' not in gclient_dict or dep_name not in gclient_dict['deps']:
+        raise KeyError("Could not find any dependency called %s." % dep_name)
+
+    node = gclient_dict['deps'][dep_name]
+    objects_node = node.GetNode('objects')
+    if len(objects_node.elts) != len(new_objects):
+        raise ValueError("Number of revision objects must match the current "
+                         "number of objects.")
+
+    # Allow only `keys_to_update` to be updated.
+    keys_to_update = ('object_name', 'sha256sum', 'size_bytes', 'generation')
+    for index, object_node in enumerate(objects_node.elts):
+        for key, value in zip(object_node.keys, object_node.values):
+            if key.value not in keys_to_update:
+                continue
+            _UpdateAstString(tokens, value, new_objects[index][key.value])
+
+    node.SetNode('objects', new_objects, objects_node)
 
 
 def SetCIPD(gclient_dict, dep_name, package_name, new_version):
@@ -796,7 +869,7 @@ def SetCIPD(gclient_dict, dep_name, package_name, new_version):
             "The deps entry for %s:%s has no formatting information." %
             (dep_name, package_name))
 
-    if not isinstance(node, ast.Call) and not isinstance(node, ast.Str):
+    if not isinstance(node, ast.Call) and not _IsStringConstant(node):
         raise ValueError(
             "Unsupported dependency revision format. Please file a bug to the "
             "Infra>SDK component in crbug.com")
@@ -821,15 +894,15 @@ def SetRevision(gclient_dict, dep_name, new_revision):
         if isinstance(node, ast.BinOp):
             node = node.right
 
-        if isinstance(node, ast.Str):
+        if _IsStringConstant(node):
             token = _gclient_eval(tokens[node.lineno, node.col_offset][1])
-            if token != node.s:
+            if token != node.value:
                 raise ValueError(
                     'Can\'t update value for %s. Multiline strings and implicitly '
                     'concatenated strings are not supported.\n'
                     'Consider reformatting the DEPS file.' % dep_key)
 
-        if not isinstance(node, ast.Call) and not isinstance(node, ast.Str):
+        if not isinstance(node, ast.Call) and not _IsStringConstant(node):
             raise ValueError(
                 "Unsupported dependency revision format. Please file a bug to the "
                 "Infra>SDK component in crbug.com")
@@ -838,15 +911,15 @@ def SetRevision(gclient_dict, dep_name, new_revision):
         if var_name is not None:
             SetVar(gclient_dict, var_name, new_revision)
         else:
-            if '@' in node.s:
+            if '@' in node.value:
                 # '@' is part of the last string, which we want to modify.
                 # Discard whatever was after the '@' and put the new revision in
                 # its place.
-                new_revision = node.s.split('@')[0] + '@' + new_revision
+                new_revision = node.value.split('@')[0] + '@' + new_revision
             elif '@' not in dep_dict[dep_key]:
                 # '@' is not part of the URL at all. This mean the dependency is
                 # unpinned and we should pin it.
-                new_revision = node.s + '@' + new_revision
+                new_revision = node.value + '@' + new_revision
             _UpdateAstString(tokens, node, new_revision)
             dep_dict.SetNode(dep_key, new_revision, node)
 
@@ -917,4 +990,7 @@ def GetRevision(gclient_dict, dep_name):
         _, _, revision = dep['url'].partition('@')
         return revision or None
 
-    raise ValueError('%s is not a valid git dependency.' % dep_name)
+    if isinstance(gclient_dict, _NodeDict) and 'objects' in dep:
+        return dep['objects']
+
+    raise ValueError('%s is not a valid git or gcs dependency.' % dep_name)

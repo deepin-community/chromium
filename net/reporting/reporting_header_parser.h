@@ -12,7 +12,6 @@
 #include "base/values.h"
 #include "net/base/net_export.h"
 #include "net/http/structured_headers.h"
-#include "url/gurl.h"
 #include "url/origin.h"
 
 namespace net {
@@ -50,7 +49,7 @@ class NET_EXPORT ReportingHeaderParser {
       ReportingContext* context,
       const NetworkAnonymizationKey& network_anonymization_key,
       const url::Origin& origin,
-      const base::Value::List& list);
+      const base::ListValue& list);
 
   // `isolation_info` here will be stored in the cache, associated with the
   // `reporting_source`. `network_anonymization_key` is the NAK which will be

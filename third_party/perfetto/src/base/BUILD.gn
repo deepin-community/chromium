@@ -21,7 +21,7 @@ import("../../gn/wasm.gni")
 # On standalone builds this is all the OSes we support. On chromium builds,
 # though, this really means !is_fuchsia && !is_nacl.
 _subprocess_supported =
-    is_linux || is_chromeos || is_android || is_mac || is_win
+    is_linux || is_chromeos || is_android || is_mac || is_win || is_freebsd
 
 perfetto_component("base") {
   deps = [
@@ -40,16 +40,24 @@ perfetto_component("base") {
     "event_fd.cc",
     "file_utils.cc",
     "getopt_compat.cc",
+    "intrusive_list.cc",
+    "intrusive_list.h",
+    "intrusive_tree.cc",
+    "intrusive_tree.h",
     "log_ring_buffer.h",
     "logging.cc",
     "metatrace.cc",
     "paged_memory.cc",
     "periodic_task.cc",
     "pipe.cc",
+    "rt_mutex.cc",
+    "scoped_mmap.cc",
+    "scoped_sched_boost.cc",
     "status.cc",
     "string_splitter.cc",
     "string_utils.cc",
     "string_view.cc",
+    "string_view_splitter.cc",
     "temp_file.cc",
     "thread_checker.cc",
     "thread_utils.cc",
@@ -59,10 +67,12 @@ perfetto_component("base") {
     "virtual_destructors.cc",
     "waitable_event.cc",
     "watchdog_posix.cc",
+    "weak_runner.cc",
   ]
 
   if (!is_nacl) {
     sources += [
+      "lock_free_task_runner.cc",
       "thread_task_runner.cc",
       "unix_task_runner.cc",
     ]
@@ -79,6 +89,15 @@ perfetto_component("base") {
   if (enable_perfetto_stderr_crash_dump) {
     deps += [ ":debug_crash_stack_trace" ]
   }
+}
+
+perfetto_component("clock_snapshots") {
+  deps = [ "../../gn:default_deps" ]
+  public_deps = [
+    "../../include/perfetto/ext/base",
+    "../../protos/perfetto/common:zero",
+  ]
+  sources = [ "clock_snapshots.cc" ]
 }
 
 # This target needs to be named as such because it's exposed directly in Bazel
@@ -191,23 +210,34 @@ perfetto_unittest_source_set("unittests") {
 
   sources = [
     "base64_unittest.cc",
+    "bits_unittest.cc",
     "circular_queue_unittest.cc",
+    "dynamic_string_writer_unittest.cc",
+    "file_utils_unittest.cc",
+    "fixed_string_writer_unittest.cc",
+    "flags_unittest.cc",
     "flat_hash_map_unittest.cc",
     "flat_set_unittest.cc",
+    "fnv_hash_unittest.cc",
     "getopt_compat_unittest.cc",
-    "hash_unittest.cc",
+    "intrusive_list_unittest.cc",
+    "intrusive_tree_unittest.cc",
     "logging_unittest.cc",
+    "murmur_hash_unittest.cc",
     "no_destructor_unittest.cc",
     "paged_memory_unittest.cc",
     "periodic_task_unittest.cc",
+    "rt_mutex_unittest.cc",
     "scoped_file_unittest.cc",
+    "scoped_mmap_unittest.cc",
+    "scoped_sched_boost_unittest.cc",
     "small_vector_unittest.cc",
     "status_or_unittest.cc",
     "status_unittest.cc",
     "string_splitter_unittest.cc",
     "string_utils_unittest.cc",
+    "string_view_splitter_unittest.cc",
     "string_view_unittest.cc",
-    "string_writer_unittest.cc",
     "task_runner_unittest.cc",
     "temp_file_unittest.cc",
     "thread_checker_unittest.cc",
@@ -248,18 +278,21 @@ if (enable_perfetto_benchmarks) {
   declare_args() {
     perfetto_benchmark_3p_libs_prefix = ""
   }
-  source_set("benchmarks") {
-    # If you intend to reproduce the comparison with {Absl, Folly, Tessil}
-    # you need to manually install those libraries and then set the GN arg
-    # perfetto_benchmark_3p_libs_prefix = "/usr/local"
+
+  source_set("flat_hash_map_benchmark") {
     testonly = true
     deps = [
       ":base",
       "../../gn:benchmark",
       "../../gn:default_deps",
     ]
+    defines = []
+    if (perfetto_build_standalone && !is_perfetto_build_generator) {
+      defines += [ "PERFETTO_HASH_MAP_COMPARE_ABSL" ]
+      deps += [ "../../buildtools:abseil_cpp" ]
+    }
     if (perfetto_benchmark_3p_libs_prefix != "") {
-      defines = [ "PERFETTO_HASH_MAP_COMPARE_THIRD_PARTY_LIBS" ]
+      defines += [ "PERFETTO_HASH_MAP_COMPARE_THIRD_PARTY_LIBS" ]
       cflags = [ "-isystem${perfetto_benchmark_3p_libs_prefix}/include" ]
       libs = [
         "${perfetto_benchmark_3p_libs_prefix}/lib/libfolly.a",
@@ -267,9 +300,21 @@ if (enable_perfetto_benchmarks) {
         "${perfetto_benchmark_3p_libs_prefix}/lib/libabsl_hash.a",
       ]
     }
+    sources = [ "flat_hash_map_benchmark.cc" ]
+  }
+
+  source_set("benchmarks") {
+    testonly = true
+    deps = [
+      ":base",
+      ":flat_hash_map_benchmark",
+      "../../gn:benchmark",
+      "../../gn:default_deps",
+    ]
     sources = [
-      "flat_hash_map_benchmark.cc",
       "flat_set_benchmark.cc",
+      "rt_mutex_benchmark.cc",
+      "task_runner_benchmark.cc",
     ]
   }
 }

@@ -4,15 +4,18 @@
 
 #include "components/browsing_topics/annotator_impl.h"
 
+#include <algorithm>
+#include <vector>
+
 #include "base/barrier_closure.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/dcheck_is_on.h"
 #include "base/files/file_util.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
-#include "components/optimization_guide/core/optimization_guide_model_provider.h"
+#include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
 #include "components/optimization_guide/proto/models.pb.h"
 #include "components/optimization_guide/proto/page_topics_model_metadata.pb.h"
 #include "components/optimization_guide/proto/page_topics_override_list.pb.h"
@@ -58,9 +61,8 @@ std::optional<std::unordered_map<std::string, std::vector<int32_t>>>
 LoadOverrideListFromFile(const base::FilePath& path) {
   if (!path.IsAbsolute() ||
       path.BaseName() != base::FilePath(kOverrideListBasePath)) {
-    NOTREACHED();
     // This is enforced by calling code, so no UMA in this case.
-    return std::nullopt;
+    NOTREACHED();
   }
 
   std::string file_contents;
@@ -101,10 +103,10 @@ LoadOverrideListFromFile(const base::FilePath& path) {
 // The full list of meaningless prefixes are:
 //   ^(www[0-9]*|web|ftp|wap|home)$
 //   ^(m|mobile|amp|w)$
-int MeaninglessPrefixLength(const std::string& host) {
+int MeaninglessPrefixLength(std::string_view host) {
   size_t len = host.size();
 
-  int dots = base::ranges::count(host, '.');
+  int dots = std::ranges::count(host, '.');
   if (dots < 2) {
     return 0;
   }
@@ -121,13 +123,14 @@ int MeaninglessPrefixLength(const std::string& host) {
       }
     }
   } else {
-    static const auto* kMeaninglessPrefixesLenMap = new std::set<std::string>(
-        {"web", "ftp", "wap", "home", "m", "w", "amp", "mobile"});
+    static constexpr auto kMeaninglessPrefixesLenSet =
+        base::MakeFixedFlatSet<std::string_view>(
+            {"web", "ftp", "wap", "home", "m", "w", "amp", "mobile"});
 
     size_t prefix_len = host.find('.');
-    std::string prefix = host.substr(0, prefix_len);
-    const auto& it = kMeaninglessPrefixesLenMap->find(prefix);
-    if (it != kMeaninglessPrefixesLenMap->end() && len > it->size() + 1) {
+    std::string_view prefix = host.substr(0, prefix_len);
+    const auto& it = kMeaninglessPrefixesLenSet.find(prefix);
+    if (it != kMeaninglessPrefixesLenSet.end() && len > it->size() + 1) {
       return it->size() + 1;
     }
   }
@@ -249,7 +252,7 @@ void AnnotatorImpl::StartBatchAnnotate(BatchAnnotationCallback callback,
   for (size_t i = 0; i < inputs.size(); i++) {
     AnnotateSingleInput(
         /*single_input_done_signal=*/barrier_closure,
-        /*annotation=*/(annotations_ptr->data() + i));
+        /*annotation=*/&(*annotations_ptr)[i]);
   }
 }
 
@@ -408,7 +411,7 @@ AnnotatorImpl::ExtractCategoriesFromModelOutput(
 
   // Prune out categories that do not meet the minimum threshold.
   if (category_params.min_category_weight() > 0) {
-    base::EraseIf(categories, [&](const std::pair<int32_t, float>& category) {
+    std::erase_if(categories, [&](const std::pair<int32_t, float>& category) {
       return category.second < category_params.min_category_weight();
     });
   }
@@ -425,7 +428,7 @@ AnnotatorImpl::ExtractCategoriesFromModelOutput(
     }
     // None weight doesn't matter, so prune it out. Note that it may have
     // already been removed above if its weight was below the category min.
-    base::EraseIf(categories, [&](const std::pair<int32_t, float>& category) {
+    std::erase_if(categories, [&](const std::pair<int32_t, float>& category) {
       return category.first == kNoneCategoryId;
     });
   }
@@ -433,7 +436,7 @@ AnnotatorImpl::ExtractCategoriesFromModelOutput(
   // Normalize category weights.
   float normalization_factor =
       sum_positive_scores > 0 ? sum_positive_scores : 1.0;
-  base::EraseIf(categories, [&](const std::pair<int32_t, float>& category) {
+  std::erase_if(categories, [&](const std::pair<int32_t, float>& category) {
     return (category.second / normalization_factor) <
            category_params.min_normalized_weight_within_top_n();
   });

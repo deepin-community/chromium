@@ -8,6 +8,10 @@
 //   This test can only be enabled when HLSL support is enabled.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "GLSLANG/ShaderLang.h"
 #include "angle_gl.h"
 #include "common/angleutils.h"
@@ -201,14 +205,14 @@ TEST_F(UnrollFlattenTest, GradientInDiscont)
     expect(expectations, ArraySize(expectations));
 }
 
-class UnrollFlattenTest_ES3 : public UnrollFlattenTest
+class UnrollFlattenTestES3 : public UnrollFlattenTest
 {
   public:
-    UnrollFlattenTest_ES3() : UnrollFlattenTest(SH_GLES3_SPEC) {}
+    UnrollFlattenTestES3() : UnrollFlattenTest(SH_GLES3_SPEC) {}
 };
 
 // Check that we correctly detect the ES3 builtin "texture" function as a gradient operation.
-TEST_F(UnrollFlattenTest_ES3, TextureBuiltin)
+TEST_F(UnrollFlattenTestES3, TextureBuiltin)
 {
     const std::string &shaderString =
         "#version 300 es\n"

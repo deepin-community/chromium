@@ -189,6 +189,12 @@ def _RemoveBreakpadKeys(plist):
               'BreakpadSendAndExit', 'BreakpadSkipConfirm')
 
 
+def _IsValidBundleId(bundle_identifier):
+  # Based on apple developer documentation, see
+  # https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundleidentifier
+  return re.match(r'^[0-9a-zA-Z-.]+$', bundle_identifier) is not None
+
+
 def _TagSuffixes():
   # Keep this list sorted in the order that tag suffix components are to
   # appear in a tag value. That is to say, it should be sorted per ASCII.
@@ -248,12 +254,51 @@ def _RemoveGTMKeys(plist):
 
 def _AddPrivilegedHelperId(plist, privileged_helper_id):
   plist['SMPrivilegedExecutables'] = {
-      privileged_helper_id: 'identifier ' + privileged_helper_id
+      privileged_helper_id: f'identifier "{privileged_helper_id}"'
   }
 
 
 def _RemovePrivilegedHelperId(plist):
   _RemoveKeys(plist, 'SMPrivilegedExecutables')
+
+
+def _SetDirectLaunchUrlScheme(plist, bundle_identifier):
+  """Sets the direct launch URL scheme in the plist."""
+  if not bundle_identifier:
+    return
+
+  scheme = None
+  if bundle_identifier == 'com.google.Chrome':
+    scheme = 'google-chrome'
+    # This logic should match shell_integration::GetDirectLaunchUrlScheme()
+    # in chrome/browser/shell_integration_mac.mm.
+    # Note: chrome/installer/mac/signing/modification.py handles removing
+    # this scheme for non-stable channels during signing.
+  elif bundle_identifier == 'org.chromium.Chromium':
+    scheme = 'chromium'
+
+  url_types = plist.get('CFBundleURLTypes')
+  if not url_types:
+    return
+
+  placeholder = '%DIRECT_LAUNCH_URL_SCHEME%'
+  new_url_types = []
+
+  for url_type in url_types:
+    schemes = url_type.get('CFBundleURLSchemes')
+    if schemes and placeholder in schemes:
+      if len(schemes) != 1:
+        raise Exception(f'Placeholder {placeholder} must be the only scheme.')
+
+      if scheme is not None:
+        schemes[0] = scheme
+        new_url_types.append(url_type)
+      # Else: scheme is None, so we drop this url_type.
+    else:
+      # This url_type does not contain the placeholder, so keep it as is.
+      new_url_types.append(url_type)
+
+  plist['CFBundleURLTypes'] = new_url_types
 
 
 def Main(argv):
@@ -307,7 +352,7 @@ def Main(argv):
                     default=None,
                     help='The bundle id of the binary')
   parser.add_option('--platform',
-                    choices=('ios', 'mac'),
+                    choices=('ios', 'mac', 'watchos'),
                     default='mac',
                     help='The target platform of the bundle')
   parser.add_option('--add-gtm-metadata',
@@ -415,6 +460,9 @@ def Main(argv):
     if options.bundle_identifier is None:
       print('Use of Keystone requires the bundle id.', file=sys.stderr)
       return 1
+    if not _IsValidBundleId(options.bundle_identifier):
+      print(f'Invalid bundle id: {options.bundle_identifier}', file=sys.stderr)
+      return 1
     _AddKeystoneKeys(plist, options.bundle_identifier,
                      options.keystone_base_tag)
   else:
@@ -432,9 +480,15 @@ def Main(argv):
 
   # Add SMPrivilegedExecutables keys.
   if options.privileged_helper_id:
+    if not _IsValidBundleId(options.privileged_helper_id):
+      print(f'Invalid privileged helper id: {options.privileged_helper_id}',
+            file=sys.stderr)
+      return 1
     _AddPrivilegedHelperId(plist, options.privileged_helper_id)
   else:
     _RemovePrivilegedHelperId(plist)
+
+  _SetDirectLaunchUrlScheme(plist, options.bundle_identifier)
 
   output_path = options.plist_path
   if options.plist_output is not None:
@@ -447,7 +501,7 @@ def Main(argv):
 
 
 if __name__ == '__main__':
-  # TODO(https://crbug.com/941669): Temporary workaround until all scripts use
+  # TODO(crbug.com/40618161): Temporary workaround until all scripts use
   # python3 by default.
   if sys.version_info[0] < 3:
     os.execvp('python3', ['python3'] + sys.argv)

@@ -4,11 +4,13 @@
 
 #include "components/safe_browsing/core/browser/db/v4_get_hash_protocol_manager.h"
 
+#include <algorithm>
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 
 #include "base/base64url.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
@@ -149,14 +151,14 @@ namespace safe_browsing {
 class V4GetHashProtocolManagerFactoryImpl
     : public V4GetHashProtocolManagerFactory {
  public:
-  V4GetHashProtocolManagerFactoryImpl() {}
+  V4GetHashProtocolManagerFactoryImpl() = default;
 
   V4GetHashProtocolManagerFactoryImpl(
       const V4GetHashProtocolManagerFactoryImpl&) = delete;
   V4GetHashProtocolManagerFactoryImpl& operator=(
       const V4GetHashProtocolManagerFactoryImpl&) = delete;
 
-  ~V4GetHashProtocolManagerFactoryImpl() override {}
+  ~V4GetHashProtocolManagerFactoryImpl() override = default;
   std::unique_ptr<V4GetHashProtocolManager> CreateProtocolManager(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const StoresToCheck& stores_to_check,
@@ -168,16 +170,16 @@ class V4GetHashProtocolManagerFactoryImpl
 
 // ----------------------------------------------------------------
 
-CachedHashPrefixInfo::CachedHashPrefixInfo() {}
+CachedHashPrefixInfo::CachedHashPrefixInfo() = default;
 
 CachedHashPrefixInfo::CachedHashPrefixInfo(const CachedHashPrefixInfo& other) =
     default;
 
-CachedHashPrefixInfo::~CachedHashPrefixInfo() {}
+CachedHashPrefixInfo::~CachedHashPrefixInfo() = default;
 
 // ----------------------------------------------------------------
 
-FullHashCallbackInfo::FullHashCallbackInfo() {}
+FullHashCallbackInfo::FullHashCallbackInfo() = default;
 
 FullHashCallbackInfo::FullHashCallbackInfo(
     const std::vector<FullHashInfo>& cached_full_hash_infos,
@@ -195,7 +197,7 @@ FullHashCallbackInfo::FullHashCallbackInfo(
       network_start_time(network_start_time),
       prefixes_requested(prefixes_requested) {}
 
-FullHashCallbackInfo::~FullHashCallbackInfo() {}
+FullHashCallbackInfo::~FullHashCallbackInfo() = default;
 
 // ----------------------------------------------------------------
 
@@ -208,16 +210,7 @@ FullHashInfo::FullHashInfo(const FullHashStr& full_hash,
 
 FullHashInfo::FullHashInfo(const FullHashInfo& other) = default;
 
-FullHashInfo::~FullHashInfo() {}
-
-bool FullHashInfo::operator==(const FullHashInfo& other) const {
-  return full_hash == other.full_hash && list_id == other.list_id &&
-         positive_expiry == other.positive_expiry && metadata == other.metadata;
-}
-
-bool FullHashInfo::operator!=(const FullHashInfo& other) const {
-  return !operator==(other);
-}
+FullHashInfo::~FullHashInfo() = default;
 
 // V4GetHashProtocolManager implementation --------------------------------
 
@@ -544,7 +537,7 @@ void V4GetHashProtocolManager::OnFullHashForApi(
   ThreatMetadata md;
   for (const FullHashInfo& full_hash_info : full_hash_infos) {
     DCHECK_EQ(GetChromeUrlApiId(), full_hash_info.list_id);
-    DCHECK(base::Contains(full_hashes, full_hash_info.full_hash));
+    DCHECK(std::ranges::contains(full_hashes, full_hash_info.full_hash));
     md.api_permissions.insert(full_hash_info.metadata.api_permissions.begin(),
                               full_hash_info.metadata.api_permissions.end());
   }
@@ -598,9 +591,10 @@ bool V4GetHashProtocolManager::ParseHashResponse(
 
     ListIdentifier list_id(match.platform_type(), match.threat_entry_type(),
                            match.threat_type());
-    if (!base::Contains(platform_types_, list_id.platform_type()) ||
-        !base::Contains(threat_entry_types_, list_id.threat_entry_type()) ||
-        !base::Contains(threat_types_, list_id.threat_type())) {
+    if (!std::ranges::contains(platform_types_, list_id.platform_type()) ||
+        !std::ranges::contains(threat_entry_types_,
+                               list_id.threat_entry_type()) ||
+        !std::ranges::contains(threat_types_, list_id.threat_type())) {
       // The server may send a ThreatMatch response for lists that we didn't ask
       // for so ignore those ThreatMatch responses.
       continue;
@@ -779,19 +773,15 @@ void V4GetHashProtocolManager::MergeResults(
 // SafeBrowsing request responses are handled here.
 void V4GetHashProtocolManager::OnURLLoaderComplete(
     network::SimpleURLLoader* url_loader,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   int response_code = 0;
   if (url_loader->ResponseInfo() && url_loader->ResponseInfo()->headers)
     response_code = url_loader->ResponseInfo()->headers->response_code();
 
-  std::string data;
-  if (response_body)
-    data = *response_body;
-
   OnURLLoaderCompleteInternal(url_loader, url_loader->NetError(), response_code,
-                              data);
+                              std::move(response_body).value_or(""));
 }
 
 void V4GetHashProtocolManager::OnURLLoaderCompleteInternal(
@@ -800,7 +790,7 @@ void V4GetHashProtocolManager::OnURLLoaderCompleteInternal(
     int response_code,
     const std::string& data) {
   auto it = pending_hash_requests_.find(url_loader);
-  DCHECK(it != pending_hash_requests_.end()) << "Request not found";
+  CHECK(it != pending_hash_requests_.end()) << "Request not found";
   RecordHttpResponseOrErrorCode("SafeBrowsing.V4GetHash.Network.Result",
                                 net_error, response_code);
 

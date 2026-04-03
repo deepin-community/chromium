@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 
+#include "ash/constants/ash_features.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_writer.h"
@@ -25,13 +26,11 @@
 #include "chrome/browser/ash/login/test/network_portal_detector_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/login/version_updater/version_updater.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
-#include "chrome/browser/ash/net/network_portal_detector_test_impl.h"
-#include "chrome/browser/ash/policy/core/device_policy_builder.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
 #include "chrome/browser/ash/policy/handlers/minimum_version_policy_test_helpers.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/consumer_update_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_info_screen_handler.h"
@@ -42,6 +41,7 @@
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/dbus/update_engine/fake_update_engine_client.h"
 #include "chromeos/ash/components/network/network_state_test_helper.h"
+#include "chromeos/ash/components/policy/device_policy/device_policy_builder.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/dbus/constants/dbus_switches.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
@@ -120,7 +120,7 @@ class ConsumerUpdateScreenTest : public OobeBaseTest {
 
     // Set up fake networks.
     network_state_test_helper_ = std::make_unique<NetworkStateTestHelper>(
-        true /*use_default_devices_and_services*/);
+        /*use_default_devices_and_services=*/true);
     network_state_test_helper_->manager_test()->SetupDefaultEnvironment();
     // Fake networks have been set up. Connect to WiFi network.
     SetConnected(kWifiServicePath);
@@ -137,13 +137,20 @@ class ConsumerUpdateScreenTest : public OobeBaseTest {
     // this local state is set in OnUserCreationScreenExit and in the test we
     // advance directly to the consumerUpdate Screen.
     StartupUtils::SaveScreenAfterConsumerUpdate(
-        ash::features::IsOobeGaiaInfoScreenEnabled()
-            ? GaiaInfoScreenView::kScreenId.name
-            : GaiaScreenHandler::kScreenId.name);
+        GaiaInfoScreenView::kScreenId.name);
+
+    if (ash::features::IsOobeAutoEnrollmentCheckForcedEnabled()) {
+      // Showing the GAIA screen requires OOBE to be marked complete.
+      StartupUtils::MarkOobeCompleted();
+    }
 
     LoginDisplayHost::default_host()
         ->GetWizardContextForTesting()
         ->is_branded_build = true;
+  }
+
+  void SaveScreenAfterConsumerUpdate(const std::string& screen_name) {
+    StartupUtils::SaveScreenAfterConsumerUpdate(screen_name);
   }
 
   void TearDownOnMainThread() override {
@@ -180,6 +187,18 @@ class ConsumerUpdateScreenTest : public OobeBaseTest {
     WaitForOobeUI();
     WizardController::default_controller()->AdvanceToScreen(
         ConsumerUpdateScreenView::kScreenId);
+  }
+
+  void SimulateNoUpdateAvailable() {
+    SetUpdateEngineStatus(update_engine::Operation::IDLE);
+    SetUpdateEngineStatus(update_engine::Operation::CHECKING_FOR_UPDATE);
+
+    OobeScreenWaiter consumer_update_screen_waiter(
+        ConsumerUpdateScreenView::kScreenId);
+    consumer_update_screen_waiter.set_assert_next_screen();
+    consumer_update_screen_waiter.Wait();
+
+    SetUpdateEngineStatus(update_engine::Operation::IDLE);
   }
 
   ConsumerUpdateScreen::Result WaitForScreenExitResult() {
@@ -389,7 +408,9 @@ IN_PROC_BROWSER_TEST_F(ConsumerUpdateScreenTest, LowBatteryStatus) {
   test::OobeJS().ExpectVisiblePath(kLowBatteryWarningMessage);
 }
 
-IN_PROC_BROWSER_TEST_F(ConsumerUpdateScreenTest, SkipUpdate) {
+// TODO(crbug.com/330761947): Test flaking frequently on linux-chromeos
+// builders.
+IN_PROC_BROWSER_TEST_F(ConsumerUpdateScreenTest, DISABLED_SkipUpdate) {
   update_engine::StatusResult status;
   status.set_update_urgency(update_engine::UpdateUrgency::REGULAR);
 
@@ -434,6 +455,60 @@ IN_PROC_BROWSER_TEST_F(ConsumerUpdateScreenTest, SkipUpdate) {
   ConsumerUpdateScreen::Result result = WaitForScreenExitResult();
   EXPECT_EQ(result, ConsumerUpdateScreen::Result::SKIPPED);
   EXPECT_FALSE(update_engine_client()->HasObserver(version_updater_));
+}
+
+IN_PROC_BROWSER_TEST_F(ConsumerUpdateScreenTest, ResumeFlowWithAddChild) {
+  SaveScreenAfterConsumerUpdate("add-child");
+  ShowConsumerUpdateScreen();
+
+  // Simulate No update just so the screen exit.
+  SimulateNoUpdateAvailable();
+
+  ConsumerUpdateScreen::Result result = WaitForScreenExitResult();
+  EXPECT_EQ(result, ConsumerUpdateScreen::Result::UPDATE_NOT_REQUIRED);
+
+  OobeScreenWaiter(AddChildScreenView::kScreenId).Wait();
+}
+
+IN_PROC_BROWSER_TEST_F(ConsumerUpdateScreenTest,
+                       ResumeFlowWithNonExistingScreen) {
+  SaveScreenAfterConsumerUpdate("non-existing-screen");
+  ShowConsumerUpdateScreen();
+
+  // Simulate No update just so the screen exit.
+  SimulateNoUpdateAvailable();
+
+  ConsumerUpdateScreen::Result result = WaitForScreenExitResult();
+  EXPECT_EQ(result, ConsumerUpdateScreen::Result::UPDATE_NOT_REQUIRED);
+
+  OobeScreenWaiter(UserCreationView::kScreenId).Wait();
+}
+
+IN_PROC_BROWSER_TEST_F(ConsumerUpdateScreenTest, ResumeFlowWithGaia) {
+  SaveScreenAfterConsumerUpdate("gaia-signin");
+  ShowConsumerUpdateScreen();
+
+  // Simulate No update just so the screen exit.
+  SimulateNoUpdateAvailable();
+
+  ConsumerUpdateScreen::Result result = WaitForScreenExitResult();
+  EXPECT_EQ(result, ConsumerUpdateScreen::Result::UPDATE_NOT_REQUIRED);
+
+  OobeScreenWaiter(GaiaView::kScreenId).Wait();
+}
+
+IN_PROC_BROWSER_TEST_F(ConsumerUpdateScreenTest,
+                       ResumeFlowWithGaiaInfoExpirement) {
+  SaveScreenAfterConsumerUpdate("gaia-info");
+  ShowConsumerUpdateScreen();
+
+  // Simulate No update just so the screen exit.
+  SimulateNoUpdateAvailable();
+
+  ConsumerUpdateScreen::Result result = WaitForScreenExitResult();
+  EXPECT_EQ(result, ConsumerUpdateScreen::Result::UPDATE_NOT_REQUIRED);
+
+  OobeScreenWaiter(GaiaInfoScreenView::kScreenId).Wait();
 }
 
 }  // namespace

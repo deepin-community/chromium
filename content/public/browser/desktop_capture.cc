@@ -6,18 +6,18 @@
 
 #include "base/feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "content/browser/media/capture/pip_screen_capture_coordinator.h"
+#include "content/browser/renderer_host/media/media_stream_manager.h"
+#include "content/browser/renderer_host/media/video_capture_manager.h"
 #include "content/common/features.h"
 #include "content/public/common/content_features.h"
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "content/browser/media/capture/desktop_capturer_lacros.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "content/browser/media/capture/desktop_capturer_ash.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "content/browser/media/capture/aura_window_to_mojo_device_adapter.h"
-#include "content/browser/media/capture/desktop_capturer_ash.h"
-#include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#if BUILDFLAG(IS_ANDROID)
+#include "content/browser/media/capture/desktop_capturer_android.h"
 #endif
 
 #if defined(WEBRTC_USE_PIPEWIRE)
@@ -32,15 +32,11 @@
 #if BUILDFLAG(IS_MAC)
 #include "base/mac/mac_util.h"
 
-BASE_FEATURE(kUseCGDisplayStreamCreateSonoma,
-             "UseCGDisplayStreamCreateSonoma",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 // CGDisplayStreamCreate() is marked as deprecated from macOS 14 (Sonoma), so
 // don't use unless the feature flag is set.
 bool CGDisplayStreamCreateIsAvailable() {
   if (base::mac::MacOSMajorVersion() >= 14) {
-    return base::FeatureList::IsEnabled(kUseCGDisplayStreamCreateSonoma);
+    return false;
   }
   return true;
 }
@@ -48,11 +44,23 @@ bool CGDisplayStreamCreateIsAvailable() {
 
 namespace content::desktop_capture {
 
+#if BUILDFLAG(IS_WIN)
+// This feature controls the rollout of a field trial experiment that enables
+// a heuristic for finding the editor window of a presentation application
+// (e.g., PowerPoint) when the user shares the slideshow window.
+// TODO(crbug.com/409473386): Remove this feature once it has been in stable for
+// at least one milestone.
+BASE_FEATURE(kUseHeuristicForFindingEditor, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
+
 webrtc::DesktopCaptureOptions CreateDesktopCaptureOptions() {
   auto options = webrtc::DesktopCaptureOptions::CreateDefault();
   // Leave desktop effects enabled during WebRTC captures.
   options.set_disable_effects(false);
 #if BUILDFLAG(IS_WIN)
+  options.full_screen_window_detector()->SetHeuristicForFindingEditor(
+      base::FeatureList::IsEnabled(kUseHeuristicForFindingEditor));
+
   // TODO(crbug.com/webrtc/15045): Possibly remove this flag. Keeping for now
   // to force fallback to GDI.
   static BASE_FEATURE(kDirectXCapturer, "DirectXCapturer",
@@ -74,54 +82,39 @@ webrtc::DesktopCaptureOptions CreateDesktopCaptureOptions() {
   }
 #endif
 #if defined(WEBRTC_USE_PIPEWIRE)
-  if (base::FeatureList::IsEnabled(features::kWebRtcPipeWireCapturer)) {
-    options.set_allow_pipewire(true);
-  }
+  options.set_allow_pipewire(true);
 #endif  // defined(WEBRTC_USE_PIPEWIRE)
   return options;
 }
 
 std::unique_ptr<webrtc::DesktopCapturer> CreateScreenCapturer(
-    bool allow_wgc_screen_capturer) {
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  return std::make_unique<DesktopCapturerLacros>(
-      DesktopCapturerLacros::CaptureType::kScreen,
-      webrtc::DesktopCaptureOptions());
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
-  return std::make_unique<DesktopCapturerAsh>();
-#else
-  auto options = desktop_capture::CreateDesktopCaptureOptions();
-#if defined(RTC_ENABLE_WIN_WGC)
-  if (allow_wgc_screen_capturer) {
-    options.set_allow_wgc_screen_capturer(true);
+    webrtc::DesktopCaptureOptions options,
+    bool for_snapshot) {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (for_snapshot) {
+    return std::make_unique<DesktopCapturerAsh>();
   }
-#endif  // defined(RTC_ENABLE_WIN_WGC)
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_ANDROID)
+  return std::make_unique<DesktopCapturerAndroid>(options);
+#else
   return webrtc::DesktopCapturer::CreateScreenCapturer(options);
-#endif
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
-std::unique_ptr<webrtc::DesktopCapturer> CreateWindowCapturer() {
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  return std::make_unique<DesktopCapturerLacros>(
-      DesktopCapturerLacros::CaptureType::kWindow,
-      webrtc::DesktopCaptureOptions());
-#else
-  auto options = desktop_capture::CreateDesktopCaptureOptions();
+std::unique_ptr<webrtc::DesktopCapturer> CreateWindowCapturer(
+    webrtc::DesktopCaptureOptions options) {
 #if defined(RTC_ENABLE_WIN_WGC)
   options.set_allow_wgc_capturer_fallback(true);
-#endif
-  return webrtc::DesktopCapturer::CreateWindowCapturer(options);
-#endif
-}
+#endif  // defined(RTC_ENABLE_WIN_WGC)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-void BindAuraWindowCapturer(
-    mojo::PendingReceiver<video_capture::mojom::Device> receiver,
-    const content::DesktopMediaID& id) {
-  mojo::MakeSelfOwnedReceiver(
-      std::make_unique<AuraWindowToMojoDeviceAdapter>(id), std::move(receiver));
+#if BUILDFLAG(IS_ANDROID)
+  return std::make_unique<DesktopCapturerAndroid>(options);
+#else
+  return webrtc::DesktopCapturer::CreateWindowCapturer(options);
+#endif  // BUILDFLAG(IS_ANDROID)
 }
-#endif
 
 bool CanUsePipeWire() {
 #if defined(WEBRTC_USE_PIPEWIRE)
@@ -131,8 +124,7 @@ bool CanUsePipeWire() {
     session_type = base::nix::GetSessionType(*env);
   }
 
-  return session_type == base::nix::SessionType::kWayland &&
-         base::FeatureList::IsEnabled(features::kWebRtcPipeWireCapturer);
+  return session_type == base::nix::SessionType::kWayland;
 #else
   return false;
 #endif
@@ -144,6 +136,34 @@ bool ShouldEnumerateCurrentProcessWindows() {
 #else
   return true;
 #endif
+}
+
+void OpenNativeScreenCapturePicker(
+    content::DesktopMediaID::Type type,
+    base::OnceCallback<void(DesktopMediaID::Id)> created_callback,
+    base::OnceCallback<void(webrtc::DesktopCapturer::Source)> picker_callback,
+    base::OnceCallback<void()> cancel_callback,
+    base::OnceCallback<void()> error_callback) {
+  content::MediaStreamManager::GetInstance()
+      ->video_capture_manager()
+      ->OpenNativeScreenCapturePicker(
+          type, std::move(created_callback), std::move(picker_callback),
+          std::move(cancel_callback), std::move(error_callback));
+}
+
+void CloseNativeScreenCapturePicker(DesktopMediaID source_id) {
+  content::MediaStreamManager::GetInstance()
+      ->video_capture_manager()
+      ->CloseNativeScreenCapturePicker(source_id);
+}
+
+std::optional<DesktopMediaID::Id> GetPipWindowToExcludeFromScreenCapture(
+    DesktopMediaID::Id desktop_id) {
+  if (auto* coordinator = content::PipScreenCaptureCoordinator::GetInstance()) {
+    return coordinator->GetPipWindowToExcludeFromScreenCapture(desktop_id);
+  }
+
+  return std::nullopt;
 }
 
 }  // namespace content::desktop_capture

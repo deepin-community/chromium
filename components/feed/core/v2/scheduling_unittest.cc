@@ -35,7 +35,7 @@ TEST(RequestSchedule, CanSerialize) {
   schedule.refresh_offsets = {base::Hours(1), base::Hours(6)};
   schedule.type = RequestSchedule::Type::kScheduledRefresh;
 
-  const base::Value::Dict schedule_dict = RequestScheduleToDict(schedule);
+  const base::DictValue schedule_dict = RequestScheduleToDict(schedule);
   ASSERT_EQ(R"({
    "anchor": "11644495200000000",
    "offsets": [ "3600000000", "21600000000" ],
@@ -59,7 +59,7 @@ TEST(RequestSchedule, GetScheduleType) {
   EXPECT_EQ(RequestSchedule::Type::kScheduledRefresh,
             RequestScheduleFromDict(RequestScheduleToDict(schedule)).type);
   schedule.type = RequestSchedule::Type::kFeedCloseRefresh;
-  base::Value::Dict schedule_dict = RequestScheduleToDict(schedule);
+  base::DictValue schedule_dict = RequestScheduleToDict(schedule);
   EXPECT_EQ(RequestSchedule::Type::kFeedCloseRefresh,
             RequestScheduleFromDict(schedule_dict).type);
   // Default to kScheduledRefresh if the type isn't valid.
@@ -218,8 +218,7 @@ TEST_F(ContentLifetimeTest, ShouldWaitForNewContent_ServerThreshold_Valid) {
 TEST_F(ContentLifetimeTest, ShouldWaitForNewContent_WithNoSubscriptions) {
   // Enable WebFeed and WebFeedOnboarding flags.
   base::test::ScopedFeatureList features;
-  std::vector<base::test::FeatureRef> enabled_features = {kWebFeed,
-                                                          kWebFeedOnboarding},
+  std::vector<base::test::FeatureRef> enabled_features = {kWebFeedOnboarding},
                                       disabled_features = {};
   features.InitWithFeatures(enabled_features, disabled_features);
   EXPECT_FALSE(ShouldWaitForNewContent(
@@ -320,8 +319,7 @@ TEST_F(ContentLifetimeTest, ContentInvalidFromAge_ServerThreshold_Invalid) {
 TEST_F(ContentLifetimeTest, ContentInvalidFromAge_SubscriptionlessThreshold) {
   // Enable WebFeed and WebFeedOnboarding flags.
   base::test::ScopedFeatureList features;
-  std::vector<base::test::FeatureRef> enabled_features = {kWebFeed,
-                                                          kWebFeedOnboarding},
+  std::vector<base::test::FeatureRef> enabled_features = {kWebFeedOnboarding},
                                       disabled_features = {};
   features.InitWithFeatures(enabled_features, disabled_features);
   EXPECT_FALSE(ContentInvalidFromAge(metadata_,

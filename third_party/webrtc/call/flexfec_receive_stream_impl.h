@@ -11,14 +11,17 @@
 #ifndef CALL_FLEXFEC_RECEIVE_STREAM_IMPL_H_
 #define CALL_FLEXFEC_RECEIVE_STREAM_IMPL_H_
 
+#include <cstdint>
 #include <memory>
-#include <vector>
 
+#include "api/environment/environment.h"
+#include "api/rtp_headers.h"
+#include "api/sequence_checker.h"
 #include "call/flexfec_receive_stream.h"
 #include "call/rtp_packet_sink_interface.h"
 #include "modules/rtp_rtcp/source/rtp_rtcp_impl2.h"
 #include "rtc_base/system/no_unique_address.h"
-#include "system_wrappers/include/clock.h"
+#include "rtc_base/thread_annotations.h"
 
 namespace webrtc {
 
@@ -27,13 +30,12 @@ class ReceiveStatistics;
 class RecoveredPacketReceiver;
 class RtcpRttStats;
 class RtpPacketReceived;
-class RtpRtcp;
 class RtpStreamReceiverControllerInterface;
 class RtpStreamReceiverInterface;
 
 class FlexfecReceiveStreamImpl : public FlexfecReceiveStream {
  public:
-  FlexfecReceiveStreamImpl(Clock* clock,
+  FlexfecReceiveStreamImpl(const Environment& env,
                            Config config,
                            RecoveredPacketReceiver* recovered_packet_receiver,
                            RtcpRttStats* rtt_stats);
@@ -75,6 +77,7 @@ class FlexfecReceiveStreamImpl : public FlexfecReceiveStream {
   }
 
  private:
+  const Environment env_;
   RTC_NO_UNIQUE_ADDRESS SequenceChecker packet_sequence_checker_;
 
   const uint32_t remote_ssrc_;

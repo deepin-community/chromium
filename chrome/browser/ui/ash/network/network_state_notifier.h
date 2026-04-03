@@ -78,7 +78,8 @@ class NetworkStateNotifier : public NetworkConnectionObserver,
   };
 
   // NetworkConnectionObserver
-  void ConnectToNetworkRequested(const std::string& service_path) override;
+  ConnectToNetworkRequestVerdict ConnectToNetworkRequested(
+      const std::string& service_path) override;
   void ConnectSucceeded(const std::string& service_path) override;
   void ConnectFailed(const std::string& service_path,
                      const std::string& error_name) override;
@@ -98,12 +99,12 @@ class NetworkStateNotifier : public NetworkConnectionObserver,
   void OnConnectErrorGetProperties(
       const std::string& error_name,
       const std::string& service_path,
-      std::optional<base::Value::Dict> shill_properties);
+      std::optional<base::DictValue> shill_properties);
 
   void ShowConnectErrorNotification(
       const std::string& error_name,
       const std::string& service_path,
-      std::optional<base::Value::Dict> shill_properties);
+      std::optional<base::DictValue> shill_properties);
 
   void ShowVpnDisconnectedNotification(VpnDetails* vpn);
 
@@ -124,6 +125,7 @@ class NetworkStateNotifier : public NetworkConnectionObserver,
   // Shows the network settings for |network_id|.
   void ShowNetworkSettings(const std::string& network_id);
   void ShowSimUnlockSettings();
+  void ShowMobileDataSubpage();
   void ShowApnSettings(const std::string& network_id);
 
   // Shows the carrier account detail page for |network_id|.

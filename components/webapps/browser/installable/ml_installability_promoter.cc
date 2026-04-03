@@ -9,8 +9,8 @@
 #include "base/check_is_test.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
-#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
+#include "base/notreached.h"
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_runner.h"
@@ -43,7 +43,6 @@
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/blink/public/common/manifest/manifest_util.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom.h"
-#include "third_party/blink/public/mojom/manifest/manifest.mojom-shared.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -215,8 +214,7 @@ GURL MLInstallabilityPromoter::GetProjectedManifestIdAfterMetricsCollection() {
   switch (state_) {
     case MLPipelineState::kInactive:
     case MLPipelineState::kRunningMetricTasks:
-      CHECK(false) << "Cannot get manifest id without metrics collected";
-      break;
+      NOTREACHED() << "Cannot get manifest id without metrics collected";
     case MLPipelineState::kUKMCollectionComplete:
     case MLPipelineState::kMLClassificationRequested:
     case MLPipelineState::kWaitingForVisibility:
@@ -275,10 +273,10 @@ void MLInstallabilityPromoter::EmitUKMs() {
         .SetHasThemeColor(/*NullableBoolean::Null=*/2);
   } else {
     manifest_builder.SetDisplayMode(static_cast<int>(manifest_->display))
-        .SetHasBackgroundColor(manifest_->has_background_color)
+        .SetHasBackgroundColor(manifest_->background_color.has_value())
         .SetHasName(manifest_->name.has_value())
         .SetHasScreenshots(!manifest_->screenshots.empty())
-        .SetHasThemeColor(manifest_->has_theme_color);
+        .SetHasThemeColor(manifest_->theme_color.has_value());
 
     // Set icon data in the UKM.
     bool has_manifest_icons_any = false;
@@ -302,7 +300,7 @@ void MLInstallabilityPromoter::EmitUKMs() {
         .SetHasIconsMaskable(has_manifest_icons_maskable);
 
     // Set Manifest start URL data in UKM.
-    if (manifest_->start_url.is_empty()) {
+    if (!manifest_->has_valid_specified_start_url) {
       manifest_builder.SetHasStartUrl(
           static_cast<int>(ManifestUrlInvalid::kEmpty));
     } else if (manifest_->start_url.is_valid()) {
@@ -341,6 +339,12 @@ void MLInstallabilityPromoter::RequestMlClassification() {
     state_ = MLPipelineState::kComplete;
     return;
   }
+  if ((!manifest_ || !manifest_->has_valid_specified_start_url) &&
+      WebappsClient::Get()->IsUrlControlledBySeenManifest(
+          web_contents()->GetBrowserContext(), site_url_)) {
+    state_ = MLPipelineState::kComplete;
+    return;
+  }
 
   auto input_context =
       base::MakeRefCounted<segmentation_platform::InputContext>();
@@ -367,7 +371,7 @@ void MLInstallabilityPromoter::OnClassificationResult(
   if (result.status != segmentation_platform::PredictionStatus::kSucceeded) {
     return;
   }
-  // TODO(https://crbug.com/1455521) Remove this.
+  // TODO(crbug.com/40272826) Remove this.
   if (!app_banner_manager_) {
     // Exit pipeline early if the AppBannerManager is destroyed.
     return;
@@ -417,7 +421,7 @@ void MLInstallabilityPromoter::MaybeReportResultToAppBannerManager() {
   if (state_ != MLPipelineState::kComplete || !ml_result_reporter_ ||
       ml_result_reporter_->ml_promotion_blocked_by_guardrail() ||
       !app_banner_manager_) {
-    // TODO(https://crbug.com/1455521) Remove the app_banner_manager check
+    // TODO(crbug.com/40272826) Remove the app_banner_manager check
     return;
   }
   app_banner_manager_->OnMlInstallPrediction(
@@ -494,8 +498,10 @@ void MLInstallabilityPromoter::DidUpdateFaviconURL(
   }
 }
 
-void MLInstallabilityPromoter::OnRegistrationStored(int64_t registration_id,
-                                                    const GURL& scope) {
+void MLInstallabilityPromoter::OnRegistrationStored(
+    int64_t registration_id,
+    const GURL& scope,
+    const content::ServiceWorkerRegistrationInformation& service_worker_info) {
   if (!content::ServiceWorkerContext::ScopeMatches(scope, site_url_)) {
     return;
   }
@@ -529,7 +535,7 @@ void MLInstallabilityPromoter::OnDestruct(
 void MLInstallabilityPromoter::ResetRunningStagesAndTasksMaybeReportResult() {
   state_ = MLPipelineState::kInactive;
   site_url_ = GURL();
-  // TODO(https://crbug.com/1455521) Remove this.
+  // TODO(crbug.com/40272826) Remove this.
   app_banner_manager_.reset();
   site_manifest_metrics_task_.reset();
   site_quality_metrics_task_.reset();

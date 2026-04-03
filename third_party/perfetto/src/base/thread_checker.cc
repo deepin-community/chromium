@@ -17,7 +17,7 @@
 #include "perfetto/ext/base/thread_checker.h"
 
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
-#include <Windows.h>
+#include <windows.h>
 #endif
 
 namespace perfetto {
@@ -41,9 +41,8 @@ ThreadChecker::ThreadChecker() {
 
 ThreadChecker::~ThreadChecker() = default;
 
-ThreadChecker::ThreadChecker(const ThreadChecker& other) {
-  thread_id_ = other.thread_id_.load();
-}
+ThreadChecker::ThreadChecker(const ThreadChecker& other)
+    : thread_id_(other.thread_id_.load()) {}
 
 ThreadChecker& ThreadChecker::operator=(const ThreadChecker& other) {
   thread_id_ = other.thread_id_.load();

@@ -4,6 +4,11 @@
 // found in the LICENSE file.
 //
 // CLContextCL.cpp: Implements the class methods for CLContextCL.
+//
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "libANGLE/renderer/cl/CLContextCL.h"
 
@@ -107,7 +112,6 @@ angle::Result CLContextCL::createCommandQueue(const cl::CommandQueue &commandQue
 }
 
 angle::Result CLContextCL::createBuffer(const cl::Buffer &buffer,
-                                        size_t size,
                                         void *hostPtr,
                                         CLMemoryImpl::Ptr *bufferOut)
 {
@@ -116,14 +120,14 @@ angle::Result CLContextCL::createBuffer(const cl::Buffer &buffer,
 
     if (buffer.getProperties().empty())
     {
-        nativeBuffer = mNative->getDispatch().clCreateBuffer(mNative, buffer.getFlags().get(), size,
-                                                             hostPtr, &errorCode);
+        nativeBuffer = mNative->getDispatch().clCreateBuffer(mNative, buffer.getFlags().get(),
+                                                             buffer.getSize(), hostPtr, &errorCode);
     }
     else
     {
         nativeBuffer = mNative->getDispatch().clCreateBufferWithProperties(
-            mNative, buffer.getProperties().data(), buffer.getFlags().get(), size, hostPtr,
-            &errorCode);
+            mNative, buffer.getProperties().data(), buffer.getFlags().get(), buffer.getSize(),
+            hostPtr, &errorCode);
     }
     ANGLE_CL_TRY(errorCode);
 
@@ -133,14 +137,14 @@ angle::Result CLContextCL::createBuffer(const cl::Buffer &buffer,
 }
 
 angle::Result CLContextCL::createImage(const cl::Image &image,
-                                       cl::MemFlags flags,
-                                       const cl_image_format &format,
-                                       const cl::ImageDescriptor &desc,
                                        void *hostPtr,
                                        CLMemoryImpl::Ptr *imageOut)
 {
-    cl_int errorCode   = CL_SUCCESS;
-    cl_mem nativeImage = nullptr;
+    cl_int errorCode         = CL_SUCCESS;
+    cl_mem nativeImage       = nullptr;
+    cl::ImageDescriptor desc = image.getDescriptor();
+    cl::MemFlags flags       = image.getFlags();
+    cl_image_format format   = image.getFormat();
 
     if (mContext.getPlatform().isVersionOrNewer(1u, 2u))
     {

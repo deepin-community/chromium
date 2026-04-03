@@ -64,7 +64,7 @@ class gemv_traits {
 
 /* Optimized col-major matrix * vector product:
  * This algorithm processes the matrix per vertical panels,
- * which are then processed horizontally per chunck of 8*PacketSize x 1 vertical segments.
+ * which are then processed horizontally per chunk of 8*PacketSize x 1 vertical segments.
  *
  * Mixing type logic: C += alpha * A * B
  *  |  A  |  B  |alpha| comments
@@ -97,14 +97,13 @@ struct general_matrix_vector_product<Index, LhsScalar, LhsMapper, ColMajor, Conj
   typedef typename QuarterTraits::RhsPacket RhsPacketQuarter;
   typedef typename QuarterTraits::ResPacket ResPacketQuarter;
 
-  EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE static void run(Index rows, Index cols, const LhsMapper& lhs,
-                                                      const RhsMapper& rhs, ResScalar* res, Index resIncr,
-                                                      RhsScalar alpha);
+  EIGEN_DEVICE_FUNC inline static void run(Index rows, Index cols, const LhsMapper& lhs, const RhsMapper& rhs,
+                                           ResScalar* res, Index resIncr, RhsScalar alpha);
 };
 
 template <typename Index, typename LhsScalar, typename LhsMapper, bool ConjugateLhs, typename RhsScalar,
           typename RhsMapper, bool ConjugateRhs, int Version>
-EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE void
+EIGEN_DEVICE_FUNC inline void
 general_matrix_vector_product<Index, LhsScalar, LhsMapper, ColMajor, ConjugateLhs, RhsScalar, RhsMapper, ConjugateRhs,
                               Version>::run(Index rows, Index cols, const LhsMapper& alhs, const RhsMapper& rhs,
                                             ResScalar* res, Index resIncr, RhsScalar alpha) {
@@ -112,7 +111,7 @@ general_matrix_vector_product<Index, LhsScalar, LhsMapper, ColMajor, ConjugateLh
   eigen_internal_assert(resIncr == 1);
 
   // The following copy tells the compiler that lhs's attributes are not modified outside this function
-  // This helps GCC to generate propoer code.
+  // This helps GCC to generate proper code.
   LhsMapper lhs(alhs);
 
   conj_helper<LhsScalar, RhsScalar, ConjugateLhs, ConjugateRhs> cj;
@@ -290,19 +289,18 @@ struct general_matrix_vector_product<Index, LhsScalar, LhsMapper, RowMajor, Conj
   typedef typename QuarterTraits::RhsPacket RhsPacketQuarter;
   typedef typename QuarterTraits::ResPacket ResPacketQuarter;
 
-  EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE static void run(Index rows, Index cols, const LhsMapper& lhs,
-                                                      const RhsMapper& rhs, ResScalar* res, Index resIncr,
-                                                      ResScalar alpha);
+  EIGEN_DEVICE_FUNC static inline void run(Index rows, Index cols, const LhsMapper& lhs, const RhsMapper& rhs,
+                                           ResScalar* res, Index resIncr, ResScalar alpha);
 };
 
 template <typename Index, typename LhsScalar, typename LhsMapper, bool ConjugateLhs, typename RhsScalar,
           typename RhsMapper, bool ConjugateRhs, int Version>
-EIGEN_DEVICE_FUNC EIGEN_DONT_INLINE void
+EIGEN_DEVICE_FUNC inline void
 general_matrix_vector_product<Index, LhsScalar, LhsMapper, RowMajor, ConjugateLhs, RhsScalar, RhsMapper, ConjugateRhs,
                               Version>::run(Index rows, Index cols, const LhsMapper& alhs, const RhsMapper& rhs,
                                             ResScalar* res, Index resIncr, ResScalar alpha) {
   // The following copy tells the compiler that lhs's attributes are not modified outside this function
-  // This helps GCC to generate propoer code.
+  // This helps GCC to generate proper code.
   LhsMapper lhs(alhs);
 
   eigen_internal_assert(rhs.stride() == 1);

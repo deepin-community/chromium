@@ -124,7 +124,7 @@ TEST(VideoCadenceEstimatorTest, CadenceCalculations) {
   estimator.set_cadence_hysteresis_threshold_for_testing(base::TimeDelta());
 
   const std::string kEmptyCadence = "[]";
-  VerifyCadenceVector(&estimator, 1, NTSC(60), "[60]");
+  VerifyCadenceVector(&estimator, 1, NTSC(60), kEmptyCadence);
 
   VerifyCadenceVector(&estimator, 24, 60, "[3:2]");
   VerifyCadenceVector(&estimator, NTSC(24), 60, "[3:2]");
@@ -177,7 +177,7 @@ TEST(VideoCadenceEstimatorTest, CadenceCalculationWithLargeDrift) {
   estimator.set_cadence_hysteresis_threshold_for_testing(base::TimeDelta());
 
   base::TimeDelta drift = base::Hours(1);
-  VerifyCadenceVectorWithCustomDrift(&estimator, 1, NTSC(60), drift, "[60]");
+  VerifyCadenceVectorWithCustomDrift(&estimator, 1, NTSC(60), drift, "[]");
 
   VerifyCadenceVectorWithCustomDrift(&estimator, 30, 60, drift, "[2]");
   VerifyCadenceVectorWithCustomDrift(&estimator, NTSC(30), 60, drift, "[2]");
@@ -304,6 +304,38 @@ TEST(VideoCadenceEstimatorTest, CadenceHystersisPreventsOscillation) {
       estimator.UpdateCadenceEstimate(render_interval, frame_interval * 0.75,
                                       base::TimeDelta(), acceptable_drift));
   EXPECT_FALSE(estimator.has_cadence());
+}
+
+TEST(VideoCadenceEstimatorTest, RenderIntervalChangingSkipsHystersis) {
+  VideoCadenceEstimator estimator(kMinimumAcceptableTimeBetweenGlitches);
+
+  const base::TimeDelta render_interval = Interval(60);
+  const base::TimeDelta frame_interval = Interval(30);
+  const base::TimeDelta acceptable_drift = frame_interval / 2;
+  estimator.set_cadence_hysteresis_threshold_for_testing(render_interval * 4);
+
+  // Wait for cadence to be detected.
+  int it_count = 0;
+  while (!estimator.has_cadence()) {
+    estimator.UpdateCadenceEstimate(render_interval, frame_interval,
+                                    base::TimeDelta(), acceptable_drift);
+    it_count++;
+    EXPECT_LE(it_count, 4);
+  }
+
+  // If |render_interval| changes, the hysteresis should be skipped and the
+  // candence should be updated immediately.
+  EXPECT_TRUE(estimator.UpdateCadenceEstimate(render_interval * 2,
+                                              frame_interval, base::TimeDelta(),
+                                              acceptable_drift));
+  EXPECT_TRUE(estimator.has_cadence());
+
+  // Minor changes (+/-10%) on |render_interval| should not trigger hyseteresis
+  // skipping.
+  EXPECT_FALSE(estimator.UpdateCadenceEstimate(
+      render_interval * 2 * 0.91, frame_interval, base::TimeDelta(),
+      acceptable_drift));
+  EXPECT_TRUE(estimator.has_cadence());
 }
 
 void VerifyCadenceSequence(VideoCadenceEstimator* estimator,

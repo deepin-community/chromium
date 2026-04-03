@@ -5,6 +5,7 @@
 #include "net/url_request/url_request_filter.h"
 
 #include "base/logging.h"
+#include "base/notreached.h"
 #include "base/task/current_thread.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_job.h"
@@ -34,14 +35,13 @@ bool OnMessageLoopForInterceptorRemoval() {
 
 }  // namespace
 
-URLRequestFilter* URLRequestFilter::shared_instance_ = nullptr;
-
 // static
 URLRequestFilter* URLRequestFilter::GetInstance() {
+  // base::NoDestructor is not used because most tests don't use
+  // URLRequestFilter, so there's no point in reserving space for it.
+  static URLRequestFilter* instance = new URLRequestFilter();
   DCHECK(OnMessageLoopForInterceptorAddition());
-  if (!shared_instance_)
-    shared_instance_ = new URLRequestFilter;
-  return shared_instance_;
+  return instance;
 }
 
 void URLRequestFilter::AddHostnameInterceptor(
@@ -53,14 +53,12 @@ void URLRequestFilter::AddHostnameInterceptor(
   hostname_interceptor_map_[std::pair(scheme, hostname)] =
       std::move(interceptor);
 
-#ifndef NDEBUG
+#if !defined(NDEBUG)
   // Check to see if we're masking URLs in the url_interceptor_map_.
-  for (const auto& pair : url_interceptor_map_) {
-    const GURL& url = GURL(pair.first);
-    HostnameInterceptorMap::const_iterator host_it =
-        hostname_interceptor_map_.find(std::pair(url.scheme(), url.host()));
-    if (host_it != hostname_interceptor_map_.end())
-      NOTREACHED();
+  for (const auto& [url_spec, _] : url_interceptor_map_) {
+    const GURL url(url_spec);
+    DCHECK(
+        !hostname_interceptor_map_.contains({url.GetScheme(), url.GetHost()}));
   }
 #endif  // !NDEBUG
 }
@@ -82,8 +80,8 @@ bool URLRequestFilter::AddUrlInterceptor(
   url_interceptor_map_[url.spec()] = std::move(interceptor);
 
   // Check to see if this URL is masked by a hostname handler.
-  DCHECK_EQ(
-      0u, hostname_interceptor_map_.count(std::pair(url.scheme(), url.host())));
+  DCHECK_EQ(0u, hostname_interceptor_map_.count(
+                    std::pair(url.GetScheme(), url.GetHost())));
 
   return true;
 }
@@ -110,8 +108,8 @@ std::unique_ptr<URLRequestJob> URLRequestFilter::MaybeInterceptRequest(
   std::unique_ptr<URLRequestJob> job;
 
   // Check the hostname map first.
-  const std::string hostname = request->url().host();
-  const std::string scheme = request->url().scheme();
+  const std::string hostname = request->url().GetHost();
+  const std::string scheme = request->url().GetScheme();
 
   {
     auto it = hostname_interceptor_map_.find(std::pair(scheme, hostname));
@@ -139,8 +137,7 @@ URLRequestFilter::URLRequestFilter() {
 }
 
 URLRequestFilter::~URLRequestFilter() {
-  DCHECK(OnMessageLoopForInterceptorRemoval());
-  URLRequestJobFactory::SetInterceptorForTesting(nullptr);
+  NOTREACHED();
 }
 
 }  // namespace net

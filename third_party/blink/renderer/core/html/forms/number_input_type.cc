@@ -32,6 +32,8 @@
 #include "third_party/blink/renderer/core/html/forms/number_input_type.h"
 
 #include <limits>
+
+#include "base/containers/span.h"
 #include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/renderer/core/dom/events/scoped_event_queue.h"
 #include "third_party/blink/renderer/core/events/before_text_inserted_event.h"
@@ -43,7 +45,10 @@
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
+#include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/json/json_values.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
@@ -55,15 +60,15 @@ static const int kNumberStepScaleFactor = 1;
 
 struct RealNumberRenderSize {
   unsigned size_before_decimal_point;
-  unsigned size_afte_decimal_point;
+  unsigned size_after_decimal_point;
 
   RealNumberRenderSize(unsigned before, unsigned after)
-      : size_before_decimal_point(before), size_afte_decimal_point(after) {}
+      : size_before_decimal_point(before), size_after_decimal_point(after) {}
 
   RealNumberRenderSize Max(const RealNumberRenderSize& other) const {
     return RealNumberRenderSize(
         std::max(size_before_decimal_point, other.size_before_decimal_point),
-        std::max(size_afte_decimal_point, other.size_afte_decimal_point));
+        std::max(size_after_decimal_point, other.size_after_decimal_point));
   }
 };
 
@@ -117,9 +122,9 @@ void NumberInputType::SetValueAsDouble(double new_value,
   GetElement().SetValue(SerializeForNumberType(new_value), event_behavior);
 }
 
-void NumberInputType::SetValueAsDecimal(const Decimal& new_value,
-                                        TextFieldEventBehavior event_behavior,
-                                        ExceptionState& exception_state) const {
+void NumberInputType::SetValueAsDecimal(
+    const Decimal& new_value,
+    TextFieldEventBehavior event_behavior) const {
   GetElement().SetValue(SerializeForNumberType(new_value), event_behavior);
 }
 
@@ -130,6 +135,45 @@ bool NumberInputType::TypeMismatchFor(const String& value) const {
 bool NumberInputType::TypeMismatch() const {
   DCHECK(!TypeMismatchFor(GetElement().Value()));
   return false;
+}
+
+String NumberInputType::NormalizeFullWidthNumberChars(const String& input) {
+  StringBuilder result;
+  const wtf_size_t len = input.length();
+  result.ReserveCapacity(len);
+  for (wtf_size_t i = 0; i < len; ++i) {
+    UChar c = input[i];
+    if (c >= uchar::kFullwidthDigitZero && c <= uchar::kFullwidthDigitNine) {
+      // Convert full-width digits (０-９, U+FF10-U+FF19) to ASCII digits (0-9)
+      result.Append(c - uchar::kFullwidthDigitZero + uchar::kDigitZero);
+    } else if (c == uchar::kKatakanaHiraganaProlongedSoundMark ||
+               c == uchar::kFullwidthHyphenMinus) {
+      // Convert full-width minus signs and the Japanese IME long sound symbol
+      // ("ー", U+30FC) to ASCII '-'.
+      // Note: On Japanese IMEs, typing a minus sign in full-width mode can
+      // produce either 'ー' (U+30FC) or '－' (U+FF0D), depending on the input
+      // mode.
+      //
+      // There are two common full-width input modes:
+      // - Full-width alphanumeric mode: typing '-' usually results in '－'.
+      // - Full-width Japanese kana mode: typing '-' may yield 'ー'.
+      //
+      // Especially, when **only the symbol is typed**, IMEs tend to insert 'ー'
+      // as a long sound mark. If digits follow, the symbol remains unchanged.
+      // For example, entering "ー2" instead of "-2" is a typical case.
+      //
+      // Since users generally intend to input negative numbers in such cases,
+      // we normalize both 'ー' and '－' to ASCII minus '-'.
+      result.Append(uchar::kHyphenMinus);
+    } else if (c == uchar::kFullwidthFullStop) {
+      // Convert full-width period (．, U+FF0E) to ASCII dot (.)
+      result.Append(uchar::kFullStop);
+    } else {
+      // Preserve other characters
+      result.Append(c);
+    }
+  }
+  return result.ReleaseString();
 }
 
 StepRange NumberInputType::CreateStepRange(
@@ -143,8 +187,8 @@ StepRange NumberInputType::CreateStepRange(
                                     -double_max, double_max, step_description);
 }
 
-bool NumberInputType::SizeShouldIncludeDecoration(int default_size,
-                                                  int& preferred_size) const {
+bool NumberInputType::GetSizeWithDecoration(int default_size,
+                                            int& preferred_size) const {
   preferred_size = default_size;
 
   const String step_string =
@@ -169,8 +213,8 @@ bool NumberInputType::SizeShouldIncludeDecoration(int default_size,
       CalculateRenderSize(maximum).Max(CalculateRenderSize(step)));
 
   preferred_size = size.size_before_decimal_point +
-                   size.size_afte_decimal_point +
-                   (size.size_afte_decimal_point ? 1 : 0);
+                   size.size_after_decimal_point +
+                   (size.size_after_decimal_point ? 1 : 0);
 
   return true;
 }
@@ -190,10 +234,16 @@ void NumberInputType::HandleBeforeTextInsertedEvent(
     BeforeTextInsertedEvent& event) {
   Locale& locale = GetLocale();
 
+  String normalized_input = event.GetText();
+  if (RuntimeEnabledFeatures::NumberInputFullWidthCharsEnabled()) {
+    // Normalize full-width digits and minus sign to ASCII
+    normalized_input = NormalizeFullWidthNumberChars(normalized_input);
+  }
+
   // If the cleaned up text doesn't match input text, don't insert partial input
   // since it could be an incorrect paste.
   String updated_event_text =
-      locale.StripInvalidNumberCharacters(event.GetText(), "0123456789.Ee-+");
+      locale.StripInvalidNumberCharacters(normalized_input, "0123456789.Ee-+");
 
   // Check if locale supports more cleanup rules
   if (!locale.UsesSingleCharNumberFiltering()) {
@@ -239,12 +289,18 @@ void NumberInputType::HandleBeforeTextInsertedEvent(
     // - Reject if the editing value already contains two signs
     // - Reject if the editing value contains 'e' and the caret is placed
     // neither at the beginning of the value nor just after 'e'
+    // - Reject if there is already a sign immediately following the caret.
+    // - Reject leading '+' insertion when 'e' is already present.
     else if (locale.IsSignPrefix(c)) {
-      String both_halves = left_half + right_half;
+      String both_halves = StrCat({left_half, right_half});
       if (locale.HasTwoSignChars(both_halves) ||
           (both_halves.Find(IsE) != kNotFound &&
-           !(left_half == "" || IsE(left_half[left_half.length() - 1]))))
+           !(left_half == "" || IsE(left_half[left_half.length() - 1]))) ||
+          (!right_half.empty() && locale.IsSignPrefix(right_half[0])) ||
+          (c == '+' && both_halves.Find(IsE) != kNotFound &&
+           left_half.empty())) {
         continue;
+      }
     }
     // For a digit input:
     // - Reject if the first letter of the editing value is a sign and the
@@ -260,10 +316,10 @@ void NumberInputType::HandleBeforeTextInsertedEvent(
     }
 
     // Add character
-    left_half = left_half + c;
+    left_half = StrCat({left_half, StringView(base::span_from_ref(c))});
     final_event_text.Append(c);
   }
-  event.SetText(final_event_text.ToString());
+  event.SetText(final_event_text.ReleaseString());
 }
 
 Decimal NumberInputType::ParseToNumber(const String& src,
@@ -377,5 +433,6 @@ void NumberInputType::StepAttributeChanged() {
 bool NumberInputType::SupportsSelectionAPI() const {
   return false;
 }
+
 
 }  // namespace blink

@@ -13,7 +13,6 @@
 #include "chrome/browser/browser_features.h"
 #include "chrome/browser/notifications/arc_application_notifier_controller.h"
 #include "chrome/browser/notifications/extension_notifier_controller.h"
-#include "chrome/browser/notifications/pwa_notifier_controller.h"
 #include "chrome/browser/notifications/web_page_notifier_controller.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/common/webui_url_constants.h"
@@ -111,19 +110,13 @@ ChromeAshMessageCenterClient::ChromeAshMessageCenterClient(
   DCHECK(!g_chrome_ash_message_center_client);
   g_chrome_ash_message_center_client = this;
 
-  if (base::FeatureList::IsEnabled(features::kQuickSettingsPWANotifications)) {
-    sources_.insert(
-        std::make_pair(message_center::NotifierType::APPLICATION,
-                       std::make_unique<PwaNotifierController>(this)));
-  } else {
-    sources_.insert(
-        std::make_pair(message_center::NotifierType::APPLICATION,
-                       std::make_unique<ExtensionNotifierController>(this)));
+  sources_.insert(
+      std::make_pair(message_center::NotifierType::APPLICATION,
+                     std::make_unique<ExtensionNotifierController>(this)));
 
-    sources_.insert(
-        std::make_pair(message_center::NotifierType::WEB_PAGE,
-                       std::make_unique<WebPageNotifierController>(this)));
-  }
+  sources_.insert(
+      std::make_pair(message_center::NotifierType::WEB_PAGE,
+                     std::make_unique<WebPageNotifierController>(this)));
 
   sources_.insert(std::make_pair(
       message_center::NotifierType::ARC_APPLICATION,
@@ -213,7 +206,7 @@ void ChromeAshMessageCenterClient::GetNotifiers() {
             base::BindOnce(&ChromeAshMessageCenterClient::GetNotifiers,
                            weak_ptr_.GetWeakPtr()));
     LOG(ERROR) << "GetNotifiers called before profile fully loaded, see "
-                  "https://crbug.com/968825";
+                  "https://crbug.com/40629978";
     return;
   }
 

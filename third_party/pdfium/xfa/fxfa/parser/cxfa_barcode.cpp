@@ -32,7 +32,6 @@ const CXFA_Node::AttributeData kBarcodeAttributeData[] = {
      (void*)XFA_AttributeValue::UsCarrier},
     {XFA_Attribute::Checksum, XFA_AttributeType::Enum,
      (void*)XFA_AttributeValue::None},
-    {XFA_Attribute::CharEncoding, XFA_AttributeType::CData, (void*)L"UTF-8"},
     {XFA_Attribute::Usehref, XFA_AttributeType::CData, nullptr},
     {XFA_Attribute::DataColumnCount, XFA_AttributeType::CData, nullptr},
     {XFA_Attribute::RowColumnRatio, XFA_AttributeType::CData, nullptr},
@@ -71,15 +70,12 @@ WideString CXFA_Barcode::GetBarcodeType() {
   return WideString(JSObject()->GetCData(XFA_Attribute::Type));
 }
 
-std::optional<WideString> CXFA_Barcode::GetCharEncoding() {
-  return JSObject()->TryCData(XFA_Attribute::CharEncoding, true);
-}
-
 std::optional<bool> CXFA_Barcode::GetChecksum() {
   std::optional<XFA_AttributeValue> checksum =
       JSObject()->TryEnum(XFA_Attribute::Checksum, true);
-  if (!checksum.has_value())
+  if (!checksum.has_value()) {
     return std::nullopt;
+  }
 
   switch (checksum.value()) {
     case XFA_AttributeValue::None:
@@ -98,8 +94,9 @@ std::optional<bool> CXFA_Barcode::GetChecksum() {
 std::optional<int32_t> CXFA_Barcode::GetDataLength() {
   std::optional<WideString> wsDataLength =
       JSObject()->TryCData(XFA_Attribute::DataLength, true);
-  if (!wsDataLength.has_value())
+  if (!wsDataLength.has_value()) {
     return std::nullopt;
+  }
 
   return FXSYS_wtoi(wsDataLength->c_str());
 }
@@ -107,8 +104,9 @@ std::optional<int32_t> CXFA_Barcode::GetDataLength() {
 std::optional<char> CXFA_Barcode::GetStartChar() {
   std::optional<WideString> wsStartEndChar =
       JSObject()->TryCData(XFA_Attribute::StartChar, true);
-  if (!wsStartEndChar.has_value() || wsStartEndChar->IsEmpty())
+  if (!wsStartEndChar.has_value() || wsStartEndChar->IsEmpty()) {
     return std::nullopt;
+  }
 
   return static_cast<char>(wsStartEndChar.value()[0]);
 }
@@ -116,8 +114,9 @@ std::optional<char> CXFA_Barcode::GetStartChar() {
 std::optional<char> CXFA_Barcode::GetEndChar() {
   std::optional<WideString> wsStartEndChar =
       JSObject()->TryCData(XFA_Attribute::EndChar, true);
-  if (!wsStartEndChar.has_value() || wsStartEndChar->IsEmpty())
+  if (!wsStartEndChar.has_value() || wsStartEndChar->IsEmpty()) {
     return std::nullopt;
+  }
 
   return static_cast<char>(wsStartEndChar.value()[0]);
 }
@@ -125,16 +124,18 @@ std::optional<char> CXFA_Barcode::GetEndChar() {
 std::optional<int32_t> CXFA_Barcode::GetECLevel() {
   std::optional<WideString> wsECLevel =
       JSObject()->TryCData(XFA_Attribute::ErrorCorrectionLevel, true);
-  if (!wsECLevel.has_value())
+  if (!wsECLevel.has_value()) {
     return std::nullopt;
+  }
   return FXSYS_wtoi(wsECLevel->c_str());
 }
 
 std::optional<int32_t> CXFA_Barcode::GetModuleWidth() {
   std::optional<CXFA_Measurement> moduleWidthHeight =
       JSObject()->TryMeasure(XFA_Attribute::ModuleWidth, true);
-  if (!moduleWidthHeight.has_value())
+  if (!moduleWidthHeight.has_value()) {
     return std::nullopt;
+  }
 
   return static_cast<int32_t>(moduleWidthHeight->ToUnit(XFA_Unit::Pt));
 }
@@ -142,8 +143,9 @@ std::optional<int32_t> CXFA_Barcode::GetModuleWidth() {
 std::optional<int32_t> CXFA_Barcode::GetModuleHeight() {
   std::optional<CXFA_Measurement> moduleWidthHeight =
       JSObject()->TryMeasure(XFA_Attribute::ModuleHeight, true);
-  if (!moduleWidthHeight.has_value())
+  if (!moduleWidthHeight.has_value()) {
     return std::nullopt;
+  }
 
   return static_cast<int32_t>(moduleWidthHeight->ToUnit(XFA_Unit::Pt));
 }
@@ -163,19 +165,22 @@ std::optional<bool> CXFA_Barcode::GetTruncate() {
 std::optional<int8_t> CXFA_Barcode::GetWideNarrowRatio() {
   std::optional<WideString> wsWideNarrowRatio =
       JSObject()->TryCData(XFA_Attribute::WideNarrowRatio, true);
-  if (!wsWideNarrowRatio.has_value())
+  if (!wsWideNarrowRatio.has_value()) {
     return std::nullopt;
+  }
 
   std::optional<size_t> ptPos = wsWideNarrowRatio->Find(':');
-  if (!ptPos.has_value())
+  if (!ptPos.has_value()) {
     return static_cast<int8_t>(FXSYS_wtoi(wsWideNarrowRatio->c_str()));
+  }
 
   int32_t fB = FXSYS_wtoi(
       wsWideNarrowRatio
           ->Last(wsWideNarrowRatio->GetLength() - (ptPos.value() + 1))
           .c_str());
-  if (!fB)
+  if (!fB) {
     return 0;
+  }
 
   int32_t fA = FXSYS_wtoi(wsWideNarrowRatio->First(ptPos.value()).c_str());
   float result = static_cast<float>(fA) / static_cast<float>(fB);

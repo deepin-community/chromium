@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 
-#include <type_traits>
+#include <concepts>
 #include <utility>
 
 #include "base/compiler_specific.h"
@@ -39,22 +39,19 @@ class PendingAssociatedReceiver {
   explicit PendingAssociatedReceiver(ScopedInterfaceEndpointHandle handle)
       : handle_(std::move(handle)) {}
 
-  // Disabled on NaCl since it crashes old version of clang.
-#if !BUILDFLAG(IS_NACL)
   // Move conversion operator for custom receiver types. Only participates in
   // overload resolution if a typesafe conversion is supported.
-  template <
-      typename T,
-      std::enable_if_t<std::is_same<
-          PendingAssociatedReceiver<Interface>,
-          std::invoke_result_t<decltype(&PendingAssociatedReceiverConverter<
-                                        T>::template To<Interface>),
-                               T&&>>::value>* = nullptr>
-  PendingAssociatedReceiver(T&& other)
+  template <typename T>
+    requires requires(T t) {
+      {
+        PendingAssociatedReceiverConverter<T>::template To<Interface>(
+            std::move(t))
+      } -> std::same_as<PendingAssociatedReceiver>;
+    }
+  PendingAssociatedReceiver(T other)
       : PendingAssociatedReceiver(
             PendingAssociatedReceiverConverter<T>::template To<Interface>(
                 std::move(other))) {}
-#endif  // !BUILDFLAG(IS_NACL)
 
   PendingAssociatedReceiver(const PendingAssociatedReceiver&) = delete;
   PendingAssociatedReceiver& operator=(const PendingAssociatedReceiver&) =

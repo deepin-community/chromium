@@ -4,13 +4,16 @@
 
 #include "ash/system/notification_center/session_state_notification_blocker.h"
 
+#include <algorithm>
+
 #include "ash/public/cpp/message_center/oobe_notification_constants.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/system/do_not_disturb_notification_controller.h"
 #include "ash/system/lock_screen_notification_controller.h"
 #include "ash/system/power/battery_notification.h"
-#include "base/containers/contains.h"
+#include "ash/system/privacy/screen_security_controller.h"
+#include "chromeos/ash/components/policy/restriction_schedule/device_restriction_schedule_controller_delegate_impl.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_types.h"
@@ -38,7 +41,7 @@ bool CalculateShouldShowNotification() {
 
   // Do not show notifications in kiosk mode or before session starts.
   if (session_controller->IsRunningInAppMode() ||
-      base::Contains(kNotificationBlockedStates, state)) {
+      std::ranges::contains(kNotificationBlockedStates, state)) {
     return false;
   }
 
@@ -67,21 +70,21 @@ bool CalculateShouldShowPopup() {
 
 bool IsAllowedDuringOOBE(std::string_view notification_id) {
   static const std::string_view kAllowedSystemNotificationIDs[] = {
-      BatteryNotification::kNotificationId};
+      BatteryNotification::kNotificationId,
+      policy::DeviceRestrictionScheduleControllerDelegateImpl::
+          kPostLogoutNotificationId};
   static const std::string_view kAllowedProfileBoundNotificationIDs[] = {
-      kOOBELocaleSwitchNotificationId};
+      kOOBELocaleSwitchNotificationId, kOOBEGnubbyNotificationId};
 
-  for (const auto& id : kAllowedSystemNotificationIDs) {
-    if (notification_id == id) {
-      return true;
-    }
+  if (std::ranges::contains(kAllowedSystemNotificationIDs, notification_id)) {
+    return true;
   }
 
   // Check here not for a full name equivalence, but for a substring existence
   // because profile-bound notifications have a profile-specific prefix added
   // to them.
   for (const auto& id : kAllowedProfileBoundNotificationIDs) {
-    if (base::Contains(notification_id, id)) {
+    if (notification_id.contains(id)) {
       return true;
     }
   }
@@ -126,6 +129,13 @@ bool SessionStateNotificationBlocker::ShouldShowNotification(
   // Never show notifications in kiosk mode.
   if (Shell::Get()->session_controller()->IsRunningInAppMode()) {
     return false;
+  }
+
+  // Always show remote activity notification (which also acts as a privacy
+  // indicator) irrespective of the session state (except when running in
+  // app mode).
+  if (notification.id() == ash::kRemotingScreenShareNotificationId) {
+    return true;
   }
 
   const SessionState session_state =
@@ -176,6 +186,13 @@ bool SessionStateNotificationBlocker::ShouldShowNotificationAsPopup(
           message_center::NotifierType::SYSTEM_COMPONENT &&
       login_delay_timer_.IsRunning()) {
     return false;
+  }
+
+  // Always show remote activity notification (which also acts as a privacy
+  // indicator) irrespective of the session state (except when running in
+  // app mode).
+  if (notification.id() == ash::kRemotingScreenShareNotificationId) {
+    return true;
   }
 
   if (IsAllowedDuringOOBE(notification.id())) {

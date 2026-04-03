@@ -12,16 +12,17 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
+#include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/layout/layout_embedded_content.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_transformable_container.h"
+#include "third_party/blink/renderer/core/layout/transform_utils.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/page/scrolling/sticky_position_scrolling_constraints.h"
 #include "third_party/blink/renderer/core/page/scrolling/top_document_root_scroller_controller.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
-#include "third_party/blink/renderer/core/paint/transform_utils.h"
 #include "third_party/blink/renderer/core/svg/svg_element.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition_utils.h"
@@ -56,11 +57,12 @@ bool ShouldPreferCompositingForLayoutView(const LayoutView& layout_view) {
 CompositingReasons BackfaceInvisibility3DAncestorReason(
     const PaintLayer& layer) {
   if (RuntimeEnabledFeatures::BackfaceVisibilityInteropEnabled()) {
-    if (auto* compositing_container = layer.CompositingContainer()) {
-      if (compositing_container->GetLayoutObject()
+    if (auto* painting_container = layer.PaintingContainer()) {
+      if (painting_container->GetLayoutObject()
               .StyleRef()
-              .BackfaceVisibility() == EBackfaceVisibility::kHidden)
+              .BackfaceVisibility() == EBackfaceVisibility::kHidden) {
         return CompositingReason::kBackfaceInvisibility3DAncestor;
+      }
     }
   }
   return CompositingReason::kNone;
@@ -85,6 +87,21 @@ CompositingReasons CompositingReasonsForWillChange(const ComputedStyle& style) {
     reasons |= CompositingReason::kWillChangeFilter;
   if (style.HasWillChangeBackdropFilterHint())
     reasons |= CompositingReason::kWillChangeBackdropFilter;
+  if (style.HasWillChangeClipPathHint()) {
+    reasons |= CompositingReason::kWillChangeClipPath;
+  }
+  if (style.HasWillChangeMixBlendModeHint()) {
+    reasons |= CompositingReason::kWillChangeMixBlendMode;
+  }
+  // Even though 'mask' generally implies mask-image, will-change treats them
+  // separately, so we need to check them both to get accurate backdrop filter
+  // reasons.
+  if (style.HasWillChangeMaskHint()) {
+    reasons |= CompositingReason::kWillChangeMask;
+  }
+  if (style.HasWillChangeMaskImageHint()) {
+    reasons |= CompositingReason::kWillChangeMaskImage;
+  }
 
   // kWillChangeOther is needed only when none of the explicit kWillChange*
   // reasons are set.
@@ -106,6 +123,7 @@ CompositingReasons CompositingReasonsFor3DTransform(
   const ComputedStyle& style = layout_object.StyleRef();
   CompositingReasons reasons =
       CompositingReasonFinder::PotentialCompositingReasonsFor3DTransform(style);
+
   if (reasons != CompositingReason::kNone && layout_object.IsBox()) {
     // In theory this should operate on fragment sizes, but using the box size
     // is probably good enough for a use counter.
@@ -232,6 +250,10 @@ CompositingReasons CompositingReasonsForViewportScrollEffect(
   if (layout_object.StyleRef().IsFixedToBottom()) {
     reasons |= CompositingReason::kFixedPosition |
                CompositingReason::kAffectedByOuterViewportBoundsDelta;
+
+    if (layout_object.StyleRef().IsBottomRelativeToSafeAreaInset()) {
+      reasons |= CompositingReason::kAffectedBySafeAreaBottom;
+    }
   }
 
   return reasons;
@@ -318,10 +340,29 @@ bool IsEligibleForElementCapture(const LayoutObject& object) {
 CompositingReasons CompositingReasonFinder::DirectReasonsForPaintProperties(
     const LayoutObject& object,
     const LayoutObject* container_for_fixed_position) {
-  if (object.GetDocument().Printing())
+  if (object.GetDocument().Printing()) {
     return CompositingReason::kNone;
+  }
 
-  auto reasons = CompositingReasonsFor3DSceneLeaf(object);
+  CompositingReasons reasons = CompositingReason::kNone;
+
+  auto* element = DynamicTo<Element>(object.GetNode());
+  if (element && RuntimeEnabledFeatures::CanvasDrawElementEnabled()) {
+    if (element->IsInCanvasSubtree()) [[unlikely]] {
+      auto* canvas_parent =
+          DynamicTo<HTMLCanvasElement>(element->parentElement());
+      if (canvas_parent && canvas_parent->layoutSubtree() &&
+          !canvas_parent->IsInCanvasSubtree()) {
+        reasons |= CompositingReason::kCanvasChild;
+      } else {
+        // Disable compositing for elements in canvas subtrees other than the
+        // direct children of the outermost canvas element.
+        return CompositingReason::kNone;
+      }
+    }
+  }
+
+  reasons |= CompositingReasonsFor3DSceneLeaf(object);
 
   if (object.CanHaveAdditionalCompositingReasons())
     reasons |= object.AdditionalCompositingReasons();
@@ -366,6 +407,7 @@ CompositingReasons CompositingReasonFinder::DirectReasonsForPaintProperties(
   switch (style.StyleType()) {
     case kPseudoIdViewTransition:
     case kPseudoIdViewTransitionGroup:
+    case kPseudoIdViewTransitionGroupChildren:
     case kPseudoIdViewTransitionImagePair:
     case kPseudoIdViewTransitionNew:
     case kPseudoIdViewTransitionOld:
@@ -375,17 +417,16 @@ CompositingReasons CompositingReasonFinder::DirectReasonsForPaintProperties(
       break;
   }
 
-  if (auto* transition =
-          ViewTransitionUtils::GetTransition(object.GetDocument())) {
-    // Note that `NeedsViewTransitionEffectNode` returns true for values that
-    // are in the non-transition-pseudo tree DOM. That is, things like layout
-    // view or the view transition elements that we are transitioning.
-    if (transition->NeedsViewTransitionEffectNode(object)) {
-      reasons |= CompositingReason::kViewTransitionElement;
-    }
-  }
+  ViewTransitionUtils::ForEachTransition(
+      object.GetDocument(), [&](ViewTransition& transition) {
+        // This ensures compositing for elements that are actively participating
+        // in a transition because they are tagged with view-transition-name.
+        // It does not apply to the ::view-transition* pseudo-elements.
+        if (transition.NeedsViewTransitionEffectNode(object)) {
+          reasons |= CompositingReason::kViewTransitionElement;
+        }
+      });
 
-  auto* element = DynamicTo<Element>(object.GetNode());
   if (element && element->GetRestrictionTargetId()) {
     const bool is_eligible = IsEligibleForElementCapture(object);
     element->SetIsEligibleForElementCapture(is_eligible);

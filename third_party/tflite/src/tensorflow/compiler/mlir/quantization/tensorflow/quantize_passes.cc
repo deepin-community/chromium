@@ -29,8 +29,6 @@ namespace tensorflow {
 namespace quantization {
 namespace {
 
-using ::tensorflow::quantization::QuantizationOptions;
-
 void AddConvertTpuToCpuModelPasses(mlir::OpPassManager &pm) {
   pm.addPass(mlir::quant::CreateConvertTpuModelToCpuPass());
   pm.addPass(mlir::createInlinerPass());
@@ -149,15 +147,14 @@ void AddQuantizePtqPreCalibrationPasses(
   pm.addPass(mlir::quant::CreateLiftQuantizableSpotsAsFunctionsPass(
       quantization_options));
   // TODO: b/295140328 - Add debugger support for weight only
-  if (quantization_options.has_debugger_options()) {
+  if (quantization_options.has_debugger_config()) {
     pm.addPass(mlir::quant::CreateAddDumpTensorOpPass(
-        quantization_options.debugger_options().debugger_type(),
-        quantization_options.debugger_options().log_dir_path()));
+        quantization_options.debugger_config().debugger_type(),
+        quantization_options.debugger_config().log_dir_path()));
   }
   pm.addNestedPass<mlir::func::FuncOp>(
       mlir::quant::CreateInsertCustomAggregationOpsPass(
           quantization_options.calibration_options()));
-  pm.addPass(mlir::quant::CreateIssueIDsOfCustomAggregationOpsPass());
 }
 
 void AddQuantizePtqPostCalibrationPasses(

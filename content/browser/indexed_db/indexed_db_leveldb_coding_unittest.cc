@@ -7,20 +7,23 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/test/insecure_random_generator.h"
 #include "components/services/storage/indexed_db/scopes/varint_coding.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using blink::IndexedDBKey;
 using blink::IndexedDBKeyPath;
 
-namespace content {
-
+namespace content::indexed_db {
 namespace {
 
 static IndexedDBKey CreateArrayIDBKey() {
@@ -28,13 +31,16 @@ static IndexedDBKey CreateArrayIDBKey() {
 }
 
 static IndexedDBKey CreateArrayIDBKey(const IndexedDBKey& key1) {
-  IndexedDBKey::KeyArray array = {key1};
+  IndexedDBKey::KeyArray array;
+  array.emplace_back(key1.Clone());
   return IndexedDBKey(std::move(array));
 }
 
 static IndexedDBKey CreateArrayIDBKey(const IndexedDBKey& key1,
                                       const IndexedDBKey& key2) {
-  IndexedDBKey::KeyArray array = {key1, key2};
+  IndexedDBKey::KeyArray array;
+  array.emplace_back(key1.Clone());
+  array.emplace_back(key2.Clone());
   return IndexedDBKey(std::move(array));
 }
 
@@ -43,6 +49,8 @@ static std::string WrappedEncodeByte(char value) {
   EncodeByte(value, &buffer);
   return buffer;
 }
+
+}  // namespace
 
 TEST(IndexedDBLevelDBCodingTest, EncodeByte) {
   std::string expected;
@@ -178,9 +186,7 @@ TEST(IndexedDBLevelDBCodingTest, EncodeInt) {
   EXPECT_EQ(1u, WrappedEncodeInt(255).size());
   EXPECT_EQ(2u, WrappedEncodeInt(256).size());
   EXPECT_EQ(4u, WrappedEncodeInt(0xffffffff).size());
-#ifdef NDEBUG
   EXPECT_EQ(8u, WrappedEncodeInt(-1).size());
-#endif
 }
 
 TEST(IndexedDBLevelDBCodingTest, DecodeBool) {
@@ -219,9 +225,7 @@ TEST(IndexedDBLevelDBCodingTest, DecodeInt) {
       655536,
       7711192431755665792ll,
       0x7fffffffffffffffll,
-#ifdef NDEBUG
       -3,
-#endif
   };
 
   for (size_t i = 0; i < test_cases.size(); ++i) {
@@ -236,7 +240,7 @@ TEST(IndexedDBLevelDBCodingTest, DecodeInt) {
 
     // Verify decoding at an offset, to detect unaligned memory access.
     v.insert(v.begin(), 1u, static_cast<char>(0));
-    slice = std::string_view(&*v.begin() + 1, v.size() - 1);
+    slice = std::string_view(v).substr(1u);
     EXPECT_TRUE(DecodeInt(&slice, &value));
     EXPECT_EQ(n, value);
     EXPECT_TRUE(slice.empty());
@@ -288,7 +292,7 @@ TEST(IndexedDBLevelDBCodingTest, DecodeString) {
 
     // Verify decoding at an offset, to detect unaligned memory access.
     v.insert(v.begin(), 1u, static_cast<char>(0));
-    slice = std::string_view(&*v.begin() + 1, v.size() - 1);
+    slice = std::string_view(v).substr(1u);
     EXPECT_TRUE(DecodeString(&slice, &result));
     EXPECT_EQ(test_case, result);
     EXPECT_TRUE(slice.empty());
@@ -318,7 +322,7 @@ TEST(IndexedDBLevelDBCodingTest, DecodeStringWithLength) {
   const char16_t test_string_b[] = {0xdead, 0xbeef, '\0'};
 
   const int kLongStringLen = 1234;
-  char16_t long_string[kLongStringLen + 1];
+  std::array<char16_t, kLongStringLen + 1> long_string;
   for (int i = 0; i < kLongStringLen; ++i)
     long_string[i] = i;
   long_string[kLongStringLen] = 0;
@@ -328,7 +332,7 @@ TEST(IndexedDBLevelDBCodingTest, DecodeStringWithLength) {
                                             u"foo",
                                             std::u16string(test_string_a),
                                             std::u16string(test_string_b),
-                                            std::u16string(long_string)};
+                                            std::u16string(long_string.data())};
 
   for (size_t i = 0; i < test_cases.size(); ++i) {
     std::u16string s = test_cases[i];
@@ -348,7 +352,7 @@ TEST(IndexedDBLevelDBCodingTest, DecodeStringWithLength) {
 
     // Verify decoding at an offset, to detect unaligned memory access.
     v.insert(v.begin(), 1u, static_cast<char>(0));
-    slice = std::string_view(&*v.begin() + 1, v.size() - 1);
+    slice = std::string_view(v).substr(1u);
     EXPECT_TRUE(DecodeStringWithLength(&slice, &res));
     EXPECT_EQ(s, res);
     EXPECT_TRUE(slice.empty());
@@ -419,25 +423,39 @@ static std::string WrappedEncodeBinary(const std::string& value) {
 }
 
 TEST(IndexedDBLevelDBCodingTest, EncodeBinary) {
-  const unsigned char binary_data[] = {0x00, 0x01, 0xfe, 0xff};
-  EXPECT_EQ(
-      1u,
-      WrappedEncodeBinary(std::string(binary_data, binary_data + 0)).size());
-  EXPECT_EQ(
-      2u,
-      WrappedEncodeBinary(std::string(binary_data, binary_data + 1)).size());
-  EXPECT_EQ(
-      5u,
-      WrappedEncodeBinary(std::string(binary_data, binary_data + 4)).size());
+  const auto binary_data =
+      std::to_array<unsigned char>({0x00, 0x01, 0xfe, 0xff});
+
+  EXPECT_EQ(1u, WrappedEncodeBinary(
+                    std::string(binary_data.data(),
+                                base::span(binary_data).subspan(0u).data()))
+                    .size());
+
+  EXPECT_EQ(2u, WrappedEncodeBinary(
+                    std::string(binary_data.data(),
+                                base::span(binary_data).subspan(1u).data()))
+                    .size());
+
+  EXPECT_EQ(5u, WrappedEncodeBinary(
+                    std::string(binary_data.data(),
+                                base::span(binary_data).subspan(4u).data()))
+                    .size());
 }
 
 TEST(IndexedDBLevelDBCodingTest, DecodeBinary) {
-  const unsigned char binary_data[] = { 0x00, 0x01, 0xfe, 0xff };
+  const auto binary_data =
+      std::to_array<unsigned char>({0x00, 0x01, 0xfe, 0xff});
 
   std::vector<std::string> test_cases = {
-      std::string(binary_data, binary_data + 0),
-      std::string(binary_data, binary_data + 1),
-      std::string(binary_data, binary_data + 4)};
+      std::string(
+          binary_data.data(),
+          base::span<const unsigned char>(binary_data).subspan(0u).data()),
+      std::string(
+          binary_data.data(),
+          base::span<const unsigned char>(binary_data).subspan(1u).data()),
+      std::string(
+          binary_data.data(),
+          base::span<const unsigned char>(binary_data).subspan(4u).data())};
 
   for (size_t i = 0; i < test_cases.size(); ++i) {
     std::string value = test_cases[i];
@@ -457,7 +475,7 @@ TEST(IndexedDBLevelDBCodingTest, DecodeBinary) {
 
     // Verify decoding at an offset, to detect unaligned memory access.
     v.insert(v.begin(), 1u, static_cast<char>(0));
-    slice = std::string_view(&*v.begin() + 1, v.size() - 1);
+    slice = std::string_view(v).substr(1u);
     EXPECT_TRUE(DecodeBinary(&slice, &result));
     EXPECT_EQ(value, result);
     EXPECT_TRUE(slice.empty());
@@ -496,7 +514,7 @@ TEST(IndexedDBLevelDBCodingTest, DecodeDouble) {
 
     // Verify decoding at an offset, to detect unaligned memory access.
     v.insert(v.begin(), 1u, static_cast<char>(0));
-    slice = std::string_view(&*v.begin() + 1, v.size() - 1);
+    slice = std::string_view(v).substr(1u);
     EXPECT_TRUE(DecodeDouble(&slice, &result));
     EXPECT_EQ(value, result);
     EXPECT_TRUE(slice.empty());
@@ -505,37 +523,37 @@ TEST(IndexedDBLevelDBCodingTest, DecodeDouble) {
 
 TEST(IndexedDBLevelDBCodingTest, EncodeDecodeIDBKey) {
   IndexedDBKey expected_key;
-  std::unique_ptr<IndexedDBKey> decoded_key;
   std::string v;
   std::string_view slice;
 
-  std::vector<IndexedDBKey> test_cases = {
-      IndexedDBKey(1234, blink::mojom::IDBKeyType::Number),
-      IndexedDBKey(7890, blink::mojom::IDBKeyType::Date),
-      IndexedDBKey(u"Hello World!"), IndexedDBKey(std::string("\x01\x02")),
-      IndexedDBKey(IndexedDBKey::KeyArray())};
+  IndexedDBKey::KeyArray array;
+  array.emplace_back(1234, blink::mojom::IDBKeyType::Number);
+  array.emplace_back(7890, blink::mojom::IDBKeyType::Date);
+  array.emplace_back(u"Hello World!");
+  array.emplace_back(std::string("\x01\x02"));
+  array.emplace_back(IndexedDBKey::KeyArray());
 
-  IndexedDBKey::KeyArray array = {
-      IndexedDBKey(1234, blink::mojom::IDBKeyType::Number),
-      IndexedDBKey(7890, blink::mojom::IDBKeyType::Date),
-      IndexedDBKey(u"Hello World!"), IndexedDBKey(std::string("\x01\x02")),
-      IndexedDBKey(IndexedDBKey::KeyArray())};
-  test_cases.push_back(IndexedDBKey(std::move(array)));
+  auto test_cases = std::to_array(
+      {IndexedDBKey(1234, blink::mojom::IDBKeyType::Number),
+       IndexedDBKey(7890, blink::mojom::IDBKeyType::Date),
+       IndexedDBKey(u"Hello World!"), IndexedDBKey(std::string("\x01\x02")),
+       IndexedDBKey(IndexedDBKey::KeyArray()), IndexedDBKey(std::move(array))});
 
   for (size_t i = 0; i < test_cases.size(); ++i) {
-    expected_key = test_cases[i];
+    expected_key = test_cases[i].Clone();
     v.clear();
     EncodeIDBKey(expected_key, &v);
     slice = std::string_view(&*v.begin(), v.size());
-    EXPECT_TRUE(DecodeIDBKey(&slice, &decoded_key));
-    EXPECT_TRUE(decoded_key->Equals(expected_key));
+    IndexedDBKey decoded_key = DecodeIDBKey(&slice);
+    EXPECT_TRUE(decoded_key.IsValid());
+    EXPECT_TRUE(decoded_key.Equals(expected_key));
     EXPECT_TRUE(slice.empty());
 
     slice = std::string_view(&*v.begin(), v.size() - 1);
-    EXPECT_FALSE(DecodeIDBKey(&slice, &decoded_key));
+    EXPECT_FALSE(DecodeIDBKey(&slice).IsValid());
 
     slice = std::string_view(&*v.begin(), static_cast<size_t>(0));
-    EXPECT_FALSE(DecodeIDBKey(&slice, &decoded_key));
+    EXPECT_FALSE(DecodeIDBKey(&slice).IsValid());
   }
 }
 
@@ -555,7 +573,7 @@ TEST(IndexedDBLevelDBCodingTest, EncodeDecodeIDBKeyPath) {
                        0      // Type is null
     };
     encoded_paths.push_back(
-        std::string(expected, expected + std::size(expected)));
+        std::string(std::begin(expected), std::end(expected)));
   }
 
   {
@@ -565,7 +583,7 @@ TEST(IndexedDBLevelDBCodingTest, EncodeDecodeIDBKeyPath) {
                        0      // Length is 0
     };
     encoded_paths.push_back(
-        std::string(expected, expected + std::size(expected)));
+        std::string(std::begin(expected), std::end(expected)));
   }
 
   {
@@ -575,7 +593,7 @@ TEST(IndexedDBLevelDBCodingTest, EncodeDecodeIDBKeyPath) {
                        3, 0, 'f', 0, 'o', 0, 'o'  // String length 3, UTF-16BE
     };
     encoded_paths.push_back(
-        std::string(expected, expected + std::size(expected)));
+        std::string(std::begin(expected), std::end(expected)));
   }
 
   {
@@ -586,7 +604,7 @@ TEST(IndexedDBLevelDBCodingTest, EncodeDecodeIDBKeyPath) {
                        'r'  // String length 7, UTF-16BE
     };
     encoded_paths.push_back(
-        std::string(expected, expected + std::size(expected)));
+        std::string(std::begin(expected), std::end(expected)));
   }
 
   {
@@ -601,7 +619,7 @@ TEST(IndexedDBLevelDBCodingTest, EncodeDecodeIDBKeyPath) {
                        'r'  // Member 3 (String length 7)
     };
     encoded_paths.push_back(
-        std::string(expected, expected + std::size(expected)));
+        std::string(std::begin(expected), std::end(expected)));
   }
 
   ASSERT_EQ(key_paths.size(), encoded_paths.size());
@@ -705,7 +723,7 @@ TEST(IndexedDBLevelDBCodingTest, DecodeLegacyIDBKeyPath) {
 }
 
 TEST(IndexedDBLevelDBCodingTest, ExtractAndCompareIDBKeys) {
-  std::vector<IndexedDBKey> keys = {
+  auto keys = std::to_array({
       IndexedDBKey(-10, blink::mojom::IDBKeyType::Number),
       IndexedDBKey(0, blink::mojom::IDBKeyType::Number),
       IndexedDBKey(3.14, blink::mojom::IDBKeyType::Number),
@@ -748,7 +766,7 @@ TEST(IndexedDBLevelDBCodingTest, ExtractAndCompareIDBKeys) {
       CreateArrayIDBKey(CreateArrayIDBKey(CreateArrayIDBKey())),
       CreateArrayIDBKey(
           CreateArrayIDBKey(CreateArrayIDBKey(CreateArrayIDBKey()))),
-  };
+  });
 
   for (size_t i = 0; i < keys.size() - 1; ++i) {
     const IndexedDBKey& key_a = keys[i];
@@ -787,8 +805,54 @@ TEST(IndexedDBLevelDBCodingTest, ExtractAndCompareIDBKeys) {
   }
 }
 
+// Basic verification that the variable length encoding for strings is working
+// as expected.
+TEST(IndexedDBLevelDBCodingTest, EncodeSortableString) {
+  // Two equal length strings that only use characters < 127 have the same
+  // length when encoded.
+  EXPECT_EQ(EncodeSortableIDBKey(IndexedDBKey(u"Hello world")).size(),
+            EncodeSortableIDBKey(IndexedDBKey(u"Hello w0rld")).size());
+
+  // But when one string uses a character >= 127, that takes up another byte.
+  EXPECT_EQ(EncodeSortableIDBKey(IndexedDBKey(u"Hello world")).size(),
+            EncodeSortableIDBKey(IndexedDBKey(u"H\x82llo world")).size() - 1);
+
+  // A character that doesn't fit in 14 bits uses 3 bytes.
+  EXPECT_EQ(EncodeSortableIDBKey(IndexedDBKey(u"Hello world")).size(),
+            EncodeSortableIDBKey(IndexedDBKey(u"H\xf082llo world")).size() - 2);
+}
+
+TEST(IndexedDBLevelDBCodingTest, EncodeSortableBinary) {
+  static constexpr size_t kBinarySize = 17;
+  std::vector<uint64_t> binary_input;
+  binary_input.reserve(kBinarySize);
+  base::test::InsecureRandomGenerator gen;
+  gen.ReseedForTesting(0xfedcba9876543210);
+  for (size_t i = 0; i < kBinarySize; ++i) {
+    binary_input.push_back(gen.RandUint64());
+  }
+
+  for (std::string_view sv(reinterpret_cast<const char*>(binary_input.data()),
+                           binary_input.size() * sizeof(uint64_t));
+       ; sv.remove_prefix(1)) {
+    std::string encoded = EncodeSortableIDBKey(IndexedDBKey(std::string(sv)));
+    // The binary encoding always takes a multiple of 9 bytes, plus a sentinel
+    // byte, plus a type byte.
+    EXPECT_EQ(encoded.size() % 9, 2U);
+    blink::IndexedDBKey decoded = DecodeSortableIDBKey(encoded);
+    EXPECT_TRUE(decoded.IsValid());
+    EXPECT_TRUE(decoded.Equals(IndexedDBKey(std::string(sv))));
+
+    if (sv.empty()) {
+      break;
+    }
+  }
+}
+
 TEST(IndexedDBLevelDBCodingTest, EncodeAndCompareIDBKeysWithSentinels) {
-  std::vector<IndexedDBKey> keys = {
+  const char16_t kJunkString[] = {0xdead, 0xbeef, '\0'};
+
+  auto keys = std::to_array({
       IndexedDBKey(-15, blink::mojom::IDBKeyType::Number),
       IndexedDBKey(-10, blink::mojom::IDBKeyType::Number),
       IndexedDBKey(0, blink::mojom::IDBKeyType::Number),
@@ -806,6 +870,14 @@ TEST(IndexedDBLevelDBCodingTest, EncodeAndCompareIDBKeysWithSentinels) {
       IndexedDBKey(u"baab"),
       IndexedDBKey(u"c"),
 
+      // Some more adventurous strings.
+      IndexedDBKey(u"\xA2"),
+      // Valid UTF16.
+      IndexedDBKey(u"\x4f60\x597d "),
+      // Invalid UTF16. The first character is a truncated UTF-16 character.
+      IndexedDBKey(u"\xd800\x597d"),
+      IndexedDBKey(std::u16string(kJunkString)),
+
       IndexedDBKey(std::string()),
       IndexedDBKey(std::string("\x01")),
       IndexedDBKey(std::string("\x01\x01")),
@@ -813,6 +885,10 @@ TEST(IndexedDBLevelDBCodingTest, EncodeAndCompareIDBKeysWithSentinels) {
       IndexedDBKey(std::string("\x02")),
       IndexedDBKey(std::string("\x02\x01")),
       IndexedDBKey(std::string("\x02\x02")),
+      // Same as previous binary, but with added null byte at end.
+      IndexedDBKey(std::string("\x02\x02\x00", 3)),
+      IndexedDBKey(std::string("Lorem ipsum and some bits"
+                               "\x01\x02\x03\x04\x05\x06\x07")),
       IndexedDBKey(std::string("\xff")),
 
       CreateArrayIDBKey(),
@@ -833,33 +909,72 @@ TEST(IndexedDBLevelDBCodingTest, EncodeAndCompareIDBKeysWithSentinels) {
       CreateArrayIDBKey(CreateArrayIDBKey(CreateArrayIDBKey())),
       CreateArrayIDBKey(
           CreateArrayIDBKey(CreateArrayIDBKey(CreateArrayIDBKey()))),
-  };
+  });
 
-  for (size_t i = 0; i < keys.size() - 1; ++i) {
+  for (size_t i = 0; i < keys.size(); ++i) {
     const IndexedDBKey& key_a = keys[i];
-    const IndexedDBKey& key_b = keys[i + 1];
+    std::string encoded_a = EncodeSortableIDBKey(key_a);
+    EXPECT_TRUE(encoded_a.size());
 
+    ASSERT_TRUE(DecodeSortableIDBKey(encoded_a).IsValid());
+    EXPECT_TRUE(DecodeSortableIDBKey(encoded_a).Equals(key_a));
+
+    if (i == keys.size() - 1) {
+      break;
+    }
+
+    const IndexedDBKey& key_b = keys[i + 1];
     SCOPED_TRACE(testing::Message() << "Comparing keys " << key_a.DebugString()
                                     << " and " << key_b.DebugString());
 
     EXPECT_TRUE(key_a.IsLessThan(key_b));
-
-    std::string encoded_a;
-    EncodeSortableIDBKey(key_a, &encoded_a);
-    EXPECT_TRUE(encoded_a.size());
-    std::string encoded_b;
-    EncodeSortableIDBKey(key_b, &encoded_b);
+    std::string encoded_b = EncodeSortableIDBKey(key_b);
     EXPECT_TRUE(encoded_b.size());
 
     auto sqlite_compare = [](const std::string& a, const std::string& b) {
-      return std::memcmp(a.c_str(), b.c_str(),
-                         std::min(a.length(), b.length()));
+      return UNSAFE_TODO(
+          std::memcmp(a.c_str(), b.c_str(), std::min(a.length(), b.length())));
     };
 
     EXPECT_LT(sqlite_compare(encoded_a, encoded_b), 0);
     EXPECT_GT(sqlite_compare(encoded_b, encoded_a), 0);
     EXPECT_EQ(sqlite_compare(encoded_a, encoded_a), 0);
     EXPECT_EQ(sqlite_compare(encoded_b, encoded_b), 0);
+  }
+
+  std::vector<IndexedDBKey> keys_vec;
+  for (const auto& key : keys) {
+    keys_vec.emplace_back(key.Clone());
+  }
+  // Also test decoding by treating all test cases as one massive array key.
+  const IndexedDBKey all_keys_key(std::move(keys_vec));
+  std::string encoded = EncodeSortableIDBKey(all_keys_key);
+  IndexedDBKey decoded_value = DecodeSortableIDBKey(encoded);
+  ASSERT_TRUE(decoded_value.IsValid());
+  EXPECT_TRUE(all_keys_key.Equals(decoded_value))
+      << "Original is\n"
+      << all_keys_key.DebugString() << "\nwhereas depickled version is\n"
+      << decoded_value.DebugString();
+}
+
+TEST(IndexedDBLevelDBCodingTest, DecodeSortableWithCorruption) {
+  std::vector<std::string> cases = {
+      // Empty string.
+      {},
+      // Binary with bad meta-mark.
+      {"\x40\x02\xff\x00", 4},
+      // String with bad meta-mark.
+      {"\x30\x00\x02\xff\xff\x00\x00", 7},
+      // Array without terminating sentinel.
+      {"\x50\x20\xff\xff\xff\xff", 6},
+      // String with no terminating sentinel.
+      {"\x30\x00\x01\xff\xff", 5},
+      // Double with insufficient bytes.
+      {"\x10\x00\x01\xff", 4},
+  };
+
+  for (const auto& test_case : cases) {
+    EXPECT_FALSE(DecodeSortableIDBKey(test_case).IsValid());
   }
 }
 
@@ -893,19 +1008,17 @@ TEST(IndexedDBLevelDBCodingTest, EncodeSortableDoubles) {
       SCOPED_TRACE(testing::Message()
                    << "Comparing " << value_a << " and " << value_b);
 
-      std::string encoded_a;
-      EncodeSortableIDBKey(
-          IndexedDBKey(value_a, blink::mojom::IDBKeyType::Number), &encoded_a);
+      std::string encoded_a = EncodeSortableIDBKey(
+          IndexedDBKey(value_a, blink::mojom::IDBKeyType::Number));
       EXPECT_TRUE(encoded_a.size());
-      std::string encoded_b;
-      EncodeSortableIDBKey(
-          IndexedDBKey(value_b, blink::mojom::IDBKeyType::Number), &encoded_b);
+      std::string encoded_b = EncodeSortableIDBKey(
+          IndexedDBKey(value_b, blink::mojom::IDBKeyType::Number));
       EXPECT_TRUE(encoded_b.size());
       EXPECT_EQ(encoded_a.size(), encoded_b.size());
 
       auto sqlite_compare = [](const std::string& a, const std::string& b) {
-        return std::memcmp(a.c_str(), b.c_str(),
-                           std::min(a.length(), b.length()));
+        return UNSAFE_TODO(std::memcmp(a.c_str(), b.c_str(),
+                                       std::min(a.length(), b.length())));
       };
 
       if (value_a < value_b) {
@@ -916,6 +1029,17 @@ TEST(IndexedDBLevelDBCodingTest, EncodeSortableDoubles) {
         EXPECT_GT(sqlite_compare(encoded_a, encoded_b), 0);
       }
     }
+  }
+
+  for (double value : values) {
+    const IndexedDBKey key(value, blink::mojom::IDBKeyType::Number);
+    std::string encoded = EncodeSortableIDBKey(key);
+    IndexedDBKey decoded_value = DecodeSortableIDBKey(encoded);
+    ASSERT_TRUE(decoded_value.IsValid());
+    EXPECT_TRUE(key.Equals(decoded_value))
+        << "Original is\n"
+        << key.DebugString() << "\nwhereas depickled version is\n"
+        << decoded_value.DebugString();
   }
 }
 
@@ -1056,6 +1180,8 @@ TEST(IndexedDBLevelDBCodingTest, EncodeVarIntVSEncodeByteTest) {
   }
 }
 
-}  // namespace
+TEST(IndexedDBLevelDBCodingTest, Empty) {
+  EXPECT_EQ(KeyPrefix::EncodeInternal(0, 0, 0), KeyPrefix::EncodeEmpty());
+}
 
-}  // namespace content
+}  // namespace content::indexed_db

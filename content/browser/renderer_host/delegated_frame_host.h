@@ -18,11 +18,12 @@
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "components/viz/common/frame_sinks/begin_frame_source.h"
 #include "components/viz/common/frame_timing_details_map.h"
-#include "components/viz/host/hit_test/hit_test_query.h"
+#include "components/viz/common/hit_test/hit_test_query.h"
 #include "components/viz/host/host_frame_sink_client.h"
 #include "components/viz/host/host_frame_sink_manager.h"
 #include "content/browser/renderer_host/dip_util.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "services/viz/public/mojom/compositing/compositor_frame_sink.mojom.h"
 #include "services/viz/public/mojom/hit_test/hit_test_region_list.mojom.h"
 #include "third_party/blink/public/common/page/content_to_visible_time_reporter.h"
@@ -52,7 +53,7 @@ class CONTENT_EXPORT DelegatedFrameHostClient {
                                    base::TimeTicks activation_time) = 0;
   virtual float GetDeviceScaleFactor() const = 0;
   virtual void InvalidateLocalSurfaceIdOnEviction() = 0;
-  virtual std::vector<viz::SurfaceId> CollectSurfaceIdsForEviction() = 0;
+  virtual viz::FrameEvictorClient::EvictIds CollectSurfaceIdsForEviction() = 0;
   virtual bool ShouldShowStaleContentOnEviction() = 0;
 };
 
@@ -96,6 +97,8 @@ class CONTENT_EXPORT DelegatedFrameHost
 
   // ui::CompositorObserver implementation.
   void OnCompositingShuttingDown(ui::Compositor* compositor) override;
+  void OnFirstSurfaceActivation(ui::Compositor* compositor,
+                                const viz::SurfaceInfo& surface_info) override;
 
   void ClearFallbackSurfaceForCommitPending();
   void ResetFallbackToFirstNavigationSurface();
@@ -143,7 +146,8 @@ class CONTENT_EXPORT DelegatedFrameHost
   void CopyFromCompositingSurface(
       const gfx::Rect& src_subrect,
       const gfx::Size& output_size,
-      base::OnceCallback<void(const SkBitmap&)> callback);
+      base::TimeDelta timeout,
+      base::OnceCallback<void(const content::CopyFromSurfaceResult&)> callback);
   void CopyFromCompositingSurfaceAsTexture(
       const gfx::Rect& src_subrect,
       const gfx::Size& output_size,
@@ -179,6 +183,9 @@ class CONTENT_EXPORT DelegatedFrameHost
   // Called when the page has just entered BFCache.
   void DidEnterBackForwardCache();
 
+  // Called when the page was activated or evicted from BFCache.
+  void ActivatedOrEvictedFromBackForwardCache();
+
   void WindowTitleChanged(const std::string& title);
 
   // If our SurfaceLayer doesn't have a fallback, use the fallback info of
@@ -207,12 +214,9 @@ class CONTENT_EXPORT DelegatedFrameHost
 
   viz::SurfaceId GetFirstSurfaceIdAfterNavigationForTesting() const;
 
-  void SetIsFrameSinkIdOwner(bool is_owner);
+  viz::SurfaceId GetBFCacheFallbackSurfaceIdForTesting() const;
 
-  // This is used to evict also the UI compositor if native occlusion is
-  // enabled. This only makes sense on desktop platforms where the UI compositor
-  // corresponds to a browser window, and native occlusion is supported.
-  static bool ShouldIncludeUiCompositorForEviction();
+  void SetIsFrameSinkIdOwner(bool is_owner);
 
  private:
   friend class DelegatedFrameHostClient;
@@ -228,7 +232,8 @@ class CONTENT_EXPORT DelegatedFrameHost
   // FrameEvictorClient implementation.
   void EvictDelegatedFrame(
       const std::vector<viz::SurfaceId>& surface_ids) override;
-  std::vector<viz::SurfaceId> CollectSurfaceIdsForEviction() const override;
+  viz::FrameEvictorClient::EvictIds CollectSurfaceIdsForEviction()
+      const override;
   viz::SurfaceId GetPreNavigationSurfaceId() const override;
 
   void DidCopyStaleContent(std::unique_ptr<viz::CopyOutputResult> result);
@@ -241,8 +246,10 @@ class CONTENT_EXPORT DelegatedFrameHost
   void CopyFromCompositingSurfaceInternal(
       const gfx::Rect& src_subrect,
       const gfx::Size& output_size,
+      const viz::SurfaceId& surface_id,
       viz::CopyOutputRequest::ResultFormat format,
       viz::CopyOutputRequest::ResultDestination destination,
+      base::TimeDelta timeout,
       viz::CopyOutputRequest::CopyOutputRequestCallback callback);
 
   void SetFrameEvictionStateAndNotifyObservers(
@@ -255,7 +262,7 @@ class CONTENT_EXPORT DelegatedFrameHost
 
   // The LocalSurfaceId of the currently embedded surface.
   //
-  // TODO(https://crbug.com/1459238): this value is a copy of what the browser
+  // TODO(crbug.com/40274223): this value is a copy of what the browser
   // wants to embed. The source of truth is stored else where. We should
   // consider de-dup this ID.
   viz::LocalSurfaceId local_surface_id_;

@@ -50,7 +50,7 @@ class StringLowerOp : public OpKernel {
 
     if (encoding_.empty()) {
       for (int64_t i = 0; i < input.size(); ++i) {
-        StringPiece entry(input(i));
+        absl::string_view entry(input(i));
         output(i) = absl::AsciiStrToLower(entry);
       }
     } else {
@@ -64,7 +64,7 @@ class StringLowerOp : public OpKernel {
   }
 
  private:
-  string encoding_;
+  std::string encoding_;
 };
 
 REGISTER_KERNEL_BUILDER(Name("StringLower").Device(DEVICE_CPU), StringLowerOp);

@@ -16,6 +16,15 @@ limitations under the License.
 #include "tensorflow/core/grappler/optimizers/data/graph_utils.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "tensorflow/core/framework/dataset_metadata.pb.h"
 #include "tensorflow/core/framework/device_base.h"
@@ -51,7 +60,7 @@ std::vector<int> GetElementIndicesWithPredicate(const Predicate& predicate,
 }
 
 std::vector<int> CreateNameIndex(const GraphDef& graph) {
-  std::map<string, int> names;
+  std::map<std::string, int> names;
   for (int i = 0; i < graph.node_size(); ++i) {
     names[graph.node(i).name()] = i;
   }
@@ -64,7 +73,7 @@ std::vector<int> CreateNameIndex(const GraphDef& graph) {
 }
 
 std::vector<int> CreateInputIndex(const NodeDef& node) {
-  std::map<string, int> inputs;
+  std::map<std::string, int> inputs;
   for (int i = 0; i < node.input_size(); ++i) {
     inputs[node.input(i)] = i;
   }
@@ -108,18 +117,19 @@ NodeDef* AddScalarPlaceholder(DataType dtype, MutableGraphView* graph) {
   return graph->AddNode(std::move(node));
 }
 
-NodeDef* AddNode(StringPiece name, StringPiece op,
-                 const std::vector<string>& inputs,
-                 const std::vector<std::pair<string, AttrValue>>& attributes,
-                 MutableGraphView* graph) {
+NodeDef* AddNode(
+    absl::string_view name, absl::string_view op,
+    const std::vector<std::string>& inputs,
+    const std::vector<std::pair<std::string, AttrValue>>& attributes,
+    MutableGraphView* graph) {
   NodeDef node;
   if (!name.empty()) {
-    node.set_name(string(name));
+    node.set_name(name);
   } else {
     SetUniqueGraphNodeName(op, graph->graph(), &node);
   }
-  node.set_op(string(op));
-  for (const string& input : inputs) {
+  node.set_op(op);
+  for (const std::string& input : inputs) {
     node.add_input(input);
   }
   for (const auto& attr : attributes) {
@@ -159,14 +169,14 @@ NodeDef* AddScalarConstNode(int64_t v, MutableGraphView* graph) {
 }
 
 template <>
-NodeDef* AddScalarConstNode(StringPiece v, MutableGraphView* graph) {
+NodeDef* AddScalarConstNode(absl::string_view v, MutableGraphView* graph) {
   return AddScalarConstNodeHelper(
       DT_STRING,
       [v](TensorProto* proto) { proto->add_string_val(v.data(), v.size()); },
       graph);
 }
 
-Status GetScalarConstNodeValueHelper(
+absl::Status GetScalarConstNodeValueHelper(
     const NodeDef& node, DataType dtype,
     const std::function<void(const Tensor&)>& get_value) {
   if (node.op() != kConstOpName)
@@ -193,14 +203,14 @@ Status GetScalarConstNodeValueHelper(
 }
 
 template <>
-Status GetScalarConstNodeValue(const NodeDef& node, int64_t* value) {
+absl::Status GetScalarConstNodeValue(const NodeDef& node, int64_t* value) {
   return GetScalarConstNodeValueHelper(
       node, DT_INT64,
       [value](const Tensor& tensor) { *value = tensor.scalar<int64_t>()(); });
 }
 
 template <>
-Status GetScalarConstNodeValue(const NodeDef& node, bool* value) {
+absl::Status GetScalarConstNodeValue(const NodeDef& node, bool* value) {
   return GetScalarConstNodeValueHelper(
       node, DT_BOOL,
       [value](const Tensor& tensor) { *value = tensor.scalar<bool>()(); });
@@ -236,20 +246,20 @@ bool Compare(const GraphDef& g1, const GraphDef& g2) {
   return true;
 }
 
-bool ContainsGraphFunctionWithName(StringPiece name,
+bool ContainsGraphFunctionWithName(absl::string_view name,
                                    const FunctionDefLibrary& library) {
   return FindGraphFunctionWithName(name, library) != -1;
 }
 
-bool ContainsGraphNodeWithName(StringPiece name, const GraphDef& graph) {
+bool ContainsGraphNodeWithName(absl::string_view name, const GraphDef& graph) {
   return FindGraphNodeWithName(name, graph) != -1;
 }
 
-bool ContainsNodeWithOp(StringPiece op, const GraphDef& graph) {
+bool ContainsNodeWithOp(absl::string_view op, const GraphDef& graph) {
   return FindGraphNodeWithOp(op, graph) != -1;
 }
 
-int FindGraphFunctionWithName(StringPiece name,
+int FindGraphFunctionWithName(absl::string_view name,
                               const FunctionDefLibrary& library) {
   return GetFirstElementIndexWithPredicate(
       [&name](const FunctionDef& function) {
@@ -258,18 +268,18 @@ int FindGraphFunctionWithName(StringPiece name,
       library.function());
 }
 
-int FindGraphNodeWithName(StringPiece name, const GraphDef& graph) {
+int FindGraphNodeWithName(absl::string_view name, const GraphDef& graph) {
   return GetFirstElementIndexWithPredicate(
       [&name](const NodeDef& node) { return node.name() == name; },
       graph.node());
 }
 
-int FindGraphNodeWithOp(StringPiece op, const GraphDef& graph) {
+int FindGraphNodeWithOp(absl::string_view op, const GraphDef& graph) {
   return GetFirstElementIndexWithPredicate(
       [&op](const NodeDef& node) { return node.op() == op; }, graph.node());
 }
 
-std::vector<int> FindAllGraphNodesWithOp(const string& op,
+std::vector<int> FindAllGraphNodesWithOp(const std::string& op,
                                          const GraphDef& graph) {
   return GetElementIndicesWithPredicate(
       [&op](const NodeDef& node) { return node.op() == op; }, graph.node());
@@ -288,10 +298,10 @@ NodeDef* GetInputNode(const NodeDef& node, const MutableGraphView& graph,
   return graph.GetRegularFanin(input_port).node;
 }
 
-Status GetDatasetOutputTypesAttr(const NodeDef& node,
-                                 DataTypeVector* output_types) {
+absl::Status GetDatasetOutputTypesAttr(const NodeDef& node,
+                                       DataTypeVector* output_types) {
   // We don't name the output_types attr consistently, so should check for both.
-  for (const string& attr_name : {"output_types", "Toutput_types"}) {
+  for (const std::string& attr_name : {"output_types", "Toutput_types"}) {
     if (node.attr().contains(attr_name)) {
       return GetNodeAttr(node, attr_name, output_types);
     }
@@ -300,41 +310,42 @@ Status GetDatasetOutputTypesAttr(const NodeDef& node,
                                  node.name(), " with op: ", node.op());
 }
 
-void SetUniqueGraphNodeName(StringPiece prefix, GraphDef* graph,
+void SetUniqueGraphNodeName(absl::string_view prefix, GraphDef* graph,
                             NodeDef* node) {
-  string name = string(prefix);
+  std::string name = std::string(prefix);
   int id = graph->node_size();
   while (ContainsGraphNodeWithName(name, *graph)) {
-    if (name.rfind("_generated") != string::npos &&
+    if (name.rfind("_generated") != std::string::npos &&
         (name.rfind("_generated") == (name.size() - strlen("_generated")))) {
-      name.insert(name.rfind("_generated"), strings::StrCat("/_", id));
+      name.insert(name.rfind("_generated"), absl::StrCat("/_", id));
     } else {
-      name = strings::StrCat(prefix, "/_", id);
+      name = absl::StrCat(prefix, "/_", id);
     }
     ++id;
   }
   node->set_name(std::move(name));
 }
 
-void SetUniqueGraphFunctionName(StringPiece prefix,
+void SetUniqueGraphFunctionName(absl::string_view prefix,
                                 const FunctionDefLibrary* library,
                                 FunctionDef* function) {
-  string name = string(prefix);
+  std::string name = std::string(prefix);
   int id = library->function_size();
   while (ContainsGraphFunctionWithName(name, *library)) {
-    name = strings::StrCat(prefix, "/_", id);
+    name = absl::StrCat(prefix, "/_", id);
     ++id;
   }
   function->mutable_signature()->set_name(std::move(name));
 }
 
-void CopyAttribute(const string& attribute_name, const NodeDef& from,
+void CopyAttribute(const std::string& attribute_name, const NodeDef& from,
                    NodeDef* to_node) {
   (*to_node->mutable_attr())[attribute_name] = from.attr().at(attribute_name);
 }
 
-void ConcatAttributeList(const string& attribute_name, const NodeDef& first,
-                         const NodeDef& second, NodeDef* to_node) {
+void ConcatAttributeList(const std::string& attribute_name,
+                         const NodeDef& first, const NodeDef& second,
+                         NodeDef* to_node) {
   CopyAttribute(attribute_name, first, to_node);
   (*to_node->mutable_attr())
       .at(attribute_name)
@@ -342,16 +353,16 @@ void ConcatAttributeList(const string& attribute_name, const NodeDef& first,
       ->MergeFrom(second.attr().at(attribute_name).list());
 }
 
-Status EnsureNodeNamesUnique(Graph* g) {
+absl::Status EnsureNodeNamesUnique(Graph* g) {
   // Modeled after Scope::Impl::GetUniqueName
-  std::unordered_map<string, int> name_map;
+  std::unordered_map<std::string, int> name_map;
 
   for (auto node : g->op_nodes()) {
-    const string& prefix = node->name();
+    const std::string& prefix = node->name();
     if (auto entry = gtl::FindOrNull(name_map, prefix)) {
-      string unique_name;
+      std::string unique_name;
       do {
-        unique_name = strings::StrCat(prefix, "_", ++(*entry));
+        unique_name = absl::StrCat(prefix, "_", ++*entry);
       } while (name_map.find(unique_name) != name_map.end());
       name_map.insert({unique_name, 0});
       node->set_name(std::move(unique_name));
@@ -363,8 +374,8 @@ Status EnsureNodeNamesUnique(Graph* g) {
   return absl::OkStatus();
 }
 
-Status GetFetchNode(const MutableGraphView& graph, const GrapplerItem& item,
-                    NodeDef** fetch_node) {
+absl::Status GetFetchNode(const MutableGraphView& graph,
+                          const GrapplerItem& item, NodeDef** fetch_node) {
   if (item.fetch.size() != 1) {
     return errors::InvalidArgument(
         "Expected only one fetch node but there were ", item.fetch.size(), ": ",
@@ -400,7 +411,7 @@ void MaybeSetFusedMetadata(const NodeDef& node1, const NodeDef& node2,
     metadata2.ParseFromString(node2.attr().at("metadata").s());
   }
   data::Metadata fused_metadata;
-  auto normalize_name = [](const string& name) {
+  auto normalize_name = [](const std::string& name) {
     return name.empty() ? "?" : name;
   };
   *fused_metadata.mutable_name() =
@@ -424,18 +435,18 @@ bool CopyShapesAndTypesAttrs(const NodeDef& from, NodeDef* to_node) {
 }
 
 namespace {
-const auto* kSloppyAttrOps = new absl::flat_hash_set<string>{
+const auto* kSloppyAttrOps = new absl::flat_hash_set<std::string>{
     "ParallelInterleaveDatasetV2",
     "ParallelMapDataset",
     "ParseExampleDataset",
 };
 
-const auto* kReplicateOnSplitAttrOps = new absl::flat_hash_set<string>{
+const auto* kReplicateOnSplitAttrOps = new absl::flat_hash_set<std::string>{
     "TensorSliceDataset",
     "RangeDataset",
 };
 
-const auto* kDeterministicAttrOps = new absl::flat_hash_set<string>{
+const auto* kDeterministicAttrOps = new absl::flat_hash_set<std::string>{
     "LegacyParallelInterleaveDatasetV2",
     "ParallelInterleaveDatasetV3",
     "ParallelInterleaveDatasetV4",
@@ -444,17 +455,19 @@ const auto* kDeterministicAttrOps = new absl::flat_hash_set<string>{
 };
 }  // anonymous namespace
 
-bool HasSloppyAttr(const string& op) { return kSloppyAttrOps->contains(op); }
+bool HasSloppyAttr(const std::string& op) {
+  return kSloppyAttrOps->contains(op);
+}
 
-bool HasReplicateOnSplitAttr(const string& op) {
+bool HasReplicateOnSplitAttr(const std::string& op) {
   return kReplicateOnSplitAttrOps->contains(op);
 }
 
-bool HasDeterministicAttr(const string& op) {
+bool HasDeterministicAttr(const std::string& op) {
   return kDeterministicAttrOps->contains(op);
 }
 
-Status SetMetadataName(const std::string& name, NodeDef* node) {
+absl::Status SetMetadataName(const std::string& name, NodeDef* node) {
   data::Metadata metadata;
   if (node->attr().contains("metadata")) {
     metadata.ParseFromString(node->attr().at("metadata").s());

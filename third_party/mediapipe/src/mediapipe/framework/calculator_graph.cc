@@ -17,7 +17,6 @@
 #include <stdio.h>
 
 #include <algorithm>
-#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -28,19 +27,18 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/absl_check.h"
 #include "absl/log/absl_log.h"
-#include "absl/log/check.h"  // nogncheck
-#include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "mediapipe/framework/calculator.pb.h"
 #include "mediapipe/framework/calculator_base.h"
 #include "mediapipe/framework/counter_factory.h"
 #include "mediapipe/framework/delegating_executor.h"
+#include "mediapipe/framework/deps/clock.h"
 #include "mediapipe/framework/executor.h"
 #include "mediapipe/framework/graph_output_stream.h"
 #include "mediapipe/framework/graph_service_manager.h"
@@ -50,13 +48,8 @@
 #include "mediapipe/framework/output_stream_manager.h"
 #include "mediapipe/framework/output_stream_poller.h"
 #include "mediapipe/framework/packet.h"
-#include "mediapipe/framework/packet_generator.h"
-#include "mediapipe/framework/packet_generator.pb.h"
 #include "mediapipe/framework/packet_set.h"
 #include "mediapipe/framework/packet_type.h"
-#include "mediapipe/framework/port.h"
-#include "mediapipe/framework/port/canonical_errors.h"
-#include "mediapipe/framework/port/core_proto_inc.h"
 #include "mediapipe/framework/port/logging.h"
 #include "mediapipe/framework/port/map_util.h"
 #include "mediapipe/framework/port/ret_check.h"
@@ -71,14 +64,19 @@
 #include "mediapipe/framework/thread_pool_executor.pb.h"
 #include "mediapipe/framework/timestamp.h"
 #include "mediapipe/framework/tool/fill_packet_set.h"
+#include "mediapipe/framework/tool/graph_runtime_info_logger.h"  // IWYU pragma: keep
+#include "mediapipe/framework/tool/graph_runtime_info_utils.h"  // IWYU pragma: keep
 #include "mediapipe/framework/tool/status_util.h"
 #include "mediapipe/framework/tool/tag_map.h"
-#include "mediapipe/framework/tool/validate.h"
-#include "mediapipe/framework/tool/validate_name.h"
 #include "mediapipe/framework/validated_graph_config.h"
+#include "mediapipe/framework/vlog_overrides.h"
 #include "mediapipe/gpu/gpu_service.h"
 #include "mediapipe/gpu/graph_support.h"
 #include "mediapipe/util/cpu_util.h"
+
+#if !MEDIAPIPE_DISABLE_GPU
+#include "mediapipe/gpu/gpu_shared_data_internal.h"
+#endif  // !MEDIAPIPE_DISABLE_GPU
 
 namespace mediapipe {
 
@@ -131,14 +129,48 @@ void CalculatorGraph::GraphInputStream::Close() {
   manager_->Close();
 }
 
-CalculatorGraph::CalculatorGraph()
-    : profiler_(std::make_shared<ProfilingContext>()), scheduler_(this) {
-  counter_factory_ = absl::make_unique<BasicCounterFactory>();
+CalculatorGraph::CalculatorGraph() : CalculatorGraph(/*cc=*/nullptr) {}
+
+// Adopt all services from the CalculatorContext / parent graph.
+CalculatorGraph::CalculatorGraph(CalculatorContext* cc)
+    : counter_factory_(std::make_unique<BasicCounterFactory>()),
+      profiler_(std::make_shared<ProfilingContext>()),
+      scheduler_(this) {
+  if (cc != nullptr) {
+    // Nested graphs should not create default initialized services to avoid
+    // collisions between newly created and inherited graphs.
+    // TODO b/368015341- Use factory method to avoid CHECK in constructor.
+    ABSL_CHECK_OK(DisallowServiceDefaultInitialization());
+
+    // Adopt all services from the parent graph except for GpuResources.
+    const auto parent_service_manager = cc->GetGraphServiceManager();
+    const auto parent_service_packets =
+        parent_service_manager->ServicePackets();
+    GraphServiceManager::ServiceMap service_packets;
+    for (const auto& [key, packet] : parent_service_packets) {
+#if !MEDIAPIPE_DISABLE_GPU
+      if (key == kGpuService.key) {
+        // To avoid deadlocks when sharing the same GPU thread between
+        // multiple graphs, we create a new GpuResources instance for each
+        // sub-graph with a dedicated GL context / thread.
+        auto resources = mediapipe::GpuResources::Create(
+            *packet.Get<std::shared_ptr<mediapipe::GpuResources>>());
+        ABSL_CHECK_OK(resources);
+        service_packets[key] =
+            MakePacket<std::shared_ptr<mediapipe::GpuResources>>(*resources);
+        continue;
+      }
+#endif  // !MEDIAPIPE_DISABLE_GPU
+      service_packets[key] = packet;
+    }
+    service_manager_.SetServicePackets(service_packets);
+  }
+  SetVLogOverrides();
 }
 
 CalculatorGraph::CalculatorGraph(CalculatorGraphConfig config)
     : CalculatorGraph() {
-  counter_factory_ = absl::make_unique<BasicCounterFactory>();
+  counter_factory_ = std::make_unique<BasicCounterFactory>();
   MEDIAPIPE_CHECK_OK(Initialize(std::move(config)));
 }
 
@@ -157,7 +189,7 @@ absl::Status CalculatorGraph::InitializePacketGeneratorGraph(
     const std::map<std::string, Packet>& side_packets) {
   // Create and initialize the output side packets.
   if (!validated_graph_->OutputSidePacketInfos().empty()) {
-    output_side_packets_ = absl::make_unique<OutputSidePacketImpl[]>(
+    output_side_packets_ = std::make_unique<OutputSidePacketImpl[]>(
         validated_graph_->OutputSidePacketInfos().size());
   }
   for (int index = 0; index < validated_graph_->OutputSidePacketInfos().size();
@@ -186,7 +218,7 @@ absl::Status CalculatorGraph::InitializeStreams() {
   any_packet_type_.SetAny();
 
   // Create and initialize the input streams.
-  input_stream_managers_ = absl::make_unique<InputStreamManager[]>(
+  input_stream_managers_ = std::make_unique<InputStreamManager[]>(
       validated_graph_->InputStreamInfos().size());
   for (int index = 0; index < validated_graph_->InputStreamInfos().size();
        ++index) {
@@ -197,7 +229,7 @@ absl::Status CalculatorGraph::InitializeStreams() {
   }
 
   // Create and initialize the output streams.
-  output_stream_managers_ = absl::make_unique<OutputStreamManager[]>(
+  output_stream_managers_ = std::make_unique<OutputStreamManager[]>(
       validated_graph_->OutputStreamInfos().size());
   for (int index = 0; index < validated_graph_->OutputStreamInfos().size();
        ++index) {
@@ -223,7 +255,7 @@ absl::Status CalculatorGraph::InitializeStreams() {
               edge_info.parent_node.type)
         .SetNoLogging();
 
-    graph_input_streams_[stream_name] = absl::make_unique<GraphInputStream>(
+    graph_input_streams_[stream_name] = std::make_unique<GraphInputStream>(
         &output_stream_managers_[output_stream_index]);
 
     // Assign a virtual node ID to each graph input stream so we can treat
@@ -267,11 +299,11 @@ absl::Status CalculatorGraph::InitializeCalculatorNodes() {
     // the graph proto.
     int buffer_size_hint = 0;
     NodeTypeInfo::NodeRef node_ref(NodeTypeInfo::NodeType::CALCULATOR, node_id);
-    nodes_.push_back(absl::make_unique<CalculatorNode>());
+    nodes_.push_back(std::make_unique<CalculatorNode>());
     const absl::Status result = nodes_.back()->Initialize(
         validated_graph_.get(), node_ref, input_stream_managers_.get(),
         output_stream_managers_.get(), output_side_packets_.get(),
-        &buffer_size_hint, profiler_);
+        &buffer_size_hint, profiler_, &service_manager_);
     MaybeFixupLegacyGpuNodeContract(*nodes_.back());
     if (buffer_size_hint > 0) {
       max_queue_size_ = std::max(max_queue_size_, buffer_size_hint);
@@ -305,11 +337,11 @@ absl::Status CalculatorGraph::InitializePacketGeneratorNodes(
     int buffer_size_hint = 0;
     NodeTypeInfo::NodeRef node_ref(NodeTypeInfo::NodeType::PACKET_GENERATOR,
                                    index);
-    nodes_.push_back(absl::make_unique<CalculatorNode>());
+    nodes_.push_back(std::make_unique<CalculatorNode>());
     const absl::Status result = nodes_.back()->Initialize(
         validated_graph_.get(), node_ref, input_stream_managers_.get(),
         output_stream_managers_.get(), output_side_packets_.get(),
-        &buffer_size_hint, profiler_);
+        &buffer_size_hint, profiler_, &service_manager_);
     MaybeFixupLegacyGpuNodeContract(*nodes_.back());
     if (!result.ok()) {
       // Collect as many errors as we can before failing.
@@ -380,6 +412,11 @@ absl::Status CalculatorGraph::InitializeExecutors() {
     MEDIAPIPE_CHECK_OK(SetExecutorInternal(
         executor_config.name(), std::shared_ptr<Executor>(executor)));
   }
+#ifdef __EMSCRIPTEN__
+  // Emscripten runs the application single threaded and therefore requires to
+  // use the application thread.
+  use_application_thread = true;
+#endif  // __EMSCRIPTEN__
 
   if (!mediapipe::ContainsKey(executors_, "")) {
     MP_RETURN_IF_ERROR(InitializeDefaultExecutor(default_executor_options,
@@ -393,7 +430,9 @@ absl::Status CalculatorGraph::InitializeDefaultExecutor(
     const ThreadPoolExecutorOptions* default_executor_options,
     bool use_application_thread) {
 #ifdef __EMSCRIPTEN__
-  use_application_thread = true;
+  // Emscripten runs the application single threaded and therefore requires to
+  // use the application thread.
+  RET_CHECK(use_application_thread);
 #endif  // __EMSCRIPTEN__
   // If specified, run synchronously on the calling thread.
   if (use_application_thread) {
@@ -445,6 +484,17 @@ absl::Status CalculatorGraph::Initialize(
 #endif
 
   initialized_ = true;
+
+#if !defined(__EMSCRIPTEN__)
+  // Emscripten only supports single threaded applications.
+  const auto& runtime_info_logger_config =
+      validated_graph_->Config().runtime_info();
+  if (runtime_info_logger_config.enable_graph_runtime_info()) {
+    MP_RETURN_IF_ERROR(graph_runtime_info_logger_.StartInBackground(
+        runtime_info_logger_config,
+        [this]() { return GetGraphRuntimeInfo(); }));
+  }
+#endif  // defined(__EMSCRIPTEN__)
   return absl::OkStatus();
 }
 
@@ -455,7 +505,7 @@ absl::Status CalculatorGraph::Initialize(CalculatorGraphConfig input_config) {
 absl::Status CalculatorGraph::Initialize(
     CalculatorGraphConfig input_config,
     const std::map<std::string, Packet>& side_packets) {
-  auto validated_graph = absl::make_unique<ValidatedGraphConfig>();
+  auto validated_graph = std::make_unique<ValidatedGraphConfig>();
   MP_RETURN_IF_ERROR(validated_graph->Initialize(
       std::move(input_config), /*graph_registry=*/nullptr,
       /*graph_options=*/nullptr, &service_manager_));
@@ -467,7 +517,7 @@ absl::Status CalculatorGraph::Initialize(
     const std::vector<CalculatorGraphTemplate>& input_templates,
     const std::map<std::string, Packet>& side_packets,
     const std::string& graph_type, const Subgraph::SubgraphOptions* options) {
-  auto validated_graph = absl::make_unique<ValidatedGraphConfig>();
+  auto validated_graph = std::make_unique<ValidatedGraphConfig>();
   MP_RETURN_IF_ERROR(validated_graph->Initialize(
       input_configs, input_templates, graph_type, options, &service_manager_));
   return Initialize(std::move(validated_graph), side_packets);
@@ -487,7 +537,7 @@ absl::Status CalculatorGraph::ObserveOutputStream(
            << "Unable to attach observer to output stream \"" << stream_name
            << "\" because it doesn't exist.";
   }
-  auto observer = absl::make_unique<internal::OutputStreamObserver>();
+  auto observer = std::make_unique<internal::OutputStreamObserver>();
   MP_RETURN_IF_ERROR(observer->Initialize(
       stream_name, &any_packet_type_, std::move(packet_callback),
       &output_stream_managers_[output_stream_index], observe_timestamp_bounds));
@@ -631,7 +681,7 @@ std::map<std::string, Packet> CalculatorGraph::MaybeCreateLegacyGpuSidePacket(
        legacy_sp.Get<::mediapipe::GpuSharedData*>()->gpu_resources !=
            gpu_resources)) {
     legacy_gpu_shared_ =
-        absl::make_unique<mediapipe::GpuSharedData>(gpu_resources);
+        std::make_unique<mediapipe::GpuSharedData>(gpu_resources);
     additional_side_packets[kGpuSharedSidePacketName] =
         MakePacket<::mediapipe::GpuSharedData*>(legacy_gpu_shared_.get());
   }
@@ -747,6 +797,7 @@ absl::Status CalculatorGraph::PrepareForRun(
 
   if (VLOG_IS_ON(1)) {
     std::vector<std::string> input_side_packet_names;
+    input_side_packet_names.reserve(current_run_side_packets_.size());
     for (const auto& item : current_run_side_packets_) {
       input_side_packet_names.push_back(item.first);
     }
@@ -886,6 +937,26 @@ absl::Status CalculatorGraph::WaitUntilIdle() {
   if (GetCombinedErrors(&status)) {
     ABSL_LOG(ERROR) << status.ToString(kStatusLogFlags);
   }
+
+#if defined(__EMSCRIPTEN__)
+  // Since emscripten runs single-threaded, we use the WaitUntilIdle call to
+  // output the graph runtime info at the configured interval.
+  const auto& runtime_info_logger_config =
+      validated_graph_->Config().runtime_info();
+  if (runtime_info_logger_config.enable_graph_runtime_info()) {
+    const int log_interval_sec =
+        runtime_info_logger_config.capture_period_msec() / 1000;
+    const auto get_graph_runtime_info = [&]() -> std::string {
+      const auto graph_runtime_info = GetGraphRuntimeInfo();
+      ABSL_CHECK_OK(graph_runtime_info);
+      const auto graph_runtime_info_str =
+          tool::GetGraphRuntimeInfoString(*graph_runtime_info);
+      ABSL_CHECK_OK(graph_runtime_info_str);
+      return *graph_runtime_info_str;
+    };
+    ABSL_LOG_EVERY_N_SEC(INFO, log_interval_sec) << get_graph_runtime_info();
+  }
+#endif  // defined(__EMSCRIPTEN__)
   return status;
 }
 
@@ -899,6 +970,17 @@ absl::Status CalculatorGraph::WaitUntilDone() {
 
 absl::Status CalculatorGraph::WaitForObservedOutput() {
   return scheduler_.WaitForObservedOutput();
+}
+
+absl::StatusOr<GraphRuntimeInfo> CalculatorGraph::GetGraphRuntimeInfo() {
+  RET_CHECK(initialized_);
+  GraphRuntimeInfo info;
+  for (const auto& node : nodes_) {
+    *info.add_calculator_infos() = node->GetStreamMonitoringInfo();
+  }
+  const absl::Time time_now = mediapipe::Clock::RealClock()->TimeNow();
+  info.set_capture_time_unix_us(absl::ToUnixMicros(time_now));
+  return info;
 }
 
 absl::Status CalculatorGraph::AddPacketToInputStream(
@@ -1449,29 +1531,6 @@ std::string CalculatorGraph::GetParentNodeDebugName(
 
   return DebugName(config.node(node_index));
 }
-
-namespace {
-void PrintTimingToInfo(const std::string& label, int64_t timer_value) {
-  const int64_t total_seconds = timer_value / 1000000ll;
-  const int64_t days = total_seconds / (3600ll * 24ll);
-  const int64_t hours = (total_seconds / 3600ll) % 24ll;
-  const int64_t minutes = (total_seconds / 60ll) % 60ll;
-  const int64_t seconds = total_seconds % 60ll;
-  const int64_t milliseconds = (timer_value / 1000ll) % 1000ll;
-  ABSL_LOG(INFO)
-      << label << " took "
-      << absl::StrFormat(
-             "%02lld days, %02lld:%02lld:%02lld.%03lld (total seconds: "
-             "%lld.%06lld)",
-             days, hours, minutes, seconds, milliseconds, total_seconds,
-             timer_value % int64_t{1000000});
-}
-
-bool MetricElementComparator(const std::pair<std::string, int64_t>& e1,
-                             const std::pair<std::string, int64_t>& e2) {
-  return e1.second > e2.second;
-}
-}  // namespace
 
 absl::Status CalculatorGraph::GetCalculatorProfiles(
     std::vector<CalculatorProfile>* profiles) const {

@@ -7,16 +7,16 @@
 #include <memory>
 #include <utility>
 
-#include "build/build_config.h"
+#include "partition_alloc/build_config.h"
+#include "partition_alloc/buildflags.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/logging.h"
-#include "partition_alloc/partition_alloc_buildflags.h"
 #include "partition_alloc/partition_alloc_config.h"
 #include "partition_alloc/partition_alloc_for_testing.h"
 #include "partition_alloc/shim/allocator_shim_default_dispatch_to_partition_alloc.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
     PA_CONFIG(THREAD_CACHE_SUPPORTED)
 #include "partition_alloc/extended_api.h"
 #include "partition_alloc/thread_cache.h"
@@ -45,7 +45,6 @@ class MemoryReclaimerTest : public ::testing::Test {
     MemoryReclaimer::Instance()->ResetForTesting();
 
     PartitionOptions opts;
-    opts.star_scan_quarantine = PartitionOptions::kAllowed;
     allocator_ = std::make_unique<PartitionAllocatorForTesting>(opts);
     allocator_->root()->UncapEmptySlotSpanMemoryForTesting();
     PartitionAllocGlobalInit(HandleOOM);
@@ -59,7 +58,7 @@ class MemoryReclaimerTest : public ::testing::Test {
     PartitionAllocGlobalUninitForTesting();
   }
 
-  void Reclaim() { MemoryReclaimer::Instance()->ReclaimNormal(); }
+  void Reclaim() { MemoryReclaimer::Instance()->ReclaimForTesting(); }
 
   void AllocateAndFree() {
     void* data = allocator_->root()->Alloc(1);
@@ -101,7 +100,7 @@ TEST_F(MemoryReclaimerTest, Reclaim) {
   }
 }
 
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
     PA_CONFIG(THREAD_CACHE_SUPPORTED)
 
 namespace {
@@ -114,16 +113,19 @@ PA_NOINLINE void FreeForTest(void* data) {
 
 TEST_F(MemoryReclaimerTest, DoNotAlwaysPurgeThreadCache) {
   // Make sure the thread cache is enabled in the main partition.
-  internal::ThreadCacheProcessScopeForTesting scope(
-      allocator_shim::internal::PartitionAllocMalloc::Allocator());
+  auto* root = allocator_shim::internal::PartitionAllocMalloc::Allocator();
+  internal::ThreadCacheProcessScopeForTesting scope(root);
 
   for (size_t i = 0; i < ThreadCache::kDefaultSizeThreshold; i++) {
     void* data = malloc(i);
     FreeForTest(data);
   }
 
-  auto* tcache = ThreadCache::Get();
+  auto* tcache = root->thread_cache_for_testing();
   ASSERT_TRUE(tcache);
+  // ThreadCache must not be tomestone. If so, tcache->CacheMemory() will
+  // cause memory access violation.
+  ASSERT_TRUE(!ThreadCache::IsTombstone());
   size_t cached_size = tcache->CachedMemory();
 
   Reclaim();
@@ -142,7 +144,7 @@ TEST_F(MemoryReclaimerTest, DoNotAlwaysPurgeThreadCache) {
   EXPECT_LT(tcache->CachedMemory(), cached_size / 2);
 }
 
-#endif  // BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) && \
         // PA_CONFIG(THREAD_CACHE_SUPPORTED)
 
 }  // namespace partition_alloc

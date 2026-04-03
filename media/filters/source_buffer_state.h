@@ -62,7 +62,7 @@ class MEDIA_EXPORT SourceBufferState {
   // append failure using a `QuotaExceededErr` exception per the MSE
   // specification. App could use a back-off and retry strategy or otherwise
   // alter their behavior to attempt to buffer media for further playback.
-  [[nodiscard]] bool AppendToParseBuffer(const uint8_t* data, size_t length);
+  [[nodiscard]] bool AppendToParseBuffer(base::span<const uint8_t> data);
 
   // Tells the stream parser to parse more of the data previously sent to it
   // from this object's AppendToParseBuffer(). `*timestamp_offset` is used and
@@ -103,17 +103,6 @@ class MEDIA_EXPORT SourceBufferState {
   // Returns false iff buffer is still full after running eviction.
   // https://w3c.github.io/media-source/#sourcebuffer-coded-frame-eviction
   bool EvictCodedFrames(base::TimeDelta media_time, size_t newDataSize);
-
-  // Gets invoked when the system is experiencing memory pressure, i.e. there's
-  // not enough free memory. The |media_time| is the media playback position at
-  // the time of memory pressure notification (needed for accurate GC). The
-  // |memory_pressure_level| indicates memory pressure severity. The
-  // |force_instant_gc| is used to force the MSE garbage collection algorithm to
-  // be run right away, without waiting for the next append.
-  void OnMemoryPressure(
-      base::TimeDelta media_time,
-      base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level,
-      bool force_instant_gc);
 
   // Returns true if currently parsing a media segment, or false otherwise.
   bool parsing_media_segment() const { return parsing_media_segment_; }

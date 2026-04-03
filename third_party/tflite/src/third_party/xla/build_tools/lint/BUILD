@@ -13,11 +13,10 @@
 # limitations under the License.
 # ============================================================================
 
-load("//xla:pytype.default.bzl", "pytype_strict_library")
-# Placeholder: load py_test
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//xla:pytype.bzl", "pytype_strict_binary", "pytype_strict_library")
 
 package(
-    default_visibility = ["//visibility:public"],
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     licenses = ["notice"],
 )
@@ -48,6 +47,7 @@ py_test(
     ],
     deps = [
         ":check_contents",
+        ":diff_parser",
         "//build_tools:test_utils",
         "@absl_py//absl/testing:absltest",
     ],
@@ -75,4 +75,9 @@ py_test(
         ":generate_compile_commands",
         "@absl_py//absl/testing:absltest",
     ],
+)
+
+pytype_strict_binary(
+    name = "tags",
+    srcs = ["tags.py"],
 )

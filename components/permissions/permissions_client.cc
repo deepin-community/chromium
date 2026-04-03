@@ -6,13 +6,14 @@
 
 #include "base/functional/callback.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/permissions/permission_request_enums.h"
 #include "components/permissions/permission_uma_util.h"
+#include "components/permissions/resolvers/permission_prompt_options.h"
 #include "content/public/browser/web_contents.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "ui/gfx/paint_vector_icon.h"
+#include "ui/gfx/vector_icon_types.h"
 #endif
 
 namespace permissions {
@@ -44,8 +45,9 @@ double PermissionsClient::GetSiteEngagementScore(
 void PermissionsClient::AreSitesImportant(
     content::BrowserContext* browser_context,
     std::vector<std::pair<url::Origin, bool>>* origins) {
-  for (auto& entry : *origins)
+  for (auto& entry : *origins) {
     entry.second = false;
+  }
 }
 
 bool PermissionsClient::IsCookieDeletionDisabled(
@@ -54,11 +56,12 @@ bool PermissionsClient::IsCookieDeletionDisabled(
   return false;
 }
 
-void PermissionsClient::GetUkmSourceId(ContentSettingsType permission_type,
-                                       content::BrowserContext* browser_context,
-                                       content::WebContents* web_contents,
-                                       const GURL& requesting_origin,
-                                       GetUkmSourceIdCallback callback) {
+void PermissionsClient::GetUkmSourceId(
+    ContentSettingsType permission_type,
+    content::BrowserContext* browser_context,
+    content::RenderFrameHost* render_frame_host,
+    const GURL& requesting_origin,
+    GetUkmSourceIdCallback callback) {
   std::move(callback).Run(std::nullopt);
 }
 
@@ -66,7 +69,7 @@ IconId PermissionsClient::GetOverrideIconId(RequestType request_type) {
 #if BUILDFLAG(IS_ANDROID)
   return 0;
 #else
-  return gfx::kNoneIcon;
+  return gfx::VectorIcon::EmptyIcon();
 #endif
 }
 
@@ -86,17 +89,23 @@ void PermissionsClient::TriggerPromptHatsSurveyIfEnabled(
     std::optional<base::TimeDelta> prompt_display_duration,
     bool is_post_prompt,
     const GURL& gurl,
-    base::OnceCallback<void()> hats_shown_callback_) {}
+    std::optional<permissions::feature_params::PermissionElementPromptPosition>
+        pepc_prompt_position,
+    ContentSetting initial_permission_status,
+    base::OnceCallback<void()> hats_shown_callback,
+    PromptOptions prompt_options) {}
 
 void PermissionsClient::OnPromptResolved(
-    RequestType request_type,
+    const PermissionRequest* request,
     PermissionAction action,
-    const GURL& origin,
+    const PromptOptions& prompt_options,
     PermissionPromptDisposition prompt_disposition,
     PermissionPromptDispositionReason prompt_disposition_reason,
-    PermissionRequestGestureType gesture_type,
     std::optional<QuietUiReason> quiet_ui_reason,
     base::TimeDelta prompt_display_duration,
+    std::optional<permissions::feature_params::PermissionElementPromptPosition>
+        pepc_prompt_position,
+    ContentSetting initial_permission_status,
     content::WebContents* web_contents) {}
 
 std::optional<bool>
@@ -105,7 +114,14 @@ PermissionsClient::HadThreeConsecutiveNotificationPermissionDenies(
   return std::nullopt;
 }
 
-std::optional<url::Origin> PermissionsClient::GetAutoApprovalOrigin() {
+std::optional<url::Origin> PermissionsClient::GetAutoApprovalOrigin(
+    content::BrowserContext* browser_context) {
+  return std::nullopt;
+}
+
+std::optional<PermissionAction> PermissionsClient::GetAutoApprovalStatus(
+    content::BrowserContext* browser_context,
+    const GURL& origin) {
   return std::nullopt;
 }
 
@@ -122,15 +138,16 @@ bool PermissionsClient::CanBypassEmbeddingOriginCheck(
   return false;
 }
 
-std::optional<GURL> PermissionsClient::OverrideCanonicalOrigin(
+std::optional<GURL> PermissionsClient::GetCanonicalOriginOverride(
     const GURL& requesting_origin,
     const GURL& embedding_origin) {
   return std::nullopt;
 }
 
-bool PermissionsClient::DoURLsMatchNewTabPage(const GURL& requesting_origin,
-                                              const GURL& embedding_origin) {
-  return false;
+std::optional<GURL> PermissionsClient::GetEmbeddingOriginOverride(
+    const GURL& requesting_origin,
+    content::WebContents* web_contents) {
+  return std::nullopt;
 }
 
 permissions::PermissionIgnoredReason PermissionsClient::DetermineIgnoreReason(
@@ -142,18 +159,6 @@ permissions::PermissionIgnoredReason PermissionsClient::DetermineIgnoreReason(
 bool PermissionsClient::IsDseOrigin(content::BrowserContext* browser_context,
                                     const url::Origin& origin) {
   return false;
-}
-
-infobars::InfoBarManager* PermissionsClient::GetInfoBarManager(
-    content::WebContents* web_contents) {
-  return nullptr;
-}
-
-infobars::InfoBar* PermissionsClient::MaybeCreateInfoBar(
-    content::WebContents* web_contents,
-    ContentSettingsType type,
-    base::WeakPtr<PermissionPromptAndroid> prompt) {
-  return nullptr;
 }
 
 std::unique_ptr<PermissionsClient::PermissionMessageDelegate>
@@ -191,6 +196,36 @@ bool PermissionsClient::HasDevicePermission(ContentSettingsType type) const {
 
 bool PermissionsClient::CanRequestDevicePermission(
     ContentSettingsType type) const {
+  return false;
+}
+
+bool PermissionsClient::IsPermissionAllowedByDevicePolicy(
+    content::WebContents* web_contents,
+    PermissionSetting setting,
+    const content_settings::SettingInfo& info,
+    ContentSettingsType type) const {
+  return false;
+}
+
+bool PermissionsClient::IsPermissionBlockedByDevicePolicy(
+    content::WebContents* web_contents,
+    PermissionSetting setting,
+    const content_settings::SettingInfo& info,
+    ContentSettingsType type) const {
+  return false;
+}
+
+bool PermissionsClient::IsSystemDenied(ContentSettingsType type) const {
+  return false;
+}
+
+bool PermissionsClient::CanPromptSystemPermission(
+    ContentSettingsType type) const {
+  return false;
+}
+
+bool PermissionsClient::IsActorOperatingOnWebContents(
+    content::WebContents* web_contents) const {
   return false;
 }
 

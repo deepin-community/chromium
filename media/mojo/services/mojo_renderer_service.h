@@ -63,7 +63,6 @@ class MEDIA_MOJO_EXPORT MojoRendererService final : public mojom::Renderer,
       mojo::PendingAssociatedRemote<mojom::RendererClient> client,
       std::optional<std::vector<mojo::PendingRemote<mojom::DemuxerStream>>>
           streams,
-      mojom::MediaUrlParamsPtr media_url_params,
       InitializeCallback callback) final;
   void Flush(FlushCallback callback) final;
   void StartPlayingFrom(base::TimeDelta time_delta) final;
@@ -71,6 +70,7 @@ class MEDIA_MOJO_EXPORT MojoRendererService final : public mojom::Renderer,
   void SetVolume(float volume) final;
   void SetCdm(const std::optional<base::UnguessableToken>& cdm_id,
               SetCdmCallback callback) final;
+  void SetLatencyHint(std::optional<base::TimeDelta> latency_hint) final;
 
  private:
   enum State {

@@ -26,12 +26,14 @@
 #include <vector>
 
 #include "absl/functional/any_invocable.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_format.h"
 #include "absl/types/span.h"
 #include "./fuzztest/domain_core.h"
 #include "./fuzztest/internal/domains/aggregate_of_impl.h"
-#include "./fuzztest/internal/domains/domain_base.h"
+#include "./fuzztest/internal/domains/domain.h"
 #include "./fuzztest/internal/meta.h"
+#include "./fuzztest/internal/printer.h"
 #include "./fuzztest/internal/type_support.h"
 
 namespace fuzztest {
@@ -180,13 +182,13 @@ class Registration : private Base {
 
     // We use a direct call to PrintUserValue because we don't have a
     // corpus_type object to pass to PrintValue.
-    bool first = true;
-    const auto print_one_arg = [&](auto I) {
-      using value_type = std::decay_t<std::tuple_element_t<I, SeedT>>;
-      AutodetectTypePrinter<value_type>().PrintUserValue(
-          std::get<I>(seed), &std::cerr, PrintMode::kHumanReadable);
+    auto print_one_arg = [&seed, first = true](auto I) mutable {
       if (!first) absl::FPrintF(stderr, ", ");
       first = false;
+      using value_type = std::decay_t<std::tuple_element_t<I, SeedT>>;
+      AutodetectTypePrinter<value_type>().PrintUserValue(
+          std::get<I>(seed), &std::cerr,
+          domain_implementor::PrintMode::kHumanReadable);
     };
     ApplyIndex<Base::kNumArgs>([&](auto... I) { (print_one_arg(I), ...); });
     absl::FPrintF(stderr, "}\n\n");

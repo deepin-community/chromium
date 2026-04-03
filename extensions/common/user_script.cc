@@ -100,9 +100,9 @@ UserScript::Source UserScript::GetSourceForScriptID(
     return Source::kDynamicUserScript;
   }
 
-  // TODO(crbug.com/1475409): Handle gracefully when a new source is handed,
+  // TODO(crbug.com/40927913): Handle gracefully when a new source is handed,
   // specially when user has different Chrome versions.
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 // static
@@ -115,11 +115,11 @@ bool UserScript::IsURLUserScript(const GURL& url,
 
 // static
 int UserScript::ValidUserScriptSchemes(bool can_execute_script_everywhere) {
-  if (can_execute_script_everywhere)
+  if (can_execute_script_everywhere) {
     return URLPattern::SCHEME_ALL;
+  }
   int valid_schemes = kValidUserScriptSchemes;
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kExtensionsOnChromeURLs)) {
+  if (!switches::AreExtensionsOnChromeURLsAllowed()) {
     valid_schemes &= ~URLPattern::SCHEME_CHROMEUI;
   }
   return valid_schemes;
@@ -195,6 +195,7 @@ std::unique_ptr<UserScript> UserScript::CopyMetadataFrom(
   script->match_origin_as_fallback_ = other.match_origin_as_fallback_;
   script->incognito_enabled_ = other.incognito_enabled_;
   script->execution_world_ = other.execution_world_;
+  script->world_id_ = other.world_id_;
 
   return script;
 }
@@ -240,8 +241,9 @@ bool UserScript::MatchesURL(const GURL& url) const {
 
 bool UserScript::MatchesDocument(const GURL& effective_document_url,
                                  bool is_subframe) const {
-  if (is_subframe && !match_all_frames())
+  if (is_subframe && !match_all_frames()) {
     return false;
+  }
 
   return MatchesURL(effective_document_url);
 }
@@ -252,8 +254,7 @@ void UserScript::Content::Pickle(base::Pickle* pickle) const {
   // Do not write content. It will be serialized by other means.
 }
 
-void UserScript::Content::Unpickle(const base::Pickle& pickle,
-                                   base::PickleIterator* iter) {
+void UserScript::Content::Unpickle(base::PickleIterator* iter) {
   // Read the url from the pickle.
   std::string url;
   CHECK(iter->ReadString(&url));
@@ -269,6 +270,9 @@ void UserScript::Pickle(base::Pickle* pickle) const {
   pickle->WriteInt(static_cast<int>(match_origin_as_fallback()));
   pickle->WriteBool(is_incognito_enabled());
   pickle->WriteInt(static_cast<int>(execution_world()));
+  // Pickling doesn't really have support for optionals. If there's no world ID
+  // specified, simply pass an "_".
+  pickle->WriteString(world_id().value_or("_"));
 
   PickleHostID(pickle, host_id_);
   pickle->WriteInt(consumer_instance_type());
@@ -312,8 +316,7 @@ void UserScript::PickleScripts(base::Pickle* pickle,
   }
 }
 
-void UserScript::Unpickle(const base::Pickle& pickle,
-                          base::PickleIterator* iter) {
+void UserScript::Unpickle(base::PickleIterator* iter) {
   // Read the run location.
   int run_location = 0;
   CHECK(iter->ReadInt(&run_location));
@@ -326,8 +329,8 @@ void UserScript::Unpickle(const base::Pickle& pickle,
   CHECK(iter->ReadBool(&match_all_frames_));
   int match_origin_as_fallback_int = 0;
   CHECK(iter->ReadInt(&match_origin_as_fallback_int));
-  match_origin_as_fallback_ =
-      static_cast<MatchOriginAsFallbackBehavior>(match_origin_as_fallback_int);
+  match_origin_as_fallback_ = static_cast<mojom::MatchOriginAsFallbackBehavior>(
+      match_origin_as_fallback_int);
   CHECK(iter->ReadBool(&incognito_enabled_));
 
   // Read the execution world.
@@ -337,23 +340,30 @@ void UserScript::Unpickle(const base::Pickle& pickle,
         execution_world <= static_cast<int>(mojom::ExecutionWorld::kMaxValue));
   execution_world_ = static_cast<mojom::ExecutionWorld>(execution_world);
 
-  UnpickleHostID(pickle, iter, &host_id_);
+  std::string world_id_str;
+  CHECK(iter->ReadString(&world_id_str));
+  if (world_id_str != "_") {
+    // Pickling doesn't support optionals. We pass an "_" as a placeholder if
+    // there was no world ID specified on the original UserScript.
+    world_id_ = world_id_str;
+  }
+
+  UnpickleHostID(iter, &host_id_);
 
   int consumer_instance_type = 0;
   CHECK(iter->ReadInt(&consumer_instance_type));
   consumer_instance_type_ =
       static_cast<ConsumerInstanceType>(consumer_instance_type);
 
-  UnpickleGlobs(pickle, iter, &globs_);
-  UnpickleGlobs(pickle, iter, &exclude_globs_);
-  UnpickleURLPatternSet(pickle, iter, &url_set_);
-  UnpickleURLPatternSet(pickle, iter, &exclude_url_set_);
-  UnpickleScripts(pickle, iter, &js_scripts_);
-  UnpickleScripts(pickle, iter, &css_scripts_);
+  UnpickleGlobs(iter, &globs_);
+  UnpickleGlobs(iter, &exclude_globs_);
+  UnpickleURLPatternSet(iter, &url_set_);
+  UnpickleURLPatternSet(iter, &exclude_url_set_);
+  UnpickleScripts(iter, &js_scripts_);
+  UnpickleScripts(iter, &css_scripts_);
 }
 
-void UserScript::UnpickleGlobs(const base::Pickle& pickle,
-                               base::PickleIterator* iter,
+void UserScript::UnpickleGlobs(base::PickleIterator* iter,
                                std::vector<std::string>* globs) {
   uint32_t num_globs = 0;
   CHECK(iter->ReadUInt32(&num_globs));
@@ -365,8 +375,7 @@ void UserScript::UnpickleGlobs(const base::Pickle& pickle,
   }
 }
 
-void UserScript::UnpickleHostID(const base::Pickle& pickle,
-                                base::PickleIterator* iter,
+void UserScript::UnpickleHostID(base::PickleIterator* iter,
                                 mojom::HostID* host_id) {
   int type = 0;
   std::string id;
@@ -375,8 +384,7 @@ void UserScript::UnpickleHostID(const base::Pickle& pickle,
   *host_id = mojom::HostID(static_cast<mojom::HostID::HostType>(type), id);
 }
 
-void UserScript::UnpickleURLPatternSet(const base::Pickle& pickle,
-                                       base::PickleIterator* iter,
+void UserScript::UnpickleURLPatternSet(base::PickleIterator* iter,
                                        URLPatternSet* pattern_list) {
   uint32_t num_patterns = 0;
   CHECK(iter->ReadUInt32(&num_patterns));
@@ -400,15 +408,14 @@ void UserScript::UnpickleURLPatternSet(const base::Pickle& pickle,
   }
 }
 
-void UserScript::UnpickleScripts(const base::Pickle& pickle,
-                                 base::PickleIterator* iter,
+void UserScript::UnpickleScripts(base::PickleIterator* iter,
                                  ContentList* scripts) {
   uint32_t num_files = 0;
   CHECK(iter->ReadUInt32(&num_files));
   scripts->clear();
   for (uint32_t i = 0; i < num_files; ++i) {
     std::unique_ptr<Content> file(new Content());
-    file->Unpickle(pickle, iter);
+    file->Unpickle(iter);
     scripts->push_back(std::move(file));
   }
 }

@@ -4,9 +4,7 @@
 
 #include "content/browser/preloading/prefetch/prefetch_origin_prober.h"
 
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/strings/string_util.h"
 #include "content/browser/preloading/prefetch/prefetch_canary_checker.h"
 #include "content/browser/preloading/prefetch/prefetch_dns_prober.h"
 #include "content/browser/preloading/prefetch/prefetch_params.h"
@@ -23,7 +21,6 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/tcp_socket.mojom.h"
 #include "services/network/public/mojom/tls_socket.mojom.h"
-#include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/origin.h"
 
 namespace content {
@@ -169,28 +166,34 @@ PrefetchOriginProber::PrefetchOriginProber(BrowserContext* browser_context,
 PrefetchOriginProber::~PrefetchOriginProber() = default;
 
 void PrefetchOriginProber::RunCanaryChecksIfNeeded() const {
-  if (!PrefetchProbingEnabled() || !PrefetchCanaryCheckEnabled())
+  if (!PrefetchProbingEnabled() || !PrefetchCanaryCheckEnabled()) {
     return;
+  }
 
-  if (dns_canary_checker_)
+  if (dns_canary_checker_) {
     dns_canary_checker_->RunChecksIfNeeded();
-  if (tls_canary_checker_)
+  }
+  if (tls_canary_checker_) {
     tls_canary_checker_->RunChecksIfNeeded();
+  }
 }
 
 bool PrefetchOriginProber::ShouldProbeOrigins() const {
-  if (!PrefetchProbingEnabled())
+  if (!PrefetchProbingEnabled()) {
     return false;
-  if (!PrefetchCanaryCheckEnabled() || !dns_canary_checker_)
+  }
+  if (!PrefetchCanaryCheckEnabled() || !dns_canary_checker_) {
     return true;
+  }
 
   // We call CanaryCheckSuccessful on all enabled canary checks to make sure
   // their cache gets refreshed if necessary.
   bool dns_success =
       dns_canary_checker_->CanaryCheckSuccessful().value_or(false);
   bool tls_success = true;
-  if (tls_canary_checker_)
+  if (tls_canary_checker_) {
     tls_success = tls_canary_checker_->CanaryCheckSuccessful().value_or(false);
+  }
 
   // If either check has failed or not completed in time, then probe.
   return !dns_success || !tls_success;
@@ -200,24 +203,12 @@ void PrefetchOriginProber::Probe(const GURL& url,
                                  OnProbeResultCallback callback) {
   // If canary checks are disabled, or if the TLS canary check is enabled and
   // failed (or did not complete), do TLS probing.
-  if (!PrefetchCanaryCheckEnabled() ||
+  bool also_do_tls_connect =
+      !PrefetchCanaryCheckEnabled() ||
       (tls_canary_checker_ &&
-       !tls_canary_checker_->CanaryCheckSuccessful().value_or(false))) {
-    TLSProbe(url, std::move(callback));
-    return;
-  }
+       !tls_canary_checker_->CanaryCheckSuccessful().value_or(false));
 
-  DNSProbe(url, std::move(callback));
-}
-
-void PrefetchOriginProber::DNSProbe(const GURL& url,
-                                    OnProbeResultCallback callback) {
-  StartDNSResolution(url, std::move(callback), /*also_do_tls_connect=*/false);
-}
-
-void PrefetchOriginProber::TLSProbe(const GURL& url,
-                                    OnProbeResultCallback callback) {
-  StartDNSResolution(url, std::move(callback), /*also_do_tls_connect=*/true);
+  StartDNSResolution(url, std::move(callback), also_do_tls_connect);
 }
 
 void PrefetchOriginProber::StartDNSResolution(const GURL& url,
@@ -239,8 +230,8 @@ void PrefetchOriginProber::StartDNSResolution(const GURL& url,
           std::move(callback), also_do_tls_connect)),
       client_remote.InitWithNewPipeAndPassReceiver());
 
-  // TODO(crbug.com/1355169): Consider passing a SchemeHostPort to trigger HTTPS
-  // DNS resource record query.
+  // TODO(crbug.com/40235854): Consider passing a SchemeHostPort to trigger
+  // HTTPS DNS resource record query.
   browser_context_->GetDefaultStoragePartition()
       ->GetNetworkContext()
       ->ResolveHost(network::mojom::HostResolverHost::NewHostPortPair(
@@ -254,9 +245,8 @@ void PrefetchOriginProber::OnDNSResolved(
     OnProbeResultCallback callback,
     bool also_do_tls_connect,
     int net_error,
-    const std::optional<net::AddressList>& resolved_addresses) {
-  bool successful = net_error == net::OK && resolved_addresses &&
-                    !resolved_addresses->empty();
+    const net::AddressList& resolved_addresses) {
+  bool successful = net_error == net::OK && !resolved_addresses.empty();
 
   // A TLS connection needs the resolved addresses, so it also fails here.
   if (!successful) {
@@ -269,7 +259,7 @@ void PrefetchOriginProber::OnDNSResolved(
     return;
   }
 
-  DoTLSProbeAfterDNSResolution(url, std::move(callback), *resolved_addresses);
+  DoTLSProbeAfterDNSResolution(url, std::move(callback), resolved_addresses);
 }
 
 void PrefetchOriginProber::DoTLSProbeAfterDNSResolution(

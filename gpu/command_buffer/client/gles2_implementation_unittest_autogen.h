@@ -8,6 +8,11 @@
 //    clang-format -i -style=chromium filename
 // DO NOT EDIT!
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 // This file is included by gles2_implementation.h to declare the
 // GL api functions.
 #ifndef GPU_COMMAND_BUFFER_CLIENT_GLES2_IMPLEMENTATION_UNITTEST_AUTOGEN_H_
@@ -21,81 +26,6 @@ TEST_F(GLES2ImplementationTest, AttachShader) {
   expected.cmd.Init(1, 2);
 
   gl_->AttachShader(1, 2);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationTest, BindBuffer) {
-  struct Cmds {
-    cmds::BindBuffer cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(GL_ARRAY_BUFFER, 2);
-
-  gl_->BindBuffer(GL_ARRAY_BUFFER, 2);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-  ClearCommands();
-  gl_->BindBuffer(GL_ARRAY_BUFFER, 2);
-  EXPECT_TRUE(NoCommandsWritten());
-}
-
-TEST_F(GLES2ImplementationTest, BindBufferBase) {
-  struct Cmds {
-    cmds::BindBufferBase cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(GL_TRANSFORM_FEEDBACK_BUFFER, 2, 3);
-
-  gl_->BindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 2, 3);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationTest, BindBufferRange) {
-  struct Cmds {
-    cmds::BindBufferRange cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(GL_TRANSFORM_FEEDBACK_BUFFER, 2, 3, 4, 4);
-
-  gl_->BindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 2, 3, 4, 4);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationTest, BindFramebuffer) {
-  struct Cmds {
-    cmds::BindFramebuffer cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(GL_FRAMEBUFFER, 2);
-
-  gl_->BindFramebuffer(GL_FRAMEBUFFER, 2);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-  ClearCommands();
-  gl_->BindFramebuffer(GL_FRAMEBUFFER, 2);
-  EXPECT_TRUE(NoCommandsWritten());
-}
-
-TEST_F(GLES2ImplementationTest, BindRenderbuffer) {
-  struct Cmds {
-    cmds::BindRenderbuffer cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(GL_RENDERBUFFER, 2);
-
-  gl_->BindRenderbuffer(GL_RENDERBUFFER, 2);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-  ClearCommands();
-  gl_->BindRenderbuffer(GL_RENDERBUFFER, 2);
-  EXPECT_TRUE(NoCommandsWritten());
-}
-
-TEST_F(GLES2ImplementationTest, BindSampler) {
-  struct Cmds {
-    cmds::BindSampler cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(1, 2);
-
-  gl_->BindSampler(1, 2);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
@@ -207,7 +137,7 @@ TEST_F(GLES2ImplementationTest, ClearBufferfi) {
 }
 
 TEST_F(GLES2ImplementationTest, ClearBufferfv) {
-  GLfloat data[4] = {0};
+  GLfloat data[4] = {};
   struct Cmds {
     cmds::ClearBufferfvImmediate cmd;
     GLfloat data[4];
@@ -223,7 +153,7 @@ TEST_F(GLES2ImplementationTest, ClearBufferfv) {
 }
 
 TEST_F(GLES2ImplementationTest, ClearBufferiv) {
-  GLint data[4] = {0};
+  GLint data[4] = {};
   struct Cmds {
     cmds::ClearBufferivImmediate cmd;
     GLint data[4];
@@ -239,7 +169,7 @@ TEST_F(GLES2ImplementationTest, ClearBufferiv) {
 }
 
 TEST_F(GLES2ImplementationTest, ClearBufferuiv) {
-  GLuint data[4] = {0};
+  GLuint data[4] = {};
   struct Cmds {
     cmds::ClearBufferuivImmediate cmd;
     GLuint data[4];
@@ -622,9 +552,7 @@ TEST_F(GLES2ImplementationTest, FrontFace) {
 }
 
 TEST_F(GLES2ImplementationTest, GenBuffers) {
-  GLuint ids[2] = {
-      0,
-  };
+  GLuint ids[2] = {};
   struct Cmds {
     cmds::GenBuffersImmediate gen;
     GLuint data[2];
@@ -651,9 +579,7 @@ TEST_F(GLES2ImplementationTest, GenerateMipmap) {
 }
 
 TEST_F(GLES2ImplementationTest, GenFramebuffers) {
-  GLuint ids[2] = {
-      0,
-  };
+  GLuint ids[2] = {};
   struct Cmds {
     cmds::GenFramebuffersImmediate gen;
     GLuint data[2];
@@ -669,9 +595,7 @@ TEST_F(GLES2ImplementationTest, GenFramebuffers) {
 }
 
 TEST_F(GLES2ImplementationTest, GenRenderbuffers) {
-  GLuint ids[2] = {
-      0,
-  };
+  GLuint ids[2] = {};
   struct Cmds {
     cmds::GenRenderbuffersImmediate gen;
     GLuint data[2];
@@ -687,9 +611,7 @@ TEST_F(GLES2ImplementationTest, GenRenderbuffers) {
 }
 
 TEST_F(GLES2ImplementationTest, GenSamplers) {
-  GLuint ids[2] = {
-      0,
-  };
+  GLuint ids[2] = {};
   struct Cmds {
     cmds::GenSamplersImmediate gen;
     GLuint data[2];
@@ -705,9 +627,7 @@ TEST_F(GLES2ImplementationTest, GenSamplers) {
 }
 
 TEST_F(GLES2ImplementationTest, GenTextures) {
-  GLuint ids[2] = {
-      0,
-  };
+  GLuint ids[2] = {};
   struct Cmds {
     cmds::GenTexturesImmediate gen;
     GLuint data[2];
@@ -723,9 +643,7 @@ TEST_F(GLES2ImplementationTest, GenTextures) {
 }
 
 TEST_F(GLES2ImplementationTest, GenTransformFeedbacks) {
-  GLuint ids[2] = {
-      0,
-  };
+  GLuint ids[2] = {};
   struct Cmds {
     cmds::GenTransformFeedbacksImmediate gen;
     GLuint data[2];
@@ -754,24 +672,6 @@ TEST_F(GLES2ImplementationTest, GetBooleanv) {
       .WillOnce(SetMemory(result1.ptr, SizedResultHelper<ResultType>(1)))
       .RetiresOnSaturation();
   gl_->GetBooleanv(123, &result);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-  EXPECT_EQ(static_cast<ResultType>(1), result);
-}
-
-TEST_F(GLES2ImplementationTest, GetBooleani_v) {
-  struct Cmds {
-    cmds::GetBooleani_v cmd;
-  };
-  typedef cmds::GetBooleani_v::Result::Type ResultType;
-  ResultType result = 0;
-  Cmds expected;
-  ExpectedMemoryInfo result1 =
-      GetExpectedResultMemory(sizeof(uint32_t) + sizeof(ResultType));
-  expected.cmd.Init(123, 2, result1.id, result1.offset);
-  EXPECT_CALL(*command_buffer(), OnFlush())
-      .WillOnce(SetMemory(result1.ptr, SizedResultHelper<ResultType>(1)))
-      .RetiresOnSaturation();
-  gl_->GetBooleani_v(123, 2, &result);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
   EXPECT_EQ(static_cast<ResultType>(1), result);
 }
@@ -1157,7 +1057,7 @@ TEST_F(GLES2ImplementationTest, Hint) {
 }
 
 TEST_F(GLES2ImplementationTest, InvalidateFramebuffer) {
-  GLenum data[2][1] = {{0}};
+  GLenum data[2][1] = {};
   struct Cmds {
     cmds::InvalidateFramebufferImmediate cmd;
     GLenum data[2][1];
@@ -1175,7 +1075,7 @@ TEST_F(GLES2ImplementationTest, InvalidateFramebuffer) {
 }
 
 TEST_F(GLES2ImplementationTest, InvalidateSubFramebuffer) {
-  GLenum data[2][1] = {{0}};
+  GLenum data[2][1] = {};
   struct Cmds {
     cmds::InvalidateSubFramebufferImmediate cmd;
     GLenum data[2][1];
@@ -1485,7 +1385,7 @@ TEST_F(GLES2ImplementationTest, SamplerParameterf) {
 }
 
 TEST_F(GLES2ImplementationTest, SamplerParameterfv) {
-  GLfloat data[1] = {0};
+  GLfloat data[1] = {};
   struct Cmds {
     cmds::SamplerParameterfvImmediate cmd;
     GLfloat data[1];
@@ -1512,7 +1412,7 @@ TEST_F(GLES2ImplementationTest, SamplerParameteri) {
 }
 
 TEST_F(GLES2ImplementationTest, SamplerParameteriv) {
-  GLint data[1] = {0};
+  GLint data[1] = {};
   struct Cmds {
     cmds::SamplerParameterivImmediate cmd;
     GLint data[1];
@@ -1703,7 +1603,7 @@ TEST_F(GLES2ImplementationTest, TexParameterf) {
 }
 
 TEST_F(GLES2ImplementationTest, TexParameterfv) {
-  GLfloat data[1] = {0};
+  GLfloat data[1] = {};
   struct Cmds {
     cmds::TexParameterfvImmediate cmd;
     GLfloat data[1];
@@ -1730,7 +1630,7 @@ TEST_F(GLES2ImplementationTest, TexParameteri) {
 }
 
 TEST_F(GLES2ImplementationTest, TexParameteriv) {
-  GLint data[1] = {0};
+  GLint data[1] = {};
   struct Cmds {
     cmds::TexParameterivImmediate cmd;
     GLint data[1];
@@ -1816,7 +1716,7 @@ TEST_F(GLES2ImplementationTest, Uniform1f) {
 }
 
 TEST_F(GLES2ImplementationTest, Uniform1fv) {
-  GLfloat data[2][1] = {{0}};
+  GLfloat data[2][1] = {};
   struct Cmds {
     cmds::Uniform1fvImmediate cmd;
     GLfloat data[2][1];
@@ -1845,7 +1745,7 @@ TEST_F(GLES2ImplementationTest, Uniform1i) {
 }
 
 TEST_F(GLES2ImplementationTest, Uniform1iv) {
-  GLint data[2][1] = {{0}};
+  GLint data[2][1] = {};
   struct Cmds {
     cmds::Uniform1ivImmediate cmd;
     GLint data[2][1];
@@ -1874,7 +1774,7 @@ TEST_F(GLES2ImplementationTest, Uniform1ui) {
 }
 
 TEST_F(GLES2ImplementationTest, Uniform1uiv) {
-  GLuint data[2][1] = {{0}};
+  GLuint data[2][1] = {};
   struct Cmds {
     cmds::Uniform1uivImmediate cmd;
     GLuint data[2][1];
@@ -1903,7 +1803,7 @@ TEST_F(GLES2ImplementationTest, Uniform2f) {
 }
 
 TEST_F(GLES2ImplementationTest, Uniform2fv) {
-  GLfloat data[2][2] = {{0}};
+  GLfloat data[2][2] = {};
   struct Cmds {
     cmds::Uniform2fvImmediate cmd;
     GLfloat data[2][2];
@@ -1932,7 +1832,7 @@ TEST_F(GLES2ImplementationTest, Uniform2i) {
 }
 
 TEST_F(GLES2ImplementationTest, Uniform2iv) {
-  GLint data[2][2] = {{0}};
+  GLint data[2][2] = {};
   struct Cmds {
     cmds::Uniform2ivImmediate cmd;
     GLint data[2][2];
@@ -1961,7 +1861,7 @@ TEST_F(GLES2ImplementationTest, Uniform2ui) {
 }
 
 TEST_F(GLES2ImplementationTest, Uniform2uiv) {
-  GLuint data[2][2] = {{0}};
+  GLuint data[2][2] = {};
   struct Cmds {
     cmds::Uniform2uivImmediate cmd;
     GLuint data[2][2];
@@ -1990,7 +1890,7 @@ TEST_F(GLES2ImplementationTest, Uniform3f) {
 }
 
 TEST_F(GLES2ImplementationTest, Uniform3fv) {
-  GLfloat data[2][3] = {{0}};
+  GLfloat data[2][3] = {};
   struct Cmds {
     cmds::Uniform3fvImmediate cmd;
     GLfloat data[2][3];
@@ -2019,7 +1919,7 @@ TEST_F(GLES2ImplementationTest, Uniform3i) {
 }
 
 TEST_F(GLES2ImplementationTest, Uniform3iv) {
-  GLint data[2][3] = {{0}};
+  GLint data[2][3] = {};
   struct Cmds {
     cmds::Uniform3ivImmediate cmd;
     GLint data[2][3];
@@ -2048,7 +1948,7 @@ TEST_F(GLES2ImplementationTest, Uniform3ui) {
 }
 
 TEST_F(GLES2ImplementationTest, Uniform3uiv) {
-  GLuint data[2][3] = {{0}};
+  GLuint data[2][3] = {};
   struct Cmds {
     cmds::Uniform3uivImmediate cmd;
     GLuint data[2][3];
@@ -2077,7 +1977,7 @@ TEST_F(GLES2ImplementationTest, Uniform4f) {
 }
 
 TEST_F(GLES2ImplementationTest, Uniform4fv) {
-  GLfloat data[2][4] = {{0}};
+  GLfloat data[2][4] = {};
   struct Cmds {
     cmds::Uniform4fvImmediate cmd;
     GLfloat data[2][4];
@@ -2106,7 +2006,7 @@ TEST_F(GLES2ImplementationTest, Uniform4i) {
 }
 
 TEST_F(GLES2ImplementationTest, Uniform4iv) {
-  GLint data[2][4] = {{0}};
+  GLint data[2][4] = {};
   struct Cmds {
     cmds::Uniform4ivImmediate cmd;
     GLint data[2][4];
@@ -2135,7 +2035,7 @@ TEST_F(GLES2ImplementationTest, Uniform4ui) {
 }
 
 TEST_F(GLES2ImplementationTest, Uniform4uiv) {
-  GLuint data[2][4] = {{0}};
+  GLuint data[2][4] = {};
   struct Cmds {
     cmds::Uniform4uivImmediate cmd;
     GLuint data[2][4];
@@ -2164,7 +2064,7 @@ TEST_F(GLES2ImplementationTest, UniformBlockBinding) {
 }
 
 TEST_F(GLES2ImplementationTest, UniformMatrix2fv) {
-  GLfloat data[2][4] = {{0}};
+  GLfloat data[2][4] = {};
   struct Cmds {
     cmds::UniformMatrix2fvImmediate cmd;
     GLfloat data[2][4];
@@ -2182,7 +2082,7 @@ TEST_F(GLES2ImplementationTest, UniformMatrix2fv) {
 }
 
 TEST_F(GLES2ImplementationTest, UniformMatrix2x3fv) {
-  GLfloat data[2][6] = {{0}};
+  GLfloat data[2][6] = {};
   struct Cmds {
     cmds::UniformMatrix2x3fvImmediate cmd;
     GLfloat data[2][6];
@@ -2200,7 +2100,7 @@ TEST_F(GLES2ImplementationTest, UniformMatrix2x3fv) {
 }
 
 TEST_F(GLES2ImplementationTest, UniformMatrix2x4fv) {
-  GLfloat data[2][8] = {{0}};
+  GLfloat data[2][8] = {};
   struct Cmds {
     cmds::UniformMatrix2x4fvImmediate cmd;
     GLfloat data[2][8];
@@ -2218,7 +2118,7 @@ TEST_F(GLES2ImplementationTest, UniformMatrix2x4fv) {
 }
 
 TEST_F(GLES2ImplementationTest, UniformMatrix3fv) {
-  GLfloat data[2][9] = {{0}};
+  GLfloat data[2][9] = {};
   struct Cmds {
     cmds::UniformMatrix3fvImmediate cmd;
     GLfloat data[2][9];
@@ -2236,7 +2136,7 @@ TEST_F(GLES2ImplementationTest, UniformMatrix3fv) {
 }
 
 TEST_F(GLES2ImplementationTest, UniformMatrix3x2fv) {
-  GLfloat data[2][6] = {{0}};
+  GLfloat data[2][6] = {};
   struct Cmds {
     cmds::UniformMatrix3x2fvImmediate cmd;
     GLfloat data[2][6];
@@ -2254,7 +2154,7 @@ TEST_F(GLES2ImplementationTest, UniformMatrix3x2fv) {
 }
 
 TEST_F(GLES2ImplementationTest, UniformMatrix3x4fv) {
-  GLfloat data[2][12] = {{0}};
+  GLfloat data[2][12] = {};
   struct Cmds {
     cmds::UniformMatrix3x4fvImmediate cmd;
     GLfloat data[2][12];
@@ -2272,7 +2172,7 @@ TEST_F(GLES2ImplementationTest, UniformMatrix3x4fv) {
 }
 
 TEST_F(GLES2ImplementationTest, UniformMatrix4fv) {
-  GLfloat data[2][16] = {{0}};
+  GLfloat data[2][16] = {};
   struct Cmds {
     cmds::UniformMatrix4fvImmediate cmd;
     GLfloat data[2][16];
@@ -2290,7 +2190,7 @@ TEST_F(GLES2ImplementationTest, UniformMatrix4fv) {
 }
 
 TEST_F(GLES2ImplementationTest, UniformMatrix4x2fv) {
-  GLfloat data[2][8] = {{0}};
+  GLfloat data[2][8] = {};
   struct Cmds {
     cmds::UniformMatrix4x2fvImmediate cmd;
     GLfloat data[2][8];
@@ -2308,7 +2208,7 @@ TEST_F(GLES2ImplementationTest, UniformMatrix4x2fv) {
 }
 
 TEST_F(GLES2ImplementationTest, UniformMatrix4x3fv) {
-  GLfloat data[2][12] = {{0}};
+  GLfloat data[2][12] = {};
   struct Cmds {
     cmds::UniformMatrix4x3fvImmediate cmd;
     GLfloat data[2][12];
@@ -2362,7 +2262,7 @@ TEST_F(GLES2ImplementationTest, VertexAttrib1f) {
 }
 
 TEST_F(GLES2ImplementationTest, VertexAttrib1fv) {
-  GLfloat data[1] = {0};
+  GLfloat data[1] = {};
   struct Cmds {
     cmds::VertexAttrib1fvImmediate cmd;
     GLfloat data[1];
@@ -2389,7 +2289,7 @@ TEST_F(GLES2ImplementationTest, VertexAttrib2f) {
 }
 
 TEST_F(GLES2ImplementationTest, VertexAttrib2fv) {
-  GLfloat data[2] = {0};
+  GLfloat data[2] = {};
   struct Cmds {
     cmds::VertexAttrib2fvImmediate cmd;
     GLfloat data[2];
@@ -2416,7 +2316,7 @@ TEST_F(GLES2ImplementationTest, VertexAttrib3f) {
 }
 
 TEST_F(GLES2ImplementationTest, VertexAttrib3fv) {
-  GLfloat data[3] = {0};
+  GLfloat data[3] = {};
   struct Cmds {
     cmds::VertexAttrib3fvImmediate cmd;
     GLfloat data[3];
@@ -2443,7 +2343,7 @@ TEST_F(GLES2ImplementationTest, VertexAttrib4f) {
 }
 
 TEST_F(GLES2ImplementationTest, VertexAttrib4fv) {
-  GLfloat data[4] = {0};
+  GLfloat data[4] = {};
   struct Cmds {
     cmds::VertexAttrib4fvImmediate cmd;
     GLfloat data[4];
@@ -2470,7 +2370,7 @@ TEST_F(GLES2ImplementationTest, VertexAttribI4i) {
 }
 
 TEST_F(GLES2ImplementationTest, VertexAttribI4iv) {
-  GLint data[4] = {0};
+  GLint data[4] = {};
   struct Cmds {
     cmds::VertexAttribI4ivImmediate cmd;
     GLint data[4];
@@ -2497,7 +2397,7 @@ TEST_F(GLES2ImplementationTest, VertexAttribI4ui) {
 }
 
 TEST_F(GLES2ImplementationTest, VertexAttribI4uiv) {
-  GLuint data[4] = {0};
+  GLuint data[4] = {};
   struct Cmds {
     cmds::VertexAttribI4uivImmediate cmd;
     GLuint data[4];
@@ -2594,9 +2494,7 @@ TEST_F(GLES2ImplementationTest, TexStorage2DEXT) {
 }
 
 TEST_F(GLES2ImplementationTest, GenQueriesEXT) {
-  GLuint ids[2] = {
-      0,
-  };
+  GLuint ids[2] = {};
   struct Cmds {
     cmds::GenQueriesEXTImmediate gen;
     GLuint data[2];
@@ -2659,9 +2557,7 @@ TEST_F(GLES2ImplementationTest, PopGroupMarkerEXT) {
 }
 
 TEST_F(GLES2ImplementationTest, GenVertexArraysOES) {
-  GLuint ids[2] = {
-      0,
-  };
+  GLuint ids[2] = {};
   struct Cmds {
     cmds::GenVertexArraysOESImmediate gen;
     GLuint data[2];
@@ -2717,79 +2613,6 @@ TEST_F(GLES2ImplementationTest, FramebufferParameteri) {
   expected.cmd.Init(GL_FRAMEBUFFER, 2, 3);
 
   gl_->FramebufferParameteri(GL_FRAMEBUFFER, 2, 3);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationTest, BindImageTexture) {
-  struct Cmds {
-    cmds::BindImageTexture cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(1, 2, 3, true, 5, 6, 7);
-
-  gl_->BindImageTexture(1, 2, 3, true, 5, 6, 7);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationTest, DispatchCompute) {
-  struct Cmds {
-    cmds::DispatchCompute cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(1, 2, 3);
-
-  gl_->DispatchCompute(1, 2, 3);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationTest, DispatchComputeIndirect) {
-  struct Cmds {
-    cmds::DispatchComputeIndirect cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(1);
-
-  gl_->DispatchComputeIndirect(1);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationTest, GetProgramInterfaceiv) {
-  struct Cmds {
-    cmds::GetProgramInterfaceiv cmd;
-  };
-  typedef cmds::GetProgramInterfaceiv::Result::Type ResultType;
-  ResultType result = 0;
-  Cmds expected;
-  ExpectedMemoryInfo result1 =
-      GetExpectedResultMemory(sizeof(uint32_t) + sizeof(ResultType));
-  expected.cmd.Init(123, 2, 3, result1.id, result1.offset);
-  EXPECT_CALL(*command_buffer(), OnFlush())
-      .WillOnce(SetMemory(result1.ptr, SizedResultHelper<ResultType>(1)))
-      .RetiresOnSaturation();
-  gl_->GetProgramInterfaceiv(123, 2, 3, &result);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-  EXPECT_EQ(static_cast<ResultType>(1), result);
-}
-
-TEST_F(GLES2ImplementationTest, MemoryBarrierEXT) {
-  struct Cmds {
-    cmds::MemoryBarrierEXT cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(1);
-
-  gl_->MemoryBarrierEXT(1);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationTest, MemoryBarrierByRegion) {
-  struct Cmds {
-    cmds::MemoryBarrierByRegion cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(1);
-
-  gl_->MemoryBarrierByRegion(1);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
@@ -2875,7 +2698,7 @@ TEST_F(GLES2ImplementationTest, VertexAttribDivisorANGLE) {
 }
 
 TEST_F(GLES2ImplementationTest, DiscardFramebufferEXT) {
-  GLenum data[2][1] = {{0}};
+  GLenum data[2][1] = {};
   struct Cmds {
     cmds::DiscardFramebufferEXTImmediate cmd;
     GLenum data[2][1];
@@ -2897,15 +2720,14 @@ TEST_F(GLES2ImplementationTest, LoseContextCHROMIUM) {
     cmds::LoseContextCHROMIUM cmd;
   };
   Cmds expected;
-  expected.cmd.Init(GL_GUILTY_CONTEXT_RESET_ARB, GL_GUILTY_CONTEXT_RESET_ARB);
+  expected.cmd.Init(GL_GUILTY_CONTEXT_RESET, GL_GUILTY_CONTEXT_RESET);
 
-  gl_->LoseContextCHROMIUM(GL_GUILTY_CONTEXT_RESET_ARB,
-                           GL_GUILTY_CONTEXT_RESET_ARB);
+  gl_->LoseContextCHROMIUM(GL_GUILTY_CONTEXT_RESET, GL_GUILTY_CONTEXT_RESET);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
 TEST_F(GLES2ImplementationTest, DrawBuffersEXT) {
-  GLenum data[1][1] = {{0}};
+  GLenum data[1][1] = {};
   struct Cmds {
     cmds::DrawBuffersEXTImmediate cmd;
     GLenum data[1][1];
@@ -2922,17 +2744,6 @@ TEST_F(GLES2ImplementationTest, DrawBuffersEXT) {
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
-TEST_F(GLES2ImplementationTest, DiscardBackbufferCHROMIUM) {
-  struct Cmds {
-    cmds::DiscardBackbufferCHROMIUM cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init();
-
-  gl_->DiscardBackbufferCHROMIUM();
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
 TEST_F(GLES2ImplementationTest, FlushDriverCachesCHROMIUM) {
   struct Cmds {
     cmds::FlushDriverCachesCHROMIUM cmd;
@@ -2945,7 +2756,7 @@ TEST_F(GLES2ImplementationTest, FlushDriverCachesCHROMIUM) {
 }
 
 TEST_F(GLES2ImplementationTest, WindowRectanglesEXT) {
-  GLint data[2][4] = {{0}};
+  GLint data[2][4] = {};
   struct Cmds {
     cmds::WindowRectanglesEXTImmediate cmd;
     GLint data[2][4];
@@ -3006,57 +2817,8 @@ TEST_F(GLES2ImplementationTest, EndSharedImageAccessDirectCHROMIUM) {
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
-TEST_F(GLES2ImplementationTest, ConvertRGBAToYUVAMailboxesINTERNAL) {
-  GLbyte data[80] = {0};
-  struct Cmds {
-    cmds::ConvertRGBAToYUVAMailboxesINTERNALImmediate cmd;
-    GLbyte data[80];
-  };
-
-  for (int jj = 0; jj < 80; ++jj) {
-    data[jj] = static_cast<GLbyte>(jj);
-  }
-  Cmds expected;
-  expected.cmd.Init(1, 2, 3, &data[0]);
-  gl_->ConvertRGBAToYUVAMailboxesINTERNAL(1, 2, 3, &data[0]);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationTest, ConvertYUVAMailboxesToRGBINTERNAL) {
-  GLbyte data[144] = {0};
-  struct Cmds {
-    cmds::ConvertYUVAMailboxesToRGBINTERNALImmediate cmd;
-    GLbyte data[144];
-  };
-
-  for (int jj = 0; jj < 144; ++jj) {
-    data[jj] = static_cast<GLbyte>(jj);
-  }
-  Cmds expected;
-  expected.cmd.Init(1, 2, 3, 4, 5, 6, 7, &data[0]);
-  gl_->ConvertYUVAMailboxesToRGBINTERNAL(1, 2, 3, 4, 5, 6, 7, &data[0]);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationTest, ConvertYUVAMailboxesToTextureINTERNAL) {
-  GLbyte data[64] = {0};
-  struct Cmds {
-    cmds::ConvertYUVAMailboxesToTextureINTERNALImmediate cmd;
-    GLbyte data[64];
-  };
-
-  for (int jj = 0; jj < 64; ++jj) {
-    data[jj] = static_cast<GLbyte>(jj);
-  }
-  Cmds expected;
-  expected.cmd.Init(1, 2, 3, 4, 5, 6, 7, 8, true, 10, 11, 12, &data[0]);
-  gl_->ConvertYUVAMailboxesToTextureINTERNAL(1, 2, 3, 4, 5, 6, 7, 8, true, 10,
-                                             11, 12, &data[0]);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
 TEST_F(GLES2ImplementationTest, CopySharedImageINTERNAL) {
-  GLbyte data[32] = {0};
+  GLbyte data[32] = {};
   struct Cmds {
     cmds::CopySharedImageINTERNALImmediate cmd;
     GLbyte data[32];
@@ -3066,13 +2828,13 @@ TEST_F(GLES2ImplementationTest, CopySharedImageINTERNAL) {
     data[jj] = static_cast<GLbyte>(jj);
   }
   Cmds expected;
-  expected.cmd.Init(1, 2, 3, 4, 5, 6, true, &data[0]);
-  gl_->CopySharedImageINTERNAL(1, 2, 3, 4, 5, 6, true, &data[0]);
+  expected.cmd.Init(1, 2, 3, 4, 5, 6, &data[0]);
+  gl_->CopySharedImageINTERNAL(1, 2, 3, 4, 5, 6, &data[0]);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
 TEST_F(GLES2ImplementationTest, CopySharedImageToTextureINTERNAL) {
-  GLbyte data[16] = {0};
+  GLbyte data[16] = {};
   struct Cmds {
     cmds::CopySharedImageToTextureINTERNALImmediate cmd;
     GLbyte data[16];
@@ -3198,7 +2960,7 @@ TEST_F(GLES2ImplementationTest, FramebufferTexturePixelLocalStorageANGLE) {
 }
 
 TEST_F(GLES2ImplementationTest, FramebufferPixelLocalClearValuefvANGLE) {
-  GLfloat data[4] = {0};
+  GLfloat data[4] = {};
   struct Cmds {
     cmds::FramebufferPixelLocalClearValuefvANGLEImmediate cmd;
     GLfloat data[4];
@@ -3214,7 +2976,7 @@ TEST_F(GLES2ImplementationTest, FramebufferPixelLocalClearValuefvANGLE) {
 }
 
 TEST_F(GLES2ImplementationTest, FramebufferPixelLocalClearValueivANGLE) {
-  GLint data[4] = {0};
+  GLint data[4] = {};
   struct Cmds {
     cmds::FramebufferPixelLocalClearValueivANGLEImmediate cmd;
     GLint data[4];
@@ -3230,7 +2992,7 @@ TEST_F(GLES2ImplementationTest, FramebufferPixelLocalClearValueivANGLE) {
 }
 
 TEST_F(GLES2ImplementationTest, FramebufferPixelLocalClearValueuivANGLE) {
-  GLuint data[4] = {0};
+  GLuint data[4] = {};
   struct Cmds {
     cmds::FramebufferPixelLocalClearValueuivANGLEImmediate cmd;
     GLuint data[4];
@@ -3246,7 +3008,7 @@ TEST_F(GLES2ImplementationTest, FramebufferPixelLocalClearValueuivANGLE) {
 }
 
 TEST_F(GLES2ImplementationTest, BeginPixelLocalStorageANGLE) {
-  GLenum data[1][1] = {{0}};
+  GLenum data[1][1] = {};
   struct Cmds {
     cmds::BeginPixelLocalStorageANGLEImmediate cmd;
     GLenum data[1][1];
@@ -3264,7 +3026,7 @@ TEST_F(GLES2ImplementationTest, BeginPixelLocalStorageANGLE) {
 }
 
 TEST_F(GLES2ImplementationTest, EndPixelLocalStorageANGLE) {
-  GLenum data[1][1] = {{0}};
+  GLenum data[1][1] = {};
   struct Cmds {
     cmds::EndPixelLocalStorageANGLEImmediate cmd;
     GLenum data[1][1];

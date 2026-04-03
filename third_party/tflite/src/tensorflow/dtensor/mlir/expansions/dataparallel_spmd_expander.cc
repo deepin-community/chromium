@@ -15,27 +15,27 @@ limitations under the License.
 
 #include "tensorflow/dtensor/mlir/expansions/dataparallel_spmd_expander.h"
 
-#include <algorithm>
 #include <string>
+#include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
-#include "absl/types/optional.h"
-#include "llvm/ADT/DenseSet.h"
-#include "llvm/Support/Casting.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/IR/IRMapping.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/Types.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
-#include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/core/platform/errors.h"
 #include "tensorflow/dtensor/cc/dstatus.h"
 #include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/collectives.h"
 #include "tensorflow/dtensor/mlir/layout_parsing.h"
-#include "tensorflow/dtensor/mlir/op_utils.h"
 #include "tensorflow/dtensor/mlir/shape_utils.h"
 #include "tensorflow/dtensor/mlir/spmd_expander_common.h"
 #include "tensorflow/dtensor/mlir/value_utils.h"
@@ -257,8 +257,8 @@ StatusOr<mlir::Operation*> DataparallelSPMDExpander::RelayoutOperandsAndOutputs(
   builder.setInsertionPointAfter(last_op_after_splitting);
 
   // Tie all outputs together with identity_n
-  auto identity_op = builder.create<mlir::TF::IdentityNOp>(
-      op->getLoc(), generated_types, generated_outputs);
+  auto identity_op = mlir::TF::IdentityNOp::create(
+      builder, op->getLoc(), generated_types, generated_outputs);
   newly_created_ops.insert(identity_op);
   for (int i = 0; i < output_layouts.size(); ++i) {
     op->getOpResult(i).replaceAllUsesExcept(identity_op.getResult(i),

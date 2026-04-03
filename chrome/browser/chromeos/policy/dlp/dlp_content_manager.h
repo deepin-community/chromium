@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_CHROMEOS_POLICY_DLP_DLP_CONTENT_MANAGER_H_
 #define CHROME_BROWSER_CHROMEOS_POLICY_DLP_DLP_CONTENT_MANAGER_H_
 
+#include <array>
 #include <memory>
 #include <string>
 #include <utility>
@@ -13,6 +14,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chrome/browser/chromeos/policy/dlp/dialogs/dlp_warn_dialog.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_confidential_contents.h"
@@ -21,13 +23,16 @@
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_restriction_set.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_tab_helper.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_rules_manager.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "content/public/browser/desktop_media_id.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/media_stream_request.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
+
+class BrowserWindowInterface;
 
 namespace content {
 struct DesktopMediaID;
@@ -47,7 +52,7 @@ class DlpWarnNotifier;
 // If any confidential WebContents is visible, the corresponding restrictions
 // will be enforced according to the current enterprise policy.
 class DlpContentManager : public DlpContentObserver,
-                          public BrowserListObserver,
+                          public BrowserCollectionObserver,
                           public TabStripModelObserver {
  public:
   // Holds DLP restrictions information for `web_contents` object.
@@ -128,7 +133,8 @@ class DlpContentManager : public DlpContentObserver,
   virtual void OnScreenShareSourceChanging(
       const std::string& label,
       const content::DesktopMediaID& old_media_id,
-      const content::DesktopMediaID& new_media_id);
+      const content::DesktopMediaID& new_media_id,
+      bool captured_surface_control_active);
 
   void AddObserver(DlpContentManagerObserver* observer,
                    DlpContentRestriction restriction);
@@ -191,7 +197,6 @@ class DlpContentManager : public DlpContentObserver,
         content::MediaStreamUI::SourceCallback source_callback);
 
     bool operator==(const ScreenShareInfo& other) const;
-    bool operator!=(const ScreenShareInfo& other) const;
 
     const content::DesktopMediaID& media_id() const;
     const content::DesktopMediaID& new_media_id() const;
@@ -246,6 +251,10 @@ class DlpContentManager : public DlpContentObserver,
     // otherwise.
     bool HasOpenDialogWidget();
 
+    // Records that Captured Surface Control was active at some point during
+    // the capture.
+    void SetCapturedSurfaceControlActive();
+
     base::WeakPtr<ScreenShareInfo> GetWeakPtr();
 
    private:
@@ -284,6 +293,9 @@ class DlpContentManager : public DlpContentObserver,
     // Set only for tab shares.
     base::WeakPtr<content::WebContents> web_contents_;
 
+    // Only meaningful for tab-shares.
+    bool captured_surface_control_active_ = false;
+
     base::WeakPtrFactory<ScreenShareInfo> weak_factory_{this};
   };
 
@@ -319,9 +331,8 @@ class DlpContentManager : public DlpContentObserver,
       const DlpContentRestrictionSet& restriction_set) override;
   void OnWebContentsDestroyed(content::WebContents* web_contents) override;
 
-  // BrowserListObserver overrides:
-  void OnBrowserAdded(Browser* browser) override;
-  void OnBrowserRemoved(Browser* browser) override;
+  // BrowserCollectionObserver overrides:
+  void OnBrowserCreated(BrowserWindowInterface* browser) override;
 
   // TabStripModelObserver overrides:
   void OnTabStripModelChanged(
@@ -434,7 +445,6 @@ class DlpContentManager : public DlpContentObserver,
 
   // Keeps track of the contents for which the user allowed the action after
   // being shown a warning for each type of restriction.
-  // TODO(crbug.com/1264803): Change to DlpConfidentialContentsCache
   DlpConfidentialContentsCache user_allowed_contents_cache_;
 
   // List of the currently running screen shares.
@@ -465,6 +475,9 @@ class DlpContentManager : public DlpContentObserver,
     std::string label_;
     DlpConfidentialContents confidential_contents_;
   } last_reported_screen_share_;
+
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
 };
 
 }  // namespace policy

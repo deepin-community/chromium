@@ -6,20 +6,24 @@
 
 #include <cstdint>
 
-#include "build/build_config.h"
+#include "partition_alloc/build_config.h"
 #include "partition_alloc/partition_alloc_base/check.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/process/process_handle.h"
 #include "partition_alloc/partition_alloc_base/threading/platform_thread.h"
 
-#if (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && defined(__GLIBC__)
+#if PA_BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
+#include <algorithm>
+#endif
+
+#if (PA_BUILDFLAG(IS_LINUX) || PA_BUILDFLAG(IS_CHROMEOS)) && defined(__GLIBC__)
 extern "C" void* __libc_stack_end;
 #endif
 
 namespace partition_alloc::internal::base::debug {
 namespace {
 
-#if BUILDFLAG(PA_CAN_UNWIND_WITH_FRAME_POINTERS)
+#if PA_BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
 
 #if defined(__arm__) && defined(__GNUC__) && !defined(__clang__)
 // GCC and LLVM generate slightly different frames on ARM, see
@@ -35,12 +39,12 @@ constexpr size_t kStackFrameAdjustment = 0;
 // Because the signature size can vary based on the system configuration, use
 // the xpaclri instruction to remove the signature.
 static uintptr_t StripPointerAuthenticationBits(uintptr_t ptr) {
-#if defined(ARCH_CPU_ARM64)
+#if PA_BUILDFLAG(PA_ARCH_CPU_ARM64)
   // A single Chromium binary currently spans all Arm systems (including those
   // with and without pointer authentication). xpaclri is used here because it's
   // in the HINT space and treated as a no-op on older Arm cores (unlike the
   // more generic xpaci which has a new encoding). The downside is that ptr has
-  // to be moved to x30 to use this instruction. TODO(richard.townsend@arm.com):
+  // to be moved to x30 to use this instruction. TODO(ritownsend@google.com):
   // replace with an intrinsic once that is available.
   register uintptr_t x30 __asm("x30") = ptr;
   asm("xpaclri" : "+r"(x30));
@@ -59,8 +63,8 @@ uintptr_t GetNextStackFrame(uintptr_t fp) {
 
 uintptr_t GetStackFramePC(uintptr_t fp) {
   const uintptr_t* fp_addr = reinterpret_cast<const uintptr_t*>(fp);
-  PA_MSAN_UNPOISON(&fp_addr[1], sizeof(uintptr_t));
-  return StripPointerAuthenticationBits(fp_addr[1]);
+  PA_MSAN_UNPOISON(&PA_UNSAFE_TODO(fp_addr[1]), sizeof(uintptr_t));
+  return StripPointerAuthenticationBits(PA_UNSAFE_TODO(fp_addr[1]));
 }
 
 bool IsStackFrameValid(uintptr_t fp, uintptr_t prev_fp, uintptr_t stack_end) {
@@ -141,29 +145,29 @@ uintptr_t ScanStackForNextFrame(uintptr_t fp, uintptr_t stack_end) {
   return 0;
 }
 
-#endif  // BUILDFLAG(PA_CAN_UNWIND_WITH_FRAME_POINTERS)
+#endif  // PA_BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
 
 }  // namespace
 
-#if BUILDFLAG(PA_CAN_UNWIND_WITH_FRAME_POINTERS)
+#if PA_BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
 
 // We force this function to be inlined into its callers (e.g.
 // TraceStackFramePointers()) in all build modes so we don't have to worry about
 // conditionally skipping a frame based on potential inlining or tail calls.
-__attribute__((always_inline)) size_t TraceStackFramePointersInternal(
-    uintptr_t fp,
-    uintptr_t stack_end,
-    size_t max_depth,
-    size_t skip_initial,
-    bool enable_scanning,
-    const void** out_trace) {
+PA_ALWAYS_INLINE size_t
+TraceStackFramePointersInternal(uintptr_t fp,
+                                uintptr_t stack_end,
+                                size_t max_depth,
+                                size_t skip_initial,
+                                bool enable_scanning,
+                                const void** out_trace) {
   size_t depth = 0;
   while (depth < max_depth) {
     uintptr_t pc = GetStackFramePC(fp);
     if (skip_initial != 0) {
       skip_initial--;
     } else {
-      out_trace[depth++] = reinterpret_cast<const void*>(pc);
+      PA_UNSAFE_TODO(out_trace[depth++]) = reinterpret_cast<const void*>(pc);
     }
 
     uintptr_t next_fp = GetNextStackFrame(fp);
@@ -199,9 +203,9 @@ PA_NOINLINE size_t TraceStackFramePointers(const void** out_trace,
 
 #endif  // BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
 
-#if BUILDFLAG(PA_CAN_UNWIND_WITH_FRAME_POINTERS)
+#if PA_BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
 uintptr_t GetStackEnd() {
-#if BUILDFLAG(IS_ANDROID)
+#if PA_BUILDFLAG(IS_ANDROID)
   // Bionic reads proc/maps on every call to pthread_getattr_np() when called
   // from the main thread. So we need to cache end of stack in that case to get
   // acceptable performance.
@@ -230,13 +234,13 @@ uintptr_t GetStackEnd() {
     main_stack_end = stack_end;
   }
   return stack_end;  // 0 in case of error
-#elif BUILDFLAG(IS_APPLE)
+#elif PA_BUILDFLAG(IS_APPLE)
   // No easy way to get end of the stack for non-main threads,
   // see crbug.com/617730.
   return reinterpret_cast<uintptr_t>(pthread_get_stackaddr_np(pthread_self()));
 #else
 
-#if (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && defined(__GLIBC__)
+#if (PA_BUILDFLAG(IS_LINUX) || PA_BUILDFLAG(IS_CHROMEOS)) && defined(__GLIBC__)
   if (GetCurrentProcId() == PlatformThread::CurrentId()) {
     // For the main thread we have a shortcut.
     return reinterpret_cast<uintptr_t>(__libc_stack_end);

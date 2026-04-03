@@ -16,6 +16,8 @@ limitations under the License.
 // See docs in ../ops/parse_ops.cc.
 
 #include <errno.h>
+
+#include <cstdint>
 #include <string>
 
 #include "tensorflow/core/framework/kernel_def_builder.h"
@@ -66,8 +68,10 @@ class StringToNumberOp : public OpKernel {
                           StringToNumberOp<type>)
 REGISTER(float);
 REGISTER(double);
-REGISTER(int32);
+REGISTER(int32_t);
 REGISTER(int64_t);
+REGISTER(uint32_t);
+REGISTER(uint64_t);
 #undef REGISTER
 
 }  // namespace tensorflow

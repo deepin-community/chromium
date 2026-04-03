@@ -16,7 +16,7 @@ namespace task_manager {
 
 WebAppTask::WebAppTask(content::WebContents* web_contents)
     : RendererTask(GetPrefixedTitle(web_contents),
-                   RendererTask::GetFaviconFromWebContents(web_contents),
+                   RendererTask::GetFaviconFromWebContents(web_contents).get(),
                    web_contents) {}
 
 WebAppTask::~WebAppTask() = default;
@@ -26,9 +26,7 @@ void WebAppTask::UpdateTitle() {
 }
 
 void WebAppTask::UpdateFavicon() {
-  const gfx::ImageSkia* icon =
-      RendererTask::GetFaviconFromWebContents(web_contents());
-  set_icon(icon ? *icon : gfx::ImageSkia());
+  DefaultUpdateFaviconImpl();
 }
 
 std::u16string WebAppTask::GetPrefixedTitle(

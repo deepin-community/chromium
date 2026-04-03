@@ -9,7 +9,6 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
@@ -18,26 +17,41 @@
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace policy {
+namespace {
+
+DMAuth GetAuthData(const std::string& dm_token) {
+  if (dm_token.empty()) {
+    // This is the case for uploading managed user events from an unmanaged
+    // device. The server will authenticate by looking at the user dm tokens
+    // inside the records instead of a single request-level device dm token.
+    return DMAuth::NoAuth();
+  } else {
+    // The device cloud policy client only exists on managed devices and is the
+    // source of the DM token. So if the device is managed, we use the device dm
+    // token as authentication.
+    return DMAuth::FromDMToken(dm_token);
+  }
+}
+}  // namespace
 
 EncryptedReportingJobConfiguration::EncryptedReportingJobConfiguration(
     scoped_refptr<network::SharedURLLoaderFactory> factory,
-    DMAuth auth_data,
     const std::string& server_url,
-    base::Value::Dict merging_payload,
-    CloudPolicyClient* cloud_policy_client,
+    base::DictValue merging_payload,
+    const std::string& dm_token,
+    const std::string& client_id,
     UploadResponseCallback response_cb,
     UploadCompleteCallback complete_cb)
     : ReportingJobConfigurationBase(TYPE_UPLOAD_ENCRYPTED_REPORT,
                                     factory,
-                                    std::move(auth_data),
+                                    GetAuthData(dm_token),
                                     server_url,
                                     std::move(complete_cb)),
-      is_device_managed_(cloud_policy_client != nullptr),
+      is_device_managed_(!dm_token.empty()),
       response_cb_(std::move(response_cb)) {
   if (is_device_managed_) {
     // Payload for managed device
-    InitializePayloadWithDeviceInfo(cloud_policy_client->dm_token(),
-                                    cloud_policy_client->client_id());
+    InitializePayloadWithDeviceInfo(dm_token, client_id);
   } else {
     // Payload for unmanaged device
     InitializePayloadWithoutDeviceInfo();
@@ -60,7 +74,7 @@ EncryptedReportingJobConfiguration::~EncryptedReportingJobConfiguration() {
 void EncryptedReportingJobConfiguration::UpdatePayloadBeforeGetInternal() {
   for (auto it = payload_.begin(); it != payload_.end();) {
     const auto& [key, value] = *it;
-    if (!base::Contains(GetTopLevelKeyAllowList(), key)) {
+    if (!GetTopLevelKeyAllowList().contains(key)) {
       it = payload_.erase(it);
       continue;
     }
@@ -69,7 +83,7 @@ void EncryptedReportingJobConfiguration::UpdatePayloadBeforeGetInternal() {
 }
 
 void EncryptedReportingJobConfiguration::UpdateContext(
-    base::Value::Dict context) {
+    base::DictValue context) {
   context_ = std::move(context);
 }
 

@@ -15,25 +15,24 @@ limitations under the License.
 
 // XLA-specific Slice Op.
 
+#include <cstdint>
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
 #include "absl/types/span.h"
-#include "tensorflow/compiler/tf2xla/type_util.h"
-#include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/lib/dynamic_shaped_ops.h"
-#include "xla/client/value_inference.h"
-#include "xla/client/xla_builder.h"
-#include "xla/util.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/lib/dynamic_shaped_ops.h"
+#include "xla/hlo/builder/value_inference.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/xla_data.pb.h"
 #include "tensorflow/core/framework/op_kernel.h"
-#include "tensorflow/core/framework/ops_util.h"
-#include "tensorflow/core/framework/register_types.h"
-#include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/op_requires.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/lib/core/status.h"
-#include "tensorflow/core/platform/mem.h"
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
 namespace {
@@ -181,8 +180,8 @@ class SliceOp : public XlaOpKernel {
               xla::Reshape(xla::Slice(ctx->Input(2), {i}, {i + 1}, {1}), {});
           if (constant_size_is_minus_one && size[i] == -1) {
             // size = input_.dim_size(i) - begin[i]
-            dynamic_size = xla::ConstantR0<int32>(ctx->builder(),
-                                                  input_shape.dim_size(i)) -
+            dynamic_size = xla::ConstantR0<int32_t>(ctx->builder(),
+                                                    input_shape.dim_size(i)) -
                            begin_indices[i];
           }
           auto constant_size = ctx->value_inference().AnalyzeConstant(
@@ -193,7 +192,7 @@ class SliceOp : public XlaOpKernel {
             // triggered when some dimensions's slice sizes are constant while
             // some are dynamic.
             sliced = xla::SliceInDim(
-                sliced, 0, constant_size->Get<int32>({}).value(), 1, i);
+                sliced, 0, constant_size->Get<int32_t>({}).value(), 1, i);
           } else {
             // We gave a generous bound (same as input) to the output, try reset
             // the bound if a tighter one can be found.

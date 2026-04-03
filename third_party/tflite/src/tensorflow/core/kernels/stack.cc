@@ -48,13 +48,13 @@ class Stack : public ResourceBase {
     bool swapped_to_cpu;
   };
 
-  Stack(const DataType& elem_type, const string& stack_name, int max_size)
+  Stack(const DataType& elem_type, const std::string& stack_name, int max_size)
       : elem_type_(elem_type),
         stack_name_(stack_name),
         max_size_(max_size),
         closed_(false) {}
 
-  Status Push(const TensorAndAllocation& value) {
+  absl::Status Push(const TensorAndAllocation& value) {
     mutex_lock l(mu_);
     TF_RETURN_IF_ERROR(CheckNotClosed());
     int stack_size = stack_.size();
@@ -63,10 +63,10 @@ class Stack : public ResourceBase {
                                      "its max_size (", max_size_, ")");
     }
     stack_.push_back(value);
-    return OkStatus();
+    return absl::OkStatus();
   }
 
-  Status Pop(TensorAndAllocation* value) {
+  absl::Status Pop(TensorAndAllocation* value) {
     mutex_lock l(mu_);
     TF_RETURN_IF_ERROR(CheckNotClosed());
     if (stack_.empty()) {
@@ -75,7 +75,7 @@ class Stack : public ResourceBase {
     }
     *value = stack_.back();
     stack_.pop_back();
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   // We don't swap the first tensor on the stack and any subsequent tensors
@@ -97,12 +97,12 @@ class Stack : public ResourceBase {
 
   DataType ElemType() { return elem_type_; }
 
-  string DebugString() const override {
+  std::string DebugString() const override {
     mutex_lock l(mu_);
-    return strings::StrCat("Stack[", stack_name_, "]");
+    return absl::StrCat("Stack[", stack_name_, "]");
   }
 
-  const string& stack_name() { return stack_name_; }
+  const std::string& stack_name() { return stack_name_; }
 
  private:
   friend class StackOp;
@@ -110,22 +110,22 @@ class Stack : public ResourceBase {
 
   mutable mutex mu_;
   DataType elem_type_;
-  const string stack_name_;
+  const std::string stack_name_;
   Tensor handle_;
   int max_size_;
   bool closed_ TF_GUARDED_BY(mu_);
   std::vector<TensorAndAllocation> stack_ TF_GUARDED_BY(mu_);
 
-  Status CheckNotClosed() const TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+  absl::Status CheckNotClosed() const TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     if (closed_) {
       return errors::InvalidArgument("Stack[", stack_name_,
                                      "] has already been closed.");
     }
-    return OkStatus();
+    return absl::OkStatus();
   }
 };
 
-Status GetStack(OpKernelContext* ctx, Stack** stack) {
+absl::Status GetStack(OpKernelContext* ctx, Stack** stack) {
   if (ctx->input_dtype(0) == DT_RESOURCE) {
     return LookupResource(ctx, HandleFromInput(ctx, 0), stack);
   } else {
@@ -135,9 +135,9 @@ Status GetStack(OpKernelContext* ctx, Stack** stack) {
           "Stack handle must have two elements, but had shape: ",
           Tstack_handle.shape().DebugString());
     }
-    const string& container = Tstack_handle.flat<tstring>()(0);
-    const string& stack_name = Tstack_handle.flat<tstring>()(1);
-    string key = strings::StrCat(container, stack_name);
+    const std::string& container = Tstack_handle.flat<tstring>()(0);
+    const std::string& stack_name = Tstack_handle.flat<tstring>()(1);
+    std::string key = absl::StrCat(container, stack_name);
     ResourceMgr* rm = ctx->resource_manager();
     if (rm == nullptr) {
       return errors::Internal("No resource manager.");
@@ -147,7 +147,7 @@ Status GetStack(OpKernelContext* ctx, Stack** stack) {
       return errors::Internal("No step container.");
     }
     TF_RETURN_IF_ERROR(step_container->Lookup(rm, key, stack));
-    return OkStatus();
+    return absl::OkStatus();
   }
 }
 
@@ -162,7 +162,7 @@ StackOp::StackOp(OpKernelConstruction* context) : OpKernel(context) {
 }
 
 void StackOp::Compute(OpKernelContext* ctx) {
-  int32_t size = std::numeric_limits<int32>::max();
+  int32_t size = std::numeric_limits<int32_t>::max();
   if (ctx->num_inputs() > 0) {
     const Tensor* tensor_size;
     OP_REQUIRES_OK(ctx, ctx->input("max_size", &tensor_size));
@@ -172,7 +172,7 @@ void StackOp::Compute(OpKernelContext* ctx) {
         errors::InvalidArgument("Stack size must be a scalar, but had shape: ",
                                 tensor_size->shape().DebugString()));
 
-    int32_t size_value = tensor_size->scalar<int32>()();
+    int32_t size_value = tensor_size->scalar<int32_t>()();
     if (size_value >= 0) {
       size = size_value;
     }
@@ -180,11 +180,11 @@ void StackOp::Compute(OpKernelContext* ctx) {
 
   static const char kContainer[] = "_stacks";
   auto stack_id = Stack::stack_counter.fetch_add(1);
-  string stack_name = strings::StrCat(stack_name_, "_", stack_id);
+  std::string stack_name = absl::StrCat(stack_name_, "_", stack_id);
   // Store the handle in a per-step container.
   ResourceMgr* rm = ctx->resource_manager();
   OP_REQUIRES(ctx, rm != nullptr, errors::Internal("No resource manager."));
-  string key = strings::StrCat(kContainer, stack_name);
+  std::string key = absl::StrCat(kContainer, stack_name);
   auto* step_container = ctx->step_container();
   OP_REQUIRES(ctx, step_container != nullptr,
               errors::Internal("No step container."));
@@ -258,7 +258,7 @@ void StackPushOp::ComputeAsync(OpKernelContext* ctx, DoneCallback done) {
           new Tensor(cpu_allocator, tensor.dtype(), tensor.shape());
       device_ctxt->CopyDeviceTensorToCPU(
           &tensor, "StackPush", device, cpu_tensor,
-          [cpu_tensor, stack, ctx, done](const Status& s) {
+          [cpu_tensor, stack, ctx, done](const absl::Status& s) {
             ctx->SetStatus(s);
             if (s.ok()) {
               AllocatorAttributes alloc_attrs = ctx->input_alloc_attr(1);
@@ -307,7 +307,7 @@ void StackPopOp::ComputeAsync(OpKernelContext* ctx, DoneCallback done) {
         new Tensor(gpu_allocator, cpu_tensor->dtype(), cpu_tensor->shape());
     device_ctxt->CopyCPUTensorToDevice(
         cpu_tensor, device, device_tensor,
-        [device_tensor, ctx, done](const Status& s) {
+        [device_tensor, ctx, done](const absl::Status& s) {
           ctx->SetStatus(s);
           if (s.ok()) {
             ctx->set_output(0, *device_tensor);

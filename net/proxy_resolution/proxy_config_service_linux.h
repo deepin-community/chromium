@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/compiler_specific.h"
@@ -17,6 +18,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
+#include "base/strings/cstring_view.h"
 #include "net/base/net_export.h"
 #include "net/base/proxy_server.h"
 #include "net/proxy_resolution/proxy_config_service.h"
@@ -115,7 +117,6 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
           return PROXY_SOCKS_PORT;
         default:
           NOTREACHED();
-          return PROXY_HTTP_PORT;  // Placate compiler.
       }
     }
 
@@ -220,11 +221,11 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
     // Obtains an environment variable's value. Parses a proxy chain
     // specification from it and puts it in result. Returns true if the
     // requested variable is defined and the value valid.
-    bool GetProxyFromEnvVarForScheme(base::StringPiece variable,
+    bool GetProxyFromEnvVarForScheme(base::cstring_view variable,
                                      ProxyServer::Scheme scheme,
                                      ProxyChain* result_chain);
     // As above but with scheme set to HTTP, for convenience.
-    bool GetProxyFromEnvVar(base::StringPiece variable,
+    bool GetProxyFromEnvVar(base::cstring_view variable,
                             ProxyChain* result_chain);
     // Returns a proxy config based on the environment variables, or empty value
     // on failure.

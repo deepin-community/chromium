@@ -16,10 +16,9 @@
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/ash/internet_config_dialog.h"
-#include "chrome/browser/ui/webui/ash/internet_detail_dialog.h"
+#include "chrome/browser/ui/webui/ash/internet/internet_config_dialog.h"
+#include "chrome/browser/ui/webui/ash/internet/internet_detail_dialog.h"
 #include "chrome/browser/ui/webui/ash/lock_screen_reauth/lock_screen_network_handler.h"
-#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
@@ -36,6 +35,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/devicetype_utils.h"
 #include "ui/chromeos/strings/network/network_element_localized_strings_provider.h"
+#include "ui/webui/webui_util.h"
 
 namespace ash {
 
@@ -46,8 +46,8 @@ bool LockScreenNetworkUIConfig::IsWebUIEnabled(
 }
 
 // static
-base::Value::Dict LockScreenNetworkUI::GetLocalizedStrings() {
-  base::Value::Dict localized_strings;
+base::DictValue LockScreenNetworkUI::GetLocalizedStrings() {
+  base::DictValue localized_strings;
   localized_strings.Set(
       "titleText", l10n_util::GetStringUTF16(IDS_LOCK_SCREEN_NETWORK_TITLE));
   localized_strings.Set(
@@ -69,7 +69,7 @@ LockScreenNetworkUI::LockScreenNetworkUI(content::WebUI* web_ui)
   main_handler_ = main_handler.get();
   web_ui->AddMessageHandler(std::move(main_handler));
 
-  base::Value::Dict localized_strings = GetLocalizedStrings();
+  base::DictValue localized_strings = GetLocalizedStrings();
 
   content::WebUIDataSource* html = content::WebUIDataSource::CreateAndAdd(
       web_ui->GetWebContents()->GetBrowserContext(),
@@ -82,8 +82,7 @@ LockScreenNetworkUI::LockScreenNetworkUI(content::WebUI* web_ui)
   ui::network_element::AddOncLocalizedStrings(html);
   html->UseStringsJs();
 
-  html->AddResourcePaths(base::make_span(kLockScreenReauthResources,
-                                         kLockScreenReauthResourcesSize));
+  html->AddResourcePaths(kLockScreenReauthResources);
   html->SetDefaultResource(IDR_LOCK_SCREEN_REAUTH_LOCK_SCREEN_NETWORK_HTML);
 }
 

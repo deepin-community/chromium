@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
+
 #include "extensions/common/api/declarative_net_request.h"
 #include "extensions/common/api/declarative_net_request/constants.h"
 #include "extensions/common/extension_id.h"
@@ -38,7 +39,7 @@ struct RequestAction {
     // The name of the header to be modified, specified in lowercase.
     std::string header;
     api::declarative_net_request::HeaderOperation operation;
-    // The value for |header| to be appended or set.
+    // The value for `header` to be appended or set.
     std::optional<std::string> value;
   };
 
@@ -91,15 +92,15 @@ struct RequestAction {
   // The id of the extension the action is attributed to.
   ExtensionId extension_id;
 
-  // Valid iff |type| is |MODIFY_HEADERS|.
-  // TODO(crbug.com/1074530): Constructing these vectors could involve lots of
+  // Valid iff `type` is `MODIFY_HEADERS`.
+  // TODO(crbug.com/40686893): Constructing these vectors could involve lots of
   // string copies. One potential enhancement involves storing a WeakPtr to the
   // flatbuffer index that contain the actual header strings.
   std::vector<HeaderInfo> request_headers_to_modify;
   std::vector<HeaderInfo> response_headers_to_modify;
 
   // Whether the action has already been tracked by the ActionTracker.
-  // TODO(crbug.com/983761): Move the tracking of actions matched to
+  // TODO(crbug.com/40635953): Move the tracking of actions matched to
   // ActionTracker.
   mutable bool tracked = false;
 
@@ -117,8 +118,8 @@ struct RequestAction {
   RequestAction(const RequestAction&);
 };
 
-// Compares RequestAction by |index_priority|, breaking ties by |ruleset_id|
-// then |rule_id|.
+// Compares RequestAction by `index_priority`, breaking ties by `ruleset_id`
+// then `rule_id`.
 bool operator<(const RequestAction& lhs, const RequestAction& rhs);
 bool operator>(const RequestAction& lhs, const RequestAction& rhs);
 

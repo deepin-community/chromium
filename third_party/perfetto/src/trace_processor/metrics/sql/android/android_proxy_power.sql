@@ -49,6 +49,7 @@ after_first_slash(str) AS (
   SELECT SUBSTR(str_value, INSTR(str_value, '/') + 1)
   FROM metadata
   WHERE name = 'android_build_fingerprint'
+  LIMIT 1
 ),
 before_second_slash(str) AS (
   SELECT SUBSTR(str, 0, INSTR(str, '/'))
@@ -70,13 +71,15 @@ JOIN power_profile ON (
   AND power_profile.freq = cpu_freq_view.freq_khz
   );
 
--- utid = 0 is a reserved value used to mark sched slices where CPU was idle.
--- It doesn't correspond to any real thread.
+-- threads with is_idle = 1 are used to mark sched slices where CPU was idle. It
+-- doesn't correspond to any real thread.
 DROP VIEW IF EXISTS sched_real_threads;
 CREATE PERFETTO VIEW sched_real_threads AS
 SELECT *
 FROM sched
-WHERE utid != 0;
+WHERE NOT utid IN (
+  SELECT utid FROM thread WHERE is_idle
+);
 
 DROP TABLE IF EXISTS power_per_thread;
 CREATE VIRTUAL TABLE power_per_thread

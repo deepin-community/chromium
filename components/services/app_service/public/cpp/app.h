@@ -16,6 +16,7 @@
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
 #include "components/services/app_service/public/cpp/intent_filter.h"
+#include "components/services/app_service/public/cpp/package_id.h"
 #include "components/services/app_service/public/cpp/permission.h"
 #include "components/services/app_service/public/cpp/run_on_os_login_types.h"
 
@@ -31,19 +32,18 @@ struct COMPONENT_EXPORT(APP_TYPES) App {
   ~App();
 
   bool operator==(const App& other) const;
-  bool operator!=(const App& other) const;
 
   std::unique_ptr<App> Clone() const;
 
   // Adds a new field for `extra`. The type `T` can be any type, e.g. int,
-  // double, string, base::Value::Dict, base::Value::List, base::Value, etc. The
-  // value is saved in base::Value::Dict `extra`. If the type `T` can't be
+  // double, string, base::DictValue, base::ListValue, base::Value, etc. The
+  // value is saved in base::DictValue `extra`. If the type `T` can't be
   // converted to base::Value, an explicit convert function can be added to
   // convert `value` to base::Value.
   template <typename T>
   void SetExtraField(const std::string& field_name, T&& value) {
     if (!extra.has_value()) {
-      extra = base::Value::Dict();
+      extra = base::DictValue();
     }
     extra->Set(field_name, value);
   }
@@ -66,6 +66,12 @@ struct COMPONENT_EXPORT(APP_TYPES) App {
   // this field contains the Android package name, and for web apps, it
   // contains the start URL.
   std::optional<std::string> publisher_id;
+
+  // An optional ID for the package that installed this app. In general, this
+  // will match the `app_type` and `publisher_id` of the app. However, this is
+  // permitted to diverge for alternate installation methods, e.g. web apps that
+  // are installed through the Play Store.
+  std::optional<PackageId> installer_package_id;
 
   std::optional<std::string> description;
   std::optional<std::string> version;
@@ -125,7 +131,15 @@ struct COMPONENT_EXPORT(APP_TYPES) App {
   // This vector stores all the intent filters defined in this app. Each
   // intent filter defines a matching criteria for whether an intent can
   // be handled by this app. One app can have multiple intent filters.
-  IntentFilters intent_filters;
+  // For the most part zero-length `intent_filters` are equal to nullopt
+  // `intent_filters`; however, they carry different semantical meaning when
+  // applying updates: nullopt `intent_filters` in the delta means that the
+  // field remains unchanged after merging, whereas zero-length `intent_filters`
+  // resets it.
+  // Leave this field untouched if the app has nothing to do with intent
+  // handling; otherwise initialize it with a zero-length array if the
+  // intention is to reset it.
+  std::optional<IntentFilters> intent_filters;
 
   // Whether the app can be free resized. If this is true, various resizing
   // operations will be restricted.
@@ -139,6 +153,11 @@ struct COMPONENT_EXPORT(APP_TYPES) App {
 
   // Whether the app can be closed by the user.
   std::optional<bool> allow_close;
+
+  // If the value is false, User will not be able to select open mode (i.e.
+  // open in new window or in new tab) for the app. The app will default to be
+  // opened in a new window.
+  std::optional<bool> allow_window_mode_selection;
 
   // Storage space size for app and associated data.
   std::optional<uint64_t> app_size_in_bytes;
@@ -155,7 +174,7 @@ struct COMPONENT_EXPORT(APP_TYPES) App {
   // app. `extra` needs to be modified as a whole, and we can't only modify part
   // of `extra`. AppService doesn't use the fields saved in `extra`. App
   // publishers modify the content saved in `extra`.
-  std::optional<base::Value::Dict> extra;
+  std::optional<base::DictValue> extra;
 
   // When adding new fields to the App type, the `Clone` function, the
   // `operator==` function, and the `AppUpdate` class should also be updated. If

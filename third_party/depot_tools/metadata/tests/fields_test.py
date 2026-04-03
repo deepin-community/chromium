@@ -18,6 +18,9 @@ sys.path.insert(0, _ROOT_DIR)
 import metadata.fields.known as known_fields
 import metadata.fields.field_types as field_types
 import metadata.validation_result as vr
+import metadata.fields.custom.cpe_prefix as cpe_prefix_util
+import metadata.fields.custom.mitigated
+import metadata.fields.custom.update_mechanism
 
 
 class FieldValidationTest(unittest.TestCase):
@@ -42,8 +45,7 @@ class FieldValidationTest(unittest.TestCase):
         # Check validation of a freeform text field that should be on
         # one line.
         self._run_field_validation(
-            field=field_types.FreeformTextField("Freeform single",
-                                                one_liner=True),
+            field=field_types.SingleLineTextField("Text single line"),
             valid_values=["Text on single line", "a", "1"],
             error_values=["", "\n", " "],
         )
@@ -51,8 +53,7 @@ class FieldValidationTest(unittest.TestCase):
         # Check validation of a freeform text field that can span
         # multiple lines.
         self._run_field_validation(
-            field=field_types.FreeformTextField("Freeform multi",
-                                                one_liner=False),
+            field=field_types.FreeformTextField("Freeform multi"),
             valid_values=[
                 "This is text spanning multiple lines:\n"
                 "    * with this point\n"
@@ -71,6 +72,33 @@ class FieldValidationTest(unittest.TestCase):
             error_values=["", "\n", "Probably yes"],
             warning_values=["Yes?", "not"],
         )
+
+    def test_cpe_prefix_has_version_component(self):
+        """Test has_version_component for CPE prefix."""
+        # CPE 2.3 Formatted String
+        self.assertTrue(
+            cpe_prefix_util.has_version_component(
+                "cpe:2.3:a:vendor:product:1.2.3:*:*:*:*:*:*:*"))
+        self.assertFalse(
+            cpe_prefix_util.has_version_component(
+                "cpe:2.3:a:vendor:product:*:*:*:*:*:*:*:*"))
+        self.assertFalse(
+            cpe_prefix_util.has_version_component(
+                "cpe:2.3:a:vendor:product:-:*:*:*:*:*:*:*"))
+        self.assertFalse(
+            cpe_prefix_util.has_version_component("cpe:2.3:a:vendor:product"))
+
+        # CPE 2.2 URN
+        self.assertTrue(
+            cpe_prefix_util.has_version_component("cpe:/a:vendor:product:1.2.3"))
+        self.assertFalse(
+            cpe_prefix_util.has_version_component("cpe:/a:vendor:product"))
+        self.assertFalse(cpe_prefix_util.has_version_component("cpe:/a:vendor"))
+        self.assertFalse(cpe_prefix_util.has_version_component("cpe:/a"))
+        self.assertFalse(cpe_prefix_util.has_version_component("cpe:/"))
+
+        # Invalid
+        self.assertFalse(cpe_prefix_util.has_version_component("not a cpe"))
 
     def test_cpe_prefix_validation(self):
         self._run_field_validation(
@@ -97,17 +125,18 @@ class FieldValidationTest(unittest.TestCase):
     def test_date_validation(self):
         self._run_field_validation(
             field=known_fields.DATE,
-            valid_values=[
-                "2012-03-04", "2012-03-04 UTC", "2012-03-04 UTC+10:00"
-            ],
+            valid_values=["2012-03-04"],
             error_values=[
                 "",
                 "\n",
                 "N/A",
+                "03-04-12",  # Ambiguous month and day.
+                "04/03/2012",  # Ambiguous month and day.
             ],
             warning_values=[
+                "2012-03-04 UTC", "2012-03-04 UTC+10:00",
                 "2012/03/04 UTC+10:00", "20120304", "April 3, 2012",
-                "3 Apr 2012", "03-04-12", "04/03/2012",
+                "3 Apr 2012", "30/12/2000", "20-03-2020",
                 "Tue Apr 3 05:06:07 2012 +0800"
             ],
         )
@@ -116,18 +145,30 @@ class FieldValidationTest(unittest.TestCase):
         self._run_field_validation(
             field=known_fields.LICENSE,
             valid_values=[
-                "Apache, 2.0 / MIT / MPL 2",
-                "LGPL 2.1",
-                "GPL v2 or later",
-                "LGPL2 with the classpath exception",
-                "Apache, Version 2 and Public domain",
+                "Apache-2.0 , MIT",
+                "Apache-2.0",
+                "BSD-2-Clause",
+                "BSD-2-Clause-FreeBSD",
+                "MIT",
+                "APSL-2.0, MIT",
+                "APSL-2.0 ,MIT",
+                "Refer to additional_readme_paths.json",
+                "LicenseRef-MIT",
+                "LicenseRef-MIT, Apache-2.0",
             ],
-            error_values=["", "\n", ",", "Apache 2.0 / MIT / "],
+            error_values=[
+                "",
+                "\n",
+                ",",
+                "Apache 2.0 ,",
+                "Custom / MIT",
+                "Apache-2.0 and MIT",
+                "Apache-2.0; MIT; BSD-2-Clause",
+            ],
             warning_values=[
                 "Custom license",
-                "Custom / MIT",
-                "Public domain or MPL 2",
-                "APSL 2 and the MIT license",
+                "Custom, MIT",
+                "Refer to any_other_readme_paths.json",
             ],
         )
 
@@ -166,7 +207,7 @@ class FieldValidationTest(unittest.TestCase):
             source_file_dir=os.path.join(_THIS_DIR, "data"),
             repo_root_dir=_THIS_DIR,
         )
-        self.assertIsInstance(result, vr.ValidationError)
+        self.assertIsInstance(result, vr.ValidationWarning)
 
         # Check deprecated NOT_SHIPPED.
         result = known_fields.LICENSE_FILE.validate_on_disk(
@@ -183,14 +224,22 @@ class FieldValidationTest(unittest.TestCase):
                 "https://www.example.com/a",
                 "http://www.example.com/b",
                 "ftp://www.example.com/c,git://www.example.com/d",
+                "https://www.example.com/a\n  https://example.com/b",
                 "This is the canonical public repository",
+                "internal",
+                "Internal.",
+                "Google internal",
+                "Google Internal.",
+            ],
+            warning_values=[
+                # Scheme is case-insensitive, but should be lower case.
+                "Https://www.example.com/g",
             ],
             error_values=[
                 "",
                 "\n",
                 "ghttps://www.example.com/e",
                 "https://www.example.com/ f",
-                "Https://www.example.com/g",
                 "This is an unrecognized message for the URL",
             ],
         )
@@ -201,6 +250,84 @@ class FieldValidationTest(unittest.TestCase):
             valid_values=["n / a", "123abc", "unknown forked version"],
             error_values=["", "\n"],
             warning_values=["0", "unknown"],
+        )
+
+    def test_local_modifications(self):
+        # Checks local modifications field early terminates when we can reasonably infer there's no modification.
+        _NO_MODIFICATION_VALUES = [
+            "None", "None.", "N/A.", "(none).", "No modification", "\nNone."
+        ]
+        for value in _NO_MODIFICATION_VALUES:
+            self.assertTrue(
+                known_fields.LOCAL_MODIFICATIONS.should_terminate_field(value))
+
+        # Checks ambiguous values won't early terminate the field.
+        _MAY_CONTAIN_MODIFICATION_VALUES = [
+            "None. Except doing something.",
+            "Modify file X to include ....",
+        ]
+        for value in _MAY_CONTAIN_MODIFICATION_VALUES:
+            self.assertFalse(
+                known_fields.LOCAL_MODIFICATIONS.should_terminate_field(value))
+
+    def test_vulnerability_ids(self):
+        valid_ids = [
+            "CVE-2024-12345",
+            "CVE-2024-1234567",
+            "PYSEC-2024-1234",
+            "OSV-2024-1234",
+            "DSA-1234-1",
+            "GHSA-1234-5678-90ab",
+        ]
+
+        invalid_ids = [
+            "CVE-123-456",
+            "GHSA-123-456",
+            "PYSEC-2024",  # Missing ID part.
+            "NOT-A-VALID-ID",  # Bad prefix.
+            "CVE_2024_12345",  # Wrong separator.
+            "",  # Empty.
+            " ",  # Just space.
+        ]
+
+        test_ids = valid_ids + invalid_ids
+        valid_result, invalid_result = metadata.fields.custom.mitigated.validate_vuln_ids(
+            ",".join(test_ids))
+
+        self.assertListEqual(sorted(valid_result), sorted(valid_ids))
+        self.assertListEqual(sorted(invalid_result), sorted(invalid_ids))
+
+    def test_update_mechanism_validation(self):
+        """Tests the validation logic for the Update Mechanism field."""
+        self._run_field_validation(
+            field=known_fields.UPDATE_MECHANISM,
+            valid_values=[
+                "Autoroll",
+                "  Autoroll  ",
+                "Manual (https://crbug.com/12345)",
+                "Static (https://crbug.com/54321)",
+                "Static.HardFork (https://crbug.com/98765)",
+            ],
+            error_values=[
+                "",
+                " ",
+                "Invalid Value",
+                "Custom (crbug.com/123)",
+                "Custom (https://crbug.com/123)",
+                "Manual (https://crbug.com/12345 )",
+                "Manual (https://crbug.com/12345a)",
+                "Manual (crbug.com/12345)",
+                "Static (crbug.com/54321)",
+                "Static (crbug/54321)",
+                "Static (http://crbug/54321)",
+                "Static (http://crbug.com/54321)",
+                "Static (https://crbug/54321)",
+                "Static.HardFork (crbug.com/98765)",
+            ],
+            warning_values=[
+                "Static",
+                "Static.HardFork",
+            ],
         )
 
 

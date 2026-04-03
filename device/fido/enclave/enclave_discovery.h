@@ -13,7 +13,6 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "crypto/ec_private_key.h"
 #include "device/fido/enclave/types.h"
 #include "device/fido/fido_discovery_base.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -27,12 +26,12 @@ class EnclaveAuthenticator;
 class COMPONENT_EXPORT(DEVICE_FIDO) EnclaveAuthenticatorDiscovery
     : public FidoDiscoveryBase {
  public:
+  using NetworkContextFactory =
+      base::RepeatingCallback<network::mojom::NetworkContext*()>;
   EnclaveAuthenticatorDiscovery(
-      base::RepeatingCallback<void(sync_pb::WebauthnCredentialSpecifics)>
-          save_passkey_callback,
       std::unique_ptr<EventStream<std::unique_ptr<CredentialRequest>>>
           ui_request_stream,
-      raw_ptr<network::mojom::NetworkContext> network_context);
+      NetworkContextFactory network_context_factory);
   ~EnclaveAuthenticatorDiscovery() override;
 
   // FidoDiscoveryBase:
@@ -45,9 +44,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) EnclaveAuthenticatorDiscovery
   std::vector<std::unique_ptr<EnclaveAuthenticator>> authenticators_;
   std::unique_ptr<EventStream<std::unique_ptr<CredentialRequest>>>
       ui_request_stream_;
-  base::RepeatingCallback<void(sync_pb::WebauthnCredentialSpecifics)>
-      save_passkey_callback_;
-  raw_ptr<network::mojom::NetworkContext> network_context_;
+  NetworkContextFactory network_context_factory_;
   std::unique_ptr<EventStream<std::optional<std::string_view>>>
       oauth_token_provider_;
 

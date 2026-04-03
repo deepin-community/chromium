@@ -2,29 +2,30 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ash/system_web_apps/test_support/test_system_web_app_installation.h"
+
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "ash/webui/system_apps/public/system_web_app_type.h"
-#include "base/debug/stack_trace.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
-#include "chrome/browser/ash/system_web_apps/test_support/test_system_web_app_installation.h"
 #include "chrome/browser/ash/system_web_apps/test_support/test_system_web_app_url_data_source.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/web_applications/web_app_ui_manager_impl.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
+#include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_icon_generator.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "content/public/common/url_constants.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -49,7 +50,6 @@ WebUIType GetWebUIType(const GURL& url) {
   if (url.SchemeIs(content::kChromeUIUntrustedScheme))
     return WebUIType::kChromeUntrusted;
   NOTREACHED();
-  return WebUIType::kChrome;
 }
 
 // Assumes url is like "chrome://web-app/index.html". Returns "web-app";
@@ -107,6 +107,10 @@ UnittestingSystemAppDelegate::GetWebAppInfo() const {
   return info_factory_.Run();
 }
 
+bool UnittestingSystemAppDelegate::ShouldForceReinstall() const {
+  return should_force_reinstall_;
+}
+
 std::vector<std::string>
 UnittestingSystemAppDelegate::GetAppIdsToUninstallAndReplace() const {
   return uninstall_and_replace_;
@@ -115,7 +119,8 @@ UnittestingSystemAppDelegate::GetAppIdsToUninstallAndReplace() const {
 gfx::Size UnittestingSystemAppDelegate::GetMinimumWindowSize() const {
   return minimum_window_size_;
 }
-Browser* UnittestingSystemAppDelegate::GetWindowForLaunch(
+
+BrowserDelegate* UnittestingSystemAppDelegate::GetWindowForLaunch(
     Profile* profile,
     const GURL& url) const {
   return single_window_ ? SystemWebAppDelegate::GetWindowForLaunch(profile, url)
@@ -161,6 +166,9 @@ bool UnittestingSystemAppDelegate::ShouldAllowFullscreen() const {
 bool UnittestingSystemAppDelegate::ShouldHaveTabStrip() const {
   return has_tab_strip_;
 }
+bool UnittestingSystemAppDelegate::ShouldHideNewTabButton() const {
+  return hide_new_tab_button_;
+}
 bool UnittestingSystemAppDelegate::ShouldHaveReloadButtonInMinimalUi() const {
   return should_have_reload_button_in_minimal_ui_;
 }
@@ -172,14 +180,14 @@ UnittestingSystemAppDelegate::GetTimerInfo() const {
   return timer_info_;
 }
 gfx::Rect UnittestingSystemAppDelegate::GetDefaultBounds(
-    Browser* browser) const {
+    BrowserDelegate* browser) const {
   if (get_default_bounds_) {
     return get_default_bounds_.Run(browser);
   }
   return gfx::Rect();
 }
 
-Browser* UnittestingSystemAppDelegate::LaunchAndNavigateSystemWebApp(
+BrowserDelegate* UnittestingSystemAppDelegate::LaunchAndNavigateSystemWebApp(
     Profile* profile,
     web_app::WebAppProvider* provider,
     const GURL& url,
@@ -199,17 +207,16 @@ bool UnittestingSystemAppDelegate::IsUrlInSystemAppScope(
     const GURL& url) const {
   return url == url_in_system_app_scope_;
 }
-bool UnittestingSystemAppDelegate::PreferManifestBackgroundColor() const {
-  return prefer_manifest_background_color_;
-}
 bool UnittestingSystemAppDelegate::UseSystemThemeColor() const {
   return use_system_theme_color_;
 }
-#if BUILDFLAG(IS_CHROMEOS)
 bool UnittestingSystemAppDelegate::ShouldAnimateThemeChanges() const {
   return should_animate_theme_changes_;
 }
-#endif  // BUILDFLAG(IS_CHROMEOS)
+
+void UnittestingSystemAppDelegate::SetShouldForceReinstall(bool value) {
+  should_force_reinstall_ = value;
+}
 
 void UnittestingSystemAppDelegate::SetAppIdsToUninstallAndReplace(
     const std::vector<webapps::AppId>& ids) {
@@ -257,6 +264,9 @@ void UnittestingSystemAppDelegate::SetShouldAllowMaximize(bool value) {
 void UnittestingSystemAppDelegate::SetShouldHaveTabStrip(bool value) {
   has_tab_strip_ = value;
 }
+void UnittestingSystemAppDelegate::SetShouldHideNewTabButton(bool value) {
+  hide_new_tab_button_ = value;
+}
 void UnittestingSystemAppDelegate::SetShouldHaveReloadButtonInMinimalUi(
     bool value) {
   should_have_reload_button_in_minimal_ui_ = value;
@@ -270,7 +280,7 @@ void UnittestingSystemAppDelegate::SetTimerInfo(
   timer_info_ = timer_info;
 }
 void UnittestingSystemAppDelegate::SetDefaultBounds(
-    base::RepeatingCallback<gfx::Rect(Browser*)> lambda) {
+    base::RepeatingCallback<gfx::Rect(BrowserDelegate*)> lambda) {
   get_default_bounds_ = std::move(lambda);
 }
 void UnittestingSystemAppDelegate::SetLaunchAndNavigateSystemWebApp(
@@ -283,18 +293,12 @@ void UnittestingSystemAppDelegate::SetIsAppEnabled(bool value) {
 void UnittestingSystemAppDelegate::SetUrlInSystemAppScope(const GURL& url) {
   url_in_system_app_scope_ = url;
 }
-void UnittestingSystemAppDelegate::SetPreferManifestBackgroundColor(
-    bool value) {
-  prefer_manifest_background_color_ = value;
-}
 void UnittestingSystemAppDelegate::SetUseSystemThemeColor(bool value) {
   use_system_theme_color_ = value;
 }
-#if BUILDFLAG(IS_CHROMEOS)
 void UnittestingSystemAppDelegate::SetShouldAnimateThemeChanges(bool value) {
   should_animate_theme_changes_ = value;
 }
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
 TestSystemWebAppInstallation::TestSystemWebAppInstallation(
     std::unique_ptr<UnittestingSystemAppDelegate> delegate)
@@ -346,12 +350,13 @@ TestSystemWebAppInstallation::~TestSystemWebAppInstallation() = default;
 
 std::unique_ptr<web_app::WebAppInstallInfo>
 GenerateWebAppInstallInfoForTestApp() {
-  auto info = std::make_unique<web_app::WebAppInstallInfo>();
   // the pwa.html is arguably wrong, but the manifest version uses it
   // incorrectly as well, and it's a lot of work to fix it. App ids are
   // generated from this, and it's important to keep it stable across the
   // installation modes.
-  info->start_url = GURL("chrome://test-system-app/pwa.html");
+  auto start_url = GURL("chrome://test-system-app/pwa.html");
+  auto info =
+      web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
   info->scope = GURL("chrome://test-system-app/");
   info->title = u"Test System App";
   info->theme_color = 0xFF00FF00;
@@ -363,9 +368,12 @@ GenerateWebAppInstallInfoForTestApp() {
 
 std::unique_ptr<web_app::WebAppInstallInfo>
 GenerateWebAppInstallInfoForTestAppUntrusted() {
-  auto info = GenerateWebAppInstallInfoForTestApp();
-  info->start_url = GURL("chrome-untrusted://test-system-app/pwa.html");
+  auto start_url = GURL("chrome-untrusted://test-system-app/pwa.html");
+  auto info =
+      web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
   info->scope = GURL("chrome-untrusted://test-system-app/");
+  info->title = u"Test System App Untrusted";
+  info->theme_color = 0xFFFF0000;
   return info;
 }
 
@@ -379,7 +387,7 @@ SkBitmap CreateIcon(int size) {
 std::unique_ptr<web_app::WebAppInstallInfo>
 GenerateWebAppInstallInfoWithValidIcons() {
   auto info = GenerateWebAppInstallInfoForTestApp();
-  info->manifest_icons.emplace_back(info->start_url.Resolve("test.png"),
+  info->manifest_icons.emplace_back(info->start_url().Resolve("test.png"),
                                     web_app::icon_size::k256);
   info->icon_bitmaps.any[web_app::icon_size::k256] =
       CreateIcon(web_app::icon_size::k256);
@@ -418,7 +426,7 @@ TestSystemWebAppInstallation::SetUpStandaloneSingleWindowApp() {
           SystemWebAppType::SETTINGS, "OSSettings",
           GURL("chrome://test-system-app/pwa.html"),
           base::BindRepeating(&GenerateWebAppInstallInfoForTestApp));
-  delegate->SetUrlInSystemAppScope(GURL("http://example.com/in-scope"));
+  delegate->SetUrlInSystemAppScope(GURL("https://example.com/in-scope"));
 
   return base::WrapUnique(
       new TestSystemWebAppInstallation(std::move(delegate)));
@@ -553,13 +561,14 @@ TestSystemWebAppInstallation::SetUpAppThatCapturesNavigation() {
       std::make_unique<UnittestingSystemAppDelegate>(
           SystemWebAppType::SETTINGS, "Initiating App", kInitiatingAppUrl,
           base::BindLambdaForTesting([]() {
-            auto info = std::make_unique<web_app::WebAppInstallInfo>();
             // the pwa.html is arguably wrong, but the manifest
             // version uses it incorrectly as well, and it's a lot of
             // work to fix it. App ids are generated from this, and
             // it's important to keep it stable across the
             // installation modes.
-            info->start_url = GURL("chrome://initiating-app/pwa.html");
+            auto info =
+                web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(
+                    GURL("chrome://initiating-app/pwa.html"));
             info->scope = GURL("chrome://initiating-app/");
             info->title = u"Test System App";
             info->theme_color = 0xFF00FF00;
@@ -570,7 +579,7 @@ TestSystemWebAppInstallation::SetUpAppThatCapturesNavigation() {
             return info;
           })));
   auto factory = std::make_unique<TestSystemWebAppWebUIControllerFactory>(
-      kInitiatingAppUrl.host());
+      kInitiatingAppUrl.GetHost());
   installation->web_ui_controller_factories_.push_back(std::move(factory));
 
   return base::WrapUnique(installation);
@@ -637,13 +646,15 @@ TestSystemWebAppInstallation::SetupAppWithAllowScriptsToCloseWindows(
 
 // static
 std::unique_ptr<TestSystemWebAppInstallation>
-TestSystemWebAppInstallation::SetUpAppWithTabStrip(bool has_tab_strip) {
+TestSystemWebAppInstallation::SetUpAppWithTabStrip(bool has_tab_strip,
+                                                   bool hide_new_tab_button) {
   std::unique_ptr<UnittestingSystemAppDelegate> delegate =
       std::make_unique<UnittestingSystemAppDelegate>(
           SystemWebAppType::MEDIA, "Test",
           GURL("chrome://test-system-app/pwa.html"),
           base::BindRepeating(&GenerateWebAppInstallInfoForTestApp));
   delegate->SetShouldHaveTabStrip(has_tab_strip);
+  delegate->SetShouldHideNewTabButton(hide_new_tab_button);
 
   return base::WrapUnique(
       new TestSystemWebAppInstallation(std::move(delegate)));
@@ -658,8 +669,8 @@ TestSystemWebAppInstallation::SetUpAppWithDefaultBounds(
           SystemWebAppType::MEDIA, "Test",
           GURL("chrome://test-system-app/pwa.html"),
           base::BindRepeating(&GenerateWebAppInstallInfoForTestApp));
-  delegate->SetDefaultBounds(
-      base::BindLambdaForTesting([&](Browser*) { return default_bounds; }));
+  delegate->SetDefaultBounds(base::BindLambdaForTesting(
+      [&](BrowserDelegate*) { return default_bounds; }));
 
   return base::WrapUnique(
       new TestSystemWebAppInstallation(std::move(delegate)));
@@ -728,9 +739,11 @@ TestSystemWebAppInstallation::SetUpAppThatAbortsLaunch() {
           SystemWebAppType::OS_FEEDBACK, "Test",
           GURL("chrome://test-system-app/pwa.html"),
           base::BindRepeating(&GenerateWebAppInstallInfoForTestApp));
-  delegate->SetLaunchAndNavigateSystemWebApp(base::BindRepeating(
-      [](Profile*, web_app::WebAppProvider*, const GURL&,
-         const apps::AppLaunchParams&) -> Browser* { return nullptr; }));
+  delegate->SetLaunchAndNavigateSystemWebApp(
+      base::BindRepeating([](Profile*, web_app::WebAppProvider*, const GURL&,
+                             const apps::AppLaunchParams&) -> BrowserDelegate* {
+        return nullptr;
+      }));
 
   return base::WrapUnique(
       new TestSystemWebAppInstallation(std::move(delegate)));
@@ -751,8 +764,8 @@ CreateSystemAppDelegateWithWindowConfig(
     SystemWebAppWindowConfig window_config) {
   auto* delegate = new UnittestingSystemAppDelegate(
       type, "Test App", app_url, base::BindLambdaForTesting([=]() {
-        auto info = std::make_unique<web_app::WebAppInstallInfo>();
-        info->start_url = app_url;
+        auto info =
+            web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(app_url);
         info->scope = app_url.DeprecatedGetOriginAsURL();
         info->title = u"Test System App";
         info->theme_color = 0xFF00FF00;

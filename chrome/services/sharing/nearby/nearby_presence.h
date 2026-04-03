@@ -5,14 +5,14 @@
 #ifndef CHROME_SERVICES_SHARING_NEARBY_NEARBY_PRESENCE_H_
 #define CHROME_SERVICES_SHARING_NEARBY_NEARBY_PRESENCE_H_
 
+#include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/ash/services/nearby/public/mojom/nearby_presence.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
-
 #include "third_party/nearby/src/connections/listeners.h"
+#include "third_party/nearby/src/internal/interop/device_provider.h"
 #include "third_party/nearby/src/presence/presence_client.h"
 #include "third_party/nearby/src/presence/presence_service.h"
 
@@ -34,6 +34,10 @@ class NearbyPresence : public mojom::NearbyPresence {
   NearbyPresence(const NearbyPresence&) = delete;
   NearbyPresence& operator=(const NearbyPresence&) = delete;
   ~NearbyPresence() override;
+
+  ::nearby::NearbyDeviceProvider* GetLocalDeviceProvider() {
+    return presence_service_->GetLocalDeviceProvider();
+  }
 
  protected:
   NearbyPresence(

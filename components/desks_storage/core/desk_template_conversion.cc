@@ -28,11 +28,8 @@
 #include "components/tab_groups/tab_group_color.h"
 #include "components/tab_groups/tab_group_info.h"
 #include "components/tab_groups/tab_group_visual_data.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/gfx/geometry/rect.h"
-
-#if !BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/crosapi/cpp/lacros_startup_state.h"  // nogncheck
-#endif  // !BUILDFLAG(IS_CHROMEOS_LACROS)
 
 namespace {
 
@@ -82,17 +79,18 @@ constexpr char kAppTypeUnsupported[] = "UNSUPPORTED";
 constexpr char kAutoLaunchOnStartup[] = "auto_launch_on_startup";
 constexpr char kBoundsInRoot[] = "bounds_in_root";
 constexpr char kCreatedTime[] = "created_time_usec";
+constexpr char kCoralTabAppEntities[] = "coral_tab_app_entities";
 constexpr char kDesk[] = "desk";
 constexpr char kDeskType[] = "desk_type";
 constexpr char kDeskTypeTemplate[] = "TEMPLATE";
 constexpr char kDeskTypeSaveAndRecall[] = "SAVE_AND_RECALL";
+constexpr char kDeskTypeCoral[] = "CORAL";
 constexpr char kDeskTypeFloatingWorkspace[] = "FLOATING_WORKSPACE";
 constexpr char kDeskTypeUnknown[] = "UNKNOWN";
 constexpr char kDisplayId[] = "display_id";
 constexpr char kEventFlag[] = "event_flag";
 constexpr char kFirstNonPinnedTabIndex[] = "first_non_pinned_tab_index";
 constexpr char kIsAppTypeBrowser[] = "is_app";
-constexpr char kLacrosProfileId[] = "lacros_profile_id";
 constexpr char kLaunchContainer[] = "launch_container";
 constexpr char kLaunchContainerWindow[] = "LAUNCH_CONTAINER_WINDOW";
 constexpr char kLaunchContainerUnspecified[] = "LAUNCH_CONTAINER_UNSPECIFIED";
@@ -153,7 +151,8 @@ constexpr char kZIndex[] = "z_index";
 
 // Valid value sets.
 constexpr auto kValidDeskTypes = base::MakeFixedFlatSet<std::string_view>(
-    {kDeskTypeTemplate, kDeskTypeSaveAndRecall, kDeskTypeFloatingWorkspace});
+    {kDeskTypeTemplate, kDeskTypeSaveAndRecall, kDeskTypeCoral,
+     kDeskTypeFloatingWorkspace});
 constexpr auto kValidLaunchContainers =
     base::MakeFixedFlatSet<std::string_view>(
         {kLaunchContainerWindow, kLaunchContainerPanelDeprecated,
@@ -184,9 +183,7 @@ constexpr auto kValidTabGroupColors = base::MakeFixedFlatSet<std::string_view>(
 constexpr int kVersionNum = 1;
 
 // Conversion to desk methods.
-bool GetString(const base::Value::Dict& dict,
-               const char* key,
-               std::string* out) {
+bool GetString(const base::DictValue& dict, const char* key, std::string* out) {
   const std::string* value = dict.FindString(key);
   if (!value)
     return false;
@@ -195,7 +192,7 @@ bool GetString(const base::Value::Dict& dict,
   return true;
 }
 
-bool GetInt(const base::Value::Dict& dict, const char* key, int* out) {
+bool GetInt(const base::DictValue& dict, const char* key, int* out) {
   std::optional<int> value = dict.FindInt(key);
   if (!value)
     return false;
@@ -204,7 +201,7 @@ bool GetInt(const base::Value::Dict& dict, const char* key, int* out) {
   return true;
 }
 
-bool GetBool(const base::Value::Dict& dict, const char* key, bool* out) {
+bool GetBool(const base::DictValue& dict, const char* key, bool* out) {
   std::optional<bool> value = dict.FindBool(key);
   if (!value)
     return false;
@@ -214,22 +211,10 @@ bool GetBool(const base::Value::Dict& dict, const char* key, bool* out) {
 }
 
 // Get App ID from App proto.
-std::string GetJsonAppId(const base::Value::Dict& app) {
+std::string GetJsonAppId(const base::DictValue& app) {
   std::string app_type;
   if (GetString(app, kAppType, &app_type) && app_type == kAppTypeBrowser) {
-    // Return the primary browser's known app ID.
-    const bool is_lacros =
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-        true;
-#else
-        // Note that this will launch the browser as lacros if it is enabled,
-        // even if it was saved as a non-lacros window (and vice-versa).
-        crosapi::lacros_startup_state::IsLacrosEnabled();
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
-    // Browser app has a known app ID.
-    return std::string(is_lacros ? app_constants::kLacrosAppId
-                                 : app_constants::kChromeAppId);
+    return std::string(app_constants::kChromeAppId);
   }
 
   // Fall back on a stored app_id (which may or may not be present).
@@ -239,10 +224,10 @@ std::string GetJsonAppId(const base::Value::Dict& app) {
   return app_id;
 }
 
-// Convert a TabGroupInfo object to a base::Value::Dict.
-base::Value::Dict ConvertTabGroupInfoToDict(
+// Convert a TabGroupInfo object to a base::DictValue.
+base::DictValue ConvertTabGroupInfoToDict(
     const tab_groups::TabGroupInfo& group_info) {
-  base::Value::Dict tab_group_dict;
+  base::DictValue tab_group_dict;
 
   tab_group_dict.Set(kTabRangeFirstIndex,
                      static_cast<int>(group_info.tab_range.start()));
@@ -258,8 +243,38 @@ base::Value::Dict ConvertTabGroupInfoToDict(
   return tab_group_dict;
 }
 
+// Convert Coral tab and app entities to a base::DictValue.
+base::DictValue ConvertCoralTabAppEntitiesToDict(
+    const std::vector<coral::mojom::EntityPtr>& coral_tab_app_entities) {
+  base::ListValue tab_entities;
+  base::ListValue app_entities;
+  for (const auto& entity : coral_tab_app_entities) {
+    if (entity->is_tab()) {
+      const auto& tab = entity->get_tab();
+      auto tab_value = base::DictValue()
+                           .Set(kTitle, tab->title)
+                           .Set(kTabUrl, tab->url.possibly_invalid_spec());
+      tab_entities.Append(std::move(tab_value));
+    } else if (entity->is_app()) {
+      const auto& app = entity->get_app();
+      auto app_value =
+          base::DictValue().Set(kAppName, app->title).Set(kAppId, app->id);
+      app_entities.Append(std::move(app_value));
+    }
+  }
+
+  base::DictValue tab_app_entities_dict;
+  if (!tab_entities.empty()) {
+    tab_app_entities_dict.Set(kTabs, std::move(tab_entities));
+  }
+  if (!app_entities.empty()) {
+    tab_app_entities_dict.Set(kApps, std::move(app_entities));
+  }
+  return tab_app_entities_dict;
+}
+
 bool IsValidGroupColor(const std::string& group_color) {
-  return base::Contains(kValidTabGroupColors, group_color);
+  return kValidTabGroupColors.contains(group_color);
 }
 
 GroupColor ConvertGroupColorStringToGroupColor(const std::string& group_color) {
@@ -287,7 +302,6 @@ GroupColor ConvertGroupColorStringToGroupColor(const std::string& group_color) {
     return GroupColor::kGrey;
   } else {
     NOTREACHED();
-    return GroupColor::kGrey;
   }
 }
 
@@ -295,7 +309,7 @@ GroupColor ConvertGroupColorStringToGroupColor(const std::string& group_color) {
 // are present and valid in the value parameter.  Returns true on success, false
 // on failure.
 bool MakeTabGroupVisualDataFromDict(
-    const base::Value::Dict& tab_group,
+    const base::DictValue& tab_group,
     tab_groups::TabGroupVisualData* out_visual_data) {
   std::string tab_group_title;
   std::string group_color_string;
@@ -316,7 +330,7 @@ bool MakeTabGroupVisualDataFromDict(
 // Constructs a gfx::Range from value `group_range` IFF all fields are
 // present and valid in the value parameter.  Returns true on success, false on
 // failure.
-bool MakeTabGroupRangeFromDict(const base::Value::Dict& tab_group,
+bool MakeTabGroupRangeFromDict(const base::DictValue& tab_group,
                                gfx::Range* out_range) {
   int32_t range_start;
   int32_t range_end;
@@ -332,7 +346,7 @@ bool MakeTabGroupRangeFromDict(const base::Value::Dict& tab_group,
 // Constructs a TabGroupInfo from `tab_group` IFF all fields are present
 // and valid in the value parameter. Returns true on success, false on failure.
 std::optional<tab_groups::TabGroupInfo> MakeTabGroupInfoFromDict(
-    const base::Value::Dict& tab_group) {
+    const base::DictValue& tab_group) {
   std::optional<tab_groups::TabGroupInfo> tab_group_info = std::nullopt;
 
   tab_groups::TabGroupVisualData visual_data;
@@ -347,7 +361,7 @@ std::optional<tab_groups::TabGroupInfo> MakeTabGroupInfoFromDict(
 
 // Returns true if launch container string value is valid.
 bool IsValidLaunchContainer(const std::string& launch_container) {
-  return base::Contains(kValidLaunchContainers, launch_container);
+  return kValidLaunchContainers.contains(launch_container);
 }
 
 // Returns a casted apps::LaunchContainer to be set as an app restore data's
@@ -373,7 +387,7 @@ int32_t StringToLaunchContainer(const std::string& launch_container) {
 
 // Returns true if the disposition is a valid value.
 bool IsValidWindowOpenDisposition(const std::string& disposition) {
-  return base::Contains(kValidWindowOpenDispositions, disposition);
+  return kValidWindowOpenDispositions.contains(disposition);
 }
 
 // Returns a casted WindowOpenDisposition to be set in the app restore data.
@@ -411,7 +425,7 @@ int32_t StringToWindowOpenDisposition(const std::string& disposition) {
 
 // Convert App JSON to `app_restore::AppLaunchInfo`.
 std::unique_ptr<app_restore::AppLaunchInfo> ConvertJsonToAppLaunchInfo(
-    const base::Value::Dict& app) {
+    const base::DictValue& app) {
   int32_t window_id;
   if (!GetInt(app, kWindowId, &window_id))
     return nullptr;
@@ -453,14 +467,6 @@ std::unique_ptr<app_restore::AppLaunchInfo> ConvertJsonToAppLaunchInfo(
     app_launch_info->override_url = GURL(override_url);
   }
 
-  std::string lacros_profile_id_str;
-  if (GetString(app, kLacrosProfileId, &lacros_profile_id_str)) {
-    uint64_t lacros_profile_id = 0;
-    if (base::StringToUint64(lacros_profile_id_str, &lacros_profile_id)) {
-      app_launch_info->browser_extra_info.lacros_profile_id = lacros_profile_id;
-    }
-  }
-
   // TODO(crbug.com/1311801): Add support for actual event_flag values.
   app_launch_info->event_flag = 0;
 
@@ -469,8 +475,7 @@ std::unique_ptr<app_restore::AppLaunchInfo> ConvertJsonToAppLaunchInfo(
     app_launch_info->browser_extra_info.app_type_browser = app_type_browser;
   }
 
-  if (app_id == app_constants::kLacrosAppId ||
-      app_id == app_constants::kChromeAppId) {
+  if (app_id == app_constants::kChromeAppId) {
     int active_tab_index;
     if (GetInt(app, kActiveTabIndex, &active_tab_index)) {
       app_launch_info->browser_extra_info.active_tab_index = active_tab_index;
@@ -483,7 +488,7 @@ std::unique_ptr<app_restore::AppLaunchInfo> ConvertJsonToAppLaunchInfo(
     }
 
     // Fill in the URL list
-    if (const base::Value::List* tabs = app.FindList(kTabs)) {
+    if (const base::ListValue* tabs = app.FindList(kTabs)) {
       for (auto& tab : *tabs) {
         std::string url;
         if (GetString(tab.GetDict(), kTabUrl, &url)) {
@@ -493,7 +498,7 @@ std::unique_ptr<app_restore::AppLaunchInfo> ConvertJsonToAppLaunchInfo(
     }
 
     // Fill the tab groups
-    if (const base::Value::List* tab_groups = app.FindList(kTabGroups)) {
+    if (const base::ListValue* tab_groups = app.FindList(kTabGroups)) {
       for (auto& tab : *tab_groups) {
         std::optional<tab_groups::TabGroupInfo> tab_group =
             MakeTabGroupInfoFromDict(tab.GetDict());
@@ -509,29 +514,56 @@ std::unique_ptr<app_restore::AppLaunchInfo> ConvertJsonToAppLaunchInfo(
   return app_launch_info;
 }
 
-bool IsValidWindowState(const std::string& window_state) {
-  return base::Contains(kValidWindowStates, window_state);
+std::vector<coral::mojom::EntityPtr> ConvertDictToCoralTabAppEntities(
+    const base::DictValue& tab_app_entities_dict) {
+  std::vector<coral::mojom::EntityPtr> tab_app_entities;
+  if (const auto* tab_entities = tab_app_entities_dict.FindList(kTabs)) {
+    for (const auto& tab_entity : *tab_entities) {
+      const std::string* tab_title_ptr =
+          tab_entity.GetDict().FindString(kTitle);
+      const std::string* tab_url_ptr = tab_entity.GetDict().FindString(kTabUrl);
+      tab_app_entities.emplace_back(coral::mojom::Entity::NewTab(
+          coral::mojom::Tab::New(tab_title_ptr ? *tab_title_ptr : std::string(),
+                                 tab_url_ptr ? GURL(*tab_url_ptr) : GURL())));
+    }
+  }
+
+  if (const auto* app_entities = tab_app_entities_dict.FindList(kApps)) {
+    for (const auto& app_entity : *app_entities) {
+      const std::string* app_name_ptr =
+          app_entity.GetDict().FindString(kAppName);
+      const std::string* app_id_ptr = app_entity.GetDict().FindString(kAppId);
+      tab_app_entities.emplace_back(coral::mojom::Entity::NewApp(
+          coral::mojom::App::New(app_name_ptr ? *app_name_ptr : std::string(),
+                                 app_id_ptr ? *app_id_ptr : std::string())));
+    }
+  }
+  return tab_app_entities;
 }
 
-// Convert JSON string WindowState `state` to ui::WindowShowState used by
+bool IsValidWindowState(const std::string& window_state) {
+  return kValidWindowStates.contains(window_state);
+}
+
+// Convert JSON string WindowState `state` to ui::mojom::WindowShowState used by
 // the app_restore::WindowInfo struct.
-ui::WindowShowState ToUiWindowState(const std::string& window_state) {
+ui::mojom::WindowShowState ToUiWindowState(const std::string& window_state) {
   if (window_state == kWindowStateNormal)
-    return ui::WindowShowState::SHOW_STATE_NORMAL;
+    return ui::mojom::WindowShowState::kNormal;
   else if (window_state == kWindowStateMinimized)
-    return ui::WindowShowState::SHOW_STATE_MINIMIZED;
+    return ui::mojom::WindowShowState::kMinimized;
   else if (window_state == kWindowStateMaximized)
-    return ui::WindowShowState::SHOW_STATE_MAXIMIZED;
+    return ui::mojom::WindowShowState::kMaximized;
   else if (window_state == kWindowStateFullscreen)
-    return ui::WindowShowState::SHOW_STATE_FULLSCREEN;
+    return ui::mojom::WindowShowState::kFullscreen;
   else if (window_state == kWindowStatePrimarySnapped)
-    return ui::WindowShowState::SHOW_STATE_NORMAL;
+    return ui::mojom::WindowShowState::kNormal;
   else if (window_state == kWindowStateSecondarySnapped)
-    return ui::WindowShowState::SHOW_STATE_NORMAL;
+    return ui::mojom::WindowShowState::kNormal;
   // We should never reach here unless we have been passed an invalid window
   // state
   DCHECK(IsValidWindowState(window_state));
-  return ui::WindowShowState::SHOW_STATE_NORMAL;
+  return ui::mojom::WindowShowState::kNormal;
 }
 
 // Convert JSON string WindowState `state` to chromeos::WindowStateType used by
@@ -560,9 +592,9 @@ chromeos::WindowStateType ToChromeOsWindowState(
 }
 
 void FillArcExtraWindowInfoFromJson(
-    const base::Value::Dict& app,
+    const base::DictValue& app,
     app_restore::WindowInfo::ArcExtraInfo* out_window_info) {
-  const base::Value::Dict* bounds_in_root = app.FindDict(kBoundsInRoot);
+  const base::DictValue* bounds_in_root = app.FindDict(kBoundsInRoot);
   int top;
   int left;
   int bounds_width;
@@ -575,7 +607,7 @@ void FillArcExtraWindowInfoFromJson(
                                             bounds_height);
   }
 
-  const base::Value::Dict* maximum_size = app.FindDict(kMaximumSize);
+  const base::DictValue* maximum_size = app.FindDict(kMaximumSize);
   int max_width;
   int max_height;
   if (maximum_size && GetInt(*maximum_size, kSizeWidth, &max_width) &&
@@ -583,7 +615,7 @@ void FillArcExtraWindowInfoFromJson(
     out_window_info->maximum_size.emplace(max_width, max_height);
   }
 
-  const base::Value::Dict* minimum_size = app.FindDict(kMinimumSize);
+  const base::DictValue* minimum_size = app.FindDict(kMinimumSize);
   int min_width;
   int min_height;
   if (minimum_size && GetInt(*minimum_size, kSizeWidth, &min_width) &&
@@ -593,7 +625,7 @@ void FillArcExtraWindowInfoFromJson(
 }
 
 // Fill `out_window_info` with information from JSON `app`.
-void FillWindowInfoFromJson(const base::Value::Dict& app,
+void FillWindowInfoFromJson(const base::DictValue& app,
                             app_restore::WindowInfo* out_window_info) {
   std::string window_state;
   chromeos::WindowStateType cros_window_state =
@@ -610,7 +642,7 @@ void FillWindowInfoFromJson(const base::Value::Dict& app,
                                    &out_window_info->arc_extra_info.emplace());
   }
 
-  const base::Value::Dict* window_bound = app.FindDict(kWindowBound);
+  const base::DictValue* window_bound = app.FindDict(kWindowBound);
   int top;
   int left;
   int width;
@@ -652,14 +684,14 @@ void FillWindowInfoFromJson(const base::Value::Dict& app,
 
 // Convert a desk template to `app_restore::RestoreData`.
 std::unique_ptr<app_restore::RestoreData> ConvertJsonToRestoreData(
-    const base::Value::Dict* desk) {
+    const base::DictValue* desk) {
   std::unique_ptr<app_restore::RestoreData> restore_data =
       std::make_unique<app_restore::RestoreData>();
 
-  const base::Value::List* apps = desk->FindList(kApps);
+  const base::ListValue* apps = desk->FindList(kApps);
   if (apps) {
     for (const auto& app : *apps) {
-      const base::Value::Dict& app_dict = app.GetDict();
+      const base::DictValue& app_dict = app.GetDict();
       std::unique_ptr<app_restore::AppLaunchInfo> app_launch_info =
           ConvertJsonToAppLaunchInfo(app_dict);
       if (!app_launch_info)
@@ -685,8 +717,8 @@ std::unique_ptr<app_restore::RestoreData> ConvertJsonToRestoreData(
 
 // Conversion to value methods.
 
-base::Value::Dict ConvertWindowBoundToValue(const gfx::Rect& rect) {
-  base::Value::Dict rectangle_value;
+base::DictValue ConvertWindowBoundToValue(const gfx::Rect& rect) {
+  base::DictValue rectangle_value;
 
   rectangle_value.Set(kWindowBoundTop, base::Value(rect.y()));
   rectangle_value.Set(kWindowBoundLeft, base::Value(rect.x()));
@@ -696,8 +728,8 @@ base::Value::Dict ConvertWindowBoundToValue(const gfx::Rect& rect) {
   return rectangle_value;
 }
 
-base::Value::Dict ConvertSizeToValue(const gfx::Size& size) {
-  base::Value::Dict size_value;
+base::DictValue ConvertSizeToValue(const gfx::Size& size) {
+  base::DictValue size_value;
 
   size_value.Set(kSizeWidth, base::Value(size.width()));
   size_value.Set(kSizeHeight, base::Value(size.height()));
@@ -732,17 +764,18 @@ std::string ChromeOsWindowStateToString(
   }
 }
 
-// Convert ui::WindowShowState `state` to JSON used by the base::Value
+// Convert ui::mojom::WindowShowState `state` to JSON used by the base::Value
 // representation.
-std::string UiWindowStateToString(const ui::WindowShowState& window_state) {
+std::string UiWindowStateToString(
+    const ui::mojom::WindowShowState& window_state) {
   switch (window_state) {
-    case ui::WindowShowState::SHOW_STATE_NORMAL:
+    case ui::mojom::WindowShowState::kNormal:
       return kWindowStateNormal;
-    case ui::WindowShowState::SHOW_STATE_MINIMIZED:
+    case ui::mojom::WindowShowState::kMinimized:
       return kWindowStateMinimized;
-    case ui::WindowShowState::SHOW_STATE_MAXIMIZED:
+    case ui::mojom::WindowShowState::kMaximized:
       return kWindowStateMaximized;
-    case ui::WindowShowState::SHOW_STATE_FULLSCREEN:
+    case ui::mojom::WindowShowState::kFullscreen:
       return kWindowStateFullscreen;
     default:
       // available states in JSON representation is a subset
@@ -797,12 +830,12 @@ std::string LaunchContainerToString(apps::LaunchContainer launch_container) {
   }
 }
 
-base::Value::List ConvertURLsToBrowserAppTabValues(
+base::ListValue ConvertURLsToBrowserAppTabValues(
     const std::vector<GURL>& urls) {
-  base::Value::List tab_list;
+  base::ListValue tab_list;
 
   for (const auto& url : urls) {
-    base::Value::Dict browser_tab;
+    base::DictValue browser_tab;
     browser_tab.Set(kTabUrl, url.spec());
     tab_list.Append(std::move(browser_tab));
   }
@@ -825,30 +858,18 @@ std::string GetAppTypeForJson(apps::AppRegistryCache* apps_cache,
         return kAppTypeChrome;
       }
 
-    case apps::AppType::kStandaloneBrowser:
-      if (app_id == app_constants::kLacrosAppId) {
-        return kAppTypeBrowser;
-      } else {
-        return kAppTypeUnsupported;
-      }
-
     case apps::AppType::kArc:
       return kAppTypeArc;
-
-    case apps::AppType::kStandaloneBrowserChromeApp:
-      return kAppTypeChrome;
 
     case apps::AppType::kUnknown:
       return kAppTypeUnknown;
 
-    case apps::AppType::kBuiltIn:
     case apps::AppType::kCrostini:
     case apps::AppType::kPluginVm:
     case apps::AppType::kRemote:
     case apps::AppType::kBorealis:
     case apps::AppType::kBruschetta:
     case apps::AppType::kExtension:
-    case apps::AppType::kStandaloneBrowserExtension:
       // Default to unsupported. This app should not be captured.
       return kAppTypeUnsupported;
   }
@@ -863,7 +884,7 @@ base::Value ConvertWindowToDeskApp(const std::string& app_id,
     return base::Value(base::Value::Type::NONE);
   }
 
-  base::Value::Dict app_data;
+  base::DictValue app_data;
   if (app_type != kAppTypeUnknown) {
     app_data.Set(kAppType, app_type);
   }
@@ -915,7 +936,7 @@ base::Value ConvertWindowToDeskApp(const std::string& app_id,
   }
 
   if (!app->browser_extra_info.tab_group_infos.empty()) {
-    base::Value::List tab_groups_value;
+    base::ListValue tab_groups_value;
 
     for (const auto& tab_group : app->browser_extra_info.tab_group_infos) {
       tab_groups_value.Append(ConvertTabGroupInfoToDict(tab_group));
@@ -980,19 +1001,13 @@ base::Value ConvertWindowToDeskApp(const std::string& app_id,
     app_data.Set(kOverrideUrl, app->override_url->spec());
   }
 
-  if (app->browser_extra_info.lacros_profile_id.has_value()) {
-    app_data.Set(kLacrosProfileId,
-                 base::NumberToString(
-                     app->browser_extra_info.lacros_profile_id.value()));
-  }
-
   return base::Value(std::move(app_data));
 }
 
 base::Value ConvertRestoreDataToValue(
     const app_restore::RestoreData* restore_data,
     apps::AppRegistryCache* apps_cache) {
-  base::Value::List desk_data;
+  base::ListValue desk_data;
 
   for (const auto& app : restore_data->app_id_to_launch_list()) {
     for (const auto& window : app.second) {
@@ -1005,7 +1020,7 @@ base::Value ConvertRestoreDataToValue(
     }
   }
 
-  base::Value::Dict apps;
+  base::DictValue apps;
   apps.Set(kApps, std::move(desk_data));
   return base::Value(std::move(apps));
 }
@@ -1016,6 +1031,8 @@ std::string SerializeDeskTypeAsString(ash::DeskTemplateType desk_type) {
       return kDeskTypeTemplate;
     case ash::DeskTemplateType::kSaveAndRecall:
       return kDeskTypeSaveAndRecall;
+    case ash::DeskTemplateType::kCoral:
+      return kDeskTypeCoral;
     case ash::DeskTemplateType::kFloatingWorkspace:
       return kDeskTypeFloatingWorkspace;
     case ash::DeskTemplateType::kUnknown:
@@ -1024,21 +1041,26 @@ std::string SerializeDeskTypeAsString(ash::DeskTemplateType desk_type) {
 }
 
 bool IsValidDeskTemplateType(const std::string& desk_template_type) {
-  return base::Contains(kValidDeskTypes, desk_template_type);
+  return kValidDeskTypes.contains(desk_template_type);
 }
 
 // TODO(b/258692868): Currently parse any invalid value for this field as
 // SaveAndRecall. Fix by crash / signal some error instead.
 ash::DeskTemplateType GetDeskTypeFromString(const std::string& desk_type) {
   DCHECK(IsValidDeskTemplateType(desk_type));
-  if (desk_type == kDeskTypeTemplate)
+  if (desk_type == kDeskTypeTemplate) {
     return ash::DeskTemplateType::kTemplate;
-  else if (desk_type == kDeskTypeFloatingWorkspace)
+  }
+  if (desk_type == kDeskTypeFloatingWorkspace) {
     return ash::DeskTemplateType::kFloatingWorkspace;
-  else if (desk_type == kDeskTypeSaveAndRecall)
+  }
+  if (desk_type == kDeskTypeSaveAndRecall) {
     return ash::DeskTemplateType::kSaveAndRecall;
-  else
-    return ash::DeskTemplateType::kUnknown;
+  }
+  if (desk_type == kDeskTypeCoral) {
+    return ash::DeskTemplateType::kCoral;
+  }
+  return ash::DeskTemplateType::kUnknown;
 }
 
 // Convert from apps::LaunchContainer to sync proto LaunchContainer.
@@ -1199,18 +1221,8 @@ std::string GetAppId(const sync_pb::WorkspaceDeskSpecifics_App& app) {
       // Return an empty string to indicate this app is unsupported.
       return std::string();
     case sync_pb::WorkspaceDeskSpecifics_AppOneOf::AppCase::kBrowserAppWindow: {
-      const bool is_lacros =
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-          true;
-#else
-          // Note that this will launch the browser as lacros if it is enabled,
-          // even if it was saved as a non-lacros window (and vice-versa).
-          crosapi::lacros_startup_state::IsLacrosEnabled();
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-
       // Browser app has a known app ID.
-      return std::string(is_lacros ? app_constants::kLacrosAppId
-                                   : app_constants::kChromeAppId);
+      return std::string(app_constants::kChromeAppId);
     }
     case sync_pb::WorkspaceDeskSpecifics_AppOneOf::AppCase::kChromeApp:
       return app.app().chrome_app().app_id();
@@ -1267,7 +1279,6 @@ std::unique_ptr<app_restore::AppLaunchInfo> ConvertToAppLaunchInfo(
       // This should never happen. `APP_NOT_SET` corresponds to empty `app_id`.
       // This method will early return when `app_id` is empty.
       NOTREACHED();
-      break;
     case sync_pb::WorkspaceDeskSpecifics_AppOneOf::AppCase::kBrowserAppWindow:
       if (app.app().browser_app_window().has_active_tab_index()) {
         app_launch_info->browser_extra_info.active_tab_index =
@@ -1348,26 +1359,26 @@ SyncWindowOpenDisposition FromBaseWindowOpenDisposition(
   }
 }
 
-// Convert Sync proto WindowState `state` to ui::WindowShowState used by
+// Convert Sync proto WindowState `state` to ui::mojom::WindowShowState used by
 // the app_restore::WindowInfo struct.
-ui::WindowShowState ToUiWindowState(WindowState state) {
+ui::mojom::WindowShowState ToUiWindowState(WindowState state) {
   switch (state) {
     case WindowState::WorkspaceDeskSpecifics_WindowState_UNKNOWN_WINDOW_STATE:
-      return ui::WindowShowState::SHOW_STATE_NORMAL;
+      return ui::mojom::WindowShowState::kNormal;
     case WindowState::WorkspaceDeskSpecifics_WindowState_NORMAL:
-      return ui::WindowShowState::SHOW_STATE_NORMAL;
+      return ui::mojom::WindowShowState::kNormal;
     case WindowState::WorkspaceDeskSpecifics_WindowState_MINIMIZED:
-      return ui::WindowShowState::SHOW_STATE_MINIMIZED;
+      return ui::mojom::WindowShowState::kMinimized;
     case WindowState::WorkspaceDeskSpecifics_WindowState_MAXIMIZED:
-      return ui::WindowShowState::SHOW_STATE_MAXIMIZED;
+      return ui::mojom::WindowShowState::kMaximized;
     case WindowState::WorkspaceDeskSpecifics_WindowState_FULLSCREEN:
-      return ui::WindowShowState::SHOW_STATE_FULLSCREEN;
+      return ui::mojom::WindowShowState::kFullscreen;
     case WindowState::WorkspaceDeskSpecifics_WindowState_PRIMARY_SNAPPED:
-      return ui::WindowShowState::SHOW_STATE_NORMAL;
+      return ui::mojom::WindowShowState::kNormal;
     case WindowState::WorkspaceDeskSpecifics_WindowState_SECONDARY_SNAPPED:
-      return ui::WindowShowState::SHOW_STATE_NORMAL;
+      return ui::mojom::WindowShowState::kNormal;
     case WindowState::WorkspaceDeskSpecifics_WindowState_FLOATED:
-      return ui::WindowShowState::SHOW_STATE_NORMAL;
+      return ui::mojom::WindowShowState::kNormal;
   }
 }
 
@@ -1401,7 +1412,7 @@ WindowState FromChromeOsWindowState(chromeos::WindowStateType state) {
     case chromeos::WindowStateType::kNormal:
     case chromeos::WindowStateType::kInactive:
     case chromeos::WindowStateType::kPinned:
-    case chromeos::WindowStateType::kTrustedPinned:
+    case chromeos::WindowStateType::kLockedFullscreen:
     case chromeos::WindowStateType::kPip:
       // TODO(crbug.com/1331825): Float state support for desk template.
       return WindowState::WorkspaceDeskSpecifics_WindowState_NORMAL;
@@ -1420,19 +1431,19 @@ WindowState FromChromeOsWindowState(chromeos::WindowStateType state) {
   }
 }
 
-// Convert ui::WindowShowState to Sync proto WindowState.
-WindowState FromUiWindowState(ui::WindowShowState state) {
+// Convert ui::mojom::WindowShowState to Sync proto WindowState.
+WindowState FromUiWindowState(ui::mojom::WindowShowState state) {
   switch (state) {
-    case ui::WindowShowState::SHOW_STATE_DEFAULT:
-    case ui::WindowShowState::SHOW_STATE_NORMAL:
-    case ui::WindowShowState::SHOW_STATE_INACTIVE:
-    case ui::WindowShowState::SHOW_STATE_END:
+    case ui::mojom::WindowShowState::kDefault:
+    case ui::mojom::WindowShowState::kNormal:
+    case ui::mojom::WindowShowState::kInactive:
+    case ui::mojom::WindowShowState::kEnd:
       return WindowState::WorkspaceDeskSpecifics_WindowState_NORMAL;
-    case ui::WindowShowState::SHOW_STATE_MINIMIZED:
+    case ui::mojom::WindowShowState::kMinimized:
       return WindowState::WorkspaceDeskSpecifics_WindowState_MINIMIZED;
-    case ui::WindowShowState::SHOW_STATE_MAXIMIZED:
+    case ui::mojom::WindowShowState::kMaximized:
       return WindowState::WorkspaceDeskSpecifics_WindowState_MAXIMIZED;
-    case ui::WindowShowState::SHOW_STATE_FULLSCREEN:
+    case ui::mojom::WindowShowState::kFullscreen:
       return WindowState::WorkspaceDeskSpecifics_WindowState_FULLSCREEN;
   }
 }
@@ -1460,6 +1471,8 @@ SyncTabGroupColor SyncTabColorFromTabGroupColorId(
       return SyncTabGroupColor::WorkspaceDeskSpecifics_TabGroupColor_CYAN;
     case TabGroupColor::kOrange:
       return SyncTabGroupColor::WorkspaceDeskSpecifics_TabGroupColor_ORANGE;
+    case TabGroupColor::kNumEntries:
+      NOTREACHED() << "kNumEntries is not a supported color enum.";
   };
 }
 
@@ -1685,9 +1698,10 @@ bool FillApp(const std::string& app_id,
     case apps::AppType::kWeb:
     case apps::AppType::kSystemWeb: {
       // System Web Apps.
-      // kSystemWeb is returned for System Web Apps in Lacros-primary
-      // configuration. These can be persisted and launched the same way as
-      // Chrome Apps.
+      // Even though, kSystemWeb was returned for System Web Apps in
+      // Lacros-primary configuration and while SWA's are mostly deprecated, a
+      // few internal apps like Settings are still implemented as SWA's. These
+      // can be persisted and launched the same way as Chrome Apps.
       ChromeApp* chrome_app_window =
           out_app->mutable_app()->mutable_chrome_app();
       chrome_app_window->set_app_id(app_id);
@@ -1717,32 +1731,6 @@ bool FillApp(const std::string& app_id,
       break;
     }
 
-    case apps::AppType::kStandaloneBrowser: {
-      if (app_constants::kLacrosAppId == app_id) {
-        // Lacros Chrome browser window or PWA hosted in Lacros Chrome.
-        BrowserAppWindow* browser_app_window =
-            out_app->mutable_app()->mutable_browser_app_window();
-        FillBrowserAppWindow(app_restore_data, browser_app_window);
-      } else {
-        // Chrome app running in Lacros should have
-        // AppType::kStandaloneBrowserChromeApp and never reach here.
-        NOTREACHED();
-        // Ignore this app type.
-        return false;
-      }
-
-      break;
-    }
-
-    case apps::AppType::kStandaloneBrowserChromeApp: {
-      // Chrome App hosted in Lacros.
-      ChromeApp* chrome_app_window =
-          out_app->mutable_app()->mutable_chrome_app();
-      chrome_app_window->set_app_id(app_id);
-      FillAppWithLaunchContainerAndOpenDisposition(app_restore_data, out_app);
-      break;
-    }
-
     case apps::AppType::kArc: {
       ArcApp* arc_app = out_app->mutable_app()->mutable_arc_app();
       arc_app->set_app_id(app_id);
@@ -1750,7 +1738,6 @@ bool FillApp(const std::string& app_id,
       break;
     }
 
-    case apps::AppType::kBuiltIn:
     case apps::AppType::kCrostini:
     case apps::AppType::kPluginVm:
     case apps::AppType::kUnknown:
@@ -1758,7 +1745,6 @@ bool FillApp(const std::string& app_id,
     case apps::AppType::kBorealis:
     case apps::AppType::kBruschetta:
     case apps::AppType::kExtension:
-    case apps::AppType::kStandaloneBrowserExtension:
       // Unsupported app types will be ignored.
       return false;
   }
@@ -1921,6 +1907,7 @@ void FillDeskType(const DeskTemplate* desk_template,
           SyncDeskType::WorkspaceDeskSpecifics_DeskType_FLOATING_WORKSPACE);
       return;
     // Do nothing if type is unknown.
+    case DeskTemplateType::kCoral:
     case DeskTemplateType::kUnknown:
       return;
   }
@@ -1943,6 +1930,45 @@ DeskTemplateType GetDeskTemplateTypeFromProtoType(
   }
 }
 
+// Fill a desk template `out_entry_proto` with the Coral tab and app entities.
+void FillCoralTabAppEntities(const DeskTemplate& desk_template,
+                             sync_pb::WorkspaceDeskSpecifics* out_entry_proto) {
+  for (const auto& entity : desk_template.coral_tab_app_entities()) {
+    if (entity->is_tab()) {
+      const auto& tab = entity->get_tab();
+      auto* tab_proto =
+          out_entry_proto->mutable_coral_tab_app_entities()->add_tab_entities();
+      tab_proto->set_tab_title(tab->title);
+      tab_proto->set_tab_url(tab->url.possibly_invalid_spec());
+    } else if (entity->is_app()) {
+      const auto& app = entity->get_app();
+      auto* app_proto =
+          out_entry_proto->mutable_coral_tab_app_entities()->add_app_entities();
+      app_proto->set_app_name(app->title);
+      app_proto->set_app_id(app->id);
+    }
+  }
+}
+
+std::vector<coral::mojom::EntityPtr> GetCoralTabAppEntitiesFromProto(
+    const sync_pb::WorkspaceDeskSpecifics& entry_proto) {
+  std::vector<coral::mojom::EntityPtr> tab_app_entities;
+  for (const auto& tab_proto :
+       entry_proto.coral_tab_app_entities().tab_entities()) {
+    tab_app_entities.emplace_back(
+        coral::mojom::Entity::NewTab(coral::mojom::Tab::New(
+            tab_proto.tab_title(), GURL(tab_proto.tab_url()))));
+  }
+
+  for (const auto& app_proto :
+       entry_proto.coral_tab_app_entities().app_entities()) {
+    tab_app_entities.emplace_back(coral::mojom::Entity::NewApp(
+        coral::mojom::App::New(app_proto.app_name(), app_proto.app_id())));
+  }
+
+  return tab_app_entities;
+}
+
 // Corrects the admin template browser format so that subsequent serialization
 // code stores browsers correctly.
 void CorrectAdminTemplateBrowserFormat(base::Value& app) {
@@ -1951,7 +1977,7 @@ void CorrectAdminTemplateBrowserFormat(base::Value& app) {
   }
 
   auto& app_dict = app.GetDict();
-  base::Value::List* tabs = app_dict.FindList(kTabsAdminFormat);
+  base::ListValue* tabs = app_dict.FindList(kTabsAdminFormat);
 
   if (tabs == nullptr) {
     return;
@@ -2000,9 +2026,9 @@ void CorrectAdminTemplateAppTypeFormat(base::Value& app) {
 // by `ConvertJsonToRestoreData`.  The value is copied and returned corrected.
 // If the admin format itself is corrupted return the clone, it will be
 // discarded by the parsing code.
-base::Value::Dict CorrectAdminTemplateFormat(const base::Value::Dict* desk) {
+base::DictValue CorrectAdminTemplateFormat(const base::DictValue* desk) {
   auto desk_clone = desk->Clone();
-  base::Value::List* apps = desk_clone.FindList(kApps);
+  base::ListValue* apps = desk_clone.FindList(kApps);
   if (apps == nullptr) {
     return desk_clone;
   }
@@ -2022,7 +2048,7 @@ std::unique_ptr<ash::DeskTemplate> ParseAdminTemplate(
     return nullptr;
   }
 
-  const base::Value::Dict& value_dict = admin_template.GetDict();
+  const base::DictValue& value_dict = admin_template.GetDict();
 
   bool auto_launch_on_startup;
   std::string created_time_usec_str;
@@ -2031,7 +2057,7 @@ std::unique_ptr<ash::DeskTemplate> ParseAdminTemplate(
   std::string updated_time_usec_str;
   int64_t updated_time_usec;
   std::string uuid_str;
-  const base::Value::Dict* desk = value_dict.FindDict(kDesk);
+  const base::DictValue* desk = value_dict.FindDict(kDesk);
   if (!desk ||
       !GetBool(value_dict, kAutoLaunchOnStartup, &auto_launch_on_startup) ||
       !GetString(value_dict, kUuid, &uuid_str) ||
@@ -2098,6 +2124,8 @@ std::string ConvertTabGroupColorIdToString(GroupColor color) {
       return tab_groups::kTabGroupColorCyan;
     case GroupColor::kOrange:
       return tab_groups::kTabGroupColorOrange;
+    case GroupColor::kNumEntries:
+      NOTREACHED() << "kNumEntries is not a supported color enum.";
   }
 }
 
@@ -2138,7 +2166,7 @@ ParseSavedDeskResult ParseDeskTemplateFromBaseValue(
     return base::unexpected(SavedDeskParseError::kBaseValueIsNotDict);
   }
 
-  const base::Value::Dict& value_dict = value.GetDict();
+  const base::DictValue& value_dict = value.GetDict();
 
   std::string created_time_usec_str;
   int64_t created_time_usec;
@@ -2147,7 +2175,7 @@ ParseSavedDeskResult ParseDeskTemplateFromBaseValue(
   int64_t updated_time_usec;
   std::string uuid_str;
   int version;
-  const base::Value::Dict* desk = value_dict.FindDict(kDesk);
+  const base::DictValue* desk = value_dict.FindDict(kDesk);
   if (!desk || !GetInt(value_dict, kVersion, &version) ||
       !GetString(value_dict, kUuid, &uuid_str) ||
       !GetString(value_dict, kName, &name) ||
@@ -2195,18 +2223,13 @@ ParseSavedDeskResult ParseDeskTemplateFromBaseValue(
         std::move(uuid), source, name, created_time, desk_type);
   }
 
-  if (desk_type == ash::DeskTemplateType::kSaveAndRecall) {
-    std::string lacros_profile_id_str;
-    if (GetString(value_dict, kLacrosProfileId, &lacros_profile_id_str)) {
-      uint64_t lacros_profile_id = 0;
-      if (base::StringToUint64(lacros_profile_id_str, &lacros_profile_id)) {
-        desk_template->set_lacros_profile_id(lacros_profile_id);
-      }
-    }
-  }
-
   desk_template->set_updated_time(updated_time);
   desk_template->set_desk_restore_data(ConvertJsonToRestoreData(desk));
+  if (const auto* tab_app_entities_dict =
+          value_dict.FindDict(kCoralTabAppEntities)) {
+    desk_template->set_coral_tab_app_entities(
+        ConvertDictToCoralTabAppEntities(*tab_app_entities_dict));
+  }
 
   return base::ok(std::move(desk_template));
 }
@@ -2214,7 +2237,7 @@ ParseSavedDeskResult ParseDeskTemplateFromBaseValue(
 base::Value SerializeDeskTemplateAsBaseValue(
     const ash::DeskTemplate* desk,
     apps::AppRegistryCache* app_cache) {
-  base::Value::Dict desk_dict;
+  base::DictValue desk_dict;
   desk_dict.Set(kVersion, kVersionNum);
   desk_dict.Set(kUuid, desk->uuid().AsLowercaseString());
   desk_dict.Set(kName, desk->template_name());
@@ -2222,16 +2245,17 @@ base::Value SerializeDeskTemplateAsBaseValue(
   desk_dict.Set(kUpdatedTime, base::TimeToValue(desk->GetLastUpdatedTime()));
   desk_dict.Set(kDeskType, SerializeDeskTypeAsString(desk->type()));
   desk_dict.Set(kAutoLaunchOnStartup, desk->should_launch_on_startup());
-  if (desk->type() == ash::DeskTemplateType::kSaveAndRecall &&
-      desk->lacros_profile_id()) {
-    desk_dict.Set(kLacrosProfileId,
-                  base::NumberToString(desk->lacros_profile_id()));
-  }
   desk_dict.Set(
       kDesk, ConvertRestoreDataToValue(desk->desk_restore_data(), app_cache));
 
   if (desk->policy_definition().type() == base::Value::Type::DICT) {
     desk_dict.Set(kPolicy, desk->policy_definition().Clone());
+  }
+
+  if (desk->type() == DeskTemplateType::kCoral &&
+      !desk->coral_tab_app_entities().empty()) {
+    desk_dict.Set(kCoralTabAppEntities, ConvertCoralTabAppEntitiesToDict(
+                                            desk->coral_tab_app_entities()));
   }
 
   return base::Value(std::move(desk_dict));
@@ -2275,6 +2299,11 @@ std::unique_ptr<DeskTemplate> FromSyncProto(
     desk_template->set_device_form_factor(
         syncer::DeviceInfo::FormFactor::kUnknown);
   }
+
+  if (pb_entry.has_coral_tab_app_entities()) {
+    desk_template->set_coral_tab_app_entities(
+        GetCoralTabAppEntitiesFromProto(pb_entry));
+  }
   return desk_template;
 }
 
@@ -2298,6 +2327,11 @@ sync_pb::WorkspaceDeskSpecifics ToSyncProto(const DeskTemplate* desk_template,
     FillWorkspaceDeskSpecifics(cache, desk_template->desk_restore_data(),
                                &pb_entry);
   }
+
+  if (!desk_template->coral_tab_app_entities().empty()) {
+    FillCoralTabAppEntities(*desk_template, &pb_entry);
+  }
+
   if (!desk_template->client_cache_guid().empty()) {
     pb_entry.set_client_cache_guid(desk_template->client_cache_guid());
   }

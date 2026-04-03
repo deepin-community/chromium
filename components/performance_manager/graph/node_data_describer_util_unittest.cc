@@ -5,9 +5,9 @@
 #include "components/performance_manager/public/graph/node_data_describer_util.h"
 
 #include <optional>
+#include <string_view>
 
 #include "base/json/json_reader.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "components/performance_manager/public/graph/node_data_describer.h"
 #include "components/performance_manager/public/graph/node_data_describer_registry.h"
@@ -21,26 +21,25 @@ namespace {
 
 class TestNodeDataDescriber final : public NodeDataDescriber {
  public:
-  base::Value::Dict DescribeFrameNodeData(const FrameNode*) const final {
+  base::DictValue DescribeFrameNodeData(const FrameNode*) const final {
     return Describe("FrameNode");
   }
-  base::Value::Dict DescribePageNodeData(const PageNode*) const final {
+  base::DictValue DescribePageNodeData(const PageNode*) const final {
     return Describe("PageNode");
   }
-  base::Value::Dict DescribeProcessNodeData(
-      const ProcessNode* node) const final {
+  base::DictValue DescribeProcessNodeData(const ProcessNode* node) const final {
     return Describe("ProcessNode");
   }
-  base::Value::Dict DescribeSystemNodeData(const SystemNode*) const final {
+  base::DictValue DescribeSystemNodeData(const SystemNode*) const final {
     return Describe("SystemNode");
   }
-  base::Value::Dict DescribeWorkerNodeData(const WorkerNode*) const final {
+  base::DictValue DescribeWorkerNodeData(const WorkerNode*) const final {
     return Describe("WorkerNode");
   }
 
  private:
-  base::Value::Dict Describe(base::StringPiece node_type) const {
-    base::Value::Dict description;
+  base::DictValue Describe(std::string_view node_type) const {
+    base::DictValue description;
     description.Set("node_type", node_type);
     return description;
   }
@@ -48,20 +47,21 @@ class TestNodeDataDescriber final : public NodeDataDescriber {
 
 class NodeDataDescriberUtilTest : public GraphTestHarness {
  protected:
-  void ExpectEmptyDict(base::StringPiece msg, base::StringPiece json) {
+  void ExpectEmptyDict(std::string_view msg, std::string_view json) {
     return ExpectDict(msg, json, true);
   }
 
-  void ExpectNonEmptyDict(base::StringPiece msg, base::StringPiece json) {
+  void ExpectNonEmptyDict(std::string_view msg, std::string_view json) {
     return ExpectDict(msg, json, false);
   }
 
  private:
-  void ExpectDict(base::StringPiece msg,
-                  base::StringPiece json,
+  void ExpectDict(std::string_view msg,
+                  std::string_view json,
                   bool expect_empty_dict) {
     SCOPED_TRACE(::testing::Message() << msg << " " << json);
-    std::optional<base::Value> parsed_json = base::JSONReader::Read(json);
+    std::optional<base::Value> parsed_json =
+        base::JSONReader::Read(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     ASSERT_TRUE(parsed_json.has_value());
     ASSERT_TRUE(parsed_json.value().is_dict());
     EXPECT_EQ(parsed_json.value().GetDict().empty(), expect_empty_dict);

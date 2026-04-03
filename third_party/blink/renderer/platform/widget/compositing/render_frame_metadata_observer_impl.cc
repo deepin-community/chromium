@@ -11,6 +11,7 @@
 #include "cc/mojom/render_frame_metadata.mojom-shared.h"
 #include "components/viz/common/quads/compositor_frame_metadata.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace blink {
 
@@ -62,7 +63,7 @@ void RenderFrameMetadataObserverImpl::OnRenderFrameSubmission(
     send_metadata |= force_send;
   }
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   bool is_frequency_all_updates =
       root_scroll_offset_update_frequency_.value_or(
           cc::mojom::blink::RootScrollOffsetUpdateFrequency::kNone) ==
@@ -99,30 +100,30 @@ void RenderFrameMetadataObserverImpl::OnRenderFrameSubmission(
         needs_activation_notification;
     render_frame_metadata_observer_client_->OnRenderFrameMetadataChanged(
         needs_activation_notification ? last_frame_token_ : 0u, metadata_copy);
-#if BUILDFLAG(IS_ANDROID)
-    last_root_scroll_offset_android_ = metadata_copy.root_scroll_offset;
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+    last_root_scroll_offset_ = metadata_copy.root_scroll_offset;
 #endif
-    TRACE_EVENT_WITH_FLOW1(
+    TRACE_EVENT(
         TRACE_DISABLED_BY_DEFAULT("viz.surface_id_flow"),
         "RenderFrameMetadataObserverImpl::OnRenderFrameSubmission",
-        metadata_copy.local_surface_id &&
-                metadata_copy.local_surface_id->is_valid()
-            ? metadata_copy.local_surface_id->submission_trace_id() +
-                  metadata_copy.local_surface_id->embed_trace_id()
-            : 0,
-        TRACE_EVENT_FLAG_FLOW_OUT, "local_surface_id",
+        perfetto::Flow::ProcessScoped(
+            metadata_copy.local_surface_id &&
+                    metadata_copy.local_surface_id->is_valid()
+                ? metadata_copy.local_surface_id->submission_trace_id() +
+                      metadata_copy.local_surface_id->embed_trace_id()
+                : 0),
+        "local_surface_id",
         metadata_copy.local_surface_id
             ? metadata_copy.local_surface_id->ToString()
             : "null");
   }
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
   if (send_root_scroll_offset_changed) {
     DCHECK(!send_metadata);
     render_frame_metadata_observer_client_->OnRootScrollOffsetChanged(
         *render_frame_metadata.root_scroll_offset);
-    last_root_scroll_offset_android_ =
-        *render_frame_metadata.root_scroll_offset;
+    last_root_scroll_offset_ = *render_frame_metadata.root_scroll_offset;
   }
 #endif
 
@@ -135,7 +136,7 @@ void RenderFrameMetadataObserverImpl::OnRenderFrameSubmission(
   }
 }
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 void RenderFrameMetadataObserverImpl::UpdateRootScrollOffsetUpdateFrequency(
     cc::mojom::blink::RootScrollOffsetUpdateFrequency frequency) {
   if (!RuntimeEnabledFeatures::CCTNewRFMPushBehaviorEnabled()) {
@@ -191,8 +192,13 @@ bool RenderFrameMetadataObserverImpl::ShouldSendRenderFrameMetadata(
       rfm1.top_controls_height != rfm2.top_controls_height ||
       rfm1.top_controls_shown_ratio != rfm2.top_controls_shown_ratio ||
       rfm1.local_surface_id != rfm2.local_surface_id ||
+      rfm1.tracked_element_bounds != rfm2.tracked_element_bounds ||
       rfm2.new_vertical_scroll_direction !=
-          viz::VerticalScrollDirection::kNull) {
+          viz::VerticalScrollDirection::kNull ||
+      (rfm2.primary_main_frame_item_sequence_number !=
+           cc::RenderFrameMetadata::kInvalidItemSequenceNumber &&
+       rfm1.primary_main_frame_item_sequence_number !=
+           rfm2.primary_main_frame_item_sequence_number)) {
     *needs_activation_notification = true;
     return true;
   }
@@ -250,7 +256,7 @@ bool RenderFrameMetadataObserverImpl::ShouldSendRenderFrameMetadata(
   return false;
 }
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 void RenderFrameMetadataObserverImpl::DidEndScroll() {
   if (!last_render_frame_metadata_.has_value()) {
     return;
@@ -258,7 +264,7 @@ void RenderFrameMetadataObserverImpl::DidEndScroll() {
 
   auto root_scroll_offset = last_render_frame_metadata_->root_scroll_offset;
   if (!root_scroll_offset.has_value() ||
-      root_scroll_offset == last_root_scroll_offset_android_) {
+      root_scroll_offset == last_root_scroll_offset_) {
     return;
   }
 
@@ -270,7 +276,7 @@ void RenderFrameMetadataObserverImpl::DidEndScroll() {
 
   render_frame_metadata_observer_client_->OnRootScrollOffsetChanged(
       root_scroll_offset.value());
-  last_root_scroll_offset_android_ = root_scroll_offset;
+  last_root_scroll_offset_ = root_scroll_offset;
 }
 #endif
 

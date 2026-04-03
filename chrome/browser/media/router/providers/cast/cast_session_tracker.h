@@ -37,7 +37,7 @@ class CastSessionTracker : public MediaSinkServiceBase::Observer,
                                          const CastSession& session) = 0;
     virtual void OnSessionRemoved(const MediaSinkInternal& sink) = 0;
     virtual void OnMediaStatusUpdated(const MediaSinkInternal& sink,
-                                      const base::Value::Dict& media_status,
+                                      const base::DictValue& media_status,
                                       std::optional<int> request_id) = 0;
   };
 
@@ -47,7 +47,7 @@ class CastSessionTracker : public MediaSinkServiceBase::Observer,
   ~CastSessionTracker() override;
 
   // Must be called on UI thread.
-  // TODO(https://crbug.com/904016): The UI/IO thread split makes this class
+  // TODO(crbug.com/41425670): The UI/IO thread split makes this class
   // confusing to use.  If we can directly access CastMediaSinkServiceImpl
   // without going through DualMediaSinkService, then it will no longer be
   // necessary for this method to be run on UI thread.
@@ -75,11 +75,11 @@ class CastSessionTracker : public MediaSinkServiceBase::Observer,
 
   void InitOnIoThread();
   void HandleReceiverStatusMessage(const MediaSinkInternal& sink,
-                                   const base::Value::Dict& message);
+                                   const base::DictValue& message);
   void HandleMediaStatusMessage(const MediaSinkInternal& sink,
-                                const base::Value::Dict& message);
+                                const base::DictValue& message);
   void CopySavedMediaFieldsToMediaList(CastSession* session,
-                                       base::Value::List& media_list);
+                                       base::ListValue& media_list);
   const MediaSinkInternal* GetSinkByChannelId(int channel_id) const;
 
   // MediaSinkServiceBase::Observer implementation
@@ -90,6 +90,7 @@ class CastSessionTracker : public MediaSinkServiceBase::Observer,
   void OnAppMessage(int channel_id, const CastMessage& message) override;
   void OnInternalMessage(int channel_id,
                          const cast_channel::InternalMessage& message) override;
+  void OnMessageSent(int channel_id, const CastMessage& message) override;
 
   static void SetInstanceForTest(CastSessionTracker* session_tracker);
   void SetSessionForTest(const MediaSink::Id& sink_id,

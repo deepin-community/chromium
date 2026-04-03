@@ -15,10 +15,29 @@ limitations under the License.
 
 #include "xla/service/loop_schedule_linearizer.h"
 
+#include <cstdint>
 #include <memory>
 
+#include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "xla/hlo/analysis/hlo_alias_analysis.h"
+#include "xla/hlo/analysis/hlo_dataflow_analysis.h"
+#include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/hlo/utils/hlo_query.h"
 #include "xla/service/graphcycles/graphcycles.h"
+#include "xla/service/hlo_value.h"
+#include "xla/shape_tree.h"
+#include "xla/shape_util.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -65,12 +84,12 @@ class ComputationInstructionOrdering {
 
  private:
   absl::flat_hash_map<int32_t, int32_t> node_id_to_graph_id_;
-  tensorflow::GraphCycles graph_cycles_;
+  GraphCycles graph_cycles_;
 };
 
 }  // namespace
 
-static StatusOr<bool> AddControlEdgesForLoopWrites(
+static absl::StatusOr<bool> AddControlEdgesForLoopWrites(
     HloInstruction* xla_while, HloAliasAnalysis& alias_analysis) {
   HloDataflowAnalysis& dataflow = alias_analysis.dataflow_analysis();
   HloComputation* body = xla_while->while_body();
@@ -145,7 +164,7 @@ static StatusOr<bool> AddControlEdgesForLoopWrites(
   return changed;
 }
 
-StatusOr<bool> LoopScheduleLinearizer::Run(
+absl::StatusOr<bool> LoopScheduleLinearizer::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   // Constructing HloAliasAnalysis is expensive, so don't do it until we find at
@@ -180,7 +199,7 @@ StatusOr<bool> LoopScheduleLinearizer::Run(
 
       if (alias_analysis == nullptr) {
         TF_ASSIGN_OR_RETURN(alias_analysis,
-                            HloAliasAnalysis::Run(module, can_share_buffer_));
+                            HloAliasAnalysis::Run(module, alias_info_));
       }
       TF_ASSIGN_OR_RETURN(bool updated_loop, AddControlEdgesForLoopWrites(
                                                  instruction, *alias_analysis));

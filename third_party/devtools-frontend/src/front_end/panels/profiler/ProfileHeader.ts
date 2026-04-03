@@ -1,40 +1,40 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type * as Bindings from '../../models/bindings/bindings.js';
 import * as Common from '../../core/common/common.js';
-import type * as UI from '../../ui/legacy/legacy.js';
 import type * as Protocol from '../../generated/protocol.js';
+import type * as Bindings from '../../models/bindings/bindings.js';
+import type * as UI from '../../ui/legacy/legacy.js';
 
 export class ProfileHeader extends Common.ObjectWrapper.ObjectWrapper<EventTypes> {
-  readonly profileTypeInternal: ProfileType;
+  readonly #profileType: ProfileType;
   title: string;
   uid: number;
-  fromFileInternal: boolean;
+  #fromFile: boolean;
   tempFile: Bindings.TempFile.TempFile|null;
 
   constructor(profileType: ProfileType, title: string) {
     super();
-    this.profileTypeInternal = profileType;
+    this.#profileType = profileType;
     this.title = title;
     this.uid = profileType.incrementProfileUid();
-    this.fromFileInternal = false;
+    this.#fromFile = false;
 
     this.tempFile = null;
   }
 
   setTitle(title: string): void {
     this.title = title;
-    this.dispatchEventToListeners(Events.ProfileTitleChanged, this);
+    this.dispatchEventToListeners(Events.PROFILE_TITLE_CHANGED, this);
   }
 
   profileType(): ProfileType {
-    return this.profileTypeInternal;
+    return this.#profileType;
   }
 
   updateStatus(subtitle: string|null, wait?: boolean): void {
-    this.dispatchEventToListeners(Events.UpdateStatus, new StatusUpdate(subtitle, wait));
+    this.dispatchEventToListeners(Events.UPDATE_STATUS, new StatusUpdate(subtitle, wait));
   }
 
   /**
@@ -70,11 +70,11 @@ export class ProfileHeader extends Common.ObjectWrapper.ObjectWrapper<EventTypes
   }
 
   fromFile(): boolean {
-    return this.fromFileInternal;
+    return this.#fromFile;
   }
 
   setFromFile(): void {
-    this.fromFileInternal = true;
+    this.#fromFile = true;
   }
 
   setProfile(_profile: Protocol.Profiler.Profile): void {
@@ -91,29 +91,29 @@ export class StatusUpdate {
 }
 
 export const enum Events {
-  UpdateStatus = 'UpdateStatus',
-  ProfileTitleChanged = 'ProfileTitleChanged',
+  UPDATE_STATUS = 'UpdateStatus',
+  PROFILE_TITLE_CHANGED = 'ProfileTitleChanged',
 }
 
-export type EventTypes = {
-  [Events.UpdateStatus]: StatusUpdate,
-  [Events.ProfileTitleChanged]: ProfileHeader,
-};
+export interface EventTypes {
+  [Events.UPDATE_STATUS]: StatusUpdate;
+  [Events.PROFILE_TITLE_CHANGED]: ProfileHeader;
+}
 
 export class ProfileType extends Common.ObjectWrapper.ObjectWrapper<ProfileEventTypes> {
-  readonly idInternal: string;
-  readonly nameInternal: string;
+  readonly #id: string;
+  readonly #name: string;
   profiles: ProfileHeader[];
-  profileBeingRecordedInternal: ProfileHeader|null;
-  nextProfileUidInternal: number;
+  #profileBeingRecorded: ProfileHeader|null;
+  #nextProfileUid: number;
 
   constructor(id: string, name: string) {
     super();
-    this.idInternal = id;
-    this.nameInternal = name;
+    this.#id = id;
+    this.#name = name;
     this.profiles = [];
-    this.profileBeingRecordedInternal = null;
-    this.nextProfileUidInternal = 1;
+    this.#profileBeingRecorded = null;
+    this.#nextProfileUid = 1;
 
     if (!window.opener) {
       window.addEventListener('pagehide', this.clearTempStorage.bind(this), false);
@@ -125,11 +125,11 @@ export class ProfileType extends Common.ObjectWrapper.ObjectWrapper<ProfileEvent
   }
 
   nextProfileUid(): number {
-    return this.nextProfileUidInternal;
+    return this.#nextProfileUid;
   }
 
   incrementProfileUid(): number {
-    return this.nextProfileUidInternal++;
+    return this.#nextProfileUid++;
   }
 
   hasTemporaryView(): boolean {
@@ -145,15 +145,15 @@ export class ProfileType extends Common.ObjectWrapper.ObjectWrapper<ProfileEvent
   }
 
   get id(): string {
-    return this.idInternal;
+    return this.#id;
   }
 
   get treeItemTitle(): string {
-    return this.nameInternal;
+    return this.#name;
   }
 
   get name(): string {
-    return this.nameInternal;
+    return this.#name;
   }
 
   buttonClicked(): boolean {
@@ -174,7 +174,7 @@ export class ProfileType extends Common.ObjectWrapper.ObjectWrapper<ProfileEvent
 
   getProfiles(): ProfileHeader[] {
     function isFinished(this: ProfileType, profile: ProfileHeader): boolean {
-      return this.profileBeingRecordedInternal !== profile;
+      return this.#profileBeingRecorded !== profile;
     }
     return this.profiles.filter(isFinished.bind(this));
   }
@@ -184,15 +184,6 @@ export class ProfileType extends Common.ObjectWrapper.ObjectWrapper<ProfileEvent
   }
 
   setCustomContentEnabled(_enable: boolean): void {
-  }
-
-  getProfile(uid: number): ProfileHeader|null {
-    for (let i = 0; i < this.profiles.length; ++i) {
-      if (this.profiles[i].uid === uid) {
-        return this.profiles[i];
-      }
-    }
-    return null;
   }
 
   loadFromFile(file: File): Promise<Error|DOMError|null> {
@@ -214,7 +205,7 @@ export class ProfileType extends Common.ObjectWrapper.ObjectWrapper<ProfileEvent
 
   addProfile(profile: ProfileHeader): void {
     this.profiles.push(profile);
-    this.dispatchEventToListeners(ProfileEvents.AddProfileHeader, profile);
+    this.dispatchEventToListeners(ProfileEvents.ADD_PROFILE_HEADER, profile);
   }
 
   removeProfile(profile: ProfileHeader): void {
@@ -233,11 +224,11 @@ export class ProfileType extends Common.ObjectWrapper.ObjectWrapper<ProfileEvent
   }
 
   profileBeingRecorded(): ProfileHeader|null {
-    return this.profileBeingRecordedInternal;
+    return this.#profileBeingRecorded;
   }
 
   setProfileBeingRecorded(profile: ProfileHeader|null): void {
-    this.profileBeingRecordedInternal = profile;
+    this.#profileBeingRecorded = profile;
   }
 
   profileBeingRecordedRemoved(): void {
@@ -248,13 +239,13 @@ export class ProfileType extends Common.ObjectWrapper.ObjectWrapper<ProfileEvent
       this.disposeProfile(profile);
     }
     this.profiles = [];
-    this.nextProfileUidInternal = 1;
+    this.#nextProfileUid = 1;
   }
 
   disposeProfile(profile: ProfileHeader): void {
-    this.dispatchEventToListeners(ProfileEvents.RemoveProfileHeader, profile);
+    this.dispatchEventToListeners(ProfileEvents.REMOVE_PROFILE_HEADER, profile);
     profile.dispose();
-    if (this.profileBeingRecordedInternal === profile) {
+    if (this.#profileBeingRecorded === profile) {
       this.profileBeingRecordedRemoved();
       this.setProfileBeingRecorded(null);
     }
@@ -262,18 +253,18 @@ export class ProfileType extends Common.ObjectWrapper.ObjectWrapper<ProfileEvent
 }
 
 export const enum ProfileEvents {
-  AddProfileHeader = 'add-profile-header',
-  ProfileComplete = 'profile-complete',
-  RemoveProfileHeader = 'remove-profile-header',
-  ViewUpdated = 'view-updated',
+  ADD_PROFILE_HEADER = 'add-profile-header',
+  PROFILE_COMPLETE = 'profile-complete',
+  REMOVE_PROFILE_HEADER = 'remove-profile-header',
+  VIEW_UPDATED = 'view-updated',
 }
 
-export type ProfileEventTypes = {
-  [ProfileEvents.AddProfileHeader]: ProfileHeader,
-  [ProfileEvents.ProfileComplete]: ProfileHeader,
-  [ProfileEvents.RemoveProfileHeader]: ProfileHeader,
-  [ProfileEvents.ViewUpdated]: void,
-};
+export interface ProfileEventTypes {
+  [ProfileEvents.ADD_PROFILE_HEADER]: ProfileHeader;
+  [ProfileEvents.PROFILE_COMPLETE]: ProfileHeader;
+  [ProfileEvents.REMOVE_PROFILE_HEADER]: ProfileHeader;
+  [ProfileEvents.VIEW_UPDATED]: void;
+}
 
 export interface DataDisplayDelegate {
   showProfile(profile: ProfileHeader|null): UI.Widget.Widget|null;

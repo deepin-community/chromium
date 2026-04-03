@@ -1,5 +1,5 @@
 <!--
-  Copyright 2020 The Chromium Authors. All rights reserved.
+  Copyright 2020 The Chromium Authors
   Use of this source code is governed by a BSD-style license that can be
   found in the LICENSE file.
 -->
@@ -14,7 +14,7 @@
   const constructedStyleSheet = new CSSStyleSheet();
   constructedStyleSheet.insertRule('#properties-to-inspect { color: grey; }');
 
-  import cssModuleStyleSheet from "./css-module.css" assert { type: "css" };
+  import cssModuleStyleSheet from "./css-module.css" with { type: "css" };
 
   document.adoptedStyleSheets = [constructedStyleSheet, cssModuleStyleSheet];
 </script>

@@ -25,7 +25,6 @@ import * as gearMenuTests from './file_manager/gear_menu.js';
 import * as gridViewTests from './file_manager/grid_view.js';
 import * as guestOsTests from './file_manager/guest_os.js';
 import * as holdingSpaceTests from './file_manager/holding_space.js';
-import * as installLinuxPackageDialogTests from './file_manager/install_linux_package_dialog.js';
 import * as keyboardOperationsTests from './file_manager/keyboard_operations.js';
 import * as manageDialogTests from './file_manager/manage_dialog.js';
 import * as metadataTests from './file_manager/metadata.js';
@@ -44,6 +43,7 @@ import * as recentsTests from './file_manager/recents.js';
 import * as restorePrefsTests from './file_manager/restore_prefs.js';
 import * as searchTests from './file_manager/search.js';
 import * as shareTests from './file_manager/share.js';
+import * as skyVaultTests from './file_manager/skyvault.js';
 import * as sortColumnsTests from './file_manager/sort_columns.js';
 import * as tabIndexTests from './file_manager/tab_index.js';
 import * as tasksTests from './file_manager/tasks.js';
@@ -83,7 +83,6 @@ export const testcase: Record<TestFunctionName, TestFunction> = {
   ...gridViewTests,
   ...guestOsTests,
   ...holdingSpaceTests,
-  ...installLinuxPackageDialogTests,
   ...keyboardOperationsTests,
   ...manageDialogTests,
   ...metadataTests,
@@ -110,4 +109,5 @@ export const testcase: Record<TestFunctionName, TestFunction> = {
   ...trashTests,
   ...traverseTests,
   ...zipFilesTests,
+  ...skyVaultTests,
 };

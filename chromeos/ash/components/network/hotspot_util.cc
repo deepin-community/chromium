@@ -130,8 +130,19 @@ hotspot_config::mojom::DisableReason ShillTetheringIdleReasonToMojomState(
     return DisableReason::kDownstreamNetworkDisconnect;
   }
 
+  if (idle_reason == shill::kTetheringIdleReasonStartTimeout) {
+    return DisableReason::kStartTimeout;
+  }
+
+  if (idle_reason == shill::kTetheringIdleReasonUpstreamNotAvailable) {
+    return DisableReason::kUpstreamNotAvailable;
+  }
+  if (idle_reason == shill::kTetheringIdleReasonResourceBusy) {
+    return DisableReason::kResourceBusy;
+  }
+
   NET_LOG(ERROR) << "Unexpected idle reason: " << idle_reason;
-  return DisableReason::kInternalError;
+  return DisableReason::kUnknownError;
 }
 
 hotspot_config::mojom::WiFiSecurityMode ShillSecurityToMojom(
@@ -154,7 +165,7 @@ hotspot_config::mojom::WiFiSecurityMode ShillSecurityToMojom(
 }
 
 hotspot_config::mojom::HotspotConfigPtr ShillTetheringConfigToMojomConfig(
-    const base::Value::Dict& shill_tethering_config) {
+    const base::DictValue& shill_tethering_config) {
   using hotspot_config::mojom::HotspotConfig;
 
   auto result = HotspotConfig::New();
@@ -206,11 +217,11 @@ hotspot_config::mojom::HotspotConfigPtr ShillTetheringConfigToMojomConfig(
   return result;
 }
 
-base::Value::Dict MojomConfigToShillConfig(
+base::DictValue MojomConfigToShillConfig(
     const hotspot_config::mojom::HotspotConfigPtr mojom_config) {
   using hotspot_config::mojom::HotspotConfig;
 
-  base::Value::Dict result;
+  base::DictValue result;
   result.Set(shill::kTetheringConfAutoDisableProperty,
              mojom_config->auto_disable);
   result.Set(shill::kTetheringConfBandProperty,
@@ -252,6 +263,22 @@ hotspot_config::mojom::HotspotControlResult SetTetheringEnabledResultToMojom(
   }
   if (shill_enabled_result == shill::kTetheringEnableResultWrongState) {
     return HotspotControlResult::kAlreadyFulfilled;
+  }
+  if (shill_enabled_result == shill::kTetheringEnableResultAbort) {
+    return HotspotControlResult::kAborted;
+  }
+  if (shill_enabled_result == shill::kTetheringEnableResultNotAllowed) {
+    return HotspotControlResult::kNotAllowed;
+  }
+  if (shill_enabled_result == shill::kTetheringEnableResultBusy) {
+    return HotspotControlResult::kBusy;
+  }
+  if (shill_enabled_result ==
+      shill::kTetheringEnableResultConcurrencyNotSupported) {
+    return HotspotControlResult::kConcurrencyNotSupported;
+  }
+  if (shill_enabled_result == shill::kTetheringEnableResultFailure) {
+    return HotspotControlResult::kOperationFailure;
   }
 
   NET_LOG(ERROR) << "Unknown enable/disable tethering error: "

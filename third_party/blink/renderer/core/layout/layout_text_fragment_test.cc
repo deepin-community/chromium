@@ -8,8 +8,6 @@
 #include "third_party/blink/renderer/core/dom/first_letter_pseudo_element.h"
 #include "third_party/blink/renderer/core/html/html_head_element.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -17,19 +15,19 @@ class LayoutTextFragmentTest : public RenderingTest {
  protected:
   void SetUp() override {
     RenderingTest::SetUp();
-    GetDocument().head()->setInnerHTML(
+    GetDocument().head()->SetInnerHTMLWithoutTrustedTypes(
         "<style>#target::first-letter{color:red}</style>");
   }
 
   void SetBasicBody(const char* message) {
-    SetBodyInnerHTML(String::Format(
-        "<div id='target' style='font-size: 10px;'>%s</div>", message));
+    SetBodyInnerHTML(UNSAFE_TODO(String::Format(
+        "<div id='target' style='font-size: 10px;'>%s</div>", message)));
   }
 
   void SetAhemBody(const char* message, const unsigned width) {
-    SetBodyInnerHTML(String::Format(
+    SetBodyInnerHTML(UNSAFE_TODO(String::Format(
         "<div id='target' style='font: 10px Ahem; width: %uem'>%s</div>", width,
-        message));
+        message)));
   }
 
   const LayoutTextFragment* GetRemainingText() const {

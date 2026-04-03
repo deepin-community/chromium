@@ -57,7 +57,7 @@ class RunQueue {
     Elem* e = &array_[front & kMask];
     uint8_t s = e->state.load(std::memory_order_relaxed);
     if (s != kEmpty || !e->state.compare_exchange_strong(s, kBusy, std::memory_order_acquire)) return w;
-    front_.store(front + 1 + (kSize << 1), std::memory_order_relaxed);
+    front_.store(front + 1 + (kSize << 1), std::memory_order_release);
     e->w = std::move(w);
     e->state.store(kReady, std::memory_order_release);
     return Work();
@@ -73,7 +73,7 @@ class RunQueue {
     Work w = std::move(e->w);
     e->state.store(kEmpty, std::memory_order_release);
     front = ((front - 1) & kMask2) | (front & ~kMask2);
-    front_.store(front, std::memory_order_relaxed);
+    front_.store(front, std::memory_order_release);
     return w;
   }
 
@@ -86,7 +86,7 @@ class RunQueue {
     uint8_t s = e->state.load(std::memory_order_relaxed);
     if (s != kEmpty || !e->state.compare_exchange_strong(s, kBusy, std::memory_order_acquire)) return w;
     back = ((back - 1) & kMask2) | (back & ~kMask2);
-    back_.store(back, std::memory_order_relaxed);
+    back_.store(back, std::memory_order_release);
     e->w = std::move(w);
     e->state.store(kReady, std::memory_order_release);
     return Work();
@@ -102,7 +102,7 @@ class RunQueue {
     if (s != kReady || !e->state.compare_exchange_strong(s, kBusy, std::memory_order_acquire)) return Work();
     Work w = std::move(e->w);
     e->state.store(kEmpty, std::memory_order_release);
-    back_.store(back + 1 + (kSize << 1), std::memory_order_relaxed);
+    back_.store(back + 1 + (kSize << 1), std::memory_order_release);
     return w;
   }
 
@@ -132,7 +132,7 @@ class RunQueue {
       e->state.store(kEmpty, std::memory_order_release);
       n++;
     }
-    if (n != 0) back_.store(start + 1 + (kSize << 1), std::memory_order_relaxed);
+    if (n != 0) back_.store(start + 1 + (kSize << 1), std::memory_order_release);
     return n;
   }
 
@@ -154,16 +154,18 @@ class RunQueue {
  private:
   static const unsigned kMask = kSize - 1;
   static const unsigned kMask2 = (kSize << 1) - 1;
-  struct Elem {
-    std::atomic<uint8_t> state;
-    Work w;
-  };
-  enum {
+
+  enum State {
     kEmpty,
     kBusy,
     kReady,
   };
-  EIGEN_MUTEX mutex_;
+
+  struct Elem {
+    std::atomic<uint8_t> state;
+    Work w;
+  };
+
   // Low log(kSize) + 1 bits in front_ and back_ contain rolling index of
   // front/back, respectively. The remaining bits contain modification counters
   // that are incremented on Push operations. This allows us to (1) distinguish
@@ -171,9 +173,11 @@ class RunQueue {
   // position, these conditions would be indistinguishable); (2) obtain
   // consistent snapshot of front_/back_ for Size operation using the
   // modification counters.
-  std::atomic<unsigned> front_;
-  std::atomic<unsigned> back_;
-  Elem array_[kSize];
+  EIGEN_ALIGN_TO_AVOID_FALSE_SHARING std::atomic<unsigned> front_;
+  EIGEN_ALIGN_TO_AVOID_FALSE_SHARING std::atomic<unsigned> back_;
+  EIGEN_MUTEX mutex_;  // guards `PushBack` and `PopBack` (accesses `back_`)
+
+  EIGEN_ALIGN_TO_AVOID_FALSE_SHARING Elem array_[kSize];
 
   // SizeOrNotEmpty returns current queue size; if NeedSizeEstimate is false,
   // only whether the size is 0 is guaranteed to be correct.
@@ -208,12 +212,12 @@ class RunQueue {
   EIGEN_ALWAYS_INLINE unsigned CalculateSize(unsigned front, unsigned back) const {
     int size = (front & kMask2) - (back & kMask2);
     // Fix overflow.
-    if (size < 0) size += 2 * kSize;
+    if (EIGEN_PREDICT_FALSE(size < 0)) size += 2 * kSize;
     // Order of modification in push/pop is crafted to make the queue look
     // larger than it is during concurrent modifications. E.g. push can
     // increment size before the corresponding pop has decremented it.
     // So the computed size can be up to kSize + 1, fix it.
-    if (size > static_cast<int>(kSize)) size = kSize;
+    if (EIGEN_PREDICT_FALSE(size > static_cast<int>(kSize))) size = kSize;
     return static_cast<unsigned>(size);
   }
 

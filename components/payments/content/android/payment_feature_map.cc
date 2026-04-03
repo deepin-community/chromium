@@ -4,13 +4,17 @@
 
 #include "components/payments/content/android/payment_feature_map.h"
 
+#include <jni.h>
+
 #include "base/android/feature_map.h"
 #include "base/feature_list.h"
 #include "base/no_destructor.h"
-#include "components/payments/content/android/feature_list_jni/PaymentFeatureMap_jni.h"
 #include "components/payments/core/features.h"
 #include "content/public/common/content_features.h"
 #include "third_party/blink/public/common/features_generated.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/payments/content/android/feature_list_jni/PaymentFeatureMap_jni.h"
 
 namespace payments::android {
 namespace {
@@ -22,34 +26,53 @@ namespace {
 // third_party/blink/public/common/features_generated.h, or the .h file (for
 // Android only features).
 const base::Feature* const kFeaturesExposedToJava[] = {
-    &::blink::features::kAddIdentityInCanMakePaymentEvent,
     &::features::kServiceWorkerPaymentApps,
     &::features::kWebPayments,
     &features::kAppStoreBilling,
     &features::kAppStoreBillingDebug,
+    &features::kCanMakePaymentTrueWhenPrivate,
     &features::kEnforceFullDelegation,
     &features::kGPayAppDynamicUpdate,
     &features::kWebPaymentsExperimentalFeatures,
     &features::kWebPaymentsSingleAppUiSkip,
+    &features::kRestrictIsReadyToPayQuery,
+    &features::kSecurePaymentConfirmationFallback,
+    &kAndroidPaymentIntentsOmitDeprecatedParameters,
+    &kDeduplicateNativePaymentApps,
+    &kGooglePayViaAndroidIntents,
     &kOmitParametersInReadyToPay,
+    &kAllowShowWithoutReadyToPay,
+    &kReconnectOnLostConnectionToUpdatePaymentDetailsService,
+    &kShowReadyToPayDebugInfo,
+    &kUpdatePaymentDetailsIntentFilterInPaymentApp,
 };
 
 // static
 base::android::FeatureMap* GetFeatureMap() {
-  static base::NoDestructor<base::android::FeatureMap> kFeatureMap(std::vector(
-      std::begin(kFeaturesExposedToJava), std::end(kFeaturesExposedToJava)));
+  static base::NoDestructor<base::android::FeatureMap> kFeatureMap(
+      kFeaturesExposedToJava);
   return kFeatureMap.get();
 }
 
 }  // namespace
 
-static jlong JNI_PaymentFeatureMap_GetNativeMap(JNIEnv* env) {
-  return reinterpret_cast<jlong>(GetFeatureMap());
+static int64_t JNI_PaymentFeatureMap_GetNativeMap(JNIEnv* env) {
+  return reinterpret_cast<int64_t>(GetFeatureMap());
 }
 
 // Android only features.
-BASE_FEATURE(kOmitParametersInReadyToPay,
-             "OmitParametersInReadyToPay",
+BASE_FEATURE(kAndroidPaymentIntentsOmitDeprecatedParameters,
              base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kDeduplicateNativePaymentApps, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kGooglePayViaAndroidIntents, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kOmitParametersInReadyToPay, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kAllowShowWithoutReadyToPay, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kReconnectOnLostConnectionToUpdatePaymentDetailsService,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kShowReadyToPayDebugInfo, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kUpdatePaymentDetailsIntentFilterInPaymentApp,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace payments::android
+
+DEFINE_JNI(PaymentFeatureMap)

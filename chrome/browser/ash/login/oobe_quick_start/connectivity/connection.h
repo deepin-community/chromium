@@ -19,12 +19,11 @@
 #include "chrome/browser/ash/login/oobe_quick_start/connectivity/fido_assertion_info.h"
 #include "chrome/browser/ash/login/oobe_quick_start/connectivity/session_context.h"
 #include "chrome/browser/ash/login/oobe_quick_start/connectivity/target_device_connection_broker.h"
-#include "chrome/browser/nearby_sharing/public/cpp/nearby_connection.h"
+#include "chromeos/ash/components/nearby/common/connections_manager/nearby_connection.h"
 #include "chromeos/ash/components/quick_start/quick_start_metrics.h"
 #include "chromeos/ash/components/quick_start/quick_start_response_type.h"
 #include "chromeos/ash/components/quick_start/types.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder.mojom.h"
-#include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom-shared.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom.h"
 #include "components/cbor/values.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
@@ -53,12 +52,6 @@ class Connection
     kClosing,  // A close has been requested, but the connection is not yet
                // closed
     kClosed    // The connection is closed
-  };
-
-  enum class AuthenticationMethod {
-    kQR,
-    kPin,
-    kResumeAfterUpdate,
   };
 
   class Factory {
@@ -96,7 +89,8 @@ class Connection
   // Changes the connection state to authenticated and invokes the
   // ConnectionAuthenticatedCallback. The caller must ensure that the connection
   // is authenticated before calling this function.
-  void MarkConnectionAuthenticated(AuthenticationMethod auth_method);
+  void MarkConnectionAuthenticated(
+      QuickStartMetrics::AuthenticationMethod auth_method);
 
   // Sends a cryptographic challenge to the source device. If the source device
   // can prove that it posesses the shared secret, then the connection is
@@ -125,7 +119,7 @@ class Connection
       const Base64UrlString& challenge,
       RequestAccountTransferAssertionCallback callback) override;
   void WaitForUserVerification(AwaitUserVerificationCallback callback) override;
-  base::Value::Dict GetPrepareForUpdateInfo() override;
+  base::DictValue GetPrepareForUpdateInfo() override;
   void NotifyPhoneSetupComplete() override;
 
   void DoWaitForUserVerification(size_t attempt_number,
@@ -199,7 +193,7 @@ class Connection
   std::string challenge_b64url_;
   mojo::SharedRemote<mojom::QuickStartDecoder> decoder_;
   std::unique_ptr<AccountTransferClientData> client_data_;
-  QuickStartMetrics quick_start_metrics_;
+  std::unique_ptr<QuickStartMetrics> quick_start_metrics_;
 
   // Separate WeakPtrFactory for use with |OnResponseReceived()| to allow for
   // canceling the response.

@@ -82,7 +82,7 @@ REGISTER_KERNEL_BUILDER(
     Name("FakeResourceUpdate").Device(DEVICE_CPU).HostMemory("something_else"),
     FakeResourceUpdateOp);
 
-Status PartiallyDecluster(std::unique_ptr<Graph>* graph) {
+absl::Status PartiallyDecluster(std::unique_ptr<Graph>* graph) {
   FixupSourceAndSinkEdges(graph->get());
   // Assign all nodes to the CPU device.
   static const char* kCpuDevice = "/job:localhost/replica:0/task:0/cpu:0";
@@ -100,7 +100,7 @@ Status PartiallyDecluster(std::unique_ptr<Graph>* graph) {
   return pass.Run(opt_options);
 }
 
-Node* FindNodeByName(const Graph& graph, const string& name) {
+Node* FindNodeByName(const Graph& graph, const std::string& name) {
   for (Node* node : graph.nodes()) {
     if (node->name() == name) {
       return node;
@@ -109,7 +109,7 @@ Node* FindNodeByName(const Graph& graph, const string& name) {
   return nullptr;
 }
 
-bool GetInputsForNode(const Graph& graph, const string& node_name,
+bool GetInputsForNode(const Graph& graph, const std::string& node_name,
                       std::vector<Node*>* inputs) {
   const Node* node = FindNodeByName(graph, node_name);
   if (node == nullptr) {
@@ -292,7 +292,7 @@ TEST(PartiallyDeclusterPassTest, DeclusterDependentNodes) {
 void AddToCluster(absl::Span<Node* const> nodes,
                   absl::string_view cluster_name) {
   for (Node* n : nodes) {
-    n->AddAttr(kXlaClusterAttr, string(cluster_name));
+    n->AddAttr(kXlaClusterAttr, std::string(cluster_name));
   }
 }
 

@@ -83,7 +83,7 @@ void KeyItemView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
 
 void KeyItemView::OnThemeChanged() {
   views::View::OnThemeChanged();
-  GetBackground()->SetNativeControlColor(GetColor());
+  GetBackground()->SetColor(GetColor());
   SchedulePaint();
 }
 
@@ -98,7 +98,8 @@ void KeyItemView::Layout(PassKey) {
   }
 }
 
-gfx::Size KeyItemView::CalculatePreferredSize() const {
+gfx::Size KeyItemView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   // Return the fixed size if the key item contains icon or label with a single
   // character.
   if (icon_ || (label_ && label_->GetText().length() == 1)) {
@@ -130,7 +131,7 @@ void KeyItemView::SetIcon(const gfx::VectorIcon& icon) {
 void KeyItemView::SetText(const std::u16string& text) {
   if (!label_) {
     label_ = AddChildView(std::make_unique<views::Label>());
-    label_->SetEnabledColorId(cros_tokens::kCrosSysOnSurface);
+    label_->SetEnabledColor(cros_tokens::kCrosSysOnSurface);
     label_->SetElideBehavior(gfx::ElideBehavior::NO_ELIDE);
     label_->SetFontList(gfx::FontList({kGoogleSansFont}, gfx::Font::NORMAL,
                                       kKeyItemViewFontSize,

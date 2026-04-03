@@ -26,7 +26,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "gmock/gmock.h"
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/core/ir/builder.h"
 #include "src/tint/lang/core/ir/instruction.h"
 #include "src/tint/lang/core/ir/ir_helper_test.h"
@@ -40,11 +39,11 @@ using namespace tint::core::number_suffixes;  // NOLINT
 using IR_StoreVectorElementTest = IRTestHelper;
 
 TEST_F(IR_StoreVectorElementTest, Create) {
-    auto* to = b.Var(ty.ptr<private_, vec3<i32>>());
+    auto* to = b.Var(ty.ptr<private_, vec3i>());
     auto* inst = b.StoreVectorElement(to, 2_i, 4_i);
 
     ASSERT_TRUE(inst->Is<StoreVectorElement>());
-    ASSERT_EQ(inst->To(), to->Result(0));
+    ASSERT_EQ(inst->To(), to->Result());
 
     ASSERT_TRUE(inst->Index()->Is<Constant>());
     auto index = inst->Index()->As<Constant>()->Value();
@@ -58,35 +57,35 @@ TEST_F(IR_StoreVectorElementTest, Create) {
 }
 
 TEST_F(IR_StoreVectorElementTest, Usage) {
-    auto* to = b.Var(ty.ptr<private_, vec3<i32>>());
+    auto* to = b.Var(ty.ptr<private_, vec3i>());
     auto* inst = b.StoreVectorElement(to, 2_i, 4_i);
 
     ASSERT_NE(inst->To(), nullptr);
-    EXPECT_THAT(inst->To()->Usages(), testing::UnorderedElementsAre(Usage{inst, 0u}));
+    EXPECT_THAT(inst->To()->UsagesUnsorted(), testing::UnorderedElementsAre(Usage{inst, 0u}));
 
     ASSERT_NE(inst->Index(), nullptr);
-    EXPECT_THAT(inst->Index()->Usages(), testing::UnorderedElementsAre(Usage{inst, 1u}));
+    EXPECT_THAT(inst->Index()->UsagesUnsorted(), testing::UnorderedElementsAre(Usage{inst, 1u}));
 
     ASSERT_NE(inst->Value(), nullptr);
-    EXPECT_THAT(inst->Value()->Usages(), testing::UnorderedElementsAre(Usage{inst, 2u}));
+    EXPECT_THAT(inst->Value()->UsagesUnsorted(), testing::UnorderedElementsAre(Usage{inst, 2u}));
 }
 
 TEST_F(IR_StoreVectorElementTest, Result) {
-    auto* to = b.Var(ty.ptr<private_, vec3<i32>>());
+    auto* to = b.Var(ty.ptr<private_, vec3i>());
     auto* inst = b.StoreVectorElement(to, 2_i, 4_i);
 
     EXPECT_TRUE(inst->Results().IsEmpty());
 }
 
 TEST_F(IR_StoreVectorElementTest, Clone) {
-    auto* to = b.Var(ty.ptr<private_, vec3<i32>>());
+    auto* to = b.Var(ty.ptr<private_, vec3i>());
     auto* inst = b.StoreVectorElement(to, 2_i, 4_i);
 
     auto* new_to = clone_ctx.Clone(to);
     auto* new_inst = clone_ctx.Clone(inst);
 
     EXPECT_NE(inst, new_inst);
-    EXPECT_EQ(new_to->Result(0), new_inst->To());
+    EXPECT_EQ(new_to->Result(), new_inst->To());
 
     auto new_idx = new_inst->Index()->As<Constant>()->Value();
     ASSERT_TRUE(new_idx->Is<core::constant::Scalar<i32>>());

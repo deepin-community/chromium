@@ -97,7 +97,8 @@ class MediaControlPopupMenuElement::EventListener final
           break;
         case VKEY_RETURN:
         case VKEY_SPACE:
-          To<Element>(event->target()->ToNode())->DispatchSimulatedClick(event);
+          To<Element>(event->RawTarget()->ToNode())
+              ->DispatchSimulatedClick(event);
           popup_menu_->FocusPopupAnchorIfOverflowClosed();
           break;
         default:
@@ -125,9 +126,10 @@ void MediaControlPopupMenuElement::SetIsWanted(bool wanted) {
 
   if (wanted) {
     ShowPopoverInternal(/*invoker*/ nullptr, /*exception_state*/ nullptr);
-    if (!RuntimeEnabledFeatures::CSSAnchorPositioningEnabled()) {
-      SetPosition();
-    }
+    // TODO(crbug.com/341741271): Remove this once anchor positioning, the
+    // anchor attribute, and the `anchor-scope` CSS property are stable enough
+    // to depend on for positioning here.
+    SetPosition();
 
     SelectFirstItem();
 
@@ -138,9 +140,10 @@ void MediaControlPopupMenuElement::SetIsWanted(bool wanted) {
     if (event_listener_)
       event_listener_->StopListening();
     if (popoverOpen()) {
-      HidePopoverInternal(HidePopoverFocusBehavior::kNone,
-                          HidePopoverTransitionBehavior::kNoEventsNoWaiting,
-                          nullptr);
+      HidePopoverInternal(
+          /*invoker=*/nullptr, HidePopoverFocusBehavior::kNone,
+          HidePopoverTransitionBehavior::kNoEventsNoWaiting,
+          /*exception_state=*/nullptr);
     }
   }
 }
@@ -151,19 +154,18 @@ void MediaControlPopupMenuElement::OnItemSelected() {
 
 void MediaControlPopupMenuElement::DefaultEventHandler(Event& event) {
   if (event.type() == event_type_names::kPointermove &&
-      event.target() != this) {
-    To<Element>(event.target()->ToNode())
+      event.RawTarget() != this) {
+    To<Element>(event.RawTarget()->ToNode())
         ->Focus(FocusParams(FocusTrigger::kUserGesture));
-    last_focused_element_ = To<Element>(event.target()->ToNode());
+    last_focused_element_ = To<Element>(event.RawTarget()->ToNode());
   } else if (event.type() == event_type_names::kFocusout) {
     GetDocument()
         .GetTaskRunner(TaskType::kMediaElementEvent)
-        ->PostTask(
-            FROM_HERE,
-            WTF::BindOnce(&MediaControlPopupMenuElement::HideIfNotFocused,
-                          WrapWeakPersistent(this)));
+        ->PostTask(FROM_HERE,
+                   BindOnce(&MediaControlPopupMenuElement::HideIfNotFocused,
+                            WrapWeakPersistent(this)));
   } else if (event.type() == event_type_names::kClick &&
-             event.target() != this) {
+             event.RawTarget() != this) {
     // Since event.target() != this, we know that one of our children was
     // clicked.
     OnItemSelected();
@@ -171,7 +173,7 @@ void MediaControlPopupMenuElement::DefaultEventHandler(Event& event) {
     event.stopPropagation();
     event.SetDefaultHandled();
   } else if (event.type() == event_type_names::kFocus &&
-             event.target() == this) {
+             event.RawTarget() == this) {
     // When the popup menu gains focus from scrolling, switch focus
     // back to the last focused item in the menu.
     if (last_focused_element_) {
@@ -214,14 +216,14 @@ MediaControlPopupMenuElement::MediaControlPopupMenuElement(
   setTabIndex(0);
 
   setAttribute(html_names::kPopoverAttr, keywords::kAuto);
-  SetElementAttribute(html_names::kAnchorAttr, PopupAnchor());
   SetIsWanted(false);
 }
 
 // TODO(crbug.com/1309178): This entire function and the one callsite can be
 // removed once anchor positioning is enabled by default.
+// TODO(crbug.com/341741271): Ensure all required APIs are stable, including
+// the anchor attribute and the `anchor-scope` CSS property.
 void MediaControlPopupMenuElement::SetPosition() {
-  DCHECK(!RuntimeEnabledFeatures::CSSAnchorPositioningEnabled());
   // The popup is positioned slightly on the inside of the bottom right
   // corner.
   static constexpr int kPopupMenuMarginPx = 4;
@@ -234,14 +236,14 @@ void MediaControlPopupMenuElement::SetPosition() {
   DCHECK(bounding_client_rect);
   DCHECK(dom_window);
 
-  WTF::String bottom_str_value =
-      WTF::String::Number(dom_window->innerHeight() -
-                          bounding_client_rect->bottom() + kPopupMenuMarginPx) +
-      kPx;
-  WTF::String right_str_value =
-      WTF::String::Number(dom_window->innerWidth() -
-                          bounding_client_rect->right() + kPopupMenuMarginPx) +
-      kPx;
+  String bottom_str_value = StrCat(
+      {String::Number(dom_window->innerHeight() -
+                      bounding_client_rect->bottom() + kPopupMenuMarginPx),
+       kPx});
+  String right_str_value = StrCat(
+      {String::Number(dom_window->innerWidth() - bounding_client_rect->right() +
+                      kPopupMenuMarginPx),
+       kPx});
 
   style()->setProperty(dom_window, "bottom", bottom_str_value, kImportant,
                        ASSERT_NO_EXCEPTION);

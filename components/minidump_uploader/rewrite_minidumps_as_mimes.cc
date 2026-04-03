@@ -6,17 +6,19 @@
 
 #include <utility>
 
-#include "base/android/build_info.h"
+#include "base/android/android_info.h"
+#include "base/android/apk_info.h"
+#include "base/android/device_info.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "components/crash/android/anr_build_id_provider.h"
 #include "components/crash/android/anr_skipped_reason.h"
-#include "components/minidump_uploader/minidump_uploader_jni_headers/CrashReportMimeWriter_jni.h"
 #include "components/version_info/android/channel_getter.h"
 #include "components/version_info/version_info.h"
 #include "third_party/crashpad/crashpad/handler/minidump_to_upload_parameters.h"
@@ -26,6 +28,9 @@
 #include "third_party/crashpad/crashpad/util/net/http_body.h"
 #include "third_party/crashpad/crashpad/util/net/http_multipart_builder.h"
 #include "third_party/crashpad/crashpad/util/posix/signals.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/minidump_uploader/minidump_uploader_jni_headers/CrashReportMimeWriter_jni.h"
 
 namespace minidump_uploader {
 
@@ -208,8 +213,6 @@ void RewriteMinidumpsAsMIMEs(const base::FilePath& src_dir,
 
       case crashpad::CrashReportDatabase::kCannotRequestUpload:
         NOTREACHED();
-        db->DeleteReport(report.uuid);
-        continue;
     }
   }
 }
@@ -222,6 +225,7 @@ void WriteAnrAsMime(crashpad::FileReader* anr_reader,
                     crashpad::FileWriterInterface* writer,
                     const std::string& version_number,
                     const std::string& build_id,
+                    const std::string& variations_string,
                     const std::string& anr_file_name) {
   crashpad::HTTPMultipartBuilder builder;
   builder.SetFormData("version", version_number);
@@ -247,26 +251,44 @@ void WriteAnrAsMime(crashpad::FileReader* anr_reader,
 
   // We can't use crashpad::AnnotationList::Get() as it contains a number of
   // fields which change on each Chrome restart.
-  base::android::BuildInfo* info = base::android::BuildInfo::GetInstance();
-  builder.SetFormData("android_build_id", info->android_build_id());
-  builder.SetFormData("android_build_fp", info->android_build_fp());
-  builder.SetFormData("sdk", base::StringPrintf("%d", info->sdk_int()));
-  builder.SetFormData("device", info->device());
-  builder.SetFormData("model", info->model());
-  builder.SetFormData("brand", info->brand());
-  builder.SetFormData("board", info->board());
-  builder.SetFormData("installer_package_name", info->installer_package_name());
-  builder.SetFormData("abi_name", info->abi_name());
-  builder.SetFormData("custom_themes", info->custom_themes());
-  builder.SetFormData("resources_version", info->resources_version());
-  builder.SetFormData("gms_core_version", info->gms_version_code());
+  builder.SetFormData("android_build_id",
+                      base::android::android_info::android_build_id());
+  builder.SetFormData("android_build_fp",
+                      base::android::android_info::android_build_fp());
+  builder.SetFormData(
+      "sdk", base::StringPrintf("%d", base::android::android_info::sdk_int()));
+  builder.SetFormData("device", base::android::android_info::device());
+  builder.SetFormData("model", base::android::android_info::model());
+  builder.SetFormData("brand", base::android::android_info::brand());
+  builder.SetFormData("board", base::android::android_info::board());
+  builder.SetFormData("installer_package_name",
+                      base::android::apk_info::installer_package_name());
+  builder.SetFormData("abi_name", base::android::android_info::abi_name());
+  builder.SetFormData("resources_version",
+                      base::android::apk_info::resources_version());
+  builder.SetFormData("gms_core_version",
+                      base::android::device_info::gms_version_code());
+
+  if (!variations_string.empty()) {
+    size_t delimiter_pos = variations_string.find('\n');
+    if (delimiter_pos != std::string::npos) {
+      std::string num_experiments = variations_string.substr(0, delimiter_pos);
+      std::string experiment_list = variations_string.substr(delimiter_pos + 1);
+      builder.SetFormData("num-experiments", num_experiments);
+      builder.SetFormData("variations", experiment_list);
+    } else {
+      LOG(ERROR) << "Found a malformed variations string: "
+                 << variations_string;
+    }
+  }
 
   // The package name and version are used for deobfuscation, but will
   // only be accurate for the same version of chrome.
   if (version_number == version_info::GetVersionNumber()) {
-    builder.SetFormData("package", std::string(info->package_name()) + " v" +
-                                       info->package_version_code() + " (" +
-                                       info->package_version_name() + ")");
+    builder.SetFormData(
+        "package", std::string(base::android::apk_info::package_name()) + " v" +
+                       base::android::apk_info::package_version_code() + " (" +
+                       base::android::apk_info::package_version_name() + ")");
   }
 
   if (anr_reader != nullptr) {
@@ -280,17 +302,18 @@ void WriteAnrAsMime(crashpad::FileReader* anr_reader,
 
 static void JNI_CrashReportMimeWriter_RewriteAnrsAsMIMEs(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobjectArray>& j_anrs,
-    const base::android::JavaParamRef<jstring>& j_dest_dir) {
+    const base::android::JavaRef<jobjectArray>& j_anrs,
+    const base::android::JavaRef<jstring>& j_dest_dir) {
   std::vector<std::string> anr_strings;
   base::android::AppendJavaStringArrayToStringVector(env, j_anrs, &anr_strings);
-  std::string dest_dir;
-  base::android::ConvertJavaStringToUTF8(env, j_dest_dir, &dest_dir);
+  std::string dest_dir =
+      base::android::ConvertJavaStringToUTF8(env, j_dest_dir);
 
-  for (size_t i = 0; i < anr_strings.size(); i += 3) {
+  for (size_t i = 0; i < anr_strings.size(); i += 4) {
     std::string anr_proto_file_path = anr_strings.at(i);
     std::string chrome_version = anr_strings.at(i + 1);
     std::string build_id = anr_strings.at(i + 2);
+    std::string variations_string = anr_strings.at(i + 3);
     crashpad::FileWriter writer;
     crashpad::FileReader reader;
     crashpad::UUID uuid;
@@ -307,17 +330,18 @@ static void JNI_CrashReportMimeWriter_RewriteAnrsAsMIMEs(
       continue;
     }
 
-    WriteAnrAsMime(&reader, &writer, chrome_version, build_id, anr_file_name);
+    WriteAnrAsMime(&reader, &writer, chrome_version, build_id,
+                   variations_string, anr_file_name);
   }
 }
 
 static void JNI_CrashReportMimeWriter_RewriteMinidumpsAsMIMEs(
     JNIEnv* env,
-    const base::android::JavaParamRef<jstring>& j_src_dir,
-    const base::android::JavaParamRef<jstring>& j_dest_dir) {
-  std::string src_dir, dest_dir;
-  base::android::ConvertJavaStringToUTF8(env, j_src_dir, &src_dir);
-  base::android::ConvertJavaStringToUTF8(env, j_dest_dir, &dest_dir);
+    const base::android::JavaRef<jstring>& j_src_dir,
+    const base::android::JavaRef<jstring>& j_dest_dir) {
+  std::string src_dir = base::android::ConvertJavaStringToUTF8(env, j_src_dir);
+  std::string dest_dir =
+      base::android::ConvertJavaStringToUTF8(env, j_dest_dir);
 
   RewriteMinidumpsAsMIMEs(base::FilePath(src_dir), base::FilePath(dest_dir),
                           nullptr);
@@ -326,11 +350,11 @@ static void JNI_CrashReportMimeWriter_RewriteMinidumpsAsMIMEs(
 static base::android::ScopedJavaLocalRef<jobjectArray>
 JNI_CrashReportMimeWriter_RewriteMinidumpsAsMIMEsAndGetCrashKeys(
     JNIEnv* env,
-    const base::android::JavaParamRef<jstring>& j_src_dir,
-    const base::android::JavaParamRef<jstring>& j_dest_dir) {
-  std::string src_dir, dest_dir;
-  base::android::ConvertJavaStringToUTF8(env, j_src_dir, &src_dir);
-  base::android::ConvertJavaStringToUTF8(env, j_dest_dir, &dest_dir);
+    const base::android::JavaRef<jstring>& j_src_dir,
+    const base::android::JavaRef<jstring>& j_dest_dir) {
+  std::string src_dir = base::android::ConvertJavaStringToUTF8(env, j_src_dir);
+  std::string dest_dir =
+      base::android::ConvertJavaStringToUTF8(env, j_dest_dir);
 
   std::vector<std::string> key_value_arr;
   RewriteMinidumpsAsMIMEs(base::FilePath(src_dir), base::FilePath(dest_dir),
@@ -340,3 +364,5 @@ JNI_CrashReportMimeWriter_RewriteMinidumpsAsMIMEsAndGetCrashKeys(
 }
 
 }  // namespace minidump_uploader
+
+DEFINE_JNI(CrashReportMimeWriter)

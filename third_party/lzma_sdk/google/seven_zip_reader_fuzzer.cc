@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/no_destructor.h"
@@ -30,11 +31,10 @@ class Delegate : public seven_zip::Delegate {
                base::span<uint8_t>& output) override {
     if (entry.file_size < 4096) {
       buffer_.resize(entry.file_size);
-      output = base::make_span(buffer_);
+      output = base::span(buffer_);
       return true;
-    } else {
-      return false;
     }
+    return false;
   }
   bool OnDirectory(const seven_zip::EntryInfo& entry) override { return true; }
   bool EntryDone(seven_zip::Result result,
@@ -96,7 +96,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     return 0;
 
   archive_file->SetLength(size);
-  archive_file->Write(0, reinterpret_cast<const char*>(data), size);
+  archive_file->Write(0, base::span(data, size));
 
   Delegate delegate;
 

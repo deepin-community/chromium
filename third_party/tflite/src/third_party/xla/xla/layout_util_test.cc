@@ -18,29 +18,30 @@ limitations under the License.
 #include <cstdint>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include "absl/types/span.h"
+#include "xla/hlo/testlib/test.h"
+#include "xla/hlo/testlib/test_helpers.h"
 #include "xla/layout.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/test.h"
-#include "xla/test_helpers.h"
+#include "xla/tsl/platform/logging.h"  // IWYU pragma: keep
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"  // IWYU pragma: keep
-#include "tsl/platform/status_matchers.h"
 
 namespace xla {
 namespace {
 
+using ::testing::ContainsRegex;
+using ::testing::HasSubstr;
+
 class LayoutUtilTest : public ::testing::Test {
  protected:
-  Shape MakeShapeWithLayout(
-      PrimitiveType element_type, absl::Span<const int64_t> dimensions,
-      absl::Span<const int64_t> minor_to_major,
-      absl::Span<const DimLevelType> dim_level_types = {}) {
+  Shape MakeShapeWithLayout(PrimitiveType element_type,
+                            absl::Span<const int64_t> dimensions,
+                            absl::Span<const int64_t> minor_to_major) {
     Shape shape = ShapeUtil::MakeShape(element_type, dimensions);
-    *shape.mutable_layout() =
-        LayoutUtil::MakeLayout(minor_to_major, dim_level_types);
+    *shape.mutable_layout() = LayoutUtil::MakeLayout(minor_to_major);
     return shape;
   }
 };
@@ -94,57 +95,6 @@ TEST_F(LayoutUtilTest, CopyLayoutDenseArray) {
   EXPECT_FALSE(dst.has_layout());
 }
 
-TEST_F(LayoutUtilTest, CopyLayoutCSRArray) {
-  Shape src =
-      MakeShapeWithLayout(F32, {2, 3}, {1, 0}, {DIM_DENSE, DIM_COMPRESSED});
-  Shape dst = MakeShapeWithLayout(F32, {2, 3}, {0, 1});
-
-  EXPECT_TRUE(LayoutUtil::IsSparseArray(src));
-  EXPECT_FALSE(LayoutUtil::IsSparseArray(dst));
-
-  EXPECT_TRUE(LayoutUtil::IsCSRArray(src));
-  EXPECT_FALSE(LayoutUtil::IsCSRArray(dst));
-
-  EXPECT_FALSE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  EXPECT_IS_OK(LayoutUtil::CopyLayoutBetweenShapes(src, &dst));
-  EXPECT_TRUE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  EXPECT_TRUE(LayoutUtil::IsCSRArray(dst));
-
-  // Should work if destination has no layout.
-  dst.clear_layout();
-  EXPECT_FALSE(LayoutUtil::IsCSRArray(dst));
-  EXPECT_FALSE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  EXPECT_IS_OK(LayoutUtil::CopyLayoutBetweenShapes(src, &dst));
-  EXPECT_TRUE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  EXPECT_TRUE(LayoutUtil::IsCSRArray(dst));
-
-  // Convert dst to a CSC array with dim 0 minor layout.
-  *dst.mutable_layout()->mutable_minor_to_major() = {0, 1};
-  EXPECT_TRUE(LayoutUtil::IsCSCArray(dst));
-  EXPECT_FALSE(LayoutUtil::IsCSRArray(dst));
-
-  EXPECT_IS_OK(LayoutUtil::CopyLayoutBetweenShapes(src, &dst));
-  *src.mutable_layout()->mutable_physical_shape() = ShapeUtil::MakeTupleShape({
-      ShapeUtil::MakeShapeWithDenseLayout(U32, {2}, {0}, {Tile({100})}),
-      ShapeUtil::MakeShapeWithDenseLayout(U32, {4}, {0}, {Tile({100})}),
-      ShapeUtil::MakeShapeWithDenseLayout(F32, {4}, {0}, {Tile({100})}),
-  });
-  EXPECT_FALSE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  dst.clear_layout();
-  EXPECT_IS_OK(LayoutUtil::CopyLayoutBetweenShapes(src, &dst));
-  EXPECT_TRUE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-
-  // If source is cleared, then destination should be cleared.
-  src.clear_layout();
-  EXPECT_FALSE(LayoutUtil::IsCSRArray(src));
-  EXPECT_FALSE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  EXPECT_TRUE(dst.has_layout());
-  EXPECT_IS_OK(LayoutUtil::CopyLayoutBetweenShapes(src, &dst));
-  EXPECT_TRUE(LayoutUtil::LayoutsInShapesEqual(src, dst));
-  EXPECT_FALSE(dst.has_layout());
-  EXPECT_FALSE(LayoutUtil::IsCSRArray(dst));
-}
-
 TEST_F(LayoutUtilTest, CopyLayoutTuple) {
   Shape src = ShapeUtil::MakeTupleShape(
       {MakeShapeWithLayout(F32, {2, 3}, {0, 1}),
@@ -176,8 +126,7 @@ TEST_F(LayoutUtilTest, CopyLayoutNotCompatibleDifferentRank) {
   Shape dst = MakeShapeWithLayout(F32, {2, 3}, {1, 0});
   auto status = LayoutUtil::CopyLayoutBetweenShapes(src, &dst);
   EXPECT_FALSE(status.ok());
-  EXPECT_THAT(status.message(),
-              ::testing::ContainsRegex("cannot copy layout from shape"));
+  EXPECT_THAT(status.message(), ContainsRegex("cannot copy layout from shape"));
 }
 
 TEST_F(LayoutUtilTest, CopyLayoutNotCompatibleTuple) {
@@ -195,8 +144,7 @@ TEST_F(LayoutUtilTest, CopyLayoutNotCompatibleTuple) {
 
   auto status = LayoutUtil::CopyLayoutBetweenShapes(src, &dst);
   EXPECT_FALSE(status.ok());
-  EXPECT_THAT(status.message(),
-              ::testing::ContainsRegex("cannot copy layout from shape"));
+  EXPECT_THAT(status.message(), ContainsRegex("cannot copy layout from shape"));
 }
 
 TEST_F(LayoutUtilTest, CopyLayoutBogusLayout) {
@@ -207,9 +155,9 @@ TEST_F(LayoutUtilTest, CopyLayoutBogusLayout) {
 
   auto status = LayoutUtil::CopyLayoutBetweenShapes(src, &dst);
   EXPECT_FALSE(status.ok());
-  EXPECT_THAT(status.message(), ::testing::ContainsRegex(
-                                    "layout minor_to_major field contains .* "
-                                    "elements, but shape is rank"));
+  EXPECT_THAT(status.message(),
+              ContainsRegex("layout minor_to_major field contains .* "
+                            "elements, but shape has"));
 }
 
 TEST_F(LayoutUtilTest, CopyTokenLayout) {
@@ -422,34 +370,14 @@ TEST_F(LayoutUtilTest, ValidateLayout_InvalidArrayLayout) {
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/false);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("layout minor_to_major field "
-                                   "contains 3 elements, but shape is rank 2"));
+              HasSubstr("layout minor_to_major field "
+                        "contains 3 elements, but shape has 2 dimensions"));
   status =
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/true);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("layout minor_to_major field "
-                                   "contains 3 elements, but shape is rank 2"));
-}
-
-TEST_F(LayoutUtilTest, ValidateLayout_InvalidDimLevelTypes) {
-  Shape shape = ShapeUtil::MakeShape(F32, {2, 3});
-  *shape.mutable_layout() = LayoutUtil::MakeLayout({0, 1});
-  shape.mutable_layout()->add_dim_level_type(DIM_DENSE);
-  shape.mutable_layout()->add_dim_level_type(DIM_DENSE);
-  shape.mutable_layout()->add_dim_level_type(DIM_DENSE);
-  auto status =
-      LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/false);
-  EXPECT_FALSE(status.ok());
-  EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("layout dim_level_types field "
-                                   "contains 3 elements, but shape is rank 2"));
-  status =
-      LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/true);
-  EXPECT_FALSE(status.ok());
-  EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("layout dim_level_types field "
-                                   "contains 3 elements, but shape is rank 2"));
+              HasSubstr("layout minor_to_major field "
+                        "contains 3 elements, but shape has 2 dimensions"));
 }
 
 TEST_F(LayoutUtilTest, ValidateLayout_MissingArrayLayout) {
@@ -459,51 +387,10 @@ TEST_F(LayoutUtilTest, ValidateLayout_MissingArrayLayout) {
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/false);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("shape f32[2,3] does not have a layout"));
+              HasSubstr("shape f32[2,3] does not have a layout"));
   status =
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/true);
   EXPECT_TRUE(status.ok());
-}
-
-TEST_F(LayoutUtilTest, ValidateLayout_Sparse) {
-  Shape shape = ShapeUtil::MakeShape(F32, {2, 3});
-  *shape.mutable_layout() = LayoutUtil::MakeLayout(
-      {1, 0}, {DIM_DENSE, DIM_COMPRESSED}, {}, {}, {Tile({10, 10})});
-  EXPECT_THAT(LayoutUtil::ValidateLayoutInShape(shape),
-              tsl::testing::StatusIs(
-                  tsl::error::INVALID_ARGUMENT,
-                  ::testing::HasSubstr(
-                      "layout has tiles, but the shape is a sparse array")));
-  shape.mutable_layout()->clear_tiles();
-  EXPECT_THAT(LayoutUtil::ValidateLayoutInShape(shape), tsl::testing::IsOk());
-  *shape.mutable_layout()->mutable_physical_shape() =
-      ShapeUtil::MakeShape(F32, {6});
-  EXPECT_THAT(LayoutUtil::ValidateLayoutInShape(shape), tsl::testing::IsOk());
-  *shape.mutable_layout()
-       ->mutable_physical_shape()
-       ->mutable_layout()
-       ->mutable_physical_shape() = ShapeUtil::MakeShape(S32, {10});
-  EXPECT_THAT(
-      LayoutUtil::ValidateLayoutInShape(shape),
-      tsl::testing::StatusIs(
-          tsl::error::INVALID_ARGUMENT,
-          ::testing::HasSubstr(
-              "layout has a physical_shape, but is not a sparse array")));
-  shape.mutable_layout()->mutable_physical_shape()->clear_layout();
-  shape.mutable_layout()->clear_dim_level_types();
-  EXPECT_THAT(
-      LayoutUtil::ValidateLayoutInShape(shape),
-      tsl::testing::StatusIs(
-          tsl::error::INVALID_ARGUMENT,
-          ::testing::HasSubstr(
-              "layout has a physical_shape, but is not a sparse array")));
-  *shape.mutable_layout() =
-      LayoutUtil::MakeLayout({1, 0}, {DIM_DENSE, DIM_DENSE}, {true, false});
-  EXPECT_THAT(LayoutUtil::ValidateLayoutInShape(shape),
-              tsl::testing::StatusIs(
-                  tsl::error::INVALID_ARGUMENT,
-                  ::testing::HasSubstr("layout dimension 1 has invalid level "
-                                       "encoding DIM_DENSE, non-unique")));
 }
 
 TEST_F(LayoutUtilTest, ValidateLayout_TupleSubshapesWithMissingLayouts) {
@@ -521,7 +408,7 @@ TEST_F(LayoutUtilTest, ValidateLayout_TupleSubshapesWithMissingLayouts) {
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/false);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("shape f32[1,2] does not have a layout"));
+              HasSubstr("shape f32[1,2] does not have a layout"));
   status =
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/true);
   EXPECT_TRUE(status.ok());
@@ -534,8 +421,8 @@ TEST_F(LayoutUtilTest, ValidateLayout_TupleSubshapesWithMissingLayouts) {
       LayoutUtil::ValidateLayoutInShape(shape, /*allow_missing_layouts=*/true);
   EXPECT_FALSE(status.ok());
   EXPECT_THAT(status.message(),
-              ::testing::HasSubstr("layout minor_to_major field "
-                                   "contains 3 elements, but shape is rank 1"));
+              HasSubstr("layout minor_to_major field "
+                        "contains 3 elements, but shape has 1 dimensions"));
 }
 
 TEST_F(LayoutUtilTest, MoveDimToMajor) {
@@ -545,6 +432,13 @@ TEST_F(LayoutUtilTest, MoveDimToMajor) {
 
   new_layout = LayoutUtil::MoveDimToMajor(layout, 1);
   EXPECT_EQ(new_layout, LayoutUtil::MakeLayout({2, 0, 1}));
+}
+
+TEST_F(LayoutUtilTest, MoveDimToMinor) {
+  const Layout layout = LayoutUtil::MakeLayout({2, 0, 3, 1});
+  EXPECT_EQ(LayoutUtil::MoveDimToMinor(layout, 2), layout);
+  EXPECT_EQ(LayoutUtil::MoveDimToMinor(layout, 3),
+            LayoutUtil::MakeLayout({3, 2, 0, 1}));
 }
 
 TEST_F(LayoutUtilTest, StridesIsMajorToMinor) {
@@ -592,6 +486,86 @@ TEST_F(LayoutUtilTest, HasCustomElementSizeInBits) {
       ->set_element_size_in_bits(32);
   EXPECT_TRUE(LayoutUtil::HasCustomElementSizeInBits(shape));
 }
+
+TEST_F(LayoutUtilTest, MaxSplitSize) {
+  Shape shape = ShapeUtil::MakeShape(F32, {150, 200, 100});
+  *shape.mutable_layout() = LayoutUtil::MakeLayout({0, 1, 2})
+                                .add_split_configs(SplitConfig(0, {30}))
+                                .add_split_configs(SplitConfig(1, {40, 130}));
+
+  EXPECT_EQ(LayoutUtil::MaxSplitSize(shape, 0), 150);
+  EXPECT_EQ(LayoutUtil::MaxSplitSize(shape, 1), 90);
+  EXPECT_EQ(LayoutUtil::MaxSplitSize(shape, 2), 70);
+}
+
+TEST_F(LayoutUtilTest, MaxElementsInPerSplit) {
+  Shape shape = ShapeUtil::MakeShape(F32, {150, 200, 100});
+  *shape.mutable_layout() = LayoutUtil::MakeLayout({0, 1, 2});
+  EXPECT_EQ(LayoutUtil::MaxElementsInPerSplit(shape), 150 * 200 * 100);
+
+  *shape.mutable_layout() = LayoutUtil::MakeLayout({0, 1, 2})
+                                .add_split_configs(SplitConfig(0, {30}))
+                                .add_split_configs(SplitConfig(1, {40, 130}));
+  EXPECT_EQ(LayoutUtil::MaxElementsInPerSplit(shape), 150 * 90 * 70);
+}
+
+struct IsUntiledLayoutTestCase {
+  std::vector<int64_t> shape;
+  std::vector<Tile> tiles;
+  bool allow_trailing_padding;
+  bool expected_result;
+};
+
+using IsUntiledLayoutTest = ::testing::TestWithParam<IsUntiledLayoutTestCase>;
+
+TEST_P(IsUntiledLayoutTest, IsUntiledLayout) {
+  IsUntiledLayoutTestCase params = GetParam();
+  EXPECT_EQ(LayoutUtil::IsUntiledLayout(params.tiles, params.shape,
+                                        params.allow_trailing_padding),
+            params.expected_result);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    IsUntiledLayoutTests, IsUntiledLayoutTest,
+    ::testing::ValuesIn<IsUntiledLayoutTestCase>({
+        // Exact tile match.
+        {{8, 128}, {Tile({8, 128})}, /*allow_trailing_padding=*/false, true},
+        // Multiple tiles in major dimension.
+        {{24, 128}, {Tile({8, 128})}, /*allow_trailing_padding=*/false, true},
+        // Multiple tiles in minor dimension (256 = 2 * 128) with trivial major
+        // tile dim (1). This is effectively just tiling the minor dimension.
+        {{4, 256}, {Tile({1, 128})}, /*allow_trailing_padding=*/false, true},
+        // Multiple tiles in minor dimension (256 = 2 * 128) with non-trivial
+        // major tile dim (8). This causes non-contiguous layout: (8, 2, 8, 128)
+        // physical vs (8, 256) logical.
+        {{8, 256}, {Tile({8, 128})}, /*allow_trailing_padding=*/false, false},
+        // Padding required but not allowed.
+        {{1, 8}, {Tile({1, 128})}, /*allow_trailing_padding=*/false, false},
+        // Padding required and allowed.
+        {{1, 8}, {Tile({1, 128})}, /*allow_trailing_padding=*/true, true},
+        // Padding required, but not trailing (repeated 4 times).
+        {{4, 8}, {Tile({1, 128})}, /*allow_trailing_padding=*/false, false},
+        // Padding required and allowed, but still not trailing.
+        {{4, 8}, {Tile({1, 128})}, /*allow_trailing_padding=*/true, false},
+        // Multiple tiles in both dimensions. Non-contiguous.
+        {{16, 256}, {Tile({8, 128})}, /*allow_trailing_padding=*/false, false},
+        // 1D exact match with multiple tiles.
+        {{16}, {Tile({8})}, /*allow_trailing_padding=*/false, true},
+        // 1D padding required but not allowed.
+        {{12}, {Tile({8})}, /*allow_trailing_padding=*/false, false},
+        // 1D padding required and allowed.
+        {{12}, {Tile({8})}, /*allow_trailing_padding=*/true, true},
+        // Untiled prefix dimensions must also be singletons for trailing
+        // padding. 2x8x100 with T(8, 128) expands to 2x1x1x8x128; the leading
+        // 2 means there's internal padding between the two rows.
+        {{2, 8, 100}, {Tile({8, 128})}, /*allow_trailing_padding=*/true, false},
+        // Padding in minor dimension (100 -> 128) is repeated by the
+        // non-trivial major dimension (8), creating internal gaps.
+        {{1, 8, 100}, {Tile({8, 128})}, /*allow_trailing_padding=*/true, false},
+        // Padding in major dimension (3 -> 8) is followed by a dense minor
+        // dimension, so it remains trailing.
+        {{1, 3, 128}, {Tile({8, 128})}, /*allow_trailing_padding=*/true, true},
+    }));
 
 }  // namespace
 }  // namespace xla

@@ -1,4 +1,6 @@
 load("@flatbuffers//:build_defs.bzl", "flatbuffer_cc_library")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("//tensorflow:tensorflow.bzl", "workspace_root")
 load("//tensorflow/core/platform:build_config.bzl", "tf_platform_alias")
 
@@ -44,6 +46,7 @@ cc_library(
     deps = [
         ":data_type",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
     ],
 )
@@ -430,6 +433,7 @@ cc_library(
     deps = [
         ":data_type",
         ":shape",
+        ":types",
     ],
 )
 
@@ -532,6 +536,8 @@ cc_test(
     name = "winograd_util_test",
     srcs = ["winograd_util_test.cc"],
     deps = [
+        ":operations",
+        ":shape",
         ":winograd_util",
         "@com_google_googletest//:gtest_main",
     ],

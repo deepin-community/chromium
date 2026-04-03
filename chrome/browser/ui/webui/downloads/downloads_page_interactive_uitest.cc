@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
@@ -30,13 +31,14 @@ namespace {
 
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kDownloadsPageTabId);
 
+const char kClickFn[] = "el => el.click()";
+
+using ::testing::Eq;
+
 class DownloadsPageInteractiveUitest
-    : public InteractiveBrowserTestT<DownloadTestBase> {
+    : public InteractiveBrowserTestMixin<DownloadTestBase> {
  public:
-  DownloadsPageInteractiveUitest() {
-    feature_list_.InitAndEnableFeature(
-        safe_browsing::kImprovedDownloadPageWarnings);
-  }
+  DownloadsPageInteractiveUitest() = default;
   ~DownloadsPageInteractiveUitest() override = default;
 
   void SetUp() override {
@@ -44,11 +46,11 @@ class DownloadsPageInteractiveUitest
     // reliably open in the same tab. (It only opens in the same tab if the
     // current tab is about:blank.)
     set_open_about_blank_on_browser_launch(true);
-    InteractiveBrowserTestT<DownloadTestBase>::SetUp();
+    InteractiveBrowserTestMixin<DownloadTestBase>::SetUp();
   }
 
   void SetUpOnMainThread() override {
-    InteractiveBrowserTestT<DownloadTestBase>::SetUpOnMainThread();
+    InteractiveBrowserTestMixin<DownloadTestBase>::SetUpOnMainThread();
     embedded_test_server()->ServeFilesFromDirectory(GetTestDataDirectory());
     ASSERT_TRUE(embedded_test_server()->Start());
   }
@@ -77,31 +79,51 @@ class DownloadsPageInteractiveUitest
                  WaitForStateChange(kDownloadsPageTabId, html_not_loading));
   }
 
+  // Path to an element in the topmost download item.
+  DeepQuery PathToTopmostItemElement(const std::string& element_selector) {
+    return DeepQuery{
+        "downloads-manager",
+        "downloads-item",
+        element_selector,
+    };
+  }
+
+  // Checks that an element is visible (or not visible) on the page.
+  auto CheckElementVisible(const DeepQuery& where, bool visible) {
+    return CheckJsResultAt(kDownloadsPageTabId, where,
+                           R"(el => {
+                               rect = el.getBoundingClientRect();
+                               return rect.height * rect.width > 0;
+                            })",
+                           Eq(visible));
+  }
+
   // Finds the first download item on the page and presses a button in its
-  // dropdown actions menu.
-  auto TakeTopmostItemAction(const std::string& menu_item_selector) {
+  // dropdown actions menu (which is required to be visible).
+  auto TakeTopmostItemMenuAction(const std::string& menu_item_selector) {
     DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kReadyEvent);
-    const DeepQuery kPathToMenuButton{
-        "downloads-manager",
-        "downloads-item",
-        "#more-actions",
-    };
-    const DeepQuery path_to_menu_option{
-        "downloads-manager",
-        "downloads-item",
-        menu_item_selector,
-    };
-    const char kClickFn[] = "el => el.click()";
+    const DeepQuery path_to_menu_button =
+        PathToTopmostItemElement("#more-actions");
+    const DeepQuery path_to_menu_option =
+        PathToTopmostItemElement(menu_item_selector);
     StateChange menu_item_visible;
     menu_item_visible.type = StateChange::Type::kExists;
     menu_item_visible.where = path_to_menu_option;
     menu_item_visible.event = kReadyEvent;
-    return Steps(ExecuteJsAt(kDownloadsPageTabId, kPathToMenuButton, kClickFn),
-                 WaitForStateChange(kDownloadsPageTabId, menu_item_visible),
-                 // Use mouse input instead of JavaScript click() to satisfy the
-                 // user gesture requirement for some menu options.
-                 MoveMouseTo(kDownloadsPageTabId, path_to_menu_option),
-                 ClickMouse());
+    return Steps(
+        CheckElementVisible(path_to_menu_button, true),
+        ExecuteJsAt(kDownloadsPageTabId, path_to_menu_button, kClickFn),
+        WaitForStateChange(kDownloadsPageTabId, menu_item_visible),
+        // Use mouse input instead of JavaScript click() to satisfy the
+        // user gesture requirement for some menu options.
+        MoveMouseTo(kDownloadsPageTabId, path_to_menu_option), ClickMouse());
+  }
+
+  // Finds the first download item on the page and clicks a button on the item.
+  auto ClickTopmostItemButton(const std::string& button_selector) {
+    const DeepQuery path_to_button = PathToTopmostItemElement(button_selector);
+    return Steps(CheckElementVisible(path_to_button, true),
+                 ExecuteJsAt(kDownloadsPageTabId, path_to_button, kClickFn));
   }
 
   // Presses the clear all button in the toolbar.
@@ -109,9 +131,8 @@ class DownloadsPageInteractiveUitest
     const DeepQuery kPathToClearAllButton{
         "downloads-manager",
         "downloads-toolbar",
-        ".clear-all",
+        "#clearAll",
     };
-    const char kClickFn[] = "el => el.click()";
     return ExecuteJsAt(kDownloadsPageTabId, kPathToClearAllButton, kClickFn);
   }
 
@@ -169,12 +190,17 @@ IN_PROC_BROWSER_TEST_F(DownloadsPageInteractiveUitest, DownloadItemsAppear) {
                   WaitForDownloadItems(2));
 }
 
-IN_PROC_BROWSER_TEST_F(DownloadsPageInteractiveUitest, RemoveDownloadItem) {
-  RunTestSequence(OpenDownloadsPage(),               //
-                  DownloadTestFile(),                //
-                  WaitForDownloadItems(1),           //
-                  TakeTopmostItemAction("#remove"),  //
-                  WaitForNoDownloads());
+IN_PROC_BROWSER_TEST_F(DownloadsPageInteractiveUitest,
+                       QuickRemoveDownloadItem) {
+  RunTestSequence(
+      OpenDownloadsPage(),      //
+      DownloadTestFile(),       //
+      WaitForDownloadItems(1),  //
+      // A normal, completed download should have quick action buttons but not
+      // a menu button.
+      CheckElementVisible(PathToTopmostItemElement("#more-actions"), false),
+      ClickTopmostItemButton("#quick-remove"),  //
+      WaitForNoDownloads());
 }
 
 IN_PROC_BROWSER_TEST_F(DownloadsPageInteractiveUitest, ClearAll) {
@@ -262,8 +288,8 @@ class DownloadsPageInteractiveUitestWithDangerType
       bool is_dangerous,
       std::optional<std::string> expected_caption_color = std::nullopt) {
     DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kReadyEvent);
-    const DeepQuery kPathToItemDangerCaption{"downloads-manager",
-                                             "downloads-item", ".description"};
+    const DeepQuery path_to_item_danger_caption =
+        PathToTopmostItemElement(".description");
     const char kHiddenFn[] = "el => el.getAttribute('hidden') %s null";
     const char kColorMatchCondition[] =
         " && el.getAttribute('description-color') === '%s'";
@@ -278,7 +304,7 @@ class DownloadsPageInteractiveUitestWithDangerType
     }
     StateChange danger_caption_visibility;
     danger_caption_visibility.type = StateChange::Type::kExistsAndConditionTrue;
-    danger_caption_visibility.where = kPathToItemDangerCaption;
+    danger_caption_visibility.where = path_to_item_danger_caption;
     danger_caption_visibility.test_function = test_function;
     danger_caption_visibility.event = kReadyEvent;
     return WaitForStateChange(kDownloadsPageTabId, danger_caption_visibility);
@@ -288,7 +314,7 @@ class DownloadsPageInteractiveUitestWithDangerType
     DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kReadyEvent);
     const DeepQuery kPathToDialog{
         "downloads-manager",
-        "download-bypass-warning-confirmation-dialog",
+        "downloads-bypass-warning-confirmation-dialog",
     };
     StateChange dialog_visible;
     dialog_visible.type = StateChange::Type::kExists;
@@ -301,7 +327,7 @@ class DownloadsPageInteractiveUitestWithDangerType
     DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kReadyEvent);
     const DeepQuery path_to_button{
         "downloads-manager",
-        "download-bypass-warning-confirmation-dialog",
+        "downloads-bypass-warning-confirmation-dialog",
         button_selector,
     };
     StateChange button_visible;
@@ -325,21 +351,31 @@ using DownloadsPageInteractiveUitestSuspicious =
 
 IN_PROC_BROWSER_TEST_F(DownloadsPageInteractiveUitestSuspicious,
                        DiscardSuspiciousFile) {
-  RunTestSequence(OpenDownloadsPage(),                          //
-                  DownloadDangerousTestFile(),                  //
-                  WaitForDownloadItems(1),                      //
-                  WaitForTopmostItemDanger(true, "grey"),       //
-                  TakeTopmostItemAction("#discard-dangerous"),  //
+  RunTestSequence(OpenDownloadsPage(),                              //
+                  DownloadDangerousTestFile(),                      //
+                  WaitForDownloadItems(1),                          //
+                  WaitForTopmostItemDanger(true, "grey"),           //
+                  TakeTopmostItemMenuAction("#discard-dangerous"),  //
+                  WaitForNoDownloads());
+}
+
+IN_PROC_BROWSER_TEST_F(DownloadsPageInteractiveUitestSuspicious,
+                       QuickDiscardSuspiciousFile) {
+  RunTestSequence(OpenDownloadsPage(),                      //
+                  DownloadDangerousTestFile(),              //
+                  WaitForDownloadItems(1),                  //
+                  WaitForTopmostItemDanger(true, "grey"),   //
+                  ClickTopmostItemButton("#quick-remove"),  //
                   WaitForNoDownloads());
 }
 
 IN_PROC_BROWSER_TEST_F(DownloadsPageInteractiveUitestSuspicious,
                        ValidateSuspiciousFile) {
-  RunTestSequence(OpenDownloadsPage(),                       //
-                  DownloadDangerousTestFile(),               //
-                  WaitForDownloadItems(1),                   //
-                  WaitForTopmostItemDanger(true, "grey"),    //
-                  TakeTopmostItemAction("#save-dangerous"),  //
+  RunTestSequence(OpenDownloadsPage(),                           //
+                  DownloadDangerousTestFile(),                   //
+                  WaitForDownloadItems(1),                       //
+                  WaitForTopmostItemDanger(true, "grey"),        //
+                  TakeTopmostItemMenuAction("#save-dangerous"),  //
                   WaitForTopmostItemDanger(false));
 }
 
@@ -351,11 +387,21 @@ using DownloadsPageInteractiveUitestDangerous =
 
 IN_PROC_BROWSER_TEST_F(DownloadsPageInteractiveUitestDangerous,
                        DiscardDangerousFile) {
-  RunTestSequence(OpenDownloadsPage(),                          //
-                  DownloadDangerousTestFile(),                  //
-                  WaitForDownloadItems(1),                      //
-                  WaitForTopmostItemDanger(true, "red"),        //
-                  TakeTopmostItemAction("#discard-dangerous"),  //
+  RunTestSequence(OpenDownloadsPage(),                              //
+                  DownloadDangerousTestFile(),                      //
+                  WaitForDownloadItems(1),                          //
+                  WaitForTopmostItemDanger(true, "red"),            //
+                  TakeTopmostItemMenuAction("#discard-dangerous"),  //
+                  WaitForNoDownloads());
+}
+
+IN_PROC_BROWSER_TEST_F(DownloadsPageInteractiveUitestDangerous,
+                       QuickDiscardDangerousFile) {
+  RunTestSequence(OpenDownloadsPage(),                      //
+                  DownloadDangerousTestFile(),              //
+                  WaitForDownloadItems(1),                  //
+                  WaitForTopmostItemDanger(true, "red"),    //
+                  ClickTopmostItemButton("#quick-remove"),  //
                   WaitForNoDownloads());
 }
 
@@ -366,7 +412,7 @@ IN_PROC_BROWSER_TEST_F(DownloadsPageInteractiveUitestDangerous,
       DownloadDangerousTestFile(),                                   //
       WaitForDownloadItems(1),                                       //
       WaitForTopmostItemDanger(true, "red"),                         //
-      TakeTopmostItemAction("#save-dangerous"),                      //
+      TakeTopmostItemMenuAction("#save-dangerous"),                  //
       WaitForBypassWarningPrompt(),                                  //
       ClickBypassWarningPromptButton("#download-dangerous-button"),  //
       WaitForTopmostItemDanger(false));
@@ -378,7 +424,7 @@ IN_PROC_BROWSER_TEST_F(DownloadsPageInteractiveUitestDangerous,
                   DownloadDangerousTestFile(),                       //
                   WaitForDownloadItems(1),                           //
                   WaitForTopmostItemDanger(true, "red"),             //
-                  TakeTopmostItemAction("#save-dangerous"),          //
+                  TakeTopmostItemMenuAction("#save-dangerous"),      //
                   WaitForBypassWarningPrompt(),                      //
                   ClickBypassWarningPromptButton("#cancel-button"),  //
                   WaitForTopmostItemDanger(true, "red"));

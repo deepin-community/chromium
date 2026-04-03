@@ -64,7 +64,7 @@ class MEDIA_EXPORT VpxVideoDecoder : public OffloadableVideoDecoder {
     kAlphaPlaneProcessed,  // Alpha plane (if found) was decoded successfully.
     kNoAlphaPlaneData,  // Alpha plane was found, but decoder did not return any
                         // data.
-    kAlphaPlaneError  // Fatal error occured when trying to decode alpha plane.
+    kAlphaPlaneError  // Fatal error occurred when trying to decode alpha plane.
   };
 
   // Handles (re-)initializing the decoder with a (new) config.
@@ -108,6 +108,9 @@ class MEDIA_EXPORT VpxVideoDecoder : public OffloadableVideoDecoder {
   // with no alpha. |frame_pool_| is used for all other cases.
   scoped_refptr<FrameBufferPool> memory_pool_;
   VideoFramePool frame_pool_;
+
+  // More specific error code to surface after an error occurs during decoding.
+  DecoderStatus::Codes error_status_ = DecoderStatus::Codes::kFailed;
 };
 
 // Helper class for creating a VpxVideoDecoder which will offload > 720p VP9

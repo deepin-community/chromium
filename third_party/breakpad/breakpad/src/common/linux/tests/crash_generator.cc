@@ -53,7 +53,6 @@
 #include "common/linux/eintr_wrapper.h"
 #include "common/tests/auto_tempdir.h"
 #include "common/tests/file_utils.h"
-#include "common/using_std_string.h"
 
 namespace {
 
@@ -101,7 +100,7 @@ void* thread_function(void* data) {
 namespace google_breakpad {
 
 CrashGenerator::CrashGenerator()
-    : shared_memory_(NULL),
+    : shared_memory_(nullptr),
       shared_memory_size_(0) {
 }
 
@@ -116,11 +115,11 @@ bool CrashGenerator::HasDefaultCorePattern() const {
          buffer_size == 5 && memcmp(buffer, "core", 4) == 0;
 }
 
-string CrashGenerator::GetCoreFilePath() const {
+std::string CrashGenerator::GetCoreFilePath() const {
   return temp_dir_.path() + "/core";
 }
 
-string CrashGenerator::GetDirectoryOfProcFilesCopy() const {
+std::string CrashGenerator::GetDirectoryOfProcFilesCopy() const {
   return temp_dir_.path() + "/proc";
 }
 
@@ -154,7 +153,7 @@ bool CrashGenerator::UnmapSharedMemory() {
     return true;
 
   if (munmap(shared_memory_, shared_memory_size_) == 0) {
-    shared_memory_ = NULL;
+    shared_memory_ = nullptr;
     shared_memory_size_ = 0;
     return true;
   }
@@ -209,7 +208,7 @@ bool CrashGenerator::CreateChildCrash(
     }
     if (SetCoreFileSizeLimit(kCoreSizeLimit)) {
       CreateThreadsInChildProcess(num_threads);
-      string proc_dir = GetDirectoryOfProcFilesCopy();
+      std::string proc_dir = GetDirectoryOfProcFilesCopy();
       if (mkdir(proc_dir.c_str(), 0755) == -1) {
         perror("CrashGenerator: Failed to create proc directory");
         exit(1);
@@ -312,7 +311,7 @@ void CrashGenerator::CreateThreadsInChildProcess(unsigned num_threads) {
   }
 
   pthread_barrier_t thread_barrier;
-  if (pthread_barrier_init(&thread_barrier, NULL, num_threads) != 0) {
+  if (pthread_barrier_init(&thread_barrier, nullptr, num_threads) != 0) {
     fprintf(stderr, "CrashGenerator: Failed to initialize thread barrier\n");
     exit(1);
   }

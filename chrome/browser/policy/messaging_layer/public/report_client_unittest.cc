@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "base/base64.h"
+#include "base/compiler_specific.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -44,7 +45,6 @@
 
 using ::testing::_;
 using ::testing::Eq;
-using ::testing::Invoke;
 using ::testing::Ne;
 using ::testing::SizeIs;
 using ::testing::StrEq;
@@ -120,9 +120,10 @@ class ReportClientTest : public ::testing::TestWithParam<bool> {
     signed_encryption_key.set_public_key_id(public_key_id);
     // Sign public key.
     uint8_t value_to_sign[sizeof(Encryptor::PublicKeyId) + kKeySize];
-    memcpy(value_to_sign, &public_key_id, sizeof(Encryptor::PublicKeyId));
-    memcpy(value_to_sign + sizeof(Encryptor::PublicKeyId), public_value,
-           kKeySize);
+    UNSAFE_TODO(
+        memcpy(value_to_sign, &public_key_id, sizeof(Encryptor::PublicKeyId)));
+    UNSAFE_TODO(memcpy(value_to_sign + sizeof(Encryptor::PublicKeyId),
+                       public_value, kKeySize));
     uint8_t signature[kSignatureSize];
     test::SignMessage(
         signing_private_key_,
@@ -193,8 +194,8 @@ class ReportClientTest : public ::testing::TestWithParam<bool> {
 
   bool is_encryption_enabled() const { return GetParam(); }
 
-  base::Value::Dict GetEncryptionKeyResponse() {
-    base::Value::Dict encryption_settings;
+  base::DictValue GetEncryptionKeyResponse() {
+    base::DictValue encryption_settings;
     std::string public_key =
         base::Base64Encode(signed_encryption_key_.public_asymmetric_key());
     encryption_settings.Set(json_keys::kPublicKey, public_key);
@@ -204,20 +205,20 @@ class ReportClientTest : public ::testing::TestWithParam<bool> {
         base::Base64Encode(signed_encryption_key_.signature());
     encryption_settings.Set(json_keys::kPublicKeySignature,
                             public_key_signature);
-    base::Value::Dict response;
+    base::DictValue response;
     response.Set(json_keys::kEncryptionSettings,
                  std::move(encryption_settings));
     return response;
   }
 
-  void VerifyDataUpload(base::Value::Dict payload) {
-    base::Value::List* const records =
+  void VerifyDataUpload(base::DictValue payload) {
+    base::ListValue* const records =
         payload.FindList(json_keys::kEncryptedRecordList);
     ASSERT_THAT(records, Ne(nullptr));
     ASSERT_THAT(*records, SizeIs(1));
-    const base::Value::Dict& record = (*records)[0].GetDict();
+    const base::DictValue& record = (*records)[0].GetDict();
     if (is_encryption_enabled()) {
-      const base::Value::Dict* const encryption_info =
+      const base::DictValue* const encryption_info =
           record.FindDict(json_keys::kEncryptionInfo);
       ASSERT_THAT(encryption_info, Ne(nullptr));
       const std::string* const encryption_key =
@@ -232,7 +233,7 @@ class ReportClientTest : public ::testing::TestWithParam<bool> {
     } else {
       ASSERT_FALSE(record.contains(json_keys::kEncryptionInfo));
     }
-    const base::Value::Dict* const seq_info =
+    const base::DictValue* const seq_info =
         record.FindDict(json_keys::kSequenceInformation);
     ASSERT_THAT(seq_info, Ne(nullptr));
   }
@@ -373,7 +374,7 @@ TEST_P(ReportClientTest, EnqueueMessageAndUpload) {
 
   ASSERT_THAT(*test_env_.url_loader_factory()->pending_requests(),
               testing::SizeIs(1));
-  base::Value::Dict request_body = test_env_.request_body(0);
+  base::DictValue request_body = test_env_.request_body(0);
   EXPECT_THAT(request_body, IsDataUploadRequestValid());
   VerifyDataUpload(std::move(request_body));
   test_env_.SimulateResponseForRequest(0);
@@ -404,7 +405,7 @@ TEST_P(ReportClientTest, SpeculativelyEnqueueMessageAndUpload) {
 
   ASSERT_THAT(*test_env_.url_loader_factory()->pending_requests(),
               testing::SizeIs(1));
-  base::Value::Dict request_body = test_env_.request_body(0);
+  base::DictValue request_body = test_env_.request_body(0);
   EXPECT_THAT(request_body, IsDataUploadRequestValid());
   VerifyDataUpload(std::move(request_body));
   test_env_.SimulateResponseForRequest(0);

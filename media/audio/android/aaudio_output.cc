@@ -6,27 +6,31 @@
 
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "base/numerics/checked_math.h"
 #include "base/task/sequenced_task_runner.h"
+#include "media/audio/android/audio_device.h"
 #include "media/audio/android/audio_manager_android.h"
 #include "media/audio/audio_manager.h"
 #include "media/base/amplitude_peak_detector.h"
 #include "media/base/audio_bus.h"
+#include "media/base/audio_sample_types.h"
 
 namespace media {
 
-AAudioOutputStream::AAudioOutputStream(AudioManagerAndroid* manager,
-                                       const AudioParameters& params,
-                                       aaudio_usage_t usage)
+AAudioOutputStream::AAudioOutputStream(
+    AudioManagerAndroid* manager,
+    const AudioParameters& params,
+    android::AudioDevice device,
+    aaudio_usage_t usage,
+    AmplitudePeakDetector::PeakDetectedCB peak_detected_cb)
     : audio_manager_(manager),
       params_(params),
-      peak_detector_(base::BindRepeating(&AudioManager::TraceAmplitudePeak,
-                                         base::Unretained(audio_manager_),
-                                         /*trace_start=*/false)),
+      peak_detector_(std::move(peak_detected_cb)),
       stream_wrapper_(this,
                       AAudioStreamWrapper::StreamType::kOutput,
                       params,
+                      std::move(device),
                       usage) {
-  CHECK(manager);
   CHECK(params_.IsValid());
 }
 
@@ -43,6 +47,7 @@ bool AAudioOutputStream::Open() {
     return false;
   }
 
+  CHECK(!audio_bus_);
   audio_bus_ = AudioBus::Create(params_);
 
   return true;
@@ -51,10 +56,13 @@ bool AAudioOutputStream::Open() {
 void AAudioOutputStream::Close() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  Stop();
   stream_wrapper_.Close();
 
-  // Note: This must be last, it will delete |this|.
-  audio_manager_->ReleaseOutputStream(this);
+  if (audio_manager_) {
+    // Note: This must be last, it will delete |this|.
+    audio_manager_->ReleaseOutputStream(this);
+  }
 }
 
 void AAudioOutputStream::Start(AudioSourceCallback* callback) {
@@ -106,14 +114,12 @@ void AAudioOutputStream::Stop() {
   }
 }
 
-bool AAudioOutputStream::OnAudioDataRequested(void* audio_data,
-                                              int32_t num_frames) {
-  CHECK_EQ(num_frames, audio_bus_->frames());
-
+bool AAudioOutputStream::OnAudioDataRequested(base::span<float> audio_data) {
   base::AutoLock al(lock_);
   if (!callback_) {
     // Stop() might have already been called, but there can still be pending
     // data callbacks in flight.
+    std::ranges::fill(audio_data, 0.0);
     return false;
   }
 
@@ -123,11 +129,17 @@ bool AAudioOutputStream::OnAudioDataRequested(void* audio_data,
   const int frames_filled =
       callback_->OnMoreData(delay, delay_timestamp, {}, audio_bus_.get());
 
+  if (!frames_filled) {
+    std::ranges::fill(audio_data, 0.0);
+    return true;
+  }
+
   peak_detector_.FindPeak(audio_bus_.get());
 
+  CHECK_EQ(frames_filled, audio_bus_->frames());
+
   audio_bus_->Scale(muted_ ? 0.0 : volume_);
-  audio_bus_->ToInterleaved<Float32SampleTypeTraits>(
-      frames_filled, reinterpret_cast<float*>(audio_data));
+  audio_bus_->ToInterleaved<Float32SampleTypeTraits>(audio_data);
 
   return true;
 }
@@ -166,7 +178,8 @@ void AAudioOutputStream::SetVolume(double volume) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   double volume_override = 0;
-  if (audio_manager_->HasOutputVolumeOverride(&volume_override)) {
+  if (audio_manager_ &&
+      audio_manager_->HasOutputVolumeOverride(&volume_override)) {
     volume = volume_override;
   }
 

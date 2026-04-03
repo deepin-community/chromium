@@ -8,13 +8,13 @@
 #include <vector>
 
 #include "base/test/task_environment.h"
-#include "build/chromeos_buildflags.h"
 #include "components/infobars/core/infobar.h"
 #include "components/infobars/core/infobar_manager.h"
 #include "components/language/core/browser/accept_languages_service.h"
 #include "components/language/core/browser/language_model.h"
 #include "components/language/core/browser/language_prefs.h"
 #include "components/language/core/browser/pref_names.h"
+#include "components/language_detection/core/constants.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/translate/core/browser/mock_translate_client.h"
@@ -24,7 +24,6 @@
 #include "components/translate/core/browser/translate_manager.h"
 #include "components/translate/core/browser/translate_pref_names.h"
 #include "components/translate/core/browser/translate_prefs.h"
-#include "components/translate/core/common/translate_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace translate {
@@ -46,7 +45,7 @@ class TestInfoBarManager : public infobars::InfoBarManager {
  public:
   TestInfoBarManager() = default;
   // infobars::InfoBarManager:
-  ~TestInfoBarManager() override {}
+  ~TestInfoBarManager() override = default;
 
   // infobars::InfoBarManager:
   int GetActiveEntryID() override { return 0; }
@@ -80,7 +79,7 @@ class MockManagerObserver : public infobars::InfoBarManager::Observer {
               (infobars::InfoBar*, infobars::InfoBar*),
               (override));
   MOCK_METHOD(void,
-              OnManagerShuttingDown,
+              OnManagerWillBeDestroyed,
               (infobars::InfoBarManager*),
               (override));
 };
@@ -105,7 +104,7 @@ class TranslateInfoBarDelegateTest : public ::testing::Test {
     language::LanguagePrefs::RegisterProfilePrefs(pref_service_->registry());
     pref_service_->SetString(testing::accept_languages_prefs, std::string());
     pref_service_->SetString(language::prefs::kAcceptLanguages, std::string());
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     pref_service_->SetString(language::prefs::kPreferredLanguages,
                              std::string());
 #endif
@@ -122,7 +121,6 @@ class TranslateInfoBarDelegateTest : public ::testing::Test {
   }
 
   void TearDown() override {
-    infobar_manager_->ShutDown();
     ::testing::Test::TearDown();
   }
 
@@ -139,8 +137,8 @@ class TranslateInfoBarDelegateTest : public ::testing::Test {
   std::unique_ptr<sync_preferences::TestingPrefServiceSyncable> pref_service_;
   std::unique_ptr<MockTranslateClient> client_;
   std::unique_ptr<TestLanguageModel> language_model_;
-  std::unique_ptr<TranslateManager> manager_;
   std::unique_ptr<MockTranslateRanker> ranker_;
+  std::unique_ptr<TranslateManager> manager_;
   std::unique_ptr<TestInfoBarManager> infobar_manager_;
 };
 
@@ -287,10 +285,10 @@ TEST_F(TranslateInfoBarDelegateTest, IsTranslatableLanguage) {
       .WillByDefault(Return(&accept_languages));
   ScopedListPrefUpdate update(pref_service_.get(),
                               translate::prefs::kBlockedLanguages);
-  base::Value::List& update_list = update.Get();
+  base::ListValue& update_list = update.Get();
   update_list.Append(kSourceLanguage);
   pref_service_->SetString(language::prefs::kAcceptLanguages, kSourceLanguage);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   pref_service_->SetString(language::prefs::kPreferredLanguages,
                            kSourceLanguage);
 #endif
@@ -305,11 +303,11 @@ TEST_F(TranslateInfoBarDelegateTest, IsTranslatableLanguage) {
 TEST_F(TranslateInfoBarDelegateTest, ShouldAutoAlwaysTranslate) {
   ScopedDictPrefUpdate update_translate_accepted_count(
       pref_service_.get(), TranslatePrefs::kPrefTranslateAcceptedCount);
-  base::Value::Dict& update_translate_accepted_dict =
+  base::DictValue& update_translate_accepted_dict =
       update_translate_accepted_count.Get();
   update_translate_accepted_dict.Set(kSourceLanguage, kAutoAlwaysThreshold + 1);
 
-  const base::Value::Dict* dict =
+  const base::DictValue* dict =
       &pref_service_->GetDict(TranslatePrefs::kPrefTranslateAutoAlwaysCount);
   std::optional<int> translate_auto_always_count =
       dict->FindInt(kSourceLanguage);
@@ -336,22 +334,23 @@ TEST_F(TranslateInfoBarDelegateTest, ShouldAutoAlwaysTranslate) {
 TEST_F(TranslateInfoBarDelegateTest, ShouldNotAutoAlwaysTranslateUnknown) {
   ScopedDictPrefUpdate update_translate_accepted_count(
       pref_service_.get(), TranslatePrefs::kPrefTranslateAcceptedCount);
-  base::Value::Dict& update_translate_accepted_dict =
+  base::DictValue& update_translate_accepted_dict =
       update_translate_accepted_count.Get();
   // Should not trigger auto always translate for unknown source language.
-  update_translate_accepted_dict.Set(kUnknownLanguageCode,
+  update_translate_accepted_dict.Set(language_detection::kUnknownLanguageCode,
                                      kAutoAlwaysThreshold + 1);
 
-  const base::Value::Dict* dict =
+  const base::DictValue* dict =
       &pref_service_->GetDict(TranslatePrefs::kPrefTranslateAutoAlwaysCount);
   std::optional<int> translate_auto_always_count =
-      dict->FindInt(kUnknownLanguageCode);
+      dict->FindInt(language_detection::kUnknownLanguageCode);
   EXPECT_FALSE(translate_auto_always_count.has_value());
 
   TranslateInfoBarDelegate::Create(
       /*replace_existing_infobar=*/true, manager_->GetWeakPtr(),
       infobar_manager_.get(), TranslateStep::TRANSLATE_STEP_TRANSLATING,
-      kUnknownLanguageCode, kTargetLanguage, TranslateErrors::NONE,
+      language_detection::kUnknownLanguageCode, kTargetLanguage,
+      TranslateErrors::NONE,
       /*triggered_from_menu=*/false);
   TranslateInfoBarDelegate* delegate =
       infobar_manager_->infobars()[0]->delegate()->AsTranslateInfoBarDelegate();
@@ -363,7 +362,8 @@ TEST_F(TranslateInfoBarDelegateTest, ShouldNotAutoAlwaysTranslateUnknown) {
   EXPECT_FALSE(count.has_value());
   // Get the dictionary again in order to update it.
   dict = &pref_service_->GetDict(TranslatePrefs::kPrefTranslateAutoAlwaysCount);
-  translate_auto_always_count = dict->FindInt(kUnknownLanguageCode);
+  translate_auto_always_count =
+      dict->FindInt(language_detection::kUnknownLanguageCode);
   EXPECT_FALSE(translate_auto_always_count.has_value());
 }
 
@@ -390,12 +390,12 @@ TEST_F(TranslateInfoBarDelegateTest, ShouldAutoNeverTranslate) {
 
   ScopedDictPrefUpdate update_translate_denied_count(
       pref_service_.get(), TranslatePrefs::kPrefTranslateDeniedCount);
-  base::Value::Dict& update_translate_denied_dict =
+  base::DictValue& update_translate_denied_dict =
       update_translate_denied_count.Get();
   // 21 = kAutoNeverThreshold + 1
   update_translate_denied_dict.Set(kSourceLanguage, 21);
 
-  const base::Value::Dict* dict =
+  const base::DictValue* dict =
       &pref_service_->GetDict(TranslatePrefs::kPrefTranslateAutoNeverCount);
   std::optional<int> translate_auto_never_count =
       dict->FindInt(kSourceLanguage);

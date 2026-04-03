@@ -46,7 +46,7 @@ class FillLayoutTest : public testing::Test {
   StaticSizedView* AddChildView(int width, int height) {
     StaticSizedView* child_view = new StaticSizedView(gfx::Size(width, height));
     child_view->SizeToPreferredSize();
-    host_->AddChildView(child_view);
+    host_->AddChildViewRaw(child_view);
     return child_view;
   }
 
@@ -233,7 +233,7 @@ TEST_F(FillLayoutTest, MinimumSizeDisabled) {
   child_1->set_minimum_size({1, 3});
   child_2->set_minimum_size({3, 1});
   child_3->set_minimum_size({2, 2});
-  EXPECT_EQ(host_->GetPreferredSize(), host_->GetMinimumSize());
+  EXPECT_EQ(host_->GetPreferredSize({}), host_->GetMinimumSize());
 }
 
 TEST_F(FillLayoutTest, MinimumSizeEnabled) {

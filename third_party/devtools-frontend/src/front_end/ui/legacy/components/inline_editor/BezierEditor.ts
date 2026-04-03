@@ -1,6 +1,7 @@
-// Copyright (c) 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
 
 import * as Common from '../../../../core/common/common.js';
 import * as VisualLogging from '../../../visual_logging/visual_logging.js';
@@ -28,11 +29,13 @@ export class BezierEditor extends Common.ObjectWrapper.eventMixin<EventTypes, ty
   private debouncedStartPreviewAnimation: () => void;
 
   constructor(model: AnimationTimingModel) {
-    super(true);
+    super({useShadowDom: true});
+    this.registerRequiredCSS(bezierEditorStyles);
 
     this.model = model;
     this.contentElement.tabIndex = 0;
-    this.contentElement.setAttribute('jslog', `${VisualLogging.bezierEditor()}`);
+    this.contentElement.setAttribute(
+        'jslog', `${VisualLogging.dialog('bezierEditor').parent('mapped').track({keydown: 'Enter|Escape'})}`);
     this.setDefaultFocusedElement(this.contentElement);
     this.element.style.overflowY = 'auto';
 
@@ -96,7 +99,7 @@ export class BezierEditor extends Common.ObjectWrapper.eventMixin<EventTypes, ty
   }
 
   override wasShown(): void {
-    this.registerCSSFiles([bezierEditorStyles]);
+    super.wasShown();
     this.unselectPresets();
     // Check if bezier matches a preset
     for (const category of this.presetCategories) {
@@ -114,7 +117,7 @@ export class BezierEditor extends Common.ObjectWrapper.eventMixin<EventTypes, ty
 
   private onchange(): void {
     this.updateUI();
-    this.dispatchEventToListeners(Events.BezierChanged, this.model.asCSSText());
+    this.dispatchEventToListeners(Events.BEZIER_CHANGED, this.model.asCSSText());
   }
 
   private updateUI(): void {
@@ -124,10 +127,10 @@ export class BezierEditor extends Common.ObjectWrapper.eventMixin<EventTypes, ty
     this.animationTimingUI?.draw();
   }
 
-  private createCategory(presetGroup: {
+  private createCategory(presetGroup: Array<{
     name: string,
     value: string,
-  }[]): PresetCategory|null {
+  }>): PresetCategory|null {
     const pivot = AnimationTimingModel.parse(presetGroup[0].value);
     if (!pivot) {
       return null;
@@ -144,7 +147,7 @@ export class BezierEditor extends Common.ObjectWrapper.eventMixin<EventTypes, ty
     return category;
   }
 
-  private createPresetModifyIcon(parentElement: Element, className: string, drawPath: string): Element {
+  private createPresetModifyIcon(parentElement: Element, className: string, drawPath: string): SVGElement {
     const icon = UI.UIUtils.createSVGChild(parentElement, 'svg', 'bezier-preset-modify ' + className);
     icon.setAttribute('width', '20');
     icon.setAttribute('height', '20');
@@ -227,12 +230,12 @@ export class BezierEditor extends Common.ObjectWrapper.eventMixin<EventTypes, ty
 }
 
 export const enum Events {
-  BezierChanged = 'BezierChanged',
+  BEZIER_CHANGED = 'BezierChanged',
 }
 
-export type EventTypes = {
-  [Events.BezierChanged]: string,
-};
+export interface EventTypes {
+  [Events.BEZIER_CHANGED]: string;
+}
 
 export const Presets = [
   [
@@ -279,10 +282,10 @@ export const Presets = [
   ],
 ];
 export interface PresetCategory {
-  presets: {
+  presets: Array<{
     name: string,
     value: string,
-  }[];
+  }>;
   icon: Element;
   presetIndex: number;
 }

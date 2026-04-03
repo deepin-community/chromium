@@ -36,7 +36,7 @@ constexpr const char* kPjRtDeviceCompilationProfilerResourceName =
     "pjrt_device_compilation_profiler";
 }  // namespace
 
-StatusOr<std::unique_ptr<Graph>> CreateSingleOpGraph(
+absl::StatusOr<std::unique_ptr<Graph>> CreateSingleOpGraph(
     const NodeDef& node_def, absl::Span<const XlaArgument> args,
     absl::Span<const DataType> result_types) {
   // TODO(b/74182462): We implement this by creating a new dummy Graph including
@@ -50,8 +50,8 @@ StatusOr<std::unique_ptr<Graph>> CreateSingleOpGraph(
   // dependency edge to the _SOURCE node.
   for (int64_t i = 0, end = args.size(); i < end; ++i) {
     Node* node;
-    string arg_name = absl::StrCat("_arg", i);
-    Status status =
+    std::string arg_name = absl::StrCat("_arg", i);
+    absl::Status status =
         NodeBuilder(arg_name, FunctionLibraryDefinition::kArgOp)
             .ControlInput(graph->source_node())
             .Attr("T", args[i].kind == XlaArgument::kResource ? DT_RESOURCE
@@ -65,12 +65,13 @@ StatusOr<std::unique_ptr<Graph>> CreateSingleOpGraph(
   // Similarly with return values, create dummy _Retval nodes fed by `node`.
   for (int64_t i = 0, end = result_types.size(); i < end; ++i) {
     Node* node;
-    string retval_name = absl::StrCat("_retval", i);
-    Status status = NodeBuilder(retval_name, FunctionLibraryDefinition::kRetOp)
-                        .Input(main_node, i)
-                        .Attr("T", result_types[i])
-                        .Attr("index", i)
-                        .Finalize(graph.get(), &node);
+    std::string retval_name = absl::StrCat("_retval", i);
+    absl::Status status =
+        NodeBuilder(retval_name, FunctionLibraryDefinition::kRetOp)
+            .Input(main_node, i)
+            .Attr("T", result_types[i])
+            .Attr("index", i)
+            .Finalize(graph.get(), &node);
     TF_RETURN_IF_ERROR(status);
   }
   FixupSourceAndSinkEdges(graph.get());
@@ -95,7 +96,7 @@ std::string GetPjRtDeviceCompilationProfilerResourceName(
                       device_type.type_string());
 }
 
-StatusOr<ResourceMgr*> GetResourceMgrForDeviceCompiler(
+absl::StatusOr<ResourceMgr*> GetResourceMgrForDeviceCompiler(
     const OpKernelContext& ctx, const DeviceType& device_type) {
   // We store information about the JIT-compiled XLA computation in the
   // ResourceMgr. The DeviceCompiler (which contains the DeviceCompilationCache)

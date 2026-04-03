@@ -49,7 +49,7 @@ constexpr base::TimeDelta kShowMenuWhenScreenOffTimeout =
 
 // Time that power button should be pressed after power menu is shown before
 // starting the cancellable pre-shutdown animation.
-constexpr base::TimeDelta kStartShutdownAnimationTimeout =
+constexpr base::TimeDelta kRequestCancelableShutdownTimeout =
     base::Milliseconds(650);
 
 enum PowerButtonUpState {
@@ -70,18 +70,18 @@ aura::Window* GetPowerMenuContainer() {
 std::unique_ptr<views::Widget> CreateMenuWidget() {
   auto menu_widget = std::make_unique<views::Widget>();
   views::Widget::InitParams params(
+      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.z_order = ui::ZOrderLevel::kFloatingWindow;
   params.accept_events = true;
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.name = "PowerButtonMenuWindow";
   params.layer_type = ui::LAYER_SOLID_COLOR;
   params.parent = GetPowerMenuContainer();
   menu_widget->Init(std::move(params));
 
   gfx::Rect widget_bounds =
-      display::Screen::GetScreen()->GetPrimaryDisplay().bounds();
+      display::Screen::Get()->GetPrimaryDisplay().bounds();
   menu_widget->SetBounds(widget_bounds);
 
   // Enable arrow key - arrow right/left and down/up triggers the same focus
@@ -141,7 +141,8 @@ PowerButtonController::~PowerButtonController() {
 }
 
 void PowerButtonController::OnPreShutdownTimeout() {
-  lock_state_controller_->StartShutdownAnimation(ShutdownReason::POWER_BUTTON);
+  lock_state_controller_->RequestCancelableShutdown(
+      ShutdownReason::POWER_BUTTON);
   // |menu_widget_| might be reset on login status change while shutting down.
   if (!menu_widget_) {
     return;
@@ -185,6 +186,10 @@ void PowerButtonController::OnPowerButtonEvent(
     const base::TimeTicks& timestamp) {
   if (down) {
     force_off_on_button_up_ = false;
+    if (IsPowerButtonDisabled()) {
+      /* Ignore, assume it is a spurious event. */
+      return;
+    }
     if (UseTabletBehavior()) {
       force_off_on_button_up_ = true;
 
@@ -212,7 +217,8 @@ void PowerButtonController::OnPowerButtonEvent(
     display_controller_->SetBacklightsForcedOff(false);
 
     if (menu_shown_when_power_button_down_) {
-      pre_shutdown_timer_.Start(FROM_HERE, kStartShutdownAnimationTimeout, this,
+      pre_shutdown_timer_.Start(FROM_HERE, kRequestCancelableShutdownTimeout,
+                                this,
                                 &PowerButtonController::OnPreShutdownTimeout);
       return;
     }
@@ -231,9 +237,8 @@ void PowerButtonController::OnPowerButtonEvent(
     }
   } else {
     uint32_t up_state = UP_NONE;
-    if (lock_state_controller_->CanCancelShutdownAnimation()) {
+    if (lock_state_controller_->MaybeCancelShutdownAnimation()) {
       up_state |= UP_CAN_CANCEL_SHUTDOWN_ANIMATION;
-      lock_state_controller_->CancelShutdownAnimation();
     }
     const base::TimeTicks previous_up_time = last_button_up_time_;
     last_button_up_time_ = timestamp;
@@ -347,7 +352,7 @@ void PowerButtonController::CancelPowerButtonEvent() {
   StopTimersAndDismissMenu();
 }
 
-void PowerButtonController::OnDisplayModeChanged(
+void PowerButtonController::OnDisplayConfigurationChanged(
     const display::DisplayConfigurator::DisplayStateList& display_states) {
   bool internal_display_off = false;
   bool external_display_on = false;
@@ -404,7 +409,7 @@ void PowerButtonController::SuspendDone(base::TimeDelta sleep_duration) {
 
 void PowerButtonController::OnLoginStatusChanged(LoginStatus status) {
   // Destroy |menu_widget_| on login status change to reset the content of the
-  // menu since the menu items change if login stauts changed.
+  // menu since the menu items change if login status changed.
   menu_widget_.reset();
 }
 
@@ -486,6 +491,10 @@ bool PowerButtonController::UseTabletBehavior() const {
   return in_tablet_mode_ || force_tablet_power_button_;
 }
 
+bool PowerButtonController::IsPowerButtonDisabled() const {
+  return in_tablet_mode_ && disable_power_button_in_tablet_mode_;
+}
+
 void PowerButtonController::StopTimersAndDismissMenu() {
   pre_shutdown_timer_.Stop();
   power_button_menu_timer_.Stop();
@@ -533,6 +542,8 @@ void PowerButtonController::ProcessCommandLine() {
                      ? ButtonType::LEGACY
                      : ButtonType::NORMAL;
   force_tablet_power_button_ = cl->HasSwitch(switches::kForceTabletPowerButton);
+  disable_power_button_in_tablet_mode_ =
+      cl->HasSwitch(switches::kDisablePowerButtonInTabletMode);
 
   ParsePowerButtonPositionSwitch();
 }
@@ -559,7 +570,8 @@ void PowerButtonController::SetShowMenuAnimationDone() {
   show_menu_animation_done_ = true;
   if (button_type_ != ButtonType::LEGACY &&
       shutdown_reason_ == ShutdownReason::POWER_BUTTON) {
-    pre_shutdown_timer_.Start(FROM_HERE, kStartShutdownAnimationTimeout, this,
+    pre_shutdown_timer_.Start(FROM_HERE, kRequestCancelableShutdownTimeout,
+                              this,
                               &PowerButtonController::OnPreShutdownTimeout);
   }
 }
@@ -570,16 +582,16 @@ void PowerButtonController::ParsePowerButtonPositionSwitch() {
     return;
   }
 
-  std::optional<base::Value> parsed_json = base::JSONReader::Read(
-      cl->GetSwitchValueASCII(switches::kAshPowerButtonPosition));
-  if (!parsed_json || !parsed_json->is_dict()) {
+  std::optional<base::DictValue> parsed_json = base::JSONReader::ReadDict(
+      cl->GetSwitchValueASCII(switches::kAshPowerButtonPosition),
+      base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!parsed_json) {
     LOG(ERROR) << switches::kAshPowerButtonPosition << " flag has no value";
     return;
   }
 
-  const base::Value::Dict& position_info = parsed_json->GetDict();
-  const std::string* edge = position_info.FindString(kEdgeField);
-  std::optional<double> position = position_info.FindDouble(kPositionField);
+  const std::string* edge = parsed_json->FindString(kEdgeField);
+  std::optional<double> position = parsed_json->FindDouble(kPositionField);
 
   if (!edge || !position) {
     LOG(ERROR) << "Both " << kEdgeField << " field and " << kPositionField

@@ -7,7 +7,7 @@
 
 #include <vector>
 
-#include "components/optimization_guide/core/base_model_executor.h"
+#include "components/optimization_guide/core/inference/base_model_executor.h"
 #include "components/permissions/prediction_service/prediction_model_metadata.pb.h"
 #include "components/permissions/prediction_service/prediction_request_features.h"
 #include "components/permissions/prediction_service/prediction_service_messages.pb.h"
@@ -27,18 +27,6 @@ class PredictionModelExecutor : public optimization_guide::BaseModelExecutor<
                                     GeneratePredictionsResponse,
                                     const PredictionModelExecutorInput&> {
  public:
-  // This enum backs up the 'PermissionPredictionThresholdSource` histogram
-  // enum.
-  // It indicates whether the prediction score threshold value obtained from the
-  // model or if it used the default fallback value.
-  enum class PermissionPredictionThresholdSource {
-    MODEL_METADATA = 0,
-    HARDCODED_FALLBACK = 1,
-
-    // Always keep at the end.
-    kMaxValue = HARDCODED_FALLBACK,
-  };
-
   PredictionModelExecutor();
   ~PredictionModelExecutor() override;
 

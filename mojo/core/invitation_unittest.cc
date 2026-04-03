@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "mojo/public/c/system/invitation.h"
+
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -12,7 +14,7 @@
 #include "base/base_switches.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -23,6 +25,7 @@
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/process/process.h"
+#include "base/process/process_metrics.h"
 #include "base/run_loop.h"
 #include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
@@ -31,21 +34,27 @@
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "mojo/buildflags.h"
-#include "mojo/core/core.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/core/ipcz_api.h"
-#include "mojo/core/node_controller.h"
 #include "mojo/core/test/mojo_test_base.h"
 #include "mojo/core/test/test_switches.h"
-#include "mojo/public/c/system/invitation.h"
 #include "mojo/public/cpp/platform/named_platform_channel.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/invitation.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 
+#if BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
+#include "mojo/core/core.h"
+#include "mojo/core/node_controller.h"
+#endif
+
 #if BUILDFLAG(MOJO_USE_APPLE_CHANNEL)
-#include "base/mac/mach_port_rendezvous.h"
+#include "base/apple/mach_port_rendezvous.h"
+#endif
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
 #endif
 
 namespace mojo {
@@ -54,7 +63,7 @@ namespace {
 
 const char kSecondaryChannelHandleSwitch[] = "test-secondary-channel-handle";
 
-// TODO(https://crbug.com/1428561): Flaky on Tsan.
+// TODO(crbug.com/40900578): Flaky on Tsan.
 #if defined(THREAD_SANITIZER)
 #define MAYBE_InvitationTest DISABLED_InvitationTest
 #else
@@ -105,20 +114,7 @@ void PrepareToPassRemoteEndpoint(PlatformChannel* channel,
                                  base::LaunchOptions* options,
                                  base::CommandLine* command_line,
                                  std::string_view switch_name = {}) {
-  std::string value;
-#if BUILDFLAG(IS_FUCHSIA)
-  channel->PrepareToPassRemoteEndpoint(&options->handles_to_transfer, &value);
-#elif BUILDFLAG(MOJO_USE_APPLE_CHANNEL)
-  channel->PrepareToPassRemoteEndpoint(&options->mach_ports_for_rendezvous,
-                                       &value);
-#elif BUILDFLAG(IS_POSIX)
-  channel->PrepareToPassRemoteEndpoint(&options->fds_to_remap, &value);
-#elif BUILDFLAG(IS_WIN)
-  channel->PrepareToPassRemoteEndpoint(&options->handles_to_inherit, &value);
-#else
-#error "Platform not yet supported."
-#endif
-
+  const std::string value = channel->PrepareToPassRemoteEndpoint(*options);
   if (switch_name.empty()) {
     switch_name = PlatformChannel::kHandleSwitch;
   }
@@ -386,9 +382,9 @@ void MAYBE_InvitationTest::SendInvitationToClient(
   MojoHandle invitation;
   CHECK_EQ(MOJO_RESULT_OK, MojoCreateInvitation(nullptr, &invitation));
   for (uint32_t name = 0; name < num_primordial_pipes; ++name) {
-    CHECK_EQ(MOJO_RESULT_OK,
-             MojoAttachMessagePipeToInvitation(invitation, &name, 4, nullptr,
-                                               &primordial_pipes[name]));
+    UNSAFE_TODO(CHECK_EQ(MOJO_RESULT_OK, MojoAttachMessagePipeToInvitation(
+                                             invitation, &name, 4, nullptr,
+                                             &primordial_pipes[name])));
   }
 
   MojoPlatformProcessHandle process_handle;
@@ -582,7 +578,7 @@ class RemoteProcessState {
   void NotifyError(const std::string& error_message, bool disconnected) {
     base::AutoLock lock(lock_);
     CHECK(!disconnected_);
-    EXPECT_TRUE(base::Contains(error_message, expected_error_message_));
+    EXPECT_TRUE(error_message.contains(expected_error_message_));
     disconnected_ = disconnected;
     ++call_count_;
     if (error_callback_) {
@@ -663,6 +659,7 @@ DEFINE_TEST_CLIENT(ProcessErrorsClient) {
   EXPECT_EQ(MOJO_RESULT_OK, MojoClose(pipe));
 }
 
+#if BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
 // Temporary removed support for reinvitation for non-isolated connections.
 TEST_F(MAYBE_InvitationTest, DISABLED_Reinvitation) {
   // The gist of this test is that a process should be able to accept an
@@ -712,6 +709,7 @@ TEST_F(MAYBE_InvitationTest, DISABLED_Reinvitation) {
 
   WaitForProcessToTerminate(child_process);
 }
+#endif  // BUILDFLAG(MOJO_SUPPORT_LEGACY_CORE)
 
 DEFINE_TEST_CLIENT(ReinvitationClient) {
   MojoHandle invitation = AcceptInvitation(MOJO_ACCEPT_INVITATION_FLAG_NONE);
@@ -924,7 +922,14 @@ DEFINE_TEST_CLIENT(BrokenTransportClient) {
   // No-op. Exit immediately without accepting any invitation.
 }
 
-TEST_F(MAYBE_InvitationTest, NonBrokerToNonBroker) {
+// TODO(crbug.com/407060377): Flaky in Android.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_NonBrokerToNonBroker DISABLED_NonBrokerToNonBroker
+#else
+#define MAYBE_NonBrokerToNonBroker NonBrokerToNonBroker
+#endif
+
+TEST_F(MAYBE_InvitationTest, MAYBE_NonBrokerToNonBroker) {
   // Tests a non-broker inviting another non-broker to join the network.
   MojoHandle host;
   base::Process host_process = LaunchChildTestClient(
@@ -1033,7 +1038,7 @@ TEST_F(MAYBE_InvitationTest, MultiBrokerNetwork) {
 MojoHandle CreateMemory(std::string_view contents) {
   auto region = base::WritableSharedMemoryRegion::Create(contents.size());
   auto mapping = region.Map();
-  memcpy(mapping.memory(), contents.data(), contents.size());
+  UNSAFE_TODO(memcpy(mapping.memory(), contents.data(), contents.size()));
   auto buffer = WrapReadOnlySharedMemoryRegion(
       base::WritableSharedMemoryRegion::ConvertToReadOnly(std::move(region)));
   return buffer.release().value();
@@ -1096,6 +1101,57 @@ DEFINE_TEST_CLIENT(MultiBrokerNetworkClient) {
   MojoClose(test_runner);
   MojoClose(secondary_broker);
 }
+
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_WIN)
+TEST_F(MAYBE_InvitationTest, NoLeakOnFailedSend) {
+  if (!mojo::core::IsMojoIpczEnabled()) {
+    GTEST_SKIP() << "This test is specific to the MojoIpcz driver.";
+  }
+
+  // Helper lambda to retrieve the number of open handles.
+  auto get_open_handle_count = []() {
+#if BUILDFLAG(IS_WIN)
+    DWORD handle_count = 0;
+    ::GetProcessHandleCount(::GetCurrentProcess(), &handle_count);
+    return static_cast<int>(handle_count);
+#else  // BUILDFLAG(IS_POSIX)
+    return base::ProcessMetrics::CreateCurrentProcessMetrics()
+        ->GetOpenFdCount();
+#endif
+  };
+
+  const int initial_count = get_open_handle_count();
+  const int iterations = 100;
+
+  for (int i = 0; i < iterations; i++) {
+    PlatformChannel channel;
+    MojoPlatformHandle endpoint_handle;
+    endpoint_handle.struct_size = sizeof(endpoint_handle);
+    PlatformHandle::ToMojoPlatformHandle(
+        channel.TakeLocalEndpoint().TakePlatformHandle(), &endpoint_handle);
+
+    MojoInvitationTransportEndpoint endpoint;
+    endpoint.struct_size = sizeof(endpoint);
+    endpoint.type = MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL;
+    endpoint.num_platform_handles = 1;
+    endpoint.platform_handles = &endpoint_handle;
+
+    MojoHandle invitation;
+    EXPECT_EQ(MOJO_RESULT_OK, MojoCreateInvitation(nullptr, &invitation));
+
+    // Send without attaching any pipes. This should fail.
+    EXPECT_EQ(MOJO_RESULT_FAILED_PRECONDITION,
+              MojoSendInvitation(invitation, nullptr, &endpoint, nullptr, 0,
+                                 nullptr));
+    MojoClose(invitation);
+  }
+
+  // Check that we haven't leaked a handle for every iteration.
+  // We allow some margin for other threads / noise.
+  const int final_count = get_open_handle_count();
+  EXPECT_LT(final_count, initial_count + iterations / 2);
+}
+#endif  // BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_WIN)
 
 }  // namespace
 }  // namespace core

@@ -13,18 +13,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
+#include "absl/status/statusor.h"
 #include "tensorflow/compiler/tf2xla/type_util.h"
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/lib/arithmetic.h"
-#include "xla/client/lib/comparators.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/xla_computation.h"
+#include "xla/hlo/builder/lib/arithmetic.h"
+#include "xla/hlo/builder/lib/comparators.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/xla_computation.h"
 #include "xla/shape_util.h"
+#include "xla/xla_data.pb.h"
 
 namespace tensorflow {
 namespace {
@@ -41,11 +44,11 @@ class DenseBincountOp : public XlaOpKernel {
   void Compile(XlaOpKernelContext* ctx) override {
     int64_t output_size;
     xla::XlaOp output_size_param = ctx->Input("size");
-    StatusOr<xla::Shape> output_shape_or =
+    absl::StatusOr<xla::Shape> output_shape_or =
         ctx->builder()->GetShape(output_size_param);
     OP_REQUIRES_OK(ctx, output_shape_or.status());
     auto output_shape_param = output_shape_or.value();
-    auto output_rank = output_shape_param.rank();
+    auto output_rank = output_shape_param.dimensions().size();
     OP_REQUIRES(ctx, output_rank == 0,
                 errors::InvalidArgument("Shape must be rank 0 but is rank ",
                                         output_rank));
@@ -59,17 +62,18 @@ class DenseBincountOp : public XlaOpKernel {
     xla::PrimitiveType dtype = ctx->InputXlaType("weights");
     auto zero = xla::Zero(ctx->builder(), dtype);
     auto one = xla::One(ctx->builder(), dtype);
-    StatusOr<xla::Shape> input_shape_or = ctx->builder()->GetShape(input);
+    absl::StatusOr<xla::Shape> input_shape_or = ctx->builder()->GetShape(input);
     OP_REQUIRES_OK(ctx, input_shape_or.status());
     auto input_shape = input_shape_or.value();
 
-    auto rank = input_shape.rank();
+    auto rank = input_shape.dimensions().size();
 
     OP_REQUIRES(ctx, rank <= 2,
                 errors::InvalidArgument(
                     "Shape must be at most rank 2 but is rank ", rank));
     xla::XlaOp weights = ctx->Input(2);
-    StatusOr<xla::Shape> weights_shape_or = ctx->builder()->GetShape(weights);
+    absl::StatusOr<xla::Shape> weights_shape_or =
+        ctx->builder()->GetShape(weights);
 
     OP_REQUIRES_OK(ctx, weights_shape_or.status());
 
@@ -77,13 +81,13 @@ class DenseBincountOp : public XlaOpKernel {
     OP_REQUIRES(ctx,
                 xla::ShapeUtil::CompatibleIgnoringElementType(weights_shape,
                                                               input_shape) ||
-                    (weights_shape.dimensions_size() > 0 &&
+                    (weights_shape.dimensions().size() > 0 &&
                      weights_shape.dimensions(0) == 0),
                 errors::InvalidArgument(
                     "`weights` must be the same shape as `arr` or a length-0 "
                     "`Tensor`, in which case it acts as all weights equal to "
                     "1. Received ",
-                    weights_shape.DebugString()));
+                    weights_shape.ToString()));
 
     auto size = input_shape.dimensions(0);
 

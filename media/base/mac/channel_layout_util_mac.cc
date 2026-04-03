@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/base/mac/channel_layout_util_mac.h"
 
 #include <memory>
@@ -192,7 +197,7 @@ bool AudioChannelLayoutToChannelLayout(const AudioChannelLayout& input_layout,
     channels_to_match.push_back(channel);
   }
 
-  for (int i = 0; i < ChannelLayout::CHANNEL_LAYOUT_MAX; i++) {
+  for (int i = 0; i <= ChannelLayout::CHANNEL_LAYOUT_MAX; i++) {
     ChannelLayout layout = static_cast<ChannelLayout>(i);
     if (static_cast<UInt32>(ChannelLayoutToChannelCount(layout)) !=
         channel_count) {

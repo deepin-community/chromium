@@ -2,7 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/containers/span.h"
 #include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_view_util.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/optimization_guide/mock_optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
@@ -10,17 +14,25 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/webui/feedback/feedback_dialog.h"
+#include "chrome/browser/ui/webui/side_panel/customize_chrome/wallpaper_search/wallpaper_search_string_map.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/interaction/interaction_test_util_browser.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
+#include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/optimization_guide/core/model_execution/feature_keys.h"
+#include "components/optimization_guide/core/model_execution/model_execution_features.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_prefs.h"
+#include "components/optimization_guide/proto/model_quality_service.pb.h"
+#include "components/prefs/pref_service.h"
 #include "components/search/ntp_features.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/url_loader_interceptor.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/interaction_sequence.h"
 #include "ui/base/ui_base_features.h"
@@ -28,22 +40,35 @@
 #include "ui/views/interaction/interaction_test_util_views.h"
 
 namespace {
+using testing::Return;
+
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewTabPageElementId);
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kCustomizeChromeElementId);
+
+class MockWallpaperSearchStringMap : public WallpaperSearchStringMap {
+ public:
+  MOCK_CONST_METHOD1(FindCategory,
+                     std::optional<std::string>(std::string_view key));
+  MOCK_CONST_METHOD1(FindDescriptorA,
+                     std::optional<std::string>(std::string_view key));
+  MOCK_CONST_METHOD1(FindDescriptorB,
+                     std::optional<std::string>(std::string_view key));
+  MOCK_CONST_METHOD1(FindDescriptorC,
+                     std::optional<std::string>(std::string_view key));
+};
 }  // namespace
 
 class WallpaperSearchInteractiveTest : public InteractiveBrowserTest {
  public:
-
   void SetUp() override {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{ntp_features::kCustomizeChromeWallpaperSearch,
-                              optimization_guide::features::
-                                  kOptimizationGuideModelExecution,
-                              features::kChromeRefresh2023,
-                              features::kChromeWebuiRefresh2023,
-                              ntp_features::kNtpWallpaperSearchButton},
-        /*disabled_features=*/{});
+    std::vector<base::test::FeatureRefAndParams> enabled_features =
+        GetEnabledFeatures();
+    enabled_features.push_back(
+        {ntp_features::kNtpWallpaperSearchButtonAnimationShownThreshold,
+         {{ntp_features::kNtpWallpaperSearchButtonAnimationShownThresholdParam,
+           "15"}}});
+    scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features,
+                                                       GetDisabledFeatures());
     InteractiveBrowserTest::SetUp();
   }
 
@@ -55,44 +80,63 @@ class WallpaperSearchInteractiveTest : public InteractiveBrowserTest {
                                         signin::ConsentLevel::kSignin);
   }
 
-  InteractiveTestApi::MultiStep WaitForElementVisible(
-      const ui::ElementIdentifier& contents_id,
-      const DeepQuery& element) {
-    DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kElementVisibleEvent);
-    StateChange element_visible;
-    element_visible.type = StateChange::Type::kExistsAndConditionTrue;
-    element_visible.where = element;
-    element_visible.event = kElementVisibleEvent;
-    element_visible.test_function = "(el) => el.offsetParent !== null";
-
-    return WaitForStateChange(contents_id, element_visible);
+  std::vector<base::test::FeatureRefAndParams> GetEnabledFeatures() {
+    return {
+        {ntp_features::kCustomizeChromeWallpaperSearch, {}},
+        {optimization_guide::features::kOptimizationGuideModelExecution, {}},
+        {optimization_guide::features::internal::
+             kWallpaperSearchSettingsVisibility,
+         {}},
+        {ntp_features::kNtpWallpaperSearchButton, {}},
+        {ntp_features::kNtpWallpaperSearchButtonAnimation, {}}};
   }
 
- private:
+  const std::vector<base::test::FeatureRef> GetDisabledFeatures() {
+    return {optimization_guide::features::internal::kWallpaperSearchGraduated};
+  }
+
+  InteractiveTestApi::MultiStep WaitForElementExists(
+      const ui::ElementIdentifier& contents_id,
+      const DeepQuery& element,
+      const bool& exists) {
+    DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kElementExists);
+    StateChange element_exists;
+    element_exists.type =
+        exists ? StateChange::Type::kExists : StateChange::Type::kDoesNotExist;
+    element_exists.where = element;
+    element_exists.event = kElementExists;
+    return WaitForStateChange(contents_id, element_exists);
+  }
+
+  InteractiveTestApi::MultiStep WaitForElementToRender(
+      const ui::ElementIdentifier& contents_id,
+      const WebContentsInteractionTestUtil::DeepQuery& element) {
+    DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kElementRendered);
+    WebContentsInteractionTestUtil::StateChange element_rendered;
+    element_rendered.event = kElementRendered;
+    element_rendered.where = element;
+    element_rendered.test_function =
+        "(el) => { if (el !== null) { let rect = el.getBoundingClientRect(); "
+        "return rect.width > 0 && rect.height > 0; } return false; }";
+    return WaitForStateChange(contents_id, element_rendered);
+  }
+
+ protected:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(WallpaperSearchInteractiveTest,
                        NTPWallpaperSearchButtonVisibilityDependsOnSettings) {
-  const DeepQuery kWallpaperSearchButtonContainer = {
-      "ntp-app", "#wallpaperSearchButtonContainer"};
-
-  DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kElementHiddenEvent);
-  StateChange wallpaper_search_button_hidden;
-  wallpaper_search_button_hidden.type =
-      StateChange::Type::kExistsAndConditionTrue;
-  wallpaper_search_button_hidden.where = kWallpaperSearchButtonContainer;
-  wallpaper_search_button_hidden.event = kElementHiddenEvent;
-  wallpaper_search_button_hidden.test_function =
-      "(el) => el.offsetParent === null";
+  const DeepQuery kWallpaperSearchButton = {"ntp-app", "ntp-customize-buttons",
+                                            "#wallpaperSearchButton"};
 
   RunTestSequence(
       // 1. Open the NTP.
-      Steps(InstrumentTab(kNewTabPageElementId, 0), Do([=]() {
+      Steps(InstrumentTab(kNewTabPageElementId, 0), Do([=, this]() {
               browser()->profile()->GetPrefs()->SetInteger(
                   optimization_guide::prefs::GetSettingEnabledPrefName(
-                      optimization_guide::proto::ModelExecutionFeature::
-                          MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH),
+                      optimization_guide::UserVisibleFeatureKey::
+                          kWallpaperSearch),
                   static_cast<int>(
                       optimization_guide::prefs::FeatureOptInState::kEnabled));
             }),
@@ -101,30 +145,28 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchInteractiveTest,
             WaitForWebContentsReady(kNewTabPageElementId,
                                     GURL(chrome::kChromeUINewTabPageURL))),
       // 2. Ensure the wallpaper search button is visible.
-      WaitForElementVisible(kNewTabPageElementId,
-                            kWallpaperSearchButtonContainer),
+      WaitForElementToRender(kNewTabPageElementId, kWallpaperSearchButton),
       // 3. Turn wallpaper search setting off.
-      Do([=]() {
+      Do([=, this]() {
         browser()->profile()->GetPrefs()->SetInteger(
             optimization_guide::prefs::GetSettingEnabledPrefName(
-                optimization_guide::proto::ModelExecutionFeature::
-                    MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH),
+                optimization_guide::UserVisibleFeatureKey::kWallpaperSearch),
             static_cast<int>(
                 optimization_guide::prefs::FeatureOptInState::kDisabled));
       }),
-      // 4. Ensure the wallpaper search button is hidden.
-      WaitForStateChange(kNewTabPageElementId, wallpaper_search_button_hidden),
+      // 4. Ensure the wallpaper search button is not in the DOM.
+      WaitForElementExists(kNewTabPageElementId, kWallpaperSearchButton, false),
       // 5. Turn wallpaper search setting on.
-      Do([=]() {
+      Do([=, this]() {
         browser()->profile()->GetPrefs()->SetInteger(
             optimization_guide::prefs::GetSettingEnabledPrefName(
-                optimization_guide::proto::ModelExecutionFeature::
-                    MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH),
+                optimization_guide::UserVisibleFeatureKey::kWallpaperSearch),
             static_cast<int>(
                 optimization_guide::prefs::FeatureOptInState::kEnabled));
       }),
-      // 6. Ensure the wallpaper search button is still hidden.
-      WaitForStateChange(kNewTabPageElementId, wallpaper_search_button_hidden));
+      // 6. Ensure the wallpaper search button is still not in the DOM.
+      WaitForElementExists(kNewTabPageElementId, kWallpaperSearchButton,
+                           false));
 }
 
 class WallpaperSearchOptimizationGuideInteractiveTest
@@ -156,10 +198,22 @@ class WallpaperSearchOptimizationGuideInteractiveTest
 
   std::unique_ptr<content::URLLoaderInterceptor>
   SetUpDescriptorsResponseWithData() {
+    // Set up translations.
+    auto factory = base::BindRepeating([]() -> std::unique_ptr<
+                                                WallpaperSearchStringMap> {
+      auto mock =
+          std::make_unique<testing::NiceMock<MockWallpaperSearchStringMap>>();
+      ON_CALL(*mock, FindCategory("foo")).WillByDefault(Return("foo label"));
+      ON_CALL(*mock, FindDescriptorA("bar")).WillByDefault(Return("bar label"));
+      ON_CALL(*mock, FindDescriptorB("foo")).WillByDefault(Return("foo label"));
+      ON_CALL(*mock, FindDescriptorC("foo")).WillByDefault(Return("foo label"));
+      return mock;
+    });
+    MockWallpaperSearchStringMap::SetFactory(factory);
     return std::make_unique<content::URLLoaderInterceptor>(
         base::BindLambdaForTesting(
             [&](content::URLLoaderInterceptor::RequestParams* params) -> bool {
-              if (params->url_request.url.path() ==
+              if (params->url_request.url.GetPath() ==
                   "/chrome-wallpaper-search/descriptors_en-US.json") {
                 std::string headers =
                     "HTTP/1.1 200 OK\nContent-Type: application/json\n\n";
@@ -186,28 +240,29 @@ class WallpaperSearchOptimizationGuideInteractiveTest
   InteractiveTestApi::MultiStep ClickElement(
       const ui::ElementIdentifier& contents_id,
       const DeepQuery& element) {
-    return Steps(WaitForElementVisible(contents_id, element),
+    return Steps(WaitForElementToRender(contents_id, element),
                  MoveMouseTo(contents_id, element), ClickMouse());
   }
 
   InteractiveTestApi::MultiStep OpenNewTabPage() {
-    return Steps(InstrumentTab(kNewTabPageElementId, 0), Do([this]() {
-                   ON_CALL(
-                       mock_optimization_guide_keyed_service(),
-                       ShouldFeatureBeCurrentlyEnabledForUser(
-                           optimization_guide::proto::ModelExecutionFeature::
-                               MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH))
-                       .WillByDefault(testing::Return(true));
-                 }),
-                 NavigateWebContents(kNewTabPageElementId,
-                                     GURL(chrome::kChromeUINewTabPageURL)),
-                 WaitForWebContentsReady(kNewTabPageElementId,
-                                         GURL(chrome::kChromeUINewTabPageURL)));
+    return Steps(
+        InstrumentTab(kNewTabPageElementId, 0), Do([this]() {
+          ON_CALL(
+              mock_optimization_guide_keyed_service(),
+              ShouldFeatureBeCurrentlyEnabledForUser(
+                  optimization_guide::UserVisibleFeatureKey::kWallpaperSearch))
+              .WillByDefault(testing::Return(true));
+        }),
+        NavigateWebContents(kNewTabPageElementId,
+                            GURL(chrome::kChromeUINewTabPageURL)),
+        WaitForWebContentsReady(kNewTabPageElementId,
+                                GURL(chrome::kChromeUINewTabPageURL)));
   }
 
   InteractiveTestApi::MultiStep OpenCustomizeChromeAt(
       const ui::ElementIdentifier& contents_id) {
-    const DeepQuery kCustomizeChromeButton = {"ntp-app", "#customizeButton"};
+    const DeepQuery kCustomizeChromeButton = {
+        "ntp-app", "ntp-customize-buttons", "#customizeButton"};
     return Steps(ClickElement(kNewTabPageElementId, kCustomizeChromeButton),
                  WaitForShow(kCustomizeChromeSidePanelWebViewElementId),
                  InstrumentNonTabWebView(
@@ -216,8 +271,8 @@ class WallpaperSearchOptimizationGuideInteractiveTest
 
   InteractiveTestApi::MultiStep OpenWallpaperSearchAt(
       const ui::ElementIdentifier& contents_id) {
-    const DeepQuery kWallpaperSearchButton = {"ntp-app",
-                                              "#wallpaperSearchButton"};
+    const DeepQuery kWallpaperSearchButton = {
+        "ntp-app", "ntp-customize-buttons", "#wallpaperSearchButton"};
     return Steps(ClickElement(kNewTabPageElementId, kWallpaperSearchButton),
                  WaitForShow(kCustomizeChromeSidePanelWebViewElementId),
                  InstrumentNonTabWebView(
@@ -228,35 +283,40 @@ class WallpaperSearchOptimizationGuideInteractiveTest
     return Do([this]() {
       EXPECT_CALL(
           mock_optimization_guide_keyed_service(),
-          ExecuteModel(optimization_guide::proto::ModelExecutionFeature::
-                           MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH,
-                       testing::_, testing::_))
-          .WillOnce(testing::Invoke(
-              [](optimization_guide::proto::ModelExecutionFeature feature_arg,
+          ExecuteModel(
+              optimization_guide::ModelBasedCapabilityKey::kWallpaperSearch,
+              testing::_, testing::_, testing::_))
+          .WillOnce(
+              [](optimization_guide::ModelBasedCapabilityKey feature_arg,
                  const google::protobuf::MessageLite& request_arg,
+                 const optimization_guide::ModelExecutionOptions& options,
                  optimization_guide::
                      OptimizationGuideModelExecutionResultCallback
                          done_callback_arg) {
                 SkBitmap bitmap;
                 bitmap.allocN32Pixels(64, 32);
-                std::vector<unsigned char> encoded;
-                gfx::PNGCodec::EncodeBGRASkBitmap(
-                    bitmap, /*discard_transparency=*/false, &encoded);
+                std::optional<std::vector<uint8_t>> encoded =
+                    gfx::PNGCodec::EncodeBGRASkBitmap(
+                        bitmap, /*discard_transparency=*/false);
 
                 optimization_guide::proto::WallpaperSearchResponse response;
                 auto* image = response.add_images();
                 image->set_encoded_image(
-                    std::string(encoded.begin(), encoded.end()));
+                    std::string(base::as_string_view(encoded.value())));
 
                 std::string serialized_metadata;
                 response.SerializeToString(&serialized_metadata);
                 optimization_guide::proto::Any result;
                 result.set_value(serialized_metadata);
-                result.set_type_url("type.googleapis.com/" +
-                                    response.GetTypeName());
+                result.set_type_url(base::StrCat(
+                    {"type.googleapis.com/", response.GetTypeName()}));
 
-                std::move(done_callback_arg).Run(base::ok(result), nullptr);
-              }));
+                std::move(done_callback_arg)
+                    .Run(optimization_guide::
+                             OptimizationGuideModelExecutionResult(
+                                 base::ok(result), nullptr),
+                         nullptr);
+              });
     });
   }
 
@@ -284,8 +344,9 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
                        CustomizeButtonsWorkTogether) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kReopenedCustomizeChromeElementId);
 
-  const DeepQuery kCustomizeChromeButton = {"ntp-app", "#customizeButton"};
-  const DeepQuery kWallpaperSearchButton = {"ntp-app",
+  const DeepQuery kCustomizeChromeButton = {"ntp-app", "ntp-customize-buttons",
+                                            "#customizeButton"};
+  const DeepQuery kWallpaperSearchButton = {"ntp-app", "ntp-customize-buttons",
                                             "#wallpaperSearchButton"};
 
   RunTestSequence(
@@ -305,7 +366,75 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
 }
 
 IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
-                       SearchesAndSetsNewAndHistoricalResults) {
+                       NTPButtonAnimatesUnderThreshold) {
+  const DeepQuery kCustomizeChromeButton = {"ntp-app", "ntp-customize-buttons",
+                                            "#customizeButton"};
+  const DeepQuery kWallpaperSearchButton = {"ntp-app", "ntp-customize-buttons",
+                                            "#wallpaperSearchButton"};
+
+  RunTestSequence(
+      // 1. Open the NTP.
+      Steps(InstrumentTab(kNewTabPageElementId, 0), Do([this]() {
+              ON_CALL(mock_optimization_guide_keyed_service(),
+                      ShouldFeatureBeCurrentlyEnabledForUser(
+                          optimization_guide::UserVisibleFeatureKey::
+                              kWallpaperSearch))
+                  .WillByDefault(testing::Return(true));
+              // Set shown count lower than threshold.
+              browser()->profile()->GetPrefs()->SetInteger(
+                  prefs::kNtpWallpaperSearchButtonShownCount, 14);
+            }),
+            NavigateWebContents(kNewTabPageElementId,
+                                GURL(chrome::kChromeUINewTabPageURL)),
+            WaitForWebContentsReady(kNewTabPageElementId,
+                                    GURL(chrome::kChromeUINewTabPageURL))),
+      // 2. Ensure that the wallpaper search button is animated.
+      Steps(
+          WaitForElementToRender(kNewTabPageElementId, kWallpaperSearchButton),
+          CheckJsResultAt(kNewTabPageElementId, kWallpaperSearchButton,
+                          "(el) => el.getAnimations().length > 0")));
+}
+
+IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
+                       NTPButtonDoesNotAnimateAboveThreshold) {
+  const DeepQuery kCustomizeChromeButton = {"ntp-app", "ntp-customize-buttons",
+                                            "#customizeButton"};
+  const DeepQuery kWallpaperSearchButton = {"ntp-app", "ntp-customize-buttons",
+                                            "#wallpaperSearchButton"};
+
+  RunTestSequence(
+      // 1. Open the NTP.
+      Steps(InstrumentTab(kNewTabPageElementId, 0), Do([this]() {
+              ON_CALL(mock_optimization_guide_keyed_service(),
+                      ShouldFeatureBeCurrentlyEnabledForUser(
+                          optimization_guide::UserVisibleFeatureKey::
+                              kWallpaperSearch))
+                  .WillByDefault(testing::Return(true));
+              // Set shown count higher than threshold.
+              browser()->profile()->GetPrefs()->SetInteger(
+                  prefs::kNtpWallpaperSearchButtonShownCount, 16);
+            }),
+            NavigateWebContents(kNewTabPageElementId,
+                                GURL(chrome::kChromeUINewTabPageURL)),
+            WaitForWebContentsReady(kNewTabPageElementId,
+                                    GURL(chrome::kChromeUINewTabPageURL))),
+      // 2. Ensure that the wallpaper search button is not animated.
+      Steps(
+          WaitForElementToRender(kNewTabPageElementId, kWallpaperSearchButton),
+          CheckJsResultAt(kNewTabPageElementId, kWallpaperSearchButton,
+                          "(el) => el.getAnimations().length === 0")));
+}
+
+// TODO(crbug.com/404256907): Flayky in Linux TSAN.
+#if defined(THREAD_SANITIZER) && BUILDFLAG(IS_LINUX)
+#define MAYBE_SearchesAndSetsNewAndHistoricalResults \
+  DISABLED_SearchesAndSetsNewAndHistoricalResults
+#else
+#define MAYBE_SearchesAndSetsNewAndHistoricalResults \
+  SearchesAndSetsNewAndHistoricalResults
+#endif  // defined(THREAD_SANITIZER) && BUILDFLAG(IS_LINUX)
+IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
+                       MAYBE_SearchesAndSetsNewAndHistoricalResults) {
   // Intercept Wallpaper Search descriptor fetches, and respond with data.
   std::unique_ptr<content::URLLoaderInterceptor> descriptors_fetch_interceptor =
       SetUpDescriptorsResponseWithData();
@@ -318,7 +447,8 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
                                    "#submitButton"};
   const DeepQuery kWallpaperSearchResult = {"customize-chrome-app",
                                             "#wallpaperSearchPage", ".result"};
-  const DeepQuery kCustomizeChromeButton = {"ntp-app", "#customizeButton"};
+  const DeepQuery kCustomizeChromeButton = {"ntp-app", "ntp-customize-buttons",
+                                            "#customizeButton"};
   const DeepQuery kSetClassicChromeButton = {
       "customize-chrome-app", "#appearanceElement", "#setClassicChromeButton"};
   const DeepQuery kHistoryCard = {"customize-chrome-app",
@@ -351,8 +481,8 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
       Steps(OpenNewTabPage(), OpenWallpaperSearchAt(kCustomizeChromeElementId)),
       // 2. Click the submit button.
       //    A random search should trigger, since no descriptors were selected.
-      Steps(ClickElement(kCustomizeChromeElementId, kSubmitButton),
-            MockWallpaperSearchSuccess()),
+      Steps(MockWallpaperSearchSuccess(),
+            ClickElement(kCustomizeChromeElementId, kSubmitButton)),
       // 3. Click one of the returned wallpapers.
       ClickElement(kCustomizeChromeElementId, kWallpaperSearchResult),
       // 4. Ensure that the NTP has a background.
@@ -376,25 +506,24 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
             ClickElement(kReopenedCustomizeChromeElementId, kEditThemeButton),
             ClickElement(kReopenedCustomizeChromeElementId,
                          kWallpaperSearchTile)),
-      // 10. Click the past result.
-      Steps(CheckJsResultAt(
+      // 10. Click the past result and ensure that there's only one of them.
+      Steps(ClickElement(kReopenedCustomizeChromeElementId, kPastResult),
+            CheckJsResultAt(
                 kReopenedCustomizeChromeElementId, kHistoryCard,
-                "(el) => el.querySelectorAll('.result').length === 1"),
-            ClickElement(kReopenedCustomizeChromeElementId, kPastResult)),
+                "(el) => el.querySelectorAll('.result').length === 1")),
       // 11. Ensure that the NTP has a background.
       WaitForStateChange(kNewTabPageElementId, ntp_has_background));
 }
 
-// The feedback dialog on CrOS & LaCrOS happens at the system level,
-// which cannot be easily tested here. LaCrOS has a separate feedback
-// browser test which gives us some coverage.
+// The feedback dialog on Cros happens at the system level, which cannot be
+// easily tested here.
 #if !BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
                        FeedbackDialogShowsOnThumbsDown) {
   EXPECT_CALL(mock_optimization_guide_keyed_service(),
-              ShouldFeatureBeCurrentlyAllowedForLogging(
-                  optimization_guide::proto::ModelExecutionFeature::
-                      MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH))
+              ShouldFeatureBeCurrentlyAllowedForFeedback(
+                  optimization_guide::proto::LogAiDataRequest::FeatureCase::
+                      kWallpaperSearch))
       .WillOnce(testing::Return(true));
 
   // Intercept Wallpaper Search descriptor fetches, and respond with data.
@@ -417,3 +546,122 @@ IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
       InAnyContext(WaitForShow(FeedbackDialog::kFeedbackDialogForTesting)));
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+
+IN_PROC_BROWSER_TEST_F(WallpaperSearchOptimizationGuideInteractiveTest,
+                       DescriptorErrorCTANavigatesToThemesPage) {
+  const DeepQuery kErrorCTA = {"customize-chrome-app", "#wallpaperSearchPage",
+                               "#errorCTA"};
+  const DeepQuery kThemesPage = {"customize-chrome-app", "#categoriesPage"};
+  const DeepQuery kWallpaperSearchTile = {
+      "customize-chrome-app", "#categoriesPage", "#wallpaperSearchTile"};
+  const DeepQuery kSubmitButton = {"customize-chrome-app",
+                                   "#wallpaperSearchPage", "#wallpaperSearch",
+                                   "#submitButton"};
+
+  // Intercept Wallpaper Search descriptor fetches, and respond with a network
+  // failure or data, depending on the value of |offline|.
+  bool offline;
+  std::unique_ptr<content::URLLoaderInterceptor> descriptors_fetch_interceptor =
+      std::make_unique<content::URLLoaderInterceptor>(
+          base::BindLambdaForTesting(
+              [&](content::URLLoaderInterceptor::RequestParams* params)
+                  -> bool {
+                if (params->url_request.url.GetPath() ==
+                    "/chrome-wallpaper-search/descriptors_en-US.json") {
+                  if (offline) {
+                    params->client->OnComplete(
+                        network::URLLoaderCompletionStatus(
+                            net::ERR_INTERNET_DISCONNECTED));
+                  } else {
+                    std::string headers =
+                        "HTTP/1.1 200 OK\nContent-Type: application/json\n\n";
+                    const std::string body =
+                        R"()]}'
+                      {
+                        "descriptor_a":[
+                          {"category":"foo","labels":["bar"]}
+                        ],
+                        "descriptor_b":[
+                          {"label":"foo","image":"bar.png"}
+                        ],
+                        "descriptor_c":["foo"]
+                      })";
+                    content::URLLoaderInterceptor::WriteResponse(
+                        headers, body, params->client.get(),
+                        std::optional<net::SSLInfo>());
+                  }
+                  return true;
+                }
+                return false;
+              }));
+
+  RunTestSequence(
+      // 1. Open Wallpaper Search without internet connection.
+      Steps(Do(base::BindLambdaForTesting([&]() { offline = true; })),
+            OpenNewTabPage(), OpenWallpaperSearchAt(kCustomizeChromeElementId)),
+      // 2. Wait for the error CTA to show.
+      WaitForElementExists(kCustomizeChromeElementId, kErrorCTA, true),
+      WaitForElementToRender(kCustomizeChromeElementId, kErrorCTA),
+      // 3. Assert that the themes page isn't showing yet.
+      CheckJsResultAt(kCustomizeChromeElementId, kThemesPage,
+                      "(el) => el.offsetParent === null"),
+      // 4. Click the error CTA.
+      ClickElement(kCustomizeChromeElementId, kErrorCTA),
+      // 5. Ensure that the themes page shows.
+      WaitForElementToRender(kCustomizeChromeElementId, kThemesPage),
+      // 6. Reopen Wallpaper Search with internet connection.
+      Steps(Do(base::BindLambdaForTesting([&]() { offline = false; })),
+            ClickElement(kCustomizeChromeElementId, kWallpaperSearchTile)),
+      // 7. Ensure that the error state went away.
+      Steps(WaitForElementToRender(kCustomizeChromeElementId, kSubmitButton),
+            WaitForElementExists(kCustomizeChromeElementId, kErrorCTA, false)));
+}
+
+// Tests in this class should always show an animated button because
+// kNtpWallpaperSearchButtonAnimationShownThresholdParam is set to a negative
+// value.
+class NTPWallpaperSearchButtonAnimationTest
+    : public WallpaperSearchOptimizationGuideInteractiveTest {
+ public:
+  void SetUp() override {
+    std::vector<base::test::FeatureRefAndParams> enabled_features =
+        GetEnabledFeatures();
+    enabled_features.push_back(
+        {ntp_features::kNtpWallpaperSearchButtonAnimationShownThreshold,
+         {{ntp_features::kNtpWallpaperSearchButtonAnimationShownThresholdParam,
+           "-1"}}});
+    scoped_feature_list_.InitWithFeaturesAndParameters(enabled_features,
+                                                       GetDisabledFeatures());
+    InteractiveBrowserTest::SetUp();
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(NTPWallpaperSearchButtonAnimationTest,
+                       AnimatesUnconditionally) {
+  const DeepQuery kCustomizeChromeButton = {"ntp-app", "ntp-customize-buttons",
+                                            "#customizeButton"};
+  const DeepQuery kWallpaperSearchButton = {"ntp-app", "ntp-customize-buttons",
+                                            "#wallpaperSearchButton"};
+
+  RunTestSequence(
+      // 1. Open the NTP.
+      Steps(InstrumentTab(kNewTabPageElementId, 0), Do([this]() {
+              ON_CALL(mock_optimization_guide_keyed_service(),
+                      ShouldFeatureBeCurrentlyEnabledForUser(
+                          optimization_guide::UserVisibleFeatureKey::
+                              kWallpaperSearch))
+                  .WillByDefault(testing::Return(true));
+              // Set shown count higher than threshold.
+              browser()->profile()->GetPrefs()->SetInteger(
+                  prefs::kNtpWallpaperSearchButtonShownCount, 1000);
+            }),
+            NavigateWebContents(kNewTabPageElementId,
+                                GURL(chrome::kChromeUINewTabPageURL)),
+            WaitForWebContentsReady(kNewTabPageElementId,
+                                    GURL(chrome::kChromeUINewTabPageURL))),
+      // 2. Ensure that the wallpaper search button is animated.
+      Steps(
+          WaitForElementToRender(kNewTabPageElementId, kWallpaperSearchButton),
+          CheckJsResultAt(kNewTabPageElementId, kWallpaperSearchButton,
+                          "(el) => el.getAnimations().length > 0")));
+}

@@ -11,7 +11,7 @@
 namespace blink {
 
 LayoutCustom::LayoutCustom(Element* element)
-    : LayoutNGBlockFlow(element), state_(kUnloaded) {
+    : LayoutBlockFlow(element), state_(kUnloaded) {
   DCHECK(element);
 }
 
@@ -20,7 +20,7 @@ void LayoutCustom::AddChild(LayoutObject* new_child,
   // Only use the block-flow AddChild logic when we are unloaded, i.e. we
   // should behave exactly like a block-flow.
   if (state_ == kUnloaded) {
-    LayoutNGBlockFlow::AddChild(new_child, before_child);
+    LayoutBlockFlow::AddChild(new_child, before_child);
     return;
   }
   LayoutBlock::AddChild(new_child, before_child);
@@ -30,14 +30,16 @@ void LayoutCustom::RemoveChild(LayoutObject* child) {
   // Only use the block-flow RemoveChild logic when we are unloaded, i.e. we
   // should behave exactly like a block-flow.
   if (state_ == kUnloaded) {
-    LayoutNGBlockFlow::RemoveChild(child);
+    LayoutBlockFlow::RemoveChild(child);
     return;
   }
   LayoutBlock::RemoveChild(child);
 }
 
-void LayoutCustom::StyleDidChange(StyleDifference diff,
-                                  const ComputedStyle* old_style) {
+void LayoutCustom::StyleDidChange(
+    StyleDifference diff,
+    const ComputedStyle* old_style,
+    const StyleChangeContext& style_change_context) {
   if (state_ == kUnloaded) {
     const AtomicString& name = StyleRef().DisplayLayoutCustomName();
     LayoutWorklet* worklet = LayoutWorklet::From(*GetDocument().domWindow());
@@ -62,8 +64,8 @@ void LayoutCustom::StyleDidChange(StyleDifference diff,
     SetChildrenInline(false);
 
   // TODO(ikilpatrick): Investigate reducing the properties which
-  // LayoutNGBlockFlow::StyleDidChange invalidates upon. (For example margins).
-  LayoutNGBlockFlow::StyleDidChange(diff, old_style);
+  // LayoutBlockFlow::StyleDidChange invalidates upon. (For example margins).
+  LayoutBlockFlow::StyleDidChange(diff, old_style, style_change_context);
 }
 
 }  // namespace blink

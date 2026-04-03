@@ -17,23 +17,22 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>  // NOLINT
+#include <sstream>
 #include <string>
 #include <string_view>
-#include <thread>  //NOLINT
 #include <vector>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "absl/container/flat_hash_map.h"
-#include "absl/log/check.h"
-#include "absl/log/log.h"
 #include "./centipede/binary_info.h"
-#include "./centipede/logging.h"
 #include "./centipede/pc_info.h"
 #include "./centipede/symbol_table.h"
-#include "./centipede/test_util.h"
+#include "./centipede/thread_pool.h"
+#include "./common/logging.h"
+#include "./common/test_util.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
 // Mock CFTable representing the following cfg:
 //    1
@@ -86,17 +85,24 @@ TEST(CFTable, MakeCfgFromCfTable) {
     EXPECT_TRUE(cfg.GetSuccessors(4).empty());
   }
 
-  CHECK_EQ(cfg.GetPcIndex(1), 0);
-  CHECK_EQ(cfg.GetPcIndex(2), 1);
-  CHECK_EQ(cfg.GetPcIndex(3), 2);
-  CHECK_EQ(cfg.GetPcIndex(4), 3);
+  FUZZTEST_CHECK_EQ(cfg.GetPcIndex(1), 0);
+  FUZZTEST_CHECK_EQ(cfg.GetPcIndex(2), 1);
+  FUZZTEST_CHECK_EQ(cfg.GetPcIndex(3), 2);
+  FUZZTEST_CHECK_EQ(cfg.GetPcIndex(4), 3);
 
   EXPECT_TRUE(cfg.BlockIsFunctionEntry(0));
   EXPECT_FALSE(cfg.BlockIsFunctionEntry(1));
   EXPECT_FALSE(cfg.BlockIsFunctionEntry(2));
   EXPECT_FALSE(cfg.BlockIsFunctionEntry(3));
 
-  CHECK_EQ(cfg.GetCyclomaticComplexity(1), 2);
+  FUZZTEST_CHECK_EQ(cfg.GetCyclomaticComplexity(1), 2);
+}
+
+TEST(CFTable, SerializesAndDeserializesCfTable) {
+  std::stringstream stream;
+  WriteCfTable(g_cf_table, stream);
+  const CFTable cf_table = ReadCfTable(stream);
+  EXPECT_EQ(cf_table, g_cf_table);
 }
 
 TEST(FunctionComplexity, ComputeFuncComplexity) {
@@ -148,7 +154,7 @@ TEST(ControlFlowGraph, LazyReachability) {
   cfg.InitializeControlFlowGraph(g_cf_table, g_pc_table);
   EXPECT_NE(cfg.size(), 0);
 
-  auto rt = [&]() {
+  auto rt = [&cfg]() {
     for (int i = 0; i < 10; ++i) {
       cfg.LazyGetReachabilityForPc(1);
       cfg.LazyGetReachabilityForPc(2);
@@ -166,10 +172,12 @@ TEST(ControlFlowGraph, LazyReachability) {
     EXPECT_THAT(reach4, testing::ElementsAre(4));
   };
 
-  std::thread t1(rt), t2(rt), t3(rt);
-  t1.join();
-  t2.join();
-  t3.join();
+  {
+    ThreadPool threads{3};
+    threads.Schedule(rt);
+    threads.Schedule(rt);
+    threads.Schedule(rt);
+  }  // The threads join here.
 }
 
 // Returns path to test_fuzz_target.
@@ -195,9 +203,9 @@ TEST(CFTable, GetCfTable) {
       target_path, GetObjDumpPath(), GetLLVMSymbolizerPath(),
       GetTestTempDir(test_info_->name()).string());
   const auto &cf_table = binary_info.cf_table;
-  LOG(INFO) << VV(target_path) << VV(tmp_path1) << VV(cf_table.size());
+  FUZZTEST_LOG(INFO) << VV(target_path) << VV(tmp_path1) << VV(cf_table.size());
   if (cf_table.empty()) {
-    LOG(INFO) << "__sancov_cfs is empty.";
+    FUZZTEST_LOG(INFO) << "__sancov_cfs is empty.";
     // TODO(ussuri): This should be removed once OSS clang supports
     //  control-flow.
     GTEST_SKIP();
@@ -205,7 +213,7 @@ TEST(CFTable, GetCfTable) {
 
   ASSERT_FALSE(
       std::filesystem::exists(tmp_path1.c_str()));  // tmp_path1 was deleted.
-  LOG(INFO) << VV(cf_table.size());
+  FUZZTEST_LOG(INFO) << VV(cf_table.size());
 
   const auto &pc_table = binary_info.pc_table;
   EXPECT_FALSE(binary_info.uses_legacy_trace_pc_instrumentation);
@@ -294,7 +302,7 @@ static void SymbolizeBinary(std::string_view test_dir,
   for (size_t i = 0; i < symbols.size(); i++) {
     bool is_func_entry = pc_table[i].has_flag(PCInfo::kFuncEntry);
     if (is_func_entry) {
-      LOG(INFO) << symbols.full_description(i);
+      FUZZTEST_LOG(INFO) << symbols.full_description(i);
     }
     single_edge_func_num_edges += symbols.func(i) == "SingleEdgeFunc";
     multi_edge_func_num_edges += symbols.func(i) == "MultiEdgeFunc";
@@ -304,7 +312,7 @@ static void SymbolizeBinary(std::string_view test_dir,
       has_llvm_fuzzer_test_one_input = true;
       EXPECT_THAT(
           symbols.location(i),
-          testing::HasSubstr("centipede/testing/test_fuzz_target.cc:70"));
+          testing::HasSubstr("centipede/testing/test_fuzz_target.cc:73"));
     }
   }
   EXPECT_TRUE(has_llvm_fuzzer_test_one_input);
@@ -328,4 +336,4 @@ TEST(PCTable, GetPcTableFromBinary_And_SymbolTable_TracePC) {
 
 }  // namespace
 
-}  // namespace centipede
+}  // namespace fuzztest::internal

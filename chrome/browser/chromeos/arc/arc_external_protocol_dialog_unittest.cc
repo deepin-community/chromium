@@ -6,19 +6,20 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller_impl.h"
 #include "chrome/browser/chromeos/arc/arc_web_contents_data.h"
 #include "chrome/browser/sharing/click_to_call/click_to_call_ui_controller.h"
-#include "chrome/browser/sharing/features.h"
-#include "chrome/browser/sharing/mock_sharing_service.h"
-#include "chrome/browser/sharing/proto/click_to_call_message.pb.h"
-#include "chrome/browser/sharing/proto/sharing_message.pb.h"
 #include "chrome/browser/sharing/sharing_service_factory.h"
-#include "chrome/browser/sharing/sharing_target_device_info.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
-#include "components/arc/common/intent_helper/arc_intent_helper_mojo_delegate.h"
-#include "components/arc/common/intent_helper/arc_intent_helper_package.h"
-#include "components/arc/common/test/fake_arc_icon_cache.h"
-#include "components/arc/common/test/fake_arc_intent_helper_mojo.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_mojo_delegate.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_package.h"
+#include "chromeos/ash/experiences/arc/test/fake_arc_icon_cache.h"
+#include "chromeos/ash/experiences/arc/test/fake_arc_intent_helper_mojo.h"
+#include "components/sharing_message/features.h"
+#include "components/sharing_message/mock_sharing_service.h"
+#include "components/sharing_message/proto/click_to_call_message.pb.h"
+#include "components/sharing_message/proto/sharing_message.pb.h"
+#include "components/sharing_message/sharing_target_device_info.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -50,12 +51,16 @@ class ArcExternalProtocolDialogTestUtils : public BrowserWithTestWindowTest {
 
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
+    browser_controller_.emplace();
     arc_icon_cache_ = std::make_unique<FakeArcIconCache>();
     delegate_provider_ =
         std::make_unique<ArcIconCacheDelegateProvider>(arc_icon_cache_.get());
   }
 
-  void TearDown() override { BrowserWithTestWindowTest::TearDown(); }
+  void TearDown() override {
+    browser_controller_.reset();
+    BrowserWithTestWindowTest::TearDown();
+  }
 
  protected:
   void CreateTab(bool started_from_arc) {
@@ -90,6 +95,7 @@ class ArcExternalProtocolDialogTestUtils : public BrowserWithTestWindowTest {
   base::test::ScopedFeatureList features_{kClickToCall};
   // Keep only one |WebContents| at a time.
   raw_ptr<content::WebContents, DanglingUntriaged> web_contents_;
+  std::optional<ash::BrowserControllerImpl> browser_controller_;
   std::unique_ptr<ArcIconCacheDelegate> arc_icon_cache_;
   std::unique_ptr<ArcIconCacheDelegateProvider> delegate_provider_;
 };
@@ -1013,7 +1019,7 @@ TEST_F(ArcExternalProtocolDialogTestUtils, TestSelectDeviceForTelLink) {
 
   GURL phone_number("tel:073%2099%209999%2099");
 
-  chrome_browser_sharing::SharingMessage sharing_message;
+  components_sharing_message::SharingMessage sharing_message;
   sharing_message.mutable_click_to_call_message()->set_phone_number(
       phone_number.GetContent());
   EXPECT_CALL(*sharing_service,

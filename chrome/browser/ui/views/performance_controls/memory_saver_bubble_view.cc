@@ -4,23 +4,26 @@
 
 #include "chrome/browser/ui/views/performance_controls/memory_saver_bubble_view.h"
 
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/performance_controls/memory_saver_bubble_delegate.h"
 #include "chrome/browser/ui/performance_controls/memory_saver_bubble_observer.h"
 #include "chrome/browser/ui/performance_controls/memory_saver_chip_tab_helper.h"
 #include "chrome/browser/ui/performance_controls/memory_saver_utils.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
+#include "chrome/browser/ui/views/page_action/page_action_view.h"
 #include "chrome/browser/ui/views/performance_controls/memory_saver_resource_view.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/user_tuning/prefs.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/signin/public/base/signin_buildflags.h"
@@ -45,8 +48,7 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(MemorySaverBubbleView,
 
 namespace {
 // The lower limit of memory usage that we would display to the user in bytes.
-// This value is the equivalent of 10MB.
-constexpr uint64_t kMemoryUsageThresholdInBytes = 10 * 1024 * 1024;
+constexpr base::ByteSize kMemoryUsageThreshold = base::MiBU(10);
 
 void AddBubbleBodyText(
     ui::DialogModel::Builder* dialog_model_builder,
@@ -89,7 +91,7 @@ void AddCancelButton(ui::DialogModel::Builder* dialog_model_builder,
 // static
 views::BubbleDialogModelHost* MemorySaverBubbleView::ShowBubble(
     Browser* browser,
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     MemorySaverBubbleObserver* observer) {
   auto bubble_delegate_unique =
       std::make_unique<MemorySaverBubbleDelegate>(browser, observer);
@@ -110,8 +112,8 @@ views::BubbleDialogModelHost* MemorySaverBubbleView::ShowBubble(
                        .SetLabel(l10n_util::GetStringUTF16(IDS_OK))
                        .SetId(kMemorySaverDialogOkButton));
 
-  const uint64_t memory_savings =
-      memory_saver::GetDiscardedMemorySavingsInBytes(web_contents);
+  const base::ByteSize memory_savings =
+      memory_saver::GetDiscardedMemorySavings(web_contents);
 
   ui::DialogModelLabel::TextReplacement memory_savings_text =
       ui::DialogModelLabel::CreatePlainText(ui::FormatBytes(memory_savings));
@@ -119,7 +121,7 @@ views::BubbleDialogModelHost* MemorySaverBubbleView::ShowBubble(
   Profile* const profile = browser->profile();
   const bool is_guest = profile->IsGuestSession();
 
-  if (memory_savings > kMemoryUsageThresholdInBytes) {
+  if (memory_savings > kMemoryUsageThreshold) {
     dialog_model_builder.AddCustomField(
         std::make_unique<views::BubbleDialogModelHost::CustomView>(
             std::make_unique<MemorySaverResourceView>(memory_savings),
@@ -129,26 +131,25 @@ views::BubbleDialogModelHost* MemorySaverBubbleView::ShowBubble(
 
   AddBubbleBodyText(&dialog_model_builder, IDS_MEMORY_SAVER_DIALOG_BODY);
 
-  if (base::FeatureList::IsEnabled(
-          performance_manager::features::kDiscardExceptionsImprovements) &&
-      !is_guest && !profile->IsIncognitoProfile()) {
+  if (!is_guest && !profile->IsIncognitoProfile()) {
     dialog_model_builder.SetSubtitle(
-        base::UTF8ToUTF16(web_contents->GetURL().host()));
+        base::UTF8ToUTF16(web_contents->GetURL().GetHost()));
     const bool is_site_excluded = performance_manager::user_tuning::prefs::
         IsSiteInTabDiscardExceptionsList(profile->GetPrefs(),
-                                         web_contents->GetURL().host());
+                                         web_contents->GetURL().GetHost());
     AddCancelButton(&dialog_model_builder, bubble_delegate, is_site_excluded);
   }
 
   auto dialog_model = dialog_model_builder.Build();
 
   auto bubble_unique = std::make_unique<views::BubbleDialogModelHost>(
-      std::move(dialog_model), anchor_view, views::BubbleBorder::TOP_RIGHT);
+      std::move(dialog_model), anchor, views::BubbleBorder::TOP_RIGHT);
   auto* bubble = bubble_unique.get();
-  bubble->SetHighlightedButton(
-      BrowserView::GetBrowserViewForBrowser(browser)
-          ->toolbar_button_provider()
-          ->GetPageActionIconView(PageActionIconType::kMemorySaver));
+  auto* const toolbar_button_provider =
+      BrowserView::GetBrowserViewForBrowser(browser)->toolbar_button_provider();
+  views::Button* highlighted_button =
+      toolbar_button_provider->GetPageActionView(kActionShowMemorySaverChip);
+  bubble->SetHighlightedButton(highlighted_button);
 
   views::Widget* const widget =
       views::BubbleDialogDelegate::CreateBubble(std::move(bubble_unique));

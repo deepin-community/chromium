@@ -4,18 +4,22 @@
 
 #include "content/public/test/network_service_test_helper.h"
 
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/environment.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/field_trial.h"
 #include "base/process/process.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/task/current_thread.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -55,6 +59,7 @@
 #include "services/network/network_service.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/network_service_buildflags.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/network_change_manager.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/network_service_test.mojom.h"
@@ -87,8 +92,9 @@ STATIC_ASSERT_ENUM(
 
 void CrashResolveHost(const std::string& host_to_crash,
                       const std::string& host) {
-  if (host_to_crash == host)
+  if (host_to_crash == host) {
     base::Process::TerminateCurrentProcessImmediately(1);
+  }
 }
 
 class SimpleCacheEntry : public network::mojom::SimpleCacheEntry {
@@ -112,7 +118,7 @@ class SimpleCacheEntry : public network::mojom::SimpleCacheEntry {
 
     auto data_to_pass =
         base::MakeRefCounted<net::IOBufferWithSize>(data.size());
-    memcpy(data_to_pass->data(), data.data(), data.size());
+    UNSAFE_TODO(memcpy(data_to_pass->data(), data.data(), data.size()));
     int rv = entry_->WriteData(index, offset, data_to_pass.get(), data.size(),
                                base::BindOnce(&SimpleCacheEntry::OnDataWritten,
                                               weak_factory_.GetWeakPtr(),
@@ -161,7 +167,7 @@ class SimpleCacheEntry : public network::mojom::SimpleCacheEntry {
 
     auto data_to_pass =
         base::MakeRefCounted<net::IOBufferWithSize>(data.size());
-    memcpy(data_to_pass->data(), data.data(), data.size());
+    UNSAFE_TODO(memcpy(data_to_pass->data(), data.data(), data.size()));
     int rv =
         entry_->WriteSparseData(offset, data_to_pass.get(), data.size(),
                                 base::BindOnce(&SimpleCacheEntry::OnDataWritten,
@@ -220,7 +226,7 @@ class SimpleCacheEntry : public network::mojom::SimpleCacheEntry {
       return;
     }
     std::vector<uint8_t> data(result);
-    memcpy(data.data(), buffer->data(), result);
+    UNSAFE_TODO(memcpy(data.data(), buffer->data(), result));
     std::move(callback).Run(data, result);
   }
 
@@ -423,16 +429,13 @@ class SimpleCache : public network::mojom::SimpleCache {
 
 class NetworkServiceTestHelper::NetworkServiceTestImpl
     : public network::mojom::NetworkServiceTest,
-      public base::CurrentThread::DestructionObserver {
+      public base::CurrentThread::DestructionObserver,
+      public base::MemoryPressureListener {
  public:
-  NetworkServiceTestImpl()
-      : test_host_resolver_(new TestHostResolver()),
-        memory_pressure_listener_(
-            FROM_HERE,
-            base::DoNothing(),
-            base::BindRepeating(&NetworkServiceTestHelper::
-                                    NetworkServiceTestImpl::OnMemoryPressure,
-                                base::Unretained(this))) {
+  NetworkServiceTestImpl() : test_host_resolver_(new TestHostResolver()) {
+    memory_pressure_listener_registration_.emplace(
+        base::MemoryPressureListenerTag::kTest, this);
+
     if (base::CommandLine::ForCurrentProcess()->HasSwitch(
             switches::kUseMockCertVerifierForTesting)) {
       mock_cert_verifier_ = std::make_unique<net::MockCertVerifier>();
@@ -494,11 +497,10 @@ class NetworkServiceTestHelper::NetworkServiceTestImpl
     std::move(callback).Run();
   }
 
-  void SimulateNetworkChange(network::mojom::ConnectionType type,
+  void SimulateNetworkChange(net::NetworkChangeNotifier::ConnectionType type,
                              SimulateNetworkChangeCallback callback) override {
     DCHECK(!net::NetworkChangeNotifier::CreateIfNeeded());
-    net::NetworkChangeNotifier::NotifyObserversOfNetworkChangeForTests(
-        net::NetworkChangeNotifier::ConnectionType(type));
+    net::NetworkChangeNotifier::NotifyObserversOfNetworkChangeForTests(type);
     std::move(callback).Run();
   }
 
@@ -530,7 +532,7 @@ class NetworkServiceTestHelper::NetworkServiceTestImpl
   void MockCertVerifierSetDefaultResult(
       int32_t default_result,
       MockCertVerifierSetDefaultResultCallback callback) override {
-    // TODO(crbug.com/1377734): Since testing/variations/
+    // TODO(crbug.com/40243688): Since testing/variations/
     // fieldtrial_testing_config.json changes the command line flags after
     // ContentBrowserTest::SetUpCommandLine() and NetworkServiceTest
     // instantiation, MockCertVerifierSetDefaultResult can be called without
@@ -557,20 +559,12 @@ class NetworkServiceTestHelper::NetworkServiceTestImpl
     std::move(callback).Run();
   }
 
-  void SetRequireCT(RequireCT required,
-                    SetRequireCTCallback callback) override {
-    net::TransportSecurityState::SetRequireCTForTesting(
-        required == NetworkServiceTest::RequireCT::REQUIRE);
-    std::move(callback).Run();
-  }
-
-  void SetTransportSecurityStateSource(
-      uint16_t reporting_port,
-      SetTransportSecurityStateSourceCallback callback) override {
-    if (reporting_port) {
+  void SetTransportSecurityStateTestSource(
+      bool enable_unittest_source,
+      SetTransportSecurityStateTestSourceCallback callback) override {
+    if (enable_unittest_source) {
       transport_security_state_source_ =
-          std::make_unique<net::ScopedTransportSecurityStateSource>(
-              reporting_port);
+          std::make_unique<net::ScopedTransportSecurityStateSource>();
     } else {
       transport_security_state_source_.reset();
     }
@@ -637,9 +631,8 @@ class NetworkServiceTestHelper::NetworkServiceTestImpl
   void GetEnvironmentVariableValue(
       const std::string& name,
       GetEnvironmentVariableValueCallback callback) override {
-    std::string value;
-    base::Environment::Create()->GetVar(name, &value);
-    std::move(callback).Run(value);
+    std::move(callback).Run(
+        base::Environment::Create()->GetVar(name).value_or(std::string()));
   }
 
   void Log(const std::string& message, LogCallback callback) override {
@@ -721,6 +714,7 @@ class NetworkServiceTestHelper::NetworkServiceTestImpl
         base::MakeRefCounted<network::MojoBackendFileOperationsFactory>(
             std::move(factory)),
         path, 64 * 1024 * 1024, reset_mode, net::NetLog::Get(),
+        /*cache_encryption_delegate=*/nullptr,
         base::BindOnce(&NetworkServiceTestImpl::OnCacheCreated,
                        weak_factory_.GetWeakPtr(), std::move(callback)));
     DCHECK_EQ(result.net_error, net::ERR_IO_PENDING);
@@ -729,13 +723,14 @@ class NetworkServiceTestHelper::NetworkServiceTestImpl
   void MakeRequestToServer(network::TransferableSocket transferred,
                            const net::IPEndPoint& endpoint,
                            MakeRequestToServerCallback callback) override {
-    net::TCPSocket socket(nullptr, nullptr, net::NetLogSource());
-    socket.AdoptConnectedSocket(transferred.TakeSocket(), endpoint);
+    std::unique_ptr<net::TCPSocket> socket =
+        net::TCPSocket::Create(nullptr, nullptr, net::NetLogSource());
+    socket->AdoptConnectedSocket(transferred.TakeSocket(), endpoint);
     const std::string kRequest("GET / HTTP/1.0\r\n\r\n");
     auto io_buffer = base::MakeRefCounted<net::StringIOBuffer>(kRequest);
 
-    int rv = socket.Write(io_buffer.get(), io_buffer->size(), base::DoNothing(),
-                          TRAFFIC_ANNOTATION_FOR_TESTS);
+    int rv = socket->Write(io_buffer.get(), io_buffer->size(),
+                           base::DoNothing(), TRAFFIC_ANNOTATION_FOR_TESTS);
     // For purposes of tests, this IPC only supports sync Write calls.
     DCHECK_NE(net::ERR_IO_PENDING, rv);
     std::move(callback).Run(rv == static_cast<int>(kRequest.size()));
@@ -793,9 +788,36 @@ class NetworkServiceTestHelper::NetworkServiceTestImpl
     std::move(callback).Run(allow_gssapi_library_load);
   }
 
+#if BUILDFLAG(IS_WIN)
+  void DisableExclusiveCookieDatabaseLockingForTesting(
+      DisableExclusiveCookieDatabaseLockingForTestingCallback callback)
+      override {
+    network::NetworkService::GetNetworkServiceForTesting()
+        ->disable_exclusive_cookie_database_locking_for_testing();
+    std::move(callback).Run();
+  }
+#endif  // BUILDFLAG(IS_WIN)
+
+  void IsHappyEyeballsV3Enabled(
+      IsHappyEyeballsV3EnabledCallback callback) override {
+    const bool enabled = network::NetworkService::GetNetworkServiceForTesting()
+                             ->host_resolver_manager()
+                             ->IsHappyEyeballsV3Enabled();
+    std::move(callback).Run(enabled);
+  }
+
+#if BUILDFLAG(IS_MAC)
+  void SetUseMockURLSessionURLLoaderForTesting(
+      bool use_mock_url_session_url_loader) override {
+    network::NetworkService::GetNetworkServiceForTesting()
+        ->SetUseMockURLSessionURLLoaderForTesting(
+            use_mock_url_session_url_loader);
+  }
+#endif
+
  private:
   void OnMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level) {
+      base::MemoryPressureLevel memory_pressure_level) override {
     latest_memory_pressure_level_ = memory_pressure_level;
   }
 
@@ -824,10 +846,10 @@ class NetworkServiceTestHelper::NetworkServiceTestImpl
   std::unique_ptr<net::MockCertVerifier> mock_cert_verifier_;
   std::unique_ptr<net::ScopedTransportSecurityStateSource>
       transport_security_state_source_;
-  base::MemoryPressureListener memory_pressure_listener_;
-  base::MemoryPressureListener::MemoryPressureLevel
-      latest_memory_pressure_level_ =
-          base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE;
+  std::optional<base::MemoryPressureListenerRegistration>
+      memory_pressure_listener_registration_;
+  base::MemoryPressureLevel latest_memory_pressure_level_ =
+      base::MEMORY_PRESSURE_LEVEL_NONE;
   int write_result_;
   std::unique_ptr<disk_cache::Backend> disk_cache_backend_;
 

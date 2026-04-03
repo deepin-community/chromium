@@ -7,8 +7,9 @@
 #include <string_view>
 
 #include "base/logging.h"
-#include "build/chromeos_buildflags.h"
 #include "build/config/chromebox_for_meetings/buildflags.h"
+#include "build/config/cuttlefish/buildflags.h"
+#include "build/config/squid/buildflags.h"
 #include "chrome/browser/ash/login/demo_mode/demo_setup_controller.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/browser_process.h"
@@ -26,6 +27,9 @@ const char EnrollmentRequisitionManager::kNoRequisition[] = "none";
 const char EnrollmentRequisitionManager::kRemoraRequisition[] = "remora";
 const char EnrollmentRequisitionManager::kSharkRequisition[] = "shark";
 const char EnrollmentRequisitionManager::kDemoRequisition[] = "cros-demo-mode";
+const char EnrollmentRequisitionManager::kCuttlefishRequisition[] =
+    "cuttlefish";
+const char EnrollmentRequisitionManager::kSquidRequisition[] = "squid";
 
 // static
 void EnrollmentRequisitionManager::Initialize() {
@@ -83,7 +87,7 @@ std::string EnrollmentRequisitionManager::GetDeviceRequisition() {
 // static
 void EnrollmentRequisitionManager::SetDeviceRequisition(
     const std::string& requisition) {
-  // TODO(crbug.com/1271134): Logging as "WARNING" to make sure it's preserved
+  // TODO(crbug.com/40805389): Logging as "WARNING" to make sure it's preserved
   // in the logs.
   LOG(WARNING) << "SetDeviceRequisition " << requisition;
 
@@ -119,6 +123,22 @@ bool EnrollmentRequisitionManager::IsMeetDevice() {
 #else
   return IsRemoraRequisition();
 #endif  // BUILDFLAG(PLATFORM_CFM)
+}
+
+bool EnrollmentRequisitionManager::IsCuttlefishDevice() {
+#if BUILDFLAG(PLATFORM_CUTTLEFISH)
+  return true;
+#else
+  return false;
+#endif  // BUILDFLAG(PLATFORM_CUTTLEFISH)
+}
+
+bool EnrollmentRequisitionManager::IsSquidDevice() {
+#if BUILDFLAG(PLATFORM_SQUID)
+  return true;
+#else
+  return false;
+#endif  // BUILDFLAG(PLATFORM_SQUID)
 }
 
 // static

@@ -8,7 +8,6 @@
 #include <optional>
 
 #include "base/containers/flat_map.h"
-#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "components/url_pattern_index/url_pattern_index.h"
 #include "content/public/browser/global_routing_id.h"
@@ -40,6 +39,7 @@ struct RequestParams {
   RequestParams(
       const GURL& url,
       const url::Origin& initiator,
+      const url::Origin& top_origin,
       const api::declarative_net_request::ResourceType request_type,
       const api::declarative_net_request::RequestMethod request_method,
       int tab_id,
@@ -67,12 +67,15 @@ struct RequestParams {
   url_pattern_index::UrlPatternIndexMatcher::EmbedderConditionsMatcher
       embedder_conditions_matcher;
 
-  // A map from CompositeMatcher to the priority of its highest priority
-  // matching allow or allowAllRequests rule if there is one, or std::nullopt
-  // otherwise. Used as a cache to prevent additional calls to
-  // GetBeforeRequestAction.
-  mutable base::flat_map<const CompositeMatcher*, std::optional<uint64_t>>
-      allow_rule_max_priority;
+  // A map from an extension ID to its CompositeMatcher's highest priority
+  // matching allow or allowAllRequests rule (for the request associated with
+  // this instance). Used as a cache to prevent additional calls to GetAction.
+  // - If there is no entry for an extension ID: the extension's rulesets have
+  // not matched against this request yet.
+  // - If the entry for the extension ID is nullopt: the extension has no
+  // matching allow/allowAllRequest rules for this request.
+  mutable base::flat_map<ExtensionId, std::optional<RequestAction>>
+      max_priority_allow_action;
 
   // Lower cased url, used for regex matching. Cached for performance.
   mutable std::optional<std::string> lower_cased_url_spec;

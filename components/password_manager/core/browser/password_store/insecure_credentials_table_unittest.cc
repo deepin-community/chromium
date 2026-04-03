@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <memory>
-
 #include "components/password_manager/core/browser/password_store/insecure_credentials_table.h"
+
+#include <memory>
 
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
@@ -13,10 +13,11 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "build/build_config.h"
-#include "components/os_crypt/sync/os_crypt_mocker.h"
-#include "components/password_manager/core/browser/password_store/login_database.h"
+#include "components/os_crypt/async/browser/test_utils.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/login_database.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "sql/database.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -52,27 +53,26 @@ class InsecureCredentialsTableTest : public testing::Test {
  protected:
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-    OSCryptMocker::SetUp();
+    test_oscrypt_async_ = os_crypt_async::GetTestOSCryptAsyncForTesting(
+        /*is_sync_for_unittests=*/true);
     ReloadDatabase();
   }
 
-  void TearDown() override {
-    login_db_.reset();
-    OSCryptMocker::TearDown();
-  }
+  void TearDown() override { login_db_.reset(); }
 
   void ReloadDatabase() {
     base::FilePath file = temp_dir_.GetPath().AppendASCII("TestDatabase");
     login_db_ = std::make_unique<LoginDatabase>(file, IsAccountStore(false));
-    ASSERT_TRUE(login_db_->Init());
+    ASSERT_TRUE(login_db_->Init(base::NullCallback(), CreateEncryptor()));
   }
 
   std::vector<int> GetParentIds(
       base::span<const InsecureCredential> credentials) {
     std::vector<int> ids;
     ids.reserve(credentials.size());
-    for (const auto& credential : credentials)
+    for (const auto& credential : credentials) {
       ids.push_back(credential.parent_key.value());
+    }
     return ids;
   }
 
@@ -83,10 +83,19 @@ class InsecureCredentialsTableTest : public testing::Test {
   }
   LoginDatabase* login_db() { return login_db_.get(); }
 
+  os_crypt_async::Encryptor CreateEncryptor() {
+    base::test::TestFuture<os_crypt_async::Encryptor> future;
+
+    test_oscrypt_async_->GetInstance(future.GetCallback(),
+                                     os_crypt_async::Encryptor::Option::kNone);
+    return future.Take();
+  }
+
  private:
   base::ScopedTempDir temp_dir_;
   // Required for iOS.
   base::test::TaskEnvironment task_environment_;
+  std::unique_ptr<os_crypt_async::OSCryptAsync> test_oscrypt_async_;
   std::unique_ptr<LoginDatabase> login_db_;
   InsecureCredential test_data_{
       kTestDomain,           kUsername,      base::Time::FromTimeT(1),

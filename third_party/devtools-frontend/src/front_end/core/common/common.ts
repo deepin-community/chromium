@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,16 +12,17 @@ import * as ColorUtils from './ColorUtils.js';
 import * as Console from './Console.js';
 import * as Debouncer from './Debouncer.js';
 import * as EventTarget from './EventTarget.js';
+import * as Gzip from './Gzip.js';
 import * as JavaScriptMetaData from './JavaScriptMetaData.js';
 import * as Lazy from './Lazy.js';
-import * as Linkifier from './Linkifier.js';
+import * as MapWithDefault from './MapWithDefault.js';
 import * as Mutex from './Mutex.js';
 import * as ObjectWrapper from './Object.js';
 import * as ParsedURL from './ParsedURL.js';
 import * as Progress from './Progress.js';
-import * as QueryParamHandler from './QueryParamHandler.js';
 import * as ResolverBase from './ResolverBase.js';
 import * as ResourceType from './ResourceType.js';
+import * as ReturnToPanel from './ReturnToPanel.js';
 import * as Revealer from './Revealer.js';
 import * as Runnable from './Runnable.js';
 import * as SegmentedRange from './SegmentedRange.js';
@@ -32,8 +33,6 @@ import * as StringOutputStream from './StringOutputStream.js';
 import * as TextDictionary from './TextDictionary.js';
 import * as Throttler from './Throttler.js';
 import * as Trie from './Trie.js';
-import * as WasmDisassembly from './WasmDisassembly.js';
-import * as Worker from './Worker.js';
 
 /*
  * This is re-exported here because we moved UIString into platform from
@@ -41,38 +40,36 @@ import * as Worker from './Worker.js';
  * update all references to `Common.UIString` to `Platform.UIString`.
  */
 export {UIString} from '../platform/platform.js';
-
 export {
   App,
   AppProvider,
   Base64,
   CharacterIdMap,
   Color,
-  ColorUtils,
   ColorConverter,
+  ColorUtils,
   Console,
   Debouncer,
   EventTarget,
+  Gzip,
   JavaScriptMetaData,
   Lazy,
-  Linkifier,
+  MapWithDefault,
   Mutex,
   ObjectWrapper,
   ParsedURL,
   Progress,
-  QueryParamHandler,
   ResolverBase,
   ResourceType,
+  ReturnToPanel,
   Revealer,
   Runnable,
   SegmentedRange,
-  Settings,
   SettingRegistration,
+  Settings,
   SimpleHistoryManager,
   StringOutputStream,
   TextDictionary,
   Throttler,
   Trie,
-  Worker,
-  WasmDisassembly,
 };

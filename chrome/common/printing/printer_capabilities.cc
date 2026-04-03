@@ -9,11 +9,9 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/scoped_blocking_call.h"
@@ -21,7 +19,6 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/common/printing/printing_buildflags.h"
 #include "components/crash/core/common/crash_keys.h"
 #include "components/device_event_log/device_event_log.h"
@@ -44,9 +41,6 @@
 
 #if BUILDFLAG(PRINT_MEDIA_L10N_ENABLED)
 #include "chrome/common/printing/print_media_l10n.h"
-#if BUILDFLAG(IS_MAC)
-#include "printing/printing_features.h"
-#endif  // BUILDFLAG(IS_MAC)
 #endif  // BUILDFLAG(PRINT_MEDIA_L10N_ENABLED)
 
 namespace printing {
@@ -127,24 +121,18 @@ base::Value AssemblePrinterCapabilities(const std::string& device_name,
     return base::Value();
 
 #if BUILDFLAG(PRINT_MEDIA_L10N_ENABLED)
-  bool populate_paper_names = true;
-#if BUILDFLAG(IS_MAC)
-  // Paper display name localization and vendor ID assignment is intended for
-  // use with the CUPS IPP backend. If the CUPS IPP backend is not enabled,
-  // localization will not properly occur.
-  populate_paper_names =
-      base::FeatureList::IsEnabled(features::kCupsIppPrintingBackend);
-#endif
-  if (populate_paper_names) {
-    PopulateAndSortAllPaperNames(*caps);
-  }
+  // TODO(crbug.com/339188518): Is this needed on Linux? If so, need to add back
+  // the `features::kCupsIppPrintingBackend` check when the
+  // `enable_print_media_l10n` GN variable gets set to true for Linux.
+  PopulateAndSortAllPaperNames(*caps);
 #endif  // BUILDFLAG(PRINT_MEDIA_L10N_ENABLED)
 
 #if BUILDFLAG(IS_CHROMEOS)
   PopulateMediaTypeLocalization(caps->media_types);
 
-  if (!has_secure_protocol)
+  if (!has_secure_protocol) {
     caps->pin_supported = false;
+  }
 
   PopulateAdvancedCapsLocalization(&caps->advanced_capabilities);
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -155,48 +143,47 @@ base::Value AssemblePrinterCapabilities(const std::string& device_name,
 }  // namespace
 
 #if BUILDFLAG(IS_WIN)
-std::string GetUserFriendlyName(const std::string& printer_name) {
+std::string GetUserFriendlyName(std::string_view printer_name) {
   // `printer_name` may be a UNC path like \\printserver\printername.
   if (!base::StartsWith(printer_name, "\\\\",
                         base::CompareCase::INSENSITIVE_ASCII)) {
-    return printer_name;
+    return std::string(printer_name);
   }
 
   // If it is a UNC path, split the "printserver\printername" portion and
   // generate a friendly name, like Windows does.
-  std::string printer_name_trimmed = printer_name.substr(2);
-  std::vector<std::string> tokens = base::SplitString(
+  std::string_view printer_name_trimmed = printer_name.substr(2);
+  std::vector<std::string_view> tokens = base::SplitStringPiece(
       printer_name_trimmed, "\\", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
   if (tokens.size() != 2 || tokens[0].empty() || tokens[1].empty())
-    return printer_name;
+    return std::string(printer_name);
   return l10n_util::GetStringFUTF8(
       IDS_PRINT_PREVIEW_FRIENDLY_WIN_NETWORK_PRINTER_NAME,
       base::UTF8ToUTF16(tokens[1]), base::UTF8ToUTF16(tokens[0]));
 }
 #endif
 
-base::Value::Dict AssemblePrinterSettings(
-    const std::string& device_name,
-    const PrinterBasicInfo& basic_info,
-    bool has_secure_protocol,
-    PrinterSemanticCapsAndDefaults* caps) {
-  base::Value::Dict printer_info;
+base::DictValue AssemblePrinterSettings(const std::string& device_name,
+                                        const PrinterBasicInfo& basic_info,
+                                        bool has_secure_protocol,
+                                        PrinterSemanticCapsAndDefaults* caps) {
+  base::DictValue printer_info;
   printer_info.Set(kSettingDeviceName, device_name);
   printer_info.Set(kSettingPrinterName, basic_info.display_name);
   printer_info.Set(kSettingPrinterDescription, basic_info.printer_description);
 
-  base::Value::Dict options;
+  base::DictValue options;
 
 #if BUILDFLAG(IS_CHROMEOS)
   printer_info.Set(
       kCUPSEnterprisePrinter,
-      base::Contains(basic_info.options, kCUPSEnterprisePrinter) &&
+      basic_info.options.contains(kCUPSEnterprisePrinter) &&
           basic_info.options.at(kCUPSEnterprisePrinter) == kValueTrue);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   printer_info.Set(kSettingPrinterOptions, std::move(options));
 
-  base::Value::Dict printer_info_capabilities;
+  base::DictValue printer_info_capabilities;
   printer_info_capabilities.Set(kPrinter, std::move(printer_info));
   base::Value capabilities =
       AssemblePrinterCapabilities(device_name, has_secure_protocol, caps);
@@ -207,7 +194,7 @@ base::Value::Dict AssemblePrinterSettings(
   return printer_info_capabilities;
 }
 
-base::Value::Dict GetSettingsOnBlockingTaskRunner(
+base::DictValue GetSettingsOnBlockingTaskRunner(
     const std::string& device_name,
     const PrinterBasicInfo& basic_info,
     PrinterSemanticCapsAndDefaults::Papers user_defined_papers,

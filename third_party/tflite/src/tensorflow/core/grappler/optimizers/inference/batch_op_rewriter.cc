@@ -21,6 +21,7 @@ limitations under the License.
 #include "google/protobuf/wrappers.pb.h"
 #include "google/protobuf/map.h"
 #include "google/protobuf/repeated_field.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/strings/escaping.h"
 #include "absl/strings/str_cat.h"
@@ -46,7 +47,7 @@ constexpr char kBatchTimeoutMicrosAttr[] = "batch_timeout_micros";
 constexpr char kAllowedBatchSizesAttr[] = "allowed_batch_sizes";
 constexpr char kMaxEnqueuedBatchesAttr[] = "max_enqueued_batches";
 constexpr char kEnableLargeBatchSplitting[] = "enable_large_batch_splitting";
-constexpr int64 kBoostMicrosNotSet = -1;
+constexpr int64_t kBoostMicrosNotSet = -1;
 
 using BatchOpRewriteFunction = std::function<void(NodeDef* batch_op)>;
 
@@ -60,10 +61,10 @@ using ::tensorflow::grappler::GrapplerItem;
 namespace {
 // Parameters for adaptive batch scheduler only.
 struct AdaptiveBatchSchedulerParams {
-  int32 initial_inflight_batches;
-  int32 min_inflight_batches;
-  int32 max_inflight_batches;
-  int32 batches_to_average_over;
+  int32_t initial_inflight_batches;
+  int32_t min_inflight_batches;
+  int32_t max_inflight_batches;
+  int32_t batches_to_average_over;
   int64_t full_batch_scheduling_boost_micros;
 };
 
@@ -174,7 +175,7 @@ Status BatchOpRewriter::Optimize(Cluster* cluster, const GrapplerItem& item,
   bool asbs_overridden = false;
   if (config_proto_.has_experimental() &&
       config_proto_.experimental().has_session_metadata()) {
-    const string model_name =
+    const std::string model_name =
         config_proto_.experimental().session_metadata().name();
 
     if (!config_.model_scheduler_options().empty()) {
@@ -280,6 +281,34 @@ Status BatchOpRewriter::Optimize(Cluster* cluster, const GrapplerItem& item,
                                                   batch_op);
     });
   }
+
+  if (config_.has_global_prioritization()) {
+    absl::flat_hash_map<std::string, std::string> copy_attrs = {
+        {"max_batch_size", "low_priority_max_batch_size"},
+        {"batch_timeout_micros", "low_priority_batch_timeout_micros"},
+        {"allowed_batch_sizes", "low_priority_allowed_batch_sizes"},
+        {"max_enqueued_batches", "low_priority_max_enqueued_batches"}};
+
+    UpdateBatchOps(optimized_graph, [&](NodeDef* batch_op) {
+      ::tensorflow::graph_transforms::SetNodeAttr(
+          kNumBatchThreadsAttr, config_.global_prioritization().num_threads(),
+          batch_op);
+      ::tensorflow::graph_transforms::SetNodeAttr("mixed_priority_policy",
+                                                  "priority_merge", batch_op);
+
+      // Default queue options for the low priority queue will be copied from
+      // the high priority queue if the model doesn't explicitly set low
+      // priority queue options.
+      for (const auto& [attr_name, low_priority_attr_name] : copy_attrs) {
+        if (batch_op->attr().contains(attr_name) &&
+            !batch_op->attr().contains(low_priority_attr_name)) {
+          ::tensorflow::graph_transforms::SetNodeAttr(
+              low_priority_attr_name, batch_op->attr().at(attr_name), batch_op);
+        }
+      }
+    });
+  }
+
   return absl::OkStatus();
 }
 

@@ -29,6 +29,11 @@ executable("traced") {
   ]
   sources = [ "main.cc" ]
   assert_no_deps = [ "../../../gn:protobuf_lite" ]
+
+  # Abseil is only used in Perfetto via the gRPC/libprotobuf.
+  if (perfetto_build_standalone || is_perfetto_build_generator) {
+    assert_no_deps += [ "../../buildtools:abseil_cpp" ]
+  }
 }
 
 # Contains all the implementation but not the main() entry point. This target
@@ -39,8 +44,8 @@ source_set("service") {
     "../../../include/perfetto/tracing",
   ]
   deps = [
+    ":builtin_producer",
     "../../../gn:default_deps",
-    "../../../protos/perfetto/config/android:zero",
     "../../base",
     "../../base:version",
     "../../tracing/core",
@@ -51,17 +56,37 @@ source_set("service") {
     deps += [ "../../tracing/service:zlib_compressor" ]
   }
 
+  sources = [ "service.cc" ]
+
+  # Abseil is only used in Perfetto via the gRPC/libprotobuf.
+  if (perfetto_build_standalone || is_perfetto_build_generator) {
+    assert_no_deps = [ "../../../buildtools:abseil_cpp" ]
+  }
+}
+
+source_set("builtin_producer") {
+  public_deps = [
+    "../../../include/perfetto/ext/traced",
+    "../../../include/perfetto/tracing",
+  ]
+  deps = [
+    "../../../gn:default_deps",
+    "../../../protos/perfetto/config/android:zero",
+    "../../base",
+    "../../tracing/core",
+    "../../tracing/service:service",
+  ]
+
   sources = [
     "builtin_producer.cc",
     "builtin_producer.h",
-    "service.cc",
   ]
 }
 
 perfetto_unittest_source_set("unittests") {
   testonly = true
   deps = [
-    ":service",
+    ":builtin_producer",
     "../../../gn:default_deps",
     "../../../gn:gtest_and_gmock",
     "../../../protos/perfetto/config/android:cpp",

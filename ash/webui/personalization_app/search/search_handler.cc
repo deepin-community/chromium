@@ -12,7 +12,6 @@
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/personalization_app/enterprise_policy_delegate.h"
 #include "ash/webui/personalization_app/personalization_app_url_constants.h"
-#include "ash/webui/personalization_app/search/search.mojom-forward.h"
 #include "ash/webui/personalization_app/search/search.mojom.h"
 #include "ash/webui/personalization_app/search/search_concept.h"
 #include "ash/webui/personalization_app/search/search_tag_registry.h"
@@ -117,7 +116,6 @@ void SearchHandler::OnLocalSearchDone(
                            &matching_content_id)) {
       NOTREACHED() << "All content ids are expected to be a valid integer: "
                    << local_result.positions.front().content_id;
-      continue;
     }
 
     search_results.push_back(mojom::SearchResult::New(

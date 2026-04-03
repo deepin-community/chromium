@@ -151,7 +151,6 @@ std::string GetStubPolicyFilenamePostfix(
              descriptor.component_id();
   }
   NOTREACHED();
-  return std::string();
 }
 
 // Returns the last part of the stub policy file path consisting of the filename
@@ -180,7 +179,6 @@ base::FilePath GetStubRelativePolicyPath(
     }
     default:
       NOTREACHED();
-      return base::FilePath();
   }
 }
 
@@ -217,7 +215,6 @@ base::FilePath GetStubPolicyFilePath(
     }
     default:
       NOTREACHED();
-      return base::FilePath();
   }
 }
 
@@ -348,7 +345,7 @@ void FakeSessionManagerClient::LoginScreenStorageRetrieve(
     LoginScreenStorageRetrieveCallback callback) {
   // Default value which is checked in tests.
   std::string data = "Test";
-  if (base::Contains(login_screen_storage_, key)) {
+  if (login_screen_storage_.contains(key)) {
     data = login_screen_storage_[key];
   }
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -390,6 +387,9 @@ void FakeSessionManagerClient::StartSessionEx(
   StartSession(cryptohome_id);
 }
 
+void FakeSessionManagerClient::EmitStartedUserSession(
+    const cryptohome::AccountIdentifier& cryptohome_id) {}
+
 void FakeSessionManagerClient::StopSession(
     login_manager::SessionStopReason reason) {
   session_stopped_ = true;
@@ -430,27 +430,9 @@ void FakeSessionManagerClient::StartRemoteDeviceWipe(
   }
 }
 
-void FakeSessionManagerClient::ClearForcedReEnrollmentVpd(
+void FakeSessionManagerClient::ClearBlockDevmodeVpd(
     chromeos::VoidDBusMethodCallback callback) {
-  clear_forced_re_enrollment_vpd_call_count_++;
-  PostReply(FROM_HERE, std::move(callback), true);
-}
-
-void FakeSessionManagerClient::UnblockDevModeForEnrollment(
-    chromeos::VoidDBusMethodCallback callback) {
-  unblock_dev_mode_enrollment_call_count_++;
-  PostReply(FROM_HERE, std::move(callback), true);
-}
-
-void FakeSessionManagerClient::UnblockDevModeForInitialStateDetermination(
-    chromeos::VoidDBusMethodCallback callback) {
-  unblock_dev_mode_init_state_call_count_++;
-  PostReply(FROM_HERE, std::move(callback), true);
-}
-
-void FakeSessionManagerClient::UnblockDevModeForCarrierLock(
-    chromeos::VoidDBusMethodCallback callback) {
-  unblock_dev_mode_carrier_lock_call_count_++;
+  clear_block_devmode_vpd_call_count_++;
   PostReply(FROM_HERE, std::move(callback), true);
 }
 
@@ -476,73 +458,9 @@ void FakeSessionManagerClient::NotifyLockScreenDismissed() {
   screen_is_locked_ = false;
 }
 
-bool FakeSessionManagerClient::BlockingRequestBrowserDataMigration(
-    const cryptohome::AccountIdentifier& cryptohome_id,
-    const std::string& mode) {
-  request_browser_data_migration_called_ = true;
-  request_browser_data_migration_mode_called_ = true;
-  request_browser_data_migration_mode_value_ = mode;
-  return true;
-}
-
-bool FakeSessionManagerClient::BlockingRequestBrowserDataBackwardMigration(
-    const cryptohome::AccountIdentifier& cryptohome_id) {
-  request_browser_data_backward_migration_called_ = true;
-  return true;
-}
-
 void FakeSessionManagerClient::RetrieveActiveSessions(
     ActiveSessionsCallback callback) {
   PostReply(FROM_HERE, std::move(callback), user_sessions_);
-}
-
-void FakeSessionManagerClient::RetrieveDevicePolicy(
-    RetrievePolicyCallback callback) {
-  login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_DEVICE, kEmptyAccountId);
-  RetrievePolicy(descriptor, std::move(callback));
-}
-
-RetrievePolicyResponseType
-FakeSessionManagerClient::BlockingRetrieveDevicePolicy(
-    std::string* policy_out) {
-  login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_DEVICE, kEmptyAccountId);
-  return BlockingRetrievePolicy(descriptor, policy_out);
-}
-
-void FakeSessionManagerClient::RetrievePolicyForUser(
-    const cryptohome::AccountIdentifier& cryptohome_id,
-    RetrievePolicyCallback callback) {
-  login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_USER, cryptohome_id.account_id());
-  RetrievePolicy(descriptor, std::move(callback));
-}
-
-RetrievePolicyResponseType
-FakeSessionManagerClient::BlockingRetrievePolicyForUser(
-    const cryptohome::AccountIdentifier& cryptohome_id,
-    std::string* policy_out) {
-  login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_USER, cryptohome_id.account_id());
-  return BlockingRetrievePolicy(descriptor, policy_out);
-}
-
-void FakeSessionManagerClient::RetrieveDeviceLocalAccountPolicy(
-    const std::string& account_id,
-    RetrievePolicyCallback callback) {
-  login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_DEVICE_LOCAL_ACCOUNT, account_id);
-  RetrievePolicy(descriptor, std::move(callback));
-}
-
-RetrievePolicyResponseType
-FakeSessionManagerClient::BlockingRetrieveDeviceLocalAccountPolicy(
-    const std::string& account_id,
-    std::string* policy_out) {
-  login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_DEVICE_LOCAL_ACCOUNT, account_id);
-  return BlockingRetrievePolicy(descriptor, policy_out);
 }
 
 void FakeSessionManagerClient::RetrievePolicy(
@@ -838,25 +756,23 @@ bool FakeSessionManagerClient::GetFlagsForUser(
   *out_flags_for_user = iter->second.flags;
 
   // Encode feature flags.
-  base::Value::List feature_flag_list;
+  base::ListValue feature_flag_list;
   for (const auto& feature_flag : iter->second.feature_flags) {
     feature_flag_list.Append(feature_flag);
   }
   if (!feature_flag_list.empty()) {
-    std::string encoded;
-    base::JSONWriter::Write(feature_flag_list, &encoded);
+    std::string encoded = base::WriteJson(feature_flag_list).value_or("");
     out_flags_for_user->push_back(base::StringPrintf(
         "--%s=%s", chromeos::switches::kFeatureFlags, encoded.c_str()));
   }
 
   // Encode origin list values.
-  base::Value::Dict origin_list_dict;
+  base::DictValue origin_list_dict;
   for (const auto& entry : iter->second.origin_list_flags) {
     origin_list_dict.Set(entry.first, entry.second);
   }
   if (!origin_list_dict.empty()) {
-    std::string encoded;
-    base::JSONWriter::Write(origin_list_dict, &encoded);
+    std::string encoded = base::WriteJson(origin_list_dict).value_or("");
     out_flags_for_user->push_back(base::StringPrintf(
         "--%s=%s", chromeos::switches::kFeatureFlagsOriginList,
         encoded.c_str()));

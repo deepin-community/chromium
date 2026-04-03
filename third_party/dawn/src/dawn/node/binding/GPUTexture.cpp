@@ -32,7 +32,6 @@
 #include "src/dawn/node/binding/Converter.h"
 #include "src/dawn/node/binding/Errors.h"
 #include "src/dawn/node/binding/GPUTextureView.h"
-#include "src/dawn/node/utils/Debug.h"
 
 namespace wgpu::binding {
 
@@ -42,9 +41,7 @@ namespace wgpu::binding {
 GPUTexture::GPUTexture(wgpu::Device device,
                        const wgpu::TextureDescriptor& desc,
                        wgpu::Texture texture)
-    : device_(std::move(device)),
-      texture_(std::move(texture)),
-      label_(desc.label ? desc.label : "") {}
+    : device_(std::move(device)), texture_(std::move(texture)), label_(CopyLabel(desc.label)) {}
 
 interop::Interface<interop::GPUTextureView> GPUTexture::createView(
     Napi::Env env,
@@ -55,6 +52,7 @@ interop::Interface<interop::GPUTextureView> GPUTexture::createView(
     }
 
     wgpu::TextureViewDescriptor desc{};
+    wgpu::TextureComponentSwizzle swizzle;
     Converter conv(env, device_);
     if (!conv(desc.baseMipLevel, descriptor.baseMipLevel) ||        //
         !conv(desc.mipLevelCount, descriptor.mipLevelCount) ||      //
@@ -62,9 +60,22 @@ interop::Interface<interop::GPUTextureView> GPUTexture::createView(
         !conv(desc.arrayLayerCount, descriptor.arrayLayerCount) ||  //
         !conv(desc.format, descriptor.format) ||                    //
         !conv(desc.dimension, descriptor.dimension) ||              //
-        !conv(desc.aspect, descriptor.aspect) || !conv(desc.label, descriptor.label)) {
+        !conv(desc.aspect, descriptor.aspect) ||                    //
+        !conv(desc.label, descriptor.label) ||                      //
+        !conv(desc.usage, descriptor.usage) ||                      //
+        !conv(swizzle, descriptor.swizzle)) {
         return {};
     }
+
+    wgpu::TextureComponentSwizzleDescriptor swizzle_desc{};
+    // Only pass the swizzle descriptor to Dawn if swizzle is non-default because
+    // the C API will produce validation errors if a chained struct is passed
+    // without its feature being enabled.
+    if (descriptor.swizzle != "rgba") {
+        swizzle_desc.swizzle = swizzle;
+        desc.nextInChain = reinterpret_cast<wgpu::ChainedStruct*>(&swizzle_desc);
+    }
+
     return interop::GPUTextureView::Create<GPUTextureView>(env, desc, texture_.CreateView(&desc));
 }
 
@@ -131,12 +142,31 @@ interop::GPUFlagsConstant GPUTexture::getUsage(Napi::Env env) {
     return result;
 }
 
+std::variant<interop::GPUTextureViewDimension, interop::UndefinedType>
+GPUTexture::getTextureBindingViewDimension(Napi::Env env) {
+    wgpu::TextureViewDimension viewDimension = texture_.GetTextureBindingViewDimension();
+
+    if (viewDimension == wgpu::TextureViewDimension::Undefined) {
+        return interop::UndefinedType{};
+    }
+
+    interop::GPUTextureViewDimension result;
+    Converter conv(env);
+    if (!conv(result, texture_.GetTextureBindingViewDimension())) {
+        Napi::Error::New(env, "Couldn't convert usage to a JavaScript value.")
+            .ThrowAsJavaScriptException();
+        return interop::UndefinedType{};
+    }
+
+    return result;
+}
+
 std::string GPUTexture::getLabel(Napi::Env) {
     return label_;
 }
 
 void GPUTexture::setLabel(Napi::Env, std::string value) {
-    texture_.SetLabel(value.c_str());
+    texture_.SetLabel(std::string_view(value));
     label_ = value;
 }
 

@@ -6,26 +6,42 @@
 
 #include <memory>
 
+#include "base/feature_list.h"
 #include "base/notreached.h"
 #include "chrome/browser/ui/android/context_menu_helper.h"
+#include "components/dom_distiller/core/dom_distiller_features.h"
+#include "components/dom_distiller/core/url_constants.h"
 #include "content/public/browser/context_menu_params.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view_delegate.h"
 
 ChromeWebContentsViewDelegateAndroid::ChromeWebContentsViewDelegateAndroid(
     content::WebContents* web_contents)
-    : web_contents_(web_contents) {
-}
+    : web_contents_(web_contents) {}
 
-ChromeWebContentsViewDelegateAndroid::~ChromeWebContentsViewDelegateAndroid() {
-}
+ChromeWebContentsViewDelegateAndroid::~ChromeWebContentsViewDelegateAndroid() =
+    default;
 
 content::WebDragDestDelegate*
 ChromeWebContentsViewDelegateAndroid::GetDragDestDelegate() {
   // GetDragDestDelegate is a pure virtual method from WebContentsViewDelegate
   // and must have an implementation although android doesn't use it.
   NOTREACHED();
-  return NULL;
+}
+
+bool ChromeWebContentsViewDelegateAndroid::ShouldShowBlurTransitionAnimation(
+    content::NavigationHandle* navigation_handle) {
+  if (!base::FeatureList::IsEnabled(
+          dom_distiller::kReaderModeBlurTransitionAnimation)) {
+    return false;
+  }
+
+  // Check that the navigation is entering or exiting Reading Mode.
+  return navigation_handle->GetURL().SchemeIs(
+             dom_distiller::kDomDistillerScheme) ||
+         web_contents_->GetLastCommittedURL().SchemeIs(
+             dom_distiller::kDomDistillerScheme);
 }
 
 void ChromeWebContentsViewDelegateAndroid::ShowContextMenu(
@@ -33,18 +49,19 @@ void ChromeWebContentsViewDelegateAndroid::ShowContextMenu(
     const content::ContextMenuParams& params) {
   // TODO(dtrainor, kouhei): Give WebView a Populator/delegate so it can use
   // the same context menu code.
-  ContextMenuHelper* helper =
-      ContextMenuHelper::FromWebContents(web_contents_);
-  if (helper)
+  ContextMenuHelper* helper = ContextMenuHelper::FromWebContents(web_contents_);
+  if (helper) {
     helper->ShowContextMenu(render_frame_host, params);
+  }
 }
 
 void ChromeWebContentsViewDelegateAndroid::DismissContextMenu() {
   // ContextMenuHelper is a WebContentsUserData, so it will be the same obj used
   // in #ShowContextMenu().
   ContextMenuHelper* helper = ContextMenuHelper::FromWebContents(web_contents_);
-  if (helper)
+  if (helper) {
     helper->DismissContextMenu();
+  }
 }
 
 std::unique_ptr<content::WebContentsViewDelegate> CreateWebContentsViewDelegate(

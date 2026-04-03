@@ -2,14 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/extensions/api/enterprise_kiosk_input/enterprise_kiosk_input_api.h"
+#include "chrome/common/extensions/api/enterprise_kiosk_input.h"
 
 #include <string>
 #include <vector>
 
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/stringprintf.h"
-#include "chrome/common/extensions/api/enterprise_kiosk_input.h"
+#include "chrome/browser/extensions/api/enterprise_kiosk_input/enterprise_kiosk_input_api.h"
+#include "chrome/browser/extensions/extension_api_unittest.h"
 #include "components/crx_file/id_util.h"
 #include "extensions/browser/api_test_utils.h"
 #include "extensions/browser/api_unittest.h"
@@ -19,7 +20,7 @@
 #include "ui/base/ime/ash/input_method_descriptor.h"
 #include "ui/base/ime/ash/input_method_manager.h"
 #include "ui/base/ime/ash/input_method_util.h"
-#include "ui/base/ime/ash/mock_input_method_manager.h"
+#include "ui/base/ime/ash/mock_input_method_manager_impl.h"
 
 namespace extensions {
 
@@ -41,7 +42,7 @@ std::string GetComponentExtensionImeId(const std::string& layout) {
   return ime_util::GetComponentInputMethodID(ime_util::kXkbExtensionId, layout);
 }
 
-class TestInputMethodManager : public im::MockInputMethodManager {
+class TestInputMethodManager : public im::MockInputMethodManagerImpl {
  public:
   class TestState : public im::MockInputMethodManager::State {
    public:
@@ -120,12 +121,25 @@ class TestInputMethodManager : public im::MockInputMethodManager {
 
 }  // namespace
 
-class EnterpriseKioskInputTest : public extensions::ApiUnitTest {
+class EnterpriseKioskInputTest : public ExtensionApiUnittest {
+ public:
+  void SetUp() override {
+    // Inject InputMethodManager before parent's SetUp, so the injected
+    // instance will be used in the SetUp.
+    TestInputMethodManager::Initialize(new TestInputMethodManager());
+    ExtensionApiUnittest::SetUp();
+  }
+
+  void TearDown() override {
+    ExtensionApiUnittest::TearDown();
+    TestInputMethodManager::Shutdown();
+  }
+
  protected:
-  base::Value::List CreateArgs(const std::string& input_method_id) {
+  base::ListValue CreateArgs(const std::string& input_method_id) {
     api::enterprise_kiosk_input::SetCurrentInputMethodOptions options;
     options.input_method_id = input_method_id;
-    base::Value::List args;
+    base::ListValue args;
     args.Append(options.ToValue());
     return args;
   }
@@ -133,8 +147,6 @@ class EnterpriseKioskInputTest : public extensions::ApiUnitTest {
 
 // Test for API enterprise.kioskInput.setCurrentInputMethod
 TEST_F(EnterpriseKioskInputTest, SetCurrentInputMethodFunctionTest) {
-  TestInputMethodManager::Initialize(new TestInputMethodManager);
-
   scoped_refptr<im::InputMethodManager::State> ime_state =
       im::InputMethodManager::Get()->GetActiveIMEState();
   ASSERT_TRUE(ime_state);
@@ -146,8 +158,7 @@ TEST_F(EnterpriseKioskInputTest, SetCurrentInputMethodFunctionTest) {
     auto function = base::MakeRefCounted<
         EnterpriseKioskInputSetCurrentInputMethodFunction>();
     api_test_utils::RunFunction(function.get(), CreateArgs(kLatamLayout),
-                                browser_context(),
-                                api_test_utils::FunctionMode::kNone);
+                                profile(), api_test_utils::FunctionMode::kNone);
     EXPECT_EQ(function->GetError(), kNoError);
     EXPECT_EQ(GetComponentExtensionImeId(kLatamLayout),
               ime_state->GetCurrentInputMethod().id());
@@ -157,8 +168,7 @@ TEST_F(EnterpriseKioskInputTest, SetCurrentInputMethodFunctionTest) {
     auto function = base::MakeRefCounted<
         EnterpriseKioskInputSetCurrentInputMethodFunction>();
     api_test_utils::RunFunction(function.get(), CreateArgs(kDeLayout),
-                                browser_context(),
-                                api_test_utils::FunctionMode::kNone);
+                                profile(), api_test_utils::FunctionMode::kNone);
     EXPECT_EQ(function->GetError(),
               base::StringPrintf(kErrorMessageTemplate, kDeLayout));
     EXPECT_EQ(GetComponentExtensionImeId(kLatamLayout),
@@ -169,8 +179,7 @@ TEST_F(EnterpriseKioskInputTest, SetCurrentInputMethodFunctionTest) {
     auto function = base::MakeRefCounted<
         EnterpriseKioskInputSetCurrentInputMethodFunction>();
     api_test_utils::RunFunction(function.get(), CreateArgs(kInvalidLayout),
-                                browser_context(),
-                                api_test_utils::FunctionMode::kNone);
+                                profile(), api_test_utils::FunctionMode::kNone);
     EXPECT_EQ(function->GetError(),
               base::StringPrintf(kErrorMessageTemplate, kInvalidLayout));
     EXPECT_EQ(GetComponentExtensionImeId(kLatamLayout),

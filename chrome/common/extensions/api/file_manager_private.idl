@@ -90,7 +90,8 @@ enum MountError {
   unsupported_filesystem,
   need_password,
   cancelled,
-  busy
+  busy,
+  corrupted
 };
 
 // Filesystem to format to.
@@ -98,13 +99,6 @@ enum FormatFileSystemType { vfat, exfat, ntfs };
 
 // File transfer progress state.
 enum TransferState { in_progress, queued, completed, failed };
-
-// The response when starting installing a Linux package.
-enum InstallLinuxPackageStatus {
-  started,
-  failed,
-  install_already_active
-};
 
 // Specifies type of event that is raised.
 enum FileWatchEventType { changed, error };
@@ -414,6 +408,25 @@ enum BulkPinStage {
   cannot_get_free_space,
   cannot_list_files,
   cannot_enable_docs_offline
+};
+
+// The default location/volume that the user should use.
+// It's usually MyFiles. When SkyVault is enabled the admin might
+// choose between Google Drive and OneDrive.
+// NOTE: This is independent of the Downloads folder which is mostly used
+// in the browser.
+enum DefaultLocation {
+  my_files,
+  google_drive,
+  onedrive
+};
+
+// The value of the SkyVault LocalFilesMigrationDestination policy.
+enum MigrationDestination {
+  not_specified,
+  google_drive,
+  onedrive,
+  delete
 };
 
 // These three fields together uniquely identify a task.
@@ -853,6 +866,9 @@ dictionary Preferences {
   boolean driveFsBulkPinningAvailable;
   boolean driveFsBulkPinningEnabled;
   boolean localUserFilesAllowed;
+  DefaultLocation defaultLocation;
+  MigrationDestination skyVaultMigrationDestination;
+  DOMString? skyVaultMigrationStartTime;
 };
 
 dictionary PreferencesChange {
@@ -972,17 +988,6 @@ dictionary FileSystemProviderAction {
 
   // The title of the action. It may be ignored for common actions.
   DOMString? title;
-};
-
-// Information about a Linux package in response to GetLinuxPackageInfo.
-dictionary LinuxPackageInfo {
-  DOMString name;
-  DOMString version;
-
-  // A one-line summary of the project. Almost always present.
-  DOMString? summary;
-  // A longer description of the project. Almost always present.
-  DOMString? description;
 };
 
 // Payload data for crostini event.
@@ -1335,6 +1340,30 @@ dictionary BulkPinProgress {
   boolean emptiedQueue;
 };
 
+// Used by EntryData to store the file system of the entry.
+dictionary FileSystemData {
+  // Name of the file system. Will be unique.
+  DOMString name;
+
+  // File system URL of the root entry of the file system.
+  DOMString rootUrl;
+};
+
+// Representation of an entry as a replacement for File/Directory Entries.
+dictionary EntryData {
+  // File system URL of the entry.
+  DOMString entryUrl;
+
+  // If false, the entry is a file.
+  boolean isDirectory;
+
+  // Localized name of the entry for display.
+  DOMString name;
+
+  // Information about the filesystem the entry is located in.
+  FileSystemData filesystem;
+};
+
 // Callback that does not take arguments.
 callback SimpleCallback = void();
 
@@ -1463,12 +1492,6 @@ callback GetVolumeRootCallback =
 callback GetCrostiniSharedPathsCallback =
     void(CrostiniSharedPathResponse response);
 
-// |linux_package_info| Package info for the queried package.
-callback GetLinuxPackageInfoCallback =
-    void(LinuxPackageInfo linux_package_info);
-
-callback InstallLinuxPackageCallback = void(InstallLinuxPackageStatus status);
-
 // |apps| List of Android picker apps.
 callback GetAndroidPickerAppsCallback = void(AndroidApp[] apps);
 
@@ -1521,7 +1544,6 @@ interface Functions {
   // Gets the MIME type of an entry.
   // |entry| The entry to be checked.
   // |callback|
-  [supportsPromises]
   static void getMimeType(DOMString url,
                           GetMimeTypeCallback callback);
 
@@ -1755,13 +1777,7 @@ interface Functions {
   static void searchDriveMetadata(SearchMetadataParams searchParams,
                                   SearchDriveMetadataCallback callback);
 
-  // Search files in the volume having |volumeId| by using |hashList|.
-  [doesNotSupportPromises]
-  static void searchFilesByHashes(DOMString volumeId,
-                                  DOMString[] hashList,
-                                  SearchFilesByHashesCallback callback);
-
-  // Search files in My Files.
+  // Search files in MyFiles.
   [nocompile, doesNotSupportPromises]
   static void searchFiles(SearchMetadataParams searchParams,
                           SearchFilesCallback callback);
@@ -1801,13 +1817,6 @@ interface Functions {
   // Opens page in Settings window.
   // |subPage| Name of a subPage to show.
   static void openSettingsSubpage(DOMString subPage);
-
-  // Computes an MD5 checksum for the given file.
-  // |entry| The entry of the file to checksum.
-  // |callback|
-  [nocompile, doesNotSupportPromises]
-  static void computeChecksum([instanceOf=Entry] object entry,
-                              ComputeChecksumCallback callback);
 
   // Returns list of available providers.
   [doesNotSupportPromises]
@@ -1898,16 +1907,6 @@ interface Functions {
                                      DOMString vmName,
                                      GetCrostiniSharedPathsCallback callback);
 
-  // Requests information about a Linux package. |entry| is a .deb file.
-  [nocompile, doesNotSupportPromises]
-  static void getLinuxPackageInfo([instanceOf=Entry] object entry,
-                                  GetLinuxPackageInfoCallback callback);
-
-  // Starts installation of a Linux package.
-  [nocompile, doesNotSupportPromises]
-  static void installLinuxPackage([instanceOf=Entry] object entry,
-                                  InstallLinuxPackageCallback callback);
-
   // Imports a Crostini Image File (.tini). This overrides the existing Linux
   // apps and files.
   [nocompile]
@@ -1928,9 +1927,8 @@ interface Functions {
   // |callback| is called with error in case of failure and with no arguments
   // if successfully launched the Sharesheet dialog, but before user has
   // finished the sharing.
-  [nocompile, doesNotSupportPromises]
-  static void sharesheetHasTargets([instanceOf=Entry] object[] entries,
-                           BooleanCallback callback);
+  static void sharesheetHasTargets(DOMString[] fileUrls,
+                                   BooleanCallback callback);
 
   // Invoke Sharesheet for selected files.
   // |entries| Array of selected entries.
@@ -1938,8 +1936,7 @@ interface Functions {
   // |dlpSourceUrls| Array of source URLs corresponding to the entries, used to
   // check Data Leak Prevention (DLP) restrictions
   // |callback|
-  [nocompile, doesNotSupportPromises]
-  static void invokeSharesheet([instanceOf=Entry] object[] entries,
+  static void invokeSharesheet(DOMString[] fileUrls,
                                SharesheetLaunchSource launchSource,
                                DOMString[] dlpSourceUrls,
                                SimpleCallback callback);
@@ -1968,9 +1965,6 @@ interface Functions {
   // Notifies the browser of the result of a dialog displayed earlier as a
   // result of the onDriveConfirmDialog event.
   static void notifyDriveDialogResult(DriveDialogResult result);
-
-  // Opens a new browser tab and navigates to `url`.
-  static void openURL(DOMString url);
 
   // Creates a new Files app window in the directory provided in `params`.
   [doesNotSupportPromises]

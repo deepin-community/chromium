@@ -13,11 +13,18 @@
 #include "ash/wm/window_transient_descendant_iterator.h"
 #include "ash/wm/wm_metrics.h"
 #include "base/memory/raw_ptr.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "chromeos/ui/base/window_state_type.h"
 #include "ui/aura/window.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
+#include "ui/views/window/dialog_delegate.h"
 #include "ui/wm/core/window_util.h"
 
 class PrefRegistrySimple;
+
+namespace ash {
+class WindowState;
+}
 
 namespace gfx {
 class Point;
@@ -30,10 +37,21 @@ class LocatedEvent;
 }  // namespace ui
 
 namespace views {
+class BubbleDialogDelegate;
 class View;
 }  // namespace views
 
 namespace ash::window_util {
+
+// Returns the rounded corners for a mini window representation of
+// `source_window`. It takes into account if the `source_window`
+// belongs to a snap group or not.
+// If `include_header_rounding` is false, function returns the radii of only
+// bottom two corners of mini window.
+ASH_EXPORT gfx::RoundedCornersF GetMiniWindowRoundedCorners(
+    const aura::Window* source_window,
+    bool include_header_rounding,
+    std::optional<float> scale = std::nullopt);
 
 // See ui/wm/core/window_util.h for ActivateWindow(), DeactivateWindow(),
 // IsActiveWindow() and CanActivateWindow().
@@ -75,6 +93,7 @@ ASH_EXPORT void GetBlockingContainersForRoot(
 ASH_EXPORT bool IsWindowUserPositionable(aura::Window* window);
 
 // Pins the window on top of other windows.
+// TODO(crbug.com/429215055): Rename 'trusted' to a more appropriate name.
 ASH_EXPORT void PinWindow(aura::Window* window, bool trusted);
 
 // Indicates that the window should autohide the shelf when it is the active
@@ -101,10 +120,17 @@ ASH_EXPORT void CloseWidgetForWindow(aura::Window* window);
 // Installs a resize handler on the window that makes it easier to resize
 // the window.
 ASH_EXPORT void InstallResizeHandleWindowTargeterForWindow(
-    aura::Window* window);
+    aura::Window* window,
+    chromeos::ResizeBorderInsets border_insets =
+        chromeos::ResizeBorderInsets());
 
 // Returns true if `window` is currently in tab-dragging process.
 ASH_EXPORT bool IsDraggingTabs(const aura::Window* window);
+
+// For a tab drag window (see `IsDraggingTabs`) returns the state of the source
+// window if any. Otherwise returns nullptr.
+ASH_EXPORT const WindowState* GetTabDraggingSourceWindowState(
+    const aura::Window* drag_window);
 
 // Returns true if `window` should be excluded from the cycle list and/or
 // overview.
@@ -141,8 +167,18 @@ ASH_EXPORT void ExpandArcPipWindow();
 // an item is being dragged around.
 bool IsAnyWindowDragged();
 
+// Adjusts the z-order stacking of `window_to_fix` in its parent to match its
+// order in the MRU window list. This is done after the window is moved from one
+// parent container to another by means of calling `AddChild()` which adds it as
+// the top-most window, which doesn't necessarily match the MRU order.
+// `window_to_fix` must be a child of a desk container, and the root of a
+// transient hierarchy (if it belongs to one).
+// This function must be called after `AddChild()` was called to add the
+// `window_to_fix`.
+void FixWindowStackingAccordingToGlobalMru(aura::Window* window_to_fix);
+
 // Returns the top window on MRU window list, or null if the list is empty.
-aura::Window* GetTopWindow();
+ASH_EXPORT aura::Window* GetTopWindow();
 ASH_EXPORT aura::Window* GetTopNonFloatedWindow();
 
 // Returns the floated window for the active desk if it exists.
@@ -179,6 +215,15 @@ ASH_EXPORT void SetTransform(aura::Window* window,
 ASH_EXPORT gfx::RectF GetTransformedBounds(aura::Window* transformed_window,
                                 int top_inset);
 
+// Returns the `BubbleDialogDelegate` associated with the given
+// `transient_window`, if it's a bubble dialog.
+ASH_EXPORT views::BubbleDialogDelegate* AsBubbleDialogDelegate(
+    aura::Window* transient_window);
+
+// Returns the `DialogDelegate` associated with the given `transient_window`, if
+// it's a dialog.
+views::DialogDelegate* AsDialogDelegate(aura::Window* transient_window);
+
 // If multi profile is on, check if |window| should be shown for the current
 // user.
 bool ShouldShowForCurrentUser(aura::Window* window);
@@ -211,11 +256,6 @@ float GetSnapRatioForWindow(aura::Window* window);
 // enabled.
 void RegisterProfilePrefs(PrefRegistrySimple* registry);
 
-// Returns true if either `kFasterSplitScreenSetup` or `kSnapGroup` is enabled.
-// When this is true, snapping one window will automatically start
-// SplitViewOverviewSession.
-bool IsFasterSplitScreenOrSnapGroupEnabledInClamshell();
-
 // Returns true if `SplitViewOverviewSession` is created through faster split
 // screen setup, i.e. partial overview is started on the other side of the
 // screen when `window` is snapped.
@@ -225,6 +265,9 @@ bool IsInFasterSplitScreenSetupSession(const aura::Window* window);
 // grid is in faster splitview. This is a specific mode during which we don't
 // show the desk bar or save desk buttons.
 bool IsInFasterSplitScreenSetupSession();
+
+// Returns the target bounds of `window` in screen coordinates.
+ASH_EXPORT gfx::Rect GetTargetScreenBounds(aura::Window* window);
 
 }  // namespace ash::window_util
 

@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ui/webui/ash/settings/pages/personalization/personalization_hub_handler.h"
 
-#include "ash/constants/ash_features.h"
 #include "ash/constants/personalization_entry_point.h"
 #include "base/functional/bind.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_metrics.h"
@@ -27,7 +26,7 @@ void PersonalizationHubHandler::RegisterMessages() {
 }
 
 void PersonalizationHubHandler::HandleOpenPersonalizationHub(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(0U, args.size());
   // Record entry point metric to Personalization Hub through Settings.
   personalization_app::LogPersonalizationEntryPoint(

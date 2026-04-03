@@ -4,18 +4,18 @@
 
 #include "components/sync/test/fake_cryptographer.h"
 
+#include <algorithm>
 #include <iterator>
 
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "components/sync/protocol/encryption.pb.h"
 
 namespace syncer {
 
 namespace {
 
-const char kSeparator[] = "@@";
+constexpr char kSeparator[] = "@@";
 
 }  // namespace
 
@@ -39,7 +39,7 @@ void FakeCryptographer::AddEncryptionKey(const std::string& key_name) {
 
 void FakeCryptographer::SelectDefaultEncryptionKey(
     const std::string& key_name) {
-  DCHECK(base::Contains(known_key_names_, key_name));
+  DCHECK(known_key_names_.contains(key_name));
   default_key_name_ = key_name;
 }
 
@@ -53,7 +53,7 @@ bool FakeCryptographer::CanEncrypt() const {
 
 bool FakeCryptographer::CanDecrypt(
     const sync_pb::EncryptedData& encrypted) const {
-  return base::Contains(known_key_names_, encrypted.key_name());
+  return known_key_names_.contains(encrypted.key_name());
 }
 
 std::string FakeCryptographer::GetDefaultEncryptionKeyName() const {
@@ -73,7 +73,7 @@ bool FakeCryptographer::EncryptString(const std::string& decrypted,
 
 bool FakeCryptographer::DecryptToString(const sync_pb::EncryptedData& encrypted,
                                         std::string* decrypted) const {
-  auto key_iter = base::ranges::find(known_key_names_, encrypted.key_name());
+  auto key_iter = std::ranges::find(known_key_names_, encrypted.key_name());
   if (key_iter == known_key_names_.end()) {
     return false;
   }
@@ -103,8 +103,8 @@ FakeCryptographer::AuthEncryptForCrossUserSharing(
   // here for simplicity.
   std::vector<uint8_t> result;
   result.reserve(plaintext.size() + recipient_public_key.size());
-  base::ranges::copy(recipient_public_key, std::back_inserter(result));
-  base::ranges::copy(plaintext, std::back_inserter(result));
+  std::ranges::copy(recipient_public_key, std::back_inserter(result));
+  std::ranges::copy(plaintext, std::back_inserter(result));
   return result;
 }
 
@@ -123,7 +123,7 @@ FakeCryptographer::AuthDecryptForCrossUserSharing(
   }
 
   // Verify that the prefix contains an expected public key.
-  if (base::ranges::equal(
+  if (std::ranges::equal(
           cross_user_sharing_key_pair_.GetRawPublicKey().begin(),
           cross_user_sharing_key_pair_.GetRawPublicKey().end(),
           encrypted_data.begin(),

@@ -1,4 +1,4 @@
-// Copyright 2023 The Chromium Authors
+// Copyright 2024 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,6 +21,7 @@ constexpr char kUserActionNextButtonClicked[] = "next";
 
 // static
 std::string PlaceholderScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::kNext:
       return "Next";
@@ -29,6 +30,7 @@ std::string PlaceholderScreen::GetResultString(Result result) {
     case Result::kNotApplicable:
       return BaseScreen::kNotApplicable;
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 PlaceholderScreen::PlaceholderScreen(base::WeakPtr<PlaceholderScreenView> view,
@@ -53,7 +55,7 @@ void PlaceholderScreen::ShowImpl() {
 
 void PlaceholderScreen::HideImpl() {}
 
-void PlaceholderScreen::OnUserAction(const base::Value::List& args) {
+void PlaceholderScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionNextButtonClicked) {
     exit_callback_.Run(Result::kNext);

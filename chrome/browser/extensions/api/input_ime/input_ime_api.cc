@@ -43,8 +43,8 @@ ui::KeyEvent ConvertKeyboardEventToUIKeyEvent(
     const input_ime::KeyboardEvent& event) {
   const ui::EventType type =
       event.type == input_ime::KeyboardEventType::kKeydown
-          ? ui::ET_KEY_PRESSED
-          : ui::ET_KEY_RELEASED;
+          ? ui::EventType::kKeyPressed
+          : ui::EventType::kKeyReleased;
 
   const auto key_code = static_cast<ui::KeyboardCode>(
       event.key_code && *event.key_code != ui::VKEY_UNKNOWN
@@ -163,9 +163,9 @@ ExtensionFunction::ResponseAction InputImeSetCompositionFunction::Run() {
   if (!engine->SetComposition(params.context_id, params.text.c_str(),
                               selection_start, selection_end, params.cursor,
                               segments, &error)) {
-    base::Value::List results;
+    base::ListValue results;
     results.Append(false);
-    return RespondNow(ErrorWithArguments(
+    return RespondNow(ErrorWithArgumentsDoNotUse(
         std::move(results), InformativeError(error, static_function_name())));
   }
   return RespondNow(WithArguments(true));
@@ -183,9 +183,9 @@ ExtensionFunction::ResponseAction InputImeCommitTextFunction::Run() {
   const CommitText::Params::Parameters& params = parent_params->parameters;
   if (!engine->CommitText(params.context_id, base::UTF8ToUTF16(params.text),
                           &error)) {
-    base::Value::List results;
+    base::ListValue results;
     results.Append(false);
-    return RespondNow(ErrorWithArguments(
+    return RespondNow(ErrorWithArgumentsDoNotUse(
         std::move(results), InformativeError(error, static_function_name())));
   }
   return RespondNow(WithArguments(true));

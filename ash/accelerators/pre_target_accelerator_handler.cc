@@ -4,14 +4,17 @@
 
 #include "ash/accelerators/pre_target_accelerator_handler.h"
 
+#include <algorithm>
+
 #include "ash/accelerators/accelerator_controller_impl.h"
+#include "ash/accelerators/system_shortcut_behavior_policy.h"
 #include "ash/shell.h"
 #include "ash/wm/window_state.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "ui/aura/window.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/events/event.h"
+#include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/wm/core/window_util.h"
 
 namespace ash {
@@ -55,14 +58,38 @@ bool PreTargetAcceleratorHandler::ShouldProcessAcceleratorNow(
     aura::Window* target,
     const ui::KeyEvent& event,
     const ui::Accelerator& accelerator) {
+  const aura::Window* top_level = ::wm::GetToplevelWindow(target);
+  const bool is_fullscreen =
+      top_level && WindowState::Get(top_level)->IsFullscreen();
+
   // Callers should never supply null.
   DCHECK(target);
   // On ChromeOS, If the accelerator is Search+<key(s)> then it must never be
   // intercepted by apps or windows.
-  if (accelerator.IsCmdDown())
-    return true;
+  if (accelerator.IsCmdDown() || accelerator.key_code() == ui::VKEY_LWIN ||
+      accelerator.key_code() == ui::VKEY_RWIN) {
+    const auto system_shortcut_behavior_policy = GetSystemShortcutBehavior();
+    switch (system_shortcut_behavior_policy) {
+      case SystemShortcutBehaviorType::kNormalShortcutBehavior:
+      case SystemShortcutBehaviorType::kIgnoreCommonVdiShortcuts:
+      case SystemShortcutBehaviorType::kIgnoreCommonVdiShortcutsFullscreenOnly:
+        return true;
 
-  if (base::Contains(Shell::GetAllRootWindows(), target))
+      // Always allow shortcuts with search down to passthrough.
+      case SystemShortcutBehaviorType::kAllowSearchBasedPassthrough:
+        break;
+
+      // Only allow to passthrough if the target app is fullscreen.
+      case SystemShortcutBehaviorType::
+          kAllowSearchBasedPassthroughFullscreenOnly:
+        if (!is_fullscreen) {
+          return true;
+        }
+        break;
+    }
+  }
+
+  if (std::ranges::contains(Shell::GetAllRootWindows(), target))
     return true;
 
   AcceleratorControllerImpl* accelerator_controller =
@@ -74,8 +101,7 @@ bool PreTargetAcceleratorHandler::ShouldProcessAcceleratorNow(
 
   // A full screen window has a right to handle all key events including the
   // reserved ones.
-  aura::Window* top_level = ::wm::GetToplevelWindow(target);
-  if (top_level && WindowState::Get(top_level)->IsFullscreen()) {
+  if (is_fullscreen) {
     // On ChromeOS, fullscreen windows are either browser or apps, which
     // send key events to a web content first, then will process keys
     // if the web content didn't consume them.

@@ -40,7 +40,8 @@ limitations under the License.
 // translation unit boundaries.
 //
 // For more info see https://sourceforge.net/p/numpy/mailman/message/5700519
-// See also tensorflow/tsl/python/lib/core/numpy.h for a similar approach.
+// See also tensorflow/compiler/xla/tsl/python/lib/core/numpy.h for a similar
+// approach.
 #define PY_ARRAY_UNIQUE_SYMBOL _tflite_numpy_api
 #ifndef TFLITE_IMPORT_NUMPY
 #define NO_IMPORT_ARRAY
@@ -70,6 +71,11 @@ TfLiteType TfLiteTypeFromPyArray(PyArrayObject* array);
 
 bool FillStringBufferWithPyArray(PyObject* value,
                                  DynamicBuffer* dynamic_buffer);
+
+// Helper function to pack int8/uint8 numpy array data into an INT4/UINT4
+// tensor.
+PyObject* Set4BitTensor(TfLiteTensor* tensor, PyArrayObject* array,
+                        int tensor_index);
 
 }  // namespace python_utils
 }  // namespace tflite

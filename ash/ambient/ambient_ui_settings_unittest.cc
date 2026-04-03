@@ -6,12 +6,14 @@
 
 #include "ash/ambient/ambient_constants.h"
 #include "ash/ambient/ambient_ui_settings.h"
+#include "ash/ambient/util/time_of_day_utils.h"
 #include "ash/constants/ambient_video.h"
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/ambient/ambient_prefs.h"
 #include "ash/public/cpp/personalization_app/time_of_day_test_utils.h"
 #include "ash/webui/personalization_app/mojom/personalization_app.mojom-shared.h"
 #include "base/test/scoped_feature_list.h"
+#include "chromeos/ash/components/system/fake_statistics_provider.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -28,13 +30,14 @@ using ::testing::Eq;
 class AmbientUiSettingsTest : public ::testing::Test {
  protected:
   AmbientUiSettingsTest() {
-    base::Value::Dict default_settings;
+    base::DictValue default_settings;
     default_settings.Set(ambient::prefs::kAmbientUiSettingsFieldTheme,
                          static_cast<int>(kDefaultAmbientTheme));
     test_pref_service_.registry()->RegisterDictionaryPref(
         ambient::prefs::kAmbientUiSettings, std::move(default_settings));
   }
 
+  system::ScopedFakeStatisticsProvider statistics_provider_;
   TestingPrefServiceSimple test_pref_service_;
 };
 
@@ -45,32 +48,53 @@ TEST_F(AmbientUiSettingsTest, DefaultConstructor) {
 TEST_F(AmbientUiSettingsTest, DefaultAmbientUiSettings) {
   base::test::ScopedFeatureList scoped_feature_list;
   scoped_feature_list.InitWithFeatures(
-      {}, personalization_app::GetTimeOfDayDisabledFeatures());
+      {}, personalization_app::GetTimeOfDayFeatures());
 
   ASSERT_FALSE(features::IsTimeOfDayScreenSaverEnabled());
 
   // No prior set up for kAmbientUiSettings prefs. Without TOD features,
   // kDefaultAmbientTheme (kSlideShow) is set as default.
   test_pref_service_.SetDict(ambient::prefs::kAmbientUiSettings,
-                             base::Value::Dict());
+                             base::DictValue());
   EXPECT_THAT(
       AmbientUiSettings::ReadFromPrefService(test_pref_service_).theme(),
       Eq(kDefaultAmbientTheme));
 
   scoped_feature_list.Reset();
   scoped_feature_list.InitWithFeatures(
-      personalization_app::GetTimeOfDayEnabledFeatures(), {});
+      personalization_app::GetTimeOfDayFeatures(), {});
   ASSERT_TRUE(features::IsTimeOfDayScreenSaverEnabled());
   // No prior set up for kAmbientUiSettings prefs. With TOD features, kVideo is
   // set as default.
   test_pref_service_.SetDict(ambient::prefs::kAmbientUiSettings,
-                             base::Value::Dict());
+                             base::DictValue());
   EXPECT_THAT(
       AmbientUiSettings::ReadFromPrefService(test_pref_service_).theme(),
       Eq(AmbientTheme::kVideo));
   EXPECT_THAT(
       AmbientUiSettings::ReadFromPrefService(test_pref_service_).video(),
-      Eq(kDefaultAmbientVideo));
+      Eq(GetDefaultAmbientVideo()));
+}
+
+TEST_F(AmbientUiSettingsTest, DefaultAmbientUiSettingsWithCustomizationId) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      personalization_app::GetTimeOfDayFeatures(), {});
+  ASSERT_TRUE(features::IsTimeOfDayScreenSaverEnabled());
+  statistics_provider_.SetMachineStatistic(
+      system::kCustomizationIdKey,
+      std::string(kJupiterScreensaverCustomizationId));
+  // No prior set up for kAmbientUiSettings prefs. With TOD features, kVideo
+  // is set as default.
+  test_pref_service_.SetDict(ambient::prefs::kAmbientUiSettings,
+                             base::DictValue());
+  EXPECT_THAT(
+      AmbientUiSettings::ReadFromPrefService(test_pref_service_).theme(),
+      Eq(AmbientTheme::kVideo));
+  EXPECT_THAT(
+      AmbientUiSettings::ReadFromPrefService(test_pref_service_).video(),
+      Eq(GetDefaultAmbientVideo()));
+  EXPECT_EQ(AmbientVideo::kJupiter, GetDefaultAmbientVideo());
 }
 
 TEST_F(AmbientUiSettingsTest, PrefManagement) {
@@ -97,7 +121,7 @@ TEST_F(AmbientUiSettingsTest, PrefManagement) {
 
 TEST_F(AmbientUiSettingsTest, HandlesCorruptedPrefStorage) {
   {
-    base::Value::Dict invalid_settings;
+    base::DictValue invalid_settings;
     invalid_settings.Set(ambient::prefs::kAmbientUiSettingsFieldTheme,
                          static_cast<int>(AmbientTheme::kMaxValue) + 1);
     test_pref_service_.SetDict(ambient::prefs::kAmbientUiSettings,
@@ -107,7 +131,7 @@ TEST_F(AmbientUiSettingsTest, HandlesCorruptedPrefStorage) {
       AmbientUiSettings::ReadFromPrefService(test_pref_service_).theme(),
       Eq(kDefaultAmbientTheme));
   {
-    base::Value::Dict invalid_settings;
+    base::DictValue invalid_settings;
     invalid_settings.Set(ambient::prefs::kAmbientUiSettingsFieldTheme,
                          static_cast<int>(AmbientTheme::kVideo));
     invalid_settings.Set(ambient::prefs::kAmbientUiSettingsFieldVideo,

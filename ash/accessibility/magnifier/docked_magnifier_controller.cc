@@ -11,6 +11,7 @@
 #include "ash/accessibility/magnifier/magnifier_utils.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/display/cursor_window_controller.h"
+#include "ash/display/window_tree_host_manager.h"
 #include "ash/host/ash_window_tree_host.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/public/cpp/shell_window_ids.h"
@@ -21,6 +22,7 @@
 #include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/work_area_insets.h"
 #include "base/functional/bind.h"
+#include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -28,6 +30,7 @@
 #include "ui/aura/window_tree_host.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
+#include "ui/display/manager/display_manager.h"
 #include "ui/display/screen.h"
 #include "ui/views/widget/widget.h"
 #include "ui/wm/core/coordinate_conversion.h"
@@ -55,7 +58,7 @@ constexpr char kDockedMagnifierViewportWindowName[] =
 
 // Returns the current cursor location in screen coordinates.
 inline gfx::Point GetCursorScreenPoint() {
-  return display::Screen::GetScreen()->GetCursorScreenPoint();
+  return display::Screen::Get()->GetCursorScreenPoint();
 }
 
 // Updates the workarea of the display associated with |window| such that the
@@ -99,7 +102,7 @@ DockedMagnifierController::~DockedMagnifierController() {
   shell->session_controller()->RemoveObserver(this);
 
   if (GetEnabled()) {
-    shell->window_tree_host_manager()->RemoveObserver(this);
+    shell->display_manager()->RemoveDisplayManagerObserver(this);
     shell->RemovePreTargetHandler(this);
   }
   CHECK(!views::WidgetObserver::IsInObserverList());
@@ -108,9 +111,18 @@ DockedMagnifierController::~DockedMagnifierController() {
 // static
 void DockedMagnifierController::RegisterProfilePrefs(
     PrefRegistrySimple* registry) {
-  registry->RegisterBooleanPref(prefs::kDockedMagnifierEnabled, false);
+  const uint32_t registration_flags_batch3 =
+      base::FeatureList::IsEnabled(features::kOsSyncAccessibilitySettingsBatch3)
+          ? user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PREF
+          : 0;
+  registry->RegisterBooleanPref(prefs::kDockedMagnifierEnabled, false,
+                                registration_flags_batch3);
   registry->RegisterDoublePref(prefs::kDockedMagnifierScale,
-                               kDefaultMagnifierScale);
+                               kDefaultMagnifierScale,
+                               registration_flags_batch3);
+  // Screen height divisor is not synced as it may result in undesired behavior
+  // when synced across devices with screens that have different physical
+  // dimensions.
   registry->RegisterDoublePref(prefs::kDockedMagnifierScreenHeightDivisor,
                                kDefaultScreenHeightDivisor);
 }
@@ -190,7 +202,7 @@ void DockedMagnifierController::CenterOnPoint(
   if (!GetEnabled())
     return;
 
-  auto* screen = display::Screen::GetScreen();
+  auto* screen = display::Screen::Get();
   auto* window = screen->GetWindowAtScreenPoint(point_in_screen);
   if (!window) {
     // In tests and sometimes initially on signin screen, |point_in_screen|
@@ -280,13 +292,13 @@ void DockedMagnifierController::OnScrollEvent(ui::ScrollEvent* event) {
   if (!event->IsAltDown() || !event->IsControlDown())
     return;
 
-  if (event->type() == ui::ET_SCROLL_FLING_START ||
-      event->type() == ui::ET_SCROLL_FLING_CANCEL) {
+  if (event->type() == ui::EventType::kScrollFlingStart ||
+      event->type() == ui::EventType::kScrollFlingCancel) {
     event->StopPropagation();
     return;
   }
 
-  if (event->type() == ui::ET_SCROLL) {
+  if (event->type() == ui::EventType::kScroll) {
     // Notes: - Clamping of the new scale value happens inside SetScale().
     //        - Refreshing the viewport happens in the handler of the scale pref
     //          changes.
@@ -323,7 +335,7 @@ void DockedMagnifierController::OnWidgetDestroying(views::Widget* widget) {
                                         false /* update_old_root_workarea */);
 }
 
-void DockedMagnifierController::OnDisplayConfigurationChanged() {
+void DockedMagnifierController::OnDidApplyDisplayChanges() {
   DCHECK(GetEnabled());
 
   // The viewport might have been on a display that just got removed, and hence
@@ -442,7 +454,7 @@ void DockedMagnifierController::MaybePerformViewportResizing(
   // If user releases left mouse button, or any other mouse button is pressed,
   // ignore and stop resizing.
   if (!event->IsOnlyLeftMouseButton() ||
-      event->type() == ui::ET_MOUSE_RELEASED) {
+      event->type() == ui::EventType::kMouseReleased) {
     if (is_resizing_) {
       is_resizing_ = false;
       ConfineMouseCursorOutsideViewport();
@@ -453,7 +465,7 @@ void DockedMagnifierController::MaybePerformViewportResizing(
       root_bounds.height() / std::max(1.0f, root_y + resize_offset_);
 
   switch (event->type()) {
-    case ui::ET_MOUSE_PRESSED:
+    case ui::EventType::kMousePressed:
       // User clicks within separator to start resizing Docked Magnifier.
       // Subtracting one is needed to capture when mouse is at the very top.
       if (!is_resizing_ && cursor_is_over_resizer) {
@@ -464,13 +476,13 @@ void DockedMagnifierController::MaybePerformViewportResizing(
             ->ConfineCursorToRootWindow();
       }
       break;
-    case ui::ET_MOUSE_DRAGGED:
+    case ui::EventType::kMouseDragged:
       // User continues holding and drags separator to resize Docked Magnifier.
       if (is_resizing_) {
         SetScreenHeightDivisor(std::clamp(new_screen_height_divisor,
                                           kMinScreenHeightDivisor,
                                           kMaxScreenHeightDivisor));
-        OnDisplayConfigurationChanged();
+        OnDidApplyDisplayChanges();
       }
       break;
     default:
@@ -604,9 +616,9 @@ void DockedMagnifierController::OnEnabledPrefChanged() {
     // scroll events.
     shell->AddAccessibilityEventHandler(
         this, AccessibilityEventHandlerManager::HandlerType::kDockedMagnifier);
-    shell->window_tree_host_manager()->AddObserver(this);
+    shell->display_manager()->AddDisplayManagerObserver(this);
   } else {
-    shell->window_tree_host_manager()->RemoveObserver(this);
+    shell->display_manager()->RemoveDisplayManagerObserver(this);
     shell->RemoveAccessibilityEventHandler(this);
     MaybeResetResizingCursor();
 
@@ -655,6 +667,7 @@ void DockedMagnifierController::CreateMagnifierViewport() {
   // 1- Create the viewport widget.
   viewport_widget_ = new views::Widget;
   views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.activatable = views::Widget::InitParams::Activatable::kNo;
   params.accept_events = false;

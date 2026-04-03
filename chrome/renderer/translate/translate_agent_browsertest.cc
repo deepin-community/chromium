@@ -2,7 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/translate/content/renderer/translate_agent.h"
+
 #include <tuple>
+#include <utility>
 
 #include "base/base_paths.h"
 #include "base/files/file.h"
@@ -12,14 +15,11 @@
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
-#include "base/types/cxx23_to_underlying.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
 #include "chrome/test/base/chrome_render_view_test.h"
+#include "components/language_detection/core/constants.h"
 #include "components/translate/content/common/translate.mojom.h"
-#include "components/translate/content/renderer/translate_agent.h"
-#include "components/translate/core/common/translate_constants.h"
 #include "components/translate/core/common/translate_util.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/renderer/render_frame.h"
@@ -28,7 +28,7 @@
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 
 using testing::_;
@@ -64,8 +64,6 @@ class FakeContentTranslateDriver
     details_ = details;
     page_level_translation_criteria_met_ = page_level_translation_criteria_met;
   }
-  void GetLanguageDetectionModel(
-      GetLanguageDetectionModelCallback callback) override {}
 
   void ResetNewPageValues() {
     called_new_page_ = false;
@@ -190,11 +188,9 @@ class TranslateAgentBrowserTest : public ChromeRenderViewTest {
  protected:
   void SetUp() override {
     ChromeRenderViewTest::SetUp();
-    scoped_feature_list_.InitAndEnableFeature(
-        translate::kTFLiteLanguageDetectionEnabled);
     translate_agent_ = new TestTranslateAgent(GetMainRenderFrame());
 
-    GetMainRenderFrame()->GetBrowserInterfaceBroker()->SetBinderForTesting(
+    GetMainRenderFrame()->GetBrowserInterfaceBroker().SetBinderForTesting(
         translate::mojom::ContentTranslateDriver::Name_,
         base::BindRepeating(&FakeContentTranslateDriver::BindHandle,
                             base::Unretained(&fake_translate_driver_)));
@@ -204,7 +200,7 @@ class TranslateAgentBrowserTest : public ChromeRenderViewTest {
   }
 
   void TearDown() override {
-    GetMainRenderFrame()->GetBrowserInterfaceBroker()->SetBinderForTesting(
+    GetMainRenderFrame()->GetBrowserInterfaceBroker().SetBinderForTesting(
         translate::mojom::ContentTranslateDriver::Name_, {});
 
     delete translate_agent_;
@@ -213,7 +209,6 @@ class TranslateAgentBrowserTest : public ChromeRenderViewTest {
 
   raw_ptr<TestTranslateAgent, DanglingUntriaged> translate_agent_;
   FakeContentTranslateDriver fake_translate_driver_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Tests that the browser gets notified of the translation failure if the
@@ -233,7 +228,7 @@ TEST_F(TranslateAgentBrowserTest, TranslateLibNeverReady) {
   EXPECT_CALL(*translate_agent_, GetErrorCode())
       .Times(AtLeast(5))
       .WillRepeatedly(
-          Return(base::to_underlying(translate::TranslateErrors::NONE)));
+          Return(std::to_underlying(translate::TranslateErrors::NONE)));
 
   translate_agent_->TranslatePage("en", "fr", std::string());
   base::RunLoop().RunUntilIdle();
@@ -258,7 +253,7 @@ TEST_F(TranslateAgentBrowserTest, TranslateSuccess) {
       .WillOnce(Return(true));
 
   EXPECT_CALL(*translate_agent_, GetErrorCode())
-      .WillOnce(Return(base::to_underlying(translate::TranslateErrors::NONE)));
+      .WillOnce(Return(std::to_underlying(translate::TranslateErrors::NONE)));
 
   EXPECT_CALL(*translate_agent_, StartTranslation()).WillOnce(Return(true));
 
@@ -314,7 +309,7 @@ TEST_F(TranslateAgentBrowserTest, TranslateFailure) {
 
   EXPECT_CALL(*translate_agent_, GetErrorCode())
       .WillOnce(Return(
-          base::to_underlying(translate::TranslateErrors::TRANSLATION_ERROR)));
+          std::to_underlying(translate::TranslateErrors::TRANSLATION_ERROR)));
 
   // V8 call for performance monitoring should be ignored.
   EXPECT_CALL(*translate_agent_, ExecuteScriptAndGetDoubleResult(_)).Times(2);
@@ -352,8 +347,8 @@ TEST_F(TranslateAgentBrowserTest, UndefinedSourceLang) {
   // V8 call for performance monitoring should be ignored.
   EXPECT_CALL(*translate_agent_, ExecuteScriptAndGetDoubleResult(_)).Times(3);
 
-  translate_agent_->TranslatePage(translate::kUnknownLanguageCode, "fr",
-                                  std::string());
+  translate_agent_->TranslatePage(language_detection::kUnknownLanguageCode,
+                                  "fr", std::string());
   base::RunLoop().RunUntilIdle();
 
   translate::TranslateErrors error;

@@ -6,7 +6,6 @@
 
 #include "ash/app_list/app_list_controller_impl.h"
 #include "ash/public/cpp/window_properties.h"
-#include "ash/scoped_animation_disabler.h"
 #include "ash/shell.h"
 #include "ash/wm/tablet_mode/tablet_mode_window_state.h"
 #include "base/metrics/user_metrics.h"
@@ -15,6 +14,7 @@
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/transform_util.h"
 #include "ui/views/animation/animation_builder.h"
+#include "ui/wm/core/scoped_animation_disabler.h"
 #include "ui/wm/core/window_util.h"
 #include "ui/wm/public/activation_client.h"
 
@@ -78,7 +78,7 @@ void ScopedWindowTucker::TuckHandleView::PaintButtonContents(
 
 void ScopedWindowTucker::TuckHandleView::OnGestureEvent(
     ui::GestureEvent* event) {
-  if (event->type() != ui::ET_GESTURE_SCROLL_BEGIN) {
+  if (event->type() != ui::EventType::kGestureScrollBegin) {
     views::Button::OnGestureEvent(event);
     return;
   }
@@ -169,7 +169,7 @@ void ScopedWindowTucker::AnimateTuck() {
 }
 
 void ScopedWindowTucker::AnimateUntuck(base::OnceClosure callback) {
-  ScopedAnimationDisabler disable(window_);
+  wm::ScopedAnimationDisabler disable(window_);
   window_->Show();
 
   const gfx::RectF initial_bounds(window_->bounds());
@@ -182,8 +182,6 @@ void ScopedWindowTucker::AnimateUntuck(base::OnceClosure callback) {
   tuck_handle->SetBounds(delegate_->GetTuckHandleBounds(left_, final_bounds));
 
   views::AnimationBuilder()
-      // TODO(sammiequon|sophiewen): Should we handle the case where the
-      // animation gets aborted?
       .OnEnded(std::move(callback))
       .SetPreemptionStrategy(
           ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET)
@@ -235,7 +233,9 @@ void ScopedWindowTucker::OnWindowBoundsChanged(
 }
 
 void ScopedWindowTucker::InitializeTuckHandleWidget() {
-  views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_POPUP);
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.parent =
       window()->GetRootWindow()->GetChildById(delegate_->ParentContainerId());
@@ -262,13 +262,13 @@ void ScopedWindowTucker::InitializeTuckHandleWidget() {
   auto mru_windows =
       Shell::Get()->mru_window_tracker()->BuildMruWindowList(kActiveDesk);
   auto app_window_it =
-      base::ranges::find_if(mru_windows, [this](aura::Window* w) {
+      std::ranges::find_if(mru_windows, [this](aura::Window* w) {
         CHECK(WindowState::Get(w));
         return w != window() && !WindowState::Get(w)->IsMinimized();
       });
   aura::Window* window_to_activate = nullptr;
   if (app_window_it == mru_windows.end()) {
-    if (display::Screen::GetScreen()->InTabletMode()) {
+    if (display::Screen::Get()->InTabletMode()) {
       window_to_activate = Shell::Get()->app_list_controller()->GetWindow();
     }
   } else {

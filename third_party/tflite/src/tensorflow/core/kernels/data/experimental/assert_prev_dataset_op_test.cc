@@ -51,7 +51,7 @@ class AssertPrevDatasetParams : public DatasetParams {
                           const std::vector<tstring>& transformations,
                           DataTypeVector output_dtypes,
                           std::vector<PartialTensorShape> output_shapes,
-                          string node_name)
+                          std::string node_name)
       : DatasetParams(std::move(output_dtypes), std::move(output_shapes),
                       std::move(node_name)),
         transformations_(transformations) {
@@ -67,20 +67,21 @@ class AssertPrevDatasetParams : public DatasetParams {
                                   transformations_)};
   }
 
-  Status GetInputNames(std::vector<string>* input_names) const override {
+  absl::Status GetInputNames(
+      std::vector<std::string>* input_names) const override {
     input_names->reserve(input_dataset_params_.size() + 1);
     input_names->emplace_back(AssertPrevDatasetOp::kInputDataset);
     input_names->emplace_back(AssertPrevDatasetOp::kTransformations);
     return absl::OkStatus();
   }
 
-  Status GetAttributes(AttributeVector* attr_vector) const override {
+  absl::Status GetAttributes(AttributeVector* attr_vector) const override {
     *attr_vector = {{AssertPrevDatasetOp::kOutputShapes, output_shapes_},
                     {AssertPrevDatasetOp::kOutputTypes, output_dtypes_}};
     return absl::OkStatus();
   }
 
-  string dataset_type() const override {
+  std::string dataset_type() const override {
     return AssertPrevDatasetOp::kDatasetType;
   }
 

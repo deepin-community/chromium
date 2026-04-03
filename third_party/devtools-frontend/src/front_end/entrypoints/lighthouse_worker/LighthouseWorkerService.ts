@@ -1,44 +1,30 @@
-// Copyright (c) 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import * as ProtocolClient from '../../core/protocol_client/protocol_client.js';
 import * as Root from '../../core/root/root.js';
 import * as PuppeteerService from '../../services/puppeteer/puppeteer.js';
-import type * as SDK from '../../core/sdk/sdk.js';
+import * as ThirdPartyWeb from '../../third_party/third-party-web/third-party-web.js';
 
 function disableLoggingForTest(): void {
   console.log = (): void => undefined;  // eslint-disable-line no-console
 }
 
 /**
- * ConnectionProxy is a SDK interface, but the implementation has no knowledge it's a parallelConnection.
- * The CDP traffic is smuggled back and forth by the system described in LighthouseProtocolService
+ * WorkerConnectionTransport is a DevTools `ConnectionTransport` implementation that talks
+ * CDP via web worker postMessage. The system is described in LighthouseProtocolService.
  */
-class ConnectionProxy implements SDK.Connections.ParallelConnectionInterface {
-  sessionId: string;
-  onMessage: ((arg0: Object) => void)|null;
-  onDisconnect: ((arg0: string) => void)|null;
+class WorkerConnectionTransport implements ProtocolClient.ConnectionTransport.ConnectionTransport {
+  onMessage: ((arg0: Object) => void)|null = null;
+  onDisconnect: ((arg0: string) => void)|null = null;
 
-  constructor(sessionId: string) {
-    this.sessionId = sessionId;
-    this.onMessage = null;
-    this.onDisconnect = null;
-  }
-
-  setOnMessage(onMessage: (arg0: (Object|string)) => void): void {
+  setOnMessage(onMessage: (arg0: Object|string) => void): void {
     this.onMessage = onMessage;
   }
 
   setOnDisconnect(onDisconnect: (arg0: string) => void): void {
     this.onDisconnect = onDisconnect;
-  }
-
-  getOnDisconnect(): (((arg0: string) => void)|null) {
-    return this.onDisconnect;
-  }
-
-  getSessionId(): string {
-    return this.sessionId;
   }
 
   sendRawMessage(message: string): void {
@@ -52,7 +38,7 @@ class ConnectionProxy implements SDK.Connections.ParallelConnectionInterface {
   }
 }
 
-let cdpConnection: ConnectionProxy|undefined;
+let cdpTransport: WorkerConnectionTransport|undefined;
 let endTimespan: (() => unknown)|undefined;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -89,22 +75,21 @@ async function invokeLH(action: string, args: any): Promise<unknown> {
     flags.channel = 'devtools';
     flags.locale = locale;
 
-    // TODO: Remove this filter once pubads is mode restricted
-    // https://github.com/googleads/publisher-ads-lighthouse-plugin/pull/339
-    if (action === 'startTimespan' || action === 'snapshot') {
-      args.categoryIDs = args.categoryIDs.filter((c: string) => c !== 'lighthouse-plugin-publisher-ads');
-    }
-
     // @ts-expect-error https://github.com/GoogleChrome/lighthouse/issues/11628
     const config = args.config || self.createConfig(args.categoryIDs, flags.formFactor);
     const url = args.url;
 
+    // @ts-expect-error https://github.com/GoogleChrome/lighthouse/issues/11628
+    self.thirdPartyWeb.provideThirdPartyWeb(ThirdPartyWeb.ThirdPartyWeb);
+
     const {rootTargetId, mainSessionId} = args;
-    cdpConnection = new ConnectionProxy(mainSessionId);
+    cdpTransport = new WorkerConnectionTransport();
+    const connection = new ProtocolClient.DevToolsCDPConnection.DevToolsCDPConnection(cdpTransport);
     puppeteerHandle =
         await PuppeteerService.PuppeteerConnection.PuppeteerConnectionHelper.connectPuppeteerToConnectionViaTab({
-          connection: cdpConnection,
-          rootTargetId,
+          connection,
+          targetId: rootTargetId,
+          sessionId: mainSessionId,
           // Lighthouse can only audit normal pages.
           isPageTargetCallback: targetInfo => targetInfo.type === 'page',
         });
@@ -160,14 +145,14 @@ async function fetchLocaleData(locales: string[]): Promise<string|void> {
   try {
     const remoteBase = Root.Runtime.getRemoteBase();
     let localeUrl: string;
-    if (remoteBase && remoteBase.base) {
+    if (remoteBase?.base) {
       localeUrl = `${remoteBase.base}third_party/lighthouse/locales/${locale}.json`;
     } else {
       localeUrl = new URL(`../../third_party/lighthouse/locales/${locale}.json`, import.meta.url).toString();
     }
 
-    const timeoutPromise = new Promise<string>(
-        (resolve, reject) => setTimeout(() => reject(new Error('timed out fetching locale')), 5000));
+    const timeoutPromise =
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out fetching locale')), 5000));
     const localeData = await Promise.race([timeoutPromise, fetch(localeUrl).then(result => result.json())]);
     // @ts-expect-error https://github.com/GoogleChrome/lighthouse/issues/11628
     self.registerLocaleData(locale, localeData);
@@ -214,7 +199,7 @@ async function onFrontendMessage(event: MessageEvent): Promise<void> {
       break;
     }
     case 'dispatchProtocolMessage': {
-      cdpConnection?.onMessage?.(messageFromFrontend.args.message);
+      cdpTransport?.onMessage?.(messageFromFrontend.args.message);
       break;
     }
     default: {
@@ -226,7 +211,6 @@ async function onFrontendMessage(event: MessageEvent): Promise<void> {
 self.onmessage = onFrontendMessage;
 
 // Make lighthouse and traceviewer happy.
-// @ts-ignore https://github.com/GoogleChrome/lighthouse/issues/11628
 globalThis.global = self;
 // @ts-expect-error https://github.com/GoogleChrome/lighthouse/issues/11628
 globalThis.global.isVinn = true;

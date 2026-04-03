@@ -22,8 +22,10 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "tensorflow/compiler/jit/pjrt_tensor_buffer_util.h"
 #include "xla/pjrt/c/pjrt_c_api.h"
-#include "xla/pjrt/pjrt_c_api_client.h"
+#include "xla/pjrt/c_api_client/pjrt_c_api_client.h"
 #include "xla/pjrt/pjrt_client.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
@@ -31,8 +33,6 @@ limitations under the License.
 #include "tensorflow/core/tfrt/common/global_state.h"
 #include "tensorflow/core/tfrt/common/pjrt_state.h"
 #include "tensorflow/core/tfrt/common/pjrt_util.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
 
 namespace tensorflow {
 
@@ -69,7 +69,7 @@ absl::Status SetPjRtCBufferToTensor(PJRT_Buffer* c_buffer,
 
 absl::StatusOr<xla::PjRtCApiClient*> GetPjRtCApiClient(
     const DeviceType& device_type) {
-  TF_ASSIGN_OR_RETURN(tsl::StatusOr<xla::PjRtClient*> pjrt_client,
+  TF_ASSIGN_OR_RETURN(absl::StatusOr<xla::PjRtClient*> pjrt_client,
                       tensorflow::GetPjRtClient(device_type));
   auto* pjrt_c_api_client = dynamic_cast<xla::PjRtCApiClient*>(*pjrt_client);
   if (pjrt_c_api_client == nullptr) {

@@ -9,15 +9,16 @@
 
 #include "base/callback_list.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
+#include "components/metrics/dwa/dwa_service.h"
 #include "components/metrics/metrics_service_observer.h"
+#include "components/variations/variations_seed_store.h"
 #include "content/public/browser/web_ui_message_handler.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "components/metrics/debug/structured/structured_metrics_debug_provider.h"
-#endif
+#include "third_party/federated_compute/src/fcp/confidentialcompute/cose.h"
 
 // UI Handler for chrome://metrics-internals.
-class MetricsInternalsHandler : public content::WebUIMessageHandler {
+class MetricsInternalsHandler : public content::WebUIMessageHandler,
+                                public metrics::dwa::DwaService::Observer {
  public:
   MetricsInternalsHandler();
 
@@ -43,31 +44,34 @@ class MetricsInternalsHandler : public content::WebUIMessageHandler {
   // owned by the WebUI page (|uma_log_observer_|).
   metrics::MetricsServiceObserver* GetUmaObserver();
 
-  void HandleFetchVariationsSummary(const base::Value::List& args);
-  void HandleFetchUmaSummary(const base::Value::List& args);
-  void HandleFetchUmaLogsData(const base::Value::List& args);
-  void HandleIsUsingMetricsServiceObserver(const base::Value::List& args);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  void HandleFetchStructuredMetricsEvents(const base::Value::List& args);
-  void HandleFetchStructuredMetricsSummary(const base::Value::List& args);
-#endif
+  void HandleFetchVariationsSummary(const base::ListValue& args);
+  void HandleFetchStoredSeedInfo(
+      variations::VariationsSeedStore::SeedType seed_type,
+      const base::ListValue& args);
+  void HandleFetchUmaSummary(const base::ListValue& args);
+  void HandleFetchUmaLogsData(const base::ListValue& args);
+  void HandleFetchEncryptionPublicKey(const base::ListValue& args);
+  void HandleIsUsingMetricsServiceObserver(const base::ListValue& args);
 
   void OnUmaLogCreatedOrEvent();
+
+  // metrics::dwa::DwaService::Observer:
+  void OnEncryptionPublicKeyChanged(
+      const fcp::confidential_compute::OkpCwt& decoded_public_key) override;
 
   // This UMA log observer keeps track of logs since its creation. It is unused
   // if the UMA metrics service has its own observer that has observed all
   // events since browser startup.
   std::unique_ptr<metrics::MetricsServiceObserver> uma_log_observer_;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  std::unique_ptr<metrics::structured::StructuredMetricsDebugProvider>
-      structured_metrics_debug_provider_;
-#endif
-
   // The callback subscription to |uma_log_observer_| that notifies the WebUI
   // of changes. When this subscription is destroyed, it is automatically
   // de-registered from the callback list.
   base::CallbackListSubscription uma_log_notified_subscription_;
+
+  base::ScopedObservation<metrics::dwa::DwaService,
+                          metrics::dwa::DwaService::Observer>
+      dwa_service_observation_{this};
 
   base::WeakPtrFactory<MetricsInternalsHandler> weak_ptr_factory_{this};
 };

@@ -4,18 +4,18 @@
 
 #include "chromeos/ash/services/secure_channel/ble_scanner_impl.h"
 
+#include <algorithm>
 #include <iterator>
 #include <memory>
 #include <utility>
 
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/to_vector.h"
 #include "chromeos/ash/components/multidevice/remote_device_test_util.h"
 #include "chromeos/ash/services/secure_channel/connection_role.h"
 #include "chromeos/ash/services/secure_channel/fake_ble_scanner.h"
@@ -47,9 +47,9 @@ class FakeBluetoothDevice : public device::MockBluetoothDevice {
                                     false /* paired */,
                                     false /* connected */) {
     // Convert |service_data| from a std::string to a std::vector<uint8_t>.
-    service_data_vector_ = base::test::ToVector(
-        service_data,
-        [](char character) { return static_cast<uint8_t>(character); });
+    service_data_vector_ = base::ToVector(service_data, [](char character) {
+      return static_cast<uint8_t>(character);
+    });
   }
 
   FakeBluetoothDevice(const FakeBluetoothDevice&) = delete;
@@ -121,22 +121,22 @@ class SecureChannelBleScannerImplTest : public testing::Test {
         std::move(fake_service_data_provider));
 
     ON_CALL(*mock_adapter_, StartScanWithFilter_(testing::_, testing::_))
-        .WillByDefault(testing::Invoke(
+        .WillByDefault(
             [](const device::BluetoothDiscoveryFilter* discovery_filter,
                device::BluetoothAdapter::DiscoverySessionResultCallback&
                    callback) {
               std::move(callback).Run(
                   /*is_error=*/false,
                   device::UMABluetoothDiscoverySessionOutcome::SUCCESS);
-            }));
+            });
     ON_CALL(*mock_adapter_, StopScan(testing::_))
-        .WillByDefault(testing::Invoke(
+        .WillByDefault(
             [](device::BluetoothAdapter::DiscoverySessionResultCallback
                    callback) {
               std::move(callback).Run(
                   /*is_error=*/false,
                   device::UMABluetoothDiscoverySessionOutcome::SUCCESS);
-            }));
+            });
     ON_CALL(*mock_adapter_, StartLowEnergyScanSession(testing::_, testing::_))
         .WillByDefault(Invoke(
             this, &SecureChannelBleScannerImplTest::StartLowEnergyScanSession));

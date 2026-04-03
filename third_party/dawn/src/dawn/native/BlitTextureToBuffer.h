@@ -32,14 +32,18 @@
 
 namespace dawn::native {
 
+struct Format;
 struct TextureCopy;
 struct BufferCopy;
+struct BlockExtent3D;
+
+bool IsFormatSupportedByTextureToBufferBlit(wgpu::TextureFormat format);
 
 MaybeError BlitTextureToBuffer(DeviceBase* device,
                                CommandEncoder* commandEncoder,
                                const TextureCopy& src,
                                const BufferCopy& dst,
-                               const Extent3D& copyExtent);
+                               const BlockExtent3D& copyExtent);
 
 }  // namespace dawn::native
 

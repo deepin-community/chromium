@@ -7,45 +7,28 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/browser/ui/views/bubble/webui_bubble_dialog_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "content/public/browser/spare_render_process_host_manager.h"
 #include "content/public/test/browser_test.h"
-#include "content/public/test/browser_test_utils.h"
-#include "ui/webui/mojo_bubble_web_ui_controller.h"
 
 namespace {
-
-void DestroySpareRenderProcess() {
-  content::RenderProcessHost* spare_render_process_host =
-      content::RenderProcessHost::GetSpareRenderProcessHostForTesting();
-  if (!spare_render_process_host) {
-    return;
-  }
-
-  content::RenderProcessHostWatcher kill_observer(
-      spare_render_process_host,
-      content::RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
-  spare_render_process_host->FastShutdownIfPossible(0);
-  kill_observer.Wait();
-}
 
 // Close the bubble, clear any cached content wrapper, including the ones
 // stored in the contents wrapper service.
 void DestroyBubble(WebUIBubbleManager* bubble_manager, Profile* profile) {
   bubble_manager->CloseBubble();
   bubble_manager->ResetContentsWrapperForTesting();
-  if (auto* service =
-          WebUIContentsWrapperServiceFactory::GetForProfile(profile, true)) {
-    service->Shutdown();
-  }
   base::RunLoop().RunUntilIdle();
 }
 
 }  // namespace
 
-class TestWebUIController : public ui::MojoBubbleWebUIController {
+class TestWebUIController : public TopChromeWebUIController {
   WEB_UI_CONTROLLER_TYPE_DECL();
 };
 WEB_UI_CONTROLLER_TYPE_IMPL(TestWebUIController)
@@ -55,15 +38,17 @@ class WebUIContentsWrapperT<TestWebUIController> final
     : public WebUIContentsWrapper {
  public:
   WebUIContentsWrapperT(const GURL& webui_url,
-                        content::BrowserContext* browser_context,
+                        Profile* profile,
                         int task_manager_string_id,
                         bool webui_resizes_host = true,
-                        bool esc_closes_ui = true)
+                        bool esc_closes_ui = true,
+                        bool supports_draggable_regions = false)
       : WebUIContentsWrapper(webui_url,
-                             browser_context,
+                             profile,
                              task_manager_string_id,
                              webui_resizes_host,
                              esc_closes_ui,
+                             supports_draggable_regions,
                              "Test") {}
   void ReloadWebContents() override {}
   base::WeakPtr<WebUIContentsWrapper> GetWeakPtr() override {
@@ -98,9 +83,9 @@ class WebUIBubbleManagerBrowserTest : public InProcessBrowserTest {
   // process.
   std::unique_ptr<WebUIBubbleManager> MakeBubbleManager(
       GURL site_url = GURL("chrome://test.top-chrome")) {
-    return std::make_unique<WebUIBubbleManagerT<TestWebUIController>>(
-        BrowserView::GetBrowserViewForBrowser(browser()), browser()->profile(),
-        site_url, 1);
+    return WebUIBubbleManager::Create<TestWebUIController>(
+        BrowserView::GetBrowserViewForBrowser(browser()), browser(), site_url,
+        1);
   }
 
   void DestroyBubbleManager() { bubble_manager_.reset(); }
@@ -158,18 +143,18 @@ IN_PROC_BROWSER_TEST_F(WebUIBubbleManagerBrowserTest,
 // TODO(crbug.com/325316150): Fix flakiness and re-enable.
 IN_PROC_BROWSER_TEST_F(WebUIBubbleManagerBrowserTest, DISABLED_WarmupLevel) {
   // Use the spare renderer if there is one.
-  EXPECT_NE(content::RenderProcessHost::GetSpareRenderProcessHostForTesting(),
-            nullptr);
+  auto& spare_manager = content::SpareRenderProcessHostManager::Get();
+  EXPECT_FALSE(spare_manager.GetSpares().empty());
   bubble_manager()->ShowBubble();
-  EXPECT_EQ(bubble_manager()->bubble_warmup_level(),
-            WebUIBubbleWarmUpLevel::kSpareRenderer);
+  EXPECT_EQ(bubble_manager()->contents_warmup_level(),
+            WebUIContentsWarmupLevel::kSpareRenderer);
 
   // Create a new process if there is no spare renderer.
-  DestroySpareRenderProcess();
+  spare_manager.CleanupSparesForTesting();
   DestroyBubble(bubble_manager(), browser()->profile());
   bubble_manager()->ShowBubble();
-  EXPECT_EQ(bubble_manager()->bubble_warmup_level(),
-            WebUIBubbleWarmUpLevel::kNoRenderer);
+  EXPECT_EQ(bubble_manager()->contents_warmup_level(),
+            WebUIContentsWarmupLevel::kNoRenderer);
 
   // Use the process dedicated to top chrome WebUIs if there is one.
   DestroyBubble(bubble_manager(), browser()->profile());
@@ -179,13 +164,25 @@ IN_PROC_BROWSER_TEST_F(WebUIBubbleManagerBrowserTest, DISABLED_WarmupLevel) {
       MakeBubbleManager(GURL("chrome://test2.top-chrome"));
   another_bubble_manager->ShowBubble();
   bubble_manager()->ShowBubble();
-  EXPECT_EQ(bubble_manager()->bubble_warmup_level(),
-            WebUIBubbleWarmUpLevel::kDedicatedRenderer);
+  EXPECT_EQ(bubble_manager()->contents_warmup_level(),
+            WebUIContentsWarmupLevel::kDedicatedRenderer);
 
   // Use the cached WebContents if there is one.
   bubble_manager()->CloseBubble();
   base::RunLoop().RunUntilIdle();
   bubble_manager()->ShowBubble();
-  EXPECT_EQ(bubble_manager()->bubble_warmup_level(),
-            WebUIBubbleWarmUpLevel::kNavigatedWebContents);
+  EXPECT_EQ(bubble_manager()->contents_warmup_level(),
+            WebUIContentsWarmupLevel::kReshowingWebContents);
+}
+
+IN_PROC_BROWSER_TEST_F(WebUIBubbleManagerBrowserTest,
+                       BrowserWindowContextSetOnShow) {
+  EXPECT_EQ(nullptr, bubble_manager()->GetBubbleWidget());
+  bubble_manager()->ShowBubble();
+  EXPECT_TRUE(bubble_manager()->GetBubbleWidget());
+
+  EXPECT_EQ(
+      browser(),
+      webui::GetBrowserWindowInterface(
+          bubble_manager()->GetContentsWrapperForTesting()->web_contents()));
 }

@@ -4,6 +4,7 @@
 
 #include "ash/system/time/calendar_up_next_view.h"
 
+#include <optional>
 #include <utility>
 
 #include "ash/public/cpp/test/test_system_tray_client.h"
@@ -18,6 +19,8 @@
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
+#include "google_apis/calendar/calendar_api_requests.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
 
@@ -70,9 +73,12 @@ class CalendarUpNextViewTest : public AshTestBase {
   void SetUp() override {
     AshTestBase::SetUp();
     controller_ = std::make_unique<CalendarViewController>();
+    normal_duration_.emplace(
+        gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   }
 
   void TearDown() override {
+    normal_duration_.reset();
     controller_.reset();
     AshTestBase::TearDown();
   }
@@ -89,6 +95,7 @@ class CalendarUpNextViewTest : public AshTestBase {
     Shell::Get()->system_tray_model()->calendar_model()->OnEventsFetched(
         calendar_utils::GetStartOfMonthUTC(
             base::subtle::TimeNowIgnoringOverride().LocalMidnight()),
+        google_apis::calendar::kPrimaryCalendarId,
         google_apis::ApiErrorCode::HTTP_SUCCESS,
         calendar_test_utils::CreateMockEventList(std::move(events)).get());
 
@@ -169,6 +176,7 @@ class CalendarUpNextViewTest : public AshTestBase {
   std::unique_ptr<views::Widget> widget_;
   raw_ptr<CalendarUpNextView> up_next_view_;
   std::unique_ptr<CalendarViewController> controller_;
+  std::optional<gfx::ScopedAnimationDurationScaleMode> normal_duration_;
 };
 
 TEST_F(CalendarUpNextViewTest, ShouldShowMultipleUpcomingEvents) {
@@ -557,8 +565,8 @@ TEST_F(CalendarUpNextViewTest, ShouldFocusViewsInCorrectOrder_WhenPressingTab) {
   auto* first_item = GetContentsView()->children()[0].get();
   ASSERT_TRUE(first_item);
   EXPECT_EQ(first_item, focus_manager->GetFocusedView());
-  EXPECT_STREQ("CalendarEventListItemView",
-               focus_manager->GetFocusedView()->GetClassName());
+  EXPECT_EQ("CalendarEventListItemView",
+            focus_manager->GetFocusedView()->GetClassName());
 
   // Next, the "Join" button should be focused.
   PressTab();
@@ -570,8 +578,8 @@ TEST_F(CalendarUpNextViewTest, ShouldFocusViewsInCorrectOrder_WhenPressingTab) {
   auto* second_item = GetContentsView()->children()[1].get();
   ASSERT_TRUE(second_item);
   EXPECT_EQ(second_item, focus_manager->GetFocusedView());
-  EXPECT_STREQ("CalendarEventListItemView",
-               focus_manager->GetFocusedView()->GetClassName());
+  EXPECT_EQ("CalendarEventListItemView",
+            focus_manager->GetFocusedView()->GetClassName());
 
   // Next, the second event list item view "Join" button should be focused.
   PressTab();
@@ -591,8 +599,8 @@ TEST_F(CalendarUpNextViewTest, ShouldFocusViewsInCorrectOrder_WhenPressingTab) {
   // Going back again, the second event list item view should be focused.
   PressShiftTab();
   EXPECT_EQ(second_item, focus_manager->GetFocusedView());
-  EXPECT_STREQ("CalendarEventListItemView",
-               focus_manager->GetFocusedView()->GetClassName());
+  EXPECT_EQ("CalendarEventListItemView",
+            focus_manager->GetFocusedView()->GetClassName());
 }
 
 // Add unittest for the fix of this bug: b/286596205.
@@ -613,16 +621,16 @@ TEST_F(CalendarUpNextViewTest, ShouldPreserveFocusAfterRefreshEvent) {
   auto* first_item = GetContentsView()->children()[0].get();
   ASSERT_TRUE(first_item);
   EXPECT_EQ(first_item, focus_manager->GetFocusedView());
-  EXPECT_STREQ("CalendarEventListItemView",
-               focus_manager->GetFocusedView()->GetClassName());
+  EXPECT_EQ("CalendarEventListItemView",
+            focus_manager->GetFocusedView()->GetClassName());
 
   up_next_view()->RefreshEvents();
 
   // After refresh the events, the first event list item view should still be
   // focused.
   EXPECT_EQ(first_item, focus_manager->GetFocusedView());
-  EXPECT_STREQ("CalendarEventListItemView",
-               focus_manager->GetFocusedView()->GetClassName());
+  EXPECT_EQ("CalendarEventListItemView",
+            focus_manager->GetFocusedView()->GetClassName());
 }
 
 class CalendarUpNextViewAnimationTest : public CalendarUpNextViewTest {
@@ -631,9 +639,13 @@ class CalendarUpNextViewAnimationTest : public CalendarUpNextViewTest {
       : CalendarUpNextViewTest(
             base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
 
-  void PressScrollLeftButton() override { LeftClickOn(GetScrollLeftButton()); }
+  void PressScrollLeftButton() override {
+    ASSERT_TRUE(GetScrollLeftButton()->GetEnabled());
+    LeftClickOn(GetScrollLeftButton());
+  }
 
   void PressScrollRightButton() override {
+    ASSERT_TRUE(GetScrollRightButton()->GetEnabled());
     LeftClickOn(GetScrollRightButton());
   }
 
@@ -646,9 +658,39 @@ class CalendarUpNextViewAnimationTest : public CalendarUpNextViewTest {
   const base::TimeDelta kAnimationFinishedDuration = base::Seconds(1);
 };
 
-// Flaky: https://crbug.com/1401505
 TEST_F(CalendarUpNextViewAnimationTest,
-       DISABLED_ShouldAnimateScrollView_WhenScrollButtonsArePressed) {
+       ShouldAnimateScrollView_WhenScrollButtonsArePressed) {
+  // This test is sensitive to the time at which events are created versus the
+  // time the UI component believes is "now".
+  //
+  // THE PROBLEM:
+  // 1. Event Creation Time: The `CreateUpcomingEvents` helper function uses
+  //    `base::subtle::TimeNowIgnoringOverride()`, which gets the REAL system
+  //    clock time to create event timestamps.
+  // 2. UI Component Time: The `CalendarUpNextView` and its data source,
+  //    `CalendarModel`, operate within the test's `TaskEnvironment`, which uses
+  //    a MOCK clock. By default, this mock clock starts at an arbitrary "time
+  //    zero" (e.g., a date in 1970).
+  // 3. Filtering Logic: The `CalendarModel` filters the events to only show
+  //    what is "up next" relative to its mock clock. When the mock clock is in
+  //    1970 and the events are for the current date, the model fails to
+  //    correctly identify the events as upcoming for "today". This results in
+  //    the view showing only a single event (not enough to require scrolling),
+  //    disabled scroll buttons, and a test failure.
+  //
+  // THE SOLUTION:
+  // This line synchronizes the clocks. It calculates the precise duration
+  // between the mock clock's starting time (`base::Time::Now()` within the test
+  // environment) and the beginning of the real world's current day
+  // (`LocalMidnight`). It then advances the mock clock by that duration. This
+  // ensures that when the `CalendarModel` performs its filtering, its sense of
+  // "now" is on the same day as the event timestamps. Using `LocalMidnight` is
+  // critical for predictability; it establishes a stable, consistent start
+  // time for the test, regardless of the time of day it is run, which is
+  // crucial for avoiding flakiness.
+  task_environment()->AdvanceClock(
+      base::subtle::TimeNowIgnoringOverride().LocalMidnight() -
+      base::Time::Now());
   // Add multiple upcoming events.
   const int event_count = 5;
   CreateUpNextView(CreateUpcomingEvents(event_count));

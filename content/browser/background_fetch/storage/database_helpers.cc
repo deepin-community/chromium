@@ -34,7 +34,8 @@ std::string PendingRequestKeyPrefix(const std::string& unique_id) {
 }
 
 std::string PendingRequestKey(const std::string& unique_id, int request_index) {
-  return PendingRequestKeyPrefix(unique_id) + std::to_string(request_index);
+  return PendingRequestKeyPrefix(unique_id) +
+         base::NumberToString(request_index);
 }
 
 std::string ActiveRequestKeyPrefix(const std::string& unique_id) {
@@ -42,7 +43,8 @@ std::string ActiveRequestKeyPrefix(const std::string& unique_id) {
 }
 
 std::string ActiveRequestKey(const std::string& unique_id, int request_index) {
-  return ActiveRequestKeyPrefix(unique_id) + std::to_string(request_index);
+  return ActiveRequestKeyPrefix(unique_id) +
+         base::NumberToString(request_index);
 }
 
 std::string CompletedRequestKeyPrefix(const std::string& unique_id) {
@@ -51,7 +53,8 @@ std::string CompletedRequestKeyPrefix(const std::string& unique_id) {
 
 std::string CompletedRequestKey(const std::string& unique_id,
                                 int request_index) {
-  return CompletedRequestKeyPrefix(unique_id) + std::to_string(request_index);
+  return CompletedRequestKeyPrefix(unique_id) +
+         base::NumberToString(request_index);
 }
 
 std::string StorageVersionKey(const std::string& unique_id) {
@@ -94,7 +97,6 @@ DatabaseStatus ToDatabaseStatus(blink::ServiceWorkerStatusCode status) {
       break;
   }
   NOTREACHED();
-  return DatabaseStatus::kFailed;
 }
 
 bool ToBackgroundFetchRegistration(
@@ -191,7 +193,7 @@ bool MojoFailureReasonFromRegistrationProto(
 GURL MakeCacheUrlUnique(const GURL& url,
                         const std::string& unique_id,
                         size_t request_index) {
-  std::string query = url.query();
+  std::string query = url.GetQuery();
   query += unique_id + base::NumberToString(request_index);
 
   GURL::Replacements replacements;
@@ -203,15 +205,17 @@ GURL MakeCacheUrlUnique(const GURL& url,
 GURL RemoveUniqueParamFromCacheURL(const GURL& url,
                                    const std::string& unique_id) {
   std::vector<std::string> split = base::SplitStringUsingSubstr(
-      url.query(), unique_id, base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+      url.GetQuery(), unique_id, base::KEEP_WHITESPACE,
+      base::SPLIT_WANT_NONEMPTY);
 
   GURL::Replacements replacements;
-  if (split.size() == 1u)
+  if (split.size() == 1u) {
     replacements.ClearQuery();
-  else if (split.size() == 2u)
+  } else if (split.size() == 2u) {
     replacements.SetQueryStr(split[0]);
-  else
+  } else {
     NOTREACHED();
+  }
 
   return url.ReplaceComponents(replacements);
 }

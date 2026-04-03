@@ -50,9 +50,19 @@ class CORE_EXPORT HTMLDataListElement final : public HTMLElement {
 
   void OptionElementChildrenChanged();
 
-  HTMLSelectElement* ParentSelect() const;
-  Node::InsertionNotificationRequest InsertedInto(ContainerNode&) override;
-  void RemovedFrom(ContainerNode&) override;
+  HTMLOptionElement* ActiveOption() const { return active_option_; }
+
+  void ShowPopoverInternal(Element*, ExceptionState*) override;
+  PopoverHideResult HidePopoverInternal(
+      Element* invoker,
+      HidePopoverFocusBehavior focus_behavior,
+      HidePopoverTransitionBehavior event_firing,
+      ExceptionState* exception_state) override;
+
+  void Trace(Visitor*) const override;
+
+ protected:
+  bool SupportsBaseAppearanceInternal(BaseAppearanceValue) const override;
 
  private:
   void ChildrenChanged(const ChildrenChange&) override;
@@ -61,6 +71,10 @@ class CORE_EXPORT HTMLDataListElement final : public HTMLElement {
 
   // Called when no longer reachable and about to be deleted.
   void Prefinalize();
+
+  // The option which should match the :active-option pseudo-class. Only used
+  // for base appearance when the CustomizableCombobox flag is enabled.
+  Member<HTMLOptionElement> active_option_;
 };
 
 }  // namespace blink

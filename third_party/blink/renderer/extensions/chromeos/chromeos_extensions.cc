@@ -11,8 +11,14 @@
 #include "third_party/blink/renderer/extensions/chromeos/event_type_chromeos_names.h"
 #include "third_party/blink/renderer/modules/service_worker/service_worker_global_scope.h"
 #include "third_party/blink/renderer/platform/bindings/extensions_registry.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_set_return_value.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
+#include "v8/include/v8-local-handle.h"
+#include "v8/include/v8-object.h"
+#include "v8/include/v8-primitive.h"
 
 namespace blink {
 
@@ -21,7 +27,7 @@ void ChromeOSDataPropertyGetCallback(
     v8::Local<v8::Name> v8_property_name,
     const v8::PropertyCallbackInfo<v8::Value>& info) {
   bindings::V8SetReturnValue(info, MakeGarbageCollected<ChromeOS>(),
-                             info.Holder()->GetCreationContextChecked());
+                             info.HolderV2()->GetCreationContextChecked());
 }
 
 // Whether we should install ChromeOS extensions in `execution_context`.

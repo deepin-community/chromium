@@ -3,8 +3,10 @@
 // found in the LICENSE file.
 
 #include <objbase.h>
-#include <shlobj.h>
+
 #include <shobjidl.h>
+
+#include <shlobj.h>
 #include <wrl/client.h>
 
 #include <cwchar>
@@ -13,7 +15,6 @@
 
 #include "base/command_line.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/notreached.h"
@@ -118,7 +119,6 @@ bool ShowSetUpUrlForwarderDialog() {
       return false;
     default:
       NOTREACHED() << "Unknown button: " << *button_result;
-      return false;
   }
 }
 

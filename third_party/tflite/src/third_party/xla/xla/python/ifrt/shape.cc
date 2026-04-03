@@ -22,15 +22,17 @@ limitations under the License.
 #include <variant>
 
 #include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
-#include "xla/python/ifrt/types.pb.h"
-#include "xla/status.h"
-#include "xla/statusor.h"
+#include "xla/python/ifrt/serdes_version.h"
+#include "xla/python/ifrt/shape.pb.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace ifrt {
@@ -49,7 +51,13 @@ overloaded(Ts...) -> overloaded<Ts...>;
 
 }  // namespace
 
-StatusOr<Shape> Shape::FromProto(const ShapeProto& proto) {
+absl::StatusOr<Shape> Shape::FromProto(const ShapeProto& proto) {
+  const SerDesVersionNumber version_number(proto.version_number());
+  if (version_number != SerDesVersionNumber(0)) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Unsupported ", version_number, " for Shape deserialization"));
+  }
+
   Shape::Dimensions dims;
   dims.reserve(proto.dims_size());
   for (int64_t dim : proto.dims()) {
@@ -62,13 +70,20 @@ StatusOr<Shape> Shape::FromProto(const ShapeProto& proto) {
   return Shape(std::move(dims));
 }
 
-ShapeProto Shape::ToProto() const {
-  ShapeProto proto;
+void Shape::ToProto(ShapeProto& proto, SerDesVersion version) const {
+  // TODO(b/423702568): Change the return type to `absl::StatusOr<...>` for
+  // graceful error handling.
+  CHECK_GE(version.version_number(), SerDesVersionNumber(0))
+      << "Unsupported " << version.version_number()
+      << " for Shape serialization";
+
+  proto.Clear();
+  proto.set_version_number(SerDesVersionNumber(0).value());
+
   proto.mutable_dims()->Reserve(dims().size());
   for (int64_t dim : dims()) {
     proto.mutable_dims()->AddAlreadyReserved(dim);
   }
-  return proto;
 }
 
 int64_t Shape::num_elements() const {
@@ -83,8 +98,15 @@ std::string Shape::DebugString() const {
   return absl::StrCat("[", absl::StrJoin(dims_, ","), "]");
 }
 
-StatusOr<BoundedDynamicShapeTag> BoundedDynamicShapeTag::FromProto(
+absl::StatusOr<BoundedDynamicShapeTag> BoundedDynamicShapeTag::FromProto(
     const BoundedDynamicShapeTagProto& proto) {
+  const SerDesVersionNumber version_number(proto.version_number());
+  if (version_number != SerDesVersionNumber(0)) {
+    return absl::FailedPreconditionError(
+        absl::StrCat("Unsupported ", version_number,
+                     " for BoundedDynamicShapeTag deserialization"));
+  }
+
   BoundedDynamicShapeTag::DynamicDimensions dynamic_dims;
   dynamic_dims.reserve(proto.is_dynamic_dims_size());
   for (bool dynamic_dim : proto.is_dynamic_dims()) {
@@ -93,31 +115,40 @@ StatusOr<BoundedDynamicShapeTag> BoundedDynamicShapeTag::FromProto(
   return BoundedDynamicShapeTag(std::move(dynamic_dims));
 }
 
-BoundedDynamicShapeTagProto BoundedDynamicShapeTag::ToProto() const {
-  BoundedDynamicShapeTagProto proto;
+void BoundedDynamicShapeTag::ToProto(BoundedDynamicShapeTagProto& proto,
+                                     SerDesVersion version) const {
+  // TODO(b/423702568): Change the return type to `absl::StatusOr<...>` for
+  // graceful error handling.
+  CHECK_GE(version.version_number(), SerDesVersionNumber(0))
+      << "Unsupported " << version.version_number()
+      << " for BoundedDynamicShapeTag serialization";
+
+  proto.Clear();
+  proto.set_version_number(SerDesVersionNumber(0).value());
+
   proto.mutable_is_dynamic_dims()->Reserve(dynamic_dims_.size());
   for (bool dynamic_dim : dynamic_dims_) {
     proto.mutable_is_dynamic_dims()->AddAlreadyReserved(dynamic_dim);
   }
-  return proto;
 }
 
-StatusOr<DynamicShape> DynamicShape::Create(Shape shape, DynamicShapeTag tag) {
+absl::StatusOr<DynamicShape> DynamicShape::Create(Shape shape,
+                                                  DynamicShapeTag tag) {
   TF_RETURN_IF_ERROR(std::visit(
       overloaded{
-          [&](const BoundedDynamicShapeTag& tag) {
+          [&](const BoundedDynamicShapeTag& tag) -> absl::Status {
             if (tag.DynamicDims().size() != shape.dims().size()) {
               return InvalidArgument(
                   "Shape and tag must have the same number of dimensions.");
             }
-            return xla::OkStatus();
+            return absl::OkStatus();
           },
       },
       tag));
   return DynamicShape(std::move(shape), std::move(tag));
 }
 
-StatusOr<Shape> DynamicShape::GetPaddedShape() const {
+absl::StatusOr<Shape> DynamicShape::GetPaddedShape() const {
   return std::visit(
       overloaded{
           [this](BoundedDynamicShapeTag tag) { return shape_; },
@@ -135,7 +166,14 @@ bool DynamicShape::IsDynamicDim(int dimension) const {
       tag_);
 }
 
-StatusOr<DynamicShape> DynamicShape::FromProto(const DynamicShapeProto& proto) {
+absl::StatusOr<DynamicShape> DynamicShape::FromProto(
+    const DynamicShapeProto& proto) {
+  const SerDesVersionNumber version_number(proto.version_number());
+  if (version_number != SerDesVersionNumber(0)) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Unsupported ", version_number, " for DynamicShape deserialization"));
+  }
+
   TF_ASSIGN_OR_RETURN(Shape shape, Shape::FromProto(proto.shape()));
   if (proto.has_bounded_dynamic_shape_tag()) {
     TF_ASSIGN_OR_RETURN(
@@ -146,17 +184,25 @@ StatusOr<DynamicShape> DynamicShape::FromProto(const DynamicShapeProto& proto) {
   return InvalidArgument("Only support bounded dynamic shape.");
 }
 
-DynamicShapeProto DynamicShape::ToProto() const {
-  DynamicShapeProto proto;
-  *proto.mutable_shape() = shape_.ToProto();
+void DynamicShape::ToProto(DynamicShapeProto& proto,
+                           SerDesVersion version) const {
+  // TODO(b/423702568): Change the return type to `absl::StatusOr<...>` for
+  // graceful error handling.
+  CHECK_GE(version.version_number(), SerDesVersionNumber(0))
+      << "Unsupported " << version.version_number()
+      << " for DynamicShape serialization";
+
+  proto.Clear();
+  proto.set_version_number(SerDesVersionNumber(0).value());
+
+  shape_.ToProto(*proto.mutable_shape(), version);
   std::visit(
       overloaded{
-          [&proto](BoundedDynamicShapeTag tag) {
-            *proto.mutable_bounded_dynamic_shape_tag() = tag.ToProto();
+          [&proto, version](BoundedDynamicShapeTag tag) {
+            tag.ToProto(*proto.mutable_bounded_dynamic_shape_tag(), version);
           },
       },
       tag_);
-  return proto;
 }
 
 std::string DynamicShape::DebugString() const {

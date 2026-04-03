@@ -9,10 +9,11 @@
 
 #include <cmath>
 #include <memory>
+#include <numbers>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/numerics/math_constants.h"
 #include "remoting/codec/audio_decoder_opus.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -26,7 +27,7 @@ const int kMaxSampleValue = 32767;
 const int kChannels = 2;
 
 // Phase shift between left and right channels.
-const double kChannelPhaseShift = 2 * base::kPiDouble / 3;
+const double kChannelPhaseShift = 2 * std::numbers::pi / 3;
 
 // The sampling rate that OPUS uses internally and that we expect to get
 // from the decoder.
@@ -60,7 +61,7 @@ class OpusAudioEncoderTest : public testing::Test {
                                 double pos,
                                 int channel) {
     double angle =
-        pos * 2 * base::kPiDouble * frequency_hz / static_cast<double>(rate) +
+        pos * 2 * std::numbers::pi * frequency_hz / static_cast<double>(rate) +
         kChannelPhaseShift * channel;
     return static_cast<int>(std::sin(angle) * kMaxSampleValue + 0.5);
   }
@@ -147,11 +148,11 @@ class OpusAudioEncoderTest : public testing::Test {
             decoder_->Decode(std::move(encoded));
         EXPECT_EQ(kDefaultSamplingRate, decoded->sampling_rate());
         for (int i = 0; i < decoded->data_size(); ++i) {
-          const int16_t* data =
-              reinterpret_cast<const int16_t*>(decoded->data(i).data());
+          const int16_t* data = UNSAFE_TODO(
+              reinterpret_cast<const int16_t*>(decoded->data(i).data()));
           received_data.insert(
               received_data.end(), data,
-              data + decoded->data(i).size() / sizeof(int16_t));
+              UNSAFE_TODO(data + decoded->data(i).size() / sizeof(int16_t)));
         }
       }
     }

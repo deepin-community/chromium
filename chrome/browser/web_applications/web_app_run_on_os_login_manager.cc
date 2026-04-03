@@ -11,14 +11,15 @@
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/locks/all_apps_lock.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/common/chrome_features.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/web_contents.h"
@@ -45,11 +46,7 @@ void WebAppRunOnOsLoginManager::Start() {
     return;
   }
 
-  if (!base::FeatureList::IsEnabled(features::kDesktopPWAsRunOnOsLogin)) {
-    return;
-  }
-
-  network::mojom::ConnectionType connection_type;
+  net::NetworkChangeNotifier::ConnectionType connection_type;
   // `GetConnectionType` will execute either synchronously (and return true and
   // store the value in the `connection_type`) or asynchronously (and return
   // false and call `OnInitialConnectionTypeReceived` once it is done).
@@ -64,9 +61,8 @@ void WebAppRunOnOsLoginManager::Start() {
   }
 }
 
-void WebAppRunOnOsLoginManager::RunAppsOnOsLogin(
-    AllAppsLock& lock,
-    base::Value::Dict& debug_value) {
+void WebAppRunOnOsLoginManager::RunAppsOnOsLogin(AllAppsLock& lock,
+                                                 base::DictValue& debug_value) {
   base::flat_map<webapps::AppId, WebAppUiManager::RoolNotificationBehavior>
       notification_behaviors;
 
@@ -88,7 +84,7 @@ void WebAppRunOnOsLoginManager::RunAppsOnOsLogin(
       continue;
     }
 
-    // TODO(crbug.com/1091964): Implement Run on OS Login mode selection and
+    // TODO(crbug.com/40698043): Implement Run on OS Login mode selection and
     // launch app appropriately.
     // For ROOL on ChromeOS, we only have managed web apps which need to be run
     // as standalone windows, never as tabs
@@ -108,12 +104,12 @@ void WebAppRunOnOsLoginManager::RunAppsOnOsLogin(
 }
 
 void WebAppRunOnOsLoginManager::OnInitialConnectionTypeReceived(
-    network::mojom::ConnectionType type) {
+    net::NetworkChangeNotifier::ConnectionType type) {
   CHECK(!scheduled_run_on_os_login_command_);
 
   // If there is a connection, schedule ROOL and stop listening to the network
   // status.
-  if (type != network::mojom::ConnectionType::CONNECTION_NONE) {
+  if (type != net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE) {
     RunOsLoginAppsAndMaybeUnregisterObserver();
     return;
   }
@@ -123,12 +119,12 @@ void WebAppRunOnOsLoginManager::OnInitialConnectionTypeReceived(
 }
 
 void WebAppRunOnOsLoginManager::OnConnectionChanged(
-    network::mojom::ConnectionType type) {
+    net::NetworkChangeNotifier::ConnectionType type) {
   CHECK(!scheduled_run_on_os_login_command_);
 
   // If there is a connection, schedule ROOL and stop listening to the network
   // status. Otherwise, keep listening.
-  if (type != network::mojom::ConnectionType::CONNECTION_NONE) {
+  if (type != net::NetworkChangeNotifier::ConnectionType::CONNECTION_NONE) {
     RunOsLoginAppsAndMaybeUnregisterObserver();
   }
 }

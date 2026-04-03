@@ -15,21 +15,25 @@ import 'chrome://resources/ash/common/cr_elements/cr_toggle/cr_toggle.js';
 import 'chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js';
 import 'chrome://resources/polymer/v3_0/iron-flex-layout/iron-flex-layout-classes.js';
 
+import type {CrToggleElement} from 'chrome://resources/ash/common/cr_elements/cr_toggle/cr_toggle.js';
+import type {I18nMixinInterface} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
+import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
+import type {CrPolicyIndicatorType} from 'chrome://resources/ash/common/cr_elements/policy/cr_policy_indicator_mixin.js';
 import {getSimSlotCount} from 'chrome://resources/ash/common/network/cellular_utils.js';
-import {CrPolicyNetworkBehaviorMojo, CrPolicyNetworkBehaviorMojoInterface} from 'chrome://resources/ash/common/network/cr_policy_network_behavior_mojo.js';
+import type {CrPolicyNetworkBehaviorMojoInterface} from 'chrome://resources/ash/common/network/cr_policy_network_behavior_mojo.js';
+import {CrPolicyNetworkBehaviorMojo} from 'chrome://resources/ash/common/network/cr_policy_network_behavior_mojo.js';
 import {OncMojo} from 'chrome://resources/ash/common/network/onc_mojo.js';
-import {CrToggleElement} from 'chrome://resources/ash/common/cr_elements/cr_toggle/cr_toggle.js';
-import {I18nMixin, I18nMixinInterface} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
-import {CrPolicyIndicatorType} from 'chrome://resources/ash/common/cr_elements/policy/cr_policy_indicator_mixin.js';
 import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {GlobalPolicy, VpnType} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
+import type {GlobalPolicy} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
+import {VpnType} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
 import {ConnectionStateType, DeviceStateType, NetworkType, OncSource, PortalState} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/network_types.mojom-webui.js';
 import {mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {Constructor} from '../common/types.js';
+import type {Constructor} from '../common/types.js';
 
-import {InternetPageBrowserProxy, InternetPageBrowserProxyImpl} from './internet_page_browser_proxy.js';
+import type {InternetPageBrowserProxy} from './internet_page_browser_proxy.js';
+import {InternetPageBrowserProxyImpl} from './internet_page_browser_proxy.js';
 import {getTemplate} from './network_summary_item.html.js';
 
 const NetworkSummaryItemElementBase =
@@ -124,7 +128,14 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
       return this.i18n('internetDeviceBusy');
     }
 
+    if (OncMojo.deviceIsFlashing(this.deviceState)) {
+      return this.i18n('internetDeviceFlashing');
+    }
+
     if (this.isPortalState_(this.activeNetworkState!.portalState)) {
+      if (this.deviceState && this.deviceState.type === NetworkType.kCellular) {
+        return this.i18n('networkListItemCellularSignIn');
+      }
       return this.i18n('networkListItemSignIn');
     }
 
@@ -221,10 +232,21 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
    */
   private deviceIsEnabled_(deviceState: OncMojo.DeviceStateProperties|
                            undefined): boolean {
-    return !!deviceState &&
-        (deviceState.type === NetworkType.kVPN ||
-         deviceState.deviceState === DeviceStateType.kEnabled ||
-         OncMojo.deviceIsInhibited(deviceState));
+    if (!deviceState) {
+      return false;
+    }
+
+    if (deviceState.type === NetworkType.kVPN) {
+      return true;
+    }
+    if (deviceState.deviceState === DeviceStateType.kEnabled) {
+      return true;
+    }
+    if (OncMojo.deviceIsFlashing(deviceState)) {
+      return false;
+    }
+
+    return OncMojo.deviceIsInhibited(deviceState);
   }
 
   /**
@@ -252,10 +274,12 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
       case NetworkType.kVPN:
         return false;
       case NetworkType.kTether:
-        return !this.isInstantHotspotRebrandEnabled_();
+        return true;
       case NetworkType.kWiFi:
       case NetworkType.kCellular:
         return deviceState.deviceState !== DeviceStateType.kUninitialized;
+      default:
+        break;
     }
     assertNotReached();
   }
@@ -265,7 +289,8 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
     return this.enableToggleIsVisible_(deviceState) &&
         deviceState!.deviceState !== DeviceStateType.kProhibited &&
         !OncMojo.deviceIsInhibited(deviceState) &&
-        !OncMojo.deviceStateIsIntermediate(deviceState!.deviceState);
+        !OncMojo.deviceStateIsIntermediate(deviceState!.deviceState) &&
+        !OncMojo.deviceIsFlashing(deviceState);
   }
 
   private getToggleA11yString_(deviceState: OncMojo.DeviceStateProperties|
@@ -280,6 +305,8 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
         return this.i18n('internetToggleMobileA11yLabel');
       case NetworkType.kWiFi:
         return this.i18n('internetToggleWiFiA11yLabel');
+      default:
+        break;
     }
     assertNotReached();
   }
@@ -296,13 +323,6 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
     return '';
   }
 
-  /**
-   * @return True if instant hotspot rebrand feature flag is enabled.
-   */
-  private isInstantHotspotRebrandEnabled_(): boolean {
-    return loadTimeData.valueExists('isInstantHotspotRebrandEnabled') &&
-        loadTimeData.getBoolean('isInstantHotspotRebrandEnabled');
-  }
 
   /**
    * @return True if VPNs are disabled by policy and the current device is VPN.
@@ -574,20 +594,15 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
     // The shared Cellular/Tether subpage is referred to as "Mobile".
     // TODO(khorimoto): Remove once Cellular/Tether are split into their own
     // sections.
-    if (type === NetworkType.kCellular ||
-        (type === NetworkType.kTether &&
-         !this.isInstantHotspotRebrandEnabled_())) {
+    if (type === NetworkType.kCellular || (type === NetworkType.kTether)) {
       type = NetworkType.kMobile;
     }
     return this.i18n('OncType' + OncMojo.getNetworkTypeString(type));
   }
 
-  /**
-   * Return true if portalState is either kPortal or kProxyAuthRequired.
-   */
   private isPortalState_(portalState: PortalState): boolean {
     return portalState === PortalState.kPortal ||
-        portalState === PortalState.kProxyAuthRequired;
+        portalState === PortalState.kPortalSuspected;
   }
 }
 

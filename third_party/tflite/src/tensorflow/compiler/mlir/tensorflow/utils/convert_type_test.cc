@@ -22,7 +22,6 @@ limitations under the License.
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
-#include "xla/test.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 
@@ -59,6 +58,14 @@ TEST(MlirConvertType, ConvertToMlirTensorType) {
   // Unranked shapes.
   EXPECT_EQ("tensor<*xf32>",
             ConvertToMlirString({}, /*unknown_rank=*/true, DataType::DT_FLOAT));
+
+  // int2 and uint2.
+  EXPECT_EQ(
+      "tensor<1x2xi2>",
+      ConvertToMlirString({1, 2}, /*unknown_rank=*/false, DataType::DT_INT2));
+  EXPECT_EQ(
+      "tensor<1x2xui2>",
+      ConvertToMlirString({1, 2}, /*unknown_rank=*/false, DataType::DT_UINT2));
 }
 
 }  // namespace

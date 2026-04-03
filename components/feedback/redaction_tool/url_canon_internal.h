@@ -18,6 +18,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+#include "base/compiler_specific.h"
 #include "components/feedback/redaction_tool/url_canon.h"
 
 namespace redaction_internal {
@@ -62,7 +63,7 @@ extern const unsigned char kSharedCharTypeTable[0x100];
 
 // More readable wrappers around the character type lookup table.
 inline bool IsCharOfType(unsigned char c, SharedCharTypes type) {
-  return !!(kSharedCharTypeTable[c] & type);
+  return !!(UNSAFE_TODO(kSharedCharTypeTable[c]) & type);
 }
 inline bool IsQueryChar(unsigned char c) {
   return IsCharOfType(c, CHAR_QUERY);
@@ -90,7 +91,7 @@ inline int _itoa_s(int value, char (&buffer)[N], int radix) {
 
 // _strtoui64 and strtoull behave the same
 inline uint64_t _strtoui64(const char* nptr, char** endptr, int base) {
-  return strtoull(nptr, endptr, base);
+  return UNSAFE_TODO(strtoull(nptr, endptr, base));
 }
 
 #endif  // WIN32

@@ -15,12 +15,18 @@
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/html/html_embed_element.h"
+#include "third_party/blink/renderer/core/html/html_image_element.h"
+#include "third_party/blink/renderer/core/html/html_object_element.h"
+#include "third_party/blink/renderer/core/html/html_picture_element.h"
+#include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/inspector/inspector_dom_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_dom_snapshot_agent.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/style/style_generated_image.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "ui/gfx/color_utils.h"
 
 namespace blink {
@@ -140,14 +146,14 @@ void InspectorContrast::CollectNodesAndBuildRTreeIfNeeded() {
   if (!layout_view)
     return;
 
-  if (!layout_view->GetFrameView()->UpdateLifecycleToPrePaintClean(
+  if (!layout_view->GetFrameView()->UpdateAllLifecyclePhasesExceptPaint(
           DocumentUpdateReason::kInspector)) {
     return;
   }
 
   InspectorDOMAgent::CollectNodes(
       document_, INT_MAX, true, InspectorDOMAgent::IncludeWhitespaceEnum::NONE,
-      WTF::BindRepeating(&NodeIsElementWithLayoutObject), &elements_);
+      BindRepeating(&NodeIsElementWithLayoutObject), &elements_);
   SortElementsByPaintOrder(elements_, document_);
   rtree_.Build(
       elements_.size(),
@@ -186,8 +192,9 @@ static bool IsLargeFont(const TextInfo& text_info) {
   String font_size_css = text_info.font_size;
   String font_weight = text_info.font_weight;
   // font_size_css always has 'px' appended at the end;
-  String font_size_str = font_size_css.Substring(0, font_size_css.length() - 2);
-  double font_size_px = font_size_str.ToDouble();
+  StringView font_size_str =
+      StringView(font_size_css, 0, font_size_css.length() - 2);
+  double font_size_px = StringToDouble(font_size_str).value_or(0);
   double font_size_pt = font_size_px * 72 / 96;
   bool is_bold = font_weight == "bold" || font_weight == "bolder" ||
                  font_weight == "600" || font_weight == "700" ||
@@ -338,8 +345,9 @@ bool InspectorContrast::GetColorsFromRect(PhysicalRect rect,
       continue;
 
     // If background elements are hidden, ignore their background colors.
-    if (element != top_element && style->Visibility() == EVisibility::kHidden)
+    if (element != top_element && style->Visibility() == EVisibility::kHidden) {
       continue;
+    }
 
     Color background_color =
         style->VisitedDependentColor(GetCSSPropertyBackgroundColor());

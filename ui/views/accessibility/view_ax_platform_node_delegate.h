@@ -20,7 +20,7 @@
 #include "ui/accessibility/platform/ax_platform_node.h"
 #include "ui/accessibility/platform/ax_platform_node_delegate.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/table/table_view.h"
 #include "ui/views/views_export.h"
@@ -29,7 +29,6 @@
 namespace ui {
 
 struct AXActionData;
-class AXUniqueId;
 
 }  // namespace ui
 
@@ -46,21 +45,22 @@ class VIEWS_EXPORT ViewAXPlatformNodeDelegate
     : public ViewAccessibility,
       public ui::AXPlatformNodeDelegate {
  public:
+  static std::unique_ptr<ViewAccessibility> CreatePlatformSpecific(View* view);
+
   ViewAXPlatformNodeDelegate(const ViewAXPlatformNodeDelegate&) = delete;
   ViewAXPlatformNodeDelegate& operator=(const ViewAXPlatformNodeDelegate&) =
       delete;
   ~ViewAXPlatformNodeDelegate() override;
 
   // ViewAccessibility:
+  void EnsureAtomicViewAXTreeManager() override;
   bool IsAccessibilityFocusable() const override;
   bool IsFocusedForTesting() const override;
   void SetPopupFocusOverride() override;
   void EndPopupFocusOverride() override;
   void FireFocusAfterMenuClose() override;
-  bool IsIgnored() const override;
-  bool IsAccessibilityEnabled() const override;
   gfx::NativeViewAccessible GetNativeObject() const override;
-  void NotifyAccessibilityEvent(ax::mojom::Event event_type) override;
+  void FireNativeEvent(ax::mojom::Event event_type) override;
 #if BUILDFLAG(IS_MAC)
   void AnnounceTextAs(const std::u16string& text,
                       ui::AXPlatformNode::AnnouncementType announcement_type);
@@ -77,8 +77,7 @@ class VIEWS_EXPORT ViewAXPlatformNodeDelegate
   const ui::AXSelection GetUnignoredSelection() const override;
   ui::AXNodePosition::AXPositionInstance CreatePositionAt(
       int offset,
-      ax::mojom::TextAffinity affinity =
-          ax::mojom::TextAffinity::kDownstream) const override;
+      ax::mojom::TextAffinity affinity) const override;
   ui::AXNodePosition::AXPositionInstance CreateTextPositionAt(
       int offset,
       ax::mojom::TextAffinity affinity) const override;
@@ -91,7 +90,6 @@ class VIEWS_EXPORT ViewAXPlatformNodeDelegate
   bool IsLeaf() const override;
   bool IsInvisibleOrIgnored() const override;
   bool IsFocused() const override;
-  bool IsToplevelBrowserWindow() override;
   gfx::Rect GetBoundsRect(
       const ui::AXCoordinateSystem coordinate_system,
       const ui::AXClippingBehavior clipping_behavior,
@@ -118,7 +116,7 @@ class VIEWS_EXPORT ViewAXPlatformNodeDelegate
   bool IsReadOnlyOrDisabled() const override;
 
   // Also in |ViewAccessibility|.
-  const ui::AXUniqueId& GetUniqueId() const override;
+  ui::AXPlatformNodeId GetUniqueId() const override;
   std::vector<int32_t> GetColHeaderNodeIds() const override;
   std::vector<int32_t> GetColHeaderNodeIds(int col_index) const override;
   std::optional<int32_t> GetCellId(int row_index, int col_index) const override;
@@ -155,8 +153,8 @@ class VIEWS_EXPORT ViewAXPlatformNodeDelegate
   // during the constructor.
   virtual void Init();
 
-  ui::AXNodeData data() { return data_; }
-  ui::AXPlatformNode* ax_platform_node() { return ax_platform_node_; }
+  const ui::AXNodeData& data() const { return data_; }
+  ui::AXPlatformNode* ax_platform_node() { return ax_platform_node_.get(); }
 
   // Manager for the accessibility tree for this view. The tree will only have
   // one node, which contains the AXNodeData for this view. It's a temporary
@@ -172,7 +170,7 @@ class VIEWS_EXPORT ViewAXPlatformNodeDelegate
         std::vector<raw_ptr<Widget, VectorExperimental>> child_widgets,
         bool is_tab_modal_showing);
     ChildWidgetsResult(const ChildWidgetsResult& other);
-    virtual ~ChildWidgetsResult();
+    ~ChildWidgetsResult();
     ChildWidgetsResult& operator=(const ChildWidgetsResult& other);
 
     std::vector<raw_ptr<Widget, VectorExperimental>> child_widgets;
@@ -199,9 +197,7 @@ class VIEWS_EXPORT ViewAXPlatformNodeDelegate
   // Gets the real (non-virtual) TableView, otherwise nullptr.
   TableView* GetAncestorTableView() const;
 
-  // We own this, but it is reference-counted on some platforms so we can't use
-  // a unique_ptr. It is destroyed in the destructor.
-  raw_ptr<ui::AXPlatformNode> ax_platform_node_ = nullptr;
+  ui::AXPlatformNode::Pointer ax_platform_node_;
 
   mutable ui::AXNodeData data_;
 };

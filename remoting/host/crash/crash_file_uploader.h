@@ -6,11 +6,9 @@
 #define REMOTING_HOST_CRASH_CRASH_FILE_UPLOADER_H_
 
 #include <memory>
-#include <string>
 
 #include "base/files/file_path.h"
 #include "base/files/file_path_watcher.h"
-#include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/threading/thread_checker.h"
 
@@ -29,13 +27,14 @@ namespace remoting {
 // separate IO thread which may block.
 class CrashFileUploader {
  public:
-  explicit CrashFileUploader(
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory);
+  CrashFileUploader(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      scoped_refptr<base::SingleThreadTaskRunner> core_task_runner);
   CrashFileUploader(const CrashFileUploader&) = delete;
   CrashFileUploader& operator=(const CrashFileUploader&) = delete;
   ~CrashFileUploader();
 
-  void Upload(const std::string& crash_guid);
+  void Upload(const base::FilePath& crash_guid);
 
  private:
   class Core;

@@ -60,15 +60,14 @@ class SqlFeatureProcessorTest : public testing::Test {
                                               &input_delegate_holder_,
                                               ukm_database_.get());
 
-    EXPECT_CALL(*ukm_database_, RunReadonlyQueries)
-        .WillOnce(testing::Invoke(
-            [&processed_queries, &result](
-                const base::flat_map<SqlFeatureProcessor::FeatureIndex,
-                                     CustomSqlQuery>& queries,
-                MockUkmDatabase::QueryCallback callback) {
-              EXPECT_EQ(processed_queries, queries);
-              std::move(callback).Run(true, result);
-            }));
+    EXPECT_CALL(*ukm_database_, RunReadOnlyQueries)
+        .WillOnce([&processed_queries, &result](
+                      const base::flat_map<SqlFeatureProcessor::FeatureIndex,
+                                           CustomSqlQuery>& queries,
+                      MockUkmDatabase::QueryCallback callback) {
+          EXPECT_EQ(processed_queries, queries);
+          std::move(callback).Run(true, result);
+        });
 
     // Process the sql query.
     base::RunLoop loop;
@@ -129,12 +128,9 @@ TEST_F(SqlFeatureProcessorTest, SingleSqlFeatureWithBindValues) {
        .fill_policy = proto::CustomInput::FILL_PREDICTION_TIME}};
   MetadataWriter::BindValue custom_input2{
       kBoolType,
-      {
-          .tensor_length = 2,
-          .fill_policy = proto::CustomInput::UNKNOWN_FILL_POLICY,
-          .default_values_size = default_values.size(),
-          .default_values = default_values.data(),
-      }};
+      {.tensor_length = 2,
+       .fill_policy = proto::CustomInput::UNKNOWN_FILL_POLICY,
+       .default_value = features::DefaultValue(default_values)}};
   data.emplace(0, CreateSqlFeature(kSqlQuery, {custom_input1, custom_input2}));
 
   // Construct the expected processed bind values based on the given data.

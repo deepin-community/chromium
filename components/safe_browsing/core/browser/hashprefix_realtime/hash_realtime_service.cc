@@ -4,27 +4,29 @@
 
 #include "components/safe_browsing/core/browser/hashprefix_realtime/hash_realtime_service.h"
 
+#include <algorithm>
+
 #include "base/base64url.h"
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/escape.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
-#include "components/safe_browsing/core/browser/hashprefix_realtime/hash_realtime_utils.h"
 #include "components/safe_browsing/core/browser/hashprefix_realtime/ohttp_key_service.h"
 #include "components/safe_browsing/core/browser/verdict_cache_manager.h"
 #include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/hashprefix_realtime/hash_realtime_utils.h"
 #include "components/safe_browsing/core/common/proto/safebrowsingv5.pb.h"
 #include "components/safe_browsing/core/common/utils.h"
 #include "google_apis/google_api_keys.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_request_headers.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
-#include "services/network/public/mojom/fetch_api.mojom-shared.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/oblivious_http_request.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
@@ -38,13 +40,9 @@ const size_t kMaxBackOffResetDurationInSeconds = 30 * 60;  // 30 minutes.
 
 const size_t kLookupTimeoutDurationInSeconds = 3;
 
-void LogThreatInfoSize(int num_full_hash_matches, bool is_source_local_cache) {
+void LogThreatInfoSize(int num_full_hash_matches) {
   base::UmaHistogramCounts100("SafeBrowsing.HPRT.ThreatInfoSize",
                               num_full_hash_matches);
-  std::string breakout_histogram =
-      is_source_local_cache ? "SafeBrowsing.HPRT.ThreatInfoSize.LocalCache"
-                            : "SafeBrowsing.HPRT.ThreatInfoSize.NetworkRequest";
-  base::UmaHistogramCounts100(breakout_histogram, num_full_hash_matches);
 }
 
 SBThreatType MapFullHashDetailToSbThreatType(
@@ -52,7 +50,7 @@ SBThreatType MapFullHashDetailToSbThreatType(
   // Note that for hash-prefix real-time checks, there is no need to use
   // the FRAME_ONLY enum in the attributes field, because all the checks are for
   // frame URLs.
-  if (base::Contains(detail.attributes(), V5::ThreatAttribute::CANARY)) {
+  if (std::ranges::contains(detail.attributes(), V5::ThreatAttribute::CANARY)) {
     return SBThreatType::SB_THREAT_TYPE_SUSPICIOUS_SITE;
   }
   switch (detail.threat_type()) {
@@ -69,7 +67,6 @@ SBThreatType MapFullHashDetailToSbThreatType(
       // recommended for proto3 enums.
       NOTREACHED() << "Unexpected ThreatType encountered: "
                    << detail.threat_type();
-      return SBThreatType::SB_THREAT_TYPE_UNUSED;
   }
 }
 
@@ -165,13 +162,11 @@ HashRealTimeService::HashRealTimeService(
 HashRealTimeService::~HashRealTimeService() = default;
 
 // static
-bool HashRealTimeService::CanCheckUrl(
-    const GURL& url,
-    network::mojom::RequestDestination request_destination) {
+bool HashRealTimeService::CanCheckUrl(const GURL& url) {
   if (VerdictCacheManager::has_artificial_cached_url()) {
     return true;
   }
-  return hash_realtime_utils::CanCheckUrl(url, request_destination);
+  return hash_realtime_utils::CanCheckUrl(url);
 }
 
 HashRealTimeService::SBThreatInfo::SBThreatInfo(SBThreatType threat_type,
@@ -209,7 +204,7 @@ int HashRealTimeService::GetThreatSeverity(
     const V5::FullHash::FullHashDetail& detail) {
   // These values should be consistent with the ones in GetThreatSeverity in
   // v4_local_database_manager.cc.
-  if (base::Contains(detail.attributes(), V5::ThreatAttribute::CANARY)) {
+  if (std::ranges::contains(detail.attributes(), V5::ThreatAttribute::CANARY)) {
     // ThreatAttribute::CANARY should be equivalent to SUSPICIOUS.
     return 4;
   }
@@ -227,7 +222,6 @@ int HashRealTimeService::GetThreatSeverity(
       // recommended for proto3 enums.
       NOTREACHED() << "Unexpected ThreatType encountered: "
                    << detail.threat_type();
-      return kLeastSeverity;
   }
 }
 bool HashRealTimeService::IsHashDetailMoreSevere(
@@ -306,8 +300,7 @@ void HashRealTimeService::StartLookupInternal(
   if (hash_prefixes_to_request.empty()) {
     SBThreatInfo sb_threat_info =
         DetermineSBThreatInfo(url, cached_full_hashes);
-    LogThreatInfoSize(sb_threat_info.num_full_hash_matches,
-                      /*is_source_local_cache=*/true);
+    LogThreatInfoSize(sb_threat_info.num_full_hash_matches);
     lookup_completer->CompleteLookup(/*is_lookup_successful=*/true,
                                      sb_threat_info.threat_type,
                                      OperationOutcome::kResultInLocalCache);
@@ -350,9 +343,6 @@ void HashRealTimeService::OnGetOhttpKey(
     std::optional<std::string> key) {
   base::UmaHistogramBoolean("SafeBrowsing.HPRT.HasOhttpKey", key.has_value());
   if (!key.has_value()) {
-    backoff_operator_->ReportError();
-    base::UmaHistogramEnumeration("SafeBrowsing.HPRT.BackoffReportErrorReason",
-                                  BackoffReportErrorReason::kInvalidKey);
     lookup_completer->CompleteLookup(/*is_lookup_successful=*/false,
                                      /*sb_threat_type=*/std::nullopt,
                                      OperationOutcome::kOhttpKeyFetchFailed);
@@ -386,7 +376,8 @@ void HashRealTimeService::OnGetOhttpKey(
           &HashRealTimeService::OnOhttpComplete, weak_factory_.GetWeakPtr(),
           url, std::move(hash_prefixes_in_request),
           std::move(result_full_hashes), request_start_time,
-          std::move(lookup_completer), key.value(), webui_delegate_token)),
+          base::TimeTicks::Now(), std::move(lookup_completer), key.value(),
+          webui_delegate_token)),
       std::move(pending_receiver));
 }
 
@@ -394,7 +385,8 @@ void HashRealTimeService::OnOhttpComplete(
     const GURL& url,
     const std::vector<std::string>& hash_prefixes_in_request,
     std::vector<V5::FullHash> result_full_hashes,
-    base::TimeTicks request_start_time,
+    base::TimeTicks key_request_start_time,
+    base::TimeTicks hash_request_start_time,
     std::unique_ptr<LookupCompleter> lookup_completer,
     std::string ohttp_key,
     std::optional<int> webui_delegate_token,
@@ -408,17 +400,18 @@ void HashRealTimeService::OnOhttpComplete(
   auto response_body_ptr =
       std::make_unique<std::string>(response_body.value_or(""));
   OnURLLoaderComplete(url, std::move(hash_prefixes_in_request),
-                      std::move(result_full_hashes), request_start_time,
-                      std::move(lookup_completer), std::move(response_body_ptr),
-                      net_error, response_code, webui_delegate_token,
-                      ohttp_client_destructed_early);
+                      std::move(result_full_hashes), key_request_start_time,
+                      hash_request_start_time, std::move(lookup_completer),
+                      std::move(response_body_ptr), net_error, response_code,
+                      webui_delegate_token, ohttp_client_destructed_early);
 }
 
 void HashRealTimeService::OnURLLoaderComplete(
     const GURL& url,
     const std::vector<std::string>& hash_prefixes_in_request,
     std::vector<V5::FullHash> result_full_hashes,
-    base::TimeTicks request_start_time,
+    base::TimeTicks key_request_start_time,
+    base::TimeTicks hash_request_start_time,
     std::unique_ptr<LookupCompleter> lookup_completer,
     std::unique_ptr<std::string> response_body,
     int net_error,
@@ -426,32 +419,31 @@ void HashRealTimeService::OnURLLoaderComplete(
     std::optional<int> webui_delegate_token,
     bool ohttp_client_destructed_early) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::TimeDelta network_time = base::TimeTicks::Now() - request_start_time;
-  base::UmaHistogramTimes("SafeBrowsing.HPRT.Network.Time", network_time);
+  base::TimeTicks now = base::TimeTicks::Now();
+  base::TimeDelta full_request_duration = now - key_request_start_time;
+  base::UmaHistogramTimes("SafeBrowsing.HPRT.Network.Time",
+                          full_request_duration);
+  base::TimeDelta hash_request_duration = now - hash_request_start_time;
+  base::UmaHistogramTimes("SafeBrowsing.HPRT.Network.Time.Hash",
+                          hash_request_duration);
+  if (net_error == net::OK && response_code == net::HTTP_OK && response_body &&
+      !response_body->empty()) {
+    base::UmaHistogramTimes("SafeBrowsing.HPRT.Network.Time.Success",
+                            full_request_duration);
+    base::UmaHistogramTimes("SafeBrowsing.HPRT.Network.Time.Hash.Success",
+                            hash_request_duration);
+  } else {
+    base::UmaHistogramTimes("SafeBrowsing.HPRT.Network.Time.Failure",
+                            full_request_duration);
+    base::UmaHistogramTimes("SafeBrowsing.HPRT.Network.Time.Hash.Failure",
+                            hash_request_duration);
+  }
   RecordHttpResponseOrErrorCode("SafeBrowsing.HPRT.Network.Result", net_error,
                                 response_code);
-  if (net_error == net::ERR_INTERNET_DISCONNECTED) {
-    base::UmaHistogramSparse(
-        "SafeBrowsing.HPRT.Network.HttpResponseCode.InternetDisconnected",
-        response_code);
-  }
-  if (net_error == net::ERR_NETWORK_CHANGED) {
-    base::UmaHistogramSparse(
-        "SafeBrowsing.HPRT.Network.HttpResponseCode.NetworkChanged",
-        response_code);
-  }
   if (net_error == net::ERR_FAILED) {
     base::UmaHistogramBoolean(
         "SafeBrowsing.HPRT.FailedNetResultIsFromEarlyOhttpClientDestruct",
         ohttp_client_destructed_early);
-  }
-  if (net_error == net::ERR_NAME_NOT_RESOLVED) {
-    base::UmaHistogramTimes("SafeBrowsing.HPRT.Network.Time.NameNotResolved",
-                            network_time);
-  }
-  if (net_error == net::ERR_CONNECTION_CLOSED) {
-    base::UmaHistogramTimes("SafeBrowsing.HPRT.Network.Time.ConnectionClosed",
-                            network_time);
   }
 
   base::expected<std::unique_ptr<V5::SearchHashesResponse>, OperationOutcome>
@@ -470,14 +462,13 @@ void HashRealTimeService::OnURLLoaderComplete(
     }
 
     // Merge together the results from the cache and from the response.
-    for (const auto& response_hash : response.value()->full_hashes()) {
-      result_full_hashes.push_back(response_hash);
-    }
+    result_full_hashes.insert(result_full_hashes.end(),
+                              response.value()->full_hashes().begin(),
+                              response.value()->full_hashes().end());
     SBThreatInfo sb_threat_info =
         DetermineSBThreatInfo(url, result_full_hashes);
     sb_threat_type = sb_threat_info.threat_type;
-    LogThreatInfoSize(sb_threat_info.num_full_hash_matches,
-                      /*is_source_local_cache=*/false);
+    LogThreatInfoSize(sb_threat_info.num_full_hash_matches);
   }
 
   lookup_completer->CompleteLookup(
@@ -511,8 +502,6 @@ HashRealTimeService::ParseResponseAndUpdateBackoff(
           "SafeBrowsing.HPRT.Network.Result.WhenEnteringBackoff", net_error,
           response_code);
     }
-    base::UmaHistogramEnumeration("SafeBrowsing.HPRT.BackoffReportErrorReason",
-                                  BackoffReportErrorReason::kResponseError);
   }
   return response;
 }
@@ -528,8 +517,7 @@ void HashRealTimeService::RemoveUnmatchedFullHashes(
       std::remove_if(
           mutable_full_hashes->begin(), mutable_full_hashes->end(),
           [requested_hash_prefixes_set](const V5::FullHash& full_hash) {
-            return !base::Contains(
-                requested_hash_prefixes_set,
+            return !requested_hash_prefixes_set.contains(
                 hash_realtime_utils::GetHashPrefix(full_hash.full_hash()));
           }),
       mutable_full_hashes->end());

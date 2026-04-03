@@ -1,6 +1,6 @@
 #!/usr/bin/env vpython3
 #
-# Copyright 2023 The Chromium Authors. All rights reserved.
+# Copyright 2023 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -29,8 +29,6 @@ READ_LOCATION = path.join(ROOT_DIRECTORY, 'third_party', 'blink', 'renderer',
 # Deprecations in this list are exempt from code generation as they are not
 # dispatched to the DevTools.
 EXEMPTED_FROM_DEVTOOLS_GENERATION = {
-    "ThirdPartyCookieAccessWarning",
-    "ThirdPartyCookieAccessError",
 }
 
 
@@ -71,8 +69,7 @@ def deprecations_from_file(file_name):
 meta, ui_strings = deprecations_from_file(READ_LOCATION)
 now = datetime.datetime.now()
 with open(GENERATED_LOCATION, mode="w+") as f:
-    f.write("// Copyright %d The Chromium Authors. All rights reserved.\n" %
-            now.year)
+    f.write("// Copyright %d The Chromium Authors\n" % now.year)
     f.write(
         "// Use of this source code is governed by a BSD-style license that can be\n"
     )
@@ -89,7 +86,7 @@ with open(GENERATED_LOCATION, mode="w+") as f:
         f.write("   * @description %s\n" % note)
         f.write("   */\n")
         f.write("  %s: %s,\n" % (name, json.dumps(message)))
-    f.write("};\n")
+    f.write("} as const;\n")
     f.write("\n")
     f.write("export interface DeprecationDescriptor {\n")
     f.write("  milestone?: number;\n")

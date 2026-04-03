@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -21,6 +22,8 @@
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "openssl/curve25519.h"
+#include "quiche/quic/core/crypto/certificate_view.h"
+#include "quiche/quic/core/crypto/client_proof_source.h"
 #include "quiche/quic/core/crypto/proof_verifier.h"
 #include "quiche/quic/core/http/quic_spdy_client_stream.h"
 #include "quiche/quic/core/io/quic_default_event_loop.h"
@@ -31,6 +34,7 @@
 #include "quiche/quic/masque/masque_client.h"
 #include "quiche/quic/masque/masque_client_session.h"
 #include "quiche/quic/masque/masque_client_tools.h"
+#include "quiche/quic/masque/masque_encapsulated_client.h"
 #include "quiche/quic/masque/masque_utils.h"
 #include "quiche/quic/platform/api/quic_bug_tracker.h"
 #include "quiche/quic/platform/api/quic_default_proof_providers.h"
@@ -41,6 +45,7 @@
 #include "quiche/common/platform/api/quiche_command_line_flags.h"
 #include "quiche/common/platform/api/quiche_googleurl.h"
 #include "quiche/common/platform/api/quiche_logging.h"
+#include "quiche/common/platform/api/quiche_reference_counted.h"
 #include "quiche/common/platform/api/quiche_system_event_loop.h"
 
 DEFINE_QUICHE_COMMAND_LINE_FLAG(
@@ -62,8 +67,8 @@ DEFINE_QUICHE_COMMAND_LINE_FLAG(
     "For example: \"name1:value1;name2:value2\".");
 
 DEFINE_QUICHE_COMMAND_LINE_FLAG(
-    std::string, signature_auth, "",
-    "Enables HTTP Signature Authentication. Pass in the string \"new\" to "
+    std::string, concealed_auth, "",
+    "Enables HTTP Concealed Authentication. Pass in the string \"new\" to "
     "generate new keys. Otherwise, pass in the key ID in ASCII followed by a "
     "colon and the 32-byte private key as hex. For example: \"kid:0123...f\".");
 
@@ -79,9 +84,22 @@ DEFINE_QUICHE_COMMAND_LINE_FLAG(
     "masque_client send the hostname in the CONNECT request.");
 
 DEFINE_QUICHE_COMMAND_LINE_FLAG(
+    bool, bind_use_uncompressed_context, false,
+    "If set, an uncompressed context will be created for the client."
+    "Otherwise, a compressed context will be requested.");
+
+DEFINE_QUICHE_COMMAND_LINE_FLAG(
     bool, bring_up_tap, false,
     "If set to true, no URLs need to be specified and instead a TAP device "
     "is brought up for a MASQUE CONNECT-ETHERNET session.");
+
+DEFINE_QUICHE_COMMAND_LINE_FLAG(
+    std::string, client_cert_file, "",
+    "Path to the PEM-encoded client certificate chain.");
+
+DEFINE_QUICHE_COMMAND_LINE_FLAG(
+    std::string, client_cert_key_file, "",
+    "Path to the PEM/PKCS8-encoded client certificate private key.");
 
 namespace quic {
 
@@ -240,6 +258,43 @@ class MasqueTapSession
   int fd_ = -1;
 };
 
+std::unique_ptr<ClientProofSource> CreateClientProofSource(
+    const std::string& client_cert_file,
+    const std::string& client_cert_key_file) {
+  if (client_cert_file.empty() || client_cert_key_file.empty()) {
+    std::cerr << "Both client cert and client cert key need to be set."
+              << std::endl;
+    return nullptr;
+  }
+  std::ifstream cert_stream(client_cert_file, std::ios::binary);
+  std::vector<std::string> certs =
+      CertificateView::LoadPemFromStream(&cert_stream);
+  if (certs.empty()) {
+    std::cerr << "Failed to load client certs." << std::endl;
+    return nullptr;
+  }
+
+  std::ifstream key_stream(client_cert_key_file, std::ios::binary);
+  std::unique_ptr<CertificatePrivateKey> private_key =
+      CertificatePrivateKey::LoadPemFromStream(&key_stream);
+  if (private_key == nullptr) {
+    std::cerr << "Failed to load client cert key." << std::endl;
+    return nullptr;
+  }
+
+  auto proof_source = std::make_unique<DefaultClientProofSource>();
+  if (!proof_source->AddCertAndKey(
+          {"*"},
+          quiche::QuicheReferenceCountedPointer<ClientProofSource::Chain>(
+              new ClientProofSource::Chain(certs)),
+          std::move(*private_key))) {
+    std::cerr << "Failed to add client cert and key." << std::endl;
+    return nullptr;
+  }
+
+  return proof_source;
+}
+
 int RunMasqueClient(int argc, char* argv[]) {
   const char* usage =
       "Usage: masque_client [options] <proxy-url> <urls>..\n"
@@ -254,44 +309,49 @@ int RunMasqueClient(int argc, char* argv[]) {
   std::vector<std::string> urls =
       quiche::QuicheParseCommandLineFlags(usage, argc, argv);
 
-  std::string signature_auth_param =
-      quiche::GetQuicheCommandLineFlag(FLAGS_signature_auth);
-  std::string signature_auth_key_id;
-  std::string signature_auth_private_key;
-  std::string signature_auth_public_key;
-  if (!signature_auth_param.empty()) {
+  std::string concealed_auth_param =
+      quiche::GetQuicheCommandLineFlag(FLAGS_concealed_auth);
+  std::string concealed_auth_key_id;
+  std::string concealed_auth_private_key;
+  std::string concealed_auth_public_key;
+  if (!concealed_auth_param.empty()) {
     static constexpr size_t kEd25519Rfc8032PrivateKeySize = 32;
     uint8_t public_key[ED25519_PUBLIC_KEY_LEN];
     uint8_t private_key[ED25519_PRIVATE_KEY_LEN];
-    const bool is_new_key_pair = signature_auth_param == "new";
+    const bool is_new_key_pair = concealed_auth_param == "new";
     if (is_new_key_pair) {
       ED25519_keypair(public_key, private_key);
-      QUIC_LOG(INFO) << "Generated new Signature Authentication key pair";
+      QUIC_LOG(INFO) << "Generated new Concealed Authentication key pair";
     } else {
-      std::vector<absl::string_view> signature_auth_param_split =
-          absl::StrSplit(signature_auth_param, absl::MaxSplits(':', 1));
+      std::vector<absl::string_view> concealed_auth_param_split =
+          absl::StrSplit(concealed_auth_param, absl::MaxSplits(':', 1));
       std::string private_key_seed;
-      if (signature_auth_param_split.size() != 2) {
+      if (concealed_auth_param_split.size() != 2) {
         QUIC_LOG(ERROR)
-            << "Signature authentication parameter is missing a colon";
+            << "Concealed authentication parameter is missing a colon";
         return 1;
       }
-      signature_auth_key_id = signature_auth_param_split[0];
-      if (signature_auth_key_id.empty()) {
-        QUIC_LOG(ERROR) << "Signature authentication key ID cannot be empty";
+      concealed_auth_key_id = concealed_auth_param_split[0];
+      if (concealed_auth_key_id.empty()) {
+        QUIC_LOG(ERROR) << "Concealed authentication key ID cannot be empty";
         return 1;
       }
-      private_key_seed = absl::HexStringToBytes(signature_auth_param_split[1]);
+      if (!absl::HexStringToBytes(concealed_auth_param_split[1],
+                                  &private_key_seed)) {
+        QUIC_LOG(ERROR) << "Concealed authentication key hex value is invalid";
+        return 1;
+      }
+
       if (private_key_seed.size() != kEd25519Rfc8032PrivateKeySize) {
         QUIC_LOG(ERROR)
-            << "Invalid signature authentication private key length "
+            << "Invalid Concealed authentication private key length "
             << private_key_seed.size();
         return 1;
       }
       ED25519_keypair_from_seed(
           public_key, private_key,
           reinterpret_cast<uint8_t*>(private_key_seed.data()));
-      QUIC_LOG(INFO) << "Loaded Signature Authentication key pair";
+      QUIC_LOG(INFO) << "Loaded Concealed Authentication key pair";
     }
     // Note that Ed25519 private keys are 32 bytes long per RFC 8032. However,
     // to reduce CPU costs, BoringSSL represents private keys in memory as the
@@ -301,7 +361,7 @@ int RunMasqueClient(int argc, char* argv[]) {
     // RFC 8032 private key because BoringSSL does not provide a supported way
     // to access it. This is required to allow us to print the private key in a
     // format that can be passed back in to BoringSSL from the command-line. See
-    // curve25519.h for details. The rest of our signature authentication code
+    // curve25519.h for details. The rest of our concealed authentication code
     // uses the BoringSSL representation without relying on this implementation
     // detail.
     static_assert(kEd25519Rfc8032PrivateKeySize <=
@@ -312,7 +372,7 @@ int RunMasqueClient(int argc, char* argv[]) {
     std::string public_key_hexstr = absl::BytesToHexString(absl::string_view(
         reinterpret_cast<char*>(public_key), ED25519_PUBLIC_KEY_LEN));
     if (is_new_key_pair) {
-      std::cout << "Generated new Signature Authentication key pair."
+      std::cout << "Generated new Concealed Authentication key pair."
                 << std::endl;
       std::cout << "Private key: " << private_key_hexstr << std::endl;
       std::cout << "Public key: " << public_key_hexstr << std::endl;
@@ -320,9 +380,9 @@ int RunMasqueClient(int argc, char* argv[]) {
     }
     QUIC_LOG(INFO) << "Private key: " << private_key_hexstr;
     QUIC_LOG(INFO) << "Public key: " << public_key_hexstr;
-    signature_auth_private_key = std::string(
+    concealed_auth_private_key = std::string(
         reinterpret_cast<char*>(private_key), ED25519_PRIVATE_KEY_LEN);
-    signature_auth_public_key = std::string(reinterpret_cast<char*>(public_key),
+    concealed_auth_public_key = std::string(reinterpret_cast<char*>(public_key),
                                             ED25519_PUBLIC_KEY_LEN);
   }
 
@@ -340,35 +400,6 @@ int RunMasqueClient(int argc, char* argv[]) {
   quiche::QuicheSystemEventLoop system_event_loop("masque_client");
   const bool disable_certificate_verification =
       quiche::GetQuicheCommandLineFlag(FLAGS_disable_certificate_verification);
-  std::unique_ptr<QuicEventLoop> event_loop =
-      GetDefaultEventLoop()->Create(QuicDefaultClock::Get());
-
-  std::string uri_template = urls[0];
-  if (!absl::StrContains(uri_template, '/')) {
-    // If an authority is passed in instead of a URI template, use the default
-    // URI template.
-    uri_template =
-        absl::StrCat("https://", uri_template,
-                     "/.well-known/masque/udp/{target_host}/{target_port}/");
-  }
-  url::Parsed parsed_uri_template;
-  url::ParseStandardURL(uri_template.c_str(), uri_template.length(),
-                        &parsed_uri_template);
-  if (!parsed_uri_template.scheme.is_nonempty() ||
-      !parsed_uri_template.host.is_nonempty() ||
-      !parsed_uri_template.path.is_nonempty()) {
-    QUIC_LOG(ERROR) << "Failed to parse MASQUE URI template \"" << urls[0]
-                    << "\"";
-    return 1;
-  }
-  std::string host = uri_template.substr(parsed_uri_template.host.begin,
-                                         parsed_uri_template.host.len);
-  std::unique_ptr<ProofVerifier> proof_verifier;
-  if (disable_certificate_verification) {
-    proof_verifier = std::make_unique<FakeProofVerifier>();
-  } else {
-    proof_verifier = CreateDefaultProofVerifier(host);
-  }
   MasqueMode masque_mode = MasqueMode::kOpen;
   std::string mode_string = quiche::GetQuicheCommandLineFlag(FLAGS_masque_mode);
   if (!mode_string.empty()) {
@@ -379,6 +410,9 @@ int RunMasqueClient(int argc, char* argv[]) {
     } else if (mode_string == "connectethernet" ||
                mode_string == "connect-ethernet") {
       masque_mode = MasqueMode::kConnectEthernet;
+    } else if (mode_string == "connectudpbind" ||
+               mode_string == "connect-udp-bind") {
+      masque_mode = MasqueMode::kConnectUdpBind;
     } else {
       QUIC_LOG(ERROR) << "Invalid masque_mode \"" << mode_string << "\"";
       return 1;
@@ -397,22 +431,94 @@ int RunMasqueClient(int argc, char* argv[]) {
     QUIC_LOG(ERROR) << "Invalid address_family " << address_family;
     return 1;
   }
-  std::unique_ptr<MasqueClient> masque_client = MasqueClient::Create(
-      uri_template, masque_mode, event_loop.get(), std::move(proof_verifier));
-  if (masque_client == nullptr) {
-    return 1;
-  }
+  const bool dns_on_client =
+      quiche::GetQuicheCommandLineFlag(FLAGS_dns_on_client);
+  std::string client_cert_file =
+      quiche::GetQuicheCommandLineFlag(FLAGS_client_cert_file);
+  std::string client_cert_key_file =
+      quiche::GetQuicheCommandLineFlag(FLAGS_client_cert_key_file);
+  std::unique_ptr<QuicEventLoop> event_loop =
+      GetDefaultEventLoop()->Create(QuicDefaultClock::Get());
 
-  QUIC_LOG(INFO) << "MASQUE is connected " << masque_client->connection_id()
-                 << " in " << masque_mode << " mode";
+  std::vector<std::unique_ptr<MasqueClient>> masque_clients;
+  for (absl::string_view uri_template_sv : absl::StrSplit(urls[0], ',')) {
+    std::string uri_template = std::string(uri_template_sv);
+    if (!absl::StrContains(uri_template, '/')) {
+      // If an authority is passed in instead of a URI template, use the default
+      // URI template.
+      uri_template =
+          absl::StrCat("https://", uri_template,
+                       "/.well-known/masque/udp/{target_host}/{target_port}/");
+    }
+    url::Parsed parsed_uri_template;
+    url::ParseStandardURL(uri_template.c_str(), uri_template.length(),
+                          &parsed_uri_template);
+    if (!parsed_uri_template.scheme.is_nonempty() ||
+        !parsed_uri_template.host.is_nonempty() ||
+        !parsed_uri_template.path.is_nonempty()) {
+      QUIC_LOG(ERROR) << "Failed to parse MASQUE URI template \""
+                      << uri_template << "\"";
+      return 1;
+    }
+    std::unique_ptr<MasqueClient> masque_client;
+    if (masque_clients.empty()) {
+      std::string host = uri_template.substr(parsed_uri_template.host.begin,
+                                             parsed_uri_template.host.len);
 
-  masque_client->masque_client_session()->set_additional_headers(
-      quiche::GetQuicheCommandLineFlag(FLAGS_proxy_headers));
-  if (!signature_auth_param.empty()) {
-    masque_client->masque_client_session()->EnableSignatureAuth(
-        signature_auth_key_id, signature_auth_private_key,
-        signature_auth_public_key);
+      std::unique_ptr<ProofVerifier> proof_verifier;
+      if (disable_certificate_verification) {
+        proof_verifier = std::make_unique<FakeProofVerifier>();
+      } else {
+        proof_verifier = CreateDefaultProofVerifier(host);
+        if (!proof_verifier) {
+          QUICHE_LOG(ERROR)
+              << "The default proof verifier is not supported. Pass "
+                 "in --disable_certificate_verification.";
+          return 1;
+        }
+      }
+
+      std::unique_ptr<ClientProofSource> proof_source;
+      if (!client_cert_file.empty() || !client_cert_key_file.empty()) {
+        proof_source =
+            CreateClientProofSource(client_cert_file, client_cert_key_file);
+        if (proof_source == nullptr) {
+          return 1;
+        }
+      }
+
+      masque_client = MasqueClient::Create(
+          uri_template, masque_mode, event_loop.get(),
+          std::move(proof_verifier), std::move(proof_source));
+
+    } else {
+      masque_client = tools::CreateAndConnectMasqueEncapsulatedClient(
+          masque_clients.back().get(), masque_mode, event_loop.get(),
+          uri_template, disable_certificate_verification,
+          address_family_for_lookup, dns_on_client,
+          /*is_also_underlying=*/true);
+    }
+    if (masque_client == nullptr) {
+      return 1;
+    }
+
+    QUIC_LOG(INFO) << "MASQUE[" << masque_clients.size() << "] to "
+                   << uri_template << " is connected "
+                   << masque_client->connection_id() << " in " << masque_mode
+                   << " mode";
+
+    masque_client->masque_client_session()->set_additional_headers(
+        quiche::GetQuicheCommandLineFlag(FLAGS_proxy_headers));
+    if (!concealed_auth_param.empty()) {
+      masque_client->masque_client_session()->EnableConcealedAuth(
+          concealed_auth_key_id, concealed_auth_private_key,
+          concealed_auth_public_key);
+    }
+    masque_clients.push_back(std::move(masque_client));
   }
+  std::unique_ptr<MasqueClient> masque_client =
+      std::move(masque_clients.back());
+  masque_clients.pop_back();
 
   if (bring_up_tun) {
     QUIC_LOG(INFO) << "Bringing up tun";
@@ -435,8 +541,12 @@ int RunMasqueClient(int argc, char* argv[]) {
     QUICHE_NOTREACHED();
   }
 
-  const bool dns_on_client =
-      quiche::GetQuicheCommandLineFlag(FLAGS_dns_on_client);
+  if (masque_mode == MasqueMode::kConnectUdpBind) {
+    bool uncompressed_context =
+        quiche::GetQuicheCommandLineFlag(FLAGS_bind_use_uncompressed_context);
+    masque_client->masque_client_session()->set_bind_use_uncompressed_context(
+        uncompressed_context);
+  }
 
   for (size_t i = 1; i < urls.size(); ++i) {
     if (absl::StartsWith(urls[i], "/")) {
@@ -447,11 +557,20 @@ int RunMasqueClient(int argc, char* argv[]) {
       }
       // Print the response body to stdout.
       std::cout << std::endl << stream->data() << std::endl;
-    } else if (!tools::SendEncapsulatedMasqueRequest(
-                   masque_client.get(), event_loop.get(), urls[i],
-                   disable_certificate_verification, address_family_for_lookup,
-                   dns_on_client)) {
-      return 1;
+    } else {
+      // For bind, DNS has to be done on client in the encapsulated client.
+      std::unique_ptr<MasqueEncapsulatedClient> encapsulated_client =
+          tools::CreateAndConnectMasqueEncapsulatedClient(
+              masque_client.get(), masque_mode, event_loop.get(), urls[i],
+              disable_certificate_verification, address_family_for_lookup,
+              /*dns_on_client=*/dns_on_client ||
+                  (masque_mode == MasqueMode::kConnectUdpBind),
+              /*is_also_underlying=*/false);
+
+      if (!encapsulated_client || !tools::SendRequestOnMasqueEncapsulatedClient(
+                                      *encapsulated_client, urls[i])) {
+        return 1;
+      }
     }
   }
 

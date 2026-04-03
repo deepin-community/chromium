@@ -15,17 +15,15 @@ limitations under the License.
 
 #include "xla/stream_executor/gpu/gpu_command_buffer.h"
 
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "absl/container/inlined_vector.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
@@ -33,45 +31,28 @@ limitations under the License.
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "xla/debug_options_flags.h"
+#include "xla/service/dump.h"
+#include "xla/stream_executor/bit_pattern.h"
 #include "xla/stream_executor/command_buffer.h"
-#include "xla/stream_executor/device_memory.h"
-#include "xla/stream_executor/gpu/gpu_driver.h"
-#include "xla/stream_executor/gpu/gpu_executor.h"
-#include "xla/stream_executor/gpu/gpu_kernel.h"
-#include "xla/stream_executor/gpu/gpu_kernels.h"
-#include "xla/stream_executor/gpu/gpu_stream.h"
-#include "xla/stream_executor/gpu/gpu_types.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/dnn.h"
 #include "xla/stream_executor/kernel.h"
 #include "xla/stream_executor/kernel_spec.h"
 #include "xla/stream_executor/launch_dim.h"
-#include "xla/stream_executor/stream_executor.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/path.h"
-#include "tsl/platform/statusor.h"
+#include "xla/stream_executor/stream.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace stream_executor::gpu {
 
 using Mode = CommandBuffer::Mode;
 using State = CommandBuffer::State;
-
-std::string_view to_string(State state) {
-  switch (state) {
-    case State::kCreate:
-      return "create";
-    case State::kUpdate:
-      return "update";
-    case State::kFinalized:
-      return "finalized";
-  }
-}
-
-absl::Status UnsupportedStateError(State state) {
-  return absl::InternalError(
-      absl::StrCat("Unsupported command buffer state: ", to_string(state)));
-}
+using GraphNodeHandle = GpuCommandBuffer::GraphNodeHandle;
+using GraphConditionalHandle = GpuCommandBuffer::GraphConditionalHandle;
 
 //===----------------------------------------------------------------------===//
 // GpuCommandBuffer resource usage tracking
@@ -80,21 +61,17 @@ absl::Status UnsupportedStateError(State state) {
 static std::atomic<int64_t> allocated_execs(0);
 static std::atomic<int64_t> alive_execs(0);
 
-static int64_t NotifyExecCreated() {
+int64_t GpuCommandBuffer::NotifyExecCreated() {
   alive_execs.fetch_add(1, std::memory_order_relaxed);
   return allocated_execs.fetch_add(1, std::memory_order_relaxed);
 }
 
-static int64_t NotifyExecDestroyed() {
+int64_t GpuCommandBuffer::NotifyExecDestroyed() {
   DCHECK_GE(alive_execs.load(std::memory_order_relaxed), 1);
   return alive_execs.fetch_sub(1, std::memory_order_relaxed) - 1;
 }
 
-/*static*/ int64_t GpuCommandBuffer::AllocatedExecs() {
-  return allocated_execs.load(std::memory_order_relaxed);
-}
-
-/*static*/ int64_t GpuCommandBuffer::AliveExecs() {
+int64_t GpuCommandBuffer::AliveExecs() {
   return alive_execs.load(std::memory_order_relaxed);
 }
 
@@ -102,127 +79,8 @@ static int64_t NotifyExecDestroyed() {
 // GpuCommandBuffer implementation
 //===----------------------------------------------------------------------===//
 
-static std::string_view ModeToString(CommandBuffer::Mode mode) {
-  switch (mode) {
-    case CommandBuffer::Mode::kPrimary:
-      return "primary";
-    case CommandBuffer::Mode::kNested:
-      return "nested";
-  }
-}
-
-GpuCommandBuffer::GpuCommandBuffer(Mode mode, GpuExecutor* parent,
-                                   GpuGraphHandle graph, bool is_owned_graph)
-    : mode_(mode),
-      parent_(parent),
-      graph_(graph),
-      is_owned_graph_(is_owned_graph) {
-  VLOG(5) << "Created command buffer for graph " << graph_
-          << "; mode=" << ModeToString(mode)
-          << "; is_owned_graph=" << is_owned_graph_;
-}
-
-GpuCommandBuffer::~GpuCommandBuffer() {
-  if (exec_ != nullptr && is_owned_graph_exec_) {
-    VLOG(5) << "Destroy GPU command buffer executable graph " << exec_ << " "
-            << "(remaining alive executable graphs: " << NotifyExecDestroyed()
-            << ")";
-    if (auto status = GpuDriver::DestroyGraphExec(exec_); !status.ok()) {
-      LOG(ERROR) << "Failed to destroy GPU graph exec: " << status.message();
-    }
-  }
-  if (graph_ != nullptr && is_owned_graph_) {
-    if (auto status = GpuDriver::DestroyGraph(graph_); !status.ok()) {
-      LOG(ERROR) << "Failed to destroy GPU graph: " << status.message();
-    }
-  }
-}
-
-GpuCommandBuffer::ScopedGpuGraphExec::ScopedGpuGraphExec(
-    GpuCommandBuffer* cmd_buffer, GpuGraphExecHandle exec)
-    : cmd_buffer(cmd_buffer),
-      restore(cmd_buffer->exec_),
-      restore_is_owned(cmd_buffer->is_owned_graph_exec_) {
-  cmd_buffer->exec_ = exec;
-  cmd_buffer->is_owned_graph_exec_ = false;
-}
-
-GpuCommandBuffer::ScopedGpuGraphExec::~ScopedGpuGraphExec() {
-  cmd_buffer->exec_ = restore;
-  cmd_buffer->is_owned_graph_exec_ = restore_is_owned;
-}
-
-static GpuDevicePtr AsDevicePtr(const DeviceMemoryBase& mem) {
-  return reinterpret_cast<GpuDevicePtr>(const_cast<void*>(mem.opaque()));
-}
-
-absl::Status GpuCommandBuffer::Trace(
-    Stream* stream, absl::AnyInvocable<absl::Status()> function) {
-  // TODO(ezhulenev): Check that graph is empty, because we should not be mixing
-  // graph tracing with explicit graph construction.
-  TF_RETURN_IF_ERROR(CheckNotFinalized());
-
-  VLOG(5) << "Trace into GPU command buffer graph " << graph_
-          << " on a stream: " << stream->DebugStreamPointers();
-
-  auto gpu_stream = AsGpuStreamValue(stream);
-
-  // Switch stream into the capture mode.
-  uint64_t start_nanos = tsl::Env::Default()->NowNanos();
-  TF_RETURN_IF_ERROR(GpuDriver::StreamBeginCaptureToGraph(
-      gpu_stream, graph_, GpuDriver::StreamCaptureMode::kThreadLocal));
-
-  auto traced = function();
-
-  // Always stop capturing the stream before checking `traced` result.
-  GpuGraphHandle captured_graph;
-  TF_RETURN_IF_ERROR(GpuDriver::StreamEndCapture(gpu_stream, &captured_graph));
-  DCHECK(captured_graph == graph_) << "Stream capture should update graph_";
-  uint64_t end_nanos = tsl::Env::Default()->NowNanos();
-
-  if (!traced.ok())
-    return absl::InternalError(
-        absl::StrCat("Failed to capture gpu graph: ", traced.message()));
-
-  VLOG(5) << "Traced into the GPU command buffer graph " << graph_ << " (took "
-          << (end_nanos - start_nanos) / 1000 << " μs)";
-
-  return absl::OkStatus();
-}
-
-GpuCommandBuffer::Dependencies GpuCommandBuffer::GetBarrier() {
-  return barrier_ ? Dependencies{barrier_} : Dependencies{};
-}
-
-absl::StatusOr<GpuCommandBuffer::NoOpKernel*> GpuCommandBuffer::GetNoOpKernel(
-    StreamExecutor* executor) {
-  if (!noop_kernel_) {
-    MultiKernelLoaderSpec spec(/*arity=*/0);
-#if !defined(TENSORFLOW_USE_ROCM)
-    spec.AddCudaPtxInMemory(gpu::kNoOpKernel, "noop");
-#else
-    spec.AddInProcessSymbol(gpu::GetNoOpKernel(), "noop");
-#endif  // TENSORFLOW_USE_ROCM
-
-    TF_ASSIGN_OR_RETURN(noop_kernel_, NoOpKernel::Create(executor, spec));
-  }
-
-  return &noop_kernel_;
-}
-
-absl::Status GpuCommandBuffer::DisableBarriersExecution(
-    GpuGraphExecHandle exec) {
-  for (GpuGraphNodeHandle barrier : barriers_) {
-    if (barrier == nullptr) continue;
-    TF_RETURN_IF_ERROR(GpuDriver::GraphNodeSetEnabled(exec, barrier, false));
-  }
-  for (ConditionalCommandBuffers& cmd_buffers : conditional_command_buffers_) {
-    for (auto& cmd_buffer : cmd_buffers.command_buffers) {
-      TF_RETURN_IF_ERROR(cmd_buffer->DisableBarriersExecution(exec));
-    }
-  }
-  return absl::OkStatus();
-}
+GpuCommandBuffer::GpuCommandBuffer(Mode mode, StreamExecutor* executor)
+    : mode_(mode), executor_(executor) {}
 
 absl::Status GpuCommandBuffer::CheckNotFinalized() {
   if (state_ == State::kFinalized)
@@ -231,114 +89,94 @@ absl::Status GpuCommandBuffer::CheckNotFinalized() {
   return absl::OkStatus();
 }
 
-absl::Status GpuCommandBuffer::CheckNumCommandBuffers(
-    const ConditionalCommandBuffers& cmd_buffers, size_t num_cmd_buffers) {
-  if (cmd_buffers.handles.size() != num_cmd_buffers) {
-    return absl::InternalError(absl::StrCat(
-        "Expected to have ", num_cmd_buffers,
-        " conditional command buffers, got ", cmd_buffers.handles.size()));
+absl::Status GpuCommandBuffer::CheckInState(State state) {
+  if (state_ != state) {
+    return absl::InternalError(absl::StrFormat(
+        "Expected command buffer to be in state %v but it was in state %v",
+        state, state_));
   }
   return absl::OkStatus();
 }
 
-absl::Status GpuCommandBuffer::Barrier(StreamExecutor* executor) {
-  // We don't support adding barriers as root nodes and simply skip them.
-  if ((state_ == State::kCreate && nodes_.empty()) ||
-      (state_ == State::kUpdate && update_state_.node_idx == 0))
-    return absl::OkStatus();
+std::vector<GpuCommandBuffer::GraphNodeHandle>
+GpuCommandBuffer::ToGraphNodeDependencies(
+    absl::Span<const Command* const> dependencies) {
+  std::vector<GraphNodeHandle> handles;
 
-  if (state_ == State::kCreate) {
-    // Collect nodes that will become a new barrier dependencies.
-    Dependencies dependencies;
-    for (int32_t i = nodes_.size() - 1; i >= 0; --i) {
-      if (nodes_[i].handle == barrier_) break;
-      dependencies.push_back(nodes_[i].handle);
-    }
+  for (const Command* dep : dependencies) {
+    DCHECK(dep) << "Dependency command must be not null";
 
-    // Add a noop kernel node acting as a barrier.
-    if (dependencies.size() > 1) {
-      // TODO(b/316343054): This should be an empty node, however CUDA 12.3 does
-      // not support empty nodes inside conditional command buffers.
-      GpuGraphNodeInfo& node_info = nodes_.emplace_back();
-      TF_ASSIGN_OR_RETURN(NoOpKernel * noop, GetNoOpKernel(executor));
-      TF_RETURN_IF_ERROR(GpuDriver::GraphAddKernelNode(
-          &node_info.handle, graph_, absl::MakeSpan(dependencies), "noop",
-          AsGpuKernel(&**noop)->AsGpuFunctionHandle(), 1, 1, 1, 1, 1, 1, 0,
-          /*kernel_params=*/nullptr, /*extra=*/nullptr));
-      barriers_.push_back(node_info.handle);
+    if (auto* gpu_command = dynamic_cast<const GpuCommand*>(dep)) {
+      handles.push_back(gpu_command->handle);
+
+    } else if (auto* gpu_command = dynamic_cast<const GpuCaseCommand*>(dep)) {
+      for (const auto& conditional_node : gpu_command->conditional_nodes) {
+        handles.push_back(conditional_node.handle);
+      }
+
+    } else if (auto* gpu_command = dynamic_cast<const GpuWhileCommand*>(dep)) {
+      handles.push_back(gpu_command->conditional_node.handle);
+    } else if (auto* gpu_command = dynamic_cast<const GpuChildCommand*>(dep)) {
+      handles.push_back(gpu_command->handle);
     } else {
-      barriers_.push_back(nullptr);
+      LOG(FATAL) << "Unsupported command type";  // Crash OK
     }
-
-    // Make the last node a barrier, if we didn't add a new no-op node acting
-    // as a barrier we simply reuse the last node.
-    barrier_ = nodes_.back().handle;
-    return absl::OkStatus();
   }
 
-  if (state_ == State::kUpdate) {
-    // Increment update node index only if we added a no-op node earlier and it
-    // means that we just updated a "real" barrier node, otherwise barrier is
-    // the last updated node.
-    if (barriers_[update_state_.barrier_idx++]) {
-      barrier_ = nodes_[update_state_.node_idx++].handle;
-    } else if (update_state_.node_idx) {
-      barrier_ = nodes_[update_state_.node_idx - 1].handle;
-    }
-    return absl::OkStatus();
-  }
-
-  return UnsupportedStateError(state_);
+  return handles;
 }
 
-absl::Status GpuCommandBuffer::LaunchWithPackedArgs(
+absl::StatusOr<const CommandBuffer::Command*> GpuCommandBuffer::CreateEmptyCmd(
+    absl::Span<const Command* const> dependencies, StreamPriority priority) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
+  TF_ASSIGN_OR_RETURN(GraphNodeHandle handle,
+                      CreateEmptyNode(ToGraphNodeDependencies(dependencies)));
+  return AppendCommand(GpuCommand{handle});
+}
+
+absl::StatusOr<const CommandBuffer::Command*>
+GpuCommandBuffer::CreateLaunchWithPackedArgs(
     const ThreadDim& threads, const BlockDim& blocks, const Kernel& kernel,
-    const KernelArgsPackedArrayBase& packed_args) {
+    const KernelArgsPackedArrayBase& packed_args,
+    absl::Span<const Command* const> dependencies, StreamPriority priority) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
+
   CHECK_EQ(kernel.Arity() + (packed_args.number_of_shared_bytes() > 0),
            packed_args.number_of_arguments());
 
-  const GpuKernel* gpu_kernel = AsGpuKernel(&kernel);
-  GpuFunctionHandle gpu_func = gpu_kernel->AsGpuFunctionHandle();
-
-  void** kernel_params =
-      const_cast<void**>(packed_args.argument_addresses().data());
-
   // Adds a new kernel node to the graph under construction.
-  if (state_ == State::kCreate) {
-    Dependencies barrier = GetBarrier();
-    GpuGraphNodeInfo& node_info = nodes_.emplace_back();
-    return GpuDriver::GraphAddKernelNode(
-        &node_info.handle, graph_, absl::MakeSpan(barrier), kernel.name(),
-        gpu_func, blocks.x, blocks.y, blocks.z, threads.x, threads.y, threads.z,
-        packed_args.number_of_shared_bytes(), kernel_params, /*extra=*/nullptr);
-  }
+  TF_ASSIGN_OR_RETURN(
+      GraphNodeHandle handle,
+      CreateKernelNode(ToGraphNodeDependencies(dependencies), priority, threads,
+                       blocks, kernel, packed_args));
 
-  // Updates kernel node in the executable graph.
-  if (state_ == State::kUpdate) {
-    GpuGraphNodeHandle node = nodes_[update_state_.node_idx++].handle;
-    return GpuDriver::GraphExecKernelNodeSetParams(
-        exec_, node, kernel.name(), gpu_func, blocks.x, blocks.y, blocks.z,
-        threads.x, threads.y, threads.z, packed_args.number_of_shared_bytes(),
-        kernel_params, /*extra=*/nullptr);
-  }
-
-  return UnsupportedStateError(state_);
+  return AppendCommand(GpuCommand{handle});
 }
 
-absl::Status GpuCommandBuffer::Launch(const ThreadDim& threads,
-                                      const BlockDim& blocks,
-                                      const Kernel& kernel,
-                                      const KernelArgs& args) {
-  TF_RETURN_IF_ERROR(CheckNotFinalized());
+absl::Status GpuCommandBuffer::UpdateLaunchWithPackedArgs(
+    const Command* command, const ThreadDim& threads, const BlockDim& blocks,
+    const Kernel& kernel, const KernelArgsPackedArrayBase& packed_args) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
+  auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
+  return UpdateKernelNode(gpu_command->handle, threads, blocks, kernel,
+                          packed_args);
+}
+
+absl::StatusOr<const CommandBuffer::Command*> GpuCommandBuffer::CreateLaunch(
+    const ThreadDim& threads, const BlockDim& blocks, const Kernel& kernel,
+    const KernelArgs& args, absl::Span<const Command* const> dependencies,
+    StreamPriority priority) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
 
   // If arguments are already packed we can just launch the kernel.
   if (auto* packed = DynCast<KernelArgsPackedArrayBase>(&args)) {
-    return LaunchWithPackedArgs(threads, blocks, kernel, *packed);
+    return CreateLaunchWithPackedArgs(threads, blocks, kernel, *packed,
+                                      dependencies, priority);
   }
 
   // For device memory array we rely on a custom kernel arguments packing.
-  if (auto* device_mem = DynCast<KernelArgsDeviceMemoryArray>(&args)) {
-    auto& pack = kernel.kernel_args_packing();
+  if (auto* device_mem = DynCast<KernelArgsDeviceAddressArray>(&args)) {
+    auto& pack = kernel.args_packing();
     if (!pack) {
       return absl::InternalError(
           "Kernel is missing a custom arguments packing function for device "
@@ -346,530 +184,435 @@ absl::Status GpuCommandBuffer::Launch(const ThreadDim& threads,
     }
 
     TF_ASSIGN_OR_RETURN(auto packed, pack(kernel, *device_mem));
-    return LaunchWithPackedArgs(threads, blocks, kernel, *packed);
+    return CreateLaunchWithPackedArgs(threads, blocks, kernel, *packed,
+                                      dependencies, priority);
   }
 
   return absl::InternalError("Unsupported kernel arguments type");
 }
 
-absl::Status GpuCommandBuffer::AddNestedCommandBuffer(
-    const CommandBuffer& nested) {
-  TF_RETURN_IF_ERROR(CheckNotFinalized());
+absl::Status GpuCommandBuffer::UpdateLaunch(const Command* command,
+                                            const ThreadDim& threads,
+                                            const BlockDim& blocks,
+                                            const Kernel& kernel,
+                                            const KernelArgs& args) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
 
-  GpuGraphHandle child_graph = GpuCommandBuffer::Cast(&nested)->graph();
-
-  // Adds a child graph node to the graph under construction.
-  if (state_ == State::kCreate) {
-    Dependencies barrier = GetBarrier();
-    GpuGraphNodeInfo& node_info = nodes_.emplace_back();
-    return GpuDriver::GraphAddChildNode(&node_info.handle, graph_,
-                                        absl::MakeSpan(barrier), child_graph);
+  // If arguments are already packed we can just launch the kernel.
+  if (auto* packed = DynCast<KernelArgsPackedArrayBase>(&args)) {
+    return UpdateLaunchWithPackedArgs(command, threads, blocks, kernel,
+                                      *packed);
   }
 
-  // Updates child graph node in the executable graph.
-  if (state_ == State::kUpdate) {
-    GpuGraphNodeHandle node = nodes_[update_state_.node_idx++].handle;
-    return GpuDriver::GraphExecChildNodeSetParams(exec_, node, child_graph);
+  // For device memory array we rely on a custom kernel arguments packing.
+  if (auto* device_mem = DynCast<KernelArgsDeviceAddressArray>(&args)) {
+    auto& pack = kernel.args_packing();
+    if (!pack) {
+      return absl::InternalError(
+          "Kernel is missing a custom arguments packing function for device "
+          "memory arguments array");
+    }
+
+    TF_ASSIGN_OR_RETURN(auto packed, pack(kernel, *device_mem));
+    return UpdateLaunchWithPackedArgs(command, threads, blocks, kernel,
+                                      *packed);
   }
 
-  return UnsupportedStateError(state_);
+  return absl::InternalError("Unsupported kernel arguments type");
 }
 
-absl::Status GpuCommandBuffer::MemcpyDeviceToDevice(DeviceMemoryBase* dst,
-                                                    const DeviceMemoryBase& src,
-                                                    uint64_t size) {
-  TF_RETURN_IF_ERROR(CheckNotFinalized());
-
-  if (state_ == State::kCreate) {
-    Dependencies barrier = GetBarrier();
-    GpuGraphNodeInfo& node_info = nodes_.emplace_back();
-    return GpuDriver::GraphAddMemcpyD2DNode(
-        parent_->gpu_context(), &node_info.handle, graph_,
-        absl::MakeSpan(barrier), AsDevicePtr(*dst), AsDevicePtr(src), size);
-  }
-
-  if (state_ == State::kUpdate) {
-    GpuGraphNodeHandle node = nodes_[update_state_.node_idx++].handle;
-    return GpuDriver::GraphExecMemcpyD2DNodeSetParams(
-        parent_->gpu_context(), exec_, node, AsDevicePtr(*dst),
-        AsDevicePtr(src), size);
-  }
-
-  return UnsupportedStateError(state_);
+absl::StatusOr<const CommandBuffer::Command*>
+GpuCommandBuffer::CreateChildCommand(
+    const CommandBuffer& nested,
+    absl::Span<const Command* const> dependencies) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
+  TF_ASSIGN_OR_RETURN(
+      GraphNodeHandle handle,
+      CreateClonedChildNode(ToGraphNodeDependencies(dependencies), nested));
+  return AppendCommand(GpuCommand{handle});
 }
 
-absl::Status GpuCommandBuffer::Memset(DeviceMemoryBase* dst,
-                                      CommandBuffer::BitPattern bit_pattern,
-                                      size_t num_elements) {
-  TF_RETURN_IF_ERROR(CheckNotFinalized());
-
-  if (state_ == State::kCreate) {
-    Dependencies barrier = GetBarrier();
-    GpuGraphNodeInfo& node_info = nodes_.emplace_back();
-    return GpuDriver::GraphAddMemsetNode(
-        parent_->gpu_context(), &node_info.handle, graph_,
-        absl::MakeSpan(barrier), AsDevicePtr(*dst), bit_pattern, num_elements);
-  }
-
-  if (state_ == State::kUpdate) {
-    GpuGraphNodeHandle node = nodes_[update_state_.node_idx++].handle;
-    return GpuDriver::GraphExecMemsetNodeSetParams(
-        parent_->gpu_context(), exec_, node, AsDevicePtr(*dst), bit_pattern,
-        num_elements);
-  }
-
-  return UnsupportedStateError(state_);
+absl::Status GpuCommandBuffer::UpdateChildCommand(const Command* command,
+                                                  const CommandBuffer& nested) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
+  auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
+  VLOG(5) << "UpdateChildCommand: " << reinterpret_cast<const void*>(command);
+  return UpdateClonedChildNode(gpu_command->handle, nested);
 }
 
-absl::StatusOr<DeviceMemoryBase> GpuCommandBuffer::Allocate(size_t bytes) {
-  TF_RETURN_IF_ERROR(CheckNotFinalized());
+absl::StatusOr<const CommandBuffer::Command*>
+GpuCommandBuffer::CreateChildCommand(
+    absl::AnyInvocable<absl::Status(CommandBuffer*)> record_fn,
+    absl::Span<const Command* const> dependencies) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
+  TF_ASSIGN_OR_RETURN(std::unique_ptr<CommandBuffer> nested,
+                      executor_->CreateCommandBuffer(Mode::kNested));
 
-  // Adds a new memory allocation node to the graph under construction.
-  if (state_ == State::kCreate) {
-    Dependencies barrier = GetBarrier();
-    GpuGraphNodeInfo& node_info = nodes_.emplace_back();
-
-    GpuDevicePtr ptr;
-    TF_RETURN_IF_ERROR(GpuDriver::GraphAddMemAllocNode(
-        &node_info.handle, graph_, absl::MakeSpan(barrier),
-        GpuDriver::MemAccessFlags::kReadWrite,
-        GpuDriver::MemLocationType::kDevice, parent_->device_ordinal(),
-        GpuDriver::MemAllocationType::kPinned, bytes, &ptr));
-    // For CUDA impl, VA range is reserved when adding memory allocation node.
-    CHECK(ptr) << "CUDA graph memory allocation node returned nullptr";
-
-    VLOG(2) << "Setting device memory base with opaque pointer "
-            << reinterpret_cast<void*>(ptr)
-            << " device ordinal: " << parent_->device_ordinal();
-    return DeviceMemoryBase(reinterpret_cast<void*>(ptr), bytes);
-  }
-
-  if (state_ == State::kUpdate) {
-    // Memory allocation node implemented through CUDA graph does not allocate
-    // new memory region on update, just return the memory region allocated
-    // during the create step.
-    TF_ASSIGN_OR_RETURN(AllocationResult params,
-                        GpuDriver::GraphGetMemAllocNodeParams(
-                            nodes_[update_state_.node_idx++].handle));
-    return DeviceMemoryBase(reinterpret_cast<void*>(params.first),
-                            params.second);
-  }
-
-  return UnsupportedStateError(state_);
+  TF_RETURN_IF_ERROR(record_fn(nested.get()));
+  TF_ASSIGN_OR_RETURN(GraphNodeHandle handle,
+                      CreateMovedChildNode(
+                          ToGraphNodeDependencies(dependencies), nested.get()));
+  TF_RETURN_IF_ERROR(nested->Finalize());
+  return AppendCommand(GpuChildCommand{handle, std::move(nested)});
 }
 
-absl::Status GpuCommandBuffer::Free(DeviceMemoryBase dst) {
-  TF_RETURN_IF_ERROR(CheckNotFinalized());
+absl::Status GpuCommandBuffer::UpdateChildCommand(
+    const Command* command,
+    absl::AnyInvocable<absl::Status(CommandBuffer*)> update_fn) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
+  auto* gpu_command = dynamic_cast<const GpuChildCommand*>(command);
+  CHECK(gpu_command) << "Command must be a GpuChildCommand";
 
-  // Adds a new memfree node to the graph under construction.
-  if (state_ == State::kCreate) {
-    Dependencies barrier = GetBarrier();
-    GpuGraphNodeInfo& node_info = nodes_.emplace_back();
-    GpuDevicePtr gpu_dptr = AsDevicePtr(dst);
-    TF_RETURN_IF_ERROR(GpuDriver::GraphAddMemFreeNode(
-        &node_info.handle, graph_, absl::MakeSpan(barrier), gpu_dptr));
-    return absl::OkStatus();
-  }
-
-  if (state_ == State::kUpdate) {
-    // memfree node implemented through CUDA graph only free buffers that is
-    // allocated through memory alloc node, so buffer address will not change,
-    // no update is required.
-    update_state_.node_idx++;
-    return absl::OkStatus();
-  }
-
-  return UnsupportedStateError(state_);
+  CommandBuffer* child_command_buffer = gpu_command->command_buffer.get();
+  TF_RETURN_IF_ERROR(child_command_buffer->Update());
+  TF_RETURN_IF_ERROR(update_fn(child_command_buffer));
+  return child_command_buffer->Finalize();
 }
 
-//--------------------------------------------------------------------------//
+absl::StatusOr<const CommandBuffer::Command*> GpuCommandBuffer::CreateMemcpyD2D(
+    DeviceAddressBase* dst, const DeviceAddressBase& src, uint64_t size,
+    absl::Span<const Command* const> dependencies) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
+
+  TF_ASSIGN_OR_RETURN(GraphNodeHandle handle,
+                      CreateMemcpyD2DNode(ToGraphNodeDependencies(dependencies),
+                                          *dst, src, size));
+
+  return AppendCommand(GpuCommand{handle});
+}
+
+absl::Status GpuCommandBuffer::UpdateMemcpyD2D(const Command* command,
+                                               DeviceAddressBase* dst,
+                                               const DeviceAddressBase& src,
+                                               uint64_t size) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
+  auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
+  return UpdateMemcpyD2DNode(gpu_command->handle, *dst, src, size);
+}
+
+absl::StatusOr<const CommandBuffer::Command*> GpuCommandBuffer::CreateMemset(
+    DeviceAddressBase* dst, BitPattern bit_pattern, size_t num_elements,
+    absl::Span<const Command* const> dependencies) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
+
+  TF_ASSIGN_OR_RETURN(GraphNodeHandle handle,
+                      CreateMemsetNode(ToGraphNodeDependencies(dependencies),
+                                       *dst, bit_pattern, num_elements));
+
+  return AppendCommand(GpuCommand{handle});
+}
+
+absl::Status GpuCommandBuffer::UpdateMemset(const Command* command,
+                                            DeviceAddressBase* dst,
+                                            const BitPattern& bit_pattern,
+                                            size_t num_elements) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
+  auto* gpu_command = tsl::down_cast<const GpuCommand*>(command);
+  return UpdateMemsetNode(gpu_command->handle, *dst, bit_pattern, num_elements);
+}
+
+//----------------------------------------------------------------------------//
+// Command buffer DNN graph API
+//----------------------------------------------------------------------------//
+
+absl::StatusOr<const CommandBuffer::Command*>
+GpuCommandBuffer::CreateDnnGraphCommand(
+    dnn::DnnGraph& dnn_graph, Stream& stream,
+    absl::Span<DeviceAddressBase> operands,
+    absl::Span<const Command* const> dependencies) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
+
+  TF_ASSIGN_OR_RETURN(std::unique_ptr<CommandBuffer> nested,
+                      stream.parent()->CreateCommandBuffer(Mode::kNested));
+  GpuCommandBuffer& nested_gpu =
+      tensorflow::down_cast<GpuCommandBuffer&>(*nested);
+  TF_RETURN_IF_ERROR(
+      nested_gpu.PopulateDnnGraphNode(dnn_graph, stream, operands));
+
+  TF_ASSIGN_OR_RETURN(
+      GraphNodeHandle handle,
+      CreateClonedChildNode(ToGraphNodeDependencies(dependencies), *nested));
+
+  return AppendCommand(GpuCommand{handle});
+}
+
+absl::Status GpuCommandBuffer::UpdateDnnGraphCommand(
+    const Command* command, dnn::DnnGraph& dnn_graph, Stream& stream,
+    absl::Span<DeviceAddressBase> operands) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
+  return UpdateDnnGraphNode(dnn_graph, stream, operands,
+                            tsl::down_cast<const GpuCommand*>(command)->handle);
+}
+
+//----------------------------------------------------------------------------//
 // Command buffer condtitional commands API
-//--------------------------------------------------------------------------//
+//----------------------------------------------------------------------------//
 
-/*static*/ GpuCommandBuffer::ConditionBuilder
-GpuCommandBuffer::ToConditionBuilder(CommandBuffer::Builder builder) {
-  return [builder = std::move(builder)](CommandBuffer* cmd_buffer,
-                                        GpuGraphConditionalHandle) {
-    return builder(cmd_buffer);
-  };
-}
-
-absl::StatusOr<std::vector<GpuGraphConditionalHandle>>
+absl::StatusOr<std::vector<GraphConditionalHandle>>
 GpuCommandBuffer::CreateConditionalHandles(size_t num_handles) {
-  std::vector<GpuGraphConditionalHandle> handles;
+  std::vector<GraphConditionalHandle> handles;
+  handles.reserve(num_handles);
   for (size_t i = 0; i < num_handles; ++i) {
-    TF_RETURN_IF_ERROR(GpuDriver::GraphConditionalHandleCreate(
-        &handles.emplace_back(), graph_, parent_->gpu_context(), 0, 0));
+    TF_ASSIGN_OR_RETURN(handles.emplace_back(), CreateConditionalHandle());
   }
   return handles;
 }
 
-absl::StatusOr<std::vector<GpuGraphHandle>>
-GpuCommandBuffer::CreateConditionalNodes(
-    ConditionType type, absl::Span<const GpuGraphConditionalHandle> handles) {
-  std::vector<GpuGraphHandle> conditional_graphs;
+absl::StatusOr<const CommandBuffer::Command*> GpuCommandBuffer::CreateCase(
+    DeviceAddress<uint8_t> index, bool index_is_bool,
+    std::vector<CreateCommands> create_branches,
+    absl::Span<const Command* const> dependencies) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
 
-  using ConditionalParams = GpuDriver::GpuGraphConditionalNodeParams;
-  using ConditionalResult = GpuDriver::GpuGraphConditionalNodeParams::Result;
+  constexpr size_t kBranchBatchSize = 8;
 
-  for (GpuGraphConditionalHandle handle : handles) {
-    Dependencies barrier = GetBarrier();
-    GpuGraphNodeInfo& node_info = nodes_.emplace_back();
+  GpuCaseCommand command = {};
 
-    ConditionalParams params;
-    params.type = type;
-    params.handle = handle;
-    params.context = parent_->gpu_context();
+  std::vector<GraphNodeHandle> node_dependencies =
+      ToGraphNodeDependencies(dependencies);
 
-    TF_ASSIGN_OR_RETURN(
-        GpuDriver::GpuGraphNodeResult result,
-        GpuDriver::GraphAddNode(&node_info.handle, graph_,
-                                absl::MakeSpan(barrier), params));
+  int32_t batch_offset = 0;
+  while (batch_offset < create_branches.size()) {
+    // Conditionals will by default run branches[branchs.size()-1] if index is
+    // `< 0` or `>= branches.size()`. See
+    // https://openxla.org/xla/operation_semantics#conditional.
+    // To break down a large case with back to back ConditionalCommands, only
+    // the last batch should accept this default case.
+    int32_t remaining_branches = create_branches.size() - batch_offset;
+    int32_t batch_size;
+    bool enable_conditional_default;
+    if (remaining_branches <= kBranchBatchSize) {
+      batch_size = remaining_branches;
+      enable_conditional_default = true;
+    } else {
+      batch_size = kBranchBatchSize;
+      enable_conditional_default = false;
+    }
 
-    conditional_graphs.push_back(std::get<ConditionalResult>(result).graph);
+    TF_ASSIGN_OR_RETURN(auto conditionals,
+                        CreateConditionalHandles(batch_size));
+
+    TF_ASSIGN_OR_RETURN(auto set_condition_node,
+                        CreateSetCaseConditionNode(
+                            conditionals, index, index_is_bool, batch_offset,
+                            enable_conditional_default, node_dependencies));
+
+    std::vector<GraphConditionalNodeHandle> conditional_nodes;
+    for (int z = 0; z < batch_size; ++z) {
+      int branch_offset = z + batch_offset;
+      TF_ASSIGN_OR_RETURN(
+          conditional_nodes.emplace_back(),
+          CreateConditionalNode({set_condition_node}, conditionals[z],
+                                ConditionType::kIf));
+
+      GpuCommandBuffer* case_command_buffer =
+          conditional_nodes.back().command_buffer.get();
+      TF_RETURN_IF_ERROR(create_branches[branch_offset](case_command_buffer,
+                                                        /*dependencies=*/{})
+                             .status());
+      TF_RETURN_IF_ERROR(case_command_buffer->Finalize());
+    }
+
+    // Move the state into the recorded command.
+    command.conditionals.insert(command.conditionals.end(),
+                                conditionals.begin(), conditionals.end());
+    command.set_condition_nodes.push_back(set_condition_node);
+    command.conditional_nodes.insert(
+        command.conditional_nodes.end(),
+        std::make_move_iterator(conditional_nodes.begin()),
+        std::make_move_iterator(conditional_nodes.end()));
+
+    batch_offset += batch_size;
   }
 
-  return conditional_graphs;
+  return AppendCommand(std::move(command));
 }
 
-absl::StatusOr<std::vector<std::unique_ptr<GpuCommandBuffer>>>
-GpuCommandBuffer::CreateConditionalCommandBuffers(
-    absl::Span<const GpuGraphConditionalHandle> handles,
-    absl::Span<const GpuGraphHandle> graphs,
-    absl::Span<const ConditionBuilder> builders) {
-  std::vector<std::unique_ptr<GpuCommandBuffer>> cmd_buffers;
+absl::Status GpuCommandBuffer::UpdateCase(
+    const Command* command, DeviceAddress<uint8_t> index, bool index_is_bool,
+    std::vector<UpdateCommands> update_branches) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
 
-  // Conditional command buffers always created in nested mode and with
-  // underlying graphs owned by a conditional node.
-  CommandBuffer::Mode nested = CommandBuffer::Mode::kNested;
-  bool is_owned_graph = false;
+  constexpr size_t kBranchBatchSize = 8;
 
-  for (size_t i = 0; i < handles.size(); ++i) {
-    auto command_buffer =
-        parent_->CreateCommandBuffer(nested, graphs[i], is_owned_graph);
-    TF_RETURN_IF_ERROR(builders[i](command_buffer.get(), handles[i]));
-    TF_RETURN_IF_ERROR(command_buffer->Finalize());
+  auto* gpu_command = tsl::down_cast<const GpuCaseCommand*>(command);
 
-    cmd_buffers.push_back(std::move(command_buffer));
+  // Update branch conditionals.
+  size_t batch_index = 0;
+  int32_t batch_offset = 0;
+  while (batch_offset < update_branches.size()) {
+    int32_t remaining_branches = update_branches.size() - batch_offset;
+    int32_t batch_size;
+    bool enable_conditional_default;
+    if (remaining_branches <= kBranchBatchSize) {
+      batch_size = remaining_branches;
+      enable_conditional_default = true;
+    } else {
+      batch_size = kBranchBatchSize;
+      enable_conditional_default = false;
+    }
+
+    TF_RETURN_IF_ERROR(UpdateSetCaseConditionNode(
+        gpu_command->set_condition_nodes[batch_index],
+        absl::MakeSpan(gpu_command->conditionals)
+            .subspan(batch_offset, batch_size),
+        index, index_is_bool, batch_offset, enable_conditional_default));
+
+    batch_offset += batch_size;
+    batch_index += 1;
   }
 
-  return cmd_buffers;
-}
-
-absl::Status GpuCommandBuffer::UpdateConditionalCommandBuffers(
-    absl::Span<const GpuGraphConditionalHandle> handles,
-    absl::Span<const std::unique_ptr<GpuCommandBuffer>> command_buffers,
-    absl::Span<const ConditionBuilder> builders) {
-  for (size_t i = 0; i < command_buffers.size(); ++i) {
-    // Use parent graph executable for conditional command buffer update.
-    ScopedGpuGraphExec scoped_exec(command_buffers[i].get(), exec_);
-
-    // Update command buffer using user-provided builder callback.
-    TF_RETURN_IF_ERROR(command_buffers[i]->Update());
-    TF_RETURN_IF_ERROR(builders[i](command_buffers[i].get(), handles[i]));
-    TF_RETURN_IF_ERROR(command_buffers[i]->Finalize());
+  // Update branch command buffers.
+  for (size_t i = 0; i < gpu_command->conditional_nodes.size(); ++i) {
+    GpuCommandBuffer* case_command_buffer =
+        gpu_command->conditional_nodes[i].command_buffer.get();
+    TF_RETURN_IF_ERROR(case_command_buffer->Update());
+    TF_RETURN_IF_ERROR(update_branches[i](case_command_buffer));
+    TF_RETURN_IF_ERROR(case_command_buffer->Finalize());
   }
+
   return absl::OkStatus();
 }
 
-absl::Status GpuCommandBuffer::CreateConditionalCommand(
-    StreamExecutor* executor, ConditionType type, SetConditionFn set_condition,
-    absl::Span<const ConditionBuilder> builders) {
-  TF_RETURN_IF_ERROR(CheckNotFinalized());
-
-  // Every conditional command buffer is controlled by its own handle.
-  size_t num_handles = builders.size();
-
-  if (state_ == State::kCreate) {
-    TF_ASSIGN_OR_RETURN(auto handles, CreateConditionalHandles(num_handles));
-
-    // Add a kernel to update conditional handles values.
-    TF_RETURN_IF_ERROR(set_condition(handles));
-
-    // Add a barrier between conditional handles and conditional nodes.
-    TF_RETURN_IF_ERROR(Barrier(executor));
-
-    // Create conditional command buffer for each builder.
-    TF_ASSIGN_OR_RETURN(auto graphs, CreateConditionalNodes(type, handles));
-    TF_ASSIGN_OR_RETURN(auto cmd_buffers, CreateConditionalCommandBuffers(
-                                              handles, graphs, builders));
-
-    // Keep track of created conditional handles and command buffers.
-    conditional_command_buffers_.emplace_back(std::move(handles),
-                                              std::move(cmd_buffers));
-
-    return absl::OkStatus();
-  }
-
-  if (state_ == State::kUpdate) {
-    ConditionalCommandBuffers& cond_cmd_buffers =
-        conditional_command_buffers_[update_state_.conditional_idx++];
-
-    // Sanity check that we got the correct conditional command buffers.
-    TF_RETURN_IF_ERROR(CheckNumCommandBuffers(cond_cmd_buffers, num_handles));
-
-    // Update a kernel that updates conditional handles values.
-    TF_RETURN_IF_ERROR(set_condition(cond_cmd_buffers.handles));
-
-    // Update a barrier between conditional handles and conditional nodes.
-    TF_RETURN_IF_ERROR(Barrier(executor));
-
-    // Skip updating conditional nodes.
-    update_state_.node_idx += num_handles;
-
-    return UpdateConditionalCommandBuffers(
-        cond_cmd_buffers.handles,
-        absl::MakeSpan(cond_cmd_buffers.command_buffers), builders);
-  }
-
-  return UnsupportedStateError(state_);
+absl::StatusOr<const CommandBuffer::Command*> GpuCommandBuffer::CreateCase(
+    DeviceAddress<int32_t> index, std::vector<CreateCommands> create_branches,
+    absl::Span<const Command* const> dependencies) {
+  return CreateCase(
+      DeviceAddress<uint8_t>::MakeFromByteSize(index.opaque(), index.size()),
+      /*index_is_bool=*/false, std::move(create_branches), dependencies);
 }
 
-absl::Status GpuCommandBuffer::If(StreamExecutor* executor,
-                                  DeviceMemory<bool> predicate,
-                                  CommandBuffer::Builder then_builder) {
-  DCHECK(executor->implementation() == parent_);
-
-  // Load kernels that updates condition handle value.
-  MultiKernelLoaderSpec spec(/*arity=*/2);
-  spec.AddInProcessSymbol(gpu::GetSetIfConditionKernel(), "set_if_condition");
-
-  // TODO(b/324117563): Keep kernel in `GpuCommandBuffer` to avoid loading it on
-  // every call to `If`.
-  TF_ASSIGN_OR_RETURN(SetIfConditionKernel set_if_condition,
-                      SetIfConditionKernel::Create(executor, spec));
-
-  auto set_cond_fn = [&](absl::Span<const GpuGraphConditionalHandle> handles) {
-    return CommandBuffer::Launch(set_if_condition, ThreadDim(), BlockDim(),
-                                 handles[0], predicate);
-  };
-
-  std::array<ConditionBuilder, 1> builders = {
-      ToConditionBuilder(std::move(then_builder))};
-
-  return CreateConditionalCommand(executor, ConditionType::kIf, set_cond_fn,
-                                  builders);
+absl::StatusOr<const CommandBuffer::Command*> GpuCommandBuffer::CreateCase(
+    DeviceAddress<bool> index, std::vector<CreateCommands> create_branches,
+    absl::Span<const Command* const> dependencies) {
+  return CreateCase(
+      DeviceAddress<uint8_t>::MakeFromByteSize(index.opaque(), index.size()),
+      /*index_is_bool=*/true, std::move(create_branches), dependencies);
 }
 
-absl::Status GpuCommandBuffer::IfElse(StreamExecutor* executor,
-                                      DeviceMemory<bool> predicate,
-                                      CommandBuffer::Builder then_builder,
-                                      CommandBuffer::Builder else_builder) {
-  DCHECK(executor->implementation() == parent_);
-
-  // Load kernels that updates condition handle value.
-  MultiKernelLoaderSpec spec(/*arity=*/3);
-  spec.AddInProcessSymbol(gpu::GetSetIfElseConditionKernel(),
-                          "set_if_else_condition");
-
-  // TODO(b/324117563): Keep kernel in `GpuCommandBuffer` to avoid loading it on
-  // every call to `IfElse`.
-  TF_ASSIGN_OR_RETURN(SetIfElseConditionKernel set_if_else_condition,
-                      SetIfElseConditionKernel::Create(executor, spec));
-
-  auto set_cond_fn = [&](absl::Span<const GpuGraphConditionalHandle> handles) {
-    return CommandBuffer::Launch(set_if_else_condition, ThreadDim(), BlockDim(),
-                                 handles[0], handles[1], predicate);
-  };
-
-  std::array<ConditionBuilder, 2> builders = {
-      ToConditionBuilder(std::move(then_builder)),
-      ToConditionBuilder(std::move(else_builder))};
-
-  return CreateConditionalCommand(executor, ConditionType::kIf, set_cond_fn,
-                                  builders);
+absl::Status GpuCommandBuffer::UpdateCase(
+    const Command* command, DeviceAddress<int32_t> index,
+    std::vector<UpdateCommands> update_branches) {
+  return UpdateCase(
+      command,
+      DeviceAddress<uint8_t>::MakeFromByteSize(index.opaque(), index.size()),
+      /*index_is_bool=*/false, std::move(update_branches));
 }
 
-absl::Status GpuCommandBuffer::Case(
-    StreamExecutor* executor, DeviceMemory<int32_t> index,
-    std::vector<CommandBuffer::Builder> branches) {
-  DCHECK(executor->implementation() == parent_);
-
-  // TODO(ezhulenev): Relax this constraint, we can launch multiple back to back
-  // kernels to update conditional handles in batches of size 8.
-  if (branches.size() > 8) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Case command supports only up to 8 branches, got: ", branches.size()));
-  }
-
-  // Load kernels that updates condition handle value.
-  MultiKernelLoaderSpec spec(/*arity=*/10);
-  spec.AddInProcessSymbol(gpu::GetSetCaseConditionKernel(),
-                          "set_case_condition");
-
-  // TODO(b/324117563): Keep kernel in `GpuCommandBuffer` to avoid loading it on
-  // every call to `Case`.
-  TF_ASSIGN_OR_RETURN(SetCaseConditionKernel set_case_condition,
-                      SetCaseConditionKernel::Create(executor, spec));
-
-  auto set_cond_fn = [&](absl::Span<const GpuGraphConditionalHandle> handles) {
-    int32_t num_handles = handles.size();
-
-    // Pad handles up to size 8 with a default initialized handle.
-    std::vector<GpuGraphConditionalHandle> padded_handles(handles.begin(),
-                                                          handles.end());
-    padded_handles.resize(8);
-
-    return CommandBuffer::Launch(
-        set_case_condition, ThreadDim(), BlockDim(), padded_handles[0],
-        padded_handles[1], padded_handles[2], padded_handles[3],
-        padded_handles[4], padded_handles[5], padded_handles[6],
-        padded_handles[7], index, num_handles);
-  };
-
-  // Wrap all branches into conditional command buffer builders.
-  absl::InlinedVector<ConditionBuilder, 8> builders;
-  builders.reserve(branches.size());
-  for (auto& branch : branches) {
-    builders.push_back(ToConditionBuilder(std::move(branch)));
-  }
-
-  return CreateConditionalCommand(executor, ConditionType::kIf, set_cond_fn,
-                                  builders);
+absl::Status GpuCommandBuffer::UpdateCase(
+    const Command* command, DeviceAddress<bool> index,
+    std::vector<UpdateCommands> update_branches) {
+  return UpdateCase(
+      command,
+      DeviceAddress<uint8_t>::MakeFromByteSize(index.opaque(), index.size()),
+      /*index_is_bool=*/true, std::move(update_branches));
 }
 
-absl::Status GpuCommandBuffer::For(StreamExecutor* executor,
-                                   int32_t num_iteration,
-                                   DeviceMemory<int32_t> loop_counter,
-                                   CommandBuffer::Builder body_builder) {
-  DCHECK(executor->implementation() == parent_);
+absl::StatusOr<const CommandBuffer::Command*> GpuCommandBuffer::CreateWhile(
+    DeviceAddress<bool> pred, CreateCommands create_cond,
+    CreateCommands create_body, absl::Span<const Command* const> dependencies) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kCreate));
 
-  // Load kernels that updates condition handle value.
-  MultiKernelLoaderSpec spec(/*arity=*/3);
-  spec.AddInProcessSymbol(gpu::GetSetForConditionKernel(), "set_for_condition");
+  GpuWhileCommand command = {};
 
-  // TODO(b/324117563): Keep kernel in `GpuCommandBuffer` to avoid loading it on
-  // every call to `For`.
-  TF_ASSIGN_OR_RETURN(SetForConditionKernel set_for_condition,
-                      SetForConditionKernel::Create(executor, spec));
+  TF_ASSIGN_OR_RETURN(auto init_cond, create_cond(this, dependencies));
 
-  // Reset loop counter to zero.
-  TF_RETURN_IF_ERROR(Memset(&loop_counter, uint32_t{0}, 1));
-  TF_RETURN_IF_ERROR(Barrier(executor));
+  TF_ASSIGN_OR_RETURN(command.conditional, CreateConditionalHandle());
+  TF_ASSIGN_OR_RETURN(
+      command.set_init_condition_node,
+      CreateSetWhileConditionNode(command.conditional, pred,
+                                  ToGraphNodeDependencies(init_cond)));
+  TF_ASSIGN_OR_RETURN(
+      command.conditional_node,
+      CreateConditionalNode({command.set_init_condition_node},
+                            command.conditional, ConditionType::kWhile));
 
-  auto set_cond_fn = [&](absl::Span<const GpuGraphConditionalHandle> handles) {
-    return CommandBuffer::Launch(set_for_condition, ThreadDim(), BlockDim(),
-                                 handles[0], loop_counter, num_iteration);
-  };
+  GpuCommandBuffer* body = command.conditional_node.command_buffer.get();
+  TF_ASSIGN_OR_RETURN(auto body_commands,
+                      create_body(body, /*dependencies=*/{}));
+  TF_ASSIGN_OR_RETURN(auto update_cond, create_cond(body, body_commands));
+  TF_ASSIGN_OR_RETURN(
+      command.set_body_condition_node,
+      body->CreateSetWhileConditionNode(command.conditional, pred,
+                                        ToGraphNodeDependencies(update_cond)));
+  TF_RETURN_IF_ERROR(command.conditional_node.command_buffer->Finalize());
 
-  auto body = [&](CommandBuffer* body, GpuGraphConditionalHandle handle) {
-    TF_RETURN_IF_ERROR(body_builder(body));
-    TF_RETURN_IF_ERROR(body->Barrier(executor));
-
-    // Decide if we want to continue loop iteration.
-    return body->Launch(set_for_condition, ThreadDim(), BlockDim(), handle,
-                        loop_counter, num_iteration);
-  };
-
-  std::array<ConditionBuilder, 1> builders = {std::move(body)};
-
-  return CreateConditionalCommand(executor, ConditionType::kWhile, set_cond_fn,
-                                  builders);
+  return AppendCommand(std::move(command));
 }
 
-absl::Status GpuCommandBuffer::While(StreamExecutor* executor,
-                                     DeviceMemory<bool> pred,
-                                     CommandBuffer::Builder cond_builder,
-                                     CommandBuffer::Builder body_builder) {
-  DCHECK(executor->implementation() == parent_);
+absl::Status GpuCommandBuffer::UpdateWhile(const Command* command,
+                                           DeviceAddress<bool> pred,
+                                           UpdateCommands update_cond,
+                                           UpdateCommands update_body) {
+  TF_RETURN_IF_ERROR(CheckInState(State::kUpdate));
 
-  // Load kernels that updates condition handle value.
-  MultiKernelLoaderSpec spec(/*arity=*/2);
-  spec.AddInProcessSymbol(gpu::GetSetWhileConditionKernel(),
-                          "set_while_condition");
+  auto* gpu_command = tsl::down_cast<const GpuWhileCommand*>(command);
 
-  // TODO(b/324117563): Keep kernel in `GpuCommandBuffer` to avoid loading it on
-  // every call to `While`.
-  TF_ASSIGN_OR_RETURN(SetWhileConditionKernel set_while_condition,
-                      SetWhileConditionKernel::Create(executor, spec));
+  TF_RETURN_IF_ERROR(update_cond(this));
 
-  // Record condition commands into the parent command buffer.
-  TF_RETURN_IF_ERROR(cond_builder(this));
-  TF_RETURN_IF_ERROR(Barrier(executor));
+  TF_RETURN_IF_ERROR(UpdateSetWhileConditionNode(
+      gpu_command->set_init_condition_node, gpu_command->conditional, pred));
 
-  auto set_cond_fn = [&](absl::Span<const GpuGraphConditionalHandle> handles) {
-    return CommandBuffer::Launch(set_while_condition, ThreadDim(), BlockDim(),
-                                 handles[0], pred);
-  };
+  GpuCommandBuffer* body = gpu_command->conditional_node.command_buffer.get();
 
-  auto body = [&](CommandBuffer* body, GpuGraphConditionalHandle handle) {
-    TF_RETURN_IF_ERROR(body_builder(body));
-    TF_RETURN_IF_ERROR(body->Barrier(executor));
-    TF_RETURN_IF_ERROR(cond_builder(body));
-    TF_RETURN_IF_ERROR(body->Barrier(executor));
-    return body->Launch(set_while_condition, ThreadDim(), BlockDim(), handle,
-                        pred);
-  };
+  // Update command buffer using user-provided builder callback.
+  TF_RETURN_IF_ERROR(body->Update());
+  TF_RETURN_IF_ERROR(update_body(body));
+  TF_RETURN_IF_ERROR(update_cond(body));
+  TF_RETURN_IF_ERROR(body->UpdateSetWhileConditionNode(
+      gpu_command->set_body_condition_node, gpu_command->conditional, pred));
+  TF_RETURN_IF_ERROR(body->Finalize());
 
-  std::array<ConditionBuilder, 1> builders = {std::move(body)};
-
-  return CreateConditionalCommand(executor, ConditionType::kWhile, set_cond_fn,
-                                  builders);
+  return absl::OkStatus();
 }
 
 absl::Status GpuCommandBuffer::Finalize() {
   TF_RETURN_IF_ERROR(CheckNotFinalized());
+  TF_RETURN_IF_ERROR(PrepareFinalization());
 
-  // Maybe dump created CUDA graph to a dot file for debugging.
-  if (state_ == State::kCreate && VLOG_IS_ON(10)) {
-    std::string path = tsl::io::GetTempFilename(/*extension=*/"dot");
-    auto printed = GpuDriver::GraphDebugDotPrint(
-        graph_, path.c_str(), /*return_printed_graph=*/VLOG_IS_ON(100));
-    if (VLOG_IS_ON(100) && printed.ok()) {
-      VLOG(100) << "Printed Gpu graph " << graph_ << " to: " << path << "\n"
-                << *printed;
-    }
+  // Maybe dump created GPU graph to a dot file for debugging.
+  if (state_ == State::kCreate &&
+      (VLOG_IS_ON(10) || (VLOG_IS_ON(9) && mode_ == Mode::kPrimary))) {
+    xla::DebugOptions debug_options = xla::GetDebugOptionsFromFlags();
+    std::string contents = ToString();
+    std::string filename = absl::StrFormat("gpu_command_buffer_%p.dot", this);
+    xla::DumpToFileInDir(debug_options, filename, contents);
   }
 
-  if (mode_ == Mode::kPrimary && state_ == State::kCreate) {
-    // If this is the first time we finalize command buffer after construction,
-    // we need to instantiate it to an executable graph.
-    GpuDriver::GraphInstantiateFlags flags;
+  size_t num_commands = commands_.size();
 
+  if (mode_ == Mode::kPrimary && state_ == State::kCreate) {
     uint64_t start_nanos = tsl::Env::Default()->NowNanos();
 
-    // If we get a "resource exhausted error" we retry instantiating Gpu graph
-    // one more time after releasing unused device memory allocated for graphs.
-    auto instantiated = GpuDriver::GraphInstantiate(&exec_, graph_, flags);
+    // If this is the first time we finalize command buffer after construction,
+    // we need to instantiate it to an executable graph.
+    auto instantiated = InstantiateGraph();
+
     if (instantiated.code() == absl::StatusCode::kResourceExhausted) {
-      LOG(WARNING) << "Retry CUDA graph instantiation after OOM error"
-                   << "; nodes=" << nodes_.size()
-                   << "; conditionals=" << conditional_command_buffers_.size()
-                   << "; alive executable graphs: " << AliveExecs();
-
-      TF_RETURN_IF_ERROR(GpuDriver::DeviceGraphMemTrim(parent_->device()));
-
-      auto retry = GpuDriver::GraphInstantiate(&exec_, graph_, flags);
-      if (retry.code() == absl::StatusCode::kResourceExhausted) {
-        return absl::ResourceExhaustedError(absl::StrFormat(
-            "CUDA driver ran out of memory trying to instantiate CUDA graph "
-            "with %d nodes and %d conditionals (total of %d alive CUDA graphs "
-            "in the process). You can try to (a) Give more memory to CUDA "
-            "driver by reducing XLA_PYTHON_CLIENT_MEM_FRACTION (b) Disable "
-            "CUDA graph with 'XLA_FLAGS=--xla_gpu_enable_command_buffer=' "
-            "(empty set). Original error: %s",
-            nodes_.size(), conditional_command_buffers_.size(), AliveExecs(),
-            retry.message()));
-      } else {
-        TF_RETURN_IF_ERROR(retry);
-      }
+      return absl::ResourceExhaustedError(absl::StrFormat(
+          "Underlying backend ran out of memory trying to instantiate command "
+          "buffer with %d (total of %d alive graphs in the process). You can "
+          "try to (a) Give more memory to the driver by reducing "
+          "XLA_CLIENT_MEM_FRACTION (b) Disable command buffers with "
+          "'XLA_FLAGS=--xla_gpu_enable_command_buffer=' (empty set). Original "
+          "error: %s",
+          num_commands, AliveExecs(), instantiated.message()));
     }
+    TF_RETURN_IF_ERROR(instantiated);
 
     uint64_t end_nanos = tsl::Env::Default()->NowNanos();
 
-    VLOG(5) << "Instantiated executable graph #" << NotifyExecCreated() << " "
-            << exec_ << " in " << (end_nanos - start_nanos) / 1000 << " μs"
-            << "; nodes: " << nodes_.size()
-            << "; conditionals: " << conditional_command_buffers_.size()
+    auto exec_num = NotifyExecCreated();
+    VLOG(5) << "Instantiated executable graph #" << exec_num << " in "
+            << (end_nanos - start_nanos) / 1000 << " μs"
+            << "; commands: " << num_commands
             << "; alive executable graphs: " << AliveExecs();
-
-    TF_RETURN_IF_ERROR(DisableBarriersExecution(exec_));
 
   } else if (mode_ == Mode::kPrimary && state_ == State::kUpdate) {
     // If this is a finalization after update, we don't have to do anything as
     // each individual command already updated executable graph.
-    VLOG(5) << "Finalize executable graph " << exec_ << " update #"
-            << num_updates_++ << " "
+    VLOG(5) << "Finalize executable graph of command buffer " << this
+            << " update #" << num_updates_++ << " "
             << "(alive executable graphs: " << AliveExecs() << ")";
 
   } else if (mode_ == Mode::kNested) {
@@ -883,23 +626,32 @@ absl::Status GpuCommandBuffer::Finalize() {
 }
 
 absl::Status GpuCommandBuffer::Update() {
-  if (exec_ == nullptr) {
-    return absl::InternalError(
-        "Command buffer has to have a graph executable to be updated");
-  }
+  TF_RETURN_IF_ERROR(CheckCanBeUpdated());
 
   if (state_ != State::kFinalized) {
     return absl::InternalError(
         "Command buffer has to be finalized first before it can be updated");
   }
 
-  VLOG(5) << "Begin " << (mode_ == Mode::kPrimary ? "primary" : "nested")
-          << " command buffer update for executable graph " << exec_;
+  VLOG(5) << "Begin update of " << absl::StrCat(mode_) << " command buffer "
+          << this;
 
   state_ = State::kUpdate;
-  barrier_ = nullptr;
-  update_state_ = UpdateState();
   return absl::OkStatus();
+}
+
+absl::Span<const std::unique_ptr<CommandBuffer::Command>>
+GpuCommandBuffer::commands() const {
+  return commands_;
+}
+
+absl::Status GpuCommandBuffer::Submit(Stream* stream) {
+  if (mode_ != Mode::kPrimary) {
+    return absl::InvalidArgumentError(
+        "Can't submit non-primary command buffer for execution");
+  }
+
+  return LaunchGraph(stream);
 }
 
 }  // namespace stream_executor::gpu

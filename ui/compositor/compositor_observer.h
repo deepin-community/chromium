@@ -12,6 +12,10 @@
 #include "ui/base/ozone_buildflags.h"
 #include "ui/compositor/compositor_export.h"
 
+namespace viz {
+class SurfaceInfo;
+}
+
 namespace gfx {
 class Size;
 struct PresentationFeedback;
@@ -40,17 +44,23 @@ class COMPOSITOR_EXPORT CompositorObserver {
   virtual void OnCompositingStarted(Compositor* compositor,
                                     base::TimeTicks start_time) {}
 
-  // Called when compositing completes: the present to screen has completed.
-  virtual void OnCompositingEnded(Compositor* compositor) {}
+  // This is an inaccurate signal that has been used to represent that content
+  // was displayed. This actually maps to the removal of backpressure by the
+  // GPU. This can be signalled when the GPU attempts to Draw; when a submitted
+  // frame, that has not drawn, is being replaced by a newer one; or merged with
+  // future OnBeginFrames.
+  //
+  // To determine when presentation occurred see `OnDidPresentCompositorFrame`.
+  virtual void OnCompositingAckDeprecated(Compositor* compositor) {}
 
   // Called when a child of the compositor is resizing.
   virtual void OnCompositingChildResizing(Compositor* compositor) {}
 
-#if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_X11)
+#if BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_X11)
   // Called when a swap with new size is completed.
   virtual void OnCompositingCompleteSwapWithNewSize(ui::Compositor* compositor,
                                                     const gfx::Size& size) {}
-#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_X11)
+#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_X11)
 
   // Called at the top of the compositor's destructor, to give observers a
   // chance to remove themselves.
@@ -58,6 +68,7 @@ class COMPOSITOR_EXPORT CompositorObserver {
 
   // Called when the presentation feedback was received from the viz.
   virtual void OnDidPresentCompositorFrame(
+      Compositor* compositor,
       uint32_t frame_token,
       const gfx::PresentationFeedback& feedback) {}
 
@@ -79,6 +90,24 @@ class COMPOSITOR_EXPORT CompositorObserver {
 
   // Called at the end of the BeginMainFrame.
   virtual void OnDidBeginMainFrame(Compositor* compositor) {}
+
+  // Called when the compositor visibility is about to change, but before it is
+  // changed.
+  virtual void OnCompositorVisibilityChanging(Compositor* compositor,
+                                              bool visible) {}
+
+  // Called when the compositor visibility has changed.
+  virtual void OnCompositorVisibilityChanged(Compositor* compositor,
+                                             bool visible) {}
+
+  // Called when the compositor receives a new refresh rate preference.
+  virtual void OnSetPreferredRefreshRate(Compositor* compositor,
+                                         float refresh_rate) {}
+
+  // Called when a CompositorFrame with a new SurfaceId activates for the first
+  // time.
+  virtual void OnFirstSurfaceActivation(Compositor* compositor,
+                                        const viz::SurfaceInfo& surface_info) {}
 };
 
 }  // namespace ui

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "crypto/nss_util_internal.h"
 #include "crypto/scoped_nss_types.h"
 #include "crypto/scoped_test_nss_chromeos_user.h"
@@ -31,7 +32,7 @@ crypto::ScopedPK11Slot GetRootCertsSlot() {
   for (SECMODModuleList* item = head; item != nullptr; item = item->next) {
     int slot_count = item->module->loaded ? item->module->slotCount : 0;
     for (int i = 0; i < slot_count; i++) {
-      PK11SlotInfo* slot = item->module->slots[i];
+      PK11SlotInfo* slot = UNSAFE_TODO(item->module->slots[i]);
       if (!PK11_IsPresent(slot))
         continue;
       if (PK11_HasRootCerts(slot))

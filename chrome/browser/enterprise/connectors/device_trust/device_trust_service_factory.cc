@@ -8,7 +8,6 @@
 
 #include "base/no_destructor.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/enterprise/connectors/device_trust/attestation/common/attestation_service.h"
 #include "chrome/browser/enterprise/connectors/device_trust/device_trust_connector_service.h"
@@ -42,10 +41,14 @@
 #include "components/policy/core/common/cloud/user_cloud_policy_manager.h"
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_switches.h"
 #include "chrome/browser/enterprise/connectors/device_trust/ash/ash_attestation_policy_observer.h"
 #include "chrome/browser/enterprise/connectors/device_trust/attestation/ash/ash_attestation_service_impl.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#include "chrome/browser/enterprise/connectors/device_trust/attestation/ash/flex_attester.h"
+#include "chrome/browser/enterprise/connectors/device_trust/attestation/browser/browser_attestation_service.h"
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
 bool IsProfileManaged(Profile* profile) {
@@ -57,10 +60,7 @@ bool IsProfileManaged(Profile* profile) {
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 policy::CloudPolicyStore* GetUserCloudPolicyStore(Profile* profile) {
   policy::CloudPolicyManager* user_policy_manager =
-      profile->GetUserCloudPolicyManager();
-  if (!user_policy_manager) {
-    user_policy_manager = profile->GetProfileCloudPolicyManager();
-  }
+      profile->GetCloudPolicyManager();
   if (user_policy_manager) {
     auto* core = user_policy_manager->core();
     if (core) {
@@ -100,7 +100,12 @@ DeviceTrustService* DeviceTrustServiceFactory::GetForProfile(Profile* profile) {
 DeviceTrustServiceFactory::DeviceTrustServiceFactory()
     : ProfileKeyedServiceFactory(
           "DeviceTrustService",
-          ProfileSelections::BuildForRegularAndIncognito()) {
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOwnInstance)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOwnInstance)
+              .Build()) {
   DependsOn(DeviceTrustConnectorServiceFactory::GetInstance());
   DependsOn(policy::ManagementServiceFactory::GetInstance());
 
@@ -141,14 +146,24 @@ DeviceTrustServiceFactory::BuildServiceInstanceForBrowserContext(
     return nullptr;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  std::unique_ptr<AshAttestationServiceImpl> ash_attestation_service =
-      std::make_unique<AshAttestationServiceImpl>(profile);
-  dt_connector_service->AddObserver(
-      std::make_unique<AshAttestationPolicyObserver>(
-          ash_attestation_service->GetWeakPtr()));
-  std::unique_ptr<AttestationService> attestation_service =
-      std::move(ash_attestation_service);
+#if BUILDFLAG(IS_CHROMEOS)
+  std::unique_ptr<AttestationService> attestation_service;
+  if (ash::switches::IsRevenBranding()) {
+    std::vector<std::unique_ptr<Attester>> attesters;
+    attesters.push_back(std::make_unique<FlexAttester>(profile));
+    attestation_service = std::make_unique<BrowserAttestationService>(
+        std::move(attesters),
+        ash::InstallAttributes::Get()->IsEnterpriseManaged()
+            ? ENTERPRISE_MACHINE
+            : DEVICE_TRUST_CONNECTOR);
+  } else {
+    std::unique_ptr<AshAttestationServiceImpl> ash_attestation_service =
+        std::make_unique<AshAttestationServiceImpl>(profile);
+    dt_connector_service->AddObserver(
+        std::make_unique<AshAttestationPolicyObserver>(
+            ash_attestation_service->GetWeakPtr()));
+    attestation_service = std::move(ash_attestation_service);
+  }
 #else
   DeviceTrustKeyManager* key_manager = nullptr;
   policy::CloudPolicyStore* browser_cloud_policy_store = nullptr;
@@ -180,8 +195,8 @@ DeviceTrustServiceFactory::BuildServiceInstanceForBrowserContext(
       GetUserCloudPolicyStore(profile)));
 
   auto attestation_service =
-      std::make_unique<BrowserAttestationService>(std::move(attesters));
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+      std::make_unique<BrowserAttestationService>(std::move(attesters), CBCM);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   auto signals_service = CreateSignalsService(profile);
 

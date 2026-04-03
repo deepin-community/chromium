@@ -7,8 +7,13 @@
 //   Helper methods pertaining to most or all back-ends.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/renderer_utils.h"
 
+#include "common/base/anglebase/numerics/checked_math.h"
 #include "common/string_utils.h"
 #include "common/system_utils.h"
 #include "common/utilities.h"
@@ -23,8 +28,8 @@
 #include "libANGLE/renderer/Format.h"
 #include "platform/Feature.h"
 
-#include <string.h>
 #include <cctype>
+#include <cstring>
 
 namespace angle
 {
@@ -64,21 +69,16 @@ bool FeatureNameMatch(const std::string &a, const std::string &b)
 }
 }  // anonymous namespace
 
-// FeatureInfo implementation
-static const char *kFeatureOverrideTrue  = "true (override)";
-static const char *kFeatureOverrideFalse = "false (override)";
-
 void FeatureInfo::applyOverride(bool state)
 {
     enabled     = state;
     hasOverride = true;
-    condition   = state ? kFeatureOverrideTrue : kFeatureOverrideFalse;
 }
 
 // FeatureSetBase implementation
 void FeatureSetBase::reset()
 {
-    for (auto iter : members)
+    for (const auto &iter : members)
     {
         FeatureInfo *feature = iter.second;
         feature->enabled     = false;
@@ -86,12 +86,15 @@ void FeatureSetBase::reset()
     }
 }
 
-void FeatureSetBase::overrideFeatures(const std::vector<std::string> &featureNames, bool enabled)
+std::string FeatureSetBase::overrideFeatures(const std::vector<std::string> &featureNames,
+                                             bool enabled)
 {
+    std::stringstream featureStream;
+
     for (const std::string &name : featureNames)
     {
         const bool hasWildcard = name.back() == '*';
-        for (auto iter : members)
+        for (const auto &iter : members)
         {
             const std::string &featureName = iter.first;
             FeatureInfo *feature           = iter.second;
@@ -103,6 +106,12 @@ void FeatureSetBase::overrideFeatures(const std::vector<std::string> &featureNam
 
             feature->applyOverride(enabled);
 
+            if (featureStream.str().empty())
+            {
+                featureStream << "Feature overrides: ";
+            }
+            featureStream << featureName << (enabled ? " enabled, " : " disabled, ");
+
             // If name has a wildcard, try to match it with all features.  Otherwise, bail on first
             // match, as names are unique.
             if (!hasWildcard)
@@ -111,13 +120,20 @@ void FeatureSetBase::overrideFeatures(const std::vector<std::string> &featureNam
             }
         }
     }
+
+    if (!featureStream.str().empty())
+    {
+        featureStream << std::endl;
+    }
+
+    return featureStream.str();
 }
 
 void FeatureSetBase::populateFeatureList(FeatureList *features) const
 {
-    for (FeatureMap::const_iterator it = members.begin(); it != members.end(); it++)
+    for (const auto &member : members)
     {
-        features->push_back(it->second);
+        features->push_back(member.second);
     }
 }
 }  // namespace angle
@@ -238,7 +254,7 @@ void WriteFloatColor(const gl::ColorF &color,
 }
 
 template <int cols, int rows, bool IsColumnMajor>
-inline int GetFlattenedIndex(int col, int row)
+constexpr inline int GetFlattenedIndex(int col, int row)
 {
     if (IsColumnMajor)
     {
@@ -257,25 +273,113 @@ template <typename T,
           bool IsDstColumnMajor,
           int colsDst,
           int rowsDst>
-void ExpandMatrix(T *target, const GLfloat *value)
+void ExpandMatrix(T *target, const GLfloat *value, const bool isFloat16)
 {
     static_assert(colsSrc <= colsDst && rowsSrc <= rowsDst, "Can only expand!");
-
-    constexpr int kDstFlatSize = colsDst * rowsDst;
-    T staging[kDstFlatSize]    = {0};
-
-    for (int r = 0; r < rowsSrc; r++)
+    if (!isFloat16)
     {
-        for (int c = 0; c < colsSrc; c++)
-        {
-            int srcIndex = GetFlattenedIndex<colsSrc, rowsSrc, IsSrcColumnMajor>(c, r);
-            int dstIndex = GetFlattenedIndex<colsDst, rowsDst, IsDstColumnMajor>(c, r);
+        // Clamp the staging data's size to the last written value so that data packed just after
+        // this matrix is not overwritten.
+        constexpr int kDstFlatSize =
+            GetFlattenedIndex<colsDst, rowsDst, IsDstColumnMajor>(colsSrc - 1, rowsSrc - 1) + 1;
+        T staging[kDstFlatSize] = {0};
 
-            staging[dstIndex] = static_cast<T>(value[srcIndex]);
+        for (int r = 0; r < rowsSrc; r++)
+        {
+            for (int c = 0; c < colsSrc; c++)
+            {
+                int srcIndex = GetFlattenedIndex<colsSrc, rowsSrc, IsSrcColumnMajor>(c, r);
+                int dstIndex = GetFlattenedIndex<colsDst, rowsDst, IsDstColumnMajor>(c, r);
+
+                staging[dstIndex] = static_cast<T>(value[srcIndex]);
+            }
         }
+
+        memcpy(target, staging, kDstFlatSize * sizeof(T));
+        return;
     }
 
-    memcpy(target, staging, kDstFlatSize * sizeof(T));
+    // If we reach here, we need to transform uniform matrix data from 32-bit to 16-bit.
+    // This path is only expected to execute on Vulkan backend.
+    // Vulkan SpirvMatrix Rule: each column / row of the matrix must be aligned to 16 bytes
+    // We need to copy to the destination row by row / column by column, because we need to
+    // leave padding for each row / each column.
+    static_assert(IsDstColumnMajor ? (rowsDst == 4) : (colsDst == 4),
+                  "matrix is not correctly padded");
+    if (IsDstColumnMajor)
+    {
+        // If (IsDstColumnMajor == true), copy column by column
+        constexpr int kDstMatrixComponentSize = rowsDst;
+        constexpr int kSrcMatrixColSize       = rowsSrc;
+        for (int c = 0; c < colsSrc; ++c)
+        {
+            GLshort staging[kSrcMatrixColSize] = {0};
+            for (int r = 0; r < rowsSrc; r++)
+            {
+                int srcIndex = GetFlattenedIndex<colsSrc, rowsSrc, IsSrcColumnMajor>(c, r);
+                int dstIndex = GetFlattenedIndex<colsDst, rowsDst, IsDstColumnMajor>(0, r);
+                ASSERT(dstIndex < kSrcMatrixColSize);
+                staging[dstIndex] = gl::float32ToFloat16(value[srcIndex]);
+            }
+            memcpy(target, staging, kSrcMatrixColSize * sizeof(GLshort));
+            // If it is not the last column, set the remaining of the current column to 0, so
+            // that shader is not accessing uninitialized memory.
+            // If it is the last column, don't touch the remaining of the current column.
+            // Because we may pack other data tightly right after the last column. See
+            // http://anglebug.com/42266878.
+            // e.g. For example, for a 3*3 matrix, in the target memory, we end up with:
+            // Last column:
+            // |2-byte half float|2-byte half float|2-byte half float|10-byte untouched|
+            // Other columns:
+            // |2-byte half float|2-byte half float|2-byte half float|10-byte of 0|
+            if (c < colsSrc - 1)
+            {
+                size_t remainingColumnSize =
+                    kDstMatrixComponentSize * sizeof(GLfloat) - kSrcMatrixColSize * sizeof(GLshort);
+                GLshort *remainingColumnStartPos =
+                    reinterpret_cast<GLshort *>(target) + kSrcMatrixColSize;
+                memset(remainingColumnStartPos, 0, remainingColumnSize);
+            }
+            target += kDstMatrixComponentSize;
+        }
+    }
+    else
+    {
+        // If (IsDstColumnMajor == false), copy row by row
+        constexpr int kDstMatrixComponentSize = colsDst;
+        constexpr int kSrcMatrixRowSize       = colsSrc;
+        for (int r = 0; r < rowsSrc; ++r)
+        {
+            GLshort staging[kSrcMatrixRowSize] = {0};
+            for (int c = 0; c < colsSrc; c++)
+            {
+                int srcIndex = GetFlattenedIndex<colsSrc, rowsSrc, IsSrcColumnMajor>(c, r);
+                int dstIndex = GetFlattenedIndex<colsDst, rowsDst, IsDstColumnMajor>(0, r);
+                ASSERT(dstIndex < kSrcMatrixRowSize);
+                staging[dstIndex] = gl::float32ToFloat16(value[srcIndex]);
+            }
+            memcpy(target, staging, kSrcMatrixRowSize * sizeof(GLshort));
+            // If it is not the last row, set the remaining of the current row to 0, so
+            // that shader is not accessing uninitialized memory.
+            // If it is the last row, don't touch the remaining of the current row. Because
+            // we may pack other data tightly right after the last row. See
+            // http://anglebug.com/42266878.
+            // e.g. For example, for a 3*3 matrix, in the target memory, we end up with:
+            // Last row:
+            // |2-byte half float|2-byte half float|2-byte half float|10-byte untouched|
+            // Other rows:
+            // |2-byte half float|2-byte half float|2-byte half float|10-byte of 0|
+            if (r < rowsSrc - 1)
+            {
+                size_t remainingRowSize =
+                    kDstMatrixComponentSize * sizeof(GLfloat) - kSrcMatrixRowSize * sizeof(GLshort);
+                GLshort *remainingRowStartPos =
+                    reinterpret_cast<GLshort *>(target) + kSrcMatrixRowSize;
+                memset(remainingRowStartPos, 0, remainingRowSize);
+            }
+            target += kDstMatrixComponentSize;
+        }
+    }
 }
 
 template <bool IsSrcColumMajor,
@@ -288,7 +392,8 @@ void SetFloatUniformMatrix(unsigned int arrayElementOffset,
                            unsigned int elementCount,
                            GLsizei countIn,
                            const GLfloat *value,
-                           uint8_t *targetData)
+                           uint8_t *targetData,
+                           const bool isFloat16)
 {
     unsigned int count =
         std::min(elementCount - arrayElementOffset, static_cast<unsigned int>(countIn));
@@ -300,7 +405,7 @@ void SetFloatUniformMatrix(unsigned int arrayElementOffset,
     for (unsigned int i = 0; i < count; i++)
     {
         ExpandMatrix<GLfloat, IsSrcColumMajor, colsSrc, rowsSrc, IsDstColumnMajor, colsDst,
-                     rowsDst>(target, value);
+                     rowsDst>(target, value, isFloat16);
 
         target += targetMatrixStride;
         value += colsSrc * rowsSrc;
@@ -386,6 +491,7 @@ PackPixelsParams::PackPixelsParams()
     : destFormat(nullptr),
       outputPitch(0),
       packBuffer(nullptr),
+      reverseRowOrder(false),
       offset(0),
       rotation(SurfaceRotation::Identity)
 {}
@@ -531,6 +637,32 @@ void PackPixels(const PackPixelsParams &params,
     }
 }
 
+angle::Result GetPackPixelsParams(const gl::InternalFormat &sizedFormatInfo,
+                                  GLuint outputPitch,
+                                  const gl::PixelPackState &packState,
+                                  gl::Buffer *packBuffer,
+                                  const gl::Rectangle &area,
+                                  const gl::Rectangle &clippedArea,
+                                  rx::PackPixelsParams *paramsOut,
+                                  GLuint *skipBytesOut)
+{
+    angle::CheckedNumeric<GLuint> checkedSkipBytes = *skipBytesOut;
+    checkedSkipBytes += (clippedArea.x - area.x) * sizedFormatInfo.pixelBytes +
+                        (clippedArea.y - area.y) * outputPitch;
+    if (!checkedSkipBytes.AssignIfValid(skipBytesOut))
+    {
+        return angle::Result::Stop;
+    }
+
+    angle::FormatID angleFormatID =
+        angle::Format::InternalFormatToID(sizedFormatInfo.sizedInternalFormat);
+    const angle::Format &angleFormat = angle::Format::Get(angleFormatID);
+
+    *paramsOut = rx::PackPixelsParams(clippedArea, angleFormat, outputPitch,
+                                      packState.reverseRowOrder, packBuffer, 0);
+    return angle::Result::Continue;
+}
+
 bool FastCopyFunctionMap::has(angle::FormatID formatID) const
 {
     return (get(formatID) != nullptr);
@@ -667,10 +799,6 @@ void CopyImageCHROMIUM(const uint8_t *sourceData,
 }
 
 // IncompleteTextureSet implementation.
-IncompleteTextureSet::IncompleteTextureSet() : mIncompleteTextureBufferAttachment(nullptr) {}
-
-IncompleteTextureSet::~IncompleteTextureSet() {}
-
 void IncompleteTextureSet::onDestroy(const gl::Context *context)
 {
     // Clear incomplete textures.
@@ -684,11 +812,6 @@ void IncompleteTextureSet::onDestroy(const gl::Context *context)
                 incompleteTexture.set(context, nullptr);
             }
         }
-    }
-    if (mIncompleteTextureBufferAttachment != nullptr)
-    {
-        mIncompleteTextureBufferAttachment->onDestroy(context);
-        mIncompleteTextureBufferAttachment = nullptr;
     }
 }
 
@@ -734,6 +857,7 @@ angle::Result IncompleteTextureSet::getIncompleteTexture(
     gl::Texture *tex =
         new gl::Texture(implFactory, {std::numeric_limits<GLuint>::max()}, createType);
     angle::UniqueObjectPointer<gl::Texture, gl::Context> t(tex, context);
+    gl::Buffer *incompleteTextureBufferAttachment = nullptr;
 
     // This is a bit of a kludge but is necessary to consume the error.
     gl::Context *mutableContext = const_cast<gl::Context *>(context);
@@ -741,9 +865,9 @@ angle::Result IncompleteTextureSet::getIncompleteTexture(
     if (createType == gl::TextureType::Buffer)
     {
         constexpr uint32_t kBufferInitData = 0;
-        mIncompleteTextureBufferAttachment =
+        incompleteTextureBufferAttachment =
             new gl::Buffer(implFactory, {std::numeric_limits<GLuint>::max()});
-        ANGLE_TRY(mIncompleteTextureBufferAttachment->bufferData(
+        ANGLE_TRY(incompleteTextureBufferAttachment->bufferData(
             mutableContext, gl::BufferBinding::Texture, &kBufferInitData, sizeof(kBufferInitData),
             gl::BufferUsage::StaticDraw));
     }
@@ -793,7 +917,8 @@ angle::Result IncompleteTextureSet::getIncompleteTexture(
     }
     else if (type == gl::TextureType::Buffer)
     {
-        ANGLE_TRY(t->setBuffer(context, mIncompleteTextureBufferAttachment,
+        ASSERT(incompleteTextureBufferAttachment != nullptr);
+        ANGLE_TRY(t->setBuffer(context, incompleteTextureBufferAttachment,
                                incompleteTextureParam.sizedInternalFormat));
     }
     else
@@ -821,7 +946,7 @@ angle::Result IncompleteTextureSet::getIncompleteTexture(
 
 #define ANGLE_INSTANTIATE_SET_UNIFORM_MATRIX_FUNC(api, cols, rows) \
     template void SetFloatUniformMatrix##api<cols, rows>::Run(     \
-        unsigned int, unsigned int, GLsizei, GLboolean, const GLfloat *, uint8_t *)
+        unsigned int, unsigned int, GLsizei, GLboolean, const GLfloat *, uint8_t *, bool)
 
 ANGLE_INSTANTIATE_SET_UNIFORM_MATRIX_FUNC(GLSL, 2, 2);
 ANGLE_INSTANTIATE_SET_UNIFORM_MATRIX_FUNC(GLSL, 3, 3);
@@ -839,9 +964,9 @@ ANGLE_INSTANTIATE_SET_UNIFORM_MATRIX_FUNC(HLSL, 3, 4);
 
 #undef ANGLE_INSTANTIATE_SET_UNIFORM_MATRIX_FUNC
 
-#define ANGLE_SPECIALIZATION_ROWS_SET_UNIFORM_MATRIX_FUNC(api, cols, rows)                      \
-    template void SetFloatUniformMatrix##api<cols, 4>::Run(unsigned int, unsigned int, GLsizei, \
-                                                           GLboolean, const GLfloat *, uint8_t *)
+#define ANGLE_SPECIALIZATION_ROWS_SET_UNIFORM_MATRIX_FUNC(api, cols, rows) \
+    template void SetFloatUniformMatrix##api<cols, 4>::Run(                \
+        unsigned int, unsigned int, GLsizei, GLboolean, const GLfloat *, uint8_t *, bool)
 
 template <int cols>
 struct SetFloatUniformMatrixGLSL<cols, 4>
@@ -851,7 +976,8 @@ struct SetFloatUniformMatrixGLSL<cols, 4>
                     GLsizei countIn,
                     GLboolean transpose,
                     const GLfloat *value,
-                    uint8_t *targetData);
+                    uint8_t *targetData,
+                    bool isFloat16);
 };
 
 ANGLE_SPECIALIZATION_ROWS_SET_UNIFORM_MATRIX_FUNC(GLSL, 2, 4);
@@ -860,9 +986,9 @@ ANGLE_SPECIALIZATION_ROWS_SET_UNIFORM_MATRIX_FUNC(GLSL, 4, 4);
 
 #undef ANGLE_SPECIALIZATION_ROWS_SET_UNIFORM_MATRIX_FUNC
 
-#define ANGLE_SPECIALIZATION_COLS_SET_UNIFORM_MATRIX_FUNC(api, cols, rows)                      \
-    template void SetFloatUniformMatrix##api<4, rows>::Run(unsigned int, unsigned int, GLsizei, \
-                                                           GLboolean, const GLfloat *, uint8_t *)
+#define ANGLE_SPECIALIZATION_COLS_SET_UNIFORM_MATRIX_FUNC(api, cols, rows) \
+    template void SetFloatUniformMatrix##api<4, rows>::Run(                \
+        unsigned int, unsigned int, GLsizei, GLboolean, const GLfloat *, uint8_t *, bool)
 
 template <int rows>
 struct SetFloatUniformMatrixHLSL<4, rows>
@@ -872,7 +998,8 @@ struct SetFloatUniformMatrixHLSL<4, rows>
                     GLsizei countIn,
                     GLboolean transpose,
                     const GLfloat *value,
-                    uint8_t *targetData);
+                    uint8_t *targetData,
+                    bool isFloat16);
 };
 
 ANGLE_SPECIALIZATION_COLS_SET_UNIFORM_MATRIX_FUNC(HLSL, 4, 2);
@@ -887,22 +1014,55 @@ void SetFloatUniformMatrixGLSL<cols, 4>::Run(unsigned int arrayElementOffset,
                                              GLsizei countIn,
                                              GLboolean transpose,
                                              const GLfloat *value,
-                                             uint8_t *targetData)
+                                             uint8_t *targetData,
+                                             const bool isFloat16)
 {
     const bool isSrcColumnMajor = !transpose;
     if (isSrcColumnMajor)
     {
-        // Both src and dst matrixs are has same layout,
-        // a single memcpy updates all the matrices
-        constexpr size_t srcMatrixSize = sizeof(GLfloat) * cols * 4;
-        SetFloatUniformMatrixFast(arrayElementOffset, elementCount, countIn, srcMatrixSize, value,
-                                  targetData);
+        if (isFloat16)
+        {
+            // If we need to transform float number in matrix from 32-bit to 16-bit before writing
+            // to memory, even if both src and dst have the same layout, we can't do
+            // SetFloatUniformMatrixFast(). because we need to
+            // 1) transform the src data from 32-bit to 16-bit
+            // 2) make sure each column aligns to 16 bytes
+            // For example, if this is the src column major 4*4 matrix:
+            // | 4-byte float | 4-byte float | 4-byte float | 4-byte float |
+            //  ______________ ______________ ______________ ______________
+            // | 4-byte float | 4-byte float | 4-byte float | 4-byte float |
+            //  ______________ ______________ ______________ ______________
+            // | 4-byte float | 4-byte float | 4-byte float | 4-byte float |
+            //  ______________ ______________ ______________ ______________
+            // | 4-byte float | 4-byte float | 4-byte float | 4-byte float |
+
+            // Then in the dst column major 4*4 matrix, it needs to be
+            // | 2-byte half float | 2-byte half float | 2-byte half float | 2-byte half float |
+            //  ___________________ ___________________ ___________________ ___________________
+            // | 2-byte half float | 2-byte half float | 2-byte half float | 2-byte half float |
+            //  ___________________ ___________________ ___________________ ___________________
+            // | 2-byte half float | 2-byte half float | 2-byte half float | 2-byte half float |
+            //  ___________________ ___________________ ___________________ ___________________
+            // | 2-byte half float | 2-byte half float | 2-byte half float | 2-byte half float |
+            //  ___________________ ___________________ ___________________ ___________________
+            // | 8-byte padding    | 8-byte padding    | 8-byte padding    | 8-byte padding    |
+            SetFloatUniformMatrix<true, cols, 4, true, cols, 4>(
+                arrayElementOffset, elementCount, countIn, value, targetData, isFloat16);
+        }
+        else
+        {
+            // Both src and dst matrixs are has same layout, and we don't need to transform data
+            // from 32-bit to 16-bit, a single memcpy updates all the matrices
+            constexpr size_t srcMatrixSize = sizeof(GLfloat) * cols * 4;
+            SetFloatUniformMatrixFast(arrayElementOffset, elementCount, countIn, srcMatrixSize,
+                                      value, targetData);
+        }
     }
     else
     {
         // fallback to general cases
         SetFloatUniformMatrix<false, cols, 4, true, cols, 4>(arrayElementOffset, elementCount,
-                                                             countIn, value, targetData);
+                                                             countIn, value, targetData, isFloat16);
     }
 }
 
@@ -912,19 +1072,20 @@ void SetFloatUniformMatrixGLSL<cols, rows>::Run(unsigned int arrayElementOffset,
                                                 GLsizei countIn,
                                                 GLboolean transpose,
                                                 const GLfloat *value,
-                                                uint8_t *targetData)
+                                                uint8_t *targetData,
+                                                const bool isFloat16)
 {
     const bool isSrcColumnMajor = !transpose;
     // GLSL expects matrix uniforms to be column-major, and each column is padded to 4 rows.
     if (isSrcColumnMajor)
     {
-        SetFloatUniformMatrix<true, cols, rows, true, cols, 4>(arrayElementOffset, elementCount,
-                                                               countIn, value, targetData);
+        SetFloatUniformMatrix<true, cols, rows, true, cols, 4>(
+            arrayElementOffset, elementCount, countIn, value, targetData, isFloat16);
     }
     else
     {
-        SetFloatUniformMatrix<false, cols, rows, true, cols, 4>(arrayElementOffset, elementCount,
-                                                                countIn, value, targetData);
+        SetFloatUniformMatrix<false, cols, rows, true, cols, 4>(
+            arrayElementOffset, elementCount, countIn, value, targetData, isFloat16);
     }
 }
 
@@ -934,7 +1095,8 @@ void SetFloatUniformMatrixHLSL<4, rows>::Run(unsigned int arrayElementOffset,
                                              GLsizei countIn,
                                              GLboolean transpose,
                                              const GLfloat *value,
-                                             uint8_t *targetData)
+                                             uint8_t *targetData,
+                                             const bool isFloat16)
 {
     const bool isSrcColumnMajor = !transpose;
     if (!isSrcColumnMajor)
@@ -949,7 +1111,7 @@ void SetFloatUniformMatrixHLSL<4, rows>::Run(unsigned int arrayElementOffset,
     {
         // fallback to general cases
         SetFloatUniformMatrix<true, 4, rows, false, 4, rows>(arrayElementOffset, elementCount,
-                                                             countIn, value, targetData);
+                                                             countIn, value, targetData, isFloat16);
     }
 }
 
@@ -959,47 +1121,446 @@ void SetFloatUniformMatrixHLSL<cols, rows>::Run(unsigned int arrayElementOffset,
                                                 GLsizei countIn,
                                                 GLboolean transpose,
                                                 const GLfloat *value,
-                                                uint8_t *targetData)
+                                                uint8_t *targetData,
+                                                const bool isFloat16)
 {
     const bool isSrcColumnMajor = !transpose;
     // Internally store matrices as row-major to accomodate HLSL matrix indexing.  Each row is
     // padded to 4 columns.
     if (!isSrcColumnMajor)
     {
-        SetFloatUniformMatrix<false, cols, rows, false, 4, rows>(arrayElementOffset, elementCount,
-                                                                 countIn, value, targetData);
+        SetFloatUniformMatrix<false, cols, rows, false, 4, rows>(
+            arrayElementOffset, elementCount, countIn, value, targetData, isFloat16);
     }
     else
     {
-        SetFloatUniformMatrix<true, cols, rows, false, 4, rows>(arrayElementOffset, elementCount,
-                                                                countIn, value, targetData);
+        SetFloatUniformMatrix<true, cols, rows, false, 4, rows>(
+            arrayElementOffset, elementCount, countIn, value, targetData, isFloat16);
     }
 }
 
-template void GetMatrixUniform<GLint>(GLenum, GLint *, const GLint *, bool);
-template void GetMatrixUniform<GLuint>(GLenum, GLuint *, const GLuint *, bool);
+template void GetMatrixUniform<GLint>(GLenum, GLint *, const GLint *, bool, bool);
+template void GetMatrixUniform<GLuint>(GLenum, GLuint *, const GLuint *, bool, bool);
 
-void GetMatrixUniform(GLenum type, GLfloat *dataOut, const GLfloat *source, bool transpose)
+void GetMatrixUniform(GLenum type,
+                      GLfloat *dataOut,
+                      const GLfloat *source,
+                      bool transpose,
+                      bool isFloat16)
 {
     int columns = gl::VariableColumnCount(type);
     int rows    = gl::VariableRowCount(type);
-    for (GLint col = 0; col < columns; ++col)
+    if (isFloat16)
     {
-        for (GLint row = 0; row < rows; ++row)
+        // If we transformed float from 32-bit to 16-bit before writing to memory,
+        // we need to transform them back to 32-bit after reading.
+        constexpr GLint kInputStride = 4;
+        for (GLint col = 0; col < columns; ++col)
         {
-            GLfloat *outptr = dataOut + ((col * rows) + row);
-            const GLfloat *inptr =
-                transpose ? source + ((row * 4) + col) : source + ((col * 4) + row);
-            *outptr = *inptr;
+            for (GLint outputRow = 0; outputRow < rows; /*outputRow is incremented inside*/)
+            {
+                // Each iteration processes two packed 16-bit floats from the memory.
+                // Therefore, the sourceRow index increments once for every two outputRow.
+                GLint sourceRow = outputRow / 2;
+                // Calculate the linear index for the source data based on transpose mode.
+                const size_t sourceIndex =
+                    transpose ? (sourceRow * kInputStride + col) : (col * kInputStride + sourceRow);
+                // Copy the two packed 16-bit float values from the source.
+                GLshort packedValues[2];
+                memcpy(packedValues, &source[sourceIndex], sizeof(packedValues));
+
+                // Unpack and write the first value
+                // The destination is always treated as column-major.
+                size_t destIndex   = col * rows + outputRow;
+                dataOut[destIndex] = gl::float16ToFloat32(packedValues[0]);
+                outputRow++;
+
+                // Unpack and write the second value (if it fits in the destination)
+                if (outputRow < rows)
+                {
+                    destIndex          = col * rows + outputRow;
+                    dataOut[destIndex] = gl::float16ToFloat32(packedValues[1]);
+                    outputRow++;
+                }
+            }
+        }
+    }
+    else
+    {
+        for (GLint col = 0; col < columns; ++col)
+        {
+            for (GLint row = 0; row < rows; ++row)
+            {
+                GLfloat *outptr = dataOut + ((col * rows) + row);
+                const GLfloat *inptr =
+                    transpose ? source + ((row * 4) + col) : source + ((col * 4) + row);
+                *outptr = *inptr;
+            }
         }
     }
 }
 
 template <typename NonFloatT>
-void GetMatrixUniform(GLenum type, NonFloatT *dataOut, const NonFloatT *source, bool transpose)
+void GetMatrixUniform(GLenum type,
+                      NonFloatT *dataOut,
+                      const NonFloatT *source,
+                      bool transpose,
+                      bool isFloat16)
 {
     UNREACHABLE();
 }
+
+BufferAndLayout::BufferAndLayout() = default;
+
+BufferAndLayout::~BufferAndLayout() = default;
+
+template <typename T>
+ANGLE_NOINLINE void UpdateBufferWithLayoutStrided(GLsizei count,
+                                                  uint32_t arrayIndex,
+                                                  int componentCount,
+                                                  const T *v,
+                                                  const sh::BlockMemberInfo &layoutInfo,
+                                                  angle::MemoryBuffer *uniformData)
+{
+    const int elementSize = sizeof(T) * componentCount;
+    uint8_t *dst          = uniformData->data() + layoutInfo.offset;
+    int maxIndex          = arrayIndex + count;
+    for (int writeIndex = arrayIndex, readIndex = 0; writeIndex < maxIndex;
+         writeIndex++, readIndex++)
+    {
+        const int arrayOffset = writeIndex * layoutInfo.arrayStride;
+        uint8_t *writePtr     = dst + arrayOffset;
+        const T *readPtr      = v + (readIndex * componentCount);
+        ASSERT(writePtr + elementSize <= uniformData->data() + uniformData->size());
+        memcpy(writePtr, readPtr, elementSize);
+    }
+}
+
+template <typename T>
+ANGLE_INLINE void UpdateBufferWithLayout(GLsizei count,
+                                         uint32_t arrayIndex,
+                                         int componentCount,
+                                         const T *v,
+                                         const sh::BlockMemberInfo &layoutInfo,
+                                         angle::MemoryBuffer *uniformData)
+{
+    const int elementSize = sizeof(T) * componentCount;
+    uint8_t *dst = uniformData->data() + layoutInfo.offset;
+    if (ANGLE_LIKELY(layoutInfo.arrayStride == 0) ||
+        ANGLE_LIKELY(layoutInfo.arrayStride == elementSize))
+    {
+        uint32_t arrayOffset = arrayIndex * layoutInfo.arrayStride;
+        uint8_t *writePtr    = dst + arrayOffset;
+        ASSERT(writePtr + (elementSize * count) <= uniformData->data() + uniformData->size());
+        memcpy(writePtr, v, elementSize * count);
+    }
+    else
+    {
+        // Have to respect the arrayStride between each element of the array.
+        UpdateBufferWithLayoutStrided(count, arrayIndex, componentCount, v, layoutInfo,
+                                      uniformData);
+    }
+}
+
+template <typename T>
+void ReadFromBufferWithLayout(int componentCount,
+                              uint32_t arrayIndex,
+                              T *dst,
+                              const sh::BlockMemberInfo &layoutInfo,
+                              const angle::MemoryBuffer *uniformData,
+                              bool isFloat16)
+{
+    ASSERT(layoutInfo.offset != -1);
+
+    const int elementSize = sizeof(T) * componentCount;
+    const uint8_t *source  = uniformData->data() + layoutInfo.offset;
+    const uint8_t *readPtr = source + arrayIndex * layoutInfo.arrayStride;
+    // Special case when the expected data read back is GLfloat, it is possible we need to
+    // transform the data in memory from GLshort to GLfloat.
+    if constexpr (std::is_same<T, GLfloat>::value)
+    {
+        if (isFloat16)
+        {
+            // check that dst is aligned to 4 bytes (size of GLfloat)
+            ASSERT(reinterpret_cast<uintptr_t>(dst) % 4 == 0);
+            // check that readPtr is aligned to 2 bytes (size of GLshort)
+            ASSERT(reinterpret_cast<uintptr_t>(readPtr) % 2 == 0);
+            const GLshort *transformedValues = reinterpret_cast<const GLshort *>(readPtr);
+            for (size_t index = 0; index < static_cast<size_t>(componentCount); ++index)
+            {
+                dst[index] = gl::float16ToFloat32(transformedValues[index]);
+            }
+            // skip the generic case below
+            return;
+        }
+    }
+    // Generic case where no data transform is needed
+    memcpy(dst, readPtr, elementSize);
+}
+
+template <typename T>
+ANGLE_NOINLINE void SetUniformAsBool(const gl::ProgramExecutable *executable,
+                                     GLint location,
+                                     GLsizei count,
+                                     const T *v,
+                                     GLenum entryPointType,
+                                     DefaultUniformBlockMap *defaultUniformBlocks,
+                                     gl::ShaderBitSet *defaultUniformBlocksDirty)
+{
+    const gl::VariableLocation &locationInfo = executable->getUniformLocations()[location];
+    const gl::LinkedUniform &linkedUniform   = executable->getUniforms()[locationInfo.index];
+
+    for (const gl::ShaderType shaderType : executable->getLinkedShaderStages())
+    {
+        BufferAndLayout &uniformBlock         = *(*defaultUniformBlocks)[shaderType];
+        const sh::BlockMemberInfo &layoutInfo = uniformBlock.uniformLayout[location];
+
+        // Assume an offset of -1 means the block is unused.
+        if (layoutInfo.offset == -1)
+        {
+            continue;
+        }
+
+        const GLint componentCount = linkedUniform.getElementComponents();
+
+        ASSERT(linkedUniform.getType() == gl::VariableBoolVectorType(entryPointType));
+
+        GLint initialArrayOffset =
+            locationInfo.arrayIndex * layoutInfo.arrayStride + layoutInfo.offset;
+        for (GLint i = 0; i < count; i++)
+        {
+            GLint elementOffset = i * layoutInfo.arrayStride + initialArrayOffset;
+            GLint *dst = reinterpret_cast<GLint *>(uniformBlock.uniformData.data() + elementOffset);
+            const T *source = v + i * componentCount;
+
+            for (int c = 0; c < componentCount; c++)
+            {
+                dst[c] = (source[c] == static_cast<T>(0)) ? GL_FALSE : GL_TRUE;
+            }
+        }
+
+        defaultUniformBlocksDirty->set(shaderType);
+    }
+}
+
+template <typename T>
+void SetUniform(const gl::ProgramExecutable *executable,
+                GLint location,
+                GLsizei count,
+                const T *v,
+                GLenum entryPointType,
+                DefaultUniformBlockMap *defaultUniformBlocks,
+                gl::ShaderBitSet *defaultUniformBlocksDirty)
+{
+    const gl::VariableLocation &locationInfo = executable->getUniformLocations()[location];
+    const gl::LinkedUniform &linkedUniform   = executable->getUniforms()[locationInfo.index];
+
+    ASSERT(!linkedUniform.isSampler());
+
+    if (ANGLE_LIKELY(linkedUniform.getType() == entryPointType))
+    {
+        const GLint componentCount = linkedUniform.getElementComponents();
+        if constexpr (std::is_same<T, GLfloat>::value)
+        {
+            if (linkedUniform.isFloat16())
+            {
+                // Special case where we need to transform the 32-bit float to 16-bit float before
+                // storing.
+                for (const gl::ShaderType shaderType : executable->getLinkedShaderStages())
+                {
+                    BufferAndLayout &uniformBlock         = *(*defaultUniformBlocks)[shaderType];
+                    const sh::BlockMemberInfo &layoutInfo = uniformBlock.uniformLayout[location];
+
+                    // Assume an offset of -1 means the block is unused.
+                    if (layoutInfo.offset == -1)
+                    {
+                        continue;
+                    }
+
+                    const int elementSize = sizeof(GLshort) * componentCount;
+                    uint8_t *dst          = uniformBlock.uniformData.data() + layoutInfo.offset;
+                    int maxIndex          = locationInfo.arrayIndex + count;
+                    for (int writeIndex = locationInfo.arrayIndex, readIndex = 0;
+                         writeIndex < maxIndex; writeIndex++, readIndex++)
+                    {
+                        const int arrayOffset = writeIndex * layoutInfo.arrayStride;
+                        uint8_t *writePtr     = dst + arrayOffset;
+                        // check that writePtr is aligned to 2 bytes (size of GLshort)
+                        ASSERT(reinterpret_cast<uintptr_t>(writePtr) % 2 == 0);
+                        const GLfloat *readPtr = v + (readIndex * componentCount);
+                        // check that readPtr is aligned to 4 bytes (size of GLfloat)
+                        ASSERT(reinterpret_cast<uintptr_t>(readPtr) % 4 == 0);
+                        // Ensure the uniformBlock.uniformData has enough space
+                        ASSERT(writePtr + elementSize <=
+                               uniformBlock.uniformData.data() + uniformBlock.uniformData.size());
+                        // Transform each original GLfloat data to GLshort
+                        GLshort *dstGLShortPtr = reinterpret_cast<GLshort *>(writePtr);
+                        for (int componentIndex = 0; componentIndex < componentCount;
+                             ++componentIndex)
+                        {
+                            dstGLShortPtr[componentIndex] =
+                                gl::float32ToFloat16(readPtr[componentIndex]);
+                        }
+                        // Add paddings of 0 if the next item written to the destination memory is
+                        // not tightly packed to the current item
+                        if (writeIndex + 1 < maxIndex)
+                        {
+                            const int paddingSize = (writeIndex + 1) * layoutInfo.arrayStride -
+                                                    arrayOffset - elementSize;
+                            if (paddingSize > 0)
+                            {
+                                memset(writePtr + elementSize, 0, paddingSize);
+                            }
+                        }
+                    }
+                    defaultUniformBlocksDirty->set(shaderType);
+                }
+                // Skip the generic case below
+                return;
+            }
+        }
+        // Generic case where data transformation is not required
+        for (const gl::ShaderType shaderType : executable->getLinkedShaderStages())
+        {
+            BufferAndLayout &uniformBlock         = *(*defaultUniformBlocks)[shaderType];
+            const sh::BlockMemberInfo &layoutInfo = uniformBlock.uniformLayout[location];
+
+            // Assume an offset of -1 means the block is unused.
+            if (layoutInfo.offset == -1)
+            {
+                continue;
+            }
+
+            UpdateBufferWithLayout(count, locationInfo.arrayIndex, componentCount, v, layoutInfo,
+                                   &uniformBlock.uniformData);
+            defaultUniformBlocksDirty->set(shaderType);
+        }
+    }
+    else
+    {
+        SetUniformAsBool(executable, location, count, v, entryPointType, defaultUniformBlocks,
+                         defaultUniformBlocksDirty);
+    }
+}
+template void SetUniform<GLint>(const gl::ProgramExecutable *executable,
+                                GLint location,
+                                GLsizei count,
+                                const GLint *v,
+                                GLenum entryPointType,
+                                DefaultUniformBlockMap *defaultUniformBlocks,
+                                gl::ShaderBitSet *defaultUniformBlocksDirty);
+template void SetUniform<GLuint>(const gl::ProgramExecutable *executable,
+                                 GLint location,
+                                 GLsizei count,
+                                 const GLuint *v,
+                                 GLenum entryPointType,
+                                 DefaultUniformBlockMap *defaultUniformBlocks,
+                                 gl::ShaderBitSet *defaultUniformBlocksDirty);
+template void SetUniform<GLfloat>(const gl::ProgramExecutable *executable,
+                                  GLint location,
+                                  GLsizei count,
+                                  const GLfloat *v,
+                                  GLenum entryPointType,
+                                  DefaultUniformBlockMap *defaultUniformBlocks,
+                                  gl::ShaderBitSet *defaultUniformBlocksDirty);
+
+template <int cols, int rows>
+void SetUniformMatrixfv(const gl::ProgramExecutable *executable,
+                        GLint location,
+                        GLsizei count,
+                        GLboolean transpose,
+                        const GLfloat *value,
+                        DefaultUniformBlockMap *defaultUniformBlocks,
+                        gl::ShaderBitSet *defaultUniformBlocksDirty)
+{
+    const gl::VariableLocation &locationInfo = executable->getUniformLocations()[location];
+    const gl::LinkedUniform &linkedUniform   = executable->getUniforms()[locationInfo.index];
+
+    for (const gl::ShaderType shaderType : executable->getLinkedShaderStages())
+    {
+        BufferAndLayout &uniformBlock         = *(*defaultUniformBlocks)[shaderType];
+        const sh::BlockMemberInfo &layoutInfo = uniformBlock.uniformLayout[location];
+
+        // Assume an offset of -1 means the block is unused.
+        if (layoutInfo.offset == -1)
+        {
+            continue;
+        }
+
+        SetFloatUniformMatrixGLSL<cols, rows>::Run(
+            locationInfo.arrayIndex, linkedUniform.getBasicTypeElementCount(), count, transpose,
+            value, uniformBlock.uniformData.data() + layoutInfo.offset, linkedUniform.isFloat16());
+
+        defaultUniformBlocksDirty->set(shaderType);
+    }
+}
+
+#define ANGLE_SET_UNIFORM_MATRIX_FV_SPECIALIZATION(cols, rows)                                   \
+    template void SetUniformMatrixfv<cols, rows>(                                                \
+        const gl::ProgramExecutable *executable, GLint location, GLsizei count,                  \
+        GLboolean transpose, const GLfloat *value, DefaultUniformBlockMap *defaultUniformBlocks, \
+        gl::ShaderBitSet *defaultUniformBlocksDirty)
+ANGLE_SET_UNIFORM_MATRIX_FV_SPECIALIZATION(2, 2);
+ANGLE_SET_UNIFORM_MATRIX_FV_SPECIALIZATION(2, 3);
+ANGLE_SET_UNIFORM_MATRIX_FV_SPECIALIZATION(2, 4);
+ANGLE_SET_UNIFORM_MATRIX_FV_SPECIALIZATION(3, 2);
+ANGLE_SET_UNIFORM_MATRIX_FV_SPECIALIZATION(3, 3);
+ANGLE_SET_UNIFORM_MATRIX_FV_SPECIALIZATION(3, 4);
+ANGLE_SET_UNIFORM_MATRIX_FV_SPECIALIZATION(4, 2);
+ANGLE_SET_UNIFORM_MATRIX_FV_SPECIALIZATION(4, 3);
+ANGLE_SET_UNIFORM_MATRIX_FV_SPECIALIZATION(4, 4);
+
+template <typename T>
+void GetUniform(const gl::ProgramExecutable *executable,
+                GLint location,
+                T *v,
+                GLenum entryPointType,
+                const DefaultUniformBlockMap *defaultUniformBlocks)
+{
+    const gl::VariableLocation &locationInfo = executable->getUniformLocations()[location];
+    const gl::LinkedUniform &linkedUniform   = executable->getUniforms()[locationInfo.index];
+
+    ASSERT(!linkedUniform.isSampler() && !linkedUniform.isImage());
+
+    const gl::ShaderType shaderType = linkedUniform.getFirstActiveShaderType();
+    ASSERT(shaderType != gl::ShaderType::InvalidEnum);
+
+    const BufferAndLayout &uniformBlock   = *(*defaultUniformBlocks)[shaderType];
+    const sh::BlockMemberInfo &layoutInfo = uniformBlock.uniformLayout[location];
+
+    ASSERT(linkedUniform.getUniformTypeInfo().componentType == entryPointType ||
+           linkedUniform.getUniformTypeInfo().componentType ==
+               gl::VariableBoolVectorType(entryPointType));
+
+    if (gl::IsMatrixType(linkedUniform.getType()))
+    {
+        const uint8_t *ptrToElement = uniformBlock.uniformData.data() + layoutInfo.offset +
+                                      (locationInfo.arrayIndex * layoutInfo.arrayStride);
+        GetMatrixUniform(linkedUniform.getType(), v, reinterpret_cast<const T *>(ptrToElement),
+                         false, linkedUniform.isFloat16());
+    }
+    else
+    {
+        ReadFromBufferWithLayout(linkedUniform.getElementComponents(), locationInfo.arrayIndex, v,
+                                 layoutInfo, &uniformBlock.uniformData, linkedUniform.isFloat16());
+    }
+}
+
+template void GetUniform<GLint>(const gl::ProgramExecutable *executable,
+                                GLint location,
+                                GLint *v,
+                                GLenum entryPointType,
+                                const DefaultUniformBlockMap *defaultUniformBlocks);
+template void GetUniform<GLuint>(const gl::ProgramExecutable *executable,
+                                 GLint location,
+                                 GLuint *v,
+                                 GLenum entryPointType,
+                                 const DefaultUniformBlockMap *defaultUniformBlocks);
+template void GetUniform<GLfloat>(const gl::ProgramExecutable *executable,
+                                  GLint location,
+                                  GLfloat *v,
+                                  GLenum entryPointType,
+                                  const DefaultUniformBlockMap *defaultUniformBlocks);
 
 const angle::Format &GetFormatFromFormatType(GLenum format, GLenum type)
 {
@@ -1013,15 +1574,10 @@ angle::Result ComputeStartVertex(ContextImpl *contextImpl,
                                  GLint baseVertex,
                                  GLint *firstVertexOut)
 {
-    // The entire index range should be within the limits of a 32-bit uint because the largest
-    // GL index type is GL_UNSIGNED_INT.
-    ASSERT(indexRange.start <= std::numeric_limits<uint32_t>::max() &&
-           indexRange.end <= std::numeric_limits<uint32_t>::max());
-
     // The base vertex is only used in DrawElementsIndirect. Given the assertion above and the
     // type of mBaseVertex (GLint), adding them both as 64-bit ints is safe.
     int64_t startVertexInt64 =
-        static_cast<int64_t>(baseVertex) + static_cast<int64_t>(indexRange.start);
+        static_cast<int64_t>(baseVertex) + static_cast<int64_t>(indexRange.start());
 
     // OpenGL ES 3.2 spec section 10.5: "Behavior of DrawElementsOneInstance is undefined if the
     // vertex ID is negative for any element"
@@ -1051,7 +1607,8 @@ angle::Result GetVertexRangeInfo(const gl::Context *context,
     {
         gl::IndexRange indexRange;
         ANGLE_TRY(context->getState().getVertexArray()->getIndexRange(
-            context, indexTypeOrInvalid, vertexOrIndexCount, indices, &indexRange));
+            context, indexTypeOrInvalid, vertexOrIndexCount, indices,
+            context->getState().isPrimitiveRestartEnabled(), &indexRange));
         ANGLE_TRY(ComputeStartVertex(context->getImplementation(), indexRange, baseVertex,
                                      startVertexOut));
         *vertexCountOut = indexRange.vertexCount();
@@ -1092,36 +1649,13 @@ gl::Rectangle ClipRectToScissor(const gl::State &glState, const gl::Rectangle &r
     return clippedRect;
 }
 
-void LogFeatureStatus(const angle::FeatureSetBase &features,
-                      const std::vector<std::string> &featureNames,
-                      bool enabled)
+void ApplyFeatureOverrides(angle::FeatureSetBase *features,
+                           const angle::FeatureOverrides &overrides)
 {
-    for (const std::string &name : featureNames)
-    {
-        const bool hasWildcard = name.back() == '*';
-        for (auto iter : features.getFeatures())
-        {
-            const std::string &featureName = iter.first;
+    std::stringstream featureStream;
 
-            if (!angle::FeatureNameMatch(featureName, name))
-            {
-                continue;
-            }
-
-            INFO() << "Feature: " << featureName << (enabled ? " enabled" : " disabled");
-
-            if (!hasWildcard)
-            {
-                break;
-            }
-        }
-    }
-}
-
-void ApplyFeatureOverrides(angle::FeatureSetBase *features, const egl::DisplayState &state)
-{
-    features->overrideFeatures(state.featureOverridesEnabled, true);
-    features->overrideFeatures(state.featureOverridesDisabled, false);
+    featureStream << features->overrideFeatures(overrides.enabled, true);
+    featureStream << features->overrideFeatures(overrides.disabled, false);
 
     // Override with environment as well.
     constexpr char kAngleFeatureOverridesEnabledEnvName[]  = "ANGLE_FEATURE_OVERRIDES_ENABLED";
@@ -1137,11 +1671,42 @@ void ApplyFeatureOverrides(angle::FeatureSetBase *features, const egl::DisplaySt
         angle::GetCachedStringsFromEnvironmentVarOrAndroidProperty(
             kAngleFeatureOverridesDisabledEnvName, kAngleFeatureOverridesDisabledPropertyName, ":");
 
-    features->overrideFeatures(overridesEnabled, true);
-    LogFeatureStatus(*features, overridesEnabled, true);
+    featureStream << features->overrideFeatures(overridesEnabled, true);
+    featureStream << features->overrideFeatures(overridesDisabled, false);
 
-    features->overrideFeatures(overridesDisabled, false);
-    LogFeatureStatus(*features, overridesDisabled, false);
+    if (!featureStream.str().empty())
+    {
+        INFO() << featureStream.str();
+    }
+}
+
+void StreamEmulatedLineLoopIndices(gl::DrawElementsType glIndexType,
+                                   GLsizei indexCount,
+                                   const uint8_t *srcPtr,
+                                   uint8_t *outPtr,
+                                   bool shouldConvertUint8)
+{
+    switch (glIndexType)
+    {
+        case gl::DrawElementsType::UnsignedByte:
+            if (shouldConvertUint8)
+            {
+                CopyLineLoopIndicesWithRestart<uint8_t, uint16_t>(indexCount, srcPtr, outPtr);
+            }
+            else
+            {
+                CopyLineLoopIndicesWithRestart<uint8_t, uint8_t>(indexCount, srcPtr, outPtr);
+            }
+            break;
+        case gl::DrawElementsType::UnsignedShort:
+            CopyLineLoopIndicesWithRestart<uint16_t, uint16_t>(indexCount, srcPtr, outPtr);
+            break;
+        case gl::DrawElementsType::UnsignedInt:
+            CopyLineLoopIndicesWithRestart<uint32_t, uint32_t>(indexCount, srcPtr, outPtr);
+            break;
+        default:
+            UNREACHABLE();
+    }
 }
 
 void GetSamplePosition(GLsizei sampleCount, size_t index, GLfloat *xy)
@@ -1187,6 +1752,7 @@ void GetSamplePosition(GLsizei sampleCount, size_t index, GLfloat *xy)
 #define MULTI_DRAW_BLOCK(drawType, instanced, bvbi, hasDrawID, hasBaseVertex, hasBaseInstance) \
     do                                                                                         \
     {                                                                                          \
+        bool anyDraw = false;                                                                  \
         for (GLsizei drawID = 0; drawID < drawcount; ++drawID)                                 \
         {                                                                                      \
             if (ANGLE_NOOP_DRAW(instanced))                                                    \
@@ -1200,9 +1766,14 @@ void GetSamplePosition(GLsizei sampleCount, size_t index, GLfloat *xy)
             ANGLE_TRY(DRAW_CALL(drawType, instanced, bvbi));                                   \
             ANGLE_MARK_TRANSFORM_FEEDBACK_USAGE(instanced);                                    \
             gl::MarkShaderStorageUsage(context);                                               \
+            anyDraw = true;                                                                    \
         }                                                                                      \
         /* reset the uniform to zero for non-multi-draw uses of the program */                 \
         ANGLE_SET_DRAW_ID_UNIFORM(hasDrawID)(0);                                               \
+        if (!anyDraw)                                                                          \
+        {                                                                                      \
+            ANGLE_TRY(contextImpl->handleNoopMultiDrawEvent());                                \
+        }                                                                                      \
     } while (0)
 
 angle::Result MultiDrawArraysGeneral(ContextImpl *contextImpl,
@@ -1736,6 +2307,7 @@ const gl::ColorGeneric AdjustBorderColor(const angle::ColorGeneric &borderColorG
 
     return adjustedBorderColor;
 }
+
 template const gl::ColorGeneric AdjustBorderColor<true>(
     const angle::ColorGeneric &borderColorGeneric,
     const angle::Format &format,
@@ -1745,4 +2317,114 @@ template const gl::ColorGeneric AdjustBorderColor<false>(
     const angle::Format &format,
     bool stencilMode);
 
+bool TextureHasAnyRedefinedLevels(const gl::CubeFaceArray<gl::TexLevelMask> &redefinedLevels)
+{
+    for (gl::TexLevelMask faceRedefinedLevels : redefinedLevels)
+    {
+        if (faceRedefinedLevels.any())
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool IsTextureLevelRedefined(const gl::CubeFaceArray<gl::TexLevelMask> &redefinedLevels,
+                             gl::TextureType textureType,
+                             gl::LevelIndex level)
+{
+    gl::TexLevelMask redefined = redefinedLevels[0];
+
+    if (textureType == gl::TextureType::CubeMap)
+    {
+        for (size_t face = 1; face < gl::kCubeFaceCount; ++face)
+        {
+            redefined |= redefinedLevels[face];
+        }
+    }
+
+    return redefined.test(level.get());
+}
+
+bool TextureRedefineLevel(const TextureLevelAllocation levelAllocation,
+                          const TextureLevelDefinition levelDefinition,
+                          bool immutableFormat,
+                          uint32_t levelCount,
+                          const uint32_t layerIndex,
+                          const gl::ImageIndex &index,
+                          gl::LevelIndex imageFirstAllocatedLevel,
+                          gl::CubeFaceArray<gl::TexLevelMask> *redefinedLevels)
+{
+    // If the level that's being redefined is outside the level range of the allocated
+    // image, the application is free to use any size or format.  Any data uploaded to it
+    // will live in staging area until the texture base/max level is adjusted to include
+    // this level, at which point the image will be recreated.
+    //
+    // Otherwise, if the level that's being redefined has a different format or size,
+    // only release the image if it's single-mip, and keep the uploaded data staged.
+    // Otherwise the image is mip-incomplete anyway and will be eventually recreated when
+    // needed.  Only exception to this latter is if all the levels of the texture are
+    // redefined such that the image becomes mip-complete in the end.
+    // redefinedLevels is used during syncState to support this use-case.
+    //
+    // Note that if the image has multiple mips, there could be a copy from one mip
+    // happening to the other, which means the image cannot be released.
+    //
+    // In summary:
+    //
+    // - If the image has a single level, and that level is being redefined, release the
+    //   image.
+    // - Otherwise keep the image intact (another mip may be the source of a copy), and
+    //   make sure any updates to this level are staged.
+    gl::LevelIndex levelIndexGL(index.getLevelIndex());
+    const bool isCompatibleRedefinition =
+        levelAllocation == TextureLevelAllocation::WithinAllocatedImage &&
+        levelDefinition == TextureLevelDefinition::Compatible;
+    const bool isCubeMap = index.getType() == gl::TextureType::CubeMap;
+
+    // Mark the level as incompatibly redefined if that's the case.  Note that if the level
+    // was previously incompatibly defined, then later redefined to be compatible, the
+    // corresponding bit should clear.
+    if (levelAllocation == TextureLevelAllocation::WithinAllocatedImage)
+    {
+        // Immutable texture should never have levels redefined.
+        ASSERT(isCompatibleRedefinition || !immutableFormat);
+
+        const uint32_t redefinedFace = isCubeMap ? layerIndex : 0;
+        (*redefinedLevels)[redefinedFace].set(levelIndexGL.get(), !isCompatibleRedefinition);
+    }
+
+    const bool isUpdateToSingleLevelImage =
+        levelCount == 1 && imageFirstAllocatedLevel == levelIndexGL;
+
+    // If incompatible, and redefining the single-level image, the caller will release the texture
+    // so it can be recreated immediately.  This is needed so that the texture can be reallocated
+    // with the correct format/size.
+    //
+    // This is not done for cubemaps because every face may be separately redefined.  Note
+    // that this is not possible for texture arrays in general.
+    bool shouldReleaseImage = !isCompatibleRedefinition && isUpdateToSingleLevelImage && !isCubeMap;
+    return shouldReleaseImage;
+}
+
+void TextureRedefineGenerateMipmapLevels(gl::LevelIndex baseLevel,
+                                         gl::LevelIndex maxLevel,
+                                         gl::LevelIndex firstGeneratedLevel,
+                                         gl::CubeFaceArray<gl::TexLevelMask> *redefinedLevels)
+{
+    static_assert(gl::IMPLEMENTATION_MAX_TEXTURE_LEVELS < 32,
+                  "levels mask assumes 32-bits is enough");
+    // Generate bitmask for (baseLevel, maxLevel]. `+1` because bitMask takes `the number of bits`
+    // but levels start counting from 0
+    gl::TexLevelMask levelsMask(angle::BitMask<uint32_t>(maxLevel.get() + 1));
+    levelsMask &= static_cast<uint32_t>(~angle::BitMask<uint32_t>(firstGeneratedLevel.get()));
+    // Remove (baseLevel, maxLevel] from redefinedLevels. These levels are no longer incompatibly
+    // defined if they previously were.  The corresponding bits in redefinedLevels should be
+    // cleared.
+    for (size_t face = 0; face < gl::kCubeFaceCount; ++face)
+    {
+        (*redefinedLevels)[face] &= ~levelsMask;
+    }
+}
 }  // namespace rx

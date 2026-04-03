@@ -9,7 +9,6 @@
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/inspector/node_content_visibility_state.h"
 #include "third_party/blink/renderer/core/inspector/protocol/dom.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "ui/gfx/geometry/quad_f.h"
@@ -283,7 +282,9 @@ class CORE_EXPORT InspectorHighlight : public InspectorHighlightBase {
   ColorFormat color_format_;
 };
 
-std::unique_ptr<protocol::DictionaryValue> InspectorFlexContainerHighlight(
+// CORE_EXPORT is required to make these functions available for unit tests.
+std::unique_ptr<protocol::DictionaryValue> CORE_EXPORT
+InspectorFlexContainerHighlight(
     Node* node,
     const InspectorFlexContainerHighlightConfig& config);
 
@@ -299,7 +300,6 @@ std::unique_ptr<protocol::DictionaryValue> InspectorIsolatedElementHighlight(
     Element* element,
     const InspectorIsolationModeHighlightConfig& config);
 
-// CORE_EXPORT is required to make these functions available for unit tests.
 std::unique_ptr<protocol::DictionaryValue> CORE_EXPORT
 InspectorGridHighlight(Node*, const InspectorGridHighlightConfig& config);
 

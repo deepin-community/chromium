@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_APPS_APP_SERVICE_APP_SERVICE_PROXY_BASE_H_
 
 #include <stdint.h>
+
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -16,11 +17,12 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/launch_result_type.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/services/app_service/public/cpp/app_capability_access_cache.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/services/app_service/public/cpp/app_types.h"
@@ -35,7 +37,6 @@
 #include "components/services/app_service/public/cpp/permission.h"
 #include "components/services/app_service/public/cpp/preferred_app.h"
 #include "components/services/app_service/public/cpp/preferred_apps_impl.h"
-#include "ui/gfx/native_widget_types.h"
 
 class Profile;
 class GURL;
@@ -46,10 +47,11 @@ class FilePath;
 
 namespace apps {
 
-class AppPublisher;
+class Publisher;
 class AppUpdate;
 class BrowserAppLauncher;
 class PreferredAppsListHandle;
+class PublisherHostFactory;
 
 struct IntentLaunchInfo {
   IntentLaunchInfo();
@@ -79,20 +81,9 @@ struct IntentLaunchInfo {
 class AppServiceProxyBase : public KeyedService,
                             public PreferredAppsImpl::Host {
  public:
-  // The parameters of the launch calling.
-  struct LaunchParams {
-    LaunchParams();
-    ~LaunchParams();
-    int32_t event_flags_ = 0;
-    IntentPtr intent_;
-    LaunchSource launch_source_ = LaunchSource::kUnknown;
-    std::vector<base::FilePath> file_paths_;
-    WindowInfoPtr window_info_;
-    std::optional<AppLaunchParams> params_;
-    LaunchCallback call_back_;
-  };
-
-  explicit AppServiceProxyBase(Profile* profile);
+  // `publisher_host_factory` must be non-null and outlive this instance.
+  AppServiceProxyBase(Profile* profile,
+                      PublisherHostFactory* publisher_host_factory);
   AppServiceProxyBase(const AppServiceProxyBase&) = delete;
   AppServiceProxyBase& operator=(const AppServiceProxyBase&) = delete;
   ~AppServiceProxyBase() override;
@@ -114,7 +105,7 @@ class AppServiceProxyBase : public KeyedService,
   // Registers `publisher` with the App Service as exclusively publishing apps
   // of type `app_type`. `publisher` must have a lifetime equal to or longer
   // than this object.
-  virtual void RegisterPublisher(AppType app_type, AppPublisher* publisher);
+  void RegisterPublisher(AppType app_type, Publisher* publisher);
 
   // UnRegisters the publisher for `app_type`, As the publisher(ArcApps) might
   // be destroyed earlier than AppServiceProxy.
@@ -177,7 +168,7 @@ class AppServiceProxyBase : public KeyedService,
   // Launches the app for the given |app_id| with files from |file_paths|.
   // DEPRECATED. Prefer passing the files in an Intent through
   // LaunchAppWithIntent.
-  // TODO(crbug.com/1264164): Remove this method.
+  // TODO(crbug.com/40203246): Remove this method.
   void LaunchAppWithFiles(const std::string& app_id,
                           int32_t event_flags,
                           LaunchSource launch_source,
@@ -232,13 +223,6 @@ class AppServiceProxyBase : public KeyedService,
 
   // Sets |permission| for the app identified by |app_id|.
   void SetPermission(const std::string& app_id, PermissionPtr permission);
-
-  // Uninstalls an app for the given |app_id|. If |parent_window| is specified,
-  // the uninstall dialog will be created as a modal dialog anchored at
-  // |parent_window|. Otherwise, the browser window will be used as the anchor.
-  virtual void Uninstall(const std::string& app_id,
-                         UninstallSource uninstall_source,
-                         gfx::NativeWindow parent_window) = 0;
 
   // Uninstalls an app for the given |app_id| without prompting the user to
   // confirm.
@@ -311,7 +295,7 @@ class AppServiceProxyBase : public KeyedService,
   // Any apps with overlapping preferred app preferences will have all their
   // supported link filters unset, as if RemoveSupportedLinksPreference was
   // called for that app.
-  // TODO(crbug.com/1265315): Remove this method to use
+  // TODO(crbug.com/40203720): Remove this method to use
   // SetSupportedLinksPreference(std::string).
   void SetSupportedLinksPreference(const std::string& app_id,
                                    IntentFilters all_link_filters);
@@ -405,12 +389,7 @@ class AppServiceProxyBase : public KeyedService,
   // avoid calling other virtual methods in the AppServiceProxy constructor).
   virtual void Initialize();
 
-  AppPublisher* GetPublisher(AppType app_type);
-
-  // Called when a publisher is not ready to launch an app.
-  virtual void OnPublisherNotReadyForLaunch(
-      const std::string& app_id,
-      std::unique_ptr<LaunchParams> launch_request);
+  Publisher* GetPublisher(AppType app_type);
 
   // Returns true if the app cannot be launched and a launch prevention dialog
   // is shown to the user (e.g. the app is paused or blocked). Returns false
@@ -456,7 +435,8 @@ class AppServiceProxyBase : public KeyedService,
       const apps::IntentFilterPtr& filter,
       const apps::AppUpdate& update);
 
-  base::flat_map<AppType, AppPublisher*> publishers_;
+  const raw_ref<PublisherHostFactory> publisher_host_factory_;
+  base::flat_map<AppType, raw_ptr<Publisher, CtnExperimental>> publishers_;
 
   apps::AppRegistryCache app_registry_cache_;
   apps::AppCapabilityAccessCache app_capability_access_cache_;
@@ -474,12 +454,12 @@ class AppServiceProxyBase : public KeyedService,
 
   raw_ptr<Profile> profile_;
 
-  // TODO(crbug.com/1061843): Remove BrowserAppLauncher and merge the interfaces
-  // to AppServiceProxyBase when publishers(ExtensionApps and WebApps) can run
-  // on Chrome.
+  // TODO(crbug.com/40122594): Remove BrowserAppLauncher and merge the
+  // interfaces to AppServiceProxyBase when publishers(ExtensionApps and
+  // WebApps) can run on Chrome.
   std::unique_ptr<apps::BrowserAppLauncher> browser_app_launcher_;
 
-  bool is_using_testing_profile_ = false;
+  bool skip_pause_dialog_for_testing_ = false;
   base::OnceClosure dialog_created_callback_;
 
  private:

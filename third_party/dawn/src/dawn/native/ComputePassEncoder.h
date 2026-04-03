@@ -50,7 +50,9 @@ class ComputePassEncoder final : public ProgrammableEncoder {
     static Ref<ComputePassEncoder> MakeError(DeviceBase* device,
                                              CommandEncoder* commandEncoder,
                                              EncodingContext* encodingContext,
-                                             const char* label);
+                                             StringView label);
+
+    ~ComputePassEncoder() override;
 
     ObjectType GetType() const override;
 
@@ -66,6 +68,8 @@ class ComputePassEncoder final : public ProgrammableEncoder {
                          BindGroupBase* group,
                          uint32_t dynamicOffsetCount = 0,
                          const uint32_t* dynamicOffsets = nullptr);
+
+    void APISetImmediates(uint32_t offset, const void* data, size_t size);
 
     void APIWriteTimestamp(QuerySetBase* querySet, uint32_t queryIndex);
 
@@ -83,10 +87,10 @@ class ComputePassEncoder final : public ProgrammableEncoder {
                        CommandEncoder* commandEncoder,
                        EncodingContext* encodingContext,
                        ErrorTag errorTag,
-                       const char* label);
+                       StringView label);
 
   private:
-    void DestroyImpl() override;
+    void DestroyImpl(DestroyReason reason) override;
 
     ResultOrError<std::pair<Ref<BufferBase>, uint64_t>> TransformIndirectDispatchBuffer(
         Ref<BufferBase> indirectBuffer,

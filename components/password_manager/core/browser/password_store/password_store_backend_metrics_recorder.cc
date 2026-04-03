@@ -5,6 +5,7 @@
 #include "components/password_manager/core/browser/password_store/password_store_backend_metrics_recorder.h"
 
 #include <utility>
+#include <variant>
 
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
@@ -29,7 +30,6 @@ bool HasRunToCompletion(
       return false;
   }
   NOTREACHED();
-  return false;
 }
 
 }  // namespace
@@ -73,8 +73,8 @@ void PasswordStoreBackendMetricsRecorder::RecordMetrics(
 
   if (error.has_value()) {
     DCHECK_NE(success_status, SuccessStatus::kSuccess);
-    if (absl::holds_alternative<AndroidBackendError>(error.value())) {
-      RecordErrorCode(std::move(absl::get<1>(error.value())));
+    if (std::holds_alternative<AndroidBackendError>(error.value())) {
+      RecordErrorCode(std::move(std::get<1>(error.value())));
     }
   }
 }
@@ -230,7 +230,6 @@ std::string PasswordStoreBackendMetricsRecorder::GetStoreInfix() const {
       return base::JoinString({*backend_infix_, "Local"}, ".");
     default:
       NOTREACHED();
-      return "";
   }
 }
 

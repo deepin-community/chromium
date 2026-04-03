@@ -4,17 +4,18 @@
 
 #include "chrome/browser/ash/login/lock_screen_utils.h"
 
+#include <algorithm>
+
 #include "ash/constants/ash_constants.h"
 #include "ash/constants/ash_pref_names.h"
-#include "base/containers/contains.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/ash/ime_controller_client_impl.h"
+#include "chrome/browser/ui/ash/input_method/ime_controller_client_impl.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/account_id/account_id.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/user_manager/known_user.h"
@@ -34,8 +35,8 @@ bool SetUserInputMethodImpl(
                  << " (entry dropped). Use hardware default instead.";
     return false;
   }
-  if (!base::Contains(ime_state->GetEnabledInputMethodIds(),
-                      user_input_method_id)) {
+  if (!std::ranges::contains(ime_state->GetEnabledInputMethodIds(),
+                             user_input_method_id)) {
     if (!ime_state->EnableInputMethod(user_input_method_id)) {
       DLOG(ERROR) << "SetUserInputMethod: user input method '"
                   << user_input_method_id
@@ -70,7 +71,7 @@ void SetUserInputMethod(const AccountId& account_id,
     DVLOG(0) << "SetUserInputMethod: failed to set user layout. Switching to "
                 "default.";
 
-    ime_state->SetInputMethodLoginDefault();
+    ime_state->SetInputMethodLoginDefault(false /* is_in_oobe_context */);
   }
 }
 
@@ -98,7 +99,7 @@ std::string GetUserLastInputMethodId(const AccountId& account_id) {
 
 void EnforceDevicePolicyInputMethods(std::string user_input_method_id) {
   auto* cros_settings = CrosSettings::Get();
-  const base::Value::List* login_screen_input_methods = nullptr;
+  const base::ListValue* login_screen_input_methods = nullptr;
   if (!cros_settings->GetList(kDeviceLoginScreenInputMethods,
                               &login_screen_input_methods) ||
       login_screen_input_methods->empty()) {
@@ -134,7 +135,7 @@ void StopEnforcingPolicyInputMethods() {
   imm_state->SetAllowedInputMethods(std::vector<std::string>());
   if (ImeControllerClientImpl::Get())  // Can be null in tests.
     ImeControllerClientImpl::Get()->SetImesManagedByPolicy(false);
-  imm_state->SetInputMethodLoginDefault();
+  imm_state->SetInputMethodLoginDefault(false /* is_in_oobe_context */);
 }
 
 void SetKeyboardSettings(const AccountId& account_id) {
@@ -174,7 +175,7 @@ void SetKeyboardSettings(const AccountId& account_id) {
       rate);
 }
 
-std::vector<LocaleItem> FromListValueToLocaleItem(base::Value::List locales) {
+std::vector<LocaleItem> FromListValueToLocaleItem(base::ListValue locales) {
   std::vector<LocaleItem> result;
   for (const auto& locale : locales) {
     if (!locale.is_dict())

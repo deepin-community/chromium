@@ -145,7 +145,7 @@ bool is_atk_version_supported() {
 }  // namespace
 
 AXInspectTestHelper::AXInspectTestHelper(AXApiType::Type type)
-    : expectation_type_(type) {}
+    : expectation_type_(std::string(type)) {}
 
 AXInspectTestHelper::AXInspectTestHelper(const char* expectation_type)
     : expectation_type_(expectation_type) {}
@@ -311,7 +311,7 @@ bool AXInspectTestHelper::ValidateAgainstExpectation(
     diff += base::JoinString(actual_lines, "\n");
     diff += "\n";
 
-    // This is used by rebase_dump_accessibility_tree_test.py to signify
+    // This is used by rebase_dump_accessibility_tree_tests.py to signify
     // the end of the file when parsing the actual output from remote logs.
     diff += kMarkEndOfFile;
     diff += "\n";
@@ -375,18 +375,6 @@ FilePath::StringType AXInspectTestHelper::GetVersionSpecificExpectedFileSuffix(
     if (!expectations_qualifier.empty())
       suffix = FILE_PATH_LITERAL("-") + expectations_qualifier;
     return suffix + FILE_PATH_LITERAL("-expected-blink-cros.txt");
-  }
-#endif
-#if BUILDFLAG(IS_MAC)
-  // When running tests in a platform specific test directory (such as
-  // content/test/data/accessibility/mac/) the expectation_type_ == content.
-  if ((expectation_type_ == "mac" || expectation_type_ == "content") &&
-      base::mac::MacOSMajorVersion() < 11) {
-    FilePath::StringType suffix;
-    if (!expectations_qualifier.empty()) {
-      suffix = FILE_PATH_LITERAL("-") + expectations_qualifier;
-    }
-    return suffix + FILE_PATH_LITERAL("-expected-mac-before-11.txt");
   }
 #endif
   return FILE_PATH_LITERAL("");

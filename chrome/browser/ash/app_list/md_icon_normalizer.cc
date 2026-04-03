@@ -6,10 +6,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <utility>
 #include <vector>
 
-#include "base/numerics/math_constants.h"
+#include "base/compiler_specific.h"
 #include "base/trace_event/trace_event.h"
 #include "skia/ext/image_operations.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -34,7 +35,7 @@ constexpr float kMaxSquareAreaFactor = 361.0f / 576;
 // Ratio of icon visible area to full icon size for a circular shaped icon.
 constexpr float kMaxCircleAreaFactor = 380.0f / 576;
 
-constexpr float kCircleAreaByRect = base::kPiFloat / 4;
+constexpr float kCircleAreaByRect = std::numbers::pi_v<float> / 4;
 
 // Slope used to calculate icon visible area to full icon size for any generic
 // shaped icon.
@@ -129,7 +130,8 @@ float GetMdIconScale(const SkBitmap& bitmap) {
             : nullptr;
 
     for (int x = 0; x < width; x++) {
-      if (SkColorGetA(nativeRow ? nativeRow[x] : pixmap.getColor(x, y)) >
+      if (UNSAFE_TODO(
+              SkColorGetA(nativeRow ? nativeRow[x] : pixmap.getColor(x, y))) >
           kMaxShadowAlpha) {
         border_left[y] = x;
         x_left = std::min(x_left, x);
@@ -142,7 +144,8 @@ float GetMdIconScale(const SkBitmap& bitmap) {
       continue;
 
     for (int x = width - 1; x > 0; x--) {
-      if (SkColorGetA(nativeRow ? nativeRow[x] : pixmap.getColor(x, y)) >
+      if (UNSAFE_TODO(
+              SkColorGetA(nativeRow ? nativeRow[x] : pixmap.getColor(x, y))) >
           kMaxShadowAlpha) {
         border_right[y] = x;
         x_right = std::max(x_right, x);

@@ -28,7 +28,7 @@ egl::Error DisplayVkGbm::initialize(egl::Display *display)
     if (!mGbmDevice)
     {
         ERR() << "Failed to retrieve GBM device";
-        return egl::EglNotInitialized();
+        return egl::Error(EGL_NOT_INITIALIZED);
     }
 
     return DisplayVk::initialize(display);
@@ -71,21 +71,29 @@ egl::ConfigSet DisplayVkGbm::generateConfigs()
     return cfgSet;
 }
 
-void DisplayVkGbm::checkConfigSupport(egl::Config *config) {}
+void DisplayVkGbm::checkConfigSupport(egl::Config *config)
+{
+    ASSERT(mGbmDevice);
+    uint32_t format = angle::GLInternalFormatToDrmFourCCFormat(config->renderTargetFormat);
+    uint32_t flags  = GBM_BO_USE_RENDERING | GBM_BO_USE_SCANOUT;
+
+    if (!gbm_device_is_format_supported(mGbmDevice, format, flags))
+    {
+        config->surfaceType &= ~EGL_WINDOW_BIT;
+        return;
+    }
+
+    config->nativeVisualID = format;
+}
 
 const char *DisplayVkGbm::getWSIExtension() const
 {
     return nullptr;
 }
 
-bool DisplayVkGbm::isUsingSwapchain() const
+angle::NativeWindowSystem DisplayVkGbm::getWindowSystem() const
 {
-    return true;
-}
-
-bool DisplayVkGbm::isGBM() const
-{
-    return true;
+    return angle::NativeWindowSystem::Gbm;
 }
 
 bool IsVulkanGbmDisplayAvailable()

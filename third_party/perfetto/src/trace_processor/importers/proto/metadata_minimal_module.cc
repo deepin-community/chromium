@@ -16,30 +16,43 @@
 
 #include "src/trace_processor/importers/proto/metadata_minimal_module.h"
 
+#include <cstdint>
+#include <string>
+
 #include "perfetto/ext/base/base64.h"
 #include "perfetto/ext/base/string_utils.h"
+#include "perfetto/ext/base/string_view.h"
+#include "perfetto/trace_processor/ref_counted.h"
+#include "perfetto/trace_processor/trace_blob_view.h"
+#include "protos/perfetto/trace/trace_packet.pbzero.h"
 #include "src/trace_processor/importers/common/metadata_tracker.h"
+#include "src/trace_processor/importers/proto/packet_sequence_state_generation.h"
+#include "src/trace_processor/importers/proto/proto_importer_module.h"
+#include "src/trace_processor/storage/metadata.h"
+#include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/types/trace_processor_context.h"
+#include "src/trace_processor/types/variadic.h"
 
 #include "protos/perfetto/trace/chrome/chrome_benchmark_metadata.pbzero.h"
 #include "protos/perfetto/trace/chrome/chrome_metadata.pbzero.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
 using perfetto::protos::pbzero::TracePacket;
 
-MetadataMinimalModule::MetadataMinimalModule(TraceProcessorContext* context)
-    : context_(context) {
-  RegisterForField(TracePacket::kChromeMetadataFieldNumber, context);
-  RegisterForField(TracePacket::kChromeBenchmarkMetadataFieldNumber, context);
+MetadataMinimalModule::MetadataMinimalModule(
+    ProtoImporterModuleContext* module_context,
+    TraceProcessorContext* context)
+    : ProtoImporterModule(module_context), context_(context) {
+  RegisterForField(TracePacket::kChromeMetadataFieldNumber);
+  RegisterForField(TracePacket::kChromeBenchmarkMetadataFieldNumber);
 }
 
 ModuleResult MetadataMinimalModule::TokenizePacket(
     const protos::pbzero::TracePacket::Decoder& decoder,
     TraceBlobView*,
     int64_t,
-    PacketSequenceState*,
+    RefPtr<PacketSequenceStateGeneration>,
     uint32_t field_id) {
   switch (field_id) {
     case TracePacket::kChromeMetadataFieldNumber: {
@@ -189,13 +202,7 @@ void MetadataMinimalModule::ParseChromeMetadataPacket(ConstBytes blob) {
       return;
     protos::pbzero::BackgroundTracingMetadata::TriggerRule::Decoder
         triggered_rule_decoder(triggered_rule.data, triggered_rule.size);
-    if (!triggered_rule_decoder.has_name_hash())
-      return;
-    metadata->SetDynamicMetadata(
-        storage->InternString("cr-triggered_rule_name_hash"),
-        Variadic::Integer(triggered_rule_decoder.name_hash()));
   }
 }
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

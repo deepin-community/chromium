@@ -56,7 +56,7 @@ void EvalDequantize(const Tensor& input, const Tensor& scales,
                                         quantization_axis, output);
   } else {
     EvalPerTensorDequantize<Tin, Tout>(input, scales.scalar<float>()(),
-                                       zero_points.scalar<int32>()(), output);
+                                       zero_points.scalar<int32_t>()(), output);
   }
 }
 
@@ -71,7 +71,8 @@ class UniformDequantizeOp : public OpKernel {
                    context->GetAttr("quantization_axis", &quantization_axis_));
 
     OP_REQUIRES(context,
-                (std::is_same<Tin, qint8>() || std::is_same<Tin, qint32>()),
+                (std::is_same<Tin, qint8>() || std::is_same<Tin, quint8>() ||
+                 std::is_same<Tin, qint32>()),
                 InvalidArgument("Unsupported input type."));
     OP_REQUIRES(context, (std::is_same<Tout, float>()),
                 InvalidArgument("Unsupported output type."));
@@ -105,6 +106,12 @@ REGISTER_KERNEL_BUILDER(Name("UniformDequantize")
                             .TypeConstraint<qint8>("Tin")
                             .TypeConstraint<float>("Tout"),
                         UniformDequantizeOp<qint8, float>);
+
+REGISTER_KERNEL_BUILDER(Name("UniformDequantize")
+                            .Device(DEVICE_CPU)
+                            .TypeConstraint<quint8>("Tin")
+                            .TypeConstraint<float>("Tout"),
+                        UniformDequantizeOp<quint8, float>);
 
 REGISTER_KERNEL_BUILDER(Name("UniformDequantize")
                             .Device(DEVICE_CPU)

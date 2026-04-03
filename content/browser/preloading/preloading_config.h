@@ -5,10 +5,10 @@
 #ifndef CONTENT_BROWSER_PRELOADING_PRELOADING_CONFIG_H_
 #define CONTENT_BROWSER_PRELOADING_PRELOADING_CONFIG_H_
 
+#include <string_view>
+
 #include "base/containers/flat_map.h"
-#include "base/feature_list.h"
 #include "base/no_destructor.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "content/public/browser/preloading.h"
 
@@ -46,7 +46,7 @@ class CONTENT_EXPORT PreloadingConfig {
   friend class content::test::PreloadingConfigOverride;
 
   struct Key {
-    Key(base::StringPiece preloading_type, base::StringPiece predictdor);
+    Key(std::string_view preloading_type, std::string_view predictdor);
     static Key FromEnums(PreloadingType preloading_type,
                          PreloadingPredictor predictor);
 
@@ -55,7 +55,7 @@ class CONTENT_EXPORT PreloadingConfig {
   };
 
   struct Entry {
-    static Entry FromDict(const base::Value::Dict* dict);
+    static Entry FromDict(const base::DictValue* dict);
 
     bool holdback_ = false;
     float sampling_likelihood_ = 1.0;
@@ -76,8 +76,8 @@ class CONTENT_EXPORT PreloadingConfig {
   void SetHoldbackForTesting(PreloadingType preloading_type,
                              PreloadingPredictor predictor,
                              bool holdback);
-  void SetHoldbackForTesting(base::StringPiece preloading_type,
-                             base::StringPiece predictdor,
+  void SetHoldbackForTesting(std::string_view preloading_type,
+                             std::string_view predictdor,
                              bool holdback);
 
   base::flat_map<Key, Entry, KeyCompare> entries_;

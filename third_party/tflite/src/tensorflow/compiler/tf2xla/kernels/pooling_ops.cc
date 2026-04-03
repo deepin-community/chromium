@@ -15,39 +15,48 @@ limitations under the License.
 
 // XLA specific pooling ops.
 
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "tensorflow/compiler/tf2xla/mlir_xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/shape_util.h"
 #include "tensorflow/compiler/tf2xla/type_util.h"
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/lib/arithmetic.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/lib/pooling.h"
-#include "xla/client/value_inference.h"
-#include "xla/client/xla_builder.h"
-#include "xla/client/xla_computation.h"
-#include "xla/literal.h"
-#include "xla/util.h"
-#include "tensorflow/core/framework/bounds_check.h"
+#include "xla/hlo/builder/lib/arithmetic.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/lib/pooling.h"
+#include "xla/hlo/builder/padding.h"
+#include "xla/hlo/builder/value_inference.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/xla_data.pb.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/op_requires.h"
-#include "tensorflow/core/framework/register_types.h"
-#include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor_shape.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/status.h"
+#include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/util/determinism.h"
+#include "tensorflow/core/util/padding.h"
 #include "tensorflow/core/util/tensor_format.h"
-#include "tsl/platform/errors.h"
 
 namespace tensorflow {
 namespace {
 
 template <typename T>
-static Status ValidateKernelSizes(const T& ksizes) {
+static absl::Status ValidateKernelSizes(const T& ksizes) {
   for (size_t i = 0; i < ksizes.size(); ++i) {
     if (ksizes[i] <= 0) {
       return errors::InvalidArgument(
@@ -59,7 +68,7 @@ static Status ValidateKernelSizes(const T& ksizes) {
 }
 
 template <typename T>
-static Status ValidateStrides(const T& strides) {
+static absl::Status ValidateStrides(const T& strides) {
   for (size_t i = 0; i < strides.size(); ++i) {
     if (strides[i] <= 0) {
       return errors::InvalidArgument(
@@ -79,8 +88,8 @@ class PoolingOp : public XlaOpKernel {
         num_spatial_dims_(num_spatial_dims),
         reduction_type_(reduction_type) {
     if (ctx->num_inputs() == 1) {
-      std::vector<int32> ksize_int;
-      std::vector<int32> stride_int;
+      std::vector<int32_t> ksize_int;
+      std::vector<int32_t> stride_int;
       OP_REQUIRES_OK(ctx, ctx->GetAttr("ksize", &ksize_int));
       OP_REQUIRES(ctx, ksize_int.size() == num_dims(),
                   errors::InvalidArgument("Sliding window ksize field must "
@@ -110,7 +119,7 @@ class PoolingOp : public XlaOpKernel {
   int num_dims() const { return num_spatial_dims_ + 2; }
 
  protected:
-  StatusOr<std::vector<int64_t>> GetKernelSize(XlaOpKernelContext* ctx) {
+  absl::StatusOr<std::vector<int64_t>> GetKernelSize(XlaOpKernelContext* ctx) {
     std::vector<int64_t> ksize;
     if (ctx->num_inputs() == 1) {
       ksize = ksize_;
@@ -136,7 +145,7 @@ class PoolingOp : public XlaOpKernel {
     return ksize;
   }
 
-  StatusOr<std::vector<int64_t>> GetStride(XlaOpKernelContext* ctx) {
+  absl::StatusOr<std::vector<int64_t>> GetStride(XlaOpKernelContext* ctx) {
     std::vector<int64_t> stride;
     if (ctx->num_inputs() == 1) {
       stride = stride_;
@@ -216,7 +225,7 @@ class MaxPoolOp : public PoolingOp {
 
     xla::XlaOp input = ctx->Input(0);
 
-    StatusOr<xla::Shape> input_shape = ctx->builder()->GetShape(input);
+    absl::StatusOr<xla::Shape> input_shape = ctx->builder()->GetShape(input);
     OP_REQUIRES_OK(ctx, input_shape.status());
 
     // For VECT_C max-pool ops, transpose to plain NCHW, do the max-pool, and
@@ -231,7 +240,7 @@ class MaxPoolOp : public PoolingOp {
       OP_REQUIRES_OK(ctx, input_shape.status());
     }
 
-    OP_REQUIRES(ctx, input_shape->dimensions_size() == num_dims(),
+    OP_REQUIRES(ctx, input_shape->dimensions().size() == num_dims(),
                 errors::InvalidArgument("Input to ", type_string(),
                                         " operator must have ", num_dims(),
                                         " dimensions"));
@@ -239,21 +248,22 @@ class MaxPoolOp : public PoolingOp {
         input, ksize, stride, padding_,
         XlaTensorFormat(
             data_format_ == FORMAT_NCHW_VECT_C ? FORMAT_NCHW : data_format_,
-            input_shape->dimensions_size() - 2));
+            input_shape->dimensions().size() - 2));
 
     if (data_format_ == FORMAT_NCHW_VECT_C) {
-      StatusOr<xla::Shape> result_shape = ctx->builder()->GetShape(pooling);
+      absl::StatusOr<xla::Shape> result_shape =
+          ctx->builder()->GetShape(pooling);
       OP_REQUIRES_OK(ctx, result_shape.status());
 
-      int64 num_channels = result_shape->dimensions(1);
+      int64_t num_channels = result_shape->dimensions(1);
       OP_REQUIRES(
           ctx, num_channels % *vect_width == 0,
           errors::FailedPrecondition("Result of NCHW_VECT_C op must have "
                                      "channels multiple of ",
                                      *vect_width, ", but was ", num_channels));
 
-      absl::InlinedVector<int64, 5> new_dims(result_shape->dimensions().begin(),
-                                             result_shape->dimensions().end());
+      absl::InlinedVector<int64_t, 5> new_dims(
+          result_shape->dimensions().begin(), result_shape->dimensions().end());
       new_dims[1] /= *vect_width;
       new_dims.insert(new_dims.begin() + 2, *vect_width);
       pooling =
@@ -288,7 +298,7 @@ class AvgPoolOp : public PoolingOp {
       : PoolingOp(ctx, /*num_spatial_dims=*/num_spatial_dims,
                   /*reduction_type=*/
                   XlaHelpers::SumAccumulationType(ctx->input_type(0))) {
-    string data_format_str;
+    std::string data_format_str;
     OP_REQUIRES_OK(ctx, ctx->GetAttr("data_format", &data_format_str));
     OP_REQUIRES(ctx, FormatFromString(data_format_str, &data_format_),
                 errors::InvalidArgument("Invalid data format"));
@@ -456,7 +466,7 @@ class MaxPool2DGradOp : public MaxPoolGradOp {
  public:
   explicit MaxPool2DGradOp(OpKernelConstruction* ctx)
       : MaxPoolGradOp(ctx, /*num_spatial_dims=*/2) {
-    string data_format;
+    std::string data_format;
     OP_REQUIRES_OK(ctx, ctx->GetAttr("data_format", &data_format));
     OP_REQUIRES(ctx, FormatFromString(data_format, &data_format_),
                 errors::InvalidArgument("Invalid data format"));
@@ -495,7 +505,7 @@ class AvgPoolGradOp : public XlaOpKernel {
                 errors::Unimplemented(
                     "Pooling is not yet supported on the batch dimension."));
 
-    string data_format;
+    std::string data_format;
     OP_REQUIRES_OK(ctx, ctx->GetAttr("data_format", &data_format));
     OP_REQUIRES(ctx, FormatFromString(data_format, &data_format_),
                 errors::InvalidArgument("Invalid data format"));
@@ -551,7 +561,7 @@ class AvgPoolGradOp : public XlaOpKernel {
  protected:
   const int num_spatial_dims_;
   std::vector<int64_t> ksize_;
-  std::vector<int32> stride_;
+  std::vector<int32_t> stride_;
   Padding padding_;
   TensorFormat data_format_ = FORMAT_NHWC;
 };
@@ -667,7 +677,7 @@ class MaxPoolGradGradOp : public XlaOpKernel {
 
     auto b = ctx->builder();
 
-    auto sixteen = xla::ConstantR0<uint32>(b, 16);
+    auto sixteen = xla::ConstantR0<uint32_t>(b, 16);
     // in (f32) -> round to 7 mantissa bits (bf16)-> 16-high-bit u32.
     //
     // NOTE: Use a ReducePrecision operation instead of a cast to BF16 and back
@@ -692,7 +702,7 @@ class MaxPoolGradGradOp : public XlaOpKernel {
       const xla::Shape scalar = xla::ShapeUtil::MakeShape(xla::F32, {});
       auto lhs = xla::Parameter(rb.get(), 0, scalar, "lhs");
       auto rhs = xla::Parameter(rb.get(), 1, scalar, "rhs");
-      auto sixteen = xla::ConstantR0<int32>(rb.get(), 16);
+      auto sixteen = xla::ConstantR0<int32_t>(rb.get(), 16);
       auto lhs_criteria =
           xla::ShiftLeft(xla::ShiftRightLogical(
                              xla::BitcastConvertType(lhs, xla::S32), sixteen),
@@ -739,7 +749,7 @@ class MaxPool2DGradGradOp : public MaxPoolGradGradOp {
  public:
   explicit MaxPool2DGradGradOp(OpKernelConstruction* ctx)
       : MaxPoolGradGradOp(ctx, /*num_spatial_dims=*/2) {
-    string data_format;
+    std::string data_format;
     OP_REQUIRES_OK(ctx, ctx->GetAttr("data_format", &data_format));
     OP_REQUIRES(ctx, FormatFromString(data_format, &data_format_),
                 errors::InvalidArgument("Invalid data format"));
@@ -757,7 +767,7 @@ class MaxPool3DGradGradOp : public MaxPoolGradGradOp {
  public:
   explicit MaxPool3DGradGradOp(OpKernelConstruction* ctx)
       : MaxPoolGradGradOp(ctx, /*num_spatial_dims=*/3) {
-    string data_format;
+    std::string data_format;
     OP_REQUIRES_OK(ctx, ctx->GetAttr("data_format", &data_format));
     OP_REQUIRES(ctx, FormatFromString(data_format, &data_format_),
                 errors::InvalidArgument("Invalid data format"));

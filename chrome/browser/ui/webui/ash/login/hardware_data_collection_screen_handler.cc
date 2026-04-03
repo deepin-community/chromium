@@ -26,10 +26,14 @@ HWDataCollectionScreenHandler::HWDataCollectionScreenHandler()
 HWDataCollectionScreenHandler::~HWDataCollectionScreenHandler() = default;
 
 void HWDataCollectionScreenHandler::Show(bool enabled) {
-  base::Value::Dict data;
+  base::DictValue data;
   data.Set(kHardwareUsageEnabled, enabled);
 
   ShowInWebUI(std::move(data));
+}
+
+base::WeakPtr<HWDataCollectionView> HWDataCollectionScreenHandler::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 void HWDataCollectionScreenHandler::DeclareLocalizedValues(

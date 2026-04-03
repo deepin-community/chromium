@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <memory>
 
+#include "base/compiler_specific.h"
+
 namespace {
 
 void DeleteSharedMemoryMapping(void* not_used, void* context) {
@@ -70,12 +72,12 @@ StructTraits<viz::mojom::BitmapInSharedMemoryDataView,
     // If source and destination stride are the same use a single copy
     // operation, otherwise do a row-by-row copy.
     if (src_stride == min_row_bytes) {
-      memcpy(dst_pixels, src_pixels, byte_size);
+      UNSAFE_TODO(memcpy(dst_pixels, src_pixels, byte_size));
     } else {
       for (int y = 0; y < sk_bitmap.height(); ++y) {
-        memcpy(dst_pixels, src_pixels, min_row_bytes);
-        src_pixels += src_stride;
-        dst_pixels += min_row_bytes;
+        UNSAFE_TODO(memcpy(dst_pixels, src_pixels, min_row_bytes));
+        UNSAFE_TODO(src_pixels += src_stride);
+        UNSAFE_TODO(dst_pixels += min_row_bytes);
       }
     }
   }
@@ -104,6 +106,10 @@ bool StructTraits<viz::mojom::BitmapInSharedMemoryDataView, SkBitmap>::Read(
       std::make_unique<base::WritableSharedMemoryMapping>(region_opt->Map());
   if (!mapping_ptr->IsValid())
     return false;
+
+  if (mapping_ptr->size() < image_info.computeByteSize(data.row_bytes())) {
+    return false;
+  }
 
   if (!sk_bitmap->installPixels(image_info, mapping_ptr->memory(),
                                 data.row_bytes(), &DeleteSharedMemoryMapping,

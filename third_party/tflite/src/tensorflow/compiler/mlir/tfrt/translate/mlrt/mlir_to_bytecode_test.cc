@@ -14,17 +14,31 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/compiler/mlir/tfrt/translate/mlrt/mlir_to_bytecode.h"
 
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <vector>
 
 #include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/IR/Attributes.h"  // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
+#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
+#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
+#include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/Parser/Parser.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/tfrt/ir/mlrt/mlrt_dialect.h"
+#include "xla/tsl/platform/resource_loader.h"
+#include "tensorflow/core/tfrt/mlrt/bytecode/bytecode.h"
 #include "tensorflow/core/tfrt/mlrt/bytecode/executable.h"
 #include "tensorflow/core/tfrt/mlrt/interpreter/attribute_span.h"
-#include "tsl/platform/resource_loader.h"
-#include "tsl/platform/status_matchers.h"
 
 namespace mlrt {
 namespace {
@@ -32,8 +46,6 @@ namespace {
 using ::testing::ElementsAreArray;
 using ::testing::FloatEq;
 using ::testing::IsEmpty;
-using ::tsl::testing::IsOkAndHolds;
-using ::tsl::testing::StatusIs;
 
 TEST(MlirToByteCodeTest, Basic) {
   constexpr char kBasicMlir[] =
@@ -124,7 +136,7 @@ TEST(MlirToByteCodeTest, BasicAttributes) {
 
   auto attributes = executable.attributes();
 
-  ASSERT_EQ(attributes.size(), 14);
+  ASSERT_EQ(attributes.size(), 15);
 
   auto attr_iter = attributes.begin();
 
@@ -134,16 +146,20 @@ TEST(MlirToByteCodeTest, BasicAttributes) {
   EXPECT_EQ(*attr_iter, "ts");
   ++attr_iter;
 
-  EXPECT_THAT(DecodeAttribute<int32_t>(*attr_iter), IsOkAndHolds(100));
+  EXPECT_THAT(DecodeAttribute<int32_t>(*attr_iter),
+              absl_testing::IsOkAndHolds(100));
   ++attr_iter;
 
-  EXPECT_THAT(DecodeAttribute<int64_t>(*attr_iter), IsOkAndHolds(200));
+  EXPECT_THAT(DecodeAttribute<int64_t>(*attr_iter),
+              absl_testing::IsOkAndHolds(200));
   ++attr_iter;
 
-  EXPECT_THAT(DecodeAttribute<float>(*attr_iter), IsOkAndHolds(FloatEq(3.0)));
+  EXPECT_THAT(DecodeAttribute<float>(*attr_iter),
+              absl_testing::IsOkAndHolds(FloatEq(3.0)));
   ++attr_iter;
 
-  EXPECT_THAT(DecodeAttribute<uint8_t>(*attr_iter), IsOkAndHolds(0));
+  EXPECT_THAT(DecodeAttribute<uint8_t>(*attr_iter),
+              absl_testing::IsOkAndHolds(0));
   ++attr_iter;
 
   bc::Vector<int64_t> list_of_i64((*attr_iter).data());
@@ -158,7 +174,8 @@ TEST(MlirToByteCodeTest, BasicAttributes) {
   EXPECT_THAT(list_of_str, ElementsAreArray({"string 0", "string 1"}));
   ++attr_iter;
 
-  EXPECT_THAT(DecodeAttribute<uint32_t>(*attr_iter), IsOkAndHolds(1));
+  EXPECT_THAT(DecodeAttribute<uint32_t>(*attr_iter),
+              absl_testing::IsOkAndHolds(1));
   EXPECT_EQ(executable.functions()[1].name().Get(), "callee");
   ++attr_iter;
 
@@ -178,9 +195,13 @@ TEST(MlirToByteCodeTest, BasicAttributes) {
 
   bc::Vector<int32_t> empty_dense_array((*attr_iter).data());
   EXPECT_TRUE(empty_dense_array.empty());
+  ++attr_iter;
+
+  bc::Vector<uint8_t> dense_array_of_bool((*attr_iter).data());
+  EXPECT_THAT(dense_array_of_bool, ElementsAreArray({true, false}));
 
   auto kernels = executable.functions()[0].kernels();
-  ASSERT_EQ(kernels.size(), 15);
+  ASSERT_EQ(kernels.size(), 16);
   auto kernel_iter = kernels.begin();
 
   auto attribute_span = [&](auto kernel_iter) {
@@ -235,6 +256,10 @@ TEST(MlirToByteCodeTest, BasicAttributes) {
 
   EXPECT_THAT(attribute_span(kernel_iter).GetAs<bc::Vector<int32_t>>(0),
               IsEmpty());
+  ++kernel_iter;
+
+  EXPECT_THAT(attribute_span(kernel_iter).GetAs<bc::Vector<bool>>(0),
+              ElementsAreArray({true, false}));
 }
 
 TEST(MlirToByteCodeTest, UnsupportedAttributes) {
@@ -251,9 +276,10 @@ TEST(MlirToByteCodeTest, UnsupportedAttributes) {
       &mlir_context);
 
   AttributeEncoderRegistry attribute_encoder_registry;
-  EXPECT_THAT(EmitExecutable(attribute_encoder_registry, mlir_module.get()),
-              StatusIs(absl::StatusCode::kInvalidArgument,
-                       "Try to encode unsupported attribute: unit"));
+  EXPECT_THAT(
+      EmitExecutable(attribute_encoder_registry, mlir_module.get()),
+      absl_testing::StatusIs(absl::StatusCode::kInvalidArgument,
+                             "Try to encode unsupported attribute: unit"));
 }
 
 class CustomDense {
@@ -299,13 +325,13 @@ class CustomDense {
 
 absl::StatusOr<std::string> EncodeCustomDense(const ModuleEmitterContext&,
                                               mlir::Attribute attr) {
-  auto dense_int_attr = attr.dyn_cast<mlir::DenseIntElementsAttr>();
+  auto dense_int_attr = mlir::dyn_cast<mlir::DenseIntElementsAttr>(attr);
   if (!dense_int_attr)
     return absl::InvalidArgumentError(
         "The element of the custom dense attribute must be an integer.");
 
-  if (dense_int_attr.getElementType().cast<mlir::IntegerType>().getWidth() !=
-      32) {
+  if (mlir::cast<mlir::IntegerType>(dense_int_attr.getElementType())
+          .getWidth() != 32) {
     return absl::InvalidArgumentError(
         "The element of the custom dense attribute must be an i32 integer.");
   }
@@ -355,6 +381,130 @@ TEST(MlirToByteCodeTest, CustomDense) {
     EXPECT_THAT(custom_dense.shape(), ElementsAreArray({1}));
     EXPECT_THAT(custom_dense.data(), ElementsAreArray({i}));
   }
+}
+
+TEST(MlirToByteCodeTest, AsyncNotFreed) {
+  constexpr char kAsyncMlir[] =
+      "tensorflow/compiler/mlir/tfrt/translate/mlrt/testdata/async.mlir";
+
+  mlir::DialectRegistry registry;
+  registry.insert<mlir::func::FuncDialect, mlrt::compiler::MlrtDialect>();
+  mlir::MLIRContext mlir_context(registry);
+  mlir_context.allowUnregisteredDialects();
+  auto mlir_module = mlir::parseSourceFile<mlir::ModuleOp>(
+      tsl::GetDataDependencyFilepath(kAsyncMlir), &mlir_context);
+
+  AttributeEncoderRegistry attribute_encoder_registry;
+  bc::Buffer buffer =
+      EmitExecutable(attribute_encoder_registry, mlir_module.get()).value();
+
+  bc::Executable executable(buffer.data());
+
+  auto kernel_names = executable.kernel_names();
+  EXPECT_THAT(kernel_names,
+              ElementsAreArray({"test_mlbc.add.i32", "return", "mlrt.async",
+                                "mlrt.await_handle"}));
+
+  auto functions = executable.functions();
+  ASSERT_EQ(functions.size(), 2);
+
+  auto function = functions[1];
+  EXPECT_EQ(function.name().str(), "main");
+  EXPECT_EQ(function.num_regs(), 4);
+  EXPECT_THAT(function.input_regs(), ElementsAreArray({0, 1}));
+  EXPECT_THAT(function.output_regs(), ElementsAreArray({1}));
+  EXPECT_THAT(function.output_last_uses(), ElementsAreArray({true}));
+
+  auto kernels = function.kernels();
+  ASSERT_EQ(kernels.size(), 5);
+
+  EXPECT_EQ(kernels[0].code(), 2);  // mlrt.async
+  EXPECT_THAT(kernels[0].arguments(), ElementsAreArray({0, 1}));
+  // The returned handle is in register 2, which is never used by other kernels.
+  EXPECT_THAT(kernels[0].results(), ElementsAreArray({2}));
+  EXPECT_THAT(kernels[0].last_uses(), ElementsAreArray({false, false}));
+
+  EXPECT_EQ(kernels[1].code(), 3);  // mlrt.await_handle
+  EXPECT_THAT(kernels[1].arguments(), ElementsAreArray({2}));
+  EXPECT_THAT(kernels[1].results(), IsEmpty());
+
+  EXPECT_EQ(kernels[2].code(), 0);  // test_mlbc.add.i32
+  EXPECT_THAT(kernels[2].arguments(), ElementsAreArray({0, 1}));
+  EXPECT_THAT(kernels[2].results(), ElementsAreArray({3}));
+  EXPECT_THAT(kernels[2].last_uses(), ElementsAreArray({true, true}));
+
+  EXPECT_EQ(kernels[3].code(), 0);  // test_mlbc.add.i32
+  EXPECT_THAT(kernels[3].arguments(), ElementsAreArray({3, 3}));
+  EXPECT_THAT(kernels[3].results(), ElementsAreArray({1}));
+  EXPECT_THAT(kernels[3].last_uses(), ElementsAreArray({false, true}));
+
+  EXPECT_EQ(kernels[4].code(), 1);  // return
+  EXPECT_THAT(kernels[4].arguments(), ElementsAreArray({1}));
+  EXPECT_THAT(kernels[4].results(), IsEmpty());
+  EXPECT_THAT(kernels[4].last_uses(), ElementsAreArray({true}));
+}
+
+TEST(MlirToByteCodeTest, AsyncUseNewId) {
+  constexpr char kAsyncMlir[] =
+      "tensorflow/compiler/mlir/tfrt/translate/mlrt/testdata/async2.mlir";
+
+  mlir::DialectRegistry registry;
+  registry.insert<mlir::func::FuncDialect, mlrt::compiler::MlrtDialect>();
+  mlir::MLIRContext mlir_context(registry);
+  mlir_context.allowUnregisteredDialects();
+  auto mlir_module = mlir::parseSourceFile<mlir::ModuleOp>(
+      tsl::GetDataDependencyFilepath(kAsyncMlir), &mlir_context);
+
+  AttributeEncoderRegistry attribute_encoder_registry;
+  bc::Buffer buffer =
+      EmitExecutable(attribute_encoder_registry, mlir_module.get()).value();
+
+  bc::Executable executable(buffer.data());
+
+  auto kernel_names = executable.kernel_names();
+  EXPECT_THAT(kernel_names,
+              ElementsAreArray({"test_mlbc.add.i32", "return", "mlrt.async",
+                                "mlrt.await_handle"}));
+
+  auto functions = executable.functions();
+  ASSERT_EQ(functions.size(), 2);
+
+  auto function = functions[1];
+  EXPECT_EQ(function.name().str(), "main");
+  EXPECT_EQ(function.num_regs(), 4);
+  EXPECT_THAT(function.input_regs(), ElementsAreArray({0, 1}));
+  EXPECT_THAT(function.output_regs(), ElementsAreArray({1}));
+  EXPECT_THAT(function.output_last_uses(), ElementsAreArray({true}));
+
+  auto kernels = function.kernels();
+  ASSERT_EQ(kernels.size(), 5);
+
+  EXPECT_EQ(kernels[0].code(), 0);  // test_mlbc.add.i32
+  EXPECT_THAT(kernels[0].arguments(), ElementsAreArray({0, 1}));
+  EXPECT_THAT(kernels[0].results(), ElementsAreArray({2}));
+  EXPECT_THAT(kernels[0].last_uses(), ElementsAreArray({true, true}));
+
+  EXPECT_EQ(kernels[1].code(), 2);  // mlrt.async
+  EXPECT_THAT(kernels[1].arguments(), ElementsAreArray({2, 2}));
+  // The returned handle is in register 3, which is never used by other kernels.
+  EXPECT_THAT(kernels[1].results(), ElementsAreArray({3}));
+  EXPECT_THAT(kernels[1].last_uses(), ElementsAreArray({false, false}));
+
+  EXPECT_EQ(kernels[2].code(), 3);  // mlrt.await_handle
+  EXPECT_THAT(kernels[2].arguments(), ElementsAreArray({3}));
+  EXPECT_THAT(kernels[2].results(), IsEmpty());
+  EXPECT_THAT(kernels[2].last_uses(), ElementsAreArray({false}));
+
+  EXPECT_EQ(kernels[3].code(), 0);  // test_mlbc.add.i32
+  EXPECT_THAT(kernels[3].arguments(), ElementsAreArray({2, 2}));
+  // AsyncHandle does not free its register. So this can only use 1.
+  EXPECT_THAT(kernels[3].results(), ElementsAreArray({1}));
+  EXPECT_THAT(kernels[3].last_uses(), ElementsAreArray({false, true}));
+
+  EXPECT_EQ(kernels[4].code(), 1);  // return
+  EXPECT_THAT(kernels[4].arguments(), ElementsAreArray({1}));
+  EXPECT_THAT(kernels[4].results(), IsEmpty());
+  EXPECT_THAT(kernels[4].last_uses(), ElementsAreArray({true}));
 }
 
 }  // namespace

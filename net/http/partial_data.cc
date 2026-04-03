@@ -36,16 +36,19 @@ PartialData::PartialData() = default;
 PartialData::~PartialData() = default;
 
 bool PartialData::Init(const HttpRequestHeaders& headers) {
-  std::string range_header;
-  if (!headers.GetHeader(HttpRequestHeaders::kRange, &range_header)) {
+  std::optional<std::string_view> range_header =
+      headers.GetHeaderView(HttpRequestHeaders::kRange);
+  if (!range_header) {
     range_requested_ = false;
     return false;
   }
   range_requested_ = true;
 
   std::vector<HttpByteRange> ranges;
-  if (!HttpUtil::ParseRangeHeader(range_header, &ranges) || ranges.size() != 1)
+  if (!HttpUtil::ParseRangeHeader(range_header.value(), &ranges) ||
+      ranges.size() != 1) {
     return false;
+  }
 
   // We can handle this range request.
   byte_range_ = ranges[0];
@@ -185,17 +188,20 @@ bool PartialData::UpdateFromStoredHeaders(const HttpResponseHeaders* headers,
     DCHECK_EQ(headers->response_code(), 200);
     // We don't have the real length and the user may be trying to create a
     // sparse entry so let's not write to this entry.
-    if (byte_range_.IsValid())
+    if (byte_range_.IsValid()) {
       return false;
+    }
 
-    if (!headers->HasStrongValidators())
+    if (!headers->HasStrongValidators()) {
       return false;
+    }
 
     // Now we avoid resume if there is no content length, but that was not
     // always the case so double check here.
-    int64_t total_length = headers->GetContentLength();
-    if (total_length <= 0)
+    std::optional<base::ByteCount> total_length = headers->GetContentLength();
+    if (!total_length || total_length->is_zero()) {
       return false;
+    }
 
     // In case we see a truncated entry, we first send a network request for
     // 1 byte range with If-Range: to probe server support for resumption.
@@ -215,14 +221,14 @@ bool PartialData::UpdateFromStoredHeaders(const HttpResponseHeaders* headers,
     sparse_entry_ = false;
     int current_len = entry->GetDataSize(kDataStream);
     byte_range_.set_first_byte_position(current_len);
-    resource_size_ = total_length;
+    resource_size_ = total_length->InBytes();
     current_range_start_ = current_len;
     cached_min_len_ = current_len;
     cached_start_ = current_len + 1;
     return true;
   }
 
-  sparse_entry_ = (headers->response_code() == net::HTTP_PARTIAL_CONTENT);
+  sparse_entry_ = (headers->response_code() == HTTP_PARTIAL_CONTENT);
 
   if (writing_in_progress || sparse_entry_) {
     // |writing_in_progress| means another Transaction is still fetching the
@@ -235,11 +241,13 @@ bool PartialData::UpdateFromStoredHeaders(const HttpResponseHeaders* headers,
     // it's for a particular range only); while GetDataSize would be unusable
     // since the data is stored using WriteSparseData, and not in the usual data
     // stream.
-    resource_size_ = headers->GetContentLength();
-    if (resource_size_ <= 0)
+    std::optional<base::ByteCount> content_length = headers->GetContentLength();
+    resource_size_ = content_length ? content_length->InBytes() : -1;
+    if (resource_size_ <= 0) {
       return false;
+    }
   } else {
-    // If we can safely use GetDataSize, it's preferrable since it's usable for
+    // If we can safely use GetDataSize, it's preferable since it's usable for
     // things w/o Content-Length, such as chunked content.
     resource_size_ = entry->GetDataSize(kDataStream);
   }
@@ -248,7 +256,7 @@ bool PartialData::UpdateFromStoredHeaders(const HttpResponseHeaders* headers,
 
   if (sparse_entry_) {
     // If our previous is a 206, we need strong validators as we may be
-    // stiching the cached data and network data together.
+    // stitching the cached data and network data together.
     if (!headers->HasStrongValidators())
       return false;
     // Make sure that this is really a sparse entry.
@@ -288,7 +296,7 @@ bool PartialData::IsRequestedRangeOK() {
 }
 
 bool PartialData::ResponseHeadersOK(const HttpResponseHeaders* headers) {
-  if (headers->response_code() == net::HTTP_NOT_MODIFIED) {
+  if (headers->response_code() == HTTP_NOT_MODIFIED) {
     if (!byte_range_.IsValid() || truncated_)
       return true;
 
@@ -307,9 +315,11 @@ bool PartialData::ResponseHeadersOK(const HttpResponseHeaders* headers) {
 
   // A server should return a valid content length with a 206 (per the standard)
   // but relax the requirement because some servers don't do that.
-  int64_t content_length = headers->GetContentLength();
-  if (content_length > 0 && content_length != end - start + 1)
+  std::optional<base::ByteCount> content_length = headers->GetContentLength();
+  if (content_length && content_length->is_positive() &&
+      content_length->InBytes() != end - start + 1) {
     return false;
+  }
 
   if (!resource_size_) {
     // First response. Update our values with the ones provided by the server.
@@ -318,8 +328,9 @@ bool PartialData::ResponseHeadersOK(const HttpResponseHeaders* headers) {
       byte_range_.set_first_byte_position(start);
       current_range_start_ = start;
     }
-    if (!byte_range_.HasLastBytePosition())
+    if (!byte_range_.HasLastBytePosition()) {
       byte_range_.set_last_byte_position(end);
+    }
   } else if (resource_size_ != total_length) {
     return false;
   }
@@ -371,7 +382,7 @@ void PartialData::FixResponseHeaders(HttpResponseHeaders* headers,
   if (byte_range_.IsValid() && resource_size_) {
     headers->UpdateWithNewRange(byte_range_, resource_size_, !sparse_entry_);
   } else {
-    if (headers->response_code() == net::HTTP_PARTIAL_CONTENT) {
+    if (headers->response_code() == HTTP_PARTIAL_CONTENT) {
       // TODO(rvargas): Is it safe to change the protocol version?
       headers->ReplaceStatusLine("HTTP/1.1 200 OK");
     }

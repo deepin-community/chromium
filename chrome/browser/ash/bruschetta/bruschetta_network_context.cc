@@ -5,6 +5,7 @@
 #include "chrome/browser/ash/bruschetta/bruschetta_network_context.h"
 
 #include <stdint.h>
+
 #include <memory>
 #include <optional>
 #include <vector>
@@ -13,7 +14,6 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/extensions/cws_info_service.h"
 #include "chrome/browser/net/profile_network_context_service.h"
@@ -21,6 +21,7 @@
 #include "chrome/browser/net/proxy_config_monitor.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/network_service_instance.h"
@@ -39,6 +40,7 @@
 #include "net/ssl/ssl_private_key.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/shared_storage.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/url_loader_network_service_observer.mojom.h"
 #include "url/gurl.h"
@@ -79,9 +81,9 @@ class SSLPrivateKeyBridge : public network::mojom::SSLPrivateKey {
   base::WeakPtrFactory<SSLPrivateKeyBridge> weak_ptr_factory_{this};
 };
 
-BruschettaNetworkContext::BruschettaNetworkContext(Profile* profile)
-    : profile_(profile),
-      proxy_config_monitor_(g_browser_process->local_state()) {
+BruschettaNetworkContext::BruschettaNetworkContext(Profile* profile,
+                                                   PrefService& local_state)
+    : profile_(profile), proxy_config_monitor_(&local_state) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 }
 
@@ -97,7 +99,8 @@ BruschettaNetworkContext::GetURLLoaderFactory() {
     url_loader_observers_.Clear();
     network::mojom::URLLoaderFactoryParamsPtr url_loader_factory_params =
         network::mojom::URLLoaderFactoryParams::New();
-    url_loader_factory_params->process_id = network::mojom::kBrowserProcessId;
+    url_loader_factory_params->process_id =
+        network::OriginatingProcess::browser();
     url_loader_factory_params->is_orb_enabled = false;
     url_loader_factory_params->is_trusted = true;
     url_loader_observers_.Add(
@@ -120,7 +123,7 @@ void BruschettaNetworkContext::EnsureNetworkContextExists() {
 
 void BruschettaNetworkContext::CreateNetworkContext() {
   network::mojom::NetworkContextParamsPtr network_context_params =
-      g_browser_process->system_network_context_manager()
+      SystemNetworkContextManager::GetInstance()
           ->CreateDefaultNetworkContextParams();
   network_context_params->http_cache_enabled = false;
 
@@ -146,15 +149,17 @@ void BruschettaNetworkContext::OnCertificateRequested(
     const scoped_refptr<net::SSLCertRequestInfo>& cert_info,
     mojo::PendingRemote<network::mojom::ClientCertificateResponder>
         cert_responder_remote) {
-  if (!cert_store_) {
-    cert_store_ = ProfileNetworkContextServiceFactory::GetForContext(profile_)
-                      ->CreateClientCertStore();
+  if (!cert_store_ &&
+      !(cert_store_ =
+            ProfileNetworkContextServiceFactory::GetForContext(profile_)
+                ->CreateClientCertStore())) {
+    OnGotClientCerts(cert_info, std::move(cert_responder_remote), /*certs=*/{});
+    return;
   }
   cert_store_->GetClientCerts(
-      *cert_info.get(),
-      base::BindOnce(&BruschettaNetworkContext::OnGotClientCerts,
-                     weak_ptr_factory_.GetWeakPtr(), cert_info,
-                     std::move(cert_responder_remote)));
+      cert_info, base::BindOnce(&BruschettaNetworkContext::OnGotClientCerts,
+                                weak_ptr_factory_.GetWeakPtr(), cert_info,
+                                std::move(cert_responder_remote)));
 }
 
 void BruschettaNetworkContext::OnGotClientCerts(
@@ -163,12 +168,12 @@ void BruschettaNetworkContext::OnGotClientCerts(
         cert_responder_remote,
     net::ClientCertIdentityList certs) {
   GURL requesting_url =
-      chrome::enterprise_util::GetRequestingUrl(cert_info->host_and_port);
+      enterprise_util::GetRequestingUrl(cert_info->host_and_port);
   net::ClientCertIdentityList matching_certificates, nonmatching_certificates;
   // Bruschetta is an enterprise feature with the URL set in policy. So if they
   // pick a URL which requires an SSL cert they should also provide the cert via
   // policy. We don't have a WebContents so can't show UI.
-  chrome::enterprise_util::AutoSelectCertificates(
+  enterprise_util::AutoSelectCertificates(
       profile_, requesting_url, std::move(certs), &matching_certificates,
       &nonmatching_certificates);
 
@@ -215,7 +220,7 @@ void BruschettaNetworkContext::ContinueWithCertificate(
 
 void BruschettaNetworkContext::OnAuthRequired(
     const std::optional<base::UnguessableToken>& window_id,
-    uint32_t request_id,
+    int32_t request_id,
     const GURL& url,
     bool first_auth_attempt,
     const net::AuthChallengeInfo& auth_info,
@@ -227,13 +232,11 @@ void BruschettaNetworkContext::OnAuthRequired(
   auth_challenge_responder_remote->OnAuthCredentials(std::nullopt);
 }
 
-void BruschettaNetworkContext::OnPrivateNetworkAccessPermissionRequired(
-    const GURL& url,
-    const net::IPAddress& ip_address,
-    const std::optional<std::string>& private_network_device_id,
-    const std::optional<std::string>& private_network_device_name,
-    OnPrivateNetworkAccessPermissionRequiredCallback callback) {
-  std::move(callback).Run(false);
+void BruschettaNetworkContext::OnLocalNetworkAccessPermissionRequired(
+    network::mojom::TransportType type,
+    network::mojom::IPAddressSpace ip_address_space,
+    OnLocalNetworkAccessPermissionRequiredCallback callback) {
+  std::move(callback).Run(network::mojom::LocalNetworkAccessResult::kDenied);
 }
 
 void BruschettaNetworkContext::OnClearSiteData(
@@ -254,20 +257,36 @@ void BruschettaNetworkContext::OnLoadingStateUpdate(
 
 void BruschettaNetworkContext::OnDataUseUpdate(
     int32_t network_traffic_annotation_id_hash,
-    int64_t recv_bytes,
-    int64_t sent_bytes) {}
+    base::ByteSize recv_bytes,
+    base::ByteSize sent_bytes) {}
 
 void BruschettaNetworkContext::OnSharedStorageHeaderReceived(
     const url::Origin& request_origin,
-    std::vector<network::mojom::SharedStorageOperationPtr> operations,
+    std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+        methods_with_options,
+    const std::optional<std::string>& with_lock,
     OnSharedStorageHeaderReceivedCallback callback) {
   std::move(callback).Run();
 }
+
+void BruschettaNetworkContext::OnAdAuctionEventRecordHeaderReceived(
+    network::AdAuctionEventRecord event_record,
+    const std::optional<url::Origin>& top_frame_origin) {}
 
 void BruschettaNetworkContext::Clone(
     mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>
         observer) {
   url_loader_observers_.Add(this, std::move(observer));
 }
+
+void BruschettaNetworkContext::OnWebSocketConnectedToLocalNetwork(
+    const GURL& request_url,
+    network::mojom::IPAddressSpace ip_address_space) {}
+
+void BruschettaNetworkContext::OnUrlLoaderConnectedToLocalNetwork(
+    const GURL& request_url,
+    network::mojom::IPAddressSpace response_address_space,
+    network::mojom::IPAddressSpace client_address_space,
+    network::mojom::IPAddressSpace target_address_space) {}
 
 }  // namespace bruschetta

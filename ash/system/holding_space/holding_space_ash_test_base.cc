@@ -58,7 +58,7 @@ HoldingSpaceItem* HoldingSpaceAshTestBase::AddPartiallyInitializedItem(
           HoldingSpaceFile(path, HoldingSpaceFile::FileSystemType::kTest,
                            GURL("filesystem:ignored")),
           base::BindOnce(&CreateStubHoldingSpaceImage));
-  const base::Value::Dict serialized_holding_space_item = item->Serialize();
+  const base::DictValue serialized_holding_space_item = item->Serialize();
   std::unique_ptr<HoldingSpaceItem> deserialized_item =
       HoldingSpaceItem::Deserialize(
           serialized_holding_space_item,
@@ -87,9 +87,7 @@ void HoldingSpaceAshTestBase::SetUp() {
   AshTestBase::SetUp();
 
   // Add and activate a new user.
-  AccountId account_id = AccountId::FromUserEmail(kTestUser);
-  GetSessionControllerClient()->AddUserSession(kTestUser);
-  GetSessionControllerClient()->SwitchActiveUser(account_id);
+  AccountId account_id = SimulateUserLogin({kTestUser});
 
   // Mark the holding space feature as being available to the user.
   holding_space_prefs::MarkTimeOfFirstAvailability(

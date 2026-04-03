@@ -5,7 +5,6 @@
 #ifndef COMPONENTS_SAFE_BROWSING_CONTENT_COMMON_VISUAL_UTILS_H_
 #define COMPONENTS_SAFE_BROWSING_CONTENT_COMMON_VISUAL_UTILS_H_
 
-#include <optional>
 #include <string>
 
 #include "components/safe_browsing/core/common/proto/client_model.pb.h"
@@ -18,7 +17,7 @@ namespace safe_browsing::visual_utils {
 // Enum used to represent the result of the function |CanExtractVisualFeatures|.
 enum class CanExtractVisualFeaturesResult {
   kCanExtractVisualFeatures = 0,
-  kNotExtendedReporting = 1,
+  kUserNotOptedIn = 1,
   kOffTheRecord = 2,
   kBelowMinFrame = 3,
   kAboveZoomLevel = 4,
@@ -39,18 +38,18 @@ std::unique_ptr<SkBitmap> BlockMeanAverage(const SkBitmap& image,
                                            int block_size);
 
 // Whether we can extract visual features from a page with a given size and zoom
-// level.
+// level. For password protection, the safe browsing preference that allows the
+// extraction are extended reporting and enhanced safe browsing, whereas for
+// client side detection, it's just enhanced safe browsing.
 #if BUILDFLAG(IS_ANDROID)
-CanExtractVisualFeaturesResult CanExtractVisualFeatures(
-    bool is_extended_reporting,
-    bool is_off_the_record,
-    gfx::Size size);
+CanExtractVisualFeaturesResult CanExtractVisualFeatures(bool is_user_opted_in,
+                                                        bool is_off_the_record,
+                                                        gfx::Size size);
 #else
-CanExtractVisualFeaturesResult CanExtractVisualFeatures(
-    bool is_extended_reporting,
-    bool is_off_the_record,
-    gfx::Size size,
-    double zoom_level);
+CanExtractVisualFeaturesResult CanExtractVisualFeatures(bool is_user_opted_in,
+                                                        bool is_off_the_record,
+                                                        gfx::Size size,
+                                                        double zoom_level);
 #endif
 
 // Extract a VisualFeatures proto from the given `bitmap`.

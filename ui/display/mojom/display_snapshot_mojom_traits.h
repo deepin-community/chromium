@@ -11,7 +11,6 @@
 #include "ui/display/types/display_mode.h"
 #include "ui/display/types/display_snapshot.h"
 #include "ui/gfx/geometry/mojom/geometry_mojom_traits.h"
-#include "ui/gfx/ipc/color/gfx_param_traits.h"
 
 namespace mojo {
 
@@ -177,11 +176,6 @@ struct StructTraits<display::mojom::DisplaySnapshotDataView,
   static display::VariableRefreshRateState variable_refresh_rate_state(
       const std::unique_ptr<display::DisplaySnapshot>& snapshot) {
     return snapshot->variable_refresh_rate_state();
-  }
-
-  static uint16_t vsync_rate_min(
-      const std::unique_ptr<display::DisplaySnapshot>& snapshot) {
-    return snapshot->vsync_rate_min().value_or(0);
   }
 
   static const display::DrmFormatsAndModifiers& drm_formats_and_modifiers(

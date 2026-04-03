@@ -112,7 +112,7 @@ std::optional<int64_t> GetSliceIndex(const Node& node, const int node_output) {
 //   `tf.unstack(tf.shape(tensor))[ix]`,
 // and the result can be inferred from shape metadata, returns the result.
 // Otherwise, returns null.
-StatusOr<std::optional<Tensor>> TryInferFromShapes(
+absl::StatusOr<std::optional<Tensor>> TryInferFromShapes(
     const Node& node, const int node_output, const ShapeRefiner& refiner) {
   std::optional<Tensor> result;
   if (node.num_inputs() == 0 || node_output >= node.num_outputs()) {
@@ -246,13 +246,13 @@ struct Subgraph {
 // Node along with output index.
 using NodeOutput = std::pair<const Node*, int>;
 std::string OutputName(const NodeOutput& output) {
-  return strings::StrCat(output.first->name(), ":", output.second);
+  return absl::StrCat(output.first->name(), ":", output.second);
 }
 
 // Assuming that the subgraph ending at `target_node` is constant-foldable,
 // returns it along with all constant inputs necessary for evaluation.
 // Otherwise, returns null.
-StatusOr<std::unique_ptr<Subgraph>> ExtractConstantSubgraph(
+absl::StatusOr<std::unique_ptr<Subgraph>> ExtractConstantSubgraph(
     const Node& target_node, const ShapeRefiner& refiner,
     const absl::FunctionRef<std::optional<Tensor>(const Node&, int)> lookup,
     const OpRegistryInterface* op_registry, const int32_t graph_def_version) {
@@ -356,7 +356,7 @@ StatusOr<std::unique_ptr<Subgraph>> ExtractConstantSubgraph(
 
 }  // namespace
 
-StatusOr<std::optional<Tensor>> EvaluateConstantTensor(
+absl::StatusOr<std::optional<Tensor>> EvaluateConstantTensor(
     const Node& node, const int node_output, const ShapeRefiner& refiner,
     const absl::FunctionRef<std::optional<Tensor>(const Node&, int)> lookup,
     const std::optional<EvaluateConstantTensorRunner> runner) {

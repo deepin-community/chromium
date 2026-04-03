@@ -29,8 +29,6 @@ class AccessibilityControllerClient
                                   gfx::PointF location) override;
   bool ToggleDictation() override;
   void SilenceSpokenFeedback() override;
-  void OnTwoFingerTouchStart() override;
-  void OnTwoFingerTouchStop() override;
   bool ShouldToggleSpokenFeedbackViaTouch() const override;
   void PlaySpokenFeedbackToggleCountdown(int tick_count) override;
   void RequestSelectToSpeakStateChange() override;
@@ -42,6 +40,7 @@ class AccessibilityControllerClient
                                   double value) override;
   void SetA11yOverrideWindow(aura::Window* a11y_override_window) override;
   std::string GetDictationDefaultLocale(bool new_user) override;
+  void SendFaceGazeDisableDialogResultToSettings(bool accepted) override;
 };
 
 #endif  // CHROME_BROWSER_UI_ASH_ACCESSIBILITY_ACCESSIBILITY_CONTROLLER_CLIENT_H_

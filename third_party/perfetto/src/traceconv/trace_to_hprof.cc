@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -32,7 +33,7 @@
 // Spec
 // http://hg.openjdk.java.net/jdk6/jdk6/jdk/raw-file/tip/src/share/demo/jvmti/hprof/manual.html#Basic_Type
 // Parser
-// https://cs.android.com/android/platform/superproject/+/main:art/tools/ahat/src/main/com/android/ahat/heapdump/Parser.java
+// https://cs.android.com/android/platform/superproject/main/+/main:art/tools/ahat/src/main/com/android/ahat/heapdump/Parser.java
 
 namespace perfetto {
 namespace trace_to_text {
@@ -136,7 +137,7 @@ class ClassData {
 };
 
 // Ingested data from a Java Heap Profile for a name, location pair.
-// We need to support multiple class datas per pair as name, location is
+// We need to support multiple class data per pair as name, location is
 // not unique. Classloader should guarantee uniqueness but is not available
 // until S.
 class RawClassData {
@@ -330,7 +331,9 @@ int TraceToHprof(std::istream* input,
       trace_processor::TraceProcessor::CreateInstance(config);
   if (!ReadTraceUnfinalized(tp.get(), input))
     return false;
-  tp->NotifyEndOfFile();
+  if (auto status = tp->NotifyEndOfFile(); !status.ok()) {
+    return false;
+  }
   return TraceToHprof(tp.get(), output, pid, timestamps[0]);
 }
 

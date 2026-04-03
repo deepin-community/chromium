@@ -59,14 +59,15 @@ std::vector<history::Cluster> GetClustersFromFile() {
     return {};
   }
 
-  std::optional<base::Value> json_value = base::JSONReader::Read(file_contents);
+  std::optional<base::Value> json_value = base::JSONReader::Read(
+      file_contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!json_value) {
     LOG(ERROR) << "Clusters override file is not valid JSON";
     return {};
   }
 
   // Parse the JSON.
-  const base::Value::List* json_clusters =
+  const base::ListValue* json_clusters =
       json_value->GetDict().FindList("clusters");
   if (!json_clusters) {
     return {};
@@ -80,7 +81,7 @@ std::vector<history::Cluster> GetClustersFromFile() {
     history::Cluster cluster;
 
     // Get the visits associated with the cluster.
-    const base::Value::List* visits = json_cluster_dict.FindList("visits");
+    const base::ListValue* visits = json_cluster_dict.FindList("visits");
     if (!visits) {
       continue;
     }
@@ -108,7 +109,7 @@ std::vector<history::Cluster> GetClustersFromFile() {
       cluster_visit.score = static_cast<float>(*score);
 
       // Get duplicate visit IDs.
-      const base::Value::List* duplicate_visit_ids =
+      const base::ListValue* duplicate_visit_ids =
           json_visit_dict.FindList("duplicateVisitIds");
       if (duplicate_visit_ids) {
         for (const auto& json_duplicate_visit_id : *duplicate_visit_ids) {

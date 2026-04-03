@@ -30,6 +30,7 @@ void AddMaterialSidePanelColorMixer(ui::ColorProvider* provider,
   mixer[kColorSidePanelHeaderButtonIconDisabled] = {kColorToolbarTextDisabled};
   mixer[kColorSidePanelResizeAreaHandle] = {kColorToolbarText};
 
+  mixer[kColorSidePanelHoverResizeAreaHandle] = {ui::kColorSysOutline};
   mixer[kColorSidePanelCardBackground] = {ui::kColorSysBaseContainerElevated};
   mixer[kColorSidePanelCardPrimaryForeground] = {ui::kColorSysOnSurface};
   mixer[kColorSidePanelCardSecondaryForeground] = {
@@ -74,6 +75,10 @@ void AddMaterialSidePanelColorMixer(ui::ColorProvider* provider,
       ui::kColorSysOnSurface};
   mixer[kColorSidePanelBookmarksSelectedFolderIcon] = {
       ui::kColorSysOnSurfaceSubtle};
+  mixer[kColorSidePanelBookmarksActiveFolderForeground] = {
+      ui::kColorSysPrimary};
+  mixer[kColorSidePanelBookmarksActiveFolderBackground] = {
+      ui::kColorSysPrimaryContainer};
 
   /* Customize Chrome */
   mixer[kColorSidePanelCustomizeChromeClassicChromeTileBorder] = {

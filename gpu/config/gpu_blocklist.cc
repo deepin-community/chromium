@@ -16,8 +16,7 @@ GpuBlocklist::~GpuBlocklist() = default;
 
 // static
 std::unique_ptr<GpuBlocklist> GpuBlocklist::Create() {
-  return Create(base::make_span(kSoftwareRenderingListEntries,
-                                kSoftwareRenderingListEntryCount));
+  return Create(GetSoftwareRenderingListEntries());
 }
 
 // static
@@ -36,23 +35,25 @@ std::unique_ptr<GpuBlocklist> GpuBlocklist::Create(
                             GPU_FEATURE_TYPE_GPU_TILE_RASTERIZATION);
   list->AddSupportedFeature("accelerated_webgl2",
                             GPU_FEATURE_TYPE_ACCELERATED_WEBGL2);
-  list->AddSupportedFeature("android_surface_control",
-                            GPU_FEATURE_TYPE_ANDROID_SURFACE_CONTROL);
   list->AddSupportedFeature("accelerated_gl", GPU_FEATURE_TYPE_ACCELERATED_GL);
   list->AddSupportedFeature("vulkan", GPU_FEATURE_TYPE_VULKAN);
-  list->AddSupportedFeature("canvas_oop_rasterization",
-                            GPU_FEATURE_TYPE_CANVAS_OOP_RASTERIZATION);
   list->AddSupportedFeature("accelerated_webgpu",
                             GPU_FEATURE_TYPE_ACCELERATED_WEBGPU);
   list->AddSupportedFeature("skia_graphite", GPU_FEATURE_TYPE_SKIA_GRAPHITE);
+  list->AddSupportedFeature("webnn", GPU_FEATURE_TYPE_WEBNN);
+  list->AddSupportedFeature(
+      "direct_rendering_display_compositor",
+      GPU_FEATURE_TYPE_DIRECT_RENDERING_DISPLAY_COMPOSITOR);
+  list->AddSupportedFeature("webgpu_on_vk_via_gl_interop",
+                            GPU_FEATURE_TYPE_WEBGPU_ON_VK_VIA_GL_INTEROP);
   return list;
 }
 
 // static
 bool GpuBlocklist::AreEntryIndicesValid(
     const std::vector<uint32_t>& entry_indices) {
-  return GpuControlList::AreEntryIndicesValid(entry_indices,
-                                              kSoftwareRenderingListEntryCount);
+  return GpuControlList::AreEntryIndicesValid(
+      entry_indices, GetSoftwareRenderingListEntries().size());
 }
 
 }  // namespace gpu

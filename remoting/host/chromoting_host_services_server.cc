@@ -7,6 +7,7 @@
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/notreached.h"
+#include "base/strings/strcat.h"
 #include "build/buildflag.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/system/isolated_connection.h"
@@ -78,7 +79,7 @@ void ChromotingHostServicesServer::StopServer() {
 
 void ChromotingHostServicesServer::OnMessagePipeReady(
     mojo::ScopedMessagePipeHandle message_pipe,
-    base::ProcessId peer_pid,
+    std::unique_ptr<named_mojo_ipc_server::ConnectionInfo> connection_info,
     void* context,
     std::unique_ptr<mojo::IsolatedConnection> connection) {
   DCHECK(!context) << "ChromotingHostServicesServer provides no context";
@@ -86,7 +87,7 @@ void ChromotingHostServicesServer::OnMessagePipeReady(
   bind_chromoting_host_services_.Run(
       mojo::PendingReceiver<mojom::ChromotingHostServices>(
           std::move(message_pipe)),
-      peer_pid);
+      connection_info->pid);
 }
 
 }  // namespace remoting

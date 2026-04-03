@@ -20,6 +20,10 @@ namespace policy {
 class CloudPolicyManager;
 }  // namespace policy
 
+namespace enterprise_core {
+class DependencyFactory;
+}  // namespace enterprise_core
+
 namespace enterprise_signals {
 struct DeviceInfo;
 }  // namespace enterprise_signals
@@ -31,19 +35,17 @@ struct SignalsAggregationResponse;
 
 namespace enterprise_connectors {
 
-class DependencyFactory;
-
 // Definition of the SignalsDecorator common to all Chrome browser platforms.
 class BrowserSignalsDecorator : public SignalsDecorator {
  public:
   BrowserSignalsDecorator(
       policy::CloudPolicyManager* browser_cloud_policy_manager,
-      std::unique_ptr<DependencyFactory> dependency_factory,
+      std::unique_ptr<enterprise_core::DependencyFactory> dependency_factory,
       device_signals::SignalsAggregator* signals_aggregator);
   ~BrowserSignalsDecorator() override;
 
   // SignalsDecorator:
-  void Decorate(base::Value::Dict& signals,
+  void Decorate(base::DictValue& signals,
                 base::OnceClosure done_closure) override;
 
  private:
@@ -51,7 +53,7 @@ class BrowserSignalsDecorator : public SignalsDecorator {
   // signals are added to `signals` for the caller to use. `done_closure` can be
   // invoked to indicate that this part of the signals collection has concluded.
   // `device_info` represents the signals collected by the DeviceInfoFetcher.
-  void OnDeviceInfoFetched(base::Value::Dict& signals,
+  void OnDeviceInfoFetched(base::DictValue& signals,
                            base::OnceClosure done_closure,
                            const enterprise_signals::DeviceInfo& device_info);
 
@@ -60,7 +62,7 @@ class BrowserSignalsDecorator : public SignalsDecorator {
   // invoked to indicate that this part of the signals collection has concluded.
   // `response` represents the signals collected by the aggregator.
   void OnAggregatedSignalsReceived(
-      base::Value::Dict& signals,
+      base::DictValue& signals,
       base::OnceClosure done_closure,
       device_signals::SignalsAggregationResponse response);
 
@@ -72,7 +74,7 @@ class BrowserSignalsDecorator : public SignalsDecorator {
                             base::OnceClosure done_closure);
 
   const raw_ptr<policy::CloudPolicyManager> browser_cloud_policy_manager_;
-  std::unique_ptr<DependencyFactory> dependency_factory_;
+  std::unique_ptr<enterprise_core::DependencyFactory> dependency_factory_;
 
   // Signals aggregator, which is a profile-keyed service. Can be nullptr in
   // the case where the Profile is an incognito profile.

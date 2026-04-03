@@ -5,7 +5,6 @@
 #ifndef CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_DISPLAY_SERVICE_H_
 #define CHROME_BROWSER_NOTIFICATIONS_NOTIFICATION_DISPLAY_SERVICE_H_
 
-#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -65,9 +64,6 @@ class NotificationDisplayService : public KeyedService {
       base::OnceCallback<void(std::set<std::string>,
                               bool /* supports_synchronization */)>;
 
-  // Returns an instance of the display service for the given |profile|.
-  static NotificationDisplayService* GetForProfile(Profile* profile);
-
   // Displays the |notification| of type |notification_type|. The |metadata|
   // may be provided for certain notification types that require additional
   // information for the notification to be displayed.
@@ -82,7 +78,7 @@ class NotificationDisplayService : public KeyedService {
 
   // Gets the IDs of currently displaying notifications and invokes |callback|
   // once available. Not all backends support retrieving this information.
-  // TODO(https://crbug.com/1486910): Consider refactoring this API and its
+  // TODO(crbug.com/40283098): Consider refactoring this API and its
   // usage to something that can get implemented by more backends.
   virtual void GetDisplayed(DisplayedNotificationsCallback callback) = 0;
 

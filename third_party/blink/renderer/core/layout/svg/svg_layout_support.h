@@ -26,7 +26,7 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
-#include "third_party/blink/renderer/platform/graphics/dash_array.h"
+#include "third_party/blink/renderer/platform/geometry/dash_array.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
@@ -92,15 +92,9 @@ class CORE_EXPORT SVGLayoutSupport {
                                            const LayoutObject&,
                                            float dash_scale_factor);
 
-  static DashArray ResolveSVGDashArray(const SVGDashArray&,
+  static DashArray ResolveSVGDashArray(const SVGDashArray*,
                                        const ComputedStyle&,
                                        const SVGViewportResolver&);
-
-  // Determines if any ancestor has adjusted the scale factor.
-  static bool ScreenScaleFactorChanged(const LayoutObject*);
-
-  // Determines if any ancestor's layout size has changed.
-  static bool LayoutSizeOfNearestViewportChanged(const LayoutObject*);
 
   // Helper method for determining if a LayoutObject marked as text (isText()==
   // true) can/will be laid out as part of a <text>.

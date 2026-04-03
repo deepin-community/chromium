@@ -48,6 +48,12 @@ class ChromeProcessSingleton {
 
   bool IsSingletonInstanceForTesting() const { return is_singleton_instance_; }
 
+#if BUILDFLAG(IS_WIN)
+  // Must only be called both after initialization of FeatureList and
+  // NotifyOtherProcessOrCreate().
+  void InitializeFeatures();
+#endif
+
   // Create the chrome process singleton instance for the current process.
   static void CreateInstance(const base::FilePath& user_data_dir);
   // Delete the chrome process singleton instance.
@@ -61,7 +67,7 @@ class ChromeProcessSingleton {
   static bool IsSingletonInstance();
 
  private:
-  bool NotificationCallback(const base::CommandLine& command_line,
+  bool NotificationCallback(base::CommandLine command_line,
                             const base::FilePath& current_directory);
 
   // Whether or not this instance is the running single instance.

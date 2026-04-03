@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
@@ -18,7 +19,7 @@
 #include "content/public/test/browser_test.h"
 #include "ui/display/display_switches.h"
 
-// TODO(crbug.com/1448244): enable this test on all supported platforms.
+// TODO(crbug.com/40269208): enable this test on all supported platforms.
 #if BUILDFLAG(IS_WIN)
 #include "components/eye_dropper/eye_dropper_view.h"
 #endif
@@ -47,8 +48,9 @@ class EyeDropperBrowserTest : public UiBrowserTest,
 
   bool VerifyUi() override {
 #if BUILDFLAG(IS_WIN)
-    if (!eye_dropper_)
+    if (!eye_dropper_) {
       return false;
+    }
 
     views::Widget* widget =
         static_cast<eye_dropper::EyeDropperView*>(eye_dropper_.get())
@@ -65,7 +67,7 @@ class EyeDropperBrowserTest : public UiBrowserTest,
 
   void WaitForUserDismissal() override {
     // Consider closing the browser to be dismissal.
-    ui_test_utils::WaitForBrowserToClose();
+    ui_test_utils::BrowserDestroyedObserver().Wait();
   }
 
   void DismissUi() override { eye_dropper_.reset(); }
@@ -75,7 +77,8 @@ class EyeDropperBrowserTest : public UiBrowserTest,
 };
 
 // Invokes the eye dropper.
-IN_PROC_BROWSER_TEST_P(EyeDropperBrowserTest, InvokeUi_default) {
+// Flaky: https://crbug.com/40150152, https://crbug.com/402170536
+IN_PROC_BROWSER_TEST_P(EyeDropperBrowserTest, DISABLED_InvokeUi_default) {
   ShowAndVerifyUi();
 }
 

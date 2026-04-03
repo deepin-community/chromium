@@ -8,14 +8,13 @@
 #include <string>
 
 #include "ash/ash_export.h"
-#include "ash/public/cpp/desk_profiles_delegate.h"
-#include "ash/public/cpp/session/session_observer.h"
 #include "ash/wm/desks/desks_controller.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/events/event.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/view.h"
 
 namespace ash {
@@ -24,12 +23,9 @@ class Desk;
 class DeskButton;
 class DeskButtonWidget;
 class DeskSwitchButton;
-class SessionController;
 class Shelf;
 
-class ASH_EXPORT DeskButtonContainer : public DeskProfilesDelegate::Observer,
-                                       public DesksController::Observer,
-                                       public SessionObserver,
+class ASH_EXPORT DeskButtonContainer : public DesksController::Observer,
                                        public views::View {
   METADATA_HEADER(DeskButtonContainer, views::View)
 
@@ -39,9 +35,7 @@ class ASH_EXPORT DeskButtonContainer : public DeskProfilesDelegate::Observer,
   DeskButtonContainer& operator=(const DeskButtonContainer&) = delete;
   ~DeskButtonContainer() override;
 
-  static bool ShouldShowDeskProfilesUi();
-
-  static int GetMaxLength(bool horizontal_shelf, bool zero_state);
+  static int GetMaxLength(bool zero_state);
 
   bool zero_state() const { return zero_state_; }
   void set_zero_state(bool zero_state) { zero_state_ = zero_state; }
@@ -50,10 +44,6 @@ class ASH_EXPORT DeskButtonContainer : public DeskProfilesDelegate::Observer,
   DeskButton* desk_button() const { return desk_button_; }
   DeskSwitchButton* prev_desk_button() const { return prev_desk_button_; }
   DeskSwitchButton* next_desk_button() const { return next_desk_button_; }
-
-  // DeskProfilesDelegate::Observer:
-  void OnProfileUpsert(const LacrosProfileSummary& summary) override;
-  void OnProfileRemoved(uint64_t profile_id) override;
 
   // DesksController::Observer:
   void OnDeskAdded(const Desk* desk, bool from_undo) override;
@@ -64,11 +54,9 @@ class ASH_EXPORT DeskButtonContainer : public DeskProfilesDelegate::Observer,
   void OnDeskNameChanged(const Desk* desk,
                          const std::u16string& new_name) override;
 
-  // SessionObserver:
-  void OnFirstSessionStarted() override;
-
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void Layout(PassKey) override;
 
   // Invoked after the shelf alignment change. It's used to update the container
@@ -80,11 +68,11 @@ class ASH_EXPORT DeskButtonContainer : public DeskProfilesDelegate::Observer,
   // shelf. It's used by the widget to layout contents properly.
   int GetPreferredLength() const;
 
+  // Returns true if the desk button UI is visible and the given
+  // `screen_location` intersects with the UI.
+  bool IntersectsWithDeskButtonUi(const gfx::Point& screen_location) const;
+
   std::u16string GetTitleForView(const views::View* view) const;
-
-  bool IsHorizontalShelf() const;
-
-  bool IsForcedZeroState() const;
 
   // Initializes the view. Must be called before any meaningful UIs can be laid
   // out.
@@ -104,6 +92,9 @@ class ASH_EXPORT DeskButtonContainer : public DeskProfilesDelegate::Observer,
   // controller so that they show the same menu items.
   void MaybeShowContextMenu(views::View* source, ui::LocatedEvent* event);
 
+  // Sets previous focus and next focus of desk button.
+  void InitializeAccessibleProperties();
+
  private:
   bool zero_state_ = false;
   raw_ptr<Shelf> shelf_ = nullptr;
@@ -113,10 +104,6 @@ class ASH_EXPORT DeskButtonContainer : public DeskProfilesDelegate::Observer,
   raw_ptr<DeskSwitchButton> next_desk_button_ = nullptr;
   base::ScopedObservation<DesksController, DesksController::Observer>
       desks_observation_{this};
-  base::ScopedObservation<DeskProfilesDelegate, DeskProfilesDelegate::Observer>
-      desk_profiles_observer_{this};
-  base::ScopedObservation<SessionController, SessionObserver> session_observer_{
-      this};
 };
 
 BEGIN_VIEW_BUILDER(VIEWS_EXPORT, DeskButtonContainer, views::View)
@@ -127,4 +114,4 @@ END_VIEW_BUILDER
 
 DEFINE_VIEW_BUILDER(VIEWS_EXPORT, ash::DeskButtonContainer)
 
-#endif
+#endif  // ASH_WM_DESKS_DESK_BUTTON_DESK_BUTTON_CONTAINER_H_

@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -40,3 +40,9 @@ class Startup(TestSuite):
         trace=Path('android_startup_unlock.py'),
         query=Metric('android_startup'),
         out=Path('android_startup_unlock.out'))
+
+  def test_ttid_and_ttfd(self):
+    return DiffTestBlueprint(
+        trace=DataPath('api31_startup_warm.perfetto-trace'),
+        query=Metric('android_startup'),
+        out=Path('ttid_and_ttfd.out'))

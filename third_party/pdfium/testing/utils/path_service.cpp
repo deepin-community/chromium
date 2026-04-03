@@ -11,9 +11,6 @@
 #elif defined(__APPLE__)
 #include <mach-o/dyld.h>
 #include <sys/stat.h>
-#elif defined(__Fuchsia__)
-#include <sys/stat.h>
-#include <unistd.h>
 #else  // Linux
 #include <linux/limits.h>
 #include <sys/stat.h>
@@ -22,13 +19,12 @@
 
 #include <string>
 
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_system.h"
-#include "third_party/base/check.h"
 
 namespace {
 
-#if defined(__APPLE__) || defined(__Fuchsia__) || \
-    (defined(ANDROID) && __ANDROID_API__ < 21)
+#if defined(__APPLE__) || (defined(ANDROID) && __ANDROID_API__ < 21)
 using stat_wrapper_t = struct stat;
 
 int CallStat(const char* path, stat_wrapper_t* sb) {
@@ -48,13 +44,15 @@ int CallStat(const char* path, stat_wrapper_t* sb) {
 bool PathService::DirectoryExists(const std::string& path) {
 #ifdef _WIN32
   DWORD fileattr = GetFileAttributesA(path.c_str());
-  if (fileattr != INVALID_FILE_ATTRIBUTES)
+  if (fileattr != INVALID_FILE_ATTRIBUTES) {
     return (fileattr & FILE_ATTRIBUTE_DIRECTORY) != 0;
+  }
   return false;
 #else
   stat_wrapper_t file_info;
-  if (CallStat(path.c_str(), &file_info) != 0)
+  if (CallStat(path.c_str(), &file_info) != 0) {
     return false;
+  }
   return S_ISDIR(file_info.st_mode);
 #endif
 }
@@ -65,82 +63,93 @@ bool PathService::EndsWithSeparator(const std::string& path) {
 }
 
 // static
-bool PathService::GetExecutableDir(std::string* path) {
+std::string PathService::GetExecutableDir() {
+  std::string path;
 // Get the current executable file path.
 #ifdef _WIN32
   char path_buffer[MAX_PATH];
   path_buffer[0] = 0;
 
-  if (GetModuleFileNameA(NULL, path_buffer, MAX_PATH) == 0)
-    return false;
-  *path = std::string(path_buffer);
+  if (GetModuleFileNameA(nullptr, path_buffer, MAX_PATH) == 0) {
+    return std::string();
+  }
+  path = std::string(path_buffer);
 #elif defined(__APPLE__)
-  DCHECK(path);
   unsigned int path_length = 0;
-  _NSGetExecutablePath(NULL, &path_length);
-  if (path_length == 0)
-    return false;
+  _NSGetExecutablePath(nullptr, &path_length);
+  if (path_length == 0) {
+    return std::string();
+  }
 
-  path->reserve(path_length);
-  path->resize(path_length - 1);
-  if (_NSGetExecutablePath(&((*path)[0]), &path_length))
-    return false;
+  path.reserve(path_length);
+  path.resize(path_length - 1);
+  if (_NSGetExecutablePath(&path[0], &path_length)) {
+    return std::string();
+  }
 #else   // Linux
   static const char kProcSelfExe[] = "/proc/self/exe";
   char buf[PATH_MAX];
   ssize_t count = ::readlink(kProcSelfExe, buf, PATH_MAX);
-  if (count <= 0)
-    return false;
+  if (count <= 0) {
+    return std::string();
+  }
 
-  *path = std::string(buf, count);
+  path = std::string(buf, count);
 #endif  // _WIN32
 
   // Get the directory path.
-  size_t pos = path->size() - 1;
-  if (EndsWithSeparator(*path))
+  size_t pos = path.size() - 1;
+  if (EndsWithSeparator(path)) {
     pos--;
-  size_t found = path->find_last_of(PATH_SEPARATOR, pos);
-  if (found == std::string::npos)
-    return false;
-  path->resize(found);
-  return true;
+  }
+  size_t found = path.find_last_of(PATH_SEPARATOR, pos);
+  if (found == std::string::npos) {
+    return std::string();
+  }
+  path.resize(found);
+  return path;
 }
 
 // static
-bool PathService::GetSourceDir(std::string* path) {
-  if (!GetExecutableDir(path))
-    return false;
+std::string PathService::GetSourceDir() {
+  std::string path = GetExecutableDir();
+  if (path.empty()) {
+    return std::string();
+  }
 
-  if (!EndsWithSeparator(*path))
-    path->push_back(PATH_SEPARATOR);
-  path->append("..");
-  path->push_back(PATH_SEPARATOR);
+  if (!EndsWithSeparator(path)) {
+    path.push_back(PATH_SEPARATOR);
+  }
+  path.append("..");
+  path.push_back(PATH_SEPARATOR);
 #if defined(ANDROID)
-  path->append("chromium_tests_root");
+  path.append("chromium_tests_root");
 #else   // Non-Android
-  path->append("..");
+  path.append("..");
 #endif  // defined(ANDROID)
-  return true;
+  return path;
 }
 
 // static
-bool PathService::GetTestDataDir(std::string* path) {
-  if (!GetSourceDir(path))
-    return false;
+std::string PathService::GetTestDataDir() {
+  std::string path = GetSourceDir();
+  if (path.empty()) {
+    return std::string();
+  }
 
-  if (!EndsWithSeparator(*path))
-    path->push_back(PATH_SEPARATOR);
+  if (!EndsWithSeparator(path)) {
+    path.push_back(PATH_SEPARATOR);
+  }
 
-  std::string potential_path = *path;
+  std::string potential_path = path;
   potential_path.append("testing");
   potential_path.push_back(PATH_SEPARATOR);
   potential_path.append("resources");
   if (PathService::DirectoryExists(potential_path)) {
-    *path = potential_path;
-    return true;
+    return potential_path;
   }
 
-  potential_path = *path;
+  potential_path = path;
   potential_path.append("third_party");
   potential_path.push_back(PATH_SEPARATOR);
   potential_path.append("pdfium");
@@ -149,17 +158,16 @@ bool PathService::GetTestDataDir(std::string* path) {
   potential_path.push_back(PATH_SEPARATOR);
   potential_path.append("resources");
   if (PathService::DirectoryExists(potential_path)) {
-    *path = potential_path;
-    return true;
+    return potential_path;
   }
 
-  return false;
+  return std::string();
 }
 
 // static
 std::string PathService::GetTestFilePath(const std::string& file_name) {
-  std::string path;
-  if (!GetTestDataDir(&path)) {
+  std::string path = GetTestDataDir();
+  if (path.empty()) {
     return std::string();
   }
 
@@ -171,26 +179,27 @@ std::string PathService::GetTestFilePath(const std::string& file_name) {
 }
 
 // static
-bool PathService::GetThirdPartyFilePath(const std::string& file_name,
-                                        std::string* path) {
-  if (!GetSourceDir(path))
-    return false;
+std::string PathService::GetThirdPartyFilePath(const std::string& file_name) {
+  std::string path = GetSourceDir();
+  if (path.empty()) {
+    return std::string();
+  }
 
-  if (!EndsWithSeparator(*path))
-    path->push_back(PATH_SEPARATOR);
+  if (!EndsWithSeparator(path)) {
+    path.push_back(PATH_SEPARATOR);
+  }
 
-  std::string potential_path = *path;
+  std::string potential_path = path;
   potential_path.append("third_party");
 
   // Use third_party/bigint as a way to distinguish PDFium's vs. other's.
   std::string bigint = potential_path + PATH_SEPARATOR + "bigint";
   if (PathService::DirectoryExists(bigint)) {
-    *path = potential_path;
-    path->append(PATH_SEPARATOR + file_name);
-    return true;
+    potential_path.append(PATH_SEPARATOR + file_name);
+    return potential_path;
   }
 
-  potential_path = *path;
+  potential_path = path;
   potential_path.append("third_party");
   potential_path.push_back(PATH_SEPARATOR);
   potential_path.append("pdfium");
@@ -198,10 +207,9 @@ bool PathService::GetThirdPartyFilePath(const std::string& file_name,
   potential_path.append("third_party");
   bigint = potential_path + PATH_SEPARATOR + "bigint";
   if (PathService::DirectoryExists(potential_path)) {
-    *path = potential_path;
-    path->append(PATH_SEPARATOR + file_name);
-    return true;
+    potential_path.append(PATH_SEPARATOR + file_name);
+    return potential_path;
   }
 
-  return false;
+  return std::string();
 }

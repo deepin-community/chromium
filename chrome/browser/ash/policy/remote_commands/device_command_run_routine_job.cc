@@ -13,6 +13,7 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/syslog_logging.h"
@@ -67,13 +68,11 @@ bool PopulateMojoEnumValueIfValid(int possible_enum, T* valid_enum_out) {
 std::string CreatePayload(
     ash::cros_healthd::mojom::RunRoutineResponsePtr response) {
   auto root_dict =
-      base::Value::Dict()
+      base::DictValue()
           .Set(kIdFieldName, response->id)
           .Set(kStatusFieldName, static_cast<int>(response->status));
 
-  std::string payload;
-  base::JSONWriter::Write(root_dict, &payload);
-  return payload;
+  return base::WriteJson(root_dict).value_or("");
 }
 }  // namespace
 
@@ -90,17 +89,14 @@ em::RemoteCommand_Type DeviceCommandRunRoutineJob::GetType() const {
 
 bool DeviceCommandRunRoutineJob::ParseCommandPayload(
     const std::string& command_payload) {
-  std::optional<base::Value> root(base::JSONReader::Read(command_payload));
-  if (!root.has_value()) {
-    return false;
-  }
-  if (!root->is_dict()) {
+  std::optional<base::DictValue> root = base::JSONReader::ReadDict(
+      command_payload, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!root) {
     return false;
   }
 
-  base::Value::Dict& dict = root->GetDict();
   // Make sure the command payload specified a valid DiagnosticRoutineEnum.
-  std::optional<int> routine_enum = dict.FindInt(kRoutineEnumFieldName);
+  std::optional<int> routine_enum = root->FindInt(kRoutineEnumFieldName);
   if (!routine_enum.has_value()) {
     return false;
   }
@@ -113,7 +109,7 @@ bool DeviceCommandRunRoutineJob::ParseCommandPayload(
   // Make sure there's a dictionary with parameter values for the routine.
   // Validation of routine-specific parameters will be done before running the
   // routine, so here we just check that any dictionary was given to us.
-  auto* params_dict = dict.FindDict(kParamsFieldName);
+  auto* params_dict = root->FindDict(kParamsFieldName);
   if (!params_dict) {
     return false;
   }
@@ -132,7 +128,6 @@ void DeviceCommandRunRoutineJob::RunImpl(CallbackWithResult result_callback) {
   switch (routine_enum_) {
     case ash::cros_healthd::mojom::DiagnosticRoutineEnum::kUnknown: {
       NOTREACHED() << "This default value should not be used.";
-      break;
     }
     case ash::cros_healthd::mojom::DiagnosticRoutineEnum::kBatteryCapacity: {
       diagnostics_service->RunBatteryCapacityRoutine(base::BindOnce(
@@ -314,30 +309,9 @@ void DeviceCommandRunRoutineJob::RunImpl(CallbackWithResult result_callback) {
               weak_ptr_factory_.GetWeakPtr(), std::move(result_callback)));
       break;
     }
-    case ash::cros_healthd::mojom::DiagnosticRoutineEnum::kNvmeWearLevel: {
-      constexpr char kWearLevelThresholdFieldName[] = "wearLevelThreshold";
-      std::optional<int> wear_level_threshold =
-          params_dict_.FindInt(kWearLevelThresholdFieldName);
-      ash::cros_healthd::mojom::NullableUint32Ptr routine_duration;
-      // The NVMe wear level routine expects one optional integer >= 0.
-      if (wear_level_threshold.has_value()) {
-        // If the optional integer parameter is specified, it must be >= 0.
-        int value = wear_level_threshold.value();
-        if (value < 0) {
-          SYSLOG(ERROR) << "Invalid parameters for NVMe wear level routine.";
-          base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-              FROM_HERE,
-              base::BindOnce(std::move(result_callback), ResultType::kFailure,
-                             CreatePayload(MakeInvalidParametersResponse())));
-          break;
-        }
-        routine_duration = ash::cros_healthd::mojom::NullableUint32::New(value);
-      }
-      diagnostics_service->RunNvmeWearLevelRoutine(
-          std::move(routine_duration),
-          base::BindOnce(
-              &DeviceCommandRunRoutineJob::OnCrosHealthdResponseReceived,
-              weak_ptr_factory_.GetWeakPtr(), std::move(result_callback)));
+    case ash::cros_healthd::mojom::DiagnosticRoutineEnum::
+        DEPRECATED_kNvmeWearLevel: {
+      NOTIMPLEMENTED();
       break;
     }
     case ash::cros_healthd::mojom::DiagnosticRoutineEnum::kNvmeSelfTest: {
@@ -604,7 +578,8 @@ void DeviceCommandRunRoutineJob::RunImpl(CallbackWithResult result_callback) {
               weak_ptr_factory_.GetWeakPtr(), std::move(result_callback)));
       break;
     }
-    case ash::cros_healthd::mojom::DiagnosticRoutineEnum::kLedLitUp: {
+    case ash::cros_healthd::mojom::DiagnosticRoutineEnum::
+        DEPRECATED_kLedLitUp: {
       NOTIMPLEMENTED();
       break;
     }

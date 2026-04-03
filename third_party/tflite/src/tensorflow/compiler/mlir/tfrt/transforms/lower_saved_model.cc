@@ -14,24 +14,50 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
+#include <cassert>
+#include <cstdint>
 #include <deque>
+#include <memory>
 #include <tuple>
+#include <utility>
 
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CommandLine.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/IR/Block.h"  // from @llvm-project
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
+#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
+#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
 #include "mlir/IR/IRMapping.h"  // from @llvm-project
+#include "mlir/IR/OpDefinition.h"  // from @llvm-project
 #include "mlir/IR/OperationSupport.h"  // from @llvm-project
+#include "mlir/IR/SymbolTable.h"  // from @llvm-project
 #include "mlir/IR/Types.h"  // from @llvm-project
-#include "mlir/Transforms/Passes.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/IR/Visitors.h"  // from @llvm-project
+#include "mlir/Interfaces/SideEffectInterfaces.h"  // from @llvm-project
+#include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/Support/TypeID.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/tensorflow/analysis/side_effect_analysis.h"
+#include "tensorflow/compiler/mlir/tensorflow/ir/host_runtime/tfrt_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_op_interfaces.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_saved_model.h"
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 #include "tensorflow/compiler/mlir/tfrt/transforms/passes.h"
 #include "tensorflow/compiler/mlir/tfrt/transforms/utils.h"
 
@@ -93,6 +119,10 @@ bool CanHoist(const llvm::DenseSet<mlir::TF::ResourceHandle> &read_only_vars,
               mlir::Operation *op) {
   // return ops should not be hoisted.
   if (op->mightHaveTrait<mlir::OpTrait::IsTerminator>()) return false;
+
+  // Fixes a corner case where hoisting the tf.BatchFunction leads to
+  // a compilation error; such a case may occur in unit tests.
+  if (llvm::isa<mlir::TF::BatchFunctionOp>(op)) return false;
 
   // Non-side-effecting ops can be hoisted.
   if (mlir::isMemoryEffectFree(op)) return true;
@@ -206,7 +236,7 @@ void FindCalleesRecursiveForOp(const mlir::SymbolTable &symbol_table,
                                llvm::StringSet<> &callees) {
   for (const auto &named_attr : op->getAttrs()) {
     if (auto symbol_attr =
-            named_attr.getValue().dyn_cast<mlir::FlatSymbolRefAttr>()) {
+            mlir::dyn_cast<mlir::FlatSymbolRefAttr>(named_attr.getValue())) {
       auto symbol = symbol_attr.getValue();
       if (!callees.contains(symbol)) {
         callees.insert(symbol);
@@ -312,7 +342,8 @@ class LowerTFSavedModelPass
           func_op->removeAttr(kTfSavedModelExportedNamesAttr);
           for (auto exported_name : exported_names) {
             auto exported_func_op = func_op.clone();
-            exported_func_op.setName(exported_name.cast<mlir::StringAttr>());
+            exported_func_op.setName(
+                mlir::cast<mlir::StringAttr>(exported_name));
 
             // If it is a session initializer, we want to maximize parallelism
             // and do not perform any stream merge, to minimize latency.
@@ -381,7 +412,7 @@ void LowerTFSavedModelPass::HoistInvariantOps(mlir::ModuleOp module) {
     } else if (auto func = llvm::dyn_cast<mlir::func::FuncOp>(op)) {
       if (!IsSessionInitializer(func)) return;
       FindCalleesRecursive(symbol_table, func, init_callees);
-    } else if (op->getName().getStringRef().str() == "tf.XlaLaunch") {
+    } else if (llvm::isa<mlir::TF::XlaLaunchOp>(op)) {
       // TODO(b/275095412): Clean up MLIR XLA functions after they are written
       // back to function library, so that we don't need to do special handling
       // for those functions here.
@@ -409,8 +440,8 @@ void LowerTFSavedModelPass::HoistInvariantOps(mlir::ModuleOp module) {
   // "_tfrt_resource_init" is the special function that executes all invariant
   // ops (eg. read-only variables) used in the model. This function should be
   // executed after user-specified initialization.
-  auto init_func_op = builder.create<mlir::func::FuncOp>(
-      module.getLoc(), "_tfrt_resource_init",
+  auto init_func_op = mlir::func::FuncOp::create(
+      builder, module.getLoc(), "_tfrt_resource_init",
       mlir::FunctionType::get(module.getContext(), /*inputs=*/{},
                               /*results=*/{}));
   auto *block = init_func_op.addEntryBlock();
@@ -450,8 +481,8 @@ void LowerTFSavedModelPass::HoistInvariantOps(mlir::ModuleOp module) {
     auto *new_op = new_value.getDefiningOp();
     assert(new_op);
     builder.setInsertionPointAfter(new_op);
-    auto set_resource_op = builder.create<mlir::TF::_TfrtSetResourceOp>(
-        new_op->getLoc(), new_value, index);
+    auto set_resource_op = mlir::TF::_TfrtSetResourceOp::create(
+        builder, new_op->getLoc(), new_value, index);
 
     // Preserve the device attribute.
     llvm::StringRef device = kCpuDeviceName;
@@ -463,7 +494,7 @@ void LowerTFSavedModelPass::HoistInvariantOps(mlir::ModuleOp module) {
 
   builder.setInsertionPointToEnd(block);
   // Finish building the init function by inserting an return op.
-  builder.create<mlir::func::ReturnOp>(init_func_op.getLoc());
+  mlir::func::ReturnOp::create(builder, init_func_op.getLoc());
 
   // Now that we have the index for each value that will be replaced, we can
   // create the tf._TfrtGetResource op in each function using these indices.
@@ -537,8 +568,8 @@ void LowerTFSavedModelPass::ReplaceHoistedValues(
       llvm::SmallVector<mlir::Value> new_values;
 
       if (fuse_get_resource_ops_) {
-        auto get_resource_op = builder.create<mlir::TF::_TfrtGetResourceOp>(
-            block->getParentOp()->getLoc(), old_values.getTypes(),
+        auto get_resource_op = mlir::TF::_TfrtGetResourceOp::create(
+            builder, block->getParentOp()->getLoc(), old_values.getTypes(),
             builder.getI64ArrayAttr(indices),
             builder.getStrArrayAttr(shared_name_arr),
             builder.getStrArrayAttr(container_arr));
@@ -546,8 +577,8 @@ void LowerTFSavedModelPass::ReplaceHoistedValues(
         new_values = get_resource_op.getResults();
       } else {
         for (int i = 0; i < old_values.size(); ++i) {
-          auto get_resource_op = builder.create<mlir::TF::_TfrtGetResourceOp>(
-              block->getParentOp()->getLoc(),
+          auto get_resource_op = mlir::TF::_TfrtGetResourceOp::create(
+              builder, block->getParentOp()->getLoc(),
               mlir::TypeRange(old_values[i].getType()),
               builder.getI64ArrayAttr(indices[i]),
               builder.getStrArrayAttr(shared_name_arr[i]),
@@ -606,8 +637,8 @@ class ConvertReferenceVariableToResourceVariablePass
 
 mlir::LogicalResult ConvertReferenceVariableToResourceVariable(
     mlir::TF::VariableV2Op var_op) {
-  auto tensor_type =
-      mlir::TF::DropRefType(var_op.getRef().getType()).cast<mlir::TensorType>();
+  auto tensor_type = mlir::cast<mlir::TensorType>(
+      mlir::TF::DropRefType(var_op.getRef().getType()));
 
   llvm::SmallVector<mlir::TF::IdentityOp, 4> identity_ops;
   llvm::SmallVector<mlir::TF::AssignOp, 4> assign_ops;
@@ -639,8 +670,8 @@ mlir::LogicalResult ConvertReferenceVariableToResourceVariable(
 
   mlir::OpBuilder builder(var_op);
 
-  auto var_handle_op = builder.create<mlir::TF::VarHandleOp>(
-      var_op.getLoc(),
+  auto var_handle_op = mlir::TF::VarHandleOp::create(
+      builder, var_op.getLoc(),
       mlir::RankedTensorType::get(
           {}, mlir::TF::ResourceType::get(
                   llvm::ArrayRef<mlir::TensorType>{tensor_type},
@@ -651,8 +682,8 @@ mlir::LogicalResult ConvertReferenceVariableToResourceVariable(
     // Set insertion point to this identity_op so that the side-effect
     // visibility is preserved.
     builder.setInsertionPoint(op);
-    auto read_var_op = builder.create<mlir::TF::ReadVariableOp>(
-        op.getLoc(), op.getType(), var_handle_op);
+    auto read_var_op = mlir::TF::ReadVariableOp::create(
+        builder, op.getLoc(), op.getType(), var_handle_op);
     op.replaceAllUsesWith(read_var_op.getValue());
     op.erase();
   }
@@ -661,8 +692,8 @@ mlir::LogicalResult ConvertReferenceVariableToResourceVariable(
     // Set the insertion point after the assign op so that all operands are
     // dominating the newly created op.
     builder.setInsertionPoint(op);
-    builder.create<mlir::TF::AssignVariableOp>(op.getLoc(), var_handle_op,
-                                               op.getValue());
+    mlir::TF::AssignVariableOp::create(builder, op.getLoc(), var_handle_op,
+                                       op.getValue());
     op.erase();
   }
 
@@ -673,8 +704,8 @@ mlir::LogicalResult ConvertReferenceVariableToResourceVariable(
     // the newly created op.
     builder.setInsertionPoint(op);
     // Create a new read variable op, so that the side-effects are preserved.
-    auto read_var_op = builder.create<mlir::TF::ReadVariableOp>(
-        op->getLoc(), tensor_type, var_handle_op);
+    auto read_var_op = mlir::TF::ReadVariableOp::create(
+        builder, op->getLoc(), tensor_type, var_handle_op);
     op->setOperand(idx, read_var_op.getValue());
   }
 

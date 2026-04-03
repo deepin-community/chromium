@@ -13,7 +13,7 @@
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -75,7 +75,7 @@ const char kTransportTypeChannel[] = "channel";
 const char kTransportTypeChannelServer[] = "channel-server";
 #endif
 
-// TODO(https://crbug.com/1428561): Flaky on Tsan.
+// TODO(crbug.com/40900578): Flaky on Tsan.
 #if defined(THREAD_SANITIZER)
 #define MAYBE_InvitationCppTest DISABLED_InvitationCppTest
 #else
@@ -93,12 +93,12 @@ class MAYBE_InvitationCppTest
   ~MAYBE_InvitationCppTest() override = default;
 
  protected:
-  void LaunchChildTestClient(const std::string& test_client_name,
-                             ScopedMessagePipeHandle* primordial_pipes,
-                             size_t num_primordial_pipes,
-                             InvitationType invitation_type,
-                             TransportType transport_type,
-                             const ProcessErrorCallback& error_callback = {}) {
+  void LaunchChildTestClient(
+      const std::string& test_client_name,
+      base::span<ScopedMessagePipeHandle> primordial_pipes,
+      InvitationType invitation_type,
+      TransportType transport_type,
+      const ProcessErrorCallback& error_callback = {}) {
     base::CommandLine command_line(
         base::GetMultiProcessTestChildBaseCommandLine());
 
@@ -149,13 +149,15 @@ class MAYBE_InvitationCppTest
 
     child_process_ = base::SpawnMultiProcessTestChild(
         test_client_name, command_line, launch_options);
-    if (channel)
+    if (channel) {
       channel->RemoteProcessLaunchAttempted();
+    }
 
     OutgoingInvitation invitation;
     if (invitation_type != InvitationType::kIsolated) {
-      for (uint64_t name = 0; name < num_primordial_pipes; ++name)
+      for (uint64_t name = 0; name < primordial_pipes.size(); ++name) {
         primordial_pipes[name] = invitation.AttachMessagePipe(name);
+      }
     }
 
 #if BUILDFLAG(IS_WIN)
@@ -180,8 +182,8 @@ class MAYBE_InvitationCppTest
                                    child_process_.Handle(),
                                    std::move(channel_endpoint), error_callback);
         } else {
-          DCHECK(primordial_pipes);
-          DCHECK_EQ(num_primordial_pipes, 1u);
+          DCHECK(!primordial_pipes.empty());
+          DCHECK_EQ(primordial_pipes.size(), 1u);
           primordial_pipes[0] = OutgoingInvitation::SendIsolated(
               std::move(channel_endpoint), {}, child_process_.Handle());
         }
@@ -194,8 +196,8 @@ class MAYBE_InvitationCppTest
                                    child_process_.Handle(),
                                    std::move(server_endpoint), error_callback);
         } else {
-          DCHECK(primordial_pipes);
-          DCHECK_EQ(num_primordial_pipes, 1u);
+          DCHECK(!primordial_pipes.empty());
+          DCHECK_EQ(primordial_pipes.size(), 1u);
           // Provide the remote process handle when calling SendIsolated
           // function.
           primordial_pipes[0] = OutgoingInvitation::SendIsolated(
@@ -208,8 +210,8 @@ class MAYBE_InvitationCppTest
           OutgoingInvitation::Send(std::move(invitation), {},
                                    std::move(server_endpoint), error_callback);
         } else {
-          DCHECK(primordial_pipes);
-          DCHECK_EQ(num_primordial_pipes, 1u);
+          DCHECK(!primordial_pipes.empty());
+          DCHECK_EQ(primordial_pipes.size(), 1u);
           // Don't provide the remote process handle when calling SendIsolated
           // function.
           primordial_pipes[0] =
@@ -309,8 +311,8 @@ const char kTestMessage2[] = "hello";
 
 TEST_P(MAYBE_InvitationCppTest, Send) {
   ScopedMessagePipeHandle pipe;
-  LaunchChildTestClient("CppSendClient", &pipe, 1, InvitationType::kNormal,
-                        GetParam());
+  LaunchChildTestClient("CppSendClient", base::span_from_ref(pipe),
+                        InvitationType::kNormal, GetParam());
   WriteMessage(pipe, kTestMessage1);
   WaitForChildExit();
 }
@@ -323,7 +325,7 @@ DEFINE_TEST_CLIENT(CppSendClient) {
 
 TEST_P(MAYBE_InvitationCppTest, SendIsolated) {
   ScopedMessagePipeHandle pipe;
-  LaunchChildTestClient("CppSendIsolatedClient", &pipe, 1,
+  LaunchChildTestClient("CppSendIsolatedClient", base::span_from_ref(pipe),
                         InvitationType::kIsolated, GetParam());
   WriteMessage(pipe, kTestMessage1);
   WaitForChildExit();
@@ -337,7 +339,7 @@ DEFINE_TEST_CLIENT(CppSendIsolatedClient) {
 #if BUILDFLAG(IS_WIN)
 TEST_P(MAYBE_InvitationCppTest, SendElevated) {
   ScopedMessagePipeHandle pipe;
-  LaunchChildTestClient("CppSendElevatedClient", &pipe, 1,
+  LaunchChildTestClient("CppSendElevatedClient", base::span_from_ref(pipe),
                         InvitationType::kElevated, GetParam());
   WriteMessage(pipe, kTestMessage1);
   WaitForChildExit();
@@ -352,7 +354,7 @@ DEFINE_TEST_CLIENT(CppSendElevatedClient) {
 
 TEST_P(MAYBE_InvitationCppTest, SendWithMultiplePipes) {
   ScopedMessagePipeHandle pipes[2];
-  LaunchChildTestClient("CppSendWithMultiplePipesClient", pipes, 2,
+  LaunchChildTestClient("CppSendWithMultiplePipesClient", pipes,
                         InvitationType::kNormal, GetParam());
   WriteMessage(pipes[0], kTestMessage1);
   WriteMessage(pipes[1], kTestMessage2);
@@ -402,7 +404,8 @@ TEST_P(MAYBE_InvitationCppTest, MAYBE_ProcessErrors) {
 
   ScopedMessagePipeHandle pipe;
   LaunchChildTestClient(
-      "CppProcessErrorsClient", &pipe, 1, InvitationType::kNormal, GetParam(),
+      "CppProcessErrorsClient", base::span_from_ref(pipe),
+      InvitationType::kNormal, GetParam(),
       base::BindLambdaForTesting([&](const std::string& error_message) {
         ASSERT_TRUE(actual_error_callback);
         actual_error_callback.Run(error_message);
@@ -418,7 +421,7 @@ TEST_P(MAYBE_InvitationCppTest, MAYBE_ProcessErrors) {
   base::RunLoop error_loop;
   actual_error_callback =
       base::BindLambdaForTesting([&](const std::string& error_message) {
-        EXPECT_TRUE(base::Contains(error_message, kErrorMessage));
+        EXPECT_TRUE(error_message.contains(kErrorMessage));
         error_loop.Quit();
       });
   EXPECT_EQ(MOJO_RESULT_OK,
@@ -427,9 +430,8 @@ TEST_P(MAYBE_InvitationCppTest, MAYBE_ProcessErrors) {
   error_loop.Run();
   EXPECT_EQ(MOJO_RESULT_OK, MojoDestroyMessage(message));
 
-  // TODO(https://crbug.com/846833): Once we can rework the C++ invitation API
-  // to also notify on disconnect, this test should cover that too. For now we
-  // just tell the process to exit and wait for it to do.
+  // The C++ invitation API doesn't notify on disconnect, so this test just tells
+  // the process to exit and waits for it. See crbug.com/40578072 for context.
   WriteMessage(pipe, kDisconnectMessage);
   WaitForChildExit();
 }

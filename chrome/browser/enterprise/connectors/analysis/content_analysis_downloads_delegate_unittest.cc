@@ -6,9 +6,11 @@
 
 #include <gtest/gtest.h>
 
+#include "base/files/file_util.h"
+#include "base/files/scoped_temp_dir.h"
+#include "base/run_loop.h"
 #include "base/strings/strcat.h"
-#include "base/test/scoped_feature_list.h"
-#include "chrome/browser/enterprise/connectors/analysis/content_analysis_features.h"
+#include "base/test/task_environment.h"
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "components/download/public/common/mock_download_item.h"
 
@@ -27,13 +29,19 @@ constexpr char16_t kTestFile[] = u"foo.txt";
 
 class ContentAnalysisDownloadsDelegateTest : public testing::Test {
  public:
-  void OpenCallback() { ++times_open_called_; }
+  void OpenCallback() {
+    ++times_open_called_;
+    if (quit_closure_) {
+      std::move(quit_closure_).Run();
+    }
+  }
 
   void DiscardCallback() { ++times_discard_called_; }
 
   int times_open_called_ = 0;
   int times_discard_called_ = 0;
   download::MockDownloadItem mock_download_item;
+  base::OnceClosure quit_closure_;
 };
 
 TEST_F(ContentAnalysisDownloadsDelegateTest, TestOpenFile) {
@@ -131,13 +139,15 @@ TEST_F(ContentAnalysisDownloadsDelegateTest, TestNoMessageOrUrlReturnsNullOpt) {
 }
 
 TEST_F(ContentAnalysisDownloadsDelegateTest, TestGetMessageAndUrl) {
+  ContentAnalysisResponse::Result::TriggeredRule::CustomRuleMessage
+      empty_custom_rule_msg;
   ContentAnalysisDownloadsDelegate delegate(
       kTestFile, kTestMessage, GURL(kTestUrl), true,
       base::BindOnce(&ContentAnalysisDownloadsDelegateTest::OpenCallback,
                      base::Unretained(this)),
       base::BindOnce(&ContentAnalysisDownloadsDelegateTest::DiscardCallback,
                      base::Unretained(this)),
-      nullptr, CreateSampleCustomRuleMessage(u"", ""));
+      nullptr, empty_custom_rule_msg);
 
   EXPECT_TRUE(delegate.GetCustomMessage());
   EXPECT_TRUE(delegate.GetCustomLearnMoreUrl());
@@ -152,7 +162,6 @@ TEST_F(ContentAnalysisDownloadsDelegateTest, TestGetMessageAndUrl) {
 
 TEST_F(ContentAnalysisDownloadsDelegateTest,
        TestCustomRuleMessageAndCustomMessage) {
-  base::test::ScopedFeatureList enable_feature(kDialogCustomRuleMessageEnabled);
   ContentAnalysisDownloadsDelegate delegate(
       kTestFile, kTestMessage, GURL(kTestUrl), true,
       base::BindOnce(&ContentAnalysisDownloadsDelegateTest::OpenCallback,
@@ -162,7 +171,7 @@ TEST_F(ContentAnalysisDownloadsDelegateTest,
       nullptr, CreateSampleCustomRuleMessage(kTestMessage2, kTestUrl2));
 
   EXPECT_TRUE(delegate.GetCustomMessage());
-  EXPECT_TRUE(delegate.GetCustomLearnMoreUrl());
+  EXPECT_FALSE(delegate.GetCustomLearnMoreUrl());
   EXPECT_TRUE(delegate.GetCustomRuleMessageRanges());
 
   EXPECT_EQ(base::StrCat({kTestFile,
@@ -174,7 +183,6 @@ TEST_F(ContentAnalysisDownloadsDelegateTest,
 
 TEST_F(ContentAnalysisDownloadsDelegateTest,
        TestCustomRuleMessageAndCustomMessageInvalidUrl) {
-  base::test::ScopedFeatureList enable_feature(kDialogCustomRuleMessageEnabled);
   ContentAnalysisDownloadsDelegate delegate(
       u"foo.txt", kTestMessage, GURL(kTestUrl), true,
       base::BindOnce(&ContentAnalysisDownloadsDelegateTest::OpenCallback,
@@ -184,7 +192,7 @@ TEST_F(ContentAnalysisDownloadsDelegateTest,
       nullptr, CreateSampleCustomRuleMessage(kTestMessage2, kTestInvalidUrl));
 
   EXPECT_TRUE(delegate.GetCustomMessage());
-  EXPECT_TRUE(delegate.GetCustomLearnMoreUrl());
+  EXPECT_FALSE(delegate.GetCustomLearnMoreUrl());
   EXPECT_FALSE(delegate.GetCustomRuleMessageRanges());
 
   EXPECT_EQ(base::StrCat({kTestFile,
@@ -192,6 +200,19 @@ TEST_F(ContentAnalysisDownloadsDelegateTest,
                           u"administrator says: \"",
                           kTestMessage2, u"\""}),
             *(delegate.GetCustomMessage()));
+}
+
+TEST_F(ContentAnalysisDownloadsDelegateTest, TestFilenameNulloptIfEmpty) {
+  // Most arguments copied from other tests
+  ContentAnalysisDownloadsDelegate delegate(
+      u"", kTestMessage, GURL(kTestUrl), true,
+      base::BindOnce(&ContentAnalysisDownloadsDelegateTest::OpenCallback,
+                     base::Unretained(this)),
+      base::BindOnce(&ContentAnalysisDownloadsDelegateTest::DiscardCallback,
+                     base::Unretained(this)),
+      nullptr, CreateSampleCustomRuleMessage(kTestMessage2, kTestInvalidUrl));
+
+  EXPECT_EQ(delegate.GetFilename(), std::nullopt);
 }
 
 }  // namespace enterprise_connectors

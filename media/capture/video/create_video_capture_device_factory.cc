@@ -5,17 +5,18 @@
 #include "media/capture/video/create_video_capture_device_factory.h"
 
 #include "base/command_line.h"
+#include "base/notimplemented.h"
 #include "base/system/sys_info.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "gpu/config/gpu_driver_bug_workarounds.h"
 #include "media/base/media_switches.h"
 #include "media/capture/video/fake_video_capture_device_factory.h"
 #include "media/capture/video/file_video_capture_device_factory.h"
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
 #include "media/capture/video/linux/video_capture_device_factory_linux.h"
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
+#elif BUILDFLAG(IS_CHROMEOS)
 #include "media/capture/video/chromeos/public/cros_features.h"
 #include "media/capture/video/chromeos/video_capture_device_factory_chromeos.h"
 #include "media/capture/video/linux/video_capture_device_factory_linux.h"
@@ -55,19 +56,25 @@ CreateFakeVideoCaptureDeviceFactory() {
 
 std::unique_ptr<VideoCaptureDeviceFactory>
 CreatePlatformSpecificVideoCaptureDeviceFactory(
-    scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner) {
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+    scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
+    gpu::GpuDriverBugWorkarounds* gpu_workarounds) {
+#if BUILDFLAG(IS_LINUX)
   return std::make_unique<VideoCaptureDeviceFactoryLinux>(ui_task_runner);
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
+#elif BUILDFLAG(IS_CHROMEOS)
   if (base::SysInfo::IsRunningOnChromeOS())
     return std::make_unique<VideoCaptureDeviceFactoryChromeOS>(ui_task_runner);
   return std::make_unique<VideoCaptureDeviceFactoryLinux>(ui_task_runner);
 #elif BUILDFLAG(IS_WIN)
   return std::make_unique<VideoCaptureDeviceFactoryWin>();
 #elif BUILDFLAG(IS_APPLE)
+#if BUILDFLAG(IS_IOS_TVOS)
+  return CreateFakeVideoCaptureDeviceFactory();
+#else
   return std::make_unique<VideoCaptureDeviceFactoryApple>();
+#endif  // BUILDFLAG(IS_IOS_TVOS)
 #elif BUILDFLAG(IS_ANDROID)
-  return std::make_unique<VideoCaptureDeviceFactoryAndroid>();
+  return std::make_unique<VideoCaptureDeviceFactoryAndroid>(
+      gpu_workarounds ? *gpu_workarounds : gpu::GpuDriverBugWorkarounds());
 #elif BUILDFLAG(IS_FUCHSIA)
   return std::make_unique<VideoCaptureDeviceFactoryFuchsia>();
 #elif BUILDFLAG(IS_IOS)
@@ -87,13 +94,15 @@ bool ShouldUseFakeVideoCaptureDeviceFactory() {
 }
 
 std::unique_ptr<VideoCaptureDeviceFactory> CreateVideoCaptureDeviceFactory(
-    scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner) {
+    scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
+    gpu::GpuDriverBugWorkarounds* gpu_workarounds) {
   if (ShouldUseFakeVideoCaptureDeviceFactory()) {
     return CreateFakeVideoCaptureDeviceFactory();
   } else {
     // |ui_task_runner| is needed for the Linux ChromeOS factory to retrieve
     // screen rotations.
-    return CreatePlatformSpecificVideoCaptureDeviceFactory(ui_task_runner);
+    return CreatePlatformSpecificVideoCaptureDeviceFactory(ui_task_runner,
+                                                           gpu_workarounds);
   }
 }
 

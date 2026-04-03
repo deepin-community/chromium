@@ -62,8 +62,8 @@ class SubresourceTrackingPerf : public DawnPerfTestWithParams<SubresourceTrackin
     SubresourceTrackingPerf() : DawnPerfTestWithParams(kNumIterations, 1) {}
     ~SubresourceTrackingPerf() override = default;
 
-    void SetUp() override {
-        DawnPerfTestWithParams<SubresourceTrackingParams>::SetUp();
+  protected:
+    void SetUpPerfTest() override {
         const SubresourceTrackingParams& params = GetParam();
 
         wgpu::TextureDescriptor materialDesc;
@@ -108,10 +108,10 @@ class SubresourceTrackingPerf : public DawnPerfTestWithParams<SubresourceTrackin
 
         // Copy into the layer of the material array.
         {
-            wgpu::ImageCopyTexture sourceView;
+            wgpu::TexelCopyTextureInfo sourceView;
             sourceView.texture = mUploadTexture;
 
-            wgpu::ImageCopyTexture destView;
+            wgpu::TexelCopyTextureInfo destView;
             destView.texture = mMaterials;
             destView.origin.z = layerUploaded;
 

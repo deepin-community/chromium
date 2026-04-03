@@ -28,11 +28,12 @@
 #ifndef SRC_DAWN_NODE_BINDING_GPURENDERPASSENCODER_H_
 #define SRC_DAWN_NODE_BINDING_GPURENDERPASSENCODER_H_
 
+#include <webgpu/webgpu_cpp.h>
+
 #include <string>
 #include <vector>
 
 #include "dawn/native/DawnNative.h"
-#include "dawn/webgpu_cpp.h"
 #include "src/dawn/node/interop/NodeAPI.h"
 #include "src/dawn/node/interop/WebGPU.h"
 
@@ -77,6 +78,11 @@ class GPURenderPassEncoder final : public interop::GPURenderPassEncoder {
                       interop::Uint32Array dynamicOffsetsData,
                       interop::GPUSize64 dynamicOffsetsDataStart,
                       interop::GPUSize32 dynamicOffsetsDataLength) override;
+    void setImmediates(Napi::Env env,
+                       interop::GPUSize32 rangeOffset,
+                       interop::AllowSharedBufferSource data,
+                       interop::GPUSize64 dataOffsetElements,
+                       std::optional<interop::GPUSize64> sizeElements) override;
     void pushDebugGroup(Napi::Env, std::string groupLabel) override;
     void popDebugGroup(Napi::Env) override;
     void insertDebugMarker(Napi::Env, std::string markerLabel) override;
@@ -108,6 +114,19 @@ class GPURenderPassEncoder final : public interop::GPURenderPassEncoder {
     void drawIndexedIndirect(Napi::Env,
                              interop::Interface<interop::GPUBuffer> indirectBuffer,
                              interop::GPUSize64 indirectOffset) override;
+    void multiDrawIndirect(Napi::Env,
+                           interop::Interface<interop::GPUBuffer> indirectBuffer,
+                           interop::GPUSize64 indirectOffset,
+                           interop::GPUSize32 maxDrawCount,
+                           std::optional<interop::Interface<interop::GPUBuffer>> countBuffer,
+                           interop::GPUSize64 countBufferOffset) override;
+    void multiDrawIndexedIndirect(
+        Napi::Env,
+        interop::Interface<interop::GPUBuffer> indirectBuffer,
+        interop::GPUSize64 indirectOffset,
+        interop::GPUSize32 maxDrawCount,
+        std::optional<interop::Interface<interop::GPUBuffer>> drawCountBuffer,
+        interop::GPUSize64 drawCountBufferOffset) override;
     std::string getLabel(Napi::Env) override;
     void setLabel(Napi::Env, std::string value) override;
 

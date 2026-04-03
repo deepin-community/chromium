@@ -10,7 +10,6 @@
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/ash/crostini/ansible/ansible_management_service.h"
 #include "chrome/browser/ash/crostini/crostini_installer_ui_delegate.h"
 #include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/ash/crostini/crostini_types.mojom-forward.h"
@@ -72,8 +71,6 @@ class CrostiniInstaller : public KeyedService,
     // at the top of this enum.
   };
 
-  static CrostiniInstaller* GetForProfile(Profile* profile);
-
   explicit CrostiniInstaller(Profile* profile);
 
   CrostiniInstaller(const CrostiniInstaller&) = delete;
@@ -107,8 +104,6 @@ class CrostiniInstaller : public KeyedService,
   void set_skip_launching_terminal_for_testing() {
     skip_launching_terminal_for_testing_ = true;
   }
-
-  static void EnsureFactoryBuilt();
 
  private:
   enum class State {

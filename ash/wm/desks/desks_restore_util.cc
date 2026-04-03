@@ -89,7 +89,6 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   constexpr int kDefaultActiveDeskIndex = 0;
   registry->RegisterListPref(prefs::kDesksNamesList);
   registry->RegisterListPref(prefs::kDesksGuidsList);
-  registry->RegisterListPref(prefs::kDesksLacrosProfileIdList);
   registry->RegisterListPref(prefs::kDesksMetricsList);
   registry->RegisterDictionaryPref(prefs::kDesksWeeklyActiveDesksMetrics);
   registry->RegisterIntegerPref(prefs::kDesksActiveDesk,
@@ -105,13 +104,11 @@ void RestorePrimaryUserDesks() {
     return;
   }
 
-  const base::Value::List& desks_names_list =
+  const base::ListValue& desks_names_list =
       primary_user_prefs->GetList(prefs::kDesksNamesList);
-  const base::Value::List& desks_guids_list =
+  const base::ListValue& desks_guids_list =
       primary_user_prefs->GetList(prefs::kDesksGuidsList);
-  const base::Value::List& desks_lacros_profile_ids_list =
-      primary_user_prefs->GetList(prefs::kDesksLacrosProfileIdList);
-  const base::Value::List& desks_metrics_list =
+  const base::ListValue& desks_metrics_list =
       primary_user_prefs->GetList(prefs::kDesksMetricsList);
 
   // First create the same number of desks.
@@ -146,16 +143,6 @@ void RestorePrimaryUserDesks() {
       desks_controller->RestoreGuidOfDeskAtIndex(
           base::Uuid::ParseLowercase(desks_guids_list[index].GetString()),
           index);
-    }
-
-    if (index < desks_lacros_profile_ids_list.size()) {
-      uint64_t lacros_profile_id = 0;
-      if (base::StringToUint64(desks_lacros_profile_ids_list[index].GetString(),
-                               &lacros_profile_id)) {
-        desks_controller->GetDeskAtIndex(index)->SetLacrosProfileId(
-            lacros_profile_id, /*source=*/std::nullopt,
-            /*skip_prefs_update=*/true);
-      }
     }
 
     // Only restore metrics if there is existing data.
@@ -240,7 +227,7 @@ void UpdatePrimaryUserDeskNamesPrefs() {
   }
 
   ScopedListPrefUpdate name_update(primary_user_prefs, prefs::kDesksNamesList);
-  base::Value::List& name_pref_data = name_update.Get();
+  base::ListValue& name_pref_data = name_update.Get();
   name_pref_data.clear();
 
   const auto& desks = DesksController::Get()->desks();
@@ -268,7 +255,7 @@ void UpdatePrimaryUserDeskGuidsPrefs() {
   }
 
   ScopedListPrefUpdate guid_update(primary_user_prefs, prefs::kDesksGuidsList);
-  base::Value::List& guid_pref_data = guid_update.Get();
+  base::ListValue& guid_pref_data = guid_update.Get();
   guid_pref_data.clear();
 
   const auto& desks = DesksController::Get()->desks();
@@ -277,29 +264,6 @@ void UpdatePrimaryUserDeskGuidsPrefs() {
   }
 
   DCHECK_EQ(guid_pref_data.size(), desks.size());
-}
-
-void UpdatePrimaryUserDeskLacrosProfileIdPrefs() {
-  if (g_pause_desks_prefs_updates) {
-    return;
-  }
-
-  PrefService* primary_user_prefs = GetPrimaryUserPrefService();
-  if (!primary_user_prefs) {
-    // Can be null in tests.
-    return;
-  }
-
-  ScopedListPrefUpdate id_update(primary_user_prefs,
-                                 prefs::kDesksLacrosProfileIdList);
-  base::Value::List& id_pref_data = id_update.Get();
-  id_pref_data.clear();
-
-  for (const auto& desk : DesksController::Get()->desks()) {
-    // Lacros profile IDs are 64-bit unsigned integers, which will fall outside
-    // of the range of `int`. We therefore store them as strings.
-    id_pref_data.Append(base::NumberToString(desk->lacros_profile_id()));
-  }
 }
 
 void UpdatePrimaryUserDeskMetricsPrefs() {
@@ -315,14 +279,14 @@ void UpdatePrimaryUserDeskMetricsPrefs() {
   // Save per-desk metrics.
   ScopedListPrefUpdate metrics_update(primary_user_prefs,
                                       prefs::kDesksMetricsList);
-  base::Value::List& metrics_pref_data = metrics_update.Get();
+  base::ListValue& metrics_pref_data = metrics_update.Get();
   metrics_pref_data.clear();
 
   auto* desks_controller = DesksController::Get();
   const auto& desks = desks_controller->desks();
   for (const auto& desk : desks) {
-    base::Value::Dict metrics_dict =
-        base::Value::Dict()
+    base::DictValue metrics_dict =
+        base::DictValue()
             .Set(kCreationTimeKey,
                  desk->creation_time().ToDeltaSinceWindowsEpoch().InMinutes())
             .Set(kFirstDayVisitedKey, desk->first_day_visited())

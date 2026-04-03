@@ -11,40 +11,47 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_base.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
+#include "chrome/browser/apps/app_service/chrome_app_deprecation/chrome_app_deprecation.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
+#include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/ash/drive/drivefs_test_support.h"
 #include "chrome/browser/ash/extensions/file_manager/event_router.h"
 #include "chrome/browser/ash/extensions/file_manager/event_router_factory.h"
 #include "chrome/browser/ash/file_manager/file_manager_test_util.h"
 #include "chrome/browser/ash/file_manager/mount_test_util.h"
 #include "chrome/browser/ash/file_manager/volume_manager.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/ash/cast_config_controller_media_router.h"
+#include "chrome/browser/ui/ash/cast_config/cast_config_controller_media_router.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 #include "components/media_router/browser/test/mock_media_router.h"
 #include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/test_helper.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/file_system_chooser_test_helpers.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/extension_host_test_helper.h"
+#include "extensions/browser/process_manager.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "extensions/test/result_catcher.h"
 #include "google_apis/common/test_util.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "storage/browser/file_system/external_mount_points.h"
 #include "ui/shell_dialogs/select_file_dialog_factory.h"
 #include "ui/shell_dialogs/select_file_policy.h"
@@ -85,7 +92,7 @@ constexpr char kTestFileContent[] = "This is some test content.";
 // User account email and directory hash for secondary account for multi-profile
 // sensitive test cases.
 constexpr char kSecondProfileAccount[] = "profile2@test.com";
-constexpr char kSecondProfileGiaId[] = "9876543210";
+constexpr GaiaId::Literal kSecondProfileGaiaId("9876543210");
 constexpr char kSecondProfileHash[] = "fileBrowserApiTestProfile2";
 
 // Waits for a WebContents of the background page of the extension under test
@@ -226,7 +233,8 @@ class FileSystemExtensionApiTestBase : public extensions::ExtensionApiTest {
   enum Flags {
     FLAGS_NONE = 0,
     FLAGS_USE_FILE_HANDLER = 1 << 1,
-    FLAGS_LAZY_FILE_HANDLER = 1 << 2
+    FLAGS_LAZY_FILE_HANDLER = 1 << 2,
+    FLAGS_CHROME_APP = 1 << 3
   };
 
   FileSystemExtensionApiTestBase() = default;
@@ -288,6 +296,10 @@ class FileSystemExtensionApiTestBase : public extensions::ExtensionApiTest {
       const base::FilePath::CharType* filebrowser_manifest,
       const std::string& filehandler_path,
       int flags) {
+    std::unique_ptr<
+        apps::chrome_app_deprecation::ScopedAddAppToAllowlistForTesting>
+        allowlist;
+
     if (flags & FLAGS_USE_FILE_HANDLER) {
       if (filehandler_path.empty()) {
         message_ = "Missing file handler path.";
@@ -310,6 +322,12 @@ class FileSystemExtensionApiTestBase : public extensions::ExtensionApiTest {
         return false;
       }
 
+      if (flags & FLAGS_CHROME_APP) {
+        allowlist = std::make_unique<
+            apps::chrome_app_deprecation::ScopedAddAppToAllowlistForTesting>(
+            file_handler->id());
+      }
+
       if (flags & FLAGS_LAZY_FILE_HANDLER) {
         host_helper.WaitForHostDestroyed();
       } else {
@@ -321,6 +339,7 @@ class FileSystemExtensionApiTestBase : public extensions::ExtensionApiTest {
 
     const Extension* file_browser = LoadExtensionAsComponentWithManifest(
         test_data_dir_.AppendASCII(filebrowser_path), filebrowser_manifest);
+
     if (!file_browser) {
       message_ = "Could not create file browser";
       return false;
@@ -422,9 +441,7 @@ class DriveFileSystemExtensionApiTest : public FileSystemExtensionApiTestBase {
   drive::DriveIntegrationService* CreateDriveIntegrationService(
       Profile* profile) {
     // Ignore signin and lock screen apps profile.
-    if (profile->GetPath() == ash::ProfileHelper::GetSigninProfileDir() ||
-        profile->GetPath() ==
-            ash::ProfileHelper::GetLockScreenAppProfilePath()) {
+    if (ash::IsSigninBrowserContext(profile)) {
       return nullptr;
     }
 
@@ -436,7 +453,8 @@ class DriveFileSystemExtensionApiTest : public FileSystemExtensionApiTestBase {
     fake_drivefs_helper_ = std::make_unique<drive::FakeDriveFsHelper>(
         profile, drivefs_mount_point.DirName());
     return new drive::DriveIntegrationService(
-        profile, "", test_cache_root_.GetPath(),
+        g_browser_process->local_state(), profile, "",
+        test_cache_root_.GetPath(),
         fake_drivefs_helper_->CreateFakeDriveFsListenerFactory());
   }
 
@@ -464,16 +482,30 @@ class MultiProfileDriveFileSystemExtensionApiTest
                                     "false");
   }
 
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    InProcessBrowserTest::SetUpLocalStatePrefService(local_state);
+
+    // Register persisted users.
+    user_manager::TestHelper::RegisterPersistedUser(
+        *local_state,
+        AccountId::FromUserEmailGaiaId("testuser@gmail.com", GaiaId("123456")));
+    user_manager::TestHelper::RegisterPersistedUser(
+        *local_state, AccountId::FromUserEmailGaiaId(kSecondProfileAccount,
+                                                     kSecondProfileGaiaId));
+  }
+
   void SetUpOnMainThread() override {
+    // Set up the secondary user session.
     base::FilePath user_data_directory;
     base::PathService::Get(chrome::DIR_USER_DATA, &user_data_directory);
     session_manager::SessionManager::Get()->CreateSession(
         AccountId::FromUserEmailGaiaId(kSecondProfileAccount,
-                                       kSecondProfileGiaId),
-        kSecondProfileHash, false);
-    // Set up the secondary profile.
-    base::FilePath profile_dir = user_data_directory.Append(
-        ash::ProfileHelper::GetUserProfileDir(kSecondProfileHash).BaseName());
+                                       kSecondProfileGaiaId),
+        kSecondProfileHash, /*new_user=*/false,
+        /*has_active_session=*/false);
+    base::FilePath profile_dir = user_data_directory.AppendASCII(
+        ash::BrowserContextHelper::GetUserBrowserContextDirName(
+            kSecondProfileHash));
     second_profile_ =
         g_browser_process->profile_manager()->GetProfile(profile_dir);
 
@@ -503,9 +535,7 @@ class MultiProfileDriveFileSystemExtensionApiTest
   drive::DriveIntegrationService* CreateDriveIntegrationService(
       Profile* profile) {
     // Ignore signin and lock screen apps profile.
-    if (profile->GetPath() == ash::ProfileHelper::GetSigninProfileDir() ||
-        profile->GetPath() ==
-            ash::ProfileHelper::GetLockScreenAppProfilePath()) {
+    if (ash::IsSigninBrowserContext(profile)) {
       return nullptr;
     }
 
@@ -532,7 +562,7 @@ class MultiProfileDriveFileSystemExtensionApiTest
     const auto& drivefs_helper = fake_drivefs_helpers_[profile] =
         std::make_unique<drive::FakeDriveFsHelper>(profile, drivefs_dir);
     return new drive::DriveIntegrationService(
-        profile, std::string(), cache_dir,
+        g_browser_process->local_state(), profile, std::string(), cache_dir,
         drivefs_helper->CreateFakeDriveFsListenerFactory());
   }
 
@@ -589,9 +619,7 @@ class LocalAndDriveFileSystemExtensionApiTest
   drive::DriveIntegrationService* CreateDriveIntegrationService(
       Profile* profile) {
     // Ignore signin and lock screen apps profile.
-    if (profile->GetPath() == ash::ProfileHelper::GetSigninProfileDir() ||
-        profile->GetPath() ==
-            ash::ProfileHelper::GetLockScreenAppProfilePath()) {
+    if (ash::IsSigninBrowserContext(profile)) {
       return nullptr;
     }
 
@@ -603,7 +631,8 @@ class LocalAndDriveFileSystemExtensionApiTest
     fake_drivefs_helper_ = std::make_unique<drive::FakeDriveFsHelper>(
         profile, drivefs_mount_point.DirName());
     return new drive::DriveIntegrationService(
-        profile, "", test_cache_root_.GetPath(),
+        g_browser_process->local_state(), profile, "",
+        test_cache_root_.GetPath(),
         fake_drivefs_helper_->CreateFakeDriveFsListenerFactory());
   }
 
@@ -628,7 +657,7 @@ class LocalAndDriveFileSystemExtensionApiTest
 class FileSystemExtensionApiTestWithApps
     : public LocalFileSystemExtensionApiTest {
  public:
-  FileSystemExtensionApiTestWithApps() {}
+  FileSystemExtensionApiTestWithApps() = default;
 
   // FileManagerPrivateApiTest:
   void SetUpOnMainThread() override {
@@ -658,7 +687,22 @@ constexpr char kAppLaunchMetric[] = "Apps.DefaultAppLaunch.FromFileManager";
 
 // Check the interception of ExecuteTask calls to replace Gallery for PNGs. The
 // Media App should always be used in this case.
-IN_PROC_BROWSER_TEST_F(FileSystemExtensionApiTestWithApps, OpenGalleryForPng) {
+//
+// TODO(crbug.com/431933537): Disabled on MSAN due to a renderer crash. The
+// crash is caused by a use-of-uninitialized-value in
+// blink::CSSParserImpl::ParseStyleSheet when parsing default stylesheets,
+// indicating an underlying Blink issue rather than a problem with the test
+// logic.
+//
+// A separate bug (crbug.com/431933537) is filed to specifically track the
+// blink::CSSParserImpl::ParseStyleSheet issue.
+#if defined(MEMORY_SANITIZER)
+#define MAYBE_OpenGalleryForPng DISABLED_OpenGalleryForPng
+#else
+#define MAYBE_OpenGalleryForPng OpenGalleryForPng
+#endif
+IN_PROC_BROWSER_TEST_F(FileSystemExtensionApiTestWithApps,
+                       MAYBE_OpenGalleryForPng) {
   base::HistogramTester histogram_tester;
   EXPECT_TRUE(RunBackgroundPageTestCase("open_gallery",
                                         "testPngOpensGalleryReturnsOpened"))
@@ -704,7 +748,8 @@ IN_PROC_BROWSER_TEST_F(LocalFileSystemExtensionApiTest,
 IN_PROC_BROWSER_TEST_F(LocalFileSystemExtensionApiTest, AppFileHandler) {
   EXPECT_TRUE(RunFileSystemExtensionApiTest(
       "file_browser/handler_test_runner", FILE_PATH_LITERAL("manifest.json"),
-      "file_browser/app_file_handler", FLAGS_USE_FILE_HANDLER))
+      "file_browser/app_file_handler",
+      FLAGS_USE_FILE_HANDLER | FLAGS_CHROME_APP))
       << message_;
 }
 
@@ -753,7 +798,8 @@ IN_PROC_BROWSER_TEST_F(DriveFileSystemExtensionApiTest, Search) {
 IN_PROC_BROWSER_TEST_F(DriveFileSystemExtensionApiTest, AppFileHandler) {
   EXPECT_TRUE(RunFileSystemExtensionApiTest(
       "file_browser/handler_test_runner", FILE_PATH_LITERAL("manifest.json"),
-      "file_browser/app_file_handler", FLAGS_USE_FILE_HANDLER))
+      "file_browser/app_file_handler",
+      FLAGS_USE_FILE_HANDLER | FLAGS_CHROME_APP))
       << message_;
 }
 

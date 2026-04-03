@@ -32,11 +32,11 @@ namespace tensorflow {
 // so that we will always "hop" after each read (except first).
 class FixedLengthRecordReader : public ReaderBase {
  public:
-  FixedLengthRecordReader(const string& node_name, int64_t header_bytes,
+  FixedLengthRecordReader(const std::string& node_name, int64_t header_bytes,
                           int64_t record_bytes, int64_t footer_bytes,
-                          int64_t hop_bytes, const string& encoding, Env* env)
-      : ReaderBase(
-            strings::StrCat("FixedLengthRecordReader '", node_name, "'")),
+                          int64_t hop_bytes, const std::string& encoding,
+                          Env* env)
+      : ReaderBase(absl::StrCat("FixedLengthRecordReader '", node_name, "'")),
         header_bytes_(header_bytes),
         record_bytes_(record_bytes),
         footer_bytes_(footer_bytes),
@@ -48,7 +48,7 @@ class FixedLengthRecordReader : public ReaderBase {
   // On success:
   // * buffered_inputstream_ != nullptr,
   // * buffered_inputstream_->Tell() == header_bytes_
-  Status OnWorkStartedLocked() override {
+  absl::Status OnWorkStartedLocked() override {
     record_number_ = 0;
 
     lookahead_cache_.clear();
@@ -72,13 +72,13 @@ class FixedLengthRecordReader : public ReaderBase {
     return absl::OkStatus();
   }
 
-  Status OnWorkFinishedLocked() override {
+  absl::Status OnWorkFinishedLocked() override {
     buffered_inputstream_.reset(nullptr);
     return absl::OkStatus();
   }
 
-  Status ReadLocked(tstring* key, tstring* value, bool* produced,
-                    bool* at_end) override {
+  absl::Status ReadLocked(tstring* key, tstring* value, bool* produced,
+                          bool* at_end) override {
     // We will always "hop" the hop_bytes_ except the first record
     // where record_number_ == 0
     if (record_number_ != 0) {
@@ -92,9 +92,10 @@ class FixedLengthRecordReader : public ReaderBase {
         // as the cache_size has been skipped through cache.
         int64_t cache_size = lookahead_cache_.size();
         lookahead_cache_.clear();
-        Status s = buffered_inputstream_->SkipNBytes(hop_bytes_ - cache_size);
+        absl::Status s =
+            buffered_inputstream_->SkipNBytes(hop_bytes_ - cache_size);
         if (!s.ok()) {
-          if (!errors::IsOutOfRange(s)) {
+          if (!absl::IsOutOfRange(s)) {
             return s;
           }
           *at_end = true;
@@ -105,10 +106,10 @@ class FixedLengthRecordReader : public ReaderBase {
 
     // Fill up lookahead_cache_ to record_bytes_ + footer_bytes_
     int bytes_to_read = record_bytes_ + footer_bytes_ - lookahead_cache_.size();
-    Status s = buffered_inputstream_->ReadNBytes(bytes_to_read, value);
+    absl::Status s = buffered_inputstream_->ReadNBytes(bytes_to_read, value);
     if (!s.ok()) {
       value->clear();
-      if (!errors::IsOutOfRange(s)) {
+      if (!absl::IsOutOfRange(s)) {
         return s;
       }
       *at_end = true;
@@ -120,14 +121,14 @@ class FixedLengthRecordReader : public ReaderBase {
     // Copy first record_bytes_ from cache to value
     *value = lookahead_cache_.substr(0, record_bytes_);
 
-    *key = strings::StrCat(current_work(), ":", record_number_);
+    *key = absl::StrCat(current_work(), ":", record_number_);
     *produced = true;
     ++record_number_;
 
     return absl::OkStatus();
   }
 
-  Status ResetLocked() override {
+  absl::Status ResetLocked() override {
     record_number_ = 0;
     buffered_inputstream_.reset(nullptr);
     lookahead_cache_.clear();
@@ -148,10 +149,10 @@ class FixedLengthRecordReader : public ReaderBase {
   // or even obtain the uncompressed stream size before hand.
   // The max size of the lookahead_cache_ could be
   // record_bytes_ + footer_bytes_
-  string lookahead_cache_;
+  std::string lookahead_cache_;
   Env* const env_;
   int64_t record_number_;
-  string encoding_;
+  std::string encoding_;
   // must outlive buffered_inputstream_
   std::unique_ptr<RandomAccessFile> file_;
   // must outlive buffered_inputstream_
@@ -182,7 +183,7 @@ class FixedLengthRecordReaderOp : public ReaderOpKernel {
         context, hop_bytes >= 0,
         errors::InvalidArgument("hop_bytes must be >= 0 not ", hop_bytes));
     Env* env = context->env();
-    string encoding;
+    std::string encoding;
     OP_REQUIRES_OK(context, context->GetAttr("encoding", &encoding));
     SetReaderFactory([this, header_bytes, record_bytes, footer_bytes, hop_bytes,
                       encoding, env]() {

@@ -11,6 +11,7 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/supervised_user/chrome_supervised_user_web_content_handler_base.h"
 #include "components/supervised_user/core/browser/web_content_handler.h"
+#include "content/public/browser/frame_tree_node_id.h"
 
 enum class AndroidLocalWebApprovalFlowOutcome;
 
@@ -19,7 +20,7 @@ class SupervisedUserWebContentHandlerImpl
     : public ChromeSupervisedUserWebContentHandlerBase {
  public:
   SupervisedUserWebContentHandlerImpl(content::WebContents* web_contents,
-                                      int frame_id,
+                                      content::FrameTreeNodeId frame_id,
                                       int64_t interstitial_navigation_id);
 
   SupervisedUserWebContentHandlerImpl(
@@ -28,14 +29,16 @@ class SupervisedUserWebContentHandlerImpl
       const SupervisedUserWebContentHandlerImpl&) = delete;
   ~SupervisedUserWebContentHandlerImpl() override;
 
-  // ChromeSupervisedUserWebContentHandlerBase implementaion:
-  void RequestLocalApproval(const GURL& url,
-                            const std::u16string& child_display_name,
-                            ApprovalRequestInitiatedCallback callback) override;
+  // ChromeSupervisedUserWebContentHandlerBase implementation:
+  void RequestLocalApproval(
+      const GURL& target_url,
+      supervised_user::WebFilteringResult filtering_result,
+      const std::u16string& child_display_name,
+      ApprovalRequestInitiatedCallback callback) override;
 
  private:
   void OnLocalApprovalRequestCompleted(
-      supervised_user::SupervisedUserSettingsService& settings_service,
+      supervised_user::FamilyLinkSettingsService& settings_service,
       const GURL& url,
       base::TimeTicks start_time,
       AndroidLocalWebApprovalFlowOutcome request_outcome);

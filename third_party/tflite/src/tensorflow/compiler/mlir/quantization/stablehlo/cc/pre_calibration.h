@@ -38,19 +38,14 @@ class PreCalibrationComponent : public Component {
   // debugging purposes.
   static constexpr absl::string_view kName = "quant_ptq_pre_calibration";
 
-  PreCalibrationComponent(
-      absl::Nonnull<MLIRContext*> ctx,
-      tensorflow::quantization::CalibrationOptions calibration_options);
+  explicit PreCalibrationComponent(MLIRContext* absl_nonnull ctx);
 
   absl::StatusOr<ModuleOp> Run(
       ModuleOp,
       const ::stablehlo::quantization::QuantizationConfig& config) override;
 
  private:
-  absl::Nonnull<MLIRContext*> ctx_;
-  // TODO: b/315747711 - Allow `QuantizationConfig` to express calibration
-  // options and remove this field.
-  tensorflow::quantization::CalibrationOptions calibration_options_;
+  MLIRContext* absl_nonnull ctx_;
 };
 
 }  // namespace mlir::quant::stablehlo

@@ -16,44 +16,36 @@ limitations under the License.
 #include "xla/service/hlo_proto_util.h"
 
 #include <memory>
-#include <string>
 #include <vector>
 
-#include "xla/service/hlo_verifier.h"
 #include "xla/util.h"
 
 namespace xla {
 
 HloProto MakeHloProto(const HloModule& module,
                       const BufferAssignment& assignment) {
-  BufferAssignmentProto proto_assignment = assignment.ToProto();
-  HloProto proto = MakeHloProto(module);
-  proto.mutable_buffer_assignment()->Swap(&proto_assignment);
+  HloProto proto;
+  MakeHloProto(module, assignment, &proto);
   return proto;
+}
+
+void MakeHloProto(const HloModule& module, const BufferAssignment& assignment,
+                  HloProto* proto) {
+  MakeHloProto(module, proto);
+  assignment.ToProto(proto->mutable_buffer_assignment());
 }
 
 HloProto MakeHloProto(const HloModule& module) {
-  HloModuleProto proto_module = module.ToProto();
   HloProto proto;
-  proto.mutable_hlo_module()->Swap(&proto_module);
+  MakeHloProto(module, &proto);
   return proto;
 }
 
-StatusOr<std::unique_ptr<HloModule>> CreateModuleFromProto(
-    const HloModuleProto& proto, const HloModuleConfig& module_config,
-    bool is_module_post_optimizations) {
-  VLOG(4) << proto.ShortDebugString();
-  TF_ASSIGN_OR_RETURN(std::unique_ptr<HloModule> module,
-                      HloModule::CreateFromProto(proto, module_config));
-  TF_RETURN_IF_ERROR(
-      HloVerifier(/*layout_sensitive=*/false,
-                  /*allow_mixed_precision=*/is_module_post_optimizations)
-          .Run(module.get())
-          .status());
-  return module;
+void MakeHloProto(const HloModule& module, HloProto* proto) {
+  module.ToProto(proto->mutable_hlo_module());
 }
 
-StatusOr<std::vector<const ShapeProto*>> EntryComputationParameterShapes(
+absl::StatusOr<std::vector<const ShapeProto*>> EntryComputationParameterShapes(
     const HloProto& hlo_proto) {
   if (!hlo_proto.has_hlo_module()) {
     return NotFound("HloProto missing HloModuleProto.");
@@ -70,7 +62,7 @@ StatusOr<std::vector<const ShapeProto*>> EntryComputationParameterShapes(
   return parameter_shapes;
 }
 
-StatusOr<const ShapeProto*> EntryComputationOutputShape(
+absl::StatusOr<const ShapeProto*> EntryComputationOutputShape(
     const HloProto& hlo_proto) {
   if (!hlo_proto.has_hlo_module()) {
     return NotFound("HloProto missing HloModuleProto.");

@@ -21,6 +21,7 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tf2xla/transforms/passes.h"
 #include "tensorflow/compiler/tf2xla/kernels/rng_converter_utils.h"
+#include "xla/xla_data.pb.h"
 
 namespace mlir {
 namespace mhlo {
@@ -56,8 +57,9 @@ LogicalResult TFXLADeviceSpecificTransforms::ConvertGetAlgOp(
 
   OpBuilder opbuilder(get_alg_op);
 
-  auto tf_const = opbuilder.create<TF::ConstOp>(
-      get_alg_op->getLoc(), opbuilder.getI32IntegerAttr((int)tensorflow_rng));
+  auto tf_const =
+      TF::ConstOp::create(opbuilder, get_alg_op->getLoc(),
+                          opbuilder.getI32IntegerAttr((int)tensorflow_rng));
 
   get_alg_op->replaceAllUsesWith(tf_const);
   get_alg_op->erase();

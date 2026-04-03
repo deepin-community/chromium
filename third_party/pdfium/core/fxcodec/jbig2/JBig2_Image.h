@@ -7,9 +7,14 @@
 #ifndef CORE_FXCODEC_JBIG2_JBIG2_IMAGE_H_
 #define CORE_FXCODEC_JBIG2_JBIG2_IMAGE_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include <memory>
+#include <optional>
 
 #include "core/fxcodec/jbig2/JBig2_Define.h"
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/fx_memory_wrappers.h"
 #include "core/fxcrt/maybe_owned.h"
 #include "core/fxcrt/span.h"
@@ -36,26 +41,34 @@ class CJBig2_Image {
 
   static bool IsValidImageSize(int32_t w, int32_t h);
 
-  int32_t width() const { return m_nWidth; }
-  int32_t height() const { return m_nHeight; }
-  int32_t stride() const { return m_nStride; }
+  int32_t width() const { return width_; }
+  int32_t height() const { return height_; }
+  int32_t stride() const { return stride_; }
 
-  uint8_t* data() const { return m_pData.Get(); }
+  bool has_data() const { return static_cast<bool>(data_); }
 
-  int GetPixel(int32_t x, int32_t y) const;
-  void SetPixel(int32_t x, int32_t y, int v);
+  pdfium::span<const uint8_t> span() const;
+  pdfium::span<uint8_t> span();
 
-  uint8_t* GetLineUnsafe(int32_t y) const { return data() + y * m_nStride; }
-  uint8_t* GetLine(int32_t y) const {
-    return (y >= 0 && y < m_nHeight) ? GetLineUnsafe(y) : nullptr;
-  }
+  // Gets / Sets pixels at position `x` in `line`. Assumes `line` came from
+  // GetLine() from the same instance.
+  // - GetPixel() returns 0 if `x` is out of bounds.
+  // - SetPixel() is a no-op if `x` is out of bounds`.
+  int GetPixel(int32_t x, pdfium::span<const uint8_t> line) const;
+  void SetPixel(int32_t x, pdfium::span<uint8_t> line, int v);
 
-  void CopyLine(int32_t hTo, int32_t hFrom);
+  // Returns an empty span if `y` is out of bounds, or if there is no data.
+  pdfium::span<const uint8_t> GetLine(int32_t y) const;
+  pdfium::span<uint8_t> GetLine(int32_t y);
+  pdfium::span<const uint32_t> GetLine32(int32_t y) const;
+  pdfium::span<uint32_t> GetLine32(int32_t y);
+
+  void CopyLine(pdfium::span<uint8_t> dest, pdfium::span<const uint8_t> src);
   void Fill(bool v);
 
-  bool ComposeFrom(int32_t x, int32_t y, CJBig2_Image* pSrc, JBig2ComposeOp op);
-  bool ComposeFromWithRect(int32_t x,
-                           int32_t y,
+  bool ComposeFrom(int64_t x, int64_t y, CJBig2_Image* pSrc, JBig2ComposeOp op);
+  bool ComposeFromWithRect(int64_t x,
+                           int64_t y,
                            CJBig2_Image* pSrc,
                            const FX_RECT& rtSrc,
                            JBig2ComposeOp op);
@@ -63,37 +76,40 @@ class CJBig2_Image {
   std::unique_ptr<CJBig2_Image> SubImage(int32_t x,
                                          int32_t y,
                                          int32_t w,
-                                         int32_t h);
+                                         int32_t h) const;
   void Expand(int32_t h, bool v);
 
-  bool ComposeTo(CJBig2_Image* pDst, int32_t x, int32_t y, JBig2ComposeOp op);
+  bool ComposeTo(CJBig2_Image* pDst, int64_t x, int64_t y, JBig2ComposeOp op);
   bool ComposeToWithRect(CJBig2_Image* pDst,
-                         int32_t x,
-                         int32_t y,
+                         int64_t x,
+                         int64_t y,
                          const FX_RECT& rtSrc,
                          JBig2ComposeOp op);
 
  private:
-  void SubImageFast(int32_t x,
-                    int32_t y,
+  std::optional<size_t> GetLineOffset(int32_t y) const;
+
+  // SubImage() already checked `x` and `y` are valid.
+  void SubImageFast(uint32_t x,
+                    uint32_t y,
                     int32_t w,
                     int32_t h,
-                    CJBig2_Image* pImage);
-  void SubImageSlow(int32_t x,
-                    int32_t y,
+                    CJBig2_Image* image) const;
+  void SubImageSlow(uint32_t x,
+                    uint32_t y,
                     int32_t w,
                     int32_t h,
-                    CJBig2_Image* pImage);
+                    CJBig2_Image* image) const;
   bool ComposeToInternal(CJBig2_Image* pDst,
-                         int32_t x,
-                         int32_t y,
+                         int64_t x_in,
+                         int64_t y_in,
                          JBig2ComposeOp op,
                          const FX_RECT& rtSrc);
 
-  MaybeOwned<uint8_t, FxFreeDeleter> m_pData;
-  int32_t m_nWidth = 0;   // 1-bit pixels
-  int32_t m_nHeight = 0;  // lines
-  int32_t m_nStride = 0;  // bytes, must be multiple of 4.
+  MaybeOwned<uint8_t, FxFreeDeleter> data_;
+  int32_t width_ = 0;   // 1-bit pixels
+  int32_t height_ = 0;  // lines
+  int32_t stride_ = 0;  // bytes, must be multiple of 4.
 };
 
 #endif  // CORE_FXCODEC_JBIG2_JBIG2_IMAGE_H_

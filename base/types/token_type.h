@@ -7,6 +7,7 @@
 
 #include <compare>
 #include <type_traits>
+#include <utility>
 
 #include "base/check.h"
 #include "base/types/strong_alias.h"
@@ -17,7 +18,7 @@ namespace base {
 // A specialization of StrongAlias for UnguessableToken. Unlike
 // UnguessableToken, a TokenType<...> does not default to null and does not
 // expose the concept of null tokens. If you need to indicate a null token,
-// please use absl::optional<TokenType<...>>.
+// please use std::optional<TokenType<...>>.
 template <typename TypeMarker>
 class TokenType : public StrongAlias<TypeMarker, UnguessableToken> {
  private:
@@ -48,6 +49,11 @@ class TokenType : public StrongAlias<TypeMarker, UnguessableToken> {
   }
   friend constexpr bool operator==(const TokenType& lhs, const TokenType& rhs) {
     return lhs.value() == rhs.value();
+  }
+
+  template <typename H>
+  friend H AbslHashValue(H h, const TokenType& token_type) {
+    return H::combine(std::move(h), token_type.value());
   }
 
   // Hash functor for use in unordered containers.

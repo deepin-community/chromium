@@ -16,6 +16,7 @@ import random
 import re
 import socket
 import sys
+import tarfile
 import tempfile
 import textwrap
 import time
@@ -47,6 +48,9 @@ def read_tree(tree_root):
         for f in [join(root, f) for f in files if not f.startswith('.')]:
             filepath = f[len(tree_root) + 1:].replace(os.sep, '/')
             assert len(filepath) > 0, f
+            if tarfile.is_tarfile(join(root, f)):
+                tree[filepath] = 'tarfile'
+                continue
             with io.open(join(root, f), encoding='utf-8') as f:
                 tree[filepath] = f.read()
     return tree
@@ -166,6 +170,22 @@ class FakeReposBase(object):
                 'git', 'init', '-b', DEFAULT_BRANCH, '-q',
                 join(self.git_base, repo)
             ])
+            subprocess2.check_call([
+                'git',
+                '-C',
+                join(self.git_base, repo),
+                'config',
+                'user.name',
+                'Hina Hoshino',
+            ])
+            subprocess2.check_call([
+                'git',
+                '-C',
+                join(self.git_base, repo),
+                'config',
+                'user.email',
+                'testing@example.com',
+            ])
             self.git_hashes[repo] = [(None, None)]
         self.populateGit()
         self.initialized = True
@@ -210,7 +230,7 @@ class FakeReposBase(object):
 
 class FakeRepos(FakeReposBase):
     """Implements populateGit()."""
-    NB_GIT_REPOS = 21
+    NB_GIT_REPOS = 24
 
     def populateGit(self):
         # Testing:
@@ -819,7 +839,11 @@ deps = {
      }],
      "dep_type": "cipd",
   },
-}""" % {
+}
+
+recursedeps = [
+  'chicken/dickens',
+]""" % {
                     'hash_2': self.git_hashes['repo_2'][1][0],
                     'hash_3': self.git_hashes['repo_3'][1][0],
                 },
@@ -852,13 +876,18 @@ deps = {
      }],
      "dep_type": "cipd",
   },
-}""" % {
+}
+
+recursedeps = [
+  'foo/chicken/dickens',
+]
+""" % {
                     'hash_2': self.git_hashes['repo_2'][1][0],
                     'hash_3': self.git_hashes['repo_3'][1][0],
                 },
             })
 
-        # gitmodules already present, test migration
+        # gitmodules already present, test migration, .git suffix
         self._commit_git(
             'repo_21',
             {
@@ -880,6 +909,134 @@ deps = {
 	url = invalid/repo_url.git"""
             },
         )
+
+        self._commit_git(
+            'repo_22', {
+                'DEPS':
+                textwrap.dedent("""\
+        vars = {}
+        deps = {
+          'src/gcs_dep': {
+            'bucket': '123bucket',
+            'dep_type': 'gcs',
+            'objects': [{
+                'object_name': 'deadbeef',
+                'sha256sum': 'abcd123',
+                'size_bytes': 10000,
+                'generation': 1542380408102454,
+            }]
+          },
+          'src/another_gcs_dep': {
+            'bucket': '456bucket',
+            'dep_type': 'gcs',
+            'objects': [{
+                'object_name': 'Linux/llvmfile.tar.gz',
+                'sha256sum': 'abcd123',
+                'size_bytes': 10000,
+                'generation': 1542380408102455,
+            }]
+          },
+          'src/zip_gcs_dep': {
+            'bucket': '456bucket',
+            'dep_type': 'gcs',
+            'objects': [{
+                'object_name': 'windows/payload.zip',
+                'sha256sum': 'abcd123',
+                'size_bytes': 10000,
+                'generation': 1542380408102455,
+            }]
+          },
+          'src/gcs_dep_with_output_file': {
+            'bucket': '789bucket',
+            'dep_type': 'gcs',
+            'objects': [{
+                'object_name': 'clang-format-version123',
+                'sha256sum': 'abcd123',
+                'output_file': 'clang-format-no-extract',
+                'size_bytes': 10000,
+                'generation': 1542380408102456,
+            }]
+          },
+          'src/gcs_dep_ignored': {
+            'bucket': '789bucket',
+            'dep_type': 'gcs',
+            'objects': [{
+                'object_name': 'foobar',
+                'sha256sum': 'abcd124',
+                'size_bytes': 10000,
+                'generation': 1542380408102457,
+                'condition': 'False',
+            }]
+          },
+        }"""),
+                'origin':
+                'git/repo_22@1\n'
+            })
+
+        self._commit_git(
+            'repo_23', {
+                'DEPS': """
+deps = {
+  'src/repo12': '/repo_12',
+}""",
+                'origin': 'git/repo_23@1\n',
+            })
+
+        self._commit_git(
+            'repo_23', {
+                'DEPS': """
+deps = {
+  'src/repo12': '/repo_12@refs/changes/1212',
+}""",
+                'origin': 'git/repo_23@2\n',
+            })
+
+        # src/repo12 is now a GCS dependency.
+        self._commit_git(
+            'repo_23', {
+                'DEPS': """
+deps = {
+  'src/repo12': {
+    'bucket': 'bucket123',
+    'dep_type': 'gcs',
+    'objects': [{
+        'object_name': 'path_to_file.tar.gz',
+        'sha256sum': 'abcd123',
+        'size_bytes': 10000,
+        'generation': 1542380408102454,
+    }]
+  },
+}
+""",
+                'origin': 'git/repo_23@3\n'
+            })
+
+        # gitmodules already present, test migration, gclient-recursedeps
+        self._commit_git(
+            'repo_24',
+            {
+                'DEPS':
+                """
+use_relative_paths = True
+git_dependencies = "SYNC"
+deps = {
+  "bar": {
+    "url": 'https://example.googlesource.com/repo@%(hash)s',
+  },
+}
+
+recursedeps = [
+  'bar',
+]""" % {
+                    'hash': self.git_hashes['repo_2'][1][0],
+                },
+                '.gitmodules':
+                """
+[submodule "bar"]
+	path = bar
+	url = https://example.googlesource.com/repo"""
+            },
+        )  # Update `NB_GIT_REPOS` if you add more repos.
 
 
 class FakeRepoSkiaDEPS(FakeReposBase):

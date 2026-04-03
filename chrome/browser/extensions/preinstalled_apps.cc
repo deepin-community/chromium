@@ -6,13 +6,13 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 #include <set>
 #include <string>
 
-#include "base/lazy_instance.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_util.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/preinstalled_app_install_features.h"
 #include "chrome/browser/web_applications/preinstalled_web_app_utils.h"
@@ -22,8 +22,10 @@
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/version_info/version_info.h"
+#include "extensions/browser/extensions_browser_client.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace {
 
@@ -38,10 +40,11 @@ bool IsLocaleSupported() {
   // that they don't work.
   // TODO(rogerta): Do this check dynamically once the webstore can expose
   // an API. See http://crbug.com/101357
-  const std::string& locale = g_browser_process->GetApplicationLocale();
-  static const char* const unsupported_locales[] = {"CN", "TR", "IR"};
-  for (size_t i = 0; i < std::size(unsupported_locales); ++i) {
-    if (base::EndsWith(locale, unsupported_locales[i],
+  std::string locale =
+      extensions::ExtensionsBrowserClient::Get()->GetApplicationLocale();
+  static constexpr const char* unsupported_locales[] = {"CN", "TR", "IR"};
+  for (const char* unsupported : unsupported_locales) {
+    if (base::EndsWith(locale, unsupported,
                        base::CompareCase::INSENSITIVE_ASCII)) {
       return false;
     }
@@ -49,8 +52,10 @@ bool IsLocaleSupported() {
   return true;
 }
 
-base::LazyInstance<std::set<Profile*>>::Leaky g_perform_new_installation =
-    LAZY_INSTANCE_INITIALIZER;
+std::set<Profile*>& GetPerformNewInstallationProfiles() {
+  static base::NoDestructor<std::set<Profile*>> perform_new_installation;
+  return *perform_new_installation;
+}
 }  // namespace
 
 namespace preinstalled_apps {
@@ -61,7 +66,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
 
 // static
 bool Provider::DidPerformNewInstallationForProfile(Profile* profile) {
-  return g_perform_new_installation.Get().count(profile);
+  return GetPerformNewInstallationProfiles().count(profile);
 }
 
 void Provider::InitProfileState() {
@@ -122,7 +127,7 @@ void Provider::InitProfileState() {
                                      *new_install_state);
   }
   if (perform_new_installation_)
-    g_perform_new_installation.Get().insert(profile_);
+    GetPerformNewInstallationProfiles().insert(profile_);
 }
 
 Provider::Provider(Profile* profile,
@@ -149,20 +154,20 @@ void Provider::VisitRegisteredExtension() {
     // If pre-installed apps aren't enabled for the profile, we short-circuit
     // the flow to load them from the file (which happens as a result of
     // VisitRegisteredExtension()), and immediately set empty prefs.
-    ExternalProviderImpl::SetPrefs(base::Value::Dict());
+    ExternalProviderImpl::SetPrefs(base::DictValue());
     return;
   }
 
   extensions::ExternalProviderImpl::VisitRegisteredExtension();
 }
 
-void Provider::SetPrefs(base::Value::Dict prefs) {
+void Provider::SetPrefs(base::DictValue prefs) {
   DCHECK(preinstalled_apps_enabled_);
 
   // First, check if this is for a migration from around 2013. Likely not.
   if (is_migration_) {
     DCHECK(!perform_new_installation_);
-    std::set<std::string> keys_to_erase;
+    absl::flat_hash_set<std::string> keys_to_erase;
     // Filter out the new pre-installed apps for migrating users, so that we
     // don't randomly install them out of the blue. Two-pass to keep iterators
     // nice and happy.
@@ -187,8 +192,7 @@ void Provider::SetPrefs(base::Value::Dict prefs) {
           pref.GetDict().FindString(kWebAppMigrationFlag);
       if (!web_app_flag)
         return false;  // Isn't migrating.
-      if (web_app::IsPreinstalledAppInstallFeatureEnabled(*web_app_flag,
-                                                          *profile)) {
+      if (web_app::IsPreinstalledAppInstallFeatureEnabled(*web_app_flag)) {
         // The feature is still enabled; it's responsible for the behavior.
         return false;
       }
@@ -203,7 +207,7 @@ void Provider::SetPrefs(base::Value::Dict prefs) {
       return true;
     };
 
-    std::set<std::string> keys_to_erase;
+    absl::flat_hash_set<std::string> keys_to_erase;
     for (auto entry : prefs) {
       bool should_re_add = should_re_add_app(entry.first, entry.second);
       if (should_re_add) {

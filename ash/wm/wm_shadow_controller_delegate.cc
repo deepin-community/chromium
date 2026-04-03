@@ -6,7 +6,6 @@
 
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
-#include "ash/wm/desks/desks_util.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/overview/overview_item.h"
 #include "ash/wm/overview/overview_session.h"
@@ -16,6 +15,7 @@
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "ui/base/class_property.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/color/color_provider_source_observer.h"
 #include "ui/views/widget/widget.h"
 #include "ui/wm/core/shadow_controller.h"
@@ -59,9 +59,7 @@ class ShadowColorizer : public ui::ColorProviderSourceObserver {
 }  // namespace
 
 DEFINE_UI_CLASS_PROPERTY_TYPE(ShadowColorizer*)
-DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(ShadowColorizer,
-                                   kShadowColorizerKey,
-                                   nullptr)
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(ShadowColorizer, kShadowColorizerKey)
 namespace ash {
 
 //------------------------------------------------------------------------------
@@ -69,6 +67,16 @@ namespace ash {
 WmShadowControllerDelegate::WmShadowControllerDelegate() = default;
 
 WmShadowControllerDelegate::~WmShadowControllerDelegate() = default;
+
+bool WmShadowControllerDelegate::ShouldObserveWindow(
+    const aura::Window* window) {
+  // On ChromeOS, Containers (which has no delegate with unknown type) and
+  // embedded windows do not need Shadow.  Other windows will be checked when a
+  // window is added to tree, or its property changes.
+  return ((window->delegate() ||
+           window->GetType() != aura::client::WINDOW_TYPE_UNKNOWN) &&
+          window->GetType() != aura::client::WINDOW_TYPE_CONTROL);
+}
 
 bool WmShadowControllerDelegate::ShouldShowShadowForWindow(
     const aura::Window* window) {
@@ -91,8 +99,7 @@ bool WmShadowControllerDelegate::ShouldShowShadowForWindow(
     // Windows in overview that are not moving out of the active desk should not
     // have shadows.
     auto* overview_item = overview_session->GetOverviewItemForWindow(window);
-    if (desks_util::BelongsToActiveDesk(const_cast<aura::Window*>(window)) &&
-        overview_item && !overview_item->is_moving_to_another_desk()) {
+    if (overview_item && !overview_item->is_moving_to_another_desk()) {
       return false;
     }
   }
@@ -109,10 +116,10 @@ bool WmShadowControllerDelegate::ShouldShowShadowForWindow(
 
   // Hide the shadow if it's not being dragged and it's a maximized/fullscreen
   // window.
-  ui::WindowShowState show_state =
+  ui::mojom::WindowShowState show_state =
       window->GetProperty(aura::client::kShowStateKey);
-  if (show_state == ui::SHOW_STATE_FULLSCREEN ||
-      show_state == ui::SHOW_STATE_MAXIMIZED) {
+  if (show_state == ui::mojom::WindowShowState::kFullscreen ||
+      show_state == ui::mojom::WindowShowState::kMaximized) {
     return false;
   }
 
@@ -123,11 +130,8 @@ bool WmShadowControllerDelegate::ShouldUpdateShadowOnWindowPropertyChange(
     const aura::Window* window,
     const void* key,
     intptr_t old) {
-  return (key == chromeos::kIsShowingInOverviewKey &&
-          window->GetProperty(chromeos::kIsShowingInOverviewKey) != old) ||
-         (key == chromeos::kWindowStateTypeKey &&
-          window->GetProperty(chromeos::kWindowStateTypeKey) !=
-              static_cast<chromeos::WindowStateType>(old));
+  return (key == chromeos::kWindowHasRoundedCornersKey &&
+          window->GetProperty(chromeos::kWindowHasRoundedCornersKey) != old);
 }
 
 void WmShadowControllerDelegate::ApplyColorThemeToWindowShadow(
@@ -138,6 +142,12 @@ void WmShadowControllerDelegate::ApplyColorThemeToWindowShadow(
         kShadowColorizerKey,
         std::make_unique<ShadowColorizer>(window, color_provider_source));
   }
+}
+
+bool WmShadowControllerDelegate::ShouldRoundShadowForWindow(
+    const aura::Window* window) {
+  auto* window_state = WindowState::Get(window);
+  return window_state ? window_state->ShouldWindowHaveRoundedCorners() : true;
 }
 
 }  // namespace ash

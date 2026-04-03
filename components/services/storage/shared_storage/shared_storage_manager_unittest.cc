@@ -10,7 +10,6 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
@@ -32,6 +31,8 @@
 #include "components/services/storage/shared_storage/shared_storage_database.h"
 #include "components/services/storage/shared_storage/shared_storage_options.h"
 #include "components/services/storage/shared_storage/shared_storage_test_utils.h"
+#include "content/public/test/shared_storage_test_utils.h"
+#include "services/network/public/cpp/features.h"
 #include "storage/browser/quota/special_storage_policy.h"
 #include "storage/browser/test/mock_special_storage_policy.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
@@ -59,7 +60,6 @@ using StorageKeyPolicyMatcherFunction =
 using DBOperation = TestDatabaseOperationReceiver::DBOperation;
 using Type = DBOperation::Type;
 using DBType = SharedStorageTestDBType;
-using MemoryPressureLevel = base::MemoryPressureListener::MemoryPressureLevel;
 
 const int kBitBudget = 8;
 const int kInitialPurgeIntervalHours = 4;
@@ -81,6 +81,14 @@ class MockResultQueue {
   OperationResult NextOperationResult() {
     DCHECK(!result_queue_.empty());
     OperationResult next_result = result_queue_.front();
+    result_queue_.pop();
+    return next_result;
+  }
+
+  BatchUpdateResult NextBatchUpdateResult() {
+    DCHECK(!result_queue_.empty());
+    BatchUpdateResult next_result(/*overall_result=*/result_queue_.front(),
+                                  /*inner_method_results=*/{});
     result_queue_.pop();
     return next_result;
   }
@@ -196,7 +204,15 @@ class MockAsyncSharedStorageDatabase : public AsyncSharedStorageDatabase {
     Run(std::move(callback));
   }
   void Clear(url::Origin context_origin,
-             base::OnceCallback<void(OperationResult)> callback) override {
+             base::OnceCallback<void(OperationResult)> callback,
+             DataClearSource source) override {
+    Run(std::move(callback));
+  }
+  void BatchUpdate(
+      url::Origin context_origin,
+      std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+          methods_with_options,
+      base::OnceCallback<void(BatchUpdateResult)> callback) override {
     Run(std::move(callback));
   }
   void Length(url::Origin context_origin,
@@ -301,6 +317,12 @@ class MockAsyncSharedStorageDatabase : public AsyncSharedStorageDatabase {
         .Then(std::move(callback));
   }
 
+  void Run(base::OnceCallback<void(BatchUpdateResult)> callback) {
+    DCHECK(callback);
+    mock_result_queue_.AsyncCall(&MockResultQueue::NextBatchUpdateResult)
+        .Then(std::move(callback));
+  }
+
   void Run(base::OnceCallback<void(GetResult)> callback) {
     DCHECK(callback);
     mock_result_queue_.AsyncCall(&MockResultQueue::NextGetResult)
@@ -359,7 +381,7 @@ class MockSharedStorageManager : public SharedStorageManager {
     OverrideDatabaseForTesting(MockAsyncSharedStorageDatabase::Create());
   }
 
-  ~MockSharedStorageManager() override = default;
+  ~MockSharedStorageManager() = default;
 
   void SetResultsForTesting(std::queue<OperationResult> result_queue,
                             base::OnceClosure callback) {
@@ -405,7 +427,7 @@ class SharedStorageManagerTest : public testing::Test {
 
   virtual void InitSharedStorageFeature() {
     scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        {blink::features::kSharedStorageAPI},
+        {network::features::kSharedStorageAPI},
         // Set these intervals to be long enough not to interfere with the
         // basic tests.
         {{"SharedStorageStalePurgeInitialInterval",
@@ -422,7 +444,7 @@ class SharedStorageManagerTest : public testing::Test {
   // Return the relative file path in the "storage/" subdirectory of test data
   // for the SQL file from which to initialize an async shared storage database
   // instance.
-  virtual std::string GetRelativeFilePath() { return nullptr; }
+  virtual std::string GetRelativeFilePath() { return ""; }
 
   virtual DBType GetType() { return DBType::kInMemory; }
 
@@ -478,19 +500,6 @@ class SharedStorageManagerTest : public testing::Test {
     EXPECT_TRUE(destroy_success_);
     EXPECT_TRUE(GetManager()->tried_to_recover_from_init_failure_for_testing());
     EXPECT_TRUE(GetManager()->database());
-  }
-
-  void OnMemoryPressure(MemoryPressureLevel memory_pressure_level) {
-    DCHECK(GetManager());
-    DCHECK(receiver_);
-
-    auto callback = receiver_->MakeOnceClosureFromClosure(
-        DBOperation(
-            Type::DB_ON_MEMORY_PRESSURE,
-            {TestDatabaseOperationReceiver::SerializeMemoryPressureLevel(
-                memory_pressure_level)}),
-        base::BindLambdaForTesting([&]() { memory_trimmed_ = true; }));
-    GetManager()->OnMemoryPressure(std::move(callback), memory_pressure_level);
   }
 
   void Get(url::Origin context_origin,
@@ -590,6 +599,36 @@ class SharedStorageManagerTest : public testing::Test {
     GetManager()->Delete(std::move(context_origin), std::move(key),
                          future.GetCallback());
     return future.Get();
+  }
+
+  void BatchUpdate(
+      url::Origin context_origin,
+      std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+          methods_with_options,
+      BatchUpdateResult* out_result) {
+    DCHECK(out_result);
+    DCHECK(GetManager());
+    DCHECK(receiver_);
+
+    auto callback = receiver_->MakeBatchUpdateResultCallback(
+        DBOperation(Type::DB_BATCH_UPDATE, context_origin,
+                    content::CloneSharedStorageMethods(methods_with_options)),
+        out_result);
+    GetManager()->BatchUpdate(std::move(context_origin),
+                              std::move(methods_with_options),
+                              std::move(callback));
+  }
+
+  BatchUpdateResult BatchUpdateSync(
+      url::Origin context_origin,
+      std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+          methods_with_options) {
+    DCHECK(GetManager());
+    base::test::TestFuture<BatchUpdateResult> future;
+    GetManager()->BatchUpdate(std::move(context_origin),
+                              std::move(methods_with_options),
+                              future.GetCallback());
+    return future.Take();
   }
 
   void Length(url::Origin context_origin, int* out_length) {
@@ -1173,6 +1212,30 @@ TEST_P(SharedStorageManagerParamTest, Append) {
   EXPECT_EQ(BytesUsedSync(kOrigin1), 8 + 12 + 12 + 12);
 }
 
+TEST_P(SharedStorageManagerParamTest, BatchUpdate) {
+  url::Origin kOrigin1 = url::Origin::Create(GURL("http://www.example1.test"));
+
+  std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+      methods_with_options;
+  methods_with_options.push_back(
+      content::MojomSetMethod(/*key=*/u"a", /*value=*/u"b",
+                              /*ignore_if_present=*/true));
+  methods_with_options.push_back(
+      content::MojomAppendMethod(/*key=*/u"a", /*value=*/u"b"));
+  methods_with_options.push_back(content::MojomSetMethod(
+      /*key=*/u"c", /*value=*/u"d", /*ignore_if_present=*/true));
+
+  BatchUpdateResult result =
+      BatchUpdateSync(kOrigin1, std::move(methods_with_options));
+  EXPECT_EQ(result.overall_result, OperationResult::kSuccess);
+  EXPECT_THAT(result.inner_method_results,
+              ElementsAre(OperationResult::kSet, OperationResult::kSet,
+                          OperationResult::kSet));
+
+  EXPECT_EQ(GetSync(kOrigin1, u"a").data, u"bb");
+  EXPECT_EQ(GetSync(kOrigin1, u"c").data, u"d");
+}
+
 TEST_P(SharedStorageManagerParamTest, Length) {
   url::Origin kOrigin1 = url::Origin::Create(GURL("http://www.example1.test"));
   EXPECT_EQ(0, LengthSync(kOrigin1));
@@ -1713,13 +1776,15 @@ TEST_P(SharedStorageManagerErrorParamTest,
   histogram_tester_.ExpectUniqueSample(
       "Storage.SharedStorage.OnShutdown.NumSqlErrors", 6, 1);
   histogram_tester_.ExpectUniqueSample(
+      "Storage.SharedStorage.OnShutdown.HasSqlErrors", true, 1);
+  histogram_tester_.ExpectUniqueSample(
       "Storage.SharedStorage.OnShutdown.RecoveryFromInitFailureAttempted",
       false, 1);
   histogram_tester_.ExpectUniqueSample(
       "Storage.SharedStorage.OnShutdown.RecoveryOnDiskAttempted", false, 1);
 }
 
-// TODO(crbug.com/1312273): Test is flaky.
+// TODO(crbug.com/40831552): Test is flaky.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_InitFailure_DestroyAndRecreateDatabase DISABLED_InitFailure_DestroyAndRecreateDatabase
 #else
@@ -1788,6 +1853,8 @@ TEST_P(SharedStorageManagerErrorParamTest,
   histogram_tester_.ExpectUniqueSample(
       "Storage.SharedStorage.OnShutdown.NumSqlErrors", 0, 1);
   histogram_tester_.ExpectUniqueSample(
+      "Storage.SharedStorage.OnShutdown.HasSqlErrors", false, 1);
+  histogram_tester_.ExpectUniqueSample(
       "Storage.SharedStorage.OnShutdown.RecoveryFromInitFailureAttempted", true,
       1);
   histogram_tester_.ExpectUniqueSample(
@@ -1852,6 +1919,8 @@ TEST_P(SharedStorageManagerErrorParamTest,
   histogram_tester_.ExpectUniqueSample(
       "Storage.SharedStorage.OnShutdown.NumSqlErrors", 0, 1);
   histogram_tester_.ExpectUniqueSample(
+      "Storage.SharedStorage.OnShutdown.HasSqlErrors", false, 1);
+  histogram_tester_.ExpectUniqueSample(
       "Storage.SharedStorage.OnShutdown.RecoveryFromInitFailureAttempted",
       false, 1);
   histogram_tester_.ExpectUniqueSample(
@@ -1865,6 +1934,14 @@ TEST_P(SharedStorageManagerParamTest, AsyncOperations) {
       task_environment_.GetMainThreadTaskRunner());
   size_t id1 = listener_utility.RegisterListener();
   size_t id2 = listener_utility.RegisterListener();
+
+  std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+      batch_update_methods;
+  batch_update_methods.push_back(
+      content::MojomSetMethod(/*key=*/u"key1", /*value=*/u"value1",
+                              /*ignore_if_present=*/true));
+  batch_update_methods.push_back(
+      content::MojomAppendMethod(/*key=*/u"key1", /*value=*/u"value1"));
 
   std::queue<DBOperation> operation_list(
       {{Type::DB_SET,
@@ -1898,9 +1975,9 @@ TEST_P(SharedStorageManagerParamTest, AsyncOperations) {
        {Type::DB_ENTRIES, kOrigin1, {base::NumberToString16(id2)}},
        {Type::DB_CLEAR, kOrigin1},
        {Type::DB_LENGTH, kOrigin1},
-       {Type::DB_ON_MEMORY_PRESSURE,
-        {TestDatabaseOperationReceiver::SerializeMemoryPressureLevel(
-            MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_CRITICAL)}}});
+       {Type::DB_BATCH_UPDATE, kOrigin1,
+        content::CloneSharedStorageMethods(batch_update_methods)},
+       {Type::DB_GET, kOrigin1, {u"key1"}}});
 
   SetExpectedOperationList(std::move(operation_list));
   ASSERT_TRUE(GetManager());
@@ -1951,8 +2028,12 @@ TEST_P(SharedStorageManagerParamTest, AsyncOperations) {
   int length5 = -1;
   Length(kOrigin1, &length5);
 
-  EXPECT_FALSE(memory_trimmed_);
-  OnMemoryPressure(MemoryPressureLevel::MEMORY_PRESSURE_LEVEL_CRITICAL);
+  BatchUpdateResult batch_update_result(
+      /*overall_result=*/OperationResult::kSqlError,
+      /*inner_method_results*/ {});
+  BatchUpdate(kOrigin1, std::move(batch_update_methods), &batch_update_result);
+  GetResult value6;
+  Get(kOrigin1, u"key1", &value6);
 
   WaitForOperations();
   EXPECT_TRUE(is_finished());
@@ -1994,7 +2075,10 @@ TEST_P(SharedStorageManagerParamTest, AsyncOperations) {
   EXPECT_EQ(OperationResult::kSuccess, result9);
   EXPECT_EQ(0, length5);
 
-  EXPECT_TRUE(memory_trimmed_);
+  EXPECT_EQ(batch_update_result.overall_result, OperationResult::kSuccess);
+  EXPECT_THAT(batch_update_result.inner_method_results,
+              ElementsAre(OperationResult::kSet, OperationResult::kSet));
+  EXPECT_EQ(value6.data, u"value1value1");
 }
 
 class SharedStorageManagerPurgeMatchingOriginsParamTest

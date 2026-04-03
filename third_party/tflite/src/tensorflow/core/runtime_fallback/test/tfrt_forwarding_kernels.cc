@@ -16,6 +16,9 @@ limitations under the License.
 // TFRT kernels for testing tfrt_forwarding delegate.
 
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor_shape.h"
+#include "tensorflow/core/framework/types.pb.h"
+#include "tensorflow/core/platform/types.h"
 #include "tfrt/host_context/kernel_registry.h"  // from @tf_runtime
 #include "tfrt/host_context/kernel_utils.h"  // from @tf_runtime
 
@@ -25,7 +28,7 @@ namespace tensorflow {
 static void TFDConstantTensor5D(tfrt::Argument<int32_t> value,
                                 tfrt::Result<Tensor> tensor) {
   Tensor out(DT_INT32, TensorShape({1, 1, 1, 1, 1}));
-  out.flat<int32>()(0) = value.get();
+  out.flat<int32_t>()(0) = value.get();
   tensor.Emplace(out);
 }
 

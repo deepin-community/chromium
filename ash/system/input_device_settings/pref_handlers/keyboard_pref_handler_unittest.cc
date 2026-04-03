@@ -2,19 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ash/system/input_device_settings/pref_handlers/keyboard_pref_handler_impl.h"
-
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
-#include "ash/public/mojom/input_device_settings.mojom-shared.h"
 #include "ash/public/mojom/input_device_settings.mojom.h"
 #include "ash/shell.h"
 #include "ash/system/input_device_settings/input_device_settings_defaults.h"
 #include "ash/system/input_device_settings/input_device_settings_pref_names.h"
+#include "ash/system/input_device_settings/input_device_settings_utils.h"
 #include "ash/system/input_device_settings/input_device_tracker.h"
+#include "ash/system/input_device_settings/pref_handlers/keyboard_pref_handler_impl.h"
 #include "ash/system/input_device_settings/settings_updated_metrics_info.h"
 #include "ash/test/ash_test_base.h"
-#include "base/containers/contains.h"
+#include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/to_string.h"
@@ -25,13 +24,12 @@
 #include "components/prefs/testing_pref_service.h"
 #include "components/user_manager/known_user.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/events/ash/mojom/extended_fkeys_modifier.mojom-shared.h"
+#include "ui/events/ash/keyboard_capability.h"
 #include "ui/events/ash/mojom/extended_fkeys_modifier.mojom.h"
-#include "ui/events/ash/mojom/modifier_key.mojom-shared.h"
 #include "ui/events/ash/mojom/modifier_key.mojom.h"
-#include "ui/events/ash/mojom/six_pack_shortcut_modifier.mojom-shared.h"
 #include "ui/events/ash/mojom/six_pack_shortcut_modifier.mojom.h"
 #include "ui/events/ash/pref_names.h"
+#include "ui/events/devices/device_data_manager_test_api.h"
 
 namespace ash {
 
@@ -50,6 +48,13 @@ const std::string kKeyboardKey2 = "device_key2";
 const std::string kKeyboardKey3 = "device_key3";
 
 const bool kGlobalSendFunctionKeys = false;
+
+const ui::KeyboardDevice kSampleSplitModifierKeyboard(
+    21,
+    ui::INPUT_DEVICE_INTERNAL,
+    "kSampleSplitModifierKeyboard",
+    /*has_assistant_key=*/true,
+    /*has_function_key=*/true);
 
 const mojom::KeyboardSettings kKeyboardSettingsDefault(
     /*modifier_remappings=*/{},
@@ -109,6 +114,14 @@ const mojom::KeyboardSettings kKeyboardSettings3(
     kDefaultFkey,
     kDefaultFkey);
 
+const mojom::KeyboardSettings kKeyboardSettings4(
+    /*modifier_remappings=*/{},
+    /*top_row_are_fkeys=*/false,
+    /*suppress_meta_fkey_rewrites=*/false,
+    nullptr,
+    std::nullopt,
+    std::nullopt);
+
 }  // namespace
 
 class KeyboardPrefHandlerTest : public AshTestBase {
@@ -120,12 +133,8 @@ class KeyboardPrefHandlerTest : public AshTestBase {
 
   // testing::Test:
   void SetUp() override {
-    // scoped_feature_list_.InitAndEnableFeature(
-    //     features::kInputDeviceSettingsSplit);
-
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kInputDeviceSettingsSplit,
-                              features::kAltClickAndSixPackCustomization,
+        /*enabled_features=*/{features::kAltClickAndSixPackCustomization,
                               ::features::kSupportF11AndF12KeyShortcuts},
         /*disabled_features=*/{});
 
@@ -150,6 +159,8 @@ class KeyboardPrefHandlerTest : public AshTestBase {
         prefs::kKeyboardDefaultChromeOSSettings);
     pref_service_->registry()->RegisterDictionaryPref(
         prefs::kKeyboardDefaultNonChromeOSSettings);
+    pref_service_->registry()->RegisterDictionaryPref(
+        prefs::kKeyboardDefaultSplitModifierSettings);
     pref_service_->registry()->RegisterDictionaryPref(
         prefs::kKeyboardUpdateSettingsMetricInfo);
     pref_service_->registry()->RegisterDictionaryPref(
@@ -198,7 +209,7 @@ class KeyboardPrefHandlerTest : public AshTestBase {
 
   void CheckKeyboardSettingsAndDictAreEqual(
       const mojom::KeyboardSettings& settings,
-      const base::Value::Dict& settings_dict,
+      const base::DictValue& settings_dict,
       bool is_external = false) {
     auto suppress_meta_fkey_rewrites =
         settings_dict.FindBool(prefs::kKeyboardSettingSuppressMetaFKeyRewrites);
@@ -278,7 +289,7 @@ class KeyboardPrefHandlerTest : public AshTestBase {
     mojom::KeyboardPtr keyboard = mojom::Keyboard::New();
     keyboard->settings = settings.Clone();
     keyboard->device_key = device_key;
-    keyboard->meta_key = mojom::MetaKey::kLauncher;
+    keyboard->meta_key = ui::mojom::MetaKey::kLauncher;
 
     pref_handler_->UpdateDefaultChromeOSKeyboardSettings(
         pref_service_.get(),
@@ -291,9 +302,24 @@ class KeyboardPrefHandlerTest : public AshTestBase {
     mojom::KeyboardPtr keyboard = mojom::Keyboard::New();
     keyboard->settings = settings.Clone();
     keyboard->device_key = device_key;
-    keyboard->meta_key = mojom::MetaKey::kExternalMeta;
+    keyboard->meta_key = ui::mojom::MetaKey::kExternalMeta;
 
     pref_handler_->UpdateDefaultNonChromeOSKeyboardSettings(
+        pref_service_.get(),
+        /*keyboard_policies=*/{}, *keyboard);
+  }
+
+  void CallUpdateDefaultSplitModifierKeyboardSettings(
+      const std::string& device_key,
+      const mojom::KeyboardSettings& settings) {
+    mojom::KeyboardPtr keyboard = mojom::Keyboard::New();
+    keyboard->settings = settings.Clone();
+    keyboard->device_key = device_key;
+    keyboard->meta_key = ui::mojom::MetaKey::kLauncherRefresh;
+    keyboard->modifier_keys = {ui::mojom::ModifierKey::kFunction,
+                               ui::mojom::ModifierKey::kQuickInsert};
+
+    pref_handler_->UpdateDefaultSplitModifierKeyboardSettings(
         pref_service_.get(),
         /*keyboard_policies=*/{}, *keyboard);
   }
@@ -342,7 +368,7 @@ class KeyboardPrefHandlerTest : public AshTestBase {
     return std::move(keyboard_ptr->settings);
   }
 
-  const base::Value::Dict* GetSettingsDictForDeviceKey(
+  const base::DictValue* GetSettingsDictForDeviceKey(
       const std::string& device_key,
       bool is_external = false) {
     if (!is_external) {
@@ -374,14 +400,14 @@ class KeyboardPrefHandlerTest : public AshTestBase {
     return dict && dict->is_dict();
   }
 
-  base::Value::Dict GetInternalLoginScreenSettingsDict(AccountId account_id) {
+  base::DictValue GetInternalLoginScreenSettingsDict(AccountId account_id) {
     return known_user()
         .FindPath(account_id, prefs::kKeyboardLoginScreenInternalSettingsPref)
         ->GetDict()
         .Clone();
   }
 
-  base::Value::Dict GetExternalLoginScreenSettingsDict(AccountId account_id) {
+  base::DictValue GetExternalLoginScreenSettingsDict(AccountId account_id) {
     return known_user()
         .FindPath(account_id, prefs::kKeyboardLoginScreenExternalSettingsPref)
         ->GetDict()
@@ -459,22 +485,6 @@ TEST_F(KeyboardPrefHandlerTest, UpdateLoginScreenKeyboardSettings) {
       GetInternalLoginScreenSettingsDict(account_id_1);
   CheckKeyboardSettingsAndDictAreEqual(*updated_settings,
                                        updated_settings_dict);
-}
-
-TEST_F(KeyboardPrefHandlerTest,
-       LoginScreenPrefsNotPersistedWhenFlagIsDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(features::kInputDeviceSettingsSplit);
-  mojom::Keyboard keyboard1;
-  keyboard1.device_key = kKeyboardKey1;
-  keyboard1.is_external = false;
-  mojom::Keyboard keyboard2;
-  keyboard2.device_key = kKeyboardKey2;
-  keyboard2.is_external = true;
-  CallInitializeLoginScreenKeyboardSettings(account_id_1, keyboard1);
-  CallInitializeLoginScreenKeyboardSettings(account_id_1, keyboard2);
-  EXPECT_FALSE(HasInternalLoginScreenSettingsDict(account_id_1));
-  EXPECT_FALSE(HasExternalLoginScreenSettingsDict(account_id_1));
 }
 
 TEST_F(KeyboardPrefHandlerTest, PreservesOldSettings) {
@@ -672,7 +682,7 @@ TEST_F(KeyboardPrefHandlerTest, InvalidModifierRemappings) {
       pref_service_->GetDict(prefs::kKeyboardDeviceSettingsDictPref).Clone();
   auto* settings_dict = devices_dict.FindDict(kKeyboardKey1);
 
-  base::Value::Dict invalid_modifier_remappings;
+  base::DictValue invalid_modifier_remappings;
   invalid_modifier_remappings.Set(
       base::NumberToString(static_cast<int>(ui::mojom::ModifierKey::kMaxValue) +
                            1),
@@ -687,6 +697,10 @@ TEST_F(KeyboardPrefHandlerTest, InvalidModifierRemappings) {
   invalid_modifier_remappings.Set(
       base::NumberToString(static_cast<int>(ui::mojom::ModifierKey::kAlt)),
       static_cast<int>(ui::mojom::ModifierKey::kMinValue) - 1);
+  invalid_modifier_remappings.Set(
+      base::NumberToString(
+          static_cast<int>(ui::mojom::ModifierKey::kBackspace)),
+      static_cast<int>(ui::mojom::ModifierKey::kFunction));
 
   // Set 1 valid modifier remapping to check that it skips invalid remappings,
   // and keeps the valid.
@@ -706,8 +720,8 @@ TEST_F(KeyboardPrefHandlerTest, InvalidModifierRemappings) {
       CallInitializeKeyboardSettings(kKeyboardKey1, /*is_external=*/true);
 
   ASSERT_EQ(1u, settings->modifier_remappings.size());
-  ASSERT_TRUE(base::Contains(settings->modifier_remappings,
-                             ui::mojom::ModifierKey::kAlt));
+  ASSERT_TRUE(
+      settings->modifier_remappings.contains(ui::mojom::ModifierKey::kAlt));
   EXPECT_EQ(ui::mojom::ModifierKey::kControl,
             settings->modifier_remappings[ui::mojom::ModifierKey::kAlt]);
 }
@@ -715,7 +729,6 @@ TEST_F(KeyboardPrefHandlerTest, InvalidModifierRemappings) {
 TEST_F(KeyboardPrefHandlerTest, KeyboardObserveredInTransitionPeriod) {
   mojom::Keyboard keyboard;
   keyboard.device_key = kKeyboardKey1;
-  Shell::Get()->input_device_tracker()->OnKeyboardConnected(keyboard);
   // Initialize keyboard settings for the device and check that the global
   // prefs were used as defaults.
   mojom::KeyboardSettingsPtr settings =
@@ -725,64 +738,10 @@ TEST_F(KeyboardPrefHandlerTest, KeyboardObserveredInTransitionPeriod) {
             kDefaultSuppressMetaFKeyRewrites);
 }
 
-TEST_F(KeyboardPrefHandlerTest,
-       KeyboardSendFunctionKeysTransitionPrefAlwaysConsistent) {
-  mojom::Keyboard keyboard;
-  keyboard.is_external = true;
-  keyboard.meta_key = mojom::MetaKey::kExternalMeta;
-  keyboard.device_key = kKeyboardKey1;
-  {
-    base::test::ScopedFeatureList disable_settings_split_feature_list;
-    disable_settings_split_feature_list.InitAndDisableFeature(
-        features::kInputDeviceSettingsSplit);
-    Shell::Get()->input_device_tracker()->OnKeyboardConnected(keyboard);
-  }
-
-  // Initialize keyboard settings for the device and check that the global
-  // prefs were used as defaults even though the `kSendFunctionKeys` pref was
-  // never changed and it goes against the default since the keyboard is
-  // external.
-  mojom::KeyboardSettingsPtr settings =
-      CallInitializeKeyboardSettings(keyboard);
-  ASSERT_EQ(settings->top_row_are_fkeys, kGlobalSendFunctionKeys);
-  ASSERT_EQ(settings->suppress_meta_fkey_rewrites,
-            kDefaultSuppressMetaFKeyRewrites);
-}
-
-TEST_F(KeyboardPrefHandlerTest, ModifierRemappingsFromGlobalPrefs) {
-  // Disable flag in this test since `InputDeviceTracker` only records
-  // connected devices when the settings split flag is disabled.
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(features::kInputDeviceSettingsSplit);
-  mojom::Keyboard keyboard;
-  keyboard.device_key = kKeyboardKey1;
-  keyboard.modifier_keys = {
-      ui::mojom::ModifierKey::kAlt,       ui::mojom::ModifierKey::kControl,
-      ui::mojom::ModifierKey::kAssistant, ui::mojom::ModifierKey::kBackspace,
-      ui::mojom::ModifierKey::kMeta,      ui::mojom::ModifierKey::kEscape};
-  keyboard.meta_key = mojom::MetaKey::kSearch;
-  // Remap Alt + Meta keys.
-  pref_service_->SetInteger(
-      ::prefs::kLanguageRemapAltKeyTo,
-      static_cast<int>(ui::mojom::ModifierKey::kCapsLock));
-  pref_service_->SetInteger(::prefs::kLanguageRemapSearchKeyTo,
-                            static_cast<int>(ui::mojom::ModifierKey::kEscape));
-
-  Shell::Get()->input_device_tracker()->OnKeyboardConnected(keyboard);
-  mojom::KeyboardSettingsPtr settings =
-      CallInitializeKeyboardSettings(keyboard);
-
-  ASSERT_EQ(settings->modifier_remappings.size(), 2u);
-  ASSERT_EQ(settings->modifier_remappings.at(ui::mojom::ModifierKey::kAlt),
-            ui::mojom::ModifierKey::kCapsLock);
-  ASSERT_EQ(settings->modifier_remappings.at(ui::mojom::ModifierKey::kMeta),
-            ui::mojom::ModifierKey::kEscape);
-}
-
 TEST_F(KeyboardPrefHandlerTest, SwitchControlAndCommandForAppleKeyboard) {
   mojom::Keyboard keyboard;
   keyboard.device_key = kKeyboardKey1;
-  keyboard.meta_key = mojom::MetaKey::kCommand;
+  keyboard.meta_key = ui::mojom::MetaKey::kCommand;
   mojom::KeyboardSettingsPtr settings =
       CallInitializeKeyboardSettings(keyboard);
 
@@ -828,6 +787,33 @@ TEST_F(KeyboardPrefHandlerTest, DefaultNotPersistedUntilUpdated) {
 }
 
 TEST_F(KeyboardPrefHandlerTest,
+       NewKeyboard_ManagedEnterprisePolicy_Initalizes_FunctionKey_NoSixPack) {
+  mojom::KeyboardPolicies policies;
+  policies.home_and_end_keys_policy =
+      mojom::InputDeviceSettingsSixPackKeyPolicy::New(
+          mojom::PolicyStatus::kManaged,
+          ui::mojom::SixPackShortcutModifier::kSearch);
+  policies.page_up_and_page_down_keys_policy =
+      mojom::InputDeviceSettingsSixPackKeyPolicy::New(
+          mojom::PolicyStatus::kManaged,
+          ui::mojom::SixPackShortcutModifier::kAlt);
+  policies.delete_key_policy = mojom::InputDeviceSettingsSixPackKeyPolicy::New(
+      mojom::PolicyStatus::kManaged, ui::mojom::SixPackShortcutModifier::kAlt);
+  policies.insert_key_policy = mojom::InputDeviceSettingsSixPackKeyPolicy::New(
+      mojom::PolicyStatus::kManaged, ui::mojom::SixPackShortcutModifier::kNone);
+
+  mojom::Keyboard keyboard;
+  keyboard.device_key = kKeyboardKey1;
+  keyboard.meta_key = ui::mojom::MetaKey::kSearch;
+  keyboard.modifier_keys = {ui::mojom::ModifierKey::kFunction};
+
+  pref_handler_->InitializeKeyboardSettings(pref_service_.get(), policies,
+                                            &keyboard);
+
+  EXPECT_EQ(kKeyboardSettings4, *keyboard.settings);
+}
+
+TEST_F(KeyboardPrefHandlerTest,
        NewKeyboard_ManagedEnterprisePolicy_GetsDefaults) {
   mojom::KeyboardPolicies policies;
   policies.top_row_are_fkeys_policy = mojom::InputDeviceSettingsPolicy::New(
@@ -854,7 +840,7 @@ TEST_F(KeyboardPrefHandlerTest,
 
   mojom::Keyboard keyboard;
   keyboard.device_key = kKeyboardKey1;
-  keyboard.meta_key = mojom::MetaKey::kSearch;
+  keyboard.meta_key = ui::mojom::MetaKey::kSearch;
 
   pref_handler_->InitializeKeyboardSettings(pref_service_.get(), policies,
                                             &keyboard);
@@ -910,7 +896,7 @@ TEST_F(KeyboardPrefHandlerTest,
       ui::mojom::ExtendedFkeysModifier::kAlt);
   mojom::Keyboard keyboard;
   keyboard.device_key = kKeyboardKey1;
-  keyboard.meta_key = mojom::MetaKey::kSearch;
+  keyboard.meta_key = ui::mojom::MetaKey::kSearch;
 
   pref_handler_->InitializeKeyboardSettings(pref_service_.get(), policies,
                                             &keyboard);
@@ -952,7 +938,7 @@ TEST_F(KeyboardPrefHandlerTest,
       ui::mojom::ExtendedFkeysModifier::kAlt);
   mojom::Keyboard keyboard;
   keyboard.device_key = kKeyboardKey1;
-  keyboard.meta_key = mojom::MetaKey::kSearch;
+  keyboard.meta_key = ui::mojom::MetaKey::kSearch;
 
   pref_handler_->InitializeKeyboardSettings(
       pref_service_.get(), /*keyboard_policies=*/{}, &keyboard);
@@ -993,7 +979,7 @@ TEST_F(KeyboardPrefHandlerTest,
       ui::mojom::ExtendedFkeysModifier::kAlt);
   mojom::Keyboard keyboard;
   keyboard.device_key = kKeyboardKey1;
-  keyboard.meta_key = mojom::MetaKey::kSearch;
+  keyboard.meta_key = ui::mojom::MetaKey::kSearch;
 
   pref_handler_->InitializeKeyboardSettings(
       pref_service_.get(), /*keyboard_policies=*/{}, &keyboard);
@@ -1135,15 +1121,52 @@ TEST_F(KeyboardPrefHandlerTest, SixPackKeyRemappings_RetrieveSettings) {
             settings->six_pack_key_remappings->page_up);
 }
 
+TEST_F(KeyboardPrefHandlerTest,
+       NewSplitModifierKeyboardUseDefaultsFromLastUpdatedSettings) {
+  mojom::Keyboard split_modifier_keyboard;
+  split_modifier_keyboard.device_key = kKeyboardKey3;
+  split_modifier_keyboard.meta_key = ui::mojom::MetaKey::kLauncher;
+  split_modifier_keyboard.modifier_keys = {ui::mojom::ModifierKey::kFunction};
+
+  base::DictValue dict1;
+  base::DictValue modifier_remappings;
+  modifier_remappings.Set(
+      base::NumberToString(static_cast<int>(ui::mojom::ModifierKey::kFunction)),
+      static_cast<int>(ui::mojom::ModifierKey::kControl));
+  dict1.Set(prefs::kKeyboardSettingModifierRemappings,
+            modifier_remappings.Clone());
+
+  pref_service_->SetDict(prefs::kKeyboardDefaultSplitModifierSettings,
+                         dict1.Clone());
+
+  pref_handler_->InitializeKeyboardSettings(
+      pref_service_.get(), /*keyboard_policies=*/{}, &split_modifier_keyboard);
+
+  CheckKeyboardSettingsAndDictAreEqual(*split_modifier_keyboard.settings, dict1,
+                                       /*is_external=*/false);
+}
+
+TEST_F(KeyboardPrefHandlerTest, UpdateSplitModifierKeyboardDefaultSettings) {
+  CallUpdateDefaultSplitModifierKeyboardSettings(kKeyboardKey1,
+                                                 kKeyboardSettings3);
+
+  const auto& default_split_modifier_settings =
+      pref_service_->GetDict(prefs::kKeyboardDefaultSplitModifierSettings);
+  EXPECT_FALSE(default_split_modifier_settings.empty());
+  CheckKeyboardSettingsAndDictAreEqual(kKeyboardSettings3,
+                                       default_split_modifier_settings,
+                                       /*is_external=*/false);
+}
+
 TEST_F(KeyboardPrefHandlerTest, RememberDefaultsFromLastUpdatedSettings) {
   mojom::Keyboard chromeos_keyboard;
   chromeos_keyboard.device_key = kKeyboardKey2;
-  chromeos_keyboard.meta_key = mojom::MetaKey::kLauncher;
+  chromeos_keyboard.meta_key = ui::mojom::MetaKey::kLauncher;
   chromeos_keyboard.is_external = true;
 
   mojom::Keyboard non_chromeos_keyboard;
   non_chromeos_keyboard.device_key = kKeyboardKey3;
-  non_chromeos_keyboard.meta_key = mojom::MetaKey::kExternalMeta;
+  non_chromeos_keyboard.meta_key = ui::mojom::MetaKey::kExternalMeta;
   non_chromeos_keyboard.modifier_keys = {ui::mojom::ModifierKey::kControl};
   non_chromeos_keyboard.is_external = true;
 
@@ -1209,7 +1232,7 @@ TEST_F(KeyboardPrefHandlerTest, SettingsUpdateMetricTest) {
   {
     auto devices_dict =
         pref_service_->GetDict(prefs::kKeyboardDeviceSettingsDictPref).Clone();
-    devices_dict.Set(kKeyboardKey3, base::Value::Dict());
+    devices_dict.Set(kKeyboardKey3, base::DictValue());
     pref_service_->SetDict(prefs::kKeyboardDeviceSettingsDictPref,
                            std::move(devices_dict));
 
@@ -1224,6 +1247,47 @@ TEST_F(KeyboardPrefHandlerTest, SettingsUpdateMetricTest) {
     EXPECT_EQ(SettingsUpdatedMetricsInfo::Category::kSynced,
               metrics_info->category());
   }
+}
+
+TEST_F(KeyboardPrefHandlerTest,
+       InitializeSplitModifierKeyboardPreFeatureEnable) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kModifierSplit);
+
+  ui::DeviceDataManagerTestApi().SetKeyboardDevices(
+      {kSampleSplitModifierKeyboard});
+
+  mojom::Keyboard keyboard;
+  keyboard.id = kSampleSplitModifierKeyboard.id;
+  keyboard.is_external = false;
+  keyboard.modifier_keys = {ui::mojom::ModifierKey::kAssistant};
+  pref_handler_->InitializeKeyboardSettings(nullptr, /*keyboard_policies=*/{},
+                                            &keyboard);
+  const auto& settings = keyboard.settings;
+  EXPECT_EQ(1u, settings->modifier_remappings.size());
+  ASSERT_TRUE(settings->modifier_remappings.contains(
+      ui::mojom::ModifierKey::kAssistant));
+  EXPECT_EQ(
+      ui::mojom::ModifierKey::kCapsLock,
+      settings->modifier_remappings.at(ui::mojom::ModifierKey::kAssistant));
+}
+
+TEST_F(KeyboardPrefHandlerTest,
+       InitializeSplitModifierKeyboardPostFeatureEnable) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(features::kModifierSplit);
+
+  ui::DeviceDataManagerTestApi().SetKeyboardDevices(
+      {kSampleSplitModifierKeyboard});
+
+  mojom::Keyboard keyboard;
+  keyboard.id = kSampleSplitModifierKeyboard.id;
+  keyboard.is_external = false;
+  keyboard.modifier_keys = {ui::mojom::ModifierKey::kAssistant};
+  pref_handler_->InitializeKeyboardSettings(nullptr, /*keyboard_policies=*/{},
+                                            &keyboard);
+  const auto& settings = keyboard.settings;
+  EXPECT_EQ(0u, settings->modifier_remappings.size());
 }
 
 class KeyboardSettingsPrefConversionTest
@@ -1316,7 +1380,7 @@ TEST_F(KeyboardPrefHandlerTest, ExtendedFkeysOnlyAddedForChromeOSKeyboards) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(::features::kSupportF11AndF12KeyShortcuts);
   mojom::Keyboard keyboard;
-  keyboard.meta_key = mojom::MetaKey::kCommand;
+  keyboard.meta_key = ui::mojom::MetaKey::kCommand;
   mojom::KeyboardSettingsPtr settings =
       CallInitializeKeyboardSettings(keyboard);
   EXPECT_FALSE(settings->f11.has_value());
@@ -1325,7 +1389,7 @@ TEST_F(KeyboardPrefHandlerTest, ExtendedFkeysOnlyAddedForChromeOSKeyboards) {
 
 TEST_F(KeyboardPrefHandlerTest, AppleKeyboardDefaultRemappingsNotSaved) {
   mojom::Keyboard keyboard;
-  keyboard.meta_key = mojom::MetaKey::kCommand;
+  keyboard.meta_key = ui::mojom::MetaKey::kCommand;
   keyboard.device_key = kKeyboardKey1;
   keyboard.is_external = true;
 

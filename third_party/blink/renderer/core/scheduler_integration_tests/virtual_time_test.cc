@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "third_party/blink/public/platform/platform.h"
@@ -52,12 +53,12 @@ class VirtualTimeTest : public SimTest {
     ScriptExecutionCallbackHelper callback_helper;
     WebScriptSource source(script_source);
     WebView().MainFrame()->ToWebLocalFrame()->RequestExecuteScript(
-        DOMWrapperWorld::kMainWorldId, base::make_span(&source, 1u),
+        DOMWrapperWorld::kMainWorldId, base::span_from_ref(source),
         mojom::blink::UserActivationOption::kDoNotActivate,
         mojom::blink::EvaluationTiming::kSynchronous,
         mojom::blink::LoadEventBlockingOption::kDoNotBlock,
-        WTF::BindOnce(&ScriptExecutionCallbackHelper::Completed,
-                      base::Unretained(&callback_helper)),
+        blink::BindOnce(&ScriptExecutionCallbackHelper::Completed,
+                        base::Unretained(&callback_helper)),
         BackForwardCacheAware::kAllow,
         mojom::blink::WantResultOption::kWantResult,
         mojom::blink::PromiseResultOption::kDoNotWait);
@@ -85,8 +86,8 @@ class VirtualTimeTest : public SimTest {
     base::RunLoop loop;
     scheduler::GetSingleThreadTaskRunnerForTesting()->PostDelayedTask(
         FROM_HERE,
-        WTF::BindOnce(&VirtualTimeTest::StopVirtualTimeAndExitRunLoop,
-                      WTF::Unretained(this), loop.QuitClosure()),
+        blink::BindOnce(&VirtualTimeTest::StopVirtualTimeAndExitRunLoop,
+                        Unretained(this), loop.QuitClosure()),
         base::Milliseconds(delay_ms));
 
     loop.Run();

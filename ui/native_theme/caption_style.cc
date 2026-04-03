@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "ui/native_theme/caption_style.h"
+
 #include "base/json/json_reader.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -16,12 +17,13 @@ CaptionStyle::~CaptionStyle() = default;
 // static
 std::optional<CaptionStyle> CaptionStyle::FromSpec(const std::string& spec) {
   CaptionStyle style;
-  std::optional<base::Value> dict = base::JSONReader::Read(spec);
+  std::optional<base::Value> dict =
+      base::JSONReader::Read(spec, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!dict.has_value()) {
     return std::nullopt;
   }
 
-  base::Value::Dict* value_dict = dict->GetIfDict();
+  base::DictValue* value_dict = dict->GetIfDict();
   if (!value_dict) {
     return std::nullopt;
   }

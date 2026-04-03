@@ -6,7 +6,6 @@
 #define COMPONENTS_PAYMENTS_CORE_FEATURES_H_
 
 #include "base/feature_list.h"
-#include "build/build_config.h"
 
 namespace payments {
 namespace features {
@@ -27,6 +26,10 @@ BASE_DECLARE_FEATURE(kAppStoreBilling);
 // installed from specific app stores.
 BASE_DECLARE_FEATURE(kAppStoreBillingDebug);
 
+// If enabled, CanMakePayment returns true (and HasEnrolledInstrument returns
+// false) when the `kCanMakePaymentEnabled` pref is false.
+BASE_DECLARE_FEATURE(kCanMakePaymentTrueWhenPrivate);
+
 // Used to control whether allow crawling just-in-time installable payment app.
 BASE_DECLARE_FEATURE(kWebPaymentsJustInTimePaymentApp);
 
@@ -44,24 +47,16 @@ BASE_DECLARE_FEATURE(kGPayAppDynamicUpdate);
 // credential store APIs, or if it can only rely on the user-profile database.
 BASE_DECLARE_FEATURE(kSecurePaymentConfirmationUseCredentialStoreAPIs);
 
-#if !BUILDFLAG(IS_ANDROID)
-// Desktop only, if enabled PaymentHandler will use the new minimal header UX.
-// See https://crbug.com/1385136.
-BASE_DECLARE_FEATURE(kPaymentHandlerMinimalHeaderUX);
+// Used to enable the refreshed fallback flow for Secure Payment Confirmation.
+BASE_DECLARE_FEATURE(kSecurePaymentConfirmationFallback);
 
-// Desktop only, if enabled the Task Manager will show the PaymentHandler
-// window.
-BASE_DECLARE_FEATURE(kPaymentHandlerWindowInTaskManager);
-#endif
+// Used to control whether the `kCanMakePaymentEnabled` pref being false will
+// stop the IsReadyToPay query from being sent to payment handlers.
+BASE_DECLARE_FEATURE(kRestrictIsReadyToPayQuery);
 
-// If enabled, the web-app manifest for already-installed service-worker apps
-// will always be refetched for every Payment Request, in order to potentially
-// refresh the icon for the app.
-BASE_DECLARE_FEATURE(kPaymentHandlerAlwaysRefreshIcon);
-
-// If enabled, the payment method manifest fetch for Payment Handler must go via
-// a Link header with rel="payment-method-manifest".
-BASE_DECLARE_FEATURE(kPaymentHandlerRequireLinkHeader);
+// Used to control whether Payment Request/Handler dialogs are rejected if the
+// browser window is too small to contain them.
+BASE_DECLARE_FEATURE(kPaymentRequestRejectTooSmallWindows);
 
 }  // namespace features
 }  // namespace payments

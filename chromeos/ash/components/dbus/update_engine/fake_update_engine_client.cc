@@ -88,10 +88,8 @@ void FakeUpdateEngineClient::GetChannel(bool get_current_channel,
 }
 
 void FakeUpdateEngineClient::GetEolInfo(GetEolInfoCallback callback) {
-  UpdateEngineClient::EolInfo eol_info;
-  eol_info.eol_date = eol_date_;
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), eol_info));
+      FROM_HERE, base::BindOnce(std::move(callback), eol_info_));
 }
 
 void FakeUpdateEngineClient::SetUpdateOverCellularPermission(
@@ -123,10 +121,10 @@ void FakeUpdateEngineClient::IsFeatureEnabled(
                                                    : std::nullopt);
 }
 
-void FakeUpdateEngineClient::ApplyDeferredUpdate(
+void FakeUpdateEngineClient::ApplyDeferredUpdateAdvanced(
     bool shutdown_after_update,
     base::OnceClosure failure_callback) {
-  apply_deferred_update_count_++;
+  apply_deferred_update_advanced_count_++;
 }
 
 void FakeUpdateEngineClient::set_default_status(

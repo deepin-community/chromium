@@ -2,20 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "chrome/test/chromedriver/logging.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 
+#include <array>
 #include <cmath>
 #include <memory>
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/logging/logging_settings.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -53,14 +55,14 @@ int64_t g_start_time = 0;
 bool readable_timestamp;
 
 // Array indices are the Log::Level enum values.
-const char* const kLevelToName[] = {
-  "ALL",  // kAll
-  "DEBUG",  // kDebug
-  "INFO",  // kInfo
-  "WARNING",  // kWarning
-  "SEVERE",  // kError
-  "OFF",  // kOff
-};
+constexpr auto kLevelToName = std::to_array<const char*>({
+    "ALL",      // kAll
+    "DEBUG",    // kDebug
+    "INFO",     // kInfo
+    "WARNING",  // kWarning
+    "SEVERE",   // kError
+    "OFF",      // kOff
+});
 
 const char* LevelToName(Log::Level level) {
   const int index = level - Log::kAll;
@@ -74,14 +76,14 @@ struct LevelPair {
   Log::Level level;
 };
 
-const LevelPair kNameToLevel[] = {
+constexpr auto kNameToLevel = std::to_array<LevelPair>({
     {"ALL", Log::kAll},
     {"DEBUG", Log::kDebug},
     {"INFO", Log::kInfo},
     {"WARNING", Log::kWarning},
     {"SEVERE", Log::kError},
     {"OFF", Log::kOff},
-};
+});
 
 Log::Level GetLevelFromSeverity(int severity) {
   switch (severity) {
@@ -196,29 +198,30 @@ WebDriverLog::WebDriverLog(const std::string& type, Log::Level min_level)
 
 WebDriverLog::~WebDriverLog() {
   size_t sum = 0;
-  for (const base::Value::List& batch : batches_of_entries_)
+  for (const base::ListValue& batch : batches_of_entries_) {
     sum += batch.size();
+  }
   VLOG(1) << "Log type '" << type_ << "' lost " << sum
           << " entries on destruction";
 }
 
-base::Value::List WebDriverLog::GetAndClearEntries() {
+base::ListValue WebDriverLog::GetAndClearEntries() {
   if (batches_of_entries_.empty()) {
     emptied_ = true;
-    return base::Value::List();
+    return base::ListValue();
   } else {
-    base::Value::List list = std::move(batches_of_entries_.front());
+    base::ListValue list = std::move(batches_of_entries_.front());
     batches_of_entries_.pop_front();
     emptied_ = false;
     return list;
   }
 }
 
-bool GetFirstErrorMessageFromList(const base::Value::List& list,
+bool GetFirstErrorMessageFromList(const base::ListValue& list,
                                   std::string* message) {
   for (const auto& entry : list) {
     if (entry.is_dict()) {
-      const base::Value::Dict& log_entry = entry.GetDict();
+      const base::DictValue& log_entry = entry.GetDict();
       const std::string* level = log_entry.FindString("level");
       if (!level || *level != kLevelToName[Log::kError])
         continue;
@@ -234,9 +237,10 @@ bool GetFirstErrorMessageFromList(const base::Value::List& list,
 
 std::string WebDriverLog::GetFirstErrorMessage() const {
   std::string message;
-  for (const base::Value::List& list : batches_of_entries_)
+  for (const base::ListValue& list : batches_of_entries_) {
     if (GetFirstErrorMessageFromList(list, &message))
       break;
+  }
   return message;
 }
 
@@ -247,7 +251,7 @@ void WebDriverLog::AddEntryTimestamped(const base::Time& timestamp,
   if (level < min_level_)
     return;
 
-  base::Value::Dict log_entry_dict;
+  base::DictValue log_entry_dict;
   log_entry_dict.Set("timestamp",
                      std::trunc(timestamp.InMillisecondsFSinceUnixEpoch()));
   log_entry_dict.Set("level", LevelToName(level));
@@ -256,7 +260,7 @@ void WebDriverLog::AddEntryTimestamped(const base::Time& timestamp,
   log_entry_dict.Set("message", message);
   if (batches_of_entries_.empty() ||
       batches_of_entries_.back().size() >= internal::kMaxReturnedEntries) {
-    batches_of_entries_.push_back(base::Value::List());
+    batches_of_entries_.push_back(base::ListValue());
   }
   batches_of_entries_.back().Append(std::move(log_entry_dict));
 }
@@ -277,7 +281,7 @@ Log::Level WebDriverLog::min_level() const {
   return min_level_;
 }
 
-bool InitLogging(uint16_t port) {
+bool InitLogging() {
   g_start_time = base::TimeTicks::Now().ToInternalValue();
   base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
 
@@ -289,13 +293,13 @@ bool InitLogging(uint16_t port) {
     if (cmd_line->HasSwitch("append-log")) {
       log_mode = FILE_PATH_LITERAL("a");
     }
-  if (cmd_line->HasSwitch("readable-timestamp")) {
-    readable_timestamp = true;
-  }
+    if (cmd_line->HasSwitch("readable-timestamp")) {
+      readable_timestamp = true;
+    }
 #if BUILDFLAG(IS_WIN)
-  FILE* redir_stderr = _wfreopen(log_path.value().c_str(), log_mode, stderr);
+    FILE* redir_stderr = _wfreopen(log_path.value().c_str(), log_mode, stderr);
 #else
-  FILE* redir_stderr = freopen(log_path.value().c_str(), log_mode, stderr);
+    FILE* redir_stderr = freopen(log_path.value().c_str(), log_mode, stderr);
 #endif
     if (!redir_stderr) {
       printf("Failed to redirect stderr to log file.\n");
@@ -346,13 +350,7 @@ bool InitLogging(uint16_t port) {
   logging::LoggingSettings logging_settings;
   logging_settings.logging_dest =
       logging::LOG_TO_SYSTEM_DEBUG_LOG | logging::LOG_TO_STDERR;
-  bool res = logging::InitLogging(logging_settings);
-  if (cmd_line->HasSwitch("log-path") && res) {
-    VLOG(0) << "Starting " << kChromeDriverProductFullName << " "
-            << kChromeDriverVersion << " on port " << port;
-    VLOG(0) << GetPortProtectionMessage();
-  }
-  return res;
+  return logging::InitLogging(logging_settings);
 }
 
 Status CreateLogs(
@@ -375,8 +373,7 @@ Status CreateLogs(
         logs.push_back(std::make_unique<WebDriverLog>(type, Log::kAll));
         devtools_listeners.push_back(std::make_unique<PerformanceLogger>(
             logs.back().get(), session, capabilities.perf_logging_prefs,
-            base::Contains(capabilities.window_types,
-                           WebViewInfo::kServiceWorker)));
+            capabilities.window_types.contains(WebViewInfo::kServiceWorker)));
         PerformanceLogger* perf_log =
             static_cast<PerformanceLogger*>(devtools_listeners.back().get());
         // We use a proxy for |perf_log|'s |CommandListener| interface.

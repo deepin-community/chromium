@@ -4,6 +4,7 @@
 
 #include "chrome/browser/web_applications/commands/dedupe_install_urls_command.h"
 
+#include "base/auto_reset.h"
 #include "base/barrier_closure.h"
 #include "base/containers/extend.h"
 #include "base/containers/flat_map.h"
@@ -33,7 +34,7 @@ bool g_suppress_for_testing = false;
 
 base::flat_map<GURL, base::flat_set<webapps::AppId>> BuildInstallUrlToAppIdsMap(
     const WebAppRegistrar& registrar,
-    base::Value::Dict& debug_value) {
+    base::DictValue& debug_value) {
   base::flat_map<GURL, base::flat_set<webapps::AppId>> result;
 
   for (const WebApp& app : registrar.GetApps()) {
@@ -49,6 +50,11 @@ base::flat_map<GURL, base::flat_set<webapps::AppId>> BuildInstallUrlToAppIdsMap(
   return result;
 }
 
+// Selects the best app to merge other apps with the same install URL into.
+// The criteria for "best" is:
+// 1. A non-placeholder app is better than a placeholder-like app.
+// 2. If both are placeholder-like or not, the one with the most recent
+//    install time is better.
 const webapps::AppId& SelectWebAppToDedupeInto(
     const WebAppRegistrar& registrar,
     const base::flat_set<webapps::AppId>& app_ids_with_common_install_url) {
@@ -83,7 +89,7 @@ const webapps::AppId& SelectWebAppToDedupeInto(
 std::vector<std::unique_ptr<RemoveInstallUrlJob>>
 BuildOperationsToDedupeInstallUrlConfigsIntoSelectedApp(
     Profile& profile,
-    base::Value::Dict& jobs_debug_value,
+    base::DictValue& jobs_debug_value,
     const WebAppRegistrar& registrar,
     ScopedRegistryUpdate& update,
     const GURL& install_url,
@@ -135,10 +141,11 @@ struct DedupeOperations {
 
 DedupeOperations BuildOperationsToHaveOneAppPerInstallUrl(
     Profile& profile,
-    base::Value::Dict& debug_value,
+    base::DictValue& debug_value,
     const WebAppRegistrar& registrar,
     ScopedRegistryUpdate& update,
-    base::flat_map<GURL, base::flat_set<webapps::AppId>> install_url_to_apps) {
+    const base::flat_map<GURL, base::flat_set<webapps::AppId>>&
+        install_url_to_apps) {
   DedupeOperations result;
 
   for (const auto& [install_url, app_ids] : install_url_to_apps) {
@@ -212,6 +219,9 @@ void DedupeInstallUrlsCommand::ProcessPendingJobsOrComplete() {
   if (!pending_jobs_.empty()) {
     std::swap(active_job_, pending_jobs_.back());
     pending_jobs_.pop_back();
+    // Track an uninstallation event, regardless of whether it succeeded or not.
+    webapps::InstallableMetrics::TrackUninstallEvent(
+        webapps::WebappUninstallSource::kInstallUrlDeduping);
     active_job_->Start(*lock_,
                        base::BindOnce(&DedupeInstallUrlsCommand::JobComplete,
                                       weak_ptr_factory_.GetWeakPtr()));

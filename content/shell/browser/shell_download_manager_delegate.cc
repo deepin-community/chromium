@@ -6,17 +6,22 @@
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
+#include "base/files/file_path.h"
+#include "base/notimplemented.h"
 #include "build/build_config.h"
 #include "components/download/public/common/download_target_info.h"
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
 #include <commdlg.h>
 #endif
 
 #include "base/check_op.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/notreached.h"
@@ -69,8 +74,12 @@ bool ShellDownloadManagerDelegate::DetermineDownloadTarget(
   // This assignment needs to be here because even at the call to
   // SetDownloadManager, the system is not fully initialized.
   if (default_download_path_.empty()) {
-    default_download_path_ = download_manager_->GetBrowserContext()->GetPath().
-        Append(FILE_PATH_LITERAL("Downloads"));
+    default_download_path_ = download_manager_->GetBrowserContext()
+                                 ->GetPath()
+#if BUILDFLAG(IS_CHROMEOS)
+                                 .Append(FILE_PATH_LITERAL("MyFiles"))
+#endif
+                                 .Append(FILE_PATH_LITERAL("Downloads"));
   }
 
   if (!download->GetForcedFilePath().empty()) {
@@ -162,11 +171,10 @@ void ShellDownloadManagerDelegate::ChooseDownloadPath(
 
   base::FilePath result;
 #if BUILDFLAG(IS_WIN)
-  std::wstring file_part = base::FilePath(suggested_path).BaseName().value();
-  wchar_t file_name[MAX_PATH];
-  base::wcslcpy(file_name, file_part.c_str(), std::size(file_name));
-  OPENFILENAME save_as;
-  ZeroMemory(&save_as, sizeof(save_as));
+  std::wstring file_name = suggested_path.BaseName().value();
+  file_name.resize(MAX_PATH);
+
+  OPENFILENAME save_as{};
   save_as.lStructSize = sizeof(OPENFILENAME);
   WebContents* web_contents = DownloadItemUtils::GetWebContents(item);
   // |web_contents| could be null if the tab was quickly closed.
@@ -174,8 +182,8 @@ void ShellDownloadManagerDelegate::ChooseDownloadPath(
     return;
   save_as.hwndOwner =
       web_contents->GetNativeView()->GetHost()->GetAcceleratedWidget();
-  save_as.lpstrFile = file_name;
-  save_as.nMaxFile = std::size(file_name);
+  save_as.lpstrFile = &file_name[0];
+  save_as.nMaxFile = file_name.size();
 
   std::wstring directory;
   if (!suggested_path.empty())

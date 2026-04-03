@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/test/mock_callback.h"
 #include "chrome/browser/picture_in_picture/auto_picture_in_picture_tab_strip_observer_helper.h"
+
+#include "base/test/mock_callback.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
@@ -17,6 +19,9 @@ using testing::_;
 
 class AutoPictureInPictureTabStripObserverHelperBrowserTest
     : public InProcessBrowserTest {
+ public:
+  AutoPictureInPictureTabStripObserverHelperBrowserTest() = default;
+
  protected:
   void OpenNewForegroundTab(Browser* browser) {
     ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
@@ -43,6 +48,7 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabStripObserverHelperBrowserTest,
   AutoPictureInPictureTabStripObserverHelper helper(original_web_contents,
                                                     callback.Get());
   helper.StartObserving();
+  EXPECT_EQ(helper.GetActiveWebContents(), original_web_contents);
 
   // Opening and switching to a new tab should trigger the callback with
   // `is_tab_activated` set to false.
@@ -50,6 +56,7 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabStripObserverHelperBrowserTest,
   OpenNewForegroundTab(browser());
   auto* second_web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
+  EXPECT_EQ(helper.GetActiveWebContents(), second_web_contents);
   testing::Mock::VerifyAndClearExpectations(&callback);
 
   // Switching back to the original tab should trigger the callback with
@@ -132,12 +139,12 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabStripObserverHelperBrowserTest,
   EXPECT_CALL(callback, Run(true));
   auto* second_browser_initial_web_contents =
       second_browser->tab_strip_model()->GetActiveWebContents();
-  auto original_web_contents_tab =
-      browser()->tab_strip_model()->DetachWebContentsAtForInsertion(
+  std::unique_ptr<tabs::TabModel> detached_tab =
+      browser()->tab_strip_model()->DetachTabAtForInsertion(
           browser()->tab_strip_model()->GetIndexOfWebContents(
               original_web_contents));
-  second_browser->tab_strip_model()->AppendWebContents(
-      std::move(original_web_contents_tab), /*foreground=*/true);
+  second_browser->tab_strip_model()->AppendTab(std::move(detached_tab),
+                                               /*foreground=*/true);
   testing::Mock::VerifyAndClearExpectations(&callback);
 
   // Then backgrounding it should trigger the callback.
@@ -180,12 +187,41 @@ IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabStripObserverHelperBrowserTest,
   // Now move the tab into the second window while keeping it in the foreground.
   // This should not trigger the callback.
   EXPECT_CALL(callback, Run(_)).Times(0);
-  auto original_web_contents_tab =
-      browser()->tab_strip_model()->DetachWebContentsAtForInsertion(
+  std::unique_ptr<tabs::TabModel> detached_tab =
+      browser()->tab_strip_model()->DetachTabAtForInsertion(
           browser()->tab_strip_model()->GetIndexOfWebContents(
               original_web_contents));
-  second_browser->tab_strip_model()->AppendWebContents(
-      std::move(original_web_contents_tab), /*foreground=*/true);
+  second_browser->tab_strip_model()->AppendTab(std::move(detached_tab),
+                                               /*foreground=*/true);
+  testing::Mock::VerifyAndClearExpectations(&callback);
+}
+
+IN_PROC_BROWSER_TEST_F(AutoPictureInPictureTabStripObserverHelperBrowserTest,
+                       DoesNotTriggerWhenActivatingOtherTabInSplitView) {
+  auto* original_web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  base::MockCallback<
+      AutoPictureInPictureTabStripObserverHelper::ActivatedChangedCallback>
+      callback;
+  AutoPictureInPictureTabStripObserverHelper helper(original_web_contents,
+                                                    callback.Get());
+  helper.StartObserving();
+
+  // Opening a new tab in the background should not trigger the callback.
+  EXPECT_CALL(callback, Run(_)).Times(0);
+  OpenNewBackgroundTab(browser());
+  testing::Mock::VerifyAndClearExpectations(&callback);
+
+  // Creating a new split view should not trigger the callback.
+  EXPECT_CALL(callback, Run(_)).Times(0);
+  browser()->tab_strip_model()->AddToNewSplit(
+      {1}, split_tabs::SplitTabVisualData(),
+      split_tabs::SplitTabCreatedSource());
+  testing::Mock::VerifyAndClearExpectations(&callback);
+
+  // Activating the other tab in the split view should not trigger the callback.
+  EXPECT_CALL(callback, Run(_)).Times(0);
+  browser()->tab_strip_model()->ActivateTabAt(1);
   testing::Mock::VerifyAndClearExpectations(&callback);
 }
 

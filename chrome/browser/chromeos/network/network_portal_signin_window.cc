@@ -8,23 +8,19 @@
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/network/network_handler.h"
+#include "chromeos/ash/components/network/network_state_handler.h"
 #include "components/device_event_log/device_event_log.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/proxy_config/proxy_prefs.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents_observer.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/ash/components/network/portal_detector/network_portal_detector.h"
-#elif BUILDFLAG(IS_CHROMEOS_LACROS)
-// TODO(b/261727502): Add crosapi call for portal detection.
-#endif
 
 namespace chromeos {
 
@@ -55,50 +51,6 @@ Profile* GetOTROrActiveProfile() {
 
 }  // namespace
 
-// static
-NetworkPortalSigninWindow* NetworkPortalSigninWindow::Get() {
-  static base::NoDestructor<NetworkPortalSigninWindow> instance;
-  return instance.get();
-}
-
-NetworkPortalSigninWindow::NetworkPortalSigninWindow() = default;
-
-NetworkPortalSigninWindow::~NetworkPortalSigninWindow() = default;
-
-void NetworkPortalSigninWindow::Show(const GURL& url) {
-  Profile* profile = GetOTROrActiveProfile();
-
-  Browser* browser = chrome::FindBrowserWithID(window_session_id_);
-  if (browser) {
-    NET_LOG(EVENT) << "Show existing portal signin window";
-    NavigateParams params(browser, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK);
-    params.window_action = NavigateParams::SHOW_WINDOW;
-    params.user_gesture = true;
-    params.trusted_source = false;
-    ::Navigate(&params);
-    return;
-  }
-
-  NET_LOG(EVENT) << "Show new portal signin window";
-  NavigateParams params(profile, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK);
-  params.disposition = WindowOpenDisposition::NEW_POPUP;
-  params.user_gesture = true;
-  params.trusted_source = false;
-  auto handle = ::Navigate(&params);
-  if (!handle) {
-    NET_LOG(ERROR) << "Failed to navigate to captive portal url: " << url;
-    window_session_id_ = SessionID::InvalidValue();
-    return;
-  }
-  window_session_id_ = params.browser->session_id();
-  window_observer_ =
-      std::make_unique<WindowObserver>(handle->GetWebContents(), this);
-}
-
-Browser* NetworkPortalSigninWindow::GetBrowserForTesting() {
-  return chrome::FindBrowserWithID(window_session_id_);
-}
-
 class NetworkPortalSigninWindow::WindowObserver
     : public content::WebContentsObserver {
  public:
@@ -117,16 +69,71 @@ class NetworkPortalSigninWindow::WindowObserver
  private:
   void RequestPortalDetection() {
     NET_LOG(EVENT) << "Request portal detection";
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    ash::network_portal_detector::GetInstance()
-        ->RequestCaptivePortalDetection();
-#elif BUILDFLAG(IS_CHROMEOS_LACROS)
-    // TODO(b/261727502): Add crosapi call for portal detection.
-#endif
+    controller_->portal_detection_requested_for_testing_++;
+    ash::NetworkHandler::Get()
+        ->network_state_handler()
+        ->RequestPortalDetection();
   }
 
  private:
   raw_ptr<NetworkPortalSigninWindow> controller_;
 };
+
+// static
+NetworkPortalSigninWindow* NetworkPortalSigninWindow::Get() {
+  static base::NoDestructor<NetworkPortalSigninWindow> instance;
+  return instance.get();
+}
+
+NetworkPortalSigninWindow::NetworkPortalSigninWindow() = default;
+
+NetworkPortalSigninWindow::~NetworkPortalSigninWindow() = default;
+
+void NetworkPortalSigninWindow::Show(const GURL& url) {
+  Profile* profile = GetOTROrActiveProfile();
+
+  Browser* browser = chrome::FindBrowserWithID(window_session_id_);
+  if (browser) {
+    NET_LOG(EVENT) << "Show existing portal signin window";
+    NavigateParams params(browser, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK);
+    params.window_action = NavigateParams::WindowAction::kShowWindow;
+    params.user_gesture = true;
+    params.trusted_source = false;
+    ::Navigate(&params);
+    return;
+  }
+
+  NET_LOG(EVENT) << "Show new portal signin window";
+  NavigateParams params(profile, url, ui::PAGE_TRANSITION_AUTO_BOOKMARK);
+  params.disposition = WindowOpenDisposition::NEW_POPUP;
+  params.user_gesture = true;
+  params.trusted_source = false;
+  // `captive_portal_window_type = kPopup` is used on desktop Chrome to identify
+  // captive portal signin popup windows. This affects the following behaviors:
+  // * Secure DNS is disabled in ChromeContentBrowserClient
+  // * The window title is customized in Browser
+  params.captive_portal_window_type =
+      captive_portal::CaptivePortalWindowType::kPopup;
+  auto handle = ::Navigate(&params);
+  if (!handle) {
+    NET_LOG(ERROR) << "Failed to navigate to captive portal url: " << url;
+    window_session_id_ = SessionID::InvalidValue();
+    return;
+  }
+  window_session_id_ = params.browser->GetSessionID();
+  window_observer_ =
+      std::make_unique<WindowObserver>(handle->GetWebContents(), this);
+}
+
+Browser* NetworkPortalSigninWindow::GetBrowserForTesting() {
+  return chrome::FindBrowserWithID(window_session_id_);
+}
+
+content::WebContents* NetworkPortalSigninWindow::GetWebContentsForTesting() {
+  if (!window_observer_.get()) {
+    return nullptr;
+  }
+  return window_observer_->web_contents();
+}
 
 }  // namespace chromeos

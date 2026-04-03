@@ -4,6 +4,8 @@
 
 #include "components/segmentation_platform/internal/execution/processing/custom_input_processor.h"
 
+#include <string_view>
+
 #include "base/rand_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/system/sys_info.h"
@@ -30,15 +32,17 @@ std::optional<int> GetArgAsInt(
   auto iter = args.find(key);
 
   // Did not find target key.
-  if (iter == args.end())
-    return std::optional<int>();
+  if (iter == args.end()) {
+    return std::nullopt;
+  }
 
   // Perform string to int conversion, return empty value if the conversion
   // failed.
-  if (!base::StringToInt(base::StringPiece(iter->second), &value))
-    return std::optional<int>();
+  if (!base::StringToInt(std::string_view(iter->second), &value)) {
+    return std::nullopt;
+  }
 
-  return std::optional<int>(value);
+  return value;
 }
 
 }  // namespace
@@ -224,6 +228,11 @@ QueryProcessor::Tensor CustomInputProcessor::ProcessSingleCustomInput(
       feature_processor_state.SetError(
           stats::FeatureProcessingError::kCustomInputError);
     }
+  } else if (custom_input.fill_policy() ==
+             proto::CustomInput::FILL_FROM_SHOPPING_SERVICE) {
+    feature_processor_state.SetError(
+        stats::FeatureProcessingError::kCustomInputError);
+    NOTREACHED() << "InputDelegate is not found";
   }
 
   return tensor_result;
@@ -238,11 +247,8 @@ bool CustomInputProcessor::AddFromInputContext(
   }
   scoped_refptr<InputContext> input_context =
       feature_processor_state.input_context();
-  std::string input_name = custom_input.name();
-  auto custom_input_iter = custom_input.additional_args().find("name");
-  if (custom_input_iter != custom_input.additional_args().end()) {
-    input_name = custom_input_iter->second;
-  }
+  std::string input_name =
+      metadata_utils::GetInputKeyForInputContextCustomInput(custom_input);
 
   std::optional<processing::ProcessedValue> input_context_value;
   if (input_context) {
@@ -299,7 +305,7 @@ bool CustomInputProcessor::AddDeviceRAMInMB(
   if (custom_input.tensor_length() != 1) {
     return false;
   }
-  float device_ram_in_mb = base::SysInfo::AmountOfPhysicalMemoryMB();
+  float device_ram_in_mb = base::SysInfo::AmountOfPhysicalMemory().InMiB();
   out_tensor.emplace_back(device_ram_in_mb);
   return true;
 }
@@ -339,4 +345,5 @@ bool CustomInputProcessor::AddRandom(const proto::CustomInput& custom_input,
   out_tensor.emplace_back(base::RandFloat());
   return true;
 }
+
 }  // namespace segmentation_platform::processing

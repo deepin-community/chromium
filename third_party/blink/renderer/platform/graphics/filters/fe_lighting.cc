@@ -134,7 +134,6 @@ sk_sp<PaintFilter> FELighting::CreateImageFilter() {
     }
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 

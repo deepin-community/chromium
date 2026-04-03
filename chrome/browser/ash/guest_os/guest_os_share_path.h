@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <variant>
 #include <vector>
 
 #include "base/containers/flat_set.h"
@@ -16,6 +17,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/scoped_observation.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/file_manager/volume_manager_observer.h"
@@ -69,14 +71,13 @@ class GuestOsSharePath : public KeyedService,
   // ConvertArgsToPathsToShare returns this.
   struct PathsToShare {
     PathsToShare();
-    PathsToShare(PathsToShare&);
+    PathsToShare(const PathsToShare&);
     ~PathsToShare();
 
     std::vector<base::FilePath> paths_to_share;
     std::vector<std::string> launch_args;
   };
 
-  static GuestOsSharePath* GetForProfile(Profile* profile);
   explicit GuestOsSharePath(Profile* profile);
 
   GuestOsSharePath(const GuestOsSharePath&) = delete;
@@ -96,7 +97,7 @@ class GuestOsSharePath : public KeyedService,
   // Convert launch args and return paths to share with the VM, and string args
   // to pass to the app being launched. On failure, returns an error string
   // instead.
-  absl::variant<PathsToShare, std::string> ConvertArgsToPathsToShare(
+  std::variant<PathsToShare, std::string> ConvertArgsToPathsToShare(
       const guest_os::GuestOsRegistryService::Registration& registration,
       const std::vector<guest_os::LaunchArg>& args,
       const base::FilePath& vm_mount,
@@ -221,6 +222,10 @@ class GuestOsSharePath : public KeyedService,
   base::ObserverList<Observer>::Unchecked observers_;
   std::map<base::FilePath, SharedPathInfo> shared_paths_;
   base::flat_set<GuestId> guests_;
+
+  base::ScopedObservation<file_manager::VolumeManager,
+                          file_manager::VolumeManagerObserver>
+      volume_manager_observer_{this};
 
   base::WeakPtrFactory<GuestOsSharePath> weak_ptr_factory_{this};
 };  // class

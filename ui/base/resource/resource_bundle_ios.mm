@@ -10,7 +10,6 @@
 #include "base/apple/bundle_locations.h"
 #include "base/apple/foundation_util.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/notreached.h"
 #include "base/strings/sys_string_conversions.h"
@@ -61,8 +60,7 @@ void ResourceBundle::LoadCommonResources() {
 }
 
 // static
-base::FilePath ResourceBundle::GetLocaleFilePath(
-    const std::string& app_locale) {
+base::FilePath ResourceBundle::GetLocaleFilePath(std::string_view app_locale) {
   NSString* mac_locale = base::SysUTF8ToNSString(app_locale);
 
   // iOS uses "_" instead of "-", so swap to get a iOS-style value.
@@ -75,11 +73,6 @@ base::FilePath ResourceBundle::GetLocaleFilePath(
 
   base::FilePath locale_file_path =
       GetResourcesPakFilePath(@"locale", mac_locale);
-
-  if (HasSharedInstance() && GetSharedInstance().delegate_) {
-    locale_file_path = GetSharedInstance().delegate_->GetPathForLocalePack(
-        locale_file_path, app_locale);
-  }
 
   // Don't try to load from paths that are not absolute.
   return locale_file_path.IsAbsolute() ? locale_file_path : base::FilePath();
@@ -116,7 +109,7 @@ gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id) {
     NSData* ns_data = [[NSData alloc] initWithBytes:data->front()
                                              length:data->size()];
 
-    bool is_fallback = PNGContainsFallbackMarker(data->front(), data->size());
+    bool is_fallback = PNGContainsFallbackMarker(*data);
     // Create the image from the data.
     CGFloat target_scale = ui::GetScaleForResourceScaleFactor(scale_factor);
     CGFloat source_scale = is_fallback ? 1.0 : target_scale;
@@ -133,8 +126,8 @@ gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id) {
       base::apple::ScopedCFTypeRef<CGContextRef> context(CGBitmapContextCreate(
           /*data=*/nullptr, target_size.width, target_size.height, 8,
           target_size.width * 4, color_space.get(),
-          kCGImageAlphaPremultipliedFirst |
-              static_cast<CGImageAlphaInfo>(kCGBitmapByteOrder32Host)));
+          static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedFirst) |
+              kCGImageByteOrder32Host));
 
       CGRect target_rect = CGRectMake(0, 0,
                                       target_size.width, target_size.height);
@@ -148,12 +141,7 @@ gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id) {
                                       orientation:UIImageOrientationUp];
     }
 
-    if (!ui_image) {
-      LOG(WARNING) << "Unable to load image with id " << resource_id;
-      NOTREACHED();  // Want to assert in debug mode.
-      return GetEmptyImage();
-    }
-
+    CHECK(ui_image) << "Unable to load image with id " << resource_id;
     image = gfx::Image(ui_image);
   }
 

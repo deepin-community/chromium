@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
@@ -14,8 +15,9 @@
 #include "content/public/browser/web_contents.h"
 
 class Browser;
-class BrowserNonClientFrameView;
+class BrowserFrameView;
 class BrowserView;
+class Profile;
 class GURL;
 class WebAppFrameToolbarView;
 class WebAppOriginText;
@@ -33,6 +35,8 @@ class View;
 }  // namespace views
 
 namespace web_app {
+class BundledIsolatedWebApp;
+class IsolatedWebAppUrlInfo;
 struct WebAppInstallInfo;
 }  // namespace web_app
 
@@ -45,17 +49,29 @@ class WebAppFrameToolbarTestHelper {
       delete;
   ~WebAppFrameToolbarTestHelper();
 
+  // Installs but does not launch a web app with the given `start_url`. This
+  // does not modify state of this test helper.
+  webapps::AppId InstallWebApp(Profile* profile, const GURL& start_url);
+
+  // These methods install and launch the given web app; additionally the
+  // various getters in this test helper will start returning objects and
+  // views related to this latest launched web app.
+  webapps::AppId InstallAndLaunchWebApp(Profile* profile,
+                                        const GURL& start_url);
   webapps::AppId InstallAndLaunchWebApp(Browser* browser,
                                         const GURL& start_url);
   webapps::AppId InstallAndLaunchCustomWebApp(
       Browser* browser,
       std::unique_ptr<web_app::WebAppInstallInfo> web_app_info,
       const GURL& start_url);
+  web_app::IsolatedWebAppUrlInfo InstallAndLaunchIsolatedWebApp(
+      Profile* profile,
+      web_app::BundledIsolatedWebApp* iwa);
 
   GURL LoadTestPageWithDataAndGetURL(
       net::test_server::EmbeddedTestServer* embedded_test_server,
       base::ScopedTempDir* temp_dir,
-      base::StringPiece test_html);
+      std::string_view test_html);
 
   GURL LoadWindowControlsOverlayTestPageWithDataAndGetURL(
       net::test_server::EmbeddedTestServer* embedded_test_server,
@@ -67,7 +83,7 @@ class WebAppFrameToolbarTestHelper {
       base::ScopedTempDir* temp_dir);
 
   // WebContents is used to run JS to parse rectangle values into a list value.
-  static base::Value::List GetXYWidthHeightListValue(
+  static base::ListValue GetXYWidthHeightListValue(
       content::WebContents* web_contents,
       const std::string& rect_value_list,
       const std::string& rect_var_name);
@@ -93,18 +109,20 @@ class WebAppFrameToolbarTestHelper {
 
   Browser* app_browser() { return app_browser_; }
   BrowserView* browser_view() { return browser_view_; }
-  BrowserNonClientFrameView* frame_view() { return frame_view_; }
+  BrowserFrameView* frame_view() { return frame_view_; }
   views::View* root_view() { return root_view_; }
   WebAppFrameToolbarView* web_app_frame_toolbar() {
     return web_app_frame_toolbar_;
   }
   WebAppOriginText* origin_text_view();
+  void SetOriginTextLabelForTesting(const std::u16string& label_text);
 
  private:
+  void SetViews(Browser* app_browser);
+
   raw_ptr<Browser, AcrossTasksDanglingUntriaged> app_browser_ = nullptr;
   raw_ptr<BrowserView, AcrossTasksDanglingUntriaged> browser_view_ = nullptr;
-  raw_ptr<BrowserNonClientFrameView, AcrossTasksDanglingUntriaged> frame_view_ =
-      nullptr;
+  raw_ptr<BrowserFrameView, AcrossTasksDanglingUntriaged> frame_view_ = nullptr;
   raw_ptr<views::View, AcrossTasksDanglingUntriaged> root_view_ = nullptr;
   raw_ptr<WebAppFrameToolbarView, AcrossTasksDanglingUntriaged>
       web_app_frame_toolbar_ = nullptr;

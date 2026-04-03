@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_PASSWORD_MANAGER_ANDROID_PASSWORD_STORE_ANDROID_BACKEND_BRIDGE_HELPER_IMPL_H_
 #define CHROME_BROWSER_PASSWORD_MANAGER_ANDROID_PASSWORD_STORE_ANDROID_BACKEND_BRIDGE_HELPER_IMPL_H_
 
+#include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/password_manager/android/password_store_android_backend_bridge_helper.h"
@@ -41,7 +42,6 @@ class PasswordStoreAndroidBackendBridgeHelperImpl
   // PasswordStoreAndroidBackendBridgeHelper implementation
   bool CanUseGetAffiliatedPasswordsAPI() override;
   bool CanUseGetAllLoginsWithBrandingInfoAPI() override;
-  bool CanRemoveUnenrollment() override;
   void SetConsumer(base::WeakPtr<Consumer> consumer) override;
   [[nodiscard]] JobId GetAllLogins(std::string account) override;
   [[nodiscard]] JobId GetAllLoginsWithBrandingInfo(

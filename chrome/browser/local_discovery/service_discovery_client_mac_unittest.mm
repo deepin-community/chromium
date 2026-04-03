@@ -2,16 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/local_discovery/service_discovery_client.h"
+
 #import <Cocoa/Cocoa.h>
 #include <stdint.h>
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/threading/thread.h"
-#include "chrome/browser/local_discovery/service_discovery_client.h"
 #include "chrome/browser/local_discovery/service_discovery_client_mac.h"
+#include "chrome/browser/local_discovery/service_discovery_client_mac_util.h"
 #import "chrome/browser/ui/cocoa/test/cocoa_test_helper.h"
 #include "content/public/test/browser_task_environment.h"
 #include "net/base/ip_endpoint.h"
@@ -153,9 +158,9 @@ TEST_F(ServiceDiscoveryClientMacTest, ParseServiceRecord) {
   ASSERT_TRUE(ip_address.AssignFromIPLiteral(kIp));
   net::IPEndPoint endpoint(ip_address, kPort);
   net::SockaddrStorage storage;
-  ASSERT_TRUE(endpoint.ToSockAddr(storage.addr, &storage.addr_len));
-  NSData* discoveryHost =
-      [NSData dataWithBytes:storage.addr length:storage.addr_len];
+  ASSERT_TRUE(endpoint.ToSockAddr(storage.addr(), &storage.addr_len));
+  NSData* discoveryHost = [NSData dataWithBytes:storage.addr()
+                                         length:storage.addr_len];
   NSArray* addresses = @[ discoveryHost ];
   [test_service setAddresses:addresses];
 
@@ -164,8 +169,8 @@ TEST_F(ServiceDiscoveryClientMacTest, ParseServiceRecord) {
 
   const std::vector<std::string>& metadata = description.metadata;
   EXPECT_EQ(2u, metadata.size());
-  EXPECT_TRUE(base::Contains(metadata, "ab"));
-  EXPECT_TRUE(base::Contains(metadata, "d=e"));
+  EXPECT_TRUE(std::ranges::contains(metadata, "ab"));
+  EXPECT_TRUE(std::ranges::contains(metadata, "d=e"));
 
   EXPECT_EQ(ip_address, description.ip_address);
   EXPECT_EQ(kPort, description.address.port());
@@ -191,9 +196,9 @@ TEST_F(ServiceDiscoveryClientMacTest, ParseInvalidUnicodeRecord) {
   ASSERT_TRUE(ip_address.AssignFromIPLiteral(kIp));
   net::IPEndPoint endpoint(ip_address, kPort);
   net::SockaddrStorage storage;
-  ASSERT_TRUE(endpoint.ToSockAddr(storage.addr, &storage.addr_len));
-  NSData* discovery_host =
-      [NSData dataWithBytes:storage.addr length:storage.addr_len];
+  ASSERT_TRUE(endpoint.ToSockAddr(storage.addr(), &storage.addr_len));
+  NSData* discovery_host = [NSData dataWithBytes:storage.addr()
+                                          length:storage.addr_len];
   NSArray* addresses = @[ discovery_host ];
   [test_service setAddresses:addresses];
 
@@ -202,8 +207,8 @@ TEST_F(ServiceDiscoveryClientMacTest, ParseInvalidUnicodeRecord) {
 
   const std::vector<std::string>& metadata = description.metadata;
   EXPECT_EQ(2u, metadata.size());
-  EXPECT_TRUE(base::Contains(metadata, "a=b"));
-  EXPECT_TRUE(base::Contains(metadata, "cd=e9"));
+  EXPECT_TRUE(std::ranges::contains(metadata, "a=b"));
+  EXPECT_TRUE(std::ranges::contains(metadata, "cd=e9"));
 
   EXPECT_EQ(ip_address, description.ip_address);
   EXPECT_EQ(kPort, description.address.port());
@@ -234,6 +239,20 @@ TEST_F(ServiceDiscoveryClientMacTest, ResolveInvalidServiceName) {
 
   EXPECT_EQ(1, num_resolves_);
   EXPECT_EQ(ServiceResolver::STATUS_KNOWN_NONEXISTENT, last_status_);
+}
+
+TEST_F(ServiceDiscoveryClientMacTest, RecordPermissionStateMetrics) {
+  base::HistogramTester histograms;
+  auto watcher_impl = std::make_unique<ServiceWatcherImplMac>(
+      "service_type", base::DoNothing(),
+      base::SingleThreadTaskRunner::GetCurrentDefault());
+
+  watcher_impl->RecordPermissionState(/*permission_granted*/ false);
+  histograms.ExpectUniqueSample(
+      "MediaRouter.Discovery.LocalNetworkAccessPermissionGranted", false, 1);
+  watcher_impl->RecordPermissionState(/*permission_granted*/ false);
+  histograms.ExpectUniqueSample(
+      "MediaRouter.Discovery.LocalNetworkAccessPermissionGranted", false, 1);
 }
 
 }  // namespace local_discovery

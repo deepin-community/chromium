@@ -8,7 +8,7 @@
 #include "chrome/browser/extensions/activity_log/activity_action_constants.h"
 #include "chrome/browser/extensions/activity_log/activity_actions.h"
 #include "chrome/browser/extensions/activity_log/activity_log_policy.h"
-#include "extensions/browser/api/activity_log/web_request_constants.h"
+#include "extensions/common/api/web_request/web_request_activity_log_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace extensions {
@@ -42,11 +42,11 @@ TEST_F(ActivityLogPolicyUtilTest, StripPrivacySensitive) {
 TEST_F(ActivityLogPolicyUtilTest, StripPrivacySensitiveWebRequest) {
   scoped_refptr<Action> action = new Action(
       "punky", base::Time::Now(), Action::ACTION_WEB_REQUEST, "webRequest");
-  base::Value::Dict root;
-  root.Set(activity_log_web_request_constants::kNewUrlKey,
+  base::DictValue root;
+  root.Set(web_request_activity_log_constants::kNewUrlKey,
            "http://www.youtube.com/");
-  root.Set(activity_log_web_request_constants::kAddedRequestHeadersKey,
-           base::Value::List());
+  root.Set(web_request_activity_log_constants::kAddedRequestHeadersKey,
+           base::ListValue());
   action->mutable_other().Set(activity_log_constants::kActionWebRequest,
                               std::move(root));
 

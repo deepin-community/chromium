@@ -42,12 +42,6 @@ namespace safe_browsing {
 // installs or other tests.
 class PlatformStateStoreTestBase : public ::testing::Test {
  protected:
-  PlatformStateStoreTestBase() {}
-
-  PlatformStateStoreTestBase(const PlatformStateStoreTestBase&) = delete;
-  PlatformStateStoreTestBase& operator=(const PlatformStateStoreTestBase&) =
-      delete;
-
   void SetUp() override {
     ::testing::Test::SetUp();
     ASSERT_NO_FATAL_FAILURE(
@@ -111,7 +105,7 @@ class StateStoreTest : public PlatformStateStoreTestBase {
     std::unique_ptr<base::Value> prefs(JSONFileValueDeserializer(GetPrefsPath())
                                            .Deserialize(nullptr, nullptr));
     ASSERT_NE(nullptr, prefs.get());
-    base::Value::Dict* dict = prefs->GetIfDict();
+    base::DictValue* dict = prefs->GetIfDict();
     ASSERT_TRUE(dict);
     ASSERT_TRUE(dict->RemoveByDottedPath(prefs::kSafeBrowsingIncidentsSent));
     ASSERT_TRUE(JSONFileValueSerializer(GetPrefsPath()).Serialize(*dict));

@@ -32,7 +32,7 @@
 namespace dawn::native {
 
 BindGroupLayoutBase::BindGroupLayoutBase(DeviceBase* device,
-                                         const char* label,
+                                         StringView label,
                                          Ref<BindGroupLayoutInternalBase> internal,
                                          PipelineCompatibilityToken pipelineCompatibilityToken)
     : ApiObjectBase(device, label),
@@ -43,15 +43,20 @@ BindGroupLayoutBase::BindGroupLayoutBase(DeviceBase* device,
 
 BindGroupLayoutBase::BindGroupLayoutBase(DeviceBase* device,
                                          ObjectBase::ErrorTag tag,
-                                         const char* label)
+                                         StringView label)
     : ApiObjectBase(device, tag, label) {}
 
 ObjectType BindGroupLayoutBase::GetType() const {
     return ObjectType::BindGroupLayout;
 }
 
+bool BindGroupLayoutBase::IsEmpty() const {
+    DAWN_ASSERT(mInternalLayout != nullptr);
+    return mInternalLayout->IsEmpty();
+}
+
 // static
-Ref<BindGroupLayoutBase> BindGroupLayoutBase::MakeError(DeviceBase* device, const char* label) {
+Ref<BindGroupLayoutBase> BindGroupLayoutBase::MakeError(DeviceBase* device, StringView label) {
     return AcquireRef(new BindGroupLayoutBase(device, ObjectBase::kError, label));
 }
 
@@ -68,6 +73,18 @@ bool BindGroupLayoutBase::IsLayoutEqual(const BindGroupLayoutBase* other,
     return GetInternalBindGroupLayout() == other->GetInternalBindGroupLayout();
 }
 
-void BindGroupLayoutBase::DestroyImpl() {}
+void BindGroupLayoutBase::DestroyImpl(DestroyReason reason) {}
+
+void BindGroupLayoutBase::SetLabelImpl() {
+    // Note: Internal BindGroups are deduplicated so if a user
+    // has 2 matching bindgroups one will get the wrong label
+    // TODO(42240220): This can be fixed by keeping a list of labels per
+    // deduplicated object.
+    // There will be no internal BGL if creation was an error.
+    BindGroupLayoutInternalBase* internal = GetInternalBindGroupLayout();
+    if (internal) {
+        internal->SetLabel(GetLabel());
+    }
+}
 
 }  // namespace dawn::native

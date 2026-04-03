@@ -1,7 +1,6 @@
 <?xml version="1.0" ?>
 <!DOCTYPE translationbundle>
 <translationbundle lang="pl">
-<translation id="101606685846791463">wyczyść pamięć podręczną przeglądarki, wyczyść historię, usuń pliki cookie, usuń historię przeglądania</translation>
 <translation id="132297926492792130">kontroluj moje konto Google, rozwiąż problemy z kontem Google, zarządzaj kontem Google, zarządzaj moim kontem Google</translation>
 <translation id="1455865776268085776">wejdź w tryb incognito, nowe okno incognito, otwórz kartę incognito</translation>
 <translation id="1545931455576308147">udostępnij tę stronę, udostępnić tę stronę, udostępnij tę kartę, udostępnić tę kartę</translation>
@@ -24,10 +23,12 @@
 <translation id="5061612070235737664">zmień czcionkę przeglądarki, zmienić czcionkę przeglądarki, zmiana czcionki przeglądarki, zmienianie czcionki przeglądarki, czcionki chrome</translation>
 <translation id="6413237123574479071">zarządzaj formami płatności, zaktualizuj kartę kredytową</translation>
 <translation id="6654270263159958770">dodaj niestandardową wyszukiwarkę, dodaj wyszukiwarkę niestandardową, dodać niestandardową wyszukiwarkę, dodać wyszukiwarkę niestandardową, zarządzanie wyszukiwarkami, zarządzaj wyszukiwarkami, wyszukiwarki</translation>
+<translation id="6955091698405527624">zarządzaj moimi rzeczami, zarządzaj moimi rzeczami w Chrome, zarządzaj moimi danymi w Chrome, zarządzaj moimi informacjami w Chrome, zarządzaj zakładkami i innymi danymi, edytuj zapisane dane, edytuj dane na moim koncie, zmień ustawienia synchronizacji przeglądarki Chrome, zmień synchronizację Chrome, edytuj synchronizację, edytuj ustawienia synchronizacji, zarządzaj synchronizacją</translation>
 <translation id="7081494400361697539">utwórz arkusz Google, utwórz arkusz kalkulacyjny obszaru roboczego, nowy arkusz Google, otwórz nowy arkusz Google</translation>
 <translation id="7153639895359139570">dodaj adres, zmień adres dostawy, edytuj adresy, zarządzaj adresami</translation>
 <translation id="7242693601647412075">zarządzaj ustawieniami zabezpieczeń</translation>
 <translation id="7441773108452086364">zmień hasło do Gmaila, zmień moje hasło do Gmaila, zmiana hasła do Google, zresetuj hasło do konta Gmail</translation>
+<translation id="7469628627013714019">usuń pamięć podręczną przeglądarki, usuń historię, usuń pliki cookie, wyczyść historię przeglądania</translation>
 <translation id="7660956169713698963">dostosuj ułatwienia dostępu chrome os, dostosowanie ułatwień dostępu chrome os, dostosowywanie ułatwień dostępu chrome os, dostosuj ułatwienia dostępu systemu operacyjnego chrome, dostosowanie ułatwień dostępu systemu operacyjnego chrome, dostosowywanie ułatwień dostępu systemu operacyjnego chrome, zarządzanie ustawieniami ułatwień dostępu, zarządzaj ustawieniami ułatwień dostępu, zarządzać ustawieniami ułatwień dostępu</translation>
 <translation id="7700496593710078083">pokaż historię chrome, wyświetl historię chrome, wyświetlanie historii chrome, pokaż historię przeglądania, wyświetl historię przeglądania, wyświetlanie historii przeglądania</translation>
 <translation id="7739523284295786564">zarządzanie pobranymi plikami w chrome, zarządzanie pobieraniem w chrome, zarządzaj pobranymi plikami w chrome, zarządzaj pobieraniem w chrome, zarządzać pobieraniem w chrome, zarządzać pobranymi plikami w chrome, pokaż pobrane pliki, wyświetl pobrane pliki, zobacz pobrane pliki, zobaczyć pobrane pliki, pokazać pobrane pliki, wyświetlić pobrane pliki</translation>

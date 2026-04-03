@@ -5,6 +5,8 @@
 #include "components/browsing_data/content/browsing_data_helper.h"
 
 #include "components/browsing_data/content/browsing_data_model.h"
+#include "components/content_settings/core/common/content_settings_pattern.h"
+#include "content/public/browser/browsing_data_filter_builder.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_browser_context.h"
@@ -18,7 +20,7 @@ namespace {
 
 class BrowsingDataHelperTest : public testing::Test {
  public:
-  BrowsingDataHelperTest() {}
+  BrowsingDataHelperTest() = default;
 
   BrowsingDataHelperTest(const BrowsingDataHelperTest&) = delete;
   BrowsingDataHelperTest& operator=(const BrowsingDataHelperTest&) = delete;
@@ -60,12 +62,66 @@ TEST_F(BrowsingDataHelperTest, SchemesThatCantStoreDataDontMatchAnything) {
   EXPECT_FALSE(IsWebScheme("invalid-scheme-i-just-made-up"));
 }
 
-TEST_F(BrowsingDataHelperTest, GetUniqueThirdPartyCookiesHostCount) {
-  auto local_shared_objects_container =
-      browsing_data::LocalSharedObjectsContainer(
-          browser_context_.GetDefaultStoragePartition(),
-          /*ignore_empty_localstorage=*/false, base::NullCallback());
+TEST_F(BrowsingDataHelperTest, CreateWebsiteSettingsFilter) {
+  // A filter builder in "preserve" mode with no rules matches everything for
+  // deletion, and should result in a null filter.
+  std::unique_ptr<content::BrowsingDataFilterBuilder> filter_builder =
+      content::BrowsingDataFilterBuilder::Create(
+          content::BrowsingDataFilterBuilder::Mode::kPreserve);
+  EXPECT_TRUE(CreateWebsiteSettingsFilter(filter_builder.get()).is_null());
 
+  // A filter builder in "delete" mode with no rules should not result in a
+  // null filter, as it matches nothing.
+  filter_builder = content::BrowsingDataFilterBuilder::Create(
+      content::BrowsingDataFilterBuilder::Mode::kDelete);
+  EXPECT_FALSE(CreateWebsiteSettingsFilter(filter_builder.get()).is_null());
+
+  // Test "preserve" mode.
+  filter_builder = content::BrowsingDataFilterBuilder::Create(
+      content::BrowsingDataFilterBuilder::Mode::kPreserve);
+  filter_builder->AddOrigin(url::Origin::Create(GURL("https://google.com")));
+  auto preserve_predicate = CreateWebsiteSettingsFilter(filter_builder.get());
+  EXPECT_FALSE(preserve_predicate.is_null());
+
+  // The wildcard pattern should be ignored.
+  EXPECT_FALSE(preserve_predicate.Run(ContentSettingsPattern::Wildcard(),
+                                      ContentSettingsPattern::Wildcard()));
+
+  // A non-wildcard pattern for an origin added to the filter should not match,
+  // as it is preserved.
+  EXPECT_FALSE(preserve_predicate.Run(
+      ContentSettingsPattern::FromString("[*.]google.com"),
+      ContentSettingsPattern::Wildcard()));
+
+  // A non-wildcard pattern for an origin not in the filter should match, as it
+  // should be deleted.
+  EXPECT_TRUE(preserve_predicate.Run(
+      ContentSettingsPattern::FromString("[*.]example.com"),
+      ContentSettingsPattern::Wildcard()));
+
+  // Test "delete" mode.
+  filter_builder = content::BrowsingDataFilterBuilder::Create(
+      content::BrowsingDataFilterBuilder::Mode::kDelete);
+  filter_builder->AddOrigin(url::Origin::Create(GURL("https://google.com")));
+  auto delete_predicate = CreateWebsiteSettingsFilter(filter_builder.get());
+  EXPECT_FALSE(delete_predicate.is_null());
+
+  // The wildcard pattern should be ignored.
+  EXPECT_FALSE(delete_predicate.Run(ContentSettingsPattern::Wildcard(),
+                                    ContentSettingsPattern::Wildcard()));
+
+  // A non-wildcard pattern for an origin added to the filter should match.
+  EXPECT_TRUE(
+      delete_predicate.Run(ContentSettingsPattern::FromString("[*.]google.com"),
+                           ContentSettingsPattern::Wildcard()));
+
+  // A non-wildcard pattern for an origin not in the filter should not match.
+  EXPECT_FALSE(delete_predicate.Run(
+      ContentSettingsPattern::FromString("[*.]example.com"),
+      ContentSettingsPattern::Wildcard()));
+}
+
+TEST_F(BrowsingDataHelperTest, GetUniqueThirdPartyCookiesHostCount) {
   std::unique_ptr<BrowsingDataModel> browsing_data_model =
       BrowsingDataModel::BuildEmpty(
           browser_context_.GetDefaultStoragePartition(), /*delegate=*/nullptr);
@@ -130,23 +186,44 @@ TEST_F(BrowsingDataHelperTest, GetUniqueThirdPartyCookiesHostCount) {
 
   // When `google_url` is the top frame unique third-party count should sites
   // other than google URLs (out of 6 entries should be 4).
-  int unique_site_count = GetUniqueThirdPartyCookiesHostCount(
-      google_url, local_shared_objects_container, *browsing_data_model);
+  int unique_site_count =
+      GetUniqueThirdPartyCookiesHostCount(google_url, *browsing_data_model);
   EXPECT_EQ(3, unique_site_count);
 
   // When `google_subdomain_url` is the top frame unique third-party count
   // should sites other than google URLs (out of 6 entries should be 4).
-  unique_site_count = GetUniqueThirdPartyCookiesHostCount(
-      google_subdomain_url, local_shared_objects_container,
-      *browsing_data_model);
+  unique_site_count = GetUniqueThirdPartyCookiesHostCount(google_subdomain_url,
+                                                          *browsing_data_model);
   EXPECT_EQ(3, unique_site_count);
 
   // When `ip_url` is the top frame this tests empty top frame domain with other
   // sites. Subdomains are counted separately because they're different hosts
   // (out of 6 entries should be 5).
-  unique_site_count = GetUniqueThirdPartyCookiesHostCount(
-      ip_url, local_shared_objects_container, *browsing_data_model);
+  unique_site_count =
+      GetUniqueThirdPartyCookiesHostCount(ip_url, *browsing_data_model);
   EXPECT_EQ(4, unique_site_count);
+}
+
+TEST_F(BrowsingDataHelperTest, ABAEmbedCookies) {
+  std::unique_ptr<BrowsingDataModel> browsing_data_model =
+      BrowsingDataModel::BuildEmpty(
+          browser_context_.GetDefaultStoragePartition(), /*delegate=*/nullptr);
+
+  // 1P cookies accessed in contexts with a cross-site ancestor (aka ABA embeds)
+  // should also be counted as third-party cookies.
+  browsing_data_model->AddBrowsingData(
+      *net::CanonicalCookie::CreateForTesting(
+          GURL("https://example.com/"), "abc=123; SameSite=None; Secure",
+          base::Time::Now(),
+          /*server_time=*/std::nullopt,
+          /*cookie_partition_key=*/std::nullopt, net::CookieSourceType::kOther),
+      BrowsingDataModel::StorageType::kCookie,
+      /*storage_size=*/0,
+      /*cookie_count=*/1,
+      /*blocked_third_party=*/true);
+
+  EXPECT_EQ(1, GetUniqueThirdPartyCookiesHostCount(GURL("https://example.com/"),
+                                                   *browsing_data_model));
 }
 
 }  // namespace

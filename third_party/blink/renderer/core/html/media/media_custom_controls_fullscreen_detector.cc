@@ -11,7 +11,6 @@
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/intersection_observer/intersection_observer_entry.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "ui/gfx/geometry/size_conversions.h"
 
@@ -93,7 +92,7 @@ void MediaCustomControlsFullscreenDetector::Attach() {
 
   viewport_intersection_observer_ = IntersectionObserver::Create(
       video_element_->GetDocument(),
-      WTF::BindRepeating(
+      BindRepeating(
           &MediaCustomControlsFullscreenDetector::OnIntersectionChanged,
           WrapWeakPersistent(this)),
       LocalFrameUkmAggregator::kMediaIntersectionObserver,
@@ -186,10 +185,10 @@ void MediaCustomControlsFullscreenDetector::UpdateDominantAndFullscreenStatus(
   VideoElement()
       .GetDocument()
       .GetTaskRunner(TaskType::kInternalMedia)
-      ->PostTask(FROM_HERE, WTF::BindOnce(update_dominant_and_fullscreen,
-                                          WrapWeakPersistent(this),
-                                          is_dominant_visible_content,
-                                          is_effectively_fullscreen));
+      ->PostTask(
+          FROM_HERE,
+          BindOnce(update_dominant_and_fullscreen, WrapWeakPersistent(this),
+                   is_dominant_visible_content, is_effectively_fullscreen));
 }
 
 void MediaCustomControlsFullscreenDetector::OnIntersectionChanged(

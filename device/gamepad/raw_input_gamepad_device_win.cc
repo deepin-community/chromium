@@ -2,9 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "device/gamepad/raw_input_gamepad_device_win.h"
+
 #include <string_view>
 
-#include "raw_input_gamepad_device_win.h"
+#include "base/compiler_specific.h"
+#include "base/strings/string_util.h"
 
 // NOTE: <hidsdi.h> must be included before <hidpi.h>. clang-format will want to
 // reorder them.
@@ -92,8 +95,6 @@ RawInputGamepadDeviceWin::RawInputGamepadDeviceWin(HANDLE device_handle,
       source_id_(source_id),
       last_update_timestamp_(GamepadDataFetcher::CurrentTimeInMicroseconds()),
       button_report_id_(Gamepad::kButtonsLengthCap, std::nullopt) {
-  ::ZeroMemory(buttons_, sizeof(buttons_));
-  ::ZeroMemory(axes_, sizeof(axes_));
 
   is_valid_ = QueryDeviceInfo();
   if (!is_valid_)
@@ -140,26 +141,35 @@ void RawInputGamepadDeviceWin::UpdateGamepad(RAWINPUT* input) {
     // Handle Dualshock4 input reports that do not specify HID gamepad usages in
     // the report descriptor.
     uint8_t report_id = input->data.hid.bRawData[0];
-    auto report = base::make_span(input->data.hid.bRawData + 1,
-                                  input->data.hid.dwSizeHid);
+    // SAFETY: data.hid.bRawData has length data.hid.dwSizeHid.
+    auto raw_data = UNSAFE_BUFFERS(
+        base::span(input->data.hid.bRawData, input->data.hid.dwSizeHid));
+    auto report = raw_data.subspan(1u);
     Gamepad pad;
     bool is_multitouch_enabled = features::IsGamepadMultitouchEnabled();
     if (dualshock4_->ProcessInputReport(report_id, report, &pad, false,
                                         is_multitouch_enabled)) {
-      for (size_t i = 0; i < Gamepad::kAxesLengthCap; ++i)
-        axes_[i].value = pad.axes[i];
-      for (size_t i = 0; i < Gamepad::kButtonsLengthCap; ++i)
-        buttons_[i] = pad.buttons[i].pressed;
+      auto axes_span = base::span(axes_);
+      auto buttons_span = base::span(buttons_);
+
+      for (size_t i = 0; i < Gamepad::kAxesLengthCap; ++i) {
+        axes_span[i].value = pad.axes[i];
+      }
+
+      for (size_t i = 0; i < Gamepad::kButtonsLengthCap; ++i) {
+        buttons_span[i] = pad.buttons[i].pressed;
+      }
 
       if (is_multitouch_enabled) {
-        const GamepadTouch* touches = pad.touch_events;
+        const auto& touches = pad.touch_events;
+        auto touches_span = base::span(touches_);
         for (size_t i = 0; i < Gamepad::kTouchEventsLengthCap; ++i) {
-          touches_[i].touch_id = touches[i].touch_id;
-          touches_[i].surface_id = touches[i].surface_id;
-          touches_[i].x = touches[i].x;
-          touches_[i].y = touches[i].y;
-          touches_[i].surface_width = touches[i].surface_width;
-          touches_[i].surface_height = touches[i].surface_height;
+          touches_span[i].touch_id = touches[i].touch_id;
+          touches_span[i].surface_id = touches[i].surface_id;
+          touches_span[i].x = touches[i].x;
+          touches_span[i].y = touches[i].y;
+          touches_span[i].surface_width = touches[i].surface_width;
+          touches_span[i].surface_height = touches[i].surface_height;
         }
         touches_length_ = pad.touch_events_length;
         supports_touch_events_ = pad.supports_touch_events_;
@@ -178,19 +188,20 @@ void RawInputGamepadDeviceWin::UpdateGamepad(RAWINPUT* input) {
                      reinterpret_cast<PCHAR>(input->data.hid.bRawData),
                      input->data.hid.dwSizeHid);
 
-    std::unique_ptr<USAGE_AND_PAGE[]> usages(
-        new USAGE_AND_PAGE[buttons_length]);
-    status = HidP_GetUsagesEx(HidP_Input, 0, usages.get(), &buttons_length,
+    auto usages = base::HeapArray<USAGE_AND_PAGE>::Uninit(buttons_length);
+    status = HidP_GetUsagesEx(HidP_Input, 0, usages.data(), &buttons_length,
                               preparsed_data_,
                               reinterpret_cast<PCHAR>(input->data.hid.bRawData),
                               input->data.hid.dwSizeHid);
 
     uint8_t report_id = input->data.hid.bRawData[0];
+    auto button_report_id_span = base::span(button_report_id_);
+    auto buttons_span = base::span(buttons_);
     // Clear the button state of buttons contained in this report
     for (size_t j = 0; j < button_report_id_.size(); j++) {
-      if (button_report_id_[j].has_value() &&
-          button_report_id_[j].value() == report_id) {
-        buttons_[j] = false;
+      if (button_report_id_span[j].has_value() &&
+          button_report_id_span[j].value() == report_id) {
+        buttons_span[j] = false;
       }
     }
 
@@ -201,18 +212,21 @@ void RawInputGamepadDeviceWin::UpdateGamepad(RAWINPUT* input) {
         uint16_t usage = usages[j].Usage;
         if (usage_page == kButtonUsagePage && usage > 0) {
           size_t button_index = static_cast<size_t>(usage - 1);
-          if (button_index < Gamepad::kButtonsLengthCap)
-            buttons_[button_index] = true;
+          if (button_index < Gamepad::kButtonsLengthCap) {
+            buttons_span[button_index] = true;
+          }
         } else if (usage_page != kButtonUsagePage &&
                    !special_button_map_.empty()) {
+          auto special_usages_span = base::span(kSpecialUsages);
           for (size_t special_index = 0; special_index < kSpecialUsagesLen;
                ++special_index) {
             int button_index = special_button_map_[special_index];
             if (button_index < 0)
               continue;
-            const auto& special = kSpecialUsages[special_index];
-            if (usage_page == special.usage_page && usage == special.usage)
-              buttons_[button_index] = true;
+            const auto& special = special_usages_span[special_index];
+            if (usage_page == special.usage_page && usage == special.usage) {
+              buttons_span[button_index] = true;
+            }
           }
         }
       }
@@ -234,26 +248,29 @@ void RawInputGamepadDeviceWin::ReadPadState(Gamepad* pad) const {
   pad->axes_length = axes_length_;
   pad->axes_used = axes_used_;
 
+  auto buttons_span = base::span(buttons_);
   for (uint32_t i = 0u; i < buttons_length_; i++) {
     pad->buttons[i].used = button_report_id_[i].has_value();
-    pad->buttons[i].pressed = buttons_[i];
-    pad->buttons[i].value = buttons_[i] ? 1.0 : 0.0;
+    pad->buttons[i].pressed = buttons_span[i];
+    pad->buttons[i].value = buttons_span[i] ? 1.0 : 0.0;
   }
 
+  auto axes_span = base::span(axes_);
   for (uint32_t i = 0u; i < axes_length_; i++) {
-    pad->axes[i] = axes_[i].value;
+    pad->axes[i] = axes_span[i].value;
   }
 
   if (features::IsGamepadMultitouchEnabled()) {
     pad->supports_touch_events_ = supports_touch_events_;
     pad->touch_events_length = touches_length_;
+    auto touches_span = base::span(touches_);
     for (uint32_t i = 0u; i < touches_length_; i++) {
-      pad->touch_events[i].touch_id = touches_[i].touch_id;
-      pad->touch_events[i].surface_id = touches_[i].surface_id;
-      pad->touch_events[i].x = touches_[i].x;
-      pad->touch_events[i].y = touches_[i].y;
-      pad->touch_events[i].surface_width = touches_[i].surface_width;
-      pad->touch_events[i].surface_height = touches_[i].surface_height;
+      pad->touch_events[i].touch_id = touches_span[i].touch_id;
+      pad->touch_events[i].surface_id = touches_span[i].surface_id;
+      pad->touch_events[i].x = touches_span[i].x;
+      pad->touch_events[i].y = touches_span[i].y;
+      pad->touch_events[i].surface_width = touches_span[i].surface_width;
+      pad->touch_events[i].surface_height = touches_span[i].surface_height;
     }
   }
 }
@@ -292,8 +309,8 @@ bool RawInputGamepadDeviceWin::QueryDeviceInfo() {
   // "DEV" instead of "VID" and "PID". PCI HID devices are typically not
   // gamepads and are ignored.
   // Example PCI device name: \\?\HID#VEN_1234&DEV_ABCD
-  // TODO(crbug/881539): Potentially allow PCI HID devices to be enumerated, but
-  // prefer known gamepads when there is contention.
+  // TODO(crbug.com/41412324): Potentially allow PCI HID devices to be
+  // enumerated, but prefer known gamepads when there is contention.
   std::wstring pci_prefix = L"\\\\?\\HID#VEN_";
   if (!name_.compare(0, pci_prefix.size(), pci_prefix))
     return false;
@@ -307,8 +324,9 @@ bool RawInputGamepadDeviceWin::QueryDeviceInfo() {
   // read the product string from the device. If the OS does not return a valid
   // handle this gamepad is invalid.
   auto hid_handle = OpenHidHandle();
-  if (!hid_handle.IsValid())
+  if (!hid_handle.is_valid()) {
     return false;
+  }
 
   // Fetch the human-friendly |product_string_|, if available.
   if (!QueryProductString(hid_handle))
@@ -338,16 +356,16 @@ bool RawInputGamepadDeviceWin::QueryHidInfo() {
   }
   DCHECK_EQ(0u, result);
 
-  std::unique_ptr<uint8_t[]> buffer(new uint8_t[size]);
+  auto buffer = base::HeapArray<uint8_t>::Uninit(size);
   result =
-      ::GetRawInputDeviceInfo(handle_, RIDI_DEVICEINFO, buffer.get(), &size);
+      ::GetRawInputDeviceInfo(handle_, RIDI_DEVICEINFO, buffer.data(), &size);
   if (result == static_cast<UINT>(-1)) {
     PLOG(ERROR) << "GetRawInputDeviceInfo() failed";
     return false;
   }
   DCHECK_EQ(size, result);
   RID_DEVICE_INFO* device_info =
-      reinterpret_cast<RID_DEVICE_INFO*>(buffer.get());
+      reinterpret_cast<RID_DEVICE_INFO*>(buffer.data());
 
   DCHECK_EQ(device_info->dwType, static_cast<DWORD>(RIM_TYPEHID));
   vendor_id_ = static_cast<uint16_t>(device_info->hid.dwVendorId);
@@ -369,23 +387,23 @@ bool RawInputGamepadDeviceWin::QueryDeviceName() {
   }
   DCHECK_EQ(0u, result);
 
-  std::unique_ptr<wchar_t[]> buffer(new wchar_t[size]);
-  result =
-      ::GetRawInputDeviceInfo(handle_, RIDI_DEVICENAME, buffer.get(), &size);
+  std::wstring buffer;
+  result = ::GetRawInputDeviceInfo(handle_, RIDI_DEVICENAME,
+                                   base::WriteInto(&buffer, size), &size);
   if (result == static_cast<UINT>(-1)) {
     PLOG(ERROR) << "GetRawInputDeviceInfo() failed";
     return false;
   }
   DCHECK_EQ(size, result);
 
-  name_ = buffer.get();
+  name_ = std::move(buffer);
 
   return true;
 }
 
 bool RawInputGamepadDeviceWin::QueryProductString(
     base::win::ScopedHandle& hid_handle) {
-  DCHECK(hid_handle.IsValid());
+  DCHECK(hid_handle.is_valid());
   // HidD_GetProductString may return successfully even if it didn't write to
   // the buffer. Ensure the buffer is zeroed before calling
   // HidD_GetProductString. See https://crbug.com/1205511.
@@ -426,10 +444,10 @@ bool RawInputGamepadDeviceWin::QueryDeviceCapabilities() {
   }
   DCHECK_EQ(0u, result);
 
-  ppd_buffer_.reset(new uint8_t[size]);
-  preparsed_data_ = reinterpret_cast<PHIDP_PREPARSED_DATA>(ppd_buffer_.get());
+  ppd_buffer_ = base::HeapArray<uint8_t>::Uninit(size);
+  preparsed_data_ = reinterpret_cast<PHIDP_PREPARSED_DATA>(ppd_buffer_.data());
   result = ::GetRawInputDeviceInfo(handle_, RIDI_PREPARSEDDATA,
-                                   ppd_buffer_.get(), &size);
+                                   ppd_buffer_.data(), &size);
   if (result == static_cast<UINT>(-1)) {
     PLOG(ERROR) << "GetRawInputDeviceInfo() failed";
     return false;
@@ -491,12 +509,13 @@ void RawInputGamepadDeviceWin::QuerySpecialButtonCapabilities(
   std::vector<bool> has_special_usage(kSpecialUsagesLen, false);
   std::vector<uint8_t> special_report_id(kSpecialUsagesLen, 0);
   size_t unmapped_button_count = 0;
+  auto special_usages_span = base::span(kSpecialUsages);
   for (const auto& item : button_caps) {
     uint16_t usage_min = item.Range.UsageMin;
     uint16_t usage_max = item.Range.UsageMax;
     for (size_t special_index = 0; special_index < kSpecialUsagesLen;
          ++special_index) {
-      const auto& special = kSpecialUsages[special_index];
+      const auto& special = special_usages_span[special_index];
       if (item.UsagePage == special.usage_page && usage_min <= special.usage &&
           usage_max >= special.usage) {
         has_special_usage[special_index] = true;
@@ -536,18 +555,19 @@ void RawInputGamepadDeviceWin::QuerySpecialButtonCapabilities(
 }
 
 void RawInputGamepadDeviceWin::QueryAxisCapabilities(uint16_t axis_count) {
-  std::unique_ptr<HIDP_VALUE_CAPS[]> axes_caps(new HIDP_VALUE_CAPS[axis_count]);
-  HidP_GetValueCaps(HidP_Input, axes_caps.get(), &axis_count, preparsed_data_);
+  auto axes_caps = base::HeapArray<HIDP_VALUE_CAPS>::Uninit(axis_count);
+  HidP_GetValueCaps(HidP_Input, axes_caps.data(), &axis_count, preparsed_data_);
 
   bool mapped_all_axes = true;
 
+  auto axes_span = base::span(axes_);
   for (size_t i = 0; i < axis_count; i++) {
     size_t axis_index = axes_caps[i].Range.UsageMin - kAxisMinimumUsageNumber;
-    if (axis_index < Gamepad::kAxesLengthCap && !axes_[axis_index].active) {
-      axes_[axis_index].caps = axes_caps[i];
-      axes_[axis_index].value = 0;
-      axes_[axis_index].active = true;
-      axes_[axis_index].bitmask = GetBitmask(axes_caps[i].BitSize);
+    if (axis_index < Gamepad::kAxesLengthCap && !axes_span[axis_index].active) {
+      axes_span[axis_index].caps = axes_caps[i];
+      axes_span[axis_index].value = 0;
+      axes_span[axis_index].active = true;
+      axes_span[axis_index].bitmask = GetBitmask(axes_caps[i].BitSize);
       axes_length_ = std::max(axes_length_, axis_index + 1);
       axes_used_ |= 1 << axis_index;
     } else {
@@ -563,14 +583,15 @@ void RawInputGamepadDeviceWin::QueryAxisCapabilities(uint16_t axis_count) {
       if (usage >= Gamepad::kAxesLengthCap &&
           axes_caps[i].UsagePage <= kGameControlsUsagePage) {
         for (; next_index < Gamepad::kAxesLengthCap; ++next_index) {
-          if (!axes_[next_index].active)
+          if (!axes_span[next_index].active) {
             break;
+          }
         }
         if (next_index < Gamepad::kAxesLengthCap) {
-          axes_[next_index].caps = axes_caps[i];
-          axes_[next_index].value = 0;
-          axes_[next_index].active = true;
-          axes_[next_index].bitmask = GetBitmask(axes_caps[i].BitSize);
+          axes_span[next_index].caps = axes_caps[i];
+          axes_span[next_index].value = 0;
+          axes_span[next_index].active = true;
+          axes_span[next_index].bitmask = GetBitmask(axes_caps[i].BitSize);
           axes_length_ = std::max(axes_length_, next_index + 1);
           axes_used_ |= 1 << next_index;
         }
@@ -610,7 +631,8 @@ void RawInputGamepadDeviceWin::UpdateAxisValue(size_t axis_index,
   // and normalize using the Physical bounds. If the Physical bounds are invalid
   // or HidP_GetScaledUsageValue fails, use HidP_GetUsageValue to retrieve the
   // logical value and normalize using the Logical bounds.
-  auto& axis = axes_[axis_index];
+  auto axes_span = base::span(axes_);
+  auto& axis = axes_span[axis_index];
   if (axis.caps.PhysicalMin < axis.caps.PhysicalMax) {
     LONG scaled_axis_value = 0;
     if (HidP_GetScaledUsageValue(

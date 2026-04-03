@@ -15,8 +15,24 @@ limitations under the License.
 
 #include "tensorflow/compiler/tf2xla/xla_compiler.h"
 
+#include <cstdint>
+#include <functional>
+#include <initializer_list>
+#include <memory>
+#include <optional>
+#include <set>
+#include <utility>
+#include <vector>
+
+#include <gmock/gmock.h>
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/match.h"
+#include "absl/strings/str_cat.h"
 #include "tensorflow/cc/framework/ops.h"
+#include "tensorflow/cc/framework/scope.h"
+#include "tensorflow/cc/ops/array_ops.h"
 #include "tensorflow/cc/ops/const_op.h"
 #include "tensorflow/cc/ops/data_flow_ops.h"
 #include "tensorflow/cc/ops/function_ops.h"
@@ -25,21 +41,39 @@ limitations under the License.
 #include "tensorflow/cc/ops/math_ops.h"
 #include "tensorflow/cc/ops/resource_variable_ops.h"
 #include "tensorflow/cc/ops/standard_ops.h"
+#include "tensorflow/compiler/tf2xla/layout_util.h"
 #include "tensorflow/compiler/tf2xla/literal_util.h"
 #include "tensorflow/compiler/tf2xla/shape_util.h"
 #include "tensorflow/compiler/tf2xla/side_effect_util.h"
 #include "tensorflow/compiler/tf2xla/type_util.h"
+#include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
+#include "tensorflow/compiler/tf2xla/xla_resource.h"
+#include "xla/array.h"
+#include "xla/client/client.h"
 #include "xla/client/client_library.h"
 #include "xla/client/local_client.h"
-#include "xla/client/xla_builder.h"
+#include "xla/debug_options_flags.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_sharding.h"
+#include "xla/hlo/testlib/filecheck.h"
+#include "xla/layout_util.h"
 #include "xla/literal.h"
+#include "xla/literal_util.h"
 #include "xla/service/hlo.pb.h"
+#include "xla/service/hlo_module_util.h"
 #include "xla/service/hlo_proto_util.h"
+#include "xla/service/service.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/status_macros.h"
 #include "xla/tests/literal_test_util.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/xla_data.pb.h"
 #include "tensorflow/core/common_runtime/function.h"
 #include "tensorflow/core/common_runtime/graph_constructor.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
@@ -50,16 +84,24 @@ limitations under the License.
 #include "tensorflow/core/framework/graph_to_functiondef.h"
 #include "tensorflow/core/framework/node_def_builder.h"
 #include "tensorflow/core/framework/node_def_util.h"
+#include "tensorflow/core/framework/op.h"
+#include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/op_requires.h"
+#include "tensorflow/core/framework/resource_base.h"
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/tensor_testutil.h"
+#include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/graph/algorithm.h"
 #include "tensorflow/core/graph/graph.h"
+#include "tensorflow/core/graph/node_builder.h"
 #include "tensorflow/core/kernels/ops_testutil.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
+#include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/platform/test.h"
+#include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/public/version.h"
 #include "tsl/platform/statusor.h"
 
@@ -98,7 +140,7 @@ namespace {
 // compiled kernels.
 class DummyResourceForTest : public ResourceBase {
  public:
-  string DebugString() const override { return "dummy"; }
+  std::string DebugString() const override { return "dummy"; }
   void Increment() { ++value_; }
   int Get() { return value_; }
 
@@ -226,8 +268,8 @@ TEST_F(XlaCompilerTest, Simple) {
                                      std::move(graph), args, &result));
 
   // Tests that the generated computation works.
-  xla::Literal param0_literal = xla::LiteralUtil::CreateR1<int32>({7, 42});
-  xla::Literal param1_literal = xla::LiteralUtil::CreateR1<int32>({-3, 101});
+  xla::Literal param0_literal = xla::LiteralUtil::CreateR1<int32_t>({7, 42});
+  xla::Literal param1_literal = xla::LiteralUtil::CreateR1<int32_t>({-3, 101});
   std::unique_ptr<xla::GlobalData> param0_data =
       client_->TransferToServer(param0_literal).value();
   std::unique_ptr<xla::GlobalData> param1_data =
@@ -239,12 +281,12 @@ TEST_F(XlaCompilerTest, Simple) {
           .value();
   xla::Literal actual_literal = client_->Transfer(*actual).value();
 
-  xla::Literal expected0 = xla::LiteralUtil::CreateR1<int32>({4, 143});
+  xla::Literal expected0 = xla::LiteralUtil::CreateR1<int32_t>({4, 143});
   xla::Literal expected_literal = xla::LiteralUtil::MakeTuple({&expected0});
   EXPECT_TRUE(xla::LiteralTestUtil::Equal(expected_literal, actual_literal));
 }
 
-StatusOr<std::unique_ptr<xla::HloModule>> LoadModuleFromHloProto(
+absl::StatusOr<std::unique_ptr<xla::HloModule>> LoadModuleFromHloProto(
     const xla::HloModuleProto& module_proto) {
   TF_ASSIGN_OR_RETURN(auto module_config,
                       xla::HloModule::CreateModuleConfigFromProto(
@@ -268,15 +310,12 @@ TEST_F(XlaCompilerTest, SimpleDynamicShapeParameter) {
   std::vector<XlaCompiler::Argument> args(2);
   args[0].kind = XlaCompiler::Argument::kParameter;
   args[0].type = DT_INT32;
-  args[0].shape = TensorShape({2});
-  args[0].value_bound = Tensor(DT_INT32, std::get<0>(args[0].shape));
-  Tensor dynamism_tensor(DT_BOOL);
-  TF_ASSERT_OK(LiteralToHostTensor(xla::LiteralUtil::CreateR1<bool>({true}),
-                                   DT_BOOL, &dynamism_tensor));
-  args[0].value_dynamism = dynamism_tensor;
+  args[0].shape =
+      xla::ShapeUtil::MakeShape(/*element_type=*/xla::S32, /*dimensions=*/{2},
+                                /*dynamic_dimensions=*/{true});
   args[1].kind = XlaCompiler::Argument::kParameter;
   args[1].type = DT_INT32;
-  args[1].shape = TensorShape({2});
+  args[1].shape = TensorShape(/*dimensions=*/{2});
 
   // Compiles the graph.
   XlaCompiler compiler(DefaultOptions());
@@ -288,7 +327,7 @@ TEST_F(XlaCompilerTest, SimpleDynamicShapeParameter) {
   auto hlo = result.computation->proto();
   TF_ASSERT_OK_AND_ASSIGN(auto module, LoadModuleFromHloProto(hlo));
   EXPECT_EQ(module->computation_count(), 1);
-  EXPECT_TRUE(module->mutable_computation(0)
+  EXPECT_TRUE((*module->computations().begin())
                   ->parameter_instruction(0)
                   ->shape()
                   .is_dynamic());
@@ -327,8 +366,8 @@ TEST_F(XlaCompilerTest, OutOfOrderGraph) {
                                      args, &result));
 
   // Tests that the generated computation works.
-  xla::Literal param0_literal = xla::LiteralUtil::CreateR1<int32>({7, 42});
-  xla::Literal param1_literal = xla::LiteralUtil::CreateR1<int32>({-3, 101});
+  xla::Literal param0_literal = xla::LiteralUtil::CreateR1<int32_t>({7, 42});
+  xla::Literal param1_literal = xla::LiteralUtil::CreateR1<int32_t>({-3, 101});
   std::unique_ptr<xla::GlobalData> param0_data =
       client_->TransferToServer(param0_literal).value();
   std::unique_ptr<xla::GlobalData> param1_data =
@@ -364,7 +403,7 @@ TEST_F(XlaCompilerTest, HonorShapeRepresentationFnForUnwrittenResource) {
   XlaShapeLayoutHelpers::ShapeDeterminationFns shape_determination_fns;
   shape_determination_fns.shape_representation_fn =
       [](const TensorShape& shape, DataType dt, bool use_fast_memory,
-         XlaLayoutPreference layout_preference) -> StatusOr<xla::Shape> {
+         XlaLayoutPreference layout_preference) -> absl::StatusOr<xla::Shape> {
     xla::Shape xla_shape;
     TF_RETURN_IF_ERROR(TensorShapeToXLAShape(dt, shape, &xla_shape));
     *xla_shape.mutable_layout() = xla::LayoutUtil::MakeLayout({0, 1});
@@ -410,7 +449,7 @@ TEST_F(XlaCompilerTest, HonorShapeRepresentationFnForFastMemVar) {
   shape_determination_fns.shape_representation_fn =
       [&fast_mem_arg_count](
           const TensorShape& shape, DataType dt, bool use_fast_memory,
-          XlaLayoutPreference layout_preference) -> StatusOr<xla::Shape> {
+          XlaLayoutPreference layout_preference) -> absl::StatusOr<xla::Shape> {
     xla::Shape xla_shape;
     TF_RETURN_IF_ERROR(TensorShapeToXLAShape(dt, shape, &xla_shape));
     *xla_shape.mutable_layout() = xla::LayoutUtil::MakeLayout({0, 1});
@@ -445,7 +484,7 @@ TEST_F(XlaCompilerTest, HonorShapeRepresentationFnForRetVal) {
   auto read = ops::ReadVariableOp(
       scope.WithControlDependencies(std::vector<Operation>{write}), var,
       DT_INT32);
-  auto read_plus_one = ops::Add(scope, read, ops::Const<int32>(scope, 1));
+  auto read_plus_one = ops::Add(scope, read, ops::Const<int32_t>(scope, 1));
   auto d = ops::_Retval(scope.WithOpName("D"), read_plus_one, 0);
   std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
   TF_ASSERT_OK(scope.ToGraph(graph.get()));
@@ -465,7 +504,7 @@ TEST_F(XlaCompilerTest, HonorShapeRepresentationFnForRetVal) {
   XlaShapeLayoutHelpers::ShapeDeterminationFns shape_determination_fns;
   shape_determination_fns.shape_representation_fn =
       [](const TensorShape& shape, DataType dt, bool use_fast_memory,
-         XlaLayoutPreference layout_preference) -> StatusOr<xla::Shape> {
+         XlaLayoutPreference layout_preference) -> absl::StatusOr<xla::Shape> {
     xla::Shape xla_shape;
     TF_RETURN_IF_ERROR(TensorShapeToXLAShape(dt, shape, &xla_shape));
     *xla_shape.mutable_layout() = xla::LayoutUtil::MakeLayout({0, 1});
@@ -563,7 +602,7 @@ TEST_F(XlaCompilerTest, MixedOrderArguments) {
     auto read = ops::ReadVariableOp(
         scope.WithControlDependencies(std::vector<Operation>{write}), var,
         DT_INT32);
-    auto read_plus_one = ops::Add(scope, read, ops::Const<int32>(scope, 1));
+    auto read_plus_one = ops::Add(scope, read, ops::Const<int32_t>(scope, 1));
     auto d = ops::_Retval(scope.WithOpName("D"), read_plus_one, 0);
     std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
     TF_ASSERT_OK(scope.ToGraph(graph.get()));
@@ -621,7 +660,7 @@ TEST_F(XlaCompilerTest, HasSaneErrorOnNonCompileTimeConstantInputToReshape) {
   XlaCompiler compiler(DefaultOptions());
 
   XlaCompiler::CompilationResult result;
-  Status status =
+  absl::Status status =
       compiler.CompileGraph(XlaCompiler::CompileOptions(), "reshape",
                             std::move(graph), args, &result);
   EXPECT_FALSE(status.ok());
@@ -641,7 +680,7 @@ TEST_F(XlaCompilerTest, ConstantOutputs) {
   // func(a) { b=7; c=-a; return b, c; }
   Scope scope = Scope::NewRootScope().ExitOnError();
   auto a = ops::_Arg(scope.WithOpName("A"), DT_INT32, 0);
-  auto b = ops::Const<int32>(scope.WithOpName("B"), 7);
+  auto b = ops::Const<int32_t>(scope.WithOpName("B"), 7);
   auto c = ops::Neg(scope.WithOpName("C"), a);
   auto d = ops::_Retval(scope.WithOpName("D"), b, 0);
   auto e = ops::_Retval(scope.WithOpName("E"), c, 1);
@@ -671,7 +710,7 @@ TEST_F(XlaCompilerTest, ConstantOutputs) {
     EXPECT_FALSE(result.outputs[1].is_constant);
 
     // Tests that the generated computation works.
-    xla::Literal param0_literal = xla::LiteralUtil::CreateR1<int32>({7, 42});
+    xla::Literal param0_literal = xla::LiteralUtil::CreateR1<int32_t>({7, 42});
     std::unique_ptr<xla::GlobalData> param0_data =
         client_->TransferToServer(param0_literal).value();
 
@@ -679,8 +718,8 @@ TEST_F(XlaCompilerTest, ConstantOutputs) {
         client_->Execute(*result.computation, {param0_data.get()}).value();
     xla::Literal actual_literal = client_->Transfer(*actual).value();
 
-    xla::Literal expected0 = xla::LiteralUtil::CreateR0<int32>(7);
-    xla::Literal expected1 = xla::LiteralUtil::CreateR1<int32>({-7, -42});
+    xla::Literal expected0 = xla::LiteralUtil::CreateR0<int32_t>(7);
+    xla::Literal expected1 = xla::LiteralUtil::CreateR1<int32_t>({-7, -42});
     xla::Literal expected =
         xla::LiteralUtil::MakeTuple({&expected0, &expected1});
     EXPECT_TRUE(xla::LiteralTestUtil::Equal(expected, actual_literal));
@@ -711,7 +750,7 @@ TEST_F(XlaCompilerTest, ConstantOutputsOfFunctionalNode) {
     foo.set_name("foo");
     foo.set_op("foo");
     *foo.add_input() = "input_arg";
-    Status status;
+    absl::Status status;
     scope.graph()->AddNode(foo, &status);
     TF_ASSERT_OK(status);
     NodeDef retval_1;
@@ -774,7 +813,7 @@ TEST_F(XlaCompilerTest, ResourceManager) {
 
   // Compiles the graph.
   auto options = DefaultOptions();
-  std::function<Status(ResourceMgr*)> populate_function =
+  std::function<absl::Status(ResourceMgr*)> populate_function =
       [resource](ResourceMgr* rm) {
         resource->Ref();
         return rm->Create(rm->default_container(), "dummy", resource);
@@ -846,7 +885,7 @@ TEST_F(XlaCompilerTest, DeterministicCompilation) {
         // The names of instructions were uniquified by the XlaBuilder and the
         // unique ids may be different, the rest of the fields should be
         // identical.
-        string str1, str2;
+        std::string str1, str2;
         LOG(INFO) << "instr1 = " << instr1.DebugString();
         LOG(INFO) << "instr2 = " << instr2.DebugString();
         instr1.AppendPartialToString(&str1);
@@ -865,7 +904,7 @@ TEST_F(XlaCompilerTest, CanPassTensorArraysToAndFromComputation) {
   auto flow = ops::Const<float>(scope, {});
   auto grad1 = ops::TensorArrayGrad(scope, arg, flow, "grad1");
   auto grad2 = ops::TensorArrayGrad(scope, arg, grad1.flow_out, "grad2");
-  auto index = ops::Const<int32>(scope, 1);
+  auto index = ops::Const<int32_t>(scope, 1);
   auto write = ops::TensorArrayWrite(scope, grad1.grad_handle, index, index,
                                      grad2.flow_out);
   auto read = ops::TensorArrayRead(scope, arg, index, write.flow_out, DT_INT32);
@@ -894,12 +933,12 @@ TEST_F(XlaCompilerTest, CanPassTensorArraysToAndFromComputation) {
   const XlaCompiler::ResourceUpdate& update = result.resource_updates[0];
   EXPECT_EQ(0, update.input_index);
   EXPECT_EQ(DT_INT32, update.type);
-  EXPECT_EQ((std::set<string>{"grad1", "grad2"}),
+  EXPECT_EQ((std::set<std::string>{"grad1", "grad2"}),
             update.tensor_array_gradients_accessed);
 
   // Tests that the generated computation works.
-  xla::Literal input_base = xla::LiteralUtil::CreateR1<int32>({7, 42});
-  xla::Literal input_grad2 = xla::LiteralUtil::CreateR1<int32>({-3, 101});
+  xla::Literal input_base = xla::LiteralUtil::CreateR1<int32_t>({7, 42});
+  xla::Literal input_grad2 = xla::LiteralUtil::CreateR1<int32_t>({-3, 101});
   xla::Literal input = xla::LiteralUtil::MakeTuple({&input_base, &input_grad2});
   std::unique_ptr<xla::GlobalData> param0_data =
       client_->TransferToServer(input).value();
@@ -908,10 +947,10 @@ TEST_F(XlaCompilerTest, CanPassTensorArraysToAndFromComputation) {
       client_->Execute(*result.computation, {param0_data.get()}).value();
   xla::Literal actual_literal = client_->Transfer(*actual).value();
 
-  xla::Literal output_read = xla::LiteralUtil::CreateR0<int32>(42);
-  xla::Literal output_base = xla::LiteralUtil::CreateR1<int32>({7, 42});
-  xla::Literal output_grad1 = xla::LiteralUtil::CreateR1<int32>({0, 1});
-  xla::Literal output_grad2 = xla::LiteralUtil::CreateR1<int32>({-3, 101});
+  xla::Literal output_read = xla::LiteralUtil::CreateR0<int32_t>(42);
+  xla::Literal output_base = xla::LiteralUtil::CreateR1<int32_t>({7, 42});
+  xla::Literal output_grad1 = xla::LiteralUtil::CreateR1<int32_t>({0, 1});
+  xla::Literal output_grad2 = xla::LiteralUtil::CreateR1<int32_t>({-3, 101});
   xla::Literal output_resource =
       xla::LiteralUtil::MakeTuple({&output_base, &output_grad1, &output_grad2});
   xla::Literal expected_literal =
@@ -925,7 +964,7 @@ TEST_F(XlaCompilerTest, UnwrittenTensorArrayGradientsAreNotComputationOutputs) {
   auto arg = ops::_Arg(scope.WithOpName("arg"), DT_RESOURCE, 0);
   auto flow = ops::Const<float>(scope, {});
   auto grad1 = ops::TensorArrayGrad(scope, arg, flow, "grad1");
-  auto index = ops::Const<int32>(scope, 1);
+  auto index = ops::Const<int32_t>(scope, 1);
   auto read = ops::TensorArrayRead(scope, arg, index, grad1.flow_out, DT_INT32);
   auto retval = ops::_Retval(scope.WithOpName("retval"), read, 0);
   std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
@@ -957,7 +996,7 @@ TEST_F(XlaCompilerTest, NewTensorArrayGradientsAreComputationOutputs) {
   auto arg = ops::_Arg(scope.WithOpName("arg"), DT_RESOURCE, 0);
   auto flow = ops::Const<float>(scope, {});
   auto grad1 = ops::TensorArrayGrad(scope, arg, flow, "grad2");
-  auto index = ops::Const<int32>(scope, 1);
+  auto index = ops::Const<int32_t>(scope, 1);
   auto read = ops::TensorArrayRead(scope, arg, index, grad1.flow_out, DT_INT32);
   auto retval = ops::_Retval(scope.WithOpName("retval"), read, 0);
   std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
@@ -991,7 +1030,7 @@ TEST_F(XlaCompilerTest, UndefinedFunctionFails) {
   XlaCompiler::CompilationResult result;
   NameAttrList name_attr;
   name_attr.set_name("Function_NotDefined_");
-  Status status =
+  absl::Status status =
       compiler.CompileFunction(XlaCompiler::CompileOptions(), name_attr,
                                /*args=*/{}, &result);
   EXPECT_FALSE(status.ok());
@@ -1028,8 +1067,8 @@ TEST_F(XlaCompilerTest, FunctionCallWithConstants) {
   std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
 
   Scope scope = Scope::NewRootScope().ExitOnError();
-  auto value = ops::Const<int32>(scope.WithOpName("value"), 1, {});
-  auto shape = ops::Const<int32>(scope.WithOpName("shape"), {5}, {1});
+  auto value = ops::Const<int32_t>(scope.WithOpName("value"), 1, {});
+  auto shape = ops::Const<int32_t>(scope.WithOpName("shape"), {5}, {1});
   TF_EXPECT_OK(scope.graph()->AddFunctionLibrary(flib));
 
   NodeDef def;
@@ -1037,7 +1076,7 @@ TEST_F(XlaCompilerTest, FunctionCallWithConstants) {
                    .Input(value.name(), 0, DT_INT32)
                    .Input(shape.name(), 1, DT_INT32)
                    .Finalize(&def));
-  Status status;
+  absl::Status status;
   Node* fill = scope.graph()->AddNode(def, &status);
   TF_ASSERT_OK(status);
   TF_ASSERT_OK(scope.DoShapeInference(fill));
@@ -1068,7 +1107,7 @@ TEST_F(XlaCompilerTest, LocalFunctionWithWrongArgumentsFail) {
   XlaCompiler::CompilationResult result;
   NameAttrList name_attr;
   name_attr.set_name("XTimesTwo");
-  Status status =
+  absl::Status status =
       compiler.CompileFunction(XlaCompiler::CompileOptions(), name_attr,
                                /*args=*/{}, &result);
 
@@ -1112,9 +1151,9 @@ TEST_F(XlaCompilerTest, SliceWithDynamicBegins) {
   std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
 
   Scope scope = Scope::NewRootScope().ExitOnError();
-  auto value = ops::Const<int32>(scope.WithOpName("shape"), {5}, {1});
+  auto value = ops::Const<int32_t>(scope.WithOpName("shape"), {5}, {1});
   auto begin = ops::_Arg(scope.WithOpName("arg"), DT_INT32, 0);
-  auto size = ops::Const<int32>(scope.WithOpName("value"), {1}, {1});
+  auto size = ops::Const<int32_t>(scope.WithOpName("value"), {1}, {1});
 
   TF_EXPECT_OK(scope.graph()->AddFunctionLibrary(flib));
 
@@ -1124,7 +1163,7 @@ TEST_F(XlaCompilerTest, SliceWithDynamicBegins) {
                    .Input(begin.node()->name(), 1, DT_INT32)
                    .Input(size.name(), 2, DT_INT32)
                    .Finalize(&def));
-  Status status;
+  absl::Status status;
   Node* slice = scope.graph()->AddNode(def, &status);
   TF_ASSERT_OK(status);
   TF_ASSERT_OK(scope.DoShapeInference(slice));
@@ -1149,8 +1188,8 @@ TEST_F(XlaCompilerTest, SliceWithDynamicBegins) {
 
 void RunAndCheckVariablesComputation(
     xla::Client* client, const XlaCompiler::CompilationResult& result) {
-  xla::Literal param0_literal = xla::LiteralUtil::CreateR1<int32>({7, 42});
-  xla::Literal param1_literal = xla::LiteralUtil::CreateR1<int32>({-3, 101});
+  xla::Literal param0_literal = xla::LiteralUtil::CreateR1<int32_t>({7, 42});
+  xla::Literal param1_literal = xla::LiteralUtil::CreateR1<int32_t>({-3, 101});
   std::unique_ptr<xla::GlobalData> param0_data =
       client->TransferToServer(param0_literal).value();
   std::unique_ptr<xla::GlobalData> param1_data =
@@ -1162,8 +1201,8 @@ void RunAndCheckVariablesComputation(
           .value();
   xla::Literal actual_literal = client->Transfer(*actual).value();
 
-  xla::Literal expected0 = xla::LiteralUtil::CreateR1<int32>({5, 144});
-  xla::Literal expected1 = xla::LiteralUtil::CreateR1<int32>({4, 143});
+  xla::Literal expected0 = xla::LiteralUtil::CreateR1<int32_t>({5, 144});
+  xla::Literal expected1 = xla::LiteralUtil::CreateR1<int32_t>({4, 143});
   xla::Literal expected_literal =
       xla::LiteralUtil::MakeTuple({&expected0, &expected1});
   EXPECT_TRUE(xla::LiteralTestUtil::Equal(expected_literal, actual_literal));
@@ -1181,7 +1220,7 @@ TEST_F(XlaCompilerTest, Variables) {
   auto read = ops::ReadVariableOp(
       scope.WithControlDependencies(std::vector<Operation>{write}), var,
       DT_INT32);
-  auto read_plus_one = ops::Add(scope, read, ops::Const<int32>(scope, 1));
+  auto read_plus_one = ops::Add(scope, read, ops::Const<int32_t>(scope, 1));
   auto d = ops::_Retval(scope.WithOpName("D"), read_plus_one, 0);
   std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
   TF_ASSERT_OK(scope.ToGraph(graph.get()));
@@ -1225,7 +1264,7 @@ TEST_F(XlaCompilerTest, ResultLayoutSingle) {
   XlaShapeLayoutHelpers::ShapeDeterminationFns shape_determination_fns;
   shape_determination_fns.shape_representation_fn =
       [](const TensorShape& shape, DataType type, bool use_fast_memory,
-         XlaLayoutPreference layout_preference) -> StatusOr<xla::Shape> {
+         XlaLayoutPreference layout_preference) -> absl::StatusOr<xla::Shape> {
     xla::Shape xla_shape;
     TF_RETURN_IF_ERROR(TensorShapeToXLAShape(type, shape, &xla_shape));
     *xla_shape.mutable_layout() = xla::LayoutUtil::MakeLayout({0, 1});
@@ -1268,7 +1307,7 @@ TEST_F(XlaCompilerTest, ResultLayoutMultiple) {
   XlaShapeLayoutHelpers::ShapeDeterminationFns shape_determination_fns;
   shape_determination_fns.shape_representation_fn =
       [](const TensorShape& shape, DataType type, bool use_fast_memory,
-         XlaLayoutPreference layout_preference) -> StatusOr<xla::Shape> {
+         XlaLayoutPreference layout_preference) -> absl::StatusOr<xla::Shape> {
     xla::Shape xla_shape;
     TF_RETURN_IF_ERROR(TensorShapeToXLAShape(type, shape, &xla_shape));
     *xla_shape.mutable_layout() = xla::LayoutUtil::MakeLayout({0, 1});
@@ -1317,7 +1356,7 @@ TEST_F(XlaCompilerTest, ReturnResourceHandleOnly) {
                                      std::move(graph), args, &result));
 
   // Tests that the generated computation works.
-  xla::Literal param1_literal = xla::LiteralUtil::CreateR1<int32>({-3, 101});
+  xla::Literal param1_literal = xla::LiteralUtil::CreateR1<int32_t>({-3, 101});
   std::unique_ptr<xla::GlobalData> param1_data =
       client_->TransferToServer(param1_literal).value();
 
@@ -1340,7 +1379,7 @@ TEST_F(XlaCompilerTest, ReturnResourceHandle) {
   auto read = ops::ReadVariableOp(
       scope.WithControlDependencies(std::vector<Operation>{write}), var,
       DT_INT32);
-  auto read_plus_one = ops::Add(scope, read, ops::Const<int32>(scope, 1));
+  auto read_plus_one = ops::Add(scope, read, ops::Const<int32_t>(scope, 1));
   auto r = ops::_Retval(scope.WithOpName("R"), var, 0);
   auto d = ops::_Retval(scope.WithOpName("D"), read_plus_one, 1);
 
@@ -1367,7 +1406,7 @@ TEST_F(XlaCompilerTest, ReturnResourceHandle) {
   RunAndCheckVariablesComputation(client_, result);
 }
 
-StatusOr<std::unique_ptr<Graph>> BuildTestGraph() {
+absl::StatusOr<std::unique_ptr<Graph>> BuildTestGraph() {
   Scope scope = Scope::NewRootScope().ExitOnError();
   auto a = ops::_Arg(scope.WithOpName("A"), DT_INT32, 0);
   auto var = ops::_Arg(scope.WithOpName("V"), DT_RESOURCE, 1);
@@ -1375,7 +1414,7 @@ StatusOr<std::unique_ptr<Graph>> BuildTestGraph() {
   auto read = ops::ReadVariableOp(
       scope.WithControlDependencies(std::vector<Operation>{write}), var,
       DT_INT32);
-  auto read_plus_one = ops::Add(scope, read, ops::Const<int32>(scope, 1));
+  auto read_plus_one = ops::Add(scope, read, ops::Const<int32_t>(scope, 1));
   auto d = ops::_Retval(scope.WithOpName("D"), read_plus_one, 0);
   std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
   TF_RETURN_IF_ERROR(scope.ToGraph(graph.get()));
@@ -1404,7 +1443,7 @@ TEST_F(XlaCompilerTest, VariableRepresentationShapeFunction) {
   XlaShapeLayoutHelpers::ShapeDeterminationFns shape_determination_fns;
   shape_determination_fns.shape_representation_fn =
       [](const TensorShape& shape, DataType type, bool use_fast_memory,
-         XlaLayoutPreference layout_preference) -> StatusOr<xla::Shape> {
+         XlaLayoutPreference layout_preference) -> absl::StatusOr<xla::Shape> {
     xla::PrimitiveType ptype;
     TF_RETURN_IF_ERROR(DataTypeToPrimitiveType(type, &ptype));
     return xla::ShapeUtil::MakeShape(ptype, {shape.num_elements()});
@@ -1436,9 +1475,9 @@ TEST_F(XlaCompilerTest, VariableRepresentationShapeFunction) {
 
   // Tests that the generated computation works.
   xla::Literal param0_literal =
-      xla::LiteralUtil::CreateR2<int32>({{4, 55}, {1, -3}});
+      xla::LiteralUtil::CreateR2<int32_t>({{4, 55}, {1, -3}});
   xla::Literal param1_literal =
-      xla::LiteralUtil::CreateR1<int32>({22, 11, 33, 404});
+      xla::LiteralUtil::CreateR1<int32_t>({22, 11, 33, 404});
   std::unique_ptr<xla::GlobalData> param0_data =
       client_->TransferToServer(param0_literal).value();
   std::unique_ptr<xla::GlobalData> param1_data =
@@ -1451,8 +1490,9 @@ TEST_F(XlaCompilerTest, VariableRepresentationShapeFunction) {
   xla::Literal actual_literal = client_->Transfer(*actual).value();
 
   xla::Literal expected0 =
-      xla::LiteralUtil::CreateR2<int32>({{27, 67}, {35, 402}});
-  xla::Literal expected1 = xla::LiteralUtil::CreateR1<int32>({26, 66, 34, 401});
+      xla::LiteralUtil::CreateR2<int32_t>({{27, 67}, {35, 402}});
+  xla::Literal expected1 =
+      xla::LiteralUtil::CreateR1<int32_t>({26, 66, 34, 401});
   xla::Literal expected_literal =
       xla::LiteralUtil::MakeTuple({&expected0, &expected1});
   EXPECT_TRUE(xla::LiteralTestUtil::Equal(expected_literal, actual_literal));
@@ -1477,7 +1517,7 @@ TEST_F(XlaCompilerTest, ArgRetvalShapeRepresentationFunction) {
   XlaShapeLayoutHelpers::ShapeDeterminationFns shape_determination_fns;
   shape_determination_fns.shape_representation_fn =
       [](const TensorShape& shape, DataType type, bool use_fast_memory,
-         XlaLayoutPreference layout_preference) -> StatusOr<xla::Shape> {
+         XlaLayoutPreference layout_preference) -> absl::StatusOr<xla::Shape> {
     xla::PrimitiveType ptype;
     TF_RETURN_IF_ERROR(DataTypeToPrimitiveType(type, &ptype));
     return xla::ShapeUtil::MakeShape(ptype, {shape.num_elements()});
@@ -1508,9 +1548,9 @@ TEST_F(XlaCompilerTest, ArgRetvalShapeRepresentationFunction) {
 
   // Tests that the generated computation works.
   xla::Literal param0_literal =
-      xla::LiteralUtil::CreateR1<int32>({4, 55, 1, -3});
+      xla::LiteralUtil::CreateR1<int32_t>({4, 55, 1, -3});
   xla::Literal param1_literal =
-      xla::LiteralUtil::CreateR1<int32>({22, 11, 33, 404});
+      xla::LiteralUtil::CreateR1<int32_t>({22, 11, 33, 404});
   std::unique_ptr<xla::GlobalData> param0_data =
       client_->TransferToServer(param0_literal).value();
   std::unique_ptr<xla::GlobalData> param1_data =
@@ -1522,8 +1562,10 @@ TEST_F(XlaCompilerTest, ArgRetvalShapeRepresentationFunction) {
           .value();
   xla::Literal actual_literal = client_->Transfer(*actual).value();
 
-  xla::Literal expected0 = xla::LiteralUtil::CreateR1<int32>({27, 67, 35, 402});
-  xla::Literal expected1 = xla::LiteralUtil::CreateR1<int32>({26, 66, 34, 401});
+  xla::Literal expected0 =
+      xla::LiteralUtil::CreateR1<int32_t>({27, 67, 35, 402});
+  xla::Literal expected1 =
+      xla::LiteralUtil::CreateR1<int32_t>({26, 66, 34, 401});
   xla::Literal expected_literal =
       xla::LiteralUtil::MakeTuple({&expected0, &expected1});
   EXPECT_TRUE(xla::LiteralTestUtil::Equal(expected_literal, actual_literal));
@@ -1548,8 +1590,8 @@ TEST_F(XlaCompilerTest, FunctionWithInvalidOp) {
   std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
 
   Scope scope = Scope::NewRootScope().ExitOnError();
-  auto value = ops::Const<int32>(scope.WithOpName("value"), 1, {});
-  auto shape = ops::Const<int32>(scope.WithOpName("shape"), {5}, {1});
+  auto value = ops::Const<int32_t>(scope.WithOpName("value"), 1, {});
+  auto shape = ops::Const<int32_t>(scope.WithOpName("shape"), {5}, {1});
   TF_ASSERT_OK(scope.graph()->AddFunctionLibrary(flib));
 
   NodeDef def;
@@ -1557,7 +1599,7 @@ TEST_F(XlaCompilerTest, FunctionWithInvalidOp) {
                    .Input(value.name(), 0, DT_INT32)
                    .Input(shape.name(), 1, DT_INT32)
                    .Finalize(&def));
-  Status status;
+  absl::Status status;
   Node* fill = scope.graph()->AddNode(def, &status);
   TF_ASSERT_OK(status);
   TF_ASSERT_OK(scope.DoShapeInference(fill));
@@ -1587,7 +1629,7 @@ TEST_F(XlaCompilerTest, NodeWithInvalidDataType) {
   shape.set_op("Shape");
   (*shape.mutable_attr())["T"].set_type(DT_INT32);
   (*shape.mutable_attr())["out_type"].set_type(DT_BOOL); /* invalid type */
-  Status status;
+  absl::Status status;
   Node* shape_node = graph->AddNode(shape, &status);
   TF_ASSERT_OK(status);
   graph->AddControlEdge(graph->source_node(), shape_node);
@@ -1610,7 +1652,7 @@ TEST_F(XlaCompilerTest, SingleOpWithoutInputs) {
   NodeDef no_op;
   no_op.set_name("NoOp");
   no_op.set_op("NoOp");
-  Status status;
+  absl::Status status;
   graph->AddNode(no_op, &status);
   TF_ASSERT_OK(status);
 
@@ -1645,10 +1687,11 @@ TEST_F(XlaCompilerTest, TokenInputAndOutput) {
   side_effecting_op.set_name("DummySideEffectingOp");
   side_effecting_op.set_op("DummySideEffectingOp");
   AddNodeAttr(kXlaTokenInputNodesAttrName,
-              std::vector<string>{kXlaTokenArgNodeName}, &side_effecting_op);
+              std::vector<std::string>{kXlaTokenArgNodeName},
+              &side_effecting_op);
   AddNodeAttr(kXlaOriginalOutsideCompilationNodeName, side_effecting_op.name(),
               &side_effecting_op);
-  Status status;
+  absl::Status status;
   graph->AddNode(side_effecting_op, &status);
   TF_ASSERT_OK(status);
   EXPECT_TRUE(FixupSourceAndSinkEdges(graph.get()));
@@ -1729,8 +1772,8 @@ TEST_F(XlaCompilerTest, OpsWithTensorListInput) {
   }
 
   Scope scope = Scope::NewRootScope().ExitOnError();
-  auto element_shape = ops::Const<int32>(scope, {1}, {1});
-  auto max_elements = ops::Const<int32>(scope, {10}, {});
+  auto element_shape = ops::Const<int32_t>(scope, {1}, {1});
+  auto max_elements = ops::Const<int32_t>(scope, {10}, {});
   auto arg = ops::_Arg(scope.WithOpName("arg"), DT_VARIANT, 0);
   std::initializer_list<Output> out = {arg, arg};
   auto add_n = ops::AddN(scope, out);
@@ -1783,7 +1826,7 @@ TEST_F(XlaCompilerTest, WhileWithResources) {
     auto arg0 = ops::_Arg(scope.WithOpName("arg0"), DT_INT32, 0);
     auto arg1 = ops::_Arg(scope.WithOpName("arg1"), DT_RESOURCE, 1);
     auto arg2 = ops::_Arg(scope.WithOpName("arg2"), DT_RESOURCE, 2);
-    auto less = ops::Less(scope, arg0, ops::Const<int32>(scope, 10));
+    auto less = ops::Less(scope, arg0, ops::Const<int32_t>(scope, 10));
     (void)ops::_Retval(scope.WithOpName("ret"), less, 0);
     TF_ASSERT_OK(scope.ToGraph(graph.get()));
     FunctionDef fdef;
@@ -1860,9 +1903,9 @@ TEST_F(XlaCompilerTest, WhileWithResources) {
   ASSERT_EQ(output2.input_index, 2);
 
   // Tests that the generated computation works.
-  xla::Literal literal0 = xla::LiteralUtil::CreateR0<int32>(0);
-  xla::Literal literal1 = xla::LiteralUtil::CreateR0<int32>(2);
-  xla::Literal literal2 = xla::LiteralUtil::CreateR0<int32>(1);
+  xla::Literal literal0 = xla::LiteralUtil::CreateR0<int32_t>(0);
+  xla::Literal literal1 = xla::LiteralUtil::CreateR0<int32_t>(2);
+  xla::Literal literal2 = xla::LiteralUtil::CreateR0<int32_t>(1);
   std::unique_ptr<xla::GlobalData> data0 =
       client_->TransferToServer(literal0).value();
   std::unique_ptr<xla::GlobalData> data1 =
@@ -1877,9 +1920,9 @@ TEST_F(XlaCompilerTest, WhileWithResources) {
           .value();
   xla::Literal actual_literal = client_->Transfer(*actual).value();
 
-  xla::Literal expected0 = xla::LiteralUtil::CreateR0<int32>(10);
-  xla::Literal expected1 = xla::LiteralUtil::CreateR0<int32>(2);
-  xla::Literal expected2 = xla::LiteralUtil::CreateR0<int32>(1);
+  xla::Literal expected0 = xla::LiteralUtil::CreateR0<int32_t>(10);
+  xla::Literal expected1 = xla::LiteralUtil::CreateR0<int32_t>(2);
+  xla::Literal expected2 = xla::LiteralUtil::CreateR0<int32_t>(1);
   xla::Literal expected_literal =
       xla::LiteralUtil::MakeTuple({&expected0, &expected1, &expected2});
   EXPECT_TRUE(xla::LiteralTestUtil::Equal(expected_literal, actual_literal));
@@ -1921,7 +1964,9 @@ TEST_F(XlaCompilerTest, SetShardingForReturnedTuple) {
   const auto& hlo_computation_proto = hlo_module_proto.computations(0);
   std::optional<xla::HloInstructionProto> root_instruction_proto;
   for (const auto& inst : hlo_computation_proto.instructions()) {
-    if (inst.id() == hlo_computation_proto.root_id()) {
+    if (xla::HloInstruction::CalculateLocalId(inst.id()) ==
+        xla::HloInstruction::CalculateLocalId(
+            hlo_computation_proto.root_id())) {
       root_instruction_proto = inst;
       break;
     }
@@ -1937,7 +1982,7 @@ TEST_F(XlaCompilerTest, SetShardingForReturnedTuple) {
 
 TEST_F(XlaCompilerTest, AliasResourceUpdates) {
   Scope scope = Scope::NewRootScope().ExitOnError();
-  auto a = ops::Const<int32>(scope.WithOpName("A"), {1, 2});
+  auto a = ops::Const<int32_t>(scope.WithOpName("A"), {1, 2});
   auto var = ops::_Arg(scope.WithOpName("V"), DT_RESOURCE, 1);
   auto write = ops::AssignAddVariableOp(scope, var, a);
   auto read = ops::ReadVariableOp(
@@ -1981,7 +2026,7 @@ TEST_F(XlaCompilerTest, AliasResourceUpdates) {
 TEST_F(XlaCompilerTest, SetDeviceToHostMetadataExactDuplicate) {
   XlaCompiler compiler(DefaultOptions());
 
-  const string& key = "comm_key";
+  const std::string& key = "comm_key";
   std::vector<DataType> types{DT_INT32};
   std::vector<TensorShape> shapes{TensorShape({2})};
 
@@ -1994,14 +2039,14 @@ TEST_F(XlaCompilerTest, SetDeviceToHostMetadataExactDuplicate) {
 TEST_F(XlaCompilerTest, SetDeviceToHostMetadataMismatchedDuplicate) {
   XlaCompiler compiler(DefaultOptions());
 
-  const string& key = "comm_key";
+  const std::string& key = "comm_key";
   std::vector<DataType> types{DT_INT32};
   std::vector<TensorShape> shapes{TensorShape({2})};
   std::vector<DataType> types2{DT_FLOAT};
   std::vector<TensorShape> shapes2{TensorShape({1})};
 
   TF_ASSERT_OK(compiler.SetDeviceToHostMetadata(key, types, shapes));
-  Status status = compiler.SetDeviceToHostMetadata(key, types2, shapes2);
+  absl::Status status = compiler.SetDeviceToHostMetadata(key, types2, shapes2);
   EXPECT_EQ(status.code(), error::Code::INVALID_ARGUMENT);
 }
 
@@ -2010,7 +2055,7 @@ TEST_F(XlaCompilerTest, SetDeviceToHostMetadataMismatchedDuplicate) {
 TEST_F(XlaCompilerTest, SetHostToDeviceMetadataExactDuplicate) {
   XlaCompiler compiler(DefaultOptions());
 
-  const string& key = "comm_key";
+  const std::string& key = "comm_key";
   std::vector<DataType> types{DT_INT32};
   std::vector<TensorShape> shapes{TensorShape({2})};
 
@@ -2023,15 +2068,36 @@ TEST_F(XlaCompilerTest, SetHostToDeviceMetadataExactDuplicate) {
 TEST_F(XlaCompilerTest, SetHostToDeviceMetadataMismatchedDuplicate) {
   XlaCompiler compiler(DefaultOptions());
 
-  const string& key = "comm_key";
+  const std::string& key = "comm_key";
   std::vector<DataType> types{DT_INT32};
   std::vector<TensorShape> shapes{TensorShape({2})};
   std::vector<DataType> types2{DT_FLOAT};
   std::vector<TensorShape> shapes2{TensorShape({1})};
 
   TF_ASSERT_OK(compiler.SetHostToDeviceMetadata(key, types, shapes));
-  Status status = compiler.SetHostToDeviceMetadata(key, types2, shapes2);
+  absl::Status status = compiler.SetHostToDeviceMetadata(key, types2, shapes2);
   EXPECT_EQ(status.code(), error::Code::INVALID_ARGUMENT);
+}
+
+TEST_F(XlaCompilerTest, GetChannelHandleIndependently) {
+  XlaCompiler compiler1(DefaultOptions());
+  XlaCompiler compiler2(DefaultOptions());
+  int num_channels = 3;
+  std::vector<int> channel_ids1, channel_ids2;
+  for (int j = 0; j < num_channels; ++j) {
+    xla::ChannelHandle channel_handle;
+    TF_ASSERT_OK(
+        compiler1.GetChannelHandle(/*key=*/absl::StrCat(j), &channel_handle));
+    channel_ids1.push_back(channel_handle.handle());
+  }
+  for (int j = 0; j < num_channels; ++j) {
+    xla::ChannelHandle channel_handle;
+    TF_ASSERT_OK(
+        compiler2.GetChannelHandle(/*key=*/absl::StrCat(j), &channel_handle));
+    channel_ids2.push_back(channel_handle.handle());
+  }
+  EXPECT_THAT(channel_ids1, ::testing::UnorderedElementsAreArray({1, 2, 3}));
+  EXPECT_THAT(channel_ids2, ::testing::UnorderedElementsAreArray({1, 2, 3}));
 }
 
 TEST_F(OpsTestBase, BuildSingleOpCompileArgument) {
@@ -2094,6 +2160,156 @@ TEST_F(OpsTestBase, CompileSingleOp) {
   xla::Literal expected0 = xla::LiteralUtil::CreateR2<float>({{6.9, 4.2}});
   xla::Literal expected_literal = xla::LiteralUtil::MakeTuple({&expected0});
   EXPECT_TRUE(xla::LiteralTestUtil::Equal(expected_literal, actual_literal));
+}
+
+TEST_F(XlaCompilerTest, SetShardingForParametersAndReturnValues) {
+  Scope scope = Scope::NewRootScope().ExitOnError();
+  auto a = ops::_Arg(scope.WithOpName("A"), DT_INT32, 0);
+  auto b = ops::_Retval(scope.WithOpName("B"), a, 0);
+  std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
+  TF_ASSERT_OK(scope.ToGraph(graph.get()));
+
+  auto node_name_index = graph->BuildNodeNameIndex();
+  Node* arg_node = node_name_index["A"];
+  ASSERT_NE(arg_node, nullptr);
+  Node* ret_node = node_name_index["B"];
+  ASSERT_NE(ret_node, nullptr);
+
+  std::vector<XlaCompiler::Argument> args(1);
+  args[0].kind = XlaCompiler::Argument::kParameter;
+  args[0].type = DT_INT32;
+  args[0].shape = TensorShape({2, 2});
+
+  xla::OpSharding sharding;
+  sharding.set_type(xla::OpSharding::OTHER);
+  int rank = 2;
+  int shard_dim = 1;
+  int num_shards = 2;
+  for (int i = 0; i < rank; i++) {
+    sharding.add_tile_assignment_dimensions(i == shard_dim ? num_shards : 1);
+  }
+  xla::OpSharding sharding_v2(sharding);
+  for (int i = 0; i < num_shards; ++i) {
+    sharding.add_tile_assignment_devices(i);
+  }
+  sharding_v2.add_iota_reshape_dims(num_shards);
+  sharding_v2.add_iota_transpose_perm(0);
+
+  arg_node->AddAttr("_XlaSharding", sharding.SerializeAsString());
+  arg_node->AddAttr("_XlaShardingV2", sharding_v2.SerializeAsString());
+  ret_node->AddAttr("_XlaSharding", sharding.SerializeAsString());
+  ret_node->AddAttr("_XlaShardingV2", sharding_v2.SerializeAsString());
+
+  // Expected HLO module with Shardy attributes
+  const char* const expected = R"(
+    // CHECK:                HloModule test.1, entry_computation_layout={{.*}}, frontend_attributes=
+    // CHECK-SAME:             {xla.sdy.tuple_results_shardings="#sdy.sharding_per_value<[<mesh<[\"_axis_0\"=2]>, [{}, {\"_axis_0\"}]>]>"}
+    //
+    // CHECK:                ENTRY %test.1 (arg0.1: s32[2,2]) -> (s32[2,2]) {
+    // CHECK-NEXT:             %arg0.1 = s32[2,2]{1,0} parameter(0), parameter_replication={false}, sharding={devices=[1,2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding<mesh<[\"_axis_0\"=2]>, [{}, {\"_axis_0\"}]>"}, metadata={op_name="XLA_Args"}
+    // CHECK-NEXT:             %reshape.1 = s32[2,2]{1,0} reshape(%arg0.1)
+    // CHECK-NEXT:             %XLA_Retvals.3 = s32[2,2]{1,0} reshape(%reshape.1), metadata={op_name="XLA_Retvals"}
+    // CHECK-NEXT:             %XLA_Retvals.4 = s32[2,2]{1,0} copy(%XLA_Retvals.3), sharding={devices=[1,2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<mesh<[\"_axis_0\"=2]>, [{}, {\"_axis_0\"}]>]>"}, metadata={op_name="XLA_Retvals"}
+    // CHECK-NEXT{LITERAL}:    ROOT %XLA_Retvals.5 = (s32[2,2]{1,0}) tuple(%XLA_Retvals.4), sharding={{devices=[1,2]<=[2]}}, metadata={op_name="XLA_Retvals"}
+  })";
+  XlaCompiler::Options compiler_options = DefaultOptions();
+  compiler_options.use_shardy_partitioner = true;
+  XlaCompiler compiler(compiler_options);
+
+  XlaCompiler::CompilationResult result;
+  TF_ASSERT_OK(compiler.CompileGraph(XlaCompiler::CompileOptions(), "test",
+                                     std::move(graph), args, &result));
+  TF_ASSERT_OK_AND_ASSIGN(auto hlo_module,
+                          LoadModuleFromHloProto(result.computation->proto()));
+  EXPECT_TRUE(*xla::RunFileCheck(hlo_module->ToString(xla::HloPrintOptions{}),
+                                 expected));
+}
+
+TEST_F(XlaCompilerTest, SetShardingForTupleArguments) {
+  Scope scope = Scope::NewRootScope().ExitOnError();
+  auto a = ops::_Arg(scope.WithOpName("A"), DT_INT32, 0);
+  auto b = ops::_Arg(scope.WithOpName("B"), DT_INT32, 1);
+  auto c = ops::_Retval(scope.WithOpName("C"), a, 0);
+  auto d = ops::_Retval(scope.WithOpName("D"), b, 1);
+  std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
+  TF_ASSERT_OK(scope.ToGraph(graph.get()));
+
+  auto node_name_index = graph->BuildNodeNameIndex();
+  Node* arg_node_a = node_name_index["A"];
+  ASSERT_NE(arg_node_a, nullptr);
+  Node* arg_node_b = node_name_index["B"];
+  ASSERT_NE(arg_node_b, nullptr);
+  Node* ret_node_c = node_name_index["C"];
+  ASSERT_NE(ret_node_c, nullptr);
+  Node* ret_node_d = node_name_index["D"];
+  ASSERT_NE(ret_node_d, nullptr);
+
+  std::vector<XlaCompiler::Argument> args(2);
+  args[0].kind = XlaCompiler::Argument::kParameter;
+  args[0].type = DT_INT32;
+  args[0].shape = TensorShape({2, 2});
+  args[1].kind = XlaCompiler::Argument::kParameter;
+  args[1].type = DT_INT32;
+  args[1].shape = TensorShape({2, 2});
+
+  xla::OpSharding sharding;
+  sharding.set_type(xla::OpSharding::OTHER);
+  int rank = 2;
+  int shard_dim = 1;
+  int num_shards = 2;
+  for (int i = 0; i < rank; i++) {
+    sharding.add_tile_assignment_dimensions(i == shard_dim ? num_shards : 1);
+  }
+  xla::OpSharding sharding_v2(sharding);
+  for (int i = 0; i < num_shards; ++i) {
+    sharding.add_tile_assignment_devices(i);
+  }
+
+  sharding_v2.add_iota_reshape_dims(num_shards);
+  sharding_v2.add_iota_transpose_perm(0);
+
+  arg_node_a->AddAttr("_XlaSharding", sharding.SerializeAsString());
+  arg_node_a->AddAttr("_XlaShardingV2", sharding_v2.SerializeAsString());
+  arg_node_b->AddAttr("_XlaSharding", sharding.SerializeAsString());
+  arg_node_b->AddAttr("_XlaShardingV2", sharding_v2.SerializeAsString());
+  ret_node_c->AddAttr("_XlaSharding", sharding.SerializeAsString());
+  ret_node_c->AddAttr("_XlaShardingV2", sharding_v2.SerializeAsString());
+  ret_node_d->AddAttr("_XlaSharding", sharding.SerializeAsString());
+  ret_node_d->AddAttr("_XlaShardingV2", sharding_v2.SerializeAsString());
+
+  // Expected HLO module with Shardy attributes
+  const char* const expected = R"(
+    // CHECK:                HloModule test.1, entry_computation_layout={{.*}}, frontend_attributes={
+    // CHECK-SAME:             xla.sdy.tuple_args_shardings="#sdy.sharding_per_value<[<mesh<[\"_axis_0\"=2]>, [{}, {\"_axis_0\"}]>, <mesh<[\"_axis_0\"=2]>, [{}, {\"_axis_0\"}]>]>",
+    // CHECK-SAME:             xla.sdy.tuple_results_shardings="#sdy.sharding_per_value<[<mesh<[\"_axis_0\"=2]>, [{}, {\"_axis_0\"}]>, <mesh<[\"_axis_0\"=2]>, [{}, {\"_axis_0\"}]>]>",
+    // CHECK-SAME:             xla.sdy.use_tuple_args="True"}
+    //
+    // CHECK:                ENTRY %test.1 (arg_tuple.1: (s32[2,2], s32[2,2])) -> (s32[2,2], s32[2,2]) {
+    // CHECK-NEXT{LITERAL}:    %arg_tuple.1 = (s32[2,2]{1,0}, s32[2,2]{1,0}) parameter(0), parameter_replication={false,false}, sharding={{devices=[1,2]<=[2]}, {devices=[1,2]<=[2]}}, metadata={op_name="XLA_Args"}
+    // CHECK-NEXT:             %get-tuple-element.2 = s32[2,2]{1,0} get-tuple-element(%arg_tuple.1), index=0, sharding={devices=[1,2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<mesh<[\"_axis_0\"=2]>, [{}, {\"_axis_0\"}]>]>"}
+    // CHECK-NEXT:             %reshape.2 = s32[2,2]{1,0} reshape(%get-tuple-element.2)
+    // CHECK-NEXT:             %XLA_Retvals.5 = s32[2,2]{1,0} reshape(%reshape.2), metadata={op_name="XLA_Retvals"}
+    // CHECK-NEXT:             %XLA_Retvals.6 = s32[2,2]{1,0} copy(%XLA_Retvals.5), sharding={devices=[1,2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<mesh<[\"_axis_0\"=2]>, [{}, {\"_axis_0\"}]>]>"}, metadata={op_name="XLA_Retvals"}
+    // CHECK-NEXT:             %get-tuple-element.3 = s32[2,2]{1,0} get-tuple-element(%arg_tuple.1), index=1, sharding={devices=[1,2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<mesh<[\"_axis_0\"=2]>, [{}, {\"_axis_0\"}]>]>"}
+    // CHECK-NEXT:             %reshape.3 = s32[2,2]{1,0} reshape(%get-tuple-element.3)
+    // CHECK-NEXT:             %XLA_Retvals.7 = s32[2,2]{1,0} reshape(%reshape.3), metadata={op_name="XLA_Retvals"}
+    // CHECK-NEXT:             %XLA_Retvals.8 = s32[2,2]{1,0} copy(%XLA_Retvals.7), sharding={devices=[1,2]<=[2]}, frontend_attributes={xla.sdy.sharding="#sdy.sharding_per_value<[<mesh<[\"_axis_0\"=2]>, [{}, {\"_axis_0\"}]>]>"}, metadata={op_name="XLA_Retvals"}
+    // CHECK-NEXT{LITERAL}:    ROOT %XLA_Retvals.9 = (s32[2,2]{1,0}, s32[2,2]{1,0}) tuple(%XLA_Retvals.6, %XLA_Retvals.8), sharding={{devices=[1,2]<=[2]}, {devices=[1,2]<=[2]}}, metadata={op_name="XLA_Retvals"}
+  })";
+
+  XlaCompiler::Options compiler_options = DefaultOptions();
+  compiler_options.use_shardy_partitioner = true;
+  XlaCompiler compiler(compiler_options);
+
+  XlaCompiler::CompileOptions compile_options;
+  compile_options.use_tuple_arg = true;
+  XlaCompiler::CompilationResult result;
+  TF_ASSERT_OK(compiler.CompileGraph(compile_options, "test", std::move(graph),
+                                     args, &result));
+  TF_ASSERT_OK_AND_ASSIGN(auto hlo_module,
+                          LoadModuleFromHloProto(result.computation->proto()));
+  EXPECT_TRUE(*xla::RunFileCheck(hlo_module->ToString(xla::HloPrintOptions{}),
+                                 expected));
 }
 
 }  // namespace

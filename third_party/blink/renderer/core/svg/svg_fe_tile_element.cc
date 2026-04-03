@@ -20,11 +20,14 @@
 
 #include "third_party/blink/renderer/core/svg/svg_fe_tile_element.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_string.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/graphics/filters/fe_tile.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
@@ -40,7 +43,6 @@ void SVGFETileElement::Trace(Visitor* visitor) const {
 void SVGFETileElement::SvgAttributeChanged(
     const SvgAttributeChangedParams& params) {
   if (params.name == svg_names::kInAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     Invalidate();
     return;
   }
@@ -50,6 +52,7 @@ void SVGFETileElement::SvgAttributeChanged(
 
 FilterEffect* SVGFETileElement::Build(SVGFilterBuilder* filter_builder,
                                       Filter* filter) {
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFETileElement);
   FilterEffect* input1 = filter_builder->GetEffectById(
       AtomicString(in1_->CurrentValue()->Value()));
   DCHECK(input1);

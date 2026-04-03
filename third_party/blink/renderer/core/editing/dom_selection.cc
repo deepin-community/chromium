@@ -29,6 +29,7 @@
 
 #include "third_party/blink/renderer/core/editing/dom_selection.h"
 
+#include "third_party/blink/renderer/bindings/core/v8/v8_get_composed_ranges_options.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/dom/range.h"
@@ -48,6 +49,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -93,7 +95,12 @@ void DOMSelection::UpdateFrameSelection(
 }
 
 VisibleSelection DOMSelection::GetVisibleSelection() const {
-  return Selection().ComputeVisibleSelectionInDOMTreeDeprecated();
+  // TODO(editing-dev): The use of UpdateStyleAndLayout
+  // needs to be audited.  See http://crbug.com/590369 for more details.
+  DomWindow()->document()->UpdateStyleAndLayout(
+      DocumentUpdateReason::kSelection);
+
+  return Selection().ComputeVisibleSelectionInDOMTree();
 }
 
 bool DOMSelection::IsAnchorFirstInSelection() const {
@@ -101,41 +108,45 @@ bool DOMSelection::IsAnchorFirstInSelection() const {
 }
 
 Node* DOMSelection::anchorNode() const {
-  if (Range* range = PrimaryRangeOrNull()) {
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (temp_range.GetRange()) {
     if (!DomWindow() || IsAnchorFirstInSelection()) {
-      return range->startContainer();
+      return temp_range.GetRange()->startContainer();
     }
-    return range->endContainer();
+    return temp_range.GetRange()->endContainer();
   }
   return nullptr;
 }
 
 unsigned DOMSelection::anchorOffset() const {
-  if (Range* range = PrimaryRangeOrNull()) {
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (temp_range.GetRange()) {
     if (!DomWindow() || IsAnchorFirstInSelection()) {
-      return range->startOffset();
+      return temp_range.GetRange()->startOffset();
     }
-    return range->endOffset();
+    return temp_range.GetRange()->endOffset();
   }
   return 0;
 }
 
 Node* DOMSelection::focusNode() const {
-  if (Range* range = PrimaryRangeOrNull()) {
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (temp_range.GetRange()) {
     if (!DomWindow() || IsAnchorFirstInSelection()) {
-      return range->endContainer();
+      return temp_range.GetRange()->endContainer();
     }
-    return range->startContainer();
+    return temp_range.GetRange()->startContainer();
   }
   return nullptr;
 }
 
 unsigned DOMSelection::focusOffset() const {
-  if (Range* range = PrimaryRangeOrNull()) {
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (temp_range.GetRange()) {
     if (!DomWindow() || IsAnchorFirstInSelection()) {
-      return range->endOffset();
+      return temp_range.GetRange()->endOffset();
     }
-    return range->startOffset();
+    return temp_range.GetRange()->startOffset();
   }
   return 0;
 }
@@ -159,17 +170,15 @@ unsigned DOMSelection::extentOffset() const {
 bool DOMSelection::isCollapsed() const {
   if (!IsAvailable())
     return true;
-  Node* node = Selection()
-                   .ComputeVisibleSelectionInDOMTreeDeprecated()
-                   .Anchor()
-                   .AnchorNode();
-  if (node && node->IsInShadowTree() &&
-      DomWindow()->document()->AncestorInThisScope(node)) {
-    return true;
-  }
+  // TODO(editing-dev): The use of UpdateStyleAndLayout
+  // needs to be audited.  See http://crbug.com/590369 for more details.
+  DomWindow()->document()->UpdateStyleAndLayout(
+      DocumentUpdateReason::kSelection);
 
-  if (Range* range = PrimaryRangeOrNull())
-    return range->collapsed();
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (temp_range.GetRange()) {
+    return temp_range.GetRange()->collapsed();
+  }
   return true;
 }
 
@@ -188,13 +197,43 @@ String DOMSelection::type() const {
   return "Range";
 }
 
+String DOMSelection::direction() const {
+  if (!IsAvailable()) {
+    return "none";
+  }
+  // TODO(editing-dev): The use of UpdateStyleAndLayout
+  // needs to be audited.  See http://crbug.com/590369 for more details.
+  DomWindow()->document()->UpdateStyleAndLayout(
+      DocumentUpdateReason::kSelection);
+
+  if (!Selection().IsDirectional() ||
+      (RuntimeEnabledFeatures::SelectionCollapsedDirectionNoneEnabled() &&
+       // Use IsCaret() instead of isCollapsed() so that directionality is still
+       // reported for selections that cross shadow boundaries.
+       Selection().GetSelectionInDOMTree().IsCaret()) ||
+      Selection().ComputeVisibleSelectionInDOMTree().IsNone()) {
+    return "none";
+  }
+  if (IsAnchorFirstInSelection()) {
+    return "forward";
+  }
+  return "backward";
+}
+
 unsigned DOMSelection::rangeCount() const {
   if (!IsAvailable())
     return 0;
   if (DocumentCachedRange())
     return 1;
-  if (Selection().ComputeVisibleSelectionInDOMTreeDeprecated().IsNone())
+
+  // TODO(editing-dev): The use of UpdateStyleAndLayout
+  // needs to be audited.  See http://crbug.com/590369 for more details.
+  DomWindow()->document()->UpdateStyleAndLayout(
+      DocumentUpdateReason::kSelection);
+
+  if (Selection().ComputeVisibleSelectionInDOMTree().IsNone()) {
     return 0;
+  }
   // Any selection can be adjusted to Range for Document.
   if (IsSelectionOfDocument())
     return 1;
@@ -225,8 +264,8 @@ void DOMSelection::collapse(Node* node,
   if (exception_state.HadException())
     return;
 
-  // 3. If node's root is not the document associated with the context object,
-  // abort these steps.
+  // 3. If document associated with this is not a shadow-including inclusive
+  // ancestor of node, abort these steps.
   if (!IsValidForPosition(node))
     return;
 
@@ -324,6 +363,7 @@ void DOMSelection::empty() {
     Selection().Clear();
 }
 
+// https://www.w3.org/TR/selection-api/#dom-selection-setbaseandextent
 void DOMSelection::setBaseAndExtent(Node* base_node,
                                     unsigned base_offset,
                                     Node* extent_node,
@@ -334,16 +374,36 @@ void DOMSelection::setBaseAndExtent(Node* base_node,
 
   // TODO(editing-dev): Behavior on where base or extent is null is still
   // under discussion: https://github.com/w3c/selection-api/issues/72
-  if (!base_node) {
-    UseCounter::Count(DomWindow(), WebFeature::kSelectionSetBaseAndExtentNull);
-    Selection().Clear();
-    return;
-  }
-  if (!extent_node) {
-    UseCounter::Count(DomWindow(), WebFeature::kSelectionSetBaseAndExtentNull);
-    extent_offset = 0;
+  if (RuntimeEnabledFeatures::SelectionSetBaseAndExtentNonNullNodeEnabled()) {
+    if (!base_node) {
+      UseCounter::Count(DomWindow(),
+                        WebFeature::kSelectionSetBaseAndExtentNull);
+      exception_state.ThrowTypeError("anchorNode is null");
+      return;
+    }
+    if (!extent_node) {
+      UseCounter::Count(DomWindow(),
+                        WebFeature::kSelectionSetBaseAndExtentNull);
+      exception_state.ThrowTypeError("focusNode is null");
+      return;
+    }
+  } else {
+    if (!base_node) {
+      UseCounter::Count(DomWindow(),
+                        WebFeature::kSelectionSetBaseAndExtentNull);
+      Selection().Clear();
+      return;
+    }
+    if (!extent_node) {
+      UseCounter::Count(DomWindow(),
+                        WebFeature::kSelectionSetBaseAndExtentNull);
+      extent_offset = 0;
+    }
   }
 
+  // 1. If anchorOffset is longer than anchorNode's length or if focusOffset is
+  // longer than focusNode's length, throw an IndexSizeError exception and abort
+  // these steps.
   Range::CheckNodeWOffset(base_node, base_offset, exception_state);
   if (exception_state.HadException())
     return;
@@ -353,14 +413,22 @@ void DOMSelection::setBaseAndExtent(Node* base_node,
       return;
   }
 
+  // 2. If document associated with this is not a shadow-including inclusive
+  // ancestor of anchorNode or focusNode, abort these steps.
   if (!IsValidForPosition(base_node) || !IsValidForPosition(extent_node))
     return;
 
   ClearCachedRangeIfSelectionOfDocument();
 
+  // 3. Let anchor be the boundary point (anchorNode, anchorOffset) and let
+  // focus be the boundary point (focusNode, focusOffset).
   Position base_position(base_node, base_offset);
   Position extent_position(extent_node, extent_offset);
+  // 4. Let newRange be a new range.
   Range* new_range = Range::Create(base_node->GetDocument());
+  // 5. If anchor is before focus, set the start the newRange's start to anchor
+  // and its end to focus. Otherwise, set the start them to focus and anchor
+  // respectively.
   if (extent_position.IsNull()) {
     new_range->setStart(base_node, base_offset);
     new_range->setEnd(base_node, base_offset);
@@ -371,6 +439,7 @@ void DOMSelection::setBaseAndExtent(Node* base_node,
     new_range->setStart(extent_node, extent_offset);
     new_range->setEnd(base_node, base_offset);
   }
+  // 6. Set this's range to newRange.
   UpdateFrameSelection(
       SelectionInDOMTree::Builder()
           .SetBaseAndExtentDeprecated(base_position, extent_position)
@@ -447,8 +516,8 @@ void DOMSelection::extend(Node* node,
   if (!IsAvailable())
     return;
 
-  // 1. If node's root is not the document associated with the context object,
-  // abort these steps.
+  // 1. If the document associated with this is not a shadow-including
+  // inclusive ancestor of node, abort these steps.
   if (!IsValidForPosition(node))
     return;
 
@@ -467,7 +536,13 @@ void DOMSelection::extend(Node* node,
 
   // 3. Let oldAnchor and oldFocus be the context object's anchor and focus, and
   // let newFocus be the boundary point (node, offset).
-  const Position old_anchor(anchorNode(), anchorOffset());
+  Position old_anchor(anchorNode(), anchorOffset());
+  if (RuntimeEnabledFeatures::
+          UseSelectionInDOMTreeAnchorInExtendSelectionEnabled()) {
+    old_anchor =
+        Selection().GetSelectionInDOMTree().Anchor().ToOffsetInAnchor();
+  }
+
   DCHECK(!old_anchor.IsNull());
   const Position new_focus(node, offset);
 
@@ -517,7 +592,7 @@ Range* DOMSelection::getRangeAt(unsigned index,
   if (index >= rangeCount()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        String::Number(index) + " is not a valid index.");
+        StrCat({String::Number(index), " is not a valid index."}));
     return nullptr;
   }
 
@@ -530,6 +605,75 @@ Range* DOMSelection::getRangeAt(unsigned index,
   Range* range = CreateRange(CreateRangeFromSelectionEditor());
   CacheRangeIfSelectionOfDocument(range);
   return range;
+}
+
+// https://www.w3.org/TR/selection-api/#dom-selection-getcomposedranges
+const StaticRangeVector DOMSelection::getComposedRanges(
+    const GetComposedRangesOptions* options) const {
+  StaticRangeVector ranges;
+  // 1. If this is empty, return an empty array.
+  if (!IsAvailable()) {
+    return ranges;
+  }
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (!temp_range.GetRange()) {
+    return ranges;
+  }
+
+  const SelectionInDOMTree& selection = Selection().GetSelectionInDOMTree();
+  // 2. Otherwise, let startNode be start node of the range associated with
+  // this, and let startOffset be start offset of the range.
+  const Position& start = selection.ComputeStartPosition();
+  Node* startNode = start.ComputeContainerNode();
+  unsigned startOffset = start.ComputeOffsetInContainerNode();
+  // 3. Rescope startNode and startOffset with listed shadow roots.
+  Rescope(startNode, startOffset, options->shadowRoots(), /*isEnd=*/false);
+
+  // 4. Let endNode be end node of the range associated with this, and let
+  // endOffset be end offset of the range.
+  const Position& end = selection.ComputeEndPosition();
+  Node* endNode = end.ComputeContainerNode();
+  unsigned endOffset = end.ComputeOffsetInContainerNode();
+  // 5. Rescope endNode and endOffset with listed shadow roots.
+  Rescope(endNode, endOffset, options->shadowRoots(), /*isEnd=*/true);
+
+  // 6. Return an array consisting of new StaticRange whose start node is
+  // startNode, start offset is startOffset, end node is endNode, and end
+  // offset is endOffset.
+  ranges.push_back(MakeGarbageCollected<StaticRange>(
+      Selection().GetDocument(), startNode, startOffset, endNode, endOffset));
+  return ranges;
+}
+
+// If isEnd is false, rescope following spec step 3.
+// Else, Rescope following sepc step 5.
+// https://www.w3.org/TR/selection-api/#dom-selection-getcomposedranges
+void DOMSelection::Rescope(Node*& node,
+                           unsigned& offset,
+                           const HeapVector<Member<ShadowRoot>>& shadowRoots,
+                           bool isEnd) const {
+  // 3. & 5. While node is a node, node's root is a shadow root, and
+  // node's root is not a shadow-including inclusive ancestor of any of
+  // shadowRoots, repeat these steps:
+  while (node) {
+    ShadowRoot* root = node->ContainingShadowRoot();
+    Element* host = node->OwnerShadowHost();
+    if (!root || !host) {
+      return;
+    }
+    for (auto& shadowRoot : shadowRoots) {
+      if (root->IsShadowIncludingInclusiveAncestorOf(*shadowRoot)) {
+        return;
+      }
+    }
+    // 1. Set node to node's root's host's parent.
+    node = host->parentNode();
+    // 2. Set offset to index of node's root's host.
+    offset = host->NodeIndex();
+    if (isEnd) {
+      offset += 1;
+    }
+  }
 }
 
 Range* DOMSelection::PrimaryRangeOrNull() const {
@@ -578,10 +722,17 @@ void DOMSelection::ClearCachedRangeIfSelectionOfDocument() {
     Selection().ClearDocumentCachedRange();
 }
 
-void DOMSelection::removeRange(Range* range) {
+void DOMSelection::removeRange(Range* range, ExceptionState& exception_state) {
   DCHECK(range);
-  if (IsAvailable() && range == PrimaryRangeOrNull())
+  TemporaryRange temp_range(this, PrimaryRangeOrNull());
+  if (IsAvailable() && range == temp_range.GetRange()) {
     Selection().Clear();
+  } else {
+    if (RuntimeEnabledFeatures::SelectionRemoveRangeNotFoundErrorEnabled()) {
+      exception_state.ThrowDOMException(DOMExceptionCode::kNotFoundError,
+                                        "Range not found.");
+    }
+  }
 }
 
 void DOMSelection::removeAllRanges() {
@@ -616,14 +767,6 @@ void DOMSelection::addRange(Range* new_range) {
                          new_range, SetSelectionOptions());
     return;
   }
-
-  Range* original_range = PrimaryRangeOrNull();
-  DCHECK(original_range);
-
-  if (original_range->startContainer()->GetTreeScope() !=
-      new_range->startContainer()->GetTreeScope()) {
-    return;
-  }
 }
 
 // https://www.w3.org/TR/selection-api/#dom-selection-deletefromdocument
@@ -644,19 +787,14 @@ void DOMSelection::deleteFromDocument() {
   DomWindow()->document()->UpdateStyleAndLayout(
       DocumentUpdateReason::kSelection);
 
-  // The following code is necessary for
-  // editing/selection/deleteFromDocument-crash.html, which assumes
-  // deleteFromDocument() for text selection in a TEXTAREA deletes the TEXTAREA
-  // value.
-
-  if (Selection().ComputeVisibleSelectionInDOMTree().IsNone())
-    return;
-
   Range* selected_range = CreateRange(Selection()
                                           .ComputeVisibleSelectionInDOMTree()
                                           .ToNormalizedEphemeralRange());
   if (!selected_range)
     return;
+  if (selected_range->startContainer()->IsInUserAgentShadowRoot()) {
+    return;
+  }
 
   // |selectedRange| may point nodes in a different root.
   selected_range->deleteContents(ASSERT_NO_EXCEPTION);
@@ -679,10 +817,9 @@ bool DOMSelection::containsNode(const Node* n, bool allow_partial) const {
   DomWindow()->document()->UpdateStyleAndLayout(
       DocumentUpdateReason::kSelection);
 
-  const EphemeralRange selected_range =
-      Selection()
-          .ComputeVisibleSelectionInDOMTreeDeprecated()
-          .ToNormalizedEphemeralRange();
+  const EphemeralRange selected_range = Selection()
+                                            .ComputeVisibleSelectionInDOMTree()
+                                            .ToNormalizedEphemeralRange();
   if (selected_range.IsNull())
     return false;
 
@@ -744,11 +881,17 @@ String DOMSelection::toString() {
       DomWindow()->document()->Lifecycle());
 
   const EphemeralRange range = Selection()
-                                   .ComputeVisibleSelectionInDOMTreeDeprecated()
+                                   .ComputeVisibleSelectionInDOMTree()
                                    .ToNormalizedEphemeralRange();
-  return PlainText(
-      range,
-      TextIteratorBehavior::Builder().SetForSelectionToString(true).Build());
+
+  TextIteratorBehavior::Builder behavior_builder;
+  behavior_builder.SetForSelectionToString(true);
+
+  if (RuntimeEnabledFeatures::SelectionToStringSkipsUserSelectNoneEnabled()) {
+    behavior_builder.SetSkipsUnselectableContent(true);
+  }
+
+  return PlainText(range, behavior_builder.Build());
 }
 
 Node* DOMSelection::ShadowAdjustedNode(const Position& position) const {
@@ -804,6 +947,22 @@ void DOMSelection::Trace(Visitor* visitor) const {
   visitor->Trace(tree_scope_);
   ScriptWrappable::Trace(visitor);
   ExecutionContextClient::Trace(visitor);
+}
+
+DOMSelection::TemporaryRange::TemporaryRange(const DOMSelection* selection,
+                                             Range* range) {
+  owner_dom_selection_ = selection;
+  range_ = range;
+}
+
+DOMSelection::TemporaryRange::~TemporaryRange() {
+  if (range_ && range_ != owner_dom_selection_->DocumentCachedRange()) {
+    range_->Dispose();
+  }
+}
+
+Range* DOMSelection::TemporaryRange::GetRange() {
+  return range_;
 }
 
 }  // namespace blink

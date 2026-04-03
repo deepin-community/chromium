@@ -27,6 +27,7 @@
 
 #include "dawn/tests/end2end/BufferHostMappedPointerTests.h"
 
+#include "dawn/common/Math.h"
 #include "dawn/utils/WGPUHelpers.h"
 
 namespace dawn {
@@ -50,12 +51,12 @@ void BufferHostMappedPointerTests::SetUp() {
     DawnTestWithParams<BufferHostMappedPointerTestParams>::SetUp();
     DAWN_TEST_UNSUPPORTED_IF(!SupportsFeatures({wgpu::FeatureName::HostMappedPointer}));
 
-    // TODO(crbug.com/dawn/2018): Expose a proper limit for the alignment.
-    if (IsD3D12()) {
-        mRequiredAlignment = 65536;
-    } else {
-        mRequiredAlignment = 4096;
-    }
+    dawn::utils::ComboLimits limits;
+    wgpu::DawnHostMappedPointerLimits hostAlignmentLimits;
+    device.GetLimits(limits.GetLinked(&hostAlignmentLimits));
+    ASSERT_TRUE(dawn::IsPowerOfTwo(hostAlignmentLimits.hostMappedPointerAlignment));
+
+    mRequiredAlignment = hostAlignmentLimits.hostMappedPointerAlignment;
 }
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(BufferHostMappedPointerTests);
@@ -92,10 +93,11 @@ TEST_P(BufferHostMappedPointerNoFeatureTests, Creation) {
 DAWN_INSTANTIATE_TEST(BufferHostMappedPointerNoFeatureTests,
                       D3D11Backend(),
                       D3D12Backend(),
-                      VulkanBackend(),
                       MetalBackend(),
                       OpenGLBackend(),
-                      OpenGLESBackend());
+                      OpenGLESBackend(),
+                      VulkanBackend(),
+                      WebGPUBackend());
 
 // Test that memory allocations must be aligned to the required alignment.
 TEST_P(BufferHostMappedPointerTests, Alignment) {
@@ -156,6 +158,10 @@ TEST_P(BufferHostMappedPointerTests, InitialDataAndCopySrc) {
 // Create a host-mapped buffer with CopyDst usage. Test that changes on the GPU
 // are visible to the host.
 TEST_P(BufferHostMappedPointerTests, CopyDst) {
+    // TODO(crbug.com/358296955): Re-enable when this no longer causes
+    // subsequent tests to flakily crash.
+    DAWN_SUPPRESS_TEST_IF(IsMacOS() && IsAMD() && IsMetal());
+
     // Set up expected data.
     uint32_t bufferSize = mRequiredAlignment;
     std::vector<uint32_t> expected(bufferSize / sizeof(uint32_t));
@@ -263,9 +269,10 @@ TEST_P(BufferHostMappedPointerTests, Mapping) {
     ASSERT_DEVICE_ERROR(buffer.Unmap());
 
     // Invalid to map a persistently host mapped buffer.
-    ASSERT_DEVICE_ERROR_MSG(
-        buffer.MapAsync(wgpu::MapMode::Write, 0, wgpu::kWholeMapSize, nullptr, nullptr),
-        testing::HasSubstr("cannot be mapped"));
+    ASSERT_DEVICE_ERROR_MSG(buffer.MapAsync(wgpu::MapMode::Write, 0, wgpu::kWholeMapSize,
+                                            wgpu::CallbackMode::AllowSpontaneous,
+                                            [](wgpu::MapAsyncStatus, wgpu::StringView) {}),
+                            testing::HasSubstr("cannot be mapped"));
 
     // Still invalid to GetMappedRange() or Unmap.
     ASSERT_EQ(buffer.GetMappedRange(), nullptr);
@@ -273,6 +280,34 @@ TEST_P(BufferHostMappedPointerTests, Mapping) {
 
     // TODO(crbug.com/dawn/2018):
     // Test it is invalid to pass mappedAtCreation = true
+}
+
+// Test creating a buffer with data initially in the host-mapped memory
+// on multiple threads. The contents should be correct and  GPU-visible
+// immediately after creation.
+TEST_P(BufferHostMappedPointerTests, MultithreadedCreation) {
+    std::vector<wgpu::Buffer> buffers(20);
+
+    uint32_t bufferSize = mRequiredAlignment;
+    uint32_t u32PerBuffer = bufferSize / sizeof(uint32_t);
+    // Set up expected data.
+    std::vector<uint32_t> expected(buffers.size() * bufferSize);
+    for (size_t i = 0; i < expected.size(); ++i) {
+        expected[i] = i;
+    }
+
+    // Create buffers on multiple threads.
+    utils::RunInParallel(buffers.size(), [&, this](uint32_t i) {
+        auto [buffer, _] = GetParam().mBackend->CreateHostMappedBuffer(
+            device, wgpu::BufferUsage::CopySrc, bufferSize,
+            [&](void* initialPtr) { memcpy(initialPtr, &expected[i * u32PerBuffer], bufferSize); });
+        buffers[i] = std::move(buffer);
+    });
+
+    // Check the buffer contents.
+    for (uint32_t i = 0; i < buffers.size(); ++i) {
+        EXPECT_BUFFER_U32_RANGE_EQ(&expected[i * u32PerBuffer], buffers[i], 0, u32PerBuffer);
+    }
 }
 
 // TODO(crbug.com/dawn/2018):

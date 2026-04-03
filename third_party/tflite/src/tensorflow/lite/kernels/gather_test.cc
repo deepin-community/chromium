@@ -20,9 +20,11 @@ limitations under the License.
 #include <vector>
 
 #include <gtest/gtest.h>
+#include "Eigen/Core"  // from @eigen_archive
 #include "tensorflow/lite/kernels/internal/portable_tensor_utils.h"
 #include "tensorflow/lite/kernels/test_util.h"
 #include "tensorflow/lite/schema/schema_generated.h"
+#include "tensorflow/lite/types/half.h"
 
 namespace tflite {
 namespace {
@@ -105,8 +107,9 @@ class GatherOpModel : public SingleOpModel {
       num_elements *= shape[i];
     }
     std::vector<int8_t> inflated_output(num_elements);
-    tensor_utils::UnpackDenseInt4IntoInt8(data_int8.data(), num_elements,
-                                          inflated_output.data());
+    tensor_utils::UnpackPackedIntToInt8(data_int8.data(), num_elements,
+                                        /*bit_width=*/4,
+                                        inflated_output.data());
     return inflated_output;
   }
 
@@ -250,8 +253,8 @@ TEST_P(GatherOpTest, LastAxis0DIndex) {
   EXPECT_THAT(m.GetOutputShape(), ElementsAreArray({1, 2}));
 }
 
-using TestTypes =
-    testing::Types<int8_t, uint8_t, int16_t, int32_t, int64_t, float>;
+using TestTypes = testing::Types<int8_t, uint8_t, int16_t, int32_t, int64_t,
+                                 float, half, Eigen::bfloat16>;
 
 template <typename T>
 struct TypedGatherOpTest : public testing::Test {};
@@ -263,10 +266,12 @@ TYPED_TEST(TypedGatherOpTest, Int32Indices) {
     TensorType tensor_type = GetTensorType<TypeParam>();
     GatherOpModel<TypeParam, int32_t> m(
         {tensor_type, {2, 2}}, {TensorType_INT32, {2}}, constant_tensor,
-        {13, 120, 14, 15}, {1, 0});
+        {TypeParam(13), TypeParam(120), TypeParam(14), TypeParam(15)}, {1, 0});
     ASSERT_EQ(m.Invoke(), kTfLiteOk);
 
-    EXPECT_THAT(m.GetOutput(), ElementsAreArray({14, 15, 13, 120}));
+    EXPECT_THAT(m.GetOutput(),
+                ElementsAreArray({TypeParam(14), TypeParam(15), TypeParam(13),
+                                  TypeParam(120)}));
   }
 }
 
@@ -275,10 +280,12 @@ TYPED_TEST(TypedGatherOpTest, Int64Indices) {
     TensorType tensor_type = GetTensorType<TypeParam>();
     GatherOpModel<TypeParam, int64_t> m(
         {tensor_type, {2, 2}}, {TensorType_INT64, {2}}, constant_tensor,
-        {13, 120, 14, 15}, {1, 0});
+        {TypeParam(13), TypeParam(120), TypeParam(14), TypeParam(15)}, {1, 0});
     ASSERT_EQ(m.Invoke(), kTfLiteOk);
 
-    EXPECT_THAT(m.GetOutput(), ElementsAreArray({14, 15, 13, 120}));
+    EXPECT_THAT(m.GetOutput(),
+                ElementsAreArray({TypeParam(14), TypeParam(15), TypeParam(13),
+                                  TypeParam(120)}));
   }
 }
 
@@ -307,21 +314,40 @@ TYPED_TEST(TypedGatherOpTest, BatchDims2) {
     GatherOpModel<TypeParam, int32_t> m(
         {tensor_type, {2, 2, 3, 5}}, {TensorType_INT32, {2, 2, 2}},
         constant_tensor,
-        {0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14,
-         15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
-         30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
-         45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59},
+        {TypeParam(0),  TypeParam(1),  TypeParam(2),  TypeParam(3),
+         TypeParam(4),  TypeParam(5),  TypeParam(6),  TypeParam(7),
+         TypeParam(8),  TypeParam(9),  TypeParam(10), TypeParam(11),
+         TypeParam(12), TypeParam(13), TypeParam(14), TypeParam(15),
+         TypeParam(16), TypeParam(17), TypeParam(18), TypeParam(19),
+         TypeParam(20), TypeParam(21), TypeParam(22), TypeParam(23),
+         TypeParam(24), TypeParam(25), TypeParam(26), TypeParam(27),
+         TypeParam(28), TypeParam(29), TypeParam(30), TypeParam(31),
+         TypeParam(32), TypeParam(33), TypeParam(34), TypeParam(35),
+         TypeParam(36), TypeParam(37), TypeParam(38), TypeParam(39),
+         TypeParam(40), TypeParam(41), TypeParam(42), TypeParam(43),
+         TypeParam(44), TypeParam(45), TypeParam(46), TypeParam(47),
+         TypeParam(48), TypeParam(49), TypeParam(50), TypeParam(51),
+         TypeParam(52), TypeParam(53), TypeParam(54), TypeParam(55),
+         TypeParam(56), TypeParam(57), TypeParam(58), TypeParam(59)},
         {1, 0, 0, 1, 1, 0, 0, 1},
         /*axis=*/2,
         /*batch_dims=*/2);
     ASSERT_EQ(m.Invoke(), kTfLiteOk);
 
     ASSERT_THAT(m.GetOutputShape(), ElementsAreArray({2, 2, 2, 5}));
-    EXPECT_THAT(m.GetOutput(),
-                ElementsAreArray({5,  6,  7,  8,  9,  0,  1,  2,  3,  4,
-                                  15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-                                  35, 36, 37, 38, 39, 30, 31, 32, 33, 34,
-                                  45, 46, 47, 48, 49, 50, 51, 52, 53, 54}));
+    EXPECT_THAT(
+        m.GetOutput(),
+        ElementsAreArray(
+            {TypeParam(5),  TypeParam(6),  TypeParam(7),  TypeParam(8),
+             TypeParam(9),  TypeParam(0),  TypeParam(1),  TypeParam(2),
+             TypeParam(3),  TypeParam(4),  TypeParam(15), TypeParam(16),
+             TypeParam(17), TypeParam(18), TypeParam(19), TypeParam(20),
+             TypeParam(21), TypeParam(22), TypeParam(23), TypeParam(24),
+             TypeParam(35), TypeParam(36), TypeParam(37), TypeParam(38),
+             TypeParam(39), TypeParam(30), TypeParam(31), TypeParam(32),
+             TypeParam(33), TypeParam(34), TypeParam(45), TypeParam(46),
+             TypeParam(47), TypeParam(48), TypeParam(49), TypeParam(50),
+             TypeParam(51), TypeParam(52), TypeParam(53), TypeParam(54)}));
   }
 }
 

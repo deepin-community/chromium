@@ -4,7 +4,6 @@
 //
 #include "chrome/browser/extensions/api/document_scan/start_scan_runner.h"
 
-#include "base/containers/contains.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/extensions/extensions_dialogs.h"
@@ -15,7 +14,7 @@
 #include "extensions/common/extension.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/views/native_window_tracker.h"
+#include "ui/native_window_tracker/native_window_tracker.h"
 
 namespace extensions {
 
@@ -30,11 +29,11 @@ std::optional<bool> g_start_scan_confirmation_result = std::nullopt;
 
 bool CanSkipConfirmation(content::BrowserContext* browser_context,
                          const ExtensionId& extension_id) {
-  const base::Value::List& list =
+  const base::ListValue& list =
       Profile::FromBrowserContext(browser_context)
           ->GetPrefs()
           ->GetList(prefs::kDocumentScanAPITrustedExtensions);
-  return base::Contains(list, base::Value(extension_id));
+  return list.contains(extension_id);
 
   // TODO(b/312740272): Add a way for the user to make their consent permanent.
   // Note that this needs to be per device.
@@ -53,7 +52,7 @@ StartScanRunner::StartScanRunner(gfx::NativeWindow native_window,
       approved_(false) {
   CHECK(extension_);
   if (native_window_) {
-    native_window_tracker_ = views::NativeWindowTracker::Create(native_window_);
+    native_window_tracker_ = ui::NativeWindowTracker::Create(native_window_);
   }
 }
 
@@ -137,9 +136,6 @@ void StartScanRunner::SendStartScanRequest() {
       scanner_handle_, std::move(options_),
       base::BindOnce(&StartScanRunner::OnStartScanResponse,
                      weak_ptr_factory_.GetWeakPtr()));
-
-  // TODO(b/312757530): Clean up the pending call if the DocumentScan service
-  // goes away without running our callback.
 }
 
 void StartScanRunner::OnStartScanResponse(

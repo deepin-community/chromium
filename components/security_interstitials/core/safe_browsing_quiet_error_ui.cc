@@ -19,7 +19,6 @@ namespace security_interstitials {
 
 SafeBrowsingQuietErrorUI::SafeBrowsingQuietErrorUI(
     const GURL& request_url,
-    const GURL& main_frame_url,
     BaseSafeBrowsingErrorUI::SBInterstitialReason reason,
     const BaseSafeBrowsingErrorUI::SBErrorDisplayOptions& display_options,
     const std::string& app_locale,
@@ -27,7 +26,6 @@ SafeBrowsingQuietErrorUI::SafeBrowsingQuietErrorUI(
     ControllerClient* controller,
     const bool is_giant_webview)
     : BaseSafeBrowsingErrorUI(request_url,
-                              main_frame_url,
                               reason,
                               display_options,
                               app_locale,
@@ -49,7 +47,7 @@ SafeBrowsingQuietErrorUI::~SafeBrowsingQuietErrorUI() {
 }
 
 void SafeBrowsingQuietErrorUI::PopulateStringsForHtml(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   load_time_data.Set("type", "SAFEBROWSING");
   load_time_data.Set("tabTitle",
                      l10n_util::GetStringUTF16(IDS_SAFEBROWSING_V3_TITLE));
@@ -73,10 +71,6 @@ void SafeBrowsingQuietErrorUI::PopulateStringsForHtml(
       PopulateBillingLoadTimeData(load_time_data);
       break;
   }
-
-  // Not used by this interstitial.
-  load_time_data.Set("recurrentErrorParagraph", "");
-  load_time_data.Set("show_recurrent_error_paragraph", false);
 }
 
 void SafeBrowsingQuietErrorUI::SetGiantWebViewForTesting(
@@ -115,13 +109,19 @@ void SafeBrowsingQuietErrorUI::HandleCommand(
     case CMD_OPEN_ENHANCED_PROTECTION_SETTINGS:
     case CMD_CLOSE_INTERSTITIAL_WITHOUT_UI:
     case CMD_REQUEST_SITE_ACCESS_PERMISSION:
+    case CMD_OPEN_ANDROID_ADVANCED_PROTECTION_SETTINGS:
+    case CMD_OPEN_HELP_CENTER_IN_NEW_TAB:
+    case CMD_OPEN_DIAGNOSTIC_IN_NEW_TAB:
+    case CMD_OPEN_REPORTING_PRIVACY_IN_NEW_TAB:
+    case CMD_OPEN_WHITEPAPER_IN_NEW_TAB:
+    case CMD_REPORT_PHISHING_ERROR_IN_NEW_TAB:
+    case CMD_SHOW_CERTIFICATE_VIEWER:
       NOTREACHED();
-      break;
   }
 }
 
 void SafeBrowsingQuietErrorUI::PopulateMalwareLoadTimeData(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   load_time_data.Set("phishing", false);
   load_time_data.Set("heading",
                      l10n_util::GetStringUTF16(IDS_MALWARE_WEBVIEW_HEADING));
@@ -131,7 +131,7 @@ void SafeBrowsingQuietErrorUI::PopulateMalwareLoadTimeData(
 }
 
 void SafeBrowsingQuietErrorUI::PopulateHarmfulLoadTimeData(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   load_time_data.Set("phishing", false);
   load_time_data.Set("heading",
                      l10n_util::GetStringUTF16(IDS_HARMFUL_WEBVIEW_HEADING));
@@ -141,7 +141,7 @@ void SafeBrowsingQuietErrorUI::PopulateHarmfulLoadTimeData(
 }
 
 void SafeBrowsingQuietErrorUI::PopulatePhishingLoadTimeData(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   load_time_data.Set("phishing", true);
   load_time_data.Set("heading",
                      l10n_util::GetStringUTF16(IDS_PHISHING_WEBVIEW_HEADING));
@@ -151,7 +151,7 @@ void SafeBrowsingQuietErrorUI::PopulatePhishingLoadTimeData(
 }
 
 void SafeBrowsingQuietErrorUI::PopulateBillingLoadTimeData(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   load_time_data.Set("phishing", false);
   load_time_data.Set("tabTitle", l10n_util::GetStringUTF16(IDS_BILLING_TITLE));
   load_time_data.Set("heading",

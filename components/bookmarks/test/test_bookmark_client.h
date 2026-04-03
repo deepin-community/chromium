@@ -11,6 +11,9 @@
 #include <map>
 #include <memory>
 
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "components/bookmarks/browser/bookmark_client.h"
 
@@ -64,12 +67,31 @@ class TestBookmarkClient : public BookmarkClient {
   bool HasFaviconLoadTasks() const;
 
   // Sets the value returned by
-  // `IsSyncFeatureEnabledIncludingBookmarksForUma()`.
-  void SetIsSyncFeatureEnabledIncludingBookmarksForUma(bool value);
+  // `IsSyncFeatureEnabledIncludingBookmarks()`.
+  void SetIsSyncFeatureEnabledIncludingBookmarks(bool value);
+
+  // Returns sync metadata for account bookmarks,  received via
+  // DecodeAccountBookmarkSyncMetadata() or modified via
+  // SetAccountBookmarkSyncMetadataAndScheduleWrite().
+  const std::string& account_bookmark_sync_metadata() const {
+    return account_bookmark_sync_metadata_;
+  }
+
+  void SetAccountBookmarkSyncMetadataAndScheduleWrite(
+      const std::string& account_bookmark_sync_metadata);
+
+  // Allows overriding the value returned by
+  // `DecodeAccountBookmarkSyncMetadataResult()`.
+  void SetDecodeAccountBookmarkSyncMetadataResult(
+      DecodeAccountBookmarkSyncMetadataResult result);
+
+  // Simulates the log interval trigger by calling `metrics_callback_` that was
+  // the input in `SchedulePersistentTimerForDailyMetrics()`.
+  void TriggerPersistentLogInterval();
 
   // BookmarkClient:
   LoadManagedNodeCallback GetLoadManagedNodeCallback() override;
-  bool IsSyncFeatureEnabledIncludingBookmarksForUma() override;
+  bool IsSyncFeatureEnabledIncludingBookmarks() override;
   bool CanSetPermanentNodeTitle(const BookmarkNode* permanent_node) override;
   bool IsNodeManaged(const BookmarkNode* node) override;
   std::string EncodeLocalOrSyncableBookmarkSyncMetadata() override;
@@ -77,7 +99,7 @@ class TestBookmarkClient : public BookmarkClient {
   void DecodeLocalOrSyncableBookmarkSyncMetadata(
       const std::string& metadata_str,
       const base::RepeatingClosure& schedule_save_closure) override;
-  void DecodeAccountBookmarkSyncMetadata(
+  DecodeAccountBookmarkSyncMetadataResult DecodeAccountBookmarkSyncMetadata(
       const std::string& metadata_str,
       const base::RepeatingClosure& schedule_save_closure) override;
   base::CancelableTaskTracker::TaskId GetFaviconImageForPageURL(
@@ -85,10 +107,11 @@ class TestBookmarkClient : public BookmarkClient {
       favicon_base::FaviconImageCallback callback,
       base::CancelableTaskTracker* tracker) override;
   void OnBookmarkNodeRemovedUndoable(
-      BookmarkModel* model,
       const BookmarkNode* parent,
       size_t index,
       std::unique_ptr<BookmarkNode> node) override;
+  void SchedulePersistentTimerForDailyMetrics(
+      base::RepeatingClosure metrics_callback) override;
 
  private:
   // Helpers for GetLoadManagedNodeCallback().
@@ -107,6 +130,16 @@ class TestBookmarkClient : public BookmarkClient {
       requests_per_page_url_;
 
   bool is_sync_feature_enabled_including_bookmarks_for_uma = false;
+
+  std::string account_bookmark_sync_metadata_;
+  base::RepeatingClosure account_bookmark_sync_metadata_save_closure_ =
+      base::DoNothing();
+
+  DecodeAccountBookmarkSyncMetadataResult
+      decode_account_bookmark_sync_metadata_result_ =
+          DecodeAccountBookmarkSyncMetadataResult::kSuccess;
+
+  base::RepeatingClosure metrics_callback_;
 };
 
 }  // namespace bookmarks

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/gpu/v4l2/v4l2_image_processor_backend.h"
 
 #include <errno.h>
@@ -31,6 +36,7 @@
 #include "media/gpu/chromeos/video_frame_resource.h"
 #include "media/gpu/macros.h"
 #include "media/gpu/v4l2/v4l2_utils.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace media {
 
@@ -53,7 +59,7 @@ void FillV4L2BufferByGpuMemoryBufferHandle(
   DCHECK_EQ(buffer->Memory(), V4L2_MEMORY_DMABUF);
   const size_t num_planes = GetNumPlanesOfV4L2PixFmt(fourcc.ToV4L2PixFmt());
   const std::vector<gfx::NativePixmapPlane>& planes =
-      gmb_handle.native_pixmap_handle.planes;
+      gmb_handle.native_pixmap_handle().planes;
 
   for (size_t i = 0; i < num_planes; ++i) {
     if (fourcc.IsMultiPlanar()) {
@@ -218,7 +224,7 @@ v4l2_memory InputStorageTypeToV4L2Memory(VideoFrame::StorageType storage_type) {
     case VideoFrame::STORAGE_SHMEM:
       return V4L2_MEMORY_USERPTR;
     case VideoFrame::STORAGE_DMABUFS:
-    case VideoFrame::STORAGE_GPU_MEMORY_BUFFER:
+    case VideoFrame::STORAGE_MAPPABLE_SHARED_IMAGE:
       return V4L2_MEMORY_DMABUF;
     default:
       return static_cast<v4l2_memory>(0);
@@ -256,38 +262,23 @@ std::unique_ptr<ImageProcessorBackend> V4L2ImageProcessorBackend::Create(
     return nullptr;
   }
 
-  VideoFrame::StorageType input_storage_type = VideoFrame::STORAGE_UNKNOWN;
-  for (auto input_type : input_config.preferred_storage_types) {
-    v4l2_memory v4l2_memory_type = InputStorageTypeToV4L2Memory(input_type);
-    if (v4l2_memory_type == V4L2_MEMORY_USERPTR ||
-        v4l2_memory_type == V4L2_MEMORY_DMABUF) {
-      input_storage_type = input_type;
-      break;
-    }
-  }
-  if (input_storage_type == VideoFrame::STORAGE_UNKNOWN) {
+  const v4l2_memory input_memory_type =
+      InputStorageTypeToV4L2Memory(input_config.storage_type);
+  if (input_memory_type != V4L2_MEMORY_USERPTR &&
+      input_memory_type != V4L2_MEMORY_DMABUF) {
     VLOGF(2) << "Unsupported input storage type";
     return nullptr;
   }
 
-  VideoFrame::StorageType output_storage_type = VideoFrame::STORAGE_UNKNOWN;
-  for (auto output_type : output_config.preferred_storage_types) {
-    v4l2_memory v4l2_memory_type = InputStorageTypeToV4L2Memory(output_type);
-    if (v4l2_memory_type == V4L2_MEMORY_MMAP ||
-        v4l2_memory_type == V4L2_MEMORY_DMABUF) {
-      output_storage_type = output_type;
-      break;
-    }
-  }
-  if (output_storage_type == VideoFrame::STORAGE_UNKNOWN) {
+  // When |output_mode| is ALLOCATE, then |output_config.storage_type| is
+  // ignored. The output memory type will be V4L2_MEMORY_MMAP.
+  const v4l2_memory output_memory_type =
+      output_mode == OutputMode::ALLOCATE
+          ? V4L2_MEMORY_MMAP
+          : InputStorageTypeToV4L2Memory(output_config.storage_type);
+  if (output_memory_type != V4L2_MEMORY_MMAP &&
+      output_memory_type != V4L2_MEMORY_DMABUF) {
     VLOGF(2) << "Unsupported output storage type";
-    return nullptr;
-  }
-
-  const v4l2_memory input_memory_type =
-      InputStorageTypeToV4L2Memory(input_storage_type);
-  if (input_memory_type == 0) {
-    VLOGF(1) << "Unsupported input storage type: " << input_storage_type;
     return nullptr;
   }
 
@@ -405,20 +396,10 @@ std::unique_ptr<ImageProcessorBackend> V4L2ImageProcessorBackend::Create(
   if (device->Ioctl(VIDIOC_S_CTRL, &alpha) != 0)
     VPLOGF(1) << "V4L2_CID_ALPHA_COMPONENT failed";
 
-  const v4l2_memory output_memory_type =
-      output_mode == OutputMode::ALLOCATE
-          ? V4L2_MEMORY_MMAP
-          : InputStorageTypeToV4L2Memory(output_storage_type);
   std::unique_ptr<V4L2ImageProcessorBackend> image_processor(
       new V4L2ImageProcessorBackend(
-          std::move(device),
-          PortConfig(input_config.fourcc, negotiated_input_size, input_planes,
-                     input_config.visible_rect, {input_storage_type}),
-          PortConfig(output_config.fourcc, negotiated_output_size,
-                     output_planes, output_config.visible_rect,
-                     {output_storage_type}),
-          input_memory_type, output_memory_type, output_mode,
-          std::move(error_cb)));
+          std::move(device), input_config, output_config, input_memory_type,
+          output_memory_type, output_mode, std::move(error_cb)));
 
   if (!image_processor->CreateInputBuffers(num_buffers) ||
       !image_processor->CreateOutputBuffers(num_buffers)) {
@@ -499,24 +480,6 @@ bool V4L2ImageProcessorBackend::TryOutputFormat(uint32_t input_pixelformat,
   return true;
 }
 
-void V4L2ImageProcessorBackend::ProcessLegacy(scoped_refptr<VideoFrame> frame,
-                                              LegacyFrameReadyCB cb) {
-  DVLOGF(4) << "ts=" << frame->timestamp().InMilliseconds();
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  CHECK_EQ(output_memory_type_, V4L2_MEMORY_MMAP);
-
-  auto job_record = std::make_unique<JobRecord>();
-  job_record->input_frame = VideoFrameResource::Create(std::move(frame));
-  job_record->legacy_ready_cb = std::move(cb);
-  if (MediaTraceIsEnabled()) {
-    job_record->start_time = base::TimeTicks::Now();
-  }
-
-  input_job_queue_.emplace(std::move(job_record));
-  ProcessJobs();
-}
-
 void V4L2ImageProcessorBackend::ProcessLegacyFrame(
     scoped_refptr<FrameResource> frame,
     LegacyFrameResourceReadyCB cb) {
@@ -527,7 +490,7 @@ void V4L2ImageProcessorBackend::ProcessLegacyFrame(
 
   auto job_record = std::make_unique<JobRecord>();
   job_record->input_frame = std::move(frame);
-  job_record->legacy_frame_ready_cb = std::move(cb);
+  job_record->legacy_ready_cb = std::move(cb);
   if (MediaTraceIsEnabled()) {
     job_record->start_time = base::TimeTicks::Now();
   }
@@ -563,8 +526,10 @@ void V4L2ImageProcessorBackend::ProcessJobs() {
     if (!input_queue_->IsStreaming()) {
       const FrameResource& input_frame =
           *(input_job_queue_.front()->input_frame.get());
-      const gfx::Size input_buffer_size(input_frame.stride(0),
-                                        input_frame.coded_size().height());
+      const gfx::Size input_buffer_size(
+          input_frame.stride(0) /
+              VideoFrame::BytesPerElement(input_frame.format(), 0),
+          input_frame.coded_size().height());
       if (!ReconfigureV4L2Format(input_buffer_size,
                                  V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE)) {
         NotifyError();
@@ -577,8 +542,10 @@ void V4L2ImageProcessorBackend::ProcessJobs() {
         !output_queue_->IsStreaming()) {
       const FrameResource& output_frame =
           *(input_job_queue_.front()->output_frame.get());
-      const gfx::Size output_buffer_size(output_frame.stride(0),
-                                         output_frame.coded_size().height());
+      const gfx::Size output_buffer_size(
+          output_frame.stride(0) /
+              VideoFrame::BytesPerElement(output_frame.format(), 0),
+          output_frame.coded_size().height());
       if (!ReconfigureV4L2Format(output_buffer_size,
                                  V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)) {
         NotifyError();
@@ -590,10 +557,11 @@ void V4L2ImageProcessorBackend::ProcessJobs() {
     std::optional<V4L2WritableBufferRef> input_buffer;
     // If we are using DMABUF frames, try to always obtain the same V4L2 buffer.
     if (input_memory_type_ == V4L2_MEMORY_DMABUF) {
-      const FrameResource& input_frame =
-          *(input_job_queue_.front()->input_frame.get());
-      input_buffer =
-          input_queue_->GetFreeBufferForFrame(input_frame.GetSharedMemoryId());
+      const std::optional<base::UnguessableToken> tracking_token =
+          input_job_queue_.front()->input_frame->metadata().tracking_token;
+      if (tracking_token.has_value()) {
+        input_buffer = input_queue_->GetFreeBufferForFrame(*tracking_token);
+      }
     }
     if (!input_buffer)
       input_buffer = input_queue_->GetFreeBuffer();
@@ -601,10 +569,11 @@ void V4L2ImageProcessorBackend::ProcessJobs() {
     std::optional<V4L2WritableBufferRef> output_buffer;
     // If we are using DMABUF frames, try to always obtain the same V4L2 buffer.
     if (output_memory_type_ == V4L2_MEMORY_DMABUF) {
-      const FrameResource& output_frame =
-          *(input_job_queue_.front()->output_frame.get());
-      output_buffer = output_queue_->GetFreeBufferForFrame(
-          output_frame.GetSharedMemoryId());
+      const std::optional<base::UnguessableToken> tracking_token =
+          input_job_queue_.front()->output_frame->metadata().tracking_token;
+      if (tracking_token.has_value()) {
+        output_buffer = output_queue_->GetFreeBufferForFrame(*tracking_token);
+      }
     }
     if (!output_buffer)
       output_buffer = output_queue_->GetFreeBuffer();
@@ -849,7 +818,7 @@ void V4L2ImageProcessorBackend::Dequeue() {
     // Jobs are always processed in FIFO order.
     if (running_jobs_.empty() ||
         running_jobs_.front()->output_buffer_id != buffer->BufferId()) {
-      DVLOGF(3) << "previous Reset() abondoned the job, ignore.";
+      DVLOGF(3) << "previous Reset() abandoned the job, ignore.";
       continue;
     }
     std::unique_ptr<JobRecord> job_record = std::move(running_jobs_.front());
@@ -878,7 +847,7 @@ void V4L2ImageProcessorBackend::Dequeue() {
         break;
 
       default:
-        NOTREACHED_NORETURN();
+        NOTREACHED();
     }
 
     const auto timestamp = job_record->input_frame->timestamp();
@@ -886,32 +855,15 @@ void V4L2ImageProcessorBackend::Dequeue() {
     output_frame->set_color_space(job_record->input_frame->ColorSpace());
 
     if (job_record->start_time) {
-      TRACE_EVENT_NESTABLE_ASYNC_BEGIN_WITH_TIMESTAMP0(
-          "media", "V4L2ImageProcessorBackend::Process", TRACE_ID_LOCAL(this),
-          job_record->start_time.value());
-      TRACE_EVENT_NESTABLE_ASYNC_END_WITH_TIMESTAMP1(
-          "media", "V4L2ImageProcessorBackend::Process", TRACE_ID_LOCAL(this),
-          base::TimeTicks::Now(), "timestamp", timestamp.InMilliseconds());
+      TRACE_EVENT_BEGIN("media", "V4L2ImageProcessorBackend::Process",
+                        perfetto::Track::FromPointer(this),
+                        job_record->start_time.value());
+      TRACE_EVENT_END("media", perfetto::Track::FromPointer(this), "timestamp",
+                      timestamp.InMilliseconds());
     }
 
-    // At most of of |job_record->legacy_ready_cb| or
-    // |job_record->legacy_frame_ready_cb| should be set.
-    CHECK(job_record->legacy_ready_cb.is_null() ||
-          job_record->legacy_frame_ready_cb.is_null());
     if (!job_record->legacy_ready_cb.is_null()) {
-      // Since the legacy API only supports a |output_memory_type_| of
-      // V4L2_MEMORY_MMAP, |output_frame| is manufactured by a call to
-      // |V4L2ReadableBufferRef::GetFrameResource()|. This always returns a
-      // VideoFrameResource object, so |output_frame->AsVideoFrameResource()|
-      // returns a valid pointer.
-      // TODO(nhebert): switch to NativePixmap FrameResource when V4L2Queue
-      // does.
-      CHECK(output_frame->AsVideoFrameResource());
       std::move(job_record->legacy_ready_cb)
-          .Run(buffer->BufferId(),
-               output_frame->AsVideoFrameResource()->GetMutableVideoFrame());
-    } else if (!job_record->legacy_frame_ready_cb.is_null()) {
-      std::move(job_record->legacy_frame_ready_cb)
           .Run(buffer->BufferId(), std::move(output_frame));
     } else {
       std::move(job_record->ready_cb).Run(std::move(output_frame));
@@ -957,7 +909,7 @@ bool V4L2ImageProcessorBackend::EnqueueInputRecord(
       FillV4L2BufferByGpuMemoryBufferHandle(
           input_config_.fourcc, input_config_.size, *input_handle, &buffer);
       if (!std::move(buffer).QueueDMABuf(
-              input_handle->native_pixmap_handle.planes)) {
+              input_handle->native_pixmap_handle().planes)) {
         VPLOGF(1) << "Failed to queue a DMABUF buffer to input queue";
         NotifyError();
         return false;
@@ -965,7 +917,7 @@ bool V4L2ImageProcessorBackend::EnqueueInputRecord(
       break;
     }
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
   DVLOGF(4) << "enqueued frame ts="
             << job_record->input_frame->timestamp().InMilliseconds()
@@ -996,10 +948,10 @@ bool V4L2ImageProcessorBackend::EnqueueOutputRecord(
       FillV4L2BufferByGpuMemoryBufferHandle(
           output_config_.fourcc, output_config_.size, *output_handle, &buffer);
       return std::move(buffer).QueueDMABuf(
-          output_handle->native_pixmap_handle.planes);
+          output_handle->native_pixmap_handle().planes);
     }
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 

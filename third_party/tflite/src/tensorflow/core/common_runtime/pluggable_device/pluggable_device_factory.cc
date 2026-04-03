@@ -32,6 +32,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/framework/device_id_utils.h"
 #include "tensorflow/core/common_runtime/device/device_id.h"
 #include "tensorflow/core/common_runtime/device/device_id_manager.h"
 #include "tensorflow/core/common_runtime/device_factory.h"
@@ -40,7 +41,6 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/pluggable_device/pluggable_device_process_state.h"
 #include "tensorflow/core/common_runtime/pluggable_device/pluggable_device_util.h"
 #include "tensorflow/core/framework/allocator.h"
-#include "tsl/framework/device_id_utils.h"
 
 namespace tensorflow {
 namespace {
@@ -82,10 +82,10 @@ int64_t MinSystemMemory(int64_t available_memory) {
 // Get the memory limit for the virtual device being created on PluggableDevice
 // with 'platform_device_id', when that virtual device is the only
 // virtual device being created on that PluggableDevice.
-Status SingleVirtualDeviceMemoryLimit(const string& platform_name,
-                                      const GPUOptions& device_options,
-                                      PlatformDeviceId platform_device_id,
-                                      int64_t* memory_limit) {
+absl::Status SingleVirtualDeviceMemoryLimit(const std::string& platform_name,
+                                            const GPUOptions& device_options,
+                                            PlatformDeviceId platform_device_id,
+                                            int64_t* memory_limit) {
   int64_t total_memory = 0;
   int64_t available_memory = 0;
   se::Platform* platform = PluggableDeviceMachineManager(platform_name);
@@ -119,27 +119,27 @@ Status SingleVirtualDeviceMemoryLimit(const string& platform_name,
 }
 }  // namespace
 
-PluggableDeviceFactory::PluggableDeviceFactory(const string& device_type,
-                                               const string& platform_name)
+PluggableDeviceFactory::PluggableDeviceFactory(const std::string& device_type,
+                                               const std::string& platform_name)
     : device_type_(device_type), platform_name_(platform_name) {}
 
-Status PluggableDeviceFactory::ListPhysicalDevices(
-    std::vector<string>* devices) {
+absl::Status PluggableDeviceFactory::ListPhysicalDevices(
+    std::vector<std::string>* devices) {
   TF_RETURN_IF_ERROR(ValidatePluggableDeviceMachineManager(platform_name_));
   se::Platform* platform = PluggableDeviceMachineManager(platform_name_);
 
   int device_count = platform->VisibleDeviceCount();
   for (int i = 0; i < device_count; ++i) {
-    const string device_name =
-        strings::StrCat("/physical_device:", device_type_, ":", i);
+    const std::string device_name =
+        absl::StrCat("/physical_device:", device_type_, ":", i);
     devices->push_back(device_name);
   }
 
   return absl::OkStatus();
 }
 
-Status PluggableDeviceFactory::GetDeviceDetails(
-    int device_index, std::unordered_map<string, string>* details) {
+absl::Status PluggableDeviceFactory::GetDeviceDetails(
+    int device_index, std::unordered_map<std::string, std::string>* details) {
   TF_RETURN_IF_ERROR(ValidatePluggableDeviceMachineManager(platform_name_));
   se::Platform* platform = PluggableDeviceMachineManager(platform_name_);
   if (platform == nullptr) {
@@ -162,8 +162,8 @@ Status PluggableDeviceFactory::GetDeviceDetails(
   return absl::OkStatus();
 }
 
-Status PluggableDeviceFactory::CreateDevices(
-    const SessionOptions& options, const string& name_prefix,
+absl::Status PluggableDeviceFactory::CreateDevices(
+    const SessionOptions& options, const std::string& name_prefix,
     std::vector<std::unique_ptr<Device>>* devices) {
   TF_RETURN_IF_ERROR(ValidatePluggableDeviceMachineManager(platform_name_));
   se::Platform* platform = PluggableDeviceMachineManager(platform_name_);
@@ -177,7 +177,7 @@ Status PluggableDeviceFactory::CreateDevices(
   const absl::flat_hash_map<std::string, int64_t> device_count_map(
       options.config.device_count().begin(),
       options.config.device_count().end());
-  const auto& device_options = options.config.gpu_options();
+  const auto& device_options = options.config.pluggable_device_options();
   TF_ASSIGN_OR_RETURN(
       const size_t num_tf_devices,
       tsl::GetNumberTfDevicesAndConfigurePlatformDeviceId(
@@ -214,20 +214,20 @@ Status PluggableDeviceFactory::CreateDevices(
   return absl::OkStatus();
 }
 
-static string GetShortDeviceDescription(PlatformDeviceId platform_device_id,
-                                        const se::DeviceDescription& desc) {
+static std::string GetShortDeviceDescription(
+    PlatformDeviceId platform_device_id, const se::DeviceDescription& desc) {
   return strings::StrCat("device: ", platform_device_id.value(),
                          ", name: ", desc.name(),
                          ", pci bus id: ", desc.pci_bus_id());
 }
 
-Status PluggableDeviceFactory::CreatePluggableDevice(
-    const SessionOptions& options, const string& name_prefix,
+absl::Status PluggableDeviceFactory::CreatePluggableDevice(
+    const SessionOptions& options, const std::string& name_prefix,
     TfDeviceId tf_device_id, int64_t memory_limit,
     const DeviceLocality& dev_locality,
     std::vector<std::unique_ptr<Device>>* devices) {
   DCHECK_GE(tf_device_id.value(), 0);
-  const string device_name = strings::StrCat(
+  const std::string device_name = strings::StrCat(
       name_prefix, "/device:", device_type_, ":", tf_device_id.value());
 
   se::Platform* platform = PluggableDeviceMachineManager(platform_name_);
@@ -246,7 +246,7 @@ Status PluggableDeviceFactory::CreatePluggableDevice(
   PluggableDeviceProcessState* process_state =
       PluggableDeviceProcessState::singleton(device_type_, platform_name_);
   Allocator* device_allocator = process_state->GetPluggableDeviceAllocator(
-      options.config.gpu_options(), tf_device_id, memory_limit);
+      options.config.pluggable_device_options(), tf_device_id, memory_limit);
   if (device_allocator == nullptr) {
     return absl::InternalError(absl::StrCat(
         "Failed to get memory allocator for TF PluggableDevice ",
@@ -277,7 +277,7 @@ Status PluggableDeviceFactory::CreatePluggableDevice(
   return absl::OkStatus();
 }
 
-Status PluggableDeviceFactory::GetDeviceLocalities(
+absl::Status PluggableDeviceFactory::GetDeviceLocalities(
     int num_tf_devices, std::vector<DeviceLocality>* device_localities) {
   for (int i = 0; i < num_tf_devices; ++i) {
     TfDeviceId tf_device_id(i);

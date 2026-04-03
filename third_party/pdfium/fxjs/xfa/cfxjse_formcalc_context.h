@@ -13,6 +13,7 @@
 #include <optional>
 
 #include "core/fxcrt/bytestring.h"
+#include "core/fxcrt/unowned_ptr.h"
 #include "core/fxcrt/widetext_buffer.h"
 #include "fxjs/xfa/fxjse.h"
 #include "v8/include/cppgc/persistent.h"
@@ -30,7 +31,7 @@ class CFXJSE_FormCalcContext final : public CFXJSE_HostObject {
  public:
   CFXJSE_FormCalcContext(v8::Isolate* pIsolate,
                          CFXJSE_Context* pScriptContext,
-                         CXFA_Document* pDoc);
+                         CXFA_Document* doc);
   ~CFXJSE_FormCalcContext() override;
 
   // CFXJSE_HostObject:
@@ -271,8 +272,8 @@ class CFXJSE_FormCalcContext final : public CFXJSE_HostObject {
                                                  WideStringView wsFormcalc);
 
   v8::Local<v8::Value> GlobalPropertyGetter();
-  v8::Isolate* GetIsolate() const { return m_pIsolate; }
-  CXFA_Document* GetDocument() const { return m_pDocument.Get(); }
+  v8::Isolate* GetIsolate() const { return isolate_; }
+  CXFA_Document* GetDocument() const { return document_.Get(); }
 
  private:
   friend class FormCalcContextTest_GenerateSomExpression_Test;
@@ -280,8 +281,8 @@ class CFXJSE_FormCalcContext final : public CFXJSE_HostObject {
   friend class FormCalcContextTest_IsIsoTimeFormat_Test;
 
   static ByteString GenerateSomExpression(ByteStringView bsName,
-                                          int32_t iIndexFlags,
-                                          int32_t iIndexValue,
+                                          int32_t index_flags,
+                                          int32_t index_value,
                                           bool bIsStar);
 
   static void DotAccessorCommon(CFXJSE_HostObject* pThis,
@@ -325,9 +326,9 @@ class CFXJSE_FormCalcContext final : public CFXJSE_HostObject {
   void ThrowParamCountMismatchException(ByteStringView method) const;
   void ThrowException(ByteStringView str) const;
 
-  UnownedPtr<v8::Isolate> const m_pIsolate;
-  v8::Global<v8::Value> m_Value;
-  cppgc::WeakPersistent<CXFA_Document> const m_pDocument;
+  UnownedPtr<v8::Isolate> const isolate_;
+  v8::Global<v8::Value> value_;
+  cppgc::WeakPersistent<CXFA_Document> const document_;
 };
 
 #endif  // FXJS_XFA_CFXJSE_FORMCALC_CONTEXT_H_

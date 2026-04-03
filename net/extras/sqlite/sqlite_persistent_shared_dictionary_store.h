@@ -155,8 +155,15 @@ class COMPONENT_EXPORT(NET_EXTRAS) SQLitePersistentSharedDictionaryStore {
   void DeleteDictionariesByDiskCacheKeyTokens(
       std::set<base::UnguessableToken> disk_cache_key_tokens,
       base::OnceCallback<void(Error)> callback);
+  void UpdateDictionaryLastFetchTime(const int64_t primary_key_in_database,
+                                     const base::Time last_fetch_time,
+                                     base::OnceCallback<void(Error)> callback);
   void UpdateDictionaryLastUsedTime(int64_t primary_key_in_database,
                                     base::Time last_used_time);
+  void UpdateDictionaryResponseTimeAndLastFetchTime(
+      const int64_t primary_key_in_database,
+      const base::Time new_time,
+      base::OnceCallback<void(Error)> callback);
 
   base::WeakPtr<SQLitePersistentSharedDictionaryStore> GetWeakPtr();
 
@@ -173,4 +180,4 @@ class COMPONENT_EXPORT(NET_EXTRAS) SQLitePersistentSharedDictionaryStore {
 
 }  // namespace net
 
-#endif  // NET_EXTRAS_SQLITE_SQLITE_PERSISTENT_REPORTING_AND_NEL_STORE_H_
+#endif  // NET_EXTRAS_SQLITE_SQLITE_PERSISTENT_SHARED_DICTIONARY_STORE_H_

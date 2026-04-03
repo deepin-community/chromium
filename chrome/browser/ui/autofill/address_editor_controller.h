@@ -6,12 +6,13 @@
 #define CHROME_BROWSER_UI_AUTOFILL_ADDRESS_EDITOR_CONTROLLER_H_
 
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "base/callback_list.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
-#include "components/autofill/core/browser/data_model/autofill_profile.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/ui/country_combobox_model.h"
 
@@ -60,7 +61,13 @@ class AddressEditorController {
 
   bool is_validatable() const { return is_validatable_; }
 
-  bool is_valid() const { return is_valid_; }
+  // Returns `std::nullopt` if the form was not validated (`ValidateAllFields()`
+  // was not triggered on the view and it didn't call `SetIsValid()` on its
+  // turn) yet, its validity state is unknown. Otherwise returns the state
+  // according to the validation performed in the view.
+  // Note that the view doesn't perform validation if the `is_validatable()` is
+  // `false`, in which case this always returns `std::nullopt`.
+  std::optional<bool> is_valid() const { return is_valid_; }
 
   void SetIsValid(bool is_valid);
 
@@ -78,16 +85,9 @@ class AddressEditorController {
   [[nodiscard]] base::CallbackListSubscription AddIsValidChangedCallback(
       OnIsValidChangeCallbackList::CallbackType callback);
 
-  bool IsValid(const EditorField& field, const std::u16string& value);
+  bool IsValid(const EditorField& field, std::u16string_view value);
 
  private:
-  // Returns whether unsupported countries should be filtered out, which is
-  // true iff the profile is an account address profile.
-  bool should_filter_out_unsupported_countries() const {
-    // Validation is turned on only for account address profiles.
-    return is_validatable_;
-  }
-
   AutofillProfile profile_to_edit_;
 
   const raw_ref<PersonalDataManager> pdm_;
@@ -107,7 +107,7 @@ class AddressEditorController {
   // Whether the editor should perform validation.
   const bool is_validatable_ = false;
 
-  bool is_valid_ = true;
+  std::optional<bool> is_valid_;
 
   // List of external callbacks subscribed to validity updates.
   OnIsValidChangeCallbackList on_is_valid_change_callbacks_;

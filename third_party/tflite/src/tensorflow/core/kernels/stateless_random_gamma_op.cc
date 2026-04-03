@@ -59,11 +59,11 @@ namespace functor {
 
 template <typename T>
 struct StatelessRandomGammaFunctor<CPUDevice, T> {
-  static Status Fill(OpKernelContext* ctx, const T* alpha_flat,
-                     int64_t num_samples, int64_t num_alphas,
-                     int64_t samples_per_alpha, const uint64* key,
-                     const uint64* counter, random::PhiloxRandom random,
-                     T* samples_flat) {
+  static absl::Status Fill(OpKernelContext* ctx, const T* alpha_flat,
+                           int64_t num_samples, int64_t num_alphas,
+                           int64_t samples_per_alpha, const uint64_t* key,
+                           const uint64_t* counter, random::PhiloxRandom random,
+                           T* samples_flat) {
     if (key != nullptr && counter != nullptr) {
       random = GetPhiloxRandomFromCounterKeyMem(counter, key);
     }
@@ -192,7 +192,7 @@ struct StatelessRandomGammaFunctor<CPUDevice, T> {
     auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
     Shard(worker_threads.num_threads, worker_threads.workers, num_samples,
           kElementCost, DoWork);
-    return OkStatus();
+    return absl::OkStatus();
   }
 };
 
@@ -200,7 +200,7 @@ struct StatelessRandomGammaFunctor<CPUDevice, T> {
 
 namespace {
 
-StatusOr<std::tuple<int64_t, int64_t, int64_t> > GetParams(
+absl::StatusOr<std::tuple<int64_t, int64_t, int64_t>> GetParams(
     const Tensor& alpha_t, const TensorShape& samples_shape) {
   if (!TensorShapeUtils::EndsWith(samples_shape, alpha_t.shape())) {
     return errors::InvalidArgument(
@@ -272,8 +272,8 @@ class StatelessRandomGammaOpWithKeyCounter
     auto samples_flat = output->flat<T>().data();
 
     if (alg == RNG_ALG_PHILOX) {
-      auto key_data = key.flat<uint64>().data();
-      auto counter_data = counter.flat<uint64>().data();
+      auto key_data = key.flat<uint64_t>().data();
+      auto counter_data = counter.flat<uint64_t>().data();
       OP_REQUIRES_OK(ctx, functor::StatelessRandomGammaFunctor<Device, T>::Fill(
                               ctx, alpha_flat, num_samples, num_alphas,
                               samples_per_alpha, key_data, counter_data,

@@ -8,17 +8,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
+#include <optional>
 #include <vector>
 
-#include <optional>
 #include "base/atomic_sequence_num.h"
 #include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
+#include "cc/paint/tone_map_util.h"
 #include "cc/paint/transfer_cache_entry.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/core/SkYUVAInfo.h"
-#include "third_party/skia/include/gpu/GrTypes.h"
+#include "third_party/skia/include/gpu/ganesh/GrTypes.h"
 #include "third_party/skia/include/private/SkGainmapInfo.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/hdr_metadata.h"
@@ -60,7 +62,7 @@ class CC_PAINT_EXPORT ClientImageTransferCacheEntry final
     explicit Image(const SkPixmap* pixmap);
 
     // Constructor for YUVA images.
-    Image(const SkPixmap yuva_pixmaps[],
+    Image(base::span<const SkPixmap> yuva_pixmaps,
           const SkYUVAInfo& yuva_info,
           const SkColorSpace* color_space);
 
@@ -82,7 +84,7 @@ class CC_PAINT_EXPORT ClientImageTransferCacheEntry final
   ClientImageTransferCacheEntry(
       const Image& image,
       bool needs_mips,
-      const std::optional<gfx::HDRMetadata>& hdr_metadata = std::nullopt,
+      const gfx::HDRMetadata& hdr_metadata,
       sk_sp<SkColorSpace> target_color_space = nullptr);
   ClientImageTransferCacheEntry(const Image& image,
                                 const Image& gainmap_image,
@@ -119,7 +121,7 @@ class CC_PAINT_EXPORT ClientImageTransferCacheEntry final
   std::optional<SkGainmapInfo> gainmap_info_;
 
   // The HDR metadata for non-gainmap HDR metadata.
-  std::optional<gfx::HDRMetadata> hdr_metadata_;
+  gfx::HDRMetadata hdr_metadata_;
 };
 
 class CC_PAINT_EXPORT ServiceImageTransferCacheEntry final
@@ -132,27 +134,6 @@ class CC_PAINT_EXPORT ServiceImageTransferCacheEntry final
   ServiceImageTransferCacheEntry& operator=(
       ServiceImageTransferCacheEntry&& other);
 
-  // Populates this entry using the result of a hardware decode. The assumption
-  // is that |plane_images| are backed by textures that are in turn backed by a
-  // buffer (dmabuf in Chrome OS) containing the planes of the decoded image.
-  // |plane_images_format| indicates the planar layout of |plane_images|.
-  // |buffer_byte_size| is the size of the buffer. We assume the following:
-  //
-  // - The backing textures don't have mipmaps. We will generate the mipmaps if
-  //   |needs_mips| is true.
-  // - The conversion from YUV to RGB will be performed according to
-  //   |yuv_color_space|.
-  // - The colorspace of the resulting RGB image is sRGB.
-  //
-  // Returns true if the entry can be built, false otherwise.
-  bool BuildFromHardwareDecodedImage(GrDirectContext* gr_context,
-                                     std::vector<sk_sp<SkImage>> plane_images,
-                                     SkYUVAInfo::PlaneConfig plane_config,
-                                     SkYUVAInfo::Subsampling subsampling,
-                                     SkYUVColorSpace yuv_color_space,
-                                     size_t buffer_byte_size,
-                                     bool needs_mips);
-
   // ServiceTransferCacheEntry implementation:
   size_t CachedSize() const final;
   bool Deserialize(GrDirectContext* gr_context,
@@ -161,13 +142,9 @@ class CC_PAINT_EXPORT ServiceImageTransferCacheEntry final
 
   const sk_sp<SkImage>& image() const { return image_; }
 
-  // Return true if GetImageWithToneMapApplied() should be used instead of
-  // image().
-  bool NeedsToneMapApplied() const { return has_gainmap_ || use_tone_curve_; }
-
-  // Return this image, tone mapped to match the specified HDR headroom.
-  sk_sp<SkImage> GetImageWithToneMapApplied(float hdr_headroom,
-                                            bool needs_mips) const;
+  bool HasGainmap() const { return gainmap_image_ != nullptr; }
+  const sk_sp<SkImage>& gainmap_image() const { return gainmap_image_; }
+  const SkGainmapInfo& gainmap_info() const { return gainmap_info_; }
 
   // Ensures the cached image has mips.
   void EnsureMips();
@@ -185,19 +162,21 @@ class CC_PAINT_EXPORT ServiceImageTransferCacheEntry final
   size_t num_planes() const { return plane_images_.size(); }
   bool fits_on_gpu() const;
 
+  const gfx::HDRMetadata& hdr_metadata() const { return hdr_metadata_; }
+
  private:
-  raw_ptr<GrDirectContext, DanglingUntriaged> gr_context_ = nullptr;
+  raw_ptr<GrDirectContext> gr_context_ = nullptr;
   raw_ptr<skgpu::graphite::Recorder> graphite_recorder_ = nullptr;
   sk_sp<SkImage> image_;
 
-  // HDR tonemapping may be done with a gainmap (for local tone mapping).
+  // HDR local tone mapping may be done with a gainmap.
   bool has_gainmap_ = false;
   sk_sp<SkImage> gainmap_image_;
   SkGainmapInfo gainmap_info_;
 
-  // HDR tonemapping may be done with a tone curve (for global tone mapping).
-  bool use_tone_curve_ = false;
-  std::optional<gfx::HDRMetadata> tone_curve_hdr_metadata_;
+  // HDR metadata used by global tone map application and (potentially but not
+  // yet) gain map application.
+  gfx::HDRMetadata hdr_metadata_;
 
   // The value of `size_` is computed during deserialization and never updated
   // (even if the size of the image changes due to mipmaps being requested).

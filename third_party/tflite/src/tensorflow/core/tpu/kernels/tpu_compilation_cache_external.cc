@@ -35,7 +35,7 @@ namespace tpu {
 namespace {
 
 int64_t get_uid() {
-  uint64 unsigned_rand = random::New64() & INT64_MAX;
+  uint64_t unsigned_rand = random::New64() & INT64_MAX;
   return static_cast<int64_t>(unsigned_rand);
 }
 
@@ -67,7 +67,8 @@ std::unique_ptr<CompiledSubgraph> CreateAndInitializeCompiledSubgraph(
 
 CompiledSubgraph* TpuCompilationCacheExternal::InitializeEntry(
     const std::string& key,
-    const std::function<Status(TpuProgramGroupInterface*)>& initialize_program,
+    const std::function<absl::Status(TpuProgramGroupInterface*)>&
+        initialize_program,
     const TpuCompilationCacheKey& subgraph_key) {
   CompiledSubgraph* main_entry = new CompiledSubgraph();
   main_entry->parent = this;
@@ -90,18 +91,18 @@ CompiledSubgraph* TpuCompilationCacheExternal::InitializeEntry(
 
   // Initialize the programs outside the lock so that other cache operations
   // can proceed during the (potentially lengthy) initialization.
-  Status initialization_status;
+  absl::Status initialization_status;
 
   TpuProgramGroup tpu_program_group;
   {
-    mu_.Unlock();
+    mu_.unlock();
     {
-      profiler::TraceMe compile_programs_traceme(
+      tsl::profiler::TraceMe compile_programs_traceme(
           "TPU compilation cache compile",
           /*level=*/2);
       initialization_status = initialize_program(&tpu_program_group);
     }
-    mu_.Lock();
+    mu_.lock();
   }
 
   main_entry->initialization_status = initialization_status;

@@ -16,6 +16,40 @@ namespace rx
 class CLContextVk;
 class CLDeviceVk;
 class CLPlatformVk;
+class CLProgramVk;
+
+// Specialization constant Types
+enum class SpecConstantType : uint32_t
+{
+    WorkgroupSizeX,
+    WorkgroupSizeY,
+    WorkgroupSizeZ,
+    WorkDimension,
+    GlobalOffsetX,
+    GlobalOffsetY,
+    GlobalOffsetZ,
+
+    InvalidEnum,
+    EnumCount = InvalidEnum
+};
+
+enum class ImageBufferCopyDirection
+{
+    ToImage,
+    ToBuffer
+};
+
+enum class ImageCopyWith
+{
+    Image,
+    Buffer
+};
+
+enum class StagingBufferCopyDirection
+{
+    ToHost,
+    ToStagingBuffer
+};
 
 }  // namespace rx
 

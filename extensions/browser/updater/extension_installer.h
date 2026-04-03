@@ -6,6 +6,7 @@
 #define EXTENSIONS_BROWSER_UPDATER_EXTENSION_INSTALLER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/files/file_path.h"
@@ -33,11 +34,9 @@ class ExtensionInstaller : public update_client::CrxInstaller {
       bool install_immediately,
       UpdateClientCallback update_client_callback)>;
 
-  // This method takes the id and root directory for an extension we're doing
-  // an update check for, as well as a callback to call if we get a new version
-  // of it to install.
+  // This method takes the id for an extension we're doing an update check for,
+  // as well as a callback to call if we get a new version of it to install.
   ExtensionInstaller(ExtensionId extension_id,
-                     const base::FilePath& extension_root,
                      bool install_immediately,
                      ExtensionInstallerCallback extension_installer_callback);
 
@@ -45,8 +44,6 @@ class ExtensionInstaller : public update_client::CrxInstaller {
   ExtensionInstaller& operator=(const ExtensionInstaller&) = delete;
 
   // update_client::CrxInstaller::
-  void OnUpdateError(int error) override;
-
   // This function is executed by the component update client, which runs on a
   // blocking thread with background priority.
   // |update_client_callback| is expected to be called on a UI thread.
@@ -55,8 +52,8 @@ class ExtensionInstaller : public update_client::CrxInstaller {
                std::unique_ptr<InstallParams> install_params,
                ProgressCallback progress_callback,
                UpdateClientCallback update_client_callback) override;
-  bool GetInstalledFile(const std::string& file,
-                        base::FilePath* installed_file) override;
+  std::optional<base::FilePath> GetInstalledFile(
+      const std::string& file) override;
   bool Uninstall() override;
 
   // For unit tests.
@@ -67,7 +64,6 @@ class ExtensionInstaller : public update_client::CrxInstaller {
   ~ExtensionInstaller() override;
 
   ExtensionId extension_id_;
-  base::FilePath extension_root_;
   bool install_immediately_;
   ExtensionInstallerCallback extension_installer_callback_;
 };

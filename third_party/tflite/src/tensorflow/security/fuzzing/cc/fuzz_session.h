@@ -111,9 +111,9 @@ class FuzzSession {
   // Initializes the FuzzSession.  Not safe for multithreading.
   // Separate init function because the call to virtual BuildGraphDef
   // can't be put into the constructor.
-  Status InitIfNeeded() {
+  absl::Status InitIfNeeded() {
     if (initialized_) {
-      return OkStatus();
+      return absl::OkStatus();
     }
     initialized_ = true;
 
@@ -126,7 +126,7 @@ class FuzzSession {
     GraphDef graph_def;
     TF_CHECK_OK(root.ToGraphDef(&graph_def));
 
-    Status status = session_->Create(graph_def);
+    absl::Status status = session_->Create(graph_def);
     if (!status.ok()) {
       // This is FATAL, because this code is designed to fuzz an op
       // within a session.  Failure to create the session means we
@@ -142,20 +142,20 @@ class FuzzSession {
   // any returned output.
   // Note: We are ignoring Status from Run here since fuzzers don't need to
   // check it (as that will slow them down and printing/logging is useless).
-  void RunInputs(const std::vector<std::pair<string, Tensor> >& inputs) {
+  void RunInputs(const std::vector<std::pair<std::string, Tensor>>& inputs) {
     RunInputsWithStatus(inputs).IgnoreError();
   }
 
   // Same as RunInputs but don't ignore status
-  Status RunInputsWithStatus(
-      const std::vector<std::pair<string, Tensor> >& inputs) {
+  absl::Status RunInputsWithStatus(
+      const std::vector<std::pair<std::string, Tensor>>& inputs) {
     return session_->Run(inputs, {}, {"output"}, nullptr);
   }
 
   // Dispatches to FuzzImpl;  small amount of sugar to keep the code
   // of the per-op fuzzers tiny.
   void Fuzz(const T&... args) {
-    Status status = InitIfNeeded();
+    absl::Status status = InitIfNeeded();
     TF_CHECK_OK(status) << "Fuzzer graph initialization failed: "
                         << status.message();
     // No return value from fuzzing:  Success is defined as "did not

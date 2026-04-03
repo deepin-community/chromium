@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/webui/nearby_internals/nearby_internals_prefs_handler.h"
+
 #include "base/functional/bind.h"
 #include "chrome/browser/nearby_sharing/common/nearby_share_prefs.h"
 #include "chrome/browser/profiles/profile.h"
@@ -34,7 +35,7 @@ void NearbyInternalsPrefsHandler::OnJavascriptAllowed() {}
 void NearbyInternalsPrefsHandler::OnJavascriptDisallowed() {}
 
 void NearbyInternalsPrefsHandler::HandleClearNearbyPrefs(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   // Reset onboarding otherwise turning off Nearby also sets Fast Initiation
   // pref.
   pref_service_->SetBoolean(prefs::kNearbySharingOnboardingCompletePrefName,

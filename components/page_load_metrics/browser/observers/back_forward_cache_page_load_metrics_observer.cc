@@ -7,9 +7,10 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
+#include "components/page_load_metrics/browser/features.h"
+#include "components/page_load_metrics/browser/interaction_to_next_paint_calculator.h"
 #include "components/page_load_metrics/browser/observers/core/uma_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/page_load_metrics_util.h"
-#include "components/page_load_metrics/browser/responsiveness_metrics_normalization.h"
 #include "components/page_load_metrics/common/page_visit_final_status.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
@@ -31,11 +32,11 @@ const char kHistogramThirdRequestAnimationFrameAfterBackForwardCacheRestore[] =
     "PageLoad.PaintTiming.NavigationToFirstPaint.BFCachePolyfillThird";
 const char kHistogramFirstInputDelayAfterBackForwardCacheRestore[] =
     "PageLoad.InteractiveTiming.FirstInputDelay.AfterBackForwardCacheRestore";
-extern const char
+const char
     kHistogramCumulativeShiftScoreMainFrameAfterBackForwardCacheRestore[] =
         "PageLoad.LayoutInstability.CumulativeShiftScore.MainFrame."
         "AfterBackForwardCacheRestore";
-extern const char kHistogramCumulativeShiftScoreAfterBackForwardCacheRestore[] =
+const char kHistogramCumulativeShiftScoreAfterBackForwardCacheRestore[] =
     "PageLoad.LayoutInstability.CumulativeShiftScore."
     "AfterBackForwardCacheRestore";
 
@@ -52,27 +53,6 @@ const char
              "WorstUserInteractionLatency."
              "MaxEventDuration.AfterBackForwardCacheRestore";
 
-// Enables to emit zero values for some key metrics when back-forward cache is
-// used.
-//
-// With this flag disabled, no samples are emitted for regular VOLT metrics
-// after the page is restored from the back-forward cache. This means that we
-// will miss a lot of metrics for history navigations after we launch back-
-// forward cache. As metrics for history navigations tend to be better figures
-// than other navigations (e.g., due to network cache), the average of such
-// metrics values will become worse and might seem regression if we don't take
-// any actions.
-//
-// To mitigate this issue, we plan to emit 0 samples for such key metrics for
-// back-forward navigations. This is implemented behind this flag so far, and we
-// will enable this by default when we reach the conclusion how to adjust them.
-//
-// For cumulative layout shift scores, we use actual score values for back-
-// forward cache navigations instead of 0s.
-BASE_FEATURE(kBackForwardCacheEmitZeroSamplesForKeyMetrics,
-             "BackForwardCacheEmitZeroSamplesForKeyMetrics",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
 }  // namespace internal
 
 BackForwardCachePageLoadMetricsObserver::
@@ -80,7 +60,7 @@ BackForwardCachePageLoadMetricsObserver::
 
 BackForwardCachePageLoadMetricsObserver::
     ~BackForwardCachePageLoadMetricsObserver() {
-  // TODO(crbug.com/1265307): Revert to the default destructor when we've
+  // TODO(crbug.com/40203717): Revert to the default destructor when we've
   // figured out why sometimes page end metrics are not logged.
   if (back_forward_cache_navigation_ids_.size() > 0) {
     DCHECK(logged_page_end_metrics_);
@@ -100,7 +80,7 @@ page_load_metrics::PageLoadMetricsObserver::ObservePolicy
 BackForwardCachePageLoadMetricsObserver::OnFencedFramesStart(
     content::NavigationHandle* navigation_handle,
     const GURL& currently_committed_url) {
-  // TODO(https://crbug.com/1251387): This must be updated when FencedFrames
+  // TODO(crbug.com/40198346): This must be updated when FencedFrames
   // supports back/forward cache.
   return STOP_OBSERVING;
 }
@@ -186,8 +166,9 @@ void BackForwardCachePageLoadMetricsObserver::
     OnFirstPaintAfterBackForwardCacheRestoreInPage(
         const page_load_metrics::mojom::BackForwardCacheTiming& timing,
         size_t index) {
-  if (index >= back_forward_cache_navigation_ids_.size())
+  if (index >= back_forward_cache_navigation_ids_.size()) {
     return;
+  }
   auto first_paint = timing.first_paint_after_back_forward_cache_restore;
   DCHECK(!first_paint.is_zero());
   if (page_load_metrics::
@@ -206,7 +187,8 @@ void BackForwardCachePageLoadMetricsObserver::
     builder.Record(ukm::UkmRecorder::Get());
 
     if (base::FeatureList::IsEnabled(
-            internal::kBackForwardCacheEmitZeroSamplesForKeyMetrics)) {
+            page_load_metrics::features::
+                kBackForwardCacheEmitZeroSamplesForKeyMetrics)) {
       PAGE_LOAD_HISTOGRAM(internal::kHistogramFirstPaint, base::TimeDelta{});
       PAGE_LOAD_HISTOGRAM(internal::kHistogramFirstContentfulPaint,
                           base::TimeDelta{});
@@ -220,8 +202,9 @@ void BackForwardCachePageLoadMetricsObserver::
     OnRequestAnimationFramesAfterBackForwardCacheRestoreInPage(
         const page_load_metrics::mojom::BackForwardCacheTiming& timing,
         size_t index) {
-  if (index >= back_forward_cache_navigation_ids_.size())
+  if (index >= back_forward_cache_navigation_ids_.size()) {
     return;
+  }
   auto request_animation_frames =
       timing.request_animation_frames_after_back_forward_cache_restore;
   DCHECK_EQ(request_animation_frames.size(), 3u);
@@ -256,8 +239,9 @@ void BackForwardCachePageLoadMetricsObserver::
     OnFirstInputAfterBackForwardCacheRestoreInPage(
         const page_load_metrics::mojom::BackForwardCacheTiming& timing,
         size_t index) {
-  if (index >= back_forward_cache_navigation_ids_.size())
+  if (index >= back_forward_cache_navigation_ids_.size()) {
     return;
+  }
   auto first_input_delay =
       timing.first_input_delay_after_back_forward_cache_restore;
   DCHECK(first_input_delay.has_value());
@@ -277,7 +261,8 @@ void BackForwardCachePageLoadMetricsObserver::
     builder.Record(ukm::UkmRecorder::Get());
 
     if (base::FeatureList::IsEnabled(
-            internal::kBackForwardCacheEmitZeroSamplesForKeyMetrics)) {
+            page_load_metrics::features::
+                kBackForwardCacheEmitZeroSamplesForKeyMetrics)) {
       PAGE_LOAD_HISTOGRAM(internal::kHistogramFirstInputDelay,
                           base::TimeDelta{});
     }
@@ -287,8 +272,9 @@ void BackForwardCachePageLoadMetricsObserver::
 page_load_metrics::PageLoadMetricsObserver::ObservePolicy
 BackForwardCachePageLoadMetricsObserver::FlushMetricsOnAppEnterBackground(
     const page_load_metrics::mojom::PageLoadTiming& timing) {
-  if (!in_back_forward_cache_)
+  if (!in_back_forward_cache_) {
     RecordMetricsOnPageVisitEnd(timing, /*app_entering_background=*/true);
+  }
   page_metrics_logged_due_to_backgrounding_ = true;
   return CONTINUE_OBSERVING;
 }
@@ -298,16 +284,18 @@ void BackForwardCachePageLoadMetricsObserver::OnComplete(
   // If the page is in the back-forward cache and OnComplete is called, the page
   // is being evicted from the cache. Do not record metrics here as we have
   // already recorded them in OnEnterBackForwardCache.
-  if (in_back_forward_cache_)
+  if (in_back_forward_cache_) {
     return;
+  }
   RecordMetricsOnPageVisitEnd(timing, /*app_entering_background=*/false);
 }
 
 void BackForwardCachePageLoadMetricsObserver::RecordMetricsOnPageVisitEnd(
     const page_load_metrics::mojom::PageLoadTiming& timing,
     bool app_entering_background) {
-  if (page_metrics_logged_due_to_backgrounding_)
+  if (page_metrics_logged_due_to_backgrounding_) {
     return;
+  }
   MaybeRecordLayoutShiftScoreAfterBackForwardCacheRestore(timing);
   MaybeRecordPageEndAfterBackForwardCacheRestore(app_entering_background);
   MaybeRecordForegroundDurationAfterBackForwardCacheRestore(
@@ -332,14 +320,14 @@ void BackForwardCachePageLoadMetricsObserver::RecordMetricsOnPageVisitEnd(
 
 void BackForwardCachePageLoadMetricsObserver::
     MaybeRecordNormalizedResponsivenessMetrics() {
-  if (!has_ever_entered_back_forward_cache_)
+  if (!has_ever_entered_back_forward_cache_) {
     return;
-  // Normalized Responsiveness Metrics.
-  const page_load_metrics::ResponsivenessMetricsNormalization&
-      responsiveness_metrics_normalization =
-          GetDelegate().GetResponsivenessMetricsNormalization();
+  }
+  // Interaction to Next Paint (INP) Metrics.
+  const page_load_metrics::InteractionToNextPaintCalculator& inp_calculator =
+      GetDelegate().GetInteractionToNextPaintCalculator();
 
-  if (!responsiveness_metrics_normalization.num_user_interactions()) {
+  if (!inp_calculator.num_user_interactions()) {
     return;
   }
 
@@ -349,27 +337,21 @@ void BackForwardCachePageLoadMetricsObserver::
       GetLastUkmSourceIdForBackForwardCacheRestore());
   builder
       .SetWorstUserInteractionLatencyAfterBackForwardCacheRestore_MaxEventDuration2(
-          responsiveness_metrics_normalization.worst_latency()
-              .value()
-              .interaction_latency.InMilliseconds());
+          inp_calculator.worst_latency().value().duration.InMilliseconds());
   UmaHistogramCustomTimes(
       internal::
           kWorstUserInteractionLatency_MaxEventDuration_AfterBackForwardCacheRestore,
-      responsiveness_metrics_normalization.worst_latency()
-          .value()
-          .interaction_latency,
-      base::Milliseconds(1), base::Seconds(60), 50);
+      inp_calculator.worst_latency().value().duration, base::Milliseconds(1),
+      base::Seconds(60), 50);
 
   base::TimeDelta high_percentile2_max_event_duration =
-      responsiveness_metrics_normalization.ApproximateHighPercentile()
-          .value()
-          .interaction_latency;
+      inp_calculator.ApproximateHighPercentile().value().duration;
   builder
       .SetUserInteractionLatencyAfterBackForwardCacheRestore_HighPercentile2_MaxEventDuration(
           high_percentile2_max_event_duration.InMilliseconds());
   builder.SetNumInteractionsAfterBackForwardCacheRestore(
       ukm::GetExponentialBucketMinForCounts1000(
-          responsiveness_metrics_normalization.num_user_interactions()));
+          inp_calculator.num_user_interactions()));
 
   UmaHistogramCustomTimes(
       internal::
@@ -378,7 +360,7 @@ void BackForwardCachePageLoadMetricsObserver::
       base::Seconds(60), 50);
   base::UmaHistogramCounts1000(
       internal::kNumInteractions_AfterBackForwardCacheRestore,
-      responsiveness_metrics_normalization.num_user_interactions());
+      inp_calculator.num_user_interactions());
 
   builder.Record(ukm::UkmRecorder::Get());
 }
@@ -424,11 +406,6 @@ void BackForwardCachePageLoadMetricsObserver::
             page_load_metrics::LayoutShiftUkmValue(
                 normalized_cls_data
                     .session_windows_gap1000ms_max5000ms_max_cls));
-    base::UmaHistogramCounts100(
-        "PageLoad.LayoutInstability.MaxCumulativeShiftScore."
-        "AfterBackForwardCacheRestore.SessionWindow.Gap1000ms.Max5000ms",
-        page_load_metrics::LayoutShiftUmaValue(
-            normalized_cls_data.session_windows_gap1000ms_max5000ms_max_cls));
     base::UmaHistogramCustomCounts(
         "PageLoad.LayoutInstability.MaxCumulativeShiftScore."
         "AfterBackForwardCacheRestore.SessionWindow.Gap1000ms.Max5000ms2",
@@ -440,10 +417,8 @@ void BackForwardCachePageLoadMetricsObserver::
   builder.Record(ukm::UkmRecorder::Get());
 
   if (base::FeatureList::IsEnabled(
-          internal::kBackForwardCacheEmitZeroSamplesForKeyMetrics)) {
-    base::UmaHistogramCounts100(
-        "PageLoad.LayoutInstability.CumulativeShiftScore.MainFrame",
-        page_load_metrics::LayoutShiftUmaValue(layout_main_frame_shift_score));
+          page_load_metrics::features::
+              kBackForwardCacheEmitZeroSamplesForKeyMetrics)) {
     base::UmaHistogramCounts100(
         "PageLoad.LayoutInstability.CumulativeShiftScore",
         page_load_metrics::LayoutShiftUmaValue(layout_shift_score));
@@ -453,8 +428,9 @@ void BackForwardCachePageLoadMetricsObserver::
 void BackForwardCachePageLoadMetricsObserver::
     MaybeRecordPageEndAfterBackForwardCacheRestore(
         bool app_entering_background) {
-  if (!has_ever_entered_back_forward_cache_)
+  if (!has_ever_entered_back_forward_cache_) {
     return;
+  }
   auto page_end_reason = GetDelegate().GetPageEndReason();
   if (page_end_reason == page_load_metrics::PageEndReason::END_NONE &&
       app_entering_background) {
@@ -485,8 +461,9 @@ void BackForwardCachePageLoadMetricsObserver::
 
     // If the BFCache restoration happened while not in the foreground, don't
     // record a foreground duration.
-    if (!back_forward_state.was_in_foreground)
+    if (!back_forward_state.was_in_foreground) {
       return;
+    }
 
     std::optional<base::TimeDelta> time_to_page_end =
         GetDelegate().GetPageEndReason() == page_load_metrics::END_NONE

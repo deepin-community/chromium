@@ -8,9 +8,6 @@
 #include <string>
 #include <utility>
 
-#include "ash/components/arc/app/arc_playstore_search_request_state.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
@@ -20,6 +17,9 @@
 #include "chrome/browser/ash/app_list/search/types.h"
 #include "chrome/browser/ash/extensions/gfx_utils.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/experiences/arc/app/arc_playstore_search_request_state.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 
 namespace {
 constexpr int kHistogramBuckets = 13;
@@ -43,7 +43,7 @@ bool CanSkipSearchResult(content::BrowserContext* context,
     return true;
   }
 
-  // TODO(crbug/763562): Remove this once we have a fix in Phonesky.
+  // TODO(crbug.com/41343677): Remove this once we have a fix in Phonesky.
   // Don't show installed Android apps.
   const ArcAppListPrefs* arc_prefs = ArcAppListPrefs::Get(context);
   return arc_prefs && arc_prefs->GetPackage(result.package_name.value());

@@ -5,14 +5,14 @@
 #ifndef CC_TEST_PAINT_OP_MATCHERS_H_
 #define CC_TEST_PAINT_OP_MATCHERS_H_
 
+#include <optional>
 #include <ostream>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <utility>
 
-#include <optional>
 #include "base/memory/ref_counted.h"
-#include "base/strings/stringprintf.h"
 #include "cc/paint/paint_op_buffer.h"
 #include "cc/test/paint_op_helper.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -32,6 +32,7 @@ class PaintOpEq {
   using is_gtest_matcher = void;
 
   template <typename... Args>
+    requires(std::is_constructible_v<OpT, Args...>)
   explicit PaintOpEq(Args&&... args)
       : expected_op_(base::MakeRefCounted<base::RefCountedData<OpT>>(
             std::in_place,
@@ -61,30 +62,45 @@ class PaintOpEq {
   scoped_refptr<base::RefCountedData<OpT>> expected_op_;
 };
 
-// Matcher testing whether that a PaintOp is of the specified type, irrespective
-// of it's specific value.
+// Matcher testing whether a PaintOp is of one or two specific types. The second
+// template parameter is intended for lite-ops. For example, a line may be
+// represented as either a DrawLineOp or DrawLineLiteOp.
 //
 // Example use:
 //   PaintOpBuffer buffer = ...;
 //   EXPECT_THAT(buffer,
 //               ElementsAre(PaintOpIs<SaveOp>(), PaintOpIs<SetMatrixOp>()));
-template <typename OpT>
+template <typename OpT, typename OpU = OpT>
 class PaintOpIs {
  public:
   using is_gtest_matcher = void;
 
   bool MatchAndExplain(const PaintOp& op,
                        testing::MatchResultListener* listener) const {
-    if (op.GetType() != OpT::kType) {
+    if (op.GetType() != OpT::kType && op.GetType() != OpU::kType) {
       if (listener->IsInterested()) {
-        *listener->stream()
-            << "Unexpected PaintOp type. Expected: "
-            << PaintOpTypeToString(OpT::kType)
-            << ", Actual: " << PaintOpTypeToString(op.GetType());
+        if constexpr (std::is_same_v<OpT, OpU>) {
+          *listener->stream()
+              << "Unexpected PaintOp type. Expected: "
+              << PaintOpTypeToString(OpT::kType)
+              << ", Actual: " << PaintOpTypeToString(op.GetType());
+        } else {
+          *listener->stream()
+              << "Unexpected PaintOp type. Expected: "
+              << PaintOpTypeToString(OpT::kType) << " or "
+              << PaintOpTypeToString(OpU::kType)
+              << ", Actual: " << PaintOpTypeToString(op.GetType());
+        }
       }
       return false;
     }
-    if (!static_cast<const OpT&>(op).IsValid()) {
+    if (op.GetType() == OpT::kType && !static_cast<const OpT&>(op).IsValid()) {
+      if (listener->IsInterested()) {
+        *listener->stream() << "PaintOp is not valid";
+      }
+      return false;
+    }
+    if (op.GetType() == OpU::kType && !static_cast<const OpU&>(op).IsValid()) {
       if (listener->IsInterested()) {
         *listener->stream() << "PaintOp is not valid";
       }

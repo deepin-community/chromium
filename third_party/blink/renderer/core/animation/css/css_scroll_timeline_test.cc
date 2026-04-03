@@ -7,7 +7,6 @@
 #include "third_party/blink/renderer/core/css/properties/longhands.h"
 #include "third_party/blink/renderer/core/dom/id_target_observer.h"
 #include "third_party/blink/renderer/core/dom/id_target_observer_registry.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
@@ -23,18 +22,15 @@
 
 namespace blink {
 
-class CSSScrollTimelineTest : public PageTestBase,
-                              private ScopedScrollTimelineForTest {
+class CSSScrollTimelineTest : public PageTestBase {
  public:
-  CSSScrollTimelineTest() : ScopedScrollTimelineForTest(true) {}
-
   DocumentAnimations& GetDocumentAnimations() const {
     return GetDocument().GetDocumentAnimations();
   }
 
-  const HeapHashSet<WeakMember<ScrollSnapshotClient>>&
-  GetScrollSnapshotClientsForTesting() {
-    return GetFrame().GetScrollSnapshotClientsForTesting();
+  const HeapHashSet<WeakMember<PostLayoutSnapshotClient>>&
+  GetPostLayoutSnapshotClientsForTesting() {
+    return GetFrame().GetPostLayoutSnapshotClientsForTesting();
   }
 };
 
@@ -72,7 +68,7 @@ TEST_F(CSSScrollTimelineTest, SharedTimelines) {
 
   Element* main = GetDocument().getElementById(AtomicString("main"));
   ASSERT_TRUE(main);
-  main->setInnerHTML(R"HTML(
+  main->SetInnerHTMLWithoutTrustedTypes(R"HTML(
     <style>
       #element1, #element2 {
         animation-name: anim1, anim2, anim3;
@@ -207,7 +203,7 @@ TEST_F(CSSScrollTimelineTest, ResizeObserverTriggeredTimelines) {
     <div id=main></div>
   )HTML");
 
-  ASSERT_TRUE(GetScrollSnapshotClientsForTesting().empty());
+  ASSERT_TRUE(GetPostLayoutSnapshotClientsForTesting().empty());
 
   Element* element = MakeGarbageCollected<HTMLDivElement>(GetDocument());
   element->setAttribute(blink::html_names::kIdAttr, AtomicString("element"));
@@ -227,266 +223,7 @@ TEST_F(CSSScrollTimelineTest, ResizeObserverTriggeredTimelines) {
   observer->observe(element);
 
   UpdateAllLifecyclePhasesForTest();
-  EXPECT_EQ(1u, GetScrollSnapshotClientsForTesting().size());
-}
-
-namespace {
-
-std::optional<ScrollTimeline::ScrollAxis> GetTimelineAxis(
-    const Animation& animation) {
-  if (auto* scroll_timeline =
-          DynamicTo<ScrollTimeline>(animation.TimelineInternal())) {
-    return scroll_timeline->GetAxis();
-  }
-  return std::nullopt;
-}
-
-}  // namespace
-
-TEST_F(CSSScrollTimelineTest, ViewTimelineHost) {
-  ScopedCSSTreeScopedTimelinesForTest scoped_feature(true);
-  GetDocument().documentElement()->setHTMLUnsafe(R"HTML(
-    <style>
-      @keyframes anim {
-        from { z-index: 100; }
-        to { z-index: 100; }
-      }
-      .target {
-        animation: anim 10s linear;
-        animation-timeline: --timeline;
-      }
-      .scroller > div {
-        view-timeline: --timeline x;
-      }
-    </style>
-    <div class=scroller>
-      <div>
-        <div class=target>
-          <template shadowrootmode=open>
-            <style>
-              :host {
-                view-timeline: --timeline y;
-              }
-            </style>
-          </template>
-        </div>
-      </div>
-    </div>
-  )HTML");
-  UpdateAllLifecyclePhasesForTest();
-  Element* target = GetDocument().QuerySelector(AtomicString(".target"));
-  ASSERT_TRUE(target);
-  HeapVector<Member<Animation>> animations = target->getAnimations();
-  ASSERT_EQ(1u, animations.size());
-  ASSERT_EQ(ScrollTimeline::ScrollAxis::kX, GetTimelineAxis(*animations[0]))
-      << "Outer animation can not see view timeline defined by :host";
-}
-
-TEST_F(CSSScrollTimelineTest, ViewTimelineSlotted) {
-  ScopedCSSTreeScopedTimelinesForTest scoped_feature(true);
-  GetDocument().documentElement()->setHTMLUnsafe(R"HTML(
-    <style>
-      @keyframes anim {
-        from { z-index: 100; }
-        to { z-index: 100; }
-      }
-      .target {
-        animation: anim 10s linear;
-        animation-timeline: --timeline;
-      }
-      .host {
-        view-timeline: --timeline x;
-      }
-    </style>
-    <div class=scroller>
-      <div class=host>
-        <template shadowrootmode=open>
-          <style>
-            ::slotted(.target) {
-              view-timeline: --timeline y;
-            }
-          </style>
-          <slot></slot>
-        </template>
-        <div class=target></div>
-      </div>
-    </div>
-  )HTML");
-  UpdateAllLifecyclePhasesForTest();
-  Element* target = GetDocument().QuerySelector(AtomicString(".target"));
-  ASSERT_TRUE(target);
-  HeapVector<Member<Animation>> animations = target->getAnimations();
-  ASSERT_EQ(1u, animations.size());
-  ASSERT_EQ(ScrollTimeline::ScrollAxis::kX, GetTimelineAxis(*animations[0]))
-      << "Outer animation can not see view timeline defined by ::slotted";
-}
-
-TEST_F(CSSScrollTimelineTest, ViewTimelinePart) {
-  ScopedCSSTreeScopedTimelinesForTest scoped_feature(true);
-  GetDocument().documentElement()->setHTMLUnsafe(R"HTML(
-    <style>
-      .host {
-        view-timeline: --timeline y;
-      }
-      .host::part(foo) {
-        view-timeline: --timeline x;
-      }
-    </style>
-    <div class=host>
-      <template shadowrootmode=open>
-        <style>
-            /* Not placing 'anim2' at document scope, due to
-               https://crbug.com/1334534 */
-            @keyframes anim2 {
-              from { z-index: 100; }
-              to { z-index: 100; }
-            }
-          .target {
-            animation: anim2 10s linear;
-            animation-timeline: --timeline;
-          }
-        </style>
-        <div part=foo>
-          <div class=target></div>
-        </div>
-      </template>
-    </div>
-  )HTML");
-  UpdateAllLifecyclePhasesForTest();
-  Element* host = GetDocument().QuerySelector(AtomicString(".host"));
-  ASSERT_TRUE(host);
-  ASSERT_TRUE(host->GetShadowRoot());
-  Element* target =
-      host->GetShadowRoot()->QuerySelector(AtomicString(".target"));
-  ASSERT_TRUE(target);
-  HeapVector<Member<Animation>> animations = target->getAnimations();
-  ASSERT_EQ(1u, animations.size());
-  ASSERT_EQ(ScrollTimeline::ScrollAxis::kX, GetTimelineAxis(*animations[0]))
-      << "Inner animation can see view timeline defined by ::part";
-}
-
-TEST_F(CSSScrollTimelineTest, ScrollTimelineHost) {
-  ScopedCSSTreeScopedTimelinesForTest scoped_feature(true);
-  GetDocument().documentElement()->setHTMLUnsafe(R"HTML(
-    <style>
-      @keyframes anim {
-        from { z-index: 100; }
-        to { z-index: 100; }
-      }
-      .target {
-        animation: anim 10s linear;
-        animation-timeline: --timeline;
-      }
-      main > .scroller {
-        scroll-timeline: --timeline x;
-      }
-    </style>
-    <main>
-      <div class=scroller>
-        <div class=scroller>
-          <template shadowrootmode=open>
-            <style>
-              :host {
-                scroll-timeline: --timeline y;
-              }
-            </style>
-            <slot></slot>
-          </template>
-          <div class=target></div>
-        </div>
-      </div>
-    </main>
-  )HTML");
-  UpdateAllLifecyclePhasesForTest();
-  Element* target = GetDocument().QuerySelector(AtomicString(".target"));
-  ASSERT_TRUE(target);
-  HeapVector<Member<Animation>> animations = target->getAnimations();
-  ASSERT_EQ(1u, animations.size());
-  ASSERT_EQ(ScrollTimeline::ScrollAxis::kX, GetTimelineAxis(*animations[0]))
-      << "Outer animation can not see scroll timeline defined by :host";
-}
-
-TEST_F(CSSScrollTimelineTest, ScrollTimelineSlotted) {
-  ScopedCSSTreeScopedTimelinesForTest scoped_feature(true);
-  GetDocument().documentElement()->setHTMLUnsafe(R"HTML(
-    <style>
-      @keyframes anim {
-        from { z-index: 100; }
-        to { z-index: 100; }
-      }
-      .target {
-        animation: anim 10s linear;
-        animation-timeline: --timeline;
-      }
-      .host {
-        scroll-timeline: --timeline x;
-      }
-    </style>
-    <div class=host>
-      <template shadowrootmode=open>
-        <style>
-          ::slotted(.scroller) {
-            scroll-timeline: --timeline y;
-          }
-        </style>
-        <slot></slot>
-      </template>
-      <div class=scroller>
-        <div class=target></div>
-      </div>
-    </div>
-  )HTML");
-  UpdateAllLifecyclePhasesForTest();
-  Element* target = GetDocument().QuerySelector(AtomicString(".target"));
-  ASSERT_TRUE(target);
-  HeapVector<Member<Animation>> animations = target->getAnimations();
-  ASSERT_EQ(1u, animations.size());
-  ASSERT_EQ(ScrollTimeline::ScrollAxis::kX, GetTimelineAxis(*animations[0]))
-      << "Outer animation can not see scroll timeline defined by ::slotted";
-}
-
-TEST_F(CSSScrollTimelineTest, ScrollTimelinePart) {
-  ScopedCSSTreeScopedTimelinesForTest scoped_feature(true);
-  GetDocument().documentElement()->setHTMLUnsafe(R"HTML(
-    <style>
-      .host {
-        scroll-timeline: --timeline y;
-      }
-      .host::part(foo) {
-        scroll-timeline: --timeline x;
-      }
-    </style>
-    <div class=host>
-      <template shadowrootmode=open>
-        <style>
-            /* Not placing 'anim2' at document scope, due to
-               https://crbug.com/1334534 */
-            @keyframes anim2 {
-              from { z-index: 100; background-color: green; }
-              to { z-index: 100; background-color: green; }
-            }
-          .target {
-            animation: anim2 10s linear;
-            animation-timeline: --timeline;
-          }
-        </style>
-        <div part=foo>
-          <div class=target></div>
-        </div>
-      </template>
-    </div>
-  )HTML");
-  UpdateAllLifecyclePhasesForTest();
-  Element* host = GetDocument().QuerySelector(AtomicString(".host"));
-  ASSERT_TRUE(host);
-  ASSERT_TRUE(host->GetShadowRoot());
-  Element* target =
-      host->GetShadowRoot()->QuerySelector(AtomicString(".target"));
-  ASSERT_TRUE(target);
-  HeapVector<Member<Animation>> animations = target->getAnimations();
-  ASSERT_EQ(1u, animations.size());
-  ASSERT_EQ(ScrollTimeline::ScrollAxis::kX, GetTimelineAxis(*animations[0]))
-      << "Inner animation can see scroll timeline defined by ::part";
+  EXPECT_EQ(1u, GetPostLayoutSnapshotClientsForTesting().size());
 }
 
 }  // namespace blink

@@ -6,7 +6,6 @@ from recipe_engine import post_process
 from recipe_engine import recipe_api
 
 
-PYTHON_VERSION_COMPATIBILITY = 'PY3'
 
 DEPS = [
   'recipe_engine/buildbucket',
@@ -18,7 +17,7 @@ DEPS = [
 
 
 def RunSteps(api):
-  src_cfg = api.gclient.make_config(CACHE_DIR=api.path['cache'].join('git'))
+  src_cfg = api.gclient.make_config(CACHE_DIR=api.path.cache_dir / 'git')
   soln = src_cfg.solutions.add()
   soln.name = 'src'
   soln.url = 'https://chromium.googlesource.com/chromium/src.git'

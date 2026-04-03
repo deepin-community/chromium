@@ -7,7 +7,6 @@
 
 #include <optional>
 
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/layout/block_break_token.h"
 #include "third_party/blink/renderer/core/layout/block_node.h"
@@ -16,8 +15,10 @@
 #include "third_party/blink/renderer/core/layout/floats_utils.h"
 #include "third_party/blink/renderer/core/layout/geometry/margin_strut.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_child_layout_context.h"
+#include "third_party/blink/renderer/core/layout/inline/inline_node.h"
 #include "third_party/blink/renderer/core/layout/layout_algorithm.h"
 #include "third_party/blink/renderer/core/layout/layout_result.h"
+#include "third_party/blink/renderer/core/layout/line_clamp_data.h"
 #include "third_party/blink/renderer/core/layout/unpositioned_float.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 
@@ -58,33 +59,131 @@ struct InflowChildData {
   bool is_pushed_by_floats = false;
 };
 
+struct BlockLineClampData {
+  STACK_ALLOCATED();
+
+ public:
+  explicit BlockLineClampData(LineClampData line_clamp_data)
+      : data(line_clamp_data) {
+    if (data.IsClampByLines()) {
+      initial_lines_until_clamp = data.lines_until_clamp;
+    }
+  }
+
+  std::optional<int> LinesUntilClamp(bool show_measured_lines = false) const {
+    return data.LinesUntilClamp(show_measured_lines);
+  }
+
+  bool IsPastClampPoint() const { return data.IsPastClampPoint(); }
+
+  bool ShouldHideForPaint() const { return data.ShouldHideForPaint(); }
+
+  bool ShouldRelayoutWithNoForcedTruncate() const {
+    if (!previous_inflow_position_when_clamped.has_value()) {
+      return false;
+    }
+    DCHECK(data.IsClampByLines());
+    return data.lines_until_clamp == 0;
+  }
+
+  void UpdateFromStyle(int lines_until_clamp, LayoutUnit clamp_bfc_offset);
+
+  // Returns false if we need to relayout with a different clamp BFC offset.
+  bool UpdateAfterLayout(const LayoutResult* layout_result,
+                         const PreviousInflowPosition& previous_inflow_position,
+                         const BoxFragmentBuilder& container_builder);
+
+  // If a child box's layout fails because it overflows, and we're propagating
+  // that failure up until the line-clamp container, this method returns the
+  // "clamp after layout object" value we should propagate upwards.
+  const LayoutObject* PropagateClampAfterLayoutObject(
+      const LayoutResult* layout_result) const {
+    // The child overflew after a lineless box; propagate that layout object.
+    if (layout_result->LineClampAfterLayoutObject()) {
+      return layout_result->LineClampAfterLayoutObject();
+    }
+    // If the child advanced the number of lines, then it clamped after a line.
+    if (layout_result->LinesUntilClamp() != data.lines_until_clamp) {
+      return nullptr;
+    }
+    // The child must have overflown at the beginning of the box. Since the
+    // beginning of a child box isn't a valid clamp point, we must clamp before
+    // it instead. If the previous child was a lineless box, we return that
+    // layout object.
+    return last_layout_object;
+  }
+
+  LineClampData data;
+
+  // Set to true when we relayout ignoring line clamp.
+  bool ignore_line_clamp = false;
+
+  // TODO(abotella): Make the following fields into a union.
+
+  // The initial number of lines until clamp from the start of this layout.
+  // Needed when relayouting due to factors other than line-clamp. Only relevant
+  // if data.state == kClampByLines.
+  int initial_lines_until_clamp = 0;
+
+  // Only relevant if data.state == kMeasureLinesUntilBfcOffset.
+  MarginStrut end_margin_strut;
+
+  // If set, the box was clamped, and this is the previous inflow position after
+  // the last line or box before clamp. Can only be set if
+  // data.state == kClampByLines.
+  std::optional<PreviousInflowPosition> previous_inflow_position_when_clamped;
+
+  // If set, any lines added by any further layout results are ignored when
+  // decreasing the number of lines until clamp. Used when we know that the
+  // remaining lines in this block box would not exist if we weren't
+  // ellipsizing. Can only be set if data.state == kClampByLines.
+  bool ignore_further_lines = false;
+
+  // The last LayoutObject encountered since the last line.
+  // Can only be set if data.state == kMeasureLinesUntilBfcOffset.
+  const LayoutObject* last_layout_object = nullptr;
+};
+
 // A class for general block layout (e.g. a <div> with no special style).
 // Lays out the children in sequence.
 class CORE_EXPORT BlockLayoutAlgorithm
     : public LayoutAlgorithm<BlockNode, BoxFragmentBuilder, BlockBreakToken> {
  public:
-  // Default constructor.
   explicit BlockLayoutAlgorithm(const LayoutAlgorithmParams& params);
 
-  ~BlockLayoutAlgorithm() override;
+  ~BlockLayoutAlgorithm();
 
+  void SetupRelayoutData(const BlockLayoutAlgorithm& previous, RelayoutType);
   void SetBoxType(PhysicalFragment::BoxType type);
 
-  MinMaxSizesResult ComputeMinMaxSizes(const MinMaxSizesFloatInput&) override;
-  const LayoutResult* Layout() override;
+  MinMaxSizesResult ComputeMinMaxSizes(const MinMaxSizesFloatInput&);
+  const LayoutResult* Layout();
 
  private:
   NOINLINE const LayoutResult* HandleNonsuccessfulLayoutResult(
       const LayoutResult*);
 
   const LayoutResult* LayoutInlineChild(const InlineNode& child);
-  NOINLINE const LayoutResult* LayoutWithSimpleInlineChildLayoutContext(
-      const InlineNode& child);
+  // A helper for the above.
+  // If `paragraph_scale` is std::nullopt, this lays out inline children
+  // without any fit-text handling. We can use its result to compute the
+  // paragraph scaling factor.
+  // Otherwise, it lays out inline children with `*paragraph_scale`.
+  NOINLINE const LayoutResult* LayoutInlineChild(
+      const InlineNode& node,
+      const ParagraphScale* paragraph_scale);
+  // Ditto, for OptimalInlineChildLayoutContext.
   template <wtf_size_t capacity>
   NOINLINE const LayoutResult* LayoutWithOptimalInlineChildLayoutContext(
-      const InlineNode& child);
+      const InlineNode& child,
+      const ParagraphScale* paragraph_scale);
 
   NOINLINE const LayoutResult* RelayoutIgnoringLineClamp();
+  NOINLINE const LayoutResult* RelayoutClampingByLines(int lines_until_clamp);
+  NOINLINE const LayoutResult* RelayoutClampingAfterLayoutObject(
+      const LayoutObject*);
+  NOINLINE const LayoutResult* RelayoutForTextBoxTrimEnd();
+  NOINLINE const LayoutResult* RelayoutForMarginTrimEnd();
 
   inline const LayoutResult* Layout(
       InlineChildLayoutContext* inline_child_layout_context);
@@ -108,6 +207,11 @@ class CORE_EXPORT BlockLayoutAlgorithm
       const PreviousInflowPosition& previous_inflow_position) const {
     return BfcBlockOffset() + previous_inflow_position.logical_block_offset +
            previous_inflow_position.margin_strut.Sum();
+  }
+
+  LogicalSize PercentageSizeForChild(const LayoutInputNode& child) {
+    return child.IsReplaced() ? replaced_child_percentage_size_
+                              : child_percentage_size_;
   }
 
   BoxStrut CalculateMargins(LayoutInputNode child,
@@ -163,7 +267,9 @@ class CORE_EXPORT BlockLayoutAlgorithm
       PreviousInflowPosition*,
       const InlineBreakToken** inline_break_token_out);
 
-  void HandleOutOfFlowPositioned(const PreviousInflowPosition&, BlockNode);
+  void HandleOutOfFlowPositioned(const PreviousInflowPosition&,
+                                 const BlockNode&,
+                                 const BlockBreakToken*);
   void HandleFloat(const PreviousInflowPosition&,
                    BlockNode,
                    const BlockBreakToken*);
@@ -222,6 +328,13 @@ class CORE_EXPORT BlockLayoutAlgorithm
       InlineChildLayoutContext*,
       const InlineBreakToken** previous_inline_break_token);
 
+  // Update text box trim state after child layout.
+  void UpdateTextBoxTrim(LayoutInputNode child,
+                         const BreakToken* incoming_child_break_token,
+                         const InlineBreakToken* outgoing_inline_break_token,
+                         const LayoutResult*,
+                         PreviousInflowPosition*);
+
   // Consume all remaining fragmentainer space. This happens when we decide to
   // break before a child.
   //
@@ -236,8 +349,7 @@ class CORE_EXPORT BlockLayoutAlgorithm
   // clipped box gets overflowed past the fragmentation line). The return value
   // can be checked for this. Only if kContinue is returned, can a fragment be
   // created.
-  BreakStatus FinalizeForFragmentation(
-      LayoutUnit block_end_border_padding_added);
+  BreakStatus FinalizeForFragmentation();
 
   // Insert a fragmentainer break before the child if necessary.
   // See |::blink::BreakBeforeChildIfNeeded()| for more documentation.
@@ -355,23 +467,21 @@ class CORE_EXPORT BlockLayoutAlgorithm
     }
     // Ensure we're really a column box. We can't use |BoxType| to call this
     // from the constructor.
-    DCHECK(node_.GetLayoutBox()->SlowFirstChild()->IsLayoutFlowThread());
+    DCHECK(node_.GetLayoutBox()->IsMulticolContainer());
     return false;
   }
 
-  // Returns true if |this| is a ruby segment (LayoutRubyColumn) and the
-  // specified |child| is a ruby annotation box (LayoutRubyText).
-  bool IsRubyText(const LayoutInputNode& child) const;
-
-  // Layout |ruby_text_child| content, and decide the location of
-  // |ruby_text_child|. This is called only if IsRubyText() returns true.
-  void HandleRubyText(BlockNode ruby_text_child);
+  // Represent the result of HandleTextControlPlaceholder().
+  struct PlaceholderLayoutResult {
+    LayoutUnit logical_block_offset;
+    LayoutResult::EStatus status;
+  };
 
   // Layout |placeholder| content, and decide the location of |placeholder|.
   // This is called only if |this| is a text control.
   // This function returns a new value for `PreviousInflowPosition::
-  // logical_block_offset`.
-  LayoutUnit HandleTextControlPlaceholder(
+  // logical_block_offset` and the status of placeholder layout.
+  NOINLINE PlaceholderLayoutResult HandleTextControlPlaceholder(
       BlockNode placeholder,
       const PreviousInflowPosition& previous_inflow_position);
   // A helper for HandleTextControlPlaceholder().
@@ -396,8 +506,35 @@ class CORE_EXPORT BlockLayoutAlgorithm
 
   const ColumnSpannerPath* column_spanner_path_ = nullptr;
 
+  // The last non-empty inflow child. Currently this is used only when
+  // `should_text_box_trim_end_` and when the last child was empty. Thus this is
+  // updated only in that case.
+  InlineNode last_non_empty_inflow_child_ = nullptr;
+  // The break token of the last non-empty line.
+  const BreakToken* last_non_empty_break_token_ = nullptr;
+
+  // `text-box-trim: end` should be applied to this child.
+  InlineNode override_text_box_trim_end_child_ = nullptr;
+  const BreakToken* override_text_box_trim_end_break_token_ = nullptr;
+
+  // The last in-flow child laid out that isn't self-collapsing. If trailing
+  // margins are to be trimmed, the outgoing block-end margin from this child is
+  // where to start trimming.
+  LayoutInputNode last_non_self_collapsing_child_ = nullptr;
+
+  // In relayout for end margin trimming, this is the child after which margin
+  // trimming should start. It will be set to nullptr when the child is
+  // reached. If it's nullptr initially, it means that the entire container is
+  // self-collapsing.
+  LayoutInputNode pending_margin_end_trim_child_ = nullptr;
+
+  // The incoming margin strut at the start of layout.
+  MarginStrut incoming_margin_strut_;
+
   // Intrinsic block size based on child layout and containment.
   LayoutUnit intrinsic_block_size_;
+
+  BlockLineClampData line_clamp_data_;
 
   // The line box index at which we ran out of space. This where we'll actually
   // end up breaking, unless we determine that we should break earlier in order
@@ -427,19 +564,14 @@ class CORE_EXPORT BlockLayoutAlgorithm
   // (between block-level siblings or line box siblings).
   bool has_break_opportunity_before_next_child_ : 1;
 
-  // If true, ignore the line-clamp property as truncation wont be required.
-  bool ignore_line_clamp_ : 1;
+  // Set when performing an extra layout pass to correctly truncate trailing
+  // margins for end margin trimming.
+  bool is_relayout_for_margin_end_trim_ : 1 = false;
 
-  // If this is within a -webkit-line-clamp context.
-  bool is_line_clamp_context_ : 1;
-
-  // If set, this is the number of lines until a clamp. A value of 1 indicates
-  // the current line should be clamped. This may go negative.
-  std::optional<int> lines_until_clamp_;
-
-  // If set, one of the lines was clamped and this is the intrinsic size at the
-  // time of the clamp.
-  std::optional<LayoutUnit> intrinsic_block_size_when_clamped_;
+  // Set if last_non_self_collapsing_child_ should be left as-is, because we're
+  // in a relayout pass (but not necessarily in a relayout pass for margin
+  // trimming).
+  bool is_last_non_self_collapsing_child_determined_ : 1 = false;
 };
 
 }  // namespace blink

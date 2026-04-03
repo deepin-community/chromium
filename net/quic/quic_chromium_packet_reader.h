@@ -6,6 +6,7 @@
 #ifndef NET_QUIC_QUIC_CHROMIUM_PACKET_READER_H_
 #define NET_QUIC_QUIC_CHROMIUM_PACKET_READER_H_
 
+#include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "net/base/io_buffer.h"
@@ -27,6 +28,10 @@ const int kQuicYieldAfterPacketsRead = 32;
 const int kQuicYieldAfterDurationMilliseconds = 2;
 
 class NET_EXPORT_PRIVATE QuicChromiumPacketReader {
+  // TODO(crbug.com/422045782): Remove this macro once we identified the cause
+  // of the bug.
+  ADVANCED_MEMORY_SAFETY_CHECKS();
+
  public:
   class NET_EXPORT_PRIVATE Visitor {
    public:
@@ -77,9 +82,6 @@ class NET_EXPORT_PRIVATE QuicChromiumPacketReader {
   quic::QuicTime yield_after_;
   scoped_refptr<IOBufferWithSize> read_buffer_;
   NetLogWithSource net_log_;
-  // Stores whether receiving ECN is in the feature list to avoid accessing
-  // the feature list for every packet.
-  bool report_ecn_;
 
   base::WeakPtrFactory<QuicChromiumPacketReader> weak_factory_{this};
 };

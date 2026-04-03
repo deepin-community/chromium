@@ -23,24 +23,18 @@
 #include <vector>
 
 #include "absl/base/nullability.h"
-#include "absl/log/check.h"
 #include "absl/types/span.h"
-#include "./centipede/defs.h"
 #include "./centipede/feature.h"
+#include "./common/defs.h"
+#include "./common/logging.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
-// Returns a printable hash of a byte array. Currently sha1 is used.
-std::string Hash(ByteSpan span);
-// Same as above, but for std::string_view.
-std::string Hash(std::string_view str);
-// Hashes are always this many bytes.
-inline constexpr size_t kHashLen = 40;
 // Returns the hash of the contents of the file `file_path`. Supports the file
 // being remote. Returns an empty string if the `file_path` is empty.
 std::string HashOfFileContents(std::string_view file_path);
 // Returns a printable string representing at most `max_len` bytes of `data`.
-std::string AsString(const ByteArray &data, size_t max_len = 16);
+std::string AsPrintableString(ByteSpan data, size_t max_len);
 // Reads from a local file `file_path` into `data`.
 // Crashes on any error.
 void ReadFromLocalFile(std::string_view file_path, ByteArray &data);
@@ -51,6 +45,8 @@ void ReadFromLocalFile(std::string_view file_path, std::string &data);
 void ReadFromLocalFile(std::string_view file_path, FeatureVec &data);
 // Same as above but for vector<uint32_t>.
 void ReadFromLocalFile(std::string_view file_path, std::vector<uint32_t> &data);
+// Clears the content of the file `file_path`. Crashes on any error.
+void ClearLocalFileContents(std::string_view file_path);
 // Writes the contents of `data` to a local file `file_path`.
 // Crashes on any error.
 void WriteToLocalFile(std::string_view file_path, ByteSpan data);
@@ -120,37 +116,24 @@ std::vector<size_t> RandomWeightedSubset(absl::Span<const uint64_t> set,
                                          size_t target_size, Rng &rng);
 
 // Removes all elements from `set` whose indices are found in `subset_indices`.
-// `subset_indices` is a sorted vector.
+//
+// REQUIRES: std::is_sorted(subset_indices.begin(), subset_indices.end())
+// REQUIRES: For all e in subset_indices, e < set.size()
 template <typename T>
 void RemoveSubset(const std::vector<size_t> &subset_indices,
                   std::vector<T> &set) {
   size_t pos_to_write = 0;
-  for (size_t i = 0, n = set.size(); i < n; i++) {
-    // If subset_indices.size() is k, this loop's complexity is O(n*log(k)).
-    // We can do it in O(n+k) with a bit more code, but this loop is not
-    // expected to be hot. Besides, k would typically be small.
-    if (!std::binary_search(subset_indices.begin(), subset_indices.end(), i))
-      std::swap(set[pos_to_write++], set[i]);
+  for (size_t i = 0, n = set.size(), j = 0, m = subset_indices.size(); i < n;
+       i++) {
+    if (j < m && i == subset_indices[j]) {
+      ++j;
+      continue;
+    }
+    std::swap(set[pos_to_write++], set[i]);
   }
   set.resize(pos_to_write);
 }
 
-// Adds a prefix and a postfix to `data` such that the result can be
-// appended to another such packed data and then the operation can be reversed.
-// The purpose is to allow appending blobs of data to a (possibly remote) file
-// such that when reading this file we can separate the blobs.
-// TODO(kcc): [impl] is there a lightweight equivalent in the open-source world?
-//  tar sounds too heavy.
-// TODO(kcc): [impl] investigate https://github.com/google/riegeli.
-ByteArray PackBytesForAppendFile(const ByteArray &data);
-// Unpacks `packed_data` into `unpacked` and `hashes`.
-// `packed_data` is multiple data packed by PackBytesForAppendFile()
-// and merged together.
-// `unpacked` or `hashes` can be nullptr.
-void UnpackBytesFromAppendFile(
-    const ByteArray &packed_data,
-    absl::Nullable<std::vector<ByteArray> *> unpacked,
-    absl::Nullable<std::vector<std::string> *> hashes = nullptr);
 // Append the bytes from 'hash' to 'ba'.
 void AppendHashToArray(ByteArray &ba, std::string_view hash);
 // Reverse to AppendHashToArray.
@@ -166,8 +149,8 @@ ByteArray PackFeaturesAndHashAsRawBytes(const ByteArray &data,
 
 // Given a `blob` created by `PackFeaturesAndHash`, unpack the features into
 // `features` and return the hash.
-std::string UnpackFeaturesAndHash(const ByteSpan &blob,
-                                  absl::Nonnull<FeatureVec *> features);
+std::string UnpackFeaturesAndHash(ByteSpan blob,
+                                  FeatureVec *absl_nonnull features);
 
 // Parses `dictionary_text` representing an AFL/libFuzzer dictionary.
 // https://github.com/google/AFL/blob/master/dictionaries/README.dictionaries
@@ -178,13 +161,13 @@ bool ParseAFLDictionary(std::string_view dictionary_text,
                         std::vector<ByteArray> &dictionary_entries);
 
 // Maps `size` bytes with `mmap(NO_RESERVE)` or equivalent, returns the result.
-// CHECK-fails on error.
+// FUZZTEST_CHECK-fails on error.
 // The resulting memory is unreserved, and will be zero-initialized on first
 // access.
 uint8_t *MmapNoReserve(size_t size);
 
 // Unmaps memory returned by `MmapNoReserve`().
-// CHECK-fails on error.
+// FUZZTEST_CHECK-fails on error.
 void Munmap(uint8_t *ptr, size_t size);
 
 // Fixed size array allocated/deallocated with MmapNoReserve/Munmap.
@@ -199,11 +182,11 @@ class MmapNoReserveArray {
   MmapNoReserveArray(MmapNoReserveArray &&) = delete;
   MmapNoReserveArray &operator=(MmapNoReserveArray &&) = delete;
   uint8_t operator[](size_t i) const {
-    CHECK_LT(i, kSize);
+    FUZZTEST_CHECK_LT(i, kSize);
     return array_[i];
   }
   uint8_t &operator[](size_t i) {
-    CHECK_LT(i, kSize);
+    FUZZTEST_CHECK_LT(i, kSize);
     return array_[i];
   }
 
@@ -211,6 +194,6 @@ class MmapNoReserveArray {
   uint8_t *array_;
 };
 
-}  // namespace centipede
+}  // namespace fuzztest::internal
 
 #endif  // THIRD_PARTY_CENTIPEDE_UTIL_H_

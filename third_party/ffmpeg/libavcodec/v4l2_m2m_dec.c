@@ -164,7 +164,7 @@ static int v4l2_receive_frame(AVCodecContext *avctx, AVFrame *frame)
     if (!s->draining) {
         ret = v4l2_try_start(avctx);
         if (ret) {
-            /* cant recover */
+            /* can't recover */
             if (ret != AVERROR(ENOMEM))
                 ret = 0;
             goto fail;
@@ -233,6 +233,7 @@ static const AVOption options[] = {
 #define M2MDEC_CLASS(NAME) \
     static const AVClass v4l2_m2m_ ## NAME ## _dec_class = { \
         .class_name = #NAME "_v4l2m2m_decoder", \
+        .item_name  = av_default_item_name, \
         .option     = options, \
         .version    = LIBAVUTIL_VERSION_INT, \
     };

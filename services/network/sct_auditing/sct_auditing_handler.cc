@@ -4,8 +4,9 @@
 
 #include "services/network/sct_auditing/sct_auditing_handler.h"
 
+#include <algorithm>
+
 #include "base/base64.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -14,7 +15,6 @@
 #include "base/json/json_writer.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/rand_util.h"
-#include "base/ranges/algorithm.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -85,8 +85,9 @@ SCTAuditingHandler::SCTAuditingHandler(NetworkContext* context,
   background_runner_ = base::ThreadPool::CreateSequencedTaskRunner(
       {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
        base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
-  writer_ = std::make_unique<base::ImportantFileWriter>(persistence_path_,
-                                                        background_runner_);
+  constexpr const char* kHistogramSuffix = "SCTAuditing";
+  writer_ = std::make_unique<base::ImportantFileWriter>(
+      persistence_path_, background_runner_, kHistogramSuffix);
 
   // Post a task to load persisted state after startup has finished.
   foreground_runner_->PostTask(
@@ -114,7 +115,7 @@ void SCTAuditingHandler::MaybeEnqueueReport(
   // a valid signature, and thus are expected to be public certificates. If
   // there are no valid SCTs, there's no need to report anything.
   net::SignedCertificateTimestampAndStatusList validated_scts;
-  base::ranges::copy_if(
+  std::ranges::copy_if(
       signed_certificate_timestamps, std::back_inserter(validated_scts),
       [](const auto& sct) { return sct.status == net::ct::SCT_STATUS_OK; });
   if (validated_scts.empty()) {
@@ -127,8 +128,7 @@ void SCTAuditingHandler::MaybeEnqueueReport(
     // hashdance lookup query.
     sct_metadata.emplace();
     const net::ct::SignedCertificateTimestamp* sct =
-        validated_scts.at(base::RandInt(0, validated_scts.size() - 1))
-            .sct.get();
+        base::RandomChoice(validated_scts).sct.get();
     sct_metadata->issued = sct->timestamp;
     net::ct::MerkleTreeLeaf tree_leaf;
     bool result = net::ct::GetMerkleTreeLeaf(validated_certificate_chain, sct,
@@ -140,8 +140,7 @@ void SCTAuditingHandler::MaybeEnqueueReport(
     // Do not report if this is a known popular SCT.
     if (owner_network_context_->network_service()
             ->sct_auditing_cache()
-            ->IsPopularSCT(
-                base::as_bytes(base::make_span(sct_metadata->leaf_hash)))) {
+            ->IsPopularSCT(base::as_byte_span(sct_metadata->leaf_hash))) {
       RecordPopularSCTSkippedMetrics(true);
       return;
     }
@@ -150,7 +149,7 @@ void SCTAuditingHandler::MaybeEnqueueReport(
     // Find the corresponding log entry metadata.
     const std::vector<mojom::CTLogInfoPtr>& logs =
         owner_network_context_->network_service()->log_list();
-    auto log = base::ranges::find(logs, sct->log_id, &mojom::CTLogInfo::id);
+    auto log = std::ranges::find(logs, sct->log_id, &mojom::CTLogInfo::id);
     // It's possible that log entry metadata may not exist for a few reasons:
     //
     // 1) The PKI Metadata component has not yet been loaded and no log list
@@ -188,7 +187,7 @@ void SCTAuditingHandler::MaybeEnqueueReport(
 std::optional<std::string> SCTAuditingHandler::SerializeData() {
   DCHECK(foreground_runner_->RunsTasksInCurrentSequence());
 
-  base::Value::List reports;
+  base::ListValue reports;
   for (const auto& kv : pending_reporters_) {
     auto reporter_key = kv.first;
     auto* reporter = kv.second.get();
@@ -198,7 +197,7 @@ std::optional<std::string> SCTAuditingHandler::SerializeData() {
     serialized_report = base::Base64Encode(serialized_report);
 
     auto report_entry =
-        base::Value::Dict()
+        base::DictValue()
             .Set(kReporterKeyKey, reporter_key.ToString())
             .Set(kBackoffEntryKey,
                  net::BackoffEntrySerializer::SerializeToList(
@@ -214,18 +213,15 @@ std::optional<std::string> SCTAuditingHandler::SerializeData() {
     reports.Append(std::move(report_entry));
   }
 
-  std::string output;
-  if (!base::JSONWriter::Write(reports, &output)) {
-    return std::nullopt;
-  }
-  return output;
+  return base::WriteJson(reports);
 }
 
 void SCTAuditingHandler::DeserializeData(const std::string& serialized) {
   DCHECK(foreground_runner_->RunsTasksInCurrentSequence());
 
   // Parse the serialized reports.
-  std::optional<base::Value> value = base::JSONReader::Read(serialized);
+  std::optional<base::Value> value =
+      base::JSONReader::Read(serialized, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!value || !value->is_list()) {
     base::UmaHistogramCounts100(
         "Security.SCTAuditing.NumPersistedReportsLoaded", 0);
@@ -234,7 +230,7 @@ void SCTAuditingHandler::DeserializeData(const std::string& serialized) {
 
   size_t num_reporters_deserialized = 0u;
   for (base::Value& sct_entry : value->GetList()) {
-    base::Value::Dict* entry_dict = sct_entry.GetIfDict();
+    base::DictValue* entry_dict = sct_entry.GetIfDict();
     if (!sct_entry.is_dict()) {
       continue;
     }
@@ -243,7 +239,7 @@ void SCTAuditingHandler::DeserializeData(const std::string& serialized) {
     std::string* report_string = entry_dict->FindString(kReportKey);
     const std::optional<base::Value> sct_metadata_value =
         entry_dict->Extract(kSCTHashdanceMetadataKey);
-    const base::Value::List* backoff_entry_value =
+    const base::ListValue* backoff_entry_value =
         entry_dict->FindList(kBackoffEntryKey);
     const std::optional<bool> counted_towards_report_limit =
         entry_dict->FindBool(kAlreadyCountedKey);
@@ -450,7 +446,7 @@ network::mojom::URLLoaderFactory* SCTAuditingHandler::GetURLLoaderFactory() {
 
   network::mojom::URLLoaderFactoryParamsPtr params =
       network::mojom::URLLoaderFactoryParams::New();
-  params->process_id = network::mojom::kBrowserProcessId;
+  params->process_id = OriginatingProcess::browser();
   params->is_orb_enabled = false;
   params->is_trusted = true;
   params->automatically_assign_isolation_info = true;

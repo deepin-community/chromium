@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/memory/ref_counted_memory.h"
@@ -131,7 +130,9 @@ void FeedbackData::OnGetTraceData(
   if (tracing_manager_)
     tracing_manager_->DiscardTraceData(trace_id);
 
-  AddFile(kTraceFilename, std::move(trace_data->data()));
+  std::string s;
+  std::swap(s, trace_data->as_string());
+  AddFile(kTraceFilename, std::move(s));
 
   set_category_tag(kPerformanceCategoryTag);
   --pending_op_count_;

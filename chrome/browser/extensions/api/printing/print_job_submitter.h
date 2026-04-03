@@ -16,9 +16,17 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/types/expected.h"
+#include "base/types/optional_ref.h"
 #include "chrome/common/extensions/api/printing.h"
-#include "chromeos/crosapi/mojom/local_printer.mojom-forward.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
+
+namespace ash {
+class LocalPrinter;
+}
+
+namespace chromeos {
+class Printer;
+}
 
 namespace content {
 class BrowserContext;
@@ -28,18 +36,19 @@ namespace gfx {
 class Image;
 }  // namespace gfx
 
-namespace views {
-class NativeWindowTracker;
-}  // namespace views
-
 namespace printing {
 class PdfBlobDataFlattener;
 class PrintedDocument;
 class PrintJobController;
 class PrintSettings;
+struct PrinterSemanticCapsAndDefaults;
 struct FlattenPdfResult;
 struct PrintJobCreatedInfo;
 }  // namespace printing
+
+namespace ui {
+class NativeWindowTracker;
+}  // namespace ui
 
 namespace extensions {
 
@@ -63,7 +72,7 @@ class PrintJobSubmitter {
                     printing::PdfBlobDataFlattener* pdf_blob_data_flattener,
                     scoped_refptr<const extensions::Extension> extension,
                     api::printing::SubmitJobRequest request,
-                    crosapi::mojom::LocalPrinter* local_printer,
+                    ash::LocalPrinter* local_printer,
                     SubmitJobCallback callback);
 
   ~PrintJobSubmitter();
@@ -86,7 +95,8 @@ class PrintJobSubmitter {
   void CheckPrinter();
 
   void CheckCapabilitiesCompatibility(
-      crosapi::mojom::CapabilitiesResponsePtr capabilities);
+      base::optional_ref<const chromeos::Printer> printer,
+      const std::optional<printing::PrinterSemanticCapsAndDefaults>& caps);
 
   void ReadDocumentData();
 
@@ -95,6 +105,8 @@ class PrintJobSubmitter {
 
   void OnPdfReadAndFlattened(
       std::unique_ptr<printing::FlattenPdfResult> result);
+
+  void OnImageDataRead(std::string data, int64_t);
 
   void ShowPrintJobConfirmationDialog(const gfx::Image& extension_icon);
 
@@ -109,15 +121,15 @@ class PrintJobSubmitter {
   gfx::NativeWindow native_window_;
   const raw_ptr<content::BrowserContext> browser_context_;
 
-  // Tracks whether |native_window_| got destroyed.
-  std::unique_ptr<views::NativeWindowTracker> native_window_tracker_;
+  // Tracks whether `native_window_` got destroyed.
+  std::unique_ptr<ui::NativeWindowTracker> native_window_tracker_;
 
   // These objects are owned by PrintingAPIHandler.
   const raw_ptr<printing::PrintJobController> print_job_controller_;
   const raw_ref<printing::PdfBlobDataFlattener> pdf_blob_data_flattener_;
 
-  // TODO(crbug.com/996785): Consider tracking extension being unloaded instead
-  // of storing scoped_refptr.
+  // TODO(crbug.com/40641692): Consider tracking extension being unloaded
+  // instead of storing scoped_refptr.
   scoped_refptr<const extensions::Extension> extension_;
 
   api::printing::SubmitJobRequest request_;
@@ -126,7 +138,7 @@ class PrintJobSubmitter {
 
   std::unique_ptr<printing::FlattenPdfResult> flatten_pdf_result_;
 
-  const raw_ptr<crosapi::mojom::LocalPrinter> local_printer_;
+  const raw_ptr<ash::LocalPrinter> local_printer_;
   SubmitJobCallback callback_;
   base::WeakPtrFactory<PrintJobSubmitter> weak_ptr_factory_{this};
 };

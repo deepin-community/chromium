@@ -18,32 +18,55 @@ from __future__ import division
 from __future__ import print_function
 
 import argparse
-import datetime
 import json
 import os
-import re
-import signal
 import sys
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(ROOT_DIR))
 
-from python.generators.diff_tests.testing import TestType
-from python.generators.diff_tests.utils import ctrl_c_handler
+# Check that the python venv is active by trying to import protobuf.
+try:
+  import google.protobuf  # noqa: F401
+except ImportError:
+  sys.stderr.write('''
+Error: google.protobuf module not found.
+
+The Perfetto python virtual environment is not active. To set it up, run:
+
+  tools/install-build-deps
+
+Then activate it with:
+
+  source .venv/bin/activate  (Linux/macOS)
+  .venv\\Scripts\\activate   (Windows)
+
+Alternatively, run this script using the venv python directly:
+
+  .venv/bin/python3 tools/diff_test_trace_processor.py ...
+
+''')
+  sys.exit(1)
+
+from python.generators.diff_tests.utils import setup_ctrl_c_handler
 from python.generators.diff_tests.runner import DiffTestsRunner
+from python.generators.diff_tests.models import Config
 
 
 def main():
-  signal.signal(signal.SIGINT, ctrl_c_handler)
+  setup_ctrl_c_handler()
   parser = argparse.ArgumentParser()
   parser.add_argument('--test-type', type=str, default='all')
   parser.add_argument('--trace-descriptor', type=str)
+  parser.add_argument('--summary-descriptor', type=str)
   parser.add_argument('--metrics-descriptor', nargs='+', type=str)
   parser.add_argument('--chrome-track-event-descriptor', type=str, default=None)
   parser.add_argument('--test-extensions', type=str, default=None)
+  parser.add_argument('--winscope-extensions', type=str, default=None)
+  parser.add_argument('--simpleperf-descriptor', type=str, default=None)
   parser.add_argument('--perf-file', type=str)
   parser.add_argument(
-      '--override-sql-module', type=str, action='append', default=[])
+      '--override-sql-package', type=str, action='append', default=[])
   parser.add_argument('--test-dir', type=str, default=ROOT_DIR)
   parser.add_argument(
       '--name-filter',
@@ -55,45 +78,94 @@ def main():
       action='store_true',
       help='Save the (generated) input pb file for debugging')
   parser.add_argument(
-      '--rebase',
-      action='store_true',
-      help='Update the expected output file with the actual result')
+      '--quiet', action='store_true', help='Only print if the test failed.')
   parser.add_argument(
       '--no-colors', action='store_true', help='Print without coloring')
+  parser.add_argument(
+      '--print-slowest-tests',
+      action='store_true',
+      help='Print the slowest tests')
+  parser.add_argument(
+      '-j',
+      '--jobs',
+      type=int,
+      default=0,
+      help='Number of parallel jobs (default: 0 = use all CPUs)')
   parser.add_argument(
       'trace_processor', type=str, help='location of trace processor binary')
   args = parser.parse_args()
 
   out_path = os.path.dirname(args.trace_processor)
+  protos_path = os.path.join(out_path, 'gen', 'protos')
   if args.chrome_track_event_descriptor is None:
     args.chrome_track_event_descriptor = os.path.join(
-        out_path, 'gen', 'protos', 'third_party', 'chromium',
-        'chrome_track_event.descriptor')
+        protos_path, 'third_party', 'chromium', 'chrome_track_event.descriptor')
   if args.test_extensions is None:
-    args.test_extensions = os.path.join(out_path, 'gen', 'protos', 'perfetto',
-                                        'trace', 'test_extensions.descriptor')
+    args.test_extensions = os.path.join(protos_path, 'perfetto', 'trace',
+                                        'test_extensions.descriptor')
+  if args.winscope_extensions is None:
+    args.winscope_extensions = os.path.join(protos_path, 'perfetto', 'trace',
+                                            'android', 'winscope.descriptor')
+  if args.simpleperf_descriptor is None:
+    args.simpleperf_descriptor = os.path.join(protos_path, 'third_party',
+                                              'simpleperf',
+                                              'simpleperf.descriptor')
+  if args.summary_descriptor is None:
+    args.summary_descriptor = os.path.join(protos_path, 'perfetto',
+                                           'trace_summary',
+                                           'trace_summary.descriptor')
 
-  test_runner = DiffTestsRunner(args.name_filter, args.trace_processor,
-                                args.trace_descriptor, args.no_colors,
-                                args.override_sql_module, args.test_dir)
-  sys.stderr.write(f"[==========] Running {len(test_runner.tests)} tests.\n")
+  config = Config(
+      name_filter=args.name_filter,
+      trace_processor_path=args.trace_processor,
+      trace_descriptor=args.trace_descriptor,
+      no_colors=args.no_colors,
+      override_sql_package_paths=args.override_sql_package,
+      test_dir=args.test_dir,
+      quiet=args.quiet,
+      summary_descriptor=args.summary_descriptor,
+      metrics_descriptor_paths=args.metrics_descriptor,
+      chrome_extensions=args.chrome_track_event_descriptor,
+      test_extensions=args.test_extensions,
+      winscope_extensions=args.winscope_extensions,
+      simpleperf_descriptor=args.simpleperf_descriptor,
+      keep_input=args.keep_input,
+      print_slowest_tests=args.print_slowest_tests,
+      jobs=args.jobs)
+  test_runner = DiffTestsRunner(config)
+  results = test_runner.run()
+  sys.stderr.write(results.str(args.no_colors))
 
-  results = test_runner.run_all_tests(args.metrics_descriptor,
-                                      args.chrome_track_event_descriptor,
-                                      args.test_extensions, args.keep_input,
-                                      args.rebase)
-  sys.stderr.write(results.str(args.no_colors, len(test_runner.tests)))
+  if args.print_slowest_tests:
+    sys.stderr.write('\n--- Slowest tests ---\n')
+    slowest_total = sorted(
+        results.perf_data,
+        key=lambda p: p.ingest_time_ns + p.real_time_ns,
+        reverse=True)[:5]
+    slowest_query = sorted(
+        results.perf_data, key=lambda p: p.real_time_ns, reverse=True)[:5]
+    slowest_ingest = sorted(
+        results.perf_data, key=lambda p: p.ingest_time_ns, reverse=True)[:5]
 
-  if args.rebase:
-    sys.stderr.write(results.rebase_str())
+    sys.stderr.write('Top 5 by total time:\n')
+    for p in slowest_total:
+      total_ms = (p.ingest_time_ns + p.real_time_ns) / 1000000
+      sys.stderr.write(f'  {p.test.name}: {total_ms:.2f}ms\n')
+
+    sys.stderr.write('Top 5 by query time:\n')
+    for p in slowest_query:
+      query_ms = p.real_time_ns / 1000000
+      sys.stderr.write(f'  {p.test.name}: {query_ms:.2f}ms\n')
+
+    sys.stderr.write('Top 5 by ingest time:\n')
+    for p in slowest_ingest:
+      ingest_ms = p.ingest_time_ns / 1000000
+      sys.stderr.write(f'  {p.test.name}: {ingest_ms:.2f}ms\n')
 
   if len(results.test_failures) > 0:
     return 1
 
   if args.perf_file:
-    test_dir = os.path.join(ROOT_DIR, 'test')
-    trace_processor_dir = os.path.join(test_dir, 'trace_processor')
-
     metrics = []
     sorted_data = sorted(
         results.perf_data, key=lambda x: (x.test.type.name, x.test.name))

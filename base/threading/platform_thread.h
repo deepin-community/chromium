@@ -12,44 +12,120 @@
 #include <stddef.h>
 
 #include <iosfwd>
+#include <limits>
+#include <optional>
 #include <type_traits>
 
 #include "base/base_export.h"
-#include "base/feature_list.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/process/process_handle.h"
-#include "base/sequence_checker_impl.h"
+#include "base/task/thread_type.h"
 #include "base/threading/platform_thread_ref.h"
-#include "base/time/time.h"
+#include "base/trace_event/base_tracing_forward.h"
 #include "base/types/strong_alias.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/windows_types.h"
 #elif BUILDFLAG(IS_FUCHSIA)
 #include <zircon/types.h>
-#elif BUILDFLAG(IS_APPLE)
-#include <mach/mach_types.h>
 #elif BUILDFLAG(IS_POSIX)
 #include <pthread.h>
 #include <unistd.h>
 #endif
 
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+#include "base/feature_list.h"
+#endif
+
 namespace base {
 
-// Used for logging. Always an integer value.
-#if BUILDFLAG(IS_WIN)
-typedef DWORD PlatformThreadId;
-#elif BUILDFLAG(IS_FUCHSIA)
-typedef zx_koid_t PlatformThreadId;
-#elif BUILDFLAG(IS_APPLE)
-typedef mach_port_t PlatformThreadId;
-#elif BUILDFLAG(IS_POSIX)
-typedef pid_t PlatformThreadId;
+#if BUILDFLAG(IS_ANDROID)
+BASE_EXPORT BASE_DECLARE_FEATURE(kRestrictBigCoreThreadAffinity);
 #endif
-static_assert(std::is_integral_v<PlatformThreadId>, "Always an integer value.");
+
+class TimeDelta;
+
+// Used for uniquely identifying a thread.
+//
+// Wraps a platform-specific integer value with platform-specific size,
+// guaranteed to have a maximum bitness of 64-bit. Getting a 32-bit value is
+// possible only if we either know the platform-specific size (because we're in
+// platform-specific code), or if we are ok with truncation of the value (e.g.
+// because we are logging and the occasional false match is not catastrophic).
+class BASE_EXPORT PlatformThreadId {
+ public:
+#if BUILDFLAG(IS_WIN)
+  using UnderlyingType = DWORD;
+#elif BUILDFLAG(IS_FUCHSIA)
+  using UnderlyingType = zx_koid_t;
+#elif BUILDFLAG(IS_APPLE)
+  using UnderlyingType = uint64_t;
+#elif BUILDFLAG(IS_POSIX)
+  using UnderlyingType = pid_t;
+#endif
+  static_assert(std::is_integral_v<UnderlyingType>, "Always an integer value.");
+
+  constexpr PlatformThreadId() = default;
+
+  // Special templated constructor which prevents implicit conversion of the
+  // integer argument.
+  template <typename T>
+  explicit constexpr PlatformThreadId(T value)
+    requires(std::is_same_v<T, UnderlyingType>)
+      : value_(value) {}
+
+  static constexpr PlatformThreadId ForTest(int value) {
+    return PlatformThreadId(static_cast<UnderlyingType>(value));
+  }
+
+  // Allow conversion to u/int64_t, whether the underlying type is signed or
+  // not, and whether it is 32-bit or 64-bit.
+  explicit constexpr operator uint64_t() const {
+    static_assert(sizeof(uint64_t) >= sizeof(UnderlyingType));
+    return static_cast<uint64_t>(value_);
+  }
+  explicit constexpr operator int64_t() const {
+    static_assert(sizeof(int64_t) >= sizeof(UnderlyingType));
+    return static_cast<int64_t>(value_);
+  }
+  // Forbid conversion to u/int32_t, since we might have a 64-bit
+  // value -- use truncate_to_int32_for_display_only() or raw() instead.
+  explicit constexpr operator uint32_t() const = delete;
+  explicit constexpr operator int32_t() const = delete;
+
+  // Truncating getter for an int32 representation of the id.
+  //
+  // AVOID: This should only be used in cases where truncation is not
+  // catastrophic, e.g. displaying the thread id in traces or logs. It will
+  // always be preferable to display the full, untruncated thread id.
+  constexpr int32_t truncate_to_int32_for_display_only() const {
+    return static_cast<int32_t>(value_);
+  }
+
+  // Getter for the underlying raw value. Should only be used when
+  // exposing the UnderlyingType, e.g. passing into system APIs or passing into
+  // functions overloaded on different integer sizes like NumberToString.
+  constexpr UnderlyingType raw() const { return value_; }
+
+  constexpr friend auto operator<=>(const PlatformThreadId& lhs,
+                                    const PlatformThreadId& rhs) = default;
+  constexpr friend bool operator==(const PlatformThreadId& lhs,
+                                   const PlatformThreadId& rhs) = default;
+
+  // Allow serialising into a trace.
+  void WriteIntoTrace(perfetto::TracedValue&& context) const;
+
+ private:
+  // TODO(crbug.com/393384253): Use a system-specific invalid value, which might
+  // be 0, -1, or some other value from a system header.
+  UnderlyingType value_ = 0;
+};
+
+inline std::ostream& operator<<(std::ostream& stream,
+                                const PlatformThreadId& id) {
+  return stream << id.raw();
+}
 
 // Used to operate on threads.
 class PlatformThreadHandle {
@@ -65,76 +141,22 @@ class PlatformThreadHandle {
   explicit constexpr PlatformThreadHandle(Handle handle) : handle_(handle) {}
 
   bool is_equal(const PlatformThreadHandle& other) const {
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+    return pthread_equal(handle_, other.handle_);
+#else
     return handle_ == other.handle_;
+#endif
   }
 
-  bool is_null() const {
-    return !handle_;
-  }
+  bool is_null() const { return !handle_; }
 
-  Handle platform_handle() const {
-    return handle_;
-  }
+  Handle platform_handle() const { return handle_; }
 
  private:
   Handle handle_;
 };
 
-const PlatformThreadId kInvalidThreadId(0);
-
-// Valid values for `thread_type` of Thread::Options, SimpleThread::Options,
-// and SetCurrentThreadType(), listed in increasing order of importance.
-//
-// It is up to each platform-specific implementation what these translate to.
-// Callers should avoid setting different ThreadTypes on different platforms
-// (ifdefs) at all cost, instead the platform differences should be encoded in
-// the platform-specific implementations. Some implementations may treat
-// adjacent ThreadTypes in this enum as equivalent.
-//
-// Reach out to //base/task/OWNERS (scheduler-dev@chromium.org) before changing
-// thread type assignments in your component, as such decisions affect the whole
-// of Chrome.
-//
-// Refer to PlatformThreadTest.SetCurrentThreadTypeTest in
-// platform_thread_unittest.cc for the most up-to-date state of each platform's
-// handling of ThreadType.
-enum class ThreadType : int {
-  // Suitable for threads that have the least urgency and lowest priority, and
-  // can be interrupted or delayed by other types.
-  kBackground,
-  // Suitable for threads that are less important than normal type, and can be
-  // interrupted or delayed by threads with kDefault type.
-  kUtility,
-  // Suitable for threads that produce user-visible artifacts but aren't
-  // latency sensitive. The underlying platform will try to be economic
-  // in its usage of resources for this thread, if possible.
-  kResourceEfficient,
-  // Default type. The thread priority or quality of service will be set to
-  // platform default. In Chrome, this is suitable for handling user
-  // interactions (input), only display and audio can get a higher priority.
-  kDefault,
-  // Suitable for threads which are critical to compositing the foreground
-  // content.
-  kCompositing,
-  // Suitable for display critical threads.
-  kDisplayCritical,
-  // Suitable for low-latency, glitch-resistant audio.
-  kRealtimeAudio,
-  kMaxValue = kRealtimeAudio,
-};
-
-// Cross-platform mapping of physical thread priorities. Used by tests to verify
-// the underlying effects of SetCurrentThreadType.
-enum class ThreadPriorityForTest : int {
-  kBackground,
-  kUtility,
-  kResourceEfficient,
-  kNormal,
-  kCompositing,
-  kDisplay,
-  kRealtimeAudio,
-  kMaxValue = kRealtimeAudio,
-};
+static constexpr PlatformThreadId kInvalidThreadId = PlatformThreadId();
 
 // A namespace for low-level thread functions.
 class BASE_EXPORT PlatformThreadBase {
@@ -266,15 +288,19 @@ class BASE_EXPORT PlatformThreadBase {
   static TimeDelta GetRealtimePeriod(Delegate* delegate);
 
   // Returns the override of task leeway if any.
-  static absl::optional<TimeDelta> GetThreadLeewayOverride();
+  static std::optional<TimeDelta> GetThreadLeewayOverride();
 
   // Returns the default thread stack size set by chrome. If we do not
   // explicitly set default size then returns 0.
   static size_t GetDefaultThreadStackSize();
 
-  static ThreadPriorityForTest GetCurrentThreadPriorityForTest();
+  // Returns the ThreadType that corresponds to the current OS thread settings.
+  // Note that this returns a canonical ThreadType for the settings and may not
+  // match the exact ThreadType set if multiple ThreadTypes map to the same OS
+  // thread settings.
+  static ThreadType GetCurrentEffectiveThreadTypeForTest();
 
-  protected:
+ protected:
   static void SetNameCommon(const std::string& name);
 };
 
@@ -284,17 +310,15 @@ class BASE_EXPORT PlatformThreadApple : public PlatformThreadBase {
   // Stores the period value in TLS.
   static void SetCurrentThreadRealtimePeriodValue(TimeDelta realtime_period);
 
-  // Signals that the feature list has been initialized which allows to check
-  // the feature's value now and initialize state. This prevents race
-  // conditions where the feature is being checked while it is being
-  // initialized, which can cause a crash.
-  static void InitFeaturesPostFieldTrial();
+  static TimeDelta GetCurrentThreadRealtimePeriodForTest();
+
+  // Initializes features for this class. See `base::features::Init()`.
+  static void InitializeFeatures();
 };
 #endif  // BUILDFLAG(IS_APPLE)
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 class ThreadTypeDelegate;
-using IsViaIPC = base::StrongAlias<class IsViaIPCTag, bool>;
 
 class BASE_EXPORT PlatformThreadLinux : public PlatformThreadBase {
  public:
@@ -314,10 +338,9 @@ class BASE_EXPORT PlatformThreadLinux : public PlatformThreadBase {
   // to change the priority of sandboxed threads for improved performance.
   // Warning: Don't use this for a main thread because that will change the
   // whole thread group's (i.e. process) priority.
-  static void SetThreadType(PlatformThreadId process_id,
+  static void SetThreadType(ProcessId process_id,
                             PlatformThreadId thread_id,
-                            ThreadType thread_type,
-                            IsViaIPC via_ipc);
+                            ThreadType thread_type);
 
   // For a given thread id and thread type, setup the cpuset and schedtune
   // CGroups for the thread.
@@ -331,43 +354,25 @@ class BASE_EXPORT PlatformThreadLinux : public PlatformThreadBase {
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_CHROMEOS)
-BASE_EXPORT BASE_DECLARE_FEATURE(kSetRtForDisplayThreads);
+class CrossProcessPlatformThreadDelegate;
 
 class BASE_EXPORT PlatformThreadChromeOS : public PlatformThreadLinux {
  public:
-  // Signals that the feature list has been initialized. Used for preventing
-  // race conditions and crashes, see comments in PlatformThreadApple.
-  static void InitFeaturesPostFieldTrial();
+  // Sets a delegate which handles thread type changes for threads of another
+  // process. This must be externally synchronized with any call to
+  // SetCurrentThreadType.
+  static void SetCrossProcessPlatformThreadDelegate(
+      CrossProcessPlatformThreadDelegate* delegate);
+
+  // Initializes features for this class. See `base::features::Init()`.
+  static void InitializeFeatures();
 
   // Toggles a specific thread's type at runtime. This is the ChromeOS-specific
   // version and includes Linux's functionality but does slightly more. See
   // PlatformThreadLinux's SetThreadType() header comment for Linux details.
-  static void SetThreadType(PlatformThreadId process_id,
+  static void SetThreadType(ProcessId process_id,
                             PlatformThreadId thread_id,
-                            ThreadType thread_type,
-                            IsViaIPC via_ipc);
-
-  // Returns true if the feature for backgrounding of threads is enabled.
-  static bool IsThreadsBgFeatureEnabled();
-
-  // Returns true if the feature for setting display threads to RT is enabled.
-  static bool IsDisplayThreadsRtFeatureEnabled();
-
-  // Set a specific thread as backgrounded. This is called when the process
-  // moves to and from the background and changes have to be made to each of its
-  // thread's scheduling attributes.
-  static void SetThreadBackgrounded(ProcessId process_id,
-                                    PlatformThreadId thread_id,
-                                    bool backgrounded);
-
-  // Returns the thread type of a thread given its thread id.
-  static absl::optional<ThreadType> GetThreadTypeFromThreadId(
-      ProcessId process_id,
-      PlatformThreadId thread_id);
-
-  // Returns a SequenceChecker which should be used to verify that all
-  // cross-process priority changes are performed without races.
-  static SequenceCheckerImpl& GetCrossProcessThreadPrioritySequenceChecker();
+                            ThreadType thread_type);
 };
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
@@ -382,10 +387,35 @@ using PlatformThread = PlatformThreadLinux;
 using PlatformThread = PlatformThreadBase;
 #endif
 
+#if BUILDFLAG(IS_ANDROID)
+BASE_EXPORT void SetMaxFrequencyPerProcessorOverrideForTesting(
+    std::vector<uint64_t>* value);
+
+// Returns whether `SetCanRunOnBigCore()` is a no-op. This is intended to help
+// with experiment targeting, by making sure that the base::Feature is only
+// queried for eligible devices. It is thus intended to be temporary, and to be
+// removed once the experiments conclude.
+BASE_EXPORT bool IsEligibleForBigCoreAffinityChange();
+// Sets whether a thread is allowed to run on the big core cluster, on
+// configurations where this is relevant, i.e. at least 3 distinct
+// clusters. Otherwise this is a no-op.
+BASE_EXPORT void SetCanRunOnBigCore(PlatformThreadId thread_id, bool can_run);
+#endif  // BUILDFLAG(IS_ANDROID)
+
 namespace internal {
 
-void SetCurrentThreadType(ThreadType thread_type,
-                          MessagePumpType pump_type_hint);
+#if BUILDFLAG(IS_APPLE)
+using PlatformPriorityOverride = pthread_override_t;
+#else
+using PlatformPriorityOverride = bool;
+#endif
+PlatformPriorityOverride SetThreadTypeOverride(
+    PlatformThreadHandle thread_handle,
+    ThreadType thread_type);
+void RemoveThreadTypeOverride(
+    PlatformThreadHandle thread_handle,
+    const PlatformPriorityOverride& priority_override_handle,
+    ThreadType initial_thread_type);
 
 void SetCurrentThreadTypeImpl(ThreadType thread_type,
                               MessagePumpType pump_type_hint);

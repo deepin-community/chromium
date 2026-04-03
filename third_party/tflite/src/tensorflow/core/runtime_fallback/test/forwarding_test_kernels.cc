@@ -39,8 +39,8 @@ class ScalarAdd : public OpKernelT {
     const Tensor& input1 = ctx->input(1);
 
     Tensor output(input0);
-    output.scalar<int32>()() =
-        input0.scalar<int32>()() + input1.scalar<int32>()();
+    output.scalar<int32_t>()() =
+        input0.scalar<int32_t>()() + input1.scalar<int32_t>()();
 
     ctx->set_output(0, output);
   }
@@ -54,7 +54,7 @@ REGISTER_OP("ScalarAdd") SCALAR_ADD_PROPERTIES;
 
 // When calling ScalarAdd from TF, use the standard OpKernel* types.
 REGISTER_KERNEL_BUILDER(
-    Name("ScalarAdd").Device(DEVICE_CPU).TypeConstraint<int32>("T"),
+    Name("ScalarAdd").Device(DEVICE_CPU).TypeConstraint<int32_t>("T"),
     ScalarAdd<OpKernel, OpKernelConstruction, OpKernelContext>)
 #endif
 
@@ -89,7 +89,7 @@ class KernelWithBoolAttr : public OpKernelT {
  public:
   explicit KernelWithBoolAttr(OpKernelConstructionT* construction)
       : OpKernelT(construction) {
-    Status s = construction->GetAttr("testattr", &attr_);
+    absl::Status s = construction->GetAttr("testattr", &attr_);
     if (!s.ok()) {
       construction->CtxFailure(s);
     }

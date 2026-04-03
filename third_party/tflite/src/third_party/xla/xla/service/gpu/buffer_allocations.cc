@@ -16,28 +16,27 @@ limitations under the License.
 #include "xla/service/gpu/buffer_allocations.h"
 
 #include <cstdint>
+#include <optional>
 #include <set>
 
+#include "absl/status/status.h"
 #include "absl/types/span.h"
 #include "xla/service/buffer_assignment.h"
-#include "xla/status.h"
-#include "xla/stream_executor/device_memory.h"
-#include "xla/util.h"
-#include "tsl/platform/logging.h"
+#include "xla/stream_executor/device_address.h"
 
 namespace xla {
 namespace gpu {
 
 absl::Status BufferAllocations::TearDown(
-    const std::set<se::DeviceMemoryBase>& live_addresses,
-    absl::Span<const BufferAllocation> allocations) {
+    const std::set<se::DeviceAddressBase>& live_addresses,
+    absl::Span<const BufferAllocation* const> allocations) {
   // Deallocate temporary buffers, taking care to try to deallocate all of them
   // even if one of the deallocations fails.
   absl::Status status;
   const int64_t num_buffers = allocations.size();
   for (BufferAllocation::Index i = 0; i < num_buffers; ++i) {
-    const BufferAllocation& allocation = allocations[i];
-    se::DeviceMemoryBase buffer_address = GetDeviceAddress(allocation.index());
+    const BufferAllocation& allocation = *allocations[i];
+    se::DeviceAddressBase buffer_address = GetDeviceAddress(allocation.index());
     // Deallocate buffers marked "maybe_live_out" but aren't actually live out,
     // and temp buffers.
     if ((allocation.maybe_live_out() &&
@@ -53,40 +52,24 @@ absl::Status BufferAllocations::TearDown(
   return status;
 }
 
-se::DeviceMemoryBase BufferAllocations::GetDeviceAddress(
+se::DeviceAddressBase BufferAllocations::GetDeviceAddress(
     BufferAllocation::Index buffer_index) const {
   CHECK_GE(buffer_index, 0);
   CHECK_LT(buffer_index, buffers_.size());
-  se::DeviceMemoryBase base = buffers_[buffer_index];
-  if (reinterpret_cast<uintptr_t>(base.opaque()) == kExternalAllocationMarker) {
-    if (!external_allocations_) {
-      LOG(ERROR) << "Does not have external allocations for buffer "
-                 << buffer_index;
-      return se::DeviceMemoryBase();
-    }
-    auto external_address =
-        external_allocations_->GetDeviceAddress(buffer_index);
-    if (external_address.ok()) {
-      return external_address.value();
-    }
-    LOG(ERROR) << "External address for allocation" << buffer_index
-               << " is not allocated yet";
-    return se::DeviceMemoryBase();
-  }
-  return base;
+  return buffers_[buffer_index];
 }
 
-se::DeviceMemoryBase& BufferAllocations::GetMutableDeviceAddress(
+se::DeviceAddressBase& BufferAllocations::GetMutableDeviceAddress(
     BufferAllocation::Index buffer_index) {
   CHECK_GE(buffer_index, 0);
   CHECK_LT(buffer_index, buffers_.size());
   return buffers_[buffer_index];
 }
 
-se::DeviceMemoryBase BufferAllocations::GetDeviceAddress(
+se::DeviceAddressBase BufferAllocations::GetDeviceAddress(
     const BufferAllocation::Slice& buffer_slice) const {
   int64_t index = buffer_slice.index();
-  se::DeviceMemoryBase base = GetDeviceAddress(index);
+  se::DeviceAddressBase base = GetDeviceAddress(index);
 
   int64_t offset = buffer_slice.offset();
   CHECK_LE(buffer_slice.offset(), base.size())
@@ -101,26 +84,16 @@ se::DeviceMemoryBase BufferAllocations::GetDeviceAddress(
   return base.GetByteSlice(buffer_slice.offset(), buffer_slice.size());
 }
 
-absl::Status BufferAllocations::AddExternalAllocation(
-    BufferAllocation::Index index, se::DeviceMemoryBase memory) const {
-  if (external_allocations_ == nullptr) {
-    return Internal(
-        "Calling external allocations, but no allocation tracker is provided"
-        "for allocation %d",
-        index);
+std::optional<BufferAllocation::Index> BufferAllocations::FindAllocationIndex(
+    const se::DeviceAddressBase& addr) const {
+  for (BufferAllocation::Index i = 0; i < buffers_.size(); ++i) {
+    char* buf = static_cast<char*>(buffers_[i].opaque());
+    char* ptr = static_cast<char*>(addr.opaque());
+    if (ptr >= buf && ptr <= buf + buffers_[i].size()) {
+      return i;
+    }
   }
-  return external_allocations_->AddAllocation(index, memory);
-}
-
-absl::Status BufferAllocations::EraseExternalAllocation(
-    BufferAllocation::Index index) const {
-  if (external_allocations_ == nullptr) {
-    return Internal(
-        "Calling external allocations, but no allocation tracker is provided"
-        "for allocation %d",
-        index);
-  }
-  return external_allocations_->EraseAllocation(index);
+  return std::nullopt;
 }
 
 }  // namespace gpu

@@ -39,11 +39,20 @@ class LocalPasswordSetupScreen : public BaseOSAuthSetupScreen {
 
   ~LocalPasswordSetupScreen() override;
 
+  void set_exit_callback_for_testing(const ScreenExitCallback& exit_callback) {
+    exit_callback_ = exit_callback;
+  }
+
+  const ScreenExitCallback& get_exit_callback_for_testing() {
+    return exit_callback_;
+  }
+
  private:
   // BaseScreen:
   void ShowImpl() override;
+  void HideImpl() override;
   void DoShow();
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
 
   void OnUpdateLocalPassword(auth::mojom::ConfigureResult result);
   void OnSetLocalPassword(auth::mojom::ConfigureResult result);
@@ -51,6 +60,9 @@ class LocalPasswordSetupScreen : public BaseOSAuthSetupScreen {
   base::WeakPtr<LocalPasswordSetupView> view_;
 
   ScreenExitCallback exit_callback_;
+
+  // Keeps cryptohome authsession alive.
+  std::unique_ptr<ScopedSessionRefresher> session_refresher_;
 
   base::WeakPtrFactory<LocalPasswordSetupScreen> weak_factory_{this};
 };

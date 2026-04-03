@@ -10,11 +10,11 @@
 #include "third_party/blink/renderer/core/layout/inline/inline_cursor.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/layout/layout_text_combine.h"
-#include "third_party/blink/renderer/core/layout/legacy_layout_tree_walking.h"
 #include "third_party/blink/renderer/core/layout/length_utils.h"
 #include "third_party/blink/renderer/core/layout/logical_fragment.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/physical_fragment.h"
+#include "third_party/blink/renderer/core/layout/transform_utils.h"
 #include "third_party/blink/renderer/core/style/style_overflow_clip_margin.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 
@@ -32,17 +32,10 @@ ScrollableOverflowCalculator::RecalculateScrollableOverflowForFragment(
   const WritingDirectionMode writing_direction =
       node.Style().GetWritingDirection();
 
-  // TODO(ikilpatrick): The final computed scrollbars for a fragment should
-  // likely live on the PhysicalBoxFragment.
-  PhysicalBoxStrut scrollbar;
-  if (fragment.IsCSSBox()) {
-    scrollbar = ComputeScrollbarsForNonAnonymous(node).ConvertToPhysical(
-        writing_direction);
-  }
-
   ScrollableOverflowCalculator calculator(
       node, fragment.IsCSSBox(), has_block_fragmentation, fragment.Borders(),
-      scrollbar, fragment.Padding(), fragment.Size(), writing_direction);
+      fragment.Scrollbar(), fragment.Padding(), fragment.Size(),
+      writing_direction);
 
   if (const FragmentItems* items = fragment.Items()) {
     calculator.AddItems(fragment, *items);
@@ -86,6 +79,8 @@ ScrollableOverflowCalculator::ScrollableOverflowCalculator(
       writing_direction_(writing_direction),
       is_scroll_container_(is_css_box && node_.IsScrollContainer()),
       is_view_(node_.IsView()),
+      scrolls_all_directions_(is_css_box &&
+                              node_.IsOverscrollAreaParentPseudoElement()),
       has_left_overflow_(is_css_box && node_.HasLeftOverflow()),
       has_top_overflow_(is_css_box && node_.HasTopOverflow()),
       has_non_visible_overflow_(is_css_box && node_.HasNonVisibleOverflow()),
@@ -136,11 +131,15 @@ void ScrollableOverflowCalculator::AddItemsInternal(
 
   // |LayoutTextCombine| doesn't not cause scrollable overflow because
   // combined text fits in 1em by using width variant font or scaling.
-  if (UNLIKELY(IsA<LayoutTextCombine>(layout_object))) {
+  if (IsA<LayoutTextCombine>(layout_object)) [[unlikely]] {
     return;
   }
 
   for (const auto& item : items) {
+    if (item->IsHiddenForPaint()) {
+      continue;
+    }
+
     if (const auto* line_box = item->LineBoxFragment()) {
       has_hanging = line_box->HasHanging();
       line_rect = item->RectInContainerFragment();
@@ -156,8 +155,9 @@ void ScrollableOverflowCalculator::AddItemsInternal(
       PhysicalRect child_overflow = item->RectInContainerFragment();
 
       // Adjust the text's overflow if the line-box has hanging.
-      if (UNLIKELY(has_hanging))
+      if (has_hanging) [[unlikely]] {
         child_overflow = AdjustOverflowForHanging(line_rect, child_overflow);
+      }
 
       AddOverflow(child_overflow);
       continue;
@@ -213,23 +213,24 @@ PhysicalRect ScrollableOverflowCalculator::AdjustOverflowForHanging(
 PhysicalRect ScrollableOverflowCalculator::AdjustOverflowForScrollOrigin(
     const PhysicalRect& overflow) {
   LayoutUnit left_offset =
-      has_left_overflow_
+      scrolls_all_directions_ || has_left_overflow_
           ? std::min(padding_rect_.Right(), overflow.offset.left)
           : std::max(padding_rect_.offset.left, overflow.offset.left);
 
   LayoutUnit right_offset =
-      has_left_overflow_
-          ? std::min(padding_rect_.Right(), overflow.Right())
-          : std::max(padding_rect_.offset.left, overflow.Right());
+      scrolls_all_directions_ || !has_left_overflow_
+          ? std::max(padding_rect_.offset.left, overflow.Right())
+          : std::min(padding_rect_.Right(), overflow.Right());
 
   LayoutUnit top_offset =
-      has_top_overflow_
+      scrolls_all_directions_ || has_top_overflow_
           ? std::min(padding_rect_.Bottom(), overflow.offset.top)
           : std::max(padding_rect_.offset.top, overflow.offset.top);
 
   LayoutUnit bottom_offset =
-      has_top_overflow_ ? std::min(padding_rect_.Bottom(), overflow.Bottom())
-                        : std::max(padding_rect_.offset.top, overflow.Bottom());
+      scrolls_all_directions_ || !has_top_overflow_
+          ? std::max(padding_rect_.offset.top, overflow.Bottom())
+          : std::min(padding_rect_.Bottom(), overflow.Bottom());
 
   return {PhysicalOffset(left_offset, top_offset),
           PhysicalSize(right_offset - left_offset, bottom_offset - top_offset)};
@@ -237,6 +238,10 @@ PhysicalRect ScrollableOverflowCalculator::AdjustOverflowForScrollOrigin(
 
 PhysicalRect ScrollableOverflowCalculator::ScrollableOverflowForPropagation(
     const PhysicalBoxFragment& child_fragment) {
+  if (child_fragment.IsHiddenForPaint()) {
+    return {};
+  }
+
   // If the fragment is anonymous, just return its scrollable-overflow (don't
   // apply any incorrect transforms, etc).
   if (!child_fragment.IsCSSBox())
@@ -244,13 +249,11 @@ PhysicalRect ScrollableOverflowCalculator::ScrollableOverflowForPropagation(
 
   PhysicalRect overflow = {{}, child_fragment.Size()};
 
-  // Collapsed table rows/sections set IsHiddenForPaint flag.
   bool ignore_scrollable_overflow =
       child_fragment.ShouldApplyLayoutContainment() ||
       child_fragment.IsInlineBox() ||
       (child_fragment.ShouldClipOverflowAlongBothAxis() &&
-       !child_fragment.ShouldApplyOverflowClipMargin()) ||
-      child_fragment.IsHiddenForPaint();
+       !child_fragment.ShouldApplyOverflowClipMargin());
 
   if (!ignore_scrollable_overflow) {
     PhysicalRect child_overflow = child_fragment.ScrollableOverflow();
@@ -279,8 +282,8 @@ PhysicalRect ScrollableOverflowCalculator::ScrollableOverflowForPropagation(
   }
 
   // Apply any transforms to the overflow.
-  if (std::optional<gfx::Transform> transform =
-          node_.GetTransformForChildFragment(child_fragment, size_)) {
+  if (std::optional<gfx::Transform> transform = GetTransformForChildFragment(
+          child_fragment, *node_.GetLayoutBox(), size_)) {
     overflow =
         PhysicalRect::EnclosingRect(transform->MapRect(gfx::RectF(overflow)));
   }

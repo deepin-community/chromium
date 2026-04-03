@@ -64,6 +64,11 @@ bool VideoColorSpace::IsSpecified() const {
          range != gfx::ColorSpace::RangeID::INVALID;
 }
 
+bool VideoColorSpace::IsHDR() const {
+  return transfer == TransferID::SMPTEST2084 ||
+         transfer == TransferID::ARIB_STD_B67;
+}
+
 gfx::ColorSpace VideoColorSpace::ToGfxColorSpace() const {
   return ToGfxColorSpaceInternal(/*allow_guessing=*/false);
 }
@@ -130,6 +135,9 @@ VideoColorSpace VideoColorSpace::FromGfxColorSpace(
     case gfx::ColorSpace::PrimaryID::P3:
       primaries = VideoColorSpace::PrimaryID::SMPTEST432_1;
       break;
+    case gfx::ColorSpace::PrimaryID::EBU_3213_E:
+      primaries = VideoColorSpace::PrimaryID::EBU_3213_E;
+      break;
     default:
       break;
   }
@@ -137,6 +145,7 @@ VideoColorSpace VideoColorSpace::FromGfxColorSpace(
   VideoColorSpace::TransferID transfer = VideoColorSpace::TransferID::INVALID;
   switch (color_space.GetTransferID()) {
     case gfx::ColorSpace::TransferID::BT709:
+    case gfx::ColorSpace::TransferID::BT709_APPLE:
       transfer = VideoColorSpace::TransferID::BT709;
       break;
     case gfx::ColorSpace::TransferID::GAMMA22:
@@ -214,9 +223,6 @@ VideoColorSpace VideoColorSpace::FromGfxColorSpace(
     case gfx::ColorSpace::MatrixID::BT2020_NCL:
       matrix = VideoColorSpace::MatrixID::BT2020_NCL;
       break;
-    case gfx::ColorSpace::MatrixID::BT2020_CL:
-      matrix = VideoColorSpace::MatrixID::BT2020_CL;
-      break;
     case gfx::ColorSpace::MatrixID::YDZDX:
       matrix = VideoColorSpace::MatrixID::YDZDX;
       break;
@@ -238,7 +244,8 @@ gfx::ColorSpace VideoColorSpace::ToGfxColorSpaceInternal(
   // Bitfield, note that guesses with higher values take precedence over
   // guesses with lower values.
   enum Guess {
-    GUESS_BT709 = 1 << 4,
+    GUESS_BT709 = 1 << 5,
+    GUESS_BT2020 = 1 << 4,
     GUESS_BT470M = 1 << 3,
     GUESS_BT470BG = 1 << 2,
     GUESS_SMPTE170M = 1 << 1,
@@ -273,6 +280,7 @@ gfx::ColorSpace VideoColorSpace::ToGfxColorSpaceInternal(
       break;
     case PrimaryID::BT2020:
       primary_id = gfx::ColorSpace::PrimaryID::BT2020;
+      guess |= GUESS_BT2020;
       break;
     case PrimaryID::SMPTEST428_1:
       primary_id = gfx::ColorSpace::PrimaryID::SMPTEST428_1;
@@ -284,8 +292,7 @@ gfx::ColorSpace VideoColorSpace::ToGfxColorSpaceInternal(
       primary_id = gfx::ColorSpace::PrimaryID::P3;
       break;
     case PrimaryID::EBU_3213_E:
-      // TODO(uzair.jaleel) Need to check this once.
-      primary_id = gfx::ColorSpace::PrimaryID::INVALID;
+      primary_id = gfx::ColorSpace::PrimaryID::EBU_3213_E;
       break;
     case PrimaryID::INVALID:
     case PrimaryID::UNSPECIFIED:
@@ -331,18 +338,22 @@ gfx::ColorSpace VideoColorSpace::ToGfxColorSpaceInternal(
       break;
     case TransferID::BT2020_10:
       transfer_id = gfx::ColorSpace::TransferID::BT2020_10;
+      guess |= GUESS_BT2020;
       break;
     case TransferID::BT2020_12:
       transfer_id = gfx::ColorSpace::TransferID::BT2020_12;
+      guess |= GUESS_BT2020;
       break;
     case TransferID::SMPTEST2084:
       transfer_id = gfx::ColorSpace::TransferID::PQ;
+      guess |= GUESS_BT2020;
       break;
     case TransferID::SMPTEST428_1:
       transfer_id = gfx::ColorSpace::TransferID::SMPTEST428_1;
       break;
     case TransferID::ARIB_STD_B67:
       transfer_id = gfx::ColorSpace::TransferID::HLG;
+      guess |= GUESS_BT2020;
       break;
     case TransferID::INVALID:
     case TransferID::UNSPECIFIED:
@@ -379,13 +390,12 @@ gfx::ColorSpace VideoColorSpace::ToGfxColorSpaceInternal(
       break;
     case MatrixID::BT2020_NCL:
       matrix_id = gfx::ColorSpace::MatrixID::BT2020_NCL;
-      break;
-    case MatrixID::BT2020_CL:
-      matrix_id = gfx::ColorSpace::MatrixID::BT2020_CL;
+      guess |= GUESS_BT2020;
       break;
     case MatrixID::YDZDX:
       matrix_id = gfx::ColorSpace::MatrixID::YDZDX;
       break;
+    case MatrixID::BT2020_CL:
     case MatrixID::INVALID:
     case MatrixID::UNSPECIFIED:
       break;
@@ -434,6 +444,9 @@ gfx::ColorSpace VideoColorSpace::ToGfxColorSpaceInternal(
       case GUESS_SMPTE240M:
         primary_id = gfx::ColorSpace::PrimaryID::SMPTE240M;
         break;
+      case GUESS_BT2020:
+        primary_id = gfx::ColorSpace::PrimaryID::BT2020;
+        break;
     }
   }
 
@@ -450,6 +463,9 @@ gfx::ColorSpace VideoColorSpace::ToGfxColorSpaceInternal(
       case GUESS_SMPTE240M:
         transfer_id = gfx::ColorSpace::TransferID::SMPTE240M;
         break;
+      case GUESS_BT2020:
+        transfer_id = gfx::ColorSpace::TransferID::BT2020_10;
+        break;
     }
   }
 
@@ -465,6 +481,9 @@ gfx::ColorSpace VideoColorSpace::ToGfxColorSpaceInternal(
         break;
       case GUESS_SMPTE240M:
         matrix_id = gfx::ColorSpace::MatrixID::SMPTE240M;
+        break;
+      case GUESS_BT2020:
+        matrix_id = gfx::ColorSpace::MatrixID::BT2020_NCL;
         break;
     }
   }

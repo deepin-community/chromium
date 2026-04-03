@@ -14,6 +14,7 @@
 
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "skia/ext/skcolorspace_primaries.h"
 #include "ui/display/types/display_constants.h"
 #include "ui/display/types/display_mode.h"
@@ -34,11 +35,11 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
 
   struct ColorInfo {
     // The color space of the display.
-    // TODO(https://crbug.com/1505062): This should be derived from other
+    // TODO(crbug.com/40945652): This should be derived from other
     // members.
     gfx::ColorSpace color_space = gfx::ColorSpace::CreateSRGB();
 
-    // Primaries and gamma indicicated by the EDID.
+    // Primaries and gamma indicated by the EDID.
     SkColorSpacePrimaries edid_primaries = SkNamedPrimariesExt::kSRGB;
     float edid_gamma = 2.2;
 
@@ -79,7 +80,6 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
                   int32_t year_of_manufacture,
                   const gfx::Size& maximum_cursor_size,
                   VariableRefreshRateState variable_refresh_rate_state,
-                  const std::optional<uint16_t>& vsync_rate_min,
                   const DrmFormatsAndModifiers& drm_formats_and_modifiers_);
 
   DisplaySnapshot(const DisplaySnapshot&) = delete;
@@ -127,7 +127,7 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
   PanelOrientation panel_orientation() const { return panel_orientation_; }
   const std::vector<uint8_t>& edid() const { return edid_; }
   const DisplayMode* current_mode() const { return current_mode_; }
-  void set_current_mode(const DisplayMode* mode) { current_mode_ = mode; }
+  void set_current_mode(const DisplayMode* mode);
   const DisplayMode* native_mode() const { return native_mode_; }
   int64_t product_code() const { return product_code_; }
   int32_t year_of_manufacture() const { return year_of_manufacture_; }
@@ -139,14 +139,9 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
       VariableRefreshRateState variable_refresh_rate_state) {
     variable_refresh_rate_state_ = variable_refresh_rate_state;
   }
-  const std::optional<uint16_t>& vsync_rate_min() const {
-    return vsync_rate_min_;
-  }
   const DrmFormatsAndModifiers& GetDRMFormatsAndModifiers() const {
     return drm_formats_and_modifiers_;
   }
-
-  void add_mode(const DisplayMode* mode) { modes_.push_back(mode->Clone()); }
 
   // Clones display state.
   std::unique_ptr<DisplaySnapshot> Clone() const;
@@ -157,8 +152,8 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
   // Used when no |product_code_| known.
   static const int64_t kInvalidProductCode = -1;
 
-  // Returns the buffer format to be used for the primary plane buffer.
-  static gfx::BufferFormat PrimaryFormat();
+  // Returns the SharedImageFormat to be used for the primary plane buffer.
+  static viz::SharedImageFormat PrimaryFormat();
 
   // Adds |connector_index_| to bits 33-48 of |edid_display_id_|. This function
   // is not plumbed via mojom to limit and control usage across processes.
@@ -250,7 +245,14 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
 
   const base::FilePath sys_path_;
 
+  // List of modes which natively exist on the display (i.e. have been extracted
+  // from the display's EDID blob).
   DisplayModeList modes_;
+  // List of modes which do not natively exist on the display. Modes are added
+  // to this list as-needed due to either panel fitting from other displays or
+  // from creating virtual modes. Once added, modes are not removed from this
+  // list for the lifetime of the snapshot.
+  DisplayModeList nonnative_modes_;
 
   // The orientation of the panel in respect to the natural device orientation.
   PanelOrientation panel_orientation_;
@@ -275,8 +277,6 @@ class DISPLAY_TYPES_EXPORT DisplaySnapshot {
 
   // Whether VRR is enabled, disabled, or not capable on this display.
   VariableRefreshRateState variable_refresh_rate_state_;
-  // The minimum supported vsync rate for this display in Hz.
-  const std::optional<uint16_t> vsync_rate_min_;
 
   // A list of supported Linux DRM formats and corresponding lists of modifiers
   // for each one.

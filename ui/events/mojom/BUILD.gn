@@ -40,7 +40,7 @@ mojom("mojom") {
   cpp_typemaps += [
     {
       types = [
-        # TODO(crbug.com/617167): Map directly to ui::Event.
+        # TODO(crbug.com/41257096): Map directly to ui::Event.
         {
           mojom = "ui.mojom.Event"
           cpp = "::std::unique_ptr<::ui::Event>"
@@ -76,6 +76,36 @@ mojom("mojom") {
       traits_deps = [ "//ipc:param_traits" ]
     },
   ]
+
+  if (is_android) {
+    sources += [ "motion_event_android.mojom" ]
+    cpp_typemaps += [
+      {
+        types = [
+          {
+            mojom = "ui.mojom.PointerCoordinates"
+            cpp = "::ui::MotionEventAndroid::PointerCoordinates"
+          },
+          {
+            mojom = "ui.mojom.MotionEventAndroidCachedPointer"
+            cpp = "::ui::MotionEventAndroid::CachedPointer"
+          },
+          {
+            mojom = "ui.mojom.HistoricalCachedPointer"
+            cpp = "::ui::CachedHistoricalEventSource::HistoricalCachedPointer"
+          },
+          {
+            mojom = "ui.mojom.CachedMotionEventAndroid"
+            cpp = "::std::unique_ptr<::ui::MotionEventAndroid>"
+            move_only = true
+          },
+        ]
+        traits_headers = [ "motion_event_android_mojom_traits.h" ]
+        traits_sources = [ "motion_event_android_mojom_traits.cc" ]
+      },
+    ]
+    cpp_configs = [ "//build/config/android:hide_all_but_jni" ]
+  }
 
   blink_cpp_typemaps = shared_cpp_typemaps
 

@@ -15,7 +15,6 @@
 #include "third_party/blink/renderer/core/resize_observer/resize_observer_utilities.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/svg/svg_graphics_element.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 #include "ui/gfx/geometry/size_f.h"
 
@@ -67,7 +66,7 @@ void ResizeObserverEntry::PopulateFromLayoutBox(
       PhysicalOffset(layout_box.PaddingLeft(), layout_box.PaddingTop()),
       layout_box.ContentSize());
   content_rect_ =
-      ResizeObserverUtilities::ZoomAdjustedLayoutRect(content_rect, style);
+      ResizeObserverUtilities::ZoomAdjustedPhysicalRect(content_rect, style);
 
   gfx::SizeF content_box = ResizeObserverUtilities::ComputeZoomAdjustedBox(
       ResizeObserverBoxOptions::kContentBox, layout_box, style);
@@ -105,9 +104,9 @@ void ResizeObserverEntry::PopulateFromSVGChild(
   const ComputedStyle& style = layout_object.StyleRef();
   const gfx::SizeF scaled_bounding_box_size(
       gfx::ScaleSize(bounding_box_size, style.EffectiveZoom()));
-  gfx::SizeF snapped_device_pixel_content_box =
+  gfx::SizeF snapped_device_pixel_content_box(
       ResizeObserverUtilities::ComputeSnappedDevicePixelContentBox(
-          scaled_bounding_box_size, layout_object, style);
+          scaled_bounding_box_size, layout_object, style));
   device_pixel_content_box_size.push_back(
       ResizeObserverSize::Create(snapped_device_pixel_content_box.width(),
                                  snapped_device_pixel_content_box.height()));

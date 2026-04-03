@@ -22,9 +22,12 @@
 #include "extensions/browser/api/storage/backend_task_runner.h"
 #include "extensions/browser/api/storage/settings_observer.h"
 #include "extensions/browser/api/storage/storage_area_namespace.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using testing::_;
 using testing::Mock;
@@ -95,7 +98,7 @@ class MutablePolicyValueStore : public PolicyValueStore {
   }
 
   WriteResult Set(WriteOptions options,
-                  const base::Value::Dict& values) override {
+                  const base::DictValue& values) override {
     return delegate()->Set(options, values);
   }
 
@@ -123,7 +126,7 @@ INSTANTIATE_TEST_SUITE_P(PolicyValueStoreTest,
 class PolicyValueStoreTest : public testing::Test {
  public:
   PolicyValueStoreTest() = default;
-  ~PolicyValueStoreTest() override {}
+  ~PolicyValueStoreTest() override = default;
 
   void SetUp() override {
     ASSERT_TRUE(scoped_temp_dir_.CreateUniqueTempDir());
@@ -185,7 +188,7 @@ TEST_F(PolicyValueStoreTest, ReadOnly) {
   base::Value string_value("value");
   EXPECT_FALSE(store_->Set(options, "key", string_value).status().ok());
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("key", "value");
   EXPECT_FALSE(store_->Set(options, dict).status().ok());
 

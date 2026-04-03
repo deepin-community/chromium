@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
+
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+
 #ifndef GL_GLEXT_PROTOTYPES
 #define GL_GLEXT_PROTOTYPES
 #endif
@@ -150,14 +155,14 @@ std::string GetFragmentShaderSource(GLenum target, GLenum format, bool is_es3) {
 
 void setColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t* color) {
   color[0] = r;
-  color[1] = g;
-  color[2] = b;
-  color[3] = a;
+  UNSAFE_TODO(color[1]) = g;
+  UNSAFE_TODO(color[2]) = b;
+  UNSAFE_TODO(color[3]) = a;
 }
 
 void getExpectedColorAndMask(GLenum src_internal_format,
                              GLenum dest_internal_format,
-                             const uint8_t* color,
+                             base::span<const uint8_t> color,
                              uint8_t* expected_color,
                              uint8_t* expected_mask) {
   uint8_t adjusted_color[4];
@@ -180,7 +185,6 @@ void getExpectedColorAndMask(GLenum src_internal_format,
       break;
     case GL_RGB:
     case GL_RGB8:
-    case GL_RGB_YCBCR_420V_CHROMIUM:
       setColor(color[0], color[1], color[2], 255, adjusted_color);
       break;
     case GL_RGBA:
@@ -201,11 +205,10 @@ void getExpectedColorAndMask(GLenum src_internal_format,
     }
     default:
       NOTREACHED() << gl::GLEnums::GetStringEnum(src_internal_format);
-      break;
   }
 
   switch (dest_internal_format) {
-    // TODO(crbug.com/577144): Enable GL_ALPHA, GL_LUMINANCE and
+    // TODO(crbug.com/40452138): Enable GL_ALPHA, GL_LUMINANCE and
     // GL_LUMINANCE_ALPHA.
     case GL_R8:
     case GL_R16F:
@@ -277,7 +280,6 @@ void getExpectedColorAndMask(GLenum src_internal_format,
       break;
     default:
       NOTREACHED() << gl::GLEnums::GetStringEnum(dest_internal_format);
-      break;
   }
 }
 
@@ -318,22 +320,22 @@ void getTextureDataAndExpectedRGBAs(FormatType src_format_type,
         for (uint32_t j = 0; j < 4; ++j) {
           if (j < src_channel_count) {
             texture_data->at((width * y + x) * src_channel_count + j) =
-                (alt ? alt_color : color)[j];
+                UNSAFE_TODO((alt ? alt_color : color)[j]);
           }
           expected_rgba_pixels->at((width * y + x) * 4 + j) =
-              (alt ? alt_expected_color : expected_color)[j];
+              UNSAFE_TODO((alt ? alt_expected_color : expected_color)[j]);
         }
       }
     }
 
     return;
   } else if (src_format_type.type == GL_UNSIGNED_SHORT) {
-    constexpr uint16_t color_16bit[4] = {color[0] << 8, color[1] << 8,
-                                         color[2] << 8, color[3] << 8};
+    constexpr std::array<uint16_t, 4> color_16bit = {
+        color[0] << 8, color[1] << 8, color[2] << 8, color[3] << 8};
 
     texture_data->resize(num_pixels * src_channel_count * sizeof(uint16_t));
     uint16_t* texture_data16 =
-        reinterpret_cast<uint16_t*>(texture_data->data());
+        UNSAFE_TODO(reinterpret_cast<uint16_t*>(texture_data->data()));
     int16_t flip_sign = -1;
     for (uint32_t i = 0; i < num_pixels * src_channel_count;
          i += src_channel_count) {
@@ -342,12 +344,12 @@ void getTextureDataAndExpectedRGBAs(FormatType src_format_type,
         // the same as without the offset.
         flip_sign *= -1;
         int16_t offset = flip_sign * ((i + j) % 0x7F);
-        texture_data16[i + j] = color_16bit[j] + offset;
+        UNSAFE_TODO(texture_data16[i + j]) = color_16bit[j] + offset;
       }
     }
     for (uint32_t i = 0; i < num_pixels * 4; i += 4) {
       for (int c = 0; c < 4; ++c) {
-        expected_rgba_pixels->at(i + c) = expected_color[c];
+        expected_rgba_pixels->at(i + c) = UNSAFE_TODO(expected_color[c]);
       }
     }
 
@@ -359,15 +361,15 @@ void getTextureDataAndExpectedRGBAs(FormatType src_format_type,
                                         color[0];
     texture_data->resize(num_pixels * sizeof(uint32_t));
     uint32_t* texture_data32 =
-        reinterpret_cast<uint32_t*>(texture_data->data());
+        UNSAFE_TODO(reinterpret_cast<uint32_t*>(texture_data->data()));
     for (uint32_t p = 0; p < num_pixels; ++p) {
-      texture_data32[p] = color_rgb10_a2;
-      memcpy(expected_rgba_pixels->data() + p * 4, expected_color, 4);
+      UNSAFE_TODO(texture_data32[p]) = color_rgb10_a2;
+      UNSAFE_TODO(
+          memcpy(expected_rgba_pixels->data() + p * 4, expected_color, 4));
     }
     return;
   }
   NOTREACHED() << gl::GLEnums::GetStringEnum(src_format_type.type);
-  return;
 }
 
 }  // namespace
@@ -435,7 +437,6 @@ class GLCopyTextureCHROMIUMTest
         return GL_BGRA_EXT;
       default:
         NOTREACHED();
-        return GL_NONE;
     }
   }
 
@@ -638,7 +639,7 @@ class GLCopyTextureCHROMIUMES3Test : public GLCopyTextureCHROMIUMTest {
     DCHECK(!ShouldSkipTest());
 #if (BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) && \
     (defined(ARCH_CPU_X86) || defined(ARCH_CPU_X86_64))
-    // // TODO(crbug.com/1046873): Fails on mac and linux intel.
+    // // TODO(crbug.com/40671060): Fails on mac and linux intel.
     return true;
 #else
     return false;
@@ -649,10 +650,9 @@ class GLCopyTextureCHROMIUMES3Test : public GLCopyTextureCHROMIUMTest {
     DCHECK(!ShouldSkipTest());
     const gl::GLVersionInfo& gl_version_info =
         gl_.decoder()->GetFeatureInfo()->gl_version_info();
-    // XB30 support was introduced in GLES 3.0/ OpenGL 3.3, before that it was
-    // signalled via a specific extension.
+    // XB30 support was introduced in GLES 3.0, before that it was signalled
+    // via a specific extension.
     const bool supports_rgb10_a2 =
-        gl_version_info.IsAtLeastGL(3, 3) ||
         gl_version_info.IsAtLeastGLES(3, 0) ||
         GLTestHelper::HasExtension("GL_EXT_texture_type_2_10_10_10_REV");
     EXPECT_TRUE(supports_rgb10_a2);
@@ -665,7 +665,7 @@ class GLCopyTextureCHROMIUMES3Test : public GLCopyTextureCHROMIUMTest {
       return;
     }
     if (IsMacArm64()) {
-      LOG(INFO) << "TODO(crbug.com/1135372): fails on Apple DTK. Skipping.";
+      LOG(INFO) << "TODO(crbug.com/40151839): fails on Apple DTK. Skipping.";
       return;
     }
     if (gl_.gpu_preferences().use_passthrough_cmd_decoder) {
@@ -675,7 +675,7 @@ class GLCopyTextureCHROMIUMES3Test : public GLCopyTextureCHROMIUMTest {
       return;
     }
     if (IsMac() && !gl_.gpu_preferences().use_passthrough_cmd_decoder) {
-      // TODO(crbug.com/1227853): Remove this suppression once this passes on
+      // TODO(crbug.com/40189400): Remove this suppression once this passes on
       // Mac 11.
       LOG(INFO) << "Validating decoder on Mac. Skipping.";
       return;
@@ -1040,7 +1040,7 @@ TEST_P(GLCopyTextureCHROMIUMTest, InternalFormatNotSupported) {
   EXPECT_TRUE(GL_NO_ERROR == glGetError());
 
   // Check unsupported format reports error.
-  GLint unsupported_dest_formats[] = {GL_RED, GL_RG};
+  auto unsupported_dest_formats = std::to_array<GLint>({GL_RED, GL_RG});
   for (size_t dest_index = 0; dest_index < std::size(unsupported_dest_formats);
        dest_index++) {
     if (copy_type == TexImage) {
@@ -1076,11 +1076,11 @@ TEST_F(GLCopyTextureCHROMIUMTest, InternalFormatTypeCombinationNotSupported) {
 
   // Check unsupported internal_format/type combination reports error.
   struct FormatType { GLenum format, type; };
-  FormatType unsupported_format_types[] = {
-    {GL_RGB, GL_UNSIGNED_SHORT_4_4_4_4},
-    {GL_RGB, GL_UNSIGNED_SHORT_5_5_5_1},
-    {GL_RGBA, GL_UNSIGNED_SHORT_5_6_5},
-  };
+  auto unsupported_format_types = std::to_array<FormatType>({
+      {GL_RGB, GL_UNSIGNED_SHORT_4_4_4_4},
+      {GL_RGB, GL_UNSIGNED_SHORT_5_5_5_1},
+      {GL_RGBA, GL_UNSIGNED_SHORT_5_6_5},
+  });
   for (size_t dest_index = 0; dest_index < std::size(unsupported_format_types);
        dest_index++) {
     glCopyTextureCHROMIUM(textures_[0], 0, GL_TEXTURE_2D, textures_[1], 0,
@@ -1294,7 +1294,7 @@ TEST_P(GLCopyTextureCHROMIUMTest, BasicStatePreservation) {
                  nullptr);
   }
 
-  GLboolean reference_settings[2] = { GL_TRUE, GL_FALSE };
+  std::array<GLboolean, 2> reference_settings = {GL_TRUE, GL_FALSE};
   for (int x = 0; x < 2; ++x) {
     GLboolean setting = reference_settings[x];
     glEnableDisable(GL_DEPTH_TEST, setting);
@@ -1646,8 +1646,11 @@ TEST_P(GLCopyTextureCHROMIUMTest, UninitializedSource) {
   }
   EXPECT_TRUE(GL_NO_ERROR == glGetError());
 
-  uint8_t pixels[kHeight][kWidth][4] = {{{1}}};
-  glReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+  std::array<std::array<std::array<uint8_t, 4>, kWidth>, kHeight> pixels = {};
+  pixels[0][0][0] = 1;  // Set a pixel to a non-zero value, to ensure the zeroes
+                        // are indeed written by `glReadPixels`.
+
+  glReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
   for (int x = 0; x < kWidth; ++x) {
     for (int y = 0; y < kHeight; ++y) {
       EXPECT_EQ(0, pixels[y][x][0]);

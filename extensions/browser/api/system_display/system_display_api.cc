@@ -6,7 +6,6 @@
 
 #include <map>
 #include <memory>
-#include <set>
 #include <string>
 
 #include "base/functional/bind.h"
@@ -15,12 +14,16 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "extensions/browser/api/system_display/display_info_provider.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "extensions/common/manifest_handlers/kiosk_mode_info.h"
 #endif
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -107,7 +110,7 @@ class OverscanTracker::OverscanWebObserver
   }
 
  private:
-  std::set<std::string> display_ids_;
+  absl::flat_hash_set<std::string> display_ids_;
 };
 
 static OverscanTracker* g_overscan_tracker = nullptr;
@@ -166,7 +169,7 @@ bool HasAutotestPrivate(const ExtensionFunction& function) {
              mojom::APIPermissionID::kAutoTestPrivate);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
 // |edid| is available only to Chrome OS kiosk mode applications.
 bool ShouldRestrictEdidInformation(const ExtensionFunction& function) {
   if (function.extension()) {
@@ -196,7 +199,7 @@ bool SystemDisplayCrOSRestrictedFunction::PreRunValidation(std::string* error) {
   if (!SystemDisplayFunction::PreRunValidation(error))
     return false;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
   if (!ShouldRestrictToKioskAndWebUI())
     return true;
 
@@ -233,7 +236,7 @@ ExtensionFunction::ResponseAction SystemDisplayGetInfoFunction::Run() {
 
 void SystemDisplayGetInfoFunction::Response(
     std::vector<api::system_display::DisplayUnitInfo> all_displays_info) {
-#if BUILDFLAG(IS_CHROMEOS_ASH) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_CHROMEOS)
   if (ShouldRestrictEdidInformation(*this)) {
     for (auto& display_info : all_displays_info)
       display_info.edid.reset();

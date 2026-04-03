@@ -2,11 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "third_party/blink/public/platform/modules/video_capture/web_video_capture_impl_manager.h"
+
 #include <array>
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
@@ -17,10 +20,9 @@
 #include "media/capture/mojom/video_capture.mojom-blink.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
-#include "third_party/blink/public/platform/modules/video_capture/web_video_capture_impl_manager.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
-#include "third_party/blink/renderer/platform/video_capture/gpu_memory_buffer_test_support.h"
+#include "third_party/blink/renderer/platform/testing/io_task_runner_testing_platform_support.h"
 #include "third_party/blink/renderer/platform/video_capture/video_capture_impl.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_base.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
@@ -55,7 +57,7 @@ class MockVideoCaptureImpl : public VideoCaptureImpl,
                        base::OnceClosure destruct_callback)
       : VideoCaptureImpl(session_id,
                          scheduler::GetSingleThreadTaskRunnerForTesting(),
-                         &GetEmptyBrowserInterfaceBroker()),
+                         GetEmptyBrowserInterfaceBroker()),
         pause_callback_(pause_callback),
         destruct_callback_(std::move(destruct_callback)) {}
 
@@ -109,7 +111,7 @@ class MockVideoCaptureImpl : public VideoCaptureImpl,
   MOCK_METHOD1(OnFrameDropped, void(media::VideoCaptureFrameDropReason));
   MOCK_METHOD2(OnLog, void(const base::UnguessableToken&, const String&));
 
-  const raw_ptr<PauseResumeCallback, ExperimentalRenderer> pause_callback_;
+  const raw_ptr<PauseResumeCallback> pause_callback_;
   base::OnceClosure destruct_callback_;
 };
 
@@ -128,14 +130,14 @@ class MockVideoCaptureImplManager : public WebVideoCaptureImplManager {
  private:
   std::unique_ptr<VideoCaptureImpl> CreateVideoCaptureImpl(
       const media::VideoCaptureSessionId& session_id,
-      BrowserInterfaceBrokerProxy*) const override {
+      const BrowserInterfaceBrokerProxy&) const override {
     auto video_capture_impl = std::make_unique<MockVideoCaptureImpl>(
         session_id, pause_callback_, stop_capture_callback_);
     video_capture_impl->SetVideoCaptureHostForTesting(video_capture_impl.get());
     return std::move(video_capture_impl);
   }
 
-  const raw_ptr<PauseResumeCallback, ExperimentalRenderer> pause_callback_;
+  const raw_ptr<PauseResumeCallback> pause_callback_;
   const base::RepeatingClosure stop_capture_callback_;
 };
 
@@ -218,34 +220,35 @@ class VideoCaptureImplManagerTest : public ::testing::Test,
 
   void OnStateUpdate(const media::VideoCaptureSessionId& id,
                      VideoCaptureState state) {
-    if (state == VIDEO_CAPTURE_STATE_STARTED)
+    if (state == VIDEO_CAPTURE_STATE_STARTED) {
       OnStarted(id);
-    else if (state == VIDEO_CAPTURE_STATE_STOPPED)
+    } else if (state == VIDEO_CAPTURE_STATE_STOPPED) {
       OnStopped(id);
-    else
+    } else {
       NOTREACHED();
+    }
   }
 
   base::OnceClosure StartCapture(const media::VideoCaptureSessionId& id,
                                  const media::VideoCaptureParams& params) {
-    return manager_->StartCapture(
-        id, params,
-        ConvertToBaseRepeatingCallback(CrossThreadBindRepeating(
-            &VideoCaptureImplManagerTest::OnStateUpdate,
-            CrossThreadUnretained(this), id)),
-        ConvertToBaseRepeatingCallback(
-            CrossThreadBindRepeating(&VideoCaptureImplManagerTest::OnFrameReady,
-                                     CrossThreadUnretained(this))),
-        base::DoNothing(), base::DoNothing());
+    VideoCaptureCallbacks video_capture_callbacks;
+    video_capture_callbacks.state_update_cb = ConvertToBaseRepeatingCallback(
+        CrossThreadBindRepeating(&VideoCaptureImplManagerTest::OnStateUpdate,
+                                 CrossThreadUnretained(this), id));
+    video_capture_callbacks.deliver_frame_cb =
+        base::BindRepeating(&VideoCaptureImplManagerTest::OnFrameReady,
+                            CrossThreadUnretained(this));
+    video_capture_callbacks.frame_dropped_cb = base::DoNothing();
+    video_capture_callbacks.capture_version_cb = base::DoNothing();
+    return manager_->StartCapture(id, params,
+                                  std::move(video_capture_callbacks));
   }
 
   base::test::TaskEnvironment task_environment_;
-  ScopedTestingPlatformSupport<TestingPlatformSupportForGpuMemoryBuffer>
-      platform_;
+  ScopedTestingPlatformSupport<IOTaskRunnerTestingPlatformSupport> platform_;
   base::RunLoop cleanup_run_loop_;
   std::unique_ptr<MockVideoCaptureImplManager> manager_;
-  raw_ptr<BrowserInterfaceBrokerProxy, ExperimentalRenderer>
-      browser_interface_broker_;
+  raw_ptr<const BrowserInterfaceBrokerProxy> browser_interface_broker_;
 };
 
 // Multiple clients with the same session id. There is only one
@@ -254,7 +257,7 @@ TEST_F(VideoCaptureImplManagerTest, MultipleClients) {
   std::array<base::OnceClosure, kNumClients> release_callbacks;
   for (size_t i = 0; i < kNumClients; ++i) {
     release_callbacks[i] =
-        manager_->UseDevice(session_ids_[0], browser_interface_broker_);
+        manager_->UseDevice(session_ids_[0], *browser_interface_broker_);
   }
   std::array<base::OnceClosure, kNumClients> stop_callbacks =
       StartCaptureForAllClients(true);
@@ -265,7 +268,7 @@ TEST_F(VideoCaptureImplManagerTest, MultipleClients) {
 }
 
 TEST_F(VideoCaptureImplManagerTest, NoLeak) {
-  manager_->UseDevice(session_ids_[0], browser_interface_broker_).Reset();
+  manager_->UseDevice(session_ids_[0], *browser_interface_broker_).Reset();
   manager_.reset();
   cleanup_run_loop_.Run();
 }
@@ -275,7 +278,7 @@ TEST_F(VideoCaptureImplManagerTest, SuspendAndResumeSessions) {
   MediaStreamDevices video_devices;
   for (size_t i = 0; i < kNumClients; ++i) {
     release_callbacks[i] =
-        manager_->UseDevice(session_ids_[i], browser_interface_broker_);
+        manager_->UseDevice(session_ids_[i], *browser_interface_broker_);
     MediaStreamDevice video_device;
     video_device.set_session_id(session_ids_[i]);
     video_devices.push_back(video_device);

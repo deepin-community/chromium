@@ -96,7 +96,6 @@ void TPMTokenInfoGetter::Continue() {
   switch (state_) {
     case STATE_INITIAL:
       NOTREACHED();
-      break;
     case STATE_STARTED:
       chromeos::TpmManagerClient::Get()->GetTpmNonsensitiveStatus(
           ::tpm_manager::GetTpmNonsensitiveStatusRequest(),

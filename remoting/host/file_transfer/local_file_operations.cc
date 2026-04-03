@@ -5,8 +5,9 @@
 #include "remoting/host/file_transfer/local_file_operations.h"
 
 #include <cstdint>
-
 #include <optional>
+#include <variant>
+
 #include "base/files/file_path.h"
 #include "base/files/file_proxy.h"
 #include "base/files/file_util.h"
@@ -16,6 +17,7 @@
 #include "base/path_service.h"
 #include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "build/build_config.h"
 #include "remoting/base/result.h"
@@ -76,7 +78,7 @@ class LocalFileReader : public FileOperations::Reader {
 
  private:
   void OnEnsureUserResult(OpenCallback callback,
-                          protocol::FileTransferResult<absl::monostate> result);
+                          protocol::FileTransferResult<std::monostate> result);
   void OnFileChooserResult(OpenCallback callback, FileChooser::Result result);
   void OnOpenResult(OpenCallback callback, base::File::Error error);
   void OnGetInfoResult(OpenCallback callback,
@@ -194,7 +196,7 @@ FileOperations::State LocalFileReader::state() const {
 
 void LocalFileReader::OnEnsureUserResult(
     FileOperations::Reader::OpenCallback callback,
-    protocol::FileTransferResult<absl::monostate> result) {
+    protocol::FileTransferResult<std::monostate> result) {
   if (!result) {
     SetState(FileOperations::kFailed);
     std::move(callback).Run(std::move(result.error()));
@@ -277,7 +279,6 @@ void LocalFileReader::SetState(FileOperations::State state) {
   switch (state) {
     case FileOperations::kCreated:
       NOTREACHED();  // Can never return to initial state.
-      break;
     case FileOperations::kReady:
       DCHECK_EQ(FileOperations::kBusy, state_);
       break;
@@ -311,7 +312,7 @@ void LocalFileWriter::Open(const base::FilePath& filename, Callback callback) {
   file_task_runner_->PostTaskAndReplyWithResult(
       FROM_HERE, base::BindOnce([] {
         return EnsureUserContext().AndThen(
-            [](absl::monostate) { return GetFileUploadDirectory(); });
+            [](std::monostate) { return GetFileUploadDirectory(); });
       }),
       base::BindOnce(&LocalFileWriter::OnGetTargetDirectoryResult,
                      weak_ptr_factory_.GetWeakPtr(), filename,
@@ -328,7 +329,7 @@ void LocalFileWriter::WriteChunk(std::vector<std::uint8_t> data,
   //               given that callback is moved into the task and not returned
   //               on error?
   // Ensure span is obtained before data is moved.
-  auto data_span = base::make_span(data);
+  auto data_span = base::span(data);
   file_proxy_->Write(bytes_written_, data_span,
                      base::BindOnce(&LocalFileWriter::OnWriteResult,
                                     weak_ptr_factory_.GetWeakPtr(),
@@ -525,7 +526,6 @@ void LocalFileWriter::SetState(FileOperations::State state) {
   switch (state) {
     case FileOperations::kCreated:
       NOTREACHED();  // Can never return to initial state.
-      break;
     case FileOperations::kReady:
       DCHECK(state_ == FileOperations::kBusy);
       break;

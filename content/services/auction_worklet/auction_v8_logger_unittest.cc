@@ -19,6 +19,7 @@
 #include "content/services/auction_worklet/public/mojom/bidder_worklet.mojom.h"
 #include "content/services/auction_worklet/worklet_v8_debug_test_util.h"
 #include "gin/converter.h"
+#include "gin/public/gin_embedders.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 #include "v8/include/v8-context.h"
@@ -44,7 +45,9 @@ class TestLazyFiller {
 
     v8::Maybe<bool> success = object->SetLazyDataProperty(
         isolate->GetCurrentContext(), gin::StringToSymbol(isolate, "warn1"),
-        &TestLazyFiller::Warn1, v8::External::New(isolate, this),
+        &TestLazyFiller::Warn1,
+        v8::External::New(isolate, this,
+                          gin::kAuctionV8LoggerTest_TestLazyFillerTag),
         /*attributes=*/v8::None,
         /*getter_side_effect_type=*/v8::SideEffectType::kHasNoSideEffect,
         /*setter_side_effect_type=*/v8::SideEffectType::kHasSideEffect);
@@ -52,7 +55,9 @@ class TestLazyFiller {
 
     success = object->SetLazyDataProperty(
         isolate->GetCurrentContext(), gin::StringToSymbol(isolate, "warn2"),
-        &TestLazyFiller::Warn2, v8::External::New(isolate, this),
+        &TestLazyFiller::Warn2,
+        v8::External::New(isolate, this,
+                          gin::kAuctionV8LoggerTest_TestLazyFillerTag),
         /*attributes=*/v8::None,
         /*getter_side_effect_type=*/v8::SideEffectType::kHasNoSideEffect,
         /*setter_side_effect_type=*/v8::SideEffectType::kHasSideEffect);
@@ -64,8 +69,9 @@ class TestLazyFiller {
  private:
   static void Warn1(v8::Local<v8::Name> name,
                     const v8::PropertyCallbackInfo<v8::Value>& info) {
-    TestLazyFiller* self =
-        static_cast<TestLazyFiller*>(v8::External::Cast(*info.Data())->Value());
+    TestLazyFiller* self = static_cast<TestLazyFiller*>(
+        v8::External::Cast(*info.Data())
+            ->Value(gin::kAuctionV8LoggerTest_TestLazyFillerTag));
     self->v8_logger_->LogConsoleWarning("Warning 1");
     info.GetReturnValue().Set(
         v8::Boolean::New(self->v8_helper_->isolate(), true));
@@ -73,8 +79,9 @@ class TestLazyFiller {
 
   static void Warn2(v8::Local<v8::Name> name,
                     const v8::PropertyCallbackInfo<v8::Value>& info) {
-    TestLazyFiller* self =
-        static_cast<TestLazyFiller*>(v8::External::Cast(*info.Data())->Value());
+    TestLazyFiller* self = static_cast<TestLazyFiller*>(
+        v8::External::Cast(*info.Data())
+            ->Value(gin::kAuctionV8LoggerTest_TestLazyFillerTag));
     self->v8_logger_->LogConsoleWarning("Warning 2");
     info.GetReturnValue().Set(
         v8::Boolean::New(self->v8_helper_->isolate(), false));
@@ -107,7 +114,9 @@ class AuctionV8LoggerTest : public testing::Test {
           {
             v8::Context::Scope ctx(helper_->scratch_context());
             std::optional<std::string> error_msg;
-            ASSERT_TRUE(helper_->Compile(body, url_, debug_id.get(), error_msg)
+            ASSERT_TRUE(helper_
+                            ->Compile(body, url_, debug_id.get(),
+                                      /*cached_data=*/nullptr, error_msg)
                             .ToLocal(&script));
             EXPECT_FALSE(error_msg.has_value());
           }
@@ -121,16 +130,18 @@ class AuctionV8LoggerTest : public testing::Test {
           auto timeout =
               helper_->CreateTimeLimit(/*script_timeout=*/std::nullopt);
           bool success = helper_->RunScript(context, script, debug_id.get(),
-                                            timeout.get(), error_msgs);
+                                            timeout.get(), error_msgs) ==
+                         AuctionV8Helper::Result::kSuccess;
           if (success) {
             v8::Local<v8::Value> result;
-            success = helper_
-                          ->CallFunction(context, debug_id.get(),
-                                         helper_->FormatScriptName(script),
-                                         function_name,
-                                         base::span<v8::Local<v8::Value>>(),
-                                         timeout.get(), error_msgs)
-                          .ToLocal(&result);
+            v8::MaybeLocal<v8::Value> maybe_result;
+            success =
+                helper_->CallFunction(
+                    context, debug_id.get(), helper_->FormatScriptName(script),
+                    function_name, base::span<v8::Local<v8::Value>>(),
+                    timeout.get(), maybe_result,
+                    error_msgs) == AuctionV8Helper::Result::kSuccess &&
+                maybe_result.ToLocal(&result);
           }
           EXPECT_TRUE(success);
           run_loop.Quit();
@@ -170,6 +181,7 @@ TEST_F(AuctionV8LoggerTest, LogConsoleWarning) {
       "warning", /*json_args=*/R"([{"type":"string", "value":"Warning 2"}])",
       /*stack_trace_size=*/1, /*function=*/"foo", /*url=*/url_,
       /*line_number=*/3);
+  channel->ExpectNoMoreConsoleEvents();
   id->AbortDebuggerPauses();
 }
 

@@ -9,49 +9,48 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/path_service.h"
+#include "base/version.h"
+#include "base/win/windows_version.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "components/cdm/common/buildflags.h"
 #include "content/public/common/cdm_info.h"
-#include "media/cdm/cdm_capability.h"
+#include "media/base/cdm_capability.h"
+#include "media/base/media_switches.h"
 #include "media/cdm/cdm_type.h"
 #include "media/cdm/clear_key_cdm_common.h"
 #include "third_party/widevine/cdm/buildflags.h"
 
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
-#include "base/command_line.h"
-#include "components/cdm/common/cdm_manifest.h"
-#include "media/base/media_switches.h"
-#include "media/cdm/cdm_paths.h"  // nogncheck
+#include "media/base/video_codecs.h"
+#include "media/cdm/supported_audio_codecs.h"
 #endif
 
 #if BUILDFLAG(ENABLE_WIDEVINE)
+#include "components/cdm/common/cdm_manifest.h"
 #include "third_party/widevine/cdm/widevine_cdm_common.h"  // nogncheck
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "base/native_library.h"
 #include "chrome/common/chrome_paths.h"
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-#include "base/no_destructor.h"
 #include "chrome/common/media/component_widevine_cdm_hint_file_linux.h"
-#include "media/cdm/supported_audio_codecs.h"
-// Needed for WIDEVINE_CDM_MIN_GLIBC_VERSION. This file is in
-// SHARED_INTERMEDIATE_DIR.
-#include "widevine_cdm_version.h"  // nogncheck
-// The following must be after widevine_cdm_version.h.
-#if defined(WIDEVINE_CDM_MIN_GLIBC_VERSION)
-#include <gnu/libc-version.h>
-#include "base/version.h"
-#endif  // defined(WIDEVINE_CDM_MIN_GLIBC_VERSION)
+#include "media/cdm/cdm_paths.h"  // nogncheck
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #endif  // BUILDFLAG(ENABLE_WIDEVINE)
 
 #if BUILDFLAG(IS_ANDROID)
 #include "components/cdm/common/android_cdm_registration.h"
 #endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(ENABLE_PLAYREADY)
+#include "base/file_version_info_win.h"
+#include "components/cdm/common/playready_cdm_common.h"
+#include "media/base/win/mf_feature_checks.h"
+#endif  // BUILDFLAG(ENABLE_PLAYREADY)
 
 namespace {
 
@@ -64,13 +63,12 @@ using Robustness = content::CdmInfo::Robustness;
 // Create a CdmInfo for a Widevine CDM, using |version|, |cdm_library_path|, and
 // |capability|.
 std::unique_ptr<content::CdmInfo> CreateWidevineCdmInfo(
-    const base::Version& version,
     const base::FilePath& cdm_library_path,
     media::CdmCapability capability) {
   return std::make_unique<content::CdmInfo>(
       kWidevineKeySystem, Robustness::kSoftwareSecure, std::move(capability),
       /*supports_sub_key_systems=*/false, kWidevineCdmDisplayName,
-      kWidevineCdmType, version, cdm_library_path);
+      kWidevineCdmType, cdm_library_path);
 }
 
 // On desktop Linux and ChromeOS, given |cdm_base_path| that points to a folder
@@ -90,15 +88,13 @@ std::unique_ptr<content::CdmInfo> CreateCdmInfoFromWidevineDirectory(
 
   // Manifest should be at the top level.
   auto manifest_path = cdm_base_path.Append(FILE_PATH_LITERAL("manifest.json"));
-  base::Version version;
   media::CdmCapability capability;
-  if (!ParseCdmManifestFromPath(manifest_path, &version, &capability)) {
+  if (!ParseCdmManifestFromPath(manifest_path, &capability)) {
     DLOG(ERROR) << __func__ << " no manifest: " << manifest_path;
     return nullptr;
   }
 
-  return CreateWidevineCdmInfo(version, cdm_library_path,
-                               std::move(capability));
+  return CreateWidevineCdmInfo(cdm_library_path, std::move(capability));
 }
 #endif  // (BUILDFLAG(BUNDLE_WIDEVINE_CDM) ||
         // BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)) && (BUILDFLAG(IS_LINUX) ||
@@ -113,23 +109,23 @@ std::unique_ptr<content::CdmInfo> CreateCdmInfoFromWidevineDirectory(
 // This code checks to see if the Widevine CDM was bundled with Chrome. If one
 // can be found and looks valid, it returns the CdmInfo for the CDM. Otherwise
 // it returns nullptr.
-content::CdmInfo* GetBundledWidevine() {
-  // We only want to do this on the first call, as if Widevine wasn't bundled
-  // with Chrome (or it was deleted/removed) it won't be loaded into the zygote.
-  static base::NoDestructor<std::unique_ptr<content::CdmInfo>> s_cdm_info(
-      []() -> std::unique_ptr<content::CdmInfo> {
-        base::FilePath install_dir;
-        CHECK(base::PathService::Get(chrome::DIR_BUNDLED_WIDEVINE_CDM,
-                                     &install_dir));
-        return CreateCdmInfoFromWidevineDirectory(install_dir);
-      }());
-  return s_cdm_info->get();
+std::unique_ptr<content::CdmInfo> GetBundledWidevine() {
+  // Ideally this would cache the result, as the bundled Widevine CDM is either
+  // there or it's not. However, RegisterCdmInfo() will be called by different
+  // processes (the pre-zygote process and the browser process), so caching it
+  // as a static variable ends up with multiple copies anyways.
+  base::FilePath install_dir;
+  if (!base::PathService::Get(chrome::DIR_BUNDLED_WIDEVINE_CDM, &install_dir)) {
+    return nullptr;
+  }
+
+  return CreateCdmInfoFromWidevineDirectory(install_dir);
 }
 #endif  // BUILDFLAG(BUNDLE_WIDEVINE_CDM) &&
         // (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
 
-#if BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT) && \
-    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+#if (BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT) && \
+     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)))
 // This code checks to see if Component Updater picked a version of the Widevine
 // CDM to be used last time it ran. (Component Updater may choose the bundled
 // CDM if there is not a new version available for download.) If there is one
@@ -156,8 +152,8 @@ std::unique_ptr<content::CdmInfo> GetHintedWidevine() {
 
   return CreateCdmInfoFromWidevineDirectory(install_dir);
 }
-#endif  // BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT) &&
-        // (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+#endif  // (BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT) && (BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)))
 
 void AddSoftwareSecureWidevine(std::vector<content::CdmInfo>* cdms) {
   DVLOG(1) << __func__;
@@ -169,18 +165,9 @@ void AddSoftwareSecureWidevine(std::vector<content::CdmInfo>* cdms) {
   cdms->emplace_back(
       kWidevineKeySystem, Robustness::kSoftwareSecure, std::nullopt,
       /*supports_sub_key_systems=*/false, kWidevineCdmDisplayName,
-      kWidevineCdmType, base::Version(), base::FilePath());
+      kWidevineCdmType, base::FilePath());
 
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-#if defined(WIDEVINE_CDM_MIN_GLIBC_VERSION)
-  base::Version glibc_version(gnu_get_libc_version());
-  DCHECK(glibc_version.IsValid());
-  if (glibc_version < base::Version(WIDEVINE_CDM_MIN_GLIBC_VERSION)) {
-    LOG(WARNING) << "Widevine not registered because glibc version is too low";
-    return;
-  }
-#endif  // defined(WIDEVINE_CDM_MIN_GLIBC_VERSION)
-
   // The Widevine CDM on Linux/ChromeOS needs to be registered (and loaded)
   // before the zygote is locked down. The CDM can be found from the version
   // bundled with Chrome (if BUNDLE_WIDEVINE_CDM = true) and/or the version
@@ -206,11 +193,14 @@ void AddSoftwareSecureWidevine(std::vector<content::CdmInfo>* cdms) {
   // selected by Component Update may have a lower version than the bundled CDM.
   // We should still use the version selected by Component Update (except for
   // case #3 above).
-  content::CdmInfo* bundled_widevine = nullptr;
+  std::unique_ptr<content::CdmInfo> bundled_widevine = nullptr;
 #if BUILDFLAG(BUNDLE_WIDEVINE_CDM)
   bundled_widevine = GetBundledWidevine();
 #endif
 
+  // The hinted Widevine CDM is the CDM selected by Component Update. It may be
+  // the bundled CDM if it matches the version Component Update determines that
+  // should be used.
   std::unique_ptr<content::CdmInfo> hinted_widevine;
 #if BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)
   hinted_widevine = GetHintedWidevine();
@@ -218,32 +208,37 @@ void AddSoftwareSecureWidevine(std::vector<content::CdmInfo>* cdms) {
 
   if (bundled_widevine && !hinted_widevine) {
     // Only a bundled version is available, so use it.
-    VLOG(1) << "Registering bundled Widevine " << bundled_widevine->version;
+    VLOG(1) << "Registering bundled Widevine "
+            << bundled_widevine->capability->version;
     cdms->push_back(*bundled_widevine);
   } else if (!bundled_widevine && hinted_widevine) {
     // Only a component updated version is available, so use it.
-    VLOG(1) << "Registering hinted Widevine " << hinted_widevine->version;
+    VLOG(1) << "Registering hinted Widevine "
+            << hinted_widevine->capability->version;
     cdms->push_back(*hinted_widevine);
   } else if (!bundled_widevine && !hinted_widevine) {
     VLOG(1) << "Widevine enabled but no library found";
   } else {
-    // Both a bundled CDM and a CDM selected by Component Update found, so
-    // choose between them. Generally we want to pick the Component Update
-    // selected version, except in the case the bundled CDM is newer than the
-    // selected CDM and is different than the previously bundled CDM.
-    base::Version bundled_version = bundled_widevine->version;
-    base::Version hinted_version = hinted_widevine->version;
+    // Both a bundled CDM and a hinted CDM found, so choose between them.
+    base::Version bundled_version = bundled_widevine->capability->version;
+    base::Version hinted_version = hinted_widevine->capability->version;
     DVLOG(1) << __func__ << " bundled: " << bundled_version;
     DVLOG(1) << __func__ << " hinted: " << hinted_version;
 
-    if (bundled_version > hinted_version &&
-        bundled_version != GetBundledVersionDuringLastComponentUpdate()) {
-      // Bundled CDM is a higher version than the Component Update selected CDM
-      // and does not match the version Component Update replaced, so use it.
-      VLOG(1) << "Choosing bundled Widevine " << bundled_version;
+    // On all platforms we want to pick the hinted version, except in the case
+    // the bundled CDM is newer than the hinted CDM and is different than the
+    // previously bundled CDM.
+    bool choose_bundled =
+        bundled_version > hinted_version &&
+        bundled_version != GetBundledVersionDuringLastComponentUpdate();
+
+    if (choose_bundled) {
+      VLOG(1) << "Choosing bundled Widevine " << bundled_version << " from "
+              << bundled_widevine->path;
       cdms->push_back(*bundled_widevine);
     } else {
-      VLOG(1) << "Choosing hinted Widevine " << hinted_version;
+      VLOG(1) << "Choosing hinted Widevine " << hinted_version << " from "
+              << hinted_widevine->path;
       cdms->push_back(*hinted_widevine);
     }
   }
@@ -260,15 +255,9 @@ void AddHardwareSecureWidevine(std::vector<content::CdmInfo>* cdms) {
   cdms->emplace_back(
       kWidevineKeySystem, Robustness::kHardwareSecure, std::nullopt,
       /*supports_sub_key_systems=*/false, kWidevineCdmDisplayName,
-      kWidevineCdmType, base::Version(), base::FilePath());
+      kWidevineCdmType, base::FilePath());
 
 #elif BUILDFLAG(USE_CHROMEOS_PROTECTED_MEDIA)
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kLacrosUseChromeosProtectedMedia)) {
-    return;
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
   media::CdmCapability capability;
 
   // The following audio formats are supported for decrypt-only.
@@ -283,26 +272,16 @@ void AddHardwareSecureWidevine(std::vector<content::CdmInfo>* cdms) {
   capability.video_codecs.emplace(media::VideoCodec::kH264, kAllProfiles);
 #endif
 #if BUILDFLAG(ENABLE_PLATFORM_HEVC)
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kLacrosEnablePlatformHevc)) {
-    capability.video_codecs.emplace(media::VideoCodec::kHEVC, kAllProfiles);
-  }
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (base::FeatureList::IsEnabled(media::kPlatformHEVCDecoderSupport)) {
     capability.video_codecs.emplace(media::VideoCodec::kHEVC, kAllProfiles);
   }
 #else
   capability.video_codecs.emplace(media::VideoCodec::kHEVC, kAllProfiles);
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 #endif
 #if BUILDFLAG(USE_CHROMEOS_PROTECTED_AV1)
   capability.video_codecs.emplace(media::VideoCodec::kAV1, kAllProfiles);
-#elif BUILDFLAG(IS_CHROMEOS_LACROS)
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kLacrosUseChromeosProtectedAv1)) {
-    capability.video_codecs.emplace(media::VideoCodec::kAV1, kAllProfiles);
-  }
 #endif
 
   // Both encryption schemes are supported on ChromeOS.
@@ -339,7 +318,8 @@ void AddExternalClearKey(std::vector<content::CdmInfo>* cdms) {
   media::CdmCapability capability(
       {}, {}, {media::EncryptionScheme::kCenc, media::EncryptionScheme::kCbcs},
       {media::CdmSessionType::kTemporary,
-       media::CdmSessionType::kPersistentLicense});
+       media::CdmSessionType::kPersistentLicense},
+      base::Version("0.1.0.0"));
 
   // Register media::kExternalClearKeyDifferentCdmTypeTestKeySystem first
   // separately. Otherwise, it'll be treated as a sub-key-system of normal
@@ -349,18 +329,55 @@ void AddExternalClearKey(std::vector<content::CdmInfo>* cdms) {
       media::kExternalClearKeyDifferentCdmTypeTestKeySystem,
       Robustness::kSoftwareSecure, capability,
       /*supports_sub_key_systems=*/false, media::kClearKeyCdmDisplayName,
-      media::kClearKeyCdmDifferentCdmType, base::Version("0.1.0.0"),
-      clear_key_cdm_path));
+      media::kClearKeyCdmDifferentCdmType, clear_key_cdm_path));
 
   cdms->push_back(content::CdmInfo(
       media::kExternalClearKeyKeySystem, Robustness::kSoftwareSecure,
       capability,
       /*supports_sub_key_systems=*/true, media::kClearKeyCdmDisplayName,
-      media::kClearKeyCdmType, base::Version("0.1.0.0"), clear_key_cdm_path));
+      media::kClearKeyCdmType, clear_key_cdm_path));
 }
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
 
 #if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(ENABLE_PLAYREADY)
+void AddPlayReady(std::vector<content::CdmInfo>* cdms) {
+  DVLOG(1) << __func__;
+  // TODO(crbug.com/423799624): Need to clean up this check logic when
+  // deprecating Widevine hardware secure support on Windows.
+  if (!base::FeatureList::IsEnabled(media::kHardwareSecureDecryption) ||
+      (base::win::GetVersion() < base::win::Version::WIN11) ||
+      !media::SupportMediaFoundationEncryptedPlayback()) {
+    DVLOG(1) << __func__ << ": Not adding PlayReady CdmInfo";
+    return;
+  }
+
+  std::unique_ptr<FileVersionInfoWin> playready_version_info =
+      FileVersionInfoWin::CreateFileVersionInfoWin(base::FilePath(
+          FILE_PATH_LITERAL("Windows.Media.Protection.PlayReady.dll")));
+  if (!playready_version_info) {
+    DVLOG(1) << __func__ << ": Failed to get PlayReady version info. "
+             << "Not adding PlayReady CdmInfo";
+    return;
+  }
+
+  DVLOG(1) << __func__ << ":"
+           << " CdmType=" << kPlayReadyCdmType.ToString()
+           << " Version=" << playready_version_info->GetFileVersion();
+
+  // Add PlayReady hardware secure CdmInfo - its capability will be
+  // filled by `CdmRegistryImpl::LazyInitializeHardwareSecureCapability()`.
+  // Path is empty since the CDM is not in a separate library.
+  cdms->emplace_back(kPlayReadyKeySystemRecommendationDefault,
+                     content::CdmInfo::Robustness::kHardwareSecure,
+                     /*capability=*/std::nullopt,
+                     /*supports_sub_key_systems=*/true,
+                     kPlayReadyCdmDisplayName, kPlayReadyCdmType,
+                     playready_version_info->GetFileVersion(),
+                     /*path=*/base::FilePath());
+}
+#endif  // BUILDFLAG(ENABLE_PLAYREADY)
+
 void AddMediaFoundationClearKey(std::vector<content::CdmInfo>* cdms) {
   if (!base::FeatureList::IsEnabled(media::kExternalClearKeyForTesting)) {
     return;
@@ -376,15 +393,14 @@ void AddMediaFoundationClearKey(std::vector<content::CdmInfo>* cdms) {
   // Supported codecs are hard-coded in ExternalClearKeyKeySystemInfo.
   media::CdmCapability capability(
       {}, {}, {media::EncryptionScheme::kCenc, media::EncryptionScheme::kCbcs},
-      {media::CdmSessionType::kTemporary});
+      {media::CdmSessionType::kTemporary}, base::Version("0.1.0.0"));
 
-  cdms->push_back(
-      content::CdmInfo(media::kMediaFoundationClearKeyKeySystem,
-                       Robustness::kHardwareSecure, capability,
-                       /*supports_sub_key_systems=*/false,
-                       media::kMediaFoundationClearKeyCdmDisplayName,
-                       media::kMediaFoundationClearKeyCdmType,
-                       base::Version("0.1.0.0"), clear_key_cdm_path));
+  cdms->push_back(content::CdmInfo(
+      media::kMediaFoundationClearKeyKeySystem, Robustness::kHardwareSecure,
+      capability,
+      /*supports_sub_key_systems=*/false,
+      media::kMediaFoundationClearKeyCdmDisplayName,
+      media::kMediaFoundationClearKeyCdmType, clear_key_cdm_path));
 }
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -404,6 +420,9 @@ void RegisterCdmInfo(std::vector<content::CdmInfo>* cdms) {
 #endif
 
 #if BUILDFLAG(IS_WIN)
+#if BUILDFLAG(ENABLE_PLAYREADY)
+  AddPlayReady(cdms);
+#endif
   AddMediaFoundationClearKey(cdms);
 #endif
 
@@ -414,10 +433,12 @@ void RegisterCdmInfo(std::vector<content::CdmInfo>* cdms) {
   DVLOG(3) << __func__ << " done with " << cdms->size() << " cdms";
 }
 
-#if BUILDFLAG(ENABLE_WIDEVINE) && BUILDFLAG(IS_LINUX)
-std::vector<content::CdmInfo> GetSoftwareSecureWidevineForTesting() {
+#if BUILDFLAG(ENABLE_WIDEVINE) && \
+    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+std::vector<content::CdmInfo> GetSoftwareSecureWidevine() {
   std::vector<content::CdmInfo> cdms;
   AddSoftwareSecureWidevine(&cdms);
   return cdms;
 }
-#endif  // BUILDFLAG(ENABLE_WIDEVINE) && BUILDFLAG(IS_LINUX)
+#endif  // BUILDFLAG(ENABLE_WIDEVINE) && (BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS))

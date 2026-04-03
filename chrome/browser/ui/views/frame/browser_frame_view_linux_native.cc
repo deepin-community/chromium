@@ -6,6 +6,7 @@
 
 #include "base/notreached.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_layout_linux_native.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/linux/linux_ui.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/window/frame_background.h"
@@ -26,7 +27,7 @@ ui::NavButtonProvider::ButtonState ButtonStateToNavButtonProviderState(
 
     case views::Button::STATE_COUNT:
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 
@@ -39,18 +40,28 @@ bool BrowserFrameViewLinuxNative::DrawFrameButtonParams::operator==(
 }
 
 BrowserFrameViewLinuxNative::BrowserFrameViewLinuxNative(
-    BrowserFrame* frame,
+    BrowserWidget* widget,
     BrowserView* browser_view,
     BrowserFrameViewLayoutLinuxNative* layout,
     std::unique_ptr<ui::NavButtonProvider> nav_button_provider)
-    : BrowserFrameViewLinux(frame, browser_view, layout),
+    : BrowserFrameViewLinux(widget, browser_view, layout),
       nav_button_provider_(std::move(nav_button_provider)),
       layout_(layout) {}
 
 BrowserFrameViewLinuxNative::~BrowserFrameViewLinuxNative() = default;
 
-float BrowserFrameViewLinuxNative::GetRestoredCornerRadiusDip() const {
-  return layout_->GetFrameProvider()->GetTopCornerRadiusDip();
+void BrowserFrameViewLinuxNative::Layout(PassKey) {
+  // Calling MaybeUpdateCachedFrameButtonImages() here is sufficient to catch
+  // all cases that could update the appearance, since
+  // DesktopWindowTreeHostPlatform::On{Window,Activation}StateChanged() does a
+  // layout any time the maximized and activation state changes, respectively.
+  MaybeUpdateCachedFrameButtonImages();
+  LayoutSuperclass<BrowserFrameViewLinux>(this);
+}
+
+BrowserFrameViewLinuxNative::FrameButtonStyle
+BrowserFrameViewLinuxNative::GetFrameButtonStyle() const {
+  return FrameButtonStyle::kImageButton;
 }
 
 int BrowserFrameViewLinuxNative::GetTranslucentTopAreaHeight() const {
@@ -59,18 +70,17 @@ int BrowserFrameViewLinuxNative::GetTranslucentTopAreaHeight() const {
              : 0;
 }
 
-void BrowserFrameViewLinuxNative::Layout(PassKey) {
-  // Calling MaybeUpdateCachedFrameButtonImages() here is sufficient to catch
-  // all cases that could update the appearance, since
-  // DesktopWindowTreeHostPlatform::On{Window,Activation}StateChanged() does a
-  // layout any time the maximized and activation state changes, respectively.
-  MaybeUpdateCachedFrameButtonImages();
-  LayoutSuperclass<OpaqueBrowserFrameView>(this);
+BrowserLayoutParams BrowserFrameViewLinuxNative::GetBrowserLayoutParams()
+    const {
+  // Because this can be called before the frame is laid out, we might need to
+  // preemptively cache the frame buttons.
+  const_cast<BrowserFrameViewLinuxNative*>(this)
+      ->MaybeUpdateCachedFrameButtonImages();
+  return BrowserFrameViewLinux::GetBrowserLayoutParams();
 }
 
-BrowserFrameViewLinuxNative::FrameButtonStyle
-BrowserFrameViewLinuxNative::GetFrameButtonStyle() const {
-  return FrameButtonStyle::kImageButton;
+float BrowserFrameViewLinuxNative::GetRestoredCornerRadiusDip() const {
+  return layout_->GetFrameProvider()->GetTopCornerRadiusDip();
 }
 
 void BrowserFrameViewLinuxNative::PaintRestoredFrameBorder(
@@ -101,8 +111,7 @@ void BrowserFrameViewLinuxNative::MaybeUpdateCachedFrameButtonImages() {
       views::Button::ButtonState button_state =
           static_cast<views::Button::ButtonState>(state);
       views::Button* button = GetButtonFromDisplayType(type);
-      DCHECK_EQ(std::string(views::ImageButton::kViewClassName),
-                button->GetClassName());
+      DCHECK_EQ(views::ImageButton::kViewClassName, button->GetClassName());
       static_cast<views::ImageButton*>(button)->SetImageModel(
           button_state,
           ui::ImageModel::FromImageSkia(nav_button_provider_->GetImage(
@@ -123,6 +132,9 @@ views::Button* BrowserFrameViewLinuxNative::GetButtonFromDisplayType(
     case ui::NavButtonProvider::FrameButtonDisplayType::kClose:
       return close_button();
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
+
+BEGIN_METADATA(BrowserFrameViewLinuxNative)
+END_METADATA

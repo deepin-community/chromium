@@ -17,8 +17,13 @@
 #include "third_party/blink/public/mojom/devtools/devtools_agent.mojom-forward.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom.h"
 #include "third_party/blink/public/mojom/frame/frame_owner_properties.mojom.h"
+#include "third_party/blink/public/mojom/frame/lifecycle.mojom.h"
 #include "third_party/blink/public/mojom/input/focus_type.mojom-forward.h"
 #include "third_party/blink/public/mojom/navigation/navigation_api_history_entry_arrays.mojom.h"
+
+namespace base {
+class UnguessableToken;
+}
 
 namespace gfx {
 class Point;
@@ -45,13 +50,16 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
   void GetTextSurroundingSelection(
       uint32_t max_length,
       GetTextSurroundingSelectionCallback callback) override;
-  void SendInterventionReport(const std::string& id,
-                              const std::string& message) override;
+  void SendInterventionReport(
+      const std::string& id,
+      const std::string& message,
+      const std::optional<blink::FrameToken>& child_frame_token) override;
   void SetFrameOwnerProperties(
       blink::mojom::FrameOwnerPropertiesPtr properties) override;
   void NotifyUserActivation(
       blink::mojom::UserActivationNotificationType notification_type) override;
   void NotifyVirtualKeyboardOverlayRect(const gfx::Rect&) override;
+  void ShowInterestInElement(int) override;
   void AddMessageToConsole(blink::mojom::ConsoleMessageLevel level,
                            const std::string& message,
                            bool discard_duplicates) override;
@@ -70,10 +78,11 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
   void BeforeUnload(bool is_reload, BeforeUnloadCallback callback) override;
   void MediaPlayerActionAt(const gfx::Point& location,
                            blink::mojom::MediaPlayerActionPtr action) override;
-  void RequestVideoFrameAt(const gfx::Point& window_point,
-                           const gfx::Size& max_size,
-                           int max_area,
-                           RequestVideoFrameAtCallback callback) override;
+  void RequestVideoFrameAtWithBoundsHint(
+      const gfx::Point& window_point,
+      const gfx::Size& max_size,
+      int max_area,
+      RequestVideoFrameAtWithBoundsHintCallback callback) override;
   void PluginActionAt(const gfx::Point& location,
                       blink::mojom::PluginActionType action) override;
   void AdvanceFocusInFrame(blink::mojom::FocusType focus_type,
@@ -83,15 +92,17 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
   void ReportContentSecurityPolicyViolation(
       network::mojom::CSPViolationPtr violation) override;
   void DidUpdateFramePolicy(const blink::FramePolicy& frame_policy) override;
+  void OnFrameVisibilityChanged(
+      blink::mojom::FrameVisibility visibility) override;
   void PostMessageEvent(
       const std::optional<blink::RemoteFrameToken>& source_frame_token,
-      const std::u16string& source_origin,
-      const std::u16string& target_origin,
+      const std::optional<url::Origin>& source_origin,
+      const std::optional<url::Origin>& target_origin,
       blink::TransferableMessage message) override;
   void JavaScriptMethodExecuteRequest(
       const std::u16string& object_name,
       const std::u16string& method_name,
-      base::Value::List arguments,
+      base::ListValue arguments,
       bool wants_result,
       JavaScriptMethodExecuteRequestCallback callback) override;
   void JavaScriptExecuteRequest(
@@ -100,8 +111,9 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
       JavaScriptExecuteRequestCallback callback) override;
   void JavaScriptExecuteRequestForTests(
       const std::u16string& javascript,
-      bool wants_result,
       bool has_user_gesture,
+      bool resolve_promises,
+      bool honor_js_content_settings,
       int32_t world_id,
       JavaScriptExecuteRequestForTestsCallback callback) override;
   void JavaScriptExecuteRequestInIsolatedWorld(
@@ -112,8 +124,10 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
   void GetSavableResourceLinks(
       GetSavableResourceLinksCallback callback) override;
 #if BUILDFLAG(IS_MAC)
-  void GetCharacterIndexAtPoint(const gfx::Point& point) override;
-  void GetFirstRectForRange(const gfx::Range& range) override;
+  void GetCharacterIndexAtPoint(const base::UnguessableToken& request_token,
+                                const gfx::Point& point) override;
+  void GetFirstRectForRange(const base::UnguessableToken& request_token,
+                            const gfx::Range& range) override;
   void GetStringForRange(const gfx::Range& range,
                          GetStringForRangeCallback callback) override;
 #endif
@@ -154,8 +168,11 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
       const std::string& page_state,
       bool is_browser_initiated) override;
   void SnapshotDocumentForViewTransition(
-      blink::mojom::PageConcealEventParamsPtr,
+      const blink::ViewTransitionToken& transition_token,
+      blink::mojom::PageSwapEventParamsPtr,
       SnapshotDocumentForViewTransitionCallback callback) override;
+  void NotifyViewTransitionAbortedToOldDocument() override;
+  void DispatchPageSwap(blink::mojom::PageSwapEventParamsPtr) override;
   void AddResourceTimingEntryForFailedSubframeNavigation(
       const ::blink::FrameToken& subframe_token,
       const GURL& initial_url,
@@ -172,7 +189,12 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
       bool is_validated,
       const std::string& normalized_server_timing,
       const ::network::URLLoaderCompletionStatus& completion_status) override;
-  void RequestFullscreenDocumentElement() override;
+  void UpdatePrerenderURL(const ::GURL& matched_url,
+                          UpdatePrerenderURLCallback callback) override;
+  void GetScrollPosition(GetScrollPositionCallback callback) override;
+#if BUILDFLAG(IS_ANDROID)
+  void PerformFullContentSpellCheck() override;
+#endif
 
  private:
   void BindFrameHostReceiver(mojo::ScopedInterfaceEndpointHandle handle);

@@ -18,7 +18,6 @@ from collections import OrderedDict
 from functools import cmp_to_key
 from functools import partial
 import ast
-import codecs
 import json
 import os
 import re
@@ -28,6 +27,7 @@ import textwrap
 from xml.sax.saxutils import escape as xml_escape
 
 CHROME_POLICY_KEY = 'SOFTWARE\\\\Policies\\\\Google\\\\Chrome'
+CHROME_FOR_TESTING_POLICY_KEY = CHROME_POLICY_KEY + ' for Testing'
 CHROMIUM_POLICY_KEY = 'SOFTWARE\\\\Policies\\\\Chromium'
 PLATFORM_STRINGS = {
     'chrome_frame': ['win'],
@@ -91,7 +91,9 @@ class PolicyDetails:
     self.metapolicy_type = features.get('metapolicy_type', '')
     self.is_deprecated = policy.get('deprecated', False)
     self.is_device_only = policy.get('device_only', False)
+    self.is_sensitive = policy.get('sensitive', False)
     self.per_profile = features.get('per_profile', False)
+    self.is_user_only = features.get('user_only', False)
     self.schema = policy['schema']
     self.validation_schema = policy.get('validation_schema')
     self.has_enterprise_default = 'default_for_enterprise_users' in policy
@@ -151,6 +153,7 @@ class PolicyDetails:
             PolicyDetails._RemovePlaceholders(policy['desc']).splitlines()))
     self.caption = PolicyDetails._RemovePlaceholders(policy['caption'])
     self.max_size = policy.get('max_size', 0)
+    self.default = policy.get('default', None)
 
     items = policy.get('items')
     if items is None:
@@ -171,6 +174,21 @@ class PolicyDetails:
         raise RuntimeError('Invalid Tag:' + tag + '!\n'
                            'Chose a valid tag from \'risk_tag_definitions\' (a '
                            'subproperty of root in policy_templates.json)!')
+
+  @property
+  def scope(self):
+    """Get policy scope string based on per_profile and user_only feature.
+       The string is defined in policy_details.h.
+    """
+    if self.is_device_only:
+      return 'kDevice'
+    if self.per_profile:
+      if self.is_user_only:
+        return 'kSingleProfile'
+      else:
+        return 'kProfile'
+    else:
+      return 'kBrowser'
 
   # Simplistic grit placeholder stripper.
   @staticmethod
@@ -338,7 +356,7 @@ def main():
 
   def GenerateFile(path, writer, sorted=False, xml=False):
     if path:
-      with codecs.open(path, 'w', encoding='utf-8') as f:
+      with open(path, 'w', encoding='utf-8') as f:
         _OutputGeneratedWarningHeader(f, template_file_name, xml)
         writer(sorted and sorted_policy_details or policy_details,
                sorted and sorted_policy_atomic_groups or policy_atomic_groups,
@@ -402,7 +420,7 @@ def _OutputComment(f, comment):
 
 
 def _LoadJSONFile(json_file):
-  with codecs.open(json_file, 'r', encoding='utf-8') as f:
+  with open(json_file, 'r', encoding='utf-8') as f:
     return json.load(f)
 
 
@@ -417,7 +435,7 @@ def _GetSupportedChromeUserPolicies(policies, protobuf_type):
 # Ensure only windows supported policies are returned when building for windows.
 # Eventually only supported policies on every platforms will be returned.
 def _GetSupportedPolicies(policies, target_platform):
-  # TODO(crbug.com/1348959): Remove this special case once deprecated policies
+  # TODO(crbug.com/40855589): Remove this special case once deprecated policies
   # have been removed for fuchsia
   if target_platform == 'fuchsia':
     is_deprecated = lambda policy: len(policy.platforms) + len(
@@ -519,6 +537,8 @@ const internal::SchemaData* GetChromeSchemaData();
           len(_GetMetapoliciesOfType(policies, METAPOLICY_TYPE['precedence'])))
   f.write('}  // namespace metapolicy\n\n')
 
+  _WriteSensitivePoliciesHeader(f)
+
   f.write('enum class StringPolicyType {\n'
           '  STRING,\n'
           '  JSON,\n'
@@ -562,6 +582,18 @@ def _ComputeTotalDevicePolicyExternalDataMaxSize(policies):
       total_device_policy_external_data_max_size += policy.max_size
   return total_device_policy_external_data_max_size
 
+
+def _WriteSensitivePoliciesHeader(f):
+  """Writes the extern declaration for sensitive policies.
+
+  Note that this 'sensitive' flag is different from the 'sensitiveValue' flag
+  in schemas, which is used to mask values in the chrome://policy UI.
+  """
+  f.write(
+      '// The policies that are considered only if the user is part of an AD\n'
+      '// domain on Windows, managed on Mac, or enrolled in Chrome Enterprise'
+      ' Core.\n'
+      'base::span<const char* const> GetSensitivePolicies();\n\n')
 
 #------------------ policy constants source ------------------------#
 
@@ -998,7 +1030,6 @@ class SchemaNodesGenerator:
 
     return has_sensitive_children or node.is_sensitive_value
 
-
 def _GenerateDefaultValue(value):
   """Converts a JSON object into a base::Value entry. Returns a tuple, the first
   entry being a list of declaration statements to define the variable, the
@@ -1014,7 +1045,7 @@ def _GenerateDefaultValue(value):
   elif type(value) == str:
     return [], 'base::Value("%s")' % value
   elif type(value) == list:
-    setup = ['base::Value::List default_value;']
+    setup = ['base::ListValue default_value;']
     for entry in value:
       decl, fetch = _GenerateDefaultValue(entry)
       # Nested lists are not supported.
@@ -1070,10 +1101,10 @@ namespace policy {
   # Chrome schema, so that binary searching in the PropertyNode array gets the
   # right index on this array as well. See the implementation of
   # GetChromePolicyDetails() below.
-  # TODO(crbug.com/1074336): kChromePolicyDetails shouldn't be declare if there
+  # TODO(crbug.com/40127969): kChromePolicyDetails shouldn't be declare if there
   # is no policy.
   f.write('''[[maybe_unused]] const PolicyDetails kChromePolicyDetails[] = {
-// is_deprecated is_future is_device_policy id max_external_data_size, risk tags
+// is_deprecated is_future scope id max_external_data_size, risk tags
 ''')
   for policy in policies:
     if policy.is_supported:
@@ -1083,10 +1114,11 @@ namespace policy {
       f.write('  // %s\n' % policy.name)
       f.write('  { %-14s%-10s%-17s%4s,%22s, %s },\n' %
               ('true,' if policy.is_deprecated else 'false,',
-               'true,' if policy.is_future else 'false, ',
-               'true,' if policy.is_device_only else 'false,', policy.id,
-               policy.max_size, risk_tags.ToInitString(policy.tags)))
+               'true,' if policy.is_future else 'false, ', policy.scope + ",",
+               policy.id, policy.max_size, risk_tags.ToInitString(policy.tags)))
   f.write('};\n\n')
+
+  _WriteSensitivePoliciesSource(f, policies)
 
   schema_generator = SchemaNodesGenerator(shared_strings)
   schema_generator.GenerateAndCollectID(chrome_schema, 'root node')
@@ -1118,6 +1150,9 @@ namespace policy {
     f.write('#if BUILDFLAG(GOOGLE_CHROME_BRANDING)\n'
             'const wchar_t kRegistryChromePolicyKey[] = '
             'L"' + CHROME_POLICY_KEY + '";\n'
+            '#elif BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)\n'
+            'const wchar_t kRegistryChromePolicyKey[] = '
+            'L"' + CHROME_FOR_TESTING_POLICY_KEY + '";\n'
             '#else\n'
             'const wchar_t kRegistryChromePolicyKey[] = '
             'L"' + CHROMIUM_POLICY_KEY + '";\n'
@@ -1329,13 +1364,30 @@ def _WriteChromePolicyAccessSource(policies, f, protobuf_type, chunking):
   f.write('}};\n\n')
 
 
+def _WriteSensitivePoliciesSource(f, policies):
+  """Writes the list of sensitive policies.
+
+  Note that this 'sensitive' flag is different from the 'sensitiveValue' flag
+  in schemas, which is used to mask values in the chrome://policy UI.
+  """
+  f.write('const char* const kSensitivePolicies[] = {\n')
+  sensitive_policies = sorted([p for p in policies if p.is_sensitive],
+                              key=lambda p: p.name)
+  for p in sensitive_policies:
+    f.write('    key::k%s,\n' % p.name)
+  f.write('};\n\n')
+  f.write('base::span<const char* const> GetSensitivePolicies() {\n')
+  f.write('  return kSensitivePolicies;\n')
+  f.write('}\n\n')
+
+
 #------------------ policy risk tag header -------------------------#
 
 
 class RiskTags(object):
   '''Generates files and strings to translate the parsed risk tags.'''
 
-  # TODO(fhorschig|tnagel): Add, Check & Generate translation descriptions.
+  # TODO(tnagel): Add, Check & Generate translation descriptions.
 
   def __init__(self, template_file_contents):
     self.max_tags = None
@@ -1601,6 +1653,27 @@ def _GetProtobufTypes():
 ENROLLMENT_TOKEN_POLICY_NAME = 'CloudManagementEnrollmentToken'
 
 
+def _FormatDefaultValue(default_value):
+  """Format default value for Android app restrictions XML.
+
+  Args:
+    default_value: The default value from policy YAML (bool, int, str, or None)
+
+  Returns:
+    String representation suitable for android:defaultValue attribute,
+    or None if the value should not be included.
+  """
+  if default_value is None:
+    return None
+  if isinstance(default_value, bool):
+    return 'true' if default_value else 'false'
+  elif isinstance(default_value, int):
+    return str(default_value)
+  elif isinstance(default_value, str):
+    return xml_escape(default_value)
+  return xml_escape(str(default_value))
+
+
 def _WriteAppRestrictions(policies, policy_atomic_groups, target_platform, f,
                           risk_tags, chunking):
 
@@ -1619,6 +1692,11 @@ def _WriteAppRestrictions(policies, policy_atomic_groups, target_platform, f,
 
     if policy.items is not None:
       WriteItemsDefinition(policy_name)
+
+    # Write default value if it exists
+    formatted_default = _FormatDefaultValue(policy.default)
+    if formatted_default is not None:
+      f.write('        android:defaultValue="%s"\n' % formatted_default)
 
     f.write('        android:restrictionType="%s"/>' % policy.restriction_type)
     f.write('\n\n')

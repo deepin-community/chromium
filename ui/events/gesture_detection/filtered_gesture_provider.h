@@ -6,6 +6,7 @@
 #define UI_EVENTS_GESTURE_DETECTION_FILTERED_GESTURE_PROVIDER_H_
 
 #include <stdint.h>
+
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
@@ -69,6 +70,10 @@ class GESTURE_DETECTION_EXPORT FilteredGestureProvider final
   void SetDoubleTapSupportForPlatformEnabled(bool enabled);
   void SetDoubleTapSupportForPageEnabled(bool enabled);
   const ui::MotionEvent* GetCurrentDownEvent() const;
+  const ui::MotionEvent* GetLastEventWithoutHistory() const;
+  void OnUnconfirmedTapConvertedToTap();
+
+  GestureDetector* GetGestureDetectorForTesting();
 
  private:
   // GestureProviderClient implementation.

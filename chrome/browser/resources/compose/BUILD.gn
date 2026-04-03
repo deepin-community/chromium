@@ -7,21 +7,26 @@ import("//ui/webui/resources/tools/build_webui.gni")
 build_webui("build") {
   grd_prefix = "compose"
   static_files = [ "compose.html" ]
-  web_component_files = [
-    "app.ts",
-    "textarea.ts",
-    "result_text.ts",
-  ]
-  non_web_component_files = [
+  web_component_files = [ "app.ts" ]
+  ts_files = [
     "animations/animator.ts",
     "animations/app_animator.ts",
     "animations/textarea_animator.ts",
     "compose_api_proxy.ts",
+    "result_text.html.ts",
+    "result_text.ts",
+    "textarea.html.ts",
+    "textarea.ts",
     "word_streamer.ts",
+  ]
+  css_files = [
+    "result_text.css",
+    "textarea.css",
   ]
   icons_html_files = [ "icons.html" ]
   ts_composite = true
   ts_deps = [
+    "//third_party/lit/v3_0:build_ts",
     "//third_party/polymer/v3_0:library",
     "//ui/webui/resources/cr_components/color_change_listener:build_ts",
     "//ui/webui/resources/cr_elements:build_ts",
@@ -38,4 +43,6 @@ build_webui("build") {
     "$root_gen_dir/chrome/common/compose/compose.mojom-webui.ts",
     "$root_gen_dir/components/compose/core/browser/compose_enums.mojom-webui.ts",
   ]
+
+  webui_context_type = "untrusted"
 }

@@ -11,6 +11,7 @@
 #include "base/containers/flat_set.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/time.h"
 #include "components/favicon/core/favicon_service.h"
@@ -27,7 +28,7 @@ struct FaviconImageResult;
 namespace content {
 class NavigationEntry;
 class WebContents;
-}
+}  // namespace content
 
 ///////////////////////////////////////////////////////////////////////////////
 //
@@ -36,12 +37,21 @@ class WebContents;
 // Interface for the showing of the dropdown menu for the Back/Forward buttons.
 // Actual implementations are platform-specific.
 ///////////////////////////////////////////////////////////////////////////////
-class BackForwardMenuModel : public ui::MenuModel,
-                             public content::WebContentsObserver {
+class BackForwardMenuModel final : public ui::MenuModel,
+                                   public content::WebContentsObserver {
  public:
   // These are IDs used to identify individual UI elements within the
   // browser window using View::GetViewByID.
   enum class ModelType { kForward = 1, kBackward = 2 };
+
+  // Enum identifying different sections of the menu. Made public for testing.
+  enum class MenuSection {
+    kHistory,       // History navigation items
+    kChapterStops,  // Chapter stop navigation items
+    kBackToOpener,  // Back-to-opener item
+    kSeparator,  // Separator (between sections or before "Show Full History")
+    kShowFullHistory,  // "Show Full History" item
+  };
 
   BackForwardMenuModel(Browser* browser, ModelType model_type);
 
@@ -51,6 +61,7 @@ class BackForwardMenuModel : public ui::MenuModel,
   ~BackForwardMenuModel() override;
 
   // ui::MenuModel:
+  base::WeakPtr<ui::MenuModel> AsWeakPtr() override;
   size_t GetItemCount() const override;
   ItemType GetTypeAt(size_t index) const override;
   ui::MenuSeparatorType GetSeparatorTypeAt(size_t index) const override;
@@ -78,6 +89,21 @@ class BackForwardMenuModel : public ui::MenuModel,
   // Is the item at |index| a separator?
   bool IsSeparator(size_t index) const;
 
+  // Returns which section the given index belongs to, or nullopt if the index
+  // doesn't belong to any section.
+  std::optional<MenuSection> GetSectionForIndex(size_t index) const;
+
+  // Returns true if the menu has the specified section.
+  bool HasSection(MenuSection section) const;
+
+  // Returns the number of items in the specified section. Returns 0 if the
+  // section doesn't exist.
+  size_t GetSectionItemCount(MenuSection section) const;
+
+  // Returns the starting index of the specified section, or nullopt if the
+  // section doesn't exist.
+  std::optional<size_t> GetStartingIndexOfSection(MenuSection section) const;
+
  private:
   friend class BackFwdMenuModelTest;
   FRIEND_TEST_ALL_PREFIXES(BackFwdMenuModelTest, BasicCase);
@@ -86,7 +112,10 @@ class BackForwardMenuModel : public ui::MenuModel,
   FRIEND_TEST_ALL_PREFIXES(BackFwdMenuModelTest, EscapeLabel);
   FRIEND_TEST_ALL_PREFIXES(BackFwdMenuModelTest, FaviconLoadTest);
   FRIEND_TEST_ALL_PREFIXES(BackFwdMenuModelTest, NavigationWhenMenuShownTest);
+  FRIEND_TEST_ALL_PREFIXES(BackFwdMenuModelTest, MenuSections);
   FRIEND_TEST_ALL_PREFIXES(BackFwdMenuModelIncognitoTest, IncognitoCaseTest);
+  FRIEND_TEST_ALL_PREFIXES(BackFwdMenuModelIncognitoTest,
+                           MenuSectionsIncognito);
   FRIEND_TEST_ALL_PREFIXES(ChromeNavigationBrowserTest,
                            NoUserActivationSetSkipOnBackForward);
 
@@ -120,6 +149,11 @@ class BackForwardMenuModel : public ui::MenuModel,
   // returned does not include the separator lines before and after the
   // chapter-stops.
   size_t GetChapterStopCount(size_t history_items) const;
+
+  // Returns how many separators the menu should show. Separators appear before
+  // chapter stops (if chapter stops exist) and before "Show Full History" (if
+  // it exists).
+  size_t GetSeparatorCount() const;
 
   // Finds the next chapter-stop in the NavigationEntryList starting from
   // the index specified in |start_from| and continuing in the direction
@@ -164,11 +198,7 @@ class BackForwardMenuModel : public ui::MenuModel,
   // "Show Full History" link in which case this function returns nullopt.
   std::optional<size_t> MenuIndexToNavEntryIndex(size_t index) const;
 
-  // Does the item have a command associated with it?
-  bool ItemHasCommand(size_t index) const;
 
-  // Returns true if there is an icon for this menu item.
-  bool ItemHasIcon(size_t index) const;
 
   // Allow the unit test to use the "Show Full History" label.
   std::u16string GetShowFullHistoryLabel() const;
@@ -217,6 +247,8 @@ class BackForwardMenuModel : public ui::MenuModel,
   // twice depending on whether any of the menu item is activated, the timestamp
   // will not be reset.
   std::optional<base::TimeTicks> menu_model_open_timestamp_;
+
+  base::WeakPtrFactory<BackForwardMenuModel> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_TOOLBAR_BACK_FORWARD_MENU_MODEL_H_

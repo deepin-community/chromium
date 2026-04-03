@@ -9,10 +9,13 @@
 #include "base/functional/bind.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
+#include "base/strings/to_string.h"
 #include "chrome/browser/web_applications/locks/all_apps_lock.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
+#include "chrome/browser/web_applications/web_app_management_type.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/data_type.h"
+#include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/browser/uninstall_result_code.h"
 
 namespace web_app {
@@ -80,6 +83,9 @@ void UninstallAllUserInstalledWebAppsCommand::ProcessNextUninstallOrComplete() {
   webapps::AppId app_id = ids_to_uninstall_.back();
   ids_to_uninstall_.pop_back();
 
+  // Track an uninstallation event, regardless of whether it succeeded or not.
+  webapps::InstallableMetrics::TrackUninstallEvent(uninstall_source_);
+
   WebAppManagementTypes types_to_remove =
       base::Intersection(kUserDrivenInstallSources,
                          lock_->registrar().GetAppById(app_id)->GetSources());
@@ -98,8 +104,7 @@ void UninstallAllUserInstalledWebAppsCommand::JobComplete(
     webapps::UninstallResultCode code) {
   CHECK(active_job_);
 
-  if (code != webapps::UninstallResultCode::kSuccess &&
-      code != webapps::UninstallResultCode::kNoAppToUninstall) {
+  if (!webapps::UninstallSucceeded(code)) {
     std::string error_message =
         base::StrCat({active_job_->app_id(), "[", TypesToString(types),
                       "]: ", base::ToString(code)});

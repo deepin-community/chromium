@@ -6,6 +6,7 @@
 // CLExtensions.cpp: Implements the struct methods for CLExtension.
 
 #include "libANGLE/renderer/CLExtensions.h"
+#include "libANGLE/renderer/cl_types.h"
 
 #include "common/string_utils.h"
 
@@ -22,6 +23,8 @@ CLExtensions &CLExtensions::operator=(CLExtensions &&) = default;
 
 void CLExtensions::initializeExtensions(std::string &&extensionStr)
 {
+    ASSERT(extensions.empty());
+
     extensions.assign(std::move(extensionStr));
     if (extensions.empty())
     {
@@ -47,6 +50,46 @@ void CLExtensions::initializeExtensions(std::string &&extensionStr)
     khrICD                  = hasExtension("cl_khr_icd");
     khrInt64BaseAtomics     = hasExtension("cl_khr_int64_base_atomics");
     khrInt64ExtendedAtomics = hasExtension("cl_khr_int64_extended_atomics");
+    khrIntegerDotProduct    = hasExtension("cl_khr_integer_dot_product");
+    khrExternalMemory       = hasExtension("cl_khr_external_memory");
+    khrPriorityHints        = hasExtension("cl_khr_priority_hints");
+
+    armNonUniformWorkGroupSize = hasExtension("cl_arm_non_uniform_work_group_size");
+    armImportMemory            = hasExtension("cl_arm_import_memory");
+    armImportMemoryDMABuf      = hasExtension("cl_arm_import_memory_dma_buf");
+}
+
+void CLExtensions::initializeVersionedExtensions(const NameVersionVector &versionedExtList)
+{
+    ASSERT(extensionsWithVersion.empty());
+    ASSERT(extensions.empty());
+
+    extensionsWithVersion = std::move(versionedExtList);
+
+    std::string extensionString = "";
+    for (cl_name_version ext : extensionsWithVersion)
+    {
+        extensionString += ext.name;
+        extensionString += " ";
+    }
+
+    return initializeExtensions(std::move(extensionString));
+}
+
+bool CLExtensions::populateSupportedExternalMemoryHandleTypes(
+    ExternalMemoryHandleBitset supportedHandles)
+{
+    externalMemoryHandleSupport = supportedHandles;
+
+    if (externalMemoryHandleSupport.test(cl::ExternalMemoryHandle::OpaqueFd))
+    {
+        externalMemoryHandleSupportList.push_back(cl::ToCLenum(cl::ExternalMemoryHandle::OpaqueFd));
+    }
+    if (externalMemoryHandleSupport.test(cl::ExternalMemoryHandle::DmaBuf))
+    {
+        externalMemoryHandleSupportList.push_back(cl::ToCLenum(cl::ExternalMemoryHandle::DmaBuf));
+    }
+    return externalMemoryHandleSupport.any();
 }
 
 }  // namespace rx

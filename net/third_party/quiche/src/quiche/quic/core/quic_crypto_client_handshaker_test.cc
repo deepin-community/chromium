@@ -4,7 +4,10 @@
 
 #include "quiche/quic/core/quic_crypto_client_handshaker.h"
 
+#include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/strings/string_view.h"
 #include "quiche/quic/core/proto/crypto_server_config_proto.h"
@@ -81,6 +84,7 @@ class DummyProofSource : public ProofSource {
     callback->Run(true, chain, proof, /*details=*/nullptr);
   }
 
+  // TODO: b/451645567 - Define `GetCertChains()` instead of `GetCertChain()`.
   quiche::QuicheReferenceCountedPointer<Chain> GetCertChain(
       const QuicSocketAddress& /*server_address*/,
       const QuicSocketAddress& /*client_address*/,
@@ -100,7 +104,7 @@ class DummyProofSource : public ProofSource {
     callback->Run(true, "Dummy signature", /*details=*/nullptr);
   }
 
-  absl::InlinedVector<uint16_t, 8> SupportedTlsSignatureAlgorithms()
+  QuicSignatureAlgorithmVector SupportedTlsSignatureAlgorithms()
       const override {
     return {};
   }

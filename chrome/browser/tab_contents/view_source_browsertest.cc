@@ -20,11 +20,11 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/navigation_entry.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/prerender_test_util.h"
@@ -172,7 +172,7 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest,
 
 // Tests that reload initiated by the script on the view-source page leaves
 // the page in view-source mode.
-// Times out on Mac, Windows, ChromeOS Linux: crbug.com/162080
+// Times out on Mac, Windows, ChromeOS Linux: crbug.com/40955430
 IN_PROC_BROWSER_TEST_F(ViewSourceTest, DISABLED_TestViewSourceReload) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -195,7 +195,7 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest, DISABLED_TestViewSourceReload) {
 }
 
 // This test ensures that view-source session history navigations work
-// correctly when switching processes. See https://crbug.com/544868.
+// correctly when switching processes. See https://crbug.com/40440793.
 IN_PROC_BROWSER_TEST_F(ViewSourceTest,
                        ViewSourceCrossProcessAndBack) {
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -211,8 +211,7 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest,
   // original bug to reproduce.
   {
     GURL url = embedded_test_server()->GetURL("a.com", "/title1.html");
-    ui_test_utils::UrlLoadObserver load_complete(
-        url, content::NotificationService::AllSources());
+    ui_test_utils::UrlLoadObserver load_complete(url);
     EXPECT_TRUE(
         content::ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
                         "window.open('" + url.spec() + "');"));
@@ -231,8 +230,7 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest,
   // Navigate back in session history to ensure view-source mode is still
   // active.
   {
-    ui_test_utils::UrlLoadObserver load_complete(
-        url_viewsource, content::NotificationService::AllSources());
+    ui_test_utils::UrlLoadObserver load_complete(url_viewsource);
     chrome::GoBack(browser(), WindowOpenDisposition::CURRENT_TAB);
     load_complete.Wait();
   }
@@ -247,7 +245,7 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest,
 }
 
 // Tests that view-source mode of b.com subframe won't commit in an a.com (main
-// frame) process.  This is a regresion test for https://crbug.com/770946.
+// frame) process.  This is a regression test for https://crbug.com/40542846.
 IN_PROC_BROWSER_TEST_F(ViewSourceTest, CrossSiteSubframe) {
   // Navigate to a page with a cross-site frame.
   content::SetupCrossSiteRedirector(embedded_test_server());
@@ -273,8 +271,8 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest, CrossSiteSubframe) {
   if (content::AreAllSitesIsolatedForTesting()) {
     EXPECT_NE(original_main_frame->GetSiteInstance(),
               original_child_frame->GetSiteInstance());
-    EXPECT_NE(original_main_frame->GetProcess()->GetID(),
-              original_child_frame->GetProcess()->GetID());
+    EXPECT_NE(original_main_frame->GetProcess()->GetDeprecatedID(),
+              original_child_frame->GetProcess()->GetDeprecatedID());
   }
 
   // Open view-source mode tab for the subframe.  This tries to mimic the
@@ -298,12 +296,12 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest, CrossSiteSubframe) {
   // Verify that the original main frame and the view-source subframe are in a
   // different process (e.g. if the main frame was malicious and the subframe
   // was an isolated origin, then the malicious frame shouldn't be able to see
-  // the contents of the isolated document).  See https://crbug.com/770946.
+  // the contents of the isolated document).  See https://crbug.com/40542846.
   EXPECT_NE(original_main_frame->GetSiteInstance(),
             view_source_frame->GetSiteInstance());
 
   // Verify that the original subframe and the view-source subframe are in a
-  // different process - see https://crbug.com/699493.
+  // different process - see https://crbug.com/40509794.
   EXPECT_NE(original_child_frame->GetSiteInstance(),
             view_source_frame->GetSiteInstance());
 
@@ -322,9 +320,9 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest, CrossSiteSubframe) {
   GURL original_url = original_child_frame->GetLastCommittedURL();
   std::string title = base::UTF16ToUTF8(view_source_contents->GetTitle());
   EXPECT_THAT(title, HasSubstr(content::kViewSourceScheme));
-  EXPECT_THAT(title, HasSubstr(original_url.host()));
-  EXPECT_THAT(title, HasSubstr(original_url.port()));
-  EXPECT_THAT(title, HasSubstr(original_url.path()));
+  EXPECT_THAT(title, HasSubstr(original_url.GetHost()));
+  EXPECT_THAT(title, HasSubstr(original_url.GetPort()));
+  EXPECT_THAT(title, HasSubstr(original_url.GetPath()));
 }
 
 // Tests that "View Source" works fine for pages shown via HTTP POST.
@@ -407,7 +405,7 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest, HttpPostInMainframe) {
               HasSubstr("<title>EmbeddedTestServer - EchoAll</title>"));
 
   // Verify that the original contents and the view-source contents are in a
-  // different process - see https://crbug.com/699493.
+  // different process - see https://crbug.com/40509794.
   EXPECT_NE(current_main_frame->GetSiteInstance(),
             view_source_contents->GetPrimaryMainFrame()->GetSiteInstance());
 
@@ -419,9 +417,9 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest, HttpPostInMainframe) {
   EXPECT_THAT(title, Not(HasSubstr("EmbeddedTestServer - EchoAll")));
   GURL original_url = current_main_frame->GetLastCommittedURL();
   EXPECT_THAT(title, HasSubstr(content::kViewSourceScheme));
-  EXPECT_THAT(title, HasSubstr(original_url.host()));
-  EXPECT_THAT(title, HasSubstr(original_url.port()));
-  EXPECT_THAT(title, HasSubstr(original_url.path()));
+  EXPECT_THAT(title, HasSubstr(original_url.GetHost()));
+  EXPECT_THAT(title, HasSubstr(original_url.GetPort()));
+  EXPECT_THAT(title, HasSubstr(original_url.GetPath()));
 }
 
 // Test the case where ViewSource() is called on a top-level RenderFrameHost
@@ -518,7 +516,7 @@ class ViewSourceWithSplitCacheTest
 };
 
 // Tests that "View Source" works fine for *subframes* shown via HTTP POST.
-// This is a regression test for https://crbug.com/774691.
+// This is a regression test for https://crbug.com/41349757.
 IN_PROC_BROWSER_TEST_P(ViewSourceWithSplitCacheTest, HttpPostInSubframe) {
   // Navigate to a page with multiple frames.
   content::SetupCrossSiteRedirector(embedded_test_server());
@@ -594,7 +592,8 @@ IN_PROC_BROWSER_TEST_P(ViewSourceWithSplitCacheTest, HttpPostInSubframe) {
   EXPECT_THAT(source_text,
               HasSubstr("<title>EmbeddedTestServer - EchoAll</title>"));
 
-  // Verify that view-source opens in a new process - https://crbug.com/699493.
+  // Verify that view-source opens in a new process -
+  // https://crbug.com/40509794.
   EXPECT_NE(original_child_frame->GetSiteInstance(),
             view_source_contents->GetPrimaryMainFrame()->GetSiteInstance());
   EXPECT_NE(original_contents->GetSiteInstance(),
@@ -604,9 +603,9 @@ IN_PROC_BROWSER_TEST_P(ViewSourceWithSplitCacheTest, HttpPostInSubframe) {
   GURL original_url = original_child_frame->GetLastCommittedURL();
   std::string title = base::UTF16ToUTF8(view_source_contents->GetTitle());
   EXPECT_THAT(title, HasSubstr(content::kViewSourceScheme));
-  EXPECT_THAT(title, HasSubstr(original_url.host()));
-  EXPECT_THAT(title, HasSubstr(original_url.port()));
-  EXPECT_THAT(title, HasSubstr(original_url.path()));
+  EXPECT_THAT(title, HasSubstr(original_url.GetHost()));
+  EXPECT_THAT(title, HasSubstr(original_url.GetPort()));
+  EXPECT_THAT(title, HasSubstr(original_url.GetPath()));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -652,7 +651,8 @@ IN_PROC_BROWSER_TEST_P(ViewSourceWithSplitCacheEnabledTest,
         subframe_url.c_str());
     content::TestNavigationObserver navigation_observer(original_contents);
     original_contents->GetPrimaryMainFrame()->ExecuteJavaScriptForTests(
-        base::ASCIIToUTF16(create_frame_script), base::NullCallback());
+        base::ASCIIToUTF16(create_frame_script), base::NullCallback(),
+        content::ISOLATED_WORLD_ID_GLOBAL);
     navigation_observer.Wait();
   }
 
@@ -709,7 +709,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(true));
 
 // Verify that links clicked from view-source do not send a Referer header.
-// See https://crbug.com/834023.
+// See https://crbug.com/41383952.
 IN_PROC_BROWSER_TEST_F(ViewSourceTest, NavigationOmitsReferrer) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -748,7 +748,7 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest, JavaScriptURISanitized) {
 }
 
 // This test verifies that 'view-source' documents are not affected by vertical
-// scroll (see https://crbug.com/898688).
+// scroll (see https://crbug.com/40599616).
 IN_PROC_BROWSER_TEST_F(ViewSourcePermissionsPolicyTest,
                        ViewSourceNotAffectedByHeaderPolicy) {
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -811,7 +811,8 @@ IN_PROC_BROWSER_TEST_F(ViewSourcePrerenderTest, ViewSourceForPrerender) {
   set_target(content::WebContents::FromRenderFrameHost(referrer_frame));
 
   prerender_test_helper().AddPrerender(prerender_url);
-  int host_id = prerender_test_helper().GetHostForUrl(prerender_url);
+  content::PrerenderHostId host_id =
+      prerender_test_helper().GetHostForUrl(prerender_url);
   content::RenderFrameHost* prerender_frame =
       prerender_test_helper().GetPrerenderedMainFrameHost(host_id);
   EXPECT_TRUE(prerender_frame);

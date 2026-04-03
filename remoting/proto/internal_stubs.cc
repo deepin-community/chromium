@@ -7,6 +7,8 @@
 #include <memory>
 #include <string>
 
+#include "base/notreached.h"
+
 namespace remoting::internal {
 
 namespace {
@@ -19,16 +21,23 @@ const std::string& GetEmptyStringRef() {
 }
 }  // namespace
 
-std::string GetGenerateHostTokenRequestPath() {
+// ===========================
+// RemoteAccessService helpers
+// ===========================
+
+// ProvisionCorpMachine
+
+std::string GetMachineProvisioningRequestPath() {
   return "";
 }
 
-std::string GetVerifySessionTokenRequestPath() {
-  return "";
-}
-
-std::string GetReauthorizeHostRequestPath() {
-  return "";
+std::unique_ptr<ProvisionCorpMachineRequest> GetMachineProvisioningRequest(
+    const std::string& owner_email,
+    const std::string& fqdn,
+    const std::string& public_key,
+    const std::string& version,
+    const std::optional<std::string>& existing_directory_id) {
+  return std::make_unique<ProvisionCorpMachineRequest>();
 }
 
 const std::string& GetAuthorizationCode(const ProvisionCorpMachineResponse&) {
@@ -44,28 +53,62 @@ const std::string& GetHostId(const ProvisionCorpMachineResponse&) {
   return GetEmptyStringRef();
 }
 
-std::string GetMachineProvisioningRequestPath() {
-  return "";
-}
-
-std::unique_ptr<ProvisionCorpMachineRequest> GetMachineProvisioningRequest(
-    const std::string& owner_email,
-    const std::string& fqdn,
-    const std::string& public_key,
-    const std::string& version,
-    std::optional<std::string> existing_host_id) {
-  return std::make_unique<ProvisionCorpMachineRequest>();
-}
+// ReportProvisioningError
 
 std::string GetReportProvisioningErrorRequestPath() {
   return "";
 }
 
 std::unique_ptr<ReportProvisioningErrorRequest>
-GetReportProvisioningErrorRequest(const std::string& host_id,
+GetReportProvisioningErrorRequest(const std::string& directory_id,
                                   const std::string& error_message,
                                   const std::string& version) {
   return std::make_unique<ReportProvisioningErrorRequest>();
+}
+
+// SendHeartbeat
+
+std::string GetSendHeartbeatRequestPath() {
+  return "";
+}
+
+std::unique_ptr<SendHeartbeatRequest> GetSendHeartbeatRequest(
+    const std::string& directory_id) {
+  return std::make_unique<SendHeartbeatRequest>();
+}
+
+// UpdateRemoteAccessHost
+
+std::string GetUpdateRemoteAccessHostRequestPath() {
+  return "";
+}
+
+std::unique_ptr<UpdateRemoteAccessHostRequest> GetUpdateRemoteAccessHostRequest(
+    const std::string& directory_id,
+    std::optional<std::string> host_version,
+    std::optional<std::string> signaling_id,
+    std::optional<std::string> offline_reason,
+    std::optional<std::string> os_name,
+    std::optional<std::string> os_version) {
+  return std::make_unique<UpdateRemoteAccessHostRequest>();
+}
+
+// ===========================
+// SessionAuthzService helpers
+// ===========================
+
+std::string_view GetRemoteAccessSessionAuthzPath() {
+  return {};
+}
+
+std::string_view GetRemoteSupportSessionAuthzPath() {
+  return {};
+}
+
+// GenerateHostToken
+
+std::string_view GetGenerateHostTokenRequestVerb() {
+  return {};
 }
 
 std::unique_ptr<GenerateHostTokenRequest> GetGenerateHostTokenRequest(
@@ -73,19 +116,20 @@ std::unique_ptr<GenerateHostTokenRequest> GetGenerateHostTokenRequest(
   return std::make_unique<GenerateHostTokenRequest>();
 }
 
-std::unique_ptr<VerifySessionTokenRequest> GetVerifySessionTokenRequest(
-    const VerifySessionTokenRequestStruct&) {
-  return std::make_unique<VerifySessionTokenRequest>();
-}
-
-std::unique_ptr<ReauthorizeHostRequest> GetReauthorizeHostRequest(
-    const ReauthorizeHostRequestStruct&) {
-  return std::make_unique<ReauthorizeHostRequest>();
-}
-
 std::unique_ptr<GenerateHostTokenResponseStruct>
 GetGenerateHostTokenResponseStruct(const GenerateHostTokenResponse&) {
   return std::make_unique<GenerateHostTokenResponseStruct>();
+}
+
+// VerifySessionToken
+
+std::string_view GetVerifySessionTokenRequestVerb() {
+  return {};
+}
+
+std::unique_ptr<VerifySessionTokenRequest> GetVerifySessionTokenRequest(
+    const VerifySessionTokenRequestStruct&) {
+  return std::make_unique<VerifySessionTokenRequest>();
 }
 
 std::unique_ptr<VerifySessionTokenResponseStruct>
@@ -93,49 +137,116 @@ GetVerifySessionTokenResponseStruct(const VerifySessionTokenResponse&) {
   return std::make_unique<VerifySessionTokenResponseStruct>();
 }
 
+// ReauthorizeHost
+
+std::string_view GetReauthorizeHostRequestVerb() {
+  return {};
+}
+
+std::unique_ptr<ReauthorizeHostRequest> GetReauthorizeHostRequest(
+    const ReauthorizeHostRequestStruct&) {
+  return std::make_unique<ReauthorizeHostRequest>();
+}
+
 extern std::unique_ptr<ReauthorizeHostResponseStruct>
 GetReauthorizeHostResponseStruct(const ReauthorizeHostResponse&) {
   return std::make_unique<ReauthorizeHostResponseStruct>();
 }
 
-std::string GetSendHeartbeatRequestPath() {
-  return "";
+// ======================
+// LoggingService helpers
+// ======================
+
+std::string_view GetRemoteAccessLoggingPath() {
+  return {};
 }
 
-std::unique_ptr<SendHeartbeatRequest> GetSendHeartbeatRequest(
-    const std::string& host_id) {
-  return std::make_unique<SendHeartbeatRequest>();
+std::string_view GetRemoteSupportLoggingPath() {
+  return {};
 }
 
-std::string DoNothingProto::GetTypeName() const {
-  return "";
+// ReportSessionDisconnected
+
+std::string_view GetReportSessionDisconnectedRequestVerb() {
+  return {};
 }
 
-google::protobuf::MessageLite* DoNothingProto::New(
-    google::protobuf::Arena* arena) const {
-  return nullptr;
+std::unique_ptr<ReportSessionDisconnectedRequest>
+GetReportSessionDisconnectedRequest(
+    const ReportSessionDisconnectedRequestStruct&) {
+  return std::make_unique<ReportSessionDisconnectedRequest>();
 }
 
-void DoNothingProto::Clear() {}
+// ============================
+// RemoteSupportService helpers
+// ============================
 
-bool DoNothingProto::IsInitialized() const {
-  return true;
+std::string_view GetCreateRemoteSupportHostRequestPath() {
+  return {};
 }
 
-void DoNothingProto::CheckTypeAndMergeFrom(const MessageLite& other) {}
-
-size_t DoNothingProto::ByteSizeLong() const {
-  return 0;
+std::unique_ptr<RemoteSupportHost> GetRemoteSupportHost(
+    const RemoteSupportHostStruct& request_struct) {
+  return std::make_unique<RemoteSupportHost>();
 }
 
-int DoNothingProto::GetCachedSize() const {
-  return 0;
+std::string_view GetSupportId(const RemoteSupportHost&) {
+  return {};
 }
 
-uint8_t* DoNothingProto::_InternalSerialize(
-    uint8_t* ptr,
-    google::protobuf::io::EpsCopyOutputStream* stream) const {
-  return ptr;
+// ============================
+// MessagingService helpers
+// ============================
+
+std::string_view GetHostSendMessagePath() {
+  return "/fake/for_testing/send_host_message";
+}
+std::string_view GetHostOpenChannelPath() {
+  return "/fake/for_testing/receive_client_messages";
+}
+
+std::unique_ptr<HostOpenChannelRequest> GetHostOpenChannelRequest(
+    const HostOpenChannelRequestStruct&) {
+  return std::make_unique<HostOpenChannelRequest>();
+}
+
+std::unique_ptr<HostOpenChannelResponseStruct> GetHostOpenChannelResponseStruct(
+    const HostOpenChannelResponse&) {
+  return std::make_unique<HostOpenChannelResponseStruct>();
+}
+
+std::unique_ptr<HostSendMessageRequest> GetHostSendMessageRequest(
+    const HostSendMessageRequestStruct&) {
+  return std::make_unique<HostSendMessageRequest>();
+}
+
+std::unique_ptr<HostSendMessageResponseStruct> GetHostSendMessageResponseStruct(
+    const HostSendMessageResponse&) {
+  return std::make_unique<HostSendMessageResponseStruct>();
+}
+
+std::unique_ptr<PeerMessage> GetPeerMessage(const PeerMessageStruct&) {
+  return std::make_unique<PeerMessage>();
+}
+
+std::unique_ptr<PeerMessageStruct> GetPeerMessageStruct(const PeerMessage&) {
+  return std::make_unique<PeerMessageStruct>();
+}
+
+std::unique_ptr<IqStanza> GetIqStanza(const IqStanzaStruct&) {
+  return std::make_unique<IqStanza>();
+}
+
+std::unique_ptr<IqStanzaStruct> GetIqStanzaStruct(const IqStanza&) {
+  return std::make_unique<IqStanzaStruct>();
+}
+
+std::unique_ptr<SystemTest> GetSystemTest(const SystemTestStruct&) {
+  return std::make_unique<SystemTest>();
+}
+
+std::unique_ptr<SystemTestStruct> GetSystemTestStruct(const SystemTest&) {
+  return std::make_unique<SystemTestStruct>();
 }
 
 }  // namespace remoting::internal

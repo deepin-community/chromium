@@ -102,14 +102,19 @@ class TransformFeedback final : public RefCountObject<TransformFeedbackID>, publ
     // Returns true if any buffer bound to this object is also bound to another target.
     bool buffersBoundForOtherUseInWebGL() const;
 
+    // Returns true if the buffer is bound to any of the indexed binding points in this transform
+    // feedback.
+    bool isBufferBound(BufferID bufferID) const;
+
     angle::Result detachBuffer(const Context *context, BufferID bufferID);
 
-    rx::TransformFeedbackImpl *getImplementation() const;
+    rx::TransformFeedbackImpl *getImplementation() const { return mImplementation; }
 
     void onBindingChanged(const Context *context, bool bound);
 
   private:
     void bindProgram(const Context *context, Program *program);
+    void recomputeVertexCapacity(const Context *context);
 
     TransformFeedbackState mState;
     rx::TransformFeedbackImpl *mImplementation;

@@ -6,6 +6,7 @@
 
 #include <limits>
 
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -63,7 +64,8 @@ void OnReadLandingPage(uint8_t landing_page_id,
   }
 
   GURL url;
-  ParseWebUsbUrlDescriptor(base::make_span(buffer->front(), length), &url);
+  ParseWebUsbUrlDescriptor(UNSAFE_TODO(base::span(buffer->data(), length)),
+                           &url);
   std::move(callback).Run(url);
 }
 
@@ -80,7 +82,7 @@ void OnReadBosDescriptor(scoped_refptr<UsbDeviceHandle> device_handle,
 
   WebUsbPlatformCapabilityDescriptor descriptor;
   if (!descriptor.ParseFromBosDescriptor(
-          base::make_span(buffer->front(), length))) {
+          UNSAFE_TODO(base::span(buffer->data(), length)))) {
     std::move(callback).Run(std::nullopt);
     return;
   }
@@ -99,7 +101,7 @@ void OnReadBosDescriptorHeader(scoped_refptr<UsbDeviceHandle> device_handle,
     return;
   }
 
-  const uint8_t* data = buffer->front();
+  base::span<const uint8_t> data = *buffer;
   uint16_t new_length = data[2] | (data[3] << 8);
   auto new_buffer = base::MakeRefCounted<base::RefCountedBytes>(new_length);
   device_handle->ControlTransfer(
@@ -176,7 +178,8 @@ bool WebUsbPlatformCapabilityDescriptor::ParseFromBosDescriptor(
       return false;
     }
 
-    if (memcmp(&it[4], kWebUsbCapabilityUUID, sizeof(kWebUsbCapabilityUUID)) !=
+    if (UNSAFE_TODO(memcmp(&it[4], kWebUsbCapabilityUUID,
+                           sizeof(kWebUsbCapabilityUUID))) !=
         0) {  // PlatformCapabilityUUID
       continue;
     }
@@ -244,7 +247,8 @@ bool ParseWebUsbUrlDescriptor(base::span<const uint8_t> bytes, GURL* output) {
     default:
       return false;
   }
-  url.append(reinterpret_cast<const char*>(bytes.data() + 3), length - 3);
+  url.append(reinterpret_cast<const char*>(UNSAFE_TODO(bytes.data() + 3)),
+             length - 3);
 
   *output = GURL(url);
   if (!output->is_valid()) {

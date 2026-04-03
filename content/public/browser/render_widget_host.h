@@ -15,20 +15,19 @@
 #include "base/i18n/rtl.h"
 #include "base/scoped_observation_traits.h"
 #include "build/build_config.h"
+#include "components/input/input_event_source.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "content/common/content_export.h"
+#include "content/public/browser/tracked_element_observer.h"
 #include "content/public/common/drop_data.h"
-#include "content/public/common/input/native_web_keyboard_event.h"
-#include "ipc/ipc_channel.h"
-#include "ipc/ipc_sender.h"
 #include "third_party/blink/public/common/input/web_gesture_event.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/page/drag_operation.h"
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom-forward.h"
-#include "ui/base/ui_base_types.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/display/screen_infos.h"
-#include "ui/surface/transport_dib.h"
 
 namespace blink {
 class WebMouseEvent;
@@ -61,6 +60,7 @@ class RenderProcessHost;
 class RenderWidgetHostIterator;
 class RenderWidgetHostObserver;
 class RenderWidgetHostView;
+class TrackedElementObserver;
 
 // A RenderWidgetHost acts as the abstraction for compositing and input
 // functionality. It can exist in 3 different scenarios:
@@ -111,6 +111,12 @@ class CONTENT_EXPORT RenderWidgetHost {
   static std::unique_ptr<RenderWidgetHostIterator> GetRenderWidgetHosts();
 
   virtual ~RenderWidgetHost() {}
+
+  // This is a method to manually trigger user interaction notifications. This
+  // is useful for mechanisms that do not use the normal input stack and thus
+  // would not normally send notifications to observers (e.g. tools in
+  // `actor::`).
+  virtual void SimulateUserInteraction(const blink::WebInputEvent& event) = 0;
 
   // Returns the viz::FrameSinkId that this object uses to put things on screen.
   // This value is constant throughout the lifetime of this object. Note that
@@ -176,9 +182,9 @@ class CONTENT_EXPORT RenderWidgetHost {
   virtual void ForwardWheelEvent(
       const blink::WebMouseWheelEvent& wheel_event) = 0;
   virtual void ForwardKeyboardEvent(
-      const NativeWebKeyboardEvent& key_event) = 0;
+      const input::NativeWebKeyboardEvent& key_event) = 0;
   virtual void ForwardKeyboardEventWithLatencyInfo(
-      const NativeWebKeyboardEvent& key_event,
+      const input::NativeWebKeyboardEvent& key_event,
       const ui::LatencyInfo& latency_info) = 0;
   virtual void ForwardGestureEvent(
       const blink::WebGestureEvent& gesture_event) = 0;
@@ -192,6 +198,11 @@ class CONTENT_EXPORT RenderWidgetHost {
   // never cache this pointer since it can become nullptr if the renderer
   // crashes, instead you should always ask for it using the accessor.
   virtual RenderWidgetHostView* GetView() = 0;
+  virtual const RenderWidgetHostView* GetView() const = 0;
+
+  virtual void AddTrackedElementObserver(TrackedElementObserver* observer) = 0;
+  virtual void RemoveTrackedElementObserver(
+      TrackedElementObserver* observer) = 0;
 
   // Returns true if the renderer is considered unresponsive.
   virtual bool IsCurrentlyUnresponsive() = 0;
@@ -200,12 +211,9 @@ class CONTENT_EXPORT RenderWidgetHost {
   // true if visual properties have changed since last call.
   virtual bool SynchronizeVisualProperties() = 0;
 
-  // Access to the implementation's IPC::Listener::OnMessageReceived. Intended
-  // only for test code.
-
   // Add/remove a callback that can handle key presses without requiring focus.
   using KeyPressEventCallback =
-      base::RepeatingCallback<bool(const NativeWebKeyboardEvent&)>;
+      base::RepeatingCallback<bool(const input::NativeWebKeyboardEvent&)>;
   virtual void AddKeyPressEventCallback(
       const KeyPressEventCallback& callback) = 0;
   virtual void RemoveKeyPressEventCallback(
@@ -217,21 +225,30 @@ class CONTENT_EXPORT RenderWidgetHost {
   virtual void AddMouseEventCallback(const MouseEventCallback& callback) = 0;
   virtual void RemoveMouseEventCallback(const MouseEventCallback& callback) = 0;
 
-  // Add/remove a callback that, when it returns true, will suppress IME
+  // Adds a callback that, when it returns true, will suppress IME
   // display.
   using SuppressShowingImeCallback = base::RepeatingCallback<bool()>;
   virtual void AddSuppressShowingImeCallback(
       const SuppressShowingImeCallback& callback) = 0;
+  // Removes the callback to suppress IME display. If `trigger_ime` is set tu
+  // true, it will also try to show the IME display after the callback removal.
   virtual void RemoveSuppressShowingImeCallback(
-      const SuppressShowingImeCallback& callback) = 0;
+      const SuppressShowingImeCallback& callback,
+      bool trigger_ime) = 0;
 
   // Observer for WebInputEvents.
   class InputEventObserver {
    public:
-    virtual ~InputEventObserver() {}
+    using InputEventSource = input::InputEventSource;
+    virtual ~InputEventObserver() = default;
 
-    virtual void OnInputEvent(const blink::WebInputEvent&) {}
-    virtual void OnInputEventAck(blink::mojom::InputEventResultSource source,
+    // Called when an input event is received. `source` indicates whether the
+    // event was received from the browser or Viz process.
+    virtual void OnInputEvent(const RenderWidgetHost& host,
+                              const blink::WebInputEvent& event,
+                              InputEventSource source) {}
+    virtual void OnInputEventAck(const RenderWidgetHost&,
+                                 blink::mojom::InputEventResultSource source,
                                  blink::mojom::InputEventResultState state,
                                  const blink::WebInputEvent&) {}
 
@@ -330,8 +347,9 @@ class CONTENT_EXPORT RenderWidgetHost {
   virtual void SetCursor(const ui::Cursor& cursor) {}
 
   // Shows the context menu using the specified point as anchor point.
-  virtual void ShowContextMenuAtPoint(const gfx::Point& point,
-                                      const ui::MenuSourceType source_type) {}
+  virtual void ShowContextMenuAtPoint(
+      const gfx::Point& point,
+      const ui::mojom::MenuSourceType source_type) {}
 
   // Roundtrips through the renderer and compositor pipeline to ensure that any
   // changes to the contents resulting from operations executed prior to this
@@ -341,6 +359,9 @@ class CONTENT_EXPORT RenderWidgetHost {
   // This can run synchronously on failure.
   using VisualStateCallback = base::OnceCallback<void(bool)>;
   virtual void InsertVisualStateCallback(VisualStateCallback callback) {}
+
+  // Sets the timeout for the hung renderer detection.
+  virtual void SetHungRendererDelay(const base::TimeDelta& delay) = 0;
 };
 
 }  // namespace content

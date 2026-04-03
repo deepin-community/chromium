@@ -13,7 +13,6 @@
 #include "chrome/browser/media/media_access_handler.h"
 #include "chrome/browser/tab_contents/web_contents_collection.h"
 #include "components/content_settings/core/common/content_settings.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
 namespace user_prefs {
@@ -29,7 +28,7 @@ class PermissionBubbleMediaAccessHandler
   ~PermissionBubbleMediaAccessHandler() override;
 
   // MediaAccessHandler implementation.
-  bool SupportsStreamType(content::WebContents* web_contents,
+  bool SupportsStreamType(content::RenderFrameHost* render_frame_host,
                           const blink::mojom::MediaStreamType type,
                           const extensions::Extension* extension) override;
   bool CheckMediaAccessPermission(
@@ -77,7 +76,7 @@ class PermissionBubbleMediaAccessHandler
   // This method uses StreamDevicesSetPtr (movable) and forwards the data
   // to OnAccessRequestResponse when calling the callback.
   void OnAccessRequestResponseForBinding(
-      content::WebContents* web_contents,
+      MayBeDangling<content::WebContents> web_contents,
       int64_t request_id,
       blink::mojom::StreamDevicesSetPtr stream_devices_set,
       blink::mojom::MediaStreamRequestResult result,

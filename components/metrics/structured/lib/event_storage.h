@@ -5,15 +5,12 @@
 #ifndef COMPONENTS_METRICS_STRUCTURED_LIB_EVENT_STORAGE_H_
 #define COMPONENTS_METRICS_STRUCTURED_LIB_EVENT_STORAGE_H_
 
+#include "base/functional/callback.h"
 #include "third_party/protobuf/src/google/protobuf/message_lite.h"
 
 namespace metrics {
 class StructuredEventProto;
 }  // namespace metrics
-
-namespace base {
-class FilePath;
-}
 
 namespace metrics::structured {
 
@@ -40,9 +37,10 @@ class EventStorage {
   // Add a new StructuredEventProto to be stored.
   virtual void AddEvent(T event) = 0;
 
-  // External API for removing events from the storage.
-  // Intended to be used with a Swap for improved performance.
-  virtual Container<T> TakeEvents() = 0;
+  // External API for removing events from the storage. Removed events are
+  // passed to the |consumer| callback. The callback may be called
+  // asynchronously.
+  virtual void TakeEvents(base::OnceCallback<void(Container<T>)> consumer) = 0;
 
   // The number of events that have been recorded.
   virtual int RecordedEventsCount() const = 0;
@@ -52,9 +50,6 @@ class EventStorage {
 
   // Delete all events.
   virtual void Purge() = 0;
-
-  // Temporary API for notifying storage that a profile has been added.
-  virtual void OnProfileAdded(const base::FilePath& path) {}
 
   // Copies the events out of the event storage.
   virtual void CopyEvents(EventsProto* events_proto) const {}

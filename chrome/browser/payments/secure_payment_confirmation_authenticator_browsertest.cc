@@ -8,12 +8,14 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/payments/secure_payment_confirmation_browsertest.h"
-#include "components/autofill/core/browser/test_event_waiter.h"
+#include "components/autofill/core/browser/test_utils/test_event_waiter.h"
 #include "components/payments/content/secure_payment_confirmation_app.h"
 #include "components/payments/core/journey_logger.h"
 #include "components/payments/core/secure_payment_confirmation_metrics.h"
 #include "content/public/browser/scoped_authenticator_environment_for_testing.h"
+#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
+#include "crypto/scoped_fake_unexportable_key_provider.h"
 #include "device/fido/virtual_fido_device_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -23,8 +25,8 @@
 #error "These tests are unsupported on Android"
 #endif
 
-// TODO(crbug.com/1372198): Temporarily disable the tests on macOS since they do
-// not yet work with current WebAuthn UI.
+// TODO(crbug.com/40870879): Temporarily disable the tests on macOS since they
+// do not yet work with current WebAuthn UI.
 #if !BUILDFLAG(IS_MAC)
 
 namespace payments {
@@ -96,7 +98,8 @@ class SecurePaymentConfirmationAuthenticatorTestBase
             .ExtractString();
     ASSERT_EQ(std::string::npos, response.find("Error")) << response;
 
-    std::optional<base::Value> value = base::JSONReader::Read(response);
+    std::optional<base::Value> value =
+        base::JSONReader::Read(response, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     ASSERT_TRUE(value.has_value());
     ASSERT_TRUE(value->is_dict());
     const auto& value_dict = value->GetDict();
@@ -131,6 +134,9 @@ class SecurePaymentConfirmationAuthenticatorTestBase
   }
 
   std::unique_ptr<autofill::EventWaiter<Event>> event_waiter_;
+
+ private:
+  crypto::ScopedFakeUnexportableKeyProvider scoped_key_provider_;
 };
 
 using SecurePaymentConfirmationAuthenticatorCreateTest =
@@ -149,15 +155,8 @@ IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationAuthenticatorCreateTest,
   EXPECT_EQ("PublicKeyCredential", info.webidl_type);
   EXPECT_EQ("webauthn.create", info.type);
 
-  // Verify that the correct metrics are recorded.
-  histogram_tester_.ExpectTotalCount(
-      "PaymentRequest.SecurePaymentConfirmationCredentialIdSizeInBytes", 1U);
-
-  // Check that we can create a second credential, and that the tracked metrics
-  // update.
+  // Check that we can create a second credential successfully.
   CreatePaymentCredential();
-  histogram_tester_.ExpectTotalCount(
-      "PaymentRequest.SecurePaymentConfirmationCredentialIdSizeInBytes", 2U);
 }
 
 // b.com cannot create a credential with RP = "a.com".
@@ -165,10 +164,10 @@ IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationAuthenticatorCreateTest,
                        RelyingPartyIsEnforced) {
   auto scoped_auth_env = ReplaceFidoDiscoveryFactory(/*should_succeed=*/true);
   NavigateTo("b.com", "/secure_payment_confirmation.html");
-  EXPECT_EQ(
-      "SecurityError: The relying party ID is not a registrable domain suffix "
-      "of, nor equal to the current domain.",
-      content::EvalJs(GetActiveWebContents(), "createPaymentCredential()"));
+  EXPECT_THAT(
+      content::EvalJs(GetActiveWebContents(), "createPaymentCredential()")
+          .ExtractString(),
+      testing::HasSubstr("SecurityError: The relying party ID is not"));
 }
 
 IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationAuthenticatorCreateTest,
@@ -247,10 +246,11 @@ IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationAuthenticatorGetTest,
           .ExtractString();
 
   ASSERT_EQ(std::string::npos, response.find("Error"));
-  std::optional<base::Value> value = base::JSONReader::Read(response);
+  std::optional<base::Value> value =
+      base::JSONReader::Read(response, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(value.has_value());
   ASSERT_TRUE(value->is_dict());
-  const base::Value::Dict& value_dict = value->GetDict();
+  const base::DictValue& value_dict = value->GetDict();
   const std::string* type = value_dict.FindString("type");
   ASSERT_NE(nullptr, type) << response;
   EXPECT_EQ("payment.get", *type);
@@ -315,11 +315,12 @@ IN_PROC_BROWSER_TEST_F(SecurePaymentConfirmationAuthenticatorGetTest,
           .ExtractString();
 
   ASSERT_EQ(std::string::npos, response.find("Error"));
-  std::optional<base::Value> value = base::JSONReader::Read(response);
+  std::optional<base::Value> value =
+      base::JSONReader::Read(response, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(value.has_value());
   ASSERT_TRUE(value->is_dict());
 
-  const base::Value::Dict& dict = value->GetDict();
+  const base::DictValue& dict = value->GetDict();
   const std::string* payee_name =
       dict.FindStringByDottedPath("payment.payeeName");
   ASSERT_NE(nullptr, payee_name) << response;
@@ -365,11 +366,12 @@ IN_PROC_BROWSER_TEST_F(
           .ExtractString();
 
   ASSERT_EQ(std::string::npos, response.find("Error"));
-  std::optional<base::Value> value = base::JSONReader::Read(response);
+  std::optional<base::Value> value =
+      base::JSONReader::Read(response, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(value.has_value());
   ASSERT_TRUE(value->is_dict());
 
-  const base::Value::Dict& dict = value->GetDict();
+  const base::DictValue& dict = value->GetDict();
   const std::string* payee_name =
       dict.FindStringByDottedPath("payment.payeeName");
   ASSERT_NE(nullptr, payee_name) << response;

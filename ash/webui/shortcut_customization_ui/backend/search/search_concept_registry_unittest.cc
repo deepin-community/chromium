@@ -5,7 +5,6 @@
 #include "ash/webui/shortcut_customization_ui/backend/search/search_concept_registry.h"
 #include <vector>
 
-#include "ash/public/mojom/accelerator_info.mojom-shared.h"
 #include "ash/public/mojom/accelerator_info.mojom.h"
 #include "ash/webui/shortcut_customization_ui/backend/search/fake_search_data.h"
 #include "ash/webui/shortcut_customization_ui/backend/search/search_concept.h"
@@ -183,6 +182,7 @@ TEST_F(SearchConceptRegistryTest, SearchConceptToDataStandardAccelerator) {
           /*type=*/ash::mojom::AcceleratorType::kDefault,
           /*state=*/ash::mojom::AcceleratorState::kEnabled,
           /*locked=*/true,
+          /*accelerator_locked=*/false,
           /*layout_properties=*/
           ash::mojom::LayoutStyleProperties::NewStandardAccelerator(
               ash::mojom::StandardAcceleratorProperties::New(
@@ -195,6 +195,7 @@ TEST_F(SearchConceptRegistryTest, SearchConceptToDataStandardAccelerator) {
           /*type=*/ash::mojom::AcceleratorType::kDefault,
           /*state=*/ash::mojom::AcceleratorState::kEnabled,
           /*locked=*/true,
+          /*accelerator_locked=*/false,
           /*layout_properties=*/
           ash::mojom::LayoutStyleProperties::NewStandardAccelerator(
               ash::mojom::StandardAcceleratorProperties::New(
@@ -243,6 +244,7 @@ TEST_F(SearchConceptRegistryTest, SearchConceptToDataTextAccelerator) {
           /*type=*/ash::mojom::AcceleratorType::kDefault,
           /*state=*/ash::mojom::AcceleratorState::kEnabled,
           /*locked=*/true,
+          /*accelerator_locked=*/false,
           /*layout_properties=*/
           ash::mojom::LayoutStyleProperties::NewTextAccelerator(
               ash::mojom::TextAcceleratorProperties::New(

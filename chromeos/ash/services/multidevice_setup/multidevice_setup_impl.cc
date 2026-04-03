@@ -2,18 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chromeos/ash/services/multidevice_setup/multidevice_setup_impl.h"
+
+#include <algorithm>
 #include <utility>
 #include <vector>
 
-#include "chromeos/ash/services/multidevice_setup/multidevice_setup_impl.h"
-
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
 #include "base/time/default_clock.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/services/multidevice_setup/account_status_change_delegate_notifier_impl.h"
@@ -74,21 +73,18 @@ std::unique_ptr<MultiDeviceSetupBase> MultiDeviceSetupImpl::Factory::Create(
     OobeCompletionTracker* oobe_completion_tracker,
     AndroidSmsAppHelperDelegate* android_sms_app_helper_delegate,
     AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
-    const device_sync::GcmDeviceInfoProvider* gcm_device_info_provider,
     bool is_secondary_user) {
   if (test_factory_) {
     return test_factory_->CreateInstance(
         pref_service, device_sync_client, auth_token_validator,
         oobe_completion_tracker, android_sms_app_helper_delegate,
-        android_sms_pairing_state_tracker, gcm_device_info_provider,
-        is_secondary_user);
+        android_sms_pairing_state_tracker, is_secondary_user);
   }
 
   return base::WrapUnique(new MultiDeviceSetupImpl(
       pref_service, device_sync_client, auth_token_validator,
       oobe_completion_tracker, android_sms_app_helper_delegate,
-      android_sms_pairing_state_tracker, gcm_device_info_provider,
-      is_secondary_user));
+      android_sms_pairing_state_tracker, is_secondary_user));
 }
 
 // static
@@ -106,7 +102,6 @@ MultiDeviceSetupImpl::MultiDeviceSetupImpl(
     OobeCompletionTracker* oobe_completion_tracker,
     AndroidSmsAppHelperDelegate* android_sms_app_helper_delegate,
     AndroidSmsPairingStateTracker* android_sms_pairing_state_tracker,
-    const device_sync::GcmDeviceInfoProvider* gcm_device_info_provider,
     bool is_secondary_user)
     : eligible_host_devices_provider_(
           EligibleHostDevicesProviderImpl::Factory::Create(device_sync_client)),
@@ -213,7 +208,7 @@ void MultiDeviceSetupImpl::GetEligibleActiveHostDevices(
   for (const auto& host_device :
        eligible_host_devices_provider_->GetEligibleActiveHostDevices()) {
     // For metrics.
-    if (base::Contains(name_set, host_device.remote_device.name())) {
+    if (name_set.contains(host_device.remote_device.name())) {
       has_duplicate_host_name = true;
       PA_LOG(WARNING) << "MultiDeviceSetupImpl::GetEligibleActiveHostDevices: "
                       << "Detected duplicate eligible host device name \""
@@ -230,6 +225,8 @@ void MultiDeviceSetupImpl::GetEligibleActiveHostDevices(
   base::UmaHistogramBoolean(
       "MultiDevice.Setup.HasDuplicateEligibleHostDeviceNames",
       has_duplicate_host_name);
+  base::UmaHistogramBoolean("MultiDevice.Setup.EligibleHostDeviceListCount",
+                            eligible_active_hosts.size());
 
   std::move(callback).Run(std::move(eligible_active_hosts));
 }
@@ -239,6 +236,8 @@ void MultiDeviceSetupImpl::SetHostDevice(
     const std::string& auth_token,
     SetHostDeviceCallback callback) {
   if (!auth_token_validator_->IsAuthTokenValid(auth_token)) {
+    PA_LOG(WARNING) << "MultiDeviceSetupImpl::SetHostDevice failed due to "
+                       "invalid auth token";
     std::move(callback).Run(false /* success */);
     return;
   }
@@ -399,23 +398,25 @@ bool MultiDeviceSetupImpl::AttemptSetHost(
 
   multidevice::RemoteDeviceRefList eligible_devices =
       eligible_host_devices_provider_->GetEligibleHostDevices();
+  if (eligible_devices.empty()) {
+    PA_LOG(WARNING)
+        << __func__
+        << ": attempting to set host but no eligible devices are available";
+  }
 
-  auto it = base::ranges::find_if(
+  auto it = std::ranges::find_if(
       eligible_devices,
       [&host_instance_id_or_legacy_device_id](const auto& eligible_device) {
-        if (features::ShouldUseV1DeviceSync()) {
-          return eligible_device.instance_id() ==
-                     host_instance_id_or_legacy_device_id ||
-                 eligible_device.GetDeviceId() ==
-                     host_instance_id_or_legacy_device_id;
-        }
-
         return eligible_device.instance_id() ==
                host_instance_id_or_legacy_device_id;
       });
 
-  if (it == eligible_devices.end())
+  if (it == eligible_devices.end()) {
+    PA_LOG(WARNING)
+        << " MultiDeviceSetupImpl::AttemptSetHost failed because there was no "
+           "match in the eligible devices for the selected host";
     return false;
+  }
 
   LogForgetHostConfirmed(
       VerifyAndForgetHostConfirmationState::kCompletedSetupState);

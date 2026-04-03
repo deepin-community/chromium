@@ -17,7 +17,7 @@ class WebContents;
 
 namespace autofill {
 
-class AutofillVirtualCardEnrollmentInfoBarDelegateMobile;
+class AutofillVirtualCardEnrollmentBottomSheetDelegateMobile;
 
 // Bridge for the virtual card enrollment bottom sheet on Android.
 class AutofillVCNEnrollBottomSheetBridge {
@@ -29,14 +29,17 @@ class AutofillVCNEnrollBottomSheetBridge {
   AutofillVCNEnrollBottomSheetBridge& operator=(
       const AutofillVCNEnrollBottomSheetBridge&) = delete;
 
-  ~AutofillVCNEnrollBottomSheetBridge();
+  virtual ~AutofillVCNEnrollBottomSheetBridge();
 
   // Requests to show the virtual card enrollment bottom sheet.
   // Returns true if the bottom sheet was shown.
   bool RequestShowContent(
       content::WebContents* web_contents,
-      std::unique_ptr<AutofillVirtualCardEnrollmentInfoBarDelegateMobile>
+      std::unique_ptr<AutofillVirtualCardEnrollmentBottomSheetDelegateMobile>
           delegate);
+
+  // Hides the virtual card enrollment bottom sheet.
+  virtual void Hide();
 
   void OnAccept(JNIEnv* env);
   void OnCancel(JNIEnv* env);
@@ -45,7 +48,8 @@ class AutofillVCNEnrollBottomSheetBridge {
 
  private:
   base::android::ScopedJavaGlobalRef<jobject> java_bridge_;
-  std::unique_ptr<AutofillVirtualCardEnrollmentInfoBarDelegateMobile> delegate_;
+  std::unique_ptr<AutofillVirtualCardEnrollmentBottomSheetDelegateMobile>
+      delegate_;
 };
 
 }  // namespace autofill

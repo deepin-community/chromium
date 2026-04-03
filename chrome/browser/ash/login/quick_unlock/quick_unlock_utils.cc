@@ -12,12 +12,11 @@
 #include "ash/constants/ash_switches.h"
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/feature_list.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/login/quick_unlock/pin_backend.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/browser_resources.h"
@@ -81,7 +80,7 @@ constexpr int kDefaultMinimumPinLength = 6;
 bool HasPolicyValue(const PrefService* pref_service,
                     Purpose purpose,
                     const char* value) {
-  const base::Value::List* factors = nullptr;
+  const base::ListValue* factors = nullptr;
   switch (purpose) {
     case Purpose::kUnlock:
       factors = &pref_service->GetList(prefs::kQuickUnlockModeAllowlist);
@@ -92,7 +91,7 @@ bool HasPolicyValue(const PrefService* pref_service,
     default:
       return false;
   }
-  return base::Contains(*factors, base::Value(value));
+  return factors->contains(value);
 }
 
 // Check if fingerprint is disabled for a specific purpose (so not including
@@ -124,9 +123,12 @@ TestApi::TestApi(bool override_quick_unlock)
   old_instance_ = g_instance;
   g_instance = this;
   std::fill(pin_purposes_enabled_by_policy_,
-            pin_purposes_enabled_by_policy_ + kNumOfPurposes, false);
-  std::fill(fingerprint_purposes_enabled_by_policy_,
-            fingerprint_purposes_enabled_by_policy_ + kNumOfPurposes, false);
+            UNSAFE_TODO(pin_purposes_enabled_by_policy_ + kNumOfPurposes),
+            false);
+  std::fill(
+      fingerprint_purposes_enabled_by_policy_,
+      UNSAFE_TODO(fingerprint_purposes_enabled_by_policy_ + kNumOfPurposes),
+      false);
 }
 
 TestApi::~TestApi() {
@@ -146,7 +148,8 @@ void TestApi::EnablePinByPolicy(Purpose purpose) {
   if (purpose != Purpose::kAny) {
     pin_purposes_enabled_by_policy_[static_cast<int>(Purpose::kAny)] = true;
   }
-  pin_purposes_enabled_by_policy_[static_cast<int>(purpose)] = true;
+  UNSAFE_TODO(pin_purposes_enabled_by_policy_[static_cast<int>(purpose)]) =
+      true;
 }
 
 void TestApi::EnableFingerprintByPolicy(Purpose purpose) {
@@ -154,15 +157,19 @@ void TestApi::EnableFingerprintByPolicy(Purpose purpose) {
     fingerprint_purposes_enabled_by_policy_[static_cast<int>(Purpose::kAny)] =
         true;
   }
-  fingerprint_purposes_enabled_by_policy_[static_cast<int>(purpose)] = true;
+  UNSAFE_TODO(
+      fingerprint_purposes_enabled_by_policy_[static_cast<int>(purpose)]) =
+      true;
 }
 
 bool TestApi::IsPinEnabledByPolicy(Purpose purpose) {
-  return pin_purposes_enabled_by_policy_[static_cast<int>(purpose)];
+  return UNSAFE_TODO(
+      pin_purposes_enabled_by_policy_[static_cast<int>(purpose)]);
 }
 
 bool TestApi::IsFingerprintEnabledByPolicy(Purpose purpose) {
-  return fingerprint_purposes_enabled_by_policy_[static_cast<int>(purpose)];
+  return UNSAFE_TODO(
+      fingerprint_purposes_enabled_by_policy_[static_cast<int>(purpose)]);
 }
 
 bool IsFingerprintDisabledByPolicy(const PrefService* pref_service,
@@ -194,13 +201,12 @@ base::TimeDelta PasswordConfirmationFrequencyToTimeDelta(
       return base::Days(7);
   }
   NOTREACHED();
-  return base::TimeDelta();
 }
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry) {
-  base::Value::List quick_unlock_modes_default;
+  base::ListValue quick_unlock_modes_default;
   quick_unlock_modes_default.Append(kFactorsOptionAll);
-  base::Value::List webauthn_factors_default;
+  base::ListValue webauthn_factors_default;
   webauthn_factors_default.Append(kFactorsOptionAll);
   registry->RegisterListPref(prefs::kQuickUnlockModeAllowlist,
                              std::move(quick_unlock_modes_default));
@@ -217,9 +223,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterIntegerPref(prefs::kPinUnlockMaximumLength, 0);
   registry->RegisterBooleanPref(prefs::kPinUnlockWeakPinsAllowed, true);
 
-  // Register as true by default only when the feature is enabled.
-  registry->RegisterBooleanPref(::prefs::kPinUnlockAutosubmitEnabled,
-                                features::IsPinAutosubmitFeatureEnabled());
+  registry->RegisterBooleanPref(::prefs::kPinUnlockAutosubmitEnabled, true);
 }
 
 bool IsPinDisabledByPolicy(PrefService* pref_service, Purpose purpose) {
@@ -264,7 +268,6 @@ FingerprintLocation GetFingerprintLocation() {
   if (location_info == "left-of-power-button-top-right")
     return FingerprintLocation::LEFT_OF_POWER_BUTTON_TOP_RIGHT;
   NOTREACHED() << "Not handled value: " << location_info;
-  return default_location;
 }
 
 bool IsFingerprintSupported() {
@@ -336,7 +339,7 @@ void AddFingerprintResources(content::WebUIDataSource* html_source) {
 
 FingerprintDescriptionStrings GetFingerprintDescriptionStrings(
     FingerprintLocation location) {
-  auto* location_string_it = kFingerprintLocationToStringsMap.find(location);
+  auto location_string_it = kFingerprintLocationToStringsMap.find(location);
   CHECK(location_string_it != kFingerprintLocationToStringsMap.end());
   return location_string_it->second;
 }

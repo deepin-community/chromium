@@ -7,7 +7,9 @@
 #include <memory>
 
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
+#include "chrome/browser/ui/views/media_preview/media_preview_metrics.h"
 #include "chrome/browser/ui/views/media_preview/media_view.h"
+#include "components/user_prefs/user_prefs.h"
 #include "ui/color/color_id.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
@@ -23,13 +25,19 @@ MediaCoordinator::EligibleDevices::~EligibleDevices() = default;
 MediaCoordinator::EligibleDevices::EligibleDevices(const EligibleDevices&) =
     default;
 
-MediaCoordinator::MediaCoordinator(ViewType view_type,
-                                   views::View& parent_view,
-                                   bool is_subsection,
-                                   EligibleDevices eligible_devices,
-                                   PrefService& prefs) {
+MediaCoordinator::MediaCoordinator(
+    ViewType view_type,
+    views::View& parent_view,
+    bool is_subsection,
+    EligibleDevices eligible_devices,
+    base::WeakPtr<content::BrowserContext> browser_context,
+    bool allow_device_selection,
+    const media_preview_metrics::Context& metrics_context) {
   media_view_ =
       parent_view.AddChildView(std::make_unique<MediaView>(is_subsection));
+  media_view_->SetBetweenChildSpacing(
+      ChromeLayoutProvider::Get()->GetDistanceMetric(
+          views::DISTANCE_RELATED_CONTROL_VERTICAL));
 
   if (!is_subsection) {
     auto* provider = ChromeLayoutProvider::Get();
@@ -38,20 +46,24 @@ MediaCoordinator::MediaCoordinator(ViewType view_type,
     const int kBorderThickness =
         provider->GetDistanceMetric(views::DISTANCE_RELATED_CONTROL_VERTICAL);
 
-    media_view_->SetBorder(views::CreateThemedRoundedRectBorder(
+    media_view_->SetBorder(views::CreateRoundedRectBorder(
         kBorderThickness, kRoundedRadius, ui::kColorSysSurface4));
-    media_view_->SetBackground(views::CreateThemedRoundedRectBackground(
+    media_view_->SetBackground(views::CreateRoundedRectBackground(
         ui::kColorSysSurface4, kRoundedRadius));
   }
 
   if (view_type != ViewType::kMicOnly) {
     camera_coordinator_.emplace(*media_view_, /*needs_borders=*/!is_subsection,
-                                eligible_devices.cameras, prefs);
+                                eligible_devices.cameras,
+                                allow_device_selection, browser_context,
+                                metrics_context);
   }
 
   if (view_type != ViewType::kCameraOnly) {
     mic_coordinator_.emplace(*media_view_, /*needs_borders=*/!is_subsection,
-                             eligible_devices.mics, prefs);
+                             eligible_devices.mics,
+                             *user_prefs::UserPrefs::Get(browser_context.get()),
+                             allow_device_selection, metrics_context);
   }
 }
 
@@ -73,3 +85,25 @@ void MediaCoordinator::UpdateDevicePreferenceRanking() {
     mic_coordinator_->UpdateDevicePreferenceRanking();
   }
 }
+
+void MediaCoordinator::OnCameraPermissionChange(bool has_permission) {
+  if (camera_coordinator_) {
+    camera_coordinator_->OnPermissionChange(has_permission);
+  }
+}
+
+namespace media_coordinator {
+
+media_preview_metrics::PreviewType GetPreviewTypeFromMediaCoordinatorViewType(
+    MediaCoordinator::ViewType view_type) {
+  switch (view_type) {
+    case MediaCoordinator::ViewType::kBoth:
+      return media_preview_metrics::PreviewType::kCameraAndMic;
+    case MediaCoordinator::ViewType::kCameraOnly:
+      return media_preview_metrics::PreviewType::kCamera;
+    case MediaCoordinator::ViewType::kMicOnly:
+      return media_preview_metrics::PreviewType::kMic;
+  }
+}
+
+}  // namespace media_coordinator

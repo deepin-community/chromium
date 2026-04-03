@@ -5,9 +5,9 @@
 #ifndef CHROMEOS_ASH_COMPONENTS_DBUS_USERDATAAUTH_MOCK_USERDATAAUTH_CLIENT_H_
 #define CHROMEOS_ASH_COMPONENTS_DBUS_USERDATAAUTH_MOCK_USERDATAAUTH_CLIENT_H_
 
-#include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
-
 #include "base/component_export.h"
+#include "chromeos/ash/components/dbus/cryptohome/UserDataAuth.pb.h"
+#include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace ash {
@@ -25,11 +25,24 @@ class COMPONENT_EXPORT(USERDATAAUTH_CLIENT) MockUserDataAuthClient
   void AddFingerprintAuthObserver(FingerprintAuthObserver* observer) override;
   void RemoveFingerprintAuthObserver(
       FingerprintAuthObserver* observer) override;
+  void AddPrepareAuthFactorProgressObserver(
+      PrepareAuthFactorProgressObserver* observer) override;
+  void RemovePrepareAuthFactorProgressObserver(
+      PrepareAuthFactorProgressObserver* observer) override;
+  void AddAuthFactorStatusUpdateObserver(
+      AuthFactorStatusUpdateObserver* observer) override;
+  void RemoveAuthFactorStatusUpdateObserver(
+      AuthFactorStatusUpdateObserver* observer) override;
 
   MOCK_METHOD(void,
               IsMounted,
               (const ::user_data_auth::IsMountedRequest& request,
                IsMountedCallback callback),
+              (override));
+  MOCK_METHOD(void,
+              GetVaultProperties,
+              (const ::user_data_auth::GetVaultPropertiesRequest& request,
+               GetVaultPropertiesCallback callback),
               (override));
   MOCK_METHOD(void,
               Unmount,
@@ -82,11 +95,6 @@ class COMPONENT_EXPORT(USERDATAAUTH_CLIENT) MockUserDataAuthClient
                CreatePersistentUserCallback callback),
               (override));
   MOCK_METHOD(void,
-              RestoreDeviceKey,
-              (const ::user_data_auth::RestoreDeviceKeyRequest& request,
-               RestoreDeviceKeyCallback callback),
-              (override));
-  MOCK_METHOD(void,
               PreparePersistentVault,
               (const ::user_data_auth::PreparePersistentVaultRequest& request,
                PreparePersistentVaultCallback callback),
@@ -127,6 +135,11 @@ class COMPONENT_EXPORT(USERDATAAUTH_CLIENT) MockUserDataAuthClient
                UpdateAuthFactorMetadataCallback callback),
               (override));
   MOCK_METHOD(void,
+              ReplaceAuthFactor,
+              (const ::user_data_auth::ReplaceAuthFactorRequest& request,
+               ReplaceAuthFactorCallback callback),
+              (override));
+  MOCK_METHOD(void,
               ListAuthFactors,
               (const ::user_data_auth::ListAuthFactorsRequest& request,
                ListAuthFactorsCallback callback),
@@ -138,14 +151,14 @@ class COMPONENT_EXPORT(USERDATAAUTH_CLIENT) MockUserDataAuthClient
        GetAuthFactorExtendedInfoCallback callback),
       (override));
   MOCK_METHOD(void,
+              GenerateFreshRecoveryId,
+              (const ::user_data_auth::GenerateFreshRecoveryIdRequest& request,
+               GenerateFreshRecoveryIdCallback callback),
+              (override));
+  MOCK_METHOD(void,
               RemoveAuthFactor,
               (const ::user_data_auth::RemoveAuthFactorRequest& request,
                RemoveAuthFactorCallback callback),
-              (override));
-  MOCK_METHOD(void,
-              GetRecoveryRequest,
-              (const ::user_data_auth::GetRecoveryRequestRequest& request,
-               GetRecoveryRequestCallback callback),
               (override));
   MOCK_METHOD(void,
               GetAuthSessionStatus,
@@ -171,6 +184,17 @@ class COMPONENT_EXPORT(USERDATAAUTH_CLIENT) MockUserDataAuthClient
               GetRecoverableKeyStores,
               (const ::user_data_auth::GetRecoverableKeyStoresRequest& request,
                GetRecoverableKeyStoresCallback),
+              (override));
+  MOCK_METHOD(
+      void,
+      SetUserDataStorageWriteEnabled,
+      (const ::user_data_auth::SetUserDataStorageWriteEnabledRequest& request,
+       SetUserDataStorageWriteEnabledCallback),
+      (override));
+  MOCK_METHOD(void,
+              LockFactorUntilReboot,
+              (const ::user_data_auth::LockFactorUntilRebootRequest& request,
+               LockFactorUntilRebootCallback callback),
               (override));
 };
 

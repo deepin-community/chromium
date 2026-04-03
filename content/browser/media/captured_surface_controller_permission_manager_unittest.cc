@@ -2,14 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "content/browser/media/captured_surface_control_permission_manager.h"
-
 #include <memory>
 
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
+#include "content/browser/media/captured_surface_control_permission_manager.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/permission_request_description.h"
+#include "content/public/browser/permission_result.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/test/mock_permission_controller.h"
 #include "content/test/test_render_frame_host.h"
@@ -22,7 +23,7 @@ namespace {
 
 using ::blink::mojom::PermissionStatus;
 using PermissionManager = ::content::CapturedSurfaceControlPermissionManager;
-using CallbackType = ::base::OnceCallback<void(PermissionStatus)>;
+using CallbackType = ::base::OnceCallback<void(PermissionResult)>;
 using CallbackActionType = ::base::OnceCallback<void(CallbackType)>;
 
 // Extends MockPermissionController and allows test suites to conveniently
@@ -32,12 +33,22 @@ class CscMockPermissionController : public MockPermissionController {
  public:
   ~CscMockPermissionController() override = default;
 
+  PermissionStatus GetPermissionStatusForCurrentDocument(
+      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
+      RenderFrameHost* render_frame_host) override {
+    return permission_status_;
+  }
+
   void RequestPermissionFromCurrentDocument(
       RenderFrameHost* render_frame_host,
       PermissionRequestDescription request_description,
-      base::OnceCallback<void(PermissionStatus)> callback) override {
+      base::OnceCallback<void(PermissionResult)> callback) override {
     CHECK(callback_action_);
     std::move(callback_action_).Run(std::move(callback));
+  }
+
+  void SetPermissionStatus(PermissionStatus permission_status) {
+    permission_status_ = permission_status;
   }
 
   void SetCallbackAction(CallbackActionType callback_action) {
@@ -46,6 +57,7 @@ class CscMockPermissionController : public MockPermissionController {
 
  private:
   CallbackActionType callback_action_;
+  PermissionStatus permission_status_ = PermissionStatus::ASK;
 };
 
 // Encapsulates the state and logic of an invocation of
@@ -63,10 +75,12 @@ class PermissionCheckState final {
   void SimulateUserPromptResponse(bool allow) {
     CHECK(callback_for_pending_prompt_);
     std::move(callback_for_pending_prompt_)
-        .Run(allow ? PermissionStatus::GRANTED : PermissionStatus::DENIED);
+        .Run(PermissionResult(
+            allow ? PermissionStatus::GRANTED : PermissionStatus::DENIED,
+            PermissionStatusSource::UNSPECIFIED));
   }
 
-  void SetUserPrompted(base::OnceCallback<void(PermissionStatus)> callback) {
+  void SetUserPrompted(base::OnceCallback<void(PermissionResult)> callback) {
     CHECK(!user_prompted_);
     CHECK(!callback_for_pending_prompt_);
 
@@ -78,13 +92,16 @@ class PermissionCheckState final {
 
   bool user_prompted() const { return user_prompted_; }
 
-  void SetResult(PermissionManager::PermissionResult result) {
+  void SetResult(CapturedSurfaceControlPermissionManager::
+                     CapturedSurfaceControlPermissionStatus result) {
     CHECK(!result_.has_value());
     result_ = result;
     check_permission_run_loop.Quit();
   }
 
-  std::optional<PermissionManager::PermissionResult> result() const {
+  std::optional<CapturedSurfaceControlPermissionManager::
+                    CapturedSurfaceControlPermissionStatus>
+  result() const {
     return result_;
   }
 
@@ -92,21 +109,24 @@ class PermissionCheckState final {
   bool user_prompted_ = false;
   base::RunLoop user_prompt_shown_run_loop;
 
-  std::optional<PermissionManager::PermissionResult> result_;
+  std::optional<CapturedSurfaceControlPermissionManager::
+                    CapturedSurfaceControlPermissionStatus>
+      result_;
   base::RunLoop check_permission_run_loop;
 
-  base::OnceCallback<void(PermissionStatus)> callback_for_pending_prompt_;
+  base::OnceCallback<void(PermissionResult)> callback_for_pending_prompt_;
 };
 
 class CapturedSurfaceControlPermissionManagerTest
     : public RenderViewHostTestHarness {
  public:
+  CapturedSurfaceControlPermissionManagerTest() = default;
   ~CapturedSurfaceControlPermissionManagerTest() override = default;
 
   std::unique_ptr<TestWebContents> MakeTestWebContents() {
     scoped_refptr<SiteInstance> instance =
         SiteInstance::Create(GetBrowserContext());
-    instance->GetProcess()->Init();
+    instance->GetOrCreateProcessForTesting()->Init();
     return TestWebContents::Create(GetBrowserContext(), std::move(instance));
   }
 
@@ -114,6 +134,7 @@ class CapturedSurfaceControlPermissionManagerTest
     RenderViewHostTestHarness::SetUp();
 
     capturing_wc_ = MakeTestWebContents();
+    FocusCapturer();
 
     auto mock_permission_controller =
         std::make_unique<CscMockPermissionController>();
@@ -134,6 +155,18 @@ class CapturedSurfaceControlPermissionManagerTest
     RenderViewHostTestHarness::TearDown();
   }
 
+  void FocusCapturer() {
+    capturing_wc_->GetPrimaryMainFrame()->GetRenderWidgetHost()->Focus();
+    FrameTree& frame_tree = capturing_wc_->GetPrimaryFrameTree();
+    FrameTreeNode* const root = frame_tree.root();
+    frame_tree.SetFocusedFrame(
+        root, root->current_frame_host()->GetSiteInstance()->group());
+  }
+
+  void UnFocusCapturer() {
+    capturing_wc_->GetPrimaryMainFrame()->GetRenderWidgetHost()->Blur();
+  }
+
   // Run CheckPermission() on the unit-under-test
   // (CapturedSurfaceControlPermissionManager).
   // Returns a state object that can be used to test the results
@@ -143,17 +176,25 @@ class CapturedSurfaceControlPermissionManagerTest
 
     mock_permission_controller_->SetCallbackAction(base::BindOnce(
         [](PermissionCheckState* state,
-           base::OnceCallback<void(PermissionStatus)> callback) {
+           base::OnceCallback<void(PermissionResult)> callback) {
           state->SetUserPrompted(std::move(callback));
         },
         base::Unretained(state.get())));
 
     permission_manager_->CheckPermission(base::BindOnce(
         [](PermissionCheckState* state,
-           PermissionManager::PermissionResult result) {
-          state->SetResult(result);
+           CscMockPermissionController* mock_permission_controller,
+           CapturedSurfaceControlPermissionManager::
+               CapturedSurfaceControlPermissionStatus status) {
+          mock_permission_controller->SetPermissionStatus(
+              status == CapturedSurfaceControlPermissionManager::
+                            CapturedSurfaceControlPermissionStatus::kGranted
+                  ? PermissionStatus::GRANTED
+                  : PermissionStatus::DENIED);
+          state->SetResult(status);
         },
-        base::Unretained(state.get())));
+        base::Unretained(state.get()),
+        base::Unretained(mock_permission_controller_.get())));
 
     return state;
   }
@@ -170,6 +211,7 @@ class CapturedSurfaceControlPermissionManagerTest
     CHECK_EQ(rfh->HasTransientUserActivation(), has_activation);
   }
 
+ protected:
   std::unique_ptr<TestWebContents> capturing_wc_;
   raw_ptr<CscMockPermissionController> mock_permission_controller_ = nullptr;
   std::unique_ptr<CapturedSurfaceControlPermissionManager> permission_manager_;
@@ -183,7 +225,9 @@ TEST_F(CapturedSurfaceControlPermissionManagerTest,
   state->WaitForCheckPermissionCallbackResult();
 
   EXPECT_FALSE(state->user_prompted());
-  EXPECT_EQ(state->result(), PermissionManager::PermissionResult::kDenied);
+  EXPECT_EQ(state->result(),
+            CapturedSurfaceControlPermissionManager::
+                CapturedSurfaceControlPermissionStatus::kDenied);
 }
 
 TEST_F(CapturedSurfaceControlPermissionManagerTest,
@@ -206,7 +250,9 @@ TEST_F(CapturedSurfaceControlPermissionManagerTest,
   state->WaitForCheckPermissionCallbackResult();
 
   EXPECT_TRUE(state->user_prompted());
-  EXPECT_EQ(state->result(), PermissionManager::PermissionResult::kDenied);
+  EXPECT_EQ(state->result(),
+            CapturedSurfaceControlPermissionManager::
+                CapturedSurfaceControlPermissionStatus::kDenied);
 }
 
 TEST_F(CapturedSurfaceControlPermissionManagerTest,
@@ -219,7 +265,9 @@ TEST_F(CapturedSurfaceControlPermissionManagerTest,
   state->WaitForCheckPermissionCallbackResult();
 
   EXPECT_TRUE(state->user_prompted());
-  EXPECT_EQ(state->result(), PermissionManager::PermissionResult::kGranted);
+  EXPECT_EQ(state->result(),
+            CapturedSurfaceControlPermissionManager::
+                CapturedSurfaceControlPermissionStatus::kGranted);
 }
 
 TEST_F(CapturedSurfaceControlPermissionManagerTest,
@@ -235,7 +283,8 @@ TEST_F(CapturedSurfaceControlPermissionManagerTest,
 
     ASSERT_TRUE(init_state->user_prompted());
     ASSERT_EQ(init_state->result(),
-              PermissionManager::PermissionResult::kGranted);
+              CapturedSurfaceControlPermissionManager::
+                  CapturedSurfaceControlPermissionStatus::kGranted);
   }
 
   SetTransientActivation(false);
@@ -243,143 +292,9 @@ TEST_F(CapturedSurfaceControlPermissionManagerTest,
   state->WaitForCheckPermissionCallbackResult();
 
   EXPECT_FALSE(state->user_prompted());
-  EXPECT_EQ(state->result(), PermissionManager::PermissionResult::kGranted);
-}
-
-TEST_F(CapturedSurfaceControlPermissionManagerTest, CanGrantAfterDenying) {
-  // This block repeats `DeniedReportedIfUserDeniesPrompt`.
-  {
-    SetTransientActivation(true);
-
-    std::unique_ptr<PermissionCheckState> init_state = CheckPermission();
-    init_state->WaitForUserPromptToBeShown();
-    init_state->SimulateUserPromptResponse(/*allow=*/false);
-    init_state->WaitForCheckPermissionCallbackResult();
-
-    EXPECT_TRUE(init_state->user_prompted());
-    EXPECT_EQ(init_state->result(),
-              PermissionManager::PermissionResult::kDenied);
-  }
-
-  // Approve this time.
-  std::unique_ptr<PermissionCheckState> state = CheckPermission();
-  state->WaitForUserPromptToBeShown();
-  state->SimulateUserPromptResponse(/*allow=*/true);
-  state->WaitForCheckPermissionCallbackResult();
-
-  EXPECT_TRUE(state->user_prompted());
-  EXPECT_EQ(state->result(), PermissionManager::PermissionResult::kGranted);
-}
-
-TEST_F(CapturedSurfaceControlPermissionManagerTest, EmbargoObserved) {
-  // Prompt and deny `kMaxPromptAttempts` times.
-  for (int i = 0; i < PermissionManager::kMaxPromptAttempts; ++i) {
-    SetTransientActivation(true);
-
-    std::unique_ptr<PermissionCheckState> denied_state = CheckPermission();
-    denied_state->WaitForUserPromptToBeShown();
-    denied_state->SimulateUserPromptResponse(/*allow=*/false);
-    denied_state->WaitForCheckPermissionCallbackResult();
-
-    ASSERT_TRUE(denied_state->user_prompted());
-    ASSERT_EQ(denied_state->result(),
-              PermissionManager::PermissionResult::kDenied);
-  }
-
-  // Ensure that no more prompts are permitted.
-  SetTransientActivation(true);
-  std::unique_ptr<PermissionCheckState> state = CheckPermission();
-  state->WaitForCheckPermissionCallbackResult();
-  EXPECT_FALSE(state->user_prompted());
-  EXPECT_EQ(state->result(), PermissionManager::PermissionResult::kDenied);
-}
-
-TEST_F(CapturedSurfaceControlPermissionManagerTest,
-       AdditionalPermissionChecksDeniedWhilePromptPending) {
-  // User prompted but does not yet respond.
-  SetTransientActivation(true);
-  std::unique_ptr<PermissionCheckState> state_1 = CheckPermission();
-  state_1->WaitForUserPromptToBeShown();
-  ASSERT_TRUE(state_1->user_prompted());
-
-  // Additional checks immediately denied while prior prompt pending.
-  SetTransientActivation(true);
-  std::unique_ptr<PermissionCheckState> state_2 = CheckPermission();
-  state_2->WaitForCheckPermissionCallbackResult();
-  EXPECT_FALSE(state_2->user_prompted());
-  EXPECT_EQ(state_2->result(), PermissionManager::PermissionResult::kDenied);
-}
-
-TEST_F(CapturedSurfaceControlPermissionManagerTest,
-       SubsequentPermissionChecksAllowedAfterPromptAcceptedByUser) {
-  // User prompted but does not yet respond.
-  SetTransientActivation(true);
-  std::unique_ptr<PermissionCheckState> state_1 = CheckPermission();
-  state_1->WaitForUserPromptToBeShown();
-  ASSERT_TRUE(state_1->user_prompted());
-
-  // Additional checks immediately denied while prior prompt pending.
-  // Further, embargo cannot be triggered by excessive checks at this stage,
-  // because they do not trigger a prompt.
-  for (int i = 0; i < PermissionManager::kMaxPromptAttempts; ++i) {
-    SetTransientActivation(true);
-
-    std::unique_ptr<PermissionCheckState> denied_state = CheckPermission();
-    denied_state->WaitForCheckPermissionCallbackResult();
-
-    ASSERT_FALSE(denied_state->user_prompted());
-    ASSERT_EQ(denied_state->result(),
-              PermissionManager::PermissionResult::kDenied);
-  }
-
-  // If the user accepts the original prompt, that permission-check's callback
-  // is handled correctly, despite the intervening denied calls.
-  state_1->SimulateUserPromptResponse(/*allow=*/true);
-  state_1->WaitForCheckPermissionCallbackResult();
-  EXPECT_EQ(state_1->result(), PermissionManager::PermissionResult::kGranted);
-
-  // Further checks are now granted without a prompt.
-  SetTransientActivation(true);
-  std::unique_ptr<PermissionCheckState> state_2 = CheckPermission();
-  state_2->WaitForCheckPermissionCallbackResult();
-  EXPECT_FALSE(state_2->user_prompted());
-  EXPECT_EQ(state_2->result(), PermissionManager::PermissionResult::kGranted);
-}
-
-TEST_F(CapturedSurfaceControlPermissionManagerTest,
-       SubsequentPermissionChecksCauseNewPromptAfterPromptRejecdByUser) {
-  // User prompted but does not yet respond.
-  SetTransientActivation(true);
-  std::unique_ptr<PermissionCheckState> state_1 = CheckPermission();
-  state_1->WaitForUserPromptToBeShown();
-  ASSERT_TRUE(state_1->user_prompted());
-
-  // Additional checks immediately denied while prior prompt pending.
-  // Further, embargo cannot be triggered by excessive checks at this stage,
-  // because they do not trigger a prompt.
-  for (int i = 0; i < PermissionManager::kMaxPromptAttempts; ++i) {
-    SetTransientActivation(true);
-
-    std::unique_ptr<PermissionCheckState> denied_state = CheckPermission();
-    denied_state->WaitForCheckPermissionCallbackResult();
-
-    ASSERT_FALSE(denied_state->user_prompted());
-    ASSERT_EQ(denied_state->result(),
-              PermissionManager::PermissionResult::kDenied);
-  }
-
-  // If the user rejects the original prompt, that permission-check's callback
-  // is handled correctly, despite the intervening denied calls.
-  state_1->SimulateUserPromptResponse(/*allow=*/false);
-  state_1->WaitForCheckPermissionCallbackResult();
-  EXPECT_EQ(state_1->result(), PermissionManager::PermissionResult::kDenied);
-
-  // Further checks cause a new prompt.
-  SetTransientActivation(true);
-  std::unique_ptr<PermissionCheckState> state_2 = CheckPermission();
-  state_2->WaitForUserPromptToBeShown();
-  EXPECT_TRUE(state_2->user_prompted());
-  EXPECT_EQ(state_2->result(), std::nullopt);
+  EXPECT_EQ(state->result(),
+            CapturedSurfaceControlPermissionManager::
+                CapturedSurfaceControlPermissionStatus::kGranted);
 }
 
 }  // namespace

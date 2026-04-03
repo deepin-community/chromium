@@ -13,12 +13,14 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/synchronization/lock.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "content/browser/bad_message.h"
 #include "content/browser/media/media_devices_util.h"
 #include "content/browser/media/media_stream_web_contents_observer.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/common/buildflags.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -71,18 +73,14 @@ class CONTENT_EXPORT MediaStreamDispatcherHost
   FRIEND_TEST_ALL_PREFIXES(MediaStreamDispatcherHostMultiCaptureTest,
                            PolicySetMultiCaptureAllowed);
 
-  struct GenerateStreamsUIThreadCheckResult {
-    bool request_allowed = false;
-    MediaDeviceSaltAndOrigin salt_and_origin;
-  };
+  using GenerateStreamsUIThreadCheckResult =
+      ::base::expected<::content::MediaDeviceSaltAndOrigin,
+                       ::blink::mojom::MediaStreamRequestResult>;
 
   struct PendingAccessRequest;
   using RequestsQueue =
       base::circular_deque<std::unique_ptr<PendingAccessRequest>>;
   RequestsQueue pending_requests_;
-
-  static bool CheckRequestAllScreensAllowed(
-      GlobalRenderFrameHostId render_frame_host_id);
 
   // Performs checks / computations that need to be done on the UI
   // thread (i.e. if a select all screens request is permitted and
@@ -90,6 +88,19 @@ class CONTENT_EXPORT MediaStreamDispatcherHost
   static void GenerateStreamsChecksOnUIThread(
       GlobalRenderFrameHostId render_frame_host_id,
       bool request_all_screens,
+      base::OnceCallback<void(MediaDeviceSaltAndOriginCallback)>
+          get_salt_and_origin_cb,
+      base::OnceCallback<void(GenerateStreamsUIThreadCheckResult)>
+          result_callback);
+
+  static void CheckRequestAllScreensAllowed(
+      base::OnceCallback<void(MediaDeviceSaltAndOriginCallback)>
+          get_salt_and_origin_cb,
+      base::OnceCallback<void(GenerateStreamsUIThreadCheckResult)>
+          result_callback,
+      RenderFrameHost* render_frame_host);
+
+  static void CheckStreamsPermissionResultReceived(
       base::OnceCallback<void(MediaDeviceSaltAndOriginCallback)>
           get_salt_and_origin_cb,
       base::OnceCallback<void(GenerateStreamsUIThreadCheckResult)>
@@ -120,7 +131,6 @@ class CONTENT_EXPORT MediaStreamDispatcherHost
       const std::optional<base::UnguessableToken>& session_id,
       blink::mojom::MediaStreamType type,
       bool is_secure) override;
-  void OnStreamStarted(const std::string& label) override;
   using KeepDeviceAliveForTransferCallback =
       base::OnceCallback<void(bool device_found)>;
   void KeepDeviceAliveForTransfer(
@@ -129,25 +139,31 @@ class CONTENT_EXPORT MediaStreamDispatcherHost
       KeepDeviceAliveForTransferCallback callback) override;
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   void FocusCapturedSurface(const std::string& label, bool focus) override;
-  void ApplySubCaptureTarget(const base::UnguessableToken& device_id,
+  void SendWheel(const base::UnguessableToken& session_id,
+                 blink::mojom::CapturedWheelActionPtr action) override;
+  void UpdateZoomLevel(const base::UnguessableToken& session_id,
+                       blink::mojom::ZoomLevelAction action,
+                       UpdateZoomLevelCallback callback) override;
+  void RequestCapturedSurfaceControlPermission(
+      const base::UnguessableToken& session_id,
+      RequestCapturedSurfaceControlPermissionCallback callback) override;
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
+#if BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+  void ApplySubCaptureTarget(const base::UnguessableToken& session_id,
                              media::mojom::SubCaptureTargetType type,
                              const base::Token& sub_capture_target,
                              uint32_t sub_capture_target_version,
                              ApplySubCaptureTargetCallback callback) override;
-  void SendWheel(const base::UnguessableToken& device_id,
-                 blink::mojom::CapturedWheelActionPtr action,
-                 SendWheelCallback callback) override;
-  void SetZoomLevel(const base::UnguessableToken& device_id,
-                    int32_t zoom_level,
-                    SetZoomLevelCallback callback) override;
   void OnSubCaptureTargetValidationComplete(
-      const base::UnguessableToken& device_id,
+      const base::UnguessableToken& session_id,
       media::mojom::SubCaptureTargetType type,
       const base::Token& target,
       uint32_t sub_capture_target_version,
       ApplySubCaptureTargetCallback callback,
       bool target_passed_validation);
-#endif
+#endif  // BUILDFLAG(ENABLE_SCREEN_CAPTURE)
+
   void GetOpenDevice(int32_t page_request_id,
                      const base::UnguessableToken& session_id,
                      const base::UnguessableToken& transfer_id,
@@ -197,12 +213,12 @@ class CONTENT_EXPORT MediaStreamDispatcherHost
   std::optional<bad_message::BadMessageReason>
   ValidateControlsForGenerateStreams(const blink::StreamControls& controls);
 
-  void ReceivedBadMessage(int render_process_id,
+  void ReceivedBadMessage(ChildProcessId render_process_id,
                           bad_message::BadMessageReason reason);
 
   void SetBadMessageCallbackForTesting(
-      base::RepeatingCallback<void(int, bad_message::BadMessageReason)>
-          callback);
+      base::RepeatingCallback<void(ChildProcessId,
+                                   bad_message::BadMessageReason)> callback);
 
   static int next_requester_id_;
 
@@ -217,7 +233,7 @@ class CONTENT_EXPORT MediaStreamDispatcherHost
                   BrowserThread::DeleteOnUIThread>
       web_contents_observer_;
 
-  base::RepeatingCallback<void(int, bad_message::BadMessageReason)>
+  base::RepeatingCallback<void(ChildProcessId, bad_message::BadMessageReason)>
       bad_message_callback_for_testing_;
 
   base::WeakPtrFactory<MediaStreamDispatcherHost> weak_factory_{this};

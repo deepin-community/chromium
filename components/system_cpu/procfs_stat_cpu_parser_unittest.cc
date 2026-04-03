@@ -6,12 +6,14 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/strings/string_piece.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -31,12 +33,12 @@ class ProcfsStatCpuParserTest : public testing::Test {
     parser_ = std::make_unique<ProcfsStatCpuParser>(fake_stat_path_);
   }
 
-  [[nodiscard]] bool WriteFakeStat(base::StringPiece contents) {
+  [[nodiscard]] bool WriteFakeStat(std::string_view contents) {
     if (!stat_file_.SetLength(0)) {
       return false;
     }
     if (contents.size() > 0) {
-      if (!stat_file_.Write(0, contents.data(), contents.size())) {
+      if (!stat_file_.WriteAndCheck(0, base::as_byte_span(contents))) {
         return false;
       }
     }

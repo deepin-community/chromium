@@ -6,6 +6,9 @@
 #include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "ui/android/ui_android_features.h"
+#include "ui/base/ui_base_features.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "ui/android/ui_android_jni_headers/UiAndroidFeatureMap_jni.h"
 
 namespace ui {
@@ -14,23 +17,33 @@ namespace {
 
 // Array of features exposed through the Java UiAndroidFeatureMap API.
 const base::Feature* const kFeaturesExposedToJava[] = {
-    &ui::kConvertTrackpadEventsToMouse,
+    &ui::kAndroidUseCorrectDisplayWorkArea,
+    &ui::kAndroidUseCorrectWindowBounds,
+    &ui::kAndroidUseDisplayTopology,
+    &ui::kAndroidWindowOcclusion,
+    &ui::kCheckIntentCallerPermission,
     &ui::kDeprecatedExternalPickerFunction,
-    &ui::kReportAllAvailablePointerTypes,
+    &ui::kDisablePhotoPickerForVideoCapture,
+    &ui::kRefactorMinWidthContextOverride,
+    &ui::kReportBottomOverscrolls,
     &ui::kRequireLeadingInTextViewWithLeading,
+    &ui::kSelectFileOpenDocument,
+    &ui::kAndroidTouchpadOverscrollHistoryNavigation,
 };
 
 // static
 base::android::FeatureMap* GetFeatureMap() {
-  static base::NoDestructor<base::android::FeatureMap> kFeatureMap(std::vector(
-      std::begin(kFeaturesExposedToJava), std::end(kFeaturesExposedToJava)));
+  static base::NoDestructor<base::android::FeatureMap> kFeatureMap(
+      kFeaturesExposedToJava);
   return kFeatureMap.get();
 }
 
 }  // namespace
 
-static jlong JNI_UiAndroidFeatureMap_GetNativeMap(JNIEnv* env) {
-  return reinterpret_cast<jlong>(GetFeatureMap());
+static int64_t JNI_UiAndroidFeatureMap_GetNativeMap(JNIEnv* env) {
+  return reinterpret_cast<int64_t>(GetFeatureMap());
 }
 
 }  // namespace ui
+
+DEFINE_JNI(UiAndroidFeatureMap)

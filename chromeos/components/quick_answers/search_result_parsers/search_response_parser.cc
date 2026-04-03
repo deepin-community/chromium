@@ -15,8 +15,6 @@
 namespace quick_answers {
 namespace {
 
-using base::Value;
-
 // String to prepend to JSON responses to prevent XSSI. See http://go/xssi.
 constexpr char kJsonSafetyPrefix[] = ")]}'\n";
 
@@ -32,17 +30,15 @@ SearchResponseParser::~SearchResponseParser() {
     std::move(complete_callback_).Run(/*quick_answer=*/nullptr);
 }
 
-void SearchResponseParser::ProcessResponse(
-    std::unique_ptr<std::string> response_body) {
-  if (response_body->length() < strlen(kJsonSafetyPrefix) ||
-      response_body->substr(0, strlen(kJsonSafetyPrefix)) !=
-          kJsonSafetyPrefix) {
+void SearchResponseParser::ProcessResponse(const std::string& response_body) {
+  if (response_body.length() < strlen(kJsonSafetyPrefix) ||
+      response_body.substr(0, strlen(kJsonSafetyPrefix)) != kJsonSafetyPrefix) {
     LOG(ERROR) << "Invalid search response.";
     std::move(complete_callback_).Run(nullptr);
     return;
   }
   data_decoder::DataDecoder::ParseJsonIsolated(
-      response_body->substr(strlen(kJsonSafetyPrefix)),
+      response_body.substr(strlen(kJsonSafetyPrefix)),
       base::BindOnce(&SearchResponseParser::OnJsonParsed,
                      weak_factory_.GetWeakPtr()));
 }
@@ -58,7 +54,7 @@ void SearchResponseParser::OnJsonParsed(
   }
 
   // Get the first result.
-  const Value::List* entries =
+  const base::ListValue* entries =
       result->GetDict().FindListByDottedPath("results");
   if (!entries) {
     std::move(complete_callback_).Run(nullptr);
@@ -78,8 +74,8 @@ void SearchResponseParser::OnJsonParsed(
 }
 
 std::unique_ptr<QuickAnswersSession> SearchResponseParser::ProcessResult(
-    const Value* result) {
-  const base::Value::Dict& dict = result->GetDict();
+    const base::Value* result) {
+  const base::DictValue& dict = result->GetDict();
   auto one_namespace_type = dict.FindInt("oneNamespaceType");
   if (!one_namespace_type.has_value()) {
     // Can't find valid one namespace type from the response.

@@ -31,17 +31,18 @@ DynamicsCompressorHandler::DynamicsCompressorHandler(
     AudioParamHandler& ratio,
     AudioParamHandler& attack,
     AudioParamHandler& release)
-    : AudioHandler(kNodeTypeDynamicsCompressor, node, sample_rate),
+    : AudioHandler(NodeType::kNodeTypeDynamicsCompressor, node, sample_rate),
       threshold_(&threshold),
       knee_(&knee),
       ratio_(&ratio),
       reduction_(0),
       attack_(&attack),
-      release_(&release) {
+      release_(&release),
+      param_values_(GetDeferredTaskHandler().RenderQuantumFrames()) {
   AddInput();
   AddOutput(kDefaultNumberOfOutputChannels);
 
-  SetInternalChannelCountMode(kClampedMax);
+  SetInternalChannelCountMode(V8ChannelCountMode::Enum::kClampedMax);
 
   Initialize();
 }
@@ -98,15 +99,18 @@ void DynamicsCompressorHandler::Process(uint32_t frames_to_process) {
 void DynamicsCompressorHandler::ProcessOnlyAudioParams(
     uint32_t frames_to_process) {
   DCHECK(Context()->IsAudioThread());
-  DCHECK_LE(frames_to_process, GetDeferredTaskHandler().RenderQuantumFrames());
+  DCHECK_LE(frames_to_process, param_values_.size());
 
-  float values[GetDeferredTaskHandler().RenderQuantumFrames()];
-
-  threshold_->CalculateSampleAccurateValues(values, frames_to_process);
-  knee_->CalculateSampleAccurateValues(values, frames_to_process);
-  ratio_->CalculateSampleAccurateValues(values, frames_to_process);
-  attack_->CalculateSampleAccurateValues(values, frames_to_process);
-  release_->CalculateSampleAccurateValues(values, frames_to_process);
+  threshold_->CalculateSampleAccurateValues(
+      param_values_.as_span().first(frames_to_process));
+  knee_->CalculateSampleAccurateValues(
+      param_values_.as_span().first(frames_to_process));
+  ratio_->CalculateSampleAccurateValues(
+      param_values_.as_span().first(frames_to_process));
+  attack_->CalculateSampleAccurateValues(
+      param_values_.as_span().first(frames_to_process));
+  release_->CalculateSampleAccurateValues(
+      param_values_.as_span().first(frames_to_process));
 }
 
 void DynamicsCompressorHandler::Initialize() {
@@ -136,13 +140,13 @@ void DynamicsCompressorHandler::SetChannelCount(
     unsigned channel_count,
     ExceptionState& exception_state) {
   DCHECK(IsMainThread());
-  BaseAudioContext::GraphAutoLocker locker(Context());
+  DeferredTaskHandler::GraphAutoLocker locker(Context());
 
   // A DynamicsCompressorNode only supports 1 or 2 channels
   if (channel_count > 0 && channel_count <= 2) {
     if (channel_count_ != channel_count) {
       channel_count_ = channel_count;
-      if (InternalChannelCountMode() != kMax) {
+      if (InternalChannelCountMode() != V8ChannelCountMode::Enum::kMax) {
         UpdateChannelsForInputs();
       }
     }
@@ -157,18 +161,17 @@ void DynamicsCompressorHandler::SetChannelCount(
 }
 
 void DynamicsCompressorHandler::SetChannelCountMode(
-    const String& mode,
+    V8ChannelCountMode::Enum mode,
     ExceptionState& exception_state) {
   DCHECK(IsMainThread());
-  BaseAudioContext::GraphAutoLocker locker(Context());
+  DeferredTaskHandler::GraphAutoLocker locker(Context());
 
-  ChannelCountMode old_mode = InternalChannelCountMode();
+  V8ChannelCountMode::Enum old_mode = InternalChannelCountMode();
 
-  if (mode == "clamped-max") {
-    new_channel_count_mode_ = kClampedMax;
-  } else if (mode == "explicit") {
-    new_channel_count_mode_ = kExplicit;
-  } else if (mode == "max") {
+  if (mode == V8ChannelCountMode::Enum::kClampedMax ||
+      mode == V8ChannelCountMode::Enum::kExplicit) {
+    new_channel_count_mode_ = mode;
+  } else if (mode == V8ChannelCountMode::Enum::kMax) {
     // This is not supported for a DynamicsCompressorNode, which can
     // only handle 1 or 2 channels.
     exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,

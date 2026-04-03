@@ -9,12 +9,13 @@
 #include <sys/types.h>
 
 #include <memory>
+#include <optional>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include <optional>
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "build/build_config.h"
 #include "net/base/ip_endpoint.h"
@@ -26,6 +27,30 @@ std::unique_ptr<ScopedResState> ResolvReader::GetResState() {
   if (!res->IsValid())
     return nullptr;
   return res;
+}
+
+bool ResolvReader::IsLikelySystemdResolved() {
+#if BUILDFLAG(IS_LINUX)
+  // Look for a single 127.0.0.53:53 nameserver endpoint. The only known
+  // significant usage of such a configuration is the systemd-resolved local
+  // resolver, so it is then a fairly safe assumption that any DNS queries to
+  // the nameserver will be handled by systemd-resolved.
+  //
+  // This code path is only reachable if the system has nss-resolve configured
+  // in nsswitch.conf, which is another indicator that systemd-resolved is
+  // likely to be in use.
+  std::unique_ptr<ScopedResState> res = GetResState();
+  if (res) {
+    std::optional<std::vector<IPEndPoint>> nameservers =
+        GetNameservers(res->state());
+    if (nameservers) {
+      return nameservers->size() == 1 &&
+             nameservers->front() == IPEndPoint(IPAddress(127, 0, 0, 53), 53);
+    }
+  }
+#endif
+
+  return false;
 }
 
 std::optional<std::vector<IPEndPoint>> GetNameservers(
@@ -42,9 +67,9 @@ std::optional<std::vector<IPEndPoint>> GetNameservers(
   DCHECK_LE(nscount, MAXNS);
   for (int i = 0; i < nscount; ++i) {
     IPEndPoint ipe;
-    if (!ipe.FromSockAddr(
-            reinterpret_cast<const struct sockaddr*>(&addresses[i]),
-            sizeof addresses[i])) {
+    if (!ipe.FromSockAddr(reinterpret_cast<const struct sockaddr*>(
+                              &UNSAFE_TODO(addresses[i])),
+                          sizeof addresses[i])) {
       return std::nullopt;
     }
     nameservers.push_back(ipe);
@@ -61,11 +86,14 @@ std::optional<std::vector<IPEndPoint>> GetNameservers(
     IPEndPoint ipe;
     const struct sockaddr* addr = nullptr;
     size_t addr_len = 0;
-    if (res.nsaddr_list[i].sin_family) {  // The indicator used by res_nsend.
-      addr = reinterpret_cast<const struct sockaddr*>(&res.nsaddr_list[i]);
+    if (UNSAFE_TODO(res.nsaddr_list[i])
+            .sin_family) {  // The indicator used by res_nsend.
+      addr = reinterpret_cast<const struct sockaddr*>(
+          &UNSAFE_TODO(res.nsaddr_list[i]));
       addr_len = sizeof res.nsaddr_list[i];
-    } else if (res._u._ext.nsaddrs[i]) {
-      addr = reinterpret_cast<const struct sockaddr*>(res._u._ext.nsaddrs[i]);
+    } else if (UNSAFE_TODO(res._u._ext.nsaddrs[i])) {
+      addr = reinterpret_cast<const struct sockaddr*>(
+          UNSAFE_TODO(res._u._ext.nsaddrs[i]));
       addr_len = sizeof *res._u._ext.nsaddrs[i];
     } else {
       return std::nullopt;

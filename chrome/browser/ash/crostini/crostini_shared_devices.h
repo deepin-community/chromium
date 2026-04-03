@@ -35,8 +35,6 @@ class CrostiniSharedDevices : public KeyedService,
 
   ~CrostiniSharedDevices() override;
 
-  static CrostiniSharedDevices* GetForProfile(Profile* profile);
-
   // ResultCallback's bool argument is true if the we attempted apply the
   // sharing state via Cicerone.
   using ResultCallback = base::OnceCallback<void(bool)>;
@@ -55,11 +53,9 @@ class CrostiniSharedDevices : public KeyedService,
                          bool shared,
                          ResultCallback callback);
 
-  static void EnsureFactoryBuilt();
-
  private:
   void ApplySharingState(guest_os::GuestId container_id,
-                         base::Value::Dict next_shared_devices,
+                         base::DictValue next_shared_devices,
                          ResultCallback callback);
 
   // guest_os::ContainerStartedObserver
@@ -67,7 +63,7 @@ class CrostiniSharedDevices : public KeyedService,
 
   void OnUpdateContainerDevices(
       const guest_os::GuestId container_id,
-      base::Value::Dict next_shared_devices,
+      base::DictValue next_shared_devices,
       ResultCallback callback,
       std::optional<vm_tools::cicerone::UpdateContainerDevicesResponse>
           response);

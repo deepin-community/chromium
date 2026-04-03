@@ -5,6 +5,7 @@
 #include "content/browser/payments/payment_instrument_icon_fetcher.h"
 
 #include <limits>
+#include <string_view>
 #include <utility>
 
 #include "base/base64.h"
@@ -56,16 +57,12 @@ void OnIconFetched(
     return;
   }
 
-  std::vector<unsigned char> bitmap_data;
-  bool success = gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, false, &bitmap_data);
-  DCHECK(success);
+  std::optional<std::vector<uint8_t>> bitmap_data =
+      gfx::PNGCodec::EncodeBGRASkBitmap(bitmap, /*discard_transparency=*/false);
 
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE,
-      base::BindOnce(std::move(callback),
-                     base::Base64Encode(base::StringPiece(
-                         reinterpret_cast<const char*>(&bitmap_data[0]),
-                         bitmap_data.size()))));
+      FROM_HERE, base::BindOnce(std::move(callback),
+                                base::Base64Encode(bitmap_data.value())));
 }
 
 void DownloadBestMatchingIcon(
@@ -85,12 +82,18 @@ void DownloadBestMatchingIcon(
   }
 
   gfx::NativeView native_view = web_contents->GetNativeView();
-  GURL icon_url = blink::ManifestIconSelector::FindBestMatchingIcon(
-      icons, payments::IconSizeCalculator::IdealIconHeight(native_view),
-      payments::IconSizeCalculator::MinimumIconHeight(),
-      ManifestIconDownloader::kMaxWidthToHeightRatio,
-      blink::mojom::ManifestImageResource_Purpose::ANY);
-  if (!icon_url.is_valid()) {
+  blink::ManifestIconSelectorParams params;
+  params.ideal_icon_size_in_px =
+      payments::IconSizeCalculator::IdealIconHeight(native_view);
+  params.minimum_icon_size_in_px =
+      payments::IconSizeCalculator::MinimumIconHeight();
+  params.max_width_to_height_ratio =
+      ManifestIconDownloader::kMaxWidthToHeightRatio;
+  params.purpose = blink::mojom::ManifestImageResource_Purpose::ANY;
+  std::optional<blink::ManifestIconSelectorResult> result =
+      blink::ManifestIconSelector::FindBestMatchingIcon(icons, params);
+
+  if (!result) {
     // If the icon url is invalid, it's better to give the information to
     // developers in advance unlike when fetching or decoding fails. We already
     // checked whether they are valid in renderer side. So, if the icon url is
@@ -99,6 +102,7 @@ void DownloadBestMatchingIcon(
         FROM_HERE, base::BindOnce(std::move(callback), std::string()));
     return;
   }
+  GURL icon_url = result->icon_url;
 
   std::vector<blink::Manifest::ImageResource> copy_icons;
   for (const auto& icon : icons) {

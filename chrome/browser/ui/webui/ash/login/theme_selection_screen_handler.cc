@@ -20,8 +20,13 @@ ThemeSelectionScreenHandler::ThemeSelectionScreenHandler()
 
 ThemeSelectionScreenHandler::~ThemeSelectionScreenHandler() = default;
 
-void ThemeSelectionScreenHandler::Show(base::Value::Dict data) {
+void ThemeSelectionScreenHandler::Show(base::DictValue data) {
   ShowInWebUI(std::move(data));
+}
+
+base::WeakPtr<ThemeSelectionScreenView>
+ThemeSelectionScreenHandler::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 void ThemeSelectionScreenHandler::DeclareLocalizedValues(

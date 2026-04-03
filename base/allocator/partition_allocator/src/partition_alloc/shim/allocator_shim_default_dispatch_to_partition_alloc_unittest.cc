@@ -7,28 +7,34 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "build/build_config.h"
+#include "partition_alloc/build_config.h"
+#include "partition_alloc/buildflags.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/memory/page_size.h"
-#include "partition_alloc/partition_alloc_buildflags.h"
 #include "partition_alloc/partition_alloc_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if PA_BUILDFLAG(IS_LINUX) || PA_BUILDFLAG(IS_CHROMEOS)
 #include <malloc.h>
 #endif
 
-#if BUILDFLAG(IS_APPLE)
+#if PA_BUILDFLAG(IS_APPLE)
 #include <malloc/malloc.h>
 #endif
 
-#if !defined(MEMORY_TOOL_REPLACES_ALLOCATOR) && BUILDFLAG(USE_PARTITION_ALLOC)
+#if !defined(MEMORY_TOOL_REPLACES_ALLOCATOR) && \
+    PA_BUILDFLAG(USE_PARTITION_ALLOC)
 namespace allocator_shim::internal {
 
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+namespace {
+// TODO(crbug.com/477186304): Support tests with multiple alloc tokens.
+inline static constexpr AllocToken kAllocTokenForTesting = AllocToken(0);
+}  // namespace
+
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 
 // Platforms on which we override weak libc symbols.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if PA_BUILDFLAG(IS_LINUX) || PA_BUILDFLAG(IS_CHROMEOS)
 
 PA_NOINLINE void FreeForTest(void* data) {
   free(data);
@@ -88,47 +94,72 @@ TEST(PartitionAllocAsMalloc, Mallinfo) {
 #endif
 }
 
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#endif  // PA_BUILDFLAG(IS_LINUX) || PA_BUILDFLAG(IS_CHROMEOS)
 
-#endif  // BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 
 // Note: the tests below are quite simple, they are used as simple smoke tests
 // for PartitionAlloc-Everywhere. Most of these directly dispatch to
 // PartitionAlloc, which has much more extensive tests.
 TEST(PartitionAllocAsMalloc, Simple) {
-  void* data = PartitionMalloc(nullptr, 10, nullptr);
+  void* data =
+      PartitionAllocFunctions::Malloc(10, kAllocTokenForTesting, nullptr);
   EXPECT_TRUE(data);
-  PartitionFree(nullptr, data, nullptr);
+  PartitionAllocFunctions::Free(data, nullptr);
+}
+
+TEST(PartitionAllocAsMalloc, SimpleWithSize) {
+  void* data =
+      PartitionAllocFunctions::Malloc(10, kAllocTokenForTesting, nullptr);
+  EXPECT_TRUE(data);
+  PartitionAllocFunctions::FreeWithSize(data, 10, nullptr);
 }
 
 TEST(PartitionAllocAsMalloc, MallocUnchecked) {
-  void* data = PartitionMallocUnchecked(nullptr, 10, nullptr);
+  void* data = PartitionAllocFunctions::MallocUnchecked(
+      10, kAllocTokenForTesting, nullptr);
   EXPECT_TRUE(data);
-  PartitionFree(nullptr, data, nullptr);
+  PartitionAllocFunctions::Free(data, nullptr);
 
-  void* too_large = PartitionMallocUnchecked(nullptr, 4e9, nullptr);
+  void* too_large = PartitionAllocFunctions::MallocUnchecked(
+      4e9, kAllocTokenForTesting, nullptr);
   EXPECT_FALSE(too_large);  // No crash.
 }
 
 TEST(PartitionAllocAsMalloc, Calloc) {
   constexpr size_t alloc_size = 100;
-  void* data = PartitionCalloc(nullptr, 1, alloc_size, nullptr);
+  void* data = PartitionAllocFunctions::Calloc(1, alloc_size,
+                                               kAllocTokenForTesting, nullptr);
   EXPECT_TRUE(data);
 
   char* zeroes[alloc_size];
-  memset(zeroes, 0, alloc_size);
+  PA_UNSAFE_TODO(memset(zeroes, 0, alloc_size));
 
-  EXPECT_EQ(0, memcmp(zeroes, data, alloc_size));
-  PartitionFree(nullptr, data, nullptr);
+  EXPECT_EQ(0, PA_UNSAFE_TODO(memcmp(zeroes, data, alloc_size)));
+  PartitionAllocFunctions::Free(data, nullptr);
+}
+
+TEST(PartitionAllocAsMalloc, CallocUnchecked) {
+  constexpr size_t alloc_size = 100;
+  void* data = PartitionAllocFunctions::CallocUnchecked(
+      1, alloc_size, kAllocTokenForTesting, nullptr);
+  EXPECT_TRUE(data);
+
+  char* zeroes[alloc_size];
+  PA_UNSAFE_TODO(memset(zeroes, 0, alloc_size));
+
+  EXPECT_EQ(0, PA_UNSAFE_TODO(memcmp(zeroes, data, alloc_size)));
+  PartitionAllocFunctions::Free(data, nullptr);
 }
 
 TEST(PartitionAllocAsMalloc, Memalign) {
   constexpr size_t alloc_size = 100;
   constexpr size_t alignment = 1024;
-  void* data = PartitionMemalign(nullptr, alignment, alloc_size, nullptr);
+  void* data = PartitionAllocFunctions::Memalign(
+      alignment, alloc_size, kAllocTokenForTesting, nullptr);
   EXPECT_TRUE(data);
   EXPECT_EQ(0u, reinterpret_cast<uintptr_t>(data) % alignment);
-  PartitionFree(nullptr, data, nullptr);
+  PartitionAllocFunctions::Free(data, nullptr);
 }
 
 TEST(PartitionAllocAsMalloc, AlignedAlloc) {
@@ -136,11 +167,11 @@ TEST(PartitionAllocAsMalloc, AlignedAlloc) {
     for (size_t alignment = 1;
          alignment <= partition_alloc::kMaxSupportedAlignment;
          alignment <<= 1) {
-      void* data =
-          PartitionAlignedAlloc(nullptr, alloc_size, alignment, nullptr);
+      void* data = PartitionAllocFunctions::AlignedAlloc(
+          alloc_size, alignment, kAllocTokenForTesting, nullptr);
       EXPECT_TRUE(data);
       EXPECT_EQ(0u, reinterpret_cast<uintptr_t>(data) % alignment);
-      PartitionFree(nullptr, data, nullptr);
+      PartitionAllocFunctions::Free(data, nullptr);
     }
   }
 }
@@ -150,30 +181,32 @@ TEST(PartitionAllocAsMalloc, AlignedRealloc) {
     for (size_t alignment = 1;
          alignment <= partition_alloc::kMaxSupportedAlignment;
          alignment <<= 1) {
-      void* data =
-          PartitionAlignedAlloc(nullptr, alloc_size, alignment, nullptr);
+      void* data = PartitionAllocFunctions::AlignedAlloc(
+          alloc_size, alignment, kAllocTokenForTesting, nullptr);
       EXPECT_TRUE(data);
 
-      void* data2 = PartitionAlignedRealloc(nullptr, data, alloc_size,
-                                            alignment, nullptr);
+      void* data2 = PartitionAllocFunctions::AlignedRealloc(
+          data, alloc_size, alignment, kAllocTokenForTesting, nullptr);
       EXPECT_TRUE(data2);
 
       // Aligned realloc always relocates.
       EXPECT_NE(reinterpret_cast<uintptr_t>(data),
                 reinterpret_cast<uintptr_t>(data2));
-      PartitionFree(nullptr, data2, nullptr);
+      PartitionAllocFunctions::Free(data2, nullptr);
     }
   }
 }
 
 TEST(PartitionAllocAsMalloc, Realloc) {
   constexpr size_t alloc_size = 100;
-  void* data = PartitionMalloc(nullptr, alloc_size, nullptr);
+  void* data = PartitionAllocFunctions::Malloc(alloc_size,
+                                               kAllocTokenForTesting, nullptr);
   EXPECT_TRUE(data);
-  void* data2 = PartitionMalloc(nullptr, 2 * alloc_size, nullptr);
+  void* data2 = PartitionAllocFunctions::Realloc(
+      data, 2u * alloc_size, kAllocTokenForTesting, nullptr);
   EXPECT_TRUE(data2);
   EXPECT_NE(data2, data);
-  PartitionFree(nullptr, data2, nullptr);
+  PartitionAllocFunctions::Free(data2, nullptr);
 }
 
 // crbug.com/1141752
@@ -186,7 +219,7 @@ TEST(PartitionAllocAsMalloc, Alignment) {
                     alignof(partition_alloc::PartitionRoot));
 }
 
-#if BUILDFLAG(IS_APPLE) && BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#if PA_BUILDFLAG(IS_APPLE) && PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 // Make sure that a sequence a "good sizes" grows fast enough. This is
 // implicitly required by CoreFoundation, and to match Apple's implementation.
 // Non-regression test for crbug.com/1501312
@@ -199,8 +232,14 @@ TEST(PartitionAllocAsMalloc, GoodSize) {
   }
   EXPECT_LT(iterations, 100);
 }
-#endif  // BUILDFLAG(IS_APPLE) && BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#endif  // PA_BUILDFLAG(IS_APPLE) && PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+
+#if PA_BUILDFLAG(IS_APPLE)
+TEST(PartitionAllocAsMalloc, TryFreeDefaultFallbackToFindZoneAndFree_Nullptr) {
+  TryFreeDefaultFallbackToFindZoneAndFree(nullptr);
+}
+#endif  // PA_BUILDFLAG(IS_APPLE)
 
 }  // namespace allocator_shim::internal
 #endif  // !defined(MEMORY_TOOL_REPLACES_ALLOCATOR) &&
-        // BUILDFLAG(USE_PARTITION_ALLOC)
+        // PA_BUILDFLAG(USE_PARTITION_ALLOC)

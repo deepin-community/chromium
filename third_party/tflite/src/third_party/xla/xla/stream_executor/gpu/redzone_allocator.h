@@ -17,12 +17,17 @@ limitations under the License.
 #define XLA_STREAM_EXECUTOR_GPU_REDZONE_ALLOCATOR_H_
 
 #include <cstdint>
+#include <string>
+#include <utility>
 #include <vector>
 
-#include "xla/stream_executor/device_memory_allocator.h"
-#include "xla/stream_executor/gpu/gpu_asm_opts.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "xla/shape.h"
+#include "xla/stream_executor/device_address.h"
+#include "xla/stream_executor/device_address_allocator.h"
 #include "xla/stream_executor/scratch_allocator.h"
-#include "xla/stream_executor/stream_executor.h"
+#include "xla/stream_executor/stream.h"
 
 namespace stream_executor {
 
@@ -42,8 +47,10 @@ class RedzoneAllocator : public ScratchAllocator {
   static constexpr int64_t kDefaultRedzoneSize =
       1LL << 23;  // 8MiB per side, 16MiB total.
   static constexpr uint8_t kDefaultRedzonePattern = -1;  // NOLINT
-  RedzoneAllocator(Stream* stream, DeviceMemoryAllocator* memory_allocator,
-                   const GpuAsmOpts& gpu_compilation_opts_,
+  // Maximum number of thread blocks to be used for redzone checker kernel
+  static constexpr int64_t kMaxNumThreadBlocksForKernel = 32768;
+
+  RedzoneAllocator(Stream* stream, DeviceAddressAllocator* memory_allocator,
                    int64_t memory_limit = (1LL << 32),  // 4GB
                    int64_t redzone_size = kDefaultRedzoneSize,
                    uint8_t redzone_pattern = kDefaultRedzonePattern);
@@ -55,7 +62,8 @@ class RedzoneAllocator : public ScratchAllocator {
     return allocated_bytes_excluding_redzones_;
   }
 
-  absl::StatusOr<DeviceMemory<uint8>> AllocateBytes(int64_t byte_size) override;
+  absl::StatusOr<DeviceAddress<uint8_t>> AllocateBytes(
+      int64_t byte_size) override;
 
   // Non-empty redzone check status implies that there was a write into a
   // redzone, with a string communicating the location of the write.
@@ -99,8 +107,11 @@ class RedzoneAllocator : public ScratchAllocator {
 
   Stream* stream() const { return stream_; }
 
-  // Return a pointer to in-process kernel symbol (used to check redzones).
-  void* kernel_symbol() const;
+  // Create a buffer for a given operation using redzone checker, initialize
+  // based on a given rng state.
+  absl::StatusOr<DeviceAddressBase> CreateBuffer(const xla::Shape& shape,
+                                                 bool initialize_buffers,
+                                                 int64_t& rng_state);
 
  private:
   const int device_ordinal_;
@@ -116,8 +127,7 @@ class RedzoneAllocator : public ScratchAllocator {
   const int64_t redzone_size_;
 
   const uint8_t redzone_pattern_;
-  DeviceMemoryAllocator* memory_allocator_;
-  GpuAsmOpts gpu_compilation_opts_;
+  DeviceAddressAllocator* memory_allocator_;
 
   // The second element of the pair is the size of the user allocation.  This
   // isn't necessarily just first.size() - 2 * redzone_size_ because when the
@@ -125,8 +135,9 @@ class RedzoneAllocator : public ScratchAllocator {
   // the RHS redzone.
   //
   // ScratchAllocators need to free all allocated memory on destruction so we
-  // use `OwningDeviceMemory` here.
-  std::vector<std::pair<OwningDeviceMemory, int64_t>> allocated_buffers_;
+  // use `OwningDeviceAddress` here.
+  std::vector<std::pair<ScopedDeviceAddress<uint8_t>, int64_t>>
+      allocated_buffers_;
 
   int64_t allocated_bytes_excluding_redzones_ = 0;
 };

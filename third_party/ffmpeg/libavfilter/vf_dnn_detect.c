@@ -22,15 +22,16 @@
  */
 
 #include "libavutil/file_open.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "filters.h"
 #include "dnn_filter_common.h"
-#include "internal.h"
 #include "video.h"
 #include "libavutil/time.h"
 #include "libavutil/avstring.h"
 #include "libavutil/detection_bbox.h"
 #include "libavutil/fifo.h"
+#include <float.h>
 
 typedef enum {
     DDMT_SSD,
@@ -53,38 +54,38 @@ typedef struct DnnDetectContext {
     AVFifo *bboxes_fifo;
     int scale_width;
     int scale_height;
-    char *anchors_str;
     float *anchors;
     int nb_anchor;
 } DnnDetectContext;
+
+static const AVOptionArrayDef anchor_array_def = { .sep = '&' };
 
 #define OFFSET(x) offsetof(DnnDetectContext, dnnctx.x)
 #define OFFSET2(x) offsetof(DnnDetectContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM | AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption dnn_detect_options[] = {
-    { "dnn_backend", "DNN backend",                OFFSET(backend_type),     AV_OPT_TYPE_INT,       { .i64 = DNN_OV },    INT_MIN, INT_MAX, FLAGS, "backend" },
+    { "dnn_backend", "DNN backend",                OFFSET(backend_type),     AV_OPT_TYPE_INT,       { .i64 = DNN_OV },    INT_MIN, INT_MAX, FLAGS, .unit = "backend" },
 #if (CONFIG_LIBTENSORFLOW == 1)
-    { "tensorflow",  "tensorflow backend flag",    0,                        AV_OPT_TYPE_CONST,     { .i64 = DNN_TF },    0, 0, FLAGS, "backend" },
+    { "tensorflow",  "tensorflow backend flag",    0,                        AV_OPT_TYPE_CONST,     { .i64 = DNN_TF },    0, 0, FLAGS, .unit = "backend" },
 #endif
 #if (CONFIG_LIBOPENVINO == 1)
-    { "openvino",    "openvino backend flag",      0,                        AV_OPT_TYPE_CONST,     { .i64 = DNN_OV },    0, 0, FLAGS, "backend" },
+    { "openvino",    "openvino backend flag",      0,                        AV_OPT_TYPE_CONST,     { .i64 = DNN_OV },    0, 0, FLAGS, .unit = "backend" },
 #endif
-    DNN_COMMON_OPTIONS
     { "confidence",  "threshold of confidence",    OFFSET2(confidence),      AV_OPT_TYPE_FLOAT,     { .dbl = 0.5 },  0, 1, FLAGS},
     { "labels",      "path to labels file",        OFFSET2(labels_filename), AV_OPT_TYPE_STRING,    { .str = NULL }, 0, 0, FLAGS },
-    { "model_type",  "DNN detection model type",   OFFSET2(model_type),      AV_OPT_TYPE_INT,       { .i64 = DDMT_SSD },    INT_MIN, INT_MAX, FLAGS, "model_type" },
-        { "ssd",     "output shape [1, 1, N, 7]",  0,                        AV_OPT_TYPE_CONST,       { .i64 = DDMT_SSD },    0, 0, FLAGS, "model_type" },
-        { "yolo",    "output shape [1, N*Cx*Cy*DetectionBox]",  0,           AV_OPT_TYPE_CONST,       { .i64 = DDMT_YOLOV1V2 },    0, 0, FLAGS, "model_type" },
-        { "yolov3",  "outputs shape [1, N*D, Cx, Cy]",  0,                   AV_OPT_TYPE_CONST,       { .i64 = DDMT_YOLOV3 },      0, 0, FLAGS, "model_type" },
-        { "yolov4",  "outputs shape [1, N*D, Cx, Cy]",  0,                   AV_OPT_TYPE_CONST,       { .i64 = DDMT_YOLOV4 },    0, 0, FLAGS, "model_type" },
+    { "model_type",  "DNN detection model type",   OFFSET2(model_type),      AV_OPT_TYPE_INT,       { .i64 = DDMT_SSD },    INT_MIN, INT_MAX, FLAGS, .unit = "model_type" },
+        { "ssd",     "output shape [1, 1, N, 7]",  0,                        AV_OPT_TYPE_CONST,       { .i64 = DDMT_SSD },    0, 0, FLAGS, .unit = "model_type" },
+        { "yolo",    "output shape [1, N*Cx*Cy*DetectionBox]",  0,           AV_OPT_TYPE_CONST,       { .i64 = DDMT_YOLOV1V2 },    0, 0, FLAGS, .unit = "model_type" },
+        { "yolov3",  "outputs shape [1, N*D, Cx, Cy]",  0,                   AV_OPT_TYPE_CONST,       { .i64 = DDMT_YOLOV3 },      0, 0, FLAGS, .unit = "model_type" },
+        { "yolov4",  "outputs shape [1, N*D, Cx, Cy]",  0,                   AV_OPT_TYPE_CONST,       { .i64 = DDMT_YOLOV4 },    0, 0, FLAGS, .unit = "model_type" },
     { "cell_w",      "cell width",                 OFFSET2(cell_w),          AV_OPT_TYPE_INT,       { .i64 = 0 },    0, INTMAX_MAX, FLAGS },
     { "cell_h",      "cell height",                OFFSET2(cell_h),          AV_OPT_TYPE_INT,       { .i64 = 0 },    0, INTMAX_MAX, FLAGS },
     { "nb_classes",  "The number of class",        OFFSET2(nb_classes),      AV_OPT_TYPE_INT,       { .i64 = 0 },    0, INTMAX_MAX, FLAGS },
-    { "anchors",     "anchors, splited by '&'",    OFFSET2(anchors_str),         AV_OPT_TYPE_STRING,    { .str = NULL }, 0, 0, FLAGS },
+    { "anchors",     "anchors, split by '&'",    OFFSET2(anchors),         AV_OPT_TYPE_FLOAT | AV_OPT_TYPE_FLAG_ARRAY,    { .arr = &anchor_array_def }, FLT_MIN, FLT_MAX, FLAGS },
     { NULL }
 };
 
-AVFILTER_DEFINE_CLASS(dnn_detect);
+AVFILTER_DNN_DEFINE_CLASS(dnn_detect, DNN_TF | DNN_OV);
 
 static inline float sigmoid(float x) {
     return 1.f / (1.f + exp(-x));
@@ -105,34 +106,6 @@ static int dnn_detect_get_label_id(int nb_classes, int cell_size, float *label_d
         }
     }
     return label_id;
-}
-
-static int dnn_detect_parse_anchors(char *anchors_str, float **anchors)
-{
-    char *saveptr = NULL, *token;
-    float *anchors_buf;
-    int nb_anchor = 0, i = 0;
-    while(anchors_str[i] != '\0') {
-        if(anchors_str[i] == '&')
-            nb_anchor++;
-        i++;
-    }
-    nb_anchor++;
-    anchors_buf = av_mallocz(nb_anchor * sizeof(**anchors));
-    if (!anchors_buf) {
-        return 0;
-    }
-    for (int i = 0; i < nb_anchor; i++) {
-        token = av_strtok(anchors_str, "&", &saveptr);
-        if (!token) {
-            av_freep(&anchors_buf);
-            return 0;
-        }
-        anchors_buf[i] = strtof(token, NULL);
-        anchors_str = NULL;
-    }
-    *anchors = anchors_buf;
-    return nb_anchor;
 }
 
 /* Calculate Intersection Over Union */
@@ -166,14 +139,14 @@ static int dnn_detect_parse_yolo_output(AVFrame *frame, DNNData *output, int out
         scale_w = cell_w;
         scale_h = cell_h;
     } else {
-        if (output[output_index].height != output[output_index].width &&
-            output[output_index].height == output[output_index].channels) {
+        if (output[output_index].dims[2] != output[output_index].dims[3] &&
+            output[output_index].dims[2] == output[output_index].dims[1]) {
             is_NHWC = 1;
-            cell_w = output[output_index].height;
-            cell_h = output[output_index].channels;
+            cell_w = output[output_index].dims[2];
+            cell_h = output[output_index].dims[1];
         } else {
-            cell_w = output[output_index].width;
-            cell_h = output[output_index].height;
+            cell_w = output[output_index].dims[3];
+            cell_h = output[output_index].dims[2];
         }
         scale_w = ctx->scale_width;
         scale_h = ctx->scale_height;
@@ -200,19 +173,14 @@ static int dnn_detect_parse_yolo_output(AVFrame *frame, DNNData *output, int out
         return AVERROR(EINVAL);
     }
 
-    if (!anchors) {
-        av_log(filter_ctx, AV_LOG_ERROR, "anchors is not set\n");
-        return AVERROR(EINVAL);
-    }
-
-    if (output[output_index].channels * output[output_index].width *
-            output[output_index].height % (box_size * cell_w * cell_h)) {
+    if (output[output_index].dims[1] * output[output_index].dims[2] *
+            output[output_index].dims[3] % (box_size * cell_w * cell_h)) {
         av_log(filter_ctx, AV_LOG_ERROR, "wrong cell_w, cell_h or nb_classes\n");
         return AVERROR(EINVAL);
     }
-    detection_boxes = output[output_index].channels *
-                      output[output_index].height *
-                      output[output_index].width / box_size / cell_w / cell_h;
+    detection_boxes = output[output_index].dims[1] *
+                      output[output_index].dims[2] *
+                      output[output_index].dims[3] / box_size / cell_w / cell_h;
 
     anchors = anchors + (detection_boxes * output_index * 2);
     /**
@@ -236,9 +204,6 @@ static int dnn_detect_parse_yolo_output(AVFrame *frame, DNNData *output, int out
                     conf = post_process_raw_data(
                                 detection_boxes_data[cy * cell_w + cx + 4 * cell_w * cell_h]);
                 }
-                if (conf < conf_threshold) {
-                    continue;
-                }
 
                 if (is_NHWC) {
                     x = post_process_raw_data(detection_boxes_data[0]);
@@ -256,6 +221,9 @@ static int dnn_detect_parse_yolo_output(AVFrame *frame, DNNData *output, int out
                         detection_boxes_data + cy * cell_w + cx + 5 * cell_w * cell_h);
                     conf = conf * post_process_raw_data(
                                 detection_boxes_data[cy * cell_w + cx + (label_id + 5) * cell_w * cell_h]);
+                }
+                if (conf < conf_threshold) {
+                    continue;
                 }
 
                 bbox = av_mallocz(sizeof(*bbox));
@@ -373,18 +341,18 @@ static int dnn_detect_post_proc_ssd(AVFrame *frame, DNNData *output, int nb_outp
     int scale_w = ctx->scale_width;
     int scale_h = ctx->scale_height;
 
-    if (nb_outputs == 1 && output->width == 7) {
-        proposal_count = output->height;
-        detect_size = output->width;
+    if (nb_outputs == 1 && output->dims[3] == 7) {
+        proposal_count = output->dims[2];
+        detect_size = output->dims[3];
         detections = output->data;
-    } else if (nb_outputs == 2 && output[0].width == 5) {
-        proposal_count = output[0].height;
-        detect_size = output[0].width;
+    } else if (nb_outputs == 2 && output[0].dims[3] == 5) {
+        proposal_count = output[0].dims[2];
+        detect_size = output[0].dims[3];
         detections = output[0].data;
         labels = output[1].data;
-    } else if (nb_outputs == 2 && output[1].width == 5) {
-        proposal_count = output[1].height;
-        detect_size = output[1].width;
+    } else if (nb_outputs == 2 && output[1].dims[3] == 5) {
+        proposal_count = output[1].dims[2];
+        detect_size = output[1].dims[3];
         detections = output[1].data;
         labels = output[0].data;
     } else {
@@ -421,7 +389,7 @@ static int dnn_detect_post_proc_ssd(AVFrame *frame, DNNData *output, int nb_outp
     av_strlcpy(header->source, ctx->dnnctx.model_filename, sizeof(header->source));
 
     for (int i = 0; i < proposal_count; ++i) {
-        int av_unused image_id = (int)detections[i * detect_size + 0];
+        av_unused int image_id = (int)detections[i * detect_size + 0];
         int label_id;
         float conf, x0, y0, x1, y1;
 
@@ -683,6 +651,14 @@ static av_cold int dnn_detect_init(AVFilterContext *context)
     DnnDetectContext *ctx = context->priv;
     DnnContext *dnn_ctx = &ctx->dnnctx;
     int ret;
+    int using_yolo = (ctx->model_type == DDMT_YOLOV3 ||
+                      ctx->model_type == DDMT_YOLOV4 ||
+                      ctx->model_type == DDMT_YOLOV1V2);
+
+    if (using_yolo && !ctx->anchors) {
+        av_log(ctx, AV_LOG_ERROR, "anchors is not set while being required for YOLO models\n");
+        return AVERROR(EINVAL);
+    }
 
     ret = ff_dnn_init(&ctx->dnnctx, DFT_ANALYTICS_DETECT, context);
     if (ret < 0)
@@ -696,16 +672,12 @@ static av_cold int dnn_detect_init(AVFilterContext *context)
     ff_dnn_set_detect_post_proc(&ctx->dnnctx, dnn_detect_post_proc);
 
     if (ctx->labels_filename) {
-        return read_detect_label_file(context);
-    }
-    if (ctx->anchors_str) {
-        ret = dnn_detect_parse_anchors(ctx->anchors_str, &ctx->anchors);
-        if (!ctx->anchors) {
-            av_log(context, AV_LOG_ERROR, "failed to parse anchors_str\n");
-            return AVERROR(EINVAL);
+        ret = read_detect_label_file(context);
+        if (ret) {
+          return ret;
         }
-        ctx->nb_anchor = ret;
     }
+
     return 0;
 }
 
@@ -807,11 +779,13 @@ static av_cold void dnn_detect_uninit(AVFilterContext *context)
     DnnDetectContext *ctx = context->priv;
     AVDetectionBBox *bbox;
     ff_dnn_uninit(&ctx->dnnctx);
-    while(av_fifo_can_read(ctx->bboxes_fifo)) {
-        av_fifo_read(ctx->bboxes_fifo, &bbox, 1);
-        av_freep(&bbox);
+    if (ctx->bboxes_fifo) {
+        while (av_fifo_can_read(ctx->bboxes_fifo)) {
+            av_fifo_read(ctx->bboxes_fifo, &bbox, 1);
+            av_freep(&bbox);
+        }
+        av_fifo_freep2(&ctx->bboxes_fifo);
     }
-    av_fifo_freep2(&ctx->bboxes_fifo);
     av_freep(&ctx->anchors);
     free_detect_labels(ctx);
 }
@@ -821,15 +795,19 @@ static int config_input(AVFilterLink *inlink)
     AVFilterContext *context     = inlink->dst;
     DnnDetectContext *ctx = context->priv;
     DNNData model_input;
-    int ret;
+    int ret, width_idx, height_idx;
 
     ret = ff_dnn_get_input(&ctx->dnnctx, &model_input);
     if (ret != 0) {
         av_log(ctx, AV_LOG_ERROR, "could not get input from the model\n");
         return ret;
     }
-    ctx->scale_width = model_input.width == -1 ? inlink->w : model_input.width;
-    ctx->scale_height = model_input.height ==  -1 ? inlink->h : model_input.height;
+    width_idx = dnn_get_width_idx_by_layout(model_input.layout);
+    height_idx = dnn_get_height_idx_by_layout(model_input.layout);
+    ctx->scale_width = model_input.dims[width_idx] == -1 ? inlink->w :
+        model_input.dims[width_idx];
+    ctx->scale_height = model_input.dims[height_idx] ==  -1 ? inlink->h :
+        model_input.dims[height_idx];
 
     return 0;
 }
@@ -842,15 +820,16 @@ static const AVFilterPad dnn_detect_inputs[] = {
     },
 };
 
-const AVFilter ff_vf_dnn_detect = {
-    .name          = "dnn_detect",
-    .description   = NULL_IF_CONFIG_SMALL("Apply DNN detect filter to the input."),
+const FFFilter ff_vf_dnn_detect = {
+    .p.name        = "dnn_detect",
+    .p.description = NULL_IF_CONFIG_SMALL("Apply DNN detect filter to the input."),
+    .p.priv_class  = &dnn_detect_class,
     .priv_size     = sizeof(DnnDetectContext),
+    .preinit       = ff_dnn_filter_init_child_class,
     .init          = dnn_detect_init,
     .uninit        = dnn_detect_uninit,
     FILTER_INPUTS(dnn_detect_inputs),
     FILTER_OUTPUTS(ff_video_default_filterpad),
     FILTER_PIXFMTS_ARRAY(pix_fmts),
-    .priv_class    = &dnn_detect_class,
     .activate      = dnn_detect_activate,
 };

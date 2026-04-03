@@ -35,13 +35,13 @@ bool IsFunctionCall(const Node& node) {
   // to regular function calls. Also, the GetFunctionDefAndAttrs assumes that
   // the function name is stored in the `f` attribute of the node. That code
   // will need to change as well.
-  const string& op_type = node.op_def().name();
+  const std::string& op_type = node.op_def().name();
   return op_type == "PartitionedCall" || op_type == "StatefulPartitionedCall";
 }
 
 // Utility to set node's value in `cache` and `is_deep` to `value`.
-Status Set(const Node& node, bool value, bool* is_deep,
-           std::vector<absl::optional<bool>>* cache) {
+absl::Status Set(const Node& node, bool value, bool* is_deep,
+                 std::vector<absl::optional<bool>>* cache) {
   *is_deep = value;
   (*cache)[node.id()] = value;
   return absl::OkStatus();
@@ -55,7 +55,7 @@ PlacerInspectionRequiredOpChecker::PlacerInspectionRequiredOpChecker(
   cache_.resize(graph_.num_node_ids());
 }
 
-Status PlacerInspectionRequiredOpChecker::IsPlacerInspectionRequired(
+absl::Status PlacerInspectionRequiredOpChecker::IsPlacerInspectionRequired(
     const Node& node, bool* is_deep) {
   if (cache_[node.id()].has_value()) {
     *is_deep = cache_[node.id()].value();
@@ -79,12 +79,12 @@ Status PlacerInspectionRequiredOpChecker::IsPlacerInspectionRequired(
   return Set(node, false, is_deep, &cache_);
 }
 
-Status GetFunctionDefAndAttrs(const FunctionLibraryDefinition& flib_def,
-                              const Node& node,
-                              core::RefCountPtr<FunctionRecord>* fdef,
-                              NameAttrList* func) {
+absl::Status GetFunctionDefAndAttrs(const FunctionLibraryDefinition& flib_def,
+                                    const Node& node,
+                                    core::RefCountPtr<FunctionRecord>* fdef,
+                                    NameAttrList* func) {
   TF_RETURN_IF_ERROR(GetNodeAttr(node.def(), "f", func));
-  const string& function_name = func->name();
+  const std::string& function_name = func->name();
   *fdef = flib_def.FindRecord(function_name);
   if (*fdef == nullptr) {
     return errors::InvalidArgument(
@@ -94,11 +94,12 @@ Status GetFunctionDefAndAttrs(const FunctionLibraryDefinition& flib_def,
   return absl::OkStatus();
 }
 
-FunctionStack::FunctionStack(const string& function_name)
+FunctionStack::FunctionStack(const std::string& function_name)
     : current_function_name_(function_name) {}
 
-FunctionStack FunctionStack::Push(const Node* node_in_current_function,
-                                  const string& new_current_function) const {
+FunctionStack FunctionStack::Push(
+    const Node* node_in_current_function,
+    const std::string& new_current_function) const {
   FunctionStack new_stack(new_current_function);
   new_stack.frames_ = frames_;
   new_stack.frames_.emplace_back(current_function_name_,
@@ -106,7 +107,7 @@ FunctionStack FunctionStack::Push(const Node* node_in_current_function,
   return new_stack;
 }
 
-bool FunctionStack::HasFunction(const string& function_name) const {
+bool FunctionStack::HasFunction(const std::string& function_name) const {
   if (current_function_name_ == function_name) {
     return true;
   }
@@ -118,8 +119,8 @@ bool FunctionStack::HasFunction(const string& function_name) const {
   return false;
 }
 
-string FunctionStack::FormatForError() const {
-  std::vector<string> msgs;
+std::string FunctionStack::FormatForError() const {
+  std::vector<std::string> msgs;
   for (int i = 0; i < frames_.size(); ++i) {
     if (frames_[i].function_name.empty()) {
       // Empty function body should only happen at the top level, i.e. i = 0.
@@ -132,9 +133,9 @@ string FunctionStack::FormatForError() const {
           "Function ", errors::FormatFunctionForError(frames_[i].function_name),
           " contains node ", FormatNodeForError(*frames_[i].node)));
     }
-    const string& fname = (i + 1 < frames_.size())
-                              ? frames_[i + 1].function_name
-                              : current_function_name_;
+    const std::string& fname = (i + 1 < frames_.size())
+                                   ? frames_[i + 1].function_name
+                                   : current_function_name_;
     msgs.push_back(absl::StrCat("Node ", FormatNodeForError(*frames_[i].node),
                                 " calls function ",
                                 errors::FormatFunctionForError(fname)));
@@ -148,15 +149,15 @@ using OutputEdgeMap = std::vector<std::vector<const Edge*>>;
 
 constexpr char kIdentityOp[] = "Identity";
 
-string Uniquify(const string& candidate_name,
-                std::unordered_set<string>* node_names) {
+std::string Uniquify(const std::string& candidate_name,
+                     std::unordered_set<std::string>* node_names) {
   if (node_names->find(candidate_name) == node_names->end()) {
     node_names->insert(candidate_name);
     return candidate_name;
   }
 
   for (int counter = 0;; ++counter) {
-    string candidate = absl::StrCat(candidate_name, "_", counter);
+    std::string candidate = absl::StrCat(candidate_name, "_", counter);
     if (node_names->find(candidate) == node_names->end()) {
       node_names->insert(candidate);
       return candidate;
@@ -164,12 +165,12 @@ string Uniquify(const string& candidate_name,
   }
 }
 
-Status AddInputIdentity(Node* node, int input_idx, Graph* graph,
-                        std::unordered_set<string>* node_names) {
+absl::Status AddInputIdentity(Node* node, int input_idx, Graph* graph,
+                              std::unordered_set<std::string>* node_names) {
   const Edge* edge;
   TF_RETURN_IF_ERROR(node->input_edge(input_idx, &edge));
 
-  string identity_name = Uniquify(
+  std::string identity_name = Uniquify(
       absl::StrCat(edge->src()->name(), "_", node->name()), node_names);
 
   NodeDefBuilder builder(identity_name, kIdentityOp);
@@ -203,9 +204,9 @@ struct EdgePtrCompare {
   }
 };
 
-Status AddOutputIdentities(Node* node, Graph* graph,
-                           std::unordered_set<string>* node_names) {
-  auto add_identity = [&](int src_output, const string& identity_name,
+absl::Status AddOutputIdentities(Node* node, Graph* graph,
+                                 std::unordered_set<std::string>* node_names) {
+  auto add_identity = [&](int src_output, const std::string& identity_name,
                           Node** identity_node) {
     NodeDefBuilder builder(identity_name, kIdentityOp);
     builder.Attr("T", node->output_type(src_output));
@@ -238,7 +239,7 @@ Status AddOutputIdentities(Node* node, Graph* graph,
     Node* dst = edge->dst();
     int dst_input = edge->dst_input();
     int src_output = edge->src_output();
-    string identity_name =
+    std::string identity_name =
         Uniquify(absl::StrCat(node->name(), "_", dst->name()), node_names);
     Node* identity_node;
     TF_RETURN_IF_ERROR(add_identity(src_output, identity_name, &identity_node));
@@ -257,7 +258,7 @@ Status AddOutputIdentities(Node* node, Graph* graph,
     }
     // The output is unused in the graph. Just add an identity
     // consuming it.
-    string identity_name = Uniquify(node->name(), node_names);
+    std::string identity_name = Uniquify(node->name(), node_names);
     Node* identity_node;
     TF_RETURN_IF_ERROR(add_identity(output_idx, identity_name, &identity_node));
     VLOG(6) << "Added identity into " << node->name() << ":" << output_idx
@@ -267,12 +268,12 @@ Status AddOutputIdentities(Node* node, Graph* graph,
   return absl::OkStatus();
 }
 
-Status IsolateNode(Node* node, Graph* graph) {
+absl::Status IsolateNode(Node* node, Graph* graph) {
   // We use `node_names` to make sure we pick unique names.
   // We don't use graph->NewName() because it produces verbose names and
   // does not actually ensure that they are unique (it assumes all names
   // are generated using it, which is not true today).
-  std::unordered_set<string> node_names(graph->num_nodes());
+  std::unordered_set<std::string> node_names(graph->num_nodes());
   for (Node* n : graph->nodes()) {
     node_names.insert(n->name());
   }
@@ -286,7 +287,7 @@ Status IsolateNode(Node* node, Graph* graph) {
 
 }  // namespace
 
-Status IsolatePlacerInspectionRequiredOps(
+absl::Status IsolatePlacerInspectionRequiredOps(
     const FunctionLibraryDefinition& flib_def, Graph* graph) {
   PlacerInspectionRequiredOpChecker checker(graph, &flib_def);
   // It is OK to add nodes to the graph during iteration.

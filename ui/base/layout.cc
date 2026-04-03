@@ -11,18 +11,15 @@ namespace ui {
 
 float GetScaleFactorForNativeView(gfx::NativeView view) {
   // A number of unit tests do not setup the screen.
-  if (!display::Screen::GetScreen())
+  if (!display::Screen::Get()) {
     return 1.0f;
-  display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestView(view);
+  }
 
-  // GetDisplayNearestView() may return null Display if the |view| is not shown
+  // GetPreferredScaleFactorForView may return null if |view| is not shown
   // on the screen and there is no primary display. In that case use scale
   // factor 1.0.
-  if (!display.is_valid())
-    return 1.0f;
-
-  return display.device_scale_factor();
+  return display::Screen::Get()->GetPreferredScaleFactorForView(view).value_or(
+      1.0f);
 }
 
 }  // namespace ui

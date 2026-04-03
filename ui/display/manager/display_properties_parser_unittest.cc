@@ -4,6 +4,8 @@
 
 #include "ui/display/manager/display_properties_parser.h"
 
+#include <string_view>
+
 #include "base/json/json_reader.h"
 #include "base/test/gtest_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -12,8 +14,8 @@
 namespace display {
 namespace {
 
-std::optional<base::Value> ReadJsonString(base::StringPiece json) {
-  return base::JSONReader::Read(json);
+std::optional<base::Value> ReadJsonString(std::string_view json) {
+  return base::JSONReader::Read(json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 }
 
 using DisplayPropertiesParserTest = ::testing::Test;

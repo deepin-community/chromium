@@ -14,6 +14,7 @@
 #include "cast/common/channel/connection_namespace_handler.h"
 #include "cast/common/channel/virtual_connection_router.h"
 #include "cast/common/public/cast_socket.h"
+#include "cast/common/public/receiver_info.h"
 #include "cast/receiver/channel/device_auth_namespace_handler.h"
 #include "cast/receiver/public/receiver_socket_factory.h"
 #include "platform/api/task_runner.h"
@@ -56,11 +57,11 @@ class ApplicationAgent final
     // must not mutate while the Application is registered.
     virtual const std::vector<std::string>& GetAppIds() const = 0;
 
-    // Launches the application and returns true if successful. |app_id| is the
-    // specific ID that was used to launch the app, and |app_params| is a
-    // pass-through for any arbitrary app-specfic structure (or null if not
+    // Launches the application and returns true if successful. `app_id` is the
+    // specific ID that was used to launch the app, and `app_params` is a
+    // pass-through for any arbitrary app-specific structure (or null if not
     // provided). If the Application wishes to send/receive messages, it uses
-    // the provided |message_port| and must call MessagePort::SetClient() before
+    // the provided `message_port` and must call MessagePort::SetClient() before
     // any flow will occur.
     virtual bool Launch(const std::string& app_id,
                         const Json::Value& app_params,
@@ -81,7 +82,8 @@ class ApplicationAgent final
 
   ApplicationAgent(
       TaskRunner& task_runner,
-      DeviceAuthNamespaceHandler::CredentialsProvider* credentials_provider);
+      DeviceAuthNamespaceHandler::CredentialsProvider& credentials_provider,
+      const std::string& device_uuid);
 
   ~ApplicationAgent() final;
 
@@ -89,50 +91,54 @@ class ApplicationAgent final
   // into this agent and any running Applications.
   CastSocket::Client* cast_socket_client() { return &router_; }
 
-  // Registers an Application for launching by this agent. |app| must outlive
+  // Registers an Application for launching by this agent. `app` must outlive
   // this ApplicationAgent, or until UnregisterApplication() is called.
   void RegisterApplication(Application* app,
                            bool auto_launch_for_idle_screen = false);
   void UnregisterApplication(Application* app);
 
-  // Stops the given |app| if it is the one currently running. This is used by
+  // Stops the given `app` if it is the one currently running. This is used by
   // applications that encounter "exit" conditions where they need to STOP
   // (e.g., due to timeout of user activity, end of media playback, or fatal
   // errors).
   void StopApplicationIfRunning(Application* app);
+
+  void SetReceiverInfo(ReceiverInfo receiver_info);
 
  private:
   // ReceiverSocketFactory::Client overrides.
   void OnConnected(ReceiverSocketFactory* factory,
                    const IPEndpoint& endpoint,
                    std::unique_ptr<CastSocket> socket) final;
-  void OnError(ReceiverSocketFactory* factory, Error error) final;
+  void OnError(ReceiverSocketFactory* factory, const Error& error) final;
 
   // CastMessageHandler overrides.
   void OnMessage(VirtualConnectionRouter* router,
                  CastSocket* socket,
-                 ::cast::channel::CastMessage message) final;
+                 proto::CastMessage message) final;
 
   // ConnectionNamespaceHandler::VirtualConnectionPolicy overrides.
   bool IsConnectionAllowed(const VirtualConnection& virtual_conn) const final;
 
   // VirtualConnectionRouter::SocketErrorHandler overrides.
   void OnClose(CastSocket* socket) final;
-  void OnError(CastSocket* socket, Error error) final;
+  void OnError(CastSocket* socket, const Error& error) final;
 
-  // OnMessage() delegates to these to take action for each |request|. Each of
+  // OnMessage() delegates to these to take action for each `request`. Each of
   // these returns a non-empty response message if a reply should be sent back
   // to the requestor.
   Json::Value HandlePing();
   Json::Value HandleGetAppAvailability(const Json::Value& request);
   Json::Value HandleGetStatus(const Json::Value& request);
+  Json::Value HandleDeviceInfo(const Json::Value& request);
+  Json::Value HandleEurekaInfo(const Json::Value& request);
   Json::Value HandleLaunch(const Json::Value& request, CastSocket* socket);
   Json::Value HandleStop(const Json::Value& request);
   Json::Value HandleInvalidCommand(const Json::Value& request);
 
   // Stops the currently-running Application and attempts to launch the
-  // Application referred to by |app_id|. If this fails, the "idle screen"
-  // Application will be automatically launched as a failure fall-back. |socket|
+  // Application referred to by `app_id`. If this fails, the "idle screen"
+  // Application will be automatically launched as a failure fall-back. `socket`
   // is non-null only when the application switch was caused by a remote LAUNCH
   // request.
   Error SwitchToApplication(std::string app_id,
@@ -142,10 +148,20 @@ class ApplicationAgent final
   // Stops the currently-running Application and launches the "idle screen."
   void GoIdle();
 
-  // Populates the given |message| object with the RECEIVER_STATUS fields,
+  // Populates the given `out` object with the RECEIVER_STATUS fields,
   // reflecting the currently-launched app (if any), and a fake volume level
   // status.
-  void PopulateReceiverStatus(Json::Value* message);
+  void PopulateReceiverStatus(Json::Value* out);
+
+  // Populates the given `out` object with the DEVICE_INFO fields,
+  // reflecting the currently-launched app (if any), and a fake volume level
+  // status.
+  void PopulateDeviceInfo(Json::Value* out);
+
+  // Populates the given `out` object with the eureka_info fields,
+  // reflecting the currently-launched app (if any), and a fake volume level
+  // status.
+  void PopulateEurekaInfo(Json::Value* out);
 
   // Broadcasts new RECEIVER_STATUS to all endpoints. This is called after an
   // Application LAUNCH or STOP.
@@ -162,6 +178,8 @@ class ApplicationAgent final
   CastSocketMessagePort message_port_;
   Application* launched_app_ = nullptr;
   std::string launched_via_app_id_;
+  std::string device_id_;
+  ReceiverInfo receiver_info_;
 };
 
 }  // namespace openscreen::cast

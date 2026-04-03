@@ -10,14 +10,17 @@
 #include "base/strings/strcat.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/ui/autofill/payments/payments_ui_constants.h"
-#include "chrome/browser/ui/autofill/payments/view_factory.h"
+#include "chrome/browser/ui/autofill/payments/payments_view_factory.h"
 #include "chrome/browser/ui/views/autofill/payments/payments_view_util.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "components/autofill/core/browser/ui/payments/card_unmask_otp_input_dialog_controller.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/color/color_id.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/link.h"
@@ -26,6 +29,7 @@
 #include "ui/views/controls/throbber.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/box_layout_view.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/window/dialog_delegate.h"
 
@@ -35,11 +39,11 @@ CardUnmaskOtpInputDialogViews::CardUnmaskOtpInputDialogViews(
     base::WeakPtr<CardUnmaskOtpInputDialogController> controller)
     : controller_(controller) {
   SetShowTitle(true);
-  SetButtonLabel(ui::DIALOG_BUTTON_OK, controller_->GetOkButtonLabel());
-  SetButtonEnabled(ui::DIALOG_BUTTON_OK, false);
-  SetButtonLabel(ui::DIALOG_BUTTON_CANCEL,
-                 GetDialogButtonLabel(ui::DIALOG_BUTTON_CANCEL));
-  SetModalType(ui::MODAL_TYPE_CHILD);
+  SetButtonLabel(ui::mojom::DialogButton::kOk, controller_->GetOkButtonLabel());
+  SetButtonEnabled(ui::mojom::DialogButton::kOk, false);
+  SetButtonLabel(ui::mojom::DialogButton::kCancel,
+                 GetDialogButtonLabel(ui::mojom::DialogButton::kCancel));
+  SetModalType(ui::mojom::ModalType::kChild);
   SetShowCloseButton(false);
   set_fixed_width(ChromeLayoutProvider::Get()->GetDistanceMetric(
       views::DISTANCE_MODAL_DIALOG_PREFERRED_WIDTH));
@@ -61,7 +65,7 @@ void CardUnmaskOtpInputDialogViews::ShowPendingState() {
   otp_input_view_->SetVisible(false);
   progress_view_->SetVisible(true);
   progress_throbber_->Start();
-  SetButtonEnabled(ui::DIALOG_BUTTON_OK, false);
+  SetButtonEnabled(ui::mojom::DialogButton::kOk, false);
 }
 
 void CardUnmaskOtpInputDialogViews::ShowInvalidState(
@@ -69,12 +73,13 @@ void CardUnmaskOtpInputDialogViews::ShowInvalidState(
   otp_input_view_->SetVisible(true);
   progress_view_->SetVisible(false);
   progress_throbber_->Stop();
-  SetButtonEnabled(ui::DIALOG_BUTTON_OK, false);
+  SetButtonEnabled(ui::mojom::DialogButton::kOk, false);
   otp_input_textfield_->SetInvalid(true);
   otp_input_textfield_invalid_label_->SetVisible(true);
   otp_input_textfield_invalid_label_->SetText(invalid_label_text);
   otp_input_textfield_invalid_label_padding_->SetVisible(false);
-  otp_input_textfield_->SetAccessibleName(otp_input_textfield_invalid_label_);
+  otp_input_textfield_->GetViewAccessibility().SetName(
+      *otp_input_textfield_invalid_label_);
 }
 
 void CardUnmaskOtpInputDialogViews::Dismiss(
@@ -109,13 +114,15 @@ std::u16string CardUnmaskOtpInputDialogViews::GetWindowTitle() const {
 }
 
 void CardUnmaskOtpInputDialogViews::AddedToWidget() {
-  GetBubbleFrameView()->SetTitleView(CreateTitleView(
-      GetWindowTitle(), TitleWithIconAndSeparatorView::Icon::GOOGLE_PAY));
+  GetBubbleFrameView()->SetTitleView(
+      std::make_unique<TitleWithIconAfterLabelView>(
+          GetWindowTitle(), TitleWithIconAfterLabelView::Icon::GOOGLE_PAY));
 }
 
 bool CardUnmaskOtpInputDialogViews::Accept() {
   if (controller_) {
-    controller_->OnOkButtonClicked(otp_input_textfield_->GetText());
+    controller_->OnOkButtonClicked(
+        std::u16string(otp_input_textfield_->GetText()));
   }
   ShowPendingState();
   return false;
@@ -129,11 +136,12 @@ views::View* CardUnmaskOtpInputDialogViews::GetInitiallyFocusedView() {
 void CardUnmaskOtpInputDialogViews::ContentsChanged(
     views::Textfield* sender,
     const std::u16string& new_contents) {
-  if (otp_input_textfield_->GetInvalid())
+  if (otp_input_textfield_->GetInvalid()) {
     HideInvalidState();
+  }
 
   SetButtonEnabled(
-      ui::DIALOG_BUTTON_OK,
+      ui::mojom::DialogButton::kOk,
       /*enabled=*/controller_ && controller_->IsValidOtp(new_contents));
 }
 
@@ -192,7 +200,8 @@ void CardUnmaskOtpInputDialogViews::CreateOtpInputView() {
   otp_input_textfield_invalid_label_padding_ =
       otp_input_textfield_view->AddChildView(std::make_unique<views::View>());
   otp_input_textfield_invalid_label_padding_->SetPreferredSize(
-      otp_input_textfield_invalid_label_->GetPreferredSize());
+      otp_input_textfield_invalid_label_->GetPreferredSize(
+          views::SizeBounds(otp_input_textfield_invalid_label_->width(), {})));
 
   // Adds footer.
   footer_label_ =
@@ -242,7 +251,7 @@ void CardUnmaskOtpInputDialogViews::CreateHiddenProgressView() {
       views::Builder<views::Label>()
           .SetText(controller_ ? controller_->GetProgressLabel() : u"")
           .SetMultiLine(true)
-          .SetEnabledColorId(ui::kColorThrobber)
+          .SetEnabledColor(ui::kColorThrobber)
           .Build());
 }
 
@@ -251,7 +260,8 @@ void CardUnmaskOtpInputDialogViews::HideInvalidState() {
   otp_input_textfield_->SetInvalid(false);
   otp_input_textfield_invalid_label_->SetText(std::u16string());
   otp_input_textfield_invalid_label_->SetVisible(false);
-  otp_input_textfield_->SetAccessibleName(otp_input_textfield_invalid_label_);
+  otp_input_textfield_->GetViewAccessibility().SetName(
+      *otp_input_textfield_invalid_label_);
   otp_input_textfield_invalid_label_padding_->SetVisible(true);
 }
 

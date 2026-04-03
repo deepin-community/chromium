@@ -6,6 +6,10 @@
 
 // RendererGL.cpp: Implements the class methods for RendererGL.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_libc_calls
+#endif
+
 #include "libANGLE/renderer/gl/RendererGL.h"
 
 #include <EGL/eglext.h>
@@ -27,7 +31,6 @@
 #include "libANGLE/renderer/gl/FenceNVGL.h"
 #include "libANGLE/renderer/gl/FramebufferGL.h"
 #include "libANGLE/renderer/gl/FunctionsGL.h"
-#include "libANGLE/renderer/gl/PLSProgramCache.h"
 #include "libANGLE/renderer/gl/ProgramGL.h"
 #include "libANGLE/renderer/gl/QueryGL.h"
 #include "libANGLE/renderer/gl/RenderbufferGL.h"
@@ -60,7 +63,7 @@ void SetMaxShaderCompilerThreads(const rx::FunctionsGL *functions, GLuint count)
 
 #if defined(ANGLE_PLATFORM_ANDROID)
 const char *kIgnoredErrors[] = {
-    // Wrong error message on Android Q Pixel 2. http://anglebug.com/3491
+    // Wrong error message on Android Q Pixel 2. http://anglebug.com/42262155
     "FreeAllocationOnTimestamp - Reference to buffer created from "
     "different context without a share list. Application failed to pass "
     "share_context to eglCreateContext. Results are undefined.",
@@ -154,13 +157,12 @@ RendererGL::RendererGL(std::unique_ptr<FunctionsGL> functions,
       mMultiviewClearer(nullptr),
       mUseDebugOutput(false),
       mCapsInitialized(false),
-      mMultiviewImplementationType(MultiviewImplementationTypeGL::UNSPECIFIED),
       mNativeParallelCompileEnabled(false),
       mNeedsFlushBeforeDeleteTextures(false)
 {
     ASSERT(mFunctions);
-    ApplyFeatureOverrides(&mFeatures, display->getState());
-    if (!display->getState().featuresAllDisabled)
+    ApplyFeatureOverrides(&mFeatures, display->getState().featureOverrides);
+    if (!display->getState().featureOverrides.allDisabled)
     {
         nativegl_gl::InitializeFeatures(mFunctions.get(), &mFeatures);
     }
@@ -214,7 +216,6 @@ RendererGL::~RendererGL()
     SafeDelete(mBlitter);
     SafeDelete(mMultiviewClearer);
     SafeDelete(mStateManager);
-    SafeDelete(mPLSProgramCache);
 }
 
 angle::Result RendererGL::flush()
@@ -278,8 +279,7 @@ void RendererGL::generateCaps(gl::Caps *outCaps,
                               gl::Limitations *outLimitations) const
 {
     nativegl_gl::GenerateCaps(mFunctions.get(), mFeatures, outCaps, outTextureCaps, outExtensions,
-                              outLimitations, &mMaxSupportedESVersion,
-                              &mMultiviewImplementationType, &mNativePLSOptions);
+                              outLimitations, &mMaxSupportedESVersion, &mNativePLSOptions);
 }
 
 GLint RendererGL::getGPUDisjoint()
@@ -331,21 +331,6 @@ const gl::Limitations &RendererGL::getNativeLimitations() const
 const ShPixelLocalStorageOptions &RendererGL::getNativePixelLocalStorageOptions() const
 {
     return mNativePLSOptions;
-}
-
-PLSProgramCache *RendererGL::getPLSProgramCache()
-{
-    if (!mPLSProgramCache)
-    {
-        mPLSProgramCache = new PLSProgramCache(mFunctions.get(), mNativeCaps);
-    }
-    return mPLSProgramCache;
-}
-
-MultiviewImplementationTypeGL RendererGL::getMultiviewImplementationType() const
-{
-    ensureCapsInitialized();
-    return mMultiviewImplementationType;
 }
 
 void RendererGL::initializeFrontendFeatures(angle::FrontendFeatures *features) const

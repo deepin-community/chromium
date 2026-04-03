@@ -23,7 +23,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "device/bluetooth/bluetooth_common.h"
@@ -94,7 +93,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused. This enum should be kept in sync
   // with the BluetoothDeviceConnectErrorCode enum in
-  // src/tools/metrics/histograms/enums.xml.
+  // src/tools/metrics/histograms/metadata/bluetooth/enums.xml.
   enum ConnectErrorCode {
     ERROR_AUTH_CANCELED = 0,
     ERROR_AUTH_FAILED = 1,
@@ -110,6 +109,13 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
     ERROR_DEVICE_UNCONNECTED = 11,
     ERROR_DOES_NOT_EXIST = 12,
     ERROR_INVALID_ARGS = 13,
+    ERROR_NON_AUTH_TIMEOUT = 14,
+    ERROR_NO_MEMORY = 15,
+    ERROR_JNI_ENVIRONMENT = 16,
+    ERROR_JNI_THREAD_ATTACH = 17,
+    ERROR_WAKELOCK = 18,
+    ERROR_UNEXPECTED_STATE = 19,
+    ERROR_SOCKET = 20,
     NUM_CONNECT_ERROR_CODES,  // Keep as last enum.
   };
 
@@ -146,7 +152,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
     BatteryInfo(BatteryInfo&&);
     BatteryInfo& operator=(BatteryInfo&&);
     ~BatteryInfo();
-    bool operator==(const BatteryInfo& other);
+    bool operator==(const BatteryInfo& other) const;
   };
 
   typedef std::vector<BluetoothUUID> UUIDList;
@@ -263,7 +269,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
   // and metrics logging,
   virtual uint32_t GetBluetoothClass() const = 0;
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   // Returns the transport type of the device. Some devices only support one
   // of BR/EDR or LE, and some support both.
   virtual BluetoothTransport GetType() const = 0;
@@ -403,7 +409,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
   // if a device stops advertising manufacturer data for a Manufacturer Id, this
   // function will still return the cached value for that Id.
   //
-  // TODO(crbug.com/661814) Support this on platforms that don't use BlueZ.
+  // TODO(crbug.com/41284350) Support this on platforms that don't use BlueZ.
   // Only BlueZ supports this now. This method returns an empty map on platforms
   // that don't use BlueZ.
   const ManufacturerDataMap& GetManufacturerData() const;
@@ -623,6 +629,10 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
       GattConnectionCallback callback,
       std::optional<BluetoothUUID> service_uuid = std::nullopt);
 
+  // Disconnects GATT connection on platforms that maintain a specific GATT
+  // connection.
+  virtual void DisconnectGatt() = 0;
+
   // Set the gatt services discovery complete flag for this device.
   virtual void SetGattServicesDiscoveryComplete(bool complete);
 
@@ -646,6 +656,14 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
   // Returns the time of the last call to UpdateTimestamp(), or base::Time() if
   // it hasn't been called yet.
   virtual base::Time GetLastUpdateTime() const;
+
+  // Update last_update_time_ so that the device appears as expired.
+  void SetAsExpiredForTesting();
+
+#if BUILDFLAG(IS_APPLE)
+  // Returns true if this device is a Low Energy device.
+  virtual bool IsLowEnergyDevice() = 0;
+#endif  // BUILDFLAG(IS_APPLE)
 
   // Called by BluetoothAdapter when a new Advertisement is seen for this
   // device. This replaces previously seen Advertisement Data. The order of
@@ -715,8 +733,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
   FRIEND_TEST_ALL_PREFIXES(BluetoothTest,
                            BluetoothGattConnection_DisconnectGatt_Cleanup);
   FRIEND_TEST_ALL_PREFIXES(BluetoothTest, GetName_NullName);
-  FRIEND_TEST_ALL_PREFIXES(BluetoothTest, RemoveOutdatedDevices);
-  FRIEND_TEST_ALL_PREFIXES(BluetoothTest, RemoveOutdatedDeviceGattConnect);
 
   FRIEND_TEST_ALL_PREFIXES(
       BluetoothTestWinrt,
@@ -777,10 +793,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
   // be called if the subclass sets |supports_service_specific_discovery_|.
   virtual void UpgradeToFullDiscovery();
 
-  // Disconnects GATT connection on platforms that maintain a specific GATT
-  // connection.
-  virtual void DisconnectGatt() = 0;
-
   // Returns a |BluetoothGattConnection| object that represents a reference to a
   // GATT connection to this device.
   virtual std::unique_ptr<BluetoothGattConnection>
@@ -801,9 +813,6 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothDevice {
   // at creation & deletion.
   void AddGattConnection(BluetoothGattConnection*);
   void RemoveGattConnection(BluetoothGattConnection*);
-
-  // Update last_update_time_ so that the device appears as expired.
-  void SetAsExpiredForTesting();
 
   // Raw pointer to adapter owning this device object. Subclasses use platform
   // specific pointers via adapter_.

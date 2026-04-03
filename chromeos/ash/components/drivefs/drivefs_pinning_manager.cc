@@ -10,6 +10,7 @@
 #include <string_view>
 #include <type_traits>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
@@ -279,7 +280,7 @@ ostream& operator<<(ostream& out, HumanReadableSize size) {
   const char* unit = "KMGT";
   while (d >= 1024 && *unit != '\0') {
     d /= 1024;
-    unit++;
+    UNSAFE_TODO(unit++);
   }
 
   return out << " (" << std::setprecision(4) << d << " " << *unit << ")";
@@ -327,7 +328,7 @@ bool Progress::IsError() const {
       return false;
   }
 
-  NOTREACHED_NORETURN() << "Unexpected Stage " << Quote(stage);
+  NOTREACHED() << "Unexpected Stage " << Quote(stage);
 }
 
 bool InProgress(const Stage stage) {
@@ -348,7 +349,7 @@ bool InProgress(const Stage stage) {
       return false;
   }
 
-  NOTREACHED_NORETURN() << "Unexpected Stage " << Quote(stage);
+  NOTREACHED() << "Unexpected Stage " << Quote(stage);
 }
 
 bool IsPaused(const Stage stage) {
@@ -369,7 +370,7 @@ bool IsPaused(const Stage stage) {
       return false;
   }
 
-  NOTREACHED_NORETURN() << "Unexpected Stage " << Quote(stage);
+  NOTREACHED() << "Unexpected Stage " << Quote(stage);
 }
 
 bool IsPausedOrInProgress(const Stage stage) {
@@ -390,7 +391,7 @@ bool IsPausedOrInProgress(const Stage stage) {
       return false;
   }
 
-  NOTREACHED_NORETURN() << "Unexpected Stage " << Quote(stage);
+  NOTREACHED() << "Unexpected Stage " << Quote(stage);
 }
 
 bool IsSuccessfulDocsOfflineEnablement(DocsOfflineEnableStatus status) {
@@ -903,8 +904,7 @@ void PinningManager::OnSearchResult(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(progress_.stage, Stage::kListingFiles);
 
-  if (error != drive::FILE_ERROR_OK &&
-      error != drive::FILE_ERROR_OK_WITH_MORE_RESULTS) {
+  if (!drive::IsFileErrorOk(error)) {
     LOG(ERROR) << "Cannot visit " << dir_id << " " << Quote(dir_path) << ": "
                << error;
     switch (error) {
@@ -1183,9 +1183,6 @@ void PinningManager::StartPinning() {
         progress_.bytes_to_pin >> 20);
     is_first_sync_ = false;
   }
-
-  base::UmaHistogramSparse("FileBrowser.GoogleDrive.BulkPinning.QueueSize",
-                           queue_size_);
 
   timer_ = base::ElapsedTimer();
   progress_.stage = Stage::kSyncing;

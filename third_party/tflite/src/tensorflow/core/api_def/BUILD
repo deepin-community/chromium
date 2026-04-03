@@ -7,19 +7,19 @@
 #   :java_api_def
 
 load(
+    "@local_config_tensorrt//:build_defs.bzl",
+    "if_tensorrt",
+)
+load(
+    "@xla//xla/tsl/mkl:build_defs.bzl",
+    "if_mkl",
+)
+load(
     "//tensorflow:tensorflow.bzl",
     "tf_cc_binary",
     "tf_cc_test",
 )
 load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
-load(
-    "//third_party/mkl:build_defs.bzl",
-    "if_mkl",
-)
-load(
-    "@local_config_tensorrt//:build_defs.bzl",
-    "if_tensorrt",
-)
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -65,6 +65,7 @@ cc_library(
         "//tensorflow/core:op_gen_lib",
         "//tensorflow/core:ops",
         "//tensorflow/core:protos_all_cc",
+        "@com_google_absl//absl/strings:str_format",
     ],
 )
 

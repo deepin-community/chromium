@@ -12,39 +12,24 @@ import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import '//resources/cr_elements/cr_search_field/cr_search_field.js';
 import '//resources/cr_elements/icons.html.js';
 import '//resources/cr_elements/cr_shared_style.css.js';
-import '//resources/polymer/v3_0/paper-spinner/paper-spinner-lite.js';
 import '../settings_shared.css.js';
 import '../site_favicon.js';
 
 import type {CrSearchFieldElement} from '//resources/cr_elements/cr_search_field/cr_search_field.js';
-import type {FindShortcutMixinInterface} from '//resources/cr_elements/find_shortcut_mixin.js';
 import {FindShortcutMixin} from '//resources/cr_elements/find_shortcut_mixin.js';
-import type {I18nMixinInterface} from '//resources/cr_elements/i18n_mixin.js';
 import {I18nMixin} from '//resources/cr_elements/i18n_mixin.js';
 import {assert} from '//resources/js/assert.js';
 import {focusWithoutInk} from '//resources/js/focus_without_ink.js';
 import {listenOnce} from '//resources/js/util.js';
-import {IronResizableBehavior} from '//resources/polymer/v3_0/iron-resizable-behavior/iron-resizable-behavior.js';
-import {afterNextRender, mixinBehaviors, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {afterNextRender, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 
 import {loadTimeData} from '../i18n_setup.js';
-import type {Route, RouteObserverMixinInterface} from '../router.js';
+import type {Route} from '../router.js';
 import {RouteObserverMixin, Router} from '../router.js';
 
 import {getTemplate} from './settings_subpage.html.js';
 
-
-const SETTING_ID_URL_PARAM_NAME: string = 'settingId';
-
-/**
- * Retrieves the setting ID saved in the URL's query parameter. Returns null if
- * setting ID is unavailable.
- */
-function getSettingIdParameter(): string|null {
-  return Router.getInstance().getQueryParameters().get(
-      SETTING_ID_URL_PARAM_NAME);
-}
 
 export interface SettingsSubpageElement {
   $: {
@@ -53,16 +38,15 @@ export interface SettingsSubpageElement {
 }
 
 const SettingsSubpageElementBase =
-    mixinBehaviors(
-        [IronResizableBehavior],
-        RouteObserverMixin(FindShortcutMixin(I18nMixin(PolymerElement)))) as {
-      new (): PolymerElement & FindShortcutMixinInterface & I18nMixinInterface &
-          RouteObserverMixinInterface,
-    };
+    RouteObserverMixin(FindShortcutMixin(I18nMixin(PolymerElement)));
 
 export class SettingsSubpageElement extends SettingsSubpageElementBase {
   static get is() {
     return 'settings-subpage';
+  }
+
+  static get template() {
+    return getTemplate();
   }
 
   static get properties() {
@@ -80,43 +64,13 @@ export class SettingsSubpageElement extends SettingsSubpageElementBase {
       /** Setting a |searchLabel| will enable search. */
       searchLabel: String,
 
+      /** Setting a |searchIcon| will override the default search icon. */
+      searchIcon: String,
+
       searchTerm: {
         type: String,
         notify: true,
         value: '',
-      },
-
-      /** If true shows an active spinner at the end of the subpage header. */
-      showSpinner: {
-        type: Boolean,
-        value: false,
-      },
-
-      /**
-       * Title (i.e., tooltip) to be displayed on the spinner. If |showSpinner|
-       * is false, this field has no effect.
-       */
-      spinnerTitle: {
-        type: String,
-        value: '',
-      },
-
-      /**
-       * Whether we should hide the "close" button to get to the previous page.
-       */
-      hideCloseButton: {
-        type: Boolean,
-        value: false,
-      },
-
-      /**
-       * Indicates which element triggers this subpage. Used by the searching
-       * algorithm to show search bubbles. It is |null| for subpages that are
-       * skipped during searching.
-       */
-      associatedControl: {
-        type: Object,
-        value: null,
       },
 
       /**
@@ -135,18 +89,15 @@ export class SettingsSubpageElement extends SettingsSubpageElementBase {
     };
   }
 
-  pageTitle: string;
-  titleIcon: string;
-  faviconSiteUrl: string;
-  learnMoreUrl: string;
-  searchLabel: string;
-  searchTerm: string;
-  showSpinner: boolean;
-  spinnerTitle: string;
-  hideCloseButton: boolean;
-  associatedControl: HTMLElement|null;
-  preserveSearchTerm: boolean;
-  private active_: boolean;
+  declare pageTitle: string;
+  declare titleIcon: string;
+  declare faviconSiteUrl: string;
+  declare learnMoreUrl: string;
+  declare searchLabel: string;
+  declare searchIcon: string;
+  declare searchTerm: string;
+  declare preserveSearchTerm: boolean;
+  declare private active_: boolean;
   private lastActiveValue_: boolean = false;
   private eventTracker_: EventTracker|null = null;
 
@@ -213,9 +164,6 @@ export class SettingsSubpageElement extends SettingsSubpageElementBase {
 
   /** Focuses the back button when page is loaded. */
   focusBackButton() {
-    if (this.hideCloseButton) {
-      return;
-    }
     afterNextRender(this, () => focusWithoutInk(this.$.closeButton));
   }
 
@@ -224,12 +172,11 @@ export class SettingsSubpageElement extends SettingsSubpageElementBase {
     if (this.active_ && this.searchLabel && this.preserveSearchTerm) {
       this.getSearchField_().then(() => this.restoreSearchInput_());
     }
-    if (!oldRoute && !getSettingIdParameter()) {
+    if (!oldRoute) {
       // If a settings subpage is opened directly (i.e the |oldRoute| is null,
-      // e.g via an OS settings search result that surfaces from the Chrome OS
-      // launcher, or linking from other places of Chrome UI), the back button
-      // should be focused since it's the first actionable element in the the
-      // subpage. An exception is when a setting is deep linked, focus that
+      // e.g via linking from other places of Chrome UI), the back button should
+      // be focused since it's the first actionable element in the the subpage.
+      // An exception is when a setting is deep linked, focus that
       // setting instead of back button.
       this.focusBackButton();
     }
@@ -311,11 +258,7 @@ export class SettingsSubpageElement extends SettingsSubpageElementBase {
   // Override FindShortcutMixin methods.
   override searchInputHasFocus() {
     const field = this.shadowRoot!.querySelector('cr-search-field')!;
-    return field.getSearchInput() === field.shadowRoot!.activeElement;
-  }
-
-  static get template() {
-    return getTemplate();
+    return field.getSearchInput() === field.shadowRoot.activeElement;
   }
 }
 

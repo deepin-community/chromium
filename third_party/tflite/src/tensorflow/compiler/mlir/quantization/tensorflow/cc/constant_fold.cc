@@ -16,8 +16,12 @@ limitations under the License.
 
 #include "absl/container/flat_hash_set.h"
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/IR/PatternMatch.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/quantization/common/lift_as_function_call.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
@@ -63,7 +67,7 @@ LogicalResult FoldOperation(OpBuilder& builder, Operation* op,
   results.clear();
   builder.setInsertionPointAfter(op);
   for (const auto& result_value : result_values) {
-    results.push_back(builder.create<TF::ConstOp>(op->getLoc(), result_value));
+    results.push_back(TF::ConstOp::create(builder, op->getLoc(), result_value));
   }
   return success();
 }
@@ -71,7 +75,7 @@ LogicalResult FoldOperation(OpBuilder& builder, Operation* op,
 bool IsOperationFoldable(Operation* op) {
   if (isa<TF::ConstOp>(op)) return true;
 
-  if (!op->getDialect()->getNamespace().equals("tf") || !TF::CanBeFolded(op)) {
+  if (op->getDialect()->getNamespace() != "tf" || !TF::CanBeFolded(op)) {
     return false;
   }
 

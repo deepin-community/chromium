@@ -9,6 +9,7 @@
 #include "cast/common/channel/message_util.h"
 #include "cast/common/channel/virtual_connection.h"
 #include "cast/common/public/cast_socket.h"
+#include "cast/common/public/receiver_info.h"
 #include "platform/base/tls_credentials.h"
 #include "platform/base/tls_listen_options.h"
 #include "util/json/json_helpers.h"
@@ -18,7 +19,7 @@
 namespace openscreen::cast {
 namespace {
 
-// Returns the first app ID for the given |app|, or the empty string if there is
+// Returns the first app ID for the given `app`, or the empty string if there is
 // none.
 std::string GetFirstAppId(ApplicationAgent::Application* app) {
   const auto& app_ids = app->GetAppIds();
@@ -29,16 +30,18 @@ std::string GetFirstAppId(ApplicationAgent::Application* app) {
 
 ApplicationAgent::ApplicationAgent(
     TaskRunner& task_runner,
-    DeviceAuthNamespaceHandler::CredentialsProvider* credentials_provider)
+    DeviceAuthNamespaceHandler::CredentialsProvider& credentials_provider,
+    const std::string& device_uuid)
     : task_runner_(task_runner),
       auth_handler_(credentials_provider),
-      connection_handler_(&router_, this),
-      message_port_(&router_) {
+      connection_handler_(router_, *this),
+      message_port_(router_),
+      device_id_(device_uuid) {
   router_.AddHandlerForLocalId(kPlatformReceiverId, this);
 }
 
 ApplicationAgent::~ApplicationAgent() {
-  OSP_DCHECK(task_runner_.IsRunningOnTaskRunner());
+  OSP_CHECK(task_runner_.IsRunningOnTaskRunner());
 
   idle_screen_app_ = nullptr;  // Prevent re-launching the idle screen app.
   SwitchToApplication({}, {}, nullptr);
@@ -48,17 +51,17 @@ ApplicationAgent::~ApplicationAgent() {
 
 void ApplicationAgent::RegisterApplication(Application* app,
                                            bool auto_launch_for_idle_screen) {
-  OSP_DCHECK(app);
+  OSP_CHECK(app);
 
   for (const std::string& app_id : app->GetAppIds()) {
-    OSP_DCHECK(!app_id.empty());
+    OSP_CHECK(!app_id.empty());
     const auto insert_result = registered_applications_.insert({app_id, app});
     // The insert must not fail (prior entry for same key).
-    OSP_DCHECK(insert_result.second);
+    OSP_CHECK(insert_result.second);
   }
 
   if (auto_launch_for_idle_screen) {
-    OSP_DCHECK(!idle_screen_app_);
+    OSP_CHECK(!idle_screen_app_);
     idle_screen_app_ = app;
     // Launch the idle screen app, if no app was running.
     if (!launched_app_) {
@@ -98,17 +101,18 @@ void ApplicationAgent::OnConnected(ReceiverSocketFactory* factory,
   router_.TakeSocket(this, std::move(socket));
 }
 
-void ApplicationAgent::OnError(ReceiverSocketFactory* factory, Error error) {
+void ApplicationAgent::OnError(ReceiverSocketFactory* factory,
+                               const Error& error) {
   OSP_LOG_ERROR << "Cast agent received socket factory error: " << error;
 }
 
 void ApplicationAgent::OnMessage(VirtualConnectionRouter* router,
                                  CastSocket* socket,
-                                 ::cast::channel::CastMessage message) {
+                                 proto::CastMessage message) {
   if (message_port_.GetSocketId() == ToCastSocketId(socket) &&
       !message_port_.source_id().empty() &&
       message_port_.source_id() == message.destination_id()) {
-    OSP_DCHECK(message_port_.source_id() != kPlatformReceiverId);
+    OSP_CHECK_NE(message_port_.source_id(), kPlatformReceiverId);
     message_port_.OnMessage(router, socket, std::move(message));
     return;
   }
@@ -135,6 +139,8 @@ void ApplicationAgent::OnMessage(VirtualConnectionRouter* router,
       response = HandlePing();
     }
   } else if (ns == kReceiverNamespace) {
+    const Json::Value& value =
+        request.value().get(kMessageKeyType, Json::Value::nullSingleton());
     if (request.value()[kMessageKeyRequestId].isNull()) {
       response = HandleInvalidCommand(request.value());
     } else if (HasType(request.value(), CastMessageType::kGetAppAvailability)) {
@@ -148,11 +154,36 @@ void ApplicationAgent::OnMessage(VirtualConnectionRouter* router,
     } else {
       response = HandleInvalidCommand(request.value());
     }
+  } else if (ns == kSetupNamespace) {
+    const Json::Value& value =
+        request.value().get(kMessageKeyType, Json::Value::nullSingleton());
+    if (HasType(request.value(), CastMessageType::kEurekaInfo)) {
+      response = HandleEurekaInfo(request.value());
+    } else {
+      response = HandleInvalidCommand(request.value());
+    }
+  } else if (ns == kDiscoveryNamespace) {
+    const Json::Value& value =
+        request.value().get(kMessageKeyType, Json::Value::nullSingleton());
+    if (HasType(request.value(), CastMessageType::kGetDeviceInfo)) {
+      response = HandleDeviceInfo(request.value());
+    } else {
+      response = HandleInvalidCommand(request.value());
+    }
   } else {
     // Ignore messages for all other namespaces.
   }
 
   if (!response.empty()) {
+    router_.Send(VirtualConnection{message.destination_id(),
+                                   message.source_id(), ToCastSocketId(socket)},
+                 MakeSimpleUTF8Message(ns, json::Stringify(response).value()));
+  }
+
+  // Send another RECEIVER_STATUS if LAUNCH succeeds.
+  if (HasType(request.value(), CastMessageType::kLaunch) &&
+      HasType(response, CastMessageType::kLaunchStatus)) {
+    response = HandleGetStatus(request.value());
     router_.Send(VirtualConnection{message.destination_id(),
                                    message.source_id(), ToCastSocketId(socket)},
                  MakeSimpleUTF8Message(ns, json::Stringify(response).value()));
@@ -179,7 +210,7 @@ void ApplicationAgent::OnClose(CastSocket* socket) {
   }
 }
 
-void ApplicationAgent::OnError(CastSocket* socket, Error error) {
+void ApplicationAgent::OnError(CastSocket* socket, const Error& error) {
   if (message_port_.GetSocketId() == ToCastSocketId(socket)) {
     OSP_LOG_ERROR << "Cast agent received socket error: " << error;
     GoIdle();
@@ -219,6 +250,21 @@ Json::Value ApplicationAgent::HandleGetStatus(const Json::Value& request) {
   return response;
 }
 
+Json::Value ApplicationAgent::HandleDeviceInfo(const Json::Value& request) {
+  Json::Value response;
+  PopulateDeviceInfo(&response);
+  response[kMessageKeyRequestId] = request[kMessageKeyRequestId];
+  return response;
+}
+
+Json::Value ApplicationAgent::HandleEurekaInfo(const Json::Value& request) {
+  Json::Value response;
+  PopulateEurekaInfo(&response);
+  response[kMessageKeyEurekaInfoRequestId] =
+      request[kMessageKeyEurekaInfoRequestId];
+  return response;
+}
+
 Json::Value ApplicationAgent::HandleLaunch(const Json::Value& request,
                                            CastSocket* socket) {
   const Json::Value& app_id = request[kMessageKeyAppId];
@@ -229,19 +275,19 @@ Json::Value ApplicationAgent::HandleLaunch(const Json::Value& request,
   } else {
     error = Error(Error::Code::kParameterInvalid, kMessageValueBadParameter);
   }
+  Json::Value response;
   if (!error.ok()) {
-    Json::Value response;
     response[kMessageKeyRequestId] = request[kMessageKeyRequestId];
     response[kMessageKeyType] =
         CastMessageTypeToString(CastMessageType::kLaunchError);
     response[kMessageKeyReason] = error.message();
-    return response;
+  } else {
+    response[kMessageKeyType] =
+        CastMessageTypeToString(CastMessageType::kLaunchStatus);
+    response[kMessageKeyLaunchRequestId] = request[kMessageKeyRequestId];
+    response[kMessageKeyStatus] = kMessageValueUserAllowed;
   }
-
-  // Note: No reply is sent. Instead, the requestor will get a RECEIVER_STATUS
-  // broadcast message from SwitchToApplication(), which is how it will see that
-  // the launch succeeded.
-  return {};
+  return response;
 }
 
 Json::Value ApplicationAgent::HandleStop(const Json::Value& request) {
@@ -349,7 +395,7 @@ void ApplicationAgent::PopulateReceiverStatus(Json::Value* out) {
   if (launched_app_) {
     Json::Value& details = status[kMessageKeyApplications][0];
     // If the Application can send/receive messages, the destination for such
-    // messages is provided here, in |transportId|. However, the other end must
+    // messages is provided here, in `transportId`. However, the other end must
     // first set up the virtual connection by issuing a CONNECT request.
     // Otherwise, messages will not get routed to the Application by the
     // VirtualConnectionRouter.
@@ -389,6 +435,45 @@ void ApplicationAgent::BroadcastReceiverStatus() {
       kPlatformReceiverId,
       MakeSimpleUTF8Message(kReceiverNamespace,
                             json::Stringify(message).value()));
+}
+
+void ApplicationAgent::SetReceiverInfo(ReceiverInfo receiver_info) {
+  receiver_info_ = receiver_info;
+}
+
+void ApplicationAgent::PopulateDeviceInfo(Json::Value* out) {
+  Json::Value& message = *out;
+
+  message[kMessageKeyControlNotifications] = 1;
+  message[kMessageKeyDeviceCapabilities] = kDefaultDeviceCapabilities;
+  message[kMessageKeyDeviceId] = receiver_info_.GetInstanceId();
+  message[kMessageKeyDeviceModel] = receiver_info_.model_name;
+  message[kMessageKeyFriendlyName] = receiver_info_.friendly_name;
+  message[kMessageKeyType] =
+      CastMessageTypeToString(CastMessageType::kGetDeviceInfo);
+}
+
+void ApplicationAgent::PopulateEurekaInfo(Json::Value* out) {
+  Json::Value& message = *out;
+
+  Json::Value& data = message[kMessageKeyData];
+  data[kMessageKeyVersion] = 12;
+  data[kMessageKeyName] = receiver_info_.friendly_name;
+
+  Json::Value& device_info = data[kMessageKeyDeviceInfo];
+  device_info[kMessageKeyManufacturer] = "google";
+  device_info[kMessageKeyProductName] = receiver_info_.model_name;
+  device_info[kMessageKeySsdpUdn] = receiver_info_.GetInstanceId();
+
+  Json::Value& build_info = data[kMessageKeyBuildInfo];
+  build_info[kMessageKeyBuildType] = 2;
+  build_info[kMessageKeyCastBuildRevision] = "1.0";
+  build_info[kMessageKeySystemBuildNumber] = "BUILD_NUMBER";
+
+  message[kMessageKeyResponseCode] = 200;
+  message[kMessageKeyResponseString] = "OK";
+  message[kMessageKeyType] =
+      CastMessageTypeToString(CastMessageType::kEurekaInfo);
 }
 
 ApplicationAgent::Application::~Application() = default;

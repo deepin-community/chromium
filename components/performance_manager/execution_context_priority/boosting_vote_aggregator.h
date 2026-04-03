@@ -8,6 +8,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/task/task_traits.h"
@@ -87,15 +88,16 @@ class BoostingVoteAggregator : public VoteObserver {
  protected:
   friend class BoostingVote;
 
-  // We currently require that base::TaskPriority be zero-based, and
+  // We currently require that base::Process::Priority be zero-based, and
   // consecutive. These static asserts ensure that we revisit this code if the
-  // base::TaskPriority enum ever changes.
-  static_assert(static_cast<int>(base::TaskPriority::LOWEST) == 0,
+  // base::Process::Priority enum ever changes.
+  static_assert(static_cast<int>(base::Process::Priority::kMinValue) == 0,
                 "expect 0-based priorities");
-  static_assert(static_cast<int>(base::TaskPriority::HIGHEST) == 2,
+  static_assert(static_cast<int>(base::Process::Priority::kMaxValue) == 2,
                 "expect 3 priority levels");
 
-  using NodePriorityMap = std::map<const ExecutionContext*, base::TaskPriority>;
+  using NodePriorityMap =
+      std::map<const ExecutionContext*, base::Process::Priority>;
 
   // Small helper class used to endow both edges and nodes with "active" bits
   // for each priority layer.
@@ -178,7 +180,7 @@ class BoostingVoteAggregator : public VoteObserver {
 
     // Returns the effective priority of this node based on the highest of the
     // values in |supporting_node_count_|.
-    base::TaskPriority GetEffectivePriorityLevel() const;
+    base::Process::Priority GetEffectivePriorityLevel() const;
 
     // For keeping track of the number of edges in which this node is involved.
     void IncrementEdgeCount();
@@ -249,16 +251,12 @@ class BoostingVoteAggregator : public VoteObserver {
         : src_(boosting_vote->input_execution_context()),
           dst_(boosting_vote->output_execution_context()) {}
     Edge(const Edge&) = default;
-    ~Edge() {}
+    ~Edge() = default;
 
     Edge& operator=(const Edge&) = default;
     Edge& operator=(Edge&&) = delete;
 
-    bool operator==(const Edge& rhs) const {
-      return std::tie(src_, dst_) == std::tie(rhs.src_, rhs.dst_);
-    }
-
-    bool operator!=(const Edge& rhs) const { return !(*this == rhs); }
+    friend bool operator==(const Edge&, const Edge&) = default;
 
     // Forward edges sort by (src, dst), while reverse edges sort by (dst, src).
     bool operator<(const Edge& rhs) const {

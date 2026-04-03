@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_WEBUI_SIDE_PANEL_CUSTOMIZE_CHROME_WALLPAPER_SEARCH_WALLPAPER_SEARCH_HANDLER_H_
 
 #include <optional>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -21,7 +22,7 @@
 #include "chrome/browser/search/background/wallpaper_search/wallpaper_search_background_manager_observer.h"
 #include "chrome/browser/search/background/wallpaper_search/wallpaper_search_data.h"
 #include "chrome/browser/ui/webui/side_panel/customize_chrome/wallpaper_search/wallpaper_search.mojom.h"
-#include "components/optimization_guide/core/optimization_guide_model_executor.h"
+#include "components/optimization_guide/core/model_execution/remote_model_executor.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -31,6 +32,7 @@
 
 class Profile;
 class WallpaperSearchBackgroundManager;
+class WallpaperSearchStringMap;
 
 namespace data_decoder {
 class DataDecoder;
@@ -69,7 +71,8 @@ class WallpaperSearchHandler
       Profile* profile,
       image_fetcher::ImageDecoder* image_decoder,
       WallpaperSearchBackgroundManager* wallpaper_search_background_manager,
-      int64_t session_id);
+      int64_t session_id,
+      WallpaperSearchStringMap* string_map);
 
   WallpaperSearchHandler(const WallpaperSearchHandler&) = delete;
   WallpaperSearchHandler& operator=(const WallpaperSearchHandler&) = delete;
@@ -115,26 +118,27 @@ class WallpaperSearchHandler
   void DecodeHistoryImage(image_fetcher::ImageDecodedCallback callback,
                           std::string image);
   void OnDescriptorsRetrieved(GetDescriptorsCallback callback,
-                              std::unique_ptr<std::string> response_body);
+                              std::optional<std::string> response_body);
   void OnDescriptorsJsonParsed(GetDescriptorsCallback callback,
                                data_decoder::DataDecoder::ValueOrError result);
   void OnHistoryDecoded(std::vector<HistoryEntry> history,
                         std::vector<std::pair<SkBitmap, base::Token>> results);
   void OnInspirationImageDownloaded(const base::Token& id,
                                     base::ElapsedTimer timer,
-                                    std::unique_ptr<std::string> response_body);
+                                    std::optional<std::string> response_body);
   void OnInspirationImageDecoded(const base::Token& id,
                                  base::ElapsedTimer timer,
                                  const gfx::Image& image);
   void OnInspirationsRetrieved(GetInspirationsCallback callback,
-                               std::unique_ptr<std::string> response_body);
+                               std::optional<std::string> response_body);
   void OnInspirationsJsonParsed(GetInspirationsCallback callback,
                                 data_decoder::DataDecoder::ValueOrError result);
   void OnWallpaperSearchResultsRetrieved(
       GetWallpaperSearchResultsCallback callback,
       base::ElapsedTimer request_timer,
       optimization_guide::OptimizationGuideModelExecutionResult result,
-      std::unique_ptr<optimization_guide::ModelQualityLogEntry> log_entry);
+      std::unique_ptr<optimization_guide::proto::WallpaperSearchLoggingData>
+          logging_data);
   void OnWallpaperSearchResultsDecoded(
       GetWallpaperSearchResultsCallback callback,
       base::ElapsedTimer processing_timer,
@@ -181,6 +185,7 @@ class WallpaperSearchHandler
                  SkBitmap>>
       wallpaper_search_results_;
   const int64_t session_id_;
+  const raw_ref<const WallpaperSearchStringMap> string_map_;
 #if BUILDFLAG(IS_CHROMEOS)
   bool skip_show_feedback_page_for_testing_ = false;
 #endif  // BUILDFLAG(IS_CHROMEOS)

@@ -55,8 +55,8 @@ ResourceHandle::ResourceHandle(const ResourceHandleProto& proto) {
   TF_CHECK_OK(FromProto(proto));
 }
 
-Status ResourceHandle::BuildResourceHandle(const ResourceHandleProto& proto,
-                                           ResourceHandle* out) {
+absl::Status ResourceHandle::BuildResourceHandle(
+    const ResourceHandleProto& proto, ResourceHandle* out) {
   if (out == nullptr)
     return errors::Internal(
         "BuildResourceHandle() was called with nullptr for the output");
@@ -78,7 +78,7 @@ void ResourceHandle::AsProto(ResourceHandleProto* proto) const {
   }
 }
 
-Status ResourceHandle::FromProto(const ResourceHandleProto& proto) {
+absl::Status ResourceHandle::FromProto(const ResourceHandleProto& proto) {
   set_device(proto.device());
   set_container(proto.container());
   set_name(proto.name());
@@ -88,7 +88,7 @@ Status ResourceHandle::FromProto(const ResourceHandleProto& proto) {
   for (const auto& dtype_and_shape : proto.dtypes_and_shapes()) {
     DataType dtype = dtype_and_shape.dtype();
     PartialTensorShape shape;
-    Status s = PartialTensorShape::BuildPartialTensorShape(
+    absl::Status s = PartialTensorShape::BuildPartialTensorShape(
         dtype_and_shape.shape(), &shape);
     if (!s.ok()) {
       return s;
@@ -96,21 +96,21 @@ Status ResourceHandle::FromProto(const ResourceHandleProto& proto) {
     dtypes_and_shapes.push_back(DtypeAndPartialTensorShape{dtype, shape});
   }
   dtypes_and_shapes_ = std::move(dtypes_and_shapes);
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-string ResourceHandle::SerializeAsString() const {
+std::string ResourceHandle::SerializeAsString() const {
   ResourceHandleProto proto;
   AsProto(&proto);
   return proto.SerializeAsString();
 }
 
-bool ResourceHandle::ParseFromString(const string& s) {
+bool ResourceHandle::ParseFromString(const std::string& s) {
   ResourceHandleProto proto;
   return proto.ParseFromString(s) && FromProto(proto).ok();
 }
 
-string ResourceHandle::DebugString() const {
+std::string ResourceHandle::DebugString() const {
   return absl::StrFormat(
       "device: %s container: %s name: %s hash_code: 0x%X maybe_type_name %s, "
       "dtype and shapes : %s",
@@ -118,7 +118,7 @@ string ResourceHandle::DebugString() const {
       port::Demangle(maybe_type_name()),
       DtypeAndShapesToString(dtypes_and_shapes()));
 }
-string ResourceHandle::SummarizeValue() const {
+std::string ResourceHandle::SummarizeValue() const {
   return absl::StrFormat(
       "ResourceHandle(name=\"%s\", device=\"%s\", container=\"%s\", "
       "type=\"%s\", dtype and shapes : \"%s\")",
@@ -127,7 +127,7 @@ string ResourceHandle::SummarizeValue() const {
 }
 
 ResourceHandle ResourceHandle::MakeRefCountingHandle(
-    ResourceBase* resource, const string& device_name,
+    ResourceBase* resource, const std::string& device_name,
     const TypeIndex& type_index,
     const std::vector<DtypeAndPartialTensorShape>& dtypes_and_shapes,
     const absl::optional<ManagedStackTrace>& definition_stack_trace) {
@@ -147,7 +147,7 @@ ResourceHandle ResourceHandle::MakeRefCountingHandle(
   return result;
 }
 
-Status ResourceHandle::ValidateType(const TypeIndex& type_index) const {
+absl::Status ResourceHandle::ValidateType(const TypeIndex& type_index) const {
   if (type_index.hash_code() != hash_code()) {
     return errors::InvalidArgument(
         "Trying to access a handle's resource using the wrong type. ",
@@ -157,14 +157,14 @@ Status ResourceHandle::ValidateType(const TypeIndex& type_index) const {
         port::Demangle(type_index.name()), "' (hash code ",
         type_index.hash_code(), ")");
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 std::atomic<int64_t> ResourceHandle::current_id_;
 
 int64_t ResourceHandle::GenerateUniqueId() { return current_id_.fetch_add(1); }
 
-string ProtoDebugString(const ResourceHandle& handle) {
+std::string ProtoDebugString(const ResourceHandle& handle) {
   return handle.DebugString();
 }
 
@@ -180,12 +180,13 @@ void EncodeResourceHandleList(const ResourceHandle* p, int64_t n,
 
 bool DecodeResourceHandleList(std::unique_ptr<port::StringListDecoder> d,
                               ResourceHandle* ps, int64_t n) {
-  std::vector<uint32> sizes(n);
+  std::vector<uint32_t> sizes(n);
   if (!d->ReadSizes(&sizes)) return false;
 
   ResourceHandleProto proto;
   for (int i = 0; i < n; ++i) {
-    if (!proto.ParseFromArray(d->Data(sizes[i]), sizes[i])) {
+    if (!proto.ParseFromString(
+            absl::string_view(d->Data(sizes[i]), sizes[i]))) {
       return false;
     }
     if (!ps[i].FromProto(proto).ok()) {

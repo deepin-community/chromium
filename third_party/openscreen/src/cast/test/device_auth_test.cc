@@ -19,16 +19,15 @@
 #include "cast/sender/channel/message_util.h"
 #include "gtest/gtest.h"
 #include "platform/test/paths.h"
-#include "testing/util/read_file.h"
+#include "util/read_file.h"
 
 namespace openscreen::cast {
 namespace {
 
-using ::cast::channel::CastMessage;
-using ::cast::channel::DeviceAuthMessage;
+using proto::CastMessage;
+using proto::DeviceAuthMessage;
 
 using ::testing::_;
-using ::testing::Invoke;
 
 const std::string& GetSpecificTestDataPath() {
   static std::string data_path = GetTestDataPath() + "cast/receiver/channel/";
@@ -56,15 +55,15 @@ class DeviceAuthTest : public ::testing::Test {
         data_path_ + "device_chain.pem", data_path_ + "device_tls.pem");
     creds_.device_creds.serialized_crl = std::move(serialized_crl);
 
-    // Send an auth challenge.  |auth_handler_| will automatically respond
-    // via |router_| and we will catch the result in |challenge_reply|.
+    // Send an auth challenge.  `auth_handler_` will automatically respond
+    // via `router_` and we will catch the result in `challenge_reply`.
     AuthContext auth_context = AuthContext::Create();
     CastMessage auth_challenge = CreateAuthChallengeMessage(auth_context);
     if (record_this_test) {
       std::string output;
       DeviceAuthMessage auth_message;
       ASSERT_EQ(auth_challenge.payload_type(),
-                ::cast::channel::CastMessage_PayloadType_BINARY);
+                proto::CastMessage_PayloadType_BINARY);
       ASSERT_TRUE(
           auth_message.ParseFromString(auth_challenge.payload_binary()));
       ASSERT_TRUE(auth_message.has_challenge());
@@ -80,10 +79,9 @@ class DeviceAuthTest : public ::testing::Test {
     }
     CastMessage challenge_reply;
     EXPECT_CALL(fake_cast_socket_pair_.mock_peer_client, OnMessage(_, _))
-        .WillOnce(
-            Invoke([&challenge_reply](CastSocket* socket, CastMessage message) {
-              challenge_reply = std::move(message);
-            }));
+        .WillOnce([&challenge_reply](CastSocket* socket, CastMessage message) {
+          challenge_reply = std::move(message);
+        });
     ASSERT_TRUE(
         fake_cast_socket_pair_.peer_socket->Send(std::move(auth_challenge))
             .ok());
@@ -92,7 +90,7 @@ class DeviceAuthTest : public ::testing::Test {
       std::string output;
       DeviceAuthMessage auth_message;
       ASSERT_EQ(challenge_reply.payload_type(),
-                ::cast::channel::CastMessage_PayloadType_BINARY);
+                proto::CastMessage_PayloadType_BINARY);
       ASSERT_TRUE(
           auth_message.ParseFromString(challenge_reply.payload_binary()));
       ASSERT_TRUE(auth_message.has_response());
@@ -127,7 +125,7 @@ class DeviceAuthTest : public ::testing::Test {
 
   StaticCredentialsProvider creds_;
   VirtualConnectionRouter router_;
-  DeviceAuthNamespaceHandler auth_handler_{&creds_};
+  DeviceAuthNamespaceHandler auth_handler_{creds_};
 };
 
 TEST_F(DeviceAuthTest, MANUAL_SerializeTestData) {

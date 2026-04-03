@@ -31,11 +31,12 @@
 #include "perfetto/ext/tracing/core/trace_packet.h"
 #include "perfetto/ext/tracing/core/tracing_service.h"
 #include "perfetto/protozero/scattered_heap_buffer.h"
+#include "perfetto/tracing/core/data_source_config.h"
 #include "perfetto/tracing/core/tracing_service_state.h"
 #include "src/base/test/test_task_runner.h"
 #include "src/base/test/utils.h"
 #include "src/traced/probes/ftrace/ftrace_controller.h"
-#include "src/traced/probes/ftrace/ftrace_procfs.h"
+#include "src/traced/probes/ftrace/tracefs.h"
 #include "test/gtest_and_gmock.h"
 #include "test/test_helper.h"
 
@@ -70,13 +71,13 @@ using ::testing::UnorderedElementsAreArray;
 class PerfettoFtraceIntegrationTest : public ::testing::Test {
  public:
   void SetUp() override {
-    ftrace_procfs_ = FtraceProcfs::CreateGuessingMountPoint();
+    tracefs_ = Tracefs::CreateGuessingMountPoint();
 
 // On android we do expect that tracefs is accessible, both in the case of
 // running as part of traced/probes system daemons and shell. On Linux this is
 // up to the system admin, don't hard fail.
 #if !PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
-    if (!ftrace_procfs_) {
+    if (!tracefs_) {
       PERFETTO_ELOG(
           "Cannot acces tracefs. On Linux you need to manually run `sudo chown "
           "-R $USER /sys/kernel/tracing` to enable these tests. Skipping");
@@ -85,12 +86,12 @@ class PerfettoFtraceIntegrationTest : public ::testing::Test {
       // Recent kernels set tracing_on=1 by default. On Android this is
       // disabled by initrc scripts. Be tolerant on Linux where we don't have
       // that and force disable ftrace.
-      ftrace_procfs_->SetTracingOn(false);
+      tracefs_->SetTracingOn(false);
     }
 #endif
   }
 
-  std::unique_ptr<FtraceProcfs> ftrace_procfs_;
+  std::unique_ptr<Tracefs> tracefs_;
 };
 
 }  // namespace
@@ -174,7 +175,7 @@ TEST_F(PerfettoFtraceIntegrationTest, TestFtraceFlush) {
   helper.StartTracing(trace_config);
 
   // Wait for traced_probes to start.
-  helper.WaitFor([&] { return ftrace_procfs_->GetTracingOn(); }, "ftrace");
+  helper.WaitFor([&] { return tracefs_->GetTracingOn(); }, "ftrace");
 
   // Do a first flush just to synchronize with the producer. The problem here
   // is that, on a Linux workstation, the producer can take several seconds just
@@ -183,7 +184,7 @@ TEST_F(PerfettoFtraceIntegrationTest, TestFtraceFlush) {
   helper.FlushAndWait(kDefaultTestTimeoutMs);
 
   const char kMarker[] = "just_one_event";
-  EXPECT_TRUE(ftrace_procfs_->WriteTraceMarker(kMarker));
+  EXPECT_TRUE(tracefs_->WriteTraceMarker(kMarker));
 
   // This is the real flush we are testing.
   helper.FlushAndWait(kDefaultTestTimeoutMs);
@@ -209,8 +210,7 @@ TEST_F(PerfettoFtraceIntegrationTest, TestFtraceFlush) {
 // 1. On cuttlefish (x86-kvm). It's too slow when running on GCE (b/171771440).
 //    We cannot change the length of the production code in
 //    CanReadKernelSymbolAddresses() to deal with it.
-// 2. On user (i.e. non-userdebug) builds. As that doesn't work there by design.
-// 3. On ARM builds, because they fail on our CI.
+// 2. On ARM builds, because they fail on our CI.
 #if (PERFETTO_BUILDFLAG(PERFETTO_ANDROID_BUILD) && defined(__i386__)) || \
     defined(__arm__)
 #define MAYBE_KernelAddressSymbolization DISABLED_KernelAddressSymbolization
@@ -219,14 +219,10 @@ TEST_F(PerfettoFtraceIntegrationTest, TestFtraceFlush) {
 #endif
 TEST_F(PerfettoFtraceIntegrationTest, MAYBE_KernelAddressSymbolization) {
   // On Android in-tree builds (TreeHugger): this test must always run to
-  // prevent selinux / property-related regressions. However it can run only on
-  // userdebug.
+  // prevent selinux / property-related regressions.
   // On standalone builds and Linux, this can be optionally skipped because
   // there it requires root to lower kptr_restrict.
-#if PERFETTO_BUILDFLAG(PERFETTO_ANDROID_BUILD)
-  if (!IsDebuggableBuild())
-    GTEST_SKIP();
-#else
+#if !PERFETTO_BUILDFLAG(PERFETTO_ANDROID_BUILD)
   if (geteuid() != 0)
     GTEST_SKIP();
 #endif

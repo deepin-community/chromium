@@ -11,18 +11,21 @@
 #include "base/functional/bind.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/task/thread_pool.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/mhtml_generation_params.h"
 #include "extensions/browser/extension_api_frame_id_map.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "url/origin.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using content::BrowserThread;
 using content::ChildProcessSecurityPolicy;
@@ -60,8 +63,7 @@ void ClearFileReferenceOnIOThread(
 
 static PageCaptureSaveAsMHTMLFunction::TestDelegate* test_delegate_ = nullptr;
 
-PageCaptureSaveAsMHTMLFunction::PageCaptureSaveAsMHTMLFunction() {
-}
+PageCaptureSaveAsMHTMLFunction::PageCaptureSaveAsMHTMLFunction() = default;
 
 PageCaptureSaveAsMHTMLFunction::~PageCaptureSaveAsMHTMLFunction() {
   if (mhtml_file_.get()) {
@@ -226,10 +228,12 @@ void PageCaptureSaveAsMHTMLFunction::ReturnSuccess(int file_size) {
     return;
   }
 
-  ChildProcessSecurityPolicy::GetInstance()->GrantReadFile(source_process_id(),
-                                                           mhtml_path_);
+  // TODO(crbug.com/379869738) Remove FromUnsafeValue.
+  ChildProcessSecurityPolicy::GetInstance()->GrantReadFile(
+      content::ChildProcessId::FromUnsafeValue(source_process_id()),
+      mhtml_path_);
 
-  base::Value::Dict response;
+  base::DictValue response;
   response.Set("mhtmlFilePath", mhtml_path_.AsUTF8Unsafe());
   response.Set("mhtmlFileLength", file_size);
   response.Set("requestId", request_uuid().AsLowercaseString());
@@ -240,7 +244,7 @@ void PageCaptureSaveAsMHTMLFunction::ReturnSuccess(int file_size) {
   // blob to remain alive, we have to stick around until a reference has
   // been obtained by the renderer. The response ack is the signal that the
   // renderer has it's reference, so we can release ours.
-  // TODO(crbug.com/1050887): Potential memory leak here.
+  // TODO(crbug.com/40673405): Potential memory leak here.
   AddRef();  // Balanced in either OnMessageReceived()
   AddResponseTarget();
 
@@ -248,12 +252,10 @@ void PageCaptureSaveAsMHTMLFunction::ReturnSuccess(int file_size) {
 }
 
 WebContents* PageCaptureSaveAsMHTMLFunction::GetWebContents() {
-  Browser* browser = nullptr;
   content::WebContents* web_contents = nullptr;
-
   if (!ExtensionTabUtil::GetTabById(params_->details.tab_id, browser_context(),
-                                    include_incognito_information(), &browser,
-                                    nullptr, &web_contents, nullptr)) {
+                                    include_incognito_information(),
+                                    &web_contents)) {
     return nullptr;
   }
   return web_contents;

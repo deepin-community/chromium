@@ -49,6 +49,7 @@ namespace internal {
     static void run(Index rows, Index cols, const EIGTYPE* _lhs, Index lhsStride, const EIGTYPE* _rhs,           \
                     Index rhsStride, EIGTYPE* res, Index resIncr, Index resStride, EIGTYPE alpha,                \
                     level3_blocking<EIGTYPE, EIGTYPE>& /*blocking*/) {                                           \
+      if (rows == 0 || cols == 0) return;                                                                        \
       EIGEN_ONLY_USED_FOR_DEBUG(resIncr);                                                                        \
       eigen_assert(resIncr == 1);                                                                                \
       char side = 'L', uplo = 'L';                                                                               \
@@ -91,6 +92,7 @@ namespace internal {
     static void run(Index rows, Index cols, const EIGTYPE* _lhs, Index lhsStride, const EIGTYPE* _rhs,             \
                     Index rhsStride, EIGTYPE* res, Index resIncr, Index resStride, EIGTYPE alpha,                  \
                     level3_blocking<EIGTYPE, EIGTYPE>& /*blocking*/) {                                             \
+      if (rows == 0 || cols == 0) return;                                                                          \
       EIGEN_ONLY_USED_FOR_DEBUG(resIncr);                                                                          \
       eigen_assert(resIncr == 1);                                                                                  \
       char side = 'L', uplo = 'L';                                                                                 \
@@ -164,6 +166,7 @@ EIGEN_BLAS_HEMM_L(scomplex, float, cf, chemm_)
     static void run(Index rows, Index cols, const EIGTYPE* _lhs, Index lhsStride, const EIGTYPE* _rhs,           \
                     Index rhsStride, EIGTYPE* res, Index resIncr, Index resStride, EIGTYPE alpha,                \
                     level3_blocking<EIGTYPE, EIGTYPE>& /*blocking*/) {                                           \
+      if (rows == 0 || cols == 0) return;                                                                        \
       EIGEN_ONLY_USED_FOR_DEBUG(resIncr);                                                                        \
       eigen_assert(resIncr == 1);                                                                                \
       char side = 'R', uplo = 'L';                                                                               \
@@ -267,6 +270,10 @@ EIGEN_BLAS_SYMM_R(float, float, f, ssymm_)
 EIGEN_BLAS_HEMM_R(dcomplex, double, cd, zhemm_)
 EIGEN_BLAS_HEMM_R(scomplex, float, cf, chemm_)
 #endif
+
+#undef EIGEN_BLAS_SYMM_L
+#undef EIGEN_BLAS_SYMM_R
+#undef EIGEN_BLAS_HEMM_R
 }  // end namespace internal
 
 }  // end namespace Eigen

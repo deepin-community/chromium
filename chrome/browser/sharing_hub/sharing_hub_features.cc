@@ -27,7 +27,7 @@ bool SharingHubDisabledByPolicy(content::BrowserContext* context) {
 
 // Whether screenshots-related features should be disabled by policy.
 // Currently used by desktop.
-// TODO(crbug.com/1261244): possibly apply to Android features.
+// TODO(crbug.com/40798792): possibly apply to Android features.
 bool ScreenshotsDisabledByPolicy(content::BrowserContext* context) {
   const PrefService* prefs = Profile::FromBrowserContext(context)->GetPrefs();
   return prefs->GetBoolean(prefs::kDisableScreenshots);
@@ -66,9 +66,7 @@ bool HasPageAction(content::BrowserContext* context, bool is_popup_mode) {
 #endif
 }
 
-BASE_FEATURE(kDesktopScreenshots,
-             "DesktopScreenshots",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kDesktopScreenshots, base::FEATURE_DISABLED_BY_DEFAULT);
 
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 void RegisterProfilePrefs(PrefRegistrySimple* registry) {

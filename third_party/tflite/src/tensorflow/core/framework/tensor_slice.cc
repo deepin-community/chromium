@@ -47,8 +47,8 @@ TensorSlice::TensorSlice(
   }
 }
 
-Status TensorSlice::BuildTensorSlice(const TensorSliceProto& proto,
-                                     TensorSlice* output) {
+absl::Status TensorSlice::BuildTensorSlice(const TensorSliceProto& proto,
+                                           TensorSlice* output) {
   output->Clear();
   output->starts_.reserve(proto.extent_size());
   output->lengths_.reserve(proto.extent_size());
@@ -72,23 +72,25 @@ Status TensorSlice::BuildTensorSlice(const TensorSliceProto& proto,
     output->lengths_.push_back(l);
   }
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status TensorSlice::Parse(const string& str, TensorSlice* slice) {
-  std::vector<string> items = str_util::Split(str, ':', str_util::SkipEmpty());
+absl::Status TensorSlice::Parse(const std::string& str, TensorSlice* slice) {
+  std::vector<std::string> items =
+      str_util::Split(str, ':', str_util::SkipEmpty());
   slice->starts_.reserve(items.size());
   slice->lengths_.reserve(items.size());
-  for (const string& x : items) {
+  for (const std::string& x : items) {
     int64_t s, l;
     if (x == "-") {
       // "everything"
       s = 0;
       l = kFullExtent;
     } else {
-      std::vector<string> sl = str_util::Split(x, ',', str_util::SkipEmpty());
-      if (sl.size() != 2 || !strings::safe_strto64(sl[0], &s) ||
-          !strings::safe_strto64(sl[1], &l)) {
+      std::vector<std::string> sl =
+          str_util::Split(x, ',', str_util::SkipEmpty());
+      if (sl.size() != 2 || !absl::SimpleAtoi(sl[0], &s) ||
+          !absl::SimpleAtoi(sl[1], &l)) {
         return errors::InvalidArgument(
             "Expected a pair of numbers or '-' "
             "but got '",
@@ -105,7 +107,7 @@ Status TensorSlice::Parse(const string& str, TensorSlice* slice) {
     slice->lengths_.push_back(l);
   }
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 void TensorSlice::Clear() {
@@ -152,8 +154,8 @@ void TensorSlice::AsProto(TensorSliceProto* proto) const {
   }
 }
 
-string TensorSlice::DebugString() const {
-  string buffer;
+std::string TensorSlice::DebugString() const {
+  std::string buffer;
   bool first = true;
   for (int d = 0; d < dims(); ++d) {
     if (!first) {
@@ -162,7 +164,7 @@ string TensorSlice::DebugString() const {
     if (IsFullAt(d)) {
       buffer.append("-");
     } else {
-      strings::StrAppend(&buffer, starts_[d], ",", lengths_[d]);
+      absl::StrAppend(&buffer, starts_[d], ",", lengths_[d]);
     }
     first = false;
   }
@@ -258,7 +260,7 @@ void TensorSlice::UpdateToCover(const TensorSlice& other) {
 
 // static
 bool TensorSlice::HasExtentLength(const TensorSliceProto::Extent& extent) {
-  return extent.has_length_case() == TensorSliceProto::Extent::kLength;
+  return extent.has_length();
 }
 
 // static
@@ -267,8 +269,8 @@ int64_t TensorSlice::GetExtentLength(const TensorSliceProto::Extent& extent) {
   return extent.length();
 }
 
-Status TensorSlice::SliceTensorShape(const TensorShape& shape,
-                                     TensorShape* result_shape) const {
+absl::Status TensorSlice::SliceTensorShape(const TensorShape& shape,
+                                           TensorShape* result_shape) const {
   result_shape->Clear();
   // Mismatching ranks: we can't apply the slice at all.
   if (shape.dims() != dims()) {
@@ -295,7 +297,7 @@ Status TensorSlice::SliceTensorShape(const TensorShape& shape,
     }
   }
   // If we are here, we have successfully applied the shape.
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 const int64_t TensorSlice::kFullExtent = -1;

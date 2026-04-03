@@ -26,7 +26,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "gmock/gmock.h"
-#include "gtest/gtest-spi.h"
 #include "src/tint/lang/wgsl/ast/binary_expression.h"
 #include "src/tint/lang/wgsl/ast/helper_test.h"
 
@@ -36,6 +35,7 @@ namespace tint::ast {
 namespace {
 
 using ForLoopStatementTest = TestHelper;
+using ForLoopStatementDeathTest = ForLoopStatementTest;
 
 TEST_F(ForLoopStatementTest, Creation) {
     auto* init = Decl(Var("i", ty.u32()));
@@ -73,51 +73,11 @@ TEST_F(ForLoopStatementTest, Creation_WithAttributes) {
     EXPECT_THAT(l->attributes, testing::ElementsAre(attr1, attr2));
 }
 
-TEST_F(ForLoopStatementTest, Assert_Null_Body) {
-    EXPECT_FATAL_FAILURE(
+TEST_F(ForLoopStatementDeathTest, Assert_Null_Body) {
+    EXPECT_DEATH_IF_SUPPORTED(
         {
             ProgramBuilder b;
             b.For(nullptr, nullptr, nullptr, nullptr);
-        },
-        "internal compiler error");
-}
-
-TEST_F(ForLoopStatementTest, Assert_DifferentGenerationID_Initializer) {
-    EXPECT_FATAL_FAILURE(
-        {
-            ProgramBuilder b1;
-            ProgramBuilder b2;
-            b1.For(b2.Block(), nullptr, nullptr, b1.Block());
-        },
-        "internal compiler error");
-}
-
-TEST_F(ForLoopStatementTest, Assert_DifferentGenerationID_Condition) {
-    EXPECT_FATAL_FAILURE(
-        {
-            ProgramBuilder b1;
-            ProgramBuilder b2;
-            b1.For(nullptr, b2.Expr(true), nullptr, b1.Block());
-        },
-        "internal compiler error");
-}
-
-TEST_F(ForLoopStatementTest, Assert_DifferentGenerationID_Continuing) {
-    EXPECT_FATAL_FAILURE(
-        {
-            ProgramBuilder b1;
-            ProgramBuilder b2;
-            b1.For(nullptr, nullptr, b2.Block(), b1.Block());
-        },
-        "internal compiler error");
-}
-
-TEST_F(ForLoopStatementTest, Assert_DifferentGenerationID_Body) {
-    EXPECT_FATAL_FAILURE(
-        {
-            ProgramBuilder b1;
-            ProgramBuilder b2;
-            b1.For(nullptr, nullptr, nullptr, b2.Block());
         },
         "internal compiler error");
 }

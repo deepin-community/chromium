@@ -73,9 +73,9 @@ class TopIconAnimationView : public views::View,
 
  private:
   // views::View overrides:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void Layout(PassKey) override;
-  void OnThemeChanged() override;
 
   // ui::ImplicitAnimationObserver overrides:
   void OnImplicitAnimationsCompleted() override;

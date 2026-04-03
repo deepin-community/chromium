@@ -9,9 +9,13 @@
 #include <string>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/singleton.h"
+#include "extensions/browser/disable_reason.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/manifest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 class SyncTest;
@@ -82,14 +86,25 @@ class SyncExtensionHelper {
   // Returns true if successful, false on failure.
   bool ExtensionNameToIndex(const std::string& name, int* index);
 
+  // Returns the extension ID of the extension with the given `name`.
+  extensions::ExtensionId GetExtensionId(const std::string& name) const;
+
  private:
   struct ExtensionState {
     enum EnabledState { DISABLED, PENDING, ENABLED };
 
+    ExtensionState(EnabledState state,
+                   const extensions::DisableReasonSet& reasons,
+                   bool incognito_enabled);
+    ExtensionState(ExtensionState&& other);
+    ExtensionState(const ExtensionState& other) = delete;
+    ExtensionState& operator=(const ExtensionState& other) = delete;
+    ~ExtensionState();
+
     bool operator==(const ExtensionState& other) const = default;
 
     EnabledState enabled_state = ENABLED;
-    int disable_reasons = 0;
+    extensions::DisableReasonSet disable_reasons;
     bool incognito_enabled = false;
   };
 
@@ -120,7 +135,6 @@ class SyncExtensionHelper {
       const std::string& name,
       extensions::Manifest::Type type);
 
-  std::string extension_name_prefix_;
   ProfileExtensionNameMap profile_extensions_;
   StringMap id_to_name_;
   TypeMap id_to_type_;

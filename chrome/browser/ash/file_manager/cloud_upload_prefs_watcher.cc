@@ -156,15 +156,21 @@ CloudUploadPrefsWatcherFactory* CloudUploadPrefsWatcherFactory::GetInstance() {
 }
 
 CloudUploadPrefsWatcherFactory::CloudUploadPrefsWatcherFactory()
-    : ProfileKeyedServiceFactory("CloudUploadPrefsWatcherFactory",
-                                 ProfileSelections::BuildForRegularProfile()) {}
+    : ProfileKeyedServiceFactory(
+          "CloudUploadPrefsWatcherFactory",
+          ProfileSelections::Builder()
+              .WithRegular(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOriginalOnly)
+              .Build()) {}
 
 CloudUploadPrefsWatcherFactory::~CloudUploadPrefsWatcherFactory() = default;
 
 std::unique_ptr<KeyedService>
 CloudUploadPrefsWatcherFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  if (!chromeos::features::IsUploadOfficeToCloudForEnterpriseEnabled()) {
+  if (!chromeos::features::IsUploadOfficeToCloudEnabled()) {
     return nullptr;
   }
   auto* profile = Profile::FromBrowserContext(context);

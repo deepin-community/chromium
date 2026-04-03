@@ -18,6 +18,7 @@
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "extensions/common/constants.h"  // nogncheck
@@ -27,28 +28,11 @@ namespace safe_browsing {
 
 namespace {
 
-constexpr char kFromCacheUmaSuffix[] = ".FromCache";
-constexpr char kFromNetworkUmaSuffix[] = ".FromNetwork";
-
 // Returns true if the URL is known to be safe. We also require that this URL
 // never redirects to a potentially unsafe URL, because the redirected URLs are
 // also skipped if this function returns true.
 bool KnownSafeUrl(const GURL& url) {
   return url.SchemeIs(content::kChromeUIScheme);
-}
-
-void LogTotalDelay3Metrics(base::TimeDelta total_delay) {
-  base::UmaHistogramTimes("SafeBrowsing.RendererThrottle.TotalDelay3",
-                          total_delay);
-}
-
-void LogTotalDelay2MetricsWithResponseType(bool is_response_from_cache,
-                                           base::TimeDelta total_delay) {
-  base::UmaHistogramTimes(
-      base::StrCat({"SafeBrowsing.RendererThrottle.TotalDelay2",
-                    is_response_from_cache ? kFromCacheUmaSuffix
-                                           : kFromNetworkUmaSuffix}),
-      total_delay);
 }
 
 }  // namespace
@@ -63,16 +47,18 @@ RendererURLLoaderThrottle::RendererURLLoaderThrottle(
 RendererURLLoaderThrottle::RendererURLLoaderThrottle(
     mojom::SafeBrowsing* safe_browsing,
     base::optional_ref<const blink::LocalFrameToken> local_frame_token,
-    mojom::ExtensionWebRequestReporter* extension_web_request_reporter)
+    mojo::PendingRemote<mojom::ExtensionWebRequestReporter>
+        extension_web_request_reporter)
     : safe_browsing_(safe_browsing),
       frame_token_(local_frame_token.CopyAsOptional()),
-      extension_web_request_reporter_(extension_web_request_reporter) {}
+      extension_web_request_reporter_(
+          std::move(extension_web_request_reporter)) {}
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 RendererURLLoaderThrottle::~RendererURLLoaderThrottle() {
   if (deferred_)
-    TRACE_EVENT_NESTABLE_ASYNC_END0("safe_browsing", "Deferred",
-                                    TRACE_ID_LOCAL(this));
+    TRACE_EVENT_END("safe_browsing",
+                    /* Deferred */ perfetto::Track::FromPointer(this));
 }
 
 void RendererURLLoaderThrottle::DetachFromCurrentSequence() {
@@ -83,12 +69,12 @@ void RendererURLLoaderThrottle::DetachFromCurrentSequence() {
   safe_browsing_ = nullptr;
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  // Create a new pipe to the ExtensionWebRequestReporter interface that can be
-  // bound to a different sequence.
-  extension_web_request_reporter_->Clone(
-      extension_web_request_reporter_pending_remote_
-          .InitWithNewPipeAndPassReceiver());
-  extension_web_request_reporter_ = nullptr;
+  // Pass the pipe to the ExtensionWebRequestReporter interface to be bound to
+  // a different sequence.
+  if (extension_web_request_reporter_) {
+    pending_extension_web_request_reporter_ =
+        extension_web_request_reporter_.Unbind();
+  }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 }
 
@@ -107,58 +93,12 @@ void RendererURLLoaderThrottle::WillStartRequest(
       "SafeBrowsing.RendererThrottle.RequestDestination", request->destination);
 
   if (KnownSafeUrl(request->url)) {
-    LogTotalDelay3Metrics(base::TimeDelta());
     return;
   }
 
-  // TODO(crbug.com/1486144): Remove request_destinations_to_skip together with
-  // kSafeBrowsingSkipSubresources.
-  static const base::NoDestructor<
-      std::unordered_set<network::mojom::RequestDestination>>
-      request_destinations_to_skip{{network::mojom::RequestDestination::kStyle,
-                                    network::mojom::RequestDestination::kImage,
-                                    network::mojom::RequestDestination::kFont}};
-  if (base::FeatureList::IsEnabled(kSafeBrowsingSkipSubresources) ||
-      (base::Contains(*request_destinations_to_skip, request->destination))) {
-    VLOG(2) << __func__ << " : Skipping: " << request->url << " : "
-            << request->destination;
-    DCHECK_NE(request->destination,
-              network::mojom::RequestDestination::kDocument);
-    LogTotalDelay3Metrics(base::TimeDelta());
-    base::UmaHistogramEnumeration(
-        "SafeBrowsing.RendererThrottle.RequestDestination.Skipped",
-        request->destination);
-    return;
-  }
-
-  base::UmaHistogramEnumeration(
-      "SafeBrowsing.RendererThrottle.RequestDestination.Checked",
-      request->destination);
-
-  if (safe_browsing_pending_remote_.is_valid()) {
-    // Bind the pipe created in DetachFromCurrentSequence to the current
-    // sequence.
-    safe_browsing_remote_.Bind(std::move(safe_browsing_pending_remote_));
-    safe_browsing_ = safe_browsing_remote_.get();
-  }
-
-  original_url_ = request->url;
-  pending_checks_++;
-  start_request_time_ = base::TimeTicks::Now();
-  is_start_request_called_ = true;
-  // Use a weak pointer to self because |safe_browsing_| may not be owned by
-  // this object.
-  safe_browsing_->CreateCheckerAndCheck(
-      frame_token_, url_checker_.BindNewPipeAndPassReceiver(), request->url,
-      request->method, request->headers, request->load_flags,
-      request->destination, request->has_user_gesture,
-      request->originated_from_service_worker,
-      base::BindOnce(&RendererURLLoaderThrottle::OnCheckUrlResult,
-                     weak_factory_.GetWeakPtr()));
-  safe_browsing_ = nullptr;
-
-  url_checker_.set_disconnect_handler(base::BindOnce(
-      &RendererURLLoaderThrottle::OnMojoDisconnect, base::Unretained(this)));
+  VLOG(2) << __func__ << " : Skipping: " << request->url << " : "
+          << request->destination;
+  CHECK_NE(request->destination, network::mojom::RequestDestination::kDocument);
 }
 
 void RendererURLLoaderThrottle::WillRedirectRequest(
@@ -174,7 +114,6 @@ void RendererURLLoaderThrottle::WillRedirectRequest(
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   BindExtensionWebRequestReporterPipeIfDetached();
-
   // Send redirected request data to the browser if request originated from an
   // extension and the redirected url is HTTP/HTTPS scheme only.
   if (!origin_extension_id_.empty() &&
@@ -212,25 +151,6 @@ void RendererURLLoaderThrottle::WillProcessResponse(
   base::UmaHistogramBoolean(
       "SafeBrowsing.RendererThrottle.IsCheckCompletedOnProcessResponse",
       check_completed);
-  is_response_from_cache_ =
-      response_head->was_fetched_via_cache && !response_head->network_accessed;
-  if (is_start_request_called_) {
-    base::TimeTicks process_time = base::TimeTicks::Now();
-    base::UmaHistogramTimes(
-        "SafeBrowsing.RendererThrottle.IntervalBetweenStartAndProcess",
-        process_time - start_request_time_);
-    base::UmaHistogramTimes(
-        base::StrCat(
-            {"SafeBrowsing.RendererThrottle.IntervalBetweenStartAndProcess",
-             is_response_from_cache_ ? kFromCacheUmaSuffix
-                                     : kFromNetworkUmaSuffix}),
-        process_time - start_request_time_);
-    if (check_completed) {
-      LogTotalDelay2MetricsWithResponseType(is_response_from_cache_,
-                                            base::TimeDelta());
-    }
-    is_start_request_called_ = false;
-  }
 
   if (check_completed) {
     return;
@@ -238,24 +158,17 @@ void RendererURLLoaderThrottle::WillProcessResponse(
 
   DCHECK(!deferred_);
   deferred_ = true;
-  defer_start_time_ = base::TimeTicks::Now();
   *defer = true;
-  TRACE_EVENT_NESTABLE_ASYNC_BEGIN1("safe_browsing", "Deferred",
-                                    TRACE_ID_LOCAL(this), "original_url",
-                                    original_url_.spec());
+  TRACE_EVENT_BEGIN("safe_browsing", "Deferred",
+                    perfetto::Track::FromPointer(this), "original_url",
+                    original_url_.spec());
 }
 
 const char* RendererURLLoaderThrottle::NameForLoggingWillProcessResponse() {
   return "SafeBrowsingRendererThrottle";
 }
 
-void RendererURLLoaderThrottle::OnCompleteCheck(bool proceed,
-                                                bool showed_interstitial) {
-  OnCompleteCheckInternal(proceed, showed_interstitial);
-}
-
 void RendererURLLoaderThrottle::OnCheckUrlResult(
-    mojo::PendingReceiver<mojom::UrlCheckNotifier> slow_check_notifier,
     bool proceed,
     bool showed_interstitial) {
   // When this is the callback of safe_browsing_->CreateCheckerAndCheck(), it is
@@ -264,53 +177,20 @@ void RendererURLLoaderThrottle::OnCheckUrlResult(
   if (blocked_ || !url_checker_)
     return;
 
-  if (!slow_check_notifier.is_valid()) {
-    OnCompleteCheckInternal(proceed, showed_interstitial);
-    return;
-  }
-
-  if (!notifier_receivers_) {
-    notifier_receivers_ =
-        std::make_unique<mojo::ReceiverSet<mojom::UrlCheckNotifier>>();
-  }
-  notifier_receivers_->Add(this, std::move(slow_check_notifier));
-}
-
-void RendererURLLoaderThrottle::OnCompleteCheckInternal(
-    bool proceed,
-    bool showed_interstitial) {
-  DCHECK(!blocked_);
-  DCHECK(url_checker_);
-
   DCHECK_LT(0u, pending_checks_);
   pending_checks_--;
-
-  // If the resource load is going to finish (either being cancelled or
-  // resumed), record the total delay.
-  if (!proceed || pending_checks_ == 0) {
-    // If the resource load is currently deferred, there is a delay.
-    if (deferred_) {
-      total_delay_ = base::TimeTicks::Now() - defer_start_time_;
-      LogTotalDelay2MetricsWithResponseType(is_response_from_cache_,
-                                            total_delay_);
-    }
-    LogTotalDelay3Metrics(total_delay_);
-  }
 
   if (proceed) {
     if (pending_checks_ == 0 && deferred_) {
       deferred_ = false;
-      TRACE_EVENT_NESTABLE_ASYNC_END0("safe_browsing", "Deferred",
-                                      TRACE_ID_LOCAL(this));
-      base::UmaHistogramTimes("SafeBrowsing.RendererThrottle.TotalDelay",
-                              total_delay_);
+      TRACE_EVENT_END("safe_browsing",
+                      /* Deferred */ perfetto::Track::FromPointer(this));
       delegate_->Resume();
     }
   } else {
     blocked_ = true;
 
     url_checker_.reset();
-    notifier_receivers_.reset();
     pending_checks_ = 0;
     // If we didn't show an interstitial, we cancel with ERR_ABORTED to not show
     // an error page either.
@@ -325,16 +205,13 @@ void RendererURLLoaderThrottle::OnMojoDisconnect() {
 
   // If a service-side disconnect happens, treat all URLs as if they are safe.
   url_checker_.reset();
-  notifier_receivers_.reset();
 
   pending_checks_ = 0;
 
   if (deferred_) {
-    total_delay_ = base::TimeTicks::Now() - defer_start_time_;
-
     deferred_ = false;
-    TRACE_EVENT_NESTABLE_ASYNC_END0("safe_browsing", "Deferred",
-                                    TRACE_ID_LOCAL(this));
+    TRACE_EVENT_END("safe_browsing",
+                    /* Deferred */ perfetto::Track::FromPointer(this));
     delegate_->Resume();
   }
 }
@@ -342,18 +219,15 @@ void RendererURLLoaderThrottle::OnMojoDisconnect() {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 void RendererURLLoaderThrottle::
     BindExtensionWebRequestReporterPipeIfDetached() {
-  if (extension_web_request_reporter_pending_remote_.is_valid()) {
-    extension_web_request_reporter_remote_.Bind(
-        std::move(extension_web_request_reporter_pending_remote_));
-    extension_web_request_reporter_ =
-        extension_web_request_reporter_remote_.get();
+  if (pending_extension_web_request_reporter_) {
+    extension_web_request_reporter_.Bind(
+        std::move(pending_extension_web_request_reporter_));
   }
 }
 
 void RendererURLLoaderThrottle::MaybeSendExtensionWebRequestData(
     network::ResourceRequest* request) {
   BindExtensionWebRequestReporterPipeIfDetached();
-
   // Skip if request destination isn't HTTP/HTTPS (ex. extension scheme).
   if (!request->url.SchemeIsHTTPOrHTTPS()) {
     return;

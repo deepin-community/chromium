@@ -18,9 +18,9 @@ limitations under the License.
 #define EIGEN_USE_THREADS
 
 #include <cfloat>
-#include <unordered_map>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/kernels/range_sampler.h"
@@ -71,7 +71,7 @@ class BaseCandidateSamplerOp : public OpKernel {
                    context->allocate_output(2, TensorShape({num_sampled_}),
                                             &out_sampled_expected_count));
 
-    gtl::ArraySlice<int64_t> true_candidate(
+    absl::Span<const int64_t> true_candidate(
         true_classes.matrix<int64_t>().data(), batch_size * num_true_);
 
     for (const auto& candidate : true_candidate) {
@@ -81,12 +81,12 @@ class BaseCandidateSamplerOp : public OpKernel {
                                           "), received ", candidate));
     }
 
-    gtl::MutableArraySlice<int64_t> sampled_candidate(
+    absl::Span<int64_t> sampled_candidate(
         out_sampled_candidates->vec<int64_t>().data(), num_sampled_);
-    gtl::MutableArraySlice<float> true_expected_count(
+    absl::Span<float> true_expected_count(
         out_true_expected_count->matrix<float>().data(),
         batch_size * num_true_);
-    gtl::MutableArraySlice<float> sampled_expected_count(
+    absl::Span<float> sampled_expected_count(
         out_sampled_expected_count->vec<float>().data(), num_sampled_);
 
     // Approximately conservatively estimate the number of samples required.
@@ -219,8 +219,10 @@ class ComputeAccidentalHitsOp : public OpKernel {
                     "sampled_candidates must be a vector, which is typically "
                     "an output from CandidateSampler"));
 
-    std::unordered_map<int64_t, int> sampled_candidate_to_pos;
-    for (int64_t i = 0; i < in_sampled_candidates.dim_size(0); ++i) {
+    const int64_t num_sampled = in_sampled_candidates.dim_size(0);
+    absl::flat_hash_map<int64_t, int> sampled_candidate_to_pos;
+    sampled_candidate_to_pos.reserve(num_sampled);
+    for (int64_t i = 0; i < num_sampled; ++i) {
       sampled_candidate_to_pos[in_sampled_candidates.vec<int64_t>()(i)] = i;
     }
 

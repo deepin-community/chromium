@@ -86,7 +86,7 @@ CloseButton::CloseButton(PressedCallback callback,
   // Add a rounded rect background. The rounding will be half the button size so
   // it is a circle.
   if (!IsFloatingCloseButton(type_)) {
-    SetBackground(views::CreateThemedRoundedRectBackground(
+    SetBackground(views::CreateRoundedRectBackground(
         background_color_id, GetCloseButtonSize(type_) / 2));
   }
 
@@ -127,7 +127,8 @@ void CloseButton::OnThemeChanged() {
   SchedulePaint();
 }
 
-gfx::Size CloseButton::CalculatePreferredSize() const {
+gfx::Size CloseButton::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   const int size = GetCloseButtonSize(type_);
   return gfx::Size(size, size);
 }

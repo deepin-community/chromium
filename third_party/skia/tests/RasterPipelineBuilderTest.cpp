@@ -238,7 +238,7 @@ DEF_TEST(RasterPipelineBuilderPushPopIndirect, r) {
     builder.push_uniform_indirect(one_slot_at(0), /*dynamicStack=*/1, five_slots_at(0));
     builder.push_uniform_indirect(three_slots_at(5), /*dynamicStack=*/1, five_slots_at(5));
     builder.swizzle_copy_stack_to_slots_indirect(three_slots_at(6), /*dynamicStackID=*/1,
-                                                 ten_slots_at(0), {2, 1, 0},
+                                                 ten_slots_at(0), {{2, 1, 0}},
                                                  /*offsetFromStackTop=*/3);
     builder.copy_stack_to_slots_indirect(three_slots_at(4), /*dynamicStackID=*/1, ten_slots_at(0));
     builder.pop_slots_indirect(five_slots_at(0), /*dynamicStackID=*/1, ten_slots_at(0));
@@ -327,11 +327,11 @@ DEF_TEST(RasterPipelineBuilderDuplicateSelectAndSwizzleSlots, r) {
     builder.select(4);                      // select from 4~7 and 8~11 into 4~7
     builder.select(3);                      // select from 2~4 and 5~7 into 2~4
     builder.select(1);                      // select from 3 and 4 into 3
-    builder.swizzle_copy_stack_to_slots(four_slots_at(1), {3, 2, 1, 0}, 4);
-    builder.swizzle_copy_stack_to_slots(four_slots_at(0), {0, 1, 3}, 3);
-    builder.swizzle(4, {3, 2, 1, 0});       // reverse the order of 0~3 (value.wzyx)
-    builder.swizzle(4, {1, 2});             // eliminate elements 0 and 3 (value.yz)
-    builder.swizzle(2, {0});                // eliminate element 1 (value.x)
+    builder.swizzle_copy_stack_to_slots(four_slots_at(1), {{3, 2, 1, 0}}, 4);
+    builder.swizzle_copy_stack_to_slots(four_slots_at(0), {{0, 1, 3}}, 3);
+    builder.swizzle(4, {{3, 2, 1, 0}});     // reverse the order of 0~3 (value.wzyx)
+    builder.swizzle(4, {{1, 2}});           // eliminate elements 0 and 3 (value.yz)
+    builder.swizzle(2, SKSPAN_INIT_ONE(0)); // eliminate element 1 (value.x)
     builder.discard_stack(1);               // balance stack
     std::unique_ptr<SkSL::RP::Program> program = builder.finish(/*numValueSlots=*/6,
                                                                 /*numUniformSlots=*/0,
@@ -559,6 +559,65 @@ branch_if_no_active_lanes_eq   branch -16 (label 0 at #2) if no lanes of v2 == 0
         check(r, *program, enableExecutionMaskWrites ? kExpectationWithExecutionMaskWrites
                                                      : kExpectationWithKnownExecutionMask);
     }
+}
+
+DEF_TEST(RasterPipelineBuilderBackwardsBranchOverInvocationShouldRewind, r) {
+    // Branching backward over a call to invoke_shader should always emit a stack_rewind op.
+    SkSL::RP::Builder builder;
+    int label1 = builder.nextLabelID();
+    builder.push_constant_f(10.0f);
+    builder.label(label1);
+    builder.push_constant_f(20.0f);
+    builder.invoke_shader(9);
+    builder.push_constant_f(30.0f);
+    builder.discard_stack(3);
+    builder.branch_if_any_lanes_active(label1);
+
+    std::unique_ptr<SkSL::RP::Program> program = builder.finish(/*numValueSlots=*/3,
+                                                                /*numUniformSlots=*/0,
+                                                                /*numImmutableSlots=*/0);
+    check(r, *program,
+R"(copy_constant                  $0 = 0x41200000 (10.0)
+label                          label 0
+copy_constant                  $1 = 0x41A00000 (20.0)
+invoke_shader                  invoke_shader 0x00000009
+stack_rewind
+jump                           jump -4 (label 0 at #2)
+)");
+}
+
+DEF_TEST(RasterPipelineBuilderBackwardsBranchWithoutInvocationMightNotRewind, r) {
+    SkSL::RP::Builder builder;
+    int label1 = builder.nextLabelID();
+    builder.push_constant_f(10.0f);
+    builder.invoke_shader(9);
+    builder.push_constant_f(20.0f);
+    builder.label(label1);
+    builder.push_constant_f(30.0f);
+    builder.discard_stack(3);
+    builder.branch_if_any_lanes_active(label1);
+
+    std::unique_ptr<SkSL::RP::Program> program = builder.finish(/*numValueSlots=*/3,
+                                                                /*numUniformSlots=*/0,
+                                                                /*numImmutableSlots=*/0);
+#if SK_HAS_MUSTTAIL
+    check(r, *program,
+R"(copy_constant                  $0 = 0x41200000 (10.0)
+invoke_shader                  invoke_shader 0x00000009
+copy_constant                  $1 = 0x41A00000 (20.0)
+label                          label 0
+jump                           jump -1 (label 0 at #4)
+)");
+#else
+    check(r, *program,
+R"(copy_constant                  $0 = 0x41200000 (10.0)
+invoke_shader                  invoke_shader 0x00000009
+copy_constant                  $1 = 0x41A00000 (20.0)
+label                          label 0
+stack_rewind
+jump                           jump -2 (label 0 at #4)
+)");
+#endif
 }
 
 DEF_TEST(RasterPipelineBuilderBinaryFloatOps, r) {

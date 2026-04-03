@@ -15,14 +15,8 @@
 #include "components/webapps/browser/android/add_to_homescreen_params.h"
 #include "components/webapps/browser/android/shortcut_info.h"
 #include "components/webapps/browser/installable/installable_logging.h"
-#include "components/webapps/common/web_page_metadata_agent.mojom.h"
 #include "content/public/browser/web_contents.h"
-#include "mojo/public/cpp/bindings/associated_remote.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-
-namespace favicon_base {
-struct FaviconRawBitmapResult;
-}
 
 namespace webapps {
 
@@ -93,12 +87,7 @@ class AddToHomescreenDataFetcher {
 
   // Called when installable check failed on any step and continue with the add
   // shortcut flow.
-  void PrepareToAddShortcut(bool fetch_favicon);
-
-  // Grabs the favicon for the current URL.
-  void FetchFavicon();
-  void OnFaviconFetched(
-      const favicon_base::FaviconRawBitmapResult& bitmap_result);
+  void PrepareToAddShortcut();
 
   // Creates an icon to display to the user to confirm the add to home screen
   // from the given |base_icon|. If |use_for_launcher| is true, the created icon

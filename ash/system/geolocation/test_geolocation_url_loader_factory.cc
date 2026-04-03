@@ -5,33 +5,32 @@
 #include "ash/system/geolocation/test_geolocation_url_loader_factory.h"
 
 #include <memory>
+#include <optional>
+#include <string>
 
-#include "base/json/json_string_value_serializer.h"
+#include "base/json/json_writer.h"
 
 namespace ash {
 
 namespace {
 
 // Creates a serialized dictionary string of the geoposition.
-std::string CreateResponseBody(const Geoposition& position) {
-  base::Value::Dict value;
+std::optional<std::string> CreateResponseBody(const Geoposition& position) {
+  base::DictValue value;
   value.Set("accuracy", position.accuracy);
 
-  base::Value::Dict location;
+  base::DictValue location;
   location.Set("lat", position.latitude);
   location.Set("lng", position.longitude);
   value.Set("location", std::move(location));
 
   if (position.error_code) {
-    base::Value::Dict error;
+    base::DictValue error;
     error.Set("error_code", position.error_code);
     value.Set("error", std::move(error));
   }
 
-  std::string serialized_response;
-  JSONStringValueSerializer serializer(&serialized_response);
-  serializer.Serialize(value);
-  return serialized_response;
+  return base::WriteJson(value);
 }
 
 }  // namespace
@@ -47,8 +46,9 @@ void TestGeolocationUrlLoaderFactory::CreateLoaderAndStart(
     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) {
   // Response must be added before `CreateLoaderAndStart()` to ensure the latest
   // `position_` is reflected in the incoming request.
-  test_url_loader_factory_.AddResponse(url_request.url.spec(),
-                                       CreateResponseBody(position_));
+  test_url_loader_factory_.AddResponse(
+      url_request.url.spec(),
+      CreateResponseBody(position_).value_or(std::string()));
   test_url_loader_factory_.CreateLoaderAndStart(
       std::move(receiver), request_id, options, url_request, std::move(client),
       traffic_annotation);
@@ -62,7 +62,6 @@ void TestGeolocationUrlLoaderFactory::Clone(
 std::unique_ptr<network::PendingSharedURLLoaderFactory>
 TestGeolocationUrlLoaderFactory::Clone() {
   NOTREACHED();
-  return nullptr;
 }
 
 void TestGeolocationUrlLoaderFactory::SetValidPosition(double latitude,

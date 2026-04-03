@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/files/file_util.h"
@@ -60,11 +61,12 @@ const char kDarkShareButtonOpacity[] = "dark_share_button_opacity";
 const char kDarkShareButtonIcon[] = "dark_share_button_icon";
 const char kDarkShareButtonBg[] = "dark_share_button_bg";
 
+const char kLogoType[] = "LOGO";
 const char kSimpleType[] = "SIMPLE";
 const char kAnimatedType[] = "ANIMATED";
 const char kInteractiveType[] = "INTERACTIVE";
 
-bool GetTimeValue(const base::Value::Dict& dict,
+bool GetTimeValue(const base::DictValue& dict,
                   const std::string& key,
                   base::Time* time) {
   const std::string* str = dict.FindString(key);
@@ -76,14 +78,17 @@ bool GetTimeValue(const base::Value::Dict& dict,
   return false;
 }
 
-void SetTimeValue(base::Value::Dict& dict,
+void SetTimeValue(base::DictValue& dict,
                   const std::string& key,
                   const base::Time& time) {
   int64_t internal_time_value = time.ToInternalValue();
   dict.Set(key, base::NumberToString(internal_time_value));
 }
 
-LogoType LogoTypeFromString(base::StringPiece type) {
+LogoType LogoTypeFromString(std::string_view type) {
+  if (type == kLogoType) {
+    return LogoType::LOGO;
+  }
   if (type == kSimpleType) {
     return LogoType::SIMPLE;
   }
@@ -94,11 +99,13 @@ LogoType LogoTypeFromString(base::StringPiece type) {
     return LogoType::INTERACTIVE;
   }
   LOG(WARNING) << "invalid type " << type;
-  return LogoType::SIMPLE;
+  return LogoType::LOGO;
 }
 
 std::string LogoTypeToString(LogoType type) {
   switch (type) {
+    case LogoType::LOGO:
+      return kLogoType;
     case LogoType::SIMPLE:
       return kSimpleType;
     case LogoType::ANIMATED:
@@ -107,7 +114,6 @@ std::string LogoTypeToString(LogoType type) {
       return kInteractiveType;
   }
   NOTREACHED();
-  return "";
 }
 
 }  // namespace
@@ -170,7 +176,7 @@ std::unique_ptr<EncodedLogo> LogoCache::GetCachedLogo() {
   if (logo_num_bytes_ != 0) {
     encoded_image = new base::RefCountedString();
 
-    if (!base::ReadFileToString(logo_path, &encoded_image->data())) {
+    if (!base::ReadFileToString(logo_path, &encoded_image->as_string())) {
       UpdateMetadata(nullptr);
       return nullptr;
     }
@@ -187,7 +193,8 @@ std::unique_ptr<EncodedLogo> LogoCache::GetCachedLogo() {
   if (dark_logo_num_bytes_ != 0) {
     dark_encoded_image = new base::RefCountedString();
 
-    if (!base::ReadFileToString(dark_logo_path, &dark_encoded_image->data())) {
+    if (!base::ReadFileToString(dark_logo_path,
+                                &dark_encoded_image->as_string())) {
       UpdateMetadata(nullptr);
       return nullptr;
     }
@@ -213,11 +220,12 @@ std::unique_ptr<LogoMetadata> LogoCache::LogoMetadataFromString(
     const std::string& str,
     int* logo_num_bytes,
     int* dark_logo_num_bytes) {
-  std::optional<base::Value> value = base::JSONReader::Read(str);
+  std::optional<base::Value> value =
+      base::JSONReader::Read(str, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!value) {
     return nullptr;
   }
-  const base::Value::Dict* dict = value->GetIfDict();
+  const base::DictValue* dict = value->GetIfDict();
   if (!dict) {
     return nullptr;
   }
@@ -322,7 +330,7 @@ void LogoCache::LogoMetadataToString(const LogoMetadata& metadata,
                                      int num_bytes,
                                      int dark_num_bytes,
                                      std::string* str) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kSourceUrlKey, metadata.source_url.spec());
   dict.Set(kFingerprintKey, metadata.fingerprint);
   dict.Set(kTypeKey, LogoTypeToString(metadata.type));
@@ -359,7 +367,7 @@ void LogoCache::LogoMetadataToString(const LogoMetadata& metadata,
   dict.Set(kIframeHeightPx, metadata.iframe_height_px);
   dict.Set(kDarkBackgroundColorKey, metadata.dark_background_color);
   SetTimeValue(dict, kExpirationTimeKey, metadata.expiration_time);
-  base::JSONWriter::Write(dict, str);
+  *str = base::WriteJson(dict).value_or("");
 }
 
 base::FilePath LogoCache::GetLogoPath() {

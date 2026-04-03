@@ -4,16 +4,20 @@
 
 #include "chrome/browser/ash/system_web_apps/apps/camera_app/camera_system_web_app_info.h"
 
-#include "ash/constants/ash_pref_names.h"
 #include "ash/webui/camera_app_ui/resources/strings/grit/ash_camera_app_strings.h"
 #include "ash/webui/camera_app_ui/url_constants.h"
 #include "ash/webui/grit/ash_camera_app_resources.h"
+#include "base/check.h"
+#include "base/check_deref.h"
+#include "base/files/file_path.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/system_web_apps/apps/camera_app/chrome_camera_app_ui_constants.h"
+#include "chrome/browser/ash/system_web_apps/apps/camera_app/chrome_camera_save_delegate.h"
 #include "chrome/browser/ash/system_web_apps/apps/system_web_app_install_utils.h"
-#include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
-#include "components/prefs/pref_service.h"
+#include "chromeos/ash/experiences/camera/camera_save_handler.h"
 #include "extensions/common/constants.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/styles/cros_styles.h"
@@ -26,15 +30,28 @@ constexpr gfx::Size CAMERA_WINDOW_DEFAULT_SIZE(kChromeCameraAppDefaultWidth,
                                                    32);
 }
 
+CameraSystemAppDelegate::CameraSystemAppDelegate(Profile* profile)
+    : ash::SystemWebAppDelegate(ash::SystemWebAppType::CAMERA,
+                                "Camera",
+                                GURL("chrome://camera-app/views/main.html"),
+                                profile) {
+  CHECK(profile);
+  if (!CameraSaveHandler::Get(*profile)) {
+    CameraSaveHandler::Create(
+        *profile, std::make_unique<ChromeCameraSaveDelegate>(profile));
+  }
+}
+
 std::unique_ptr<web_app::WebAppInstallInfo>
-CreateWebAppInfoForCameraSystemWebApp() {
-  auto info = std::make_unique<web_app::WebAppInstallInfo>();
-  info->start_url = GURL(ash::kChromeUICameraAppMainURL);
+CameraSystemAppDelegate::GetWebAppInfo() const {
+  GURL start_url(ash::kChromeUICameraAppMainURL);
+  auto info =
+      web_app::CreateSystemWebAppInstallInfoWithStartUrlAsIdentity(start_url);
   info->scope = GURL(ash::kChromeUICameraAppScopeURL);
 
   info->title = l10n_util::GetStringUTF16(IDS_NAME);
   web_app::CreateIconInfoForSystemWebApp(
-      info->start_url,
+      info->start_url(),
       {
           {"camera_app_icons_48.png", 48,
            IDR_ASH_CAMERA_APP_IMAGES_CAMERA_APP_ICONS_48_PNG},
@@ -52,24 +69,6 @@ CreateWebAppInfoForCameraSystemWebApp() {
   return info;
 }
 
-gfx::Rect GetDefaultBoundsForCameraApp(Browser*) {
-  gfx::Rect bounds =
-      display::Screen::GetScreen()->GetDisplayForNewWindows().work_area();
-  bounds.ClampToCenteredSize(CAMERA_WINDOW_DEFAULT_SIZE);
-  return bounds;
-}
-
-CameraSystemAppDelegate::CameraSystemAppDelegate(Profile* profile)
-    : ash::SystemWebAppDelegate(ash::SystemWebAppType::CAMERA,
-                                "Camera",
-                                GURL("chrome://camera-app/views/main.html"),
-                                profile) {}
-
-std::unique_ptr<web_app::WebAppInstallInfo>
-CameraSystemAppDelegate::GetWebAppInfo() const {
-  return CreateWebAppInfoForCameraSystemWebApp();
-}
-
 bool CameraSystemAppDelegate::ShouldCaptureNavigations() const {
   return true;
 }
@@ -78,10 +77,19 @@ gfx::Size CameraSystemAppDelegate::GetMinimumWindowSize() const {
   return {kChromeCameraAppMinimumWidth, kChromeCameraAppMinimumHeight + 32};
 }
 
-gfx::Rect CameraSystemAppDelegate::GetDefaultBounds(Browser* browser) const {
-  return GetDefaultBoundsForCameraApp(browser);
+gfx::Rect CameraSystemAppDelegate::GetDefaultBounds(
+    ash::BrowserDelegate*) const {
+  gfx::Rect bounds =
+      display::Screen::Get()->GetDisplayForNewWindows().work_area();
+  bounds.ClampToCenteredSize(CAMERA_WINDOW_DEFAULT_SIZE);
+  return bounds;
 }
 
 bool CameraSystemAppDelegate::UseSystemThemeColor() const {
   return false;
+}
+
+base::FilePath CameraSystemAppDelegate::GetLaunchDirectory(
+    const apps::AppLaunchParams& params) const {
+  return CHECK_DEREF(CameraSaveHandler::Get(*profile_)).GetWritableRoot();
 }

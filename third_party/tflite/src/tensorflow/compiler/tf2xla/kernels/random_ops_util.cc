@@ -15,18 +15,33 @@ limitations under the License.
 
 #include "tensorflow/compiler/tf2xla/kernels/random_ops_util.h"
 
+#include <cstdint>
 #include <functional>
+#include <string>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "tensorflow/compiler/tf2xla/kernels/rng_converter_utils.h"
 #include "tensorflow/compiler/tf2xla/shape_util.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/lib/prng.h"
-#include "xla/client/xla_builder.h"
+#include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/lib/prng.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/literal.h"
+#include "xla/primitive_util.h"
 #include "xla/shape.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/util.h"
+#include "xla/xla_data.pb.h"
+#include "tensorflow/core/framework/rng_alg.h"
 #include "tensorflow/core/framework/tensor_shape.h"
+#include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/kernels/stateless_random_ops_v2.h"
-#include "tensorflow/core/platform/statusor.h"
+#include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
 
@@ -37,7 +52,7 @@ xla::XlaOp GetCounter(xla::RandomAlgorithm const& alg, xla::XlaOp state) {
                     {RNG_KEY_SIZE + xla::GetCounterSize(alg)}, {1});
 }
 
-StatusOr<xla::RandomAlgorithm> ResolveAlg(
+absl::StatusOr<xla::RandomAlgorithm> ResolveAlg(
     int alg_id, absl::string_view device_type_string) {
   switch (alg_id) {
     case RNG_ALG_PHILOX:
@@ -109,12 +124,12 @@ xla::XlaOp GetU64FromS32Seeds(xla::XlaOp seed0, xla::XlaOp seed1) {
          (u64_seed1 << ConstantR0WithType(seed0.builder(), xla::U64, 32));
 }
 
-StatusOr<int> GetAlgId(XlaOpKernelContext* ctx, int alg_input_idx) {
+absl::StatusOr<int> GetAlgId(XlaOpKernelContext* ctx, int alg_input_idx) {
   TF_ASSIGN_OR_RETURN(auto alg_shape, ctx->InputXlaShape(alg_input_idx));
-  if (alg_shape.rank() != 0) {
+  if (alg_shape.dimensions().size() != 0) {
     return absl::InvalidArgumentError(
         absl::StrCat("The algorithm argument must be of shape [], not ",
-                     alg_shape.DebugString()));
+                     alg_shape.ToString()));
   }
   auto alg_dtype = ctx->input_type(alg_input_idx);
   if (alg_dtype != DT_INT32 && alg_dtype != DT_INT64) {
@@ -127,11 +142,11 @@ StatusOr<int> GetAlgId(XlaOpKernelContext* ctx, int alg_input_idx) {
   if (alg_dtype == DT_INT32) {
     return alg_literal.Get<int>({});
   } else {
-    return alg_literal.Get<int64>({});
+    return alg_literal.Get<int64_t>({});
   }
 }
 
-StatusOr<xla::RandomAlgorithm> AlgorithmFromInput(
+absl::StatusOr<xla::RandomAlgorithm> AlgorithmFromInput(
     XlaOpKernelContext* ctx, int alg_input_idx,
     absl::string_view device_type_string) {
   TF_ASSIGN_OR_RETURN(auto alg_id, GetAlgId(ctx, alg_input_idx));
@@ -158,8 +173,8 @@ DataType MaybeConvertBF16ToF32(DataType const& dtype) {
   return dtype;
 }
 
-StatusOr<xla::XlaOp> BuildUniformRandoms(
-    XlaOpKernelContext* ctx, DataType dtype, string device_type_string,
+absl::StatusOr<xla::XlaOp> BuildUniformRandoms(
+    XlaOpKernelContext* ctx, DataType dtype, std::string device_type_string,
     TensorShape shape,
     std::function<xla::XlaOp(xla::XlaBuilder*, xla::PrimitiveType)> lo_fn,
     std::function<xla::XlaOp(xla::XlaBuilder*, xla::PrimitiveType)> hi_fn) {
@@ -175,11 +190,11 @@ StatusOr<xla::XlaOp> BuildUniformRandoms(
   return BuildUniformRandoms(ctx, dtype, device_type_string, xla_shape, lo, hi);
 }
 
-StatusOr<xla::XlaOp> BuildUniformRandoms(XlaOpKernelContext* ctx,
-                                         DataType dtype,
-                                         string device_type_string,
-                                         xla::Shape xla_shape, xla::XlaOp lo,
-                                         xla::XlaOp hi) {
+absl::StatusOr<xla::XlaOp> BuildUniformRandoms(XlaOpKernelContext* ctx,
+                                               DataType dtype,
+                                               std::string device_type_string,
+                                               xla::Shape xla_shape,
+                                               xla::XlaOp lo, xla::XlaOp hi) {
   xla::XlaOp key = ctx->Input(kRandomKeyInputIdx);
   xla::XlaOp counter = ctx->Input(kRandomCounterInputIdx);
 

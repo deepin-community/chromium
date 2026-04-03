@@ -7,34 +7,33 @@
 #include <string>
 #include <utility>
 
+#include "base/check_deref.h"
 #include "base/check_op.h"
-#include "base/debug/dump_without_crashing.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
+#include "chrome/browser/ash/browser_delegate/browser_controller.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
+#include "chrome/browser/ash/browser_delegate/browser_type.h"
+#include "chrome/browser/ash/browser_delegate/browser_type_conversion.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/scalable_iph/scalable_iph_factory.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
-#include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chromeos/ash/components/scalable_iph/scalable_iph.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
+#include "components/user_manager/user.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/display/scoped_display_for_new_windows.h"
@@ -51,23 +50,27 @@ Profile* GetProfileForSystemWebAppLaunch(Profile* profile) {
 
   // We can't launch into certain profiles, and we can't find a suitable
   // alternative.
-  if (profile->IsSystemProfile())
+  if (profile->IsSystemProfile()) {
     return nullptr;
-  if (ProfileHelper::IsSigninProfile(profile))
+  }
+  if (ProfileHelper::IsSigninProfile(profile)) {
     return nullptr;
+  }
 
   // For a guest sessions, launch into the primary off-the-record profile, which
   // is used for browsing in guest sessions. We do this because the "original"
   // profile of the guest session can't create windows.
-  if (profile->IsGuestSession())
+  if (profile->IsGuestSession()) {
     return profile->GetPrimaryOTRProfile(/*create_if_needed=*/true);
+  }
 
   // We don't support launching SWA in incognito profiles, use the original
   // profile if an incognito profile is provided (with the exception of guest
   // session, which is implemented with an incognito profile, thus it is handled
   // above).
-  if (profile->IsIncognitoProfile())
+  if (profile->IsIncognitoProfile()) {
     return profile->GetOriginalProfile();
+  }
 
   // Use the profile provided in other scenarios.
   return profile;
@@ -98,8 +101,9 @@ std::optional<apps::AppLaunchParams> CreateSystemWebAppLaunchParams(
   std::optional<webapps::AppId> app_id =
       GetAppIdForSystemWebApp(profile, app_type);
   // TODO(calamity): Decide whether to report app launch failure or CHECK fail.
-  if (!app_id)
+  if (!app_id) {
     return std::nullopt;
+  }
 
   auto* provider = SystemWebAppManager::GetWebAppProvider(profile);
   DCHECK(provider);
@@ -107,7 +111,8 @@ std::optional<apps::AppLaunchParams> CreateSystemWebAppLaunchParams(
   web_app::DisplayMode display_mode =
       provider->registrar_unsafe().GetAppEffectiveDisplayMode(app_id.value());
 
-  // TODO(crbug/1113502): Plumb through better launch sources from callsites.
+  // TODO(crbug.com/40143506): Plumb through better launch sources from
+  // callsites.
   apps::AppLaunchParams params = apps::CreateAppIdLaunchParamsWithEventFlags(
       app_id.value(), /*event_flags=*/0,
       apps::LaunchSource::kFromChromeInternal, display_id,
@@ -134,8 +139,9 @@ void LaunchSystemWebAppAsyncContinue(Profile* profile_for_launch,
 
   const std::optional<webapps::AppId> app_id =
       GetAppIdForSystemWebApp(profile_for_launch, type);
-  if (!app_id)
+  if (!app_id) {
     return;
+  }
 
   auto* app_service =
       apps::AppServiceProxyFactory::GetForProfile(profile_for_launch);
@@ -176,34 +182,20 @@ void LaunchSystemWebAppAsync(Profile* profile,
   // Callback is only supported when launching with an URL.
   DCHECK(!callback || params.url.has_value());
 
-  // TODO(https://crbug.com/1135863): Implement a confirmation dialog when
+  // TODO(crbug.com/40723875): Implement a confirmation dialog when
   // changing to a different profile.
   Profile* profile_for_launch = GetProfileForSystemWebAppLaunch(profile);
   if (profile_for_launch == nullptr) {
     // We can't find a suitable profile to launch. Complain about this so we
     // can identify the call site, and ask them to pick the right profile.
-    base::debug::DumpWithoutCrashing();
-
-    DVLOG(1)
+    // Note that this is fatal in developer builds.
+    DUMP_WILL_BE_NOTREACHED()
         << "LaunchSystemWebAppAsync is called on a profile that can't launch "
            "system web apps. The launch request is ignored. Please check the "
            "profile you are using is correct.";
 
-    // This will DCHECK in debug builds. But no-op in production builds.
-    NOTREACHED();
-
     // Early return if we can't find a profile to launch.
     return;
-  }
-
-  if (type == SystemWebAppType::PERSONALIZATION &&
-      profile_for_launch == profile) {
-    scalable_iph::ScalableIph* scalable_iph =
-        ScalableIphFactory::GetForBrowserContext(profile_for_launch);
-    if (scalable_iph) {
-      scalable_iph->RecordEvent(
-          scalable_iph::ScalableIph::Event::kOpenPersonalizationApp);
-    }
   }
 
   SystemWebAppManager* manager = SystemWebAppManager::Get(profile_for_launch);
@@ -220,10 +212,10 @@ void LaunchSystemWebAppAsync(Profile* profile,
                                           : base::DoNothing()));
 }
 
-Browser* LaunchSystemWebAppImpl(Profile* profile,
-                                SystemWebAppType app_type,
-                                const GURL& url,
-                                const apps::AppLaunchParams& params) {
+BrowserDelegate* LaunchSystemWebAppImpl(Profile* profile,
+                                        SystemWebAppType app_type,
+                                        const GURL& url,
+                                        const apps::AppLaunchParams& params) {
   // Exit early if we can't create browser windows (e.g. when browser is
   // shutting down, or a wrong profile is given).
   if (Browser::GetCreationStatusForProfile(profile) !=
@@ -232,12 +224,14 @@ Browser* LaunchSystemWebAppImpl(Profile* profile,
   }
 
   SystemWebAppManager* swa_manager = SystemWebAppManager::Get(profile);
-  if (!swa_manager)
+  if (!swa_manager) {
     return nullptr;
+  }
 
   auto* provider = web_app::WebAppProvider::GetForLocalAppsUnchecked(profile);
-  if (!provider)
+  if (!provider) {
     return nullptr;
+  }
 
   auto* system_app = swa_manager->GetSystemApp(app_type);
 
@@ -257,7 +251,7 @@ Browser* LaunchSystemWebAppImpl(Profile* profile,
   // Place new windows on the specified display.
   display::ScopedDisplayForNewWindows scoped_display(params.display_id);
 
-  Browser* browser =
+  BrowserDelegate* browser =
       system_app->LaunchAndNavigateSystemWebApp(profile, provider, url, params);
   if (!browser) {
     return nullptr;
@@ -272,18 +266,17 @@ Browser* LaunchSystemWebAppImpl(Profile* profile,
   //
   // Since users can't configure SWA launch behavior, we don't report these
   // metrics to avoid skewing web app metrics.
-  web_app::UpdateLaunchStats(browser->tab_strip_model()->GetActiveWebContents(),
-                             params.app_id, url);
+  web_app::UpdateLaunchStats(browser->GetActiveWebContents(), params.app_id,
+                             url);
 
   // LaunchSystemWebAppImpl may be called with a profile associated with an
   // inactive (background) desktop (e.g. when multiple users are logged in).
   // Here we move the newly created browser window (or the existing one on the
   // inactive desktop) to the current active (visible) desktop, so the user
   // always sees the launched app.
-  multi_user_util::MoveWindowToCurrentDesktop(
-      browser->window()->GetNativeWindow());
+  multi_user_util::MoveWindowToCurrentDesktop(browser->GetNativeWindow());
 
-  browser->window()->Show();
+  browser->Show();
   return browser;
 }
 
@@ -291,44 +284,55 @@ Browser* FindSystemWebAppBrowser(Profile* profile,
                                  SystemWebAppType app_type,
                                  Browser::Type browser_type,
                                  const GURL& url) {
+  auto* browser = FindSystemWebAppBrowser(
+      profile, app_type, FromInternalBrowserType(browser_type), url);
+  return browser ? &browser->GetBrowser() : nullptr;
+}
+
+BrowserDelegate* FindSystemWebAppBrowser(Profile* profile,
+                                         SystemWebAppType app_type,
+                                         BrowserType browser_type,
+                                         const GURL& url) {
   // TODO(calamity): Determine whether, during startup, we need to wait for
   // app install and then provide a valid answer here.
   std::optional<webapps::AppId> app_id =
       GetAppIdForSystemWebApp(profile, app_type);
-  if (!app_id)
+  if (!app_id) {
     return nullptr;
-
-  auto* provider = SystemWebAppManager::GetWebAppProvider(profile);
-  DCHECK(provider);
-
-  if (!provider->registrar_unsafe().IsInstalled(app_id.value()))
-    return nullptr;
-
-  // Look through all the windows, find a browser for this app. Prefer the most
-  // recently active app window.
-  for (Browser* browser : BrowserList::GetInstance()->OrderedByActivation()) {
-    if (browser->profile() != profile || browser->type() != browser_type ||
-        browser->is_delete_scheduled()) {
-      continue;
-    }
-
-    if (web_app::GetAppIdFromApplicationName(browser->app_name()) !=
-        app_id.value()) {
-      continue;
-    }
-
-    if (!url.is_empty()) {
-      // In case a URL is provided, only allow a browser which shows it.
-      content::WebContents* content =
-          browser->tab_strip_model()->GetActiveWebContents();
-      if (!content->GetVisibleURL().EqualsIgnoringRef(url))
-        continue;
-    }
-
-    return browser;
   }
 
-  return nullptr;
+  auto* provider = SystemWebAppManager::GetWebAppProvider(profile);
+  CHECK(provider);
+
+  // TODO(crbug.com/379136842): This is likely too 'permissive' of a check, and
+  // different more restrictive filter should likely be used instead.
+  if (!provider->registrar_unsafe().AppMatches(
+          app_id.value(), web_app::WebAppFilter::IsAppSurfaceableToUser())) {
+    return nullptr;
+  }
+
+  auto* user = BrowserContextHelper::Get()->GetUserByBrowserContext(profile);
+  // TODO(crbug.com/369689187): Migrate the Profile parameter to a User
+  // parameter and move this check into the call sites where necessary. The only
+  // known necessary place is the FindSystemWebAppBrowser call in
+  // DiagnosticsDialog::ShowDialog, because it gets used in a shimless RMA
+  // session (where no SWAs are run). For other non-user sessions we already
+  // bail out in the app_id check above.
+  if (!user) {
+    return nullptr;
+  }
+
+  return BrowserController::GetInstance()->FindWebApp(
+      user->GetAccountId(), app_id.value(), browser_type);
+}
+
+int CountSystemWebAppBrowsers(Profile* profile, SystemWebAppType app_type) {
+  auto* const provider = SystemWebAppManager::GetWebAppProvider(profile);
+  const std::optional<webapps::AppId> app_id =
+      GetAppIdForSystemWebApp(profile, app_type);
+  return provider && app_id.has_value()
+             ? provider->ui_manager().GetNumWindowsForApp(app_id.value())
+             : 0;
 }
 
 bool IsSystemWebApp(Browser* browser) {
@@ -336,10 +340,13 @@ bool IsSystemWebApp(Browser* browser) {
   return browser->app_controller() && browser->app_controller()->system_app();
 }
 
-bool IsBrowserForSystemWebApp(Browser* browser, SystemWebAppType type) {
+bool IsBrowserForSystemWebApp(BrowserWindowInterface* browser,
+                              SystemWebAppType type) {
   DCHECK(browser);
-  return browser->app_controller() && browser->app_controller()->system_app() &&
-         browser->app_controller()->system_app()->GetType() == type;
+  web_app::AppBrowserController* const app_controller =
+      web_app::AppBrowserController::From(browser);
+  return app_controller && app_controller->system_app() &&
+         app_controller->system_app()->GetType() == type;
 }
 
 std::optional<SystemWebAppType> GetCapturingSystemAppForURL(Profile* profile,
@@ -351,8 +358,9 @@ std::optional<SystemWebAppType> GetCapturingSystemAppForURL(Profile* profile,
 
 gfx::Size GetSystemWebAppMinimumWindowSize(Browser* browser) {
   DCHECK(browser);
-  if (browser->app_controller() && browser->app_controller()->system_app())
+  if (browser->app_controller() && browser->app_controller()->system_app()) {
     return browser->app_controller()->system_app()->GetMinimumWindowSize();
+  }
 
   return gfx::Size();
 }

@@ -6,10 +6,13 @@
 
 #include <memory>
 
-#include "ash/api/tasks/tasks_types.h"
+#include "ash/accessibility/accessibility_controller.h"
+#include "ash/api/tasks/fake_tasks_client.h"
 #include "ash/capture_mode/capture_mode_test_util.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/glanceables/common/glanceables_util.h"
+#include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/icon_button.h"
@@ -17,13 +20,17 @@
 #include "ash/style/rounded_container.h"
 #include "ash/style/switch.h"
 #include "ash/style/system_textfield.h"
+#include "ash/style/tab_slider_button.h"
 #include "ash/system/focus_mode/focus_mode_chip_carousel.h"
 #include "ash/system/focus_mode/focus_mode_controller.h"
 #include "ash/system/focus_mode/focus_mode_countdown_view.h"
 #include "ash/system/focus_mode/focus_mode_feature_pod_controller.h"
 #include "ash/system/focus_mode/focus_mode_histogram_names.h"
+#include "ash/system/focus_mode/focus_mode_task_test_utils.h"
 #include "ash/system/focus_mode/focus_mode_task_view.h"
 #include "ash/system/focus_mode/focus_mode_util.h"
+#include "ash/system/focus_mode/sounds/focus_mode_sounds_view.h"
+#include "ash/system/focus_mode/sounds/sound_section_view.h"
 #include "ash/system/model/system_tray_model.h"
 #include "ash/system/tray/fake_detailed_view_delegate.h"
 #include "ash/system/tray/hover_highlight_view.h"
@@ -32,20 +39,24 @@
 #include "ash/system/unified/unified_system_tray_bubble.h"
 #include "ash/test/ash_test_base.h"
 #include "base/i18n/time_formatting.h"
+#include "base/strings/strcat.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/settings/scoped_timezone_settings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/message_center/message_center.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/label.h"
+#include "ui/views/controls/scroll_view.h"
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/test/views_test_utils.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
+#include "url/gurl.h"
 
 namespace ash {
 
@@ -58,13 +69,18 @@ constexpr base::TimeDelta kStartAnimationDelay = base::Milliseconds(300);
 class FocusModeDetailedViewTest : public AshTestBase {
  public:
   FocusModeDetailedViewTest()
-      : AshTestBase(base::test::TaskEnvironment::TimeSource::MOCK_TIME),
-        scoped_feature_(features::kFocusMode) {}
+      : AshTestBase(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
   ~FocusModeDetailedViewTest() override = default;
 
   // AshTestBase:
   void SetUp() override {
     AshTestBase::SetUp();
+
+    // `g_network_handler` is null in tests, we need to manually set the network
+    // connected state. Also, the buttons or textfield under the tasks view will
+    // be enabled and the playlists under the sounds view will exists only when
+    // the user is online.
+    glanceables_util::SetIsNetworkConnectedForTest(true);
 
     widget_ = CreateFramelessTestWidget();
     widget_->SetFullscreen(true);
@@ -75,6 +91,11 @@ class FocusModeDetailedViewTest : public AshTestBase {
     // pref will not be marked as using the default value.
     prefs()->SetBoolean(prefs::kFocusModeDoNotDisturb, true);
 
+    auto& tasks_client =
+        CreateFakeTasksClient(AccountId::FromUserEmail("user0@tray"));
+    tasks_client.set_http_error(google_apis::ApiErrorCode::HTTP_SUCCESS);
+    CreateFakeTasks(tasks_client);
+
     CreateFakeFocusModeDetailedView();
   }
 
@@ -83,6 +104,18 @@ class FocusModeDetailedViewTest : public AshTestBase {
     widget_.reset();
 
     AshTestBase::TearDown();
+  }
+
+  void AdvanceClock(base::TimeDelta time_delta) {
+    // Note that AdvanceClock() is used here instead of FastForwardBy() to
+    // prevent long run time during an ash test session.
+    task_environment()->AdvanceClock(time_delta);
+    task_environment()->RunUntilIdle();
+  }
+
+  virtual void CreateFakeTasks(api::FakeTasksClient& tasks_client) {
+    AddFakeTaskList(tasks_client, "default");
+    AddFakeTask(tasks_client, "default", "task1", "Task 1");
   }
 
   void CreateFakeFocusModeDetailedView() {
@@ -99,6 +132,17 @@ class FocusModeDetailedViewTest : public AshTestBase {
         focus_mode_util::GetTimerTextfieldInputInMinutes(timer_textfield)));
   }
 
+  // Scroll to the bottom of the defailed view.
+  void ScrollToBottom() {
+    auto* scroll_view = focus_mode_detailed_view_->scroll_view_for_testing();
+    scroll_view->ScrollToPosition(scroll_view->vertical_scroll_bar(),
+                                  scroll_view->GetVisibleRect().bottom());
+  }
+
+  views::ScrollView* GetScrollView() {
+    return focus_mode_detailed_view_->scroll_view_for_testing();
+  }
+
   views::Label* GetToggleRowLabel() {
     return focus_mode_detailed_view_->toggle_view_->text_label();
   }
@@ -109,6 +153,10 @@ class FocusModeDetailedViewTest : public AshTestBase {
 
   bool IsToggleRowSubLabelVisible() {
     return GetToggleRowSubLabel() && GetToggleRowSubLabel()->GetVisible();
+  }
+
+  HoverHighlightView* GetToggleView() {
+    return focus_mode_detailed_view_->toggle_view_;
   }
 
   PillButton* GetToggleRowButton() {
@@ -162,10 +210,15 @@ class FocusModeDetailedViewTest : public AshTestBase {
     return focus_mode_detailed_view_->task_view_container_;
   }
 
+  FocusModeSoundsView* GetSoundsView() {
+    return static_cast<FocusModeSoundsView*>(
+        focus_mode_detailed_view_->GetViewByID(
+            FocusModeDetailedView::ViewId::kSoundView));
+  }
+
   FakeDetailedViewDelegate detailed_view_delegate_;
 
  private:
-  base::test::ScopedFeatureList scoped_feature_;
   std::unique_ptr<views::Widget> widget_;
   raw_ptr<FocusModeDetailedView> focus_mode_detailed_view_ = nullptr;
 };
@@ -197,6 +250,9 @@ TEST_F(FocusModeDetailedViewTest, DndOffBeforeStart) {
 
   // 2. Before turning on a focus session, the system do not disturb is off. The
   // default value for the toggle button is set to disabled.
+  // Scroll to the bottom of the focus panel to make the `toggle_button` visible
+  // before clicking on it.
+  ScrollToBottom();
   LeftClickOn(toggle_button);
   EXPECT_FALSE(toggle_button->GetIsOn());
 
@@ -251,6 +307,9 @@ TEST_F(FocusModeDetailedViewTest, DndOnBeforeStart) {
   message_center->SetQuietMode(true);
   EXPECT_TRUE(message_center->IsQuietMode());
 
+  // Scroll to the bottom of the focus panel to make the `toggle_button` visible
+  // before clicking on it.
+  ScrollToBottom();
   LeftClickOn(toggle_button);
   EXPECT_FALSE(toggle_button->GetIsOn());
 
@@ -275,7 +334,8 @@ TEST_F(FocusModeDetailedViewTest, ToggleRow) {
   auto validate_labels = [&](bool active, const std::string& trace_name) {
     SCOPED_TRACE(trace_name);
     EXPECT_EQ(active, focus_mode_controller->in_focus_session());
-    EXPECT_EQ(active ? u"Focusing" : u"Focus", GetToggleRowLabel()->GetText());
+    EXPECT_EQ(active ? u"Focus is on" : u"Focus",
+              GetToggleRowLabel()->GetText());
 
     EXPECT_EQ(active, IsToggleRowSubLabelVisible());
 
@@ -295,7 +355,7 @@ TEST_F(FocusModeDetailedViewTest, ToggleRow) {
   CreateFakeFocusModeDetailedView();
 
   // Wait a minute to test that the time remaining label updates.
-  task_environment()->FastForwardBy(base::Seconds(60));
+  AdvanceClock(base::Seconds(60));
   validate_labels(/*active=*/true, "Wait for a minute");
 
   LeftClickOn(GetToggleRowButton());
@@ -311,11 +371,29 @@ TEST_F(FocusModeDetailedViewTest, ToggleRow) {
 
   // Wait a second to avoid the time remaining being either 1500 seconds or
   // 1499.99 seconds.
-  task_environment()->FastForwardBy(base::Seconds(1));
+  AdvanceClock(base::Seconds(1));
   validate_labels(/*active=*/true, "Check time passed");
 
   LeftClickOn(GetToggleRowButton());
   validate_labels(/*active=*/false, "Toggle off session again");
+}
+
+// Use a touch event to start focus mode after editing the timer.
+// https://crbug.com/371635929
+TEST_F(FocusModeDetailedViewTest, TapButtonAfterTimerChange) {
+  // Enter '11' into the timer field.
+  SystemTextfield* timer_textfield = GetTimerSettingTextfield();
+  LeftClickOn(timer_textfield);
+  ASSERT_TRUE(timer_textfield->IsActive());
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_DELETE);
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_1);
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_1);
+  EXPECT_EQ(u"11", timer_textfield->GetText());
+
+  // Tap on the start button.
+  GestureTapOn(GetToggleRowButton());
+
+  EXPECT_EQ(FocusModeController::Get()->session_duration().InMinutes(), 11);
 }
 
 // Tests how the textfield for the timer setting view handles valid and invalid
@@ -534,7 +612,7 @@ TEST_F(FocusModeDetailedViewTest, TimerViewVisibility) {
             GetEndTimeLabel()->GetText());
 
   // Wait a minute to test that the end time label updates.
-  task_environment()->FastForwardBy(base::Seconds(60));
+  AdvanceClock(base::Seconds(60));
   EXPECT_EQ(focus_mode_util::GetFormattedEndTimeString(base::Time::Now() +
                                                        session_duration),
             GetEndTimeLabel()->GetText());
@@ -598,9 +676,10 @@ TEST_F(FocusModeDetailedViewTest,
   auto pod = controller->CreateTile();
 
   auto* timer_textfield = GetTimerSettingTextfield();
-  auto textfield_text_before_increment = timer_textfield->GetText();
+  std::u16string textfield_text_before_increment(timer_textfield->GetText());
   LeftClickOn(GetTimerSettingIncrementButton());
-  auto textfield_text_after_increment = timer_textfield->GetText();
+  std::u16string_view textfield_text_after_increment =
+      timer_textfield->GetText();
   ASSERT_NE(textfield_text_before_increment, textfield_text_after_increment);
   EXPECT_EQ(base::StrCat({textfield_text_after_increment, u" min"}),
             pod->sub_label()->GetText());
@@ -637,23 +716,113 @@ TEST_F(FocusModeDetailedViewTest, ExpandOrShrinkTaskViewContainer) {
   EXPECT_TRUE(chip_carousel->HasTasks());
   EXPECT_TRUE(chip_carousel->GetVisible());
 
-  auto* radio_button = task_view->radio_button_for_testing();
-  // `radio_button` is invisible before we select a task title.
-  EXPECT_FALSE(radio_button->GetVisible());
+  auto* complete_button = task_view->complete_button_for_testing();
+  // `complete_button` is invisible before we select a task title.
+  EXPECT_FALSE(complete_button->GetVisible());
   const int old_height_before_shrink = task_container_view->bounds().height();
 
   // 1. Shrink the `task_container_view`.
-  task_view->AddOrUpdateTask(u"my task title");
+  task_view->CommitTextfieldContents(u"my task title");
+  AdvanceClock(base::Milliseconds(10));
   views::test::RunScheduledLayout(task_container_view);
-  EXPECT_TRUE(radio_button->GetVisible());
+  EXPECT_TRUE(complete_button->GetVisible());
   EXPECT_FALSE(chip_carousel->GetVisible());
   EXPECT_GT(old_height_before_shrink, task_container_view->bounds().height());
 
   // 2. Expand the `task_container_view`.
-  LeftClickOn(radio_button);
-  task_environment()->FastForwardBy(kStartAnimationDelay);
+  LeftClickOn(complete_button);
+  AdvanceClock(kStartAnimationDelay);
   views::test::RunScheduledLayout(task_container_view);
   EXPECT_EQ(old_height_before_shrink, task_container_view->bounds().height());
+}
+
+// Test that after adding or updating a task, the focus should be either on the
+// complete button or the deselect button. Note that this test should enable
+// ChromeVox.
+TEST_F(FocusModeDetailedViewTest, A11yFocusAfterTaskTextfield) {
+  Shell::Get()->accessibility_controller()->spoken_feedback().SetEnabled(true);
+
+  auto* task_view = GetTaskView();
+  auto* task_textfield = task_view->GetTaskTextfieldForTesting();
+  auto* complete_button = task_view->complete_button_for_testing();
+  EXPECT_FALSE(complete_button->HasFocus());
+
+  // 1. Add a new task. After the commit, the focus will be on the radio button.
+  LeftClickOn(task_textfield);
+  EXPECT_TRUE(task_textfield->HasFocus());
+  task_textfield->SetText(u"task title1");
+  EXPECT_TRUE(task_textfield->IsActive());
+
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
+  task_environment()->RunUntilIdle();
+  EXPECT_TRUE(complete_button->HasFocus());
+
+  // 2. Tab to the textfield, which will let us edit the existing textfield
+  // directly. Then, pressing the `Enter` key will bring the focus on the radio
+  // button.
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_TAB);
+  EXPECT_TRUE(task_textfield->HasFocus());
+  EXPECT_TRUE(task_textfield->IsActive());
+  task_textfield->SetText(u"task title2");
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
+  task_environment()->RunUntilIdle();
+  EXPECT_TRUE(complete_button->HasFocus());
+
+  // 3. Tab to the textfield, which will let us edit the existing textfield
+  // directly. Then, pressing the `TAB` key will bring the focus on the deselect
+  // button.
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_TAB);
+  EXPECT_TRUE(task_textfield->HasFocus());
+  EXPECT_TRUE(task_textfield->IsActive());
+  task_textfield->SetText(u"task title3");
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_TAB);
+  task_environment()->RunUntilIdle();
+  EXPECT_TRUE(task_view->deselect_button_for_testing()->HasFocus());
+}
+
+// Tests that the focus ring should be either on the textfield container or on
+// the textfield depending on if there is a selected task.
+TEST_F(FocusModeDetailedViewTest, RegularFocusRingCheckForTaskTextfield) {
+  auto* task_container_view = GetTaskContainerView();
+  auto* task_view = GetTaskView();
+  auto* textfield_container = task_view->textfield_container_for_testing();
+  auto* task_textfield = task_view->GetTaskTextfieldForTesting();
+  auto* complete_button = task_view->complete_button_for_testing();
+  auto* controller = FocusModeController::Get();
+
+  // When there is no selected task, no focus ring will be painted before
+  // clicking on the textfield.
+  EXPECT_FALSE(task_textfield->HasFocus());
+  auto* container_focus_ring = views::FocusRing::Get(textfield_container);
+  auto* texfield_focus_ring = views::FocusRing::Get(task_textfield);
+  EXPECT_FALSE(container_focus_ring->ShouldPaintForTesting());
+  EXPECT_FALSE(texfield_focus_ring->ShouldPaintForTesting());
+
+  // 1. Click the textfield and the focus ring should be painted on the
+  // container instead of the textfield itself.
+  LeftClickOn(task_textfield);
+  EXPECT_TRUE(task_textfield->HasFocus());
+  EXPECT_TRUE(container_focus_ring->ShouldPaintForTesting());
+  EXPECT_FALSE(texfield_focus_ring->ShouldPaintForTesting());
+
+  // 2. Set a selected task and tab to the textfield from the complete button.
+  FocusModeTask task;
+  task.task_id = {.list_id = "default", .id = "task1"};
+  task.title = "task_name";
+  task.updated = base::Time::Now();
+  controller->SetSelectedTask(task);
+
+  views::test::RunScheduledLayout(task_container_view);
+  EXPECT_TRUE(complete_button->GetVisible());
+  complete_button->RequestFocus();
+  EXPECT_TRUE(complete_button->HasFocus());
+  PressAndReleaseKey(ui::KeyboardCode::VKEY_TAB);
+
+  // In the selected state, the focus ring should be on the textfield itself
+  // instead of the container.
+  EXPECT_FALSE(container_focus_ring->ShouldPaintForTesting());
+  EXPECT_TRUE(texfield_focus_ring->ShouldPaintForTesting());
+  EXPECT_TRUE(task_textfield->IsActive());
 }
 
 // Tests that tabbing to the timer decrease button after setting the time to 1
@@ -744,77 +913,152 @@ TEST_F(FocusModeDetailedViewTest, StartSessionWithActiveTimerTextfield) {
           prefs::kFocusModeSessionDuration));
 }
 
-// Verify that when toggling a focus mode, the histogram will record the initial
-// session duration.
-TEST_F(FocusModeDetailedViewTest, CheckInitialDurationHistograms) {
-  base::HistogramTester histogram_tester;
+// Tests that when scrolling on the chip carousel, the scroll view of the focus
+// panel will be scrolled.
+TEST_F(FocusModeDetailedViewTest, ChipsNotAcceptVerticalScrollGesture) {
+  auto* chip_carousel = GetTaskView()->chip_carousel_for_testing();
+  EXPECT_TRUE(chip_carousel->HasTasks());
+  EXPECT_TRUE(chip_carousel->GetVisible());
 
-  auto* controller = FocusModeController::Get();
-  EXPECT_FALSE(controller->in_focus_session());
+  // Before scrolling the focus panel, the visible rect for the scroll view
+  // should be in an initialized state.
+  auto* scroll_view = GetScrollView();
+  EXPECT_EQ(scroll_view->GetVisibleRect().y(), 0);
 
-  // 1. Start a focus session with the minimum session duration.
-  controller->SetInactiveSessionDuration(focus_mode_util::kMinimumDuration);
-  controller->ToggleFocusMode();
-  EXPECT_TRUE(controller->in_focus_session());
-  histogram_tester.ExpectTimeBucketCount(
-      focus_mode_histogram_names::kInitialDurationOnSessionStartsHistogramName,
-      focus_mode_util::kMinimumDuration, 1);
+  const auto center_point = chip_carousel->GetBoundsInScreen().CenterPoint();
+  const gfx::Vector2d offset(0, -100);
+  // Scroll down the chip carousel with `offset`.
+  GetEventGenerator()->GestureScrollSequence(
+      center_point, center_point + offset, base::Milliseconds(300), 3);
 
-  controller->ToggleFocusMode();
-  EXPECT_FALSE(controller->in_focus_session());
-
-  // 2. Start a new focus session with the maximum session duration.
-  controller->SetInactiveSessionDuration(focus_mode_util::kMaximumDuration);
-  controller->ToggleFocusMode();
-  EXPECT_TRUE(controller->in_focus_session());
-  histogram_tester.ExpectTimeBucketCount(
-      focus_mode_histogram_names::kInitialDurationOnSessionStartsHistogramName,
-      focus_mode_util::kMaximumDuration, 1);
-
-  histogram_tester.ExpectTotalCount(
-      focus_mode_histogram_names::kInitialDurationOnSessionStartsHistogramName,
-      2);
+  // After scrolling up the focus panel, the visible rect for the scroll view
+  // has been changed.
+  EXPECT_GT(scroll_view->GetVisibleRect().y(), 0);
 }
 
-// Verify that we start a focus session, the histogram will record whether there
-// is a selected task.
-TEST_F(FocusModeDetailedViewTest, CheckHasSelectedTaskHistogram) {
-  base::HistogramTester histogram_tester;
+TEST_F(FocusModeDetailedViewTest,
+       HoverHighlightViewAccessibleDefaultActionVerb) {
+  auto* hover_highlight_view = GetToggleView();
+  auto* right_view = GetToggleRowButton();
+  ui::AXNodeData data;
 
+  ASSERT_TRUE(hover_highlight_view);
+  ASSERT_TRUE(right_view);
+  ASSERT_TRUE(right_view->GetClassName().contains("Button"));
+
+  hover_highlight_view->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetDefaultActionVerb(), ax::mojom::DefaultActionVerb::kClick);
+
+  hover_highlight_view->SetRightViewVisible(false);
+  data = ui::AXNodeData();
+  hover_highlight_view->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetDefaultActionVerb(), ax::mojom::DefaultActionVerb::kPress);
+
+  hover_highlight_view->SetRightViewVisible(true);
+  data = ui::AXNodeData();
+  hover_highlight_view->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetDefaultActionVerb(), ax::mojom::DefaultActionVerb::kClick);
+
+  hover_highlight_view->Reset();
+  data = ui::AXNodeData();
+  hover_highlight_view->GetViewAccessibility().GetAccessibleNodeData(&data);
+  EXPECT_EQ(data.GetDefaultActionVerb(), ax::mojom::DefaultActionVerb::kPress);
+}
+
+class FocusModeDetailedViewWithLotsOfTasksTest
+    : public FocusModeDetailedViewTest {
+ public:
+  void CreateFakeTasks(api::FakeTasksClient& tasks_client) override {
+    // Creates five lists, each containing two tasks.
+    for (int list_no = 0; list_no != 5; ++list_no) {
+      std::string list_id = base::StringPrintf("L%d", list_no);
+      AddFakeTaskList(tasks_client, list_id);
+
+      for (int task_no = 0; task_no != 2; ++task_no) {
+        std::string task_id = base::StringPrintf("T%d.%d", list_no, task_no);
+        AddFakeTask(tasks_client, list_id, task_id, "Title");
+      }
+    }
+  }
+};
+
+// Tests that the carousel only shows a limited number of tasks.
+TEST_F(FocusModeDetailedViewWithLotsOfTasksTest, LimitTasks) {
+  auto* task_view = GetTaskView();
+  auto* chip_carousel = task_view->chip_carousel_for_testing();
+  EXPECT_TRUE(chip_carousel->HasTasks());
+  EXPECT_EQ(chip_carousel->GetTaskCountForTesting(), 5);
+  EXPECT_TRUE(chip_carousel->GetVisible());
+}
+
+// Tests that deselecting and re-selecting a task added through the focus panel
+// works and has the newly added task data.
+TEST_F(FocusModeDetailedViewTest, ReselectAddedTask) {
+  // Verify the starting state where we have one pre-populated task.
+  auto* task_view = GetTaskView();
+  auto* chip_carousel = task_view->chip_carousel_for_testing();
+  EXPECT_TRUE(chip_carousel->HasTasks());
+  EXPECT_TRUE(chip_carousel->GetVisible());
+  EXPECT_EQ(chip_carousel->GetTaskCountForTesting(), 1);
+
+  // Verify a new task is added.
+  std::u16string new_task_title = u"my task title";
+  task_view->CommitTextfieldContents(new_task_title);
+  AdvanceClock(base::Milliseconds(10));
+  EXPECT_FALSE(chip_carousel->GetVisible());
+  EXPECT_EQ(chip_carousel->GetTaskCountForTesting(), 2);
+
+  // Simulate a task being removed. Then verify that we are able to select the
+  // task that was added.
+  task_view->OnClearTask();
   auto* controller = FocusModeController::Get();
-  EXPECT_FALSE(controller->in_focus_session());
-  histogram_tester.ExpectTotalCount(
-      focus_mode_histogram_names::kHasSelectedTaskOnSessionStartHistogramName,
-      0);
-
-  // 1. Start a focus session without a selected task.
   EXPECT_FALSE(controller->HasSelectedTask());
-  controller->ToggleFocusMode();
-  EXPECT_TRUE(controller->in_focus_session());
-  histogram_tester.ExpectBucketCount(
-      focus_mode_histogram_names::kHasSelectedTaskOnSessionStartHistogramName,
-      false, 1);
-  controller->ToggleFocusMode();
-  EXPECT_FALSE(controller->in_focus_session());
-
-  // 2. Start a focus session with a selected task.
-  int id = 0;
-  const std::string title = "Focus Task";
-  controller->SetSelectedTask(std::make_unique<api::Task>(
-                                  /*id=*/base::NumberToString(id), title,
-                                  /*due=*/absl::nullopt, /*completed=*/false,
-                                  /*has_subtasks=*/false,
-                                  /*has_email_link=*/false,
-                                  /*has_notes=*/false,
-                                  /*updated=*/base::Time::Now())
-                                  .get());
+  EXPECT_TRUE(chip_carousel->GetVisible());
+  views::View* scroll_contents =
+      chip_carousel->GetScrollViewForTesting()->contents();
+  LeftClickOn(scroll_contents->GetChildrenInZOrder()[0]);
   EXPECT_TRUE(controller->HasSelectedTask());
+  EXPECT_EQ(controller->tasks_model().selected_task()->title,
+            base::UTF16ToUTF8(new_task_title));
+}
 
-  controller->ToggleFocusMode();
-  EXPECT_TRUE(controller->in_focus_session());
-  histogram_tester.ExpectBucketCount(
-      focus_mode_histogram_names::kHasSelectedTaskOnSessionStartHistogramName,
-      true, 1);
+// Tests that the sounds view toggle buttons are visible and function correctly.
+// Regression test for crbug.com/402456595
+TEST_F(FocusModeDetailedViewTest, SoundsViewFunctionality) {
+  // Verify that the sounds view is present.
+  FocusModeSoundsView* sounds_view = GetSoundsView();
+  EXPECT_TRUE(sounds_view->GetVisible());
+  EXPECT_THAT(sounds_view->soundscape_views(),
+              testing::Pair(testing::NotNull(), testing::NotNull()));
+  EXPECT_THAT(sounds_view->youtube_music_views(),
+              testing::Pair(testing::NotNull(), testing::NotNull()));
+
+  TabSliderButton* soundscapes_button = sounds_view->soundscape_views().first;
+  SoundSectionView* soundscapes_section =
+      sounds_view->soundscape_views().second;
+  ash::TabSliderButton* ytm_button = sounds_view->youtube_music_views().first;
+  SoundSectionView* ytm_section = sounds_view->youtube_music_views().second;
+
+  // Check that the tab slider buttons are both showing (i.e. non-zero width),
+  // and that the soundscapes section view is shown by default.
+  EXPECT_TRUE(soundscapes_button->GetVisible());
+  EXPECT_TRUE(ytm_button->GetVisible());
+  EXPECT_GT(soundscapes_button->width(), 0);
+  EXPECT_GT(ytm_button->width(), 0);
+  EXPECT_TRUE(soundscapes_section->GetVisible());
+  EXPECT_FALSE(ytm_section->GetVisible());
+
+  // Click on the ytm button to switch to the ytm section view.
+  ScrollToBottom();
+  LeftClickOn(ytm_button);
+  EXPECT_FALSE(soundscapes_section->GetVisible());
+  EXPECT_TRUE(ytm_section->GetVisible());
+
+  // Click on the soundscapes button to switch back to the soundscapes section
+  // view.
+  LeftClickOn(soundscapes_button);
+  EXPECT_TRUE(soundscapes_section->GetVisible());
+  EXPECT_FALSE(ytm_section->GetVisible());
 }
 
 }  // namespace ash

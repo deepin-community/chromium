@@ -36,12 +36,12 @@ class NearbyPeriodicSchedulerTest : public ::testing::Test {
         network_connection_tracker_.get());
     pref_service_.registry()->RegisterDictionaryPref(kTestPrefName);
     network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
-        network::mojom::ConnectionType::CONNECTION_WIFI);
+        net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI);
 
     scheduler_ = std::make_unique<NearbyPeriodicScheduler>(
         kTestRequestPeriod, /*retry_failures=*/true,
         /*require_connectivity=*/true, kTestPrefName, &pref_service_,
-        base::DoNothing(), task_environment_.GetMockClock());
+        base::DoNothing(), Feature::NS, task_environment_.GetMockClock());
   }
 
   base::Time Now() const { return task_environment_.GetMockClock()->Now(); }

@@ -17,6 +17,7 @@
 #include "base/i18n/message_formatter.h"
 #include "base/i18n/time_formatting.h"
 #include "base/logging.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -56,7 +57,6 @@ const gfx::VectorIcon& GetBatteryImageMD(
     return kNotificationBatteryCriticalIcon;
   } else {
     NOTREACHED();
-    return gfx::kNoneIcon;
   }
 }
 
@@ -71,7 +71,6 @@ message_center::SystemNotificationWarningLevel GetWarningLevelMD(
     return message_center::SystemNotificationWarningLevel::CRITICAL_WARNING;
   } else {
     NOTREACHED();
-    return message_center::SystemNotificationWarningLevel::NORMAL;
   }
 }
 
@@ -188,8 +187,6 @@ void CalculateNotificationButtons(
       l10n_util::GetStringUTF16(enable_disable_bsm_token_optional.value())};
   rich_notification_data.buttons =
       std::vector<message_center::ButtonInfo>{bsm_button};
-  rich_notification_data.settings_button_handler =
-      message_center::SettingsButtonHandler::DELEGATE;
 }
 
 void HandlePowerNotificationButtonClick(
@@ -226,7 +223,7 @@ void HandlePowerNotificationButtonClick(
       break;
     }
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 

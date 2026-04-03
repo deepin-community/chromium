@@ -5,10 +5,8 @@
 #include "components/exo/ui_lock_controller.h"
 
 #include <memory>
-#include <optional>
 
 #include "ash/bluetooth_devices_observer.h"
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/keyboard/keyboard_controller.h"
 #include "ash/public/cpp/session/session_controller.h"
@@ -17,6 +15,7 @@
 #include "ash/wm/window_state_observer.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
@@ -149,7 +148,7 @@ views::Widget* CreateEscNotification(
       l10n_util::GetStringFUTF16(message_id, key_names, nullptr),
       std::move(icons));
 
-  gfx::Size size = content_view->GetPreferredSize();
+  gfx::Size size = content_view->GetPreferredSize({});
   views::Widget* popup = SubtleNotificationView::CreatePopupWidget(
       parent, std::move(content_view));
   popup->SetZOrderLevel(ui::ZOrderLevel::kSecuritySurface);
@@ -475,7 +474,7 @@ DEFINE_UI_CLASS_PROPERTY_TYPE(ExitNotifier*)
 
 namespace exo {
 namespace {
-DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(ExitNotifier, kExitNotifierKey, nullptr)
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(ExitNotifier, kExitNotifierKey)
 
 ExitNotifier* GetExitNotifier(UILockController* controller,
                               aura::Window* window,
@@ -545,7 +544,7 @@ void UILockController::OnKeyEvent(ui::KeyEvent* event) {
 
   if (event->code() == ui::DomCode::ESCAPE &&
       (event->flags() & kExcludedFlags) == 0) {
-    OnEscapeKey(event->type() == ui::ET_KEY_PRESSED);
+    OnEscapeKey(event->type() == ui::EventType::kKeyPressed);
   }
 }
 

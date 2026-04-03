@@ -17,5 +17,6 @@ dictionary CookieInit {
   USVString path = "/";
   DOMHighResTimeStamp? expires = null;
   CookieSameSite sameSite = "strict";
-  [RuntimeEnabled=PartitionedCookies] boolean partitioned = false;
+  boolean partitioned = false;
+  [RuntimeEnabled=CookieStoreAPIMaxAge] long long? maxAge;
 };

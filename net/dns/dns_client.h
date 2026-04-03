@@ -31,6 +31,16 @@ class DnsTransactionFactory;
 class NetLog;
 class ResolveContext;
 
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class DnsConfigLocalNameserverState {
+  kNoLocal = 0,
+  kOnlyLoopback = 1,
+  kOnlyNonLoopbackLocal = 2,
+  kLoopbackAndNonLoopback = 3,
+  kMaxValue = kLoopbackAndNonLoopback,
+};
+
 // Entry point for HostResolverManager to interact with the built-in async
 // resolver, as implemented by DnsTransactionFactory. Manages configuration and
 // status of the resolver.
@@ -76,7 +86,7 @@ class NET_EXPORT DnsClient {
   virtual void ReplaceCurrentSession() = 0;
 
   // Used for tracking per-context-per-session data.
-  // TODO(crbug.com/1022059): Once more per-context-per-session data has been
+  // TODO(crbug.com/40106440): Once more per-context-per-session data has been
   // moved to ResolveContext and it doesn't need to call back into DnsSession,
   // convert this to a more limited session handle to prevent overuse of
   // DnsSession outside the DnsClient code.
@@ -104,7 +114,7 @@ class NET_EXPORT DnsClient {
   // Return the effective DNS configuration as a value that can be recorded in
   // the NetLog. This also synthesizes interpretative data to the Value, e.g.
   // whether secure and insecure transactions are enabled.
-  virtual base::Value::Dict GetDnsConfigAsValueForNetLog() const = 0;
+  virtual base::DictValue GetDnsConfigAsValueForNetLog() const = 0;
 
   virtual std::optional<DnsConfig> GetSystemConfigForTesting() const = 0;
   virtual DnsConfigOverrides GetConfigOverridesForTesting() const = 0;

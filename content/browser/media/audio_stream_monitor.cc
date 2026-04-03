@@ -4,7 +4,6 @@
 
 #include "content/browser/media/audio_stream_monitor.h"
 
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
@@ -69,7 +68,7 @@ bool AudioStreamMonitor::IsCurrentlyAudible() const {
   return is_audible_;
 }
 
-void AudioStreamMonitor::RenderProcessGone(int render_process_id) {
+void AudioStreamMonitor::RenderProcessGone(ChildProcessId render_process_id) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
   // Note: It's possible for the RenderProcessHost and WebContents (and thus
@@ -258,7 +257,8 @@ void AudioStreamMonitor::UpdateStreams() {
 
 void AudioStreamMonitor::MaybeToggle() {
   const base::TimeTicks off_time =
-      last_became_silent_time_ + base::Milliseconds(kHoldOnMilliseconds);
+      last_became_silent_time_ +
+      base::Milliseconds(std::to_underlying(kHoldOnMilliseconds));
   const base::TimeTicks now = base::TimeTicks::Now();
   const bool should_stop_timer = is_audible_ || now >= off_time;
   const bool should_indicator_be_on = is_audible_ || !should_stop_timer;

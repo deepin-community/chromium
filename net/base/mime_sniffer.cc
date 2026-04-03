@@ -404,7 +404,7 @@ static bool SniffForOfficeDocs(std::string_view content,
     return false;
 
   OfficeDocType type = DOC_TYPE_NONE;
-  std::string_view url_path = url.path_piece();
+  std::string_view url_path = url.path();
   for (const auto& office_extension : kOfficeExtensionTypes) {
     if (base::EndsWith(url_path, office_extension.extension,
                        base::CompareCase::INSENSITIVE_ASCII)) {
@@ -429,7 +429,6 @@ static bool SniffForOfficeDocs(std::string_view content,
         return true;
       case DOC_TYPE_NONE:
         NOTREACHED();
-        return false;
     }
   } else if (office_version == "OOXML") {
     switch (type) {
@@ -447,12 +446,10 @@ static bool SniffForOfficeDocs(std::string_view content,
         return true;
       case DOC_TYPE_NONE:
         NOTREACHED();
-        return false;
     }
   }
 
   NOTREACHED();
-  return false;
 }
 
 static bool IsOfficeType(const std::string& type_hint) {
@@ -648,7 +645,7 @@ static bool SniffCRX(std::string_view content,
       MAGIC_NUMBER("application/x-chrome-extension", "Cr24\x03\x00\x00\x00")};
 
   // Only consider files that have the extension ".crx".
-  if (!url.path_piece().ends_with(".crx")) {
+  if (!url.path().ends_with(".crx")) {
     return false;
   }
 

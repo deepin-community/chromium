@@ -28,11 +28,6 @@ constexpr char kStopMethod[] = "Stop";
 
 constexpr char kUpstartJobsPath[] = "/com/ubuntu/Upstart/jobs/";
 constexpr char kMediaAnalyticsJob[] = "rtanalytics";
-// "wilco_5fdtc_5fdispatcher" below refers to the "wilco_dtc_dispatcher" upstart
-// job. Upstart escapes characters that aren't valid in D-Bus object paths
-// using underscore as the escape character, followed by the character code in
-// hex.
-constexpr char kWilcoDtcDispatcherJob[] = "wilco_5fdtc_5fdispatcher";
 
 UpstartClient* g_instance = nullptr;
 
@@ -53,6 +48,17 @@ class UpstartClientImpl : public UpstartClient {
                   base::BindOnce(&UpstartClientImpl::OnVoidMethod,
                                  weak_ptr_factory_.GetWeakPtr(), job, "start",
                                  std::move(callback)));
+  }
+
+  void StartJobWithTimeout(const std::string& job,
+                           const std::vector<std::string>& upstart_env,
+                           chromeos::VoidDBusMethodCallback callback,
+                           int timeout_ms) override {
+    CallJobMethod(job, kStartMethod, upstart_env,
+                  base::BindOnce(&UpstartClientImpl::OnVoidMethod,
+                                 weak_ptr_factory_.GetWeakPtr(), job, "start",
+                                 std::move(callback)),
+                  timeout_ms);
   }
 
   void StartJobWithErrorDetails(
@@ -98,29 +104,20 @@ class UpstartClientImpl : public UpstartClient {
     StopJob(kMediaAnalyticsJob, {}, std::move(callback));
   }
 
-  void StartWilcoDtcService(
-      chromeos::VoidDBusMethodCallback callback) override {
-    StartJob(kWilcoDtcDispatcherJob, {}, std::move(callback));
-  }
-
-  void StopWilcoDtcService(chromeos::VoidDBusMethodCallback callback) override {
-    StopJob(kWilcoDtcDispatcherJob, {}, std::move(callback));
-  }
-
  private:
   void CallJobMethod(const std::string& job,
                      const std::string& method,
                      const std::vector<std::string>& upstart_env,
-                     dbus::ObjectProxy::ResponseOrErrorCallback callback) {
+                     dbus::ObjectProxy::ResponseOrErrorCallback callback,
+                     int timeout_ms = dbus::ObjectProxy::TIMEOUT_USE_DEFAULT) {
     dbus::ObjectProxy* job_proxy = bus_->GetObjectProxy(
         kUpstartServiceName, dbus::ObjectPath(kUpstartJobsPath + job));
     dbus::MethodCall method_call(kUpstartJobInterface, method);
     dbus::MessageWriter writer(&method_call);
     writer.AppendArrayOfStrings(upstart_env);
     writer.AppendBool(true /* wait for response */);
-    job_proxy->CallMethodWithErrorResponse(
-        &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        std::move(callback));
+    job_proxy->CallMethodWithErrorResponse(&method_call, timeout_ms,
+                                           std::move(callback));
   }
 
   void OnVoidMethod(const std::string& job_for_logging,

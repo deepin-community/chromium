@@ -9,8 +9,6 @@
 
 #include "base/containers/queue.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder.mojom.h"
-#include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom-forward.h"
-#include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom-shared.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
 
@@ -52,11 +50,14 @@ class FakeQuickStartDecoder : public mojom::QuickStartDecoder {
 
   void SetQuickStartMessage(mojom::QuickStartMessagePtr quick_start_message);
 
+  bool has_decode_been_called() { return has_decode_been_called_; }
+
  private:
   mojo::ReceiverSet<ash::quick_start::mojom::QuickStartDecoder> receiver_set_;
   base::queue<std::pair<mojom::QuickStartMessagePtr,
                         std::optional<mojom::QuickStartDecoderError>>>
       results_;
+  bool has_decode_been_called_ = false;
 };
 
 }  // namespace ash::quick_start

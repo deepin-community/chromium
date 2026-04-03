@@ -44,12 +44,12 @@ class RendererControlMultiplexer : public media::mojom::Renderer {
   void SetVolume(float volume) override;
   void SetCdm(const std::optional<::base::UnguessableToken>& cdm_id,
               SetCdmCallback callback) override;
+  void SetLatencyHint(std::optional<base::TimeDelta> latency_hint) override;
   void Initialize(
       mojo::PendingAssociatedRemote<media::mojom::RendererClient> client,
       std::optional<
           std::vector<::mojo::PendingRemote<::media::mojom::DemuxerStream>>>
           streams,
-      media::mojom::MediaUrlParamsPtr media_url_params,
       InitializeCallback callback) override;
   void Flush(FlushCallback callback) override;
 

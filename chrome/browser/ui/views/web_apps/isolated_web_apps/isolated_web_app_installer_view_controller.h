@@ -11,16 +11,18 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/types/expected.h"
-#include "chrome/browser/ui/views/web_apps/isolated_web_apps/installability_checker.h"
 #include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_installer_model.h"
 #include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_installer_view.h"
-#include "chrome/browser/ui/views/web_apps/isolated_web_apps/pref_observer.h"
-#include "chrome/browser/web_applications/isolated_web_apps/install_isolated_web_app_command.h"
+#include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_user_installability_checker.h"
+#include "chrome/browser/web_applications/isolated_web_apps/commands/install_isolated_web_app_command.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 class Profile;
+class SkBitmap;
 
 namespace views {
 class DialogDelegate;
@@ -37,16 +39,14 @@ class IsolatedWebAppInstallerViewController
     : public IsolatedWebAppInstallerModel::Observer,
       public IsolatedWebAppInstallerView::Delegate {
  public:
-  IsolatedWebAppInstallerViewController(
-      Profile* profile,
-      WebAppProvider* web_app_provider,
-      IsolatedWebAppInstallerModel* model,
-      std::unique_ptr<IsolatedWebAppsEnabledPrefObserver> pref_observer);
+  IsolatedWebAppInstallerViewController(Profile* profile,
+                                        WebAppProvider* web_app_provider,
+                                        IsolatedWebAppInstallerModel* model);
   ~IsolatedWebAppInstallerViewController() override;
 
   // Starts the installer state transition. |initialized_callback| will be
   // called once the dialog is initialized and ready for display.
-  // |complete_callback| will be called when the dialog is being closed.
+  // |completion_callback| will be called when the dialog is being closed.
   void Start(base::OnceClosure initialized_callback,
              base::OnceClosure completion_callback);
 
@@ -58,7 +58,7 @@ class IsolatedWebAppInstallerViewController
   // Adds or updates the Isolated Web App Installer window to ChromeOS Shelf.
   void AddOrUpdateWindowToShelf();
 
-  void SetIcon(gfx::ImageSkia icon);
+  void SetIcon(gfx::ImageSkia icon, bool trigger_masking);
 
   void SetViewForTesting(IsolatedWebAppInstallerView* view);
 
@@ -91,10 +91,11 @@ class IsolatedWebAppInstallerViewController
   void OnComplete();
   void Close();
 
-  void OnPrefChanged(bool enabled);
+  void OnUserInstallPreconditionsMaybeChanged();
   void OnGetMetadataProgressUpdated(double progress);
   void OnInstallabilityChecked(InstallabilityChecker::Result result);
   void OnInstallProgressUpdated(double progress);
+  void OnIconMaskedUpdateShelf(SkBitmap mask_bitmap);
 
   void OnInstallComplete(
       base::expected<InstallIsolatedWebAppCommandSuccess,
@@ -116,7 +117,7 @@ class IsolatedWebAppInstallerViewController
       std::unique_ptr<views::View> contents_view);
 
   std::string instance_id_;
-  gfx::NativeWindow window_ = nullptr;
+  gfx::NativeWindow window_ = gfx::NativeWindow();
   gfx::ImageSkia icon_ = gfx::ImageSkia();
 
   raw_ptr<Profile> profile_ = nullptr;
@@ -128,13 +129,16 @@ class IsolatedWebAppInstallerViewController
   raw_ptr<views::Widget> child_widget_ = nullptr;
 
   std::unique_ptr<CallbackDelayer> callback_delayer_;
-  std::unique_ptr<IsolatedWebAppsEnabledPrefObserver> pref_observer_;
+  PrefChangeRegistrar pref_change_registrar_;
   std::unique_ptr<InstallabilityChecker> installability_checker_;
   bool is_initialized_ = false;
 
   base::OnceClosure initialized_callback_;
   base::OnceClosure completion_callback_;
 
+  base::ScopedObservation<IsolatedWebAppInstallerModel,
+                          IsolatedWebAppInstallerModel::Observer>
+      model_observation_{this};
   base::WeakPtrFactory<IsolatedWebAppInstallerViewController> weak_ptr_factory_{
       this};
 };

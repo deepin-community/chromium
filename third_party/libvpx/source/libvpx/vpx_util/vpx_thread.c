@@ -27,20 +27,6 @@
 
 #if CONFIG_MULTITHREAD
 
-#if defined(_WIN32) && !HAVE_PTHREAD_H
-// _beginthreadex requires __stdcall
-#if defined(__GNUC__) && \
-    (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 2))
-#define THREADFN __attribute__((force_align_arg_pointer)) unsigned int __stdcall
-#else
-#define THREADFN unsigned int __stdcall
-#endif
-#define THREAD_EXIT_SUCCESS 0
-#else  // _WIN32
-#define THREADFN void *
-#define THREAD_EXIT_SUCCESS NULL
-#endif
-
 struct VPxWorkerImpl {
   pthread_mutex_t mutex_;
   pthread_cond_t condition_;
@@ -53,6 +39,7 @@ static void execute(VPxWorker *const worker);  // Forward declaration.
 
 static THREADFN thread_loop(void *ptr) {
   VPxWorker *const worker = (VPxWorker *)ptr;
+#ifdef HAVE_PTHREAD_SETNAME_NP
 #ifdef __APPLE__
   if (worker->thread_name != NULL) {
     // Apple's version of pthread_setname_np takes one argument and operates on
@@ -74,6 +61,7 @@ static THREADFN thread_loop(void *ptr) {
     thread_name[sizeof(thread_name) - 1] = '\0';
     pthread_setname_np(pthread_self(), thread_name);
   }
+#endif
 #endif
   pthread_mutex_lock(&worker->impl_->mutex_);
   for (;;) {

@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/service/conditional_simplifier.h"
 
+#include <cstdint>
 #include <iterator>
 #include <set>
 #include <string>
@@ -24,18 +25,20 @@ limitations under the License.
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/ir/hlo_original_value_util.h"
 #include "xla/literal.h"
 #include "xla/service/call_graph.h"
 #include "xla/service/call_inliner.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
 #include "xla/status_macros.h"
-#include "xla/statusor.h"
 #include "xla/types.h"
 #include "xla/util.h"
 #include "tsl/platform/errors.h"
@@ -61,7 +64,7 @@ bool ComputationIsEmptyWithArrayRoot(const HloComputation* computation) {
   return empty_operations && contains_array;
 }
 
-StatusOr<bool> TryRemoveUnusedConditionalOperands(
+absl::StatusOr<bool> TryRemoveUnusedConditionalOperands(
     HloComputation* computation,
     const absl::flat_hash_set<HloInstruction*>& calling_conditionals) {
   HloInstruction* param = computation->parameter_instruction(0);
@@ -107,6 +110,16 @@ StatusOr<bool> TryRemoveUnusedConditionalOperands(
   param = new_computation->parameter_instruction(0);
   // Reset the parameter shape of the computation.
   *param->mutable_shape() = tuple_shape;
+  // Update original value if present.
+  if (computation->parameter_instruction(0)->original_value() != nullptr) {
+    absl::flat_hash_map<int64_t, int64_t> old_to_new_mapping;
+    for (int64_t i : tuple_indices_to_keep) {
+      old_to_new_mapping[i] = map[i];
+    }
+    CopyOriginalValue(computation->parameter_instruction(0),
+                      new_computation->parameter_instruction(0),
+                      old_to_new_mapping);
+  }
 
   // Reroute the GTE instructions to new tuple indices.
   for (HloInstruction* user : param->users()) {
@@ -209,7 +222,8 @@ bool RemoveUnusedTupleElements(HloInstruction* conditional_op) {
     return false;
   }
 
-  const int old_tuple_shapes_size = conditional_op->shape().tuple_shapes_size();
+  const int old_tuple_shapes_size =
+      conditional_op->shape().tuple_shapes().size();
 
   // Select indices that are actually used by some GTE instructions.
   std::vector<bool> used_indices(old_tuple_shapes_size, false);
@@ -299,6 +313,7 @@ bool RemoveUnusedTupleElements(HloInstruction* conditional_op) {
 
   // Replace the conditional instruction itself.
   *conditional_op->mutable_shape() = new_shape;
+  CopyOriginalValue(conditional_op, conditional_op, old_to_new_mapping);
 
   // Reroute all user GTE instructions to new tuple indices.
   for (HloInstruction* user : conditional_op->users()) {
@@ -419,7 +434,7 @@ bool MergeDuplicateTupleElements(HloInstruction* conditional) {
   bool changed = false;
   absl::flat_hash_map<std::vector<const HloInstruction*>, int64_t>
       index_collision_table;
-  for (int i = 0; i < conditional->shape().tuple_shapes_size(); ++i) {
+  for (int i = 0; i < conditional->shape().tuple_shapes().size(); ++i) {
     const std::vector<const HloInstruction*> ith_operands_vector =
         vectorize_branches_root_tuple_ith_operand(i);
     const auto emplace_res =
@@ -439,7 +454,7 @@ bool MergeDuplicateTupleElements(HloInstruction* conditional) {
 // inline that computation.
 //
 // Returns true if it made a change to the graph.
-StatusOr<bool> ConditionalSimplifier::TryRemoveConditional(
+absl::StatusOr<bool> ConditionalSimplifier::TryRemoveConditional(
     HloInstruction* conditional) {
   CHECK_EQ(conditional->opcode(), HloOpcode::kConditional);
   // Do not remove conditionals that contain side-effecting instructions or
@@ -464,6 +479,7 @@ StatusOr<bool> ConditionalSimplifier::TryRemoveConditional(
 
   if (conditional->branch_count() == 1) {
     HloInstruction* call_op = create_call(0);
+    call_op->set_original_value(conditional->original_value());
     TF_RETURN_IF_ERROR(computation->ReplaceInstruction(conditional, call_op));
     TF_RETURN_IF_ERROR(CallInliner::Inline(call_op).status());
     return true;
@@ -480,6 +496,7 @@ StatusOr<bool> ConditionalSimplifier::TryRemoveConditional(
       }
     }
     HloInstruction* call_op = create_call(branch_index);
+    call_op->set_original_value(conditional->original_value());
     TF_RETURN_IF_ERROR(computation->ReplaceInstruction(conditional, call_op));
     TF_RETURN_IF_ERROR(CallInliner::Inline(call_op).status());
 
@@ -526,7 +543,9 @@ StatusOr<bool> ConditionalSimplifier::TryRemoveConditional(
   }
 
   HloInstruction* true_call_op = create_call(0);
+  true_call_op->set_original_value(conditional->original_value());
   HloInstruction* false_call_op = create_call(1);
+  false_call_op->set_original_value(conditional->original_value());
   auto condition_broadcast = [&](const Shape& shape) {
     if (ShapeUtil::IsScalar(shape)) {
       return conditional->mutable_operand(0);
@@ -601,11 +620,11 @@ static bool InstructionCallsChannelInstructions(
   return false;
 }
 
-StatusOr<bool> ConditionalSimplifier::Run(
+absl::StatusOr<bool> ConditionalSimplifier::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   XLA_VLOG_LINES(
-      3, "ConditionalSimplifier::Run(), before:\n" + module->ToString());
+      3, "ConditionalSimplifier::RunImpl(), before:\n" + module->ToString());
   bool changed = false;
 
   // Gather all the conditional ops in our module. We do this ahead of time so
@@ -669,8 +688,8 @@ StatusOr<bool> ConditionalSimplifier::Run(
     changed |= result;
   }
 
-  XLA_VLOG_LINES(3,
-                 "ConditionalSimplifier::Run(), after:\n" + module->ToString());
+  XLA_VLOG_LINES(
+      3, "ConditionalSimplifier::RunImpl(), after:\n" + module->ToString());
   return changed;
 }
 

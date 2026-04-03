@@ -7,6 +7,7 @@
 #include <keyhi.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -15,7 +16,6 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -30,16 +30,15 @@
 #include "chrome/browser/ash/ownership/owner_key_loader.h"
 #include "chrome/browser/ash/ownership/owner_settings_service_ash_factory.h"
 #include "chrome/browser/ash/ownership/ownership_histograms.h"
-#include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/about_flags.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/device_settings_provider.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/tpm/tpm_token_loader.h"
 #include "components/ownership/owner_key_util.h"
 #include "components/prefs/pref_service.h"
@@ -52,7 +51,6 @@
 #include "crypto/nss_util.h"
 #include "crypto/nss_util_internal.h"
 #include "crypto/scoped_nss_types.h"
-#include "crypto/signature_creator.h"
 
 namespace em = enterprise_management;
 
@@ -81,80 +79,6 @@ bool IsOwnerInTests(const std::string& user_id) {
   if (!value || !value->is_string())
     return false;
   return value->GetString() == user_id;
-}
-
-void LoadPrivateKeyByPublicKeyOnWorkerThread(
-    const scoped_refptr<OwnerKeyUtil>& owner_key_util,
-    crypto::ScopedPK11Slot public_slot,
-    crypto::ScopedPK11Slot private_slot,
-    ReloadKeyCallback callback) {
-  scoped_refptr<PublicKey> public_key = owner_key_util->ImportPublicKey();
-  if (!public_key) {
-    scoped_refptr<PrivateKey> private_key;
-    content::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE,
-        base::BindOnce(std::move(callback), public_key, private_key));
-    return;
-  }
-
-  // If private slot is already available, this will check it. If not, we'll get
-  // called again later when the TPM Token is ready, and the slot will be
-  // available then. FindPrivateKeyInSlot internally checks for a null slot if
-  // needbe.
-  //
-  // TODO(davidben): The null check should be in the caller rather than
-  // internally in the OwnerKeyUtil implementation. The tests currently get a
-  // null private_slot and expect the mock OwnerKeyUtil to still be called.
-  scoped_refptr<PrivateKey> private_key(
-      new PrivateKey(owner_key_util->FindPrivateKeyInSlot(public_key->data(),
-                                                          private_slot.get())));
-  if (!private_key->key()) {
-    private_key = new PrivateKey(owner_key_util->FindPrivateKeyInSlot(
-        public_key->data(), public_slot.get()));
-  }
-  content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), public_key, private_key));
-}
-
-void ContinueLoadPrivateKeyOnIOThread(
-    const scoped_refptr<OwnerKeyUtil>& owner_key_util,
-    const std::string username_hash,
-    ReloadKeyCallback callback,
-    crypto::ScopedPK11Slot private_slot) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-
-  // TODO(eseckler): It seems loading the key is important for the UsersPrivate
-  // extension API to work correctly during startup, which is why we cannot
-  // currently use the BEST_EFFORT TaskPriority here.
-  scoped_refptr<base::TaskRunner> task_runner =
-      base::ThreadPool::CreateTaskRunner(
-          {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
-           base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN});
-  task_runner->PostTask(
-      FROM_HERE,
-      base::BindOnce(&LoadPrivateKeyByPublicKeyOnWorkerThread, owner_key_util,
-                     crypto::GetPublicSlotForChromeOSUser(username_hash),
-                     std::move(private_slot), std::move(callback)));
-}
-
-void LoadPrivateKeyOnIOThread(const scoped_refptr<OwnerKeyUtil>& owner_key_util,
-                              const std::string username_hash,
-                              ReloadKeyCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-
-  crypto::EnsureNSSInit();
-
-  // GetPrivateSlotForChromeOSUser() will only invoke the callback if the
-  // private slot has not already been loaded. Split it here so we can invoke
-  // the callback separately if the private slot has already been loaded.
-  auto callback_split = base::SplitOnceCallback(
-      base::BindOnce(&ContinueLoadPrivateKeyOnIOThread, owner_key_util,
-                     username_hash, std::move(callback)));
-  crypto::ScopedPK11Slot private_slot = crypto::GetPrivateSlotForChromeOSUser(
-      username_hash, std::move(callback_split.first));
-  if (private_slot) {
-    std::move(callback_split.second).Run(std::move(private_slot));
-  }
 }
 
 bool DoesPrivateKeyExistAsyncHelper(
@@ -349,7 +273,7 @@ bool OwnerSettingsServiceAsh::Set(const std::string& setting,
 // 2: retrieve the list with CrosSettings, be careful
 // - the CrosSettings is on observer of this object
 // - or the list is already written to the disk
-base::Value::List OwnerSettingsServiceAsh::GetListForSetting(
+base::ListValue OwnerSettingsServiceAsh::GetListForSetting(
     const std::string& setting) const {
   auto iter = pending_changes_.find(setting);
   if (iter != pending_changes_.end()) {
@@ -357,20 +281,20 @@ base::Value::List OwnerSettingsServiceAsh::GetListForSetting(
     if (!pending_val->is_list()) {
       LOG(ERROR) << "The " << setting << " setting is not a list!";
       base::debug::DumpWithoutCrashing();
-      return base::Value::List();
+      return base::ListValue();
     }
     return pending_val->GetList().Clone();
   }
   const base::Value* old_value = CrosSettings::Get()->GetPref(setting);
 
   if (old_value == nullptr) {
-    return base::Value::List();
+    return base::ListValue();
   }
 
   if (!old_value->is_list()) {
     LOG(ERROR) << "The " << setting << " setting is not a list!";
     base::debug::DumpWithoutCrashing();
-    return base::Value::List();
+    return base::ListValue();
   }
 
   return old_value->GetList().Clone();
@@ -379,7 +303,7 @@ base::Value::List OwnerSettingsServiceAsh::GetListForSetting(
 bool OwnerSettingsServiceAsh::AppendToList(const std::string& setting,
                                            const base::Value& value) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  base::Value::List new_value = GetListForSetting(setting);
+  base::ListValue new_value = GetListForSetting(setting);
   new_value.Append(value.Clone());
   return Set(setting, base::Value(std::move(new_value)));
 }
@@ -387,7 +311,7 @@ bool OwnerSettingsServiceAsh::AppendToList(const std::string& setting,
 bool OwnerSettingsServiceAsh::RemoveFromList(const std::string& setting,
                                              const base::Value& value) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  base::Value::List new_value = GetListForSetting(setting);
+  base::ListValue new_value = GetListForSetting(setting);
   new_value.EraseValue(value);
   return Set(setting, base::Value(std::move(new_value)));
 }
@@ -424,26 +348,16 @@ void OwnerSettingsServiceAsh::OwnerKeySet(bool success) {
   DCHECK(thread_checker_.CalledOnValidThread());
   RecordOwnerKeyEvent(OwnerKeyEvent::kOwnerKeySet, success);
 
-  if (base::FeatureList::IsEnabled(ownership::kChromeSideOwnerKeyGeneration)) {
-    // If the new owner key was successfully set and there was a different owner
-    // key before, it can be deleted now.
-    if (success && old_owner_key_) {
-      base::ThreadPool::PostTask(
-          FROM_HERE,
-          {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
-           base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
-          base::BindOnce(&DeleteKeyPairOnWorkerThread,
-                         std::move(old_owner_key_)));
-    }
-
-    // OwnerKeySet notification is used to reload the owner key in Chrome when
-    // session manager generates it. If Chrome is responsible for generating the
-    // owner key, the notification is not useful.
-    return;
+  // If the new owner key was successfully set and there was a different owner
+  // key before, it can be deleted now.
+  if (success && old_owner_key_) {
+    base::ThreadPool::PostTask(
+        FROM_HERE,
+        {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
+         base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
+        base::BindOnce(&DeleteKeyPairOnWorkerThread,
+                       std::move(old_owner_key_)));
   }
-
-  if (success)
-    ReloadKeypair();
 }
 
 void OwnerSettingsServiceAsh::OwnershipStatusChanged() {
@@ -471,9 +385,10 @@ void OwnerSettingsServiceAsh::IsOwnerForSafeModeAsync(
   // searching for the owner key.
   content::GetIOThreadTaskRunner({})->PostTaskAndReply(
       FROM_HERE,
-      base::BindOnce(base::IgnoreResult(&crypto::InitializeNSSForChromeOSUser),
-                     user_hash,
-                     ProfileHelper::GetProfilePathByUserIdHash(user_hash)),
+      base::BindOnce(
+          base::IgnoreResult(&crypto::InitializeNSSForChromeOSUser), user_hash,
+          ash::BrowserContextHelper::Get()->GetBrowserContextPathByUserIdHash(
+              user_hash)),
       base::BindOnce(&DoesPrivateKeyExistAsync, owner_key_util,
                      std::move(callback)));
 }
@@ -521,13 +436,15 @@ void OwnerSettingsServiceAsh::FixupLocalOwnerPolicy(
   if (settings->has_user_whitelist() && !settings->has_user_allowlist()) {
     em::UserWhitelistProto* whitelist_proto =
         settings->mutable_user_whitelist();
-    if (!base::Contains(whitelist_proto->user_whitelist(), user_id))
+    if (!std::ranges::contains(whitelist_proto->user_whitelist(), user_id)) {
       whitelist_proto->add_user_whitelist(user_id);
+    }
   } else {
     em::UserAllowlistProto* allowlist_proto =
         settings->mutable_user_allowlist();
-    if (!base::Contains(allowlist_proto->user_allowlist(), user_id))
+    if (!std::ranges::contains(allowlist_proto->user_allowlist(), user_id)) {
       allowlist_proto->add_user_allowlist(user_id);
+    }
   }
 }
 
@@ -545,16 +462,18 @@ void OwnerSettingsServiceAsh::UpdateDeviceSettings(
     }
   } else if (path == kAccountsPrefAllowGuest) {
     em::GuestModeEnabledProto* guest = settings.mutable_guest_mode_enabled();
-    if (value.is_bool())
+    if (value.is_bool()) {
       guest->set_guest_mode_enabled(value.GetBool());
-    else
+    } else {
       NOTREACHED();
+    }
   } else if (path == kAccountsPrefShowUserNamesOnSignIn) {
     em::ShowUserNamesOnSigninProto* show = settings.mutable_show_user_names();
-    if (value.is_bool())
+    if (value.is_bool()) {
       show->set_show_user_names(value.GetBool());
-    else
+    } else {
       NOTREACHED();
+    }
   } else if (path == kAccountsPrefDeviceLocalAccounts) {
     em::DeviceLocalAccountsProto* device_local_accounts =
         settings.mutable_device_local_accounts();
@@ -562,7 +481,7 @@ void OwnerSettingsServiceAsh::UpdateDeviceSettings(
     if (value.is_list()) {
       for (const auto& entry : value.GetList()) {
         if (entry.is_dict()) {
-          const base::Value::Dict& entry_dict = entry.GetDict();
+          const base::DictValue& entry_dict = entry.GetDict();
           em::DeviceLocalAccountInfoProto* account =
               device_local_accounts->add_account();
           const std::string* account_id =
@@ -596,53 +515,60 @@ void OwnerSettingsServiceAsh::UpdateDeviceSettings(
   } else if (path == kAccountsPrefDeviceLocalAccountAutoLoginId) {
     em::DeviceLocalAccountsProto* device_local_accounts =
         settings.mutable_device_local_accounts();
-    if (value.is_string())
+    if (value.is_string()) {
       device_local_accounts->set_auto_login_id(value.GetString());
-    else
+    } else {
       NOTREACHED();
+    }
   } else if (path == kAccountsPrefDeviceLocalAccountAutoLoginDelay) {
     em::DeviceLocalAccountsProto* device_local_accounts =
         settings.mutable_device_local_accounts();
-    if (value.is_int())
+    if (value.is_int()) {
       device_local_accounts->set_auto_login_delay(value.GetInt());
-    else
+    } else {
       NOTREACHED();
+    }
   } else if (path == kAccountsPrefDeviceLocalAccountAutoLoginBailoutEnabled) {
     em::DeviceLocalAccountsProto* device_local_accounts =
         settings.mutable_device_local_accounts();
-    if (value.is_bool())
+    if (value.is_bool()) {
       device_local_accounts->set_enable_auto_login_bailout(value.GetBool());
-    else
+    } else {
       NOTREACHED();
+    }
   } else if (path ==
              kAccountsPrefDeviceLocalAccountPromptForNetworkWhenOffline) {
     em::DeviceLocalAccountsProto* device_local_accounts =
         settings.mutable_device_local_accounts();
-    if (value.is_bool())
+    if (value.is_bool()) {
       device_local_accounts->set_prompt_for_network_when_offline(
           value.GetBool());
-    else
+    } else {
       NOTREACHED();
+    }
   } else if (path == kSignedDataRoamingEnabled) {
     em::DataRoamingEnabledProto* roam = settings.mutable_data_roaming_enabled();
-    if (value.is_bool())
+    if (value.is_bool()) {
       roam->set_data_roaming_enabled(value.GetBool());
-    else
+    } else {
       NOTREACHED();
+    }
   } else if (path == kReleaseChannel) {
     em::ReleaseChannelProto* release_channel =
         settings.mutable_release_channel();
     std::string channel_value;
-    if (value.is_string())
+    if (value.is_string()) {
       release_channel->set_release_channel(value.GetString());
-    else
+    } else {
       NOTREACHED();
+    }
   } else if (path == kStatsReportingPref) {
     em::MetricsEnabledProto* metrics = settings.mutable_metrics_enabled();
-    if (value.is_bool())
+    if (value.is_bool()) {
       metrics->set_metrics_enabled(value.GetBool());
-    else
+    } else {
       NOTREACHED();
+    }
   } else if (path == kAccountsPrefUsers) {
     RepeatedPtrField<std::string>* list = nullptr;
     // Only use the whitelist if the allowlist isn't being used.
@@ -706,10 +632,19 @@ void OwnerSettingsServiceAsh::UpdateDeviceSettings(
   } else if (path == kRevenEnableDeviceHWDataUsage) {
     em::RevenDeviceHWDataUsageEnabledProto* hw_data_usage =
         settings.mutable_hardware_data_usage_enabled();
-    if (value.is_bool())
+    if (value.is_bool()) {
       hw_data_usage->set_hardware_data_usage_enabled(value.GetBool());
-    else
+    } else {
       NOTREACHED();
+    }
+  } else if (path == kDeviceExtendedAutoUpdateEnabled) {
+    em::BooleanPolicyProto* container =
+        settings.mutable_deviceextendedautoupdateenabled();
+    if (value.is_bool()) {
+      container->set_value(value.GetBool());
+    } else {
+      NOTREACHED();
+    }
   } else {
     // The remaining settings don't support Set(), since they are not
     // intended to be customizable by the user:
@@ -768,9 +703,8 @@ void OwnerSettingsServiceAsh::UpdateDeviceSettings(
 void OwnerSettingsServiceAsh::OnPostKeypairLoadedActions() {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  const user_manager::User* user =
-      ProfileHelper::Get()->GetUserByProfile(profile_);
-  user_id_ = user ? user->GetAccountId().GetUserEmail() : std::string();
+  const AccountId* account_id = ash::AnnotatedAccountId::Get(profile_);
+  user_id_ = account_id ? account_id->GetUserEmail() : std::string();
 
   const bool is_owner = IsOwner() || IsOwnerInTests(user_id_);
   if (is_owner && device_settings_service_)
@@ -796,24 +730,15 @@ void OwnerSettingsServiceAsh::ReloadKeypairImpl(
     return;
   }
 
-  if (base::FeatureList::IsEnabled(ownership::kChromeSideOwnerKeyGeneration)) {
-    const bool is_enterprise_managed = g_browser_process->platform_part()
-                                           ->browser_policy_connector_ash()
-                                           ->IsDeviceEnterpriseManaged();
+  const bool is_enterprise_managed =
+      InstallAttributes::Get()->IsEnterpriseManaged();
 
-    auto cb = base::BindOnce(&OwnerSettingsServiceAsh::OnReloadedKeypairImpl,
-                             weak_factory_.GetWeakPtr(), std::move(callback));
-    owner_key_loader_ = std::make_unique<OwnerKeyLoader>(
-        profile_, device_settings_service_, owner_key_util_,
-        is_enterprise_managed, std::move(cb));
-    return owner_key_loader_->Run();
-  }
-
-  content::GetIOThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(&LoadPrivateKeyOnIOThread, owner_key_util_,
-                     ProfileHelper::GetUserIdHashFromProfile(profile_),
-                     std::move(callback)));
+  auto cb = base::BindOnce(&OwnerSettingsServiceAsh::OnReloadedKeypairImpl,
+                           weak_factory_.GetWeakPtr(), std::move(callback));
+  owner_key_loader_ = std::make_unique<OwnerKeyLoader>(
+      profile_, device_settings_service_, owner_key_util_,
+      is_enterprise_managed, std::move(cb));
+  return owner_key_loader_->Run();
 }
 
 void OwnerSettingsServiceAsh::OnReloadedKeypairImpl(
@@ -841,9 +766,7 @@ void OwnerSettingsServiceAsh::StorePendingChanges() {
              device_settings_service_->device_settings()) {
     settings = *device_settings_service_->device_settings();
     MigrateFeatureFlags(&settings);
-  } else if (base::FeatureList::IsEnabled(
-                 ownership::kChromeSideOwnerKeyGeneration) &&
-             public_key_ && !public_key_->is_persisted()) {
+  } else if (public_key_ && !public_key_->is_persisted()) {
     // A new owner key was generated and is not stored yet. Proceed to send it
     // to session manager.
   } else {

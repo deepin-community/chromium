@@ -1,4 +1,4 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -35,7 +35,7 @@ node_action("optimize_images") {
 
   inputs = [
     _bundled_entrypoint,
-    "rollup.config.js",
+    "rollup.config.mjs",
     devtools_location_prepend + "node_modules/svgo/package.json",
   ]
   foreach(svg_image, devtools_src_svg_files) {
@@ -48,12 +48,8 @@ node_action("optimize_images") {
   ]
 
   args = [
-    # TODO(crbug.com/1098074): We need to hide warnings that are written stderr,
-    # as Chromium does not process the returncode of the subprocess correctly
-    # and instead looks if `stderr` is empty.
-    "--silent",
     "--config",
-    rebase_path("rollup.config.js", root_build_dir),
+    rebase_path("rollup.config.mjs", root_build_dir),
     "--input",
     rebase_path(_bundled_entrypoint, root_build_dir),
     "--file",

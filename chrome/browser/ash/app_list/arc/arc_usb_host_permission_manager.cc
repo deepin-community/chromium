@@ -5,16 +5,17 @@
 #include "chrome/browser/ash/app_list/arc/arc_usb_host_permission_manager.h"
 
 #include <utility>
+#include <vector>
 
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/usb/usb_host_bridge.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_dialog.h"
 #include "chrome/browser/ash/app_list/arc/arc_usb_host_permission_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/usb/usb_host_bridge.h"
 #include "extensions/browser/api/device_permissions_manager.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 
 namespace arc {
 
@@ -36,12 +37,12 @@ std::string GetAppIdFromPackageName(const std::string& package_name,
   // for the requesting package. If there are multiple launchable activities
   // from the package, use the app icon from first found matching launchable
   // activity in the permission dialog.
-  std::unordered_set<std::string> app_ids =
+  absl::flat_hash_set<std::string> app_ids =
       arc_app_list_prefs->GetAppsForPackage(package_name);
   return app_ids.empty() ? std::string() : *app_ids.begin();
 }
 
-bool GetUint16FromDict(const base::Value::Dict& dict,
+bool GetUint16FromDict(const base::DictValue& dict,
                        const std::string& key,
                        uint16_t* result) {
   std::optional<int> value = dict.FindInt(key);
@@ -179,7 +180,7 @@ void ArcUsbHostPermissionManager::RestorePermissionFromChromePrefs() {
 
     for (const auto& access_permission_value :
          access_permission_list_value->GetList()) {
-      const base::Value::Dict& access_permission =
+      const base::DictValue& access_permission =
           access_permission_value.GetDict();
       const std::string* serial_number =
           access_permission.FindString(kUsbSerialNumber);
@@ -217,10 +218,6 @@ void ArcUsbHostPermissionManager::RestorePermissionFromChromePrefs() {
 void ArcUsbHostPermissionManager::RequestUsbScanDeviceListPermission(
     const std::string& package_name,
     ArcUsbHostUiDelegate::RequestPermissionCallback callback) {
-  // Grants Arc USB permission for |package_name| in Arc kiosk mode.
-  if (IsArcKioskMode())
-    UpdateArcUsbScanDeviceListPermission(package_name, true /*allowed*/);
-
   if (HasUsbScanDeviceListPermission(package_name)) {
     std::move(callback).Run(true);
     return;
@@ -251,12 +248,6 @@ void ArcUsbHostPermissionManager::RequestUsbAccessPermission(
           vendor_id, product_id, manufacturer_string, product_string,
           serial_number, true /*always_include_manufacturer*/),
       serial_number, vendor_id, product_id);
-
-  // Grants Arc USB permission for |package_name| in Arc kiosk mode.
-  if (IsArcKioskMode()) {
-    UpdateArcUsbAccessPermission(package_name, usb_device_entry,
-                                 true /*allowed*/);
-  }
 
   if (HasUsbAccessPermission(package_name, usb_device_entry)) {
     std::move(callback).Run(true);
@@ -317,7 +308,7 @@ ArcUsbHostPermissionManager::GetEventPackageList(
 
 void ArcUsbHostPermissionManager::DeviceRemoved(const std::string& guid) {
   // Remove pending requests.
-  base::EraseIf(pending_requests_,
+  std::erase_if(pending_requests_,
                 [guid](const UsbPermissionRequest& usb_permission_request) {
                   return !usb_permission_request.is_scan_request() &&
                          usb_permission_request.usb_device_entry()->guid ==
@@ -340,7 +331,7 @@ void ArcUsbHostPermissionManager::OnPackageRemoved(
     const std::string& package_name,
     bool uninstalled) {
   // Remove pending requests.
-  base::EraseIf(
+  std::erase_if(
       pending_requests_,
       [package_name](const UsbPermissionRequest& usb_permission_request) {
         return usb_permission_request.package_name() == package_name;
@@ -494,7 +485,7 @@ void ArcUsbHostPermissionManager::UpdateArcUsbAccessPermission(
   if (!usb_device_entry.IsPersistent())
     return;
 
-  base::Value::Dict new_permission;
+  base::DictValue new_permission;
   new_permission.Set(kUsbSerialNumber, usb_device_entry.serial_number);
   new_permission.Set(kUsbDeviceName, usb_device_entry.device_name);
   new_permission.Set(kUsbVendorId, usb_device_entry.vendor_id);

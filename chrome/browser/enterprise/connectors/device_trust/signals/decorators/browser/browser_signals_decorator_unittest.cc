@@ -12,10 +12,11 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
-#include "chrome/browser/enterprise/connectors/device_trust/signals/dependency_factory.h"
-#include "chrome/browser/enterprise/connectors/device_trust/signals/mock_dependency_factory.h"
+#include "chrome/browser/enterprise/connectors/device_trust/device_trust_features.h"
+#include "chrome/browser/enterprise/core/mock_dependency_factory.h"
 #include "chrome/browser/enterprise/signals/device_info_fetcher.h"
 #include "components/device_signals/core/browser/mock_signals_aggregator.h"
 #include "components/device_signals/core/browser/signals_aggregator.h"
@@ -23,13 +24,17 @@
 #include "components/device_signals/core/common/common_types.h"
 #include "components/device_signals/core/common/signals_constants.h"
 #include "components/enterprise/browser/controller/fake_browser_dm_token_storage.h"
+#include "components/enterprise/core/dependency_factory.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_manager.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_store.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+#if BUILDFLAG(IS_WIN)
+#include "components/device_signals/core/common/win/win_types.h"
+#endif
+
 using testing::_;
-using testing::Invoke;
 using testing::Return;
 using testing::StrictMock;
 
@@ -48,8 +53,8 @@ constexpr char kFakeCustomerId[] = "some-cid";
 constexpr int32_t kDisabledSetting = 1;
 constexpr int32_t kEnabledSetting = 2;
 
-base::Value::List GetExpectedMacAddresses() {
-  base::Value::List mac_addresses;
+base::ListValue GetExpectedMacAddresses() {
+  base::ListValue mac_addresses;
   mac_addresses.Append("00:00:00:00:00:00");
   return mac_addresses;
 }
@@ -57,23 +62,15 @@ base::Value::List GetExpectedMacAddresses() {
 device_signals::SignalsAggregationRequest CreateExpectedRequest() {
   device_signals::SignalsAggregationRequest request;
   request.signal_names.emplace(device_signals::SignalName::kAgent);
+  request.agent_signal_parameters.emplace(
+      device_signals::AgentSignalCollectionType::kCrowdstrikeIdentifiers);
+  if (IsDTCAntivirusSignalEnabled()) {
+    request.signal_names.emplace(device_signals::SignalName::kAntiVirus);
+  }
   return request;
 }
 
-device_signals::SignalsAggregationResponse CreateFilledResponse() {
-  device_signals::CrowdStrikeSignals crowdstrike_signals;
-  crowdstrike_signals.agent_id = kFakeAgentId;
-  crowdstrike_signals.customer_id = kFakeCustomerId;
-
-  device_signals::AgentSignalsResponse agent_signals;
-  agent_signals.crowdstrike_signals = crowdstrike_signals;
-
-  device_signals::SignalsAggregationResponse response;
-  response.agent_signals_response = agent_signals;
-  return response;
-}
-
-void ValidateStaticSignals(const base::Value::Dict& signals) {
+void ValidateStaticSignals(const base::DictValue& signals) {
   const auto* serial_number =
       signals.FindString(device_signals::names::kSerialNumber);
   ASSERT_TRUE(serial_number);
@@ -119,7 +116,7 @@ void ValidateStaticSignals(const base::Value::Dict& signals) {
             static_cast<int32_t>(device_signals::Trigger::kBrowserNavigation));
 }
 
-void ValidateCrowdStrikeSignals(const base::Value::Dict& signals) {
+void ValidateCrowdStrikeSignals(const base::DictValue& signals) {
   auto* cs_value = signals.Find(device_signals::names::kCrowdStrike);
   ASSERT_TRUE(cs_value);
   ASSERT_TRUE(cs_value->is_dict());
@@ -143,27 +140,56 @@ class BrowserSignalsDecoratorTest : public testing::Test {
   void SetUp() override {
     enterprise_signals::DeviceInfoFetcher::SetForceStubForTesting(
         /*should_force=*/true);
+    enterprise_signals::DeviceInfoFetcher::
+        SetForceDuplicateMacAddressesForTesting(
+            /*should_force=*/true);
 
     auto mock_browser_cloud_policy_store =
-        std::make_unique<policy::MockCloudPolicyStore>();
+        std::make_unique<policy::MockCloudPolicyStore>(
+            policy::dm_protocol::kChromeMachineLevelUserCloudPolicyType);
     mock_browser_cloud_policy_store_ = mock_browser_cloud_policy_store.get();
+    std::unique_ptr<policy::MockCloudPolicyStore>
+        mock_browser_cloud_policy_extension_install_store;
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+    mock_browser_cloud_policy_extension_install_store =
+        std::make_unique<policy::MockCloudPolicyStore>(
+            policy::dm_protocol::
+                kChromeExtensionInstallMachineLevelCloudPolicyType);
+#endif
+    mock_browser_cloud_policy_extension_install_store_ =
+        mock_browser_cloud_policy_extension_install_store.get();
     mock_browser_cloud_policy_manager_ =
         std::make_unique<policy::MockCloudPolicyManager>(
             std::move(mock_browser_cloud_policy_store),
+            std::move(mock_browser_cloud_policy_extension_install_store),
             task_environment_.GetMainThreadTaskRunner());
 
     auto mock_user_cloud_policy_store =
-        std::make_unique<policy::MockCloudPolicyStore>();
+        std::make_unique<policy::MockCloudPolicyStore>(
+            policy::dm_protocol::GetChromeUserPolicyType());
     mock_user_cloud_policy_store_ = mock_user_cloud_policy_store.get();
+    std::unique_ptr<policy::MockCloudPolicyStore>
+        mock_user_cloud_policy_extension_install_store;
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+    mock_user_cloud_policy_extension_install_store =
+        std::make_unique<policy::MockCloudPolicyStore>(
+            policy::dm_protocol::kChromeExtensionInstallUserCloudPolicyType);
+#endif
+    mock_user_cloud_policy_extension_install_store_ =
+        mock_user_cloud_policy_extension_install_store.get();
     mock_user_cloud_policy_manager_ =
         std::make_unique<policy::MockCloudPolicyManager>(
             std::move(mock_user_cloud_policy_store),
+            std::move(mock_user_cloud_policy_extension_install_store),
             task_environment_.GetMainThreadTaskRunner());
   }
 
   void TearDown() override {
     enterprise_signals::DeviceInfoFetcher::SetForceStubForTesting(
         /*should_force=*/false);
+    enterprise_signals::DeviceInfoFetcher::
+        SetForceDuplicateMacAddressesForTesting(
+            /*should_force=*/false);
   }
 
   void SetFakeBrowserPolicyData() {
@@ -180,10 +206,10 @@ class BrowserSignalsDecoratorTest : public testing::Test {
         std::move(policy_data));
   }
 
-  std::unique_ptr<DependencyFactory> CreateDependencyFactory(
+  std::unique_ptr<enterprise_core::DependencyFactory> CreateDependencyFactory(
       bool valid_manager = true) {
     auto mock_dependency_factory =
-        std::make_unique<test::MockDependencyFactory>();
+        std::make_unique<enterprise_core::test::MockDependencyFactory>();
     EXPECT_CALL(*mock_dependency_factory, GetUserCloudPolicyManager())
         .WillOnce(Return(valid_manager ? mock_user_cloud_policy_manager_.get()
                                        : nullptr));
@@ -198,12 +224,25 @@ class BrowserSignalsDecoratorTest : public testing::Test {
 
   void SetUpAggregatorExpectations() {
     EXPECT_CALL(mock_aggregator_, GetSignals(CreateExpectedRequest(), _))
-        .WillOnce(Invoke(
-            [](const device_signals::SignalsAggregationRequest& request,
-               base::OnceCallback<void(
-                   device_signals::SignalsAggregationResponse)> callback) {
+        .WillOnce(
+            [this](const device_signals::SignalsAggregationRequest& request,
+                   base::OnceCallback<void(
+                       device_signals::SignalsAggregationResponse)> callback) {
               std::move(callback).Run(CreateFilledResponse());
-            }));
+            });
+  }
+
+  virtual device_signals::SignalsAggregationResponse CreateFilledResponse() {
+    device_signals::CrowdStrikeSignals crowdstrike_signals;
+    crowdstrike_signals.agent_id = kFakeAgentId;
+    crowdstrike_signals.customer_id = kFakeCustomerId;
+
+    device_signals::AgentSignalsResponse agent_signals;
+    agent_signals.crowdstrike_signals = crowdstrike_signals;
+
+    device_signals::SignalsAggregationResponse response;
+    response.agent_signals_response = agent_signals;
+    return response;
   }
 
   base::test::TaskEnvironment task_environment_;
@@ -213,7 +252,11 @@ class BrowserSignalsDecoratorTest : public testing::Test {
   std::unique_ptr<policy::MockCloudPolicyManager>
       mock_user_cloud_policy_manager_;
   raw_ptr<policy::MockCloudPolicyStore> mock_browser_cloud_policy_store_;
+  raw_ptr<policy::MockCloudPolicyStore>
+      mock_browser_cloud_policy_extension_install_store_;
   raw_ptr<policy::MockCloudPolicyStore> mock_user_cloud_policy_store_;
+  raw_ptr<policy::MockCloudPolicyStore>
+      mock_user_cloud_policy_extension_install_store_;
   StrictMock<device_signals::MockSignalsAggregator> mock_aggregator_;
 };
 
@@ -224,7 +267,7 @@ TEST_F(BrowserSignalsDecoratorTest, Decorate_AllSignals) {
 
   auto decorator = CreateDecorator();
   base::RunLoop run_loop;
-  base::Value::Dict signals;
+  base::DictValue signals;
   decorator.Decorate(signals, run_loop.QuitClosure());
 
   run_loop.Run();
@@ -247,7 +290,7 @@ TEST_F(BrowserSignalsDecoratorTest, Decorate_NullAggregator) {
   BrowserSignalsDecorator decorator(mock_browser_cloud_policy_manager_.get(),
                                     CreateDependencyFactory(), nullptr);
   base::RunLoop run_loop;
-  base::Value::Dict signals;
+  base::DictValue signals;
   decorator.Decorate(signals, run_loop.QuitClosure());
 
   run_loop.Run();
@@ -269,7 +312,7 @@ TEST_F(BrowserSignalsDecoratorTest, Decorate_WithoutBrowserPolicyData) {
 
   auto decorator = CreateDecorator();
   base::RunLoop run_loop;
-  base::Value::Dict signals;
+  base::DictValue signals;
   decorator.Decorate(signals, run_loop.QuitClosure());
 
   run_loop.Run();
@@ -289,7 +332,7 @@ TEST_F(BrowserSignalsDecoratorTest, Decorate_NullBrowserPolicyStore) {
   BrowserSignalsDecorator decorator(nullptr, CreateDependencyFactory(),
                                     &mock_aggregator_);
   base::RunLoop run_loop;
-  base::Value::Dict signals;
+  base::DictValue signals;
   decorator.Decorate(signals, run_loop.QuitClosure());
 
   run_loop.Run();
@@ -308,7 +351,7 @@ TEST_F(BrowserSignalsDecoratorTest, Decorate_WithoutUserPolicyData) {
 
   auto decorator = CreateDecorator();
   base::RunLoop run_loop;
-  base::Value::Dict signals;
+  base::DictValue signals;
   decorator.Decorate(signals, run_loop.QuitClosure());
 
   run_loop.Run();
@@ -328,7 +371,7 @@ TEST_F(BrowserSignalsDecoratorTest, Decorate_NullUserPolicyStore) {
       mock_browser_cloud_policy_manager_.get(),
       CreateDependencyFactory(/*valid_manager=*/false), &mock_aggregator_);
   base::RunLoop run_loop;
-  base::Value::Dict signals;
+  base::DictValue signals;
   decorator.Decorate(signals, run_loop.QuitClosure());
 
   run_loop.Run();
@@ -345,17 +388,16 @@ TEST_F(BrowserSignalsDecoratorTest, Decorate_NoAgentSignals) {
   SetFakeUserPolicyData();
 
   EXPECT_CALL(mock_aggregator_, GetSignals(CreateExpectedRequest(), _))
-      .WillOnce(
-          Invoke([](const device_signals::SignalsAggregationRequest& request,
-                    base::OnceCallback<void(
-                        device_signals::SignalsAggregationResponse)> callback) {
-            device_signals::SignalsAggregationResponse empty_response;
-            std::move(callback).Run(std::move(empty_response));
-          }));
+      .WillOnce([](const device_signals::SignalsAggregationRequest& request,
+                   base::OnceCallback<void(
+                       device_signals::SignalsAggregationResponse)> callback) {
+        device_signals::SignalsAggregationResponse empty_response;
+        std::move(callback).Run(std::move(empty_response));
+      });
 
   auto decorator = CreateDecorator();
   base::RunLoop run_loop;
-  base::Value::Dict signals;
+  base::DictValue signals;
   decorator.Decorate(signals, run_loop.QuitClosure());
 
   run_loop.Run();
@@ -370,5 +412,119 @@ TEST_F(BrowserSignalsDecoratorTest, Decorate_NoAgentSignals) {
 
   histogram_tester_.ExpectTotalCount(kLatencyHistogram, 1);
 }
+
+#if BUILDFLAG(IS_WIN)
+class AntiVirusBrowserSignalsDecoratorTest
+    : public BrowserSignalsDecoratorTest,
+      public testing::WithParamInterface<bool> {
+ protected:
+  AntiVirusBrowserSignalsDecoratorTest() {
+    feature_list_.InitWithFeatureState(kDTCAntivirusSignalEnabled, GetParam());
+  }
+
+  device_signals::SignalsAggregationResponse CreateFilledResponse() override {
+    auto response = BrowserSignalsDecoratorTest::CreateFilledResponse();
+    response.av_signal_response = av_response_;
+    return response;
+  }
+
+  bool is_av_signal_enabled() const { return GetParam(); }
+
+  std::optional<device_signals::AntiVirusSignalResponse> av_response_{
+      std::nullopt};
+
+  base::test::ScopedFeatureList feature_list_;
+};
+
+TEST_P(AntiVirusBrowserSignalsDecoratorTest, NoAvResponse) {
+  SetUpAggregatorExpectations();
+
+  auto decorator = CreateDecorator();
+  base::RunLoop run_loop;
+  base::DictValue signals;
+  decorator.Decorate(signals, run_loop.QuitClosure());
+
+  run_loop.Run();
+
+  if (is_av_signal_enabled()) {
+    auto value = signals.FindInt(device_signals::names::kAntivirusState);
+    ASSERT_TRUE(value);
+    EXPECT_EQ(value.value(), 0);
+  } else {
+    EXPECT_FALSE(signals.contains(device_signals::names::kAntivirusState));
+  }
+}
+
+TEST_P(AntiVirusBrowserSignalsDecoratorTest, AvResponse_None) {
+  if (!is_av_signal_enabled()) {
+    GTEST_SKIP();
+  }
+  SetUpAggregatorExpectations();
+
+  av_response_ = device_signals::AntiVirusSignalResponse();
+  av_response_->antivirus_state =
+      device_signals::InstalledAntivirusState::kNone;
+
+  auto decorator = CreateDecorator();
+  base::RunLoop run_loop;
+  base::DictValue signals;
+  decorator.Decorate(signals, run_loop.QuitClosure());
+
+  run_loop.Run();
+
+  auto value = signals.FindInt(device_signals::names::kAntivirusState);
+  ASSERT_TRUE(value);
+  EXPECT_EQ(value.value(), 0);
+}
+
+TEST_P(AntiVirusBrowserSignalsDecoratorTest, AvResponse_Enabled) {
+  if (!is_av_signal_enabled()) {
+    GTEST_SKIP();
+  }
+  SetUpAggregatorExpectations();
+
+  av_response_ = device_signals::AntiVirusSignalResponse();
+  av_response_->antivirus_state =
+      device_signals::InstalledAntivirusState::kEnabled;
+
+  auto decorator = CreateDecorator();
+  base::RunLoop run_loop;
+  base::DictValue signals;
+  decorator.Decorate(signals, run_loop.QuitClosure());
+
+  run_loop.Run();
+
+  auto value = signals.FindInt(device_signals::names::kAntivirusState);
+  ASSERT_TRUE(value);
+  EXPECT_EQ(value.value(), 2);
+}
+
+TEST_P(AntiVirusBrowserSignalsDecoratorTest, AvResponse_Disabled) {
+  if (!is_av_signal_enabled()) {
+    GTEST_SKIP();
+  }
+  SetUpAggregatorExpectations();
+
+  av_response_ = device_signals::AntiVirusSignalResponse();
+  av_response_->antivirus_state =
+      device_signals::InstalledAntivirusState::kDisabled;
+
+  auto decorator = CreateDecorator();
+  base::RunLoop run_loop;
+  base::DictValue signals;
+  decorator.Decorate(signals, run_loop.QuitClosure());
+
+  run_loop.Run();
+
+  auto value = signals.FindInt(device_signals::names::kAntivirusState);
+  ASSERT_TRUE(value);
+  EXPECT_EQ(value.value(), 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(,
+                         AntiVirusBrowserSignalsDecoratorTest,
+                         testing::Bool());
+
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace enterprise_connectors

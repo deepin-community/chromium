@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -20,23 +21,25 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/menu_separator_types.h"
 #include "ui/base/themed_vector_icon.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/menu/menu_config.h"
 #include "ui/views/controls/menu/menu_controller.h"
 #include "ui/views/controls/menu/menu_types.h"
+#include "ui/views/layout/delegating_layout_manager.h"
 #include "ui/views/view.h"
-
-#if BUILDFLAG(IS_WIN)
-#include <windows.h>
-#endif
 
 namespace gfx {
 class FontList;
 }  // namespace gfx
+
+namespace ui {
+enum class NewBadgeType;
+}  // namespace ui
 
 namespace views {
 
@@ -74,10 +77,13 @@ class TestMenuItemView;
 // To show the menu use MenuRunner. See MenuRunner for details on how to run
 // (show) the menu as well as for details on the life time of the menu.
 
-class VIEWS_EXPORT MenuItemView : public View {
+class VIEWS_EXPORT MenuItemView : public View, public LayoutDelegate {
   METADATA_HEADER(MenuItemView, View)
 
  public:
+  // Padding between child views.
+  static constexpr int kChildHorizontalPadding = 8;
+
   // Different types of menu items.
   enum class Type {
     kNormal,             // Performs an action when selected.
@@ -133,10 +139,12 @@ class VIEWS_EXPORT MenuItemView : public View {
   ~MenuItemView() override;
 
   // Overridden from View:
-  std::u16string GetTooltipText(const gfx::Point& p) const override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+  std::u16string GetRenderedTooltipText(const gfx::Point& p) const override;
   bool HandleAccessibleAction(const ui::AXActionData& action_data) override;
   FocusBehavior GetFocusBehavior() const override;
+
+  // To update the custom tooltip, call this method with the new text.
+  void UpdateTooltipText(std::optional<std::u16string> new_text = std::nullopt);
 
   // Returns if a given |anchor| is a bubble or not.
   static bool IsBubble(MenuAnchorPosition anchor);
@@ -146,7 +154,7 @@ class VIEWS_EXPORT MenuItemView : public View {
   static std::u16string GetAccessibleNameForMenuItem(
       const std::u16string& item_text,
       const std::u16string& accelerator_text,
-      bool is_new_feature);
+      std::optional<ui::NewBadgeType> badge_type);
 
   // Hides and cancels the menu. This does nothing if the menu is not open.
   void Cancel();
@@ -209,6 +217,7 @@ class VIEWS_EXPORT MenuItemView : public View {
                                const ui::ImageModel& icon = ui::ImageModel());
 
   MenuItemView* AppendTitle(const std::u16string& label);
+  MenuItemView* AddTitleAt(const std::u16string& label, size_t index);
 
   // Append a submenu to this menu.
   // The returned pointer is owned by this menu.
@@ -236,7 +245,8 @@ class VIEWS_EXPORT MenuItemView : public View {
   bool HasSubmenu() const;
 
   // Returns the view containing child menu items.
-  SubmenuView* GetSubmenu() const;
+  SubmenuView* GetSubmenu();
+  const SubmenuView* GetSubmenu() const;
 
   // Returns true if this menu item has a submenu and it is showing
   bool SubmenuIsShowing() const;
@@ -293,25 +303,33 @@ class VIEWS_EXPORT MenuItemView : public View {
 
   // Sets the icon of this menu item.
   void SetIcon(const ui::ImageModel& icon);
+  const ui::ImageModel GetIcon() const;
 
   // Sets the view used to render the icon. This clobbers any icon set via
   // SetIcon(). MenuItemView takes ownership of |icon_view|.
   void SetIconView(std::unique_ptr<ImageView> icon_view);
 
+  ImageView* icon_view() { return icon_view_; }
+
   // Returns the preferred size of the icon view if any, or gfx::Size() if none.
   gfx::Size GetIconPreferredSize() const;
 
   // Sets the command id of this menu item.
-  void SetCommand(int command) { command_ = command; }
+  void SetCommand(int command);
 
   // Returns the command id of this item.
   int GetCommand() const { return command_; }
 
-  void set_is_new(bool is_new) { is_new_ = is_new; }
-  bool is_new() const { return is_new_; }
+  void set_new_badge_type(std::optional<ui::NewBadgeType> new_badge_type) {
+    new_badge_type_ = new_badge_type;
+  }
+  std::optional<ui::NewBadgeType> new_badge_type() const {
+    return new_badge_type_;
+  }
 
   void set_may_have_mnemonics(bool may_have_mnemonics) {
     may_have_mnemonics_ = may_have_mnemonics;
+    UpdateAccessibleKeyShortcuts();
   }
   bool may_have_mnemonics() const { return may_have_mnemonics_; }
 
@@ -323,12 +341,8 @@ class VIEWS_EXPORT MenuItemView : public View {
   void OnPaint(gfx::Canvas* canvas) override;
 
   // Returns the preferred size of this item.
-  gfx::Size CalculatePreferredSize() const override;
-
-  // Gets the preferred height for the given |width|. This is only different
-  // from GetPreferredSize().width() if the item has a child view with flexible
-  // dimensions.
-  int GetHeightForWidth(int width) const override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& available_size) const override;
 
   // Returns the bounds of the submenu part of the ACTIONABLE_SUBMENU.
   gfx::Rect GetSubmenuAreaOfActionableSubmenu() const;
@@ -369,8 +383,9 @@ class VIEWS_EXPORT MenuItemView : public View {
   // recalculates the bounds.
   void ChildrenChanged();
 
-  // Sizes any child views.
-  void Layout(PassKey) override;
+  // Overridden from LayoutDelegate:
+  ProposedLayout CalculateProposedLayout(
+      const SizeBounds& size_bounds) const override;
 
   // Returns true if the menu has mnemonics. This only useful on the root menu
   // item.
@@ -390,19 +405,20 @@ class VIEWS_EXPORT MenuItemView : public View {
   // there's no way to unset it for this MenuItemView!
   void SetForcedVisualSelection(bool selected);
 
-  // For items of type HIGHLIGHTED only: sets the radius of the item's
+  // For items of type HIGHLIGHTED only: sets the corner radius of the item's
   // background. This makes the menu item's background fit its container's
-  // border radius, if they are both the same value.
-  void SetCornerRadius(int radius);
+  // border radii, if they are both the same value.
+  void SetBottomCornersRadius(int lower_left_radius, int lower_right_radius);
+
+  // Sets or removes the expanded/collapsed state of the menu item if it's a
+  // submenu.
+  void UpdateAccessibleExpandedCollapsedState();
 
   // Shows an alert on this menu item. An alerted menu item is rendered
   // differently to draw attention to it. This must be called before the menu is
   // run.
   void SetAlerted();
   bool is_alerted() const { return is_alerted_; }
-
-  // Returns whether or not a "new" badge should be shown on this menu item.
-  bool ShouldShowNewBadge() const;
 
   // Returns whether keyboard navigation through the menu should stop on this
   // item.
@@ -411,11 +427,21 @@ class VIEWS_EXPORT MenuItemView : public View {
   // Returns the corresponding border padding from the `MenuConfig`.
   int GetItemHorizontalBorder() const;
 
+  virtual void UpdateAccessibleCheckedState();
+
+  void SetTriggerActionWithNonIconChildViews(
+      bool trigger_action_with_non_icon_child_views) {
+    trigger_action_with_non_icon_child_views_ =
+        trigger_action_with_non_icon_child_views;
+  }
+
+  bool GetTriggerActionWithNonIconChildViews() const {
+    return trigger_action_with_non_icon_child_views_;
+  }
+
   bool last_paint_as_selected_for_testing() const {
     return last_paint_as_selected_;
   }
-
-  static std::u16string GetNewBadgeAccessibleDescription();
 
  protected:
   // Creates a MenuItemView. This is used by the various AddXXX methods.
@@ -571,6 +597,9 @@ class VIEWS_EXPORT MenuItemView : public View {
   // could interact with model state.
   bool IsScheduledForDeletion() const;
 
+  // Calculates the X coordinate of the icon.
+  int CalculateIconX(const ImageView* icon_view) const;
+
   void SetForegroundColorId(std::optional<ui::ColorId> foreground_color_id) {
     foreground_color_id_ = foreground_color_id;
   }
@@ -578,6 +607,14 @@ class VIEWS_EXPORT MenuItemView : public View {
   // Returns the corresponding margin from the `MenuConfig` if
   // `vertical_margin_` is not set.
   int GetVerticalMargin() const;
+
+  ViewAccessibility* GetSubmenuViewAccessibility();
+  ViewAccessibility* GetScrollViewContainerViewAccessibility();
+  void UpdateAccessibleRole();
+  void UpdateAccessibleHasPopup();
+  void UpdateAccessibleName();
+  void UpdateAccessibleSelection();
+  void UpdateAccessibleKeyShortcuts();
 
   // The delegate. This is only valid for the root menu item. You shouldn't
   // use this directly, instead use GetDelegate() which walks the tree as
@@ -612,6 +649,8 @@ class VIEWS_EXPORT MenuItemView : public View {
   // feature for users.
   bool is_new_ = false;
 
+  std::optional<ui::NewBadgeType> new_badge_type_ = std::nullopt;
+
   // Whether the menu item contains user-created text.
   bool may_have_mnemonics_ = true;
 
@@ -635,9 +674,10 @@ class VIEWS_EXPORT MenuItemView : public View {
 
   // Pointer to a view with a menu icon.
   raw_ptr<ImageView> icon_view_ = nullptr;
+  std::optional<ui::ColorVariant> icon_color_;
 
   // The tooltip to show on hover for this menu item.
-  std::u16string tooltip_;
+  std::u16string custom_tooltip_;
 
   // Cached dimensions. This is cached as text sizing calculations are quite
   // costly.
@@ -648,8 +688,8 @@ class VIEWS_EXPORT MenuItemView : public View {
 
   std::optional<int> vertical_margin_;
 
-  // Corner radius in pixels, for HIGHLIGHTED items placed at the end of a menu.
-  int corner_radius_ = 0;
+  // Corners radii in pixels, for HIGHLIGHTED items placed at the end of a menu.
+  gfx::RoundedCornersF bottom_rounded_corners_;
 
   // |menu_position_| is the requested position with respect to the bounds.
   // |actual_menu_position_| is used by the controller to cache the
@@ -661,6 +701,12 @@ class VIEWS_EXPORT MenuItemView : public View {
   // out taking the full width of the menu, instead of stopping at any arrow
   // column.
   bool children_use_full_width_ = false;
+
+  // Default implementation will not trigger a MenuItemAction if there are child
+  // views other than the icon view. `trigger_action_with_non_icon_child_views_`
+  // specifies that we should still trigger the action even if we have non icon
+  // child views if other conditions are met as well.
+  bool trigger_action_with_non_icon_child_views_ = false;
 
   // Contains an image for the checkbox or radio icon.
   raw_ptr<ImageView> radio_check_image_view_ = nullptr;
@@ -697,13 +743,12 @@ class VIEWS_EXPORT MenuItemView : public View {
   // and SetIconView() explicitly calls UpdateSelectionBasedStateIfChanged().
   bool update_selection_based_state_in_view_herarchy_changed_ = true;
 
-  const std::u16string new_badge_text_ = l10n_util::GetStringUTF16(
-      features::IsChromeRefresh2023() ? IDS_NEW_BADGE_UPPERCASE
-                                      : IDS_NEW_BADGE);
-
   std::optional<ui::ColorId> foreground_color_id_;
   std::optional<MenuItemBackground> menu_item_background_;
   std::optional<ui::ColorId> selected_color_id_;
+
+  base::CallbackListSubscription visible_changed_callback_;
+  base::CallbackListSubscription enabled_changed_callback_;
 };
 
 // EmptyMenuMenuItem ----------------------------------------------------------

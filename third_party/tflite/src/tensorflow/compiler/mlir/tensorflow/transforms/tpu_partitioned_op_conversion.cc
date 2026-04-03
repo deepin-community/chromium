@@ -10,11 +10,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
-#include <stdexcept>
-#include <string>
 #include <type_traits>
 
 #include "llvm/ADT/STLExtras.h"
@@ -22,6 +20,7 @@ limitations under the License.
 #include "llvm/Support/Casting.h"
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
@@ -61,12 +60,12 @@ LogicalResult ReplacePartitionedOp(IntegerAttr num_cores_per_replica, T op) {
   }
 
   auto element_type = getElementTypeOrSelf(first_operand_type);
-  if (element_type.isa<TF::ResourceType>()) {
+  if (mlir::isa<TF::ResourceType>(element_type)) {
     first_operand_type =
-        element_type.cast<TF::ResourceType>().getSubtypes().front();
+        mlir::cast<TF::ResourceType>(element_type).getSubtypes().front();
   }
 
-  auto tensor_type = first_operand_type.dyn_cast_or_null<TensorType>();
+  auto tensor_type = mlir::dyn_cast_or_null<TensorType>(first_operand_type);
   if (!(tensor_type && tensor_type.hasRank())) {
     return op->emitError()
            << "cannot convert op with unranked or non-tensor input type "
@@ -86,15 +85,16 @@ LogicalResult ReplacePartitionedOp(IntegerAttr num_cores_per_replica, T op) {
   }
 
   if constexpr (is_input) {
-    auto pi = builder.create<TF::TPUPartitionedInputV2Op>(
-        op.getLoc(), op.getType(), op.getOperands(),
+    auto pi = TF::TPUPartitionedInputV2Op::create(
+        builder, op.getLoc(), op.getType(), op.getOperands(),
         builder.getI64ArrayAttr(partition_dims), builder.getBoolAttr(false),
-        op.get_XlaShardingAttr());
+        op.get_XlaShardingAttr(), op.get_XlaShardingV2Attr());
     op->replaceAllUsesWith(pi);
   } else {
-    auto po = builder.create<TF::TPUPartitionedOutputV2Op>(
-        op.getLoc(), op.getResultTypes(), op.getOperand(),
-        builder.getI64ArrayAttr(partition_dims), op.get_XlaShardingAttr());
+    auto po = TF::TPUPartitionedOutputV2Op::create(
+        builder, op.getLoc(), op.getResultTypes(), op.getOperand(),
+        builder.getI64ArrayAttr(partition_dims), op.get_XlaShardingAttr(),
+        op.get_XlaShardingV2Attr());
     op->replaceAllUsesWith(po);
   }
 

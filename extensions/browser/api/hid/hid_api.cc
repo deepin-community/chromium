@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/values.h"
 #include "extensions/browser/api/api_resource_manager.h"
@@ -29,7 +30,7 @@ const char kErrorFailedToOpenDevice[] = "Failed to open HID device.";
 const char kErrorConnectionNotFound[] = "Connection not established.";
 const char kErrorTransfer[] = "Transfer failed.";
 
-base::Value::Dict PopulateHidConnection(int connection_id) {
+base::DictValue PopulateHidConnection(int connection_id) {
   hid::HidConnectInfo connection_value;
   connection_value.connection_id = connection_id;
   return connection_value.ToValue();
@@ -89,7 +90,7 @@ ExtensionFunction::ResponseAction HidGetDevicesFunction::Run() {
   return RespondLater();
 }
 
-void HidGetDevicesFunction::OnEnumerationComplete(base::Value::List devices) {
+void HidGetDevicesFunction::OnEnumerationComplete(base::ListValue devices) {
   Respond(WithArguments(std::move(devices)));
 }
 
@@ -229,11 +230,8 @@ bool HidSendFunction::ReadParameters() {
 }
 
 void HidSendFunction::StartWork(device::mojom::HidConnection* connection) {
-  auto* data = reinterpret_cast<const uint8_t*>(parameters_->data.data());
-  std::vector<uint8_t> buffer(data, data + parameters_->data.size());
-
   connection->Write(
-      static_cast<uint8_t>(parameters_->report_id), buffer,
+      static_cast<uint8_t>(parameters_->report_id), parameters_->data,
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           base::BindOnce(&HidSendFunction::OnFinished, this), false));
 }
@@ -292,11 +290,8 @@ bool HidSendFeatureReportFunction::ReadParameters() {
 
 void HidSendFeatureReportFunction::StartWork(
     device::mojom::HidConnection* connection) {
-  auto* data = reinterpret_cast<const uint8_t*>(parameters_->data.data());
-  std::vector<uint8_t> buffer(data, data + parameters_->data.size());
-
   connection->SendFeatureReport(
-      static_cast<uint8_t>(parameters_->report_id), buffer,
+      static_cast<uint8_t>(parameters_->report_id), parameters_->data,
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
           base::BindOnce(&HidSendFeatureReportFunction::OnFinished, this),
           false));

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/strings/str_cat.h"
 #include "quiche/quic/core/quic_constants.h"
@@ -52,7 +53,7 @@ std::string PrintToString(const TestParams& p) {
 std::vector<TestParams> GetTestParams() {
   std::vector<TestParams> params;
   for (const ParsedQuicVersion& version : AllSupportedVersions()) {
-    if (!version.HasIetfQuicFrames()) {
+    if (!version.IsIetfQuic()) {
       continue;
     }
     for (Perspective perspective :
@@ -71,7 +72,7 @@ class QuicStreamIdManagerTest : public QuicTestWithParam<TestParams> {
       : stream_id_manager_(&delegate_, IsUnidirectional(), perspective(),
                            GetParam().version, 0,
                            kDefaultMaxStreamsPerConnection) {
-    QUICHE_DCHECK(VersionHasIetfQuicFrames(transport_version()));
+    QUICHE_DCHECK(VersionIsIetfQuic(transport_version()));
   }
 
   QuicTransportVersion transport_version() const {

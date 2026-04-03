@@ -31,67 +31,16 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"dawn.googlesource.com/dawn/tools/src/cmd/run-cts/common"
 	"dawn.googlesource.com/dawn/tools/src/cov"
+	"dawn.googlesource.com/dawn/tools/src/dawn/node"
 	"dawn.googlesource.com/dawn/tools/src/fileutils"
-	"dawn.googlesource.com/dawn/tools/src/subcmd"
+	"dawn.googlesource.com/dawn/tools/src/oswrapper"
 )
-
-type dawnFlags []string
-
-func (f *dawnFlags) String() string {
-	return strings.Join(*f, "")
-}
-
-func (f *dawnFlags) Set(value string) error {
-	// Multiple flags must be passed in individually:
-	// -flag=a=b -dawn_node_flag=c=d
-	*f = append(*f, value)
-	return nil
-}
-
-// Consolidates all the delimiter separated flags with a given prefix into a single flag.
-// Example:
-// Given the flags: ["foo=a", "bar", "foo=b,c"]
-// GlobListFlags("foo=", ",") will transform the flags to: ["bar", "foo=a,b,c"]
-func (f *dawnFlags) GlobListFlags(prefix string, delimiter string) {
-	list := []string{}
-	i := 0
-	for _, flag := range *f {
-		if strings.HasPrefix(flag, prefix) {
-			// Trim the prefix.
-			value := flag[len(prefix):]
-			// Extract the deliminated values.
-			list = append(list, strings.Split(value, delimiter)...)
-		} else {
-			(*f)[i] = flag
-			i++
-		}
-	}
-	(*f) = (*f)[:i]
-	if len(list) > 0 {
-		// Append back the consolidated flags.
-		f.Set(prefix + strings.Join(list, delimiter))
-	}
-}
-
-// defaultBinPath looks for the binary output directory at <dawn>/out/active.
-// This is used as the default for the --bin command line flag.
-func defaultBinPath() string {
-	if dawnRoot := fileutils.DawnRoot(); dawnRoot != "" {
-		bin := filepath.Join(dawnRoot, "out/active")
-		if info, err := os.Stat(bin); err == nil && info.IsDir() {
-			return bin
-		}
-	}
-	return ""
-}
 
 type flags struct {
 	common.Flags
@@ -103,11 +52,16 @@ type flags struct {
 	build                bool
 	validate             bool
 	dumpShaders          bool
+	dumpShadersPretty    bool
 	fxc                  bool
 	unrollConstEvalLoops bool
 	genCoverage          bool
 	compatibilityMode    bool
-	dawn                 dawnFlags
+	debugCTS             bool
+	skipVSCodeInfo       bool
+	enforceDefaultLimits bool
+	blockAllFeatures     bool
+	dawn                 node.Flags
 }
 
 func init() {
@@ -121,26 +75,26 @@ type cmd struct {
 	query    string
 }
 
-func (cmd) IsDefaultCommand() {}
+func (c *cmd) IsDefaultCommand() {}
 
-func (cmd) Name() string {
+func (c *cmd) Name() string {
 	return "node"
 }
 
-func (cmd) Desc() string {
+func (c *cmd) Desc() string {
 	return "runs the CTS with dawn.node"
 }
 
 func (c *cmd) RegisterFlags(ctx context.Context, cfg common.Config) ([]string, error) {
-	unrollConstEvalLoopsDefault := runtime.GOOS != "windows"
+	unrollConstEvalLoopsDefault := false
 
 	backendDefault := "default"
-	if vkIcdFilenames := os.Getenv("VK_ICD_FILENAMES"); vkIcdFilenames != "" {
+	if vkIcdFilenames := cfg.OsWrapper.Getenv("VK_ICD_FILENAMES"); vkIcdFilenames != "" {
 		backendDefault = "vulkan"
 	}
 
-	c.flags.Flags.Register()
-	flag.StringVar(&c.flags.bin, "bin", defaultBinPath(), "path to the directory holding cts.js and dawn.node")
+	c.flags.Flags.Register(cfg.OsWrapper)
+	flag.StringVar(&c.flags.bin, "bin", fileutils.BuildPath(cfg.OsWrapper), "path to the directory holding cts.cjs and dawn.node")
 	flag.BoolVar(&c.flags.isolated, "isolate", false, "run each test in an isolated process")
 	flag.BoolVar(&c.flags.build, "build", true, "attempt to build the CTS before running")
 	flag.BoolVar(&c.flags.validate, "validate", false, "enable backend validation")
@@ -149,27 +103,36 @@ func (c *cmd) RegisterFlags(ctx context.Context, cfg common.Config) ([]string, e
 		" set to 'vulkan' if VK_ICD_FILENAMES environment variable is set, 'default' otherwise")
 	flag.StringVar(&c.flags.adapterName, "adapter", "", "name (or substring) of the GPU adapter to use")
 	flag.BoolVar(&c.flags.dumpShaders, "dump-shaders", false, "dump WGSL shaders. Enables --verbose")
+	flag.BoolVar(&c.flags.dumpShadersPretty, "dump-shaders-pretty", false, "dump WGSL shaders, but don't run symbol renaming. May fail tests that shadow predeclared builtins. Enables --verbose")
 	flag.BoolVar(&c.flags.fxc, "fxc", false, "Use FXC instead of DXC. Disables 'use_dxc' Dawn flag")
 	flag.BoolVar(&c.flags.unrollConstEvalLoops, "unroll-const-eval-loops", unrollConstEvalLoopsDefault, "unroll loops in const-eval tests")
 	flag.BoolVar(&c.flags.genCoverage, "coverage", false, "displays coverage data")
 	flag.StringVar(&c.flags.coverageFile, "export-coverage", "", "write coverage data to the given path")
 	flag.BoolVar(&c.flags.compatibilityMode, "compat", false, "run tests in compatibility mode")
+	flag.BoolVar(&c.flags.debugCTS, "debug-cts", false, "enable CTS debugging option")
+	flag.BoolVar(&c.flags.skipVSCodeInfo, "skip-vs-code-info", false, "skips emitting VS Code information")
+	flag.BoolVar(&c.flags.enforceDefaultLimits, "enforce-default-limits", false, "enforce the default limits (note: powerPreference tests may fail)")
+	flag.BoolVar(&c.flags.blockAllFeatures, "block-all-features", false, "block all features (except 'core-features-and-limits')")
 
 	return []string{"[query]"}, nil
 }
 
+// TODO(crbug.com/416755658): Add unittest coverage when there is a way to fake
+// the node process.
 func (c *cmd) Run(ctx context.Context, cfg common.Config) error {
 	// Process the command line flags
-	if err := c.processFlags(); err != nil {
+	if err := c.processFlags(cfg.OsWrapper); err != nil {
 		return err
 	}
 
-	if err := c.maybeInitCoverage(); err != nil {
+	if err := c.maybeInitCoverage(cfg.OsWrapper); err != nil {
 		return err
 	}
 
-	if err := c.state.CTS.Node.BuildIfRequired(c.flags.Verbose); err != nil {
-		return err
+	if c.flags.build {
+		if err := c.state.CTS.Node.BuildIfRequired(c.flags.Verbose, cfg.OsWrapper); err != nil {
+			return err
+		}
 	}
 
 	// Find all the test cases that match r.query.
@@ -179,7 +142,7 @@ func (c *cmd) Run(ctx context.Context, cfg common.Config) error {
 	}
 	fmt.Printf("Testing %d test cases...\n", len(testCases))
 
-	var runner func(ctx context.Context, testCases []common.TestCase, results chan<- common.Result)
+	var runner func(ctx context.Context, testCases []common.TestCase, results chan<- common.Result, fsReaderWriter oswrapper.FilesystemReaderWriter)
 	if c.flags.isolated {
 		fmt.Println("Running in parallel isolated...")
 		runner = c.runTestCasesWithCmdline
@@ -190,38 +153,46 @@ func (c *cmd) Run(ctx context.Context, cfg common.Config) error {
 
 	resultStream := make(chan common.Result, 256)
 	go func() {
-		runner(ctx, testCases, resultStream)
+		runner(ctx, testCases, resultStream, cfg.OsWrapper)
 		close(resultStream)
 	}()
 
 	results, err := common.StreamResults(ctx,
 		c.flags.Colors,
+		c.flags.FailuresOnly,
 		c.state,
 		c.flags.Verbose,
 		c.coverage,
 		len(testCases),
-		resultStream)
-	if err != nil {
-		return err
+		resultStream,
+		cfg.OsWrapper)
+
+	// Make sure we always save results, even if there were failures.
+	if results != nil {
+		if err := c.state.Close(results); err != nil {
+			return err
+		}
 	}
 
-	if err := c.state.Close(results); err != nil {
+	if err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (c *cmd) processFlags() error {
+// TODO(crbug.com/344014313): Add unittest coverage.
+func (c *cmd) processFlags(fsReaderWriter oswrapper.FilesystemReaderWriter) error {
 	// Check mandatory arguments
 	if c.flags.bin == "" {
-		return subcmd.InvalidCLA()
+		return fmt.Errorf("-bin is not set. It defaults to <dawn>/out/active (%v) which does not exist",
+			filepath.Join(fileutils.DawnRoot(fsReaderWriter), "out/active"))
 	}
-	if !fileutils.IsDir(c.flags.bin) {
+	if !fileutils.IsDir(c.flags.bin, fsReaderWriter) {
 		return fmt.Errorf("'%v' is not a directory", c.flags.bin)
 	}
-	for _, file := range []string{"cts.js", "dawn.node"} {
-		if !fileutils.IsFile(filepath.Join(c.flags.bin, file)) {
+	for _, file := range []string{"cts.cjs", "dawn.node"} {
+		if !fileutils.IsFile(filepath.Join(c.flags.bin, file), fsReaderWriter) {
 			return fmt.Errorf("'%v' does not contain '%v'", c.flags.bin, file)
 		}
 	}
@@ -243,33 +214,24 @@ func (c *cmd) processFlags() error {
 		return fmt.Errorf("only a single query can be provided")
 	}
 
-	// For Windows, set the DLL directory to bin so that Dawn loads dxcompiler.dll from there.
-	c.flags.dawn.Set("dlldir=" + c.flags.bin)
+	c.flags.dawn.SetOptions(node.Options{
+		Backend:           c.flags.backend,
+		Adapter:           c.flags.adapterName,
+		Validate:          c.flags.validate,
+		AllowUnsafeAPIs:   true,
+		DumpShaders:       c.flags.dumpShaders,
+		DumpShadersPretty: c.flags.dumpShadersPretty,
+		UseFXC:            c.flags.fxc,
+	})
 
-	// Forward the backend and adapter to use, if specified.
-	if c.flags.backend != "default" {
-		fmt.Println("Forcing backend to", c.flags.backend)
-		c.flags.dawn.Set("backend=" + c.flags.backend)
-	}
-	if c.flags.adapterName != "" {
-		c.flags.dawn.Set("adapter=" + c.flags.adapterName)
-	}
-	if c.flags.validate {
-		c.flags.dawn.Set("validate=1")
-	}
-
-	// While running the CTS, always allow unsafe APIs so they can be tested.
-	c.flags.dawn.Set("enable-dawn-features=allow_unsafe_apis")
 	if c.flags.dumpShaders {
 		c.flags.Verbose = true
-		c.flags.dawn.Set("enable-dawn-features=dump_shaders,disable_symbol_renaming")
 	}
-	if c.flags.fxc {
-		c.flags.dawn.Set("disable-dawn-features=use_dxc")
+	if c.flags.dumpShadersPretty {
+		c.flags.Verbose = true
 	}
-	c.flags.dawn.GlobListFlags("enable-dawn-features=", ",")
 
-	state, err := c.flags.Process()
+	state, err := c.flags.Process(fsReaderWriter)
 	if err != nil {
 		return err
 	}
@@ -278,7 +240,9 @@ func (c *cmd) processFlags() error {
 	return nil
 }
 
-func (c *cmd) maybeInitCoverage() error {
+// TODO(crbug.com/416755658): Add unittest coverage when exec is handled via
+// dependency injection.
+func (c *cmd) maybeInitCoverage(fsReader oswrapper.FilesystemReader) error {
 	if !c.flags.genCoverage && c.flags.coverageFile == "" {
 		return nil
 	}
@@ -288,7 +252,7 @@ func (c *cmd) maybeInitCoverage() error {
 		profdata = ""
 		if runtime.GOOS == "darwin" {
 			profdata = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/llvm-profdata"
-			if !fileutils.IsExe(profdata) {
+			if !fileutils.IsExe(profdata, fsReader) {
 				profdata = ""
 			}
 		}
@@ -299,7 +263,7 @@ func (c *cmd) maybeInitCoverage() error {
 
 	llvmCov := ""
 	turboCov := filepath.Join(c.flags.bin, "turbo-cov"+fileutils.ExeExt)
-	if !fileutils.IsExe(turboCov) {
+	if !fileutils.IsExe(turboCov, fsReader) {
 		turboCov = ""
 		if path, err := exec.LookPath("llvm-cov"); err == nil {
 			llvmCov = path

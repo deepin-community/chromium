@@ -13,7 +13,6 @@
 #include "base/test/simple_test_clock.h"
 #include "base/time/clock.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/./ui/tabs/tab_enums.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/history/history_service_factory.h"
@@ -38,7 +37,6 @@
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
 #include "components/ukm/test_ukm_recorder.h"
-#include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -118,7 +116,7 @@ const char kExpectedIconUrl[] = "/notifications/no_such_file.png";
 
 }  // namespace
 
-// Flaky on Windows, Mac, Linux: http://crbug.com/437414.
+// Flaky on Windows, Mac, Linux: http://crbug.com/40395983.
 IN_PROC_BROWSER_TEST_F(NotificationsTest, DISABLED_TestUserGestureInfobar) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -731,11 +729,10 @@ IN_PROC_BROWSER_TEST_F(NotificationsTest, TestShouldDisplayPopupNotification) {
 }
 
 #if !BUILDFLAG(IS_ANDROID)
-// TODO(crbug.com/1132058): Test fails on Windows and macOS on the bots as there
-// is no real display to test with. Need to find a way to run these without a
-// display and figure out why Lacros is timing out. Tests pass locally with a
-// real display.
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS_LACROS)
+// TODO(crbug.com/40721738): Test fails on Windows and macOS on the bots as
+// there is no real display to test with. Need to find a way to run these
+// without a display. Tests pass locally with a real display.
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #define MAYBE_ShouldQueueDuringScreenPresent \
   DISABLED_ShouldQueueDuringScreenPresent
 #else

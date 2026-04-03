@@ -12,8 +12,9 @@
 #include "ash/public/cpp/clipboard_history_controller.h"
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
-#include "chromeos/crosapi/mojom/clipboard_history.mojom.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "chromeos/ui/clipboard_history/clipboard_history_types.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/menu/menu_model_adapter.h"
 
 namespace gfx {
@@ -57,8 +58,8 @@ class ASH_EXPORT ClipboardHistoryMenuModelAdapter
   // indicate how the menu was triggered. `menu_last_time_shown` and
   // `nudge_last_time_shown` indicate when the menu or any nudge was last shown.
   void Run(const gfx::Rect& anchor_rect,
-           ui::MenuSourceType source_type,
-           crosapi::mojom::ClipboardHistoryControllerShowSource show_source,
+           ui::mojom::MenuSourceType source_type,
+           chromeos::clipboard_history::ShowSource show_source,
            const std::optional<base::Time>& menu_last_time_shown,
            const std::optional<base::Time>& nudge_last_time_shown);
 
@@ -111,14 +112,15 @@ class ASH_EXPORT ClipboardHistoryMenuModelAdapter
   class MenuModelWithWillCloseCallback;
   class ScopedA11yIgnore;
 
-  using ItemViewsByCommandId = std::map<int, ClipboardHistoryItemView*>;
+  using ItemViewsByCommandId =
+      std::map<int, raw_ptr<ClipboardHistoryItemView, CtnExperimental>>;
 
   ClipboardHistoryMenuModelAdapter(
       std::unique_ptr<MenuModelWithWillCloseCallback> model,
       base::RepeatingClosure menu_closed_callback,
       const ClipboardHistory* clipboard_history);
 
-  // Advances the pseduo focus from the selected history item view (backward if
+  // Advances the pseudo focus from the selected history item view (backward if
   // `reverse` is true).
   void AdvancePseudoFocusFromSelectedItem(bool reverse);
 
@@ -149,8 +151,7 @@ class ASH_EXPORT ClipboardHistoryMenuModelAdapter
   base::TimeTicks menu_open_time_;
 
   // The source which opened the menu, absent until the menu is `Run()`.
-  std::optional<crosapi::mojom::ClipboardHistoryControllerShowSource>
-      menu_show_source_;
+  std::optional<chromeos::clipboard_history::ShowSource> menu_show_source_;
 
   // The mapping between the command ids and items that are copied from
   // `clipboard_history_` when the menu is created. It is used to solve the

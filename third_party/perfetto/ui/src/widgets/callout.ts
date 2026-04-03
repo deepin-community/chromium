@@ -1,4 +1,4 @@
-// Copyright (C) 2023 The Android Open Source Project
+// Copyright (C) 2025 The Android Open Source Project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,24 +13,51 @@
 // limitations under the License.
 
 import m from 'mithril';
-
-import {HTMLAttrs} from './common';
+import {classForIntent, HTMLAttrs, Intent} from './common';
+import {Button} from './button';
 import {Icon} from './icon';
+import {classNames} from '../base/classnames';
 
 interface CalloutAttrs extends HTMLAttrs {
   // An icon to show to the left of the callout content.
-  icon?: string;
+  readonly icon?: string;
+
+  // Color the callout by specifying an intent.
+  readonly intent?: Intent;
+
+  // Adds a close button to the callout.
+  readonly dismissible?: boolean;
+
+  // A callback to be invoked when the callout's close button is clicked.
+  readonly onDismiss?: () => void;
 }
 
 export class Callout implements m.ClassComponent<CalloutAttrs> {
   view({attrs, children}: m.CVnode<CalloutAttrs>) {
-    const {icon, ...htmlAttrs} = attrs;
+    const {
+      icon,
+      intent = Intent.None,
+      className,
+      dismissible = false,
+      onDismiss,
+      ...htmlAttrs
+    } = attrs;
 
     return m(
       '.pf-callout',
-      htmlAttrs,
+      {
+        className: classNames(classForIntent(intent), className),
+        ...htmlAttrs,
+      },
       icon && m(Icon, {className: 'pf-left-icon', icon}),
-      children,
+      m('span.pf-callout__content', children),
+      dismissible &&
+        m(Button, {
+          icon: 'close',
+          onclick: onDismiss,
+          compact: true,
+          title: 'Dismiss callout',
+        }),
     );
   }
 }

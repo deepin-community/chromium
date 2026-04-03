@@ -11,6 +11,7 @@ if (!is_ios && !is_android) {
     deps = [
       "//base",
       "//base:i18n",
+      "//components/lookalikes/core",
       "//components/url_formatter:skeleton_generator",
       "//third_party/icu",
     ]
@@ -29,7 +30,7 @@ executable("top_domain_generator") {
     "//base",
     "//base:i18n",
     "//net/tools/huffman_trie:huffman_trie_generator_sources",
-    "//url:url",
+    "//url",
   ]
   if (is_ios) {
     frameworks = [ "UIKit.framework" ]
@@ -42,14 +43,14 @@ compiled_action("generate_top_domains_trie") {
   # Inputs in order expected by the command line of the tool.
   inputs = [
     "//components/url_formatter/spoof_checks/top_domains/domains.skeletons",
-    "//components/url_formatter/spoof_checks/top_domains/top_domains_trie.template",
+    "//components/url_formatter/spoof_checks/top_domains/top_domains_trie_header.template",
   ]
-  outputs = [ "$target_gen_dir/domains-trie-inc.cc" ]
+  outputs = [ "$target_gen_dir/domains-trie.h" ]
   args =
       rebase_path(inputs, root_build_dir) + rebase_path(outputs, root_build_dir)
 }
 
-# TODO(crbug/915921): Combine this and the previous one into a
+# TODO(crbug.com/41432246): Combine this and the previous one into a
 # compiled_action_foreach target.
 compiled_action("generate_idn_top_domains_test_trie") {
   tool = ":top_domain_generator"
@@ -57,15 +58,15 @@ compiled_action("generate_idn_top_domains_test_trie") {
   # Inputs in order expected by the command line of the tool.
   inputs = [
     "//components/url_formatter/spoof_checks/top_domains/idn_test_domains.skeletons",
-    "//components/url_formatter/spoof_checks/top_domains/top_domains_trie.template",
+    "//components/url_formatter/spoof_checks/top_domains/idn_test_top_domains_trie_header.template",
   ]
-  outputs = [ "$target_gen_dir/idn_test_domains-trie-inc.cc" ]
+  outputs = [ "$target_gen_dir/idn_test_domains_trie.h" ]
 
   args =
       rebase_path(inputs, root_build_dir) + rebase_path(outputs, root_build_dir)
 }
 
-# TODO(crbug/915921): Combine this and the previous one into a
+# TODO(crbug.com/41432246): Combine this and the previous one into a
 # compiled_action_foreach target.
 compiled_action("generate_top_domains_test_trie") {
   tool = ":top_domain_generator"
@@ -73,9 +74,9 @@ compiled_action("generate_top_domains_test_trie") {
   # Inputs in order expected by the command line of the tool.
   inputs = [
     "//components/url_formatter/spoof_checks/top_domains/test_domains.skeletons",
-    "//components/url_formatter/spoof_checks/top_domains/top_domains_trie.template",
+    "//components/url_formatter/spoof_checks/top_domains/test_top_domains_trie_header.template",
   ]
-  outputs = [ "$target_gen_dir/test_domains-trie-inc.cc" ]
+  outputs = [ "$target_gen_dir/test_domains_trie.h" ]
 
   args =
       rebase_path(inputs, root_build_dir) + rebase_path(outputs, root_build_dir)
@@ -116,7 +117,7 @@ source_set("unit_tests") {
   ]
 }
 
-# TODO(crbug/915921): Combine this and the previous one into a
+# TODO(crbug.com/41432246): Combine this and the previous one into a
 # compiled_action_foreach target.
 compiled_action("generate_top_domain_list_variables_file") {
   tool = ":make_top_domain_list_variables"
@@ -129,7 +130,7 @@ compiled_action("generate_top_domain_list_variables_file") {
          rebase_path(outputs, root_build_dir)
 }
 
-# TODO(crbug/915921): Combine this and the previous one into a
+# TODO(crbug.com/41432246): Combine this and the previous one into a
 # compiled_action_foreach target.
 compiled_action("generate_test_top_domain_list_variables_file") {
   tool = ":make_top_domain_list_variables"

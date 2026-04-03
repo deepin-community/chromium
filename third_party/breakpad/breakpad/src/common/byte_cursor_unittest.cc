@@ -41,7 +41,6 @@
 
 #include "breakpad_googletest_includes.h"
 #include "common/byte_cursor.h"
-#include "common/using_std_string.h"
 
 using google_breakpad::ByteBuffer;
 using google_breakpad::ByteCursor;
@@ -733,7 +732,7 @@ TEST(Strings, PointTo) {
   EXPECT_EQ(data + 0, received1);
   EXPECT_EQ(data + 3, received2);
   EXPECT_EQ(data + 6, received3);
-  EXPECT_EQ(NULL, received4);
+  EXPECT_EQ(nullptr, received4);
 }
 
 TEST(Strings, CString) {
@@ -741,7 +740,7 @@ TEST(Strings, CString) {
   ByteBuffer buffer(data, sizeof(data) - 1);  // don't include terminating '\0'
   ByteCursor cursor(&buffer);
 
-  string a, b, c;
+  std::string a, b, c;
   EXPECT_TRUE(cursor.CString(&a).CString(&b));
   EXPECT_EQ("abc", a);
   EXPECT_EQ("", b);
@@ -755,7 +754,7 @@ TEST(Strings, CStringLimit) {
   ByteBuffer buffer(data, sizeof(data) - 1);  // don't include terminating '\0'
   ByteCursor cursor(&buffer);
 
-  string a, b, c, d, e;
+  std::string a, b, c, d, e;
 
   EXPECT_TRUE(cursor.CString(&a, 3));
   EXPECT_EQ("abc", a);

@@ -4,6 +4,8 @@
 
 #include "content/browser/mojo_binder_policy_map_impl.h"
 
+#include <string_view>
+
 #include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "content/common/dom_automation_controller.mojom.h"
@@ -13,6 +15,7 @@
 #include "content/public/common/content_client.h"
 #include "device/gamepad/public/mojom/gamepad.mojom.h"
 #include "media/mojo/mojom/media_player.mojom.h"
+#include "media/mojo/mojom/webrtc_video_perf.mojom.h"
 #include "services/network/public/mojom/restricted_cookie_manager.mojom.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom.h"
 #include "third_party/blink/public/mojom/broadcastchannel/broadcast_channel.mojom.h"
@@ -37,7 +40,6 @@ namespace content {
 #if BUILDFLAG(IS_MAC)
 // Put crbug.com/115920 fix under flag, so we can measure its CWV impact.
 BASE_FEATURE(kTextInputHostMojoCapabilityControlWorkaround,
-             "TextInputHostMojoCapabilityControlWorkaround",
              base::FEATURE_ENABLED_BY_DEFAULT);
 #endif
 
@@ -99,6 +101,11 @@ void RegisterNonAssociatedPolicies(MojoBinderPolicyMap& map,
   map.SetNonAssociatedPolicy<blink::mojom::CodeCacheHost>(
       MojoBinderNonAssociatedPolicy::kGrant);
 
+  // Grant this for Media Capabilities APIs. This should be safe as the APIs
+  // just query encoding / decoding information.
+  map.SetNonAssociatedPolicy<media::mojom::WebrtcVideoPerfHistory>(
+      content::MojoBinderNonAssociatedPolicy::kGrant);
+
 #if BUILDFLAG(IS_MAC)
   // Set policy to Grant for TextInputHost.
   // This is used to return macOS IME sync call results to the browser process,
@@ -118,7 +125,7 @@ void RegisterChannelAssociatedPoliciesForSameOriginPrerendering(
     MojoBinderPolicyMap& map) {
   // Basic skeleton. All of them are critical to load a page so their policies
   // have to be kGrant.
-  // TODO(https://crbug.com/1259007): Message-level control should be performed.
+  // TODO(crbug.com/40201285): Message-level control should be performed.
   map.SetAssociatedPolicy<mojom::FrameHost>(MojoBinderAssociatedPolicy::kGrant);
   map.SetAssociatedPolicy<blink::mojom::LocalFrameHost>(
       MojoBinderAssociatedPolicy::kGrant);
@@ -159,7 +166,7 @@ void RegisterChannelAssociatedPoliciesForSameOriginPrerendering(
       MojoBinderAssociatedPolicy::kGrant);
 
   // Pages with FetchLater API calls should be allowed to prerender.
-  // TODO(crbug.com/1465781): Update according to feedback from
+  // TODO(crbug.com/40276121): Update according to feedback from
   // https://github.com/WICG/pending-beacon/issues/82
   map.SetAssociatedPolicy<blink::mojom::FetchLaterLoaderFactory>(
       MojoBinderAssociatedPolicy::kGrant);
@@ -218,7 +225,6 @@ class BrowserInterfaceBrokerMojoBinderPolicyMapHolder {
   }
 
  private:
-  // TODO(https://crbug.com/1145976): Set default policy map for content/.
   // Changes to `same_origin_map_` require security review.
   MojoBinderPolicyMapImpl same_origin_map_;
 
@@ -277,7 +283,7 @@ MojoBinderNonAssociatedPolicy
 MojoBinderPolicyMapImpl::GetNonAssociatedMojoBinderPolicyOrDieForTesting(
     const std::string& interface_name) const {
   const auto& found = non_associated_policy_map_.find(interface_name);
-  DCHECK(found != non_associated_policy_map_.end());
+  CHECK(found != non_associated_policy_map_.end());
   return found->second;
 }
 
@@ -285,18 +291,18 @@ MojoBinderAssociatedPolicy
 MojoBinderPolicyMapImpl::GetAssociatedMojoBinderPolicyOrDieForTesting(
     const std::string& interface_name) const {
   const auto& found = associated_policy_map_.find(interface_name);
-  DCHECK(found != associated_policy_map_.end());
+  CHECK(found != associated_policy_map_.end());
   return found->second;
 }
 
 void MojoBinderPolicyMapImpl::SetPolicyByName(
-    const base::StringPiece& name,
+    const std::string_view& name,
     MojoBinderNonAssociatedPolicy policy) {
   non_associated_policy_map_.emplace(name, policy);
 }
 
 void MojoBinderPolicyMapImpl::SetPolicyByName(
-    const base::StringPiece& name,
+    const std::string_view& name,
     MojoBinderAssociatedPolicy policy) {
   associated_policy_map_.emplace(name, policy);
 }

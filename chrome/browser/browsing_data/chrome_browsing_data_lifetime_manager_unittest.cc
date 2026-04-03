@@ -16,7 +16,6 @@
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/trusted_vault/trusted_vault_service_factory.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/browsing_data/core/features.h"
 #include "components/browsing_data/core/pref_names.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/signin/public/base/signin_pref_names.h"
@@ -91,8 +90,9 @@ TEST(ChromeBrowsingDataLifetimeManager, ScheduledRemovalWithSyncDisabled) {
   delegate.ExpectCallDontCareAboutFilterBuilder(
       delete_start_time, delete_end_time_3, remove_mask_3_unfilterable, 0);
 
-  testing_profile->GetPrefs()->Set(browsing_data::prefs::kBrowsingDataLifetime,
-                                   *base::JSONReader::Read(kPref));
+  testing_profile->GetPrefs()->Set(
+      browsing_data::prefs::kBrowsingDataLifetime,
+      *base::JSONReader::Read(kPref, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
   browser_task_environment.RunUntilIdle();
   delegate.VerifyAndClearExpectations();
 
@@ -178,8 +178,9 @@ TEST(ChromeBrowsingDataLifetimeManager,
   // usual.
   testing_profile->GetPrefs()->Set(prefs::kSigninAllowed, base::Value(false));
 
-  testing_profile->GetPrefs()->Set(browsing_data::prefs::kBrowsingDataLifetime,
-                                   *base::JSONReader::Read(kPref));
+  testing_profile->GetPrefs()->Set(
+      browsing_data::prefs::kBrowsingDataLifetime,
+      *base::JSONReader::Read(kPref, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
 
   // Delete until 30 minutes from current delete end time because a task is
   // scheduled for 30 minutes from now.
@@ -222,12 +223,11 @@ TEST(ChromeBrowsingDataLifetimeManager,
   builder.AddTestingFactory(TrustedVaultServiceFactory::GetInstance(),
                             TrustedVaultServiceFactory::GetDefaultFactory());
   builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
-                            SyncServiceFactory::GetDefaultFactory());
+                            base::BindRepeating(&CreateTestSyncService));
 
   auto testing_profile = builder.Build();
   syncer::TestSyncService* sync_service = static_cast<syncer::TestSyncService*>(
-      SyncServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-          testing_profile.get(), base::BindRepeating(&CreateTestSyncService)));
+      SyncServiceFactory::GetForProfile(testing_profile.get()));
 
   content::MockBrowsingDataRemoverDelegate delegate;
   auto* remover = testing_profile->GetBrowsingDataRemover();
@@ -247,15 +247,23 @@ TEST(ChromeBrowsingDataLifetimeManager,
       content::BrowsingDataRemover::ORIGIN_TYPE_PROTECTED_WEB;
 
   // Sync is enabled, so no deletion should be made.
-  testing_profile->GetPrefs()->Set(browsing_data::prefs::kBrowsingDataLifetime,
-                                   *base::JSONReader::Read(kPref));
+  testing_profile->GetPrefs()->Set(
+      browsing_data::prefs::kBrowsingDataLifetime,
+      *base::JSONReader::Read(kPref, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
   browser_task_environment.RunUntilIdle();
   delegate.VerifyAndClearExpectations();
 
-  // If required sync types get disabled, the scheduled deletions should proceed
-  // as usual.
-  sync_service->GetUserSettings()->SetTypeIsManaged(
-      syncer::UserSelectableType::kPreferences, true);
+  // If required sync types get disabled by policy, the scheduled deletions
+  // should proceed as usual.
+  auto* settings = sync_service->GetUserSettings();
+  settings->SetSelectedType(syncer::UserSelectableType::kPreferences,
+                            /*is_type_on=*/false);
+  settings->SetSelectedType(syncer::UserSelectableType::kCookies,
+                            /*is_type_on=*/false);
+  settings->SetTypeIsManagedByPolicy(syncer::UserSelectableType::kPreferences,
+                                     /*is_managed=*/true);
+  settings->SetTypeIsManagedByPolicy(syncer::UserSelectableType::kCookies,
+                                     /*is_managed=*/true);
 
   base::Time current_time = base::Time::Now();
   base::Time delete_start_time = base::Time::Min();

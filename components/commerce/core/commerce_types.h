@@ -12,8 +12,9 @@
 #include <vector>
 
 #include "base/functional/callback.h"
-#include "base/time/time.h"
-#include "components/commerce/core/proto/parcel.pb.h"
+#include "base/tuple.h"
+#include "components/commerce/core/proto/price_tracking.pb.h"
+#include "components/commerce/core/proto/product_category.pb.h"
 #include "url/gurl.h"
 
 namespace commerce {
@@ -21,18 +22,34 @@ namespace commerce {
 // Data containers that are provided by the above callbacks:
 
 // Discount cluster types.
+// A Java counterpart will be generated for this enum.
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.commerce.core
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(DiscountClusterType)
 enum class DiscountClusterType {
   kUnspecified = 0,
   kOfferLevel = 1,
-  kMaxValue = kOfferLevel,
+  kPageLevel = 2,
+  kMaxValue = kPageLevel,
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/commerce/enums.xml:DiscountClusterType)
 
 // Discount types.
+// A Java counterpart will be generated for this enum.
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.commerce.core
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(DiscountType)
 enum class DiscountType {
   kUnspecified = 0,
   kFreeListingWithCode = 1,
-  kMaxValue = kFreeListingWithCode,
+  kCrawledPromotion = 2,
+  kMaxValue = kCrawledPromotion,
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/commerce/enums.xml:DiscountType)
 
 // Information returned by the discount APIs.
 struct DiscountInfo {
@@ -50,7 +67,7 @@ struct DiscountInfo {
   std::optional<std::string> discount_code;
   uint64_t id = 0;
   bool is_merchant_wide = false;
-  double expiry_time_sec = 0;
+  std::optional<double> expiry_time_sec;
   uint64_t offer_id = 0;
 };
 
@@ -118,36 +135,141 @@ struct ProductInfo {
   int64_t amount_micros{0};
   std::optional<int64_t> previous_amount_micros;
   std::string country_code;
-
- private:
-  friend class ShoppingService;
-
+  CategoryData category_data;
+  std::optional<BuyableProduct_PriceDisplayRecommendation>
+      price_display_recommendation;
+  std::vector<PriceSummary> price_summary;
+  // TODO(crbug.com/404335872): Populate product_reviews in shopping service.
+  std::optional<ProductReviews> product_reviews;
   // This is used to track whether the server provided an image with the rest
   // of the product info. This value being |true| does not necessarily mean an
   // image is available in the ProductInfo struct (as it is flag gated) and is
   // primarily used for recording metrics.
+  // TODO(crbug.com/410811501) make private again when we support synced tabs.
   bool server_image_available{false};
+
+ private:
+  friend class ShoppingService;
 };
 
-// Information returned by Parcels API.
-struct ParcelTrackingStatus {
- public:
-  ParcelTrackingStatus();
-  explicit ParcelTrackingStatus(const ParcelStatus&);
-  ParcelTrackingStatus(const ParcelTrackingStatus&);
-  ParcelTrackingStatus& operator=(const ParcelTrackingStatus&);
-  ~ParcelTrackingStatus();
+// Details about a particular URL.
+struct UrlInfo {
+  UrlInfo();
+  UrlInfo(const GURL& url,
+          const std::u16string& title,
+          const std::optional<GURL> favicon_url = std::nullopt,
+          const std::optional<GURL> thumbnail_url = std::nullopt,
+          const std::optional<std::string> previewText = std::nullopt);
+  UrlInfo(const UrlInfo&);
+  UrlInfo& operator=(const UrlInfo&);
+  bool operator==(const UrlInfo& other) const {
+    return url == other.url && title == other.title;
+  }
+  ~UrlInfo();
 
-  ParcelIdentifier::Carrier carrier = ParcelIdentifier::UNKNOWN;
-  std::string tracking_id;
-  ParcelStatus::ParcelState state = ParcelStatus::UNKNOWN;
-  GURL tracking_url;
-  base::Time estimated_delivery_time;
+  GURL url;
+  std::u16string title;
+  std::optional<GURL> favicon_url;
+  std::optional<GURL> thumbnail_url;
+  std::optional<std::string> previewText;
+};
+
+// Information provided by the product specifications backend.
+struct ProductSpecifications {
+ public:
+  typedef uint64_t ProductDimensionId;
+
+  ProductSpecifications();
+  ProductSpecifications(const ProductSpecifications&);
+  ~ProductSpecifications();
+
+  // Text content with a URL for more context.
+  struct DescriptionText {
+   public:
+    DescriptionText();
+    DescriptionText(const DescriptionText&);
+    ~DescriptionText();
+    std::string text;
+    std::vector<UrlInfo> urls;
+  };
+
+  struct Description {
+   public:
+    Description();
+    Description(const Description&);
+    ~Description();
+
+    struct Option {
+      Option();
+      Option(const Option&);
+      ~Option();
+
+      // The primary descriptions to display for this option.
+      std::vector<DescriptionText> descriptions;
+    };
+
+    // A list of options that apply to this description.
+    std::vector<Option> options;
+
+    // Optional label or title for the descriptions.
+    std::string label;
+
+    // Optional alternative text with additional context for the descriptions.
+    std::string alt_text;
+  };
+
+  struct Value {
+   public:
+    Value();
+    Value(const Value&);
+    ~Value();
+
+    std::vector<Description> descriptions;
+    std::vector<DescriptionText> summary;
+  };
+
+  struct Product {
+   public:
+    Product();
+    Product(const Product&);
+    ~Product();
+
+    uint64_t product_cluster_id;
+    std::string mid;
+    std::string title;
+    GURL image_url;
+    std::map<ProductDimensionId, Value> product_dimension_values;
+    std::vector<DescriptionText> summary;
+    GURL buying_options_url;
+  };
+
+  // A map of each product dimension ID to its human readable name.
+  std::map<ProductDimensionId, std::string> product_dimension_map;
+
+  // The list of products in the specification group.
+  std::vector<Product> products;
+};
+
+// Class representing the tap strip entry point.
+struct EntryPointInfo {
+  EntryPointInfo(const std::string& title,
+                 std::map<GURL, uint64_t> similar_candidate_products);
+  ~EntryPointInfo();
+  EntryPointInfo(const EntryPointInfo&);
+  EntryPointInfo& operator=(const EntryPointInfo&);
+
+  // Title of the product group to be clustered.
+  std::string title;
+
+  // Map of candidate products that are similar and can
+  // be clustered into one product group. Key is the product URL and value is
+  // the product cluster ID.
+  std::map<GURL, uint64_t> similar_candidate_products;
 };
 
 // Callbacks and typedefs for various accessors in the shopping service.
-using DiscountsMap = std::map<GURL, std::vector<DiscountInfo>>;
-using DiscountInfoCallback = base::OnceCallback<void(const DiscountsMap&)>;
+using DiscountInfoCallback =
+    base::OnceCallback<void(const GURL&, const std::vector<DiscountInfo>)>;
 using MerchantInfoCallback =
     base::OnceCallback<void(const GURL&, std::optional<MerchantInfo>)>;
 using PriceInsightsInfoCallback =
@@ -156,11 +278,14 @@ using PriceInsightsInfoCallback =
 using ProductInfoCallback =
     base::OnceCallback<void(const GURL&,
                             const std::optional<const ProductInfo>&)>;
+using ProductInfoBatchCallback =
+    base::OnceCallback<void(const std::map<GURL, std::optional<ProductInfo>>)>;
+using ProductSpecificationsCallback =
+    base::OnceCallback<void(std::vector<uint64_t>,
+                            std::optional<ProductSpecifications>)>;
 using IsShoppingPageCallback =
     base::OnceCallback<void(const GURL&, std::optional<bool>)>;
-using GetParcelStatusCallback = base::OnceCallback<
-    void(bool /*success*/, std::unique_ptr<std::vector<ParcelTrackingStatus>>)>;
-using StopParcelTrackingCallback = base::OnceCallback<void(bool /*success*/)>;
+
 }  // namespace commerce
 
 #endif  // COMPONENTS_COMMERCE_CORE_COMMERCE_TYPES_H_

@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ash/crosapi/document_scan_ash_type_converters.h"
 
-#include "base/containers/contains.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -542,8 +541,8 @@ TEST(DocumentScanAshTypeConvertersTest,
   ASSERT_TRUE(output->scanner_handle.has_value());
   EXPECT_EQ(output->scanner_handle.value(), "12345");
   ASSERT_TRUE(output->options.has_value());
-  EXPECT_TRUE(base::Contains(output->options.value(), "option1-name"));
-  EXPECT_TRUE(base::Contains(output->options.value(), "option2-name"));
+  EXPECT_TRUE(output->options.value().contains("option1-name"));
+  EXPECT_TRUE(output->options.value().contains("option2-name"));
 }
 
 TEST(DocumentScanAshTypeConvertersTest,
@@ -609,14 +608,15 @@ TEST(DocumentScanAshTypeConvertersTest, ReadScanDataResponse_Success) {
 
 TEST(DocumentScanAshTypeConvertersTest, ScannerOption_EmptyObject) {
   auto input = crosapi::mojom::OptionSetting::New();
-  auto output = input.To<lorgnette::ScannerOption>();
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
 
-  EXPECT_TRUE(output.name().empty());
-  EXPECT_EQ(output.option_type(), lorgnette::TYPE_UNKNOWN);
-  EXPECT_FALSE(output.has_bool_value());
-  EXPECT_FALSE(output.has_int_value());
-  EXPECT_FALSE(output.has_fixed_value());
-  EXPECT_FALSE(output.has_string_value());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_TRUE(output->name().empty());
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_UNKNOWN);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_FALSE(output->has_int_value());
+  EXPECT_FALSE(output->has_fixed_value());
+  EXPECT_FALSE(output->has_string_value());
 }
 
 TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessBool) {
@@ -625,15 +625,16 @@ TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessBool) {
   input->type = crosapi::mojom::OptionType::kBool;
   input->value = crosapi::mojom::OptionValue::NewBoolValue(true);
 
-  auto output = input.To<lorgnette::ScannerOption>();
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
 
-  EXPECT_EQ(output.name(), "option-name");
-  EXPECT_EQ(output.option_type(), lorgnette::TYPE_BOOL);
-  EXPECT_TRUE(output.has_bool_value());
-  EXPECT_TRUE(output.bool_value());
-  EXPECT_FALSE(output.has_int_value());
-  EXPECT_FALSE(output.has_fixed_value());
-  EXPECT_FALSE(output.has_string_value());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_BOOL);
+  EXPECT_TRUE(output->has_bool_value());
+  EXPECT_TRUE(output->bool_value());
+  EXPECT_FALSE(output->has_int_value());
+  EXPECT_FALSE(output->has_fixed_value());
+  EXPECT_FALSE(output->has_string_value());
 }
 
 TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessInt) {
@@ -642,15 +643,16 @@ TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessInt) {
   input->type = crosapi::mojom::OptionType::kInt;
   input->value = crosapi::mojom::OptionValue::NewIntValue(10);
 
-  auto output = input.To<lorgnette::ScannerOption>();
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
 
-  EXPECT_EQ(output.name(), "option-name");
-  EXPECT_EQ(output.option_type(), lorgnette::TYPE_INT);
-  EXPECT_FALSE(output.has_bool_value());
-  EXPECT_TRUE(output.has_int_value());
-  EXPECT_THAT(output.int_value().value(), ElementsAre(10));
-  EXPECT_FALSE(output.has_fixed_value());
-  EXPECT_FALSE(output.has_string_value());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_INT);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_TRUE(output->has_int_value());
+  EXPECT_THAT(output->int_value().value(), ElementsAre(10));
+  EXPECT_FALSE(output->has_fixed_value());
+  EXPECT_FALSE(output->has_string_value());
 }
 
 TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessIntList) {
@@ -659,15 +661,16 @@ TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessIntList) {
   input->type = crosapi::mojom::OptionType::kInt;
   input->value = crosapi::mojom::OptionValue::NewIntList({10, 20});
 
-  auto output = input.To<lorgnette::ScannerOption>();
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
 
-  EXPECT_EQ(output.name(), "option-name");
-  EXPECT_EQ(output.option_type(), lorgnette::TYPE_INT);
-  EXPECT_FALSE(output.has_bool_value());
-  EXPECT_TRUE(output.has_int_value());
-  EXPECT_THAT(output.int_value().value(), ElementsAre(10, 20));
-  EXPECT_FALSE(output.has_fixed_value());
-  EXPECT_FALSE(output.has_string_value());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_INT);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_TRUE(output->has_int_value());
+  EXPECT_THAT(output->int_value().value(), ElementsAre(10, 20));
+  EXPECT_FALSE(output->has_fixed_value());
+  EXPECT_FALSE(output->has_string_value());
 }
 
 TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessFixed) {
@@ -676,15 +679,16 @@ TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessFixed) {
   input->type = crosapi::mojom::OptionType::kFixed;
   input->value = crosapi::mojom::OptionValue::NewFixedValue(10.5);
 
-  auto output = input.To<lorgnette::ScannerOption>();
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
 
-  EXPECT_EQ(output.name(), "option-name");
-  EXPECT_EQ(output.option_type(), lorgnette::TYPE_FIXED);
-  EXPECT_FALSE(output.has_bool_value());
-  EXPECT_FALSE(output.has_int_value());
-  EXPECT_TRUE(output.has_fixed_value());
-  EXPECT_THAT(output.fixed_value().value(), ElementsAre(10.5));
-  EXPECT_FALSE(output.has_string_value());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_FIXED);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_FALSE(output->has_int_value());
+  EXPECT_TRUE(output->has_fixed_value());
+  EXPECT_THAT(output->fixed_value().value(), ElementsAre(10.5));
+  EXPECT_FALSE(output->has_string_value());
 }
 
 TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessFixedList) {
@@ -693,15 +697,16 @@ TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessFixedList) {
   input->type = crosapi::mojom::OptionType::kFixed;
   input->value = crosapi::mojom::OptionValue::NewFixedList({10.4, 20.6});
 
-  auto output = input.To<lorgnette::ScannerOption>();
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
 
-  EXPECT_EQ(output.name(), "option-name");
-  EXPECT_EQ(output.option_type(), lorgnette::TYPE_FIXED);
-  EXPECT_FALSE(output.has_bool_value());
-  EXPECT_FALSE(output.has_int_value());
-  EXPECT_TRUE(output.has_fixed_value());
-  EXPECT_THAT(output.fixed_value().value(), ElementsAre(10.4, 20.6));
-  EXPECT_FALSE(output.has_string_value());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_FIXED);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_FALSE(output->has_int_value());
+  EXPECT_TRUE(output->has_fixed_value());
+  EXPECT_THAT(output->fixed_value().value(), ElementsAre(10.4, 20.6));
+  EXPECT_FALSE(output->has_string_value());
 }
 
 TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessString) {
@@ -710,15 +715,132 @@ TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessString) {
   input->type = crosapi::mojom::OptionType::kString;
   input->value = crosapi::mojom::OptionValue::NewStringValue("option-value");
 
-  auto output = input.To<lorgnette::ScannerOption>();
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
 
-  EXPECT_EQ(output.name(), "option-name");
-  EXPECT_EQ(output.option_type(), lorgnette::TYPE_STRING);
-  EXPECT_FALSE(output.has_bool_value());
-  EXPECT_FALSE(output.has_int_value());
-  EXPECT_FALSE(output.has_fixed_value());
-  EXPECT_TRUE(output.has_string_value());
-  EXPECT_EQ(output.string_value(), "option-value");
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_STRING);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_FALSE(output->has_int_value());
+  EXPECT_FALSE(output->has_fixed_value());
+  EXPECT_TRUE(output->has_string_value());
+  EXPECT_EQ(output->string_value(), "option-value");
+}
+
+TEST(DocumentScanAshTypeConvertersTest, ScannerOption_BoolNoValue) {
+  auto input = crosapi::mojom::OptionSetting::New();
+  input->name = "option-name";
+  input->type = crosapi::mojom::OptionType::kBool;
+  // Don't set a value for this option.
+
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
+
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_BOOL);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_FALSE(output->has_int_value());
+  EXPECT_FALSE(output->has_fixed_value());
+  EXPECT_FALSE(output->has_string_value());
+}
+
+TEST(DocumentScanAshTypeConvertersTest, ScannerOption_BoolWrongValue) {
+  auto input = crosapi::mojom::OptionSetting::New();
+  input->name = "option-name";
+  input->type = crosapi::mojom::OptionType::kBool;
+  // Set an incorrect value for this option.
+  input->value = crosapi::mojom::OptionValue::NewStringValue("bad-value");
+
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
+
+  EXPECT_FALSE(output.has_value());
+}
+
+TEST(DocumentScanAshTypeConvertersTest, ScannerOption_IntNoValue) {
+  auto input = crosapi::mojom::OptionSetting::New();
+  input->name = "option-name";
+  input->type = crosapi::mojom::OptionType::kInt;
+  // Don't set a value for this option.
+
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
+
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_INT);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_FALSE(output->has_int_value());
+  EXPECT_FALSE(output->has_fixed_value());
+  EXPECT_FALSE(output->has_string_value());
+}
+
+TEST(DocumentScanAshTypeConvertersTest, ScannerOption_IntWrongValue) {
+  auto input = crosapi::mojom::OptionSetting::New();
+  input->name = "option-name";
+  input->type = crosapi::mojom::OptionType::kInt;
+  // Set an incorrect value for this option.
+  input->value = crosapi::mojom::OptionValue::NewStringValue("bad-value");
+
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
+
+  EXPECT_FALSE(output.has_value());
+}
+
+TEST(DocumentScanAshTypeConvertersTest, ScannerOption_FixedNoValue) {
+  auto input = crosapi::mojom::OptionSetting::New();
+  input->name = "option-name";
+  input->type = crosapi::mojom::OptionType::kFixed;
+  // Don't set a value for this option.
+
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
+
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_FIXED);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_FALSE(output->has_int_value());
+  EXPECT_FALSE(output->has_fixed_value());
+  EXPECT_FALSE(output->has_string_value());
+}
+
+TEST(DocumentScanAshTypeConvertersTest, ScannerOption_FixedWrongValue) {
+  auto input = crosapi::mojom::OptionSetting::New();
+  input->name = "option-name";
+  input->type = crosapi::mojom::OptionType::kFixed;
+  // Set an incorrect value for this option.
+  input->value = crosapi::mojom::OptionValue::NewStringValue("bad-value");
+
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
+
+  EXPECT_FALSE(output.has_value());
+}
+
+TEST(DocumentScanAshTypeConvertersTest, ScannerOption_StringNoValue) {
+  auto input = crosapi::mojom::OptionSetting::New();
+  input->name = "option-name";
+  input->type = crosapi::mojom::OptionType::kString;
+  // Don't set a value for this option.
+
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
+
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_STRING);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_FALSE(output->has_int_value());
+  EXPECT_FALSE(output->has_fixed_value());
+  EXPECT_FALSE(output->has_string_value());
+}
+
+TEST(DocumentScanAshTypeConvertersTest, ScannerOption_StringWrongValue) {
+  auto input = crosapi::mojom::OptionSetting::New();
+  input->name = "option-name";
+  input->type = crosapi::mojom::OptionType::kString;
+  // Set an incorrect value for this option.
+  input->value = crosapi::mojom::OptionValue::NewBoolValue(false);
+
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
+
+  EXPECT_FALSE(output.has_value());
 }
 
 TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessUnknown) {
@@ -729,14 +851,15 @@ TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessUnknown) {
   // the type is unknown.
   input->value = crosapi::mojom::OptionValue::NewStringValue("not-used");
 
-  auto output = input.To<lorgnette::ScannerOption>();
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
 
-  EXPECT_EQ(output.name(), "option-name");
-  EXPECT_EQ(output.option_type(), lorgnette::TYPE_UNKNOWN);
-  EXPECT_FALSE(output.has_bool_value());
-  EXPECT_FALSE(output.has_int_value());
-  EXPECT_FALSE(output.has_fixed_value());
-  EXPECT_FALSE(output.has_string_value());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_UNKNOWN);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_FALSE(output->has_int_value());
+  EXPECT_FALSE(output->has_fixed_value());
+  EXPECT_FALSE(output->has_string_value());
 }
 
 TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessButton) {
@@ -747,14 +870,15 @@ TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessButton) {
   // the type is button.
   input->value = crosapi::mojom::OptionValue::NewIntValue(10);
 
-  auto output = input.To<lorgnette::ScannerOption>();
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
 
-  EXPECT_EQ(output.name(), "option-name");
-  EXPECT_EQ(output.option_type(), lorgnette::TYPE_BUTTON);
-  EXPECT_FALSE(output.has_bool_value());
-  EXPECT_FALSE(output.has_int_value());
-  EXPECT_FALSE(output.has_fixed_value());
-  EXPECT_FALSE(output.has_string_value());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_BUTTON);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_FALSE(output->has_int_value());
+  EXPECT_FALSE(output->has_fixed_value());
+  EXPECT_FALSE(output->has_string_value());
 }
 
 TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessGroup) {
@@ -765,14 +889,15 @@ TEST(DocumentScanAshTypeConvertersTest, ScannerOption_SuccessGroup) {
   // the type is group.
   input->value = crosapi::mojom::OptionValue::NewFixedList({10.4, 20.6});
 
-  auto output = input.To<lorgnette::ScannerOption>();
+  auto output = input.To<std::optional<lorgnette::ScannerOption>>();
 
-  EXPECT_EQ(output.name(), "option-name");
-  EXPECT_EQ(output.option_type(), lorgnette::TYPE_GROUP);
-  EXPECT_FALSE(output.has_bool_value());
-  EXPECT_FALSE(output.has_int_value());
-  EXPECT_FALSE(output.has_fixed_value());
-  EXPECT_FALSE(output.has_string_value());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_EQ(output->name(), "option-name");
+  EXPECT_EQ(output->option_type(), lorgnette::TYPE_GROUP);
+  EXPECT_FALSE(output->has_bool_value());
+  EXPECT_FALSE(output->has_int_value());
+  EXPECT_FALSE(output->has_fixed_value());
+  EXPECT_FALSE(output->has_string_value());
 }
 
 TEST(DocumentScanAshTypeConvertersTest, SetOptionsResponse_EmptyObject) {

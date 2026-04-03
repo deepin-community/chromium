@@ -31,8 +31,10 @@ std::tuple<int, SkYUVAPixmapInfo::DataType> SkYUVAPixmapInfo::NumChannelsAndData
     // We could allow BGR[A] color types, but then we'd have to decide whether B should be the 0th
     // or 2nd channel. Our docs currently say channel order is always R=0, G=1, B=2[, A=3].
     switch (ct) {
+        case kR8_unorm_SkColorType:
         case kAlpha_8_SkColorType:
         case kGray_8_SkColorType:    return {1, DataType::kUnorm8 };
+        case kR16_unorm_SkColorType:
         case kA16_unorm_SkColorType: return {1, DataType::kUnorm16};
         case kA16_float_SkColorType: return {1, DataType::kFloat16};
 
@@ -40,8 +42,9 @@ std::tuple<int, SkYUVAPixmapInfo::DataType> SkYUVAPixmapInfo::NumChannelsAndData
         case kR16G16_unorm_SkColorType: return {2, DataType::kUnorm16 };
         case kR16G16_float_SkColorType: return {2, DataType::kFloat16 };
 
-        case kRGB_888x_SkColorType:    return {3, DataType::kUnorm8          };
-        case kRGB_101010x_SkColorType: return {3, DataType::kUnorm10_Unorm2  };
+        case kRGB_888x_SkColorType:       return {3, DataType::kUnorm8          };
+        case kRGB_101010x_SkColorType:    return {3, DataType::kUnorm10_Unorm2  };
+        case kRGB_F16F16F16x_SkColorType: return {3, DataType::kFloat16         };
 
         case kRGBA_8888_SkColorType:          return {4, DataType::kUnorm8  };
         case kR16G16B16A16_unorm_SkColorType: return {4, DataType::kUnorm16 };

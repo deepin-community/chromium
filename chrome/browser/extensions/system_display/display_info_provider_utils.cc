@@ -29,7 +29,6 @@ system_display::LayoutPosition GetLayoutPositionFromMojo(
       return system_display::LayoutPosition::kLeft;
   }
   NOTREACHED();
-  return system_display::LayoutPosition::kLeft;
 }
 }  // namespace
 
@@ -61,7 +60,7 @@ int64_t GetDisplayId(const std::string& display_id_str) {
 display::Display GetDisplayForId(const std::string& display_id_str) {
   int64_t id = GetDisplayId(display_id_str);
   display::Display display;
-  display::Screen::GetScreen()->GetDisplayWithDisplayId(id, &display);
+  display::Screen::Get()->GetDisplayWithDisplayId(id, &display);
   return display;
 }
 
@@ -79,7 +78,6 @@ crosapi::mojom::DisplayLayoutPosition GetDisplayLayoutPosition(
       return crosapi::mojom::DisplayLayoutPosition::kLeft;
   }
   NOTREACHED();
-  return crosapi::mojom::DisplayLayoutPosition::kLeft;
 }
 
 gfx::Insets GetInsets(const system_display::Insets& insets) {
@@ -109,7 +107,6 @@ crosapi::mojom::DisplayRotationOptions GetMojomDisplayRotationOptions(
       return crosapi::mojom::DisplayRotationOptions::k270Degrees;
     default:
       NOTREACHED();
-      return crosapi::mojom::DisplayRotationOptions::kZeroDegrees;
   }
 }
 
@@ -137,8 +134,7 @@ std::optional<std::string> ValidateDisplayPropertiesInput(
     return "Invalid display id";
   }
 
-  const display::Display& primary =
-      display::Screen::GetScreen()->GetPrimaryDisplay();
+  const display::Display& primary = display::Screen::Get()->GetPrimaryDisplay();
   bool is_primary = id == primary.id() || (info.is_primary && *info.is_primary);
 
   if (info.is_unified) {

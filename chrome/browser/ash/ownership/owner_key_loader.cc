@@ -8,7 +8,9 @@
 #include <utility>
 
 #include "base/check_is_test.h"
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
+#include "base/functional/callback_helpers.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/ownership/ownership_histograms.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -17,7 +19,6 @@
 #include "chrome/browser/net/nss_service.h"
 #include "chrome/browser/net/nss_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/channel_info.h"
 #include "components/ownership/owner_key_util.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/user_manager/user_manager.h"
@@ -29,16 +30,12 @@
 namespace ash {
 
 // Enable storing a newly created owner key in the private slot.
-BASE_FEATURE(kStoreOwnerKeyInPrivateSlot,
-             "StoreOwnerKeyInPrivateSlot",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kStoreOwnerKeyInPrivateSlot, base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enable migration of the owner key from the public to the private slot. This
 // experiment represents the second stage of `kStoreOwnerKeyInPrivateSlot` and
 // is only respected if kStoreOwnerKeyInPrivateSlot is enabled.
-BASE_FEATURE(kMigrateOwnerKeyToPrivateSlot,
-             "MigrateOwnerKeyToPrivateSlot",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kMigrateOwnerKeyToPrivateSlot, base::FEATURE_DISABLED_BY_DEFAULT);
 
 bool IsStoreOwnerKeyInPrivateSlotEnabled() {
   return base::FeatureList::IsEnabled(kStoreOwnerKeyInPrivateSlot);
@@ -141,8 +138,9 @@ void GenerateNewOwnerKeyOnWorkerThread(
   scoped_refptr<ownership::PublicKey> public_key =
       base::MakeRefCounted<ownership::PublicKey>(
           /*is_persisted=*/false,
-          std::vector<uint8_t>(sec_pub_key_der->data,
-                               sec_pub_key_der->data + sec_pub_key_der->len));
+          std::vector<uint8_t>(
+              sec_pub_key_der->data,
+              UNSAFE_TODO(sec_pub_key_der->data + sec_pub_key_der->len)));
   scoped_refptr<ownership::PrivateKey> private_key =
       base::MakeRefCounted<ownership::PrivateKey>(std::move(sec_priv_key));
 
@@ -219,9 +217,10 @@ bool UserCanBecomeOwner(const user_manager::User* user) {
       return true;
     case user_manager::UserType::kGuest:
     case user_manager::UserType::kPublicAccount:
-    case user_manager::UserType::kKioskApp:
-    case user_manager::UserType::kArcKioskApp:
-    case user_manager::UserType::kWebKioskApp:
+    case user_manager::UserType::kKioskChromeApp:
+    case user_manager::UserType::kKioskWebApp:
+    case user_manager::UserType::kKioskIWA:
+    case user_manager::UserType::kKioskArcvmApp:
       return false;
   }
 }

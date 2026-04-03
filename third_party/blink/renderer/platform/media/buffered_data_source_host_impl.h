@@ -14,7 +14,7 @@
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "media/base/ranges.h"
-#include "third_party/blink/public/platform/media/interval_map.h"
+#include "third_party/blink/renderer/platform/media/interval_map.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 
 namespace blink {
@@ -27,7 +27,7 @@ class BufferedDataSourceHost {
 
   // Notify the host that byte range [start,end] has been buffered.
   // TODO(fischman): remove this method when demuxing is push-based instead of
-  // pull-based.  http://crbug.com/131444
+  // pull-based. http://crbug.com/40221412.
   virtual void AddBufferedByteRange(int64_t start, int64_t end) = 0;
 
  protected:
@@ -91,7 +91,7 @@ class PLATFORM_EXPORT BufferedDataSourceHostImpl
   base::circular_deque<std::pair<base::TimeTicks, uint64_t>> download_history_;
   base::RepeatingClosure progress_cb_;
 
-  raw_ptr<const base::TickClock, ExperimentalRenderer> tick_clock_;
+  raw_ptr<const base::TickClock> tick_clock_;
 
   FRIEND_TEST_ALL_PREFIXES(BufferedDataSourceHostImplTest, CanPlayThrough);
   FRIEND_TEST_ALL_PREFIXES(BufferedDataSourceHostImplTest,

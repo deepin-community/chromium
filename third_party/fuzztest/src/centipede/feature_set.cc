@@ -21,13 +21,12 @@
 #include <string>
 #include <string_view>
 
-#include "absl/log/check.h"
 #include "absl/strings/str_cat.h"
 #include "./centipede/control_flow.h"
 #include "./centipede/feature.h"
-#include "./centipede/logging.h"
+#include "./common/logging.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
 //------------------------------------------------------------------------------
 //                                FeatureSet
@@ -50,6 +49,17 @@ size_t FeatureSet::CountFeatures(feature_domains::Domain domain) const {
 
 bool FeatureSet::HasUnseenFeatures(const FeatureVec &features) const {
   for (auto feature : features) {
+    if (feature_domains::IsComparisonScoreFeature(feature)) {
+      const uint8_t score = feature & feature_domains::kCMPScoreBitmask;
+      const uint8_t seen_score =
+          cmp_scores_[feature_domains::CMPScoreFeatureIndex(feature)];
+      if (seen_score < score) {
+        return true;
+      } else if (seen_score > score) {
+        continue;
+      }
+      feature &= ~feature_domains::kCMPScoreBitmask;
+    }
     if (frequencies_[feature] == 0) return true;
   }
   return false;
@@ -62,9 +72,29 @@ FeatureSet::PruneFeaturesAndCountUnseen(FeatureVec &features) const {
   size_t num_kept = 0;
   for (auto feature : features) {
     if (ShouldDiscardFeature(feature)) continue;
+    const auto orig_feature = feature;
+    bool unseen = false;
+    if (feature_domains::IsComparisonScoreFeature(feature)) {
+      const uint8_t score = feature & feature_domains::kCMPScoreBitmask;
+      const uint8_t seen_score =
+          cmp_scores_[feature_domains::CMPScoreFeatureIndex(feature)];
+      if (seen_score < score) {
+        unseen = true;
+      } else if (seen_score > score) {
+        // Discard the lower score feature as the frequency no longer represent
+        // it.
+        continue;
+      }
+      feature &= ~feature_domains::kCMPScoreBitmask;
+    }
     auto freq = frequencies_[feature];
-    if (freq == 0) ++number_of_unseen_features;
-    if (freq < FrequencyThreshold(feature)) features[num_kept++] = feature;
+    unseen |= freq == 0;
+    if (unseen) {
+      ++number_of_unseen_features;
+    }
+    if (unseen || freq < FrequencyThreshold(feature)) {
+      features[num_kept++] = orig_feature;
+    }
   }
   features.resize(num_kept);
   return number_of_unseen_features;
@@ -79,21 +109,38 @@ void FeatureSet::PruneDiscardedDomains(FeatureVec &features) const {
   features.resize(num_kept);
 }
 
-void FeatureSet::IncrementFrequencies(const FeatureVec &features) {
-  for (auto f : features) {
-    auto &freq = frequencies_[f];
+void FeatureSet::MergeFeatures(const FeatureVec& features) {
+  for (auto feature : features) {
+    bool unseen = false;
+    if (feature_domains::IsComparisonScoreFeature(feature)) {
+      const uint8_t score = feature & feature_domains::kCMPScoreBitmask;
+      auto& seen_score =
+          cmp_scores_[feature_domains::CMPScoreFeatureIndex(feature)];
+      if (seen_score < score) {
+        seen_score = score;
+        unseen = true;
+      } else if (seen_score > score) {
+        continue;
+      }
+      feature &= ~feature_domains::kCMPScoreBitmask;
+    }
+    auto& freq = frequencies_[feature];
     if (freq == 0) {
       ++num_features_;
-      ++features_per_domain_[feature_domains::Domain::FeatureToDomainId(f)];
+      ++features_per_domain_[feature_domains::Domain::FeatureToDomainId(
+          feature)];
+    } else if (unseen) {
+      freq = 0;
     }
-    if (freq < FrequencyThreshold(f)) ++freq;
+    if (freq < FrequencyThreshold(feature)) {
+      ++freq;
+    }
   }
 }
 
 __attribute__((noinline))  // to see it in profile.
-uint64_t
-FeatureSet::ComputeWeight(const FeatureVec &features) const {
-  uint64_t weight = 0;
+double FeatureSet::ComputeRarityWeight(const FeatureVec& features) const {
+  double weight = 0;
   for (auto feature : features) {
     // The less frequent is the feature, the more valuable it is.
     // (frequency == 1) => (weight == 256)
@@ -102,10 +149,13 @@ FeatureSet::ComputeWeight(const FeatureVec &features) const {
     // The less frequent is the domain, the more valuable are its features.
     auto domain_id = feature_domains::Domain::FeatureToDomainId(feature);
     auto features_in_domain = features_per_domain_[domain_id];
-    CHECK(features_in_domain);
+    FUZZTEST_CHECK(features_in_domain);
     auto domain_weight = num_features_ / features_in_domain;
+    if (feature_domains::IsComparisonScoreFeature(feature)) {
+      feature &= ~feature_domains::kCMPScoreBitmask;
+    }
     auto feature_frequency = frequencies_[feature];
-    CHECK_GT(feature_frequency, 0)
+    FUZZTEST_CHECK_GT(feature_frequency, 0)
         << VV(feature) << VV(domain_id) << VV(features_in_domain)
         << VV(domain_weight) << VV((int)feature_frequency) << DebugString();
     weight += domain_weight * (256 / feature_frequency);
@@ -122,11 +172,6 @@ std::string FeatureSet::DebugString() const {
 }
 
 std::ostream &operator<<(std::ostream &out, const FeatureSet &fs) {
-  auto num_cmp_features = fs.CountFeatures(feature_domains::kCMP) +
-                          fs.CountFeatures(feature_domains::kCMPEq) +
-                          fs.CountFeatures(feature_domains::kCMPModDiff) +
-                          fs.CountFeatures(feature_domains::kCMPHamming) +
-                          fs.CountFeatures(feature_domains::kCMPDiffLog);
   auto LogIfNotZero = [&out](size_t value, std::string_view name) {
     if (!value) return;
     out << " " << name << ": " << value;
@@ -135,7 +180,7 @@ std::ostream &operator<<(std::ostream &out, const FeatureSet &fs) {
   LogIfNotZero(fs.CountFeatures(feature_domains::kPCs), "cov");
   LogIfNotZero(fs.CountFeatures(feature_domains::k8bitCounters), "cnt");
   LogIfNotZero(fs.CountFeatures(feature_domains::kDataFlow), "df");
-  LogIfNotZero(num_cmp_features, "cmp");
+  LogIfNotZero(fs.CountFeatures(feature_domains::kCMPDomains), "cmp");
   LogIfNotZero(fs.CountFeatures(feature_domains::kCallStack), "stk");
   LogIfNotZero(fs.CountFeatures(feature_domains::kBoundedPath), "path");
   LogIfNotZero(fs.CountFeatures(feature_domains::kPCPair), "pair");
@@ -147,4 +192,4 @@ std::ostream &operator<<(std::ostream &out, const FeatureSet &fs) {
   return out;
 }
 
-}  // namespace centipede
+}  // namespace fuzztest::internal

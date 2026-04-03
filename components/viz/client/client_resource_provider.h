@@ -6,11 +6,11 @@
 #define COMPONENTS_VIZ_CLIENT_CLIENT_RESOURCE_PROVIDER_H_
 
 #include <memory>
-#include <optional>
+#include <unordered_map>
 #include <vector>
 
-#include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
+#include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/threading/thread_checker.h"
 #include "components/viz/client/viz_client_export.h"
@@ -22,17 +22,10 @@
 #include "third_party/khronos/GLES2/gl2.h"
 
 namespace gpu {
-namespace gles2 {
-class GLES2Interface;
-}
-namespace raster {
-class RasterInterface;
-}
+class SharedImageInterface;
 }  // namespace gpu
 
 namespace viz {
-class ContextProvider;
-class RasterContextProvider;
 
 // This class is used to give an integer name (ResourceId) to a gpu or software
 // resource (shipped as a TransferableResource), in order to use that name in
@@ -46,6 +39,29 @@ class VIZ_CLIENT_EXPORT ClientResourceProvider {
  public:
   using ResourceFlushCallback = base::RepeatingCallback<void()>;
 
+  // Upon destruction this will call `batch_release_callback_` in order to
+  // signal that all accumulated resource callbacks should be ran.
+  //
+  // See `CreateScopedBatchResourcesRelease`
+  class VIZ_CLIENT_EXPORT ScopedBatchResourcesRelease {
+   public:
+    ScopedBatchResourcesRelease(const ScopedBatchResourcesRelease& other) =
+        delete;
+    ScopedBatchResourcesRelease& operator=(
+        const ScopedBatchResourcesRelease& other) = delete;
+    ScopedBatchResourcesRelease(ScopedBatchResourcesRelease&& other);
+    ScopedBatchResourcesRelease& operator=(
+        ScopedBatchResourcesRelease&& other) = default;
+    ~ScopedBatchResourcesRelease();
+
+   protected:
+    explicit ScopedBatchResourcesRelease(
+        base::OnceClosure batch_release_callback);
+
+   private:
+    base::OnceClosure batch_release_callback_;
+  };
+
   ClientResourceProvider();
   ClientResourceProvider(
       scoped_refptr<base::SequencedTaskRunner> main_task_runner,
@@ -57,10 +73,6 @@ class VIZ_CLIENT_EXPORT ClientResourceProvider {
 
   ~ClientResourceProvider();
 
-  static gpu::SyncToken GenerateSyncTokenHelper(gpu::gles2::GLES2Interface* gl);
-  static gpu::SyncToken GenerateSyncTokenHelper(
-      gpu::raster::RasterInterface* ri);
-
   // Prepares resources to be transfered to the parent, moving them to
   // mailboxes and serializing meta-data into TransferableResources.
   // Resources are not removed from the ResourceProvider, but are marked as
@@ -68,14 +80,7 @@ class VIZ_CLIENT_EXPORT ClientResourceProvider {
   void PrepareSendToParent(
       const std::vector<ResourceId>& resource_ids,
       std::vector<TransferableResource>* transferable_resources,
-      RasterContextProvider* context_provider);
-
-  // TODO(sergeyu): Remove after updating all callers to use the above version
-  // of this method.
-  void PrepareSendToParent(
-      const std::vector<ResourceId>& resource_ids,
-      std::vector<TransferableResource>* transferable_resources,
-      ContextProvider* context_provider);
+      gpu::SharedImageInterface* shared_image_interface);
 
   // Receives resources from the parent, moving them from mailboxes. ResourceIds
   // passed are in the child namespace.
@@ -90,8 +95,7 @@ class VIZ_CLIENT_EXPORT ClientResourceProvider {
   // have been evicted. When `evicted_callback` is called the client should
   // invoke `RemoveImportedResources` to unlock the resource. Allowing the
   // resource to be released when it is returned from the parent. When
-  // `main_thread_release_callback` is provided, and
-  // `features::kBatchMainThreadReleaseCallbacks` is enabled, the callback will
+  // `main_thread_release_callback` is provided, the callback will
   // be invoked on `main_thread_task_runner_` when it has been returned.
   ResourceId ImportResource(const TransferableResource& resource,
                             ReleaseCallback impl_release_callback,
@@ -129,16 +133,17 @@ class VIZ_CLIENT_EXPORT ClientResourceProvider {
   void SetEvicted(bool evicted);
   void SetVisible(bool visible);
 
+  // Controls how `RemoveImportedResource` handled callbacks. While
+  // `ScopedBatchResourcesRelease` is alive, we will collect all callbacks of
+  // resources being removed. Upon leaving scope, we will perform a batch
+  // release of all releases. This includes a single thread-hop to the
+  // Main-thread for associated callbacks.
+  ScopedBatchResourcesRelease CreateScopedBatchResourcesRelease();
+
   size_t num_resources_for_testing() const;
 
  private:
   struct ImportedResource;
-
-  void PrepareSendToParentInternal(
-      const std::vector<ResourceId>& export_ids,
-      std::vector<TransferableResource>* list,
-      base::OnceCallback<void(std::vector<GLbyte*>* tokens)>
-          verify_sync_tokens);
 
   // Validates the memory impact of resources that are locked once we are both
   // evicted and no longer visible. This will also notify clients of eviction
@@ -150,9 +155,17 @@ class VIZ_CLIENT_EXPORT ClientResourceProvider {
   void BatchMainReleaseCallbacks(
       std::vector<base::OnceClosure> release_callbacks);
 
+  // Runs all release callbacks accumulated in `batch_main_release_callbacks_`.
+  // Main thread callbacks will be posted to that thread in a single thread hop.
+  void BatchResourceRelease();
+  // If `batch` is true, then this will take the `main_thread_release_callback`
+  // from `imported` to be batched later. Otherwise this runs them immediately.
+  // This will also run all `impl_thread_release_callback` immediately.
+  void TakeOrRunResourceReleases(bool batch, ImportedResource& imported);
+
   THREAD_CHECKER(thread_checker_);
 
-  base::flat_map<ResourceId, ImportedResource> imported_resources_;
+  std::unordered_map<ResourceId, ImportedResource> imported_resources_;
   // The ResourceIds in ClientResourceProvider start from 1 to avoid
   // conflicts with id from DisplayResourceProvider.
   ResourceIdGenerator id_generator_;
@@ -178,6 +191,13 @@ class VIZ_CLIENT_EXPORT ClientResourceProvider {
   // have a single thread hop, rather than each callback performing it's own
   // separate hop.
   bool threaded_release_callbacks_supported_ = false;
+
+  // While `true` resources being released will have their callbacks stored in
+  // the vector below. To be released afterwards in `BatchResourceRelease`.
+  bool batch_release_callbacks_ = false;
+  std::vector<base::OnceClosure> batch_main_release_callbacks_;
+
+  base::WeakPtrFactory<ClientResourceProvider> weak_factory_{this};
 };
 
 }  // namespace viz

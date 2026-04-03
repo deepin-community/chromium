@@ -14,9 +14,14 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/c/experimental/ops/gen/cpp/views/op_view.h"
 
+#include <vector>
+
+#include "absl/log/check.h"
 #include "tensorflow/c/experimental/ops/gen/common/view_util.h"
 #include "tensorflow/c/experimental/ops/gen/cpp/views/arg_view.h"
 #include "tensorflow/c/experimental/ops/gen/cpp/views/attr_view.h"
+#include "tensorflow/c/experimental/ops/gen/cpp/views/op_argument_view.h"
+#include "tensorflow/c/experimental/ops/gen/model/op_spec.h"
 #include "tensorflow/core/lib/strings/str_util.h"
 #include "tensorflow/core/platform/logging.h"
 
@@ -71,17 +76,17 @@ ArgView OpView::OnlyOutput() const {
   return output_args_.front();
 }
 
-string OpView::FunctionName() const { return op_.name(); }
+std::string OpView::FunctionName() const { return op_.name(); }
 
-string OpView::OpNameString() const { return Quoted(op_.name()); }
+std::string OpView::OpNameString() const { return Quoted(op_.name()); }
 
-string OpView::VariableName() const { return "op_ptr"; }
+std::string OpView::VariableName() const { return "op_ptr"; }
 
-std::vector<string> OpView::Description() const {
+std::vector<std::string> OpView::Description() const {
   return str_util::Split(op_.description(), "\n");
 }
 
-string OpView::Summary() const { return op_.summary(); }
+std::string OpView::Summary() const { return op_.summary(); }
 
 // Context
 bool OpView::IsListOp() const {

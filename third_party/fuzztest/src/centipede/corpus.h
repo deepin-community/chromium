@@ -17,20 +17,23 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "absl/log/check.h"
+#include "absl/random/bit_gen_ref.h"
 #include "./centipede/binary_info.h"
-#include "./centipede/defs.h"
 #include "./centipede/execution_metadata.h"
 #include "./centipede/feature.h"
 #include "./centipede/feature_set.h"
+#include "./centipede/runner_result.h"
 #include "./centipede/util.h"
+#include "./common/defs.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
 // WeightedDistribution maintains an array of integer weights.
 // It allows to compute a random number in range [0,size()) such that
@@ -42,13 +45,15 @@ class WeightedDistribution {
   // Removes the last weight and returns it.
   // Precondition: size() > 0.
   uint64_t PopBack();
+  // Read-only weight accessor.
+  const std::vector<uint64_t>& weights() const { return weights_; }
   // Changes the existing idx-th weight to new_weight.
   void ChangeWeight(size_t idx, uint64_t new_weight);
   // Returns a random number in [0,size()), using a random number `random`.
   // For proper randomness, `random` should come from a 64-bit RNG.
   // RandomIndex() must not be called after ChangeWeight() without first
   // calling RecomputeInternalState().
-  size_t RandomIndex(size_t random) const;
+  size_t RandomIndex(absl::BitGenRef rng) const;
   // Returns the number of weights.
   size_t size() const { return weights_.size(); }
   // Removes all weights.
@@ -87,13 +92,24 @@ struct CorpusRecord {
   ByteArray data;
   FeatureVec features;
   ExecutionMetadata metadata;
+  ExecutionResult::Stats stats;
 };
 
 // Maintains the corpus of inputs.
 // Allows to prune (forget) inputs that become uninteresting.
 class Corpus {
  public:
-  Corpus() = default;
+  enum class WeightMethod {
+    Uniform,
+    Recency,
+    FeatureRarity,
+  };
+
+  static std::optional<WeightMethod> ParseWeightMethod(
+      std::string_view method_string);
+
+  Corpus() : Corpus(WeightMethod::FeatureRarity) {}
+  explicit Corpus(WeightMethod method) : method_(method) {}
 
   Corpus(const Corpus &) = default;
   Corpus(Corpus &&) noexcept = default;
@@ -105,15 +121,22 @@ class Corpus {
   // Adds a corpus element, consisting of 'data' (the input bytes, non-empty),
   // 'fv' (the features associated with this input), and execution `metadata`.
   // `fs` is used to compute weights of `fv`.
-  void Add(const ByteArray &data, const FeatureVec &fv,
-           const ExecutionMetadata &metadata, const FeatureSet &fs,
-           const CoverageFrontier &coverage_frontier);
+  void Add(const ByteArray& data, const FeatureVec& fv,
+           const ExecutionMetadata& metadata,
+           const ExecutionResult::Stats& stats, const FeatureSet& fs,
+           const CoverageFrontier& coverage_frontier);
   // Removes elements that contain only frequent features, according to 'fs'.
   // Also, randomly removes elements to reduce the size to <= `max_corpus_size`.
   // `max_corpus_size` should be positive.
   // Returns the number of removed elements.
   size_t Prune(const FeatureSet &fs, const CoverageFrontier &coverage_frontier,
                size_t max_corpus_size, Rng &rng);
+  // Updates the corpus weights according to `fs` and `coverage_frontier` using
+  // the weight `method`. If `scale_by_exec_time` is set, scales the weights by
+  // the corpus execution time relative to the average.
+  void UpdateWeights(const FeatureSet& fs,
+                     const CoverageFrontier& coverage_frontier,
+                     bool scale_by_exec_time);
 
   // Accessors.
 
@@ -128,9 +151,9 @@ class Corpus {
   std::pair<size_t, size_t> MaxAndAvgSize() const;
   // Returns a random active corpus record using weighted distribution.
   // See WeightedDistribution.
-  const CorpusRecord &WeightedRandom(size_t random) const;
+  const CorpusRecord& WeightedRandom(absl::BitGenRef rng) const;
   // Returns a random active corpus record using uniform distribution.
-  const CorpusRecord &UniformRandom(size_t random) const;
+  const CorpusRecord& UniformRandom(absl::BitGenRef rng) const;
   // Returns the element with index 'idx', where `idx` < NumActive().
   const ByteArray &Get(size_t idx) const { return records_[idx].data; }
   // Returns the execution metadata for the element `idx`, `idx` < NumActive().
@@ -140,8 +163,10 @@ class Corpus {
 
   // Logging.
 
-  // Prints corpus stats in JSON format to `out` using `fs` for frequencies.
-  void PrintStats(std::ostream &out, const FeatureSet &fs);
+  // Saves the corpus stats in JSON format to the `filepath` file, using `fs`
+  // for feature frequencies.
+  void DumpStatsToFile(const FeatureSet &fs, std::string_view filepath,
+                       std::string_view description);
   // Returns a string used for logging the corpus memory usage.
   std::string MemoryUsageString() const;
 
@@ -150,6 +175,8 @@ class Corpus {
   // Maintains weights for elements of records_.
   WeightedDistribution weighted_distribution_;
   size_t num_pruned_ = 0;
+  // Method for weighting the corpus elements.
+  WeightMethod method_;
 };
 
 // Coverage frontier is a set of PCs that are themselves covered, but some of
@@ -177,7 +204,7 @@ class CoverageFrontier {
 
   // Returns true iff `idx` belongs to the frontier.
   bool PcIndexIsFrontier(size_t idx) const {
-    CHECK_LT(idx, MaxPcIndex());
+    FUZZTEST_CHECK_LT(idx, MaxPcIndex());
     return frontier_[idx];
   }
 
@@ -186,7 +213,7 @@ class CoverageFrontier {
 
   // Returns the frontier weight of pc at `idx`, weight of a non-frontier is 0.
   uint64_t FrontierWeight(size_t idx) const {
-    CHECK_LT(idx, MaxPcIndex());
+    FUZZTEST_CHECK_LT(idx, MaxPcIndex());
     return frontier_weight_[idx];
   }
 
@@ -202,6 +229,6 @@ class CoverageFrontier {
   size_t num_functions_in_frontier_ = 0;
 };
 
-}  // namespace centipede
+}  // namespace fuzztest::internal
 
 #endif  // THIRD_PARTY_CENTIPEDE_CORPUS_H_

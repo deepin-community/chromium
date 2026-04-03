@@ -1,9 +1,12 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
 
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
+import type * as Platform from '../../core/platform/platform.js';
+import {Link} from '../../ui/kit/kit.js';
 import * as UI from '../../ui/legacy/legacy.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 
@@ -12,32 +15,56 @@ import {type LazyUint8Array, LinearMemoryInspectorController} from './LinearMemo
 
 const UIStrings = {
   /**
-   *@description Label in the Linear Memory inspector tool that serves as a placeholder if no inspections are open (i.e. nothing to see here).
+   * @description Label in the Linear Memory inspector tool that serves as a placeholder if no inspections are open (i.e. nothing to see here).
    *             Inspection hereby refers to viewing, navigating and understanding the memory through this tool.
    */
   noOpenInspections: 'No open inspections',
-};
+  /**
+   * @description Label in the Linear Memory inspector tool that serves as a placeholder if no inspections are open (i.e. nothing to see here).
+   *             Inspection hereby refers to viewing, navigating and understanding the memory through this tool.
+   */
+  memoryInspectorExplanation: 'On this page you can inspect binary data.',
+  /**
+   * @description Label in the Linear Memory inspector tool for a link.
+   */
+  learnMore: 'Learn more',
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/linear_memory_inspector/LinearMemoryInspectorPane.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 let inspectorInstance: LinearMemoryInspectorPane;
+
+const MEMORY_INSPECTOR_EXPLANATION_URL =
+    'https://developer.chrome.com/docs/devtools/memory-inspector' as Platform.DevToolsPath.UrlString;
 
 export class LinearMemoryInspectorPane extends Common.ObjectWrapper.eventMixin<EventTypes, typeof UI.Widget.VBox>(
     UI.Widget.VBox) {
   readonly #tabbedPane: UI.TabbedPane.TabbedPane;
 
   constructor() {
-    super(false);
-    this.element.setAttribute('jslog', `${VisualLogging.panel('linear-memory-inspector').track({resize: true})}`);
-    const placeholder = document.createElement('div');
-    placeholder.textContent = i18nString(UIStrings.noOpenInspections);
-    placeholder.style.display = 'flex';
+    super({jslog: `${VisualLogging.panel('linear-memory-inspector').track({resize: true})}`});
     this.#tabbedPane = new UI.TabbedPane.TabbedPane();
-    this.#tabbedPane.setPlaceholderElement(placeholder);
+    this.#tabbedPane.setPlaceholderElement(this.createPlaceholder());
     this.#tabbedPane.setCloseableTabs(true);
     this.#tabbedPane.setAllowTabReorder(true, true);
     this.#tabbedPane.addEventListener(UI.TabbedPane.Events.TabClosed, this.#tabClosed, this);
     this.#tabbedPane.show(this.contentElement);
-    this.#tabbedPane.headerElement().setAttribute('jslog', `${VisualLogging.toolbar()}`);
+    this.#tabbedPane.headerElement().setAttribute(
+        'jslog', `${VisualLogging.toolbar().track({keydown: 'ArrowUp|ArrowLeft|ArrowDown|ArrowRight|Enter|Space'})}`);
+  }
+
+  createPlaceholder(): HTMLElement {
+    const placeholder = document.createElement('div');
+    placeholder.classList.add('empty-state');
+
+    placeholder.createChild('span', 'empty-state-header').textContent = i18nString(UIStrings.noOpenInspections);
+
+    const description = placeholder.createChild('div', 'empty-state-description');
+    description.createChild('span').textContent = i18nString(UIStrings.memoryInspectorExplanation);
+    const link =
+        Link.create(MEMORY_INSPECTOR_EXPLANATION_URL, i18nString(UIStrings.learnMore), undefined, 'learn-more');
+    description.appendChild(link);
+
+    return placeholder;
   }
 
   static instance(): LinearMemoryInspectorPane {
@@ -82,26 +109,31 @@ export class LinearMemoryInspectorPane extends Common.ObjectWrapper.eventMixin<E
 
   #tabClosed(event: Common.EventTarget.EventTargetEvent<UI.TabbedPane.EventData>): void {
     const {tabId} = event.data;
-    this.dispatchEventToListeners(Events.ViewClosed, tabId);
+    this.dispatchEventToListeners(Events.VIEW_CLOSED, tabId);
   }
 }
 
 export const enum Events {
-  ViewClosed = 'ViewClosed',
+  VIEW_CLOSED = 'ViewClosed',
 }
 
-export type EventTypes = {
-  [Events.ViewClosed]: string,
-};
+export interface EventTypes {
+  [Events.VIEW_CLOSED]: string;
+}
 
-class LinearMemoryInspectorView extends UI.Widget.VBox {
+export class LinearMemoryInspectorView extends UI.Widget.VBox {
   #memoryWrapper: LazyUint8Array;
+  #memory?: Uint8Array<ArrayBuffer>;
+  #offset = 0;
   #address: number;
   #tabId: string;
   #inspector: LinearMemoryInspectorComponents.LinearMemoryInspector.LinearMemoryInspector;
   firstTimeOpen: boolean;
-  constructor(memoryWrapper: LazyUint8Array, address: number|undefined = 0, tabId: string) {
-    super(false);
+  readonly #hideValueInspector: boolean;
+
+  constructor(
+      memoryWrapper: LazyUint8Array, address: number|undefined = 0, tabId: string, hideValueInspector?: boolean) {
+    super();
 
     if (address < 0 || address >= memoryWrapper.length()) {
       throw new Error('Requested address is out of bounds.');
@@ -110,35 +142,49 @@ class LinearMemoryInspectorView extends UI.Widget.VBox {
     this.#memoryWrapper = memoryWrapper;
     this.#address = address;
     this.#tabId = tabId;
+    this.#hideValueInspector = Boolean(hideValueInspector);
+    this.firstTimeOpen = true;
+
     this.#inspector = new LinearMemoryInspectorComponents.LinearMemoryInspector.LinearMemoryInspector();
     this.#inspector.addEventListener(
-        LinearMemoryInspectorComponents.LinearMemoryInspector.MemoryRequestEvent.eventName,
-        (event: LinearMemoryInspectorComponents.LinearMemoryInspector.MemoryRequestEvent) => {
-          this.#memoryRequested(event);
-        });
+        LinearMemoryInspectorComponents.LinearMemoryInspector.Events.MEMORY_REQUEST, this.#memoryRequested, this);
     this.#inspector.addEventListener(
-        LinearMemoryInspectorComponents.LinearMemoryInspector.AddressChangedEvent.eventName,
-        (event: LinearMemoryInspectorComponents.LinearMemoryInspector.AddressChangedEvent) => {
-          this.updateAddress(event.data);
-        });
+        LinearMemoryInspectorComponents.LinearMemoryInspector.Events.ADDRESS_CHANGED,
+        event => this.updateAddress(event.data));
     this.#inspector.addEventListener(
-        LinearMemoryInspectorComponents.LinearMemoryInspector.SettingsChangedEvent.eventName,
-        (event: LinearMemoryInspectorComponents.LinearMemoryInspector.SettingsChangedEvent) => {
-          // Stop event from bubbling up, since no element further up needs the event.
-          event.stopPropagation();
-          this.saveSettings(event.data);
-        });
+        LinearMemoryInspectorComponents.LinearMemoryInspector.Events.SETTINGS_CHANGED,
+        event => this.saveSettings(event.data));
     this.#inspector.addEventListener(
-        LinearMemoryInspectorComponents.LinearMemoryHighlightChipList.DeleteMemoryHighlightEvent.eventName,
-        (event: LinearMemoryInspectorComponents.LinearMemoryHighlightChipList.DeleteMemoryHighlightEvent) => {
+        LinearMemoryInspectorComponents.LinearMemoryInspector.Events.DELETE_MEMORY_HIGHLIGHT, event => {
           LinearMemoryInspectorController.instance().removeHighlight(this.#tabId, event.data);
           this.refreshData();
         });
-    this.contentElement.appendChild(this.#inspector);
-    this.firstTimeOpen = true;
+    this.#inspector.show(this.contentElement);
+  }
+
+  render(): void {
+    if (this.firstTimeOpen) {
+      const settings = LinearMemoryInspectorController.instance().loadSettings();
+      this.#inspector.valueTypes = settings.valueTypes;
+      this.#inspector.valueTypeModes = settings.modes;
+      this.#inspector.endianness = settings.endianness;
+      this.firstTimeOpen = false;
+    }
+
+    if (!this.#memory) {
+      return;
+    }
+
+    this.#inspector.memory = this.#memory;
+    this.#inspector.memoryOffset = this.#offset;
+    this.#inspector.address = this.#address;
+    this.#inspector.outerMemoryLength = this.#memoryWrapper.length();
+    this.#inspector.highlightInfo = this.#getHighlightInfo();
+    this.#inspector.hideValueInspector = this.#hideValueInspector;
   }
 
   override wasShown(): void {
+    super.wasShown();
     this.refreshData();
   }
 
@@ -154,47 +200,24 @@ class LinearMemoryInspectorView extends UI.Widget.VBox {
   }
 
   refreshData(): void {
-    void LinearMemoryInspectorController.getMemoryForAddress(this.#memoryWrapper, this.#address).then(({
-                                                                                                        memory,
-                                                                                                        offset,
-                                                                                                      }) => {
-      let valueTypes;
-      let valueTypeModes;
-      let endianness;
-      if (this.firstTimeOpen) {
-        const settings = LinearMemoryInspectorController.instance().loadSettings();
-        valueTypes = settings.valueTypes;
-        valueTypeModes = settings.modes;
-        endianness = settings.endianness;
-        this.firstTimeOpen = false;
-      }
-      this.#inspector.data = {
-        memory,
-        address: this.#address,
-        memoryOffset: offset,
-        outerMemoryLength: this.#memoryWrapper.length(),
-        valueTypes,
-        valueTypeModes,
-        endianness,
-        highlightInfo: this.#getHighlightInfo(),
-      };
-    });
+    void LinearMemoryInspectorController.getMemoryForAddress(this.#memoryWrapper, this.#address)
+        .then(({memory, offset}) => {
+          this.#memory = memory;
+          this.#offset = offset;
+          this.render();
+        });
   }
 
-  #memoryRequested(event: LinearMemoryInspectorComponents.LinearMemoryInspector.MemoryRequestEvent): void {
+  #memoryRequested(event: Common.EventTarget.EventTargetEvent<{start: number, end: number, address: number}>): void {
     const {start, end, address} = event.data;
     if (address < start || address >= end) {
       throw new Error('Requested address is out of bounds.');
     }
 
     void LinearMemoryInspectorController.getMemoryRange(this.#memoryWrapper, start, end).then(memory => {
-      this.#inspector.data = {
-        memory: memory,
-        address: address,
-        memoryOffset: start,
-        outerMemoryLength: this.#memoryWrapper.length(),
-        highlightInfo: this.#getHighlightInfo(),
-      };
+      this.#memory = memory;
+      this.#offset = start;
+      this.render();
     });
   }
 

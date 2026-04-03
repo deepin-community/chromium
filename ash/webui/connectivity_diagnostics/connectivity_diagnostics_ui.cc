@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ash/webui/connectivity_diagnostics/connectivity_diagnostics_ui.h"
 
 #include <utility>
@@ -18,14 +19,14 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
-#include "ui/resources/grit/webui_resources.h"
+#include "ui/webui/resources/grit/webui_resources.h"
 
 namespace ash {
 
 namespace {
 
-// TODO(crbug/1051793): Replace with webui::SetUpWebUIDataSource() once it no
-// longer requires a dependency on //chrome/browser.
+// TODO(crbug.com/40673941): Replace with webui::SetUpWebUIDataSource() once it
+// no longer requires a dependency on //chrome/browser.
 void SetUpWebUIDataSource(content::WebUIDataSource* source,
                           base::span<const webui::ResourcePath> resources,
                           int default_resource) {
@@ -66,18 +67,18 @@ class ConnectivityDiagnosticsMessageHandler
   }
 
  private:
-  void SendFeedbackReportRequest(const base::Value::List& value) {
+  void SendFeedbackReportRequest(const base::ListValue& value) {
     send_feedback_report_callback_.Run(/*extra_diagnostics*/ "");
   }
 
   // TODO(crbug/1220965): Remove conditional feedback button when WebUI feedback
   // is launched.
-  void GetShowFeedbackButton(const base::Value::List& args) {
+  void GetShowFeedbackButton(const base::ListValue& args) {
     if (args.size() < 1 || !args[0].is_string())
       return;
 
     auto callback_id = args[0].GetString();
-    base::Value::List response;
+    base::ListValue response;
     response.Append(base::Value(show_feedback_button_));
 
     AllowJavascript();
@@ -119,9 +120,7 @@ ConnectivityDiagnosticsUI::ConnectivityDiagnosticsUI(
       std::make_unique<ConnectivityDiagnosticsMessageHandler>(
           std::move(send_feedback_report_callback), show_feedback_button));
 
-  const auto resources = base::make_span(kConnectivityDiagnosticsResources,
-                                         kConnectivityDiagnosticsResourcesSize);
-  SetUpWebUIDataSource(source, resources,
+  SetUpWebUIDataSource(source, kConnectivityDiagnosticsResources,
                        IDR_CONNECTIVITY_DIAGNOSTICS_INDEX_HTML);
   source->AddLocalizedString("appTitle", IDS_CONNECTIVITY_DIAGNOSTICS_TITLE);
   source->AddLocalizedString("networkDevicesLabel",

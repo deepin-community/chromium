@@ -4,6 +4,7 @@
 
 #include "components/viz/host/host_display_client.h"
 
+#include "base/notimplemented.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 
@@ -13,6 +14,7 @@
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
 #include <utility>
 
 #include "components/viz/common/display/use_layered_window.h"
@@ -64,10 +66,16 @@ void HostDisplayClient::AddChildWindowToBrowser(
 }
 #endif
 
-#if BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_X11)
+#if BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_X11)
 void HostDisplayClient::DidCompleteSwapWithNewSize(const gfx::Size& size) {
   NOTIMPLEMENTED();
 }
-#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(IS_OZONE_X11)
+#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_X11)
+
+#if BUILDFLAG(IS_CHROMEOS)
+void HostDisplayClient::SetPreferredRefreshRate(float refresh_rate) {
+  NOTREACHED();
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace viz

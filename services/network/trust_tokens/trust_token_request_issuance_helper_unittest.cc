@@ -8,11 +8,13 @@
 
 #include "base/functional/callback.h"
 #include "base/no_destructor.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "net/base/load_flags.h"
 #include "net/base/request_priority.h"
@@ -43,7 +45,6 @@ namespace {
 using ::testing::_;
 using ::testing::ByMove;
 using ::testing::ElementsAre;
-using ::testing::Invoke;
 using ::testing::IsEmpty;
 using ::testing::Optional;
 using ::testing::Property;
@@ -140,6 +141,7 @@ class MockTrustTokenPersister : public TrustTokenPersister {
                bool(PSTKeyMatcher key_matcher, PSTTimeMatcher time_matcher));
   MOCK_METHOD0(GetStoredTrustTokenCounts,
                base::flat_map<SuitableTrustTokenOrigin, int>());
+  MOCK_METHOD0(GetRedemptionRecords, IssuerRedemptionRecordMap());
 };
 
 class MockTrustTokenStore : public TrustTokenStore {
@@ -172,6 +174,9 @@ FixedKeyCommitmentGetter* ReasonableKeyCommitmentGetter() {
   return reasonable_key_commitment_getter.get();
 }
 
+class TrustTokenRequestIssuanceHelperMetricTest
+    : public ::testing::TestWithParam<mojom::TrustTokenProtocolVersion> {};
+
 }  // namespace
 
 // Check that issuance fails if it would result in too many issuers being
@@ -200,7 +205,7 @@ TEST_F(TrustTokenRequestIssuanceHelperTest, RejectsIfTooManyIssuers) {
   auto request = MakeURLRequest("https://issuer.com/");
   request->set_initiator(issuer);
   EXPECT_EQ(ExecuteBeginOperationAndWaitForResult(&helper, request.get()),
-            mojom::TrustTokenOperationStatus::kResourceExhausted);
+            mojom::TrustTokenOperationStatus::kSiteIssuerLimit);
 }
 
 // Check that issuance fails if the number of tokens stored for the issuer is
@@ -224,7 +229,7 @@ TEST_F(TrustTokenRequestIssuanceHelperTest, RejectsIfAtCapacity) {
   auto request = MakeURLRequest("https://issuer.com/");
   request->set_initiator(issuer);
   EXPECT_EQ(ExecuteBeginOperationAndWaitForResult(&helper, request.get()),
-            mojom::TrustTokenOperationStatus::kResourceExhausted);
+            mojom::TrustTokenOperationStatus::kResourceLimited);
 }
 
 // Check that issuance fails if its key commitment request fails.
@@ -354,15 +359,14 @@ TEST_F(TrustTokenRequestIssuanceHelperTest, SetsRequestHeaders) {
   ASSERT_EQ(ExecuteBeginOperationAndWaitForResult(&helper, request.get()),
             mojom::TrustTokenOperationStatus::kOk);
 
-  std::string attached_header;
-  EXPECT_TRUE(request->extra_request_headers().GetHeader(
-      kTrustTokensSecTrustTokenHeader, &attached_header));
-  EXPECT_EQ(attached_header, "this string contains some blinded tokens");
+  EXPECT_THAT(
+      request->extra_request_headers().GetHeader(
+          kTrustTokensSecTrustTokenHeader),
+      Optional(std::string("this string contains some blinded tokens")));
 
-  std::string attached_version_header;
-  EXPECT_TRUE(request->extra_request_headers().GetHeader(
-      kTrustTokensSecTrustTokenVersionHeader, &attached_version_header));
-  EXPECT_EQ(attached_version_header, "PrivateStateTokenV3PMB");
+  EXPECT_THAT(request->extra_request_headers().GetHeader(
+                  kTrustTokensSecTrustTokenVersionHeader),
+              Optional(std::string("PrivateStateTokenV3PMB")));
 }
 
 // Check that the issuance helper rejects responses lacking the
@@ -974,5 +978,72 @@ TEST_F(TrustTokenRequestIssuanceHelperTest, UpdatesIssuanceTime) {
   // Ensure the issuance time was updated (0 seconds since last issuance).
   EXPECT_THAT(store->TimeSinceLastIssuance(issuer), Optional(base::Seconds(0)));
 }
+
+TEST_P(TrustTokenRequestIssuanceHelperMetricTest,
+       CountsProtocolVersionCorrectly) {
+  base::test::TaskEnvironment env;
+  base::HistogramTester histogram_tester;
+  std::unique_ptr<TrustTokenStore> store = TrustTokenStore::CreateForTesting();
+
+  SuitableTrustTokenOrigin issuer =
+      *SuitableTrustTokenOrigin::Create(GURL("https://issuer.com/"));
+
+  auto cryptographer = std::make_unique<MockCryptographer>();
+  EXPECT_CALL(*cryptographer, Initialize(_, _)).WillOnce(Return(true));
+  EXPECT_CALL(*cryptographer, AddKey(_)).WillOnce(Return(true));
+  EXPECT_CALL(*cryptographer, BeginIssuance(_))
+      .WillOnce(
+          Return(std::string("this string contains some blinded tokens")));
+
+  mojom::TrustTokenKeyCommitmentResultPtr commitment_result =
+      ReasonableKeyCommitmentResult();
+  commitment_result->protocol_version = GetParam();
+
+  FixedKeyCommitmentGetter commitment_getter(issuer,
+                                             std::move(commitment_result));
+  TrustTokenRequestIssuanceHelper helper(
+      *SuitableTrustTokenOrigin::Create(GURL("https://toplevel.com/")),
+      store.get(), &commitment_getter, std::nullopt, std::nullopt,
+      std::move(cryptographer));
+
+  TestURLRequestMaker request_maker;
+  auto request = request_maker.MakeURLRequest("https://issuer.com/");
+  request->set_initiator(issuer);
+
+  base::test::TestFuture<std::optional<net::HttpRequestHeaders>,
+                         mojom::TrustTokenOperationStatus>
+      future;
+  helper.Begin(request->url(), future.GetCallback());
+  histogram_tester.ExpectTotalCount("Net.TrustTokens.ProtocolVersion", 1);
+  histogram_tester.ExpectUniqueSample("Net.TrustTokens.ProtocolVersion",
+                                      GetParam(), 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ProtocolVersionTests,
+    TrustTokenRequestIssuanceHelperMetricTest,
+    ::testing::ValuesIn<mojom::TrustTokenProtocolVersion>({
+        mojom::TrustTokenProtocolVersion::kTrustTokenV3Pmb,
+        mojom::TrustTokenProtocolVersion::kTrustTokenV3Voprf,
+        mojom::TrustTokenProtocolVersion::kPrivateStateTokenV1Pmb,
+        mojom::TrustTokenProtocolVersion::kPrivateStateTokenV1Voprf,
+    }),
+    // Lambda to generate custom test name suffixes.
+    [](const ::testing::TestParamInfo<
+        TrustTokenRequestIssuanceHelperMetricTest::ParamType>& info) {
+      switch (info.param) {
+        case mojom::TrustTokenProtocolVersion::kTrustTokenV3Pmb:
+          return "TrustTokenV3Pmb";
+        case mojom::TrustTokenProtocolVersion::kTrustTokenV3Voprf:
+          return "TrustTokenV3Voprf";
+        case mojom::TrustTokenProtocolVersion::kPrivateStateTokenV1Pmb:
+          return "PrivateStateTokenV1Pmb";
+        case mojom::TrustTokenProtocolVersion::kPrivateStateTokenV1Voprf:
+          return "PrivateStateTokenV1Voprf";
+        default:
+          return "Unknown";
+      }
+      return "Unknown";
+    });
 
 }  // namespace network

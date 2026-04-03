@@ -4,6 +4,8 @@
 
 #include "extensions/browser/service_worker/service_worker_host.h"
 
+#include <vector>
+
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/trace_event/typed_macros.h"
 #include "content/public/browser/browser_context.h"
@@ -11,21 +13,24 @@
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/service_worker_external_request_result.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/browser/bad_message.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_function_dispatcher.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/message_service_api.h"
+#include "extensions/browser/permissions_manager.h"
 #include "extensions/browser/process_map.h"
-#include "extensions/browser/service_worker_task_queue.h"
+#include "extensions/browser/service_worker/service_worker_task_queue.h"
+#include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/common/api/messaging/port_context.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/mojom/frame.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/trace_util.h"
-#include "ipc/ipc_channel_proxy.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
 
 namespace extensions {
 
@@ -92,6 +97,24 @@ void ServiceWorkerHost::BindReceiver(
 }
 
 // static
+std::vector<ServiceWorkerHost*> ServiceWorkerHost::GetServiceWorkerHostList(
+    content::RenderProcessHost* rph) {
+  ServiceWorkerHostList* host_list =
+      ServiceWorkerHostList::Get(rph, /*create_if_not_exists=*/false);
+  if (!host_list) {
+    return {};
+  }
+  // Copy the vector of unique pointers to a vector of raw pointers so we're
+  // not handing out our owned memory to the caller.
+  std::vector<ServiceWorkerHost*> hosts;
+  hosts.reserve(host_list->list.size());
+  for (const std::unique_ptr<ServiceWorkerHost>& host : host_list->list) {
+    hosts.push_back(host.get());
+  }
+  return hosts;
+}
+
+// static
 ServiceWorkerHost* ServiceWorkerHost::GetWorkerFor(const WorkerId& worker_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   auto* render_process_host =
@@ -115,7 +138,6 @@ ServiceWorkerHost* ServiceWorkerHost::GetWorkerFor(const WorkerId& worker_id) {
 
 void ServiceWorkerHost::RemoteDisconnected() {
   receiver_.reset();
-  permissions_observer_.Reset();
   Destroy();
   // This instance has now been destroyed.
 }
@@ -124,10 +146,19 @@ void ServiceWorkerHost::DidInitializeServiceWorkerContext(
     const ExtensionId& extension_id,
     int64_t service_worker_version_id,
     int worker_thread_id,
+    const blink::ServiceWorkerToken& service_worker_token,
     mojo::PendingAssociatedRemote<mojom::EventDispatcher> event_dispatcher) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   content::BrowserContext* browser_context = GetBrowserContext();
   if (!browser_context) {
+    return;
+  }
+
+  // Ensure the worker thread ID is not the main thread ID as that is
+  // invalid input.
+  if (worker_thread_id == kMainThreadId) {
+    bad_message::ReceivedBadMessage(render_process_host_,
+                                    bad_message::SWH_BAD_WORKER_THREAD_ID);
     return;
   }
 
@@ -140,9 +171,10 @@ void ServiceWorkerHost::DidInitializeServiceWorkerContext(
     return;
   }
 
-  int render_process_id = render_process_host_->GetID();
+  content::ChildProcessId render_process_id = render_process_host_->GetID();
   auto* process_map = ProcessMap::Get(browser_context);
-  if (!process_map || !process_map->Contains(extension_id, render_process_id)) {
+  if (!process_map || !process_map->Contains(
+                          extension_id, render_process_id.GetUnsafeValue())) {
     // We check the process in addition to the registry to guard against
     // situations in which an extension may still be enabled, but no longer
     // running in a given process.
@@ -152,14 +184,14 @@ void ServiceWorkerHost::DidInitializeServiceWorkerContext(
   worker_id_.version_id = service_worker_version_id;
   worker_id_.render_process_id = render_process_id;
   worker_id_.thread_id = worker_thread_id;
-  permissions_observer_.Observe(PermissionsManager::Get(browser_context));
 
   ServiceWorkerTaskQueue::Get(browser_context)
-      ->DidInitializeServiceWorkerContext(render_process_id, extension_id,
-                                          service_worker_version_id,
-                                          worker_thread_id);
+      ->RendererDidInitializeServiceWorkerContext(
+          render_process_id, extension_id, service_worker_version_id,
+          worker_thread_id, service_worker_token);
   EventRouter::Get(browser_context)
-      ->BindServiceWorkerEventDispatcher(render_process_id, worker_thread_id,
+      ->BindServiceWorkerEventDispatcher(render_process_id.GetUnsafeValue(),
+                                         worker_thread_id,
                                          std::move(event_dispatcher));
 }
 
@@ -176,17 +208,18 @@ void ServiceWorkerHost::DidStartServiceWorkerContext(
   }
 
   DCHECK_NE(kMainThreadId, worker_thread_id);
-  int render_process_id = render_process_host_->GetID();
+  content::ChildProcessId render_process_id = render_process_host_->GetID();
   auto* process_map = ProcessMap::Get(browser_context);
-  if (!process_map || !process_map->Contains(extension_id, render_process_id)) {
+  if (!process_map || !process_map->Contains(
+                          extension_id, render_process_id.GetUnsafeValue())) {
     // We can legitimately get here if the extension was already unloaded.
     return;
   }
   CHECK(service_worker_scope.SchemeIs(kExtensionScheme) &&
-        extension_id == service_worker_scope.host_piece());
+        extension_id == service_worker_scope.host());
 
   ServiceWorkerTaskQueue::Get(browser_context)
-      ->DidStartServiceWorkerContext(
+      ->RendererDidStartServiceWorkerContext(
           render_process_id, extension_id, activation_token,
           service_worker_scope, service_worker_version_id, worker_thread_id);
 }
@@ -204,19 +237,19 @@ void ServiceWorkerHost::DidStopServiceWorkerContext(
   }
 
   DCHECK_NE(kMainThreadId, worker_thread_id);
-  int render_process_id = render_process_host_->GetID();
+  content::ChildProcessId render_process_id = render_process_host_->GetID();
   auto* process_map = ProcessMap::Get(browser_context);
-  if (!process_map || !process_map->Contains(extension_id, render_process_id)) {
+  if (!process_map || !process_map->Contains(
+                          extension_id, render_process_id.GetUnsafeValue())) {
     // We can legitimately get here if the extension was already unloaded.
     return;
   }
   CHECK(service_worker_scope.SchemeIs(kExtensionScheme) &&
-        extension_id == service_worker_scope.host_piece());
-  CHECK(!extension_id.empty());
+        extension_id == service_worker_scope.host());
   CHECK_NE(blink::mojom::kInvalidServiceWorkerVersionId,
            service_worker_version_id);
   ServiceWorkerTaskQueue::Get(browser_context)
-      ->DidStopServiceWorkerContext(
+      ->RendererDidStopServiceWorkerContext(
           render_process_id, extension_id, activation_token,
           service_worker_scope, service_worker_version_id, worker_thread_id);
 }
@@ -225,13 +258,14 @@ void ServiceWorkerHost::RequestWorker(mojom::RequestParamsPtr params,
                                       RequestWorkerCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!GetBrowserContext()) {
-    std::move(callback).Run(ExtensionFunction::FAILED, base::Value::List(),
+    std::move(callback).Run(/*kFailed=*/true, base::ListValue(),
                             "No browser context", nullptr);
     return;
   }
 
   dispatcher_->DispatchForServiceWorker(
-      std::move(params), render_process_host_->GetID(), std::move(callback));
+      std::move(params), render_process_host_->GetID().GetUnsafeValue(),
+      std::move(callback));
 }
 
 void ServiceWorkerHost::WorkerResponseAck(const base::Uuid& request_uuid) {
@@ -263,10 +297,9 @@ mojom::ServiceWorker* ServiceWorkerHost::GetServiceWorker() {
   return remote_.get();
 }
 
-void ServiceWorkerHost::OnExtensionPermissionsUpdated(
+void ServiceWorkerHost::UpdateExtensionPermissions(
     const Extension& extension,
-    const PermissionSet& permissions,
-    PermissionsManager::UpdateReason reason) {
+    const PermissionSet& permissions) {
   if (extension.id() != worker_id_.extension_id) {
     return;
   }
@@ -356,15 +389,15 @@ void ServiceWorkerHost::Destroy() {
   auto* service_worker_host_list = ServiceWorkerHostList::Get(
       render_process_host_, /*create_if_not_exists=*/false);
   CHECK(service_worker_host_list);
-  // base::EraseIf will lead to a call to the destructor for this object.
-  base::EraseIf(service_worker_host_list->list, base::MatchesUniquePtr(this));
+  // std::erase_if will lead to a call to the destructor for this object.
+  std::erase_if(service_worker_host_list->list, base::MatchesUniquePtr(this));
 }
 
 void ServiceWorkerHost::RenderProcessExited(
     content::RenderProcessHost* host,
     const content::ChildProcessTerminationInfo& info) {
   CHECK_EQ(host, render_process_host_);
-  // TODO(crbug.com/1407197): Investigate clearing the user data from
+  // TODO(crbug.com/40062641): Investigate clearing the user data from
   // RenderProcessHostImpl::Cleanup.
   Destroy();
   // This instance has now been deleted.

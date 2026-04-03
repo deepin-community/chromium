@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/functional/callback.h"
@@ -19,7 +20,7 @@
 namespace network {
 class SimpleURLLoader;
 class SharedURLLoaderFactory;
-}
+}  // namespace network
 
 namespace user_prefs {
 class PrefRegistrySyncable;
@@ -52,12 +53,11 @@ class PopularSitesImpl : public PopularSites {
   // PopularSites implementation.
   bool MaybeStartFetch(bool force_download, FinishedCallback callback) override;
   const std::map<SectionType, SitesVector>& sections() const override;
-  GURL GetLastURLFetched() const override;
   GURL GetURLToFetch() override;
   std::string GetDirectoryToFetch() override;
   std::string GetCountryToFetch() override;
   std::string GetVersionToFetch() override;
-  const base::Value::List& GetCachedJson() override;
+  const base::ListValue& GetCachedJson() override;
 
   // Register preferences used by this class.
   static void RegisterProfilePrefs(
@@ -69,7 +69,7 @@ class PopularSitesImpl : public PopularSites {
   void FetchPopularSites();
 
   // Called once SimpleURLLoader completes the network request.
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
 
   void OnJsonParsed(data_decoder::DataDecoder::ValueOrError result);
   void OnDownloadFailed();

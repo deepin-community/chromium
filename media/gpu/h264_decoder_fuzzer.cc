@@ -2,13 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/gpu/h264_decoder.h"
+
 #include <stddef.h>
 
+#include "base/compiler_specific.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/numerics/safe_conversions.h"
 #include "media/base/decoder_buffer.h"
+#include "media/base/test_data_util.h"
 #include "media/base/video_codecs.h"
 #include "media/base/video_types.h"
-#include "media/gpu/h264_decoder.h"
+#include "media/gpu/h264_dpb.h"
 
 namespace {
 
@@ -23,7 +28,7 @@ class FakeH264Accelerator : public media::H264Decoder::H264Accelerator {
 
   // media::H264Decoder::H264Accelerator
   scoped_refptr<media::H264Picture> CreateH264Picture() override {
-    return new media::H264Picture();
+    return base::MakeRefCounted<media::H264Picture>();
   }
 
   Status SubmitFrameMetadata(const media::H264SPS* sps,
@@ -68,11 +73,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   media::H264Decoder decoder(std::make_unique<FakeH264Accelerator>(),
                              media::H264PROFILE_MAIN);
-  auto external_memory = std::make_unique<media::DecoderBuffer::ExternalMemory>(
-      base::make_span(data, size));
+  auto external_memory =
+      std::make_unique<media::ExternalMemoryAdapterForTesting>(
+          UNSAFE_TODO(base::span(data, size)));
   scoped_refptr<media::DecoderBuffer> decoder_buffer =
       media::DecoderBuffer::FromExternalMemory(std::move(external_memory));
-  decoder.SetStream(1, *decoder_buffer);
+  decoder.SetStream(1, decoder_buffer);
 
   size_t retry_count = 0;
   while (true) {

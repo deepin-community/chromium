@@ -15,11 +15,11 @@
 #include "base/sequence_checker.h"
 #include "base/thread_annotations.h"
 #include "base/timer/elapsed_timer.h"
+#include "base/types/optional_ref.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "net/first_party_sets/first_party_sets_cache_filter.h"
 #include "services/network/first_party_sets/first_party_sets_manager.h"
-#include "services/network/public/mojom/first_party_sets_access_delegate.mojom-forward.h"
 #include "services/network/public/mojom/first_party_sets_access_delegate.mojom.h"
 
 namespace net {
@@ -65,7 +65,7 @@ class FirstPartySetsAccessDelegate
                 net::FirstPartySetsCacheFilter::MatchInfo>>
   ComputeMetadata(
       const net::SchemefulSite& site,
-      const net::SchemefulSite* top_frame_site,
+      base::optional_ref<const net::SchemefulSite> top_frame_site,
       base::OnceCallback<void(net::FirstPartySetMetadata,
                               net::FirstPartySetsCacheFilter::MatchInfo)>
           callback);
@@ -86,7 +86,7 @@ class FirstPartySetsAccessDelegate
   // only be called once the instance is fully initialized.
   void ComputeMetadataAndInvoke(
       const net::SchemefulSite& site,
-      const std::optional<net::SchemefulSite> top_frame_site,
+      base::optional_ref<const net::SchemefulSite> top_frame_site,
       base::OnceCallback<void(net::FirstPartySetMetadata,
                               net::FirstPartySetsCacheFilter::MatchInfo)>
           callback) const;
@@ -141,11 +141,6 @@ class FirstPartySetsAccessDelegate
 
   mojo::Receiver<mojom::FirstPartySetsAccessDelegate> receiver_
       GUARDED_BY_CONTEXT(sequence_checker_){this};
-
-  // Timer starting when the first async query was enqueued, if any. Used for
-  // metrics.
-  std::optional<base::ElapsedTimer> first_async_query_timer_
-      GUARDED_BY_CONTEXT(sequence_checker_);
 
   // Timer starting when the instance is constructed. Used for metrics.
   base::ElapsedTimer construction_timer_ GUARDED_BY_CONTEXT(sequence_checker_);

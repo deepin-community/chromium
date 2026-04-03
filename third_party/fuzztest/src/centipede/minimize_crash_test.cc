@@ -24,14 +24,14 @@
 #include "gtest/gtest.h"
 #include "absl/base/nullability.h"
 #include "./centipede/centipede_callbacks.h"
-#include "./centipede/defs.h"
 #include "./centipede/environment.h"
 #include "./centipede/runner_result.h"
-#include "./centipede/test_util.h"
 #include "./centipede/util.h"
 #include "./centipede/workdir.h"
+#include "./common/defs.h"
+#include "./common/test_util.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 namespace {
 
 // A mock for CentipedeCallbacks.
@@ -69,7 +69,7 @@ class MinimizerMock : public CentipedeCallbacks {
 // Factory that creates/destroys MinimizerMock.
 class MinimizerMockFactory : public CentipedeCallbacksFactory {
  public:
-  absl::Nonnull<CentipedeCallbacks *> create(const Environment &env) override {
+  CentipedeCallbacks *absl_nonnull create(const Environment &env) override {
     return new MinimizerMock(env);
   }
   void destroy(CentipedeCallbacks *cb) override { delete cb; }
@@ -98,8 +98,8 @@ TEST(MinimizeTest, MinimizeTest) {
   EXPECT_EQ(MinimizeCrash(original_crasher, env, factory), EXIT_SUCCESS);
   // Collect the new crashers from the crasher dir.
   std::vector<ByteArray> crashers;
-  for (auto const &dir_entry :
-       std::filesystem::directory_iterator{wd.CrashReproducerDirPath()}) {
+  for (auto const &dir_entry : std::filesystem::directory_iterator{
+           wd.CrashReproducerDirPaths().MyShard()}) {
     ByteArray crasher;
     const std::string &path = dir_entry.path();
     ReadFromLocalFile(path, crasher);
@@ -110,4 +110,4 @@ TEST(MinimizeTest, MinimizeTest) {
 }
 
 }  // namespace
-}  // namespace centipede
+}  // namespace fuzztest::internal

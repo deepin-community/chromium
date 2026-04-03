@@ -15,24 +15,39 @@ limitations under the License.
 
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
 
-#include <functional>
+#include <algorithm>
+#include <iterator>
 #include <memory>
+#include <set>
 #include <string>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
+#include "absl/algorithm/container.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_join.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "tensorflow/compiler/jit/flags.h"
 #include "tensorflow/compiler/jit/xla_cluster_util.h"
-#include "tensorflow/compiler/tf2xla/type_util.h"
-#include "tensorflow/compiler/tf2xla/xla_context.h"
-#include "xla/client/client_library.h"
-#include "tensorflow/core/common_runtime/device_factory.h"
-#include "tensorflow/core/common_runtime/local_device.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/util.h"
 #include "tensorflow/core/common_runtime/next_pluggable_device/next_pluggable_device_factory.h"
 #include "tensorflow/core/framework/device_base.h"
+#include "tensorflow/core/framework/device_factory.h"
 #include "tensorflow/core/framework/kernel_def.pb.h"
 #include "tensorflow/core/framework/node_def.pb.h"
+#include "tensorflow/core/framework/node_def_util.h"
+#include "tensorflow/core/framework/op.h"
+#include "tensorflow/core/framework/op_def.pb.h"
 #include "tensorflow/core/framework/op_def_util.h"
-#include "tensorflow/core/platform/mem.h"
-#include "tensorflow/core/platform/stream_executor_no_cuda.h"
+#include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/framework/types.pb.h"
+#include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/tfrt/common/pjrt_util.h"
 
 namespace tensorflow {
@@ -42,13 +57,13 @@ const char* const DEVICE_GPU_XLA_JIT = "XLA_GPU_JIT";
 const char* const DEVICE_XLA_CPU = "XLA_CPU";
 const char* const DEVICE_XLA_GPU = "XLA_GPU";
 
-static Status LaunchOpHasKernelForDevice(const DeviceType& device_type) {
+static absl::Status LaunchOpHasKernelForDevice(const DeviceType& device_type) {
   const OpDef* op_def;
   TF_RETURN_IF_ERROR(OpRegistry::Global()->LookUpOpDef("XlaLaunch", &op_def));
   NodeDef node_def;
   node_def.set_name("_XlaLaunch-op");
   node_def.set_op("XlaLaunch");
-  string kernel_class_name;
+  std::string kernel_class_name;
   TF_RETURN_IF_ERROR(FindKernelDef(device_type, node_def, /*KernelDef*/ nullptr,
                                    &kernel_class_name));
   VLOG(1) << "LaunchOpHasKernelForDevice"
@@ -115,7 +130,7 @@ XlaOpRegistry::~XlaOpRegistry() = default;
 }
 
 /* static */ void XlaOpRegistry::RegisterCompilationDevice(
-    const string& device_name, const DeviceRegistration& registration) {
+    const std::string& device_name, const DeviceRegistration& registration) {
   XlaOpRegistry& registry = Instance();
   mutex_lock lock(registry.mutex_);
   auto result =
@@ -125,7 +140,7 @@ XlaOpRegistry::~XlaOpRegistry() = default;
 }
 
 /* static */ void XlaOpRegistry::RegisterBackend(
-    const string& compilation_device_name,
+    const std::string& compilation_device_name,
     absl::Span<const DataType> supported_types, BackendOpFilter op_filter) {
   XlaOpRegistry& registry = Instance();
   mutex_lock lock(registry.mutex_);
@@ -138,14 +153,14 @@ XlaOpRegistry::~XlaOpRegistry() = default;
 }
 
 /* static */ bool XlaOpRegistry::IsCompilationDevice(
-    const string& device_name) {
+    const std::string& device_name) {
   XlaOpRegistry& registry = Instance();
   mutex_lock lock(registry.mutex_);
   return registry.backends_.find(device_name) != registry.backends_.end();
 }
 
 /* static */ bool XlaOpRegistry::GetCompilationDevice(
-    const string& device_name, const DeviceRegistration** registration) {
+    const std::string& device_name, const DeviceRegistration** registration) {
   XlaOpRegistry& registry = Instance();
 
   // Lazily register the CPU and GPU JIT devices the first time
@@ -222,7 +237,7 @@ void XlaOpRegistry::RegisterCompilationKernels() {
   // 2. Process op registration without device allowlists:
   //      this pass registers the kernels for all the other supported backends.
   for (auto& ops : registry.ops_) {
-    const string& op_name = ops.first;
+    const std::string& op_name = ops.first;
     std::vector<std::unique_ptr<OpRegistration>>& op_registrations = ops.second;
     // Partition the op registration so that the ones with device allowlists
     // precede the one without device allowlist.
@@ -234,7 +249,7 @@ void XlaOpRegistry::RegisterCompilationKernels() {
     // Collect a set of backend registered by ops with device allowlists.
     // The op registration without allowlists will register a generic kernel
     // for all other backends not in this set.
-    std::unordered_set<string> allowlisted_backend;
+    std::unordered_set<std::string> allowlisted_backend;
     for (auto& op_registration : op_registrations) {
       if (op_registration->has_device_allowlist) {
         allowlisted_backend.insert(op_registration->device_allowlist.begin(),
@@ -244,7 +259,7 @@ void XlaOpRegistry::RegisterCompilationKernels() {
 
     for (auto& op_registration : op_registrations) {
       const OpDef* op_def;
-      Status lookup_status = op_registry->LookUpOpDef(op_name, &op_def);
+      absl::Status lookup_status = op_registry->LookUpOpDef(op_name, &op_def);
       if (!lookup_status.ok()) {
         LOG(ERROR) << lookup_status.message();
         XLA_LOG_LINES(
@@ -252,9 +267,9 @@ void XlaOpRegistry::RegisterCompilationKernels() {
             "Ops registered: \n" +
                 dynamic_cast<OpRegistry*>(op_registry)->DebugString(true));
       }
-      TF_CHECK_OK(lookup_status);
+      CHECK_OK(lookup_status);
 
-      std::unordered_set<string> type_attrs;
+      std::unordered_set<std::string> type_attrs;
       for (const OpDef::AttrDef& attr_def : op_def->attr()) {
         if (attr_def.type() == "type" || attr_def.type() == "list(type)") {
           type_attrs.insert(attr_def.name());
@@ -296,7 +311,7 @@ void XlaOpRegistry::RegisterCompilationKernels() {
         // b) the types allowed by the OpDef, and
         // c) the type constraints.
         bool unsatisfiable_type_constraint = false;
-        for (const string& type_attr : type_attrs) {
+        for (const std::string& type_attr : type_attrs) {
           KernelDef::AttrConstraint* attr_constraint = kdef->add_constraint();
           attr_constraint->set_name(type_attr);
           auto* allowed_values =
@@ -362,7 +377,7 @@ void XlaOpRegistry::RegisterCompilationKernels() {
 }
 
 std::vector<const KernelDef*> XlaOpRegistry::DeviceKernels(
-    const string& compilation_device_name,
+    const std::string& compilation_device_name,
     bool include_compilation_only_kernels) {
   // Ensure compilation kernels registered.
   RegisterCompilationKernels();
@@ -390,8 +405,8 @@ std::vector<const KernelDef*> XlaOpRegistry::DeviceKernels(
   return kernels;
 }
 
-/*static*/ std::vector<string> XlaOpRegistry::GetAllRegisteredOps() {
-  std::vector<string> ops;
+/*static*/ std::vector<std::string> XlaOpRegistry::GetAllRegisteredOps() {
+  std::vector<std::string> ops;
   XlaOpRegistry& registry = Instance();
   mutex_lock lock(registry.mutex_);
   ops.reserve(registry.ops_.size());
@@ -403,7 +418,7 @@ std::vector<const KernelDef*> XlaOpRegistry::DeviceKernels(
 }
 
 /*static*/ const std::unordered_set<std::string>*
-XlaOpRegistry::CompileTimeConstantInputArgNames(const string& op) {
+XlaOpRegistry::CompileTimeConstantInputArgNames(const std::string& op) {
   XlaOpRegistry& registry = Instance();
   mutex_lock lock(registry.mutex_);
   auto it = registry.ops_.find(op);
@@ -415,17 +430,17 @@ XlaOpRegistry::CompileTimeConstantInputArgNames(const string& op) {
   }
 }
 
-/* static */ Status XlaOpRegistry::CompileTimeConstantInputs(
+/* static */ absl::Status XlaOpRegistry::CompileTimeConstantInputs(
     const NodeDef& node_def, const OpKernel* op_kernel, const OpDef* op_def,
     std::vector<int>* result) {
   result->clear();
 
   DCHECK(op_def != nullptr || op_kernel != nullptr);
 
-  std::unordered_set<string> compile_time_constant_inputs_from_attr;
-  std::vector<string> compile_time_constant_inputs_vect_from_attr;
+  std::unordered_set<std::string> compile_time_constant_inputs_from_attr;
+  std::vector<std::string> compile_time_constant_inputs_vect_from_attr;
 
-  const std::unordered_set<string>* compile_time_constant_inputs;
+  const std::unordered_set<std::string>* compile_time_constant_inputs;
 
   if (TryGetNodeAttr(node_def, kXlaCompileTimeConstantInputsAttr,
                      &compile_time_constant_inputs_vect_from_attr)) {
@@ -446,7 +461,7 @@ XlaOpRegistry::CompileTimeConstantInputArgNames(const string& op) {
           << " required constants are: "
           << absl::StrJoin(*compile_time_constant_inputs, ", ");
 
-  for (const string& input : *compile_time_constant_inputs) {
+  for (const std::string& input : *compile_time_constant_inputs) {
     if (op_def) {
       NameRangeMap input_name_ranges;
       TF_RETURN_IF_ERROR(
@@ -462,7 +477,7 @@ XlaOpRegistry::CompileTimeConstantInputArgNames(const string& op) {
       }
     } else {
       int start, stop;
-      TF_CHECK_OK(op_kernel->InputRange(input, &start, &stop));
+      CHECK_OK(op_kernel->InputRange(input, &start, &stop));
       for (int i = start; i < stop; ++i) {
         result->push_back(i);
       }
@@ -473,7 +488,7 @@ XlaOpRegistry::CompileTimeConstantInputArgNames(const string& op) {
   return absl::OkStatus();
 }
 
-/*static*/ bool XlaOpRegistry::IsMetadataOp(const string& op) {
+/*static*/ bool XlaOpRegistry::IsMetadataOp(const std::string& op) {
   XlaOpRegistry& registry = Instance();
   mutex_lock lock(registry.mutex_);
   auto it = registry.ops_.find(op);
@@ -487,8 +502,8 @@ XlaOpRegistry::CompileTimeConstantInputArgNames(const string& op) {
   return it->second.front()->is_metadata_op;
 }
 
-std::vector<string> XlaOpRegistry::BackendNames() {
-  std::vector<string> names;
+std::vector<std::string> XlaOpRegistry::BackendNames() {
+  std::vector<std::string> names;
   XlaOpRegistry& registry = Instance();
   mutex_lock lock(registry.mutex_);
   names.reserve(registry.backends_.size());
@@ -498,7 +513,7 @@ std::vector<string> XlaOpRegistry::BackendNames() {
   return names;
 }
 
-bool XlaOpRegistry::IsBackendRegistered(const string& name) {
+bool XlaOpRegistry::IsBackendRegistered(const std::string& name) {
   XlaOpRegistry& registry = Instance();
   mutex_lock lock(registry.mutex_);
   return registry.backends_.find(name) != registry.backends_.end();
@@ -511,7 +526,7 @@ XlaOpRegistry& XlaOpRegistry::Instance() {
 
 XlaOpRegistrationBuilder::XlaOpRegistrationBuilder(absl::string_view name) {
   registration_.reset(new XlaOpRegistry::OpRegistration);
-  registration_->name = string(name);
+  registration_->name = std::string(name);
 }
 
 XlaOpRegistrationBuilder XlaOpRegistrationBuilder::Name(
@@ -559,7 +574,7 @@ XlaOpRegistrationBuilder& XlaOpRegistrationBuilder::AllowStringType() {
 XlaOpRegistrationBuilder& XlaOpRegistrationBuilder::TypeConstraint(
     absl::string_view attr_name, DataType allowed) {
   std::set<DataType>& types =
-      registration_->type_constraints[string(attr_name)];
+      registration_->type_constraints[std::string(attr_name)];
   types.insert(allowed);
   return *this;
 }
@@ -567,7 +582,7 @@ XlaOpRegistrationBuilder& XlaOpRegistrationBuilder::TypeConstraint(
 XlaOpRegistrationBuilder& XlaOpRegistrationBuilder::TypeConstraint(
     absl::string_view attr_name, absl::Span<const DataType> allowed) {
   std::set<DataType>& types =
-      registration_->type_constraints[string(attr_name)];
+      registration_->type_constraints[std::string(attr_name)];
   for (DataType t : allowed) {
     types.insert(t);
   }
@@ -615,7 +630,7 @@ XlaBackendRegistrar::XlaBackendRegistrar(
     absl::string_view name, absl::Span<const DataType> types,
     XlaOpRegistry::BackendOpFilter op_filter) {
   XlaOpRegistry& registry = XlaOpRegistry::Instance();
-  registry.RegisterBackend(string(name), types, op_filter);
+  registry.RegisterBackend(std::string(name), types, op_filter);
 
   AddSymbolicExecutionDevice(name);
 }

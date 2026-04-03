@@ -4,22 +4,28 @@
 
 #include "chrome/browser/ash/login/saml/password_sync_token_fetcher.h"
 
+#include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "base/strings/escape.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/access_token_fetcher.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/primary_account_access_token_fetcher.h"
-#include "components/signin/public/identity_manager/scope_set.h"
 #include "content/public/browser/browser_context.h"
 #include "google_apis/credentials_mode.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
@@ -27,7 +33,9 @@
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/google_api_keys.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
@@ -54,7 +62,6 @@ enum class InSessionPasswordSyncEvent {
 
 constexpr int kGetAuthCodeNetworkRetry = 1;
 constexpr int kMaxResponseSize = 5 * 1024;
-const char kAccessTokenFetchId[] = "sync_token_fetcher";
 
 const char kErrorKey[] = "error";
 const char kErrorDescription[] = "message";
@@ -153,16 +160,9 @@ void PasswordSyncTokenFetcher::StartAccessTokenFetch() {
       IdentityManagerFactory::GetForProfile(profile_);
   DCHECK(identity_manager);
 
-  // Now we can request the token, knowing that it will be immediately requested
-  // if the refresh token is available, or that it will be requested once the
-  // refresh token is available for the primary account.
-  signin::ScopeSet scopes;
-  scopes.insert(GaiaConstants::kGoogleUserInfoEmail);
-  scopes.insert(GaiaConstants::kDeviceManagementServiceOAuth);
-
   access_token_fetcher_ =
       std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-          kAccessTokenFetchId, identity_manager, scopes,
+          signin::OAuthConsumerId::kPasswordSyncTokenFetcher, identity_manager,
           base::BindOnce(&PasswordSyncTokenFetcher::OnAccessTokenFetchComplete,
                          weak_ptr_factory_.GetWeakPtr()),
           signin::PrimaryAccountAccessTokenFetcher::Mode::kWaitUntilAvailable,
@@ -186,7 +186,7 @@ void PasswordSyncTokenFetcher::OnAccessTokenFetchComplete(
 }
 
 void PasswordSyncTokenFetcher::FetchSyncToken(const std::string& access_token) {
-  auto request_data = base::Value::Dict().Set(kTokenTypeKey, kTokenTypeValue);
+  auto request_data = base::DictValue().Set(kTokenTypeKey, kTokenTypeValue);
   std::string request_string;
   if (!base::JSONWriter::Write(request_data, &request_string)) {
     LOG(ERROR) << "Not able to serialize token request body.";
@@ -272,7 +272,7 @@ void PasswordSyncTokenFetcher::FetchSyncToken(const std::string& access_token) {
 }
 
 void PasswordSyncTokenFetcher::OnSimpleLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   int response_code = -1;
   if (simple_url_loader_->ResponseInfo() &&
       simple_url_loader_->ResponseInfo()->headers) {
@@ -321,7 +321,7 @@ void PasswordSyncTokenFetcher::OnSimpleLoaderComplete(
 }
 
 void PasswordSyncTokenFetcher::ProcessValidTokenResponse(
-    base::Value::Dict json_response) {
+    base::DictValue json_response) {
   switch (request_type_) {
     case RequestType::kCreateToken: {
       const std::string* sync_token = json_response.FindString(kToken);
@@ -343,7 +343,7 @@ void PasswordSyncTokenFetcher::ProcessValidTokenResponse(
         consumer_->OnApiCallFailed(ErrorType::kGetNoList);
         return;
       }
-      const base::Value::List& list_of_tokens = *token_list_entry;
+      const base::ListValue& list_of_tokens = *token_list_entry;
       if (list_of_tokens.size() > 0) {
         const std::string* sync_token_string =
             list_of_tokens[0].GetDict().FindString(kToken);

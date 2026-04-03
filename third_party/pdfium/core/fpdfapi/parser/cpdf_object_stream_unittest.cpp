@@ -101,7 +101,7 @@ TEST(ObjectStreamTest, StreamDictNoType) {
 
 TEST(ObjectStreamTest, StreamDictWrongType) {
   auto dict = pdfium::MakeRetain<CPDF_Dictionary>();
-  dict->SetNewFor<CPDF_String>("Type", "ObjStm", /*bHex=*/false);
+  dict->SetNewFor<CPDF_String>("Type", "ObjStm");
   dict->SetNewFor<CPDF_Number>("N", 3);
   dict->SetNewFor<CPDF_Number>("First", 5);
 
@@ -209,7 +209,7 @@ TEST(ObjectStreamTest, StreamDictOffsetTooBig) {
   auto dict = pdfium::MakeRetain<CPDF_Dictionary>();
   dict->SetNewFor<CPDF_Name>("Type", "ObjStm");
   dict->SetNewFor<CPDF_Number>("N", 3);
-  constexpr int kTooBigOffset = std::size(kNormalStreamContent);
+  static constexpr int kTooBigOffset = std::size(kNormalStreamContent);
   dict->SetNewFor<CPDF_Number>("First", kTooBigOffset);
 
   ByteStringView contents_view(kNormalStreamContent);

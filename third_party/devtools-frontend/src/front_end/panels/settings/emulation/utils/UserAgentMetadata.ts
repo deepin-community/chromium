@@ -1,22 +1,22 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
 // Helper functions for working with UserAgentMetadata protocol objects, in
 // particular their plain string representation.
 
-import type * as UI from '../../../../ui/legacy/legacy.js';
 import type * as Protocol from '../../../../generated/protocol.js';
+import type * as UI from '../../../../ui/legacy/legacy.js';
 
 import {
-  parseList,
-  ResultKind,
-  serializeItem,
-  serializeList,
   type Item,
   type List,
   type Parameters,
   type ParamName,
+  parseList,
+  ResultKind,
+  serializeItem,
+  serializeList,
   type String as SHString,
 } from './StructuredHeaders.js';
 
@@ -84,7 +84,7 @@ export function serializeBrandsList(brands: Protocol.Emulation.UserAgentBrandVer
 export function validateAsStructuredHeadersString(value: string, errorString: string): UI.ListWidget.ValidatorResult {
   const parsedResult = serializeItem({
     kind: ResultKind.ITEM,
-    value: {kind: ResultKind.STRING, value: value},
+    value: {kind: ResultKind.STRING, value},
     parameters: {kind: ResultKind.PARAMETERS, items: []},
   });
   if (parsedResult.kind === ResultKind.ERROR) {

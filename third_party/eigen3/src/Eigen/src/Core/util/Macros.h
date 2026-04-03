@@ -17,13 +17,9 @@
 // Eigen version and basic defaults
 //------------------------------------------------------------------------------------------
 
-#define EIGEN_WORLD_VERSION 3
-#define EIGEN_MAJOR_VERSION 4
-#define EIGEN_MINOR_VERSION 90
-
 #define EIGEN_VERSION_AT_LEAST(x, y, z) \
-  (EIGEN_WORLD_VERSION > x ||           \
-   (EIGEN_WORLD_VERSION >= x && (EIGEN_MAJOR_VERSION > y || (EIGEN_MAJOR_VERSION >= y && EIGEN_MINOR_VERSION >= z))))
+  (EIGEN_MAJOR_VERSION > x ||           \
+   (EIGEN_MAJOR_VERSION >= x && (EIGEN_MINOR_VERSION > y || (EIGEN_MINOR_VERSION >= y && EIGEN_PATCH_VERSION >= z))))
 
 #ifdef EIGEN_DEFAULT_TO_ROW_MAJOR
 #define EIGEN_DEFAULT_MATRIX_STORAGE_ORDER_OPTION Eigen::RowMajor
@@ -54,6 +50,26 @@
 #ifndef EIGEN_STACK_ALLOCATION_LIMIT
 // 131072 == 128 KB
 #define EIGEN_STACK_ALLOCATION_LIMIT 131072
+#endif
+
+/* Specify whether to use std::fma for scalar multiply-add instructions.
+ *
+ * On machines that have FMA as a single instruction, this will generally
+ * improve precision without significant performance implications.
+ *
+ * Without a single instruction, performance has been found to be reduced 2-3x
+ * on Intel CPUs, and up to 30x for WASM.
+ *
+ * If unspecified, defaults to using FMA if hardware support is available.
+ * The default should be used in most cases to ensure consistency between
+ * vectorized and non-vectorized paths.
+ */
+#ifndef EIGEN_SCALAR_MADD_USE_FMA
+#ifdef EIGEN_VECTORIZE_FMA
+#define EIGEN_SCALAR_MADD_USE_FMA 1
+#else
+#define EIGEN_SCALAR_MADD_USE_FMA 0
+#endif
 #endif
 
 //------------------------------------------------------------------------------------------
@@ -196,6 +212,13 @@
 #define EIGEN_COMP_PGI 0
 #endif
 
+/// \internal EIGEN_COMP_NVHPC set to NVHPC version if the compiler is nvc++
+#if defined(__NVCOMPILER)
+#define EIGEN_COMP_NVHPC (__NVCOMPILER_MAJOR__ * 100 + __NVCOMPILER_MINOR__)
+#else
+#define EIGEN_COMP_NVHPC 0
+#endif
+
 /// \internal EIGEN_COMP_ARM set to 1 if the compiler is ARM Compiler
 #if defined(__CC_ARM) || defined(__ARMCC_VERSION)
 #define EIGEN_COMP_ARM 1
@@ -212,7 +235,7 @@
 
 /// \internal EIGEN_COMP_FCC set to FCC version if the compiler is Fujitsu Compiler (traditional mode)
 /// \note The Fujitsu C/C++ compiler uses the traditional mode based
-/// on EDG g++ 6.1 by default or if envoked with the -Nnoclang flag
+/// on EDG g++ 6.1 by default or if invoked with the -Nnoclang flag
 #if defined(__FUJITSU)
 #define EIGEN_COMP_FCC (__FCC_major__ * 100 + __FCC_minor__ * 10 + __FCC_patchlevel__)
 #else
@@ -221,7 +244,7 @@
 
 /// \internal EIGEN_COMP_CLANGFCC set to FCC version if the compiler is Fujitsu Compiler (Clang mode)
 /// \note The Fujitsu C/C++ compiler uses the non-traditional mode
-/// based on Clang 7.1.0 if envoked with the -Nclang flag
+/// based on Clang 7.1.0 if invoked with the -Nclang flag
 #if defined(__CLANG_FUJITSU)
 #define EIGEN_COMP_CLANGFCC (__FCC_major__ * 100 + __FCC_minor__ * 10 + __FCC_patchlevel__)
 #else
@@ -369,6 +392,13 @@
 #define EIGEN_ARCH_MIPS 0
 #endif
 
+/// \internal EIGEN_ARCH_LOONGARCH64 set to 1 if the architecture is LOONGARCH64
+#if defined(__loongarch64)
+#define EIGEN_ARCH_LOONGARCH64 1
+#else
+#define EIGEN_ARCH_LOONGARCH64 0
+#endif
+
 /// \internal EIGEN_ARCH_SPARC set to 1 if the architecture is SPARC
 #if defined(__sparc__) || defined(__sparc)
 #define EIGEN_ARCH_SPARC 1
@@ -388,6 +418,13 @@
 #define EIGEN_ARCH_PPC 1
 #else
 #define EIGEN_ARCH_PPC 0
+#endif
+
+/// \internal EIGEN_ARCH_RISCV set to 1 if the architecture is RISC-V.
+#if defined(__riscv)
+#define EIGEN_ARCH_RISCV 1
+#else
+#define EIGEN_ARCH_RISCV 0
 #endif
 
 //------------------------------------------------------------------------------------------
@@ -412,6 +449,16 @@
 // note: ANDROID is defined when using ndk_build, __ANDROID__ is defined when using a standalone toolchain.
 #if defined(__ANDROID__) || defined(ANDROID)
 #define EIGEN_OS_ANDROID 1
+
+// Since NDK r16, `__NDK_MAJOR__` and `__NDK_MINOR__` are defined in
+// <android/ndk-version.h>. For NDK < r16, users should define these macros,
+// e.g. `-D__NDK_MAJOR__=11 -D__NKD_MINOR__=0` for NDK r11.
+#if defined __has_include
+#if __has_include(<android/ndk-version.h>)
+#include <android/ndk-version.h>
+#endif
+#endif
+
 #else
 #define EIGEN_OS_ANDROID 0
 #endif
@@ -660,6 +707,13 @@
 #define EIGEN_HAS_BUILTIN(x) 0
 #endif
 
+// Cross compiler wrapper around LLVM's __has_attribute
+#ifdef __has_attribute
+#define EIGEN_HAS_ATTRIBUTE(x) __has_attribute(x)
+#else
+#define EIGEN_HAS_ATTRIBUTE(x) 0
+#endif
+
 // A Clang feature extension to determine compiler features.
 // We use it to determine 'cxx_rvalue_references'
 #ifndef __has_feature
@@ -706,7 +760,7 @@
     (EIGEN_COMP_ICC && EIGEN_COMP_ICC < 1500) || (EIGEN_COMP_NVCC && EIGEN_COMP_NVCC < 80000) ||       \
     (EIGEN_COMP_CLANG_STRICT && EIGEN_COMP_CLANG < 390) ||                                             \
     (EIGEN_COMP_CLANGAPPLE && EIGEN_COMP_CLANGAPPLE < 9000000) || (EIGEN_COMP_GNUC_STRICT && EIGEN_COMP_GNUC < 510)
-#error This compiler appears to be too old to be supported by Eigen
+#error Eigen requires at least c++14 support.
 #endif
 
 // Does the compiler support C99?
@@ -788,6 +842,18 @@
 #else
 #define EIGEN_HAS_BUILTIN_INT128 0
 #endif
+#endif
+
+// Does the compiler support vector types?
+#if EIGEN_HAS_ATTRIBUTE(ext_vector_type) && EIGEN_HAS_BUILTIN(__builtin_vectorelements)
+#define EIGEN_ARCH_VECTOR_EXTENSIONS 1
+#else
+#define EIGEN_ARCH_VECTOR_EXTENSIONS 0
+#endif
+
+// Multidimensional subscript operator feature test
+#if defined(__cpp_multidimensional_subscript) && __cpp_multidimensional_subscript >= 202110L
+#define EIGEN_MULTIDIMENSIONAL_SUBSCRIPT
 #endif
 
 //------------------------------------------------------------------------------------------
@@ -920,6 +986,18 @@
 #define EIGEN_DEPRECATED
 #endif
 
+#ifndef EIGEN_NO_DEPRECATED_WARNING
+#if EIGEN_COMP_GNUC
+#define EIGEN_DEPRECATED_WITH_REASON(message) __attribute__((deprecated(message)))
+#elif EIGEN_COMP_MSVC
+#define EIGEN_DEPRECATED_WITH_REASON(message) __declspec(deprecated(message))
+#else
+#define EIGEN_DEPRECATED_WITH_REASON(message)
+#endif
+#else
+#define EIGEN_DEPRECATED_WITH_REASON(message)
+#endif
+
 #if EIGEN_COMP_GNUC
 #define EIGEN_UNUSED __attribute__((unused))
 #else
@@ -952,7 +1030,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void ignore_unused_variable(cons
 #define EIGEN_UNUSED_VARIABLE(var) Eigen::internal::ignore_unused_variable(var);
 
 #if !defined(EIGEN_ASM_COMMENT)
-#if EIGEN_COMP_GNUC && (EIGEN_ARCH_i386_OR_x86_64 || EIGEN_ARCH_ARM_OR_ARM64)
+#if EIGEN_COMP_GNUC && (EIGEN_ARCH_i386_OR_x86_64 || EIGEN_ARCH_ARM_OR_ARM64 || EIGEN_ARCH_RISCV)
 #define EIGEN_ASM_COMMENT(X) __asm__("#" X)
 #else
 #define EIGEN_ASM_COMMENT(X)
@@ -964,9 +1042,14 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void ignore_unused_variable(cons
 // added then subtracted, which is otherwise compiled away with -ffast-math.
 //
 // See bug 1674
+#if defined(EIGEN_GPU_COMPILE_PHASE)
+#define EIGEN_OPTIMIZATION_BARRIER(X)
+#endif
+
 #if !defined(EIGEN_OPTIMIZATION_BARRIER)
-#if EIGEN_COMP_GNUC
-   // According to https://gcc.gnu.org/onlinedocs/gcc/Constraints.html:
+// Implement the barrier on GNUC compilers or clang-cl.
+#if EIGEN_COMP_GNUC || (defined(__clang__) && defined(_MSC_VER))
+// According to https://gcc.gnu.org/onlinedocs/gcc/Constraints.html:
 //   X: Any operand whatsoever.
 //   r: A register operand is allowed provided that it is in a general
 //      register.
@@ -999,37 +1082,37 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void ignore_unused_variable(cons
 // directly for std::complex<T>, Eigen::half, Eigen::bfloat16. For these,
 // you will need to apply to the underlying POD type.
 #if EIGEN_ARCH_PPC && EIGEN_COMP_GNUC_STRICT
-   // This seems to be broken on clang. Packet4f is loaded into a single
+// This seems to be broken on clang. Packet4f is loaded into a single
 //   register rather than a vector, zeroing out some entries. Integer
 //   types also generate a compile error.
 #if EIGEN_OS_MAC
-   // General, Altivec for Apple (VSX were added in ISA v2.06):
+// General, Altivec for Apple (VSX were added in ISA v2.06):
 #define EIGEN_OPTIMIZATION_BARRIER(X) __asm__("" : "+r,v"(X));
 #else
-   // General, Altivec, VSX otherwise:
+// General, Altivec, VSX otherwise:
 #define EIGEN_OPTIMIZATION_BARRIER(X) __asm__("" : "+r,v,wa"(X));
 #endif
 #elif EIGEN_ARCH_ARM_OR_ARM64
 #ifdef __ARM_FP
-   // General, VFP or NEON.
+// General, VFP or NEON.
 // Clang doesn't like "r",
 //    error: non-trivial scalar-to-vector conversion, possible invalid
 //           constraint for vector typ
 #define EIGEN_OPTIMIZATION_BARRIER(X) __asm__("" : "+g,w"(X));
 #else
-   // Arm without VFP or NEON.
+// Arm without VFP or NEON.
 // "w" constraint will not compile.
 #define EIGEN_OPTIMIZATION_BARRIER(X) __asm__("" : "+g"(X));
 #endif
 #elif EIGEN_ARCH_i386_OR_x86_64
-   // General, SSE.
+// General, SSE.
 #define EIGEN_OPTIMIZATION_BARRIER(X) __asm__("" : "+g,x"(X));
 #else
-   // Not implemented for other architectures.
+// Not implemented for other architectures.
 #define EIGEN_OPTIMIZATION_BARRIER(X)
 #endif
 #else
-   // Not implemented for other compilers.
+// Not implemented for other compilers.
 #define EIGEN_OPTIMIZATION_BARRIER(X)
 #endif
 #endif
@@ -1072,14 +1155,7 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void ignore_unused_variable(cons
 #define EIGEN_USING_STD(FUNC) using std::FUNC;
 #endif
 
-#if EIGEN_COMP_MSVC_STRICT && EIGEN_COMP_NVCC
-// Wwhen compiling with NVCC, using the base operator is necessary,
-//   otherwise we get duplicate definition errors
-// For later MSVC versions, we require explicit operator= definition, otherwise we get
-//   use of implicitly deleted operator errors.
-// (cf Bugs 920, 1000, 1324, 2291)
-#define EIGEN_INHERIT_ASSIGNMENT_EQUAL_OPERATOR(Derived) using Base::operator=;
-#elif EIGEN_COMP_CLANG  // workaround clang bug (see http://forum.kde.org/viewtopic.php?f=74&t=102653)
+#if EIGEN_COMP_CLANG  // workaround clang bug (see http://forum.kde.org/viewtopic.php?f=74&t=102653)
 #define EIGEN_INHERIT_ASSIGNMENT_EQUAL_OPERATOR(Derived)                                           \
   using Base::operator=;                                                                           \
   EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Derived& operator=(const Derived& other) {                 \
@@ -1255,11 +1331,6 @@ EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE constexpr void ignore_unused_variable(cons
 #define EIGEN_TRY if (true)
 #define EIGEN_CATCH(X) else
 #endif
-
-#define EIGEN_NOEXCEPT noexcept
-#define EIGEN_NOEXCEPT_IF(x) noexcept(x)
-#define EIGEN_NO_THROW noexcept(true)
-#define EIGEN_EXCEPTION_SPEC(X) noexcept(false)
 
 // The all function is used to enable a variadic version of eigen_assert which can take a parameter pack as its input.
 namespace Eigen {

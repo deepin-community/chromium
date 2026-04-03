@@ -4,6 +4,8 @@
 
 #include "components/os_crypt/sync/os_crypt_mocker.h"
 
+#include <memory>
+
 #include "build/build_config.h"
 #include "components/os_crypt/sync/os_crypt.h"
 
@@ -12,27 +14,20 @@
 #endif
 
 // static
+#if !BUILDFLAG(IS_APPLE)
 void OSCryptMocker::SetUp() {
-#if BUILDFLAG(IS_APPLE)
-  OSCrypt::UseMockKeychainForTesting(true);
-#elif defined(USE_LIBSECRET) || defined(USE_KWALLET)
+#if defined(USE_LIBSECRET) || defined(USE_KWALLET)
   OSCryptMockerLinux::SetUp();
 #elif BUILDFLAG(IS_WIN)
   OSCrypt::UseMockKeyForTesting(true);
 #endif
 }
+#endif
 
 // static
 std::string OSCryptMocker::GetRawEncryptionKey() {
   return OSCrypt::GetRawEncryptionKey();
 }
-
-#if BUILDFLAG(IS_APPLE)
-// static
-void OSCryptMocker::SetBackendLocked(bool locked) {
-  OSCrypt::UseLockedMockKeychainForTesting(locked);
-}
-#endif
 
 #if BUILDFLAG(IS_WIN)
 // static
@@ -47,12 +42,12 @@ void OSCryptMocker::ResetState() {
 #endif
 
 // static
+#if !BUILDFLAG(IS_APPLE)
 void OSCryptMocker::TearDown() {
-#if BUILDFLAG(IS_APPLE)
-  OSCrypt::UseMockKeychainForTesting(false);
-#elif defined(USE_LIBSECRET) || defined(USE_KWALLET)
+#if defined(USE_LIBSECRET) || defined(USE_KWALLET)
   OSCryptMockerLinux::TearDown();
 #elif BUILDFLAG(IS_WIN)
   OSCrypt::UseMockKeyForTesting(false);
 #endif
 }
+#endif

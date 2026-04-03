@@ -14,19 +14,20 @@ import './print_job_entry.js';
 import './print_management_fonts.css.js';
 import './print_management_shared.css.js';
 import './printer_setup_info.js';
-import './strings.m.js';
+import '/strings.m.js';
 
-import {IronIconElement} from '//resources/polymer/v3_0/iron-icon/iron-icon.js';
+import type {IronIconElement} from '//resources/polymer/v3_0/iron-icon/iron-icon.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {loadTimeData} from 'chrome://resources/ash/common/load_time_data.m.js';
 import {ColorChangeUpdater} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {PolymerElementProperties} from 'chrome://resources/polymer/v3_0/polymer/interfaces.js';
+import type {PolymerElementProperties} from 'chrome://resources/polymer/v3_0/polymer/interfaces.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {getMetadataProvider, getPrintManagementHandler} from './mojo_interface_provider.js';
 import {getTemplate} from './print_management.html.js';
-import {ActivePrintJobState, LaunchSource, PrintingMetadataProviderInterface, PrintJobInfo, PrintJobsObserverInterface, PrintJobsObserverReceiver, PrintManagementHandlerInterface} from './printing_manager.mojom-webui.js';
+import type {PrintingMetadataProviderInterface, PrintJobInfo, PrintJobsObserverInterface, PrintManagementHandlerInterface} from './printing_manager.mojom-webui.js';
+import {ActivePrintJobState, LaunchSource, PrintJobsObserverReceiver} from './printing_manager.mojom-webui.js';
 
 const METADATA_STORED_INDEFINITELY = -1;
 const METADATA_STORED_FOR_ONE_DAY = 1;
@@ -117,13 +118,6 @@ export class PrintManagementElement extends PrintManagementElementBase
         value: false,
       },
 
-      showSetupAssistance: {
-        type: Boolean,
-        value: (): boolean => {
-          return loadTimeData.getBoolean('isSetupAssistanceEnabled');
-        },
-      },
-
       deletePrintJobHistoryAllowedByPolicy: {
         type: Boolean,
         value: true,
@@ -175,7 +169,6 @@ export class PrintManagementElement extends PrintManagementElementBase
   private listBlurred: boolean;
   private showClearAllButton: boolean;
   private showClearAllDialog: boolean;
-  private showSetupAssistance: boolean;
   private deletePrintJobHistoryAllowedByPolicy: boolean;
   private shouldDisableClearAllButton: boolean;
   private printJobsObserverReceiver: PrintJobsObserverReceiver;
@@ -249,7 +242,8 @@ export class PrintManagementElement extends PrintManagementElementBase
     }
   }
 
-  private onPrintJobsReceived(jobs: {printJobs: PrintJobInfo[]}): void {
+  private onPrintJobsReceived(
+      jobs: {printJobs: PrintJobInfo[]}, requestStartTime: number): void {
     // Set on the first print jobs response.
     if (!this.printJobsLoaded) {
       this.printJobsLoaded = true;
@@ -271,11 +265,17 @@ export class PrintManagementElement extends PrintManagementElementBase
     // Sort the print jobs in chronological order.
     this.ongoingPrintJobs = ongoingList.sort(comparePrintJobsChronologically);
     this.printJobs = historyList.sort(comparePrintJobsReverseChronologically);
+
+    // Record request duration.
+    this.pageHandler.recordGetPrintJobsRequestDuration(
+        Date.now() - requestStartTime);
   }
 
   private getPrintJobs(): void {
+    const requestStartTime = Date.now();
     this.mojoInterfaceProvider.getPrintJobs().then(
-        this.onPrintJobsReceived.bind(this));
+        (jobs: {printJobs: PrintJobInfo[]}) =>
+            this.onPrintJobsReceived(jobs, requestStartTime));
   }
 
   private onPrintJobHistoryExpirationPeriodReceived(printJobPolicyInfo: {
@@ -354,22 +354,20 @@ export class PrintManagementElement extends PrintManagementElementBase
 
   /** Determine if printer setup UI should be shown. */
   private shouldShowSetupAssistance(): boolean {
-    return this.showSetupAssistance && this.printJobsLoaded &&
-        this.ongoingPrintJobs.length === 0 && this.printJobs.length === 0;
+    return this.printJobsLoaded && this.ongoingPrintJobs.length === 0 &&
+        this.printJobs.length === 0;
   }
 
   /** Determine if ongoing jobs empty messaging should be shown. */
   private shouldShowOngoingEmptyState(): boolean {
     // The ongoing empty state should only be shown when there aren't ongoing
     // print jobs and the completed prints jobs list is showing.
-    return (!this.showSetupAssistance || this.printJobs.length > 0) &&
-        this.ongoingPrintJobs.length === 0;
+    return this.printJobs.length > 0 && this.ongoingPrintJobs.length === 0;
   }
 
   /** Determine if manage printer button in header should be shown. */
   private shouldShowManagePrinterButton(): boolean {
-    return this.showSetupAssistance &&
-        (this.ongoingPrintJobs.length > 0 || this.printJobs.length > 0);
+    return this.ongoingPrintJobs.length > 0 || this.printJobs.length > 0;
   }
 
   private onManagePrintersClicked(): void {

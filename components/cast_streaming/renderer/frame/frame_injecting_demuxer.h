@@ -24,7 +24,7 @@ class DemuxerConnector;
 // as |original_task_runner_|. OnStreamsInitialized() is the only method called
 // on the main thread. Every other method is called on the media thread, whose
 // task runner is |media_task_runner_|.
-// TODO(crbug.com/1082821): Simplify the FrameInjectingDemuxer initialization
+// TODO(crbug.com/40131115): Simplify the FrameInjectingDemuxer initialization
 // sequence when the DemuxerConnector Component has been implemented.
 class FrameInjectingDemuxer final : public media::Demuxer {
  public:
@@ -47,8 +47,7 @@ class FrameInjectingDemuxer final : public media::Demuxer {
   void OnStreamInitializationComplete();
 
   // media::Demuxer implementation.
-  std::vector<raw_ptr<media::DemuxerStream, VectorExperimental>> GetAllStreams()
-      override;
+  std::vector<media::DemuxerStream*> GetAllStreams() override;
   std::string GetDisplayName() const override;
   media::DemuxerType GetDemuxerType() const override;
   void Initialize(media::DemuxerHost* host,
@@ -65,14 +64,10 @@ class FrameInjectingDemuxer final : public media::Demuxer {
   int64_t GetMemoryUsage() const override;
   std::optional<media::container_names::MediaContainerName>
   GetContainerForMetrics() const override;
-  void OnEnabledAudioTracksChanged(
-      const std::vector<media::MediaTrack::Id>& track_ids,
-      base::TimeDelta curr_time,
-      TrackChangeCB change_completed_cb) override;
-  void OnSelectedVideoTrackChanged(
-      const std::vector<media::MediaTrack::Id>& track_ids,
-      base::TimeDelta curr_time,
-      TrackChangeCB change_completed_cb) override;
+  void OnTracksChanged(media::DemuxerStream::Type track_type,
+                       std::optional<media::MediaTrack::Id> track_id,
+                       base::TimeDelta curr_time,
+                       TrackChangeCB change_completed_cb) override;
   void SetPlaybackRate(double rate) override {}
 
   // The number of initialized streams that have yet to call
@@ -81,7 +76,7 @@ class FrameInjectingDemuxer final : public media::Demuxer {
 
   scoped_refptr<base::SequencedTaskRunner> media_task_runner_;
   scoped_refptr<base::SequencedTaskRunner> original_task_runner_;
-  raw_ptr<media::DemuxerHost, ExperimentalRenderer> host_ = nullptr;
+  raw_ptr<media::DemuxerHost> host_ = nullptr;
 
   scoped_refptr<StreamTimestampOffsetTracker> timestamp_tracker_;
   std::unique_ptr<FrameInjectingAudioDemuxerStream> audio_stream_;
@@ -90,7 +85,7 @@ class FrameInjectingDemuxer final : public media::Demuxer {
   // Set to true if the Demuxer was successfully initialized.
   bool was_initialization_successful_ = false;
   media::PipelineStatusCallback initialized_cb_;
-  const raw_ptr<DemuxerConnector, ExperimentalRenderer> demuxer_connector_;
+  const raw_ptr<DemuxerConnector> demuxer_connector_;
 
   base::WeakPtrFactory<FrameInjectingDemuxer> weak_factory_;
 };

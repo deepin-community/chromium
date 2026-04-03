@@ -5,7 +5,11 @@
 #ifndef UI_VIEWS_ACCESSIBILITY_VIEW_AX_PLATFORM_NODE_DELEGATE_WIN_H_
 #define UI_VIEWS_ACCESSIBILITY_VIEW_AX_PLATFORM_NODE_DELEGATE_WIN_H_
 
+#include <wrl/client.h>
+
 #include "ui/views/accessibility/view_ax_platform_node_delegate.h"
+
+struct IAccessible;
 
 namespace views {
 
@@ -34,8 +38,10 @@ class ViewAXPlatformNodeDelegateWin : public ViewAXPlatformNodeDelegate {
       ui::AXOffscreenResult* offscreen_result) const override;
   gfx::Point ScreenToDIPPoint(const gfx::Point& screen_point) const override;
 
-  // ViewAccessibility overrides.
-  void EnsureAtomicViewAXTreeManager() override;
+ private:
+  // The IAccessible of the parent HWND if this corresponds to the RootView.
+  // Recreated on each request for the parent.
+  mutable Microsoft::WRL::ComPtr<IAccessible> parent_;
 };
 
 }  // namespace views

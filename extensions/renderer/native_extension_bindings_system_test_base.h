@@ -18,6 +18,7 @@
 #include "extensions/common/mojom/context_type.mojom-forward.h"
 #include "extensions/common/mojom/frame.mojom-forward.h"
 #include "extensions/common/mojom/message_port.mojom-shared.h"
+#include "extensions/renderer/api/core_extensions_renderer_api_provider.h"
 #include "extensions/renderer/api/messaging/message_target.h"
 #include "extensions/renderer/bindings/api_binding_test.h"
 #include "extensions/renderer/bindings/api_binding_types.h"
@@ -75,12 +76,12 @@ class TestIPCMessageSender : public IPCMessageSender {
   MOCK_METHOD4(SendAddFilteredEventListenerIPC,
                void(ScriptContext* context,
                     const std::string& event_name,
-                    const base::Value::Dict& filter,
+                    const base::DictValue& filter,
                     bool is_lazy));
   MOCK_METHOD4(SendRemoveFilteredEventListenerIPC,
                void(ScriptContext* context,
                     const std::string& event_name,
-                    const base::Value::Dict& filter,
+                    const base::DictValue& filter,
                     bool remove_lazy_listener));
   MOCK_METHOD2(
       SendBindAutomationIPC,
@@ -100,7 +101,7 @@ class TestIPCMessageSender : public IPCMessageSender {
                     const ExtensionId& extension_id,
                     IPCMessageSender::ActivityLogCallType call_type,
                     const std::string& call_name,
-                    base::Value::List args,
+                    base::ListValue args,
                     const std::string& extra));
   const mojom::RequestParams* last_params() const { return last_params_.get(); }
 
@@ -155,6 +156,7 @@ class NativeExtensionBindingsSystemUnittest
   void set_allow_unregistered_contexts(bool allow_unregistered_contexts) {
     allow_unregistered_contexts_ = allow_unregistered_contexts;
   }
+  void DestroyBindingsSystem();
 
   // NativeExtensionBindingsSystem::Delegate implementation.
   ScriptContextSetIterable* GetScriptContextSet() override;
@@ -171,6 +173,7 @@ class NativeExtensionBindingsSystemUnittest
 
   StringSourceMap source_map_;
   TestExtensionsRendererClient renderer_client_;
+  CoreExtensionsRendererAPIProvider api_provider_;
 
   // True if we allow some v8::Contexts to avoid registration as a
   // ScriptContext.

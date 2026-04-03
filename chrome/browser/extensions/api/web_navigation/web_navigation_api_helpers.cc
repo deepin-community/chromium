@@ -15,6 +15,7 @@
 #include "base/values.h"
 #include "chrome/browser/extensions/api/web_navigation/web_navigation_api.h"
 #include "chrome/browser/extensions/api/web_navigation/web_navigation_api_constants.h"
+#include "chrome/browser/extensions/api/web_navigation/web_navigation_tab_observer.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/web_navigation.h"
@@ -106,13 +107,13 @@ void DispatchOnCommitted(events::HistogramValue histogram_value,
       navigation_handle->GetRenderFrameHost();
   ui::PageTransition transition_type = navigation_handle->GetPageTransition();
 
-  base::Value::List args;
-  base::Value::Dict dict;
+  base::ListValue args;
+  base::DictValue dict;
   dict.Set(web_navigation_api_constants::kTabIdKey,
            ExtensionTabUtil::GetTabId(web_contents));
   dict.Set(web_navigation_api_constants::kUrlKey, url.spec());
   dict.Set(web_navigation_api_constants::kProcessIdKey,
-           frame_host->GetProcess()->GetID());
+           frame_host->GetProcess()->GetDeprecatedID());
   dict.Set(web_navigation_api_constants::kFrameIdKey,
            ExtensionApiFrameIdMap::GetFrameId(frame_host));
   dict.Set(web_navigation_api_constants::kParentFrameIdKey,
@@ -145,7 +146,7 @@ void DispatchOnCommitted(events::HistogramValue histogram_value,
     transition_type_string = "start_page";
   dict.Set(web_navigation_api_constants::kTransitionTypeKey,
            transition_type_string);
-  base::Value::List qualifiers;
+  base::ListValue qualifiers;
   if (transition_type & ui::PAGE_TRANSITION_CLIENT_REDIRECT)
     qualifiers.Append("client_redirect");
   if (transition_type & ui::PAGE_TRANSITION_SERVER_REDIRECT)
@@ -174,7 +175,7 @@ void DispatchOnDOMContentLoaded(content::WebContents* web_contents,
   web_navigation::OnDOMContentLoaded::Details details;
   details.tab_id = ExtensionTabUtil::GetTabId(web_contents);
   details.url = url.spec();
-  details.process_id = frame_host->GetProcess()->GetID();
+  details.process_id = frame_host->GetProcess()->GetDeprecatedID();
   details.frame_id = ExtensionApiFrameIdMap::GetFrameId(frame_host);
   details.parent_frame_id =
       ExtensionApiFrameIdMap::GetParentFrameId(frame_host);
@@ -206,7 +207,7 @@ void DispatchOnCompleted(content::WebContents* web_contents,
   web_navigation::OnCompleted::Details details;
   details.tab_id = ExtensionTabUtil::GetTabId(web_contents);
   details.url = url.spec();
-  details.process_id = frame_host->GetProcess()->GetID();
+  details.process_id = frame_host->GetProcess()->GetDeprecatedID();
   details.frame_id = ExtensionApiFrameIdMap::GetFrameId(frame_host);
   details.parent_frame_id =
       ExtensionApiFrameIdMap::GetParentFrameId(frame_host);
@@ -276,7 +277,7 @@ void DispatchOnErrorOccurred(content::WebContents* web_contents,
   web_navigation::OnErrorOccurred::Details details;
   details.tab_id = ExtensionTabUtil::GetTabId(web_contents);
   details.url = url.spec();
-  details.process_id = frame_host->GetProcess()->GetID();
+  details.process_id = frame_host->GetProcess()->GetDeprecatedID();
   details.frame_id = ExtensionApiFrameIdMap::GetFrameId(frame_host);
   details.parent_frame_id =
       ExtensionApiFrameIdMap::GetParentFrameId(frame_host);

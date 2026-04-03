@@ -41,13 +41,16 @@ static const char* color_type_name(SkColorType colorType) {
         case kBGRA_1010102_SkColorType:       return "bgra1010102";
         case kBGR_101010x_SkColorType:        return "bgr101010x";
         case kBGR_101010x_XR_SkColorType:     return "bgr101010x_xr";
+        case kBGRA_10101010_XR_SkColorType:   return "bgra10101010_xr";
         case kRGBA_10x6_SkColorType:          return "10101010";
         case kGray_8_SkColorType:             return "G8";
         case kRGBA_F16Norm_SkColorType:       return "F16Norm";
+        case kRGB_F16F16F16x_SkColorType:     return "F16F16F16x";
         case kRGBA_F16_SkColorType:           return "F16";
         case kRGBA_F32_SkColorType:           return "F32";
         case kR8G8_unorm_SkColorType:         return "R8G8_unorm";
         case kA16_unorm_SkColorType:          return "A16_unorm";
+        case kR16_unorm_SkColorType:          return "R16_unorm";
         case kR16G16_unorm_SkColorType:       return "R16G16_unorm";
         case kA16_float_SkColorType:          return "A16_float";
         case kR16G16_float_SkColorType:       return "R16G16_float";

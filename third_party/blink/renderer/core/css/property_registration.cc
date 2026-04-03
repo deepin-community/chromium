@@ -5,7 +5,7 @@
 #include "third_party/blink/renderer/core/css/property_registration.h"
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_property_definition.h"
-#include "third_party/blink/renderer/core/animation/css_interpolation_types_map.h"
+#include "third_party/blink/renderer/core/animation/interpolation_types_map.h"
 #include "third_party/blink/renderer/core/css/css_identifier_value.h"
 #include "third_party/blink/renderer/core/css/css_string_value.h"
 #include "third_party/blink/renderer/core/css/css_style_sheet.h"
@@ -16,6 +16,7 @@
 #include "third_party/blink/renderer/core/css/css_value_list.h"
 #include "third_party/blink/renderer/core/css/css_variable_data.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
+#include "third_party/blink/renderer/core/css/parser/css_parser_local_context.h"
 #include "third_party/blink/renderer/core/css/parser/css_tokenizer.h"
 #include "third_party/blink/renderer/core/css/parser/css_variable_parser.h"
 #include "third_party/blink/renderer/core/css/property_registry.h"
@@ -49,10 +50,9 @@ PropertyRegistration::PropertyRegistration(const AtomicString& name,
       initial_(initial),
       property_rule_(property_rule),
       interpolation_types_(
-          CSSInterpolationTypesMap::CreateInterpolationTypesForCSSSyntax(
-              name,
-              syntax,
-              *this)),
+          InterpolationTypesMap::CreateInterpolationTypesForCSSSyntax(name,
+                                                                      syntax,
+                                                                      *this)),
       referenced_(false) {}
 
 PropertyRegistration::~PropertyRegistration() = default;
@@ -76,6 +76,7 @@ unsigned PropertyRegistration::GetViewportUnitFlags() const {
 void PropertyRegistration::Trace(Visitor* visitor) const {
   visitor->Trace(initial_);
   visitor->Trace(property_rule_);
+  visitor->Trace(interpolation_types_);
 }
 
 static bool ComputationallyIndependent(const CSSValue& value) {
@@ -130,24 +131,21 @@ std::optional<bool> PropertyRegistration::ConvertInherits(
 std::optional<const CSSValue*> PropertyRegistration::ConvertInitial(
     const CSSValue* initial_value,
     const CSSSyntaxDefinition& syntax,
-    const CSSParserContext& parser_context) {
+    const CSSParserContext& parser_context,
+    CSSParserLocalContext& local_context) {
   // https://drafts.css-houdini.org/css-properties-values-api-1/#initial-value-descriptor
   if (!initial_value) {
     return syntax.IsUniversal() ? std::make_optional(nullptr) : std::nullopt;
   }
-  scoped_refptr<CSSVariableData> initial_variable_data =
+  CSSVariableData* initial_variable_data =
       To<CSSUnparsedDeclarationValue>(*initial_value).VariableDataValue();
 
   // Parse initial value, if we have it.
   const CSSValue* initial = nullptr;
   if (initial_variable_data) {
     const bool is_animation_tainted = false;
-    CSSTokenizer tokenizer(initial_variable_data->OriginalText());
-    Vector<CSSParserToken, 32> tokens = tokenizer.TokenizeToEOF();
-    CSSParserTokenRange range(tokens);
-    initial = syntax.Parse(
-        CSSTokenizedValue{range, initial_variable_data->OriginalText()},
-        parser_context, is_animation_tainted);
+    initial = syntax.Parse(initial_variable_data->OriginalText(),
+                           parser_context, local_context, is_animation_tainted);
     if (!initial) {
       return {};
     }
@@ -179,8 +177,14 @@ PropertyRegistration* PropertyRegistration::MaybeCreateForDeclaredProperty(
   const CSSParserContext* parser_context =
       document.ElementSheet().Contents()->ParserContext();
 
-  std::optional<const CSSValue*> initial =
-      ConvertInitial(rule.GetInitialValue(), *syntax, *parser_context);
+  // Since random() might be element dependent, we should disallow random()
+  // values inside initial value of registered custom properties. Use
+  // CSSParserLocalContext with custom property name just to keep it consistent
+  // in case we need it in the future.
+  CSSParserLocalContext local_context =
+      CSSParserLocalContext(CSSPropertyName(name));
+  std::optional<const CSSValue*> initial = ConvertInitial(
+      rule.GetInitialValue(), *syntax, *parser_context, local_context);
   if (!initial.has_value()) {
     return nullptr;
   }
@@ -229,13 +233,14 @@ void PropertyRegistration::registerProperty(
 
   const CSSValue* initial = nullptr;
   if (property_definition->hasInitialValue()) {
-    CSSTokenizer tokenizer(property_definition->initialValue());
-    const auto tokens = tokenizer.TokenizeToEOF();
     bool is_animation_tainted = false;
-    initial = syntax_definition->Parse(
-        CSSTokenizedValue{CSSParserTokenRange(tokens),
-                          property_definition->initialValue()},
-        *parser_context, is_animation_tainted);
+    // This is called in JS `resolveValues` and we don't have a property context
+    // at that time.
+    CSSParserLocalContext local_context =
+        CSSParserLocalContext(CSSPropertyName(atomic_name));
+    initial = syntax_definition->Parse(property_definition->initialValue(),
+                                       *parser_context, local_context,
+                                       is_animation_tainted);
     if (!initial) {
       exception_state.ThrowDOMException(
           DOMExceptionCode::kSyntaxError,

@@ -8,9 +8,10 @@
 #include <optional>
 
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
+#include "components/page_load_metrics/browser/interaction_to_next_paint_calculator.h"
 #include "components/page_load_metrics/browser/observers/core/largest_contentful_paint_handler.h"
 #include "components/page_load_metrics/browser/resource_tracker.h"
-#include "components/page_load_metrics/browser/responsiveness_metrics_normalization.h"
 #include "components/page_load_metrics/common/page_end_reason.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "ui/base/scoped_visibility_tracker.h"
@@ -45,7 +46,7 @@ enum class PageVisibility {
 // be transmitted to kActivatedNoActivationStart, and kActivated.
 // Otherwise, it sticks on kNoPrerendering.
 //
-// TODO(crbug.com/1348097): Remove kActivatedNoActivationStart if possible.
+// TODO(crbug.com/40233224): Remove kActivatedNoActivationStart if possible.
 enum class PrerenderingState {
   // Not prerenedered
   kNoPrerendering,
@@ -121,6 +122,9 @@ class PageLoadMetricsObserverDelegate {
   // Page's visibility at activation.
   virtual PageVisibility GetVisibilityAtActivation() const = 0;
 
+  // True if the page load is a reload of a page that was discarded.
+  virtual bool IsReloadAfterDiscard() const = 0;
+
   // True if the page load was a prerender, that was later activated by a
   // navigation that started in the foreground.
   virtual bool WasPrerenderedThenActivatedInForeground() const = 0;
@@ -192,16 +196,14 @@ class PageLoadMetricsObserverDelegate {
       BfcacheStrategy bfcache_strategy) const = 0;
   virtual const NormalizedCLSData& GetSoftNavigationIntervalNormalizedCLSData()
       const = 0;
-  // Returns normalized responsiveness metrics data. Normalization explained in
+  // Returns Interaction to Next Paint (INP) data. Details in
   // https://web.dev/inp.
-  virtual const ResponsivenessMetricsNormalization&
-  GetResponsivenessMetricsNormalization() const = 0;
+  virtual const InteractionToNextPaintCalculator&
+  GetInteractionToNextPaintCalculator() const = 0;
 
-  virtual const ResponsivenessMetricsNormalization&
-  GetSoftNavigationIntervalResponsivenessMetricsNormalization() const = 0;
+  virtual const InteractionToNextPaintCalculator&
+  GetSoftNavigationIntervalInteractionToNextPaintCalculator() const = 0;
 
-  // InputTiming data accumulated across all frames.
-  virtual const mojom::InputTiming& GetPageInputTiming() const = 0;
   virtual const PageRenderData& GetMainFrameRenderData() const = 0;
   virtual const ui::ScopedVisibilityTracker& GetVisibilityTracker() const = 0;
   virtual const ResourceTracker& GetResourceTracker() const = 0;
@@ -223,11 +225,10 @@ class PageLoadMetricsObserverDelegate {
   // meaningfully modify the DOM, replacing the previous content with new one.
   virtual mojom::SoftNavigationMetrics& GetSoftNavigationMetrics() const = 0;
 
-  // UKM source ID for the current soft navigation.
-  virtual ukm::SourceId GetUkmSourceIdForSoftNavigation() const = 0;
-
-  // UKM source ID for the previous soft navigation.
-  virtual ukm::SourceId GetPreviousUkmSourceIdForSoftNavigation() const = 0;
+  // Maps main-frame same-document navigation identified
+  // by |same_document_metrics_token| to its UKM source id.
+  virtual ukm::SourceId GetUkmSourceIdForSameDocumentNavigation(
+      base::UnguessableToken same_document_metrics_token) const = 0;
 
   // UKM source ID for the current page load.
   // Note: For prerendered page loads, this returns ukm::kInvalidSourceId until
@@ -253,6 +254,11 @@ class PageLoadMetricsObserverDelegate {
   // be marked as a terminal visit unless it made another link navigation and
   // went back to the page with a back navigation from BFCache.
   virtual bool IsTerminalVisit() const = 0;
+
+  // Whether metrics should be observed for resources with the given scheme.
+  // Http(s) will be observed by default, but embedders can use this to enable
+  // metrics on non-web schemes.
+  virtual bool ShouldObserveScheme(std::string_view scheme) const = 0;
 };
 
 }  // namespace page_load_metrics

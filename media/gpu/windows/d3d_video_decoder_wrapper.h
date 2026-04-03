@@ -5,15 +5,12 @@
 #ifndef MEDIA_GPU_WINDOWS_D3D_VIDEO_DECODER_WRAPPER_H_
 #define MEDIA_GPU_WINDOWS_D3D_VIDEO_DECODER_WRAPPER_H_
 
-#include <Windows.h>
-
-#include <cstdint>
 #include <memory>
 #include <optional>
 #include <vector>
 
 #include "base/containers/span.h"
-#include "base/strings/string_piece.h"
+#include "base/memory/scoped_refptr.h"
 #include "media/gpu/windows/d3d11_status.h"
 #include "media/gpu/windows/scoped_d3d_buffers.h"
 
@@ -36,10 +33,15 @@ class D3DVideoDecoderWrapper {
 
   // Get whether single video decoder texture is recommended by the driver.
   // Returns whether this operation succeeds.
-  virtual absl::optional<bool> UseSingleTexture() const = 0;
+  virtual std::optional<bool> UseSingleTexture() const = 0;
 
   // Clear all internal states.
   virtual void Reset() = 0;
+
+  // Set the initialized picture buffers that the D3D11VideoDecoder class is
+  // using.
+  virtual D3D11Status SetPictureBuffers(
+      base::span<scoped_refptr<D3D11PictureBuffer>> picture_buffers) = 0;
 
   // Start a frame and wait for the hardware to be ready for decoding.
   virtual bool WaitForFrameBegins(D3D11PictureBuffer* output_picture) = 0;
@@ -80,14 +82,13 @@ class D3DVideoDecoderWrapper {
       base::span<const uint8_t> bitstream,
       base::span<const uint8_t> start_code = {});
 
+ private:
+  // Calls SubmitSlice() and GetBitstreamBuffer() to empty `bitstream_buffer_`.
+  bool SubmitAndGetBitstreamBuffer(size_t needed_size);
+
  protected:
   virtual std::unique_ptr<ScopedD3DBuffer> GetBuffer(BufferType type,
                                                      uint32_t desired_size) = 0;
-
-  void RecordFailure(base::StringPiece reason, D3D11Status::Codes code) const;
-  void RecordFailure(base::StringPiece reason,
-                     D3D11Status::Codes code,
-                     HRESULT hr) const;
 
   // Information that's accumulated during slices and submitted at the end
   std::vector<uint8_t> slice_info_bytes_;

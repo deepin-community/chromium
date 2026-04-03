@@ -24,10 +24,12 @@
 
 #if BUILDFLAG(IS_APPLE)
 #include "ui/gfx/mac/io_surface.h"
+#include "ui/gfx/mac/mtl_shared_event_fence.h"
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/scoped_hardware_buffer_fence_sync.h"
+#include "ui/gfx/android/surface_control_frame_rate.h"
 #endif
 
 namespace gfx {
@@ -102,15 +104,24 @@ class GL_EXPORT Presenter : public base::RefCounted<Presenter> {
       std::unique_ptr<gfx::GpuFence> gpu_fence,
       const gfx::OverlayPlaneData& overlay_plane_data);
 
+#if BUILDFLAG(IS_APPLE)
   // Schedule a CALayer to be shown at next Present(). Semantics is similar to
   // ScheduleOverlayPlane() above. All arguments correspond to their CALayer
   // properties.
-  virtual bool ScheduleCALayer(const ui::CARendererLayerParams& params);
+  virtual bool ScheduleCALayer(
+      const ui::CARendererLayerParams& params,
+      std::vector<gfx::MTLSharedEventFence> backpressure_fences);
+#endif
 
-  // Schedule a DCLayer to be shown at next Present(). Semantics is similar to
-  // ScheduleOverlayPlane() above. All arguments correspond to their DCLayer
-  // properties.
-  virtual bool ScheduleDCLayer(std::unique_ptr<DCLayerOverlayParams> params);
+#if BUILDFLAG(IS_WIN)
+  // Schedule a list of DCLayers to be shown at next Present(). Semantics is
+  // similar to calling ScheduleOverlayPlane() for every overlay in a frame. All
+  // arguments correspond to their DCLayer properties.
+  virtual void ScheduleDCLayers(std::vector<DCLayerOverlayParams> overlays);
+
+  // Destroy all visual tree resources and commit, returning true on success.
+  virtual bool DestroyDCLayerTree();
+#endif
 
   // Presents current frame asynchronously. `completion_callback` will be called
   // once all necessary steps were taken to display the frame.
@@ -120,13 +131,14 @@ class GL_EXPORT Presenter : public base::RefCounted<Presenter> {
                        PresentationCallback presentation_callback,
                        gfx::FrameData data) = 0;
 
-  // Sets result of delegated compositing. Value originates from overlay
-  // processors and is used by integration tests to ensure we don't fall out of
-  // delegated mode.
-  virtual void SetCALayerErrorCode(gfx::CALayerResult ca_layer_error_code) {}
+#if BUILDFLAG(IS_APPLE)
+  virtual void SetMaxPendingSwaps(int max_pending_swaps) {}
+#endif
 
+#if BUILDFLAG(IS_ANDROID)
   // Sets preferred frame rate
-  virtual void SetFrameRate(float frame_rate) {}
+  virtual void SetFrameRate(gfx::SurfaceControlFrameRate frame_rate) {}
+#endif
 
   // Android specific. Sets vsync_id of the corresponding Choreographer frame.
   virtual void SetChoreographerVsyncIdForNextFrame(
@@ -137,13 +149,13 @@ class GL_EXPORT Presenter : public base::RefCounted<Presenter> {
   virtual void PreserveChildSurfaceControls() {}
 
 #if BUILDFLAG(IS_WIN)
-  virtual bool SetDrawRectangle(const gfx::Rect& rect) = 0;
   virtual bool SupportsDelegatedInk() = 0;
   virtual void SetDelegatedInkTrailStartPoint(
       std::unique_ptr<gfx::DelegatedInkMetadata> metadata) {}
   virtual void InitDelegatedInkPointRendererReceiver(
       mojo::PendingReceiver<gfx::mojom::DelegatedInkPointRenderer>
           pending_receiver) {}
+  virtual HWND GetWindow() const = 0;
 #endif
 
   // Tells the presenter to rely on implicit sync when presenting buffers.

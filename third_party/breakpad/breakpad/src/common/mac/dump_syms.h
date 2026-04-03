@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <memory>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -118,7 +119,7 @@ class DumpSymbols {
     *count = object_files_.size();
     if (object_files_.size() > 0)
       return &object_files_[0];
-    return NULL;
+    return nullptr;
   }
 
   // Read the selected object file's debugging information, and write out the
@@ -146,7 +147,7 @@ class DumpSymbols {
       cpu_type_t cpu_type, cpu_subtype_t cpu_subtype);
 
   // Creates an empty module object.
-  bool CreateEmptyModule(scoped_ptr<Module>& module);
+  bool CreateEmptyModule(std::unique_ptr<Module>& module);
 
   // Process the split dwarf file referenced by reader.
   void StartProcessSplitDwarf(google_breakpad::CompilationUnit* reader,
@@ -208,7 +209,7 @@ class DumpSymbols {
   // messages.  This is usually object_filename_, but if that refers to a
   // fat binary, it includes an indication of the particular architecture
   // within that binary.
-  string selected_object_name_;
+  std::string selected_object_name_;
 
   // Whether symbols sharing an address should be collapsed into a single entry
   // and marked with an `m` in the output. 

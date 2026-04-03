@@ -58,6 +58,7 @@ class ASH_PUBLIC_EXPORT TestSystemTrayClient : public SystemTrayClient {
   void ShowNetworkConfigure(const std::string& network_id) override;
   void ShowNetworkCreate(const std::string& type) override;
   void ShowSettingsCellularSetup(bool show_psim_flow) override;
+  void ShowMobileDataSubpage() override;
   void ShowSettingsSimUnlock() override;
   void ShowApnSubpage(const std::string& network_id) override;
   void ShowThirdPartyVpnCreate(const std::string& extension_id) override;
@@ -79,11 +80,15 @@ class ASH_PUBLIC_EXPORT TestSystemTrayClient : public SystemTrayClient {
   void ShowAudioSettings() override;
   bool IsUserFeedbackEnabled() override;
   void ShowEolInfoPage() override;
-  void RecordEolNoticeShown() override;
   void ShowGraphicsTabletSettings() override;
   void ShowMouseSettings() override;
   void ShowTouchpadSettings() override;
   void ShowRemapKeysSubpage(int device_id) override;
+  void ShowYouTubeMusicPremiumPage() override;
+  void ShowChromebookPerksYouTubePage() override;
+  void ShowKeyboardSettings() override;
+  void ShowPointingStickSettings() override;
+  void ShowNearbyShareSettings() override;
 
   int show_account_settings_count() const {
     return show_account_settings_count_;
@@ -111,6 +116,8 @@ class ASH_PUBLIC_EXPORT TestSystemTrayClient : public SystemTrayClient {
     return show_connected_devices_settings_count_;
   }
 
+  int show_about_chromeos_count() const { return show_about_chromeos_count_; }
+
   int show_os_settings_privacy_and_security_count() const {
     return show_os_settings_privacy_and_security_count_;
   }
@@ -136,6 +143,10 @@ class ASH_PUBLIC_EXPORT TestSystemTrayClient : public SystemTrayClient {
   }
 
   int show_apn_subpage_count() const { return show_apn_subpage_count_; }
+
+  int show_mobile_data_subpage_count() const {
+    return show_mobile_data_subpage_count_;
+  }
 
   const std::string& last_apn_subpage_network_id() const {
     return last_apn_subpage_network_id_;
@@ -213,6 +224,26 @@ class ASH_PUBLIC_EXPORT TestSystemTrayClient : public SystemTrayClient {
     return show_remap_keys_subpage_count_;
   }
 
+  int show_youtube_music_premium_page_count() const {
+    return show_youtube_music_premium_page_count_;
+  }
+
+  int show_chromebook_perks_youtube_page_count() const {
+    return show_chromebook_perks_youtube_page_count_;
+  }
+
+  int show_keyboard_settings_count() const {
+    return show_keyboard_settings_count_;
+  }
+
+  int show_pointing_stick_settings_count() const {
+    return show_pointing_stick_settings_count_;
+  }
+
+  int show_nearby_share_settings_count() const {
+    return show_nearby_share_settings_count_;
+  }
+
  private:
   int show_account_settings_count_ = 0;
   int show_network_settings_count_ = 0;
@@ -221,6 +252,7 @@ class ASH_PUBLIC_EXPORT TestSystemTrayClient : public SystemTrayClient {
   int show_hotspot_subpage_count_ = 0;
   int show_multi_device_setup_count_ = 0;
   int show_connected_devices_settings_count_ = 0;
+  int show_about_chromeos_count_ = 0;
   int show_os_settings_privacy_and_security_count_ = 0;
   int show_os_settings_privacy_hub_count_ = 0;
   int show_speak_on_mute_detection_count_ = 0;
@@ -228,6 +260,7 @@ class ASH_PUBLIC_EXPORT TestSystemTrayClient : public SystemTrayClient {
   int show_wifi_sync_settings_count_ = 0;
   int show_sim_unlock_settings_count_ = 0;
   int show_apn_subpage_count_ = 0;
+  int show_mobile_data_subpage_count_ = 0;
   int show_third_party_vpn_create_count_ = 0;
   std::string last_third_party_vpn_extension_id_;
   int show_arc_vpn_create_count_ = 0;
@@ -251,6 +284,11 @@ class ASH_PUBLIC_EXPORT TestSystemTrayClient : public SystemTrayClient {
   int show_mouse_settings_count_ = 0;
   int show_touchpad_settings_count_ = 0;
   int show_remap_keys_subpage_count_ = 0;
+  int show_youtube_music_premium_page_count_ = 0;
+  int show_chromebook_perks_youtube_page_count_ = 0;
+  int show_keyboard_settings_count_ = 0;
+  int show_pointing_stick_settings_count_ = 0;
+  int show_nearby_share_settings_count_ = 0;
 };
 
 }  // namespace ash

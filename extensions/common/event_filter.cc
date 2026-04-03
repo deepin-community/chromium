@@ -11,7 +11,7 @@
 #include "base/notreached.h"
 #include "components/url_matcher/url_matcher_factory.h"
 #include "extensions/common/mojom/event_dispatcher.mojom.h"
-#include "ipc/ipc_message.h"
+#include "ipc/constants.mojom.h"
 
 using url_matcher::URLMatcher;
 using url_matcher::URLMatcherConditionSet;
@@ -81,7 +81,7 @@ EventMatcher* EventFilter::GetEventMatcher(MatcherID id) {
 
 const std::string& EventFilter::GetEventName(MatcherID id) const {
   auto it = id_to_event_name_.find(id);
-  DCHECK(it != id_to_event_name_.end());
+  CHECK(it != id_to_event_name_.end());
   return it->second;
 }
 
@@ -92,11 +92,11 @@ bool EventFilter::CreateConditionSets(
   if (url_filter_count == 0) {
     // If there are no URL filters then we want to match all events, so create a
     // URLFilter from an empty dictionary.
-    base::Value::Dict empty_dict;
+    base::DictValue empty_dict;
     return AddDictionaryAsConditionSet(empty_dict, condition_sets);
   }
   for (int i = 0; i < url_filter_count; i++) {
-    const base::Value::Dict* url_filter = matcher->GetURLFilter(i);
+    const base::DictValue* url_filter = matcher->GetURLFilter(i);
     if (!url_filter)
       return false;
     if (!AddDictionaryAsConditionSet(*url_filter, condition_sets))
@@ -106,7 +106,7 @@ bool EventFilter::CreateConditionSets(
 }
 
 bool EventFilter::AddDictionaryAsConditionSet(
-    const base::Value::Dict& url_filter,
+    const base::DictValue& url_filter,
     URLMatcherConditionSet::Vector* condition_sets) {
   std::string error;
   base::MatcherStringPattern::ID condition_set_id = next_condition_set_id_++;
@@ -126,6 +126,10 @@ bool EventFilter::AddDictionaryAsConditionSet(
 
 std::string EventFilter::RemoveEventMatcher(MatcherID id) {
   auto it = id_to_event_name_.find(id);
+  if (it == id_to_event_name_.end()) {
+    return "";
+  }
+
   std::string event_name = it->second;
   // EventMatcherEntry's destructor causes the condition set ids to be removed
   // from url_matcher_.
@@ -152,7 +156,6 @@ std::set<EventFilter::MatcherID> EventFilter::MatchEvent(
     auto matcher_id = condition_set_id_to_event_matcher_id_.find(id_key);
     if (matcher_id == condition_set_id_to_event_matcher_id_.end()) {
       NOTREACHED() << "id not found in condition set map (" << id_key << ")";
-      continue;
     }
     MatcherID id = matcher_id->second;
     auto matcher_entry = matcher_map.find(id);
@@ -163,7 +166,7 @@ std::set<EventFilter::MatcherID> EventFilter::MatchEvent(
     const EventMatcher* event_matcher = matcher_entry->second->event_matcher();
     // The context that installed the event listener should be the same context
     // as the one where the event listener is called.
-    if (routing_id != MSG_ROUTING_NONE &&
+    if (routing_id != IPC::mojom::kRoutingIdNone &&
         event_matcher->routing_id() != routing_id) {
       continue;
     }

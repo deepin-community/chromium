@@ -27,6 +27,8 @@ limitations under the License.
 #include "grpcpp/security/credentials.h"
 #include "grpcpp/server_builder.h"
 #include "absl/strings/numbers.h"
+#include "xla/tsl/distributed_runtime/coordination/coordination_service.h"
+#include "xla/tsl/distributed_runtime/rpc/async_service_interface.h"
 #include "tensorflow/core/common_runtime/device_factory.h"
 #include "tensorflow/core/common_runtime/device_mgr.h"
 #include "tensorflow/core/common_runtime/process_util.h"
@@ -61,7 +63,6 @@ limitations under the License.
 #include "tensorflow/core/profiler/rpc/profiler_service_impl.h"
 #include "tensorflow/core/public/session_options.h"
 #include "tensorflow/core/util/env_var.h"
-#include "tsl/distributed_runtime/rpc/async_service_interface.h"
 
 namespace tensorflow {
 
@@ -136,8 +137,9 @@ GrpcServer::~GrpcServer() {
 }
 
 // Look up the requested host name and port for this task in `server_def`.
-Status GrpcServer::GetHostAndPort(const ServerDef& server_def,
-                                  string* host_name, int* port) const {
+absl::Status GrpcServer::GetHostAndPort(const ServerDef& server_def,
+                                        std::string* host_name,
+                                        int* port) const {
   *port = -1;
   *host_name = "localhost";
   for (const auto& job : server_def.cluster().job()) {
@@ -159,14 +161,13 @@ Status GrpcServer::GetHostAndPort(const ServerDef& server_def,
               server_def.DebugString());
         }
         auto colon_index = iter->second.find_last_of(':');
-        if (!strings::safe_strto32(iter->second.substr(colon_index + 1),
-                                   port)) {
+        if (!absl::SimpleAtoi(iter->second.substr(colon_index + 1), port)) {
           return errors::InvalidArgument(
               "Could not parse port for local server from \"", iter->second,
               "\".");
         }
 
-        if (colon_index != string::npos &&
+        if (colon_index != std::string::npos &&
             !iter->second.substr(0, colon_index).empty()) {
           *host_name = iter->second.substr(0, colon_index);
         }
@@ -182,7 +183,7 @@ Status GrpcServer::GetHostAndPort(const ServerDef& server_def,
   return absl::OkStatus();
 }
 
-Status GrpcServer::Init(const GrpcServerOptions& opts) {
+absl::Status GrpcServer::Init(const GrpcServerOptions& opts) {
   mutex_lock l(mu_);
   CHECK_EQ(state_, NEW);
   master_env_.env = env_;
@@ -198,11 +199,18 @@ Status GrpcServer::Init(const GrpcServerOptions& opts) {
   VLOG(3) << "Grpc Server Init Definition: " << server_def_.DebugString();
   ConfigProto config = server_def_.default_session_config();
   sess_opts.config = config;
+  // Allow creation of PjRt client that knows about remote devices so
+  // collectives will work with MultiWorkerMirroredStrategy.
+  sess_opts.config.mutable_gpu_options()
+      ->mutable_experimental()
+      ->set_populate_pjrt_gpu_client_creation_info(true);
+  sess_opts.config.mutable_gpu_options()->mutable_experimental()->set_node_id(
+      server_def_.task_index());
 
   // Configure shared devices between master and worker.
-  string name_prefix = strings::StrCat("/job:", server_def_.job_name(),
-                                       "/replica:", server_def_.replica(),
-                                       "/task:", server_def_.task_index());
+  std::string name_prefix = strings::StrCat("/job:", server_def_.job_name(),
+                                            "/replica:", server_def_.replica(),
+                                            "/task:", server_def_.task_index());
   if (opts.local_device_mgr == nullptr) {
     std::vector<std::unique_ptr<Device>> devices;
     TF_RETURN_IF_ERROR(
@@ -225,8 +233,8 @@ Status GrpcServer::Init(const GrpcServerOptions& opts) {
   worker_env_.rendezvous_mgr = opts.rendezvous_mgr_func == nullptr
                                    ? new RpcRendezvousMgr(&worker_env_)
                                    : opts.rendezvous_mgr_func(&worker_env_);
-  string unused;
-  string default_worker_name;
+  std::string unused;
+  std::string default_worker_name;
   if (!DeviceNameUtils::SplitDeviceName(master_env_.local_devices[0]->name(),
                                         &default_worker_name, &unused)) {
     return errors::Internal("Could not parse worker name.");
@@ -247,12 +255,12 @@ Status GrpcServer::Init(const GrpcServerOptions& opts) {
   // the identities of tasks in the worker pool after the service is
   // running.
   ::grpc::ServerBuilder builder;
-  builder.AddListeningPort(strings::StrCat("0.0.0.0:", requested_port),
+  builder.AddListeningPort(absl::StrCat("0.0.0.0:", requested_port),
                            GetServerCredentials(server_def_), &bound_port_);
-  builder.SetMaxMessageSize(std::numeric_limits<int32>::max());
+  builder.SetMaxMessageSize(std::numeric_limits<int32_t>::max());
 
   bool reuse_port = false;
-  const Status status =
+  const absl::Status status =
       ReadBoolFromEnvVar("TF_GRPC_REUSE_PORT", false, &reuse_port);
   if (!status.ok()) {
     LOG(ERROR) << status.message();
@@ -273,11 +281,13 @@ Status GrpcServer::Init(const GrpcServerOptions& opts) {
                                          opts.worker_service_options)
                         .release();
   eager_service_ = new eager::GrpcEagerServiceImpl(&worker_env_, &builder);
-  thread::ThreadPool* compute_pool = ComputePool(sess_opts);
-  coordination_service_ =
-      new GrpcCoordinationServiceImpl(compute_pool, &builder);
+  coordination_compute_pool_ = std::make_unique<tsl::thread::ThreadPool>(
+      env_, "CoordinationServiceRpcHandler",
+      /*num_threads=*/4);
+  coordination_service_ = new GrpcCoordinationServiceImpl(
+      coordination_compute_pool_.get(), &builder);
 
-  profiler_service_ = profiler::CreateProfilerService();
+  profiler_service_ = tsl::profiler::CreateProfilerService();
   builder.RegisterService(profiler_service_.get());
 
   // Add any extra services to be started.
@@ -325,7 +335,7 @@ Status GrpcServer::Init(const GrpcServerOptions& opts) {
         return WorkerCacheFactory(options, worker_cache);
       },
       grpc_coordination_service->GetRpcHandler());
-  worker_env_.compute_pool = compute_pool;
+  worker_env_.compute_pool = ComputePool(sess_opts);
 
   // Finish setting up master environment.
   master_env_.ops = OpRegistry::Global();
@@ -339,7 +349,7 @@ Status GrpcServer::Init(const GrpcServerOptions& opts) {
           std::unique_ptr<std::vector<std::unique_ptr<Device>>> remote_devs,
           std::unique_ptr<WorkerCacheInterface> worker_cache,
           std::unique_ptr<DeviceSet> device_set,
-          std::vector<string> filtered_worker_list) {
+          std::vector<std::string> filtered_worker_list) {
         options.config.MergeFrom(config);
         return new MasterSession(options, env, std::move(remote_devs),
                                  std::move(worker_cache), std::move(device_set),
@@ -359,10 +369,10 @@ Status GrpcServer::Init(const GrpcServerOptions& opts) {
   return absl::OkStatus();
 }
 
-Status GrpcServer::ParseChannelSpec(const WorkerCacheFactoryOptions& options,
-                                    GrpcChannelSpec* channel_spec) {
+absl::Status GrpcServer::ParseChannelSpec(
+    const WorkerCacheFactoryOptions& options, GrpcChannelSpec* channel_spec) {
   for (const auto& job : options.cluster_def.job()) {
-    std::map<int, string> host_ports;
+    std::map<int, std::string> host_ports;
     for (const auto& task : job.tasks()) {
       std::vector<std::string> parts = absl::StrSplit(task.second, ':');
       int port = -1;
@@ -376,7 +386,7 @@ Status GrpcServer::ParseChannelSpec(const WorkerCacheFactoryOptions& options,
       // the worker port. We swap in the bound worker port when we see this
       // pattern.
       if (job.name() == options.job_name && task.first == options.task_index) {
-        host_ports[task.first] = strings::StrCat(host_name_, ":", bound_port_);
+        host_ports[task.first] = absl::StrCat(host_name_, ":", bound_port_);
       } else {
         host_ports[task.first] = task.second;
       }
@@ -386,10 +396,11 @@ Status GrpcServer::ParseChannelSpec(const WorkerCacheFactoryOptions& options,
   return absl::OkStatus();
 }
 
-Status GrpcServer::WorkerCacheFactory(const WorkerCacheFactoryOptions& options,
-                                      WorkerCacheInterface** worker_cache) {
+absl::Status GrpcServer::WorkerCacheFactory(
+    const WorkerCacheFactoryOptions& options,
+    WorkerCacheInterface** worker_cache) {
   if (options.job_name.empty()) {
-    Status s = errors::InvalidArgument(
+    absl::Status s = errors::InvalidArgument(
         "The master (current machine) is not included in the provided "
         "cluster_def. ",
         options.cluster_def.DebugString());
@@ -403,16 +414,15 @@ Status GrpcServer::WorkerCacheFactory(const WorkerCacheFactoryOptions& options,
   std::shared_ptr<GrpcChannelCache> channel_cache(NewGrpcChannelCache(
       channel_spec, GetChannelCreationFunction(), options.rpc_options));
 
-  string name_prefix = strings::StrCat("/job:", options.job_name,
-                                       "/replica:", options.replica_index,
-                                       "/task:", options.task_index);
+  std::string name_prefix = strings::StrCat("/job:", options.job_name,
+                                            "/replica:", options.replica_index,
+                                            "/task:", options.task_index);
 
-  const string host_port = channel_cache->TranslateTask(name_prefix);
+  const std::string host_port = channel_cache->TranslateTask(name_prefix);
   int requested_port;
 
   auto colon_index = host_port.find_last_of(':');
-  if (!strings::safe_strto32(host_port.substr(colon_index + 1),
-                             &requested_port)) {
+  if (!absl::SimpleAtoi(host_port.substr(colon_index + 1), &requested_port)) {
     return errors::Internal("Could not parse port for local server from \"",
                             host_port, "\".");
   }
@@ -425,7 +435,7 @@ Status GrpcServer::WorkerCacheFactory(const WorkerCacheFactoryOptions& options,
   return absl::OkStatus();
 }
 
-Status GrpcServer::Start() {
+absl::Status GrpcServer::Start() {
   mutex_lock l(mu_);
   switch (state_) {
     case NEW: {
@@ -467,14 +477,14 @@ Status GrpcServer::Start() {
   }
 }
 
-Status GrpcServer::AddMasterEagerContextToEagerService(
-    const tensorflow::uint64 context_id, tensorflow::EagerContext* context) {
+absl::Status GrpcServer::AddMasterEagerContextToEagerService(
+    const uint64_t context_id, tensorflow::EagerContext* context) {
   auto* eager_service =
       static_cast<eager::GrpcEagerServiceImpl*>(eager_service_);
   return eager_service->CreateMasterContext(context_id, context);
 }
 
-Status GrpcServer::UpdateServerDef(const ServerDef& server_def) {
+absl::Status GrpcServer::UpdateServerDef(const ServerDef& server_def) {
   mutex_lock l(mu_);
   server_def_ = server_def;
   WorkerCacheInterface* worker_cache;
@@ -488,8 +498,8 @@ Status GrpcServer::UpdateServerDef(const ServerDef& server_def) {
   // Transfer ownership of worker_cache to worker_env_.session_mgr.
   worker_env_.session_mgr->ResetDefaultWorkerCache(worker_cache);
 
-  string default_worker_name;
-  string unused;
+  std::string default_worker_name;
+  std::string unused;
   if (!DeviceNameUtils::SplitDeviceName(master_env_.local_devices[0]->name(),
                                         &default_worker_name, &unused)) {
     return errors::Internal("Could not parse worker name.");
@@ -507,7 +517,7 @@ Status GrpcServer::UpdateServerDef(const ServerDef& server_def) {
 
 // TODO(haoyuzhang): Remove this method once we have a mechanism to directly set
 // field inside the RPC coordination service handler.
-Status GrpcServer::SetCoordinationServiceAgentInstance(
+absl::Status GrpcServer::SetCoordinationServiceAgentInstance(
     tsl::CoordinationServiceAgent* agent) {
   auto* coord_service =
       static_cast<GrpcCoordinationServiceImpl*>(coordination_service_);
@@ -515,15 +525,15 @@ Status GrpcServer::SetCoordinationServiceAgentInstance(
   return absl::OkStatus();
 }
 
-Status GrpcServer::SetCoordinationServiceInstance(
-    tsl::CoordinationServiceInterface* service) {
+absl::Status GrpcServer::SetCoordinationServiceInstance(
+    tsl::CoordinationService* service) {
   auto* coord_service =
       static_cast<GrpcCoordinationServiceImpl*>(coordination_service_);
   coord_service->SetCoordinationServiceInstance(service);
   return absl::OkStatus();
 }
 
-Status GrpcServer::StopCoordinationService() {
+absl::Status GrpcServer::StopCoordinationService() {
   // Note: the sequence of events is important here.
   // 1. Agent must be torn down before the service as it needs to notify the
   // service.
@@ -537,7 +547,7 @@ Status GrpcServer::StopCoordinationService() {
   return absl::OkStatus();
 }
 
-Status GrpcServer::Stop() {
+absl::Status GrpcServer::Stop() {
   mutex_lock l(mu_);
   switch (state_) {
     case NEW:
@@ -554,7 +564,7 @@ Status GrpcServer::Stop() {
   }
 }
 
-Status GrpcServer::Join() {
+absl::Status GrpcServer::Join() {
   mutex_lock l(mu_);
   switch (state_) {
     case NEW:
@@ -575,8 +585,8 @@ Status GrpcServer::Join() {
   }
 }
 
-const string GrpcServer::target() const {
-  return strings::StrCat("grpc://", host_name_, ":", bound_port_);
+const std::string GrpcServer::target() const {
+  return absl::StrCat("grpc://", host_name_, ":", bound_port_);
 }
 
 std::shared_ptr<::grpc::ServerCredentials> GrpcServer::GetServerCredentials(
@@ -595,15 +605,15 @@ std::unique_ptr<Master> GrpcServer::CreateMaster(MasterEnv* master_env) {
 }
 
 /* static */
-Status GrpcServer::Create(const ServerDef& server_def, Env* env,
-                          DeviceMgr* local_device_mgr,
-                          std::unique_ptr<ServerInterface>* out_server) {
+absl::Status GrpcServer::Create(const ServerDef& server_def, Env* env,
+                                DeviceMgr* local_device_mgr,
+                                std::unique_ptr<ServerInterface>* out_server) {
   std::unique_ptr<GrpcServer> ret(
       new GrpcServer(server_def, env == nullptr ? Env::Default() : env));
   GrpcServerOptions options;
   options.rendezvous_mgr_func = NewRpcRendezvousMgr;
   options.local_device_mgr = local_device_mgr;
-  Status s = ret->Init(options);
+  absl::Status s = ret->Init(options);
   if (!s.ok()) {
     LOG(ERROR) << s;
     return s;
@@ -613,16 +623,16 @@ Status GrpcServer::Create(const ServerDef& server_def, Env* env,
 }
 
 /* static */
-Status GrpcServer::Create(const ServerDef& server_def, Env* env,
-                          std::unique_ptr<ServerInterface>* out_server) {
+absl::Status GrpcServer::Create(const ServerDef& server_def, Env* env,
+                                std::unique_ptr<ServerInterface>* out_server) {
   return Create(server_def, env, nullptr, out_server);
 }
 
 /* static */
-Status GrpcServer::Create(const ServerDef& server_def, Env* env,
-                          std::unique_ptr<GrpcServer>* out_server) {
+absl::Status GrpcServer::Create(const ServerDef& server_def, Env* env,
+                                std::unique_ptr<GrpcServer>* out_server) {
   std::unique_ptr<ServerInterface> server;
-  Status s = Create(server_def, env, nullptr, &server);
+  absl::Status s = Create(server_def, env, nullptr, &server);
   if (!s.ok()) {
     return s;
   }
@@ -638,8 +648,9 @@ class GrpcServerFactory : public ServerFactory {
     return server_def.protocol() == "grpc";
   }
 
-  Status NewServer(const ServerDef& server_def, const Options& options,
-                   std::unique_ptr<ServerInterface>* out_server) override {
+  absl::Status NewServer(
+      const ServerDef& server_def, const Options& options,
+      std::unique_ptr<ServerInterface>* out_server) override {
     return GrpcServer::Create(server_def, Env::Default(),
                               options.local_device_mgr, out_server);
   }

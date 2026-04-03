@@ -7,14 +7,15 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "base/byte_count.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -39,6 +40,7 @@
 #include "net/base/mime_sniffer.h"
 #include "net/base/mime_util.h"
 #include "net/http/http_byte_range.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/self_deleting_url_loader_factory.h"
@@ -66,7 +68,7 @@ namespace {
 
 struct FactoryParams {
   int render_process_host_id;
-  int frame_tree_node_id;
+  FrameTreeNodeId frame_tree_node_id;
   scoped_refptr<FileSystemContext> file_system_context;
   std::string storage_domain;
   blink::StorageKey storage_key;
@@ -95,10 +97,7 @@ scoped_refptr<net::HttpResponseHeaders> CreateHttpResponseHeaders(
 
 bool GetMimeType(const FileSystemURL& url, std::string* mime_type) {
   DCHECK(url.is_valid());
-  base::FilePath::StringType extension = url.path().Extension();
-  if (!extension.empty())
-    extension = extension.substr(1);
-  return net::GetWellKnownMimeTypeFromExtension(extension, mime_type);
+  return net::GetWellKnownMimeTypeFromFile(url.path(), mime_type);
 }
 
 // Common implementation shared between the file and directory URLLoaders.
@@ -118,8 +117,6 @@ class FileSystemEntryURLLoader : public network::mojom::URLLoader {
       const std::optional<GURL>& new_url) override {}
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override {}
-  void PauseReadingBodyFromNet() override {}
-  void ResumeReadingBodyFromNet() override {}
 
  protected:
   virtual void FileSystemIsMounted() = 0;
@@ -129,17 +126,27 @@ class FileSystemEntryURLLoader : public network::mojom::URLLoader {
              mojo::PendingReceiver<network::mojom::URLLoader> loader,
              mojo::PendingRemote<network::mojom::URLLoaderClient> client_remote,
              scoped_refptr<base::SequencedTaskRunner> io_task_runner) {
+    CHECK_CURRENTLY_ON(BrowserThread::UI);
+
     net::Error net_error = net::OK;
     if (!request.url.is_valid()) {
       net_error = net::ERR_INVALID_URL;
     }
 
+    // If the process ID is invalid, the request is not from a renderer process.
+    //
+    // If the process ID is valid but no longer refers to a live process, block
+    // the request because there is no process to receive the response. This is
+    // necessary to avoid "no security state" failures when querying
+    // ChildProcessSecurityPolicy.
+    //
     // If the requested URL is not committable in the current process, block the
     // request.  This prevents one origin from fetching filesystem: resources
     // belonging to another origin, see https://crbug.com/964245.
     if (params_.render_process_host_id != ChildProcessHost::kInvalidUniqueID &&
-        !ChildProcessSecurityPolicyImpl::GetInstance()->CanCommitURL(
-            params_.render_process_host_id, request.url)) {
+        (!RenderProcessHost::FromID(params_.render_process_host_id) ||
+         !ChildProcessSecurityPolicyImpl::GetInstance()->CanCommitURL(
+             params_.render_process_host_id, request.url))) {
       DVLOG(1) << "Denied unauthorized request for "
                << request.url.possibly_invalid_spec();
       net_error = net::ERR_INVALID_URL;
@@ -207,11 +214,11 @@ class FileSystemEntryURLLoader : public network::mojom::URLLoader {
       return;
     }
 
-    std::string range_header;
-    if (request.headers.GetHeader(net::HttpRequestHeaders::kRange,
-                                  &range_header)) {
+    if (std::optional<std::string> range_header =
+            request.headers.GetHeader(net::HttpRequestHeaders::kRange);
+        range_header) {
       std::vector<net::HttpByteRange> ranges;
-      if (net::HttpUtil::ParseRangeHeader(range_header, &ranges)) {
+      if (net::HttpUtil::ParseRangeHeader(*range_header, &ranges)) {
         if (ranges.size() == 1) {
           byte_range_ = ranges[0];
         } else {
@@ -227,8 +234,8 @@ class FileSystemEntryURLLoader : public network::mojom::URLLoader {
         params_.file_system_context->CrackURL(request.url, params_.storage_key);
     if (!url_.is_valid()) {
       const storage::FileSystemRequestInfo request_info = {
-          request.url, params_.storage_domain, params_.frame_tree_node_id,
-          params_.storage_key};
+          request.url, params_.storage_domain,
+          params_.frame_tree_node_id.value(), params_.storage_key};
       params_.file_system_context->AttemptAutoMountForURLRequest(
           request_info,
           base::BindOnce(&FileSystemEntryURLLoader::DidAttemptAutoMount,
@@ -343,8 +350,7 @@ class FileSystemDirectoryURLLoader final : public FileSystemEntryURLLoader {
     const DirectoryEntry& entry = entries_[index];
     const FileSystemURL entry_url =
         params_.file_system_context->CreateCrackedFileSystemURL(
-            url_.storage_key(), url_.type(),
-            url_.path().Append(base::FilePath(entry.name)));
+            url_.storage_key(), url_.type(), url_.path().Append(entry.name));
     DCHECK(entry_url.is_valid());
     params_.file_system_context->operation_runner()->GetMetadata(
         entry_url,
@@ -363,11 +369,11 @@ class FileSystemDirectoryURLLoader final : public FileSystemEntryURLLoader {
     }
 
     const DirectoryEntry& entry = entries_[index];
-    const std::u16string& name = base::FilePath(entry.name).LossyDisplayName();
+    const std::u16string& name = entry.name.path().LossyDisplayName();
     data_.append(net::GetDirectoryListingEntry(
         name, std::string(),
-        entry.type == filesystem::mojom::FsFileType::DIRECTORY, file_info.size,
-        file_info.last_modified));
+        entry.type == filesystem::mojom::FsFileType::DIRECTORY,
+        base::ByteCount(file_info.size), file_info.last_modified));
 
     if (index < entries_.size() - 1)
       GetMetadata(index + 1);
@@ -405,8 +411,8 @@ class FileSystemDirectoryURLLoader final : public FileSystemEntryURLLoader {
 
     data_producer_->Write(
         std::make_unique<mojo::StringDataSource>(
-            base::StringPiece(data_), mojo::StringDataSource::AsyncWritingMode::
-                                          STRING_STAYS_VALID_UNTIL_COMPLETION),
+            std::string_view(data_), mojo::StringDataSource::AsyncWritingMode::
+                                         STRING_STAYS_VALID_UNTIL_COMPLETION),
         base::BindOnce(&FileSystemDirectoryURLLoader::OnDirectoryWritten,
                        base::Unretained(this)));
   }
@@ -494,7 +500,7 @@ class FileSystemFileURLLoader final : public FileSystemEntryURLLoader {
     if (file_info.is_directory) {
       // Redirect to the directory URLLoader.
       GURL::Replacements replacements;
-      std::string new_path = original_request_.url.path();
+      std::string new_path = original_request_.url.GetPath();
       new_path.push_back('/');
       replacements.SetPathStr(new_path);
       const GURL directory_url =
@@ -591,7 +597,7 @@ class FileSystemFileURLLoader final : public FileSystemEntryURLLoader {
         // Only sniff for mime-type in the first block of the file.
         std::string type_hint;
         GetMimeType(url_, &type_hint);
-        SniffMimeType(base::StringPiece(file_data_->data(), result),
+        SniffMimeType(std::string_view(file_data_->data(), result),
                       url_.ToGURL(), type_hint,
                       net::ForceSniffFileUrlsForHtml::kDisabled,
                       &head_->mime_type);
@@ -610,7 +616,7 @@ class FileSystemFileURLLoader final : public FileSystemEntryURLLoader {
   void WriteFileData(int bytes_read) {
     data_producer_->Write(
         std::make_unique<mojo::StringDataSource>(
-            base::StringPiece(file_data_->data(), bytes_read),
+            std::string_view(file_data_->data(), bytes_read),
             mojo::StringDataSource::AsyncWritingMode::
                 STRING_STAYS_VALID_UNTIL_COMPLETION),
         base::BindOnce(&FileSystemFileURLLoader::OnFileDataWritten,
@@ -675,7 +681,7 @@ class FileSystemURLLoaderFactory
       override {
     DVLOG(1) << "CreateLoaderAndStart: " << request.url;
 
-    const std::string path = request.url.path();
+    const std::string path = request.url.GetPath();
 
     // If the path ends with a /, we know it's a directory. If the path refers
     // to a directory and gets dispatched to FileSystemFileURLLoader, that class
@@ -701,10 +707,12 @@ class FileSystemURLLoaderFactory
 mojo::PendingRemote<network::mojom::URLLoaderFactory>
 CreateFileSystemURLLoaderFactory(
     int render_process_host_id,
-    int frame_tree_node_id,
+    FrameTreeNodeId frame_tree_node_id,
     scoped_refptr<FileSystemContext> file_system_context,
     const std::string& storage_domain,
     const blink::StorageKey& storage_key) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI);
+
   mojo::PendingRemote<network::mojom::URLLoaderFactory> pending_remote;
   FactoryParams params = {render_process_host_id, frame_tree_node_id,
                           file_system_context, storage_domain, storage_key};

@@ -3,16 +3,15 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/lifetime/application_lifetime_chromeos.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 
 #include "ash/constants/ash_pref_names.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
-#include "chrome/browser/ash/boot_times_recorder.h"
+#include "chrome/browser/ash/boot_times_recorder/boot_times_recorder.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/lifetime/application_lifetime_chromeos.h"
 #include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/profiles/profile.h"
@@ -21,6 +20,7 @@
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/dbus/update_engine/update_engine_client.h"
 #include "chromeos/ash/components/login/session/session_termination_manager.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/dbus/power/power_policy_controller.h"
 #include "components/language/core/browser/pref_names.h"
@@ -45,9 +45,6 @@ chromeos::PowerManagerClient* GetPowerManagerClient() {
   DCHECK(power_manager_client);
   return power_manager_client;
 }
-
-// Whether Chrome should send stop request to a session manager.
-bool g_send_stop_request_to_session_manager = false;
 
 void ReportSessionUMAMetrics() {
   // GetProfileByUser() will crash in tests if profile_manager() from
@@ -113,7 +110,7 @@ void AttemptUserExit() {
       state->CommitPendingWrite();
     }
   }
-  SetSendStopRequestToSessionManager();
+  ash::SessionTerminationManager::SetSendStopRequestToSessionManager();
   // On ChromeOS, always terminate the browser, regardless of the result of
   // AreAllBrowsersCloseable(). See crbug.com/123107.
   browser_shutdown::NotifyAppTerminating();
@@ -139,8 +136,9 @@ void RelaunchForUpdate() {
 }
 
 bool UpdatePending() {
-  if (!ash::DBusThreadManager::IsInitialized())
+  if (!ash::DBusThreadManager::IsInitialized()) {
     return false;
+  }
 
   return GetUpdateEngineClient()->GetLastStatus().current_operation() ==
          update_engine::UPDATED_NEED_REBOOT;
@@ -149,7 +147,7 @@ bool UpdatePending() {
 bool SetLocaleForNextStart(PrefService* local_state) {
   // If a policy mandates the login screen locale, use it.
   ash::CrosSettings* cros_settings = ash::CrosSettings::Get();
-  const base::Value::List* login_screen_locales = nullptr;
+  const base::ListValue* login_screen_locales = nullptr;
   if (cros_settings->GetList(ash::kDeviceLoginScreenLocales,
                              &login_screen_locales) &&
       !login_screen_locales->empty() &&
@@ -174,24 +172,18 @@ bool SetLocaleForNextStart(PrefService* local_state) {
   return false;
 }
 
-bool IsSendingStopRequestToSessionManager() {
-  return g_send_stop_request_to_session_manager;
-}
-
-void SetSendStopRequestToSessionManager(bool should_send_request) {
-  g_send_stop_request_to_session_manager = should_send_request;
-}
-
 void StopSession() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   // Only call this function once.
   static bool notified = false;
-  if (notified)
+  if (notified) {
     return;
+  }
   notified = true;
 
-  if (chromeos::PowerPolicyController::IsInitialized())
+  if (chromeos::PowerPolicyController::IsInitialized()) {
     chromeos::PowerPolicyController::Get()->NotifyChromeIsExiting();
+  }
 
   if (chrome::UpdatePending()) {
     chrome::RelaunchForUpdate();
@@ -200,7 +192,7 @@ void StopSession() {
 
   // Signal session manager to stop the session if Chrome has initiated an
   // attempt to do so.
-  if (chrome::IsSendingStopRequestToSessionManager() &&
+  if (ash::SessionTerminationManager::IsSendingStopRequestToSessionManager() &&
       ash::SessionTerminationManager::Get()) {
     ash::SessionTerminationManager::Get()->StopSession(
         login_manager::SessionStopReason::REQUEST_FROM_SESSION_MANAGER);

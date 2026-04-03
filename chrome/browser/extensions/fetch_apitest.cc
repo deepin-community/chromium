@@ -6,9 +6,8 @@
 #include "base/functional/bind.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -27,8 +26,9 @@ namespace {
 // Returns a response whose body is request's origin.
 std::unique_ptr<net::test_server::HttpResponse> HandleEchoOrigin(
     const net::test_server::HttpRequest& request) {
-  if (request.relative_url != "/echo-origin")
+  if (request.relative_url != "/echo-origin") {
     return nullptr;
+  }
 
   auto response = std::make_unique<net::test_server::BasicHttpResponse>();
   response->set_code(net::HTTP_OK);
@@ -110,15 +110,6 @@ class ExtensionFetchTest : public ExtensionApiTest {
   std::string GetQuotedTestServerURL(const std::string& host,
                                      const std::string& path) {
     return GetQuotedURL(embedded_test_server()->GetURL(host, path));
-  }
-
-  // Opens a tab, puts it in the foreground, navigates it to |url| then returns
-  // its WebContents.
-  content::WebContents* CreateAndNavigateTab(const GURL& url) {
-    NavigateParams params(browser(), url, ui::PAGE_TRANSITION_LINK);
-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-    ui_test_utils::NavigateToURL(&params);
-    return browser()->tab_strip_model()->GetActiveWebContents();
   }
 
   void SetUpOnMainThread() override {
@@ -210,14 +201,15 @@ IN_PROC_BROWSER_TEST_F(ExtensionFetchTest,
   const Extension* extension = WriteFilesAndLoadTestExtension(&dir);
   ASSERT_TRUE(extension);
 
-  content::WebContents* empty_tab = CreateAndNavigateTab(
+  NavigateToURLInNewTab(
       embedded_test_server()->GetURL("example.com", "/empty.html"));
 
   // TODO(kalman): Test this from a content script too.
   EXPECT_EQ(
       "text content",
-      content::EvalJs(empty_tab, GetDOMFetchScript(GetQuotedURL(
-                                     extension->GetResourceURL("text")))));
+      content::EvalJs(
+          GetActiveWebContents(),
+          GetDOMFetchScript(GetQuotedURL(extension->GetResourceURL("text")))));
 }
 
 // Calling fetch() from a http(s) service worker context to a
@@ -240,9 +232,9 @@ IN_PROC_BROWSER_TEST_F(
   const Extension* extension = WriteFilesAndLoadTestExtension(&dir);
   ASSERT_TRUE(extension);
 
-  content::WebContents* tab =
-      CreateAndNavigateTab(embedded_test_server()->GetURL(
-          "/workers/fetch_from_service_worker.html"));
+  NavigateToURLInNewTab(embedded_test_server()->GetURL(
+      "/workers/fetch_from_service_worker.html"));
+  auto* tab = GetActiveWebContents();
   EXPECT_EQ("ready", content::EvalJs(tab, "setup();"));
   EXPECT_EQ("text content",
             content::EvalJs(
@@ -265,14 +257,15 @@ IN_PROC_BROWSER_TEST_F(ExtensionFetchTest,
   const Extension* extension = WriteFilesAndLoadTestExtension(&dir);
   ASSERT_TRUE(extension);
 
-  content::WebContents* empty_tab = CreateAndNavigateTab(
+  NavigateToURLInNewTab(
       embedded_test_server()->GetURL("example.com", "/empty.html"));
 
   // TODO(kalman): Test this from a content script too.
   EXPECT_EQ(
       "TypeError: Failed to fetch",
-      content::EvalJs(empty_tab, GetDOMFetchScript(GetQuotedURL(
-                                     extension->GetResourceURL("text")))));
+      content::EvalJs(
+          GetActiveWebContents(),
+          GetDOMFetchScript(GetQuotedURL(extension->GetResourceURL("text")))));
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionFetchTest, FetchResponseType) {

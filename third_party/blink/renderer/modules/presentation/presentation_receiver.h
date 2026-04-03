@@ -5,8 +5,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_PRESENTATION_PRESENTATION_RECEIVER_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_PRESENTATION_PRESENTATION_RECEIVER_H_
 
-#include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/mojom/presentation/presentation.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_property.h"
@@ -38,7 +36,7 @@ class MODULES_EXPORT PresentationReceiver final
   ~PresentationReceiver() override = default;
 
   // PresentationReceiver.idl implementation
-  ScriptPromiseTyped<PresentationConnectionList> connectionList(ScriptState*);
+  ScriptPromise<PresentationConnectionList> connectionList(ScriptState*);
 
   // mojom::blink::PresentationReceiver
   void OnReceiverConnectionAvailable(

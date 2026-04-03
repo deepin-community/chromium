@@ -13,7 +13,7 @@
 #include <string.h>
 #include <tuple>
 
-#include "third_party/googletest/src/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 
 #include "./vpx_config.h"
 #if CONFIG_VP9_ENCODER
@@ -139,7 +139,7 @@ class BlockinessTestBase : public ::testing::Test {
 };
 
 #if CONFIG_VP9_ENCODER
-typedef std::tuple<int, int> BlockinessParam;
+using BlockinessParam = std::tuple<int, int>;
 class BlockinessVP9Test
     : public BlockinessTestBase,
       public ::testing::WithParamInterface<BlockinessParam> {

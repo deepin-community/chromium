@@ -19,6 +19,7 @@
 #include "components/app_constants/constants.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/launch_util.h"
 #include "extensions/browser/path_util.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest.h"
@@ -28,6 +29,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/combobox_model.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/combobox/combobox.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
@@ -58,17 +60,17 @@ class LaunchOptionsComboboxModel : public ui::ComboboxModel {
 };
 
 LaunchOptionsComboboxModel::LaunchOptionsComboboxModel() {
-  // Hosted apps can only toggle between LAUNCH_TYPE_WINDOW and
-  // LAUNCH_TYPE_REGULAR.
-  launch_types_.push_back(extensions::LAUNCH_TYPE_REGULAR);
+  // Hosted apps can only toggle between LaunchType::kWindow and
+  // LaunchType::kRegular.
+  launch_types_.push_back(extensions::LaunchType::kRegular);
   launch_type_messages_.push_back(
       l10n_util::GetStringUTF16(IDS_APP_CONTEXT_MENU_OPEN_TAB));
-  launch_types_.push_back(extensions::LAUNCH_TYPE_WINDOW);
+  launch_types_.push_back(extensions::LaunchType::kWindow);
   launch_type_messages_.push_back(
       l10n_util::GetStringUTF16(IDS_APP_CONTEXT_MENU_OPEN_WINDOW));
 }
 
-LaunchOptionsComboboxModel::~LaunchOptionsComboboxModel() {}
+LaunchOptionsComboboxModel::~LaunchOptionsComboboxModel() = default;
 
 extensions::LaunchType LaunchOptionsComboboxModel::GetLaunchTypeAtIndex(
     int index) const {
@@ -82,8 +84,19 @@ int LaunchOptionsComboboxModel::GetIndexForLaunchType(
       return i;
     }
   }
+
+  static constexpr auto kLaunchTypeStrings =
+      base::MakeFixedFlatMap<extensions::LaunchType, std::string_view>({
+          {extensions::LaunchType::kInvalid, "kInvalid"},
+          {extensions::LaunchType::kPinned, "kPinned"},
+          {extensions::LaunchType::kRegular, "kRegular"},
+          {extensions::LaunchType::kFullscreen, "kFullscreen"},
+          {extensions::LaunchType::kWindow, "kWindow"},
+      });
+
   // If the requested launch type is not available, just select the first one.
-  LOG(WARNING) << "Unavailable launch type " << launch_type << " selected.";
+  LOG(WARNING) << "Unavailable launch type "
+               << kLaunchTypeStrings.at(launch_type) << " selected.";
   return 0;
 }
 
@@ -196,7 +209,7 @@ void AppInfoSummaryPanel::AddLaunchOptionControl(views::View* vertical_stack) {
       std::make_unique<LaunchOptionsComboboxModel>();
   auto launch_options_combobox =
       std::make_unique<views::Combobox>(launch_options_combobox_model_.get());
-  launch_options_combobox->SetAccessibleName(
+  launch_options_combobox->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_APPLICATION_INFO_LAUNCH_OPTIONS_ACCNAME));
   launch_options_combobox->SetCallback(base::BindRepeating(
       &AppInfoSummaryPanel::LaunchOptionsChanged, base::Unretained(this)));

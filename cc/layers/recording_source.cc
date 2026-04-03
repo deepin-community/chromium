@@ -71,7 +71,7 @@ bool RecordingSource::Update(const gfx::Size& layer_size,
   invalidation_.Swap(&invalidation);
   invalidation_.Clear();
 
-  if (size_ == layer_size && invalidation.IsEmpty()) {
+  if (size_ == layer_size && invalidation.IsEmpty() && !force_update_) {
     return false;
   }
 
@@ -81,8 +81,12 @@ bool RecordingSource::Update(const gfx::Size& layer_size,
   scoped_refptr<DisplayItemList> display_list =
       client.PaintContentsToDisplayList();
   if (display_list_ == display_list) {
+    // The client should set force_update_ only if it has a new display list.
+    CHECK(!force_update_);
     return true;
   }
+
+  force_update_ = false;
 
   // Do the following only if the display list changes. Though we use
   // recording_scale_factor in DetermineIfSolidColor(), change of it doesn't
@@ -140,7 +144,7 @@ void RecordingSource::SetCanUseRecordedBounds(bool can_use_recorded_bounds) {
 }
 
 scoped_refptr<RasterSource> RecordingSource::CreateRasterSource() const {
-  return scoped_refptr<RasterSource>(new RasterSource(this));
+  return base::WrapRefCounted(new RasterSource(*this));
 }
 
 void RecordingSource::DetermineIfSolidColor() {
@@ -151,7 +155,7 @@ void RecordingSource::DetermineIfSolidColor() {
   if (display_list_->TotalOpCount() > kMaxOpsToAnalyzeForLayer)
     return;
 
-  // TODO(crbug.com/1517714): Allow the solid color not to fill the layer.
+  // TODO(crbug.com/41490692): Allow the solid color not to fill the layer.
   TRACE_EVENT1("cc", "RecordingSource::DetermineIfSolidColor", "opcount",
                display_list_->TotalOpCount());
   is_solid_color_ = display_list_->GetColorIfSolidInRect(

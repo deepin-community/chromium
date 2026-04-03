@@ -12,6 +12,7 @@
     readonly attribute unsigned long long currentFrame;
     readonly attribute double currentTime;
     readonly attribute float sampleRate;
+    [RuntimeEnabled=WebAudioConfigurableRenderQuantum, MeasureAs=WebAudioRenderQuantumSize] readonly attribute unsigned long renderQuantumSize;
 };
 
 // Blink-specific types

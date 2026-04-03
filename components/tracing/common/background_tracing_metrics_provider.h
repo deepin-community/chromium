@@ -23,25 +23,28 @@ namespace tracing {
 class TRACING_EXPORT BackgroundTracingMetricsProvider
     : public metrics::MetricsProvider {
  public:
+  static base::RepeatingCallback<void(metrics::SystemProfileProto&)>
+  GetSystemProfileMetricsRecorder();
+
   BackgroundTracingMetricsProvider();
+  ~BackgroundTracingMetricsProvider() override;
 
   BackgroundTracingMetricsProvider(const BackgroundTracingMetricsProvider&) =
       delete;
   BackgroundTracingMetricsProvider& operator=(
       const BackgroundTracingMetricsProvider&) = delete;
 
-  ~BackgroundTracingMetricsProvider() override;
-
-  std::string RecordSystemProfileMetrics();
+  void RecordSystemProfileMetrics(
+      metrics::SystemProfileProto& system_profile_proto);
 
   // metrics::MetricsProvider:
+  void AsyncInit(base::OnceClosure done_callback) override;
   bool HasIndependentMetrics() override;
   void ProvideIndependentMetrics(
       base::OnceClosure serialize_log_callback,
       base::OnceCallback<void(bool)> done_callback,
       metrics::ChromeUserMetricsExtension* uma_proto,
       base::HistogramSnapshotManager* snapshot_manager) override;
-  void Init() override;
 
  protected:
   // Embedders can override this to do any additional processing of the log
@@ -51,10 +54,8 @@ class TRACING_EXPORT BackgroundTracingMetricsProvider
                                   std::string&&)>
   GetEmbedderMetricsProvider();
 
-  virtual void DoInit() = 0;
-
   virtual void RecordCoreSystemProfileMetrics(
-      metrics::SystemProfileProto* system_profile_proto) = 0;
+      metrics::SystemProfileProto& system_profile_proto) = 0;
 
   // Writes |serialized_trace| into |logs|'s |raw_data| field.
   static void SetTrace(metrics::TraceLog* log, std::string&& serialized_trace);

@@ -14,17 +14,18 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/compiler/mlir/quantization/tensorflow/ops/tf_op_quant_spec.h"
 
-#include <algorithm>
-#include <iterator>
 #include <memory>
 #include <optional>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
+#include "llvm/Support/Casting.h"
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/quantization/common/quantization_lib/quantization_utils.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/quantization_options.pb.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 
@@ -55,7 +56,7 @@ bool IsOpWithInt8TypeOperand(Operation* op) {
 }
 
 bool IsValueWithQuantizablePrecision(Value val) {
-  auto type = val.getType().dyn_cast<ShapedType>();
+  auto type = mlir::dyn_cast<ShapedType>(val.getType());
   if (!type) return false;
   // Supported original tensor data types.
   if (type.getElementType().isF32() || type.getElementType().isBF16())
@@ -81,46 +82,40 @@ std::unique_ptr<OpQuantSpec> GetTFOpQuantSpec(Operation* op) {
   auto spec = std::make_unique<OpQuantSpec>();
   if (auto call_op = dyn_cast<TF::PartitionedCallOp>(op)) {
     StringRef function_name =
-        call_op.getFAttr().cast<FlatSymbolRefAttr>().getValue();
+        mlir::cast<FlatSymbolRefAttr>(call_op.getFAttr()).getValue();
     if (!function_name.starts_with("composite_")) {
       return spec;
     }
     if (function_name.contains("depthwise_conv2d")) {
       spec->coeff_op_quant_dim[1] = 3;
       if (function_name.contains("with_bias")) {
-        spec->biases_params[2] = {{0, 1},
-                                  quant::GetUniformQuantizedTypeForBias};
+        spec->biases_params[2] = {{0, 1}, GetUniformQuantizedTypeForBias};
       }
     } else if (function_name.contains("conv2d")) {
       spec->coeff_op_quant_dim[1] = 3;
       if (function_name.contains("with_bias")) {
-        spec->biases_params[2] = {{0, 1},
-                                  quant::GetUniformQuantizedTypeForBias};
+        spec->biases_params[2] = {{0, 1}, GetUniformQuantizedTypeForBias};
       }
     } else if (function_name.contains("matmul")) {
       spec->coeff_op_quant_dim[1] = -1;
       if (function_name.contains("with_bias") ||
           function_name.contains("and_bias")) {
-        spec->biases_params[2] = {{0, 1},
-                                  quant::GetUniformQuantizedTypeForBias};
+        spec->biases_params[2] = {{0, 1}, GetUniformQuantizedTypeForBias};
       }
     } else if (function_name.contains("einsum")) {
       spec->coeff_op_quant_dim[1] = -1;
       if (function_name.contains("with_bias")) {
-        spec->biases_params[2] = {{0, 1},
-                                  quant::GetUniformQuantizedTypeForBias};
+        spec->biases_params[2] = {{0, 1}, GetUniformQuantizedTypeForBias};
       }
     } else if (function_name.contains("conv3d")) {
       spec->coeff_op_quant_dim[1] = 4;
       if (function_name.contains("with_bias")) {
-        spec->biases_params[2] = {{0, 1},
-                                  quant::GetUniformQuantizedTypeForBias};
+        spec->biases_params[2] = {{0, 1}, GetUniformQuantizedTypeForBias};
       }
     } else if (function_name.contains("batch_matmul")) {
       spec->coeff_op_quant_dim[1] = -1;
       if (function_name.contains("with_bias")) {
-        spec->biases_params[2] = {{0, 1},
-                                  quant::GetUniformQuantizedTypeForBias};
+        spec->biases_params[2] = {{0, 1}, GetUniformQuantizedTypeForBias};
       }
     } else if (function_name.contains("gather")) {
       // Note that gather has axis attribute that specifies channel axis.

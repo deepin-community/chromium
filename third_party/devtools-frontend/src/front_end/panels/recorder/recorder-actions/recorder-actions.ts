@@ -1,11 +1,11 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 export const enum RecorderActions {
-  CreateRecording = 'chrome-recorder.create-recording',
-  StartRecording = 'chrome-recorder.start-recording',
-  ReplayRecording = 'chrome-recorder.replay-recording',
-  ToggleCodeView = 'chrome-recorder.toggle-code-view',
-  CopyRecordingOrStep = 'chrome-recorder.copy-recording-or-step',
+  CREATE_RECORDING = 'chrome-recorder.create-recording',
+  START_RECORDING = 'chrome-recorder.start-recording',
+  REPLAY_RECORDING = 'chrome-recorder.replay-recording',
+  TOGGLE_CODE_VIEW = 'chrome-recorder.toggle-code-view',
+  COPY_RECORDING_OR_STEP = 'chrome-recorder.copy-recording-or-step',
 }

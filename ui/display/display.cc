@@ -7,7 +7,6 @@
 #include <algorithm>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
@@ -70,7 +69,6 @@ const char* ToRotationString(display::Display::Rotation rotation) {
       return "270";
   }
   NOTREACHED();
-  return "unknown";
 }
 
 }  // namespace
@@ -139,7 +137,6 @@ display::Display::Rotation Display::DegreesToRotation(int degrees) {
   if (degrees == 270)
     return display::Display::ROTATE_270;
   NOTREACHED();
-  return display::Display::ROTATE_0;
 }
 
 // static
@@ -155,7 +152,6 @@ int Display::RotationToDegrees(display::Display::Rotation rotation) {
       return 270;
   }
   NOTREACHED();
-  return 0;
 }
 
 // static
@@ -200,7 +196,6 @@ int Display::RotationAsDegree() const {
       return 270;
   }
   NOTREACHED();
-  return 0;
 }
 
 const gfx::DisplayColorSpaces& Display::GetColorSpaces() const {
@@ -208,7 +203,8 @@ const gfx::DisplayColorSpaces& Display::GetColorSpaces() const {
 }
 
 void Display::SetColorSpaces(const gfx::DisplayColorSpaces& color_spaces) {
-  SetDisplayColorSpacesRef(new DisplayColorSpacesRef(color_spaces));
+  SetDisplayColorSpacesRef(
+      base::MakeRefCounted<gfx::DisplayColorSpacesRef>(color_spaces));
 }
 
 void Display::SetRotationAsDegree(int rotation) {
@@ -316,24 +312,35 @@ int64_t Display::InternalDisplayId() {
 }
 
 bool Display::operator==(const Display& rhs) const {
-  return id_ == rhs.id_ && bounds_ == rhs.bounds_ &&
-         size_in_pixels_ == rhs.size_in_pixels_ &&
-         native_origin_ == rhs.native_origin_ && detected_ == rhs.detected_ &&
-         work_area_ == rhs.work_area_ &&
-         device_scale_factor_ == rhs.device_scale_factor_ &&
-         rotation_ == rhs.rotation_ && touch_support_ == rhs.touch_support_ &&
-         accelerometer_support_ == rhs.accelerometer_support_ &&
-         maximum_cursor_size_ == rhs.maximum_cursor_size_ &&
+  return EqualExceptForHdrHeadroom(*this, rhs) &&
          (color_spaces_ == rhs.color_spaces_ ||
-          GetColorSpaces() == rhs.GetColorSpaces()) &&
-         color_depth_ == rhs.color_depth_ &&
-         depth_per_component_ == rhs.depth_per_component_ &&
-         is_monochrome_ == rhs.is_monochrome_ &&
-         display_frequency_ == rhs.display_frequency_ && label_ == rhs.label_;
+          GetColorSpaces() == rhs.GetColorSpaces());
+}
+
+// static
+bool Display::EqualExceptForHdrHeadroom(const Display& lhs,
+                                        const Display& rhs) {
+  return lhs.id_ == rhs.id_ && lhs.bounds_ == rhs.bounds_ &&
+         lhs.size_in_pixels_ == rhs.size_in_pixels_ &&
+         lhs.native_origin_ == rhs.native_origin_ &&
+         lhs.detected_ == rhs.detected_ && lhs.work_area_ == rhs.work_area_ &&
+         lhs.device_scale_factor_ == rhs.device_scale_factor_ &&
+         lhs.rotation_ == rhs.rotation_ &&
+         lhs.touch_support_ == rhs.touch_support_ &&
+         lhs.accelerometer_support_ == rhs.accelerometer_support_ &&
+         lhs.maximum_cursor_size_ == rhs.maximum_cursor_size_ &&
+         (lhs.color_spaces_ == rhs.color_spaces_ ||
+          gfx::DisplayColorSpaces::EqualExceptForHdrHeadroom(
+              lhs.GetColorSpaces(), rhs.GetColorSpaces())) &&
+         lhs.color_depth_ == rhs.color_depth_ &&
+         lhs.depth_per_component_ == rhs.depth_per_component_ &&
+         lhs.is_monochrome_ == rhs.is_monochrome_ &&
+         lhs.display_frequency_ == rhs.display_frequency_ &&
+         lhs.label_ == rhs.label_;
 }
 
 void Display::SetDisplayColorSpacesRef(
-    scoped_refptr<const DisplayColorSpacesRef> color_spaces) {
+    scoped_refptr<const gfx::DisplayColorSpacesRef> color_spaces) {
   color_spaces_ = std::move(color_spaces);
   if (color_spaces_->color_spaces().SupportsHDR()) {
     color_depth_ = kHDR10BitsPerPixel;
@@ -344,12 +351,13 @@ void Display::SetDisplayColorSpacesRef(
   }
 }
 
-scoped_refptr<const Display::DisplayColorSpacesRef>
+scoped_refptr<const gfx::DisplayColorSpacesRef>
 Display::GetDefaultDisplayColorSpacesRef() {
   // On Android we need to ensure the platform supports a color profile before
   // using it. Using a not supported profile can result in fatal errors in the
   // GPU process.
-  static const base::NoDestructor<scoped_refptr<const DisplayColorSpacesRef>>
+  static const base::NoDestructor<
+      scoped_refptr<const gfx::DisplayColorSpacesRef>>
       default_color_spaces_ref([] {
         auto color_space = gfx::ColorSpace::CreateSRGB();
 #if !BUILDFLAG(IS_ANDROID)
@@ -357,7 +365,8 @@ Display::GetDefaultDisplayColorSpacesRef() {
           color_space = GetForcedDisplayColorProfile();
         }
 #endif
-        return new DisplayColorSpacesRef(gfx::DisplayColorSpaces(color_space));
+        return base::MakeRefCounted<gfx::DisplayColorSpacesRef>(
+            gfx::DisplayColorSpaces(color_space));
       }());
   return *default_color_spaces_ref;
 }

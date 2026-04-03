@@ -23,7 +23,6 @@
  * SOFTWARE.
  */
 
-#include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <errno.h>
@@ -39,9 +38,11 @@
 #include <sys/signalfd.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
+#include "timespec-util.h"
 #include "wayland-util.h"
 #include "wayland-private.h"
 #include "wayland-server-core.h"
+#include "wayland-server-private.h"
 #include "wayland-os.h"
 
 /** \cond INTERNAL */
@@ -73,7 +74,7 @@ struct wl_event_loop {
 	struct wl_list idle_list;
 	struct wl_list destroy_list;
 
-	struct wl_signal destroy_signal;
+	struct wl_priv_signal destroy_signal;
 
 	struct wl_timer_heap timers;
 };
@@ -446,7 +447,8 @@ wl_timer_heap_disarm(struct wl_timer_heap *timers,
 	struct wl_event_source_timer *last_end_evt;
 	int old_source_idx;
 
-	assert(source->heap_idx >= 0);
+	if (!(source->heap_idx >= 0))
+		wl_abort("Timer has already been disarmed\n");
 
 	old_source_idx = source->heap_idx;
 	source->heap_idx = -1;
@@ -475,7 +477,8 @@ wl_timer_heap_arm(struct wl_timer_heap *timers,
 		  struct wl_event_source_timer *source,
 		  struct timespec deadline)
 {
-	assert(source->heap_idx == -1);
+	if (!(source->heap_idx == -1))
+		wl_abort("Timer is already armed\n");
 
 	source->deadline = deadline;
 	timers->data[timers->active] = source;
@@ -898,7 +901,7 @@ wl_event_loop_create(void)
 	wl_list_init(&loop->idle_list);
 	wl_list_init(&loop->destroy_list);
 
-	wl_signal_init(&loop->destroy_signal);
+	wl_priv_signal_init(&loop->destroy_signal);
 
 	wl_timer_heap_init(&loop->timers, loop);
 
@@ -921,7 +924,7 @@ wl_event_loop_create(void)
 WL_EXPORT void
 wl_event_loop_destroy(struct wl_event_loop *loop)
 {
-	wl_signal_emit(&loop->destroy_signal, loop);
+	wl_priv_signal_final_emit(&loop->destroy_signal, loop);
 
 	wl_event_loop_process_destroy_list(loop);
 	wl_timer_heap_release(&loop->timers);
@@ -998,17 +1001,46 @@ wl_event_loop_dispatch(struct wl_event_loop *loop, int timeout)
 	struct wl_event_source *source;
 	int i, count;
 	bool has_timers = false;
+	bool use_timeout = timeout > 0;
+	struct timespec now;
+	struct timespec deadline = {0};
+	struct timespec result;
 
 	wl_event_loop_dispatch_idle(loop);
 
-	count = epoll_wait(loop->epoll_fd, ep, ARRAY_LENGTH(ep), timeout);
+	if (use_timeout) {
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		timespec_add_msec(&deadline, &now, timeout);
+	}
+
+	while (true) {
+		count = epoll_wait(loop->epoll_fd, ep, ARRAY_LENGTH(ep), timeout);
+		if (count >= 0)
+			break; /* have events or timeout */
+		else if (count < 0 && errno != EINTR && errno != EAGAIN)
+			break; /* have error */
+
+		if (use_timeout) {
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			timespec_sub(&result, &deadline, &now);
+			timeout = timespec_to_msec(&result);
+			if (timeout <= 0) {
+				/* too late */
+				count = 0;
+				break;
+			}
+		}
+	}
+
 	if (count < 0)
 		return -1;
 
 	for (i = 0; i < count; i++) {
 		source = ep[i].data.ptr;
-		if (source == &loop->timers.base)
+		if (source == &loop->timers.base) {
 			has_timers = true;
+			break;
+		}
 	}
 
 	if (has_timers) {
@@ -1070,7 +1102,7 @@ WL_EXPORT void
 wl_event_loop_add_destroy_listener(struct wl_event_loop *loop,
 				   struct wl_listener *listener)
 {
-	wl_signal_add(&loop->destroy_signal, listener);
+	wl_priv_signal_add(&loop->destroy_signal, listener);
 }
 
 /** Get the listener struct for the specified callback
@@ -1086,5 +1118,5 @@ WL_EXPORT struct wl_listener *
 wl_event_loop_get_destroy_listener(struct wl_event_loop *loop,
 				   wl_notify_func_t notify)
 {
-	return wl_signal_get(&loop->destroy_signal, notify);
+	return wl_priv_signal_get(&loop->destroy_signal, notify);
 }

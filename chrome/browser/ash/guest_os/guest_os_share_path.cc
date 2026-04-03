@@ -4,26 +4,25 @@
 
 #include "chrome/browser/ash/guest_os/guest_os_share_path.h"
 
+#include <algorithm>
 #include <optional>
+#include <variant>
 
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_util.h"
-#include "base/containers/contains.h"
+#include "base/barrier_callback.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "base/task/thread_pool.h"
-#include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
+#include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/file_manager/volume_manager.h"
 #include "chrome/browser/ash/guest_os/guest_id.h"
 #include "chrome/browser/ash/guest_os/guest_os_pref_names.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
 #include "chrome/browser/ash/guest_os/guest_os_session_tracker.h"
-#include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
+#include "chrome/browser/ash/guest_os/guest_os_session_tracker_factory.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_manager.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
@@ -34,6 +33,8 @@
 #include "chromeos/ash/components/dbus/seneschal/seneschal_client.h"
 #include "chromeos/ash/components/dbus/vm_concierge/concierge_service.pb.h"
 #include "chromeos/ash/components/drivefs/mojom/drivefs.mojom.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -83,55 +84,49 @@ void LogErrorResult(const std::string& operation,
   }
 }
 
-// Barrier Closure that captures the first instance of error.
-class ErrorCapture {
- public:
-  ErrorCapture(int num_callbacks_left, guest_os::SuccessCallback callback)
-      : num_callbacks_left_(num_callbacks_left),
-        callback_(std::move(callback)) {
-    DCHECK_GE(num_callbacks_left, 0);
-    if (num_callbacks_left == 0) {
-      std::move(callback_).Run(true, "");
+struct SharePathResponseData {
+  base::FilePath cros_path;
+  base::FilePath container_path;
+  bool success;
+  std::string failure_reason;
+};
+
+SharePathResponseData AssembleSharePathResponseData(
+    const base::FilePath& cros_path,
+    const base::FilePath& container_path,
+    bool success,
+    const std::string& failure_reason) {
+  return {.cros_path = cros_path,
+          .container_path = container_path,
+          .success = success,
+          .failure_reason = failure_reason};
+}
+
+void OnGotSharePathResponses(guest_os::SuccessCallback callback,
+                             std::vector<SharePathResponseData> responses) {
+  for (const auto& response : responses) {
+    if (!response.success) {
+      LOG(WARNING) << "Error SharePath=" << response.cros_path
+                   << ", FailureReason=" << response.failure_reason;
+      std::move(callback).Run(/*success=*/false, response.failure_reason);
+      return;
     }
   }
+  std::move(callback).Run(/*success=*/true, /*failure_reason=*/"");
+}
 
-  void Run(const base::FilePath& cros_path,
-           const base::FilePath& container_path,
-           bool success,
-           const std::string& failure_reason) {
-    if (!success) {
-      LOG(WARNING) << "Error SharePath=" << cros_path.value()
-                   << ", FailureReason=" << failure_reason;
-      if (success_) {
-        success_ = false;
-        first_failure_reason_ = failure_reason;
-      }
-    }
-
-    if (!--num_callbacks_left_) {
-      std::move(callback_).Run(success_, first_failure_reason_);
-    }
-  }
-
- private:
-  int num_callbacks_left_;
-  guest_os::SuccessCallback callback_;
-  bool success_ = true;
-  std::string first_failure_reason_;
-};  // class
-
-void RemovePersistedPathFromPrefs(base::Value::Dict& shared_paths,
+void RemovePersistedPathFromPrefs(base::DictValue& shared_paths,
                                   const std::string& vm_name,
                                   const base::FilePath& path) {
   // |shared_paths| format is {'path': ['vm1', vm2']}.
   // If |path| exists, remove |vm_name| from list of VMs.
-  base::Value::List* found = shared_paths.FindList(path.value());
+  base::ListValue* found = shared_paths.FindList(path.value());
   if (!found) {
     LOG(WARNING) << "Path not in prefs to unshare path " << path.value()
                  << " for VM " << vm_name;
     return;
   }
-  auto it = base::ranges::find(*found, base::Value(vm_name));
+  auto it = std::ranges::find(*found, base::Value(vm_name));
   if (it == found->end()) {
     LOG(WARNING) << "VM not in prefs to unshare path " << path.value()
                  << " for VM " << vm_name;
@@ -165,13 +160,9 @@ SharedPathInfo::SharedPathInfo(SharedPathInfo&&) = default;
 SharedPathInfo::~SharedPathInfo() = default;
 
 GuestOsSharePath::PathsToShare::PathsToShare() = default;
-GuestOsSharePath::PathsToShare::PathsToShare(GuestOsSharePath::PathsToShare&) =
-    default;
+GuestOsSharePath::PathsToShare::PathsToShare(
+    const GuestOsSharePath::PathsToShare&) = default;
 GuestOsSharePath::PathsToShare::~PathsToShare() = default;
-
-GuestOsSharePath* GuestOsSharePath::GetForProfile(Profile* profile) {
-  return GuestOsSharePathFactory::GetForProfile(profile);
-}
 
 GuestOsSharePath::GuestOsSharePath(Profile* profile)
     : profile_(profile),
@@ -183,7 +174,7 @@ GuestOsSharePath::GuestOsSharePath(Profile* profile)
   }
 
   if (auto* vmgr = file_manager::VolumeManager::Get(profile_)) {
-    vmgr->AddObserver(this);
+    volume_manager_observer_.Observe(vmgr);
   }
 
   // We receive notifications from DriveFS about any deleted paths so
@@ -200,10 +191,6 @@ void GuestOsSharePath::Shutdown() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (auto* client = ash::ConciergeClient::Get()) {
     client->RemoveVmObserver(this);
-  }
-
-  if (auto* vmgr = file_manager::VolumeManager::Get(profile_)) {
-    vmgr->RemoveObserver(this);
   }
 
   for (auto& shared_path : shared_paths_) {
@@ -258,6 +245,7 @@ void GuestOsSharePath::CallSeneschalSharePath(const std::string& vm_name,
       file_manager::util::GetCrostiniMountDirectory(profile_);
   base::FilePath system_fonts(file_manager::util::kSystemFontsPath);
   base::FilePath archive_mount(file_manager::util::kArchiveMountPath);
+  base::FilePath fusebox_path(file_manager::util::kFuseBoxMediaPath);
   if (AppendRelativePath(my_files, path, &relative_path)) {
     allowed_path = true;
     request.set_storage_location(
@@ -293,7 +281,7 @@ void GuestOsSharePath::CallSeneschalSharePath(const std::string& vm_name,
       request.set_storage_location(
           vm_tools::seneschal::SharePathRequest::DRIVEFS_COMPUTERS);
 
-      // TODO(crbug.com/917920): Do not allow Computers Grand Root, or single
+      // TODO(crbug.com/40607763): Do not allow Computers Grand Root, or single
       // Computer Root to be shared until DriveFS enforces allowed write paths.
       std::vector<base::FilePath::StringType> components =
           relative_path.GetComponents();
@@ -345,6 +333,11 @@ void GuestOsSharePath::CallSeneschalSharePath(const std::string& vm_name,
     allowed_path = true;
     request.set_storage_location(
         vm_tools::seneschal::SharePathRequest::ARCHIVE);
+  } else if (fusebox_path.AppendRelativePath(path, &relative_path)) {
+    // Allow Fusebox files and subdirs under /media/fuse/fusebox.
+    allowed_path = true;
+    request.set_storage_location(
+        vm_tools::seneschal::SharePathRequest::FUSEBOX);
   } else if (smb_service &&
              (smb_share = smb_service->GetSmbFsShareForPath(path)) &&
              AppendRelativePath(
@@ -394,7 +387,7 @@ void GuestOsSharePath::CallSeneschalUnsharePath(const std::string& vm_name,
 
   // Return success if VM is not currently running.
   auto vm_info =
-      GuestOsSessionTracker::GetForProfile(profile_)->GetVmInfo(vm_name);
+      GuestOsSessionTrackerFactory::GetForProfile(profile_)->GetVmInfo(vm_name);
   if (!vm_info) {
     std::move(callback).Run(true, "VM not running");
     return;
@@ -415,6 +408,11 @@ void GuestOsSharePath::CallSeneschalUnsharePath(const std::string& vm_name,
         blink::StorageKey(), storage::kFileSystemTypeExternal, virtual_path);
     result = file_manager::util::ConvertFileSystemURLToPathInsideVM(
         profile_, url, dummy_vm_mount, /*map_crostini_home=*/false, &inside);
+  } else {
+    // Fusebox Monikers do not belong to any external mounts, so their paths are
+    // directly translated to the ones inside VMs.
+    result = file_manager::util::ConvertFuseboxMonikerPathToPathInsideVM(
+        path, dummy_vm_mount, &inside);
   }
   base::FilePath unshare_path;
   if (!result || !dummy_vm_mount.AppendRelativePath(inside, &unshare_path)) {
@@ -445,14 +443,13 @@ void GuestOsSharePath::SharePaths(const std::string& vm_name,
     std::move(callback).Run(true, "");
     return;
   }
-  base::RepeatingCallback<void(const base::FilePath&, const base::FilePath&,
-                               bool, const std::string&)>
-      barrier = base::BindRepeating(
-          &ErrorCapture::Run,
-          base::Owned(new ErrorCapture(paths.size(), std::move(callback))));
+  auto barrier = base::BarrierCallback<SharePathResponseData>(
+      paths.size(),
+      base::BindOnce(&OnGotSharePathResponses, std::move(callback)));
   for (const auto& path : paths) {
-    CallSeneschalSharePath(vm_name, seneschal_server_handle, path,
-                           base::BindOnce(barrier, path));
+    CallSeneschalSharePath(
+        vm_name, seneschal_server_handle, path,
+        base::BindOnce(&AssembleSharePathResponseData, path).Then(barrier));
   }
 }
 
@@ -487,11 +484,11 @@ bool GuestOsSharePath::GetAndSetFirstForSession(const std::string& vm_name) {
 std::vector<base::FilePath> GuestOsSharePath::GetPersistedSharedPaths(
     const std::string& vm_name) {
   std::vector<base::FilePath> result;
-  // TODO(crbug.com/1057591): Unexpected crashes here.
+  // TODO(crbug.com/40677501): Unexpected crashes here.
   CHECK(profile_);
   CHECK(profile_->GetPrefs());
   // |shared_paths| format is {'path': ['vm1', vm2']}.
-  const base::Value::Dict& shared_paths =
+  const base::DictValue& shared_paths =
       profile_->GetPrefs()->GetDict(prefs::kGuestOSPathsSharedToVms);
   for (const auto it : shared_paths) {
     base::FilePath path(it.first);
@@ -520,7 +517,7 @@ void GuestOsSharePath::RegisterPersistedPaths(
     const std::vector<base::FilePath>& paths) {
   PrefService* pref_service = profile_->GetPrefs();
   ScopedDictPrefUpdate update(pref_service, prefs::kGuestOSPathsSharedToVms);
-  base::Value::Dict& shared_paths = *update;
+  base::DictValue& shared_paths = *update;
   for (const auto& path : paths) {
     // Check if path is already shared so we know whether we need to add it.
     bool already_shared = false;
@@ -531,7 +528,7 @@ void GuestOsSharePath::RegisterPersistedPaths(
     for (const auto it : shared_paths) {
       base::FilePath shared(it.first);
       auto& vms = it.second;
-      auto vm_matches = base::Contains(vms.GetList(), base::Value(vm_name));
+      auto vm_matches = vms.GetList().contains(vm_name);
       if (path == shared) {
         already_shared = true;
         if (!vm_matches) {
@@ -545,7 +542,7 @@ void GuestOsSharePath::RegisterPersistedPaths(
       RemovePersistedPathFromPrefs(shared_paths, vm_name, child);
     }
     if (!already_shared) {
-      base::Value::List vms;
+      base::ListValue vms;
       vms.Append(vm_name);
       shared_paths.Set(path.value(), std::move(vms));
     }
@@ -609,7 +606,7 @@ void GuestOsSharePath::OnVolumeMounted(ash::MountError error_code,
 
   // Check if any persisted paths match volume.mount_path() or are children
   // of it then share them with any running VMs.
-  const base::Value::Dict& shared_paths =
+  const base::DictValue& shared_paths =
       profile_->GetPrefs()->GetDict(prefs::kGuestOSPathsSharedToVms);
   for (const auto it : shared_paths) {
     base::FilePath path(it.first);
@@ -619,8 +616,9 @@ void GuestOsSharePath::OnVolumeMounted(ash::MountError error_code,
     const auto& vms = it.second.GetList();
     for (const auto& vm : vms) {
       RegisterSharedPath(vm.GetString(), path);
-      auto vm_info = GuestOsSessionTracker::GetForProfile(profile_)->GetVmInfo(
-          vm.GetString());
+      auto vm_info =
+          GuestOsSessionTrackerFactory::GetForProfile(profile_)->GetVmInfo(
+              vm.GetString());
       if (vm_info) {
         CallSeneschalSharePath(
             vm.GetString(), vm_info->seneschal_server_handle(), path,
@@ -798,7 +796,7 @@ const base::flat_set<GuestId>& GuestOsSharePath::ListGuests() {
   return guests_;
 }
 
-absl::variant<GuestOsSharePath::PathsToShare, std::string>
+std::variant<GuestOsSharePath::PathsToShare, std::string>
 GuestOsSharePath::ConvertArgsToPathsToShare(
     const guest_os::GuestOsRegistryService::Registration& registration,
     const std::vector<guest_os::LaunchArg>& args,
@@ -810,11 +808,11 @@ GuestOsSharePath::ConvertArgsToPathsToShare(
   // Convert any paths not in the VM.
   out.launch_args.reserve(args.size());
   for (const auto& arg : args) {
-    if (absl::holds_alternative<std::string>(arg)) {
-      out.launch_args.push_back(absl::get<std::string>(arg));
+    if (std::holds_alternative<std::string>(arg)) {
+      out.launch_args.push_back(std::get<std::string>(arg));
       continue;
     }
-    const storage::FileSystemURL& url = absl::get<storage::FileSystemURL>(arg);
+    const storage::FileSystemURL& url = std::get<storage::FileSystemURL>(arg);
     base::FilePath path;
     if (!file_manager::util::ConvertFileSystemURLToPathInsideVM(
             profile_, url, vm_mount, map_crostini_home, &path)) {

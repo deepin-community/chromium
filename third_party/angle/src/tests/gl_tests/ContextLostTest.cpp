@@ -34,8 +34,8 @@ TEST_P(ContextLostTest, ExtensionStringExposed)
     EXPECT_TRUE(EnsureGLExtensionEnabled("GL_CHROMIUM_lose_context"));
 }
 
-// Use GL_CHROMIUM_lose_context to lose a context and verify
-TEST_P(ContextLostTest, BasicUsage)
+// Use GL_CHROMIUM_lose_context to lose a context and verify using GL_EXT_robustness
+TEST_P(ContextLostTest, BasicUsageEXT)
 {
     ANGLE_SKIP_TEST_IF(!EnsureGLExtensionEnabled("GL_CHROMIUM_lose_context"));
     ANGLE_SKIP_TEST_IF(!EnsureGLExtensionEnabled("GL_EXT_robustness") ||
@@ -44,6 +44,25 @@ TEST_P(ContextLostTest, BasicUsage)
     glLoseContextCHROMIUM(GL_GUILTY_CONTEXT_RESET, GL_INNOCENT_CONTEXT_RESET);
     EXPECT_GL_NO_ERROR();
     EXPECT_GLENUM_EQ(glGetGraphicsResetStatusEXT(), GL_GUILTY_CONTEXT_RESET);
+
+    // Errors should be continually generated
+    for (size_t i = 0; i < 10; i++)
+    {
+        glBindTexture(GL_TEXTURE_2D, 0);
+        EXPECT_GL_ERROR(GL_CONTEXT_LOST);
+    }
+}
+
+// Use GL_CHROMIUM_lose_context to lose a context and verify using GL_KHR_robustness
+TEST_P(ContextLostTest, BasicUsageKHR)
+{
+    ANGLE_SKIP_TEST_IF(!EnsureGLExtensionEnabled("GL_CHROMIUM_lose_context"));
+    ANGLE_SKIP_TEST_IF(!EnsureGLExtensionEnabled("GL_KHR_robustness") ||
+                       !IsEGLClientExtensionEnabled("EGL_EXT_create_context_robustness"));
+
+    glLoseContextCHROMIUM(GL_GUILTY_CONTEXT_RESET, GL_INNOCENT_CONTEXT_RESET);
+    EXPECT_GL_NO_ERROR();
+    EXPECT_GLENUM_EQ(glGetGraphicsResetStatusKHR(), GL_GUILTY_CONTEXT_RESET);
 
     // Errors should be continually generated
     for (size_t i = 0; i < 10; i++)
@@ -120,6 +139,53 @@ TEST_P(ContextLostTest, ParallelCompileReadyQuery)
     EXPECT_GLENUM_EQ(linkStatus, 0xBADF00D);
 }
 
+// Use GL_CHROMIUM_lose_context to lose a context and verify using glGetQueryObject* functions
+TEST_P(ContextLostTest, QueryObject)
+{
+    ANGLE_SKIP_TEST_IF(!EnsureGLExtensionEnabled("GL_CHROMIUM_lose_context"));
+    bool disjointTimerQueryEnabled = IsGLExtensionEnabled("GL_EXT_disjoint_timer_query");
+
+    glLoseContextCHROMIUM(GL_GUILTY_CONTEXT_RESET, GL_INNOCENT_CONTEXT_RESET);
+    EXPECT_GL_NO_ERROR();
+
+    if (getClientMajorVersion() >= 3)
+    {
+        GLuint uint_res;
+        glGetQueryObjectuiv(0, GL_QUERY_RESULT_AVAILABLE, &uint_res);
+        EXPECT_GL_ERROR(GL_CONTEXT_LOST);
+        EXPECT_GLENUM_EQ(uint_res, GL_TRUE);
+    }
+
+    if (disjointTimerQueryEnabled)
+    {
+        GLint int_res;
+        glGetQueryObjectivEXT(0, GL_QUERY_RESULT_AVAILABLE, &int_res);
+        EXPECT_GL_ERROR(GL_CONTEXT_LOST);
+        EXPECT_GLENUM_EQ(int_res, GL_TRUE);
+    }
+}
+
+class ContextLostTestES32 : public ContextLostTest
+{};
+
+// Use GL_CHROMIUM_lose_context to lose a context and verify using GLES 3.2 function
+TEST_P(ContextLostTestES32, BasicUsage)
+{
+    ANGLE_SKIP_TEST_IF(!EnsureGLExtensionEnabled("GL_CHROMIUM_lose_context"));
+    ANGLE_SKIP_TEST_IF(!IsEGLClientExtensionEnabled("EGL_EXT_create_context_robustness"));
+
+    glLoseContextCHROMIUM(GL_GUILTY_CONTEXT_RESET, GL_INNOCENT_CONTEXT_RESET);
+    EXPECT_GL_NO_ERROR();
+    EXPECT_GLENUM_EQ(glGetGraphicsResetStatus(), GL_GUILTY_CONTEXT_RESET);
+
+    // Errors should be continually generated
+    for (size_t i = 0; i < 10; i++)
+    {
+        glBindTexture(GL_TEXTURE_2D, 0);
+        EXPECT_GL_ERROR(GL_CONTEXT_LOST);
+    }
+}
+
 class ContextLostSkipValidationTest : public ANGLETest<>
 {
   protected:
@@ -169,5 +235,8 @@ ANGLE_INSTANTIATE_TEST(ContextLostSkipValidationTest,
                        WithRobustness(ES3_D3D11()),
                        WithRobustness(ES2_VULKAN()),
                        WithRobustness(ES3_VULKAN()));
+
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(ContextLostTestES32);
+ANGLE_INSTANTIATE_TEST(ContextLostTestES32, WithRobustness(ES32_VULKAN()));
 
 }  // namespace angle

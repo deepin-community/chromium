@@ -4,15 +4,18 @@
 
 #include "components/sync_preferences/common_syncable_prefs_database.h"
 
+#include <string_view>
+
 #include "base/containers/fixed_flat_map.h"
-#include "base/strings/string_piece.h"
+#include "base/containers/fixed_flat_set.h"
+#include "base/feature_list.h"
 #include "build/build_config.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/browsing_data/core/pref_names.h"
 #include "components/commerce/core/pref_names.h"
 #include "components/content_settings/core/common/pref_names.h"
-#include "components/dom_distiller/core/pref_names.h"
+#include "components/desktop_to_mobile_promos/pref_names.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/metrics/demographics/user_demographics.h"
 #include "components/metrics/metrics_pref_names.h"
@@ -20,11 +23,16 @@
 #include "components/omnibox/browser/omnibox_prefs.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/payments/core/payment_prefs.h"
+#include "components/plus_addresses/core/common/plus_address_prefs.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/search_engines/search_engines_pref_names.h"
+#include "components/saved_tab_groups/public/pref_names.h"
+#include "components/sharing_message/pref_names.h"
+#include "components/sync/base/data_type.h"
+#include "components/sync/base/features.h"
+#include "components/sync_preferences/cross_device_pref_tracker/prefs/cross_device_pref_names.h"
 #include "components/translate/core/browser/translate_pref_names.h"
 #include "components/translate/core/browser/translate_prefs.h"
-#include "components/variations/service/google_groups_updater_service.h"
+#include "components/variations/service/google_groups_manager_prefs.h"
 
 namespace sync_preferences {
 
@@ -34,9 +42,10 @@ namespace syncable_prefs_ids {
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. When adding a new entry, append the
 // enumerator to the end and add it to the `SyncablePref` enum in
-// tools/metrics/histograms/enums.xml. When removing an unused enumerator,
-// comment it out here, making it clear the value was previously used, and
-// add "(obsolete)" to the corresponding entry in enums.xml.
+// tools/metrics/histograms/metadata/sync/enums.xml. When removing an unused
+// enumerator, comment it out here, making it clear the value was previously
+// used, and add "(obsolete)" to the corresponding entry in enums.xml.
+// LINT.IfChange(CommonSyncablePref)
 enum {
   kSyncablePrefForTesting = 0,  // For tests.
   kAutofillCreditCardEnabled = 1,
@@ -49,27 +58,27 @@ enum {
   kShowAppsShortcutInBookmarkBar = 8,
   kShowBookmarkBar = 9,
   kShowManagedBookmarksInBookmarkBar = 10,
-  kClearBrowsingDataHistoryNoticeShownTimes = 11,
-  kDeleteBrowsingHistory = 12,
-  kDeleteBrowsingHistoryBasic = 13,
-  kDeleteCache = 14,
-  kDeleteCacheBasic = 15,
-  kDeleteCookies = 16,
-  kDeleteCookiesBasic = 17,
-  kDeleteDownloadHistory = 18,
-  kDeleteFormData = 19,
-  kDeleteHostedAppsData = 20,
-  kDeletePasswords = 21,
-  kDeleteSiteSettings = 22,
-  kDeleteTimePeriod = 23,
-  kDeleteTimePeriodBasic = 24,
+  // kClearBrowsingDataHistoryNoticeShownTimes = 11, (was never actually synced)
+  // kDeleteBrowsingHistory = 12, (no longer synced)
+  // kDeleteBrowsingHistoryBasic = 13, (no longer synced)
+  // kDeleteCache = 14, (no longer synced)
+  // kDeleteCacheBasic = 15, (no longer synced)
+  // kDeleteCookies = 16, (no longer synced)
+  // kDeleteCookiesBasic = 17, (no longer synced)
+  // kDeleteDownloadHistory = 18, (no longer synced)
+  // kDeleteFormData = 19, (no longer synced)
+  // kDeleteHostedAppsData = 20, (no longer synced)
+  // kDeletePasswords = 21, (no longer synced)
+  // kDeleteSiteSettings = 22, (no longer synced)
+  // kDeleteTimePeriod = 23, (no longer synced)
+  // kDeleteTimePeriodBasic = 24, (no longer synced)
   kLastClearBrowsingDataTime = 25,
-  kPreferencesMigratedToBasic = 26,
+  // kPreferencesMigratedToBasic = 26, (deprecated)
   kPriceEmailNotificationsEnabled = 27,
-  kFont = 28,
-  kOfferReaderMode = 29,
-  kReaderForAccessibility = 30,
-  kTheme = 31,
+  // kFont = 28, (deprecated)
+  // kOfferReaderMode = 29, (deprecated)
+  // kReaderForAccessibility = 30, (deprecated)
+  // kTheme = 31, (deprecated)
   kAcceptLanguages = 32,
   // kApplicationLocale = 33,  (moved to chrome_syncable_prefs_database.cc)
   kSelectedLanguages = 34,
@@ -87,7 +96,7 @@ enum {
   kAccountTailoredSecurityUpdateTimestamp = 46,
   kCookieControlsMode = 47,
   kSafeBrowsingEnabled = 48,
-  kSyncedDefaultSearchProviderGUID = 49,
+  // kSyncedDefaultSearchProviderGUID = 49, (deprecated)
   kPrefForceTriggerTranslateCount = 50,
   // kPrefNeverPromptSitesDeprecated = 51, (deprecated)
   kPrefTranslateAcceptedCount = 52,
@@ -103,11 +112,53 @@ enum {
   kDogfoodGroupsSyncPrefName = 62,
   kSyncableMergeableDictPrefForTesting = 63,  // For tests.
   kAutofillPaymentCvcStorage = 64,
-  kDeleteTimePeriodV2 = 65,
-  kDeleteTimePeriodV2Basic = 66,
+  // kDeleteTimePeriodV2 = 65, (no longer synced)
+  // kDeleteTimePeriodV2Basic = 66, (no longer synced)
   kSyncableMergeableListPrefForTesting = 67,         // For tests.
   kSyncableHistorySensitiveListPrefForTesting = 68,  // For tests.
   kAutofillPaymentCardBenefits = 69,
+  // kCloseTabs = 70, (no longer synced)
+  kShowTabGroupsInBookmarkBar = 71,
+  kFacilitatedPaymentsPix = 72,
+  kSyncableTabGroups = 73,
+  kAutoPinNewTabGroups = 74,
+  kShowGoogleLensShortcut = 75,
+  // kSharingVapidKey = 76, (deprecated)
+  kFirstPlusAddressCreationTime = 77,
+  kLastPlusAddressFillingTime = 78,
+  kSafeBrowsingEnhanced = 79,
+  kFacilitatedPaymentsEwallet = 80,
+  kAutofillBnplEnabled = 81,
+  kAutofillHasSeenBnpl = 82,
+  kAutomaticPasskeyUpgrades = 83,
+  kSyncablePriorityPrefForTesting = 84,               // For tests.
+  kSyncableAlwaysSyncingPriorityPrefForTesting = 85,  // For tests.
+  kFacilitatedPaymentsPixAccountLinking = 86,
+  kShowSearchTools = 87,
+  kAutofillHomeMetadata = 88,
+  kAutofillWorkMetadata = 89,
+  kFacilitatedPaymentsA2AEnabled = 90,
+  kFacilitatedPaymentsA2ATriggeredOnce = 91,
+  // kFingerprintingProtectionEnabled = 92, (deprecated)
+  kAutofillNameAndEmailProfileSignature = 93,
+  kAutofillNameAndEmailProfileNotSelectedCounter = 94,
+  kAutofillAiLastVersionDeduped = 96,
+  kCrossDeviceOmniboxIsInBottomPosition = 97,
+  kAutofillWasNameAndEmailProfileUsed = 98,
+  kCrossDeviceCrossPlatformPromosIOS16thActiveDay = 99,
+  kCrossDeviceSafetyCheckHomeModuleEnabled = 100,
+  kAutofillAiIdentityEntitiesEnabled = 101,
+  kAutofillAiTravelEntitiesEnabled = 102,
+  kCrossDeviceTabResumptionHomeModuleEnabled = 103,
+  kAutofillAmountExtractionAiTermsSeen = 104,
+  kCrossDevicePriceTrackingHomeModuleEnabled = 105,
+  kCrossDeviceMostVisitedHomeModuleEnabled = 106,
+  kCrossDeviceTipsHomeModuleEnabled = 107,
+  kCrossDeviceMagicStackHomeModuleEnabled = 108,
+  kShowAiModeOmniboxButton = 109,
+  kAutofillAiSyncedOptInStatus = 110,
+  kIOSPromoReminder = 111,
+  kAutofillAiReauthBeforeViewingSensitiveData = 112,
   // See components/sync_preferences/README.md about adding new entries here.
   // vvvvv IMPORTANT! vvvvv
   // Note to the reviewer: IT IS YOUR RESPONSIBILITY to ensure that new syncable
@@ -115,11 +166,12 @@ enum {
   // guidance and escalation path in case anything is unclear.
   // ^^^^^ IMPORTANT! ^^^^^
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:CommonSyncablePref)
 }  // namespace syncable_prefs_ids
 
 // List of syncable preferences common across platforms.
 constexpr auto kCommonSyncablePrefsAllowlist =
-    base::MakeFixedFlatMap<base::StringPiece, SyncablePrefMetadata>({
+    base::MakeFixedFlatMap<std::string_view, SyncablePrefMetadata>({
         {autofill::prefs::kAutofillCreditCardEnabled,
          {syncable_prefs_ids::kAutofillCreditCardEnabled, syncer::PREFERENCES,
           PrefSensitivity::kNone, MergeBehavior::kNone}},
@@ -129,87 +181,60 @@ constexpr auto kCommonSyncablePrefsAllowlist =
         {autofill::prefs::kAutofillLastVersionDeduped,
          {syncable_prefs_ids::kAutofillLastVersionDeduped, syncer::PREFERENCES,
           PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {autofill::prefs::kAutofillAiIdentityEntitiesEnabled,
+         {syncable_prefs_ids::kAutofillAiIdentityEntitiesEnabled,
+          syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {autofill::prefs::kAutofillAiLastVersionDeduped,
+         {syncable_prefs_ids::kAutofillAiLastVersionDeduped,
+          syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {autofill::prefs::kAutofillAiTravelEntitiesEnabled,
+         {syncable_prefs_ids::kAutofillAiTravelEntitiesEnabled,
+          syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_ANDROID) || \
+    BUILDFLAG(IS_CHROMEOS)
+        {autofill::prefs::kAutofillAiReauthBeforeViewingSensitiveData,
+         {syncable_prefs_ids::kAutofillAiReauthBeforeViewingSensitiveData,
+          syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+#endif
+        {autofill::prefs::kAutofillAiSyncedOptInStatus,
+         {syncable_prefs_ids::kAutofillAiSyncedOptInStatus, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kNone}},
         {autofill::prefs::kAutofillProfileEnabled,
          {syncable_prefs_ids::kAutofillProfileEnabled, syncer::PREFERENCES,
           PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {autofill::prefs::kAutofillNameAndEmailProfileSignature,
+         {syncable_prefs_ids::kAutofillNameAndEmailProfileSignature,
+          syncer::PRIORITY_PREFERENCES,
+          PrefSensitivity::kExemptFromUserControlWhileSignedIn,
+          MergeBehavior::kNone}},
+        {autofill::prefs::kAutofillNameAndEmailProfileNotSelectedCounter,
+         {syncable_prefs_ids::kAutofillNameAndEmailProfileNotSelectedCounter,
+          syncer::PRIORITY_PREFERENCES,
+          PrefSensitivity::kExemptFromUserControlWhileSignedIn,
+          MergeBehavior::kNone}},
+        {autofill::prefs::kAutofillWasNameAndEmailProfileUsed,
+         {syncable_prefs_ids::kAutofillWasNameAndEmailProfileUsed,
+          syncer::PRIORITY_PREFERENCES,
+          PrefSensitivity::kExemptFromUserControlWhileSignedIn,
+          MergeBehavior::kNone}},
         {bookmarks::prefs::kShowAppsShortcutInBookmarkBar,
          {syncable_prefs_ids::kShowAppsShortcutInBookmarkBar,
           syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {bookmarks::prefs::kShowTabGroupsInBookmarkBar,
+         {syncable_prefs_ids::kShowTabGroupsInBookmarkBar, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kNone}},
         {bookmarks::prefs::kShowBookmarkBar,
          {syncable_prefs_ids::kShowBookmarkBar, syncer::PREFERENCES,
           PrefSensitivity::kNone, MergeBehavior::kNone}},
         {bookmarks::prefs::kShowManagedBookmarksInBookmarkBar,
          {syncable_prefs_ids::kShowManagedBookmarksInBookmarkBar,
           syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kClearBrowsingDataHistoryNoticeShownTimes,
-         {syncable_prefs_ids::kClearBrowsingDataHistoryNoticeShownTimes,
-          syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteBrowsingHistory,
-         {syncable_prefs_ids::kDeleteBrowsingHistory, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteBrowsingHistoryBasic,
-         {syncable_prefs_ids::kDeleteBrowsingHistoryBasic, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteCache,
-         {syncable_prefs_ids::kDeleteCache, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteCacheBasic,
-         {syncable_prefs_ids::kDeleteCacheBasic, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteCookies,
-         {syncable_prefs_ids::kDeleteCookies, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteCookiesBasic,
-         {syncable_prefs_ids::kDeleteCookiesBasic, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteDownloadHistory,
-         {syncable_prefs_ids::kDeleteDownloadHistory, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteFormData,
-         {syncable_prefs_ids::kDeleteFormData, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteHostedAppsData,
-         {syncable_prefs_ids::kDeleteHostedAppsData, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeletePasswords,
-         {syncable_prefs_ids::kDeletePasswords, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteSiteSettings,
-         {syncable_prefs_ids::kDeleteSiteSettings, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteTimePeriod,
-         {syncable_prefs_ids::kDeleteTimePeriod, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteTimePeriodBasic,
-         {syncable_prefs_ids::kDeleteTimePeriodBasic, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteTimePeriodV2,
-         {syncable_prefs_ids::kDeleteTimePeriodV2, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kDeleteTimePeriodV2Basic,
-         {syncable_prefs_ids::kDeleteTimePeriodV2Basic, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
         {browsing_data::prefs::kLastClearBrowsingDataTime,
          {syncable_prefs_ids::kLastClearBrowsingDataTime, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {browsing_data::prefs::kPreferencesMigratedToBasic,
-         {syncable_prefs_ids::kPreferencesMigratedToBasic, syncer::PREFERENCES,
           PrefSensitivity::kNone, MergeBehavior::kNone}},
         {commerce::kPriceEmailNotificationsEnabled,
          {syncable_prefs_ids::kPriceEmailNotificationsEnabled,
           syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {dom_distiller::prefs::kFont,
-         {syncable_prefs_ids::kFont, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {dom_distiller::prefs::kOfferReaderMode,
-         {syncable_prefs_ids::kOfferReaderMode, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {dom_distiller::prefs::kReaderForAccessibility,
-         {syncable_prefs_ids::kReaderForAccessibility, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
-        {dom_distiller::prefs::kTheme,
-         {syncable_prefs_ids::kTheme, syncer::PREFERENCES,
-          PrefSensitivity::kNone, MergeBehavior::kNone}},
         {language::prefs::kAcceptLanguages,
          {syncable_prefs_ids::kAcceptLanguages, syncer::PREFERENCES,
           PrefSensitivity::kNone, MergeBehavior::kNone}},
@@ -218,7 +243,8 @@ constexpr auto kCommonSyncablePrefsAllowlist =
           PrefSensitivity::kNone, MergeBehavior::kNone}},
         {metrics::kSyncDemographicsPrefName,
          {syncable_prefs_ids::kSyncDemographicsPrefName,
-          syncer::PRIORITY_PREFERENCES, PrefSensitivity::kNone,
+          syncer::PRIORITY_PREFERENCES,
+          PrefSensitivity::kExemptFromUserControlWhileSignedIn,
           MergeBehavior::kNone}},
         {ntp_tiles::prefs::kCustomLinksInitialized,
          {syncable_prefs_ids::kCustomLinksInitialized, syncer::PREFERENCES,
@@ -229,12 +255,19 @@ constexpr auto kCommonSyncablePrefsAllowlist =
         {omnibox::kKeywordSpaceTriggeringEnabled,
          {syncable_prefs_ids::kKeywordSpaceTriggeringEnabled,
           syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {omnibox::kShowGoogleLensShortcut,
+         {syncable_prefs_ids::kShowGoogleLensShortcut, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kNone}},
         {password_manager::prefs::kCredentialsEnableAutosignin,
          {syncable_prefs_ids::kCredentialsEnableAutosignin,
           syncer::PRIORITY_PREFERENCES, PrefSensitivity::kNone,
           MergeBehavior::kNone}},
         {password_manager::prefs::kCredentialsEnableService,
          {syncable_prefs_ids::kCredentialsEnableService,
+          syncer::PRIORITY_PREFERENCES, PrefSensitivity::kNone,
+          MergeBehavior::kNone}},
+        {password_manager::prefs::kAutomaticPasskeyUpgrades,
+         {syncable_prefs_ids::kAutomaticPasskeyUpgrades,
           syncer::PRIORITY_PREFERENCES, PrefSensitivity::kNone,
           MergeBehavior::kNone}},
         {password_manager::prefs::kPasswordDismissCompromisedAlertEnabled,
@@ -257,16 +290,44 @@ constexpr auto kCommonSyncablePrefsAllowlist =
         {prefs::kCookieControlsMode,
          {syncable_prefs_ids::kCookieControlsMode, syncer::PREFERENCES,
           PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {prefs::kCrossDeviceCrossPlatformPromosIOS16thActiveDay,
+         {syncable_prefs_ids::kCrossDeviceCrossPlatformPromosIOS16thActiveDay,
+          syncer::PREFERENCES, PrefSensitivity::kNone,
+          MergeBehavior::kMergeableDict}},
+        {prefs::kCrossDeviceMagicStackHomeModuleEnabled,
+         {syncable_prefs_ids::kCrossDeviceMagicStackHomeModuleEnabled,
+          syncer::PREFERENCES, PrefSensitivity::kNone,
+          MergeBehavior::kMergeableDict}},
+        {prefs::kCrossDeviceMostVisitedHomeModuleEnabled,
+         {syncable_prefs_ids::kCrossDeviceMostVisitedHomeModuleEnabled,
+          syncer::PREFERENCES, PrefSensitivity::kNone,
+          MergeBehavior::kMergeableDict}},
+        {prefs::kCrossDeviceOmniboxIsInBottomPosition,
+         {syncable_prefs_ids::kCrossDeviceOmniboxIsInBottomPosition,
+          syncer::PREFERENCES, PrefSensitivity::kNone,
+          MergeBehavior::kMergeableDict}},
+        {prefs::kCrossDevicePriceTrackingHomeModuleEnabled,
+         {syncable_prefs_ids::kCrossDevicePriceTrackingHomeModuleEnabled,
+          syncer::PREFERENCES, PrefSensitivity::kNone,
+          MergeBehavior::kMergeableDict}},
+        {prefs::kCrossDeviceSafetyCheckHomeModuleEnabled,
+         {syncable_prefs_ids::kCrossDeviceSafetyCheckHomeModuleEnabled,
+          syncer::PREFERENCES, PrefSensitivity::kNone,
+          MergeBehavior::kMergeableDict}},
+        {prefs::kCrossDeviceTabResumptionHomeModuleEnabled,
+         {syncable_prefs_ids::kCrossDeviceTabResumptionHomeModuleEnabled,
+          syncer::PREFERENCES, PrefSensitivity::kNone,
+          MergeBehavior::kMergeableDict}},
+        {prefs::kCrossDeviceTipsHomeModuleEnabled,
+         {syncable_prefs_ids::kCrossDeviceTipsHomeModuleEnabled,
+          syncer::PREFERENCES, PrefSensitivity::kNone,
+          MergeBehavior::kMergeableDict}},
         {prefs::kSafeBrowsingEnabled,
          {syncable_prefs_ids::kSafeBrowsingEnabled, syncer::PREFERENCES,
           PrefSensitivity::kNone, MergeBehavior::kNone}},
-// TODO(crbug.com/1434910): Maybe move to chrome_syncable_prefs_database.cc,
-// see bug.
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-        {prefs::kSyncedDefaultSearchProviderGUID,
-         {syncable_prefs_ids::kSyncedDefaultSearchProviderGUID,
-          syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+        {tab_groups::prefs::kAutoPinNewTabGroups,
+         {syncable_prefs_ids::kAutoPinNewTabGroups, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kNone}},
         {translate::TranslatePrefs::kPrefForceTriggerTranslateCount,
          {syncable_prefs_ids::kPrefForceTriggerTranslateCount,
           syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
@@ -302,10 +363,11 @@ constexpr auto kCommonSyncablePrefsAllowlist =
           PrefSensitivity::kNone, MergeBehavior::kNone}},
 // For Ash, the OS_PRIORITY_PREFERENCES equivalent is defined in
 // chrome/browser/sync/prefs/chrome_syncable_prefs_database.cc instead.
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
         {variations::kDogfoodGroupsSyncPrefName,
          {syncable_prefs_ids::kDogfoodGroupsSyncPrefName,
-          syncer::PRIORITY_PREFERENCES, PrefSensitivity::kNone,
+          syncer::PRIORITY_PREFERENCES,
+          PrefSensitivity::kExemptFromUserControlWhileSignedIn,
           MergeBehavior::kNone}},
 #endif
         {kSyncablePrefForTesting,
@@ -326,24 +388,91 @@ constexpr auto kCommonSyncablePrefsAllowlist =
          {syncable_prefs_ids::kSyncableHistorySensitiveListPrefForTesting,
           syncer::PREFERENCES, PrefSensitivity::kSensitiveRequiresHistory,
           MergeBehavior::kNone}},
+        {tab_groups::prefs::kSyncableTabGroups,
+         {syncable_prefs_ids::kSyncableTabGroups, syncer::PREFERENCES,
+          sync_preferences::PrefSensitivity::kNone,
+          sync_preferences::MergeBehavior::kNone}},
         {autofill::prefs::kAutofillPaymentCardBenefits,
          {syncable_prefs_ids::kAutofillPaymentCardBenefits, syncer::PREFERENCES,
           PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {plus_addresses::prefs::kFirstPlusAddressCreationTime,
+         {syncable_prefs_ids::kFirstPlusAddressCreationTime,
+          syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {plus_addresses::prefs::kLastPlusAddressFillingTime,
+         {syncable_prefs_ids::kLastPlusAddressFillingTime, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {prefs::kSafeBrowsingEnhanced,
+         {syncable_prefs_ids::kSafeBrowsingEnhanced, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kNone}},
+#if BUILDFLAG(IS_ANDROID)
+        {autofill::prefs::kFacilitatedPaymentsPix,
+         {syncable_prefs_ids::kFacilitatedPaymentsPix, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {autofill::prefs::kFacilitatedPaymentsEwallet,
+         {syncable_prefs_ids::kFacilitatedPaymentsEwallet, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {autofill::prefs::kFacilitatedPaymentsPixAccountLinking,
+         {syncable_prefs_ids::kFacilitatedPaymentsPixAccountLinking,
+          syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {autofill::prefs::kFacilitatedPaymentsA2AEnabled,
+         {syncable_prefs_ids::kFacilitatedPaymentsA2AEnabled,
+          syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {autofill::prefs::kFacilitatedPaymentsA2ATriggeredOnce,
+         {syncable_prefs_ids::kFacilitatedPaymentsA2ATriggeredOnce,
+          syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+#endif  // BUILDFLAG(IS_ANDROID)
+        {autofill::prefs::kAutofillBnplEnabled,
+         {syncable_prefs_ids::kAutofillBnplEnabled, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {autofill::prefs::kAutofillHasSeenBnpl,
+         {syncable_prefs_ids::kAutofillHasSeenBnpl, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {kSyncablePriorityPrefForTesting,
+         {syncable_prefs_ids::kSyncablePriorityPrefForTesting,
+          syncer::PRIORITY_PREFERENCES, PrefSensitivity::kNone,
+          MergeBehavior::kNone}},
+        {kSyncableAlwaysSyncingPriorityPrefForTesting,
+         {syncable_prefs_ids::kSyncableAlwaysSyncingPriorityPrefForTesting,
+          syncer::PRIORITY_PREFERENCES,
+          PrefSensitivity::kExemptFromUserControlWhileSignedIn,
+          MergeBehavior::kNone}},
+        {omnibox::kShowSearchTools,
+         {syncable_prefs_ids::kShowSearchTools, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {autofill::prefs::kAutofillHomeMetadata,
+         {syncable_prefs_ids::kAutofillHomeMetadata,
+          syncer::PRIORITY_PREFERENCES,
+          PrefSensitivity::kExemptFromUserControlWhileSignedIn,
+          MergeBehavior::kNone}},
+        {autofill::prefs::kAutofillWorkMetadata,
+         {syncable_prefs_ids::kAutofillWorkMetadata,
+          syncer::PRIORITY_PREFERENCES,
+          PrefSensitivity::kExemptFromUserControlWhileSignedIn,
+          MergeBehavior::kNone}},
+        {autofill::prefs::kAutofillAmountExtractionAiTermsSeen,
+         {syncable_prefs_ids::kAutofillAmountExtractionAiTermsSeen,
+          syncer::PREFERENCES, PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {omnibox::kShowAiModeOmniboxButton,
+         {syncable_prefs_ids::kShowAiModeOmniboxButton, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kNone}},
+        {prefs::kIOSPromoReminder,
+         {syncable_prefs_ids::kIOSPromoReminder, syncer::PREFERENCES,
+          PrefSensitivity::kNone, MergeBehavior::kMergeableDict}},
     });
 
 }  // namespace
 
 std::optional<SyncablePrefMetadata>
 CommonSyncablePrefsDatabase::GetSyncablePrefMetadata(
-    const std::string& pref_name) const {
-  const auto* it = kCommonSyncablePrefsAllowlist.find(pref_name);
+    std::string_view pref_name) const {
+  const auto it = kCommonSyncablePrefsAllowlist.find(pref_name);
   if (it == kCommonSyncablePrefsAllowlist.end()) {
     return std::nullopt;
   }
   return it->second;
 }
 
-std::map<base::StringPiece, SyncablePrefMetadata>
+std::map<std::string_view, SyncablePrefMetadata>
 CommonSyncablePrefsDatabase::GetAllSyncablePrefsForTest() const {
   return {kCommonSyncablePrefsAllowlist.begin(),
           kCommonSyncablePrefsAllowlist.end()};

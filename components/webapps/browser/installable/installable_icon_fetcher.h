@@ -9,6 +9,7 @@
 
 #include "base/functional/callback.h"
 #include "base/task/cancelable_task_tracker.h"
+#include "build/android_buildflags.h"
 #include "components/webapps/browser/installable/installable_logging.h"
 #include "components/webapps/browser/installable/installable_page_data.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
@@ -20,7 +21,7 @@ class WebContents;
 }  // namespace content
 
 namespace favicon_base {
-struct FaviconRawBitmapResult;
+struct LargeIconResult;
 }
 
 namespace webapps {
@@ -54,14 +55,22 @@ class InstallableIconFetcher {
       const SkBitmap& bitmap);
 
   void FetchFavicon();
-  void OnFaviconFetched(
-      const favicon_base::FaviconRawBitmapResult& bitmap_result);
+  void OnFaviconFetched(const favicon_base::LargeIconResult& result);
 
   void OnIconFetched(const GURL& icon_url,
                      const blink::mojom::ManifestImageResource_Purpose purpose,
                      const SkBitmap& bitmap);
 
+  // Gives a chance for desktop android to generate an icon instead of
+  // ending with an error. Other platforms end immediately with an error.
+  void MaybeEndWithError(InstallableStatusCode code);
+
+  // Ends the fetch with an error.
   void EndWithError(InstallableStatusCode code);
+
+#if BUILDFLAG(IS_DESKTOP_ANDROID)
+  void OnHomeScreenIconGenerated(const GURL& page_url, const SkBitmap& bitmap);
+#endif
 
   base::WeakPtr<content::WebContents> web_contents_;
 
@@ -69,11 +78,10 @@ class InstallableIconFetcher {
 
   const raw_ref<const std::vector<blink::Manifest::ImageResource>>
       manifest_icons_;
-  const bool prefer_maskable_;
+  bool prefer_maskable_;
   const bool fetch_favicon_;
   base::OnceCallback<void(InstallableStatusCode)> finish_callback_;
 
-  std::vector<IconPurpose> downloading_icons_type_;
   base::CancelableTaskTracker favicon_task_tracker_;
 
   base::WeakPtrFactory<InstallableIconFetcher> weak_ptr_factory_{this};

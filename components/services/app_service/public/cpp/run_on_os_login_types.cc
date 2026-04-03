@@ -22,24 +22,15 @@ RunOnOsLogin::RunOnOsLogin(RunOnOsLoginMode login_mode, bool is_managed)
 
 RunOnOsLogin::~RunOnOsLogin() = default;
 
-bool RunOnOsLogin::operator==(const RunOnOsLogin& other) const {
-  return login_mode == other.login_mode && is_managed == other.is_managed;
-}
-
-bool RunOnOsLogin::operator!=(const RunOnOsLogin& other) const {
-  return !(*this == other);
-}
-
-base::Value::Dict ConvertRunOnOsLoginToDict(
-    const RunOnOsLogin& run_on_os_login) {
-  base::Value::Dict dict;
+base::DictValue ConvertRunOnOsLoginToDict(const RunOnOsLogin& run_on_os_login) {
+  base::DictValue dict;
   dict.Set(kLoginModeKey, static_cast<int>(run_on_os_login.login_mode));
   dict.Set(kIsManagedKey, run_on_os_login.is_managed);
   return dict;
 }
 
 std::optional<RunOnOsLogin> ConvertDictToRunOnOsLogin(
-    const base::Value::Dict* dict) {
+    const base::DictValue* dict) {
   if (!dict) {
     return std::nullopt;
   }

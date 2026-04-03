@@ -4,10 +4,10 @@
 
 #include "device/fido/mac/get_assertion_operation.h"
 
+#import <Foundation/Foundation.h>
+
 #include <set>
 #include <string>
-
-#import <Foundation/Foundation.h>
 
 #include "base/apple/foundation_util.h"
 #include "base/apple/osstatus_logging.h"
@@ -16,13 +16,13 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/device_event_log/device_event_log.h"
-#include "device/fido/features.h"
-#include "device/fido/fido_transport_protocol.h"
-#include "device/fido/fido_types.h"
 #include "device/fido/mac/credential_metadata.h"
 #include "device/fido/mac/util.h"
-#include "device/fido/public_key_credential_descriptor.h"
-#include "device/fido/public_key_credential_user_entity.h"
+#include "device/fido/public/features.h"
+#include "device/fido/public/fido_transport_protocol.h"
+#include "device/fido/public/fido_types.h"
+#include "device/fido/public/public_key_credential_descriptor.h"
+#include "device/fido/public/public_key_credential_user_entity.h"
 #include "device/fido/strings/grit/fido_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -50,25 +50,26 @@ void GetAssertionOperation::Run() {
 
   if (!credentials) {
     FIDO_LOG(ERROR) << "FindCredentialsFromCredentialDescriptorList() failed";
-    std::move(callback_).Run(CtapDeviceResponseCode::kCtap2ErrOther, {});
+    std::move(callback_).Run(GetAssertionStatus::kAuthenticatorResponseInvalid,
+                             {});
     return;
   }
 
   if (credentials->empty()) {
     // This can happen if e.g. a credential is deleted after it is shown to the
     // user on the account picker.
-    std::move(callback_).Run(CtapDeviceResponseCode::kCtap2ErrNoCredentials,
-                             {});
+    std::move(callback_).Run(
+        GetAssertionStatus::kUserConsentButCredentialNotRecognized, {});
     return;
   }
 
-  bool require_uv =
-      DeviceHasBiometricsAvailable() ||
-      request_.user_verification == UserVerificationRequirement::kRequired ||
-      std::any_of(credentials->begin(), credentials->end(),
-                  [](const Credential& credential) {
-                    return credential.RequiresUvForSignature();
-                  });
+  bool require_uv = ProfileAuthenticatorWillDoUserVerification(
+                        request_.user_verification,
+                        device::fido::mac::DeviceHasBiometricsAvailable()) ||
+                    std::any_of(credentials->begin(), credentials->end(),
+                                [](const Credential& credential) {
+                                  return credential.RequiresUvForSignature();
+                                });
   if (require_uv) {
     touch_id_context_->PromptTouchId(
         l10n_util::GetStringFUTF16(IDS_WEBAUTHN_TOUCH_ID_PROMPT_REASON,
@@ -86,8 +87,7 @@ void GetAssertionOperation::Run() {
 
 void GetAssertionOperation::PromptTouchIdDone(bool success) {
   if (!success) {
-    std::move(callback_).Run(CtapDeviceResponseCode::kCtap2ErrOperationDenied,
-                             {});
+    std::move(callback_).Run(GetAssertionStatus::kUserConsentDenied, {});
     return;
   }
 
@@ -104,8 +104,7 @@ void GetAssertionOperation::PromptTouchIdDone(bool success) {
 
   if (!credentials || credentials->empty()) {
     FIDO_LOG(ERROR) << "Failed to fetch credentials";
-    std::move(callback_).Run(CtapDeviceResponseCode::kCtap2ErrOperationDenied,
-                             {});
+    std::move(callback_).Run(GetAssertionStatus::kUserConsentDenied, {});
     return;
   }
 
@@ -131,12 +130,12 @@ void GetAssertionOperation::GenerateResponses(std::list<Credential> credentials,
   }
 
   if (responses.empty()) {
-    std::move(callback_).Run(CtapDeviceResponseCode::kCtap2ErrOther, {});
+    std::move(callback_).Run(GetAssertionStatus::kAuthenticatorResponseInvalid,
+                             {});
     return;
   }
 
-  std::move(callback_).Run(CtapDeviceResponseCode::kSuccess,
-                           std::move(responses));
+  std::move(callback_).Run(GetAssertionStatus::kSuccess, std::move(responses));
 }
 
 std::optional<AuthenticatorGetAssertionResponse>

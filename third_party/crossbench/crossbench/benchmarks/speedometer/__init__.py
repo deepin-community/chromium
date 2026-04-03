@@ -4,13 +4,24 @@
 
 from __future__ import annotations
 
-from .speedometer_2_0 import Speedometer20Benchmark
-from .speedometer_2_1 import Speedometer21Benchmark
-from .speedometer_3_0 import Speedometer30Benchmark
+from typing import Final
 
-benchmark_classes = [
-    Speedometer20Benchmark, Speedometer21Benchmark, Speedometer30Benchmark
-]
+from crossbench.benchmarks.speedometer.speedometer_1_0 import \
+    Speedometer10Benchmark
+from crossbench.benchmarks.speedometer.speedometer_2_0 import \
+    Speedometer20Benchmark
+from crossbench.benchmarks.speedometer.speedometer_2_1 import \
+    Speedometer21Benchmark
+from crossbench.benchmarks.speedometer.speedometer_3_0 import \
+    Speedometer30Benchmark
+from crossbench.benchmarks.speedometer.speedometer_3_1 import \
+    Speedometer31Benchmark
+from crossbench.benchmarks.speedometer.speedometer_main import \
+    SpeedometerMainBenchmark
+
+benchmark_classes: Final = (Speedometer10Benchmark, Speedometer20Benchmark,
+                            Speedometer21Benchmark, Speedometer30Benchmark,
+                            Speedometer31Benchmark, SpeedometerMainBenchmark)
 
 _versions = set()
 for benchmark_cls in benchmark_classes:

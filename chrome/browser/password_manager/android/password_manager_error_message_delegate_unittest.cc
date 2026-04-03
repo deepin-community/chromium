@@ -6,8 +6,11 @@
 
 #include "base/android/jni_android.h"
 #include "base/functional/callback_helpers.h"
+#include "base/strings/strcat.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
+#include "chrome/browser/android/android_theme_resources.h"
+#include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/password_manager/android/mock_password_manager_error_message_helper_bridge.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
@@ -16,6 +19,8 @@
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/sync/base/features.h"
+#include "components/sync/service/sync_service_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -23,10 +28,10 @@ using testing::Return;
 
 namespace {
 constexpr char kErrorMessageDismissalReasonHistogramName[] =
-    "PasswordManager.ErrorMessageDismissalReason";
+    "PasswordManager.ErrorMessageDismissalReason.";
 constexpr char kErrorMessageDisplayReasonHistogramName[] =
     "PasswordManager.ErrorMessageDisplayReason";
-}
+}  // namespace
 
 class PasswordManagerErrorMessageDelegateTest
     : public ChromeRenderViewHostTestHarness {
@@ -63,6 +68,8 @@ class PasswordManagerErrorMessageDelegateTest
 
   messages::MessageWrapper* GetMessageWrapper();
 
+  base::test::ScopedFeatureList scoped_feature_list_;
+
  private:
   TestingPrefServiceSimple test_pref_service_;
   std::unique_ptr<PasswordManagerErrorMessageDelegate> delegate_;
@@ -85,6 +92,8 @@ void PasswordManagerErrorMessageDelegateTest::SetUp() {
   ChromeRenderViewHostTestHarness::SetUp();
   messages::MessageDispatcherBridge::SetInstanceForTesting(
       &message_dispatcher_bridge_);
+  test_pref_service_.registry()->RegisterTimePref(
+      password_manager::prefs::kUPMErrorUIShownTimestamp, base::Time());
 }
 
 void PasswordManagerErrorMessageDelegateTest::TearDown() {
@@ -95,7 +104,7 @@ void PasswordManagerErrorMessageDelegateTest::TearDown() {
 void PasswordManagerErrorMessageDelegateTest::DisplayMessageAndExpectEnqueued(
     password_manager::ErrorMessageFlowType flow_type,
     password_manager::PasswordStoreBackendErrorType error_type) {
-  EXPECT_CALL(*helper_bridge_, ShouldShowErrorUI(web_contents()))
+  EXPECT_CALL(*helper_bridge_, ShouldShowSignInErrorUI(web_contents()))
       .WillOnce(Return(true));
   EXPECT_CALL(message_dispatcher_bridge_, EnqueueMessage);
   delegate_->MaybeDisplayErrorMessage(web_contents(), pref_service(), flow_type,
@@ -169,7 +178,8 @@ TEST_F(PasswordManagerErrorMessageDelegateTest,
 
 // Tests that the sign in flow starts when the user clicks the "Sign in" button
 // and that the metrics are recorded correctly.
-TEST_F(PasswordManagerErrorMessageDelegateTest, SignInOnActionClick) {
+TEST_F(PasswordManagerErrorMessageDelegateTest,
+       SignInOnActionClickToSavePasswords) {
   base::HistogramTester histogram_tester;
 
   DisplayMessageAndExpectEnqueued(
@@ -184,9 +194,34 @@ TEST_F(PasswordManagerErrorMessageDelegateTest, SignInOnActionClick) {
   // The message needs to be dismissed manually in tests. In production code
   // this happens automatically, but on the java side.
   DismissMessageAndExpectDismissed(messages::DismissReason::PRIMARY_ACTION);
-  histogram_tester.ExpectUniqueSample(kErrorMessageDismissalReasonHistogramName,
-                                      messages::DismissReason::PRIMARY_ACTION,
-                                      1);
+  histogram_tester.ExpectUniqueSample(
+      base::StrCat(
+          {kErrorMessageDismissalReasonHistogramName, "AuthErrorResolvable"}),
+      messages::DismissReason::PRIMARY_ACTION, 1);
+}
+
+// Tests that the sign in flow starts when the user clicks the "Sign in" button
+// and that the metrics are recorded correctly.
+TEST_F(PasswordManagerErrorMessageDelegateTest,
+       SignInOnActionClickToUsePasswords) {
+  base::HistogramTester histogram_tester;
+
+  DisplayMessageAndExpectEnqueued(
+      password_manager::ErrorMessageFlowType::kSaveFlow,
+      password_manager::PasswordStoreBackendErrorType::kAuthErrorUnresolvable);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+
+  EXPECT_CALL(*helper_bridge(),
+              StartUpdateAccountCredentialsFlow(web_contents()));
+  // Trigger the click action on the "Sign in" button and dismiss the message.
+  GetMessageWrapper()->HandleActionClick(base::android::AttachCurrentThread());
+  // The message needs to be dismissed manually in tests. In production code
+  // this happens automatically, but on the java side.
+  DismissMessageAndExpectDismissed(messages::DismissReason::PRIMARY_ACTION);
+  histogram_tester.ExpectUniqueSample(
+      base::StrCat(
+          {kErrorMessageDismissalReasonHistogramName, "AuthErrorUnresolvable"}),
+      messages::DismissReason::PRIMARY_ACTION, 1);
 }
 
 // Tests that the metrics are recorded correctly when the message is
@@ -201,13 +236,15 @@ TEST_F(PasswordManagerErrorMessageDelegateTest, MetricOnAutodismissTimer) {
 
   DismissMessageAndExpectDismissed(messages::DismissReason::TIMER);
 
-  histogram_tester.ExpectUniqueSample(kErrorMessageDismissalReasonHistogramName,
-                                      messages::DismissReason::TIMER, 1);
+  histogram_tester.ExpectUniqueSample(
+      base::StrCat(
+          {kErrorMessageDismissalReasonHistogramName, "AuthErrorResolvable"}),
+      messages::DismissReason::TIMER, 1);
 }
 
 TEST_F(PasswordManagerErrorMessageDelegateTest,
        NotDisplayedWhenCondiditonNotMet) {
-  EXPECT_CALL(*helper_bridge(), ShouldShowErrorUI(web_contents()))
+  EXPECT_CALL(*helper_bridge(), ShouldShowSignInErrorUI(web_contents()))
       .WillOnce(Return(false));
   EXPECT_CALL(*message_dispatcher_bridge(), EnqueueMessage).Times(0);
   EXPECT_CALL(*mock_dismissal_callback(), Run);
@@ -250,14 +287,127 @@ TEST_F(PasswordManagerErrorMessageDelegateTest,
       password_manager::PasswordStoreBackendErrorType::kKeyRetrievalRequired);
   EXPECT_NE(nullptr, GetMessageWrapper());
 
-  EXPECT_CALL(*helper_bridge(),
-              StartTrustedVaultKeyRetrievalFlow(web_contents()));
+  EXPECT_CALL(
+      *helper_bridge(),
+      StartTrustedVaultKeyRetrievalFlow(
+          web_contents(), trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                              kPasswordManagerErrorMessage));
   GetMessageWrapper()->HandleActionClick(base::android::AttachCurrentThread());
 
   // The message needs to be dismissed manually in tests. In production code
   // this happens automatically, but on the java side.
   DismissMessageAndExpectDismissed(messages::DismissReason::PRIMARY_ACTION);
-  histogram_tester.ExpectUniqueSample(kErrorMessageDismissalReasonHistogramName,
-                                      messages::DismissReason::PRIMARY_ACTION,
-                                      1);
+  histogram_tester.ExpectUniqueSample(
+      base::StrCat(
+          {kErrorMessageDismissalReasonHistogramName, "KeyRetrievalRequired"}),
+      messages::DismissReason::PRIMARY_ACTION, 1);
+}
+
+// Tests that the key retrieval flow starts when the user clicks the action
+// button and that the metrics are recorded correctly.
+TEST_F(PasswordManagerErrorMessageDelegateTest,
+       StartTrustedVaultKeyRetrievalFlowForEmptySecurityDomain) {
+  base::HistogramTester histogram_tester;
+
+  DisplayMessageAndExpectEnqueued(
+      password_manager::ErrorMessageFlowType::kSaveFlow,
+      password_manager::PasswordStoreBackendErrorType::kEmptySecurityDomain);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+
+  EXPECT_CALL(
+      *helper_bridge(),
+      StartTrustedVaultKeyRetrievalFlow(
+          web_contents(), trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                              kPasswordManagerErrorMessage));
+  GetMessageWrapper()->HandleActionClick(base::android::AttachCurrentThread());
+
+  // The message needs to be dismissed manually in tests. In production code
+  // this happens automatically, but on the java side.
+  DismissMessageAndExpectDismissed(messages::DismissReason::PRIMARY_ACTION);
+  histogram_tester.ExpectUniqueSample(
+      base::StrCat(
+          {kErrorMessageDismissalReasonHistogramName, "EmptySecurityDomain"}),
+      messages::DismissReason::PRIMARY_ACTION, 1);
+}
+
+// Tests that the key retrieval flow starts when the user clicks the action
+// button and that the metrics are recorded correctly.
+TEST_F(PasswordManagerErrorMessageDelegateTest,
+       StartTrustedVaultKeyRetrievalFlowForIrretrievableSecurityDomain) {
+  base::HistogramTester histogram_tester;
+
+  DisplayMessageAndExpectEnqueued(
+      password_manager::ErrorMessageFlowType::kSaveFlow,
+      password_manager::PasswordStoreBackendErrorType::
+          kIrretrievableSecurityDomain);
+  EXPECT_NE(nullptr, GetMessageWrapper());
+
+  EXPECT_CALL(
+      *helper_bridge(),
+      StartTrustedVaultKeyRetrievalFlow(
+          web_contents(), trusted_vault::TrustedVaultUserActionTriggerForUMA::
+                              kPasswordManagerErrorMessage));
+  GetMessageWrapper()->HandleActionClick(base::android::AttachCurrentThread());
+
+  // The message needs to be dismissed manually in tests. In production code
+  // this happens automatically, but on the java side.
+  DismissMessageAndExpectDismissed(messages::DismissReason::PRIMARY_ACTION);
+  histogram_tester.ExpectUniqueSample(
+      base::StrCat({kErrorMessageDismissalReasonHistogramName,
+                    "IrretrievableSecurityDomain"}),
+      messages::DismissReason::PRIMARY_ACTION, 1);
+}
+
+// Test that SaveErrorUIShownTimestamp is NOT called on display for
+// KeyRetrievalRequired when the feature is enabled. It IS called when the
+// is dismissed by guesture.
+TEST_F(PasswordManagerErrorMessageDelegateTest,
+       TrustedVaultMessageSavesTimestampOnUserDismissal) {
+  scoped_feature_list_.InitAndEnableFeature(
+      syncer::kSyncTrustedVaultErrorMessageDuration);
+
+  // Expect NO save on display.
+  EXPECT_CALL(*helper_bridge(), SaveErrorUIShownTimestamp(web_contents()))
+      .Times(0);
+  DisplayMessageAndExpectEnqueued(
+      password_manager::ErrorMessageFlowType::kSaveFlow,
+      password_manager::PasswordStoreBackendErrorType::kKeyRetrievalRequired);
+
+  // Expect SAVE on dismissal by user gesture.
+  EXPECT_CALL(*helper_bridge(), SaveErrorUIShownTimestamp(web_contents()));
+  DismissMessageAndExpectDismissed(messages::DismissReason::GESTURE);
+}
+
+// Test that SaveErrorUIShownTimestamp is NOT called on display for
+// KeyRetrievalRequired when the feature is enabled. It ALSO not called when the
+// is dismissed by timer of that message — another message may follow.
+TEST_F(PasswordManagerErrorMessageDelegateTest,
+       TrustedVaultMessageDoesNotSaveTimestampOnTimerDismissal) {
+  scoped_feature_list_.InitAndEnableFeature(
+      syncer::kSyncTrustedVaultErrorMessageDuration);
+
+  // Expect NO save on display.
+  EXPECT_CALL(*helper_bridge(), SaveErrorUIShownTimestamp(web_contents()))
+      .Times(0);
+  DisplayMessageAndExpectEnqueued(
+      password_manager::ErrorMessageFlowType::kSaveFlow,
+      password_manager::PasswordStoreBackendErrorType::kKeyRetrievalRequired);
+
+  // Expect NO save on dismissal by timer.
+  EXPECT_CALL(*helper_bridge(), SaveErrorUIShownTimestamp(web_contents()))
+      .Times(0);
+  DismissMessageAndExpectDismissed(messages::DismissReason::TIMER);
+}
+
+// Test that SaveErrorUIShownTimestamp IS called on display if the feature is
+// disabled.
+TEST_F(PasswordManagerErrorMessageDelegateTest,
+       DisplaySavesTimestampForAuthErrorWithFeatureDisabled) {
+  scoped_feature_list_.InitAndDisableFeature(
+      syncer::kSyncTrustedVaultErrorMessageDuration);
+
+  EXPECT_CALL(*helper_bridge(), SaveErrorUIShownTimestamp(web_contents()));
+  DisplayMessageAndExpectEnqueued(
+      password_manager::ErrorMessageFlowType::kSaveFlow,
+      password_manager::PasswordStoreBackendErrorType::kKeyRetrievalRequired);
 }

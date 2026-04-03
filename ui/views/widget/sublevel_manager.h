@@ -24,15 +24,6 @@ class VIEWS_EXPORT SublevelManager : public WidgetObserver {
 
   ~SublevelManager() override;
 
-  // Tracks a child widget.
-  void TrackChildWidget(Widget* child);
-
-  // Untracks a child widget.
-  // This is intended for internal use and to work around platform-specific
-  // compatibility issues.
-  // You should not use this.
-  void UntrackChildWidget(Widget* child);
-
   // Sets the sublevel of `owner_` and triggers `EnsureOwnerSublevel()`.
   void SetSublevel(int sublevel);
 
@@ -43,16 +34,29 @@ class VIEWS_EXPORT SublevelManager : public WidgetObserver {
   // to ensure that its sublevel is respected.
   void EnsureOwnerSublevel();
 
- private:
-  // WidgetObserver:
-  void OnWidgetDestroying(Widget* owner) override;
+  // Repositions `owner_` and its descendants to ensure that their sublevels
+  // are respected.
+  void EnsureOwnerTreeSublevel();
 
+  // WidgetObserver:
+  void OnWidgetChildAdded(Widget* owner, Widget* child) override;
+  // There are some calls to `OnWidgetChildRemoved` from external callers.  This
+  // is intended for internal use and to work around platform-specific
+  // compatibility issues.
+  // You should not use this directly.
+  void OnWidgetChildRemoved(Widget* owner, Widget* child) override;
+
+ private:
   // Repositions `child_` among its siblings of the same z-order level
   // to ensure that its sublevel is respected.
   void OrderChildWidget(Widget* child);
 
   // Check if a child widget is being tracked.
   bool IsTrackingChildWidget(Widget* child);
+
+  // Returns true if `child` is already in a position that satisfies the
+  // sublevel ordering constraints relative to its siblings.
+  bool IsChildWidgetOrderValid(Widget* child);
 
   // Returns the position in `children_` before which `child` should be inserted
   // to maintain the sublevel ordering. This methods assumes that `child` is not

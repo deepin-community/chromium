@@ -8,8 +8,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
+
 #include "base/containers/span.h"
-#include "base/hash/md5.h"
 
 // BDict (binary dictionary) format. All offsets are little endian.
 //
@@ -33,7 +34,7 @@
 //     Array of NULL terminated strings. It will end in a double-NULL.
 //
 //   Affix rules table:
-//     List of LF termianted lines. NULL terminated.
+//     List of LF terminated lines. NULL terminated.
 //
 //   Replacements table:
 //     List of pairs of NULL teminated words. The end is indicated by a
@@ -43,7 +44,7 @@
 //     for replacing ("foo" with "bar") and ("a" with "b").
 //
 //   Other rules table:
-//     List of LF termianted lines. NULL terminated.
+//     List of LF terminated lines. NULL terminated.
 //
 //
 // Dic table. This stores the .dic file which contains the words in the
@@ -121,7 +122,9 @@ class BDict {
     uint32_t dic_offset;  // Offset of the dic data.
 
     // Added by version 2.0.
-    base::MD5Digest digest;  // MD5 digest of the aff data and the dic data.
+
+    // MD5 digest of the aff data and the dic data.
+    std::array<uint8_t, 16> digest;
   };
 
   // AFF section ===============================================================

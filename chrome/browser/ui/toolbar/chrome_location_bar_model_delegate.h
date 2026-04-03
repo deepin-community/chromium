@@ -38,7 +38,6 @@ class ChromeLocationBarModelDelegate : public LocationBarModelDelegate {
   bool GetURL(GURL* url) const override;
   bool ShouldPreventElision() override;
   bool ShouldDisplayURL() const override;
-  bool ShouldUseUpdatedConnectionSecurityIndicators() const override;
   security_state::SecurityLevel GetSecurityLevel() const override;
   net::CertStatus GetCertStatus() const override;
   std::unique_ptr<security_state::VisibleSecurityState>
@@ -49,6 +48,8 @@ class ChromeLocationBarModelDelegate : public LocationBarModelDelegate {
   bool IsNewTabPage() const override;
   bool IsNewTabPageURL(const GURL& url) const override;
   bool IsHomePage(const GURL& url) const override;
+  bool IsContextualTasksPage() const override;
+  GURL GetContextualTasksInnerFrameURL() const override;
   AutocompleteClassifier* GetAutocompleteClassifier() override;
   TemplateURLService* GetTemplateURLService() override;
 

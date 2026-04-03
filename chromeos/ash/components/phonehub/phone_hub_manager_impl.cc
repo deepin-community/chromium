@@ -49,8 +49,7 @@
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "components/session_manager/core/session_manager.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 namespace {
 
@@ -70,7 +69,7 @@ PhoneHubManagerImpl::PhoneHubManagerImpl(
         attestation_certificate_generator)
     : icon_decoder_(std::make_unique<IconDecoderImpl>()),
       phone_hub_structured_metrics_logger_(
-          std::make_unique<PhoneHubStructuredMetricsLogger>()),
+          std::make_unique<PhoneHubStructuredMetricsLogger>(pref_service)),
       connection_manager_(
           std::make_unique<secure_channel::ConnectionManagerImpl>(
               multidevice_setup_client,
@@ -84,7 +83,8 @@ PhoneHubManagerImpl::PhoneHubManagerImpl(
           multidevice_setup_client,
           connection_manager_.get(),
           session_manager::SessionManager::Get(),
-          chromeos::PowerManagerClient::Get())),
+          chromeos::PowerManagerClient::Get(),
+          phone_hub_structured_metrics_logger_.get())),
       user_action_recorder_(std::make_unique<UserActionRecorderImpl>(
           feature_status_provider_.get())),
       phone_hub_ui_readiness_recorder_(
@@ -166,7 +166,8 @@ PhoneHubManagerImpl::PhoneHubManagerImpl(
           app_stream_manager_.get(),
           app_stream_launcher_data_model_.get(),
           icon_decoder_.get(),
-          phone_hub_ui_readiness_recorder_.get())),
+          phone_hub_ui_readiness_recorder_.get(),
+          phone_hub_structured_metrics_logger_.get())),
       tether_controller_(
           std::make_unique<TetherControllerImpl>(phone_model_.get(),
                                                  user_action_recorder_.get(),
@@ -195,18 +196,14 @@ PhoneHubManagerImpl::PhoneHubManagerImpl(
                                      std::move(camera_roll_download_manager))
                                : nullptr),
       feature_setup_response_processor_(
-          features::IsPhoneHubFeatureSetupErrorHandlingEnabled()
-              ? std::make_unique<FeatureSetupResponseProcessor>(
-                    message_receiver_.get(),
-                    multidevice_feature_access_manager_.get())
-              : nullptr),
-      ping_manager_(features::IsPhoneHubPingOnBubbleOpenEnabled()
-                        ? std::make_unique<PingManagerImpl>(
-                              connection_manager_.get(),
-                              feature_status_provider_.get(),
-                              message_receiver_.get(),
-                              message_sender_.get())
-                        : nullptr) {}
+          std::make_unique<FeatureSetupResponseProcessor>(
+              message_receiver_.get(),
+              multidevice_feature_access_manager_.get())),
+      ping_manager_(
+          std::make_unique<PingManagerImpl>(connection_manager_.get(),
+                                            feature_status_provider_.get(),
+                                            message_receiver_.get(),
+                                            message_sender_.get())) {}
 
 PhoneHubManagerImpl::~PhoneHubManagerImpl() = default;
 
@@ -359,5 +356,4 @@ void PhoneHubManagerImpl::Shutdown() {
   phone_hub_structured_metrics_logger_.reset();
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

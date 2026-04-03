@@ -8,7 +8,6 @@
 #include <list>
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
@@ -16,6 +15,7 @@
 #include "base/uuid.h"
 #include "components/sync/base/unique_position.h"
 #include "components/sync/engine/commit_and_get_updates_types.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
 namespace bookmarks {
 class BookmarkNode;
@@ -33,7 +33,7 @@ class SyncedBookmarkTracker;
 // Responsible for merging local and remote bookmark models when bookmark sync
 // is enabled for the first time by the user (i.e. no sync metadata exists
 // locally), so we need a best-effort merge based on similarity. It is used by
-// the BookmarkModelTypeProcessor().
+// the BookmarkDataTypeProcessor().
 class BookmarkModelMerger {
  public:
   // |bookmark_model|, |favicon_service| and |bookmark_tracker| must not be
@@ -60,9 +60,9 @@ class BookmarkModelMerger {
   class RemoteTreeNode final {
    private:
     using UpdatesPerParentUuid =
-        std::unordered_map<base::Uuid,
-                           std::list<syncer::UpdateResponseData>,
-                           base::UuidHash>;
+        absl::flat_hash_map<base::Uuid,
+                            std::list<syncer::UpdateResponseData>,
+                            base::UuidHash>;
 
    public:
     // Constructs a tree given |update| as root and recursively all descendants
@@ -93,7 +93,7 @@ class BookmarkModelMerger {
     // Recursively emplaces all UUIDs (this node and descendants) into
     // |*uuid_to_remote_node_map|, which must not be null.
     void EmplaceSelfAndDescendantsByUuid(
-        std::unordered_map<base::Uuid, const RemoteTreeNode*, base::UuidHash>*
+        absl::flat_hash_map<base::Uuid, const RemoteTreeNode*, base::UuidHash>*
             uuid_to_remote_node_map) const;
 
    private:
@@ -111,7 +111,7 @@ class BookmarkModelMerger {
 
   // A forest composed of multiple trees where the root of each tree represents
   // a permanent node, keyed by server-defined unique tag of the root.
-  using RemoteForest = std::unordered_map<std::string, RemoteTreeNode>;
+  using RemoteForest = absl::flat_hash_map<std::string, RemoteTreeNode>;
 
   // Represents a pair of bookmarks, one local and one remote, that have been
   // matched by UUID. They are guaranteed to have the same type and URL (if
@@ -141,7 +141,7 @@ class BookmarkModelMerger {
   // Computes bookmark pairs that should be matched by UUID. Local bookmark
   // UUIDs may be regenerated for the case where they collide with a remote UUID
   // that is not compatible (e.g. folder vs non-folder).
-  static std::unordered_map<base::Uuid, GuidMatch, base::UuidHash>
+  static absl::flat_hash_map<base::Uuid, GuidMatch, base::UuidHash>
   FindGuidMatchesOrReassignLocal(const RemoteForest& remote_forest,
                                  BookmarkModelView* bookmark_model);
 
@@ -150,6 +150,12 @@ class BookmarkModelMerger {
   // children. It updates the |bookmark_tracker_| accordingly.
   void MergeSubtree(const bookmarks::BookmarkNode* local_node,
                     const RemoteTreeNode& remote_node);
+
+  // Makes a second pass on previously-merged subtree to detect if any of the
+  // remote updates are lacking a client tag hash. If so, it migrates the entity
+  // by issuing a deletion and a creation, using a new random GUID.
+  void MigrateBookmarksInSubtreeWithoutClientTagHash(
+      const RemoteTreeNode& remote_node);
 
   // Updates |local_node| to hold same UUID and semantics as its |remote_node|
   // match. The input nodes are two equivalent local and remote bookmarks that
@@ -210,7 +216,7 @@ class BookmarkModelMerger {
   syncer::UniquePosition GenerateUniquePositionForLocalCreation(
       const bookmarks::BookmarkNode* parent,
       size_t index,
-      const std::string& suffix) const;
+      const syncer::UniquePosition::Suffix& suffix) const;
 
   void ReportTimeMetrics();
 
@@ -226,7 +232,7 @@ class BookmarkModelMerger {
   // Preprocessed remote nodes in the form a forest where each tree's root is a
   // permanent node. Computed upon construction via BuildRemoteForest().
   const RemoteForest remote_forest_;
-  std::unordered_map<base::Uuid, GuidMatch, base::UuidHash> uuid_to_match_map_;
+  absl::flat_hash_map<base::Uuid, GuidMatch, base::UuidHash> uuid_to_match_map_;
 };
 
 }  // namespace sync_bookmarks

@@ -184,19 +184,9 @@ TEST_P(RenderPassTest, NoCorrespondingFragmentShaderOutputs) {
     EXPECT_PIXEL_RGBA8_EQ(utils::RGBA8::kRed, renderTarget, kRTSize - 1, 1);
 }
 
-DAWN_INSTANTIATE_TEST(RenderPassTest,
-                      D3D11Backend(),
-                      D3D12Backend(),
-                      D3D12Backend({}, {"use_d3d12_render_pass"}),
-                      MetalBackend(),
-                      OpenGLBackend(),
-                      OpenGLESBackend(),
-                      VulkanBackend());
-
 // Test that clearing the lower mips of an R8Unorm texture works. This is a regression test for
 // dawn:1071 where Intel Metal devices fail to do that correctly, requiring a workaround.
-class RenderPassTest_RegressionDawn1071 : public RenderPassTest {};
-TEST_P(RenderPassTest_RegressionDawn1071, ClearLowestMipOfR8Unorm) {
+TEST_P(RenderPassTest, ClearLowestMipOfR8Unorm) {
     const uint32_t kLastMipLevel = 2;
 
     // Create the texture and buffer used for readback.
@@ -230,8 +220,8 @@ TEST_P(RenderPassTest_RegressionDawn1071, ClearLowestMipOfR8Unorm) {
     // Copy the texture in the buffer.
     {
         wgpu::Extent3D copySize = {1, 1};
-        wgpu::ImageCopyTexture src = utils::CreateImageCopyTexture(tex, kLastMipLevel);
-        wgpu::ImageCopyBuffer dst = utils::CreateImageCopyBuffer(buf);
+        wgpu::TexelCopyTextureInfo src = utils::CreateTexelCopyTextureInfo(tex, kLastMipLevel);
+        wgpu::TexelCopyBufferInfo dst = utils::CreateTexelCopyBufferInfo(buf);
 
         encoder.CopyTextureToBuffer(&src, &dst, &copySize);
     }
@@ -244,21 +234,11 @@ TEST_P(RenderPassTest_RegressionDawn1071, ClearLowestMipOfR8Unorm) {
     EXPECT_BUFFER_U8_EQ(255, buf, 0);
 }
 
-DAWN_INSTANTIATE_TEST(RenderPassTest_RegressionDawn1071,
-                      D3D11Backend(),
-                      D3D12Backend(),
-                      MetalBackend(),
-                      MetalBackend({"metal_render_r8_rg8_unorm_small_mip_to_temp_texture"}),
-                      OpenGLBackend(),
-                      OpenGLESBackend(),
-                      VulkanBackend());
-
 // Test that clearing a depth16unorm texture with multiple subresources works. This is a regression
 // test for dawn:1389 where Intel Metal devices fail to do that correctly, requiring a workaround.
-class RenderPassTest_RegressionDawn1389 : public RenderPassTest {};
-TEST_P(RenderPassTest_RegressionDawn1389, ClearMultisubresourceAfterWriteDepth16Unorm) {
+TEST_P(RenderPassTest, ClearMultisubresourceAfterWriteDepth16Unorm) {
     // TODO(dawn:1705): fix this test for Intel D3D11.
-    DAWN_SUPPRESS_TEST_IF((IsD3D11() || IsANGLED3D11()) && IsIntel());
+    DAWN_SUPPRESS_TEST_IF(IsD3D11());
 
     // TODO(crbug.com/dawn/1989): Failed on Intel Gen12 GPUs because of Windows Vulkan driver issue,
     // when copying to a D16_UNORM depth texture and clearing one subresource, other subresources
@@ -292,20 +272,20 @@ TEST_P(RenderPassTest_RegressionDawn1389, ClearMultisubresourceAfterWriteDepth16
             // Initialize all subresources with WriteTexture.
             for (uint32_t level = 0; level < mipLevelCount; ++level) {
                 for (uint32_t layer = 0; layer < arrayLayerCount; ++layer) {
-                    wgpu::ImageCopyTexture imageCopyTexture =
-                        utils::CreateImageCopyTexture(tex, level, {0, 0, layer});
+                    wgpu::TexelCopyTextureInfo texelCopyTextureInfo =
+                        utils::CreateTexelCopyTextureInfo(tex, level, {0, 0, layer});
                     wgpu::Extent3D copySize = {width >> level, height >> level, 1};
 
-                    wgpu::TextureDataLayout textureDataLayout;
-                    textureDataLayout.offset = 0;
-                    textureDataLayout.bytesPerRow = copySize.width * sizeof(uint16_t);
-                    textureDataLayout.rowsPerImage = copySize.height;
+                    wgpu::TexelCopyBufferLayout texelCopyBufferLayout;
+                    texelCopyBufferLayout.offset = 0;
+                    texelCopyBufferLayout.bytesPerRow = copySize.width * sizeof(uint16_t);
+                    texelCopyBufferLayout.rowsPerImage = copySize.height;
 
                     // Use a distinct value for each subresource.
                     uint16_t value = level * 10 + layer;
                     std::vector<uint16_t> data(copySize.width * copySize.height, value);
-                    queue.WriteTexture(&imageCopyTexture, data.data(),
-                                       data.size() * sizeof(uint16_t), &textureDataLayout,
+                    queue.WriteTexture(&texelCopyTextureInfo, data.data(),
+                                       data.size() * sizeof(uint16_t), &texelCopyBufferLayout,
                                        &copySize);
                 }
             }
@@ -365,8 +345,8 @@ TEST_P(RenderPassTest_RegressionDawn1389, ClearMultisubresourceAfterWriteDepth16
                         std::vector<uint16_t> data(mipWidth * mipHeight, 0xCCCC);
                         EXPECT_TEXTURE_EQ(data.data(), tex, {0, 0, layer}, {mipWidth, mipHeight},
                                           level)
-                            << "cleared texture data should have been 0xCCCC at:"
-                            << "\nlayer: " << layer << "\nlevel: " << level;
+                            << "cleared texture data should have been 0xCCCC at:" << "\nlayer: "
+                            << layer << "\nlevel: " << level;
                     } else {
                         // Otherwise, check the other subresources have the orignal contents.
                         // Without the workaround, they are 0.
@@ -375,8 +355,8 @@ TEST_P(RenderPassTest_RegressionDawn1389, ClearMultisubresourceAfterWriteDepth16
                         std::vector<uint16_t> data(mipWidth * mipHeight, value);
                         EXPECT_TEXTURE_EQ(data.data(), tex, {0, 0, layer}, {mipWidth, mipHeight},
                                           level)
-                            << "written texture data should still be " << value << " at:"
-                            << "\nlayer: " << layer << "\nlevel: " << level;
+                            << "written texture data should still be " << value
+                            << " at:" << "\nlayer: " << layer << "\nlevel: " << level;
                     }
                 }
             }
@@ -384,14 +364,25 @@ TEST_P(RenderPassTest_RegressionDawn1389, ClearMultisubresourceAfterWriteDepth16
     }
 }
 
-DAWN_INSTANTIATE_TEST(RenderPassTest_RegressionDawn1389,
-                      D3D11Backend(),
-                      D3D12Backend(),
-                      MetalBackend(),
-                      MetalBackend({"use_blit_for_buffer_to_depth_texture_copy"}),
-                      OpenGLBackend(),
-                      OpenGLESBackend(),
-                      VulkanBackend());
+DAWN_INSTANTIATE_TEST(
+    RenderPassTest,
+    D3D11Backend(),
+    D3D12Backend(),
+    D3D12Backend({}, {"use_d3d12_render_pass"}),
+    MetalBackend(),
+
+    // for dawn:1071 regression
+    MetalBackend({"metal_render_r8_rg8_unorm_small_mip_to_temp_texture"}),
+
+    // for dawn:1389 regression
+    MetalBackend({"use_blit_for_buffer_to_depth_texture_copy"}),
+
+    OpenGLBackend(),
+    OpenGLESBackend(),
+    VulkanBackend({"vulkan_use_dynamic_rendering"}, {}),
+    VulkanBackend({"vulkan_use_create_render_pass_2"}, {"vulkan_use_dynamic_rendering"}),
+    VulkanBackend({}, {"vulkan_use_create_render_pass_2", "vulkan_use_dynamic_rendering"}),
+    WebGPUBackend());
 
 }  // anonymous namespace
 }  // namespace dawn

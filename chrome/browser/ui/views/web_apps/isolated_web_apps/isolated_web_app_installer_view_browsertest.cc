@@ -9,8 +9,8 @@
 #include <utility>
 
 #include "base/files/file_path.h"
-#include "base/functional/callback_helpers.h"
 #include "base/stl_util.h"
+#include "base/strings/strcat.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
@@ -19,35 +19,42 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/test/pixel_test_configuration_mixin.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
-#include "chrome/browser/ui/views/web_apps/isolated_web_apps/fake_pref_observer.h"
 #include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_installer_coordinator.h"
 #include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_installer_model.h"
 #include "chrome/browser/ui/views/web_apps/isolated_web_apps/isolated_web_app_installer_view_controller.h"
 #include "chrome/browser/ui/views/web_apps/isolated_web_apps/test_isolated_web_app_installer_model_observer.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_location.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 #include "chrome/browser/web_applications/isolated_web_apps/signed_web_bundle_metadata.h"
 #include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
+#include "components/prefs/pref_service.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
+#include "components/webapps/isolated_web_apps/types/source.h"
+#include "components/webapps/isolated_web_apps/types/storage_location.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
+#include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
 #include "ash/shell.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_MAC)
 #include "chrome/browser/ui/test/test_browser_dialog_mac.h"
 #endif
 
 namespace web_app {
+
+// TODO(crbug.com/478831891): Fix and enable
+// `IsolatedWebAppInstallerViewUiPixelTest` for Windows.
+#if !BUILDFLAG(IS_WIN)
 namespace {
 
 using Step = IsolatedWebAppInstallerModel::Step;
@@ -85,13 +92,15 @@ const TestParam kTestParam[] = {
 };
 
 SignedWebBundleMetadata CreateTestMetadata() {
-  IconBitmaps icons;
-  AddGeneratedIcon(&icons.any, 32, SK_ColorBLUE);
+  DialogImageInfo image_info;
+  image_info.is_maskable = true;
+  AddGeneratedIcon(&image_info.bitmaps, 32, SK_ColorBLUE);
   return SignedWebBundleMetadata::CreateForTesting(
       IsolatedWebAppUrlInfo::CreateFromSignedWebBundleId(
-          web_package::SignedWebBundleId::CreateRandomForDevelopment()),
-      DevModeBundle(base::FilePath()), u"Test Isolated Web App",
-      base::Version("0.0.1"), icons);
+          web_package::SignedWebBundleId::CreateRandomForProxyMode()),
+      IwaSourceBundleProdMode(base::FilePath()), u"Test Isolated Web App",
+      *IwaVersion::Create("0.0.1"), std::move(image_info),
+      /*enterprise_name=*/"Google LLC");
 }
 
 // To be passed as 4th argument to `INSTANTIATE_TEST_SUITE_P()`, allows the test
@@ -149,9 +158,9 @@ class NamedWidgetUiPixelTest : public MixinBasedUiBrowserTest {
     // is more predictable than activated dialog.
     widget->Deactivate();
     widget->GetFocusManager()->ClearFocus();
-    base::ScopedClosureRunner unblock_close(
-        base::BindOnce(&views::Widget::SetBlockCloseForTesting,
-                       base::Unretained(widget), false));
+    absl::Cleanup unblock_close = [widget] {
+      widget->SetBlockCloseForTesting(false);
+    };
 
     auto* test_info = testing::UnitTest::GetInstance()->current_test_info();
     const std::string screenshot_name =
@@ -188,9 +197,9 @@ class NamedWidgetUiPixelTest : public MixinBasedUiBrowserTest {
   // Stores the current widgets in |widgets_|.
   void UpdateWidgets() {
     widgets_.clear();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     for (aura::Window* root_window : ash::Shell::GetAllRootWindows()) {
-      views::Widget::GetAllChildWidgets(root_window, &widgets_);
+      widgets_.merge(views::Widget::GetAllChildWidgets(root_window));
     }
 #else
     widgets_ = views::test::WidgetTest::GetAllWidgets();
@@ -211,7 +220,11 @@ class IsolatedWebAppInstallerViewUiPixelTest
  public:
   IsolatedWebAppInstallerViewUiPixelTest()
       : NamedWidgetUiPixelTest(GetParam().use_dark_theme,
-                               GetParam().use_right_to_left_language) {}
+                               GetParam().use_right_to_left_language) {
+    feature_list_.InitWithFeatures(
+        {features::kIsolatedWebApps, features::kIsolatedWebAppUnmanagedInstall},
+        {});
+  }
 
   ~IsolatedWebAppInstallerViewUiPixelTest() override = default;
 
@@ -223,13 +236,21 @@ class IsolatedWebAppInstallerViewUiPixelTest
                : IsolatedWebAppInstallerView::kInstallerWidgetName;
   }
 
+  void TearDownOnMainThread() override {
+    widget_ = nullptr;
+    NamedWidgetUiPixelTest::TearDownOnMainThread();
+  }
+
   void ShowUi(const std::string& name) override {
     Profile* profile = browser()->profile();
+
+#if BUILDFLAG(IS_CHROMEOS)
+    profile->GetPrefs()->SetBoolean(ash::prefs::kIsolatedWebAppsEnabled, true);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
     IsolatedWebAppInstallerCoordinator* coordinator =
         IsolatedWebAppInstallerCoordinator::CreateAndStart(
-            profile, base::FilePath(), on_complete_future.GetCallback(),
-            std::make_unique<FakeIsolatedWebAppsEnabledPrefObserver>(false));
-
+            profile, base::FilePath(), on_complete_future.GetCallback());
     IsolatedWebAppInstallerModel* model = coordinator->GetModelForTesting();
     ASSERT_TRUE(model);
 
@@ -239,8 +260,7 @@ class IsolatedWebAppInstallerViewUiPixelTest
 
     TestIsolatedWebAppInstallerModelObserver model_observer(model);
 
-    model_observer.WaitForStepChange(Step::kDisabled);
-
+    model_observer.WaitForStepChange(Step::kGetMetadata);
     widget_ = controller->GetWidgetForTesting();
     ASSERT_TRUE(widget_);
 
@@ -267,7 +287,7 @@ class IsolatedWebAppInstallerViewUiPixelTest
   }
 
  private:
-  base::test::ScopedFeatureList feature_list_{features::kIsolatedWebApps};
+  base::test::ScopedFeatureList feature_list_;
   base::test::TestFuture<void> on_complete_future;
   raw_ptr<views::Widget> widget_;
 };
@@ -281,5 +301,6 @@ INSTANTIATE_TEST_SUITE_P(,
                          IsolatedWebAppInstallerViewUiPixelTest,
                          testing::ValuesIn(kTestParam),
                          &ParamToTestSuffix);
+#endif  // !BUILDFLAG(IS_WIN)
 
 }  // namespace web_app

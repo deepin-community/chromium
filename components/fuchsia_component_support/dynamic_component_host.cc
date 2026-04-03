@@ -11,12 +11,12 @@
 #include <lib/vfs/cpp/remote_dir.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/process_context.h"
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
 
 namespace fuchsia_component_support {
 
@@ -33,9 +33,9 @@ vfs::PseudoDir* DynamicComponentCapabilitiesDir() {
 }  // namespace
 
 DynamicComponentHost::DynamicComponentHost(
-    base::StringPiece collection,
-    base::StringPiece child_id,
-    base::StringPiece component_url,
+    std::string_view collection,
+    std::string_view child_id,
+    std::string_view component_url,
     base::OnceClosure on_teardown,
     fidl::InterfaceHandle<fuchsia::io::Directory> services)
     : DynamicComponentHost(base::ComponentContextForProcess()
@@ -49,9 +49,9 @@ DynamicComponentHost::DynamicComponentHost(
 
 DynamicComponentHost::DynamicComponentHost(
     fuchsia::component::RealmHandle realm,
-    base::StringPiece collection,
-    base::StringPiece child_id,
-    base::StringPiece component_url,
+    std::string_view collection,
+    std::string_view child_id,
+    std::string_view component_url,
     base::OnceClosure on_teardown,
     fidl::InterfaceHandle<fuchsia::io::Directory> services)
     : collection_(collection),
@@ -72,7 +72,7 @@ DynamicComponentHost::DynamicComponentHost(
   if (services) {
     // Link the service-directory to offer to the CFv2 component.
     zx_status_t status = DynamicComponentCapabilitiesDir()->AddEntry(
-        child_id_, std::make_unique<vfs::RemoteDir>(std::move(services)));
+        child_id_, std::make_unique<vfs::RemoteDir>(services.TakeChannel()));
     ZX_CHECK(status == ZX_OK, status);
     create_args.mutable_dynamic_offers()->push_back(
         fuchsia::component::decl::Offer::WithDirectory(std::move(
@@ -81,7 +81,7 @@ DynamicComponentHost::DynamicComponentHost(
                 .set_source_name(kDynamicComponentCapabilitiesPath)
                 .set_subdir(child_id_)
                 .set_target_name("svc")
-                .set_rights(fuchsia::io::RW_STAR_DIR)
+                .set_rights(fuchsia::io::R_STAR_DIR)
                 .set_dependency_type(
                     fuchsia::component::decl::DependencyType::STRONG))));
   }

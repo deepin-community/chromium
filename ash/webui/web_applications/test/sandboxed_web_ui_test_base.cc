@@ -3,17 +3,18 @@
 // found in the LICENSE file.
 
 #include "ash/webui/web_applications/test/sandboxed_web_ui_test_base.h"
-#include "base/memory/raw_ptr.h"
 
+#include <algorithm>
 #include <vector>
 
 #include "ash/webui/common/trusted_types_test_util.h"
 #include "ash/webui/web_applications/webui_test_prod_util.h"
 #include "base/base_paths.h"
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/path_service.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/test_timeouts.h"
@@ -58,7 +59,7 @@ void HandleTestFileRequestCallback(
 bool TestRequestHandlerShouldHandleRequest(
     const std::vector<std::string>& test_paths,
     const std::string& path) {
-  return base::Contains(test_paths, path);
+  return std::ranges::contains(test_paths, path);
 }
 
 std::string DefaultScriptTimeoutLog(const std::string& script,

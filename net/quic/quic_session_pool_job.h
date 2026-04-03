@@ -9,6 +9,7 @@
 #include "net/base/net_error_details.h"
 #include "net/base/request_priority.h"
 #include "net/log/net_log_with_source.h"
+#include "net/quic/quic_session_attempt.h"
 #include "net/quic/quic_session_pool.h"
 
 namespace net {
@@ -27,10 +28,10 @@ namespace net {
 //
 // The |client_config_handle| is not actually used, but serves to keep the
 // corresponding CryptoClientConfig alive until the Job completes.
-class QuicSessionPool::Job {
+class QuicSessionPool::Job : public QuicSessionAttempt::Delegate {
  public:
   Job(QuicSessionPool* pool,
-      const QuicSessionAliasKey& key,
+      QuicSessionAliasKey key,
       std::unique_ptr<CryptoClientConfigHandle> client_config_handle,
       RequestPriority priority,
       const NetLogWithSource& net_log);
@@ -38,7 +39,7 @@ class QuicSessionPool::Job {
   Job(const Job&) = delete;
   Job& operator=(const Job&) = delete;
 
-  virtual ~Job();
+  ~Job() override;
 
   // Run the job. This should be called as soon as the job is created, then any
   // associated requests added with `AddRequest()`.
@@ -64,6 +65,22 @@ class QuicSessionPool::Job {
     return requests_;
   }
   RequestPriority priority() const { return priority_; }
+  QuicSessionPool* pool() const { return pool_.get(); }
+
+  // Associate this job with another source.
+  void AssociateWithNetLogSource(
+      const NetLogWithSource& http_stream_job_net_log) const;
+
+  // TODO(crbug.com/404586727): Remove once we confirm the crash no longer
+  // happens.
+  void set_is_deleting() { is_deleting_ = true; }
+
+  // QuicSessionAttempt::Delegate implementation.
+  QuicSessionPool* GetQuicSessionPool() override;
+  const QuicSessionAliasKey& GetKey() override;
+  const NetLogWithSource& GetNetLog() override;
+  void OnConnectionFailedOnDefaultNetwork() override;
+  void OnQuicSessionCreationComplete(int rv) override;
 
  protected:
   // Set a new `QuicSessionRequest`'s expectations about which callbacks
@@ -80,6 +97,9 @@ class QuicSessionPool::Job {
   RequestPriority priority_;
   const NetLogWithSource net_log_;
   std::set<raw_ptr<QuicSessionRequest, SetExperimental>> requests_;
+
+ private:
+  bool is_deleting_ = false;
 };
 
 }  // namespace net

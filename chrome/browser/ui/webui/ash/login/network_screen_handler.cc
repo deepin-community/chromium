@@ -20,7 +20,7 @@ NetworkScreenHandler::NetworkScreenHandler() : BaseScreenHandler(kScreenId) {}
 
 NetworkScreenHandler::~NetworkScreenHandler() = default;
 
-void NetworkScreenHandler::ShowScreenWithData(base::Value::Dict data) {
+void NetworkScreenHandler::ShowScreenWithData(base::DictValue data) {
   ShowInWebUI(std::move(data));
 }
 
@@ -49,6 +49,10 @@ void NetworkScreenHandler::DeclareLocalizedValues(
                IDS_LOGIN_QUICK_START_WIFI_TRANSFER_TITLE);
   builder->Add("networkScreenQuickStartTransferWifiSubtitle",
                IDS_LOGIN_QUICK_START_WIFI_TRANSFER_SUBTITLE);
+  builder->Add("networkScreenQuickStartWiFiErrorTitle",
+               IDS_LOGIN_QUICK_START_WIFI_ERROR_TITLE);
+  builder->Add("networkScreenQuickStartWiFiErrorSubtitle",
+               IDS_LOGIN_QUICK_START_WIFI_ERROR_SUBTITLE);
   builder->AddF("quickStartNetworkNeededSubtitle",
                 IDS_LOGIN_QUICK_START_NETWORK_NEEDED_SUBTITLE,
                 ui::GetChromeOSDeviceName());
@@ -57,12 +61,16 @@ void NetworkScreenHandler::DeclareLocalizedValues(
   cellular_setup::AddLocalizedValuesToBuilder(builder);
 }
 
-void NetworkScreenHandler::GetAdditionalParameters(base::Value::Dict* dict) {
+void NetworkScreenHandler::GetAdditionalParameters(base::DictValue* dict) {
   cellular_setup::AddNonStringLoadTimeDataToDict(dict);
 }
 
-void NetworkScreenHandler::SetQuickStartEnabled() {
-  CallExternalAPI("setQuickStartVisible");
+void NetworkScreenHandler::SetQuickStartEntryPointVisibility(bool visible) {
+  CallExternalAPI("setQuickStartEntryPointVisibility", visible);
+}
+
+base::WeakPtr<NetworkScreenView> NetworkScreenHandler::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 }  // namespace ash

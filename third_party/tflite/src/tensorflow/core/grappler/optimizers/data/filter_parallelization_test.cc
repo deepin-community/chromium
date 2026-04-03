@@ -28,8 +28,9 @@ namespace tensorflow {
 namespace grappler {
 namespace {
 
-Status OptimizeWithFilterParallelization(const GrapplerItem& item,
-                                         GraphDef* output, bool autotune) {
+absl::Status OptimizeWithFilterParallelization(const GrapplerItem& item,
+                                               GraphDef* output,
+                                               bool autotune) {
   FilterParallelization optimizer;
   RewriterConfig_CustomGraphOptimizer config;
   if (autotune) {
@@ -76,10 +77,10 @@ TEST_P(AutotuneSetting, FilterParallelizationTest) {
 
 INSTANTIATE_TEST_SUITE_P(Test, AutotuneSetting, ::testing::Values(false, true));
 
-class FromFunctionDef : public ::testing::TestWithParam<string> {};
+class FromFunctionDef : public ::testing::TestWithParam<std::string> {};
 
 TEST_P(FromFunctionDef, FilterParallelizationTest) {
-  const string op = GetParam();
+  const std::string op = GetParam();
   bool from_function_def = (op == "_Retval");
 
   using test::function::NDef;

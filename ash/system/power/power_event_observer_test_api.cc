@@ -7,6 +7,7 @@
 #include "ash/system/power/power_event_observer.h"
 #include "base/time/time.h"
 #include "ui/compositor/compositor_observer.h"
+#include "ui/gfx/presentation_feedback.h"
 
 namespace ash {
 
@@ -36,10 +37,12 @@ void PowerEventObserverTestApi::CompositingStarted(ui::Compositor* compositor) {
       compositor, base::TimeTicks());
 }
 
-void PowerEventObserverTestApi::CompositingEnded(ui::Compositor* compositor) {
+void PowerEventObserverTestApi::CompositingAckDeprecated(
+    ui::Compositor* compositor) {
   if (!power_event_observer_->compositor_watcher_.get())
     return;
-  power_event_observer_->compositor_watcher_->OnCompositingEnded(compositor);
+  power_event_observer_->compositor_watcher_->OnDidPresentCompositorFrame(
+      compositor, /*frame_token=*/0, gfx::PresentationFeedback());
 }
 
 void PowerEventObserverTestApi::CompositeFrame(ui::Compositor* compositor) {
@@ -49,7 +52,8 @@ void PowerEventObserverTestApi::CompositeFrame(ui::Compositor* compositor) {
       compositor);
   power_event_observer_->compositor_watcher_->OnCompositingStarted(
       compositor, base::TimeTicks());
-  power_event_observer_->compositor_watcher_->OnCompositingEnded(compositor);
+  power_event_observer_->compositor_watcher_->OnDidPresentCompositorFrame(
+      compositor, /*frame_token=*/0, gfx::PresentationFeedback());
 }
 
 bool PowerEventObserverTestApi::SimulateCompositorsReadyForSuspend() {

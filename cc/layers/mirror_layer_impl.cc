@@ -20,12 +20,17 @@ MirrorLayerImpl::MirrorLayerImpl(LayerTreeImpl* tree_impl, int id)
 
 MirrorLayerImpl::~MirrorLayerImpl() = default;
 
+mojom::LayerType MirrorLayerImpl::GetLayerType() const {
+  return mojom::LayerType::kMirror;
+}
+
 std::unique_ptr<LayerImpl> MirrorLayerImpl::CreateLayerImpl(
     LayerTreeImpl* tree_impl) const {
   return MirrorLayerImpl::Create(tree_impl, id());
 }
 
-void MirrorLayerImpl::AppendQuads(viz::CompositorRenderPass* render_pass,
+void MirrorLayerImpl::AppendQuads(const AppendQuadsContext& context,
+                                  viz::CompositorRenderPass* render_pass,
                                   AppendQuadsData* append_quads_data) {
   // TODO(mohsen): Currently, effects on the mirrored layer (e.g mask and
   // opacity) are ignored. Consider applying them here.
@@ -62,7 +67,7 @@ void MirrorLayerImpl::AppendQuads(viz::CompositorRenderPass* render_pass,
   const bool contents_opaque = false;
   viz::SharedQuadState* shared_quad_state =
       render_pass->CreateAndAppendSharedQuadState();
-  // TODO(crbug.com/1196414): Support 2D scales in mirror layers.
+  // TODO(crbug.com/40176440): Support 2D scales in mirror layers.
   PopulateScaledSharedQuadStateWithContentRects(
       shared_quad_state, mirrored_layer->GetIdealContentsScaleKey(),
       content_rect, content_rect, contents_opaque);
@@ -79,9 +84,10 @@ void MirrorLayerImpl::AppendQuads(viz::CompositorRenderPass* render_pass,
       render_pass->CreateAndAppendDrawQuad<viz::CompositorRenderPassDrawQuad>();
   quad->SetNew(shared_quad_state, content_rect, unoccluded_content_rect,
                mirrored_layer_render_pass_id(), mask_resource_id, mask_uv_rect,
-               mask_texture_size, mirrored_effect_node->surface_contents_scale,
-               gfx::PointF(), gfx::RectF(gfx::Rect(content_rect.size())),
-               !layer_tree_impl()->settings().enable_edge_anti_aliasing, 0.f);
+               mask_texture_size, gfx::RectF(gfx::Rect(content_rect.size())),
+               !layer_tree_impl()->settings().enable_edge_anti_aliasing);
+  quad->SetFilters(mirrored_effect_node->surface_contents_scale, gfx::PointF(),
+                   0.f);
 }
 
 void MirrorLayerImpl::PushPropertiesTo(LayerImpl* layer) {
@@ -102,10 +108,6 @@ gfx::Rect MirrorLayerImpl::GetEnclosingVisibleRectInTargetSpace() const {
   float scale =
       mirrored_layer ? mirrored_layer->GetIdealContentsScaleKey() : 1.0f;
   return GetScaledEnclosingVisibleRectInTargetSpace(scale);
-}
-
-const char* MirrorLayerImpl::LayerTypeAsString() const {
-  return "cc::MirrorLayerImpl";
 }
 
 }  // namespace cc

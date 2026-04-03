@@ -15,7 +15,7 @@
 #include "base/run_loop.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
-#include "chrome/browser/ash/crosapi/test_crosapi_dependency_registry.h"
+#include "chrome/browser/ash/crosapi/crosapi_manager.h"
 #include "chrome/browser/printing/print_test_utils.h"
 #include "chrome/browser/ui/webui/print_preview/print_preview_handler.h"
 #include "chrome/browser/ui/webui/print_preview/print_preview_ui.h"
@@ -23,20 +23,15 @@
 #include "chrome/browser/ui/webui/print_preview/printer_handler.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chrome/test/base/testing_profile_manager.h"
 #include "chrome/test/chromeos/printing/fake_local_printer_chromeos.h"
+#include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/crosapi/mojom/local_printer.mojom.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_web_ui.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/crosapi/crosapi_manager.h"
-#include "chrome/browser/ash/crosapi/idle_service_ash.h"
-#include "chrome/test/base/testing_profile_manager.h"
-#include "chromeos/ash/components/login/login_state/login_state.h"
-#endif
 
 namespace printing {
 
@@ -126,8 +121,8 @@ class FakePrintPreviewUI : public PrintPreviewUI {
 struct PrinterInfo {
   std::string id;
   bool is_default;
-  base::Value::Dict basic_info;
-  base::Value::Dict capabilities;
+  base::DictValue basic_info;
+  base::DictValue capabilities;
 };
 
 class TestPrinterHandlerChromeOS : public PrinterHandler {
@@ -164,7 +159,7 @@ class TestPrinterHandlerChromeOS : public PrinterHandler {
                                GetPrinterInfoCallback callback) override {}
 
   void StartPrint(const std::u16string& job_title,
-                  base::Value::Dict settings,
+                  base::DictValue settings,
                   scoped_refptr<base::RefCountedMemory> print_data,
                   PrintCallback callback) override {
     std::move(callback).Run(base::Value());
@@ -183,8 +178,8 @@ class TestPrinterHandlerChromeOS : public PrinterHandler {
 
  private:
   std::string default_printer_;
-  base::Value::List printers_;
-  std::map<std::string, base::Value::Dict> printer_capabilities_;
+  base::ListValue printers_;
+  std::map<std::string, base::DictValue> printer_capabilities_;
 };
 
 class TestPrintPreviewHandlerChromeOS : public PrintPreviewHandlerChromeOS {
@@ -208,7 +203,7 @@ PrinterInfo GetSimplePrinterInfo(const std::string& name, bool is_default) {
   simple_printer.basic_info.Set("printer_name", simple_printer.id);
   simple_printer.basic_info.Set("printer_description", "Printer for test");
   simple_printer.basic_info.Set("printer_status", 1);
-  base::Value::Dict cdd;
+  base::DictValue cdd;
   simple_printer.capabilities.Set("printer", simple_printer.basic_info.Clone());
   simple_printer.capabilities.Set("capabilities", cdd.Clone());
   return simple_printer;
@@ -224,12 +219,9 @@ class PrintPreviewHandlerChromeOSTest : public testing::Test {
   ~PrintPreviewHandlerChromeOSTest() override = default;
 
   void SetUp() override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
     ASSERT_TRUE(testing_profile_manager_.SetUp());
-    crosapi::IdleServiceAsh::DisableForTesting();
     ash::LoginState::Initialize();
-    manager_ = crosapi::CreateCrosapiManagerWithTestRegistry();
-#endif
+    manager_ = std::make_unique<crosapi::CrosapiManager>();
     preview_web_contents_ = content::WebContents::Create(
         content::WebContents::CreateParams(&profile_));
     web_ui_ = std::make_unique<content::TestWebUI>();
@@ -257,10 +249,8 @@ class PrintPreviewHandlerChromeOSTest : public testing::Test {
   }
 
   void TearDown() override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
     manager_.reset();
     ash::LoginState::Shutdown();
-#endif
   }
 
   void DisableAshChrome() {
@@ -299,19 +289,11 @@ class PrintPreviewHandlerChromeOSTest : public testing::Test {
         ConvertToLocalDestinationInfo(printer_ids));
   }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  int LocalPrinterVersion() {
-    return handler_->GetLocalPrinterVersionForTesting();
-  }
-#endif
-
  private:
   content::BrowserTaskEnvironment task_environment_;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   TestingProfileManager testing_profile_manager_{
       TestingBrowserProcess::GetGlobal()};
   std::unique_ptr<crosapi::CrosapiManager> manager_;
-#endif
   TestingProfile profile_;
   std::unique_ptr<TestLocalPrinter> local_printer_;
   std::unique_ptr<content::WebContents> preview_web_contents_;
@@ -324,8 +306,8 @@ class PrintPreviewHandlerChromeOSTest : public testing::Test {
 TEST_F(PrintPreviewHandlerChromeOSTest, ChoosePrintServersNoAsh) {
   DisableAshChrome();
 
-  base::Value::List selected_args;
-  base::Value::List selected_ids_js;
+  base::ListValue selected_args;
+  base::ListValue selected_ids_js;
   selected_ids_js.Append(kSelectedPrintServerId);
   selected_args.Append(std::move(selected_ids_js));
 
@@ -337,7 +319,7 @@ TEST_F(PrintPreviewHandlerChromeOSTest, ChoosePrintServersNoAsh) {
 
 TEST_F(PrintPreviewHandlerChromeOSTest, GetPrintServersConfigNoAsh) {
   DisableAshChrome();
-  base::Value::List args;
+  base::ListValue args;
   args.Append("callback_id");
   web_ui()->HandleReceivedMessage("getPrintServersConfig", args);
   EXPECT_EQ("cr.webUIResponse", web_ui()->call_data().back()->function_name());
@@ -347,13 +329,13 @@ TEST_F(PrintPreviewHandlerChromeOSTest, GetPrintServersConfigNoAsh) {
 }
 
 TEST_F(PrintPreviewHandlerChromeOSTest, ChoosePrintServers) {
-  base::Value::List selected_args;
-  base::Value::List selected_ids_js;
+  base::ListValue selected_args;
+  base::ListValue selected_ids_js;
   selected_ids_js.Append(kSelectedPrintServerId);
   selected_args.Append(std::move(selected_ids_js));
 
-  base::Value::List none_selected_args;
-  base::Value::List none_selected_js;
+  base::ListValue none_selected_args;
+  base::ListValue none_selected_js;
   none_selected_args.Append(std::move(none_selected_js));
 
   web_ui()->HandleReceivedMessage("choosePrintServers", selected_args);
@@ -379,7 +361,7 @@ TEST_F(PrintPreviewHandlerChromeOSTest, OnPrintServersChanged) {
   ChangePrintServersConfig(std::move(config));
   auto* call_data = web_ui()->call_data().back().get();
   AssertWebUIEventFired(*call_data, "print-servers-config-changed");
-  const base::Value::List* printer_list =
+  const base::ListValue* printer_list =
       call_data->arg2()->GetDict().FindList("printServers");
   bool is_single_server_fetching_mode =
       call_data->arg2()
@@ -388,12 +370,12 @@ TEST_F(PrintPreviewHandlerChromeOSTest, OnPrintServersChanged) {
           .value();
 
   ASSERT_EQ(printer_list->size(), 1u);
-  const base::Value::Dict& first_printer = printer_list->front().GetDict();
+  const base::DictValue& first_printer = printer_list->front().GetDict();
   EXPECT_EQ(*first_printer.FindString("id"), kSelectedPrintServerId);
   EXPECT_EQ(*first_printer.FindString("name"), kSelectedPrintServerName);
   EXPECT_EQ(is_single_server_fetching_mode, false);
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append("callback_id");
   web_ui()->HandleReceivedMessage("getPrintServersConfig", args);
   const base::Value kExpectedConfig = base::test::ParseJson(R"({
@@ -416,31 +398,31 @@ TEST_F(PrintPreviewHandlerChromeOSTest, OnServerPrintersUpdated) {
 }
 
 TEST_F(PrintPreviewHandlerChromeOSTest, HandlePrinterSetup) {
-  base::Value::Dict media_1;
+  base::DictValue media_1;
   media_1.Set("width_microns", 100);
   media_1.Set("height_microns", 200);
-  base::Value::Dict media_2;
+  base::DictValue media_2;
   media_2.Set("width_microns", 300);
   media_2.Set("is_continuous_feed", true);
   // After filtering, the expected media will just have the discrete media.
-  base::Value::List expected_media;
+  base::ListValue expected_media;
   expected_media.Append(media_1.Clone());
 
-  base::Value::List option_list;
+  base::ListValue option_list;
   option_list.Append(std::move(media_1));
   option_list.Append(std::move(media_2));
-  base::Value::Dict media_size;
+  base::DictValue media_size;
   media_size.Set("option", std::move(option_list));
-  base::Value::Dict printer;
+  base::DictValue printer;
   printer.Set("media_size", std::move(media_size));
-  base::Value::Dict cdd;
+  base::DictValue cdd;
   cdd.Set("printer", std::move(printer));
 
   ASSERT_EQ(1u, printers().size());
   printers()[0].capabilities.Set(kSettingCapabilities, std::move(cdd));
   printer_handler()->SetPrinters(printers());
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append("callback_id");
   args.Append(test::kPrinterName);
   web_ui()->HandleReceivedMessage("setupPrinter", args);
@@ -452,10 +434,10 @@ TEST_F(PrintPreviewHandlerChromeOSTest, HandlePrinterSetup) {
   ASSERT_TRUE(data.arg2()->is_bool());
   EXPECT_TRUE(data.arg2()->GetBool());
   ASSERT_TRUE(data.arg3()->is_dict());
-  const base::Value::Dict* cdd_result =
+  const base::DictValue* cdd_result =
       data.arg3()->GetDict().FindDict(kSettingCapabilities);
   ASSERT_TRUE(cdd_result);
-  const base::Value::List* options = GetMediaSizeOptionsFromCdd(*cdd_result);
+  const base::ListValue* options = GetMediaSizeOptionsFromCdd(*cdd_result);
   ASSERT_TRUE(options);
   EXPECT_EQ(expected_media, *options);
 }
@@ -463,7 +445,7 @@ TEST_F(PrintPreviewHandlerChromeOSTest, HandlePrinterSetup) {
 // Verify 'getShowManagePrinters' can be called.
 TEST_F(PrintPreviewHandlerChromeOSTest, HandleGetCanShowManagePrinters) {
   const std::string callback_id = "callback-id";
-  base::Value::List args;
+  base::ListValue args;
   args.Append(callback_id);
   web_ui()->HandleReceivedMessage("getShowManagePrinters", args);
 
@@ -477,19 +459,11 @@ TEST_F(PrintPreviewHandlerChromeOSTest, HandleGetCanShowManagePrinters) {
 
 // Verify 'observeLocalPrinters' can be called.
 TEST_F(PrintPreviewHandlerChromeOSTest, HandleObserveLocalPrinters) {
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  if (int{crosapi::mojom::LocalPrinter::MethodMinVersions::
-              kAddLocalPrintersObserverMinVersion} > LocalPrinterVersion()) {
-    LOG(ERROR) << "Local printer version incompatible";
-    return;
-  }
-#endif
-
   const std::vector<std::string> printers{"Printer1", "Printer2", "Printer3"};
   SetLocalPrinters(printers);
 
   const std::string callback_id = "callback-id";
-  base::Value::List args;
+  base::ListValue args;
   args.Append(callback_id);
   web_ui()->HandleReceivedMessage("observeLocalPrinters", args);
 

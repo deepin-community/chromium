@@ -24,7 +24,6 @@
 #include <algorithm>
 
 #include "third_party/blink/renderer/core/css/style_containment_scope.h"
-#include "third_party/blink/renderer/core/css/style_containment_scope_tree.h"
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/layout/layout_text_combine.h"
@@ -36,9 +35,12 @@
 
 namespace blink {
 
-LayoutQuote::LayoutQuote(PseudoElement& pseudo, QuoteType quote)
-    : LayoutInline(nullptr), type_(quote), depth_(0), owning_pseudo_(&pseudo) {
-  SetDocumentForAnonymous(&pseudo.GetDocument());
+LayoutQuote::LayoutQuote(LayoutObject& owner, QuoteType quote)
+    : LayoutInline(nullptr),
+      type_(quote),
+      depth_(0),
+      owning_pseudo_(DynamicTo<PseudoElement>(owner.GetNode())) {
+  SetDocumentForAnonymous(&owner.GetDocument());
 }
 
 LayoutQuote::~LayoutQuote() {
@@ -57,8 +59,8 @@ void LayoutQuote::WillBeDestroyed() {
     GetDocument()
         .GetStyleEngine()
         .EnsureStyleContainmentScopeTree()
-        .UpdateOutermostQuotesDirtyScope(scope_);
-    scope_->DetachQuote(*this);
+        .UpdateOutermostDirtyScope(scope_);
+    scope_->DetachItem(*this);
   }
   LayoutInline::WillBeDestroyed();
 }
@@ -70,15 +72,17 @@ void LayoutQuote::WillBeRemovedFromTree() {
     GetDocument()
         .GetStyleEngine()
         .EnsureStyleContainmentScopeTree()
-        .UpdateOutermostQuotesDirtyScope(scope_);
-    scope_->DetachQuote(*this);
+        .UpdateOutermostDirtyScope(scope_);
+    scope_->DetachItem(*this);
   }
 }
 
-void LayoutQuote::StyleDidChange(StyleDifference diff,
-                                 const ComputedStyle* old_style) {
+void LayoutQuote::StyleDidChange(
+    StyleDifference diff,
+    const ComputedStyle* old_style,
+    const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutInline::StyleDidChange(diff, old_style);
+  LayoutInline::StyleDidChange(diff, old_style, style_change_context);
   UpdateText();
 }
 
@@ -103,8 +107,7 @@ void LayoutQuote::UpdateText() {
                            : Style());
     fragment->SetContentString(text_.Impl());
   } else {
-    fragment =
-        LayoutTextFragment::CreateAnonymous(*owning_pseudo_, text_.Impl());
+    fragment = LayoutTextFragment::CreateAnonymous(GetDocument(), text_.Impl());
     fragment->SetStyle(Style());
     AddChild(fragment);
   }
@@ -135,7 +138,6 @@ String LayoutQuote::ComputeText() const {
       return GetQuotesData()->GetOpenQuote(depth_).Impl();
   }
   NOTREACHED();
-  return g_empty_string;
 }
 
 scoped_refptr<const QuotesData> LayoutQuote::GetQuotesData() const {

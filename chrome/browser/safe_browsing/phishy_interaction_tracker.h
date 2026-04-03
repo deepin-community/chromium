@@ -5,16 +5,14 @@
 #ifndef CHROME_BROWSER_SAFE_BROWSING_PHISHY_INTERACTION_TRACKER_H_
 #define CHROME_BROWSER_SAFE_BROWSING_PHISHY_INTERACTION_TRACKER_H_
 
-#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "components/safe_browsing/content/browser/ui_manager.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
-#include "content/public/browser/navigation_entry.h"
-#include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents.h"
 
 namespace safe_browsing {
+
+class SafeBrowsingUIManager;
 
 struct PhishyPageInteractionDetails {
   PhishyPageInteractionDetails(int occurrence_count,
@@ -39,7 +37,11 @@ class PhishyInteractionTracker {
   PhishyInteractionTracker(const PhishyInteractionTracker&) = delete;
   PhishyInteractionTracker& operator=(const PhishyInteractionTracker&) = delete;
 
-  virtual ~PhishyInteractionTracker();
+  ~PhishyInteractionTracker();
+
+  // Records unlogged data if the page is phishy when the WebContents is about
+  // to be destroyed.
+  void WebContentsDestroyed();
 
   // Records unlogged data if the page is phishy. Gets called when the primary
   // page is changed.

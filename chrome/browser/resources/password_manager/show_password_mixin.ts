@@ -23,7 +23,7 @@ export const ShowPasswordMixin = dedupingMixin(
             },
           };
         }
-        isPasswordVisible: boolean;
+        declare isPasswordVisible: boolean;
 
         getPasswordInputType() {
           return this.isPasswordVisible ? 'text' : 'password';
@@ -36,6 +36,11 @@ export const ShowPasswordMixin = dedupingMixin(
         }
 
         getShowHideButtonIconClass() {
+          if (loadTimeData.getBoolean('passwordUploadUiUpdate')) {
+            return this.isPasswordVisible ? 'icon-visibility-off-refresh' :
+                                            'icon-visibility-refresh';
+          }
+
           return this.isPasswordVisible ? 'icon-visibility-off' :
                                           'icon-visibility';
         }

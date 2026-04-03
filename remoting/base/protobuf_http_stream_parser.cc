@@ -6,11 +6,13 @@
 
 #include <string.h>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "net/base/io_buffer.h"
+#include "remoting/base/http_status.h"
 #include "remoting/base/protobuf_http_client_messages.pb.h"
-#include "remoting/base/protobuf_http_status.h"
 #include "third_party/protobuf/src/google/protobuf/io/coded_stream.h"
 #include "third_party/protobuf/src/google/protobuf/wire_format_lite.h"
 
@@ -46,7 +48,7 @@ void ProtobufHttpStreamParser::Append(std::string_view data) {
   }
 
   DCHECK_GE(read_buffer_->RemainingCapacity(), static_cast<int>(data.size()));
-  memcpy(read_buffer_->data(), data.data(), data.size());
+  UNSAFE_TODO(memcpy(read_buffer_->data(), data.data(), data.size()));
   read_buffer_->set_offset(read_buffer_->offset() + data.size());
 
   ParseStreamIfAvailable();
@@ -59,9 +61,9 @@ bool ProtobufHttpStreamParser::HasPendingData() const {
 void ProtobufHttpStreamParser::ParseStreamIfAvailable() {
   DCHECK(read_buffer_);
 
-  google::protobuf::io::CodedInputStream input_stream(
-      reinterpret_cast<const uint8_t*>(read_buffer_->StartOfBuffer()),
-      read_buffer_->offset());
+  auto buffer = read_buffer_->span_before_offset();
+  google::protobuf::io::CodedInputStream input_stream(buffer.data(),
+                                                      buffer.size());
   int bytes_consumed = 0;
   auto weak_this = weak_factory_.GetWeakPtr();
   // We can't use StreamBody::ParseFromString() here, as it can't do partial
@@ -83,14 +85,14 @@ void ProtobufHttpStreamParser::ParseStreamIfAvailable() {
     }
   }
 
-  if (bytes_consumed == 0) {
+  if (bytes_consumed <= 0) {
     return;
   }
-  CHECK_LE(bytes_consumed, read_buffer_->offset());
-  int bytes_not_consumed = read_buffer_->offset() - bytes_consumed;
-  memmove(read_buffer_->StartOfBuffer(),
-          read_buffer_->StartOfBuffer() + bytes_consumed, bytes_not_consumed);
-  read_buffer_->set_offset(bytes_not_consumed);
+  base::span<const uint8_t> bytes_not_consumed =
+      read_buffer_->span_before_offset().subspan(
+          static_cast<size_t>(bytes_consumed));
+  read_buffer_->everything().copy_prefix_from(bytes_not_consumed);
+  read_buffer_->set_offset(bytes_not_consumed.size());
 }
 
 bool ProtobufHttpStreamParser::ParseOneField(
@@ -141,7 +143,7 @@ bool ProtobufHttpStreamParser::ParseOneField(
         return false;
       }
       VLOG(1) << "Client status decoded.";
-      std::move(stream_closed_callback_).Run(ProtobufHttpStatus(status));
+      std::move(stream_closed_callback_).Run(HttpStatus(status));
       break;
     }
 
@@ -172,8 +174,7 @@ bool ProtobufHttpStreamParser::ValidateWireType(
       "Invalid wire type %d for field number %d", wire_type, field_number);
   LOG(WARNING) << error_message;
   std::move(stream_closed_callback_)
-      .Run(
-          ProtobufHttpStatus(ProtobufHttpStatus::Code::UNKNOWN, error_message));
+      .Run(HttpStatus(HttpStatus::Code::UNKNOWN, error_message));
   return false;
 }
 

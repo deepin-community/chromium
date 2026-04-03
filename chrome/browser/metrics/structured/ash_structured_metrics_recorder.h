@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/metrics/structured/profile_observer.h"
 #include "components/metrics/metrics_provider.h"
 #include "components/metrics/structured/external_metrics.h"
 #include "components/metrics/structured/structured_metrics_recorder.h"
@@ -35,11 +36,11 @@ namespace metrics::structured {
 //
 // 3. Once both keys and events are loaded then AshStructuredMetricsRecorder is
 // considered fully initialized.
-class AshStructuredMetricsRecorder : public StructuredMetricsRecorder {
+class AshStructuredMetricsRecorder : public StructuredMetricsRecorder,
+                                     public ProfileObserver {
  public:
   explicit AshStructuredMetricsRecorder(
       metrics::MetricsProvider* system_profile_provider);
-
   ~AshStructuredMetricsRecorder() override;
 
   void OnExternalMetricsCollected(const EventsProto& events);
@@ -47,16 +48,21 @@ class AshStructuredMetricsRecorder : public StructuredMetricsRecorder {
   // StructuredMetricsRecorder:
   void EnableRecording() override;
   void DisableRecording() override;
-  void ProvideEventMetrics(ChromeUserMetricsExtension& uma_proto) override;
+  void ProvideEventMetrics(
+      base::OnceCallback<void(StructuredDataProto)> consumer) override;
   void AddSequenceMetadata(StructuredEventProto* proto,
                            const Event& event,
                            const ProjectValidator& project_validator,
                            const KeyData& key_data) override;
+  void ProvideLogMetadata(ChromeUserMetricsExtension& uma_proto) override;
 
   // Recorder::RecorderImpl:
   void OnSystemProfileInitialized() override;
 
   void SetExternalMetricsDirForTest(const base::FilePath& dir);
+
+  // ProfileObserver:
+  void ProfileAdded(const Profile& profile) override;
 
  private:
   friend class AshStructuredMetricsRecorderTest;
@@ -66,9 +72,13 @@ class AshStructuredMetricsRecorder : public StructuredMetricsRecorder {
       std::unique_ptr<EventStorage<StructuredEventProto>> event_storage,
       metrics::MetricsProvider* system_profile_provider);
 
-  void OnProfileAdded(const base::FilePath& profile_path) override;
-
   void ProvideSystemProfile(SystemProfileProto* system_profile);
+
+  // Called on the UI thread after events have been retrieved from storage and
+  // the external metrics have been processed.
+  void ProvideEventMetricsDone(
+      base::OnceCallback<void(StructuredDataProto)> consumer,
+      StructuredDataProto events);
 
   // Whether the system profile has been initialized.
   bool system_profile_initialized_ = false;

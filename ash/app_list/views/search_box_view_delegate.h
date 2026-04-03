@@ -26,9 +26,6 @@ class SearchBoxViewDelegate {
   virtual void QueryChanged(const std::u16string& trimmed_query,
                             bool initiated_by_user) = 0;
 
-  // Invoked when the back button has been pressed.
-  virtual void AssistantButtonPressed() = 0;
-
   // Invoked when the close button has been pressed. Implementations should
   // clear the search box, but may or may not want to take focus.
   virtual void CloseButtonPressed() = 0;
@@ -39,12 +36,6 @@ class SearchBoxViewDelegate {
   // Invoked for key events on the search box itself (e.g. arrow keys when one
   // of the buttons is focused).
   virtual void OnSearchBoxKeyEvent(ui::KeyEvent* event) = 0;
-
-  // Handles the `key_event` if the focus is trying to move to the top of the
-  // search view. It could be the focus change moving down from the buttons in
-  // search box or moving up from the search results.
-  virtual bool HandleFocusMoveAboveSearchResults(
-      const ui::KeyEvent& key_event) = 0;
 
   // Returns true if search results can be selected with the keyboard (e.g.
   // search results exist and are visible to the user).

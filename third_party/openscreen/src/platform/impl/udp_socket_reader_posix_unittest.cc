@@ -32,12 +32,17 @@ class MockUdpSocketPosix : public UdpSocketPosix {
 
   bool IsIPv6() const override { return version_ == UdpSocket::Version::kV6; }
 
-  MOCK_METHOD0(Bind, void());
-  MOCK_METHOD1(SetMulticastOutboundInterface, void(NetworkInterfaceIndex));
-  MOCK_METHOD2(JoinMulticastGroup,
-               void(const IPAddress&, NetworkInterfaceIndex));
-  MOCK_METHOD3(SendMessage, void(const void*, size_t, const IPEndpoint&));
-  MOCK_METHOD1(SetDscp, void(DscpMode));
+  MOCK_METHOD(void, Bind, (), (override));
+  MOCK_METHOD(void,
+              SetMulticastOutboundInterface,
+              (NetworkInterfaceIndex),
+              (override));
+  MOCK_METHOD(void,
+              JoinMulticastGroup,
+              (const IPAddress&, NetworkInterfaceIndex),
+              (override));
+  MOCK_METHOD(void, SendMessage, (ByteView, const IPEndpoint&), (override));
+  MOCK_METHOD(void, SetDscp, (DscpMode), (override));
 
  private:
   Version version_;
@@ -46,15 +51,15 @@ class MockUdpSocketPosix : public UdpSocketPosix {
 // Mock event waiter
 class MockNetworkWaiter final : public SocketHandleWaiter {
  public:
-  using ReadyHandle = SocketHandleWaiter::ReadyHandle;
+  using HandleWithFlags = SocketHandleWaiter::HandleWithFlags;
 
   MockNetworkWaiter() : SocketHandleWaiter(&FakeClock::now) {}
   ~MockNetworkWaiter() override = default;
 
-  MOCK_METHOD2(
-      AwaitSocketsReadable,
-      ErrorOr<std::vector<ReadyHandle>>(const std::vector<SocketHandleRef>&,
-                                        const Clock::duration&));
+  MOCK_METHOD(ErrorOr<std::vector<HandleWithFlags>>,
+              AwaitSocketsReady,
+              (const std::vector<HandleWithFlags>&, const Clock::duration&),
+              (override));
 
   FakeClock fake_clock{Clock::time_point{Clock::duration{1234567}}};
 };
@@ -88,7 +93,7 @@ class MockTaskRunner final : public TaskRunner {
 // Class extending NetworkWaiter to allow for looking at protected data.
 class TestingUdpSocketReader final : public UdpSocketReaderPosix {
  public:
-  explicit TestingUdpSocketReader(SocketHandleWaiter* waiter)
+  explicit TestingUdpSocketReader(SocketHandleWaiter& waiter)
       : UdpSocketReaderPosix(waiter) {}
 
   void OnDestroy(UdpSocket* socket) override {
@@ -119,7 +124,7 @@ TEST(UdpSocketReaderTest, UnwatchReadableSucceeds) {
   std::unique_ptr<MockUdpSocketPosix> socket =
       std::make_unique<MockUdpSocketPosix>(task_runner, &client, 17,
                                            UdpSocket::Version::kV4);
-  TestingUdpSocketReader network_waiter(mock_waiter.get());
+  TestingUdpSocketReader network_waiter(*mock_waiter);
 
   EXPECT_FALSE(network_waiter.IsMappedRead(socket.get()));
   network_waiter.OnDestroy(socket.get());

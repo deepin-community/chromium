@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "device/vr/public/mojom/plane_id.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_matrix.h"
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer_view_helpers.h"
@@ -21,6 +22,7 @@ namespace blink {
 
 class ExceptionState;
 class ScriptState;
+class XRAnchor;
 class XRAnchorSet;
 class XRCPUDepthInformation;
 class XRHitTestResult;
@@ -95,10 +97,10 @@ class XRFrame final : public ScriptWrappable {
       XRTransientInputHitTestSource* hit_test_source,
       ExceptionState& exception_state);
 
-  ScriptPromise createAnchor(ScriptState* script_state,
-                             XRRigidTransform* initial_pose,
-                             XRSpace* space,
-                             ExceptionState& exception_state);
+  ScriptPromise<XRAnchor> createAnchor(ScriptState* script_state,
+                                       XRRigidTransform* initial_pose,
+                                       XRSpace* space,
+                                       ExceptionState& exception_state);
 
   const FrozenArray<XRImageTrackingResult>& getImageTrackingResults(
       ExceptionState&);
@@ -106,10 +108,10 @@ class XRFrame final : public ScriptWrappable {
   XRJointPose* getJointPose(XRJointSpace* joint,
                             XRSpace* baseSpace,
                             ExceptionState& exception_state) const;
-  bool fillJointRadii(HeapVector<Member<XRJointSpace>>& jointSpaces,
+  bool fillJointRadii(const HeapVector<Member<XRJointSpace>>& jointSpaces,
                       NotShared<DOMFloat32Array> radii,
                       ExceptionState& exception_state) const;
-  bool fillPoses(HeapVector<Member<XRSpace>>& spaces,
+  bool fillPoses(const HeapVector<Member<XRSpace>>& spaces,
                  XRSpace* baseSpace,
                  NotShared<DOMFloat32Array> transforms,
                  ExceptionState& exception_state) const;
@@ -123,11 +125,11 @@ class XRFrame final : public ScriptWrappable {
   // |native_origin_from_anchor| is a transform from |space|'s native origin to
   // the desired anchor position (i.e. the origin-offset of the |space| is
   // already taken into account).
-  ScriptPromise CreateAnchorFromNonStationarySpace(
+  ScriptPromise<XRAnchor> CreateAnchorFromNonStationarySpace(
       ScriptState* script_state,
       const gfx::Transform& native_origin_from_anchor,
       XRSpace* space,
-      std::optional<uint64_t> maybe_plane_id,
+      std::optional<device::PlaneId> maybe_plane_id,
       ExceptionState& exception_state);
   // Helper for checking if space and frame have the same session.
   // Sets kInvalidStateError exception state if sessions are different.

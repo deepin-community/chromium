@@ -4,7 +4,6 @@
 
 #include "chrome/browser/ash/system_logs/app_service_log_source.h"
 
-#include "ash/constants/app_types.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_ash.h"
@@ -31,9 +30,7 @@ class AppServiceLogSourceTest : public ::testing::Test {
     profile_manager_ = std::make_unique<TestingProfileManager>(
         TestingBrowserProcess::GetGlobal());
     EXPECT_TRUE(profile_manager_->SetUp());
-    auto* profile =
-        profile_manager_->CreateTestingProfile(kEmail,
-                                               /*is_main_profile=*/true);
+    auto* profile = profile_manager_->CreateTestingProfile(kEmail);
     profile_ = profile;
     fake_user_manager->AddUserWithAffiliationAndTypeAndProfile(
         account_id, false, user_manager::UserType::kRegular, profile);

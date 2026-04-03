@@ -6,13 +6,13 @@
 #define CONTENT_BROWSER_DEVTOOLS_DEVTOOLS_SESSION_H_
 
 #include <list>
-#include <map>
 #include <memory>
 #include <string>
 #include <type_traits>
 
 #include "base/containers/flat_map.h"
 #include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "content/browser/devtools/protocol/protocol.h"
@@ -21,6 +21,7 @@
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "services/network/public/mojom/network_service.mojom.h"
 #include "third_party/blink/public/mojom/devtools/devtools_agent.mojom.h"
 
 namespace content {
@@ -128,6 +129,20 @@ class DevToolsSession : public protocol::FrontendChannel,
   void AddObserver(ChildObserver* obs);
   void RemoveObserver(ChildObserver* obs);
 
+  base::RepeatingCallback<void(std::string)> MakePrepareForReloadCallback() {
+    return base::BindRepeating(&DevToolsSession::PrepareForReload,
+                               base::Unretained(this));
+  }
+
+  void EnableDurableMessageCollector(
+      const base::UnguessableToken& devtools_token,
+      network::mojom::NetworkDurableMessageConfigPtr config,
+      base::OnceClosure callback);
+  void DisableDurableMessageCollectorForProfile(
+      const base::UnguessableToken& devtools_token,
+      base::OnceClosure callback);
+  network::mojom::DurableMessageCollector* MaybeGetDurableMessageCollector();
+
  private:
   struct PendingMessage {
     int call_id;
@@ -210,9 +225,10 @@ class DevToolsSession : public protocol::FrontendChannel,
         std::is_same<T, protocol::WebAuthnHandler>>;
   }
   void AddHandler(std::unique_ptr<protocol::DevToolsDomainHandler> handler);
+  void PrepareForReload(std::string script_to_evaluate_on_load);
 
-  DevToolsAgentHostClient* const client_;
-  DevToolsSession* const root_session_ = nullptr;
+  const raw_ptr<DevToolsAgentHostClient> client_;
+  const raw_ptr<DevToolsSession> root_session_ = nullptr;
   const std::string session_id_;  // empty if this is the root session.
   const Mode mode_;
 
@@ -220,7 +236,7 @@ class DevToolsSession : public protocol::FrontendChannel,
   mojo::AssociatedRemote<blink::mojom::DevToolsSession> session_;
   mojo::Remote<blink::mojom::DevToolsSession> io_session_;
   bool use_io_session_{false};
-  DevToolsAgentHostImpl* agent_host_ = nullptr;
+  raw_ptr<DevToolsAgentHostImpl> agent_host_ = nullptr;
   bool browser_only_ = false;
   HandlersMap handlers_;
   std::unique_ptr<protocol::UberDispatcher> dispatcher_{
@@ -238,11 +254,15 @@ class DevToolsSession : public protocol::FrontendChannel,
   // any of the waiting for response messages have been handled.
   // |session_state_cookie_| is nullptr before first attach.
   blink::mojom::DevToolsSessionStatePtr session_state_cookie_;
+  std::string script_to_evaluate_on_load_;
 
-  base::flat_map<std::string, DevToolsSession*> child_sessions_;
+  base::flat_map<std::string, raw_ptr<DevToolsSession, CtnExperimental>>
+      child_sessions_;
   base::OnceClosure runtime_resume_;
-  DevToolsExternalAgentProxyDelegate* proxy_delegate_ = nullptr;
+  raw_ptr<DevToolsExternalAgentProxyDelegate> proxy_delegate_ = nullptr;
   base::ObserverList<ChildObserver, true, false> child_observers_;
+  mojo::Remote<network::mojom::DurableMessageCollector>
+      durable_message_collector_;
 
   base::WeakPtrFactory<DevToolsSession> weak_factory_{this};
 };

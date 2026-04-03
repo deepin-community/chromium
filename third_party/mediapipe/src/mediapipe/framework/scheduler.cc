@@ -14,30 +14,36 @@
 
 #include "mediapipe/framework/scheduler.h"
 
+#include <functional>
 #include <memory>
 #include <queue>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/log/absl_check.h"
+#include "absl/log/absl_log.h"
 #include "absl/memory/memory.h"
+#include "absl/status/status.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "mediapipe/framework/calculator_context.h"
 #include "mediapipe/framework/calculator_graph.h"
 #include "mediapipe/framework/executor.h"
-#include "mediapipe/framework/port.h"
-#include "mediapipe/framework/port/canonical_errors.h"
 #include "mediapipe/framework/port/logging.h"
 #include "mediapipe/framework/port/ret_check.h"
-#include "mediapipe/framework/port/status.h"
-#include "mediapipe/framework/timestamp.h"
-#include "mediapipe/framework/tool/status_util.h"
+#include "mediapipe/framework/scheduler_queue.h"
+#include "mediapipe/framework/scheduler_shared.h"
 
 namespace mediapipe {
 
 namespace internal {
 
+inline constexpr absl::string_view kDefaultQueueName = "default_queue";
+
 Scheduler::Scheduler(CalculatorGraph* graph)
-    : graph_(graph), shared_(), default_queue_(&shared_) {
+    : graph_(graph), shared_(), default_queue_(kDefaultQueueName, &shared_) {
   shared_.error_callback =
       std::bind(&CalculatorGraph::RecordError, graph_, std::placeholders::_1);
   default_queue_.SetIdleCallback(std::bind(&Scheduler::QueueIdleStateChanged,
@@ -90,7 +96,7 @@ absl::Status Scheduler::SetNonDefaultExecutor(const std::string& name,
                                              "be called after the scheduler "
                                              "has started";
   auto inserted = non_default_queues_.emplace(
-      name, absl::make_unique<SchedulerQueue>(&shared_));
+      name, absl::make_unique<SchedulerQueue>(name, &shared_));
   RET_CHECK(inserted.second)
       << "SetNonDefaultExecutor must be called only once for the executor \""
       << name << "\"";
@@ -325,12 +331,12 @@ void Scheduler::ClosedAllGraphInputStreams() {
 // handle the pending calculator context. For example, the caller should dispose
 // of the calculator context and put it into a pending calculator context
 // container.
-void Scheduler::ScheduleNodeIfNotThrottled(
-    CalculatorNode* node, CalculatorContext* calculator_context) {
+void Scheduler::ScheduleNodeIfNotThrottled(CalculatorNode* node,
+                                           CalculatorContext* cc) {
   ABSL_DCHECK(node);
-  ABSL_DCHECK(calculator_context);
+  ABSL_DCHECK(cc);
   if (!graph_->IsNodeThrottled(node->Id())) {
-    node->GetSchedulerQueue()->AddNode(node, calculator_context);
+    node->GetSchedulerQueue()->AddNode(node, cc);
   }
 }
 

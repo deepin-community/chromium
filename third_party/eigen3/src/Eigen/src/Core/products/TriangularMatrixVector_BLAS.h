@@ -87,6 +87,7 @@ EIGEN_BLAS_TRMV_SPECIALIZE(scomplex)
     };                                                                                                               \
     static void run(Index rows_, Index cols_, const EIGTYPE* lhs_, Index lhsStride, const EIGTYPE* rhs_,             \
                     Index rhsIncr, EIGTYPE* res_, Index resIncr, EIGTYPE alpha) {                                    \
+      if (rows_ == 0 || cols_ == 0) return;                                                                          \
       if (ConjLhs || IsZeroDiag) {                                                                                   \
         triangular_matrix_vector_product<Index, Mode, EIGTYPE, ConjLhs, EIGTYPE, ConjRhs, ColMajor, BuiltIn>::run(   \
             rows_, cols_, lhs_, lhsStride, rhs_, rhsIncr, res_, resIncr, alpha);                                     \
@@ -183,6 +184,7 @@ EIGEN_BLAS_TRMV_CM(scomplex, float, cf, c, _)
     };                                                                                                               \
     static void run(Index rows_, Index cols_, const EIGTYPE* lhs_, Index lhsStride, const EIGTYPE* rhs_,             \
                     Index rhsIncr, EIGTYPE* res_, Index resIncr, EIGTYPE alpha) {                                    \
+      if (rows_ == 0 || cols_ == 0) return;                                                                          \
       if (IsZeroDiag) {                                                                                              \
         triangular_matrix_vector_product<Index, Mode, EIGTYPE, ConjLhs, EIGTYPE, ConjRhs, RowMajor, BuiltIn>::run(   \
             rows_, cols_, lhs_, lhsStride, rhs_, rhsIncr, res_, resIncr, alpha);                                     \
@@ -266,6 +268,9 @@ EIGEN_BLAS_TRMV_RM(float, float, f, s, _)
 EIGEN_BLAS_TRMV_RM(scomplex, float, cf, c, _)
 #endif
 
+#undef EIGEN_BLAS_TRMV_RM
+#undef EIGEN_BLAS_TRMV_SPECIALIZE
+#undef EIGEN_BLAS_TRMV_CM
 }  // namespace internal
 
 }  // end namespace Eigen

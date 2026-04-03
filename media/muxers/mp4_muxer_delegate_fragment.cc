@@ -5,6 +5,7 @@
 #include "media/muxers/mp4_muxer_delegate_fragment.h"
 
 #include "base/notreached.h"
+#include "media/base/decoder_buffer.h"
 #include "media/muxers/mp4_muxer_context.h"
 
 namespace media {
@@ -15,25 +16,16 @@ using mp4::writable_boxes::FragmentSampleFlags;
 using mp4::writable_boxes::TrackFragmentHeaderFlags;
 using mp4::writable_boxes::TrackFragmentRunFlags;
 
-// It uses the default track index for audio and video regardless of the
-// actual track index. Correction of the track index will be done in the
-// `Finalize` function that the caller MUST call before writing
-// the fragment.
-constexpr int kDefaultAudioIndex = 0;
-constexpr int kDefaultVideoIndex = 1;
-
 }  // namespace
 
 Mp4MuxerDelegateFragment::Mp4MuxerDelegateFragment(Mp4MuxerContext& context,
                                                    int video_track_id,
                                                    int audio_track_id,
                                                    uint32_t sequence_number)
-    : context_(context) {
+    : context_(context), moof_(sequence_number) {
   // We preallocate space for two tracks and initialize the track id.
   moof_.track_fragments.emplace_back(mp4::writable_boxes::TrackFragment());
   moof_.track_fragments.emplace_back(mp4::writable_boxes::TrackFragment());
-
-  moof_.header.sequence_number = sequence_number;
 
   // The `mdat` box is a container for media data and it will be
   // created for each track.
@@ -62,26 +54,28 @@ bool Mp4MuxerDelegateFragment::HasSamples() const {
   return false;
 }
 
-void Mp4MuxerDelegateFragment::AddVideoData(std::string encoded_data,
-                                            base::TimeTicks timestamp) {
+void Mp4MuxerDelegateFragment::AddVideoData(
+    scoped_refptr<DecoderBuffer> encoded_data,
+    base::TimeTicks timestamp) {
   // Add sample.
   mp4::writable_boxes::TrackFragmentRun& video_trun =
       moof_.track_fragments[kDefaultVideoIndex].run;
-  AddDataToRun(video_trun, encoded_data, timestamp);
+  AddDataToRun(video_trun, *encoded_data, timestamp);
 
   // Add sample data to the data box.
-  AddDataToMdat(mdat_.track_data[kDefaultVideoIndex], encoded_data);
+  AddDataToMdat(mdat_.track_data[kDefaultVideoIndex], *encoded_data);
 }
 
-void Mp4MuxerDelegateFragment::AddAudioData(std::string encoded_data,
-                                            base::TimeTicks timestamp) {
+void Mp4MuxerDelegateFragment::AddAudioData(
+    scoped_refptr<DecoderBuffer> encoded_data,
+    base::TimeTicks timestamp) {
   // Add sample.
   mp4::writable_boxes::TrackFragmentRun& audio_trun =
       moof_.track_fragments[kDefaultAudioIndex].run;
 
-  AddDataToRun(audio_trun, encoded_data, timestamp);
+  AddDataToRun(audio_trun, *encoded_data, timestamp);
   // Add sample data to the data box.
-  AddDataToMdat(mdat_.track_data[kDefaultAudioIndex], encoded_data);
+  AddDataToMdat(mdat_.track_data[kDefaultAudioIndex], *encoded_data);
 }
 
 void Mp4MuxerDelegateFragment::AddVideoLastTimestamp(
@@ -174,7 +168,7 @@ void Mp4MuxerDelegateFragment::Finalize(base::TimeTicks start_audio_time,
 void Mp4MuxerDelegateFragment::AddNewTrack(uint32_t track_index) {
   bool audio = (track_index == kDefaultAudioIndex);
 
-  mp4::writable_boxes::TrackFragment track_fragment = {};
+  mp4::writable_boxes::TrackFragment track_fragment;
 
   // `default-sample-flags`.
   std::vector<mp4::writable_boxes::FragmentSampleFlags> sample_flags;
@@ -195,7 +189,7 @@ void Mp4MuxerDelegateFragment::AddNewTrack(uint32_t track_index) {
       fragment_header_flags = {
           TrackFragmentHeaderFlags::kDefaultBaseIsMoof,
           TrackFragmentHeaderFlags::kkDefaultSampleFlagsPresent
-          // TODO(crbug.com/1464063).
+          // TODO(crbug.com/40275472).
           // TrackFragmentHeaderFlags::kDefaultSampleDurationPresent,
       };
   track_fragment.header.flags =
@@ -230,7 +224,7 @@ void Mp4MuxerDelegateFragment::AddNewTrack(uint32_t track_index) {
 
 void Mp4MuxerDelegateFragment::AddDataToRun(
     mp4::writable_boxes::TrackFragmentRun& trun,
-    std::string encoded_data,
+    const DecoderBuffer& encoded_data,
     base::TimeTicks timestamp) {
   // Additional entries may exist in various sample vectors, such as
   // durations, hence the use of 'sample_count' to ensure an accurate count of
@@ -244,25 +238,29 @@ void Mp4MuxerDelegateFragment::AddDataToRun(
   trun.sample_timestamps.emplace_back(timestamp);
 }
 
-void Mp4MuxerDelegateFragment::AddDataToMdat(std::vector<uint8_t>& track_data,
-                                             std::string encoded_data) {
+void Mp4MuxerDelegateFragment::AddDataToMdat(
+    std::vector<uint8_t>& track_data,
+    const DecoderBuffer& encoded_data) {
   // The parameter sets are supplied in-band at the sync samples.
   // It is a default on encoded stream, see
   // `VideoEncoder::produce_annexb=false`.
 
   // Copy the data to the mdat.
-  // TODO(crbug.com/1458518): We'll want to store the data as a vector of
+  // TODO(crbug.com/40273983): We'll want to store the data as a vector of
   // encoded buffers instead of a single block so you don't have to resize
   // a giant blob of memory to hold them all. We should only have one
   // copy into the final muxed output buffer in an ideal world.
   size_t current_size = track_data.size();
-  if (current_size + encoded_data.size() > track_data.capacity()) {
-    track_data.reserve((current_size + encoded_data.size()) * 1.5);
+  auto encoded_data_span = base::span(encoded_data);
+  if (current_size + encoded_data_span.size() > track_data.capacity()) {
+    track_data.reserve((current_size + encoded_data_span.size()) * 1.5);
   }
 
-  // TODO(crbug.com/1458518): encoded stream needs to be movable container.
-  track_data.resize(current_size + encoded_data.size());
-  memcpy(&track_data[current_size], encoded_data.data(), encoded_data.size());
+  // TODO(crbug.com/40273983): encoded stream needs to be movable container.
+  track_data.resize(current_size + encoded_data_span.size());
+  base::span(track_data)
+      .subspan(current_size)
+      .copy_from_nonoverlapping(encoded_data_span);
 }
 
 void Mp4MuxerDelegateFragment::AddLastTimestamp(

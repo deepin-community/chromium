@@ -7,11 +7,13 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
-#include "ash/components/arc/arc_features.h"
 #include "ash/public/cpp/new_window_delegate.h"
+#include "base/byte_count.h"
+#include "base/check_op.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/notreached.h"
 #include "base/values.h"
@@ -22,7 +24,12 @@
 #include "chrome/browser/ui/webui/ash/settings/pages/storage/device_storage_util.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
+#include "chromeos/ash/components/dbus/cryptohome/UserDataAuth.pb.h"
+#include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
 #include "chromeos/ash/components/disks/disk.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "components/user_manager/user_names.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/text/bytes_formatting.h"
@@ -36,7 +43,7 @@ using disks::DiskMountManager;
 
 constexpr char kIsExternalStorageEnabled[] = "isExternalStorageEnabled";
 // Dummy UUID for testing. The UUID is taken from
-// ash/components/arc/volume_mounter/arc_volume_mounter_bridge.cc.
+// chromeos/ash/experiences/arc/volume_mounter/arc_volume_mounter_bridge.cc.
 constexpr char kDummyUuid[] = "00000000000000000000000000000000DEADBEEF";
 
 const char* CalculationTypeToEventName(SizeCalculator::CalculationType x) {
@@ -59,7 +66,6 @@ const char* CalculationTypeToEventName(SizeCalculator::CalculationType x) {
       return "storage-system-size-changed";
     default:
       NOTREACHED();
-      return "";
   }
 }
 
@@ -76,8 +82,7 @@ StorageHandler::StorageHandler(Profile* profile,
       crostini_size_calculator_(profile),
       other_users_size_calculator_(),
       profile_(profile),
-      source_name_(html_source->GetSource()),
-      special_volume_path_pattern_("[a-z]+://.*") {}
+      source_name_(html_source->GetSource()) {}
 
 StorageHandler::~StorageHandler() {
   StopObservingEvents();
@@ -98,10 +103,6 @@ void StorageHandler::RegisterMessages() {
       "openMyFiles", base::BindRepeating(&StorageHandler::HandleOpenMyFiles,
                                          base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
-      "openArcStorage",
-      base::BindRepeating(&StorageHandler::HandleOpenArcStorage,
-                          base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(
       "updateExternalStorages",
       base::BindRepeating(&StorageHandler::HandleUpdateExternalStorages,
                           base::Unretained(this)));
@@ -109,12 +110,14 @@ void StorageHandler::RegisterMessages() {
       "openBrowsingDataSettings",
       base::BindRepeating(&StorageHandler::HandleOpenBrowsingDataSettings,
                           base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "getStorageEncryptionInfo",
+      base::BindRepeating(&StorageHandler::HandleGetStorageEncryption,
+                          base::Unretained(this)));
 }
 
 void StorageHandler::OnJavascriptAllowed() {
-  if (base::FeatureList::IsEnabled(arc::kUsbStorageUIFeature)) {
-    arc_observation_.Observe(arc::ArcSessionManager::Get());
-  }
+  arc_observation_.Observe(arc::ArcSessionManager::Get());
 
   // Start observing mount/unmount events to update the connected device list.
   DiskMountManager::GetInstance()->AddObserver(this);
@@ -134,21 +137,19 @@ void StorageHandler::OnJavascriptDisallowed() {
   // Ensure that pending callbacks do not complete and cause JS to be evaluated.
   weak_ptr_factory_.InvalidateWeakPtrs();
 
-  if (base::FeatureList::IsEnabled(arc::kUsbStorageUIFeature)) {
-    DCHECK(arc_observation_.IsObservingSource(arc::ArcSessionManager::Get()));
-    arc_observation_.Reset();
-  }
+  DCHECK(arc_observation_.IsObservingSource(arc::ArcSessionManager::Get()));
+  arc_observation_.Reset();
 
   StopObservingEvents();
 }
 
 void StorageHandler::HandleUpdateAndroidEnabled(
-    const base::Value::List& unused_args) {
+    const base::ListValue& unused_args) {
   // OnJavascriptAllowed() calls ArcSessionManager::AddObserver() later.
   AllowJavascript();
 }
 
-void StorageHandler::HandleUpdateStorageInfo(const base::Value::List& args) {
+void StorageHandler::HandleUpdateStorageInfo(const base::ListValue& args) {
   AllowJavascript();
   total_disk_space_calculator_.StartCalculation();
   free_disk_space_calculator_.StartCalculation();
@@ -160,25 +161,55 @@ void StorageHandler::HandleUpdateStorageInfo(const base::Value::List& args) {
   other_users_size_calculator_.StartCalculation();
 }
 
-void StorageHandler::HandleOpenMyFiles(const base::Value::List& unused_args) {
+void StorageHandler::HandleGetStorageEncryption(const base::ListValue& args) {
+  AllowJavascript();
+  CHECK_EQ(1U, args.size());
+  const std::string& callback_id = args[0].GetString();
+  ::user_data_auth::GetVaultPropertiesRequest request;
+  request.set_username(
+      user_manager::CanonicalizeUserID(profile_->GetProfileUserName()));
+  UserDataAuthClient::Get()->GetVaultProperties(
+      request, base::BindOnce(&StorageHandler::OnGetVaultProperties,
+                              weak_ptr_factory_.GetWeakPtr(), callback_id));
+}
+
+void StorageHandler::OnGetVaultProperties(
+    std::string callback_id,
+    std::optional<user_data_auth::GetVaultPropertiesReply> reply) {
+  // Default is Unknown.
+  std::u16string encryption_type =
+      l10n_util::GetStringUTF16(IDS_SETTINGS_STORAGE_SIZE_UNKNOWN);
+  if (reply.has_value()) {
+    switch (reply.value().encryption_type()) {
+      case user_data_auth::CRYPTOHOME_VAULT_ENCRYPTION_FSCRYPT:
+      case user_data_auth::CRYPTOHOME_VAULT_ENCRYPTION_DMCRYPT:
+        encryption_type = l10n_util::GetStringUTF16(
+            IDS_SETTINGS_STORAGE_ITEM_ENCRYPTION_AES_256);
+        break;
+      case user_data_auth::CRYPTOHOME_VAULT_ENCRYPTION_ECRYPTFS:
+        encryption_type = l10n_util::GetStringUTF16(
+            IDS_SETTINGS_STORAGE_ITEM_ENCRYPTION_AES_128);
+        break;
+      default:
+        // This is unexpected state and we should continue to default.
+        break;
+    }
+  }
+
+  ResolveJavascriptCallback(base::Value(std::move(callback_id)),
+                            base::Value(encryption_type));
+}
+
+void StorageHandler::HandleOpenMyFiles(const base::ListValue& unused_args) {
   const base::FilePath my_files_path =
       file_manager::util::GetMyFilesFolderForProfile(profile_);
   platform_util::OpenItem(profile_, my_files_path, platform_util::OPEN_FOLDER,
                           platform_util::OpenOperationCallback());
 }
 
-void StorageHandler::HandleOpenArcStorage(
-    const base::Value::List& unused_args) {
-  auto* arc_storage_manager =
-      arc::ArcStorageManager::GetForBrowserContext(profile_);
-  if (arc_storage_manager) {
-    arc_storage_manager->OpenPrivateVolumeSettings();
-  }
-}
-
 void StorageHandler::HandleOpenBrowsingDataSettings(
-    const base::Value::List& unused_args) {
-  ash::NewWindowDelegate::GetPrimary()->OpenUrl(
+    const base::ListValue& unused_args) {
+  ash::NewWindowDelegate::GetInstance()->OpenUrl(
       GURL(chrome::kChromeUISettingsURL)
           .Resolve(chrome::kClearBrowserDataSubPage),
       ash::NewWindowDelegate::OpenUrlFrom::kUserInteraction,
@@ -186,15 +217,15 @@ void StorageHandler::HandleOpenBrowsingDataSettings(
 }
 
 void StorageHandler::HandleUpdateExternalStorages(
-    const base::Value::List& unused_args) {
+    const base::ListValue& unused_args) {
   UpdateExternalStorages();
 }
 
 void StorageHandler::UpdateExternalStorages() {
-  base::Value::List devices;
+  base::ListValue devices;
   for (const auto& mount_point :
        DiskMountManager::GetInstance()->mount_points()) {
-    if (!IsEligibleForAndroidStorage(mount_point.source_path)) {
+    if (!IsEligibleForAndroidStorage(mount_point)) {
       continue;
     }
 
@@ -212,7 +243,7 @@ void StorageHandler::UpdateExternalStorages() {
       // Files app. crbug.com/1002535.
       label = base::FilePath(mount_point.mount_path).BaseName().AsUTF8Unsafe();
     }
-    base::Value::Dict device;
+    base::DictValue device;
     device.Set("uuid", uuid);
     device.Set("label", label);
     devices.Append(std::move(device));
@@ -221,7 +252,7 @@ void StorageHandler::UpdateExternalStorages() {
 }
 
 void StorageHandler::OnArcPlayStoreEnabledChanged(bool enabled) {
-  base::Value::Dict update;
+  base::DictValue update;
   update.Set(kIsExternalStorageEnabled, IsExternalStorageEnabled(profile_));
   content::WebUIDataSource::Update(profile_, source_name_, std::move(update));
 }
@@ -229,12 +260,12 @@ void StorageHandler::OnArcPlayStoreEnabledChanged(bool enabled) {
 void StorageHandler::OnMountEvent(
     DiskMountManager::MountEvent event,
     MountError error_code,
-    const DiskMountManager::MountPoint& mount_info) {
+    const DiskMountManager::MountPoint& mount_point) {
   if (error_code != MountError::kSuccess) {
     return;
   }
 
-  if (!IsEligibleForAndroidStorage(mount_info.source_path)) {
+  if (!IsEligibleForAndroidStorage(mount_point)) {
     return;
   }
 
@@ -300,7 +331,8 @@ void StorageHandler::UpdateStorageItem(
   if (total_bytes < 0) {
     message = l10n_util::GetStringUTF16(IDS_SETTINGS_STORAGE_SIZE_UNKNOWN);
   } else {
-    message = ui::FormatBytes(total_bytes);
+    message = ui::FormatBytes(
+        base::ByteSize(base::checked_cast<uint64_t>(total_bytes)));
   }
 
   if (calculation_type == SizeCalculator::CalculationType::kOtherUsers) {
@@ -333,12 +365,13 @@ void StorageHandler::UpdateOverallStatistics() {
   if (total_bytes <= 0 || available_bytes < 0) {
     // We can't get useful information from the storage page if total_bytes <= 0
     // or available_bytes is less than 0. This is not expected to happen.
-    NOTREACHED() << "Unable to retrieve total or available disk space";
+    DUMP_WILL_BE_NOTREACHED()
+        << "Unable to retrieve total or available disk space";
     return;
   }
 
   if (in_use_bytes < 0) {
-    // TODO(crbug.com/1409774): This shouldn't happen, but we still need to
+    // TODO(crbug.com/40889316): This shouldn't happen, but we still need to
     // clarify when and how often it does. To be replaced with
     // CHECK_GE(in_use_bytes, 0).
     LOG(WARNING) << "Calculated total space (" << total_bytes
@@ -347,9 +380,12 @@ void StorageHandler::UpdateOverallStatistics() {
     return;
   }
 
-  base::Value::Dict size_stat;
-  size_stat.Set("availableSize", ui::FormatBytes(available_bytes));
-  size_stat.Set("usedSize", ui::FormatBytes(in_use_bytes));
+  base::DictValue size_stat;
+  size_stat.Set("availableSize",
+                ui::FormatBytes(base::ByteSize(
+                    base::checked_cast<uint64_t>(available_bytes))));
+  size_stat.Set("usedSize", ui::FormatBytes(base::ByteSize(
+                                base::checked_cast<uint64_t>(in_use_bytes))));
   size_stat.Set("usedRatio", static_cast<double>(in_use_bytes) / total_bytes);
   int storage_space_state =
       static_cast<int>(StorageSpaceState::kStorageSpaceNormal);
@@ -402,18 +438,21 @@ void StorageHandler::UpdateSystemSizeItem() {
   if (system_bytes < 0) {
     message = l10n_util::GetStringUTF16(IDS_SETTINGS_STORAGE_SIZE_UNKNOWN);
   } else {
-    message = ui::FormatBytes(system_bytes);
+    message = ui::FormatBytes(
+        base::ByteSize(base::checked_cast<uint64_t>(system_bytes)));
   }
   FireWebUIListener(
       CalculationTypeToEventName(SizeCalculator::CalculationType::kSystem),
       base::Value(message));
 }
 
-bool StorageHandler::IsEligibleForAndroidStorage(std::string source_path) {
-  // Android's StorageManager volume concept relies on assumption that it is
-  // local filesystem. Hence, special volumes like DriveFS should not be
-  // listed on the Settings.
-  return !RE2::FullMatch(source_path, special_volume_path_pattern_);
+bool StorageHandler::IsEligibleForAndroidStorage(
+    const MountPoint& mount_point) {
+  // Android's StorageManager volume concept relies on the assumption that it is
+  // a local filesystem. Hence, special volumes like DriveFS and mounted
+  // archives should not be listed on the "External storage preferences"
+  // settings page.
+  return mount_point.mount_type == MountType::kDevice;
 }
 
 }  // namespace ash::settings

@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/test/gmock_callback_support.h"
@@ -97,7 +98,7 @@ class PlatformSensorChromeOSOneChannelTest
 
     sensor_ = base::MakeRefCounted<PlatformSensorChromeOS>(
         kFakeDeviceId, type, provider_->GetSensorReadingBuffer(type),
-        provider_.get(),
+        provider_->AsWeakPtr(),
         base::BindOnce(
             &PlatformSensorChromeOSOneChannelTest::OnSensorDeviceDisconnect,
             base::Unretained(this)),
@@ -290,8 +291,8 @@ class PlatformSensorChromeOSAxesTest
     std::vector<chromeos::sensors::FakeSensorDevice::ChannelData> channels_data(
         num_of_axes + 1);
     for (uint32_t i = 0; i < num_of_axes; ++i) {
-      channels_data[i].id = channels[i];
-      channels_data[i].sample_data = kFakeAxesSampleData[i];
+      channels_data[i].id = UNSAFE_TODO(channels[i]);
+      channels_data[i].sample_data = UNSAFE_TODO(kFakeAxesSampleData[i]);
     }
     channels_data.back().id = chromeos::sensors::mojom::kTimestampChannel;
     channels_data.back().sample_data = kFakeTimestampData;
@@ -328,6 +329,7 @@ class PlatformSensorChromeOSAxesTest
         RoundGyroscopeReading(reading_xyz);
         break;
       case mojom::SensorType::MAGNETOMETER:
+        RoundMagnetometerReading(reading_xyz);
         break;
       default:
         LOG(FATAL) << "Invalid type: " << GetParam().first;

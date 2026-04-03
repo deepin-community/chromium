@@ -5,6 +5,7 @@
 #include "chrome/browser/download/bubble/download_bubble_ui_controller.h"
 
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/task/single_thread_task_runner.h"
@@ -23,30 +24,36 @@
 #include "chrome/browser/download/download_item_warning_data.h"
 #include "chrome/browser/download/download_item_web_app_data.h"
 #include "chrome/browser/download/download_ui_model.h"
+#include "chrome/browser/download/download_warning_desktop_hats_utils.h"
 #include "chrome/browser/download/offline_item_model_manager.h"
 #include "chrome/browser/download/offline_item_model_manager_factory.h"
 #include "chrome/browser/download/offline_item_utils.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
 #include "chrome/browser/offline_items_collection/offline_content_aggregator_factory.h"
 #include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/safe_browsing/download_protection/download_protection_service.h"
-#include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service_factory.h"
+#include "chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "components/download/public/common/download_danger_type.h"
 #include "components/download/public/common/download_item.h"
 #include "components/download/public/common/download_stats.h"
 #include "components/feature_engagement/public/tracker.h"
 #include "components/offline_items_collection/core/offline_content_aggregator.h"
+#include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager.h"
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "chrome/browser/safe_browsing/download_protection/download_protection_service.h"
+#endif
 
 namespace {
 
@@ -58,23 +65,25 @@ using DownloadUIModelPtr = DownloadUIModel::DownloadUIModelPtr;
 // user clicks on the button to open the main view.
 constexpr base::TimeDelta kShowPartialViewMinInterval = base::Seconds(15);
 
-bool IsForDownload(Browser* browser, download::DownloadItem* item) {
+bool IsForDownload(BrowserWindowInterface* browser,
+                   download::DownloadItem* item) {
   Profile* profile = Profile::FromBrowserContext(
       content::DownloadItemUtils::GetBrowserContext(item));
   // An off-the-record `profile` should match only the off-the-record browsers,
   // but a regular `profile` should match both the regular and off-the-record
   // browsers.
-  if (browser->profile() != profile &&
-      browser->profile()->GetOriginalProfile() != profile) {
+  if (browser->GetProfile() != profile &&
+      browser->GetProfile()->GetOriginalProfile() != profile) {
     return false;
   }
 
   if (DownloadItemWebAppData* web_app_data = DownloadItemWebAppData::Get(item);
       web_app_data) {
-    return web_app::AppBrowserController::IsForWebApp(browser,
-                                                      web_app_data->id());
+    return web_app::AppBrowserController::IsForWebApp(
+        browser->GetBrowserForMigrationOnly(), web_app_data->id());
   } else {
-    return !web_app::AppBrowserController::IsWebApp(browser);
+    return !web_app::AppBrowserController::IsWebApp(
+        browser->GetBrowserForMigrationOnly());
   }
 }
 
@@ -83,13 +92,22 @@ bool IsForDownload(Browser* browser, download::DownloadItem* item) {
 // static
 DownloadBubbleUIController* DownloadBubbleUIController::GetForDownload(
     download::DownloadItem* item) {
-  for (Browser* browser : BrowserList::GetInstance()->OrderedByActivation()) {
-    if (IsForDownload(browser, item) && browser->window() &&
-        browser->window()->GetDownloadBubbleUIController()) {
-      return browser->window()->GetDownloadBubbleUIController();
-    }
-  }
-  return nullptr;
+  DownloadBubbleUIController* controller = nullptr;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [&](BrowserWindowInterface* browser) {
+        if (IsForDownload(browser, item) &&
+            browser->GetFeatures().download_toolbar_ui_controller() &&
+            browser->GetFeatures()
+                .download_toolbar_ui_controller()
+                ->bubble_controller()) {
+          controller = browser->GetFeatures()
+                           .download_toolbar_ui_controller()
+                           ->bubble_controller();
+          return false;  // stop iterating
+        }
+        return true;  // continue iterating
+      });
+  return controller;
 }
 
 DownloadBubbleUIController::DownloadBubbleUIController(Browser* browser)
@@ -105,7 +123,19 @@ DownloadBubbleUIController::DownloadBubbleUIController(
       profile_(browser->profile()),
       update_service_(update_service),
       offline_manager_(
-          OfflineItemModelManagerFactory::GetForBrowserContext(profile_)) {}
+          OfflineItemModelManagerFactory::GetForBrowserContext(profile_)) {
+  if (MaybeGetDownloadWarningHatsTrigger(
+          DownloadWarningHatsType::kDownloadBubbleIgnore)) {
+    delayed_hats_launcher_ =
+        std::make_unique<DelayedDownloadWarningHatsLauncher>(
+            profile_, GetIgnoreDownloadBubbleWarningDelay(),
+            base::BindRepeating(&DownloadBubbleUIController::CompleteHatsPsd,
+                                weak_factory_.GetWeakPtr()));
+    browser_activity_watcher_ = std::make_unique<BrowserActivityWatcher>(
+        base::BindRepeating(&DownloadBubbleUIController::OnBrowserActivity,
+                            weak_factory_.GetWeakPtr()));
+  }
+}
 
 DownloadBubbleUIController::~DownloadBubbleUIController() = default;
 
@@ -115,11 +145,6 @@ void DownloadBubbleUIController::HideDownloadUi() {
 
 void DownloadBubbleUIController::HandleButtonPressed() {
   display_controller_->HandleButtonPressed();
-}
-
-bool DownloadBubbleUIController::OpenMostSpecificDialog(
-    const offline_items_collection::ContentId& content_id) {
-  return display_controller_->OpenMostSpecificDialog(content_id);
 }
 
 void DownloadBubbleUIController::OnOfflineItemsAdded(
@@ -176,7 +201,7 @@ void DownloadBubbleUIController::OnDownloadItemUpdated(
                  (item->GetState() == download::DownloadItem::IN_PROGRESS &&
                   !IsItemInProgress(item));
   if (model.IsDangerous()) {
-    RecordDangerousDownloadShownToUser();
+    RecordDangerousDownloadShownToUser(item);
   }
   display_controller_->OnUpdatedItem(is_done, may_show_details);
 }
@@ -206,16 +231,9 @@ std::vector<DownloadUIModelPtr> DownloadBubbleUIController::GetDownloadUIModels(
 }
 
 std::vector<DownloadUIModelPtr> DownloadBubbleUIController::GetMainView() {
-  if (last_partial_view_shown_time_.has_value()) {
-    base::UmaHistogramLongTimes(
-        "Download.Bubble.PartialToFullViewLatency",
-        base::Time::Now() - (*last_partial_view_shown_time_));
-    last_partial_view_shown_time_ = std::nullopt;
-  }
-  std::vector<DownloadUIModelPtr> list =
-      GetDownloadUIModels(/*is_main_view=*/true);
-  base::UmaHistogramCounts100("Download.Bubble.FullViewSize", list.size());
-  return list;
+  last_partial_view_shown_time_ = std::nullopt;
+  last_primary_view_was_partial_ = false;
+  return GetDownloadUIModels(/*is_main_view=*/true);
 }
 
 std::vector<DownloadUIModelPtr> DownloadBubbleUIController::GetPartialView() {
@@ -230,9 +248,9 @@ std::vector<DownloadUIModelPtr> DownloadBubbleUIController::GetPartialView() {
   std::vector<DownloadUIModelPtr> list =
       GetDownloadUIModels(/*is_main_view=*/false);
   if (!list.empty()) {
+    last_primary_view_was_partial_ = true;
     last_partial_view_shown_time_ = std::make_optional(now);
   }
-  base::UmaHistogramCounts100("Download.Bubble.PartialViewSize", list.size());
   return list;
 }
 
@@ -243,6 +261,7 @@ void DownloadBubbleUIController::ProcessDownloadButtonPress(
   if (!model) {
     return;
   }
+  download::DownloadItem* item = model->GetDownloadItem();
   DownloadCommands commands(model);
   base::UmaHistogramEnumeration("Download.Bubble.ProcessedCommand2", command);
   DownloadItemWarningData::WarningSurface warning_surface =
@@ -254,7 +273,7 @@ void DownloadBubbleUIController::ProcessDownloadButtonPress(
           : DownloadItemWarningData::WarningAction::DISCARD;
   switch (command) {
     case DownloadCommands::KEEP:
-    case DownloadCommands::DISCARD:
+    case DownloadCommands::DISCARD: {
       if (safe_browsing::IsSafeBrowsingSurveysEnabled(*profile_->GetPrefs())) {
         TrustSafetySentimentService* trust_safety_sentiment_service =
             TrustSafetySentimentServiceFactory::GetForProfile(profile_);
@@ -263,13 +282,28 @@ void DownloadBubbleUIController::ProcessDownloadButtonPress(
               warning_surface, warning_action);
         }
       }
-      DownloadItemWarningData::AddWarningActionEvent(
-          model->GetDownloadItem(), warning_surface, warning_action);
+      DownloadItemWarningData::AddWarningActionEvent(item, warning_surface,
+                                                     warning_action);
+      // Launch a HaTS survey. Note this needs to come before the command is
+      // executed, as that may change the state of the DownloadItem.
+      if (item && CanShowDownloadWarningHatsSurvey(item)) {
+        DownloadWarningHatsType survey_type =
+            command == DownloadCommands::KEEP
+                ? DownloadWarningHatsType::kDownloadBubbleBypass
+                : DownloadWarningHatsType::kDownloadBubbleHeed;
+        auto psd =
+            DownloadWarningHatsProductSpecificData::Create(survey_type, item);
+        CompleteHatsPsd(psd);
+        MaybeLaunchDownloadWarningHatsSurvey(profile_, psd);
+      }
       commands.ExecuteCommand(command);
       break;
+    }
     case DownloadCommands::REVIEW:
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
       model->ReviewScanningVerdict(
           browser_->tab_strip_model()->GetActiveWebContents());
+#endif
       break;
     case DownloadCommands::RETRY:
       RetryDownload(model.get(), command);
@@ -278,12 +312,21 @@ void DownloadBubbleUIController::ProcessDownloadButtonPress(
       model->SetActionedOn(true);
       commands.ExecuteCommand(command);
       break;
-    case DownloadCommands::BYPASS_DEEP_SCANNING:
+    case DownloadCommands::BYPASS_DEEP_SCANNING: {
       DownloadItemWarningData::AddWarningActionEvent(
-          model->GetDownloadItem(), warning_surface,
+          item, warning_surface,
           DownloadItemWarningData::WarningAction::PROCEED_DEEP_SCAN);
+      // Launch a HaTS survey. Note this needs to come before the command is
+      // executed, as that may change the state of the DownloadItem.
+      if (item && CanShowDownloadWarningHatsSurvey(item)) {
+        auto psd = DownloadWarningHatsProductSpecificData::Create(
+            DownloadWarningHatsType::kDownloadBubbleBypass, item);
+        CompleteHatsPsd(psd);
+        MaybeLaunchDownloadWarningHatsSurvey(profile_, psd);
+      }
       commands.ExecuteCommand(command);
       break;
+    }
     case DownloadCommands::LEARN_MORE_SCANNING:
     case DownloadCommands::LEARN_MORE_DOWNLOAD_BLOCKED:
       DownloadItemWarningData::AddWarningActionEvent(
@@ -316,9 +359,6 @@ void DownloadBubbleUIController::RetryDownload(
   if (!download_manager) {
     return;
   }
-  RecordDownloadRetry(
-      OfflineItemUtils::ConvertFailStateToDownloadInterruptReason(
-          model->GetLastFailState()));
 
   net::NetworkTrafficAnnotationTag traffic_annotation =
       net::DefineNetworkTrafficAnnotation("download_bubble_retry_download", R"(
@@ -373,11 +413,30 @@ void DownloadBubbleUIController::ScheduleCancelForEphemeralWarning(
   }
 }
 
-void DownloadBubbleUIController::RecordDangerousDownloadShownToUser() {
+void DownloadBubbleUIController::CompleteHatsPsd(
+    DownloadWarningHatsProductSpecificData& psd) {
+  psd.AddPartialViewInteraction(last_primary_view_was_partial());
+}
+
+void DownloadBubbleUIController::OnBrowserActivity() {
+  CHECK(browser_activity_watcher_);
+  CHECK(delayed_hats_launcher_);
+  delayed_hats_launcher_->RecordBrowserActivity();
+}
+
+void DownloadBubbleUIController::RecordDangerousDownloadShownToUser(
+    download::DownloadItem* download) {
   feature_engagement::Tracker* tracker =
       feature_engagement::TrackerFactory::GetForBrowserContext(
           browser_->profile());
   tracker->NotifyEvent("download_bubble_dangerous_download_detected");
+
+  // Schedule a survey to be shown if the user ignores the survey for the whole
+  // delay period, but is otherwise actively using the browser.
+  if (CanShowDownloadWarningHatsSurvey(download) && delayed_hats_launcher_) {
+    delayed_hats_launcher_->TryScheduleTask(
+        DownloadWarningHatsType::kDownloadBubbleIgnore, download);
+  }
 }
 
 base::WeakPtr<DownloadBubbleUIController>

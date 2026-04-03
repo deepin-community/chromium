@@ -9,7 +9,6 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/new_window_delegate.h"
-#include "ash/public/cpp/view_shadow.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_id.h"
@@ -18,9 +17,11 @@
 #include "ash/style/typography.h"
 #include "base/memory/raw_ptr.h"
 #include "chromeos/ash/components/phonehub/url_constants.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_provider.h"
 #include "ui/compositor/layer.h"
@@ -40,8 +41,9 @@
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/view_shadow.h"
 #include "ui/views/window/dialog_delegate.h"
-#include "ui/views/window/non_client_view.h"
+#include "ui/views/window/frame_view.h"
 #include "ui/wm/core/coordinate_conversion.h"
 
 namespace ash {
@@ -65,6 +67,8 @@ constexpr int kMarginBetweenTitleAndBody = 15;
 constexpr int kMarginBetweenBodyAndButtons = 20;
 constexpr int kMarginBetweenButtons = 8;
 
+}  // namespace
+
 // The real error dialog with content.
 class ConnectionErrorDialogDelegateView : public views::WidgetDelegateView {
   METADATA_HEADER(ConnectionErrorDialogDelegateView, views::WidgetDelegateView)
@@ -74,22 +78,26 @@ class ConnectionErrorDialogDelegateView : public views::WidgetDelegateView {
       bool is_on_different_network,
       bool is_phone_on_cellular)
       : start_tethering_callback_(std::move(start_tethering_callback)) {
-    SetModalType(ui::MODAL_TYPE_WINDOW);
+    SetModalType(ui::mojom::ModalType::kWindow);
 
     SetPaintToLayer();
-    layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-    layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+    if (chromeos::features::IsSystemBlurEnabled()) {
+      layer()->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
+      layer()->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+    }
+
+    layer()->SetFillsBoundsOpaquely(false);
     layer()->SetRoundedCornerRadius(
         gfx::RoundedCornersF(kDialogRoundedCornerRadius));
 
-    SetBackground(views::CreateThemedRoundedRectBackground(
-        static_cast<ui::ColorId>(cros_tokens::kCrosSysBaseElevated),
-        kDialogRoundedCornerRadius));
+    SetBackground(views::CreateSolidBackground(
+        static_cast<ui::ColorId>(cros_tokens::kCrosSysBaseElevated)));
     SetBorder(std::make_unique<views::HighlightBorder>(
         kDialogRoundedCornerRadius,
         views::HighlightBorder::Type::kHighlightBorder1));
 
-    view_shadow_ = std::make_unique<ViewShadow>(this, kDialogShadowElevation);
+    view_shadow_ =
+        std::make_unique<views::ViewShadow>(this, kDialogShadowElevation);
     view_shadow_->SetRoundedCornerRadius(kDialogRoundedCornerRadius);
 
     SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -103,9 +111,7 @@ class ConnectionErrorDialogDelegateView : public views::WidgetDelegateView {
         ->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kStart);
     icon_ = icon_row->AddChildView(
         std::make_unique<views::ImageView>(ui::ImageModel::FromVectorIcon(
-            kPhoneHubEcheErrorStatusIcon,
-            AshColorProvider::Get()->GetContentLayerColor(
-                AshColorProvider::ContentLayerType::kIconColorWarning),
+            kPhoneHubEcheErrorStatusIcon, cros_tokens::kIconColorWarning,
             kIconSize)));
 
     // Add dialog title.
@@ -149,8 +155,7 @@ class ConnectionErrorDialogDelegateView : public views::WidgetDelegateView {
     body_->SetText(body_text);
 
     views::StyledLabel::RangeStyleInfo style;
-    style.override_color = AshColorProvider::Get()->GetContentLayerColor(
-        AshColorProvider::ContentLayerType::kTextColorPrimary);
+    style.override_color_id = cros_tokens::kTextColorPrimary;
     body_->AddStyleRange(gfx::Range(0, offset), style);
 
     views::StyledLabel::RangeStyleInfo link_style =
@@ -159,13 +164,11 @@ class ConnectionErrorDialogDelegateView : public views::WidgetDelegateView {
             base::Unretained(this),
             base::BindRepeating(
                 &NewWindowDelegate::OpenUrl,
-                base::Unretained(NewWindowDelegate::GetPrimary()),
+                base::Unretained(NewWindowDelegate::GetInstance()),
                 GURL(phonehub::kPhoneHubLearnMoreLink),
                 NewWindowDelegate::OpenUrlFrom::kUserInteraction,
                 NewWindowDelegate::Disposition::kNewForegroundTab)));
-    const SkColor link_color = AshColorProvider::Get()->GetContentLayerColor(
-        AshColorProvider::ContentLayerType::kButtonLabelColorBlue);
-    link_style.override_color = link_color;
+    link_style.override_color_id = cros_tokens::kTextColorProminent;
     body_->AddStyleRange(gfx::Range(offset, offset + learn_more_link.length()),
                          link_style);
 
@@ -226,8 +229,11 @@ class ConnectionErrorDialogDelegateView : public views::WidgetDelegateView {
 
   ~ConnectionErrorDialogDelegateView() override = default;
 
-  gfx::Size CalculatePreferredSize() const override {
-    return gfx::Size(kDialogWidth, GetHeightForWidth(kDialogWidth));
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
+    return gfx::Size(
+        kDialogWidth,
+        GetLayoutManager()->GetPreferredHeightForWidth(this, kDialogWidth));
   }
 
   void OnStartTetheringClicked(const ui::Event& event) {
@@ -250,7 +256,7 @@ class ConnectionErrorDialogDelegateView : public views::WidgetDelegateView {
 
  private:
   StartTetheringCallback start_tethering_callback_;
-  std::unique_ptr<ViewShadow> view_shadow_;
+  std::unique_ptr<views::ViewShadow> view_shadow_;
 
   raw_ptr<views::ImageView> icon_ = nullptr;
   raw_ptr<views::Label> title_ = nullptr;
@@ -261,8 +267,6 @@ class ConnectionErrorDialogDelegateView : public views::WidgetDelegateView {
 
 BEGIN_METADATA(ConnectionErrorDialogDelegateView)
 END_METADATA
-
-}  // namespace
 
 AppStreamConnectionErrorDialog::AppStreamConnectionErrorDialog(
     views::View* host_view,
@@ -276,9 +280,9 @@ AppStreamConnectionErrorDialog::AppStreamConnectionErrorDialog(
   views::Widget* const parent = host_view_->GetWidget();
 
   widget_ = new views::Widget();
-  views::Widget::InitParams params;
-
-  params.type = views::Widget::InitParams::TYPE_WINDOW_FRAMELESS;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.layer_type = ui::LAYER_NOT_DRAWN;
   params.parent = parent->GetNativeWindow();
   params.delegate = dialog.release();

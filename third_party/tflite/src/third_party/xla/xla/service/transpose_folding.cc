@@ -15,24 +15,26 @@ limitations under the License.
 
 #include "xla/service/transpose_folding.h"
 
-#include <algorithm>
+#include <cstdint>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/hlo/ir/hlo_instructions.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/shape_util.h"
 #include "xla/status_macros.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/logging.h"
-#include "tsl/platform/status.h"
 
 namespace xla {
 namespace {
@@ -78,7 +80,7 @@ using InstructionOperandsPair =
     std::pair<HloInstruction*, TransposeFolding::OperandIndices>;
 
 // Folds the operands of `dot` that are foldable transposes.
-Status FoldTransposeIntoDot(InstructionOperandsPair& pair) {
+absl::Status FoldTransposeIntoDot(InstructionOperandsPair& pair) {
   HloInstruction* dot = pair.first;
 
   DotDimensionNumbers new_dot_dims = dot->dot_dimension_numbers();
@@ -101,10 +103,11 @@ Status FoldTransposeIntoDot(InstructionOperandsPair& pair) {
       rhs = rhs->mutable_operand(0);
     }
   }
-
-  return dot->parent()->ReplaceWithNewInstruction(
-      dot, HloInstruction::CreateDot(dot->shape(), lhs, rhs, new_dot_dims,
-                                     dot->precision_config()));
+  HloInstruction* new_dot =
+      dot->parent()->AddInstruction(HloInstruction::CreateDot(
+          dot->shape(), lhs, rhs, new_dot_dims, dot->precision_config()));
+  dot->SetupDerivedInstruction(new_dot);
+  return dot->parent()->ReplaceInstruction(dot, new_dot);
 }
 
 // Folds the operands of `convolution` that are foldable transposes.
@@ -173,7 +176,7 @@ bool FoldTransposeIntoConvolution(InstructionOperandsPair& pair) {
       convolution.shape(), new_lhs, new_rhs, convolution.feature_group_count(),
       convolution.batch_group_count(), convolution.window(), new_dnums,
       convolution.precision_config());
-  TF_CHECK_OK(convolution.parent()->ReplaceWithNewInstruction(
+  CHECK_OK(convolution.parent()->ReplaceWithNewInstruction(
       &convolution, std::move(new_conv)));
 
   return true;
@@ -188,7 +191,7 @@ TransposeFolding::TransposeFolding(
           std::move(dot_can_fold_transpose_operand)),
       transposable_conv_operands_(std::move(transposable_conv_operands)) {}
 
-StatusOr<bool> TransposeFolding::Run(
+absl::StatusOr<bool> TransposeFolding::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   // Modifying the graph while traversing is dangerous, so we find all folding
@@ -200,9 +203,9 @@ StatusOr<bool> TransposeFolding::Run(
                                HloInstruction* instruction) {
     if (instruction->opcode() == HloOpcode::kDot) {
       // Don't fold dots with a 1D operand.
-      if ((instruction->operand(0)->shape().rank() < 2) ||
-          (instruction->operand(1)->shape().rank() < 2)) {
-        return OkStatus();
+      if ((instruction->operand(0)->shape().dimensions().size() < 2) ||
+          (instruction->operand(1)->shape().dimensions().size() < 2)) {
+        return absl::OkStatus();
       }
 
       OperandIndices operand_indices;
@@ -231,7 +234,7 @@ StatusOr<bool> TransposeFolding::Run(
         foldable_convolutions.emplace_back(instruction, operand_indices);
       }
     }
-    return OkStatus();
+    return absl::OkStatus();
   });
 
   for (auto* comp : module->MakeNonfusionComputations(execution_threads)) {
@@ -249,8 +252,9 @@ StatusOr<bool> TransposeFolding::Run(
   return changed;
 }
 
-/*static*/ StatusOr<bool> TransposeFolding::IsRowColumnTransposeDotOperand(
-    const HloInstruction& dot, int64_t operand_idx) {
+/*static*/ absl::StatusOr<bool>
+TransposeFolding::IsRowColumnTransposeDotOperand(const HloInstruction& dot,
+                                                 int64_t operand_idx) {
   TF_RET_CHECK(dot.opcode() == HloOpcode::kDot);
   TF_RET_CHECK(dot.operand_count() > operand_idx);
 
@@ -266,7 +270,7 @@ StatusOr<bool> TransposeFolding::Run(
                               ? dot_dims.lhs_contracting_dimensions()
                               : dot_dims.rhs_contracting_dimensions();
 
-  return (batch_dims.size() == transpose.shape().rank() - 2) &&
+  return (batch_dims.size() == transpose.shape().dimensions().size() - 2) &&
          (contracting_dims.size() == 1) &&
          absl::c_all_of(batch_dims, [&](int64_t dim) {
            return transpose.dimensions(dim) == dim;

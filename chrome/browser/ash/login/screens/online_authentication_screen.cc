@@ -17,10 +17,12 @@ constexpr char kUserActionBack[] = "back";
 
 // static
 std::string OnlineAuthenticationScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::BACK:
       return "Back";
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 OnlineAuthenticationScreen::OnlineAuthenticationScreen(
@@ -45,7 +47,7 @@ void OnlineAuthenticationScreen::HideImpl() {
   view_->Hide();
 }
 
-void OnlineAuthenticationScreen::OnUserAction(const base::Value::List& args) {
+void OnlineAuthenticationScreen::OnUserAction(const base::ListValue& args) {
   const std::string& action_id = args[0].GetString();
   if (action_id == kUserActionBack) {
     exit_callback_.Run(Result::BACK);

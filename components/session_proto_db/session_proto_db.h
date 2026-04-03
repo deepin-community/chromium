@@ -5,19 +5,19 @@
 #ifndef COMPONENTS_SESSION_PROTO_DB_SESSION_PROTO_DB_H_
 #define COMPONENTS_SESSION_PROTO_DB_SESSION_PROTO_DB_H_
 
+#include <algorithm>
 #include <memory>
 #include <optional>
-#include <queue>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -273,8 +273,8 @@ void SessionProtoDB<T>::PerformMaintenance(
               // Return all keys which where key_substring_to_match is a
               // substring of said keys and hasn't been explicitly marked
               // not to be removed in keys_to_keep.
-              return base::Contains(key, key_substring_to_match) &&
-                     !base::Contains(keys_to_keep, key);
+              return key.contains(key_substring_to_match) &&
+                     !std::ranges::contains(keys_to_keep, key);
             },
             keys_to_keep, key_substring_to_match),
         base::BindOnce(&SessionProtoDB::OnPerformMaintenance,
@@ -439,8 +439,8 @@ void SessionProtoDB<T>::OnLoadContent(LoadCallback callback,
   std::vector<KeyAndValue> results;
   if (success) {
     for (const auto& proto : *content) {
-      // TODO(crbug.com/1157881) relax requirement for proto to have a key field
-      // and return key value pairs OnLoadContent.
+      // TODO(crbug.com/40161040) relax requirement for proto to have a key
+      // field and return key value pairs OnLoadContent.
       results.emplace_back(proto.key(), proto);
     }
   }

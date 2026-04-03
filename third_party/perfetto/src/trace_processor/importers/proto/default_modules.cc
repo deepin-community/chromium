@@ -15,33 +15,40 @@
  */
 
 #include "src/trace_processor/importers/proto/default_modules.h"
+
+#include "src/trace_processor/importers/etw/etw_module.h"
 #include "src/trace_processor/importers/ftrace/ftrace_module.h"
 #include "src/trace_processor/importers/proto/chrome_system_probes_module.h"
 #include "src/trace_processor/importers/proto/memory_tracker_snapshot_module.h"
 #include "src/trace_processor/importers/proto/metadata_minimal_module.h"
-#include "src/trace_processor/importers/proto/profile_module.h"
 #include "src/trace_processor/importers/proto/proto_importer_module.h"
 #include "src/trace_processor/importers/proto/track_event_module.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
-void RegisterDefaultModules(TraceProcessorContext* context) {
-  context->modules.emplace_back(new FtraceModule());
-  // Ftrace module is special, because it has one extra method for parsing
-  // ftrace packets. So we need to store a pointer to it separately.
-  context->ftrace_module =
-      static_cast<FtraceModule*>(context->modules.back().get());
+void RegisterDefaultModules(ProtoImporterModuleContext* module_context,
+                            TraceProcessorContext* context) {
+  // Ftrace and Etw modules are special, because they have an extra method for
+  // parsing the ftrace/etw packets. So we need to store a pointer to it
+  // separately.
+  module_context->modules.emplace_back(new FtraceModule(module_context));
+  module_context->ftrace_module =
+      static_cast<FtraceModule*>(module_context->modules.back().get());
+  module_context->modules.emplace_back(new EtwModule(module_context));
+  module_context->etw_module =
+      static_cast<EtwModule*>(module_context->modules.back().get());
 
-  context->modules.emplace_back(new TrackEventModule(context));
-  context->track_module =
-      static_cast<TrackEventModule*>(context->modules.back().get());
+  module_context->modules.emplace_back(
+      new TrackEventModule(module_context, context));
+  module_context->track_module =
+      static_cast<TrackEventModule*>(module_context->modules.back().get());
 
-  context->modules.emplace_back(new MemoryTrackerSnapshotModule(context));
-  context->modules.emplace_back(new ChromeSystemProbesModule(context));
-  context->modules.emplace_back(new ProfileModule(context));
-  context->modules.emplace_back(new MetadataMinimalModule(context));
+  module_context->modules.emplace_back(
+      new MemoryTrackerSnapshotModule(module_context, context));
+  module_context->modules.emplace_back(
+      new ChromeSystemProbesModule(module_context, context));
+  module_context->modules.emplace_back(
+      new MetadataMinimalModule(module_context, context));
 }
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

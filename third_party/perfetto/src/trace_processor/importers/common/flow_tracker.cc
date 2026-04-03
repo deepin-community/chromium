@@ -21,8 +21,11 @@
 
 #include "src/trace_processor/importers/common/flow_tracker.h"
 #include "src/trace_processor/importers/common/slice_tracker.h"
+#include "src/trace_processor/storage/stats.h"
 #include "src/trace_processor/storage/trace_storage.h"
+#include "src/trace_processor/tables/flow_tables_py.h"
 #include "src/trace_processor/types/trace_processor_context.h"
+#include "src/trace_processor/types/variadic.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -37,7 +40,7 @@ FlowTracker::~FlowTracker() = default;
 /* TODO: if we report a flow event earlier that a corresponding slice then
   flow event would not be added, and it will increase "flow_no_enclosing_slice"
   In catapult, it was possible to report a flow after an enclosing slice if
-  timestamps were equal. But because of our seqential processing of a trace
+  timestamps were equal. But because of our sequential processing of a trace
   it is a bit tricky to make it here.
   We suspect that this case is too rare or impossible */
 void FlowTracker::Begin(TrackId track_id, FlowId flow_id) {
@@ -68,15 +71,20 @@ void FlowTracker::Step(TrackId track_id, FlowId flow_id) {
   Step(open_slice_id.value(), flow_id);
 }
 
-void FlowTracker::Step(SliceId slice_id, FlowId flow_id) {
+void FlowTracker::Step(SliceId new_id, FlowId flow_id) {
   auto* it = flow_to_slice_map_.Find(flow_id);
   if (!it) {
     context_->storage->IncrementStats(stats::flow_step_without_start);
     return;
   }
-  SliceId slice_out_id = *it;
-  InsertFlow(flow_id, slice_out_id, slice_id);
-  *it = slice_id;
+  SliceId existing_id = *it;
+  int64_t existing_ts =
+      context_->storage->slice_table().FindById(existing_id)->ts();
+  int64_t new_ts = context_->storage->slice_table().FindById(new_id)->ts();
+  SliceId outgoing = existing_ts > new_ts ? new_id : existing_id;
+  SliceId incoming = existing_ts <= new_ts ? new_id : existing_id;
+  InsertFlow(flow_id, outgoing, incoming);
+  *it = new_id;
 }
 
 void FlowTracker::End(TrackId track_id,
@@ -96,16 +104,21 @@ void FlowTracker::End(TrackId track_id,
   End(open_slice_id.value(), flow_id, close_flow);
 }
 
-void FlowTracker::End(SliceId slice_id, FlowId flow_id, bool close_flow) {
+void FlowTracker::End(SliceId new_id, FlowId flow_id, bool close_flow) {
   auto* it = flow_to_slice_map_.Find(flow_id);
   if (!it) {
     context_->storage->IncrementStats(stats::flow_end_without_start);
     return;
   }
-  SliceId slice_out_id = *it;
+  SliceId existing_id = *it;
+  int64_t existing_ts =
+      context_->storage->slice_table().FindById(existing_id)->ts();
+  int64_t new_ts = context_->storage->slice_table().FindById(new_id)->ts();
+  SliceId outgoing = existing_ts > new_ts ? new_id : existing_id;
+  SliceId incoming = existing_ts <= new_ts ? new_id : existing_id;
   if (close_flow)
     flow_to_slice_map_.Erase(flow_id);
-  InsertFlow(flow_id, slice_out_id, slice_id);
+  InsertFlow(flow_id, outgoing, incoming);
 }
 
 bool FlowTracker::IsActive(FlowId flow_id) const {
@@ -142,23 +155,22 @@ void FlowTracker::ClosePendingEventsOnTrack(TrackId track_id,
 void FlowTracker::InsertFlow(FlowId flow_id,
                              SliceId slice_out_id,
                              SliceId slice_in_id) {
-  tables::FlowTable::Row row(slice_out_id, slice_in_id, flow_id,
-                             kInvalidArgSetId);
+  tables::FlowTable::Row row(slice_out_id, slice_in_id, flow_id, std::nullopt);
   auto id = context_->storage->mutable_flow_table()->Insert(row).id;
 
   auto* it = flow_id_to_v1_flow_id_map_.Find(flow_id);
   if (it) {
     // TODO(b/168007725): Add any args from v1 flow events and also export them.
-    auto inserter = context_->args_tracker->AddArgsTo(id);
+    ArgsTracker args_tracker(context_);
+    auto inserter = args_tracker.AddArgsTo(id);
     inserter.AddArg(name_key_id_, Variadic::String(it->name));
     inserter.AddArg(cat_key_id_, Variadic::String(it->cat));
-    context_->args_tracker->Flush();
   }
 }
 
 void FlowTracker::InsertFlow(SliceId slice_out_id, SliceId slice_in_id) {
   tables::FlowTable::Row row(slice_out_id, slice_in_id, std::nullopt,
-                             kInvalidArgSetId);
+                             std::nullopt);
   context_->storage->mutable_flow_table()->Insert(row);
 }
 

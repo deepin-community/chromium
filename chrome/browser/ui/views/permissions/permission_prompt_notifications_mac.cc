@@ -3,12 +3,13 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/permissions/permission_prompt_notifications_mac.h"
+
 #include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/apps/app_shim/app_shim_manager_mac.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
-#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_tab_helper.h"
+#include "components/content_settings/browser/page_specific_content_settings.h"
+#include "components/permissions/permission_request.h"
 
 PermissionPromptNotificationsMac::PermissionPromptNotificationsMac(
     content::WebContents* web_contents,
@@ -38,16 +39,9 @@ bool PermissionPromptNotificationsMac::CanHandleRequest(
           permissions::RequestType::kNotifications) {
     return false;
   }
-  const webapps::AppId* app_id =
-      web_app::WebAppTabHelper::GetAppId(web_contents);
-  if (!app_id) {
-    return false;
-  }
-  web_app::WebAppProvider* web_app_provider =
-      web_app::WebAppProvider::GetForLocalAppsUnchecked(
-          Profile::FromBrowserContext(web_contents->GetBrowserContext()));
-  return web_app_provider &&
-         web_app_provider->registrar_unsafe().IsLocallyInstalled(*app_id);
+  return web_app::WebAppTabHelper::GetAppIdForNotificationAttribution(
+             web_contents)
+      .has_value();
 }
 
 bool PermissionPromptNotificationsMac::UpdateAnchor() {
@@ -64,14 +58,28 @@ PermissionPromptNotificationsMac::GetPromptDisposition() const {
   return permissions::PermissionPromptDisposition::MAC_OS_PROMPT;
 }
 
+bool PermissionPromptNotificationsMac::IsAskPrompt() const {
+  return true;
+}
+
 std::optional<gfx::Rect>
 PermissionPromptNotificationsMac::GetViewBoundsInScreen() const {
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 bool PermissionPromptNotificationsMac::ShouldFinalizeRequestAfterDecided()
     const {
   return true;
+}
+
+std::vector<permissions::ElementAnchoredBubbleVariant>
+PermissionPromptNotificationsMac::GetPromptVariants() const {
+  return {};
+}
+
+std::optional<permissions::feature_params::PermissionElementPromptPosition>
+PermissionPromptNotificationsMac::GetPromptPosition() const {
+  return std::nullopt;
 }
 
 void PermissionPromptNotificationsMac::ShowPrompt() {
@@ -87,11 +95,20 @@ void PermissionPromptNotificationsMac::OnPermissionResult(
       mac_notifications::mojom::RequestPermissionResult;
   switch (result) {
     case RequestPermissionResult::kPermissionGranted:
-      delegate_->Accept();
+      delegate_->Accept(/*prompt_options=*/std::monostate());
       return;
-    case RequestPermissionResult::kPermissionPreviouslyDenied:
+    case RequestPermissionResult::kPermissionPreviouslyDenied: {
+      content::RenderFrameHost* rfh =
+          delegate_->GetAssociatedWebContents()->GetPrimaryMainFrame();
+      content_settings::PageSpecificContentSettings::GetForFrame(rfh)
+          ->SetNotificationsWasDeniedBecauseOfSystemPermission();
+      // TODO(https://crbug.com/328105508): Consider adding a new result type
+      // for this rather than re-using ignore.
+      delegate_->Ignore(/*prompt_options=*/std::monostate());
+      break;
+    }
     case RequestPermissionResult::kPermissionDenied:
-      delegate_->Deny();
+      delegate_->Deny(/*prompt_options=*/std::monostate());
       return;
     case RequestPermissionResult::kPermissionPreviouslyGranted:
     case RequestPermissionResult::kRequestFailed:

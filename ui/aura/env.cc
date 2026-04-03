@@ -4,8 +4,9 @@
 
 #include "ui/aura/env.h"
 
+#include <vector>
+
 #include "base/command_line.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -19,7 +20,6 @@
 #include "ui/aura/env_observer.h"
 #include "ui/aura/input_state_lookup.h"
 #include "ui/aura/window.h"
-#include "ui/aura/window_event_dispatcher_observer.h"
 #include "ui/aura/window_occlusion_tracker.h"
 #include "ui/display/screen.h"
 #include "ui/events/event_observer.h"
@@ -91,8 +91,7 @@ class EventObserverAdapter : public ui::EventHandler,
 // Env, public:
 
 Env::~Env() {
-  for (EnvObserver& observer : observers_)
-    observer.OnWillDestroyEnv();
+  observers_.Notify(&EnvObserver::OnWillDestroyEnv);
 
   if (this == g_primary_instance)
     g_primary_instance = nullptr;
@@ -128,16 +127,6 @@ void Env::AddObserver(EnvObserver* observer) {
 
 void Env::RemoveObserver(EnvObserver* observer) {
   observers_.RemoveObserver(observer);
-}
-
-void Env::AddWindowEventDispatcherObserver(
-    WindowEventDispatcherObserver* observer) {
-  window_event_dispatcher_observers_.AddObserver(observer);
-}
-
-void Env::RemoveWindowEventDispatcherObserver(
-    WindowEventDispatcherObserver* observer) {
-  window_event_dispatcher_observers_.RemoveObserver(observer);
 }
 
 bool Env::IsMouseButtonDown() const {
@@ -180,7 +169,7 @@ gfx::Point Env::GetLastPointerPoint(ui::mojom::DragEventSource event_source,
       return *fallback;
   }
 
-  return display::Screen::GetScreen()->GetCursorScreenPoint();
+  return display::Screen::Get()->GetCursorScreenPoint();
 }
 
 WindowOcclusionTracker* Env::GetWindowOcclusionTracker() {
@@ -264,20 +253,17 @@ bool Env::Init() {
 }
 
 void Env::NotifyWindowInitialized(Window* window) {
-  for (EnvObserver& observer : observers_)
-    observer.OnWindowInitialized(window);
+  observers_.Notify(&EnvObserver::OnWindowInitialized, window);
 }
 
 void Env::NotifyHostInitialized(WindowTreeHost* host) {
   window_tree_hosts_.push_back(host);
-  for (EnvObserver& observer : observers_)
-    observer.OnHostInitialized(host);
+  observers_.Notify(&EnvObserver::OnHostInitialized, host);
 }
 
 void Env::NotifyHostDestroyed(WindowTreeHost* host) {
-  base::Erase(window_tree_hosts_, host);
-  for (EnvObserver& observer : observers_)
-    observer.OnHostDestroyed(host);
+  std::erase(window_tree_hosts_, host);
+  observers_.Notify(&EnvObserver::OnHostDestroyed, host);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -297,7 +283,6 @@ std::unique_ptr<ui::EventTargetIterator> Env::GetChildIterator() const {
 
 ui::EventTargeter* Env::GetEventTargeter() {
   NOTREACHED();
-  return nullptr;
 }
 
 }  // namespace aura

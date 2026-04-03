@@ -15,8 +15,7 @@
 #include "chromeos/ash/services/nearby/public/cpp/nearby_process_manager.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder.mojom.h"
 
-namespace ash {
-namespace nearby {
+namespace ash::nearby {
 
 class MockNearbyConnections;
 class MockNearbySharingDecoder;
@@ -55,7 +54,8 @@ class FakeNearbyProcessManager : public NearbyProcessManager {
             ::nearby::connections::mojom::NearbyConnections>& connections,
         const mojo::SharedRemote<
             ::ash::nearby::presence::mojom::NearbyPresence>& presence,
-        const mojo::SharedRemote<sharing::mojom::NearbySharingDecoder>& decoder,
+        const mojo::SharedRemote<::sharing::mojom::NearbySharingDecoder>&
+            decoder,
         const mojo::SharedRemote<quick_start::mojom::QuickStartDecoder>&
             quick_start_decoder,
         base::OnceClosure destructor_callback);
@@ -67,7 +67,7 @@ class FakeNearbyProcessManager : public NearbyProcessManager {
     GetNearbyConnections() const override;
     const mojo::SharedRemote<::ash::nearby::presence::mojom::NearbyPresence>&
     GetNearbyPresence() const override;
-    const mojo::SharedRemote<sharing::mojom::NearbySharingDecoder>&
+    const mojo::SharedRemote<::sharing::mojom::NearbySharingDecoder>&
     GetNearbySharingDecoder() const override;
     const mojo::SharedRemote<ash::quick_start::mojom::QuickStartDecoder>&
     GetQuickStartDecoder() const override;
@@ -76,7 +76,7 @@ class FakeNearbyProcessManager : public NearbyProcessManager {
         connections_;
     mojo::SharedRemote<::ash::nearby::presence::mojom::NearbyPresence>
         presence_;
-    mojo::SharedRemote<sharing::mojom::NearbySharingDecoder> decoder_;
+    mojo::SharedRemote<::sharing::mojom::NearbySharingDecoder> decoder_;
     mojo::SharedRemote<quick_start::mojom::QuickStartDecoder>
         quick_start_decoder_;
     base::OnceClosure destructor_callback_;
@@ -103,14 +103,13 @@ class FakeNearbyProcessManager : public NearbyProcessManager {
       connections_remote_;
   mojo::SharedRemote<::ash::nearby::presence::mojom::NearbyPresence>
       presence_remote_;
-  mojo::SharedRemote<sharing::mojom::NearbySharingDecoder> decoder_remote_;
+  mojo::SharedRemote<::sharing::mojom::NearbySharingDecoder> decoder_remote_;
   mojo::SharedRemote<quick_start::mojom::QuickStartDecoder>
       quick_start_decoder_remote_;
 
   base::WeakPtrFactory<FakeNearbyProcessManager> weak_ptr_factory_{this};
 };
 
-}  // namespace nearby
-}  // namespace ash
+}  // namespace ash::nearby
 
 #endif  // CHROMEOS_ASH_SERVICES_NEARBY_PUBLIC_CPP_FAKE_NEARBY_PROCESS_MANAGER_H_

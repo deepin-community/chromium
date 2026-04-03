@@ -46,7 +46,7 @@ std::vector<Flag>* jitrt_flag_list;
 std::vector<Flag>* flag_list;
 absl::once_flag flags_init;
 
-bool SetterForXlaAutoJitFlag(const string& value) {
+bool SetterForXlaAutoJitFlag(const std::string& value) {
   int32_t opt_level;
   // We need to use the mark_for_compilation_flags directly here instead of
   // going via GetMarkForCompilationPassFlags() to avoid infinite recursion. The
@@ -81,7 +81,7 @@ bool SetterForXlaAutoJitFlag(const string& value) {
   return true;
 }
 
-bool SetterForXlaCallModuleDisabledChecks(const string& value) {
+bool SetterForXlaCallModuleDisabledChecks(const std::string& value) {
   auto directives = absl::StrSplit(value, ',', absl::SkipEmpty());
   call_module_flags->disabled_checks.insert(directives.begin(),
                                             directives.end());
@@ -221,6 +221,8 @@ void AllocateAndParseFlags() {
   build_ops_flags->tf_xla_check_cluster_output_numerics = false;
   build_ops_flags->tf_xla_disable_constant_folding = false;
   build_ops_flags->tf_xla_disable_full_embedding_pipelining = false;
+  build_ops_flags->tf_xla_disable_full_embedding_pipelining_with_summaries =
+      true;
   build_ops_flags->tf_xla_embedding_parallel_iterations = 0;
 
   mark_for_compilation_flags = new MarkForCompilationPassFlags;
@@ -229,7 +231,7 @@ void AllocateAndParseFlags() {
   mark_for_compilation_flags->xla_auto_jit_flag.optimization_level_general = 0;
   mark_for_compilation_flags->tf_xla_min_cluster_size = 4;
   mark_for_compilation_flags->tf_xla_max_cluster_size =
-      std::numeric_limits<int32>::max();
+      std::numeric_limits<int32_t>::max();
   mark_for_compilation_flags->tf_xla_clustering_debug = false;
   mark_for_compilation_flags->tf_xla_cpu_global_jit = false;
   mark_for_compilation_flags->tf_xla_clustering_fuel =
@@ -282,12 +284,14 @@ void AllocateAndParseFlags() {
   bool enable_mlir_bridge_is_explicit = false;
   bool enable_mlir_merge_control_flow_pass = true;
   bool enable_mlir_convert_control_to_data_outputs_pass = false;
+  bool enable_mlir_composite_tpuexecute_side_effects = false;
   bool enable_mlir_strict_clusters = false;
   bool enable_mlir_multiple_local_cpu_devices = false;
+  bool enable_mlir_debug_info_serialization = true;
   // Dump graphs in TFG dialect.
   bool use_tfg_graph_dumper = false;
-  bool enable_mlir_generic_outside_compilation = false;
   bool enable_tpu_variable_runtime_reformatting_pass = true;
+  bool enable_serialize_mlir_to_compressed_bytecode = false;
 
   flag_list = new std::vector<Flag>(
       {Flag("tf_xla_enable_lazy_compilation",
@@ -312,6 +316,11 @@ void AllocateAndParseFlags() {
             &build_ops_flags->tf_xla_disable_full_embedding_pipelining,
             "If true then disables full embedding pipelining and instead use "
             "strict SparseCore / TensorCore sequencing."),
+       Flag("tf_xla_disable_full_embedding_pipelining_with_summaries",
+            &build_ops_flags
+                 ->tf_xla_disable_full_embedding_pipelining_with_summaries,
+            "If true then disables full embedding pipelining when summary ops "
+            "are detected."),
        Flag("tf_xla_embedding_parallel_iterations",
             &build_ops_flags->tf_xla_embedding_parallel_iterations,
             "If >0 then use this many parallel iterations in "
@@ -376,6 +385,10 @@ void AllocateAndParseFlags() {
             &enable_mlir_convert_control_to_data_outputs_pass,
             "Enables `tf-executor-convert-control-to-data-outputs` pass for "
             "MLIR-Based TensorFlow Compiler Bridge."),
+       Flag("tf_mlir_composite_tpuexecute_side_effects",
+            &enable_mlir_composite_tpuexecute_side_effects,
+            "Enables certain TPUExecute ops to run in parallel if they only "
+            "operate on resources that live on composite devices."),
        Flag("tf_mlir_enable_strict_clusters", &enable_mlir_strict_clusters,
             "Do not allow clusters that have cyclic control dependencies."),
        Flag("tf_mlir_enable_multiple_local_cpu_devices",
@@ -383,18 +396,20 @@ void AllocateAndParseFlags() {
             "Enable multiple local CPU devices. CPU ops which are outside "
             "compiled inside the tpu cluster will also be replicated across "
             "multiple cpu devices."),
+       Flag("tf_mlir_enable_debug_info_serialization",
+            &enable_mlir_debug_info_serialization,
+            "Enable debug info serialization in MLIR."),
        Flag("tf_dump_graphs_in_tfg", &use_tfg_graph_dumper,
             "When tf_dump_graphs_in_tfg is true, graphs after transformations "
             "are dumped in MLIR TFG dialect and not in GraphDef"),
-       Flag("tf_mlir_enable_generic_outside_compilation",
-            &enable_mlir_generic_outside_compilation,
-            "Enables OutsideCompilation passes for MLIR-Based TensorFlow "
-            "Generic Compiler Bridge."),
        Flag("tf_mlir_enable_tpu_variable_runtime_reformatting_pass",
             &enable_tpu_variable_runtime_reformatting_pass,
             "Enables TPUVariableRuntimeReformatting pass for MLIR-Based "
             "TensorFlow Compiler Bridge. This enables weight update sharding "
-            "and creates TPUReshardVariables ops.")});
+            "and creates TPUReshardVariables ops."),
+       Flag("tf_serialize_mlir_to_compressed_bytecode",
+            &enable_serialize_mlir_to_compressed_bytecode,
+            "If true, serialize MLIR to compressed bytecode.")});
 
   AppendMarkForCompilationPassFlagsInternal(flag_list);
   xla::ParseFlagsFromEnvAndDieIfUnknown("TF_XLA_FLAGS", *flag_list);
@@ -414,13 +429,17 @@ void AllocateAndParseFlags() {
       enable_mlir_merge_control_flow_pass;
   mlir_flags->tf_mlir_enable_convert_control_to_data_outputs_pass =
       enable_mlir_convert_control_to_data_outputs_pass;
+  mlir_flags->tf_mlir_enable_composite_tpuexecute_side_effects =
+      enable_mlir_composite_tpuexecute_side_effects;
   mlir_flags->tf_mlir_enable_strict_clusters = enable_mlir_strict_clusters;
-  mlir_flags->tf_mlir_enable_generic_outside_compilation =
-      enable_mlir_generic_outside_compilation;
   mlir_flags->tf_mlir_enable_tpu_variable_runtime_reformatting_pass =
       enable_tpu_variable_runtime_reformatting_pass;
   mlir_flags->tf_mlir_enable_multiple_local_cpu_devices =
       enable_mlir_multiple_local_cpu_devices;
+  mlir_flags->tf_mlir_enable_debug_info_serialization =
+      enable_mlir_debug_info_serialization;
+  mlir_flags->tf_serialize_mlir_to_compressed_bytecode =
+      enable_serialize_mlir_to_compressed_bytecode;
 
   if (use_tfg_graph_dumper) {
     UseMlirForGraphDump(MlirDumpConfig{}.elide_large_attributes().emit_dialect(
@@ -444,7 +463,7 @@ void ResetFlags() {
 
 }  // namespace
 
-bool SetXlaAutoJitFlagFromFlagString(const string& value) {
+bool SetXlaAutoJitFlagFromFlagString(const std::string& value) {
   absl::call_once(flags_init, &AllocateAndParseFlags);
   return SetterForXlaAutoJitFlag(value);
 }

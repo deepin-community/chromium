@@ -12,12 +12,19 @@
 
 namespace blink {
 
-ScriptPromise RestrictionTarget::fromElement(ScriptState* script_state,
-                                             Element* element,
-                                             ExceptionState& exception_state) {
-  return SubCaptureTarget::fromElement(
-      script_state, element, exception_state,
-      SubCaptureTarget::Type::kRestrictionTarget);
+ScriptPromise<RestrictionTarget> RestrictionTarget::fromElement(
+    ScriptState* script_state,
+    Element* element,
+    ExceptionState& exception_state) {
+  DCHECK(IsMainThread());
+  MediaDevices* const media_devices =
+      GetMediaDevices(script_state, element, exception_state);
+  if (!media_devices) {
+    CHECK(exception_state.HadException());  // Exception thrown by helper.
+    return EmptyPromise();
+  }
+  return media_devices->ProduceRestrictionTarget(script_state, element,
+                                                 exception_state);
 }
 
 RestrictionTarget::RestrictionTarget(String id)

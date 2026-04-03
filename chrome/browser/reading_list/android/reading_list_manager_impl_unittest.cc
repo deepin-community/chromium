@@ -9,6 +9,7 @@
 #include <string>
 #include <utility>
 
+#include "base/location.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/simple_test_clock.h"
@@ -25,7 +26,7 @@
 
 using BookmarkNode = bookmarks::BookmarkNode;
 
-namespace {
+namespace reading_list {
 
 constexpr char kURL[] = "https://www.example.com";
 constexpr char kURL1[] = "https://www.anotherexample.com";
@@ -164,6 +165,23 @@ TEST_F(ReadingListManagerImplTest, AddGetDelete) {
 
   // Deletes the node.
   Delete(url);
+  EXPECT_EQ(0u, manager()->size());
+  EXPECT_EQ(0u, manager()->unread_size());
+  EXPECT_TRUE(manager()->GetRoot()->children().empty());
+}
+
+TEST_F(ReadingListManagerImplTest, DeleteAllEntries) {
+  // Adds a node.
+  GURL url(kURL);
+  Add(url, kTitle);
+  EXPECT_EQ(1u, manager()->size());
+  EXPECT_EQ(1u, manager()->unread_size());
+  EXPECT_EQ(1u, manager()->GetRoot()->children().size())
+      << "The reading list node should be the child of the root.";
+
+  EXPECT_CALL(*observer(), ReadingListChanged()).RetiresOnSaturation();
+  // Deletes the node.
+  manager()->DeleteAll();
   EXPECT_EQ(0u, manager()->size());
   EXPECT_EQ(0u, manager()->unread_size());
   EXPECT_TRUE(manager()->GetRoot()->children().empty());
@@ -322,9 +340,10 @@ TEST_F(ReadingListManagerImplTest, ReadStatus) {
 TEST_F(ReadingListManagerImplTest, ReadingListDidAddEntry) {
   GURL url(kURL);
   EXPECT_CALL(*observer(), ReadingListChanged()).RetiresOnSaturation();
-  reading_list_model()->AddOrReplaceEntry(
-      url, kTitle, reading_list::ADDED_VIA_SYNC,
-      /*estimated_read_time=*/base::TimeDelta());
+  reading_list_model()->AddOrReplaceEntry(url, kTitle,
+                                          reading_list::ADDED_VIA_SYNC,
+                                          /*estimated_read_time=*/std::nullopt,
+                                          /*creation_time=*/std::nullopt);
 
   const auto* node = manager()->Get(url);
   EXPECT_TRUE(node);
@@ -345,7 +364,7 @@ TEST_F(ReadingListManagerImplTest, ReadingListWillRemoveEntry) {
 
   // Removes it from |reading_list_model_|.
   EXPECT_CALL(*observer(), ReadingListChanged()).RetiresOnSaturation();
-  reading_list_model()->RemoveEntryByURL(url);
+  reading_list_model()->RemoveEntryByURL(url, FROM_HERE);
   node = manager()->Get(url);
   EXPECT_FALSE(node);
   EXPECT_EQ(0u, manager()->size());
@@ -353,7 +372,7 @@ TEST_F(ReadingListManagerImplTest, ReadingListWillRemoveEntry) {
 
 // Verifies the bookmark node is updated when sync or other source updates the
 // reading list entry from |reading_list_model_|.
-TEST_F(ReadingListManagerImplTest, ReadingListWillMoveEntry) {
+TEST_F(ReadingListManagerImplTest, ReadingListWillUpateEntry) {
   GURL url(kURL);
 
   // Adds a node.
@@ -380,4 +399,4 @@ TEST_F(ReadingListManagerImplTest, EmptyBatchUpdatesDontTriggerObserver) {
   update.reset();
 }
 
-}  // namespace
+}  // namespace reading_list

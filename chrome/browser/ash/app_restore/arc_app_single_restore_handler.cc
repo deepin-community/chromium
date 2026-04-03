@@ -7,6 +7,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/ash/app_restore/app_restore_arc_task_handler_factory.h"
 #include "chrome/browser/ash/app_restore/arc_ghost_window_handler.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/profiles/profile.h"
@@ -31,12 +32,11 @@ bool IsAppReadyForLaunch(Profile* profile, const std::string& app_id) {
 }
 
 float GetDisplayScaleFactor(int64_t display_id) {
-  auto* screen = display::Screen::GetScreen();
+  auto* screen = display::Screen::Get();
   float scale_factor = 1;
   if (screen) {
-    scale_factor =
-        display::Screen::GetScreen()->GetPrimaryDisplay().device_scale_factor();
-    for (auto disp : display::Screen::GetScreen()->GetAllDisplays()) {
+    scale_factor = screen->GetPrimaryDisplay().device_scale_factor();
+    for (auto disp : screen->GetAllDisplays()) {
       if (disp.id() == display_id)
         scale_factor = disp.device_scale_factor();
     }
@@ -61,8 +61,10 @@ void ArcAppSingleRestoreHandler::LaunchGhostWindowWithApp(
     arc::mojom::WindowInfoPtr window_info) {
   // Activate ARC in case still not active. ArcSessionManager may null in test
   // env.
-  if (arc::ArcSessionManager::Get())
-    arc::ArcSessionManager::Get()->AllowActivation();
+  if (arc::ArcSessionManager::Get()) {
+    arc::ArcSessionManager::Get()->AllowActivation(
+        arc::ArcSessionManager::AllowActivationReason::kRestoreApps);
+  }
 
   // The ghost window and corresponding shelf item need to be added after ash
   // shelf ready.
@@ -86,7 +88,8 @@ void ArcAppSingleRestoreHandler::LaunchGhostWindowWithApp(
   // Unit test use injected window handler.
   if (!ghost_window_handler_) {
     ghost_window_handler_ =
-        AppRestoreArcTaskHandler::GetForProfile(profile)->window_handler();
+        AppRestoreArcTaskHandlerFactory::GetForProfile(profile)
+            ->window_handler();
   }
   DCHECK(ghost_window_handler_);
 

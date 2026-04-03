@@ -20,31 +20,35 @@
 
 #include "third_party/blink/renderer/core/svg/svg_fe_turbulence_element.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_integer.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_number.h"
 #include "third_party/blink/renderer/core/svg/svg_animated_number_optional_number.h"
 #include "third_party/blink/renderer/core/svg/svg_enumeration_map.h"
 #include "third_party/blink/renderer/core/svg_names.h"
+#include "third_party/blink/renderer/platform/graphics/filters/fe_turbulence.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
 template <>
 CORE_EXPORT const SVGEnumerationMap& GetEnumerationMap<SVGStitchOptions>() {
-  static const SVGEnumerationMap::Entry enum_items[] = {
-      {kSvgStitchtypeStitch, "stitch"},
-      {kSvgStitchtypeNostitch, "noStitch"},
-  };
+  static constexpr auto enum_items = std::to_array<const char* const>({
+      "stitch",
+      "noStitch",
+  });
   static const SVGEnumerationMap entries(enum_items);
   return entries;
 }
 
 template <>
 CORE_EXPORT const SVGEnumerationMap& GetEnumerationMap<TurbulenceType>() {
-  static const SVGEnumerationMap::Entry enum_items[] = {
-      {FETURBULENCE_TYPE_FRACTALNOISE, "fractalNoise"},
-      {FETURBULENCE_TYPE_TURBULENCE, "turbulence"},
-  };
+  static constexpr auto enum_items = std::to_array<const char* const>({
+      "fractalNoise",
+      "turbulence",
+  });
   static const SVGEnumerationMap entries(enum_items);
   return entries;
 }
@@ -124,7 +128,6 @@ void SVGFETurbulenceElement::SvgAttributeChanged(
       attr_name == svg_names::kSeedAttr ||
       attr_name == svg_names::kStitchTilesAttr ||
       attr_name == svg_names::kTypeAttr) {
-    SVGElement::InvalidationGuard invalidation_guard(this);
     PrimitiveAttributeChanged(attr_name);
     return;
   }
@@ -133,6 +136,7 @@ void SVGFETurbulenceElement::SvgAttributeChanged(
 }
 
 FilterEffect* SVGFETurbulenceElement::Build(SVGFilterBuilder*, Filter* filter) {
+  UseCounter::Count(GetDocument(), WebFeature::kSVGFETurbulenceElement);
   return MakeGarbageCollected<FETurbulence>(
       filter, type_->CurrentEnumValue(),
       baseFrequencyX()->CurrentValue()->Value(),

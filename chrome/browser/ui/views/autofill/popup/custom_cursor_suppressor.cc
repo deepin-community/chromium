@@ -11,7 +11,9 @@
 
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/global_routing_id.h"
@@ -47,25 +49,29 @@ CustomCursorSuppressor::~CustomCursorSuppressor() = default;
 void CustomCursorSuppressor::Start(int max_dimension_dips) {
   max_dimension_dips_ = max_dimension_dips;
 
-  // Observe the list of browsers.
-  browser_list_observation_.Observe(BrowserList::GetInstance());
+  // Observe the collection of browsers.
+  browser_collection_observation_.Observe(
+      GlobalBrowserCollection::GetInstance());
   // Observe all TabStripModels of existing browsers and suppress custom cursors
   // on their active tabs.
-  for (Browser* browser : *BrowserList::GetInstance()) {
-    browser->tab_strip_model()->AddObserver(this);
-    if (content::WebContents* active_contents =
-            browser->tab_strip_model()->GetActiveWebContents()) {
-      MaybeObserveNavigationsInWebContents(*active_contents);
-      SuppressForWebContents(*active_contents);
-    }
-    ObserveAndSuppressExtensionsForProfile(*browser->profile());
-  }
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [this](BrowserWindowInterface* browser) {
+        TabStripModel* const tab_strip_model = browser->GetTabStripModel();
+        tab_strip_model->AddObserver(this);
+        if (content::WebContents* const active_contents =
+                tab_strip_model->GetActiveWebContents()) {
+          MaybeObserveNavigationsInWebContents(*active_contents);
+          SuppressForWebContents(*active_contents);
+        }
+        ObserveAndSuppressExtensionsForProfile(*browser->GetProfile());
+        return true;
+      });
 }
 
 void CustomCursorSuppressor::Stop() {
   disallow_custom_cursor_scopes_.clear();
   TabStripModelObserver::StopObservingAll(this);
-  browser_list_observation_.Reset();
+  browser_collection_observation_.Reset();
   extension_host_registry_observation_.RemoveAllObservations();
 }
 
@@ -122,9 +128,9 @@ void CustomCursorSuppressor::MaybeObserveNavigationsInWebContents(
                           base::Unretained(this))));
 }
 
-void CustomCursorSuppressor::OnBrowserAdded(Browser* browser) {
-  browser->tab_strip_model()->AddObserver(this);
-  ObserveAndSuppressExtensionsForProfile(*browser->profile());
+void CustomCursorSuppressor::OnBrowserCreated(BrowserWindowInterface* browser) {
+  browser->GetTabStripModel()->AddObserver(this);
+  ObserveAndSuppressExtensionsForProfile(*browser->GetProfile());
 }
 
 void CustomCursorSuppressor::OnExtensionHostRegistryShutdown(

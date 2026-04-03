@@ -13,10 +13,10 @@
 #include "ash/ash_export.h"
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/raw_ptr_exclusion.h"
 #include "base/scoped_observation.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/display/display_observer.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/drag_controller.h"
 #include "ui/views/view.h"
@@ -39,10 +39,6 @@ namespace ash {
 
 class HoldingSpaceItemView;
 class HoldingSpaceTrayBubble;
-
-namespace holding_space_metrics {
-enum class EventSource;
-}  // namespace holding_space_metrics
 
 // A delegate for holding space views which implements context menu,
 // drag-and-drop, and selection functionality. Only a single delegate instance
@@ -134,7 +130,7 @@ class ASH_EXPORT HoldingSpaceViewDelegate
 
   // Registers a `callback` to be notified of changes to `selection_ui_`. To
   // unregister, destroy the returned subscription.
-  base::RepeatingClosureList::Subscription AddSelectionUiChangedCallback(
+  base::CallbackListSubscription AddSelectionUiChangedCallback(
       base::RepeatingClosureList::CallbackType callback);
 
   // Instructs the associated holding space tray to update its visibility. Note
@@ -143,9 +139,10 @@ class ASH_EXPORT HoldingSpaceViewDelegate
 
  private:
   // views::ContextMenuController:
-  void ShowContextMenuForViewImpl(views::View* source,
-                                  const gfx::Point& point,
-                                  ui::MenuSourceType source_type) override;
+  void ShowContextMenuForViewImpl(
+      views::View* source,
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type) override;
 
   // views::DragController:
   bool CanStartDragForView(views::View* sender,
@@ -192,8 +189,7 @@ class ASH_EXPORT HoldingSpaceViewDelegate
   // Attempts to open the holding space items associated with the given `views`.
   // Schedules the bubble to close regardless of attempt success.
   void OpenItemsAndScheduleClose(
-      const std::vector<const HoldingSpaceItemView*>& views,
-      holding_space_metrics::EventSource event_source);
+      const std::vector<const HoldingSpaceItemView*>& views);
 
   const raw_ptr<HoldingSpaceTrayBubble> bubble_;
 
@@ -210,10 +206,8 @@ class ASH_EXPORT HoldingSpaceViewDelegate
   // is used when determining the range for selection performed via shift-click.
   raw_ptr<HoldingSpaceItemView, DanglingUntriaged> selected_range_start_ =
       nullptr;
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION HoldingSpaceItemView* selected_range_end_ = nullptr;
 
+  raw_ptr<HoldingSpaceItemView> selected_range_end_ = nullptr;
   // Dictates how UI should represent holding space item views' selected states
   // to the user based on device state and `selection_size_`.
   SelectionUi selection_ui_;

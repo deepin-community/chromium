@@ -418,6 +418,7 @@ class FlattenUniformVisitor : public sh::VariableNameVisitor
         bool isImage                          = IsImageType(variable.type);
         bool isAtomicCounter                  = IsAtomicCounterType(variable.type);
         bool isFragmentInOut                  = variable.isFragmentInOut;
+        bool isTransformedFP16FloatUniform    = variable.isFloat16;
         std::vector<UsedUniform> *uniformList = mUniforms;
         if (isSampler)
         {
@@ -464,6 +465,7 @@ class FlattenUniformVisitor : public sh::VariableNameVisitor
             }
             if (mMarkActive)
             {
+                existingUniform->isFloat16 = isTransformedFP16FloatUniform;
                 existingUniform->active = true;
                 existingUniform->setActive(mShaderType, true, variable.id);
             }
@@ -485,6 +487,7 @@ class FlattenUniformVisitor : public sh::VariableNameVisitor
             linkedUniform.id                  = variable.id;
             linkedUniform.imageUnitFormat     = variable.imageUnitFormat;
             linkedUniform.isFragmentInOut     = variable.isFragmentInOut;
+            linkedUniform.isFloat16           = variable.isFloat16;
             if (variable.hasParentArrayIndex())
             {
                 linkedUniform.setParentArrayIndex(variable.parentArrayIndex());
@@ -863,12 +866,38 @@ void LogInterfaceBlocksExceedLimit(InfoLog &infoLog,
             << GetInterfaceBlockLimitName(shaderType, blockType) << " (" << limit << ")";
 }
 
-bool ValidateInterfaceBlocksCount(GLuint maxInterfaceBlocks,
-                                  const std::vector<sh::InterfaceBlock> &interfaceBlocks,
-                                  ShaderType shaderType,
-                                  sh::BlockType blockType,
-                                  GLuint *combinedInterfaceBlocksCount,
-                                  InfoLog &infoLog)
+std::string GetInterfaceBlockSizeLimitName(sh::BlockType blockType)
+{
+    switch (blockType)
+    {
+        case sh::BlockType::kBlockUniform:
+            return "GL_MAX_UNIFORM_BLOCK_SIZE";
+        case sh::BlockType::kBlockBuffer:
+            return "GL_MAX_SHADER_STORAGE_BLOCK_SIZE";
+        default:
+            UNREACHABLE();
+            return "";
+    }
+}
+
+void LogInterfaceBlockExceedsSizeLimit(InfoLog &infoLog,
+                                       ShaderType shaderType,
+                                       const std::string &name,
+                                       sh::BlockType blockType,
+                                       GLuint limit)
+{
+    infoLog << "Size of " << GetInterfaceBlockTypeString(blockType) << " " << name << " in "
+            << GetShaderTypeString(shaderType) << " shader exceeds "
+            << GetInterfaceBlockSizeLimitName(blockType) << " (" << limit << ")";
+}
+
+bool ValidateInterfaceBlocks(GLuint maxInterfaceBlocks,
+                             GLuint maxInterfaceBlockSize,
+                             const std::vector<sh::InterfaceBlock> &interfaceBlocks,
+                             ShaderType shaderType,
+                             sh::BlockType blockType,
+                             GLuint *combinedInterfaceBlocksCount,
+                             InfoLog &infoLog)
 {
     GLuint blockCount = 0;
     for (const sh::InterfaceBlock &block : interfaceBlocks)
@@ -879,6 +908,35 @@ bool ValidateInterfaceBlocksCount(GLuint maxInterfaceBlocks,
             if (blockCount > maxInterfaceBlocks)
             {
                 LogInterfaceBlocksExceedLimit(infoLog, shaderType, blockType, maxInterfaceBlocks);
+                return false;
+            }
+
+            // The size of the block is not readily available and needs to be calculated.  This is
+            // redundantly done after a successful link to gather not just the size but also derive
+            // the layout of the block.  A future optimization may be able to reuse the size
+            // calculated here, but the double-traversal is likely unavoidable (once for validation,
+            // once for gathering link info).
+            sh::Std140BlockEncoder std140Encoder;
+            sh::Std430BlockEncoder std430Encoder;
+            sh::BlockLayoutEncoder *encoder = nullptr;
+
+            if (block.layout == sh::BLOCKLAYOUT_STD430)
+            {
+                encoder = &std430Encoder;
+            }
+            else
+            {
+                encoder = &std140Encoder;
+            }
+
+            sh::BlockEncoderVisitor visitor("", "", encoder);
+            TraverseShaderVariables(block.fields, false, &visitor);
+            const size_t blockSize = encoder->getCurrentOffset();
+
+            if (blockSize > maxInterfaceBlockSize)
+            {
+                LogInterfaceBlockExceedsSizeLimit(infoLog, shaderType, block.name, blockType,
+                                                  maxInterfaceBlockSize);
                 return false;
             }
         }
@@ -1606,6 +1664,22 @@ void AtomicCounterBufferLinker::link(const std::map<int, unsigned int> &sizeMap)
     }
 }
 
+PixelLocalStorageLinker::PixelLocalStorageLinker() = default;
+
+PixelLocalStorageLinker::~PixelLocalStorageLinker() = default;
+
+void PixelLocalStorageLinker::init(
+    std::vector<ShPixelLocalStorageFormat> *pixelLocalStorageFormatsOut)
+{
+    mPixelLocalStorageFormatsOut = pixelLocalStorageFormatsOut;
+}
+
+void PixelLocalStorageLinker::link(
+    const std::vector<ShPixelLocalStorageFormat> &pixelLocalStorageFormats) const
+{
+    *mPixelLocalStorageFormatsOut = pixelLocalStorageFormats;
+}
+
 LinkingVariables::LinkingVariables()  = default;
 LinkingVariables::~LinkingVariables() = default;
 
@@ -1642,19 +1716,22 @@ void LinkingVariables::initForProgramPipeline(const ProgramPipelineState &state)
 ProgramLinkedResources::ProgramLinkedResources()  = default;
 ProgramLinkedResources::~ProgramLinkedResources() = default;
 
-void ProgramLinkedResources::init(std::vector<InterfaceBlock> *uniformBlocksOut,
-                                  std::vector<LinkedUniform> *uniformsOut,
-                                  std::vector<std::string> *uniformNamesOut,
-                                  std::vector<std::string> *uniformMappedNamesOut,
-                                  std::vector<InterfaceBlock> *shaderStorageBlocksOut,
-                                  std::vector<BufferVariable> *bufferVariablesOut,
-                                  std::vector<AtomicCounterBuffer> *atomicCounterBuffersOut)
+void ProgramLinkedResources::init(
+    std::vector<InterfaceBlock> *uniformBlocksOut,
+    std::vector<LinkedUniform> *uniformsOut,
+    std::vector<std::string> *uniformNamesOut,
+    std::vector<std::string> *uniformMappedNamesOut,
+    std::vector<InterfaceBlock> *shaderStorageBlocksOut,
+    std::vector<BufferVariable> *bufferVariablesOut,
+    std::vector<AtomicCounterBuffer> *atomicCounterBuffersOut,
+    std::vector<ShPixelLocalStorageFormat> *pixelLocalStorageFormatsOut)
 {
     uniformBlockLinker.init(uniformBlocksOut, uniformsOut, uniformNamesOut, uniformMappedNamesOut,
                             &unusedInterfaceBlocks);
     shaderStorageBlockLinker.init(shaderStorageBlocksOut, bufferVariablesOut,
                                   &unusedInterfaceBlocks);
     atomicCounterBufferLinker.init(atomicCounterBuffersOut);
+    pixelLocalStorageLinker.init(pixelLocalStorageFormatsOut);
 }
 
 void ProgramLinkedResourcesLinker::linkResources(const ProgramState &programState,
@@ -1715,6 +1792,13 @@ void ProgramLinkedResourcesLinker::linkResources(const ProgramState &programStat
     std::map<int, unsigned int> sizeMap;
     getAtomicCounterBufferSizeMap(programState.getExecutable(), sizeMap);
     resources.atomicCounterBufferLinker.link(sizeMap);
+
+    const gl::SharedCompiledShaderState &fragmentShader =
+        programState.getAttachedShader(gl::ShaderType::Fragment);
+    if (fragmentShader != nullptr)
+    {
+        resources.pixelLocalStorageLinker.link(fragmentShader->pixelLocalStorageFormats);
+    }
 }
 
 void ProgramLinkedResourcesLinker::getAtomicCounterBufferSizeMap(
@@ -1731,9 +1815,9 @@ void ProgramLinkedResourcesLinker::getAtomicCounterBufferSizeMap(
         // binding. The end of the uniform is calculated by finding the initial offset of the
         // uniform and adding size of the uniform. For arrays, the size is the number of elements
         // times the element size (should always by 4 for atomic_units).
-        unsigned dataOffset =
-            glUniform.getOffset() + static_cast<unsigned int>(glUniform.getBasicTypeElementCount() *
-                                                              glUniform.getElementSize());
+        unsigned dataOffset = glUniform.getBlockOffset() +
+                              static_cast<unsigned int>(glUniform.getBasicTypeElementCount() *
+                                                        glUniform.getElementSize());
         if (dataOffset > bufferDataSize)
         {
             bufferDataSize = dataOffset;
@@ -1863,6 +1947,41 @@ bool LinkValidateProgramGlobalNames(InfoLog &infoLog,
 }
 
 // [OpenGL ES 3.2] Chapter 7.4.1 "Shader Interface Matching"
+bool LinkValidateInOutNumberMatching(const std::vector<sh::ShaderVariable> &outputVaryings,
+                                     const std::vector<sh::ShaderVariable> &inputVaryings,
+                                     ShaderType frontShaderType,
+                                     ShaderType backShaderType,
+                                     int frontShaderVersion,
+                                     int backShaderVersion,
+                                     gl::InfoLog &infoLog)
+{
+    ASSERT(frontShaderVersion == backShaderVersion);
+
+    std::vector<const sh::ShaderVariable *> filteredInputVaryings;
+    std::vector<const sh::ShaderVariable *> filteredOutputVaryings;
+
+    GetFilteredVaryings(inputVaryings, &filteredInputVaryings);
+    GetFilteredVaryings(outputVaryings, &filteredOutputVaryings);
+
+    // Separable programs require the number of inputs and outputs match
+    if (filteredInputVaryings.size() < filteredOutputVaryings.size())
+    {
+        infoLog << GetShaderTypeString(backShaderType)
+                << " does not consume all varyings generated by "
+                << GetShaderTypeString(frontShaderType);
+        return false;
+    }
+    if (filteredInputVaryings.size() > filteredOutputVaryings.size())
+    {
+        infoLog << GetShaderTypeString(frontShaderType)
+                << " does not generate all varyings consumed by "
+                << GetShaderTypeString(backShaderType);
+        return false;
+    }
+
+    return true;
+}
+
 bool LinkValidateShaderInterfaceMatching(const std::vector<sh::ShaderVariable> &outputVaryings,
                                          const std::vector<sh::ShaderVariable> &inputVaryings,
                                          ShaderType frontShaderType,
@@ -1879,22 +1998,6 @@ bool LinkValidateShaderInterfaceMatching(const std::vector<sh::ShaderVariable> &
 
     GetFilteredVaryings(inputVaryings, &filteredInputVaryings);
     GetFilteredVaryings(outputVaryings, &filteredOutputVaryings);
-
-    // Separable programs require the number of inputs and outputs match
-    if (isSeparable && filteredInputVaryings.size() < filteredOutputVaryings.size())
-    {
-        infoLog << GetShaderTypeString(backShaderType)
-                << " does not consume all varyings generated by "
-                << GetShaderTypeString(frontShaderType);
-        return false;
-    }
-    if (isSeparable && filteredInputVaryings.size() > filteredOutputVaryings.size())
-    {
-        infoLog << GetShaderTypeString(frontShaderType)
-                << " does not generate all varyings consumed by "
-                << GetShaderTypeString(backShaderType);
-        return false;
-    }
 
     // All inputs must match all outputs
     for (const sh::ShaderVariable *input : filteredInputVaryings)
@@ -1950,7 +2053,7 @@ LinkMismatchError LinkValidateProgramVariables(const sh::ShaderVariable &variabl
         ASSERT(variable2IsArray);
         variable2IsArray = false;
     }
-    // TODO(anglebug.com/5557): Investigate interactions with arrays-of-arrays.
+    // TODO(anglebug.com/42264094): Investigate interactions with arrays-of-arrays.
     if (variable1IsArray != variable2IsArray)
     {
         return LinkMismatchError::ARRAYNESS_MISMATCH;
@@ -2143,10 +2246,11 @@ bool LinkValidateBuiltInVaryings(const std::vector<sh::ShaderVariable> &outputVa
         {
             if (sizeClipDistance != varying.getOutermostArraySize())
             {
-                infoLog << "If either shader redeclares the built-in arrays gl_ClipDistance[] the "
-                           "array must have the same size in both shaders. "
-                        << "Output size " << sizeClipDistance << ", input size "
-                        << varying.getOutermostArraySize() << ".";
+                infoLog
+                    << "If a fragment shader statically uses the gl_ClipDistance built-in array, "
+                       "the array must have the same size as in the previous shader stage. "
+                    << "Output size " << sizeClipDistance << ", input size "
+                    << varying.getOutermostArraySize() << ".";
                 return false;
             }
         }
@@ -2154,10 +2258,11 @@ bool LinkValidateBuiltInVaryings(const std::vector<sh::ShaderVariable> &outputVa
         {
             if (sizeCullDistance != varying.getOutermostArraySize())
             {
-                infoLog << "If either shader redeclares the built-in arrays gl_CullDistance[] the "
-                           "array must have the same size in both shaders. "
-                        << "Output size " << sizeCullDistance << ", input size "
-                        << varying.getOutermostArraySize() << ".";
+                infoLog
+                    << "If a fragment shader statically uses the gl_ClipDistance built-in array, "
+                       "the array must have the same size as in the previous shader stage. "
+                    << "Output size " << sizeCullDistance << ", input size "
+                    << varying.getOutermostArraySize() << ".";
 
                 return false;
             }
@@ -2406,9 +2511,10 @@ bool LinkValidateProgramInterfaceBlocks(const Caps &caps,
             resources.uniformBlockLinker.getShaderBlocks(shaderType);
         if (!uniformBlocks.empty())
         {
-            if (!ValidateInterfaceBlocksCount(
-                    static_cast<GLuint>(caps.maxShaderUniformBlocks[shaderType]), uniformBlocks,
-                    shaderType, sh::BlockType::kBlockUniform, &combinedUniformBlocksCount, infoLog))
+            if (!ValidateInterfaceBlocks(
+                    static_cast<GLuint>(caps.maxShaderUniformBlocks[shaderType]),
+                    static_cast<GLuint>(caps.maxUniformBlockSize), uniformBlocks, shaderType,
+                    sh::BlockType::kBlockUniform, &combinedUniformBlocksCount, infoLog))
             {
                 return false;
             }
@@ -2443,9 +2549,10 @@ bool LinkValidateProgramInterfaceBlocks(const Caps &caps,
                 resources.shaderStorageBlockLinker.getShaderBlocks(shaderType);
             if (!shaderStorageBlocks.empty())
             {
-                if (!ValidateInterfaceBlocksCount(
+                if (!ValidateInterfaceBlocks(
                         static_cast<GLuint>(caps.maxShaderStorageBlocks[shaderType]),
-                        shaderStorageBlocks, shaderType, sh::BlockType::kBlockBuffer,
+                        static_cast<GLuint>(caps.maxShaderStorageBlockSize), shaderStorageBlocks,
+                        shaderType, sh::BlockType::kBlockBuffer,
                         combinedShaderStorageBlocksCountOut, infoLog))
                 {
                     return false;

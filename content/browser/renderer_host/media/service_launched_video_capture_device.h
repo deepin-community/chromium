@@ -6,6 +6,7 @@
 #define CONTENT_BROWSER_RENDERER_HOST_MEDIA_SERVICE_LAUNCHED_VIDEO_CAPTURE_DEVICE_H_
 
 #include "base/functional/callback_forward.h"
+#include "base/sequence_checker.h"
 #include "base/token.h"
 #include "content/browser/renderer_host/media/video_capture_provider.h"
 #include "content/public/browser/video_capture_device_launcher.h"
@@ -65,8 +66,6 @@ class ServiceLaunchedVideoCaptureDevice : public LaunchedVideoCaptureDevice {
   mojo::Remote<video_capture::mojom::PushVideoStreamSubscription> subscription_;
   base::OnceClosure connection_lost_cb_;
   SEQUENCE_CHECKER(sequence_checker_);
-
-  media::VideoCaptureFeedback last_feedback_;
 };
 
 }  // namespace content

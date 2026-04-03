@@ -1,11 +1,14 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
+import type * as Platform from '../../core/platform/platform.js';
+import * as Root from '../../core/root/root.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import * as Workspace from '../../models/workspace/workspace.js';
+import * as PanelCommon from '../../panels/common/common.js';
 import * as UI from '../../ui/legacy/legacy.js';
 
 import * as NetworkForward from './forward/forward.js';
@@ -13,117 +16,152 @@ import type * as Network from './network.js';
 
 const UIStrings = {
   /**
-   *@description Command for showing the 'Network' tool
+   * @description Command for showing the 'Network' tool
    */
   showNetwork: 'Show Network',
   /**
-   *@description Title of the Network tool
+   * @description Title of the Network tool
    */
   network: 'Network',
   /**
-   *@description Command for showing the 'Network request blocking' tool
+   * @description Command for showing the 'Network request blocking' tool
    */
   showNetworkRequestBlocking: 'Show Network request blocking',
   /**
-   *@description Title of the 'Network request blocking' tool in the bottom drawer
+   * @description Command for showing the 'Network request blocking' tool
+   */
+  showRequestConditions: 'Show Request conditions',
+  /**
+   * @description Title of the 'Network request blocking' tool in the bottom drawer
    */
   networkRequestBlocking: 'Network request blocking',
   /**
-   *@description Command for showing the 'Network conditions' tool
+   * @description Title of the 'Request conditions' tool in the bottom drawer
+   */
+  networkRequestConditions: 'Request conditions',
+  /**
+   * @description Command for showing the 'Network conditions' tool
    */
   showNetworkConditions: 'Show Network conditions',
   /**
-   *@description Title of the 'Network conditions' tool in the bottom drawer
+   * @description Title of the 'Network conditions' tool in the bottom drawer
    */
   networkConditions: 'Network conditions',
   /**
-   *@description A tag of Network Conditions tool that can be searched in the command menu
+   * @description A tag of Network Conditions tool that can be searched in the command menu
    */
   diskCache: 'disk cache',
   /**
-   *@description A tag of Network Conditions tool that can be searched in the command menu
+   * @description A tag of Network Conditions tool that can be searched in the command menu
    */
   networkThrottling: 'network throttling',
   /**
-   *@description Command for showing the 'Search' tool
+   * @description Command for showing the 'Search' tool
    */
   showSearch: 'Show Search',
   /**
-   *@description Title of a search bar or tool
+   * @description Title of a search bar or tool
    */
   search: 'Search',
   /**
-   *@description Title of an action in the network tool to toggle recording
+   * @description Title of an action in the network tool to toggle recording
    */
   recordNetworkLog: 'Record network log',
   /**
-   *@description Title of an action in the network tool to toggle recording
+   * @description Title of an action in the network tool to toggle recording
    */
   stopRecordingNetworkLog: 'Stop recording network log',
   /**
-   *@description Title of an action that hides network request details
+   * @description Title of an action that hides network request details
    */
   hideRequestDetails: 'Hide request details',
   /**
-   *@description Title of a setting under the Network category in Settings
+   * @description Title of a setting under the Network category in Settings
    */
   colorcodeResourceTypes: 'Color-code resource types',
   /**
-   *@description A tag of Network color-code resource types that can be searched in the command menu
+   * @description A tag of Network color-code resource types that can be searched in the command menu
    */
   colorCode: 'color code',
   /**
-   *@description A tag of Network color-code resource types that can be searched in the command menu
+   * @description A tag of Network color-code resource types that can be searched in the command menu
    */
   resourceType: 'resource type',
   /**
-   *@description Title of a setting under the Network category that can be invoked through the Command Menu
+   * @description Title of a setting under the Network category that can be invoked through the Command Menu
    */
   colorCodeByResourceType: 'Color code by resource type',
   /**
-   *@description Title of a setting under the Network category that can be invoked through the Command Menu
+   * @description Title of a setting under the Network category that can be invoked through the Command Menu
    */
   useDefaultColors: 'Use default colors',
   /**
-   *@description Title of a setting under the Network category in Settings
+   * @description Title of a setting under the Network category in Settings
    */
   groupNetworkLogByFrame: 'Group network log by frame',
   /**
-   *@description A tag of Group Network by frame setting that can be searched in the command menu
+   * @description A tag of Group Network by frame setting that can be searched in the command menu
    */
   netWork: 'network',
   /**
-   *@description A tag of Group Network by frame setting that can be searched in the command menu
+   * @description A tag of Group Network by frame setting that can be searched in the command menu
    */
   frame: 'frame',
   /**
-   *@description A tag of Group Network by frame setting that can be searched in the command menu
+   * @description A tag of Group Network by frame setting that can be searched in the command menu
    */
   group: 'group',
   /**
-   *@description Title of a setting under the Network category that can be invoked through the Command Menu
+   * @description Title of a setting under the Network category that can be invoked through the Command Menu
    */
   groupNetworkLogItemsByFrame: 'Group network log items by frame',
   /**
-   *@description Title of a setting under the Network category that can be invoked through the Command Menu
+   * @description Title of a setting under the Network category that can be invoked through the Command Menu
    */
   dontGroupNetworkLogItemsByFrame: 'Don\'t group network log items by frame',
   /**
-   *@description Title of a button for clearing the network log
+   * @description Title of a button for clearing the network log
    */
   clear: 'Clear network log',
   /**
-   *@description Title of an action in the Network request blocking panel to add a new URL pattern to the blocklist.
+   * @description Title of an action in the Network request blocking panel to add a new URL pattern to the blocklist.
    */
   addNetworkRequestBlockingPattern: 'Add network request blocking pattern',
   /**
-   *@description Title of an action in the Network request blocking panel to clear all URL patterns.
+   * @description Title of an action in the Network request blocking panel to clear all URL patterns.
    */
   removeAllNetworkRequestBlockingPatterns: 'Remove all network request blocking patterns',
-};
+  /**
+   * @description Title of an action in the Network request blocking panel to add a new URL pattern to the blocklist.
+   */
+  addNetworkRequestBlockingOrThrottlingPattern: 'Add network request blocking or throttling pattern',
+  /**
+   * @description Title of an action in the Network request blocking panel to clear all URL patterns.
+   */
+  removeAllNetworkRequestBlockingOrThrottlingPatterns: 'Remove all network request blocking or throttling patterns',
+  /**
+   * @description Title of an action in the Network panel (and title of a setting in the Network category)
+   *              that enables options in the UI to copy or export HAR (not translatable) with sensitive data.
+   */
+  allowToGenerateHarWithSensitiveData: 'Allow to generate `HAR` with sensitive data',
+  /**
+   * @description Title of an action in the Network panel that disables options in the UI to copy or export
+   *              HAR (not translatable) with sensitive data.
+   */
+  dontAllowToGenerateHarWithSensitiveData: 'Don\'t allow to generate `HAR` with sensitive data',
+  /**
+   * @description Tooltip shown as documentation when hovering the (?) icon next to the "Allow to generate
+   *              HAR with sensitive data" option in the Settings panel.
+   */
+  allowToGenerateHarWithSensitiveDataDocumentation:
+      'By default generated HAR logs are sanitized and don\'t include `Cookie`, `Set-Cookie`, or `Authorization` HTTP headers. When this setting is enabled, options to export/copy HAR with sensitive data are provided.',
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/network/network-meta.ts', UIStrings);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
+const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 let loadedNetworkModule: (typeof Network|undefined);
+
+const isNode = Root.Runtime.Runtime.isNode();
 
 async function loadNetworkModule(): Promise<typeof Network> {
   if (!loadedNetworkModule) {
@@ -145,22 +183,27 @@ UI.ViewManager.registerViewExtension({
   commandPrompt: i18nLazyString(UIStrings.showNetwork),
   title: i18nLazyString(UIStrings.network),
   order: 40,
+  isPreviewFeature: isNode,
   async loadView() {
     const Network = await loadNetworkModule();
     return Network.NetworkPanel.NetworkPanel.instance();
   },
 });
 
+const individualThrottlingEnabled = (): boolean =>
+    Boolean(Root.Runtime.hostConfig.devToolsIndividualRequestThrottling?.enabled);
 UI.ViewManager.registerViewExtension({
   location: UI.ViewManager.ViewLocationValues.DRAWER_VIEW,
   id: 'network.blocked-urls',
-  commandPrompt: i18nLazyString(UIStrings.showNetworkRequestBlocking),
-  title: i18nLazyString(UIStrings.networkRequestBlocking),
+  commandPrompt: () => individualThrottlingEnabled() ? i18nString(UIStrings.showRequestConditions) :
+                                                       i18nString(UIStrings.showNetworkRequestBlocking),
+  title: () => individualThrottlingEnabled() ? i18nString(UIStrings.networkRequestConditions) :
+                                               i18nString(UIStrings.networkRequestBlocking),
   persistence: UI.ViewManager.ViewPersistence.CLOSEABLE,
   order: 60,
   async loadView() {
     const Network = await loadNetworkModule();
-    return new Network.BlockedURLsPane.BlockedURLsPane();
+    return new Network.RequestConditionsDrawer.RequestConditionsDrawer();
   },
 });
 
@@ -223,11 +266,11 @@ UI.ActionRegistration.registerActionExtension({
   bindings: [
     {
       shortcut: 'Ctrl+E',
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
     },
     {
       shortcut: 'Meta+E',
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
     },
   ],
 });
@@ -250,7 +293,7 @@ UI.ActionRegistration.registerActionExtension({
     },
     {
       shortcut: 'Meta+K',
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
     },
   ],
 });
@@ -286,7 +329,7 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+F',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
@@ -294,7 +337,7 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+F',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
@@ -307,34 +350,63 @@ UI.ActionRegistration.registerActionExtension({
 UI.ActionRegistration.registerActionExtension({
   actionId: 'network.add-network-request-blocking-pattern',
   category: UI.ActionRegistration.ActionCategory.NETWORK,
-  title: i18nLazyString(UIStrings.addNetworkRequestBlockingPattern),
+  title: () => individualThrottlingEnabled() ? i18nString(UIStrings.addNetworkRequestBlockingOrThrottlingPattern) :
+                                               i18nString(UIStrings.addNetworkRequestBlockingPattern),
   iconClass: UI.ActionRegistration.IconClass.PLUS,
   contextTypes() {
-    return maybeRetrieveContextTypes(Network => [Network.BlockedURLsPane.BlockedURLsPane]);
+    return maybeRetrieveContextTypes(Network => [Network.RequestConditionsDrawer.RequestConditionsDrawer]);
   },
   async loadActionDelegate() {
     const Network = await loadNetworkModule();
-    return new Network.BlockedURLsPane.ActionDelegate();
+    return new Network.RequestConditionsDrawer.ActionDelegate();
   },
 });
 
 UI.ActionRegistration.registerActionExtension({
   actionId: 'network.remove-all-network-request-blocking-patterns',
   category: UI.ActionRegistration.ActionCategory.NETWORK,
-  title: i18nLazyString(UIStrings.removeAllNetworkRequestBlockingPatterns),
+  title: () => individualThrottlingEnabled() ?
+      i18nString(UIStrings.removeAllNetworkRequestBlockingOrThrottlingPatterns) :
+      i18nString(UIStrings.removeAllNetworkRequestBlockingPatterns),
   iconClass: UI.ActionRegistration.IconClass.CLEAR,
   contextTypes() {
-    return maybeRetrieveContextTypes(Network => [Network.BlockedURLsPane.BlockedURLsPane]);
+    return maybeRetrieveContextTypes(Network => [Network.RequestConditionsDrawer.RequestConditionsDrawer]);
   },
   async loadActionDelegate() {
     const Network = await loadNetworkModule();
-    return new Network.BlockedURLsPane.ActionDelegate();
+    return new Network.RequestConditionsDrawer.ActionDelegate();
   },
 });
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.NETWORK,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
+  title: i18nLazyString(UIStrings.allowToGenerateHarWithSensitiveData),
+  settingName: 'network.show-options-to-generate-har-with-sensitive-data',
+  settingType: Common.Settings.SettingType.BOOLEAN,
+  defaultValue: false,
+  tags: [
+    i18n.i18n.lockedLazyString('HAR'),
+  ],
+  options: [
+    {
+      value: true,
+      title: i18nLazyString(UIStrings.allowToGenerateHarWithSensitiveData),
+    },
+    {
+      value: false,
+      title: i18nLazyString(UIStrings.dontAllowToGenerateHarWithSensitiveData),
+    },
+  ],
+  learnMore: {
+    url: 'https://goo.gle/devtools-export-hars' as Platform.DevToolsPath.UrlString,
+    tooltip: i18nLazyString(UIStrings.allowToGenerateHarWithSensitiveDataDocumentation),
+  },
+});
+
+Common.Settings.registerSettingExtension({
+  category: Common.Settings.SettingCategory.NETWORK,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.colorcodeResourceTypes),
   settingName: 'network-color-code-resource-types',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -357,7 +429,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.NETWORK,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.groupNetworkLogByFrame),
   settingName: 'network.group-by-frame',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -394,6 +466,7 @@ UI.ContextMenu.registerProvider({
       SDK.NetworkRequest.NetworkRequest,
       SDK.Resource.Resource,
       Workspace.UISourceCode.UISourceCode,
+      SDK.TraceObject.RevealableNetworkRequest,
     ];
   },
   async loadProvider() {
@@ -440,11 +513,22 @@ Common.Revealer.registerRevealer({
 
 Common.Revealer.registerRevealer({
   contextTypes() {
-    return [NetworkForward.UIFilter.UIRequestFilter];
+    return [NetworkForward.UIFilter.UIRequestFilter, PanelCommon.ExtensionServer.RevealableNetworkRequestFilter];
   },
   destination: Common.Revealer.RevealerDestination.NETWORK_PANEL,
   async loadRevealer() {
     const Network = await loadNetworkModule();
     return new Network.NetworkPanel.NetworkLogWithFilterRevealer();
+  },
+});
+
+Common.Revealer.registerRevealer({
+  contextTypes() {
+    return [SDK.NetworkManager.AppliedNetworkConditions];
+  },
+  destination: Common.Revealer.RevealerDestination.NETWORK_PANEL,
+  async loadRevealer() {
+    const Network = await loadNetworkModule();
+    return new Network.RequestConditionsDrawer.AppliedConditionsRevealer();
   },
 });

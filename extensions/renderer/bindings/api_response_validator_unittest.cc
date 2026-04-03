@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <vector>
+
 #include "base/auto_reset.h"
 #include "base/functional/bind.h"
 #include "extensions/renderer/bindings/api_binding_test.h"
@@ -32,19 +33,20 @@ std::unique_ptr<APISignature> OneStringCallbackSignature() {
       ArgumentSpecBuilder(ArgumentType::STRING, "str").Build());
   return std::make_unique<APISignature>(
       std::move(empty_specs),
-      ReturnsAsyncBuilder(std::move(async_specs)).Build(), nullptr);
+      ReturnsAsyncBuilder(std::move(async_specs)).Build());
 }
 
 v8::LocalVector<v8::Value> StringToV8Vector(v8::Local<v8::Context> context,
                                             const char* args) {
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Value> v8_args = V8ValueFromScriptSource(context, args);
   if (v8_args.IsEmpty()) {
     ADD_FAILURE() << "Could not convert args: " << args;
-    return v8::LocalVector<v8::Value>(context->GetIsolate());
+    return v8::LocalVector<v8::Value>(isolate);
   }
   EXPECT_TRUE(v8_args->IsArray());
-  v8::LocalVector<v8::Value> vector_args(context->GetIsolate());
-  EXPECT_TRUE(gin::ConvertFromV8(context->GetIsolate(), v8_args, &vector_args));
+  v8::LocalVector<v8::Value> vector_args(isolate);
+  EXPECT_TRUE(gin::ConvertFromV8(isolate, v8_args, &vector_args));
   return vector_args;
 }
 

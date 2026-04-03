@@ -7,16 +7,18 @@
 #include "components/ukm/ukm_reporting_service.h"
 
 #include <memory>
+#include <string_view>
 
 #include "base/command_line.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
+#include "components/background_task_scheduler/task_ids.h"
 #include "components/metrics/metrics_service_client.h"
 #include "components/metrics/metrics_switches.h"
+#include "components/metrics/server_urls.h"
 #include "components/metrics/unsent_log_store.h"
-#include "components/metrics/url_constants.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/ukm/ukm_pref_names.h"
 #include "components/ukm/ukm_service.h"
@@ -58,7 +60,7 @@ GURL GetServerUrl() {
       base::GetFieldTrialParamValueByFeature(kUkmFeature, "ServerUrl");
   if (!server_url.empty())
     return GURL(server_url);
-  return GURL(metrics::kDefaultUkmServerUrl);
+  return metrics::GetUkmServerUrl();
 }
 
 }  // namespace
@@ -75,7 +77,8 @@ UkmReportingService::UkmReportingService(metrics::MetricsServiceClient* client,
     : ReportingService(client,
                        local_state,
                        kMaxLogRetransmitSize,
-                       /*logs_event_manager=*/nullptr),
+                       /*logs_event_manager=*/nullptr,
+                       background_task::TaskIds::UKM_UPLOAD_JOB_ID),
       unsent_log_store_(std::make_unique<ukm::UnsentLogStoreMetricsImpl>(),
                         local_state,
                         prefs::kUkmUnsentLogStore,
@@ -88,7 +91,7 @@ UkmReportingService::UkmReportingService(metrics::MetricsServiceClient* client,
                         client->GetUploadSigningKey(),
                         /*logs_event_manager=*/nullptr) {}
 
-UkmReportingService::~UkmReportingService() {}
+UkmReportingService::~UkmReportingService() = default;
 
 metrics::LogStore* UkmReportingService::log_store() {
   return &unsent_log_store_;
@@ -102,7 +105,7 @@ GURL UkmReportingService::GetInsecureUploadUrl() const {
   return GURL();
 }
 
-base::StringPiece UkmReportingService::upload_mime_type() const {
+std::string_view UkmReportingService::upload_mime_type() const {
   return metrics::kUkmMimeType;
 }
 
@@ -164,5 +167,10 @@ void UkmReportingService::LogSuccessMetadata(const std::string& staged_log) {
 }
 
 void UkmReportingService::LogLargeRejection(size_t log_size) {}
+
+void UkmReportingService::LogBackgroundUploadTaskPendingTime(
+    base::TimeDelta time) {
+  base::UmaHistogramLongTimes("UKM.LogBackgroundUploadTaskPendingTime", time);
+}
 
 }  // namespace ukm

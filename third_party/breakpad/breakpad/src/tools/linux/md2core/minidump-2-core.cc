@@ -49,10 +49,10 @@
 #include <vector>
 
 #include "common/linux/memory_mapped_file.h"
+#include "common/memory_allocator.h"
 #include "common/minidump_type_helper.h"
 #include "common/path_helper.h"
 #include "common/scoped_ptr.h"
-#include "common/using_std_string.h"
 #include "google_breakpad/common/breakpad_types.h"
 #include "google_breakpad/common/minidump_format.h"
 #include "third_party/lss/linux_syscall_support.h"
@@ -97,6 +97,7 @@ typedef gregset_t user_regs_struct;
 using google_breakpad::MDTypeHelper;
 using google_breakpad::MemoryMappedFile;
 using google_breakpad::MinidumpMemoryRange;
+using google_breakpad::PageAllocator;
 
 typedef MDTypeHelper<sizeof(ElfW(Addr))>::MDRawDebug MDRawDebug;
 typedef MDTypeHelper<sizeof(ElfW(Addr))>::MDRawLinkMap MDRawLinkMap;
@@ -104,12 +105,12 @@ typedef MDTypeHelper<sizeof(ElfW(Addr))>::MDRawLinkMap MDRawLinkMap;
 static const MDRVA kInvalidMDRVA = static_cast<MDRVA>(-1);
 
 struct Options {
-  string minidump_path;
+  std::string minidump_path;
   bool verbose;
   int out_fd;
   bool use_filename;
   bool inc_guid;
-  string so_basedir;
+  std::string so_basedir;
 };
 
 static void
@@ -147,7 +148,7 @@ static void
 SetupOptions(int argc, const char* argv[], Options* options) {
   extern int optind;
   int ch;
-  const char* output_file = NULL;
+  const char* output_file = nullptr;
 
   // Initialize the options struct as needed.
   options->verbose = false;
@@ -187,7 +188,7 @@ SetupOptions(int argc, const char* argv[], Options* options) {
     exit(1);
   }
 
-  if (output_file == NULL || !strcmp(output_file, "-")) {
+  if (output_file == nullptr || !strcmp(output_file, "-")) {
     options->out_fd = STDOUT_FILENO;
   } else {
     options->out_fd = open(output_file, O_WRONLY|O_CREAT|O_TRUNC, 0664);
@@ -283,7 +284,7 @@ typedef struct prpsinfo {       /* Information about process                 */
 struct CrashedProcess {
   CrashedProcess()
       : exception{-1},
-        auxv(NULL),
+        auxv(nullptr),
         auxv_length(0) {
     memset(&prps, 0, sizeof(prps));
     prps.pr_sname = 'R';
@@ -301,8 +302,8 @@ struct CrashedProcess {
     uint32_t permissions;
     uint64_t start_address, end_address, offset;
     // The name we write out to the core.
-    string filename;
-    string data;
+    std::string filename;
+    std::string data;
   };
   std::map<uint64_t, Mapping> mappings;
 
@@ -340,13 +341,41 @@ struct CrashedProcess {
   // We gather them for merging later on into the list of maps.
   struct Signature {
     char guid[40];
-    string filename;
+    std::string filename;
   };
   std::map<uintptr_t, Signature> signatures;
 
-  string dynamic_data;
+  std::string dynamic_data;
   MDRawDebug debug;
   std::vector<MDRawLinkMap> link_map;
+};
+
+/* NT_FILE note as defined by linux kernel in fs/binfmt_elf.c
+ * is structured as:
+ * long count     -- how many files are mapped
+ * long page_size -- units for file_ofs
+ * array of [COUNT] elements of
+ *   long start
+ *   long end
+ *   long file_ofs
+ * followed by COUNT filenames in ASCII: "FILE1" NUL "FILE2" NUL...
+ * we can re-use the file mappings info
+ */
+struct NtFileNote {
+  NtFileNote()
+  // XXX: we really should source page size from the minidump itself but
+  // I cannot find anywhere in the minidump generation code where this
+  // would be stashed.
+  : page_sz((unsigned long)getpagesize()),
+    filename_count(0),
+    filenames_length(0) {
+  }
+
+  unsigned long page_sz;
+  unsigned long filename_count;
+  std::vector<unsigned long> file_mappings;
+  std::vector<std::string> filenames;
+  size_t filenames_length;
 };
 
 #if defined(__i386__)
@@ -798,12 +827,12 @@ ParseMaps(const Options& options, CrashedProcess* crashinfo,
        ptr < range.data() + range.length();) {
     const uint8_t* eol = (uint8_t*)memchr(ptr, '\n',
                                        range.data() + range.length() - ptr);
-    string line((const char*)ptr,
-                eol ? eol - ptr : range.data() + range.length() - ptr);
+    std::string line((const char*)ptr,
+                     eol ? eol - ptr : range.data() + range.length() - ptr);
     ptr = eol ? eol + 1 : range.data() + range.length();
     unsigned long long start, stop, offset;
-    char* permissions = NULL;
-    char* filename = NULL;
+    char* permissions = nullptr;
+    char* filename = nullptr;
     sscanf(line.c_str(), "%llx-%llx %m[-rwxp] %llx %*[:0-9a-f] %*d %ms",
            &start, &stop, &permissions, &offset, &filename);
     if (filename && *filename == '/') {
@@ -1100,7 +1129,8 @@ ParseModuleStream(const Options& options, CrashedProcess* crashinfo,
             record->signature.data4[4], record->signature.data4[5],
             record->signature.data4[6], record->signature.data4[7]);
 
-    string filename = full_file.GetAsciiMDString(rawmodule->module_name_rva);
+    std::string filename =
+        full_file.GetAsciiMDString(rawmodule->module_name_rva);
 
     CrashedProcess::Signature signature;
     strcpy(signature.guid, guid);
@@ -1120,9 +1150,8 @@ ParseModuleStream(const Options& options, CrashedProcess* crashinfo,
   }
 }
 
-static void
-AddDataToMapping(CrashedProcess* crashinfo, const string& data,
-                 uintptr_t addr) {
+static void AddDataToMapping(CrashedProcess* crashinfo, const std::string& data,
+                             uintptr_t addr) {
   for (std::map<uint64_t, CrashedProcess::Mapping>::iterator
          iter = crashinfo->mappings.begin();
        iter != crashinfo->mappings.end();
@@ -1162,8 +1191,7 @@ AddDataToMapping(CrashedProcess* crashinfo, const string& data,
   CrashedProcess::Mapping mapping;
   mapping.permissions = PF_R | PF_W;
   mapping.start_address = addr & ~4095;
-  mapping.end_address =
-    (addr + data.size() + 4095) & ~4095;
+  mapping.end_address = PageAllocator::AlignUp(addr + data.size(), 4096);
   mapping.data.assign(addr & 4095, 0).append(data);
   mapping.data.append(-mapping.data.size() & 4095, 0);
   crashinfo->mappings[mapping.start_address] = mapping;
@@ -1177,7 +1205,7 @@ AugmentMappings(const Options& options, CrashedProcess* crashinfo,
   for (unsigned i = 0; i < crashinfo->threads.size(); ++i) {
     const CrashedProcess::Thread& thread = crashinfo->threads[i];
     AddDataToMapping(crashinfo,
-                     string((char*)thread.stack, thread.stack_length),
+                     std::string((char*)thread.stack, thread.stack_length),
                      thread.stack_addr);
   }
 
@@ -1185,7 +1213,7 @@ AugmentMappings(const Options& options, CrashedProcess* crashinfo,
   // the beginning of the address space, as this area should always be
   // available.
   static const uintptr_t start_addr = 4096;
-  string data;
+  std::string data;
   struct r_debug debug = { 0 };
   debug.r_version = crashinfo->debug.version;
   debug.r_brk = (ElfW(Addr))crashinfo->debug.brk;
@@ -1205,7 +1233,7 @@ AugmentMappings(const Options& options, CrashedProcess* crashinfo,
     link_map.l_ld = (ElfW(Dyn)*)iter->ld;
     link_map.l_prev = prev;
     prev = (struct link_map*)(start_addr + data.size());
-    string filename = full_file.GetAsciiMDString(iter->name);
+    std::string filename = full_file.GetAsciiMDString(iter->name);
 
     // Look up signature for this filename. If available, change filename
     // to point to GUID, instead.
@@ -1216,21 +1244,21 @@ AugmentMappings(const Options& options, CrashedProcess* crashinfo,
       // old_filename: The path as found via SONAME (e.g. /lib/libpthread.so.0).
       // sig_filename: The path on disk (e.g. /lib/libpthread-2.19.so).
       const char* guid = sig->second.guid;
-      string sig_filename = sig->second.filename;
-      string old_filename = filename.empty() ? sig_filename : filename;
-      string new_filename;
+      std::string sig_filename = sig->second.filename;
+      std::string old_filename = filename.empty() ? sig_filename : filename;
+      std::string new_filename;
 
       // First set up the leading path.  We assume dirname always ends with a
       // trailing slash (as needed), so we won't be appending one manually.
       if (options.so_basedir.empty()) {
-        string dirname;
+        std::string dirname;
         if (options.use_filename) {
           dirname = sig_filename;
         } else {
           dirname = old_filename;
         }
         size_t slash = dirname.find_last_of('/');
-        if (slash != string::npos) {
+        if (slash != std::string::npos) {
           new_filename = dirname.substr(0, slash + 1);
         }
       } else {
@@ -1262,9 +1290,9 @@ AugmentMappings(const Options& options, CrashedProcess* crashinfo,
     if (std::distance(iter, crashinfo->link_map.end()) == 1) {
       link_map.l_next = 0;
     } else {
-      link_map.l_next = (struct link_map*)(start_addr + data.size() +
-                                           sizeof(link_map) +
-                                           ((filename.size() + 8) & ~7));
+      link_map.l_next =
+          (struct link_map*)(start_addr + data.size() + sizeof(link_map) +
+                             PageAllocator::AlignUp(filename.size(), 8));
     }
     data.append((char*)&link_map, sizeof(link_map));
     data.append(filename);
@@ -1298,6 +1326,8 @@ AugmentMappings(const Options& options, CrashedProcess* crashinfo,
     }
     AddDataToMapping(crashinfo, crashinfo->dynamic_data,
                      (uintptr_t)crashinfo->debug.dynamic);
+  } else {
+    fprintf(stderr, "dynamic data empty\n");
   }
 }
 
@@ -1417,19 +1447,40 @@ main(int argc, const char* argv[]) {
   if (!writea(options.out_fd, &ehdr, sizeof(Ehdr)))
     return 1;
 
+  struct NtFileNote nt_file;
+  for (auto iter = crashinfo.mappings.begin();
+       iter != crashinfo.mappings.end(); iter++) {
+    if (iter->second.filename.empty())
+      continue;
+    nt_file.file_mappings.push_back(iter->second.start_address);
+    nt_file.file_mappings.push_back(iter->second.end_address);
+    nt_file.file_mappings.push_back(iter->second.offset);
+    nt_file.filenames.push_back(iter->second.filename);
+    nt_file.filenames_length += iter->second.filename.length() + 1;
+    nt_file.filename_count += 1;
+  }
+  // implementation of NT_FILE note seems to pad alignment by 4 bytes but
+  // keep the header size the true size of the note. so we keep nt_file_align
+  // as separate field.
+  size_t nt_file_data_sz = (2 * sizeof(unsigned long)) +
+      (nt_file.file_mappings.size() * sizeof(unsigned long)) +
+      nt_file.filenames_length;
+  size_t nt_file_align = nt_file_data_sz % 4 == 0 ? 0 : 4 -
+      (nt_file_data_sz % 4);
   size_t offset = sizeof(Ehdr) + ehdr.e_phnum * sizeof(Phdr);
   size_t filesz = sizeof(Nhdr) + 8 + sizeof(prpsinfo) +
-                  // sizeof(Nhdr) + 8 + sizeof(user) +
-                  sizeof(Nhdr) + 8 + crashinfo.auxv_length +
-                  crashinfo.threads.size() * (
-                    (sizeof(Nhdr) + 8 + sizeof(prstatus))
+      // sizeof(Nhdr) + 8 + sizeof(user) +
+      sizeof(Nhdr) + 8 + crashinfo.auxv_length +
+      sizeof(Nhdr) + 8 + nt_file_data_sz + nt_file_align +
+      crashinfo.threads.size() * (
+      (sizeof(Nhdr) + 8 + sizeof(prstatus))
 #if defined(__i386__) || defined(__x86_64__)
-                   + sizeof(Nhdr) + 8 + sizeof(user_fpregs_struct)
+      + sizeof(Nhdr) + 8 + sizeof(user_fpregs_struct)
 #endif
 #if defined(__i386__)
-                   + sizeof(Nhdr) + 8 + sizeof(user_fpxregs_struct)
+      + sizeof(Nhdr) + 8 + sizeof(user_fpxregs_struct)
 #endif
-                    );
+      );
 
   Phdr phdr;
   memset(&phdr, 0, sizeof(Phdr));
@@ -1491,6 +1542,28 @@ main(int argc, const char* argv[]) {
       !writea(options.out_fd, crashinfo.auxv, crashinfo.auxv_length)) {
     return 1;
   }
+
+  nhdr.n_descsz = nt_file_data_sz;
+  nhdr.n_type = NT_FILE;
+  if (!writea(options.out_fd, &nhdr, sizeof(nhdr)) ||
+      !writea(options.out_fd, "CORE\0\0\0\0", 8) ||
+      !writea(options.out_fd,
+      &nt_file.filename_count, sizeof(nt_file.filename_count)) ||
+      !writea(options.out_fd, &nt_file.page_sz, sizeof(nt_file.page_sz))) {
+    return 1;
+  }
+  for (auto iter = nt_file.file_mappings.begin();
+       iter != nt_file.file_mappings.end(); iter++) {
+    if (!writea(options.out_fd, &*iter, sizeof(*iter)))
+      return 1;
+  }
+  for (auto iter = nt_file.filenames.begin();
+       iter != nt_file.filenames.end(); iter++) {
+    if (!writea(options.out_fd, iter->c_str(), iter->length() + 1))
+      return 1;
+  }
+  if (!writea(options.out_fd, "\0\0\0\0", nt_file_align))
+    return 1;
 
   for (const auto& current_thread : crashinfo.threads) {
     if (current_thread.tid == crashinfo.exception.tid) {

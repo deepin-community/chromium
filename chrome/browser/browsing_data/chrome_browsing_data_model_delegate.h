@@ -7,6 +7,7 @@
 
 #include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/browsing_data/content/browsing_data_model.h"
@@ -23,7 +24,7 @@ class ChromeBrowsingDataModelDelegate final
  public:
   // Storage types which are represented by the model. Some types have
   // incomplete implementations, and are marked as such.
-  // TODO(crbug.com/1271155): Complete implementations for all browsing data.
+  // TODO(crbug.com/40205603): Complete implementations for all browsing data.
   enum class StorageType {
     kTopics = static_cast<int>(BrowsingDataModel::StorageType::kLastType) +
               1,      // Not fetched from disk.

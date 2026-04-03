@@ -5,58 +5,83 @@
 #include "third_party/blink/renderer/core/layout/flex/layout_flexible_box.h"
 
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
+#include "third_party/blink/renderer/core/html/forms/html_opt_group_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_option_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
+#include "third_party/blink/renderer/core/html/html_hr_element.h"
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
 #include "third_party/blink/renderer/core/inspector/inspector_trace_events.h"
 #include "third_party/blink/renderer/core/layout/block_node.h"
 #include "third_party/blink/renderer/core/layout/constraint_space.h"
 #include "third_party/blink/renderer/core/layout/flex/flex_layout_algorithm.h"
+#include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/layout/layout_result.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/oof_positioned_node.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
 LayoutFlexibleBox::LayoutFlexibleBox(Element* element) : LayoutBlock(element) {}
 
-bool LayoutFlexibleBox::HasTopOverflow() const {
-  const auto& style = StyleRef();
-  bool is_wrap_reverse = StyleRef().FlexWrap() == EFlexWrap::kWrapReverse;
-  if (style.IsHorizontalWritingMode()) {
-    return style.ResolvedIsColumnReverseFlexDirection() ||
-           (style.ResolvedIsRowFlexDirection() && is_wrap_reverse);
+namespace {
+
+LogicalToPhysical<bool> GetOverflowConverter(const ComputedStyle& style) {
+  const bool is_wrap_reverse = style.ResolvedIsFlexWrapReverse();
+  const bool is_direction_reverse = style.ResolvedIsReverseFlexDirection();
+
+  bool inline_start = false;
+  bool inline_end = true;
+  bool block_start = false;
+  bool block_end = true;
+
+  if (style.ResolvedIsColumnFlexDirection()) {
+    if (is_direction_reverse) {
+      std::swap(block_start, block_end);
+    }
+    if (is_wrap_reverse) {
+      std::swap(inline_start, inline_end);
+    }
+  } else {
+    if (is_direction_reverse) {
+      std::swap(inline_start, inline_end);
+    }
+    if (is_wrap_reverse) {
+      std::swap(block_start, block_end);
+    }
   }
-  return style.IsLeftToRightDirection() ==
-         (style.ResolvedIsRowReverseFlexDirection() ||
-          (style.ResolvedIsColumnFlexDirection() && is_wrap_reverse));
+
+  return LogicalToPhysical(style.GetWritingDirection(), inline_start,
+                           inline_end, block_start, block_end);
+}
+
+}  // namespace
+
+bool LayoutFlexibleBox::HasTopOverflow() const {
+  return GetOverflowConverter(StyleRef()).Top();
 }
 
 bool LayoutFlexibleBox::HasLeftOverflow() const {
-  const auto& style = StyleRef();
-  bool is_wrap_reverse = StyleRef().FlexWrap() == EFlexWrap::kWrapReverse;
-  if (style.IsHorizontalWritingMode()) {
-    return style.IsLeftToRightDirection() ==
-           (style.ResolvedIsRowReverseFlexDirection() ||
-            (style.ResolvedIsColumnFlexDirection() && is_wrap_reverse));
-  }
-  return (style.GetWritingMode() == WritingMode::kVerticalLr) ==
-         (style.ResolvedIsColumnReverseFlexDirection() ||
-          (style.ResolvedIsRowFlexDirection() && is_wrap_reverse));
+  return GetOverflowConverter(StyleRef()).Left();
 }
 
 namespace {
 
 void MergeAnonymousFlexItems(LayoutObject* remove_child) {
+  DCHECK(!RuntimeEnabledFeatures::LayoutMergeAnonymousFixEnabled());
+
   // When we remove a flex item, and the previous and next siblings of the item
   // are text nodes wrapped in anonymous flex items, the adjacent text nodes
   // need to be merged into the same flex item.
   LayoutObject* prev = remove_child->PreviousSibling();
-  if (!prev || !prev->IsAnonymousBlock())
+  if (!prev || !prev->IsAnonymousBlockFlow()) {
     return;
+  }
   LayoutObject* next = remove_child->NextSibling();
-  if (!next || !next->IsAnonymousBlock())
+  if (!next || !next->IsAnonymousBlockFlow()) {
     return;
+  }
   To<LayoutBoxModelObject>(next)->MoveAllChildrenTo(
       To<LayoutBoxModelObject>(prev));
   next->Destroy();
@@ -64,22 +89,23 @@ void MergeAnonymousFlexItems(LayoutObject* remove_child) {
 
 }  // namespace
 
+// TODO(crbug.com/364348901): We should be able to remove this method entirely
+// when the CustomizableSelect flag is removed or disabled, but it causes a
+// crash in the switch-picker-appearance WPT.
 bool LayoutFlexibleBox::IsChildAllowed(LayoutObject* object,
                                        const ComputedStyle& style) const {
   const auto* select = DynamicTo<HTMLSelectElement>(GetNode());
-  if (UNLIKELY(select && select->UsesMenuList())) {
-    // For a size=1 <select>, we only render the active option label through the
-    // InnerElement. We do not allow adding layout objects for options and
-    // optgroups.
-    if (select->SlottedButton()) {
-      // For stylable select, we want children to be renderable so that we can
-      // render the author provided <button> element. However, we don't want the
-      // <option>s to be rendered if they will be displayed in a native popup.
-      CHECK(RuntimeEnabledFeatures::StylableSelectEnabled());
-      return !IsA<HTMLOptionElement>(object->GetNode());
-    } else {
-      return object->GetNode() == &select->InnerElement();
-    }
+  // `style` has the wrong appearance value. `select->GetComputedStyle()` is up
+  // to date.
+  if (select && select->UsesMenuList() &&
+      (!select->GetComputedStyle() ||
+       !select->SupportsBaseAppearance(
+           select->GetComputedStyle()->EffectiveAppearance()))) [[unlikely]] {
+    // For a size=1 appearance:auto <select>, we only render the active option
+    // label through the InnerElement. We do not allow adding layout objects
+    // for options, optgroups, or any other child nodes in order to hide them
+    // while still allowing them to have a ComputedStyle.
+    return object->GetNode() == &select->InnerElement();
   }
   return LayoutBlock::IsChildAllowed(object, style);
 }
@@ -97,11 +123,27 @@ const DevtoolsFlexInfo* LayoutFlexibleBox::FlexLayoutData() const {
 }
 
 void LayoutFlexibleBox::RemoveChild(LayoutObject* child) {
-  if (!DocumentBeingDestroyed() &&
-      !StyleRef().IsDeprecatedFlexboxUsingFlexLayout())
+  if (!RuntimeEnabledFeatures::LayoutMergeAnonymousFixEnabled() &&
+      !DocumentBeingDestroyed()) {
     MergeAnonymousFlexItems(child);
+  }
 
   LayoutBlock::RemoveChild(child);
+}
+
+void LayoutFlexibleBox::UpdateAfterLayout() {
+  NOT_DESTROYED();
+
+  // Gap decorations depend on the position of flex items, which may change
+  // when a child's size changes (e.g., during animation). Trigger a full
+  // paint invalidation to ensure the gap decorations repaint correctly.
+  // TODO(crbug.com/357648037): See if the conditions for this can be scoped
+  // more narrowly.
+  if (RuntimeEnabledFeatures::CSSGapDecorationEnabled() &&
+      StyleRef().HasGapRule()) {
+    SetShouldDoFullPaintInvalidation();
+  }
+  LayoutBlock::UpdateAfterLayout();
 }
 
 }  // namespace blink

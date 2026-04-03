@@ -11,6 +11,7 @@
 
 #include "base/base64.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "components/prefs/pref_service.h"
 #include "crypto/random.h"
@@ -59,9 +60,9 @@ void EcheUidProvider::GenerateKeyPair(
   ED25519_keypair(public_key, private_key);
   // Store the seed (what RFC8032 calls a private key), which is the
   // first 32 bytes of what BoringSSL calls the private key.
-  pref_service_->SetString(
-      kEcheAppSeedPref,
-      ConvertBinaryToString(base::make_span(private_key, kSeedSizeInByte)));
+  pref_service_->SetString(kEcheAppSeedPref,
+                           ConvertBinaryToString(UNSAFE_TODO(
+                               base::span(private_key, kSeedSizeInByte))));
 }
 
 std::optional<std::vector<uint8_t>> EcheUidProvider::ConvertStringToBinary(

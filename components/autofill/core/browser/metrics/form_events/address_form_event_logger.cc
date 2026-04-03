@@ -7,59 +7,122 @@
 #include <algorithm>
 #include <iterator>
 #include <memory>
+#include <string>
 
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
-#include "components/autofill/core/browser/autofill_data_util.h"
-#include "components/autofill/core/browser/autofill_trigger_details.h"
+#include "components/autofill/core/browser/autofill_trigger_source.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#include "components/autofill/core/browser/data_quality/autofill_data_util.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/foundations/autofill_driver.h"
 #include "components/autofill/core/browser/logging/log_manager.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics_utils.h"
+#include "components/autofill/core/browser/metrics/form_interactions_ukm_logger.h"
+#include "components/autofill/core/browser/suggestions/addresses/address_suggestion_generator.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_internals/log_message.h"
 #include "components/autofill/core/common/autofill_internals/logging_scope.h"
+#include "components/autofill/core/common/unique_ids.h"
 
 namespace autofill::autofill_metrics {
 
-AddressFormEventLogger::AddressFormEventLogger(
-    bool is_in_any_main_frame,
-    AutofillMetrics::FormInteractionsUkmLogger* form_interactions_ukm_logger,
-    AutofillClient* client)
-    : FormEventLoggerBase("Address",
-                          is_in_any_main_frame,
-                          form_interactions_ukm_logger,
-                          client) {}
+namespace {
+
+// Converts a set of `AutofillProfileRecordTypeCategory` to the corresponding
+// `CategoryResolvedKeyMetricBucket`.
+CategoryResolvedKeyMetricBucket ProfileCategoriesToMetricBucket(
+    DenseSet<AutofillProfileRecordTypeCategory> categories) {
+  if (categories.empty()) {
+    return CategoryResolvedKeyMetricBucket::kNone;
+  }
+  if (categories.size() > 1) {
+    return CategoryResolvedKeyMetricBucket::kMixed;
+  }
+  switch (*categories.begin()) {
+    case AutofillProfileRecordTypeCategory::kLocalOrSyncable:
+      return CategoryResolvedKeyMetricBucket::kLocalOrSyncable;
+    case AutofillProfileRecordTypeCategory::kAccountChrome:
+      return CategoryResolvedKeyMetricBucket::kAccountChrome;
+    case AutofillProfileRecordTypeCategory::kAccountNonChrome:
+      return CategoryResolvedKeyMetricBucket::kAccountNonChrome;
+    case AutofillProfileRecordTypeCategory::kAccountHome:
+      return CategoryResolvedKeyMetricBucket::kAccountHome;
+    case AutofillProfileRecordTypeCategory::kAccountWork:
+      return CategoryResolvedKeyMetricBucket::kAccountWork;
+    case AutofillProfileRecordTypeCategory::kAccountNameEmail:
+      return CategoryResolvedKeyMetricBucket::kAccountNameEmail;
+  }
+}
+
+}  // namespace
+
+AddressFormEventLogger::AddressFormEventLogger(BrowserAutofillManager* owner)
+    : FormEventLoggerBase("Address", owner) {}
 
 AddressFormEventLogger::~AddressFormEventLogger() = default;
+
+void AddressFormEventLogger::UpdateProfileAvailabilityForReadiness(
+    const std::vector<const AutofillProfile*>& profiles) {
+  record_type_count_ = profiles.size();
+  profile_categories_available_.clear();
+  for (const AutofillProfile* profile : profiles) {
+    profile_categories_available_.insert(GetCategoryOfProfile(*profile));
+  }
+}
+
+void AddressFormEventLogger::OnDidShowSuggestions(
+    const FormStructure& form,
+    const AutofillField& field,
+    base::TimeTicks form_parsed_timestamp,
+    bool off_the_record,
+    base::span<const Suggestion> suggestions) {
+  FormEventLoggerBase::OnDidShowSuggestions(
+      form, field, field.Type().GetAddressType(), form_parsed_timestamp,
+      off_the_record, suggestions);
+
+  if (!base::FeatureList::IsEnabled(
+          features::kAutofillEnableSupportForHomeAndWork)) {
+    return;
+  }
+
+  const AddressDataManager& address_data_manager =
+      client().GetPersonalDataManager().address_data_manager();
+
+  home_profile_suggestion_present_ =
+      home_profile_suggestion_present_ ||
+      ContainsProfileSuggestionWithRecordType(
+          suggestions, address_data_manager,
+          AutofillProfile::RecordType::kAccountHome);
+
+  work_profile_suggestion_present_ =
+      work_profile_suggestion_present_ ||
+      ContainsProfileSuggestionWithRecordType(
+          suggestions, address_data_manager,
+          AutofillProfile::RecordType::kAccountWork);
+}
 
 void AddressFormEventLogger::OnDidFillFormFillingSuggestion(
     const AutofillProfile& profile,
     const FormStructure& form,
     const AutofillField& field,
-    AutofillMetrics::PaymentsSigninState signin_state_for_metrics,
     const AutofillTriggerSource trigger_source) {
-  signin_state_for_metrics_ = signin_state_for_metrics;
-
-  form_interactions_ukm_logger_->LogDidFillSuggestion(form, field);
-
+  client().GetFormInteractionsUkmLogger().LogDidFillSuggestion(
+      driver().GetPageUkmSourceId(), form, field,
+      /*record_type=*/std::nullopt);
   Log(FORM_EVENT_LOCAL_SUGGESTION_FILLED, form);
-
   if (!has_logged_form_filling_suggestion_filled_) {
     has_logged_form_filling_suggestion_filled_ = true;
     Log(FORM_EVENT_LOCAL_SUGGESTION_FILLED_ONCE, form);
   }
-
-  if (has_logged_undo_after_fill_) {
-    has_logged_fill_after_undo_ = true;
-  }
-
   base::RecordAction(
       base::UserMetricsAction("Autofill_FilledProfileSuggestion"));
 
-  if (trigger_source != AutofillTriggerSource::kFastCheckout) {
-    ++form_interaction_counts_.autofill_fills;
-  }
-  UpdateFlowId();
+  FieldType field_type = field.Type().GetAddressType();
+  field_types_with_shown_suggestions_.erase(field_type);
+  field_types_with_accepted_suggestions_.insert(field_type);
+  ++form_interaction_counts_.autofill_fills;
 
   profile_categories_filled_.insert(GetCategoryOfProfile(profile));
 }
@@ -67,6 +130,25 @@ void AddressFormEventLogger::OnDidFillFormFillingSuggestion(
 void AddressFormEventLogger::OnDidUndoAutofill() {
   has_logged_undo_after_fill_ = true;
   base::RecordAction(base::UserMetricsAction("Autofill_UndoAddressAutofill"));
+}
+
+void AddressFormEventLogger::OnDestroyed() {
+  FormEventLoggerBase::OnDestroyed();
+
+  if (base::FeatureList::IsEnabled(
+          features::kAutofillEnableSupportForHomeAndWork) &&
+      has_logged_suggestions_shown_) {
+    if (profile_categories_available_.contains(
+            AutofillProfileRecordTypeCategory::kAccountHome)) {
+      base::UmaHistogramBoolean("Autofill.HomeAndWork.SuggestionPresent.Home",
+                                home_profile_suggestion_present_);
+    }
+    if (profile_categories_available_.contains(
+            AutofillProfileRecordTypeCategory::kAccountWork)) {
+      base::UmaHistogramBoolean("Autofill.HomeAndWork.SuggestionPresent.Work",
+                                work_profile_suggestion_present_);
+    }
+  }
 }
 
 void AddressFormEventLogger::OnLog(const std::string& name,
@@ -83,11 +165,6 @@ void AddressFormEventLogger::OnLog(const std::string& name,
   }
 }
 
-void AddressFormEventLogger::RecordPollSuggestions() {
-  base::RecordAction(
-      base::UserMetricsAction("Autofill_PolledProfileSuggestions"));
-}
-
 void AddressFormEventLogger::RecordParseForm() {
   base::RecordAction(base::UserMetricsAction("Autofill_ParsedProfileForm"));
 }
@@ -97,28 +174,18 @@ void AddressFormEventLogger::RecordShowSuggestions() {
       base::UserMetricsAction("Autofill_ShowedProfileSuggestions"));
 }
 
+void AddressFormEventLogger::RecordFillingReadiness(LogBuffer& logs) const {
+  FormEventLoggerBase::RecordFillingReadiness(logs);
+  base::UmaHistogramEnumeration(
+      "Autofill.Leipzig.FillingReadinessCategory",
+      ProfileCategoriesToMetricBucket(profile_categories_available_));
+}
+
 void AddressFormEventLogger::RecordFillingAssistance(LogBuffer& logs) const {
   FormEventLoggerBase::RecordFillingAssistance(logs);
-  // Log the origin-resolved filling assistance metric by converting the
-  // `profile_categories_filled` to an CategoryResolvedFillingAssistanceBucket.
-  auto filled_categories_to_bucket = [&] {
-    if (profile_categories_filled_.empty()) {
-      return CategoryResolvedFillingAssistanceBucket::kNone;
-    }
-    if (profile_categories_filled_.size() > 1) {
-      return CategoryResolvedFillingAssistanceBucket::kMixed;
-    }
-    switch (*profile_categories_filled_.begin()) {
-      case AutofillProfileSourceCategory::kLocalOrSyncable:
-        return CategoryResolvedFillingAssistanceBucket::kLocalOrSyncable;
-      case AutofillProfileSourceCategory::kAccountChrome:
-        return CategoryResolvedFillingAssistanceBucket::kAccountChrome;
-      case AutofillProfileSourceCategory::kAccountNonChrome:
-        return CategoryResolvedFillingAssistanceBucket::kAccountNonChrome;
-    }
-  };
-  base::UmaHistogramEnumeration("Autofill.Leipzig.FillingAssistanceCategory",
-                                filled_categories_to_bucket());
+  base::UmaHistogramEnumeration(
+      "Autofill.Leipzig.FillingAssistanceCategory",
+      ProfileCategoriesToMetricBucket(profile_categories_filled_));
 }
 
 void AddressFormEventLogger::RecordFillingCorrectness(LogBuffer& logs) const {
@@ -137,13 +204,27 @@ void AddressFormEventLogger::RecordFillingCorrectness(LogBuffer& logs) const {
 void AddressFormEventLogger::LogUkmInteractedWithForm(
     FormSignature form_signature) {
   // Address Autofill has deprecated the concept of server addresses.
-  form_interactions_ukm_logger_->LogInteractedWithForm(
+  client().GetFormInteractionsUkmLogger().LogInteractedWithForm(
+      driver().GetPageUkmSourceId(),
       /*is_for_credit_card=*/false, record_type_count_,
       /*server_record_type_count=*/0, form_signature);
 }
 
 bool AddressFormEventLogger::HasLoggedDataToFillAvailable() const {
   return record_type_count_ > 0;
+}
+
+DenseSet<FormTypeNameForLogging>
+AddressFormEventLogger::GetSupportedFormTypeNamesForLogging() const {
+  return {FormTypeNameForLogging::kAddressForm,
+          FormTypeNameForLogging::kEmailOnlyForm,
+          FormTypeNameForLogging::kPostalAddressForm};
+}
+
+DenseSet<FormTypeNameForLogging> AddressFormEventLogger::GetFormTypesForLogging(
+    const FormStructure& form,
+    AutocompleteUnrecognizedBehavior ac_unrecognized_behavior) const {
+  return GetAddressFormTypesForLogging(form, ac_unrecognized_behavior);
 }
 
 }  // namespace autofill::autofill_metrics

@@ -6,9 +6,9 @@
 
 #include <stdint.h>
 
+#include <atomic>
 #include <vector>
 
-#include "base/atomicops.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -26,7 +26,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
-#include "content/public/common/user_agent.h"
+#include "content/shell/browser/protocol/shell_devtools_session.h"
 #include "content/shell/browser/shell.h"
 #include "content/shell/common/shell_content_client.h"
 #include "content/shell/common/shell_switches.h"
@@ -47,7 +47,7 @@ namespace {
 
 const int kBackLog = 10;
 
-base::subtle::Atomic32 g_last_used_port;
+std::atomic<int> g_last_used_port;
 
 #if BUILDFLAG(IS_ANDROID)
 class UnixDomainServerSocketFactory : public content::DevToolsSocketFactory {
@@ -98,7 +98,7 @@ class TCPServerSocketFactory : public content::DevToolsSocketFactory {
 
     net::IPEndPoint endpoint;
     if (socket->GetLocalAddress(&endpoint) == net::OK)
-      base::subtle::NoBarrier_Store(&g_last_used_port, endpoint.port());
+      g_last_used_port.store(endpoint.port(), std::memory_order_release);
 
     return socket;
   }
@@ -160,7 +160,7 @@ std::unique_ptr<content::DevToolsSocketFactory> CreateSocketFactory() {
 
 // static
 int ShellDevToolsManagerDelegate::GetHttpHandlerPort() {
-  return base::subtle::NoBarrier_Load(&g_last_used_port);
+  return g_last_used_port.load(std::memory_order_acquire);
 }
 
 // static
@@ -196,18 +196,30 @@ BrowserContext* ShellDevToolsManagerDelegate::GetDefaultBrowserContext() {
 void ShellDevToolsManagerDelegate::ClientAttached(
     content::DevToolsAgentHostClientChannel* channel) {
   // Make sure we don't receive notifications twice for the same client.
-  CHECK(clients_.find(channel->GetClient()) == clients_.end());
-  clients_.insert(channel->GetClient());
+  CHECK(!sessions_.contains(channel));
+  sessions_.emplace(
+      channel,
+      std::make_unique<shell::protocol::ShellDevToolsSession>(
+          base::raw_ref<BrowserContext>::from_ptr(browser_context_), channel));
 }
 
 void ShellDevToolsManagerDelegate::ClientDetached(
     content::DevToolsAgentHostClientChannel* channel) {
-  clients_.erase(channel->GetClient());
+  sessions_.erase(channel);
+}
+
+void ShellDevToolsManagerDelegate::HandleCommand(
+    content::DevToolsAgentHostClientChannel* channel,
+    base::span<const uint8_t> message,
+    NotHandledCallback callback) {
+  auto& session = sessions_.at(channel);
+  session->HandleCommand(message, std::move(callback));
 }
 
 scoped_refptr<DevToolsAgentHost> ShellDevToolsManagerDelegate::CreateNewTarget(
     const GURL& url,
-    content::DevToolsManagerDelegate::TargetType target_type) {
+    content::DevToolsManagerDelegate::TargetType target_type,
+    bool new_window) {
   Shell* shell = Shell::CreateNewWindow(browser_context_, url, nullptr,
                                         Shell::GetShellDefaultSize());
   return target_type == content::DevToolsManagerDelegate::kTab

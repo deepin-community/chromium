@@ -5,6 +5,8 @@
 #include "components/invalidation/impl/per_user_topic_subscription_request.h"
 
 #include <memory>
+#include <optional>
+#include <string>
 
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
@@ -12,6 +14,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
@@ -29,7 +32,7 @@ const char kPrivateTopicNameKey[] = "privateTopicName";
 const std::string* GetTopicName(const base::Value& value) {
   if (!value.is_dict())
     return nullptr;
-  const base::Value::Dict& dict = value.GetDict();
+  const base::DictValue& dict = value.GetDict();
   if (dict.FindBool("isPublic").value_or(false)) {
     return dict.FindString(kPublicTopicNameKey);
   }
@@ -110,7 +113,7 @@ void PerUserTopicSubscriptionRequest::Start(
 }
 
 void PerUserTopicSubscriptionRequest::OnURLFetchComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   int response_code = 0;
   if (simple_loader_->ResponseInfo() &&
       simple_loader_->ResponseInfo()->headers) {
@@ -124,7 +127,7 @@ void PerUserTopicSubscriptionRequest::OnURLFetchComplete(
 void PerUserTopicSubscriptionRequest::OnURLFetchCompleteInternal(
     int net_error,
     int response_code,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   if (IsNetworkError(net_error)) {
     RecordRequestStatus(SubscriptionStatus::kNetworkFailure, type_, topic_,
                         net_error, response_code);
@@ -305,7 +308,7 @@ HttpRequestHeaders PerUserTopicSubscriptionRequest::Builder::BuildHeaders()
 }
 
 std::string PerUserTopicSubscriptionRequest::Builder::BuildBody() const {
-  base::Value::Dict request;
+  base::DictValue request;
 
   request.Set("public_topic_name", topic_);
   if (topic_is_public_)
@@ -322,19 +325,15 @@ PerUserTopicSubscriptionRequest::Builder::BuildURLFetcher(
     const HttpRequestHeaders& headers,
     const std::string& body,
     const GURL& url) const {
-  // TODO(crbug.com/1404927): Chrome Sync does not use topics anymore, update
-  // the description.
   net::NetworkTrafficAnnotationTag traffic_annotation =
       net::DefineNetworkTrafficAnnotation("per_user_topic_registration_request",
                                           R"(
         semantics {
           sender:
-            "Subscribe the Sync client for listening to the specific topic"
+            "Subscribe for listening to the specific user topic"
           description:
-            "Chromium can receive Sync invalidations via FCM messages."
-            "This request subscribes the client for receiving messages for the"
-            "concrete topic. In case of Chrome Sync topic is a ModelType,"
-            "e.g. BOOKMARK"
+            "This request subscribes the client for receiving FCM messages for"
+            "the concrete user topic."
           trigger:
             "Subscription takes place only once per profile per topic. "
           data:
@@ -345,12 +344,9 @@ PerUserTopicSubscriptionRequest::Builder::BuildURLFetcher(
           cookies_allowed: NO
           setting:
             "This feature can not be disabled by settings now"
-          chrome_policy: {
-             SyncDisabled {
-               policy_options {mode: MANDATORY}
-               SyncDisabled: false
-             }
-          }
+          policy_exception_justification:
+            "This feature is required to deliver core user experiences and "
+            "cannot be disabled by policy."
         })");
 
   auto request = std::make_unique<network::ResourceRequest>();

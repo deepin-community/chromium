@@ -5,7 +5,6 @@
 #include "extensions/browser/lazy_background_task_queue.h"
 
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "base/notreached.h"
 #include "content/public/browser/browser_context.h"
@@ -68,16 +67,18 @@ bool LazyBackgroundTaskQueue::ShouldEnqueueTask(
     ProcessManager* pm = ProcessManager::Get(browser_context);
     ExtensionHost* background_host =
         pm->GetBackgroundHostForExtension(extension->id());
-    if (!background_host || !background_host->has_loaded_once())
+    if (!background_host || !background_host->has_loaded_once()) {
       return true;
-    if (pm->IsBackgroundHostClosing(extension->id()))
+    }
+    if (pm->IsBackgroundHostClosing(extension->id())) {
       pm->CancelSuspend(extension);
+    }
   }
 
   return false;
 }
 
-// TODO(crbug.com/1467015): Refactor into `ShouldEnqueueTask()` since they are
+// TODO(crbug.com/40276609): Refactor into `ShouldEnqueueTask()` since they are
 // so similar.
 bool LazyBackgroundTaskQueue::IsReadyToRunTasks(
     content::BrowserContext* browser_context,
@@ -142,8 +143,9 @@ void LazyBackgroundTaskQueue::ProcessPendingTasks(
 
   auto map_it = pending_tasks_.find(key);
   if (map_it == pending_tasks_.end()) {
-    if (BackgroundInfo::HasLazyBackgroundPage(extension))
+    if (BackgroundInfo::HasLazyBackgroundPage(extension)) {
       CHECK(!host);  // lazy page should not load without any pending tasks
+    }
     return;
   }
 
@@ -238,7 +240,7 @@ void LazyBackgroundTaskQueue::CreateLazyBackgroundHostOnExtensionLoaded(
     const Extension* extension) {
   const auto key = LazyContextId::ForExtension(browser_context, extension);
   CHECK(key.IsForBackgroundPage());
-  if (!base::Contains(pending_tasks_, key)) {
+  if (!pending_tasks_.contains(key)) {
     return;
   }
 

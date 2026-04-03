@@ -57,31 +57,12 @@ bool IsMessagePayloadBase64Encoded(
 }  // namespace
 
 namespace ash::quick_start {
-
-// static
-bool QuickStartMessage::enable_sandbox_checks_ = true;
-
-// static
-void QuickStartMessage::DisableSandboxCheckForTesting() {
-  enable_sandbox_checks_ = false;
-}
-
 // static
 base::expected<std::unique_ptr<QuickStartMessage>, QuickStartMessage::ReadError>
 QuickStartMessage::ReadMessage(std::vector<uint8_t> data) {
-  /*
-    Since this code could handle untrusted data, it is important this
-    runs only from a strongly sandboxed process (i.e. not the browser process).
-
-    This check forces this to hold true. For testing, the
-    DisableSandboxCheckForTesting function can be used to override this
-    - but that method cannot be called from production code.
-  */
-  if (enable_sandbox_checks_) {
-    CHECK(sandbox::policy::Sandbox::IsProcessSandboxed());
-  }
   std::string str_data(data.begin(), data.end());
-  std::optional<base::Value> data_value = base::JSONReader::Read(str_data);
+  std::optional<base::Value> data_value =
+      base::JSONReader::Read(str_data, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!data_value.has_value()) {
     LOG(ERROR) << "Message is not JSON";
     return base::unexpected(QuickStartMessage::ReadError::INVALID_JSON);
@@ -92,8 +73,8 @@ QuickStartMessage::ReadMessage(std::vector<uint8_t> data) {
     return base::unexpected(QuickStartMessage::ReadError::INVALID_JSON);
   }
 
-  base::Value::Dict& message = data_value.value().GetDict();
-  base::Value::Dict* payload;
+  base::DictValue& message = data_value.value().GetDict();
+  base::DictValue* payload;
   std::string* encoded_json_payload;
 
   if (message.FindDict(kBootstrapConfigurationsPayloadKey)) {
@@ -116,8 +97,8 @@ QuickStartMessage::ReadMessage(std::vector<uint8_t> data) {
           QuickStartMessage::ReadError::BASE64_DESERIALIZATION_FAILURE);
     }
 
-    std::optional<base::Value> json_reader_result =
-        base::JSONReader::Read(json_payload);
+    std::optional<base::Value> json_reader_result = base::JSONReader::Read(
+        json_payload, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     if (!json_reader_result.has_value()) {
       LOG(ERROR) << "Unable to decode base64 encoded payload into JSON";
       return base::unexpected(
@@ -173,26 +154,26 @@ QuickStartMessage::ReadMessage(std::vector<uint8_t> data,
 
 QuickStartMessage::QuickStartMessage(QuickStartMessageType message_type)
     : message_type_(message_type) {
-  payload_ = base::Value::Dict();
+  payload_ = base::DictValue();
 }
 
 QuickStartMessage::QuickStartMessage(QuickStartMessageType message_type,
-                                     base::Value::Dict payload)
+                                     base::DictValue payload)
     : message_type_(message_type), payload_(std::move(payload)) {}
 
 QuickStartMessage::~QuickStartMessage() = default;
 
-base::Value::Dict* QuickStartMessage::GetPayload() {
+base::DictValue* QuickStartMessage::GetPayload() {
   return &payload_;
 }
 
-std::unique_ptr<base::Value::Dict> QuickStartMessage::GenerateEncodedMessage() {
-  std::unique_ptr<base::Value::Dict> message =
-      std::make_unique<base::Value::Dict>();
+std::unique_ptr<base::DictValue> QuickStartMessage::GenerateEncodedMessage() {
+  std::unique_ptr<base::DictValue> message =
+      std::make_unique<base::DictValue>();
   std::string str_payload_key =
       GetStringKeyForQuickStartMessageType(message_type_);
   if (str_payload_key.empty()) {
-    return std::make_unique<base::Value::Dict>(std::move(payload_));
+    return std::make_unique<base::DictValue>(std::move(payload_));
   }
 
   bool base64_encoded_payload_ = IsMessagePayloadBase64Encoded(message_type_);

@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "media/cdm/library_cdm/cdm_host_proxy.h"
@@ -24,7 +25,7 @@ CdmFileAdapter::Status ConvertStatus(cdm::FileIOClient::Status status) {
       return CdmFileAdapter::Status::kError;
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 }  // namespace
@@ -34,9 +35,9 @@ CdmFileAdapter::CdmFileAdapter(CdmHostProxy* cdm_host_proxy) {
 }
 
 CdmFileAdapter::~CdmFileAdapter() {
-  DCHECK(!open_cb_);
-  DCHECK(!read_cb_);
-  DCHECK(!write_cb_);
+  CHECK(!open_cb_);
+  CHECK(!read_cb_);
+  CHECK(!write_cb_);
   file_io_->Close();
 }
 
@@ -67,7 +68,7 @@ void CdmFileAdapter::OnReadComplete(cdm::FileIOClient::Status status,
                                     uint32_t data_size) {
   std::move(read_cb_).Run(
       status == FileIOClient::Status::kSuccess && data_size > 0,
-      std::vector<uint8_t>(data, data + data_size));
+      std::vector<uint8_t>(data, UNSAFE_TODO(data + data_size)));
 }
 
 void CdmFileAdapter::OnWriteComplete(cdm::FileIOClient::Status status) {

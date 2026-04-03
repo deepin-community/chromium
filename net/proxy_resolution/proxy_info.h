@@ -7,7 +7,6 @@
 
 #include <string>
 
-#include "base/gtest_prod_util.h"
 #include "base/time/time.h"
 #include "net/base/net_export.h"
 #include "net/base/proxy_chain.h"
@@ -24,6 +23,9 @@ class NetLogWithSource;
 // This object holds proxy information returned by ResolveProxy.
 class NET_EXPORT ProxyInfo {
  public:
+  // Creates a proxy info that uses a direct connection.
+  static ProxyInfo Direct();
+
   ProxyInfo();
   ProxyInfo(const ProxyInfo& other);
   ~ProxyInfo();
@@ -58,12 +60,6 @@ class NET_EXPORT ProxyInfo {
   // proxy configuration.
   void OverrideProxyList(const ProxyList& proxy_list);
 
-  // Indicates that the request that uses this proxy config caused a match with
-  // the masked domain list.
-  // This is a temporary workaround to gather initial metrics for IP Protection.
-  // TODO(1507085): Remove once the experiment is concluded.
-  void set_is_mdl_match(bool is_mdl_match) { is_mdl_match_ = is_mdl_match; }
-
   // Returns true if this proxy info specifies a direct connection.
   bool is_direct() const {
     // We don't implicitly fallback to DIRECT unless it was added to the list.
@@ -84,9 +80,7 @@ class NET_EXPORT ProxyInfo {
     if (is_empty()) {
       return false;
     }
-    const std::vector<ProxyServer>& proxy_servers =
-        proxy_chain().proxy_servers();
-    return std::any_of(proxy_servers.begin(), proxy_servers.end(), p);
+    return proxy_chain().AnyProxy(p);
   }
 
   // Returns true if any of the contained ProxyChains are multi-proxy.
@@ -106,12 +100,6 @@ class NET_EXPORT ProxyInfo {
   // Returns true if the first proxy chain corresponds to one used for IP
   // Protection. For more info, see `ProxyChain::is_for_ip_protection()`.
   bool is_for_ip_protection() const;
-
-  // Returns true if the request that uses this proxy config caused a match with
-  // the masked domain list.
-  // This is a temporary workaround to gather initial metrics for IP Protection.
-  // TODO(1507085): Remove once the experiment is concluded.
-  bool is_mdl_match() const { return is_mdl_match_; }
 
   // Returns the first valid proxy chain. is_empty() must be false to be able
   // to call this function.
@@ -134,8 +122,11 @@ class NET_EXPORT ProxyInfo {
   bool Fallback(int net_error, const NetLogWithSource& net_log);
 
   // De-prioritizes the proxies that we have cached as not working, by moving
-  // them to the end of the proxy list.
-  void DeprioritizeBadProxyChains(const ProxyRetryInfoMap& proxy_retry_info);
+  // them to the end of the proxy list. If `remove_bad_proxy_chains` is true,
+  // bad proxy chains are removed from the list rather than just moved
+  // to the end.
+  void DeprioritizeBadProxyChains(const ProxyRetryInfoMap& proxy_retry_info,
+                                  bool remove_bad_proxy_chains = false);
 
   // Deletes any entry which doesn't have one of the specified proxy schemes.
   void RemoveProxiesWithoutScheme(int scheme_bit_field);
@@ -192,12 +183,6 @@ class NET_EXPORT ProxyInfo {
 
   // Whether the proxy result represent a proxy bypass.
   bool did_bypass_proxy_ = false;
-
-  // Whether the request that uses this proxy config caused a match with the
-  // masked domain list.
-  // This is a temporary workaround to gather initial metrics for IP Protection.
-  // TODO(1507085): Remove once the experiment is concluded.
-  bool is_mdl_match_ = false;
 
   // How long it took to resolve the proxy.  Times are both null if proxy was
   // determined synchronously without running a PAC.

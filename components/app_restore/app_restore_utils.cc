@@ -4,8 +4,10 @@
 
 #include "components/app_restore/app_restore_utils.h"
 
-#include "ash/constants/app_types.h"
 #include "base/functional/bind.h"
+#include "base/strings/string_number_conversions.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "components/app_constants/constants.h"
 #include "components/app_restore/app_restore_info.h"
 #include "components/app_restore/desk_template_read_handler.h"
@@ -28,13 +30,8 @@ static int32_t session_id_counter = kArcSessionIdOffsetForRestoredLaunching;
 }  // namespace
 
 bool IsArcWindow(aura::Window* window) {
-  return window->GetProperty(aura::client::kAppType) ==
-         static_cast<int>(ash::AppType::ARC_APP);
-}
-
-bool IsLacrosWindow(aura::Window* window) {
-  return window->GetProperty(aura::client::kAppType) ==
-         static_cast<int>(ash::AppType::LACROS);
+  return window->GetProperty(chromeos::kAppTypeKey) ==
+         chromeos::AppType::ARC_APP;
 }
 
 bool HasWindowInfo(int32_t restore_window_id) {
@@ -79,7 +76,7 @@ void ModifyWidgetParams(int32_t restore_window_id,
 
   const bool is_arc_app =
       out_params->init_properties_container.GetProperty(
-          aura::client::kAppType) == static_cast<int>(ash::AppType::ARC_APP);
+          chromeos::kAppTypeKey) == chromeos::AppType::ARC_APP;
   std::unique_ptr<app_restore::WindowInfo> window_info;
   auto* full_restore_read_handler =
       full_restore::FullRestoreReadHandler::GetInstance();
@@ -207,18 +204,6 @@ std::string GetAppIdFromAppName(const std::string& app_name) {
   if (app_name.substr(0, prefix.length()) != prefix)
     return std::string();
   return app_name.substr(prefix.length());
-}
-
-const std::string GetLacrosWindowId(aura::Window* window) {
-  const std::string* lacros_window_id =
-      window->GetProperty(app_restore::kLacrosWindowId);
-  DCHECK(lacros_window_id);
-  return *lacros_window_id;
-}
-
-int32_t GetLacrosRestoreWindowId(const std::string& lacros_window_id) {
-  return full_restore::FullRestoreReadHandler::GetInstance()
-      ->GetLacrosRestoreWindowId(lacros_window_id);
 }
 
 std::tuple<int, int, int> GetWindowAndTabCount(

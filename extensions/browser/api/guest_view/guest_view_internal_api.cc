@@ -55,7 +55,8 @@ ExtensionFunction::ResponseAction GuestViewInternalCreateGuestFunction::Run() {
   // consider this the most likely owner for the guest view. It is possible,
   // however, for the guest to be embedded in another same-process frame upon
   // attachment.
-  const int sender_process_id = render_frame_host()->GetProcess()->GetID();
+  const int sender_process_id =
+      render_frame_host()->GetProcess()->GetDeprecatedID();
 
   content::RenderFrameHost* owner_rfh = nullptr;
   auto token = base::Token::FromString(params->owner_frame_token);
@@ -81,8 +82,7 @@ ExtensionFunction::ResponseAction GuestViewInternalCreateGuestFunction::Run() {
 
   // Add flag to |create_params| to indicate that the element size is specified
   // in logical units.
-  base::Value::Dict& create_params =
-      params->create_params.additional_properties;
+  base::DictValue& create_params = params->create_params.additional_properties;
   create_params.Set(guest_view::kElementSizeIsLogical, true);
 
   guest_view_manager->CreateGuest(params->view_type, owner_rfh, create_params,
@@ -130,8 +130,9 @@ ExtensionFunction::ResponseAction GuestViewInternalSetSizeFunction::Run() {
   EXTENSION_FUNCTION_VALIDATE(params);
   GuestViewBase* guest =
       GuestViewBase::FromInstanceID(source_process_id(), params->instance_id);
-  if (!guest)
+  if (!guest) {
     return RespondNow(Error(kUnknownErrorDoNotUse));
+  }
 
   guest_view::SetSizeParams set_size_params;
   if (params->params.enable_auto_size) {

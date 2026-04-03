@@ -13,6 +13,7 @@ from .code_node_cxx import CxxClassDefNode
 from .code_node_cxx import CxxFuncDeclNode
 from .code_node_cxx import CxxFuncDefNode
 from .code_node_cxx import CxxNamespaceNode
+from .codegen_accumulator import IncludeDefinition
 from .codegen_accumulator import CodeGenAccumulator
 from .codegen_context import CodeGenContext
 from .codegen_utils import component_export
@@ -161,28 +162,6 @@ def make_assignment_operators(cg_context):
             default=True),
     ])
     defs = ListNode()
-
-    # Migration adapter
-    func_decl = CxxFuncDeclNode(
-        name="operator=",
-        arg_decls=["const String&"],
-        return_type="${class_name}&")
-    func_def = CxxFuncDefNode(
-        name="operator=",
-        arg_decls=["const String& str_value"],
-        return_type="${class_name}&",
-        class_name=cg_context.class_name)
-    decls.append(func_decl)
-    defs.append(func_def)
-
-    func_def.set_base_template_vars(cg_context.template_bindings())
-    func_def.body.append(
-        TextNode("""\
-const auto& index =
-    bindings::FindIndexInEnumStringTable(str_value, string_table_);
-CHECK(index.has_value());
-return operator=(${class_name}(static_cast<Enum>(index.value())));
-"""))
 
     return decls, defs
 
@@ -355,7 +334,9 @@ def generate_enumeration(enumeration_identifier):
     ])
     header_node.accumulator.add_include_headers([
         component_export_header(api_component, for_testing),
-        "third_party/blink/renderer/platform/bindings/enumeration_base.h",
+        IncludeDefinition(
+            "third_party/blink/renderer/platform/bindings/enumeration_base.h",
+            "IWYU pragma: export")
     ])
     source_node.accumulator.add_include_headers([
         "third_party/blink/renderer/bindings/core/v8/generated_code_helper.h",

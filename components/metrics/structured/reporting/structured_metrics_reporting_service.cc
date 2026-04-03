@@ -3,11 +3,15 @@
 // found in the LICENSE file.
 
 #include "components/metrics/structured/reporting/structured_metrics_reporting_service.h"
+
+#include <string_view>
+
 #include "base/metrics/histogram_functions.h"
+#include "components/background_task_scheduler/task_ids.h"
 #include "components/metrics/metrics_service_client.h"
+#include "components/metrics/server_urls.h"
 #include "components/metrics/structured/reporting/structured_metrics_log_metrics.h"
 #include "components/metrics/structured/structured_metrics_prefs.h"
-#include "components/metrics/url_constants.h"
 #include "components/prefs/pref_registry_simple.h"
 
 namespace metrics::structured::reporting {
@@ -15,10 +19,12 @@ StructuredMetricsReportingService::StructuredMetricsReportingService(
     MetricsServiceClient* client,
     PrefService* local_state,
     const UnsentLogStore::UnsentLogStoreLimits& storage_limits)
-    : ReportingService(client,
-                       local_state,
-                       storage_limits.max_log_size_bytes,
-                       /*logs_event_manager=*/nullptr),
+    : ReportingService(
+          client,
+          local_state,
+          storage_limits.max_log_size_bytes,
+          /*logs_event_manager=*/nullptr,
+          background_task::TaskIds::STRUCTURED_METRICS_UPLOAD_JOB_ID),
       log_store_(std::make_unique<StructuredMetricsLogMetrics>(),
                  local_state,
                  prefs::kLogStoreName,
@@ -50,8 +56,8 @@ GURL StructuredMetricsReportingService::GetInsecureUploadUrl() const {
   return client()->GetInsecureMetricsServerUrl();
 }
 
-base::StringPiece StructuredMetricsReportingService::upload_mime_type() const {
-  return kDefaultMetricsMimeType;
+std::string_view StructuredMetricsReportingService::upload_mime_type() const {
+  return kMetricsMimeType;
 }
 
 MetricsLogUploader::MetricServiceType
@@ -71,7 +77,7 @@ void StructuredMetricsReportingService::LogResponseOrErrorCode(
     int response_code,
     int error_code,
     bool /*was_http*/) {
-  // TODO(crbug.com/1445155) Do we assume |was_https| is always true? UMA
+  // TODO(crbug.com/40268040) Do we assume |was_https| is always true? UMA
   // doesn't but UKM does.
   if (response_code >= 0) {
     base::UmaHistogramSparse("StructuredMetrics.Reporting.HTTPResponseCode",
@@ -90,6 +96,12 @@ void StructuredMetricsReportingService::LogSuccessLogSize(size_t log_size) {
 void StructuredMetricsReportingService::LogLargeRejection(size_t log_size) {
   base::UmaHistogramMemoryKB("StructuredMetrics.Reporting.LogSize.RejectedSize",
                              log_size);
+}
+
+void StructuredMetricsReportingService::LogBackgroundUploadTaskPendingTime(
+    base::TimeDelta time) {
+  base::UmaHistogramLongTimes(
+      "StructuredMetrics.LogBackgroundUploadTaskPendingTime", time);
 }
 
 // static:

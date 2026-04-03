@@ -4,13 +4,12 @@
 
 #include "services/service_manager/service_instance.h"
 
+#include <algorithm>
 #include <set>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -39,15 +38,15 @@ std::set<std::string> GetRequiredCapabilities(
   // Start by looking for requirements specific to the target identity.
   auto it = source_requirements.find(target_service);
   if (it != source_requirements.end()) {
-    base::ranges::copy(it->second,
-                       std::inserter(capabilities, capabilities.begin()));
+    std::ranges::copy(it->second,
+                      std::inserter(capabilities, capabilities.begin()));
   }
 
   // Apply wild card rules too.
   it = source_requirements.find("*");
   if (it != source_requirements.end()) {
-    base::ranges::copy(it->second,
-                       std::inserter(capabilities, capabilities.begin()));
+    std::ranges::copy(it->second,
+                      std::inserter(capabilities, capabilities.begin()));
   }
   return capabilities;
 }
@@ -203,8 +202,9 @@ bool ServiceInstance::MaybeAcceptConnectionRequest(
     return false;
 
   const Manifest& source_manifest = source_instance.manifest();
-  const bool bindable_on_any_service = base::Contains(
-      source_manifest.interfaces_bindable_on_any_service, interface_name);
+  const bool bindable_on_any_service =
+      source_manifest.interfaces_bindable_on_any_service.contains(
+          interface_name);
   const bool allowed_by_capabilities =
       AllowsInterface(source_manifest.required_capabilities, identity_.name(),
                       manifest_.exposed_capabilities, interface_name);

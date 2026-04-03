@@ -88,8 +88,8 @@ class DummyClient final : public GarbageCollected<DummyClient>,
   void NotifyFinished(Resource* resource) override { called_ = true; }
   String DebugName() const override { return "DummyClient"; }
 
-  void DataReceived(Resource*, const char* data, size_t length) override {
-    data_.Append(data, base::checked_cast<wtf_size_t>(length));
+  void DataReceived(Resource*, base::span<const char> data) override {
+    data_.AppendSpan(data);
   }
 
   bool RedirectReceived(Resource*,
@@ -132,8 +132,7 @@ class AddingClient final : public GarbageCollected<AddingClient>,
     // We do not expect a client to be called if the client is removed before
     // a callback invocation task queued inside addClient() is scheduled.
     platform->test_task_runner()->PostTask(
-        FROM_HERE,
-        WTF::BindOnce(&AddingClient::RemoveClient, WrapPersistent(this)));
+        FROM_HERE, BindOnce(&AddingClient::RemoveClient, WrapPersistent(this)));
     resource->AddClient(dummy_client_, platform->test_task_runner().get());
   }
   String DebugName() const override { return "AddingClient"; }
@@ -244,8 +243,7 @@ TEST_F(RawResourceTest, PreloadWithAsynchronousAddClient) {
   platform_->RunUntilIdle();
 
   EXPECT_TRUE(dummy_client->Called());
-  EXPECT_EQ("hello",
-            String(dummy_client->Data().data(), dummy_client->Data().size()));
+  EXPECT_EQ("hello", String(dummy_client->Data()));
 }
 
 }  // namespace blink

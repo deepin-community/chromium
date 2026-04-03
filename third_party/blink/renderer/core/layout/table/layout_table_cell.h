@@ -7,7 +7,7 @@
 
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/table_constants.h"
-#include "third_party/blink/renderer/core/layout/layout_ng_block_flow.h"
+#include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 
 namespace blink {
 
@@ -15,7 +15,7 @@ class LayoutTable;
 class LayoutTableRow;
 class LayoutTableSection;
 
-class CORE_EXPORT LayoutTableCell : public LayoutNGBlockFlow {
+class CORE_EXPORT LayoutTableCell : public LayoutBlockFlow {
  public:
   explicit LayoutTableCell(Element*);
 
@@ -64,7 +64,8 @@ class CORE_EXPORT LayoutTableCell : public LayoutNGBlockFlow {
   // LayoutBlockFlow methods start.
 
   void StyleDidChange(StyleDifference diff,
-                      const ComputedStyle* old_style) final;
+                      const ComputedStyle* old_style,
+                      const StyleChangeContext&) final;
 
   void WillBeRemovedFromTree() override;
 
@@ -100,10 +101,20 @@ class CORE_EXPORT LayoutTableCell : public LayoutNGBlockFlow {
   // Guaranteed to be between kMinColSpan and kMaxColSpan.
   unsigned ColSpan() const;
 
- protected:
+ private:
   bool IsTableCell() const final {
     NOT_DESTROYED();
     return true;
+  }
+
+  bool IsEligibleForSizeContainment() const final {
+    NOT_DESTROYED();
+    return false;
+  }
+
+  bool CanMergeWith(const LayoutBoxModelObject& other) const override {
+    NOT_DESTROYED();
+    return other.IsTableCell();
   }
 
   // Table cell applies a special clip to its background.
@@ -112,7 +123,6 @@ class CORE_EXPORT LayoutTableCell : public LayoutNGBlockFlow {
     return false;
   }
 
- private:
   void UpdateColAndRowSpanFlags();
 
   unsigned ParseRowSpanFromDOM() const;

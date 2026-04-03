@@ -21,11 +21,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>  // NOLINT
-#include <iostream>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <thread>  // NOLINT
 #include <vector>
 
 #include "gmock/gmock.h"
@@ -38,9 +36,11 @@
 #include "./centipede/pc_info.h"
 #include "./centipede/symbol_table.h"
 #include "./centipede/test_coverage_util.h"
-#include "./centipede/test_util.h"
+#include "./centipede/thread_pool.h"
+#include "./centipede/util.h"
+#include "./common/test_util.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 namespace {
 
 // llvm-symbolizer output for a binary with 3 functions:
@@ -79,6 +79,8 @@ static const PCTable g_pc_table = {
 
 // Tests Coverage and SymbolTable together.
 TEST(Coverage, SymbolTable) {
+  const std::filesystem::path test_dir = GetTestTempDir(test_info_->name());
+
   // Initialize and test SymbolTable.
   SymbolTable symbols;
   std::istringstream iss(symbolizer_output);
@@ -93,10 +95,9 @@ TEST(Coverage, SymbolTable) {
     // Tests coverage output for PCIndexVec = {0, 2},
     // i.e. the covered edges are 'A' and the entry of 'CCC'.
     Coverage cov(g_pc_table, {0, 2});
-    cov.Print(symbols, std::cout);
-    std::ostringstream os;
-    cov.Print(symbols, os);
-    std::string str = os.str();
+    cov.DumpReportToFile(symbols, (test_dir / "coverage.txt").string());
+    std::string str;
+    ReadFromLocalFile((test_dir / "coverage.txt").string(), str);
     EXPECT_THAT(str, testing::HasSubstr("FULL: A a.cc:1:0"));
     EXPECT_THAT(str, testing::HasSubstr("NONE: BB bb.cc:1:0"));
     EXPECT_THAT(str, testing::HasSubstr("PARTIAL: CCC ccc.cc:1:0"));
@@ -107,9 +108,9 @@ TEST(Coverage, SymbolTable) {
   {
     // Same as above, but for PCIndexVec = {1, 2, 3},
     Coverage cov(g_pc_table, {1, 2, 3});
-    std::ostringstream os;
-    cov.Print(symbols, os);
-    std::string str = os.str();
+    cov.DumpReportToFile(symbols, (test_dir / "coverage.txt").string());
+    std::string str;
+    ReadFromLocalFile((test_dir / "coverage.txt").string(), str);
     EXPECT_THAT(str, testing::HasSubstr("FULL: BB bb.cc:1:0"));
     EXPECT_THAT(str, testing::HasSubstr("NONE: A a.cc:1:0"));
     EXPECT_THAT(str, testing::HasSubstr("PARTIAL: CCC ccc.cc:1:0"));
@@ -165,9 +166,11 @@ TEST(Coverage, CoverageLogger) {
       logger.ObserveAndDescribeIfNew(pc_index);
     }
   };
-  std::thread t1(cb), t2(cb);
-  t1.join();
-  t2.join();
+  {
+    ThreadPool threads{2};
+    threads.Schedule(cb);
+    threads.Schedule(cb);
+  }  // The threads join here.
 }
 
 // Returns path to test_fuzz_target.
@@ -325,14 +328,14 @@ TEST(Coverage, CMPFeatures) {
 
   // Check moddiff.
   clear();
-  for (uintptr_t a = 0; a <= 64; ++a) {
-    uintptr_t b = 32;
+  for (uintptr_t a = 0; a <= 128; ++a) {
+    uintptr_t b = 64;
     if (a == b) continue;
     update(a, b);
   }
   EXPECT_EQ(moddiff.size(), 64);
-  EXPECT_EQ(hamming.size(), 6);
-  EXPECT_EQ(difflog.size(), 6);
+  EXPECT_EQ(hamming.size(), 7);
+  EXPECT_EQ(difflog.size(), 7);
 
   // Check hamming.
   clear();
@@ -341,7 +344,7 @@ TEST(Coverage, CMPFeatures) {
     uintptr_t a = minus_one << bits;
     update(a, 0);
   }
-  EXPECT_EQ(moddiff.size(), 6);
+  EXPECT_EQ(moddiff.size(), 1);
   EXPECT_EQ(hamming.size(), 64);
   EXPECT_EQ(difflog.size(), 1);
 
@@ -386,9 +389,14 @@ TEST(Coverage, CMPFeaturesFromMemcmp) {
   auto features =
       RunInputsAndCollectCoverage(env, {"mcmpAAAAAAAA", "mcmpAAAABBBB"});
   EXPECT_EQ(features.size(), 2);
-  // CMP features should be different.
-  EXPECT_NE(ExtractDomainFeatures(features[0], feature_domains::kCMP),
-            ExtractDomainFeatures(features[1], feature_domains::kCMP));
+  // CMP mod diff score features should be different.
+  EXPECT_NE(ExtractDomainFeatures(features[0], feature_domains::kCMPModDiff),
+            ExtractDomainFeatures(features[1], feature_domains::kCMPModDiff));
+  // But other CMP score features should be the same.
+  EXPECT_EQ(ExtractDomainFeatures(features[0], feature_domains::kCMPHamming),
+            ExtractDomainFeatures(features[1], feature_domains::kCMPHamming));
+  EXPECT_EQ(ExtractDomainFeatures(features[0], feature_domains::kCMPDiffLog),
+            ExtractDomainFeatures(features[1], feature_domains::kCMPDiffLog));
   // But control flow features should be the same.
   EXPECT_EQ(ExtractDomainFeatures(features[0], feature_domains::k8bitCounters),
             ExtractDomainFeatures(features[1], feature_domains::k8bitCounters));
@@ -535,4 +543,4 @@ TEST(FrontierWeightDeath, InvalidCallee) {
 }
 
 }  // namespace
-}  // namespace centipede
+}  // namespace fuzztest::internal

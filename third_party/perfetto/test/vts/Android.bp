@@ -1,4 +1,5 @@
 package {
+    default_team: "trendy_team_perfetto",
     // See: http://go/android-license-faq
     // A large-scale-change added 'default_applicable_licenses' to import
     // all of the 'license_kinds' from "external_perfetto_license"
@@ -14,6 +15,7 @@ cc_test {
   ],
   static_libs: [
     "libgmock",
+    "perfetto_flags_c_lib",
     "perfetto_vts_deps",
   ],
   whole_static_libs: [

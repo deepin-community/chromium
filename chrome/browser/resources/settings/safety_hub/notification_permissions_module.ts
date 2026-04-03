@@ -13,10 +13,11 @@ import 'chrome://resources/cr_elements/cr_shared_style.css.js';
 import 'chrome://resources/cr_elements/cr_toast/cr_toast.js';
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
-import 'chrome://resources/polymer/v3_0/paper-tooltip/paper-tooltip.js';
+import 'chrome://resources/cr_elements/cr_tooltip/cr_tooltip.js';
 import '../settings_shared.css.js';
 import '../i18n_setup.js';
 import '../icons.html.js';
+import './safety_hub_module.js';
 
 import type {CrActionMenuElement} from 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import type {CrToastElement} from 'chrome://resources/cr_elements/cr_toast/cr_toast.js';
@@ -63,6 +64,7 @@ export interface SettingsSafetyHubNotificationPermissionsModuleElement {
  */
 enum Actions {
   BLOCK = 'block',
+  BLOCK_ALL = 'block_all',
   IGNORE = 'ignore',
   RESET = 'reset',
 }
@@ -93,9 +95,6 @@ export class SettingsSafetyHubNotificationPermissionsModuleElement extends
       // Text below primary header label.
       subheaderString_: String,
 
-      // The icon next to primary header label.
-      headerIconString_: String,
-
       // The text that will be shown in the undo toast element.
       toastText_: String,
 
@@ -103,7 +102,10 @@ export class SettingsSafetyHubNotificationPermissionsModuleElement extends
       lastUserAction_: String,
 
       // The last origins that the user interacted with.
-      lastOrigins_: Array,
+      lastOrigins_: {
+        type: Array,
+        value: () => [],
+      },
 
       // List of domains that sends a lot of notifications.
       sites_: {
@@ -126,15 +128,14 @@ export class SettingsSafetyHubNotificationPermissionsModuleElement extends
     ];
   }
 
-  private headerString_: string;
-  private subheaderString_: string;
-  private headerIconString_: string;
-  private toastText_: string|null;
-  private sites_: NotificationPermissionsDisplay[]|null;
-  private shouldShowCompletionInfo_: boolean;
-  private lastOrigins_: string[] = [];
+  declare private headerString_: string;
+  declare private subheaderString_: string;
+  declare private toastText_: string|null;
+  declare private sites_: NotificationPermissionsDisplay[]|null;
+  declare private shouldShowCompletionInfo_: boolean;
+  declare private lastOrigins_: string[];
   private renderedOrigins_: string[] = [];
-  private lastUserAction_: Actions|null;
+  declare private lastUserAction_: Actions|null;
   private eventTracker_: EventTracker = new EventTracker();
   private browserProxy_: SafetyHubBrowserProxy =
       SafetyHubBrowserProxyImpl.getInstance();
@@ -186,12 +187,10 @@ export class SettingsSafetyHubNotificationPermissionsModuleElement extends
             ({...site, detail: site.notificationInfoString}));
   }
 
-  private async setHeaderToCompletionState_() {
-    this.headerString_ = this.toastText_ ?
-        this.toastText_ :
-        this.i18n('safetyCheckNotificationPermissionReviewDoneLabel');
+  private setHeaderToCompletionState_() {
+    assert(this.toastText_);
+    this.headerString_ = this.toastText_!;
     this.subheaderString_ = '';
-    this.headerIconString_ = 'cr:check';
   }
 
   private async onSitesChanged_() {
@@ -218,35 +217,58 @@ export class SettingsSafetyHubNotificationPermissionsModuleElement extends
         await PluralStringProxyImpl.getInstance().getPluralString(
             'safetyHubNotificationPermissionsSecondaryLabel',
             this.sites_.length);
-    this.headerIconString_ = 'settings:notifications-none';
+  }
+
+  /** Clears all the changes made by a previous action. */
+  private resetValues_(e: Event) {
+    e.stopPropagation();
+    this.$.undoToast.hide();
+    this.lastOrigins_ = [];
+    this.lastUserAction_ = null;
+  }
+
+  /** Sets all the values needed for an action. */
+  private setValues_(origins: string[], action: Actions) {
+    //  Both lastUserAction_ and lastOrigins_ need to be reset before setting
+    //  new values to prevent triggering updateUndoNotificationText_ twice
+    //  (which can cause issues like "flickering" on the header string, e.g.
+    //  when the wrong header string is shown for a split second before the
+    //  correct one).
+    assert(!this.lastUserAction_);
+    assert(!this.lastOrigins_.length);
+    this.lastOrigins_ = origins;
+    this.lastUserAction_ = action;
   }
 
   private onBlockClick_(e: CustomEvent<NotificationPermission>) {
-    e.stopPropagation();
-    this.lastOrigins_ = [e.detail.origin];
-    this.lastUserAction_ = Actions.BLOCK;
-    this.$.undoToast.show();
+    this.resetValues_(e);
+    this.setValues_([e.detail.origin], Actions.BLOCK);
+    this.showUndoToast_();
+
     this.$.module.animateHide(
         e.detail.origin,
         this.browserProxy_.blockNotificationPermissionForOrigins.bind(
             this.browserProxy_, this.lastOrigins_));
 
+    this.browserProxy_.recordSafetyHubInteraction();
     this.metricsBrowserProxy_
         .recordSafetyHubNotificationPermissionsModuleInteractionsHistogram(
             SafetyCheckNotificationsModuleInteractions.BLOCK);
   }
 
   private onMoreActionClick_(e: CustomEvent<SiteInfoWithTarget>) {
-    e.stopPropagation();
+    this.resetValues_(e);
     this.lastOrigins_ = [e.detail.origin];
     this.$.actionMenu.showAt(e.detail.target as HTMLElement);
   }
 
-  private onIgnoreClick_(e: CustomEvent<NotificationPermission>) {
-    e.stopPropagation();
-    this.lastUserAction_ = Actions.IGNORE;
-    this.$.undoToast.show();
+  private onIgnoreClick_(e: Event) {
+    const tempLastOrigins = this.lastOrigins_;
+    this.resetValues_(e);
+    this.setValues_(tempLastOrigins, Actions.IGNORE);
+    this.showUndoToast_();
     this.$.actionMenu.close();
+
     // |lastOrigins| is set to a 1-item array containing the item on which
     // the context menu with the |reset| option was open,
     // in |onMoreActionClick_|.
@@ -255,16 +277,19 @@ export class SettingsSafetyHubNotificationPermissionsModuleElement extends
         this.browserProxy_.ignoreNotificationPermissionForOrigins.bind(
             this.browserProxy_, this.lastOrigins_));
 
+    this.browserProxy_.recordSafetyHubInteraction();
     this.metricsBrowserProxy_
         .recordSafetyHubNotificationPermissionsModuleInteractionsHistogram(
             SafetyCheckNotificationsModuleInteractions.IGNORE);
   }
 
-  private onResetClick_(e: CustomEvent<NotificationPermission>) {
-    e.stopPropagation();
-    this.lastUserAction_ = Actions.RESET;
-    this.$.undoToast.show();
+  private onResetClick_(e: Event) {
+    const tempLastOrigins = this.lastOrigins_;
+    this.resetValues_(e);
+    this.setValues_(tempLastOrigins, Actions.RESET);
+    this.showUndoToast_();
     this.$.actionMenu.close();
+
     // |lastOrigins| is set to a 1-item array containing the item on which
     // the context menu with the |reset| option was open,
     // in |onMoreActionClick_|.
@@ -273,25 +298,25 @@ export class SettingsSafetyHubNotificationPermissionsModuleElement extends
         this.browserProxy_.resetNotificationPermissionForOrigins.bind(
             this.browserProxy_, this.lastOrigins_));
 
+    this.browserProxy_.recordSafetyHubInteraction();
     this.metricsBrowserProxy_
         .recordSafetyHubNotificationPermissionsModuleInteractionsHistogram(
             SafetyCheckNotificationsModuleInteractions.RESET);
   }
 
   private onBlockAllClick_(e: Event) {
-    e.stopPropagation();
+    this.resetValues_(e);
     // To be able to undo the block-all action, we need to keep track of all
     // origins that were blocked.
     assert(this.sites_);
-    this.lastOrigins_ = this.sites_.map(site => site.origin);
+    this.setValues_(this.sites_.map(site => site.origin), Actions.BLOCK_ALL);
 
     this.$.module.animateHide(
         /* all origins */ null,
         this.browserProxy_.blockNotificationPermissionForOrigins.bind(
             this.browserProxy_, this.lastOrigins_));
-    this.lastUserAction_ = Actions.BLOCK;
-    this.$.undoToast.show();
 
+    this.browserProxy_.recordSafetyHubInteraction();
     this.metricsBrowserProxy_
         .recordSafetyHubNotificationPermissionsModuleInteractionsHistogram(
             SafetyCheckNotificationsModuleInteractions.BLOCK_ALL);
@@ -325,29 +350,37 @@ export class SettingsSafetyHubNotificationPermissionsModuleElement extends
     }
     switch (this.lastUserAction_) {
       case Actions.BLOCK:
-        if (this.lastOrigins_!.length === 1) {
-          this.toastText_ = this.i18n(
-              'safetyCheckNotificationPermissionReviewBlockedToastLabel',
-              this.lastOrigins_[0]);
-        } else {
-          this.toastText_ =
-              await PluralStringProxyImpl.getInstance().getPluralString(
-                  'safetyCheckNotificationPermissionReviewBlockAllToastLabel',
-                  this.lastOrigins_.length);
-        }
+        this.toastText_ = this.i18n(
+            'safetyHubNotificationPermissionReviewBlockedToastLabel',
+            this.lastOrigins_[0]);
+        break;
+      case Actions.BLOCK_ALL:
+        this.toastText_ =
+            await PluralStringProxyImpl.getInstance().getPluralString(
+                'safetyHubNotificationPermissionReviewBlockAllToastLabel',
+                this.lastOrigins_.length);
         break;
       case Actions.IGNORE:
         this.toastText_ = this.i18n(
-            'safetyCheckNotificationPermissionReviewIgnoredToastLabel',
+            'safetyHubNotificationPermissionReviewIgnoredToastLabel',
             this.lastOrigins_[0]);
         break;
       case Actions.RESET:
         this.toastText_ = this.i18n(
-            'safetyCheckNotificationPermissionReviewResetToastLabel',
+            'safetyHubNotificationPermissionReviewResetToastLabel',
             this.lastOrigins_[0]);
         break;
       default:
         assertNotReached();
+    }
+  }
+
+  private showUndoToast_() {
+    // Only show Undo toast if there are multiple sites to review. Otherwise,
+    // once the single site is reviewed, the completion state with a permanent
+    // Undo button in the header will be shown.
+    if (this.sites_!.length > 1) {
+      this.$.undoToast.show();
     }
   }
 
@@ -358,15 +391,16 @@ export class SettingsSafetyHubNotificationPermissionsModuleElement extends
       case Actions.BLOCK:
         this.browserProxy_.allowNotificationPermissionForOrigins(
             this.lastOrigins_);
-        if (this.lastOrigins_!.length === 1) {
-          this.metricsBrowserProxy_
-              .recordSafetyHubNotificationPermissionsModuleInteractionsHistogram(
-                  SafetyCheckNotificationsModuleInteractions.UNDO_BLOCK);
-        } else {
-          this.metricsBrowserProxy_
-              .recordSafetyHubNotificationPermissionsModuleInteractionsHistogram(
-                  SafetyCheckNotificationsModuleInteractions.UNDO_BLOCK_ALL);
-        }
+        this.metricsBrowserProxy_
+            .recordSafetyHubNotificationPermissionsModuleInteractionsHistogram(
+                SafetyCheckNotificationsModuleInteractions.UNDO_BLOCK);
+        break;
+      case Actions.BLOCK_ALL:
+        this.browserProxy_.allowNotificationPermissionForOrigins(
+            this.lastOrigins_);
+        this.metricsBrowserProxy_
+            .recordSafetyHubNotificationPermissionsModuleInteractionsHistogram(
+                SafetyCheckNotificationsModuleInteractions.UNDO_BLOCK_ALL);
         break;
       case Actions.RESET:
         this.browserProxy_.allowNotificationPermissionForOrigins(
@@ -385,8 +419,6 @@ export class SettingsSafetyHubNotificationPermissionsModuleElement extends
       default:
         assertNotReached();
     }
-
-    this.lastOrigins_ = [];
     this.$.undoToast.hide();
   }
 
@@ -413,7 +445,7 @@ export class SettingsSafetyHubNotificationPermissionsModuleElement extends
       return '';
     }
     return this.i18n(
-        'safetyCheckNotificationPermissionReviewIgnoreAriaLabel', origins[0]);
+        'safetyHubNotificationPermissionReviewIgnoreAriaLabel', origins[0]);
   }
 
   private getResetAriaLabelForOrigins(origins: string[]): string {
@@ -422,14 +454,14 @@ export class SettingsSafetyHubNotificationPermissionsModuleElement extends
       return '';
     }
     return this.i18n(
-        'safetyCheckNotificationPermissionReviewResetAriaLabel', origins[0]);
+        'safetyHubNotificationPermissionReviewResetAriaLabel', origins[0]);
   }
 
   private showUndoTooltip_(e: Event) {
     e.stopPropagation();
-    const tooltip = this.shadowRoot!.querySelector('paper-tooltip');
+    const tooltip = this.shadowRoot!.querySelector('cr-tooltip');
     assert(tooltip);
-    this.showTooltipAtTarget(tooltip, e.target!);
+    this.showTooltipAtTarget(tooltip, e.target! as Element);
   }
 }
 

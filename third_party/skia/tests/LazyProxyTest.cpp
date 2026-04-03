@@ -13,14 +13,14 @@
 #include "include/core/SkSurfaceProps.h"
 #include "include/core/SkTypes.h"
 #include "include/gpu/GpuTypes.h"
-#include "include/gpu/GrBackendSurface.h"
-#include "include/gpu/GrContextOptions.h"
-#include "include/gpu/GrDirectContext.h"
-#include "include/gpu/GrRecordingContext.h"
-#include "include/gpu/GrTypes.h"
-#include "include/gpu/mock/GrMockTypes.h"
-#include "include/private/SkColorData.h"
+#include "include/gpu/ganesh/GrBackendSurface.h"
+#include "include/gpu/ganesh/GrContextOptions.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
+#include "include/gpu/ganesh/GrRecordingContext.h"
+#include "include/gpu/ganesh/GrTypes.h"
+#include "include/gpu/ganesh/mock/GrMockTypes.h"
 #include "include/private/gpu/ganesh/GrTypesPriv.h"
+#include "src/core/SkColorData.h"
 #include "src/core/SkRectPriv.h"
 #include "src/gpu/AtlasTypes.h"
 #include "src/gpu/SkBackingFit.h"
@@ -76,7 +76,7 @@ public:
     }
 
     bool preFlush(GrOnFlushResourceProvider* onFlushRP) override {
-#if defined(GR_TEST_UTILS)
+#if defined(GPU_TEST_UTILS)
         if (onFlushRP->failFlushTimeCallbacks()) {
             return false;
         }
@@ -87,7 +87,7 @@ public:
         return true;
     }
 
-    void postFlush(skgpu::AtlasToken) override {
+    void postFlush(skgpu::Token) override {
         REPORTER_ASSERT(fReporter, fHasOpTexture);
         REPORTER_ASSERT(fReporter, fHasClipTexture);
     }

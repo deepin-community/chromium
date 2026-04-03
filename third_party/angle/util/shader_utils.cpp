@@ -6,11 +6,13 @@
 
 #include "util/shader_utils.h"
 
+#include <array>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <vector>
 
+#include "common/span.h"
 #include "common/utilities.h"
 #include "util/test_utils.h"
 
@@ -145,6 +147,14 @@ void GetPerfCounterValue(const CounterNameToIndexMap &counterIndexMap,
         }
     }
 
+    // Additional logs for b/382094011
+    std::cerr << "GetPerfCounterValue missing counter: " << name << "; index: " << counterIndex
+              << "; triplets: " << std::endl;
+    for (const angle::PerfMonitorTriplet &triplet : triplets)
+    {
+        std::cerr << triplet.counter << " " << triplet.value << std::endl;
+    }
+
     UNREACHABLE();
 }
 }  // namespace
@@ -238,17 +248,17 @@ GLuint CheckLinkStatusAndReturnProgram(GLuint program, bool outputErrorMessages)
 
 GLuint GetProgramShader(GLuint program, GLint requestedType)
 {
-    static constexpr GLsizei kMaxShaderCount = 16;
-    GLuint attachedShaders[kMaxShaderCount]  = {0u};
-    GLsizei count                            = 0;
-    glGetAttachedShaders(program, kMaxShaderCount, &count, attachedShaders);
-    for (int i = 0; i < count; ++i)
+    GLsizei count                           = 0;
+    std::array<GLuint, 16u> attachedShaders = {};
+    glGetAttachedShaders(program, attachedShaders.size(), &count, attachedShaders.data());
+
+    for (GLuint shader : angle::Span(attachedShaders).first(count))
     {
         GLint type = 0;
-        glGetShaderiv(attachedShaders[i], GL_SHADER_TYPE, &type);
+        glGetShaderiv(shader, GL_SHADER_TYPE, &type);
         if (type == requestedType)
         {
-            return attachedShaders[i];
+            return shader;
         }
     }
 
@@ -390,6 +400,7 @@ CounterNameToIndexMap BuildCounterNameToIndexMap()
     glGetPerfMonitorCountersAMD(0, &numCounters, nullptr, 0, nullptr);
     if (glGetError() != GL_NO_ERROR)
     {
+        std::cerr << "glGetPerfMonitorCountersAMD failed (count)" << std::endl;
         return {};
     }
 
@@ -397,6 +408,7 @@ CounterNameToIndexMap BuildCounterNameToIndexMap()
     glGetPerfMonitorCountersAMD(0, nullptr, nullptr, numCounters, counterIndexes.data());
     if (glGetError() != GL_NO_ERROR)
     {
+        std::cerr << "glGetPerfMonitorCountersAMD failed (data)" << std::endl;
         return {};
     }
 
@@ -409,6 +421,7 @@ CounterNameToIndexMap BuildCounterNameToIndexMap()
         glGetPerfMonitorCounterStringAMD(0, counterIndex, kBufSize, nullptr, buffer);
         if (glGetError() != GL_NO_ERROR)
         {
+            std::cerr << "glGetPerfMonitorCounterStringAMD failed" << std::endl;
             return {};
         }
 
@@ -425,19 +438,23 @@ std::vector<angle::PerfMonitorTriplet> GetPerfMonitorTriplets()
                                    nullptr);
     if (glGetError() != GL_NO_ERROR || resultSize == 0)
     {
+        std::cerr << "glGetPerfMonitorCounterDataAMD failed (count)" << std::endl;
         return {};
     }
 
     std::vector<angle::PerfMonitorTriplet> perfResults(resultSize /
                                                        sizeof(angle::PerfMonitorTriplet));
+    GLint bytesWritten = 0;
     glGetPerfMonitorCounterDataAMD(
         0, GL_PERFMON_RESULT_AMD, static_cast<GLsizei>(perfResults.size() * sizeof(perfResults[0])),
-        &perfResults.data()->group, nullptr);
+        &perfResults.data()->group, &bytesWritten);
 
     if (glGetError() != GL_NO_ERROR)
     {
+        std::cerr << "glGetPerfMonitorCounterDataAMD failed (data)" << std::endl;
         return {};
     }
+    ASSERT(static_cast<GLuint>(bytesWritten) == resultSize);
 
     return perfResults;
 }

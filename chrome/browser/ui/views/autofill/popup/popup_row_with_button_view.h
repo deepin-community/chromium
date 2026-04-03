@@ -6,11 +6,11 @@
 #define CHROME_BROWSER_UI_VIEWS_AUTOFILL_POPUP_POPUP_ROW_WITH_BUTTON_VIEW_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/ui/autofill/autofill_popup_controller.h"
-#include "chrome/browser/ui/views/autofill/popup/popup_row_content_view.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_row_view.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/view_observer.h"
@@ -25,6 +25,9 @@ class ImageButton;
 
 namespace autofill {
 
+class AutofillPopupController;
+class PopupRowContentView;
+
 // Receives notifications of mouse enter/exit events of the button.
 class ButtonDelegate {
  public:
@@ -32,22 +35,28 @@ class ButtonDelegate {
   virtual void OnMouseExitedButton() = 0;
 };
 
-namespace {
-class ButtonPlaceholder;
-}  // namespace
-
 // A class for a single selectable popup cell that also has a button.
 class PopupRowWithButtonView : public PopupRowView, public ButtonDelegate {
   METADATA_HEADER(PopupRowWithButtonView, PopupRowView)
 
  public:
   // Determines under which conditions the button (if there is one) is visible.
-  enum class ButtonBehavior {
+  enum class ButtonVisibility : uint8_t {
     // The button is only visible if the cell or the button are selected or
     // hovered.
     kShowOnHoverOrSelect,
     // The button is always visible.
-    kShowAlways,
+    kShowAlways
+  };
+
+  // Determines whether the suggestion is communicated as "selected" or "not
+  // selected" to the controller when the button is selected.
+  enum class ButtonSelectBehavior : uint8_t {
+    // When the button is selected, the suggestion does not count as selected
+    // (and, for example, the content is not previewed).
+    kUnselectSuggestion,
+    // When the button  is selected, the suggestion is also selected.
+    kSelectSuggestion
   };
 
   PopupRowWithButtonView(
@@ -57,7 +66,8 @@ class PopupRowWithButtonView : public PopupRowView, public ButtonDelegate {
       int line_number,
       std::unique_ptr<PopupRowContentView> content_view,
       std::unique_ptr<views::ImageButton> button,
-      ButtonBehavior button_behavior);
+      ButtonVisibility button_visibility,
+      ButtonSelectBehavior button_select_behavior);
 
   PopupRowWithButtonView(const PopupRowWithButtonView&) = delete;
   PopupRowWithButtonView& operator=(const PopupRowWithButtonView&) = delete;
@@ -75,8 +85,7 @@ class PopupRowWithButtonView : public PopupRowView, public ButtonDelegate {
   void SetSelectedCell(std::optional<CellType> cell) override;
   // Handles key press events coming from the parent class. Returns false if
   // the parent should handle it.
-  bool HandleKeyPressEvent(
-      const content::NativeWebKeyboardEvent& event) override;
+  bool HandleKeyPressEvent(const input::NativeWebKeyboardEvent& event) override;
 
  private:
   // Enumerates logical parts of the row. Used for accessibility and arrow
@@ -101,13 +110,14 @@ class PopupRowWithButtonView : public PopupRowView, public ButtonDelegate {
   bool ShouldButtonBeVisible() const;
 
   raw_ptr<views::ImageButton> button_ = nullptr;
-  raw_ptr<ButtonPlaceholder> button_placeholder_ = nullptr;
+  raw_ptr<views::View> button_placeholder_ = nullptr;
 
   // Defines the part of the row that is currently highlighted and accepts
   // user input.
   std::optional<RowWithButtonPart> focused_part_;
 
-  ButtonBehavior button_behavior_ = ButtonBehavior::kShowOnHoverOrSelect;
+  const ButtonVisibility button_visibility_;
+  const ButtonSelectBehavior button_select_behavior_;
 };
 
 }  // namespace autofill

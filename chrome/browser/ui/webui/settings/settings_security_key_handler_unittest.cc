@@ -4,25 +4,33 @@
 
 #include "chrome/browser/ui/webui/settings/settings_security_key_handler.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <string>
+#include <vector>
 
-#include "base/test/gmock_callback_support.h"
+#include "base/containers/to_vector.h"
+#include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/webauthn/local_credential_management.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "content/public/test/test_web_ui.h"
-#include "device/fido/fake_fido_discovery.h"
-#include "device/fido/fido_constants.h"
-#include "device/fido/fido_discovery_factory.h"
-#include "device/fido/fido_types.h"
-#include "device/fido/public_key_credential_rp_entity.h"
-#include "device/fido/public_key_credential_user_entity.h"
-#include "device/fido/test_callback_receiver.h"
+#include "device/fido/public/fido_constants.h"
+#include "device/fido/public/fido_types.h"
+#include "device/fido/public/public_key_credential_rp_entity.h"
+#include "device/fido/public/public_key_credential_user_entity.h"
+#include "device/fido/virtual_ctap2_device.h"
 #include "device/fido/virtual_fido_device_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#include "base/test/gmock_callback_support.h"
+#include "chrome/browser/webauthn/local_credential_management.h"
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
 namespace settings {
 
@@ -30,12 +38,14 @@ namespace {
 
 constexpr size_t kBioEnrollCapacity = 3;
 constexpr char kTestPIN[] = "1234";
-constexpr uint8_t kCredentialID[] = {0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa,
-                                     0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa};
+constexpr auto kCredentialID =
+    std::to_array<uint8_t>({0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa,
+                            0xa, 0xa, 0xa, 0xa, 0xa, 0xa});
 constexpr char kRPID[] = "example.com";
 constexpr char kRPName[] = "Example Corp";
-constexpr uint8_t kUserID[] = {0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1,
-                               0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1};
+constexpr auto kUserID =
+    std::to_array<uint8_t>({0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1, 0x1,
+                            0x1, 0x1, 0x1, 0x1, 0x1, 0x1});
 constexpr char kUserName[] = "alice@example.com";
 constexpr char kUserDisplayName[] = "Alice Example <alice@example.com>";
 
@@ -61,7 +71,7 @@ class TestSecurityKeysCredentialHandler : public SecurityKeysCredentialHandler {
   // callback.
   std::string SimulateStart() {
     constexpr char kCallbackId[] = "securityKeyCredentialManagementStart";
-    base::Value::List args;
+    base::ListValue args;
     args.Append(kCallbackId);
     HandleStart(args);
     base::RunLoop().RunUntilIdle();
@@ -72,7 +82,7 @@ class TestSecurityKeysCredentialHandler : public SecurityKeysCredentialHandler {
   // callback.
   std::string SimulateProvidePIN() {
     constexpr char kCallbackId[] = "securityKeyCredentialManagementPIN";
-    base::Value::List args;
+    base::ListValue args;
     args.Append(kCallbackId);
     args.Append(kTestPIN);
     HandlePIN(args);
@@ -102,7 +112,7 @@ class TestSecurityKeysBioEnrollmentHandler
   // callback.
   std::string SimulateStart() {
     constexpr char kCallbackId[] = "bioEnrollStart";
-    base::Value::List args;
+    base::ListValue args;
     args.Append(kCallbackId);
     HandleStart(args);
     base::RunLoop().RunUntilIdle();
@@ -113,7 +123,7 @@ class TestSecurityKeysBioEnrollmentHandler
   // callback.
   std::string SimulateProvidePIN() {
     constexpr char kCallbackId[] = "bioEnrollProvidePIN";
-    base::Value::List args;
+    base::ListValue args;
     args.Append(kCallbackId);
     args.Append(kTestPIN);
     HandleProvidePIN(args);
@@ -125,7 +135,7 @@ class TestSecurityKeysBioEnrollmentHandler
   // completed callback.
   std::string SimulateStartEnrolling() {
     constexpr char kCallbackId[] = "bioEnrollStartEnrolling";
-    base::Value::List args;
+    base::ListValue args;
     args.Append(kCallbackId);
     HandleStartEnrolling(args);
     base::RunLoop().RunUntilIdle();
@@ -161,8 +171,7 @@ TEST_F(SecurityKeysCredentialHandlerTest,
   std::string start_callback_id = handler_->SimulateStart();
   ASSERT_EQ(web_ui_->call_data()[0]->arg1()->GetString(), start_callback_id);
   ASSERT_TRUE(web_ui_->call_data()[0]->arg3()->is_dict());
-  const base::Value::Dict& response =
-      web_ui_->call_data()[0]->arg3()->GetDict();
+  const base::DictValue& response = web_ui_->call_data()[0]->arg3()->GetDict();
   EXPECT_FALSE(*response.FindBool("supportsUpdateUserInformation"));
 }
 
@@ -176,13 +185,11 @@ TEST_F(SecurityKeysCredentialHandlerTest, TestUpdateUserInformation) {
   config.ctap2_versions = {device::Ctap2Version::kCtap2_1};
   handler_->GetDiscoveryFactory()->SetCtap2Config(config);
 
-  std::vector<uint8_t> credential_id =
-      device::fido_parsing_utils::Materialize(kCredentialID);
+  const auto credential_id = base::ToVector(kCredentialID);
 
   device::PublicKeyCredentialRpEntity rp(kRPID, kRPName);
-  device::PublicKeyCredentialUserEntity user(
-      device::fido_parsing_utils::Materialize(kUserID), kUserName,
-      kUserDisplayName);
+  device::PublicKeyCredentialUserEntity user(base::ToVector(kUserID), kUserName,
+                                             kUserDisplayName);
 
   ASSERT_TRUE(
       handler_->GetDiscoveryFactory()->mutable_state()->InjectResidentKey(
@@ -199,7 +206,7 @@ TEST_F(SecurityKeysCredentialHandlerTest, TestUpdateUserInformation) {
   std::string new_username = "jsapple@example.com";
   std::string new_displayname = "John S. Apple";
 
-  base::Value::List args;
+  base::ListValue args;
   args.Append("securityKeyCredentialManagementUpdate");
   args.Append(credential_id_hex);
   args.Append(user_id_hex);
@@ -209,8 +216,7 @@ TEST_F(SecurityKeysCredentialHandlerTest, TestUpdateUserInformation) {
   std::string start_callback_id = handler_->SimulateStart();
   ASSERT_EQ(web_ui_->call_data()[0]->arg1()->GetString(), start_callback_id);
   ASSERT_TRUE(web_ui_->call_data()[0]->arg3()->is_dict());
-  const base::Value::Dict& response =
-      web_ui_->call_data()[0]->arg3()->GetDict();
+  const base::DictValue& response = web_ui_->call_data()[0]->arg3()->GetDict();
   EXPECT_TRUE(*response.FindBool("supportsUpdateUserInformation"));
 
   handler_->SimulateProvidePIN();
@@ -218,8 +224,7 @@ TEST_F(SecurityKeysCredentialHandlerTest, TestUpdateUserInformation) {
   base::RunLoop().RunUntilIdle();
 
   device::PublicKeyCredentialUserEntity updated_user(
-      device::fido_parsing_utils::Materialize(kUserID), new_username,
-      new_displayname);
+      base::ToVector(kUserID), new_username, new_displayname);
 
   EXPECT_EQ(handler_->GetDiscoveryFactory()
                 ->mutable_state()
@@ -240,7 +245,7 @@ TEST_F(SecurityKeysCredentialHandlerTest, TestForcePINChange) {
   handler_->GetDiscoveryFactory()->SetCtap2Config(config);
 
   std::string callback_id("start_callback_id");
-  base::Value::List args;
+  base::ListValue args;
   args.Append(callback_id);
   handler_->HandleStart(args);
   base::RunLoop().RunUntilIdle();
@@ -319,7 +324,7 @@ TEST_F(SecurityKeysBioEnrollmentHandlerTest, TestStorageFullError) {
   EXPECT_EQ(web_ui_->call_data()[2]->arg1()->GetString(), callback_id);
   EXPECT_EQ(web_ui_->call_data()[2]->arg2()->GetBool(), true);
   EXPECT_TRUE(web_ui_->call_data()[2]->arg3()->is_dict());
-  base::Value::Dict expected;
+  base::DictValue expected;
   expected.Set("code",
                static_cast<int>(
                    device::CtapDeviceResponseCode::kCtap2ErrFpDatabaseFull));
@@ -367,7 +372,7 @@ class TestPasskeysHandler : public PasskeysHandler {
   std::string SimulateEdit(std::string credential_id,
                            std::string new_username) {
     constexpr char kCallbackId[] = "passkeysEdit";
-    base::Value::List args;
+    base::ListValue args;
     args.Append(kCallbackId);
     args.Append(credential_id);
     args.Append(new_username);
@@ -378,7 +383,7 @@ class TestPasskeysHandler : public PasskeysHandler {
 
   std::string SimulateDelete(std::string credential_id) {
     constexpr char kCallbackId[] = "passkeysDelete";
-    base::Value::List args;
+    base::ListValue args;
     args.Append(kCallbackId);
     args.Append(credential_id);
     HandleDelete(args);
@@ -407,10 +412,7 @@ class PasskeysHandlerTest : public ChromeRenderViewHostTestHarness {
 };
 
 TEST_F(PasskeysHandlerTest, TestHandleEdit) {
-  device::test::TestCallbackReceiver<bool> callback;
-  std::vector<uint8_t> credential_id =
-      device::fido_parsing_utils::Materialize(kCredentialID);
-  std::string credential_id_hex = base::HexEncode(credential_id);
+  std::string credential_id_hex = base::HexEncode(kCredentialID);
   EXPECT_CALL(
       *weak_local_cred_man_,
       Edit(testing::ElementsAreArray(kCredentialID),
@@ -434,7 +436,8 @@ TEST_F(PasskeysHandlerTest, TestHandleEdit) {
                 device::PublicKeyCredentialUserEntity(
                     {0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa, 0xa,
                      0xa, 0xa, 0xa, 0xa},
-                    "new-username", "new-username")}};
+                    "new-username", "new-username"),
+                /*provider_name=*/std::nullopt}};
         std::move(callback).Run(std::move(credential_metadata));
         base::RunLoop().RunUntilIdle();
       });
@@ -447,9 +450,7 @@ TEST_F(PasskeysHandlerTest, TestHandleEdit) {
 }
 
 TEST_F(PasskeysHandlerTest, TestRecordPasskeyDelete) {
-  device::test::TestCallbackReceiver<bool> callback;
-  std::vector<uint8_t> credential_id =
-      device::fido_parsing_utils::Materialize(kCredentialID);
+  const auto credential_id = base::ToVector(kCredentialID);
   std::string credential_id_hex = base::HexEncode(credential_id);
   EXPECT_CALL(*weak_local_cred_man_,
               Delete(testing::ElementsAreArray(kCredentialID),

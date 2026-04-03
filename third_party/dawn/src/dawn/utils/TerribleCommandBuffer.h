@@ -44,11 +44,13 @@ class TerribleCommandBuffer : public dawn::wire::CommandSerializer {
 
     void* GetCmdSpace(size_t size) override;
     bool Flush() override;
+    bool Empty();
 
   private:
-    // TODO(https://crbug/dawn/2343): Remove DanglingUntriaged.
-    raw_ptr<dawn::wire::CommandHandler, DanglingUntriaged> mHandler = nullptr;
+    raw_ptr<dawn::wire::CommandHandler> mHandler = nullptr;
+
     size_t mOffset = 0;
+    size_t mLastFlushedOffset = 0;
     char mBuffer[1000000];
 };
 

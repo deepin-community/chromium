@@ -3,12 +3,17 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/interstitials/chrome_settings_page_helper.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/jni_android.h"
+#endif
+
 #include "build/build_config.h"
 #include "components/safe_browsing/buildflags.h"
 #include "content/public/browser/web_contents.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/safe_browsing/android/safe_browsing_settings_launcher_android.h"
+#include "chrome/browser/safe_browsing/android/safe_browsing_settings_navigation_android.h"
 #include "components/safe_browsing/core/common/safe_browsing_settings_metrics.h"
 #else
 #include "chrome/browser/ui/browser_finder.h"
@@ -33,8 +38,8 @@ void ChromeSettingsPageHelper::OpenEnhancedProtectionSettings(
 #else
   // In rare circumstances, this happens outside of a Browser, better ignore
   // than crash.
-  // TODO(crbug.com/1219535): Remove and find a better way, e.g. not showing the
-  // enhanced protection promo at all.
+  // TODO(crbug.com/40772284): Remove and find a better way, e.g. not showing
+  // the enhanced protection promo at all.
   if (!chrome::FindBrowserWithTab(web_contents)) {
     return;
   }
@@ -49,8 +54,8 @@ void ChromeSettingsPageHelper::OpenEnhancedProtectionSettingsWithIph(
 #if BUILDFLAG(FULL_SAFE_BROWSING)
   // In rare circumstances, this happens outside of a Browser, better ignore
   // than crash.
-  // TODO(crbug.com/1219535): Remove and find a better way, e.g. not showing the
-  // enhanced protection promo at all.
+  // TODO(crbug.com/40772284): Remove and find a better way, e.g. not showing
+  // the enhanced protection promo at all.
   if (!chrome::FindBrowserWithTab(web_contents)) {
     return;
   }
@@ -58,5 +63,13 @@ void ChromeSettingsPageHelper::OpenEnhancedProtectionSettingsWithIph(
       chrome::FindBrowserWithTab(web_contents), referral_method);
 #endif
 }
+
+#if BUILDFLAG(IS_ANDROID)
+void ChromeSettingsPageHelper::OpenAdvancedProtectionSettings(
+    content::WebContents& web_contents) {
+  safe_browsing::ShowAdvancedProtectionSettings(
+      web_contents.GetTopLevelNativeWindow());
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace security_interstitials

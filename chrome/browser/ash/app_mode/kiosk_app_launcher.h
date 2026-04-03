@@ -5,6 +5,7 @@
 #define CHROME_BROWSER_ASH_APP_MODE_KIOSK_APP_LAUNCHER_H_
 
 #include <optional>
+#include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
@@ -51,6 +52,7 @@ class KioskAppLauncher {
     virtual void OnAppDataUpdated() {}
     virtual void OnAppInstalling() {}
     virtual void OnAppPrepared() {}
+    virtual void OnAppLaunching() {}
     virtual void OnAppLaunched() {}
     virtual void OnAppWindowCreated(
         const std::optional<std::string>& app_name) {}
@@ -70,6 +72,7 @@ class KioskAppLauncher {
     void NotifyAppDataUpdated();
     void NotifyAppInstalling();
     void NotifyAppPrepared();
+    void NotifyAppLaunching();
     void NotifyAppLaunched();
     void NotifyAppWindowCreated(
         const std::optional<std::string>& app_id = std::nullopt);

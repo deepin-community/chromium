@@ -44,7 +44,7 @@ class WorkerThreadSchedulerForTest : public WorkerThreadScheduler {
   using WorkerThreadScheduler::lifecycle_state;
 
  private:
-  raw_ptr<base::WaitableEvent, ExperimentalRenderer> throtting_state_changed_;
+  raw_ptr<base::WaitableEvent> throtting_state_changed_;
 };
 
 class WorkerThreadForTest : public NonMainThreadImpl {
@@ -92,10 +92,8 @@ class WorkerThreadForTest : public NonMainThreadImpl {
   WorkerThreadSchedulerForTest* GetWorkerScheduler() { return scheduler_; }
 
  private:
-  raw_ptr<base::WaitableEvent, ExperimentalRenderer>
-      throtting_state_changed_;  // NOT OWNED
-  raw_ptr<WorkerThreadSchedulerForTest, ExperimentalRenderer> scheduler_ =
-      nullptr;  // NOT OWNED
+  raw_ptr<base::WaitableEvent> throtting_state_changed_;       // NOT OWNED
+  raw_ptr<WorkerThreadSchedulerForTest> scheduler_ = nullptr;  // NOT OWNED
   std::unique_ptr<WorkerSchedulerImpl> worker_scheduler_;
 };
 
@@ -140,6 +138,7 @@ class WorkerSchedulerProxyTest : public testing::Test {
         page_scheduler_(agent_group_scheduler_->CreatePageScheduler(nullptr)),
         frame_scheduler_(page_scheduler_->CreateFrameScheduler(
             nullptr,
+            LocalFrameToken(),
             /*is_in_embedded_frame_tree=*/false,
             FrameScheduler::FrameType::kMainFrame)) {}
 

@@ -29,7 +29,6 @@
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/events/keycodes/keyboard_code_conversion.h"
 #include "ui/events/keycodes/keyboard_codes.h"
-#include "ui/gfx/native_widget_types.h"
 
 #ifdef USE_AURA
 #include "content/browser/renderer_host/render_widget_host_view_aura.h"
@@ -123,7 +122,7 @@ bool g_window_has_focus = false;
 
 class TestRenderWidgetHostView : public RenderWidgetHostViewAura {
  public:
-  TestRenderWidgetHostView(RenderWidgetHost* host)
+  explicit TestRenderWidgetHostView(RenderWidgetHost* host)
       : RenderWidgetHostViewAura(host) {}
   ~TestRenderWidgetHostView() override {}
 
@@ -188,8 +187,7 @@ void FakeKeyboardLockWebContentsDelegate::RequestKeyboardLock(
     WebContents* web_contents,
     bool esc_key_locked) {
   keyboard_lock_requested_ = true;
-  if (is_fullscreen_)
-    web_contents->GotResponseToKeyboardLockRequest(/*allowed=*/true);
+  web_contents->GotResponseToKeyboardLockRequest(/*allowed=*/true);
 }
 
 void FakeKeyboardLockWebContentsDelegate::CancelKeyboardLockRequest(
@@ -283,7 +281,6 @@ void KeyboardLockBrowserTest::SetUp() {
 
 void KeyboardLockBrowserTest::SetUpCommandLine(
     base::CommandLine* command_line) {
-  ContentBrowserTest::SetUpCommandLine(command_line);
   mock_cert_verifier_.SetUpCommandLine(command_line);
 }
 

@@ -36,7 +36,6 @@
 
 using base::test::RunOnceCallback;
 using testing::_;
-using testing::Invoke;
 using testing::StrictMock;
 
 namespace enterprise_connectors {
@@ -123,8 +122,8 @@ class AshAttestationServiceImplTest : public testing::Test {
     ash::AttestationClient::Shutdown();
   }
 
-  base::Value::Dict CreateSignals() {
-    base::Value::Dict signals;
+  base::DictValue CreateSignals() {
+    base::DictValue signals;
     signals.Set(device_signals::names::kDisplayName, kDisplayName);
     return signals;
   }

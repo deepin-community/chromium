@@ -24,6 +24,7 @@
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom.h"
 #include "third_party/blink/public/mojom/blob/serialized_blob.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace content {
 namespace background_fetch {
@@ -98,7 +99,7 @@ void MarkRequestCompleteTask::StoreResponse(base::OnceClosure done_closure) {
     return;
   }
 
-  // TODO(crbug.com/884672): Move cross origin checks to when the response
+  // TODO(crbug.com/40593934): Move cross origin checks to when the response
   // headers are available.
   BackgroundFetchCrossOriginFilter filter(
       registration_id_.storage_key().origin(), *request_info_);
@@ -148,9 +149,8 @@ void MarkRequestCompleteTask::DidGetIsQuotaAvailable(
     base::OnceClosure done_closure,
     bool is_available) {
   int64_t trace_id = blink::cache_storage::CreateTraceId();
-  TRACE_EVENT_WITH_FLOW0("CacheStorage",
-                         "MarkRequestCompleteTask::DidGetIsQuotaAvailable",
-                         TRACE_ID_GLOBAL(trace_id), TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("CacheStorage", "MarkRequestCompleteTask::DidGetIsQuotaAvailable",
+              perfetto::Flow::Global(trace_id));
 
   if (!is_available) {
     FinishWithError(blink::mojom::BackgroundFetchError::QUOTA_EXCEEDED);
@@ -167,10 +167,8 @@ void MarkRequestCompleteTask::DidOpenCache(
     base::OnceClosure done_closure,
     int64_t trace_id,
     blink::mojom::CacheStorageError error) {
-  TRACE_EVENT_WITH_FLOW0("CacheStorage",
-                         "MarkRequestCompleteTask::DidOpenCache",
-                         TRACE_ID_GLOBAL(trace_id),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("CacheStorage", "MarkRequestCompleteTask::DidOpenCache",
+              perfetto::Flow::Global(trace_id));
   if (error != blink::mojom::CacheStorageError::kSuccess) {
     SetStorageError(BackgroundFetchStorageError::kCacheStorageError);
     CreateAndStoreCompletedRequest(std::move(done_closure));
@@ -192,7 +190,7 @@ void MarkRequestCompleteTask::DidOpenCache(
   std::vector<blink::mojom::BatchOperationPtr> operations;
   operations.emplace_back(std::move(put));
 
-  // TODO(crbug.com/774054): The request blob stored in the cache is being
+  // TODO(crbug.com/40544433): The request blob stored in the cache is being
   // overwritten here, it should be written back.
   cache_storage_cache_remote()->Batch(
       std::move(operations), trace_id,

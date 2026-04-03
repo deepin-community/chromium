@@ -11,6 +11,9 @@
 
 namespace password_manager::constants {
 
+// The character used to obfuscate password labels.
+inline constexpr char16_t kPasswordReplacementChar = 0x2022;
+
 inline constexpr char kAutocompleteUsername[] = "username";
 inline constexpr char kAutocompleteCurrentPassword[] = "current-password";
 inline constexpr char kAutocompleteNewPassword[] = "new-password";
@@ -19,6 +22,9 @@ inline constexpr char kAutocompleteOneTimePassword[] = "one-time-code";
 inline constexpr char kAutocompleteWebAuthn[] = "webauthn";
 
 inline constexpr int kMaxPasswordNoteLength = 1000;
+inline constexpr int kMaxPasswordLengthForImport = 1000;
+inline constexpr int kMaxUsernameLengthForImport = 1000;
+inline constexpr int kMaxUrlLengthForImport = 2048;
 inline constexpr int kMaxPasswordsPerCSVFile = 3000;
 
 inline constexpr base::TimeDelta kPasswordManagerAuthValidity =
@@ -60,8 +66,22 @@ inline constexpr char16_t kHiddenValueRe[] = u"^(\\W)\\1+$";
 // `AutofillUploadContents::ValueType` of the user's input on-upload.
 inline constexpr char16_t kEmailValueRe[] =
     u"^[a-zA-Z0-9.!#$%&’*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*$";
-inline constexpr char16_t kPhoneValueRe[] = u"^[0-9()+-]{6,25}$";
+inline constexpr char16_t kPhoneValueRe[] = u"^[0-9()+-]{7,25}$";
 inline constexpr char16_t kUsernameLikeValueRe[] = u"[A-Za-z0-9_\\-.]{7,30}";
+
+inline constexpr char16_t kSearch[] = u"search";
+
+// Variations of the word password. Used to enable manual password generation on
+// the field.
+inline constexpr char16_t kPasswordRe[] =
+    // Synonyms and abbreviations of password.
+    u"pass(?:word|code)|pas(?:word|code)|pswrd|psw|pswd|pwd|parole|watchword|"
+
+    // Translations.
+    u"pasahitza|parol|lozinka|sifr|contrasenya|heslo|adgangskode|losen|"
+    u"wachtwoord|paswoord|salasana|passe|contrasinal|passwort|jelszo|"
+    u"sandi|signum|slaptazodis|kata|passord|haslo|senha|geslo|contrasena|"
+    u"khau";
 
 }  // namespace password_manager::constants
 

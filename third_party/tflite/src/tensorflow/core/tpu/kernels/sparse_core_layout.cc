@@ -24,6 +24,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
 #include "tensorflow/compiler/jit/flags.h"
 #include "tensorflow/core/tpu/kernels/sparse_core_layout.pb.h"
@@ -33,9 +34,14 @@ namespace tensorflow {
 
 // Provide reasonable default values for the parameters. Note the WEAK attribute
 // on these methods: these can be (and in many cases are) overridden.
-ABSL_ATTRIBUTE_WEAK bool GetDisableTableStacking() {
+ABSL_ATTRIBUTE_WEAK bool GetDisableTableStacking(bool disable_table_stacking) {
+  bool should_disable_stacking = false;
+  // BEGIN GOOGLE-INTERNAL
   XlaSparseCoreFlags *sparse_core_flags = GetXlaSparseCoreFlags();
-  return sparse_core_flags->tf_xla_sparse_core_disable_table_stacking;
+  should_disable_stacking =
+      sparse_core_flags->tf_xla_sparse_core_disable_table_stacking;
+  // END GOOGLE-INTERNAL
+  return should_disable_stacking || disable_table_stacking;
 }
 
 ABSL_ATTRIBUTE_WEAK int64_t GetXlaSparseCoreStackingMemLimit() {
@@ -58,19 +64,18 @@ static int64_t NextLargestMultiple(int64_t n, int64_t factor) {
 }
 
 SparseCoreLayoutStacker::SparseCoreLayoutStacker(int num_partitions,
+                                                 bool disable_table_stacking,
                                                  int sparse_cores_per_partition)
     : num_partitions_(num_partitions),
       sparse_cores_per_partition_(sparse_cores_per_partition),
       num_sparse_cores_(num_partitions_ * sparse_cores_per_partition_),
-      stacking_enabled_(!GetDisableTableStacking()),
+      stacking_enabled_(!GetDisableTableStacking(disable_table_stacking)),
       activation_mem_bytes_limit_(GetXlaSparseCoreStackingMemLimit()),
       variable_shard_bytes_limit_(GetXlaSparseCoreStackingTableShardLimit()) {}
 
-absl::Status SparseCoreLayoutStacker::AddTable(tsl::StringPiece table_name,
-                                               int64_t table_height,
-                                               int64_t table_width,
-                                               tsl::StringPiece group,
-                                               int64_t output_samples) {
+absl::Status SparseCoreLayoutStacker::AddTable(
+    absl::string_view table_name, int64_t table_height, int64_t table_width,
+    absl::string_view group, int64_t output_samples, int64_t num_features) {
   if (stacks_by_group_.empty()) {  // First call?
     VLOG(1) << "Stacking parameters: stacking_enabled_ = " << stacking_enabled_
             << ", activation_mem_bytes_limit_ = " << activation_mem_bytes_limit_
@@ -138,7 +143,7 @@ absl::Status SparseCoreLayoutStacker::AddTable(tsl::StringPiece table_name,
   // Need to wrap the absl::string_view in std::string constructor because as of
   // Q4 2023, on windows, the set function for protos doesn't accept a
   // string_view.
-  layout.set_table_name(std::string(table_name));
+  layout.set_table_name(table_name);
   layout.set_num_sparse_cores(num_sparse_cores_);
   layout.set_num_partitions(num_partitions_);
   layout.add_unsharded_shape(table_height);
@@ -147,6 +152,8 @@ absl::Status SparseCoreLayoutStacker::AddTable(tsl::StringPiece table_name,
   layout.add_unsharded_padded_shape(padded_width);
   layout.set_sparse_core_shard_row_offset(stack->unsharded_height /
                                           num_sparse_cores_);
+  layout.set_per_sparse_core_batch_size(samples_per_sparse_core);
+  layout.set_num_features(num_features);
   // Rotation is such that we advance one TPU chip (4 sparse core shards) for
   // each table. Because of the mod sharding across sparse cores, one row
   // advances one sparse core, so to advance one chip, we want to advance by

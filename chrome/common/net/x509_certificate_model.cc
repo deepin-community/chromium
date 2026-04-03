@@ -4,6 +4,9 @@
 
 #include "chrome/common/net/x509_certificate_model.h"
 
+#include <string_view>
+#include <variant>
+
 #include "base/check.h"
 #include "base/containers/adapters.h"
 #include "base/containers/fixed_flat_map.h"
@@ -11,6 +14,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/string_view_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
@@ -18,6 +22,7 @@
 #include "crypto/sha2.h"
 #include "net/base/ip_address.h"
 #include "net/cert/ct_objects_extractor.h"
+#include "net/cert/qwac.h"
 #include "net/cert/time_conversions.h"
 #include "net/cert/x509_util.h"
 #include "third_party/boringssl/src/include/openssl/bn.h"
@@ -282,7 +287,7 @@ constexpr uint8_t kEkuMsKeyRecoveryAgent[] = {0x2b, 0x06, 0x01, 0x04, 0x01,
                                               0x82, 0x37, 0x15, 0x06};
 
 // The certificate viewer may be used to view client certificates, so use the
-// relaxed parsing mode. See crbug.com/770323 and crbug.com/788655.
+// relaxed parsing mode. See crbug.com/41347446 and crbug.com/41357486.
 constexpr auto kNameStringHandling =
     bssl::X509NameAttribute::PrintableStringHandling::kAsUTF8Hack;
 
@@ -338,8 +343,9 @@ OptionalStringOrError FindFirstNameOfType(bssl::der::Input oid,
                                           const bssl::RDNSequence& rdns) {
   for (const bssl::RelativeDistinguishedName& rdn : rdns) {
     OptionalStringOrError r = FindAttributeOfType(oid, rdn);
-    if (!absl::holds_alternative<NotPresent>(r))
+    if (!std::holds_alternative<NotPresent>(r)) {
       return r;
+    }
   }
   return NotPresent();
 }
@@ -350,8 +356,9 @@ OptionalStringOrError FindLastNameOfType(bssl::der::Input oid,
                                          const bssl::RDNSequence& rdns) {
   for (const bssl::RelativeDistinguishedName& rdn : base::Reversed(rdns)) {
     OptionalStringOrError r = FindAttributeOfType(oid, rdn);
-    if (!absl::holds_alternative<NotPresent>(r))
+    if (!std::holds_alternative<NotPresent>(r)) {
       return r;
+    }
   }
   return NotPresent();
 }
@@ -476,6 +483,7 @@ constexpr auto kOidStringMap = base::MakeFixedFlatMap<bssl::der::Input, int>({
     {bssl::der::Input(bssl::kUserNoticeId),
      IDS_CERT_PKIX_USER_NOTICE_QUALIFIER},
     {bssl::der::Input(net::ct::kEmbeddedSCTOid), IDS_CERT_X509_SCT_LIST},
+    {bssl::der::Input(net::kQcStatementsOid), IDS_CERT_QC_STATEMENTS},
 
     // Extended Key Usages:
     {bssl::der::Input(bssl::kAnyEKU), IDS_CERT_EKU_ANY_EKU},
@@ -489,6 +497,16 @@ constexpr auto kOidStringMap = base::MakeFixedFlatMap<bssl::der::Input, int>({
     {bssl::der::Input(bssl::kOCSPSigning), IDS_CERT_EKU_OCSP_SIGNING},
     {bssl::der::Input(kNetscapeServerGatedCrypto),
      IDS_CERT_EKU_NETSCAPE_INTERNATIONAL_STEP_UP},
+
+    // Policies:
+    {bssl::der::Input(net::kQevcpwOid), IDS_CERT_POLICY_ETSI_QEVCP_W},
+    {bssl::der::Input(net::kQncpwOid), IDS_CERT_POLICY_ETSI_QNCP_W},
+
+    // QcStatements:
+    {bssl::der::Input(net::kEtsiQcsQcComplianceOid),
+     IDS_CERT_QC_ETSI_QCS_QCCOMPLIANCE},
+    {bssl::der::Input(net::kEtsiQcsQcTypeOid), IDS_CERT_QC_ETSI_QCS_QCTYPE},
+    {bssl::der::Input(net::kEtsiQctWebOid), IDS_CERT_QC_ETSI_QCT_WEB},
 
     // Microsoft oids:
     {bssl::der::Input(kMsCertExtCerttype), IDS_CERT_EXT_MS_CERT_TYPE},
@@ -523,10 +541,7 @@ constexpr auto kOidStringMap = base::MakeFixedFlatMap<bssl::der::Input, int>({
 });
 
 std::optional<std::string> GetOidText(bssl::der::Input oid) {
-  // TODO(crbug.com/1311404): this should be "const auto i" since it's an
-  // iterator, but fixed_flat_map iterators are raw pointers and the
-  // chromium-style plugin complains.
-  const auto* i = kOidStringMap.find(oid);
+  const auto i = kOidStringMap.find(oid);
   if (i != kOidStringMap.end())
     return l10n_util::GetStringUTF8(i->second);
   return std::nullopt;
@@ -745,13 +760,13 @@ OptionalStringOrError ProcessNameValue(bssl::der::Input name_value) {
   return RDNSequenceToStringMultiLine(rdns);
 }
 
-std::string FormatGeneralName(std::u16string key, base::StringPiece value) {
+std::string FormatGeneralName(std::u16string key, std::string_view value) {
   return l10n_util::GetStringFUTF8(IDS_CERT_UNKNOWN_OID_INFO_FORMAT, key,
                                    base::UTF8ToUTF16(value)) +
          '\n';
 }
 
-std::string FormatGeneralName(int key_string_id, base::StringPiece value) {
+std::string FormatGeneralName(int key_string_id, std::string_view value) {
   return FormatGeneralName(l10n_util::GetStringUTF16(key_string_id), value);
 }
 
@@ -802,10 +817,11 @@ std::optional<std::string> ProcessGeneralNames(
   }
   for (const auto& directory_name : names.directory_names) {
     OptionalStringOrError name = ProcessNameValue(directory_name);
-    if (!absl::holds_alternative<std::string>(name))
+    if (!std::holds_alternative<std::string>(name)) {
       return std::nullopt;
+    }
     rv += FormatGeneralName(IDS_CERT_GENERAL_NAME_DIRECTORY_NAME,
-                            absl::get<std::string>(name));
+                            std::get<std::string>(name));
   }
   for (const auto& edi_party_name : names.edi_party_names) {
     rv += FormatGeneralName(IDS_CERT_GENERAL_NAME_EDI_PARTY_NAME,
@@ -930,10 +946,11 @@ std::optional<std::string> ProcessUserNoticeDisplayText(
       }
       break;
     case CBS_ASN1_UTF8STRING:
-      if (!base::IsStringUTF8AllowingNoncharacters(value.AsStringView())) {
+      if (!base::IsStringUTF8AllowingNoncharacters(
+              base::as_string_view(value))) {
         return std::nullopt;
       }
-      display_text = value.AsString();
+      display_text = base::as_string_view(value);
       break;
     default:
       return std::nullopt;
@@ -1235,12 +1252,47 @@ std::vector<uint8_t> BIGNUMBytes(const BIGNUM* bn) {
   return ret;
 }
 
+std::optional<std::string> ProcessQcStatements(
+    bssl::der::Input extension_data) {
+  std::optional<std::vector<net::QcStatement>> qc_statements =
+      net::ParseQcStatements(extension_data);
+  if (!qc_statements.has_value()) {
+    return std::nullopt;
+  }
+
+  std::string rv;
+  for (const auto& statement : qc_statements.value()) {
+    rv += GetOidTextOrNumeric(statement.id);
+    if (!statement.info.empty()) {
+      rv += " = ";
+      // The `statement.info` is dependent on the `id`, so `info` can only be
+      // processed for known ids. Otherwise the raw bytes of `info` are shown.
+      if (statement.id == bssl::der::Input(net::kEtsiQcsQcTypeOid)) {
+        std::optional<std::vector<bssl::der::Input>> qc_types =
+            net::ParseQcTypeInfo(statement.info);
+        if (!qc_types.has_value()) {
+          return std::nullopt;
+        }
+        std::string sep;
+        for (const auto& qc_type_id : qc_types.value()) {
+          rv += sep;
+          rv += GetOidTextOrNumeric(qc_type_id);
+          sep = ", ";
+        }
+      } else {
+        rv += ProcessRawBytes(statement.info);
+      }
+    }
+    rv += "\n";
+  }
+  return rv;
+}
+
 }  // namespace
 
 X509CertificateModel::X509CertificateModel(
-    bssl::UniquePtr<CRYPTO_BUFFER> cert_data,
-    std::string nickname)
-    : nickname_(std::move(nickname)), cert_data_(std::move(cert_data)) {
+    bssl::UniquePtr<CRYPTO_BUFFER> cert_data)
+    : cert_data_(std::move(cert_data)) {
   DCHECK(cert_data_);
 
   bssl::ParseCertificateOptions options;
@@ -1271,23 +1323,22 @@ X509CertificateModel::~X509CertificateModel() = default;
 std::string X509CertificateModel::HashCertSHA256() const {
   auto hash =
       crypto::SHA256Hash(net::x509_util::CryptoBufferAsSpan(cert_data_.get()));
-  return base::ToLowerASCII(base::HexEncode(hash));
+  return base::HexEncodeLower(hash);
 }
 
 std::string X509CertificateModel::GetTitle() const {
-  if (!nickname_.empty())
-    return nickname_;
-
   if (!parsed_successfully_)
     return HashCertSHA256();
 
   if (!subject_rdns_.empty()) {
     OptionalStringOrError common_name = FindLastNameOfType(
         bssl::der::Input(bssl::kTypeCommonNameOid), subject_rdns_);
-    if (auto* str = absl::get_if<std::string>(&common_name); str)
+    if (auto* str = std::get_if<std::string>(&common_name); str) {
       return std::move(*str);
-    if (absl::holds_alternative<Error>(common_name))
+    }
+    if (std::holds_alternative<Error>(common_name)) {
       return HashCertSHA256();
+    }
 
     std::string rv;
     if (!bssl::ConvertToRFC2253(subject_rdns_, &rv)) {
@@ -1388,8 +1439,8 @@ OptionalStringOrError X509CertificateModel::GetSubjectName() const {
 }
 
 std::vector<Extension> X509CertificateModel::GetExtensions(
-    base::StringPiece critical_label,
-    base::StringPiece non_critical_label) const {
+    std::string_view critical_label,
+    std::string_view non_critical_label) const {
   DCHECK(parsed_successfully_);
   std::vector<Extension> extensions;
   for (const auto& extension : extensions_) {
@@ -1446,10 +1497,10 @@ bool X509CertificateModel::ParseExtensions(
 }
 
 std::string X509CertificateModel::ProcessExtension(
-    base::StringPiece critical_label,
-    base::StringPiece non_critical_label,
+    std::string_view critical_label,
+    std::string_view non_critical_label,
     const bssl::ParsedExtension& extension) const {
-  base::StringPiece criticality =
+  std::string_view criticality =
       extension.critical ? critical_label : non_critical_label;
   std::optional<std::string> processed_extension =
       ProcessExtensionData(extension);
@@ -1509,7 +1560,10 @@ std::optional<std::string> X509CertificateModel::ProcessExtensionData(
       extension.oid == bssl::der::Input(kNetscapeLostPasswordURLOid)) {
     return ProcessIA5String(extension.value);
   }
-  // TODO(https://crbug.com/853550): SCT
+  if (extension.oid == bssl::der::Input(net::kQcStatementsOid)) {
+    return ProcessQcStatements(extension.value);
+  }
+  // TODO(crbug.com/41395047): SCT
   // TODO(mattm): name constraints
   // TODO(mattm): policy mappings
   // TODO(mattm): policy constraints
@@ -1550,7 +1604,7 @@ std::string X509CertificateModel::ProcessSubjectPublicKeyInfo() const {
 std::string X509CertificateModel::HashSpkiSHA256() const {
   DCHECK(parsed_successfully_);
   auto hash = crypto::SHA256Hash(tbs_.spki_tlv);
-  return base::ToLowerASCII(base::HexEncode(hash));
+  return base::HexEncodeLower(hash);
 }
 
 std::string X509CertificateModel::ProcessRawBitsSignatureWrap() const {
@@ -1558,7 +1612,7 @@ std::string X509CertificateModel::ProcessRawBitsSignatureWrap() const {
   return ProcessRawBytes(signature_value_.bytes());
 }
 
-// TODO(https://crbug.com/953425): move to anonymous namespace once
+// TODO(crbug.com/41453265): move to anonymous namespace once
 // x509_certificate_model_nss is removed.
 std::string ProcessIDN(const std::string& input) {
   if (!base::IsStringASCII(input))

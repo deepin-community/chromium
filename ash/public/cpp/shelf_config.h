@@ -75,7 +75,6 @@ class ASH_EXPORT ShelfConfig : public SessionObserver,
   void OnSessionStateChanged(session_manager::SessionState state) override;
 
   // DisplayObserver:
-  void OnDisplayTabletStateChanged(display::TabletState state) override;
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t changed_metrics) override;
 
@@ -84,6 +83,10 @@ class ASH_EXPORT ShelfConfig : public SessionObserver,
 
   // AppListControllerObserver:
   void OnAppListVisibilityWillChange(bool shown, int64_t display_id) override;
+
+  // Updates the shelf configuration to match the provided tablet mode state.
+  // Called during transitions to enter or exit tablet mode.
+  void UpdateForTabletMode(bool in_tablet_mode);
 
   // Whether the shelf control buttons must be shown for accessibility
   // reasons.
@@ -231,6 +234,7 @@ class ASH_EXPORT ShelfConfig : public SessionObserver,
   // Gets the default shelf color, calculated using the wallpaper color if
   // available.
   SkColor GetDefaultShelfColor(const views::Widget* widget) const;
+  ui::ColorId GetDefaultShelfColorId() const;
 
   // Returns the current blur radius to use for the control buttons.
   int GetShelfControlButtonBlurRadius() const;

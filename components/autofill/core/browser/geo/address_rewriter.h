@@ -5,11 +5,14 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_GEO_ADDRESS_REWRITER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_GEO_ADDRESS_REWRITER_H_
 
+#include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_piece.h"
-#include "base/strings/string_util.h"
+#include "components/autofill/core/browser/country_type.h"
+#include "third_party/icu/source/i18n/unicode/regex.h"
 
 namespace autofill {
 
@@ -20,11 +23,11 @@ class AddressRewriter {
  public:
   // Rewrites |text| using the rules for |country_code|.
   static std::u16string RewriteForCountryCode(
-      const std::u16string& country_code,
+      const AddressCountryCode& country_code,
       const std::u16string& normalized_text);
 
-  // Get an AddressRewrite instance which applies the rules for |country_code|.
-  static AddressRewriter ForCountryCode(const std::u16string& country_code);
+  // Get an AddressRewrite instance which applies the rules for `country_code`.
+  static AddressRewriter ForCountryCode(const AddressCountryCode& country_code);
 
   // Gets an AddressRewrite instance for tests with custom rules.
   static AddressRewriter ForCustomRules(const std::string& custom_rules);
@@ -33,8 +36,20 @@ class AddressRewriter {
   std::u16string Rewrite(const std::u16string& text) const;
 
  private:
+  // Aliases for the types used by the compiled rules cache.
+  using CompiledRule =
+      std::pair<std::unique_ptr<const icu::RegexPattern>, std::string>;
+  using CompiledRuleVector = std::vector<CompiledRule>;
+
+  class Cache;
+
+  explicit AddressRewriter(const CompiledRuleVector* compiled_rules);
+
+  static void CompileRulesFromData(std::string_view data_string,
+                                   CompiledRuleVector& compiled_rules);
+
   // A handle to the internal rewrite rules this instance is using.
-  raw_ptr<const void> impl_ = nullptr;
+  const raw_ptr<const CompiledRuleVector> compiled_rules_ = nullptr;
 };
 
 }  // namespace autofill

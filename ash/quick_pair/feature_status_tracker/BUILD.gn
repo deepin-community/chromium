@@ -2,10 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
-assert(is_chromeos_ash,
-       "Quick Pair protocols (e.g. Fast Pair) are ash-chrome only")
+assert(is_chromeos, "Quick Pair protocols (e.g. Fast Pair) are ash-chrome only")
 
 static_library("feature_status_tracker") {
   sources = [
@@ -32,6 +29,8 @@ static_library("feature_status_tracker") {
     "quick_pair_feature_status_tracker.h",
     "quick_pair_feature_status_tracker_impl.cc",
     "quick_pair_feature_status_tracker_impl.h",
+    "scanning_enabled_provider.cc",
+    "scanning_enabled_provider.h",
     "screen_state_enabled_provider.cc",
     "screen_state_enabled_provider.h",
   ]
@@ -41,7 +40,7 @@ static_library("feature_status_tracker") {
     "//ash/public/cpp",
     "//ash/quick_pair/common",
     "//base",
-    "//components/cross_device/logging:logging",
+    "//components/cross_device/logging",
     "//components/prefs",
     "//device/bluetooth",
     "//google_apis",
@@ -57,16 +56,24 @@ static_library("test_support") {
   sources = [
     "fake_feature_status_tracker.cc",
     "fake_feature_status_tracker.h",
+    "mock_battery_saver_active_provider.cc",
+    "mock_battery_saver_active_provider.h",
     "mock_bluetooth_enabled_provider.cc",
     "mock_bluetooth_enabled_provider.h",
     "mock_fast_pair_pref_enabled_provider.cc",
     "mock_fast_pair_pref_enabled_provider.h",
     "mock_google_api_key_availability_provider.cc",
     "mock_google_api_key_availability_provider.h",
+    "mock_hardware_offloading_supported_provider.cc",
+    "mock_hardware_offloading_supported_provider.h",
     "mock_logged_in_user_enabled_provider.cc",
     "mock_logged_in_user_enabled_provider.h",
+    "mock_power_connected_provider.cc",
+    "mock_power_connected_provider.h",
     "mock_quick_pair_feature_status_tracker.cc",
     "mock_quick_pair_feature_status_tracker.h",
+    "mock_scanning_enabled_provider.cc",
+    "mock_scanning_enabled_provider.h",
     "mock_screen_state_enabled_provider.cc",
     "mock_screen_state_enabled_provider.h",
     "quick_pair_feature_status_tracker.h",
@@ -95,6 +102,7 @@ source_set("unit_tests") {
     "hardware_offloading_supported_provider_unittest.cc",
     "logged_in_user_enabled_provider_unittest.cc",
     "power_connected_provider_unittest.cc",
+    "scanning_enabled_provider_unittest.cc",
     "screen_state_enabled_provider_unittest.cc",
   ]
 

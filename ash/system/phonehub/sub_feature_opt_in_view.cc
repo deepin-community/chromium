@@ -14,8 +14,10 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/chromeos/devicetype_utils.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout_view.h"
@@ -142,18 +144,16 @@ void SubFeatureOptInView::SetStringIds() {
 
 void SubFeatureOptInView::UpdateLabels() {
   text_label_->SetText(l10n_util::GetStringUTF16(description_string_id_));
-  set_up_button_->SetAccessibleName(
+  set_up_button_->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(set_up_button_accessible_name_string_id_));
-  dismiss_button_->SetAccessibleName(
+  dismiss_button_->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(dismiss_button_accessible_name_string_id_));
 }
 
 void SubFeatureOptInView::InitLayout() {
-  // TODO(b/322067753): Replace usage of |AshColorProvider| with |cros_tokens|.
-  const SkColor border_color = AshColorProvider::Get()->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kSeparatorColor);
-  SetBorder(views::CreateRoundedRectBorder(
-      kBorderThicknessDip, kBorderCornerRadiusDip, border_color));
+  SetBorder(views::CreateRoundedRectBorder(kBorderThicknessDip,
+                                           kBorderCornerRadiusDip,
+                                           cros_tokens::kSeparatorColor));
 
   auto* layout = SetLayoutManager(std::make_unique<views::FlexLayout>());
   layout->SetOrientation(views::LayoutOrientation::kVertical);
@@ -164,15 +164,9 @@ void SubFeatureOptInView::InitLayout() {
   // Set up layout row for the text label.
   text_label_ = AddChildView(std::make_unique<views::Label>());
   text_label_->SetProperty(views::kCrossAxisAlignmentKey,
-                           views::LayoutAlignment::kCenter);
+                           views::LayoutAlignment::kStart);
   text_label_->SetProperty(views::kMarginsKey, kTextLabelBorderInsets);
-  text_label_->SetProperty(
-      views::kFlexBehaviorKey,
-      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToMinimum,
-                               views::MaximumFlexSizeRule::kUnbounded, true));
-  auto text_color = AshColorProvider::Get()->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kTextColorPrimary);
-  text_label_->SetEnabledColor(text_color);
+  text_label_->SetEnabledColor(cros_tokens::kTextColorPrimary);
   text_label_->SetAutoColorReadabilityEnabled(false);
   auto default_font = text_label_->font_list();
   text_label_->SetFontList(default_font
@@ -202,23 +196,23 @@ void SubFeatureOptInView::InitLayout() {
           IDS_ASH_PHONE_HUB_SUB_FEATURE_OPT_IN_DISMISS_BUTTON),
       PillButton::Type::kFloatingWithoutIcon, /*icon=*/nullptr));
   dismiss_button_->SetID(kSubFeatureOptInDismissButton);
-  dismiss_button_->SetAccessibleName(
+  dismiss_button_->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(dismiss_button_accessible_name_string_id_));
   set_up_button_ = button_container->AddChildView(std::make_unique<PillButton>(
       base::BindRepeating(&SubFeatureOptInView::SetUpButtonPressed,
                           base::Unretained(this)),
       l10n_util::GetStringUTF16(
           IDS_ASH_PHONE_HUB_NOTIFICATION_OPT_IN_SET_UP_BUTTON),
-      PillButton::Type::kDefaultWithoutIcon, /*icon=*/nullptr));
+      PillButton::Type::kPrimaryWithoutIcon, /*icon=*/nullptr));
   set_up_button_->SetID(kSubFeatureOptInConfirmButton);
-  set_up_button_->SetAccessibleName(
+  set_up_button_->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(set_up_button_accessible_name_string_id_));
 
   // By default, the description will be set to the tooltip text, but the title
   // is already announced in the accessible name.
-  set_up_button_->SetAccessibleDescription(
+  set_up_button_->GetViewAccessibility().SetDescription(
       u"", ax::mojom::DescriptionFrom::kAttributeExplicitlyEmpty);
-  dismiss_button_->SetAccessibleDescription(
+  dismiss_button_->GetViewAccessibility().SetDescription(
       u"", ax::mojom::DescriptionFrom::kAttributeExplicitlyEmpty);
 }
 

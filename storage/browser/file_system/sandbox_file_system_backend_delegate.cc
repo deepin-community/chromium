@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_error_or.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -25,7 +24,6 @@
 #include "storage/browser/file_system/file_system_operation_context.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "storage/browser/file_system/file_system_usage_cache.h"
-#include "storage/browser/file_system/file_system_util.h"
 #include "storage/browser/file_system/obfuscated_file_util.h"
 #include "storage/browser/file_system/obfuscated_file_util_memory_delegate.h"
 #include "storage/browser/file_system/quota/quota_backend_impl.h"
@@ -44,7 +42,7 @@ namespace storage {
 
 namespace {
 
-int64_t kMinimumStatsCollectionIntervalHours = 1;
+constexpr int64_t kMinimumStatsCollectionIntervalHours = 1;
 
 // For type directory names in ObfuscatedFileUtil.
 // TODO(kinuko,nhiroki): Each type string registration should be done
@@ -141,7 +139,6 @@ std::string SandboxFileSystemBackendDelegate::GetTypeString(
     case kFileSystemTypeUnknown:
     default:
       NOTREACHED() << "Unknown filesystem type requested:" << type;
-      return std::string();
   }
 }
 
@@ -349,7 +346,7 @@ void SandboxFileSystemBackendDelegate::PerformStorageCleanupOnFileTaskRunner(
 }
 
 std::vector<blink::StorageKey>
-SandboxFileSystemBackendDelegate::GetStorageKeysForTypeOnFileTaskRunner(
+SandboxFileSystemBackendDelegate::GetDefaultStorageKeysOnFileTaskRunner(
     FileSystemType type) {
   DCHECK(file_task_runner_->RunsTasksInCurrentSequence());
   std::unique_ptr<StorageKeyEnumerator> enumerator(
@@ -369,8 +366,7 @@ int64_t SandboxFileSystemBackendDelegate::GetBucketUsageOnFileTaskRunner(
     FileSystemType type) {
   DCHECK(file_task_runner_->RunsTasksInCurrentSequence());
 
-  if (base::Contains(
-          sticky_dirty_origins_,
+  if (sticky_dirty_origins_.contains(
           std::make_pair(bucket_locator.storage_key.origin(), type))) {
     return RecalculateBucketUsage(file_system_context, bucket_locator, type);
   }

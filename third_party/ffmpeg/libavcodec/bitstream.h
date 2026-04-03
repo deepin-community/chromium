@@ -82,6 +82,7 @@
 # define bits_init8         bits_init8_le
 # define bits_tell          bits_tell_le
 # define bits_size          bits_size_le
+# define bits_bytesize      bits_bytesize_le
 # define bits_left          bits_left_le
 # define bits_read_bit      bits_read_bit_le
 # define bits_read_nz       bits_read_nz_le
@@ -103,7 +104,6 @@
 # define bits_apply_sign    bits_apply_sign_le
 # define bits_read_vlc      bits_read_vlc_le
 # define bits_read_vlc_multi bits_read_vlc_multi_le
-# define bits_read_leb      bits_read_leb_le
 
 #elif defined(BITS_DEFAULT_BE)
 
@@ -112,6 +112,7 @@
 # define bits_init8         bits_init8_be
 # define bits_tell          bits_tell_be
 # define bits_size          bits_size_be
+# define bits_bytesize      bits_bytesize_be
 # define bits_left          bits_left_be
 # define bits_read_bit      bits_read_bit_be
 # define bits_read_nz       bits_read_nz_be
@@ -133,7 +134,6 @@
 # define bits_apply_sign    bits_apply_sign_be
 # define bits_read_vlc      bits_read_vlc_be
 # define bits_read_vlc_multi bits_read_vlc_multi_be
-# define bits_read_leb      bits_read_leb_be
 
 #endif
 

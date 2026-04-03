@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ash/webui/camera_app_ui/camera_app_untrusted_ui.h"
 
 #include <string>
@@ -23,8 +24,7 @@ void CreateAndAddUntrustedCameraAppUIHTMLSource(
   content::WebUIDataSource* untrusted_source =
       content::WebUIDataSource::CreateAndAdd(browser_context,
                                              kChromeUIUntrustedCameraAppURL);
-  untrusted_source->AddResourcePaths(
-      base::make_span(kAshCameraAppResources, kAshCameraAppResourcesSize));
+  untrusted_source->AddResourcePaths(kAshCameraAppResources);
   untrusted_source->AddFrameAncestor(GURL(kChromeUICameraAppURL));
 
   untrusted_source->OverrideContentSecurityPolicy(

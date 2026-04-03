@@ -8,18 +8,17 @@
 #include <stddef.h>
 
 #include <functional>
-#include <map>
 #include <set>
 #include <string>
 
 #include "base/files/file_path.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/threading/thread_checker.h"
-#include "base/time/time.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "components/history/core/browser/history_db_task.h"
 #include "components/history/core/browser/history_service.h"
@@ -97,12 +96,8 @@ class InMemoryURLIndex : public KeyedService,
   ScoredHistoryMatches HistoryItemsForTerms(
       const std::u16string& term_string,
       size_t cursor_position,
-      const std::string& host_filter,
       size_t max_matches,
       OmniboxTriggeredFeatureService* triggered_feature_service);
-
-  // Returns URL hosts that have been visited more than a threshold.
-  const std::vector<std::string>& HighlyVisitedHosts() const;
 
   // Deletes the index entry, if any, for the given |url|.
   void DeleteURL(const GURL& url);
@@ -116,13 +111,14 @@ class InMemoryURLIndex : public KeyedService,
   friend class history::HQPPerfTestOnePopularURL;
   friend class InMemoryURLIndexTest;
   FRIEND_TEST_ALL_PREFIXES(InMemoryURLIndexTest, ExpireRow);
+  FRIEND_TEST_ALL_PREFIXES(InMemoryURLIndexTest, OnURLVisited);
   FRIEND_TEST_ALL_PREFIXES(LimitedInMemoryURLIndexTest, Initialization);
 
   // HistoryDBTask used to rebuild our private data from the history database.
   class RebuildPrivateDataFromHistoryDBTask : public history::HistoryDBTask {
    public:
     explicit RebuildPrivateDataFromHistoryDBTask(
-        InMemoryURLIndex* index,
+        base::WeakPtr<InMemoryURLIndex> index,
         const SchemeSet& scheme_allowlist);
     RebuildPrivateDataFromHistoryDBTask(
         const RebuildPrivateDataFromHistoryDBTask&) = delete;
@@ -135,14 +131,11 @@ class InMemoryURLIndex : public KeyedService,
     void DoneRunOnMainThread() override;
 
    private:
-    raw_ptr<InMemoryURLIndex, AcrossTasksDanglingUntriaged>
+    base::WeakPtr<InMemoryURLIndex>
         index_;                   // Call back to this index at completion.
     SchemeSet scheme_allowlist_;  // Schemes to be indexed.
     bool succeeded_ = false;      // Indicates if the rebuild was successful.
     scoped_refptr<URLIndexPrivateData> data_;  // The rebuilt private data.
-    // When the task was first requested from the main thread. This is the same
-    // time as when this task object is constructed.
-    const base::TimeTicks task_creation_time_;
   };
 
   // Clears the in-memory cache entirely. Called when History is cleared.
@@ -166,12 +159,11 @@ class InMemoryURLIndex : public KeyedService,
 
   // HistoryServiceObserver:
   void OnURLVisited(history::HistoryService* history_service,
-                    const history::URLRow& url_row,
-                    const history::VisitRow& new_visit) override;
+                    const history::VisitedURLInfo& visited_url_info) override;
   void OnURLsModified(history::HistoryService* history_service,
                       const history::URLRows& changed_urls) override;
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override;
 
   // MemoryDumpProvider:
   bool OnMemoryDump(
@@ -222,6 +214,7 @@ class InMemoryURLIndex : public KeyedService,
       history_service_observation_{this};
 
   base::ThreadChecker thread_checker_;
+  base::WeakPtrFactory<InMemoryURLIndex> weak_ptr_factory_{this};
 };
 
 #endif  // COMPONENTS_OMNIBOX_BROWSER_IN_MEMORY_URL_INDEX_H_

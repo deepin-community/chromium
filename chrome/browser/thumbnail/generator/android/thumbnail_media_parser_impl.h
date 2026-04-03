@@ -50,7 +50,7 @@ class ThumbnailMediaParserImpl : public ThumbnailMediaParser,
   void Start(ParseCompleteCB parse_complete_cb) override;
 
  private:
-  void OnReadFileSize(int64_t file_size);
+  void OnReadFileSize(std::optional<int64_t> file_size);
 
   // MediaParserProvider implementation:
   void OnMediaParserCreated() override;
@@ -81,7 +81,7 @@ class ThumbnailMediaParserImpl : public ThumbnailMediaParser,
   // Overlays media data source read operation. Gradually read data from media
   // file.
   void OnMediaDataReady(chrome::mojom::MediaDataSource::ReadCallback callback,
-                        std::unique_ptr<std::string> data);
+                        std::string data);
 
   void NotifyComplete(SkBitmap bitmap);
   void OnError(MediaParserEvent event);

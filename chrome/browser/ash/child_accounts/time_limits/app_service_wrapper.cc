@@ -20,6 +20,7 @@
 #include "chrome/browser/ash/child_accounts/time_limits/app_types.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
+#include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/app_update.h"
 #include "components/services/app_service/public/cpp/icon_effects.h"
 #include "components/services/app_service/public/cpp/instance_update.h"
@@ -29,8 +30,7 @@
 #include "extensions/common/extension.h"
 #include "ui/gfx/image/image_skia.h"
 
-namespace ash {
-namespace app_time {
+namespace ash::app_time {
 
 namespace {
 
@@ -107,12 +107,14 @@ std::vector<AppId> AppServiceWrapper::GetInstalledApps() const {
   std::vector<AppId> installed_apps;
   GetAppCache().ForEachApp(
       [&installed_apps, this](const apps::AppUpdate& update) {
-        if (!apps_util::IsInstalled(update.Readiness()))
+        if (!apps_util::IsInstalled(update.Readiness())) {
           return;
+        }
 
         const AppId app_id = AppIdFromAppUpdate(update);
-        if (!ShouldIncludeApp(app_id))
+        if (!ShouldIncludeApp(app_id)) {
           return;
+        }
 
         installed_apps.push_back(app_id);
       });
@@ -120,16 +122,18 @@ std::vector<AppId> AppServiceWrapper::GetInstalledApps() const {
 }
 
 bool AppServiceWrapper::IsHiddenArcApp(const AppId& app_id) const {
-  if (app_id.app_type() != apps::AppType::kArc)
+  if (app_id.app_type() != apps::AppType::kArc) {
     return false;
+  }
 
   bool is_hidden = false;
   const std::string app_service_id = AppServiceIdFromAppId(app_id, profile_);
 
   GetAppCache().ForOneApp(
       app_service_id, [&is_hidden](const apps::AppUpdate& update) {
-        if (!apps_util::IsInstalled(update.Readiness()))
+        if (!apps_util::IsInstalled(update.Readiness())) {
           return;
+        }
 
         is_hidden = !update.ShowInLauncher().value_or(false);
       });
@@ -140,8 +144,9 @@ bool AppServiceWrapper::IsHiddenArcApp(const AppId& app_id) const {
 std::vector<AppId> AppServiceWrapper::GetHiddenArcApps() const {
   std::vector<AppId> hidden_arc_apps;
   GetAppCache().ForEachApp([&hidden_arc_apps](const apps::AppUpdate& update) {
-    if (!apps_util::IsInstalled(update.Readiness()))
+    if (!apps_util::IsInstalled(update.Readiness())) {
       return;
+    }
 
     const AppId app_id = AppIdFromAppUpdate(update);
     if (app_id.app_type() != apps::AppType::kArc ||
@@ -221,16 +226,18 @@ void AppServiceWrapper::RemoveObserver(EventListener* listener) {
 }
 
 void AppServiceWrapper::OnAppUpdate(const apps::AppUpdate& update) {
-  if (!update.ReadinessChanged())
+  if (!update.ReadinessChanged()) {
     return;
+  }
 
   const AppId app_id = AppIdFromAppUpdate(update);
-  if (!ShouldIncludeApp(app_id))
+  if (!ShouldIncludeApp(app_id)) {
     return;
+  }
 
   switch (update.Readiness()) {
     case apps::Readiness::kReady:
-      for (auto& listener : listeners_)
+      for (auto& listener : listeners_) {
         if (update.StateIsNull()) {
           // It is the first update about this app.
           // Note that AppService does not store info between sessions and this
@@ -239,17 +246,21 @@ void AppServiceWrapper::OnAppUpdate(const apps::AppUpdate& update) {
         } else {
           listener.OnAppAvailable(app_id);
         }
+      }
       break;
     case apps::Readiness::kUninstalledByUser:
     case apps::Readiness::kUninstalledByNonUser:
-      for (auto& listener : listeners_)
+      for (auto& listener : listeners_) {
         listener.OnAppUninstalled(app_id);
+      }
       break;
     case apps::Readiness::kDisabledByUser:
     case apps::Readiness::kDisabledByPolicy:
     case apps::Readiness::kDisabledByBlocklist:
-      for (auto& listener : listeners_)
+    case apps::Readiness::kDisabledByLocalSettings:
+      for (auto& listener : listeners_) {
         listener.OnAppBlocked(app_id);
+      }
       break;
     default:
       break;
@@ -262,8 +273,9 @@ void AppServiceWrapper::OnAppRegistryCacheWillBeDestroyed(
 }
 
 void AppServiceWrapper::OnInstanceUpdate(const apps::InstanceUpdate& update) {
-  if (!update.StateChanged())
+  if (!update.StateChanged()) {
     return;
+  }
 
   bool is_active = update.State() & apps::InstanceState::kActive;
   bool is_destroyed = update.State() & apps::InstanceState::kDestroyed;
@@ -310,8 +322,9 @@ apps::InstanceRegistry& AppServiceWrapper::GetInstanceRegistry() const {
 }
 
 bool AppServiceWrapper::ShouldIncludeApp(const AppId& app_id) const {
-  if (IsHiddenArcApp(app_id))
+  if (IsHiddenArcApp(app_id)) {
     return false;
+  }
 
   if (app_id.app_type() == apps::AppType::kChromeApp) {
     const extensions::Extension* extension =
@@ -320,8 +333,9 @@ bool AppServiceWrapper::ShouldIncludeApp(const AppId& app_id) const {
             extensions::ExtensionRegistry::IncludeFlag::EVERYTHING);
 
     // If we are not able to find the extension, return false.
-    if (!extension)
+    if (!extension) {
       return false;
+    }
 
     // Some preinstalled apps that open in browser window are legacy packaged
     // apps. Example Google Slides app.
@@ -332,5 +346,4 @@ bool AppServiceWrapper::ShouldIncludeApp(const AppId& app_id) const {
          app_id.app_type() == apps::AppType::kWeb;
 }
 
-}  // namespace app_time
-}  // namespace ash
+}  // namespace ash::app_time

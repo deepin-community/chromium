@@ -22,7 +22,7 @@ export function eventToPromise(eventType: string, target: EventTarget) {
 // Test web workers can be spawned from chrome-untrusted://media-app. Errors
 // will be logged in console from web_ui_browser_test.cc.
 GUEST_TEST('GuestCanSpawnWorkers', async () => {
-  const worker = new Worker('test_worker.js');
+  const worker = new Worker('test_worker.js', {type: 'module'});
   const workerResponse = new Promise<MessageEvent>((resolve, reject) => {
     /**
      * Registers onmessage event handler.
@@ -57,7 +57,7 @@ GUEST_TEST('GuestLoadsLoadTimeData', () => {
 // Test can load files with CSP restrictions. We expect `error` to be called
 // as these tests are loading resources that don't exist. Note: we can't violate
 // CSP in tests or Js Errors will cause test failures.
-// TODO(crbug/1148090): PDF loading tests should also appear here, they are
+// TODO(crbug.com/40156902): PDF loading tests should also appear here, they are
 // currently in media_app_integration_browsertest.cc due to 'wasm-eval' JS
 // errors.
 GUEST_TEST('GuestCanLoadWithCspRestrictions', async () => {

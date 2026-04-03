@@ -11,6 +11,7 @@
 
 #include "base/functional/callback_helpers.h"
 #include "base/unguessable_token.h"
+#include "base/uuid.h"
 #include "build/build_config.h"
 #include "content/common/frame.mojom.h"
 #include "content/common/frame_messages.mojom.h"
@@ -25,10 +26,10 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/data_url.h"
 #include "services/network/public/cpp/not_implemented_url_loader_factory.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/common/permissions_policy/permissions_policy.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom.h"
 #include "third_party/blink/public/mojom/frame/frame_replication_state.mojom.h"
 #include "third_party/blink/public/mojom/navigation/navigation_params.mojom.h"
@@ -184,9 +185,10 @@ class MockFrameHost : public mojom::FrameHost {
       blink::mojom::BeginNavigationParamsPtr begin_params,
       mojo::PendingRemote<blink::mojom::BlobURLToken> blob_url_token,
       mojo::PendingAssociatedRemote<mojom::NavigationClient>,
-      mojo::PendingRemote<blink::mojom::PolicyContainerHostKeepAliveHandle>,
-      mojo::PendingReceiver<mojom::NavigationRendererCancellationListener>)
-      override {}
+      mojo::PendingRemote<blink::mojom::NavigationStateKeepAliveHandle>,
+      mojo::PendingReceiver<mojom::NavigationRendererCancellationListener>,
+      mojo::PendingReceiver<
+          blink::mojom::NavigationResumeDeferredCommitListener>) override {}
 
   void SubresourceResponseStarted(const url::SchemeHostPort& final_response_url,
                                   net::CertStatus cert_status) override {}
@@ -269,8 +271,9 @@ void TestRenderFrame::Navigate(
       /*subresource_proxying_loader_factory=*/mojo::NullRemote(),
       /*keep_alive_loader_factory=*/mojo::NullRemote(),
       /*fetch_later_loader_factory=*/mojo::NullAssociatedRemote(),
-      blink::DocumentToken(), base::UnguessableToken::Create(),
-      blink::ParsedPermissionsPolicy(),
+      /*document_token=*/blink::DocumentToken(),
+      /*devtools_navigation_token=*/base::UnguessableToken::Create(),
+      /*base_auction_nonce=*/base::Uuid::GenerateRandomV4(),
       blink::mojom::PolicyContainer::New(
           blink::mojom::PolicyContainerPolicies::New(),
           mock_policy_container_host.BindNewEndpointAndPassDedicatedRemote()),
@@ -306,7 +309,7 @@ void TestRenderFrame::NavigateWithError(
       /*has_stale_copy_in_cache=*/false, error_code,
       /*extended_error_code=*/0, resolve_error_info, error_page_content,
       std::move(pending_factory_bundle), blink::DocumentToken(),
-      CreateStubPolicyContainer(),
+      base::UnguessableToken::Create(), CreateStubPolicyContainer(),
       /*alternative_error_page_info=*/nullptr,
       base::BindOnce(&MockFrameHost::DidCommitProvisionalLoad,
                      base::Unretained(mock_frame_host_.get())));
@@ -394,7 +397,10 @@ void TestRenderFrame::SimulateBeforeUnload(bool is_reload) {
   // local descendant frames, including children of remote frames. The browser
   // process will send separate IPCs to dispatch beforeunload in any
   // out-of-process child frames.
-  frame_->DispatchBeforeUnloadEvent(is_reload);
+  base::TimeTicks before_unload_dialog_opened_time;
+  base::TimeTicks before_unload_dialog_closed_time;
+  frame_->DispatchBeforeUnloadEvent(is_reload, before_unload_dialog_opened_time,
+                                    before_unload_dialog_closed_time);
 }
 
 bool TestRenderFrame::IsPageStateUpdated() const {

@@ -15,41 +15,52 @@ limitations under the License.
 
 #include "tensorflow/core/common_runtime/pluggable_device/pluggable_device_process_state.h"
 
+#include <cstdint>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/memory/memory.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
 #include "tensorflow/c/experimental/stream_executor/stream_executor_internal.h"
-#include "xla/stream_executor/integrations/device_mem_allocator.h"
-#include "tensorflow/core/common_runtime/device/device_host_allocator.h"
+#include "xla/stream_executor/integrations/stream_executor_allocator.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/framework/device_id_utils.h"
+#include "xla/tsl/platform/status.h"
+#include "tensorflow/core/common_runtime/bfc_allocator.h"
 #include "tensorflow/core/common_runtime/device/device_id.h"
 #include "tensorflow/core/common_runtime/device/device_id_manager.h"
 #include "tensorflow/core/common_runtime/device/device_mem_allocator.h"
-#include "tensorflow/core/common_runtime/device_factory.h"
 #include "tensorflow/core/common_runtime/device_id_utils.h"
 #include "tensorflow/core/common_runtime/pluggable_device/pluggable_device_bfc_allocator.h"
 #include "tensorflow/core/common_runtime/pluggable_device/pluggable_device_init.h"
 #include "tensorflow/core/common_runtime/pluggable_device/pluggable_device_simple_allocator.h"
-#include "tensorflow/core/common_runtime/pool_allocator.h"
-#include "tensorflow/core/common_runtime/shared_counter.h"
+#include "tensorflow/core/common_runtime/process_state.h"
 #include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/log_memory.h"
 #include "tensorflow/core/framework/tracking_allocator.h"
+#include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/lib/strings/strcat.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/mutex.h"
-#include "tensorflow/core/platform/stream_executor.h"
+#include "tensorflow/core/platform/numa.h"
+#include "tensorflow/core/platform/status.h"
 #include "tensorflow/core/platform/types.h"
+#include "tensorflow/core/protobuf/config.pb.h"
 #include "tensorflow/core/util/env_var.h"
-#include "tsl/framework/device_id_utils.h"
 
 namespace tensorflow {
 
 /*static*/ PluggableDeviceProcessState* PluggableDeviceProcessState::singleton(
-    const string& device_type, const string& platform_name) {
+    const std::string& device_type, const std::string& platform_name) {
   using ProcessStateMap =
-      std::unordered_map<string, PluggableDeviceProcessState*>;
+      std::unordered_map<std::string, PluggableDeviceProcessState*>;
   static ProcessStateMap* process_state_map = new ProcessStateMap;
   auto iter = process_state_map->find(platform_name);
   if (iter != process_state_map->end()) {
@@ -61,7 +72,7 @@ namespace tensorflow {
 }
 
 PluggableDeviceProcessState::PluggableDeviceProcessState(
-    const string& device_type, const string& platform_name)
+    const std::string& device_type, const std::string& platform_name)
     : pluggable_device_enabled_(false),
       device_type_(device_type),
       platform_name_(platform_name) {
@@ -83,7 +94,7 @@ int PluggableDeviceProcessState::BusIdForPluggableDevice(
 Allocator* PluggableDeviceProcessState::GetPluggableDeviceAllocator(
     const GPUOptions& options, TfDeviceId tf_device_id, size_t total_bytes) {
   DCHECK(process_state_);
-  const string& allocator_type = options.allocator_type();
+  const std::string& allocator_type = options.allocator_type();
   se::Platform* platform = PluggableDeviceMachineManager(platform_name_);
   mutex_lock lock(mu_);
   tsl::CheckValidTfDeviceId(DeviceType(device_type_),
@@ -108,19 +119,24 @@ Allocator* PluggableDeviceProcessState::GetPluggableDeviceAllocator(
 
     int bus_id = BusIdForPluggableDevice(tf_device_id);
     DCHECK_GE(bus_id, 0);
-    while (bus_id >= pluggable_device_visitors_.size()) {
-      pluggable_device_visitors_.push_back({});
-    }
 
     bool use_unified_memory = options.per_process_gpu_memory_fraction() > 1.0 ||
                               options.experimental().use_unified_memory();
-    DeviceMemAllocator* sub_allocator = new DeviceMemAllocator(
-        platform->ExecutorForDevice(platform_device_id.value()).value(),
-        platform_device_id,
-        use_unified_memory ? stream_executor::MemoryType::kUnified
-                           : stream_executor::MemoryType::kDevice,
-        pluggable_device_visitors_[bus_id], {});
-
+    SubAllocator* sub_allocator = nullptr;
+    if (use_unified_memory) {
+      auto unified_memory_allocator =
+          platform->ExecutorForDevice(platform_device_id.value())
+              .value()
+              ->CreateMemoryAllocator(stream_executor::MemorySpace::kUnified)
+              .value();
+      sub_allocator = new stream_executor::StreamExecutorAllocator(
+          std::move(unified_memory_allocator),
+          stream_executor::MemorySpace::kUnified, platform_device_id.value());
+    } else {
+      sub_allocator = new DeviceMemAllocator(
+          platform->ExecutorForDevice(platform_device_id.value()).value(),
+          platform_device_id);
+    }
     Allocator* device_allocator = nullptr;
     auto cplatform = dynamic_cast<se::CPlatform*>(platform);
     if (cplatform == nullptr) {
@@ -130,7 +146,7 @@ Allocator* PluggableDeviceProcessState::GetPluggableDeviceAllocator(
     if (cplatform->UseBfcAllocator()) {
       device_allocator = new PluggableDeviceBFCAllocator(
           sub_allocator, total_bytes, options,
-          strings::StrCat("PluggableDevice_", tf_device_id.value(), "_bfc"),
+          absl::StrCat("PluggableDevice_", tf_device_id.value(), "_bfc"),
           cplatform->ForceMemoryGrowth());
     } else {
       device_allocator = new PluggableDeviceSimpleAllocator(sub_allocator);
@@ -182,19 +198,15 @@ Allocator* PluggableDeviceProcessState::GetPluggableDeviceHostAllocator(
 
   while (static_cast<int>(pluggable_device_host_allocators_.size()) <=
          numa_node) {
-    while (pluggable_device_host_alloc_visitors_.size() <= numa_node) {
-      pluggable_device_host_alloc_visitors_.push_back({});
-    }
-    while (pluggable_device_host_free_visitors_.size() <= numa_node) {
-      pluggable_device_host_free_visitors_.push_back({});
-    }
-    SubAllocator* sub_allocator = new DeviceHostAllocator(
-        se, numa_node, pluggable_device_host_alloc_visitors_[numa_node],
-        pluggable_device_host_free_visitors_[numa_node]);
+    auto host_memory_allocator =
+        se->CreateMemoryAllocator(stream_executor::MemorySpace::kHost).value();
+    tsl::SubAllocator* sub_allocator = new se::StreamExecutorAllocator(
+        std::move(host_memory_allocator), stream_executor::MemorySpace::kHost,
+        numa_node);
     int64_t pluggable_device_host_mem_limit_in_mb = -1;
-    Status status = ReadInt64FromEnvVar("TF_GPU_HOST_MEM_LIMIT_IN_MB",
-                                        1LL << 17 /*128GB max by default*/,
-                                        &pluggable_device_host_mem_limit_in_mb);
+    absl::Status status = ReadInt64FromEnvVar(
+        "TF_GPU_HOST_MEM_LIMIT_IN_MB", 1LL << 17 /*128GB max by default*/,
+        &pluggable_device_host_mem_limit_in_mb);
     if (!status.ok()) {
       LOG(ERROR) << "GetPluggableDeviceHostAllocator: " << status.message();
     }

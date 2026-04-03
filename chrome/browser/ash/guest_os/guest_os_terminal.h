@@ -7,10 +7,9 @@
 
 #include <vector>
 
-#include "base/containers/fixed_flat_map.h"
+#include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
 #include "base/values.h"
-#include "chrome/browser/ash/guest_os/guest_id.h"
 #include "components/services/app_service/public/cpp/intent.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/display/types/display_constants.h"
@@ -23,6 +22,8 @@ struct MenuItems;
 class Profile;
 
 namespace guest_os {
+
+struct GuestId;
 
 // web_app::GenerateAppId(/*manifest_id=*/std::nullopt,
 //     GURL("chrome-untrusted://terminal/html/terminal.html"))
@@ -177,7 +178,7 @@ std::string ShortcutIdFromContainerId(Profile* profile,
 
 // Parse Intent extras from shortcut ID.
 base::flat_map<std::string, std::string> ExtrasFromShortcutId(
-    const base::Value::Dict& shortcut);
+    const base::DictValue& shortcut);
 
 // Returns list of SSH connections {<profile-id>, <description>}.
 std::vector<std::pair<std::string, std::string>> GetSSHConnections(

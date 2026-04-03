@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -293,4 +293,21 @@ class PerfettoFunction(TestSuite):
         13,1
         14,1
         15,1
+      """))
+
+  def test_create_function_variadic_delegate(self):
+    return DiffTestBlueprint(
+        trace=TextProto(""),
+        query="""
+        CREATE PERFETTO FUNCTION my_hash(args ANY...) RETURNS INT
+        DELEGATES TO hash;
+
+        SELECT
+          my_hash(1, 'hello', 42) as h1,
+          my_hash('single_arg') as h2,
+          my_hash(1, 2, 3, 4, 5) as h3;
+      """,
+        out=Csv("""
+        "h1","h2","h3"
+        4730678220997103486,1309196097616646754,-6396149620914793052
       """))

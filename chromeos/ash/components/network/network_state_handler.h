@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -128,10 +129,10 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkStateHandler
   using Observer = NetworkStateHandlerObserver;
 
   void AddObserver(Observer* observer, const base::Location& from_here);
-  void AddObserver(Observer* observer);
+  virtual void AddObserver(Observer* observer);
 
   void RemoveObserver(Observer* observer, const base::Location& from_here);
-  void RemoveObserver(Observer* observer);
+  virtual void RemoveObserver(Observer* observer);
 
   bool HasObserver(Observer* observer) {
     return observers_.HasObserver(observer);
@@ -220,11 +221,6 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkStateHandler
   // Calls NetworkState::set_shill_connect_error_ for |service_path|.
   void SetShillConnectError(const std::string& service_path,
                             const std::string& shill_connect_error);
-
-  // Called from Chrome's network portal detector when Chrome has detected
-  // that a network is in a captive portal state.
-  void SetNetworkChromePortalState(const std::string& service_path,
-                                   NetworkState::PortalState portal_state);
 
   // Returns the aa:bb formatted hardware (MAC) address for the first connected
   // network matching |type|, or an empty string if none is connected.
@@ -484,18 +480,17 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkStateHandler
   // This adds new entries to |network_list_| or |device_list_| and deletes any
   // entries that are no longer in the list.
   void UpdateManagedList(ManagedState::ManagedType type,
-                         const base::Value::List& entries) override;
+                         const base::ListValue& entries) override;
 
   // The list of profiles changed (i.e. a user has logged in). Re-request
   // properties for all services since they may have changed.
-  void ProfileListChanged(const base::Value::List& profile_list) override;
+  void ProfileListChanged(const base::ListValue& profile_list) override;
 
   // Parses the properties for the network service or device. Mostly calls
   // managed->PropertyChanged(key, value) for each dictionary entry.
-  void UpdateManagedStateProperties(
-      ManagedState::ManagedType type,
-      const std::string& path,
-      const base::Value::Dict& properties) override;
+  void UpdateManagedStateProperties(ManagedState::ManagedType type,
+                                    const std::string& path,
+                                    const base::DictValue& properties) override;
 
   // Called by ShillPropertyHandler when a watched service property changes.
   void UpdateNetworkServiceProperty(const std::string& service_path,
@@ -512,7 +507,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkStateHandler
   void UpdateIPConfigProperties(ManagedState::ManagedType type,
                                 const std::string& path,
                                 const std::string& ip_config_path,
-                                base::Value::Dict properties) override;
+                                base::DictValue properties) override;
 
   void CheckPortalListChanged(const std::string& check_portal_list) override;
   void HostnameChanged(const std::string& hostname) override;
@@ -530,6 +525,9 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkStateHandler
   // Called after construction. Called explicitly by tests after adding
   // test observers.
   void InitShillPropertyHandler();
+
+  // Observer list
+  base::ObserverList<Observer, true>::Unchecked observers_;
 
  private:
   typedef std::map<std::string, std::string> SpecifierGuidMap;
@@ -598,7 +596,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkStateHandler
   // NetworkState specific method for UpdateManagedStateProperties which
   // notifies observers.
   void UpdateNetworkStateProperties(NetworkState* network,
-                                    const base::Value::Dict& properties);
+                                    const base::DictValue& properties);
 
   // Ensure a valid GUID for NetworkState.
   void UpdateGuid(NetworkState* network);
@@ -744,13 +742,14 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkStateHandler
   void SetDefaultNetworkValues(const std::string& path, bool metered);
 
   // Determines whether the user is logged in and sets |is_user_logged_in_|.
-  void ProcessIsUserLoggedIn(const base::Value::List& profile_list);
+  void ProcessIsUserLoggedIn(const base::ListValue& profile_list);
+
+  // Requests an update for an existing DeviceState. This is a no-op if
+  // there's no device state for the given `device_path`.
+  void RequestUpdateForDevice(const std::string& device_path);
 
   // Shill property handler instance, owned by this class.
   std::unique_ptr<internal::ShillPropertyHandler> shill_property_handler_;
-
-  // Observer list
-  base::ObserverList<Observer, true>::Unchecked observers_;
 
   // List of managed network states
   ManagedStateList network_list_;
@@ -789,7 +788,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkStateHandler
   std::optional<base::ElapsedTimer> time_in_portal_;
 
   // Tracks the default network proxy config for triggering PortalStateChanged.
-  std::optional<base::Value::Dict> default_network_proxy_config_;
+  std::optional<base::DictValue> default_network_proxy_config_;
 
   // DHCP Hostname.
   std::string hostname_;
@@ -828,6 +827,15 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkStateHandler
   // user's saved networks are done updating.
   bool is_profile_networks_loaded_ = false;
   bool is_user_logged_in_ = false;
+
+  // A set of device or network service paths that need to request another
+  // GetProperties to get latest properties. Shill may send a device property
+  // update after Chrome sends a GetProperties request to Shill and before
+  // completing Shill's response. If this occurs, the initial response may not
+  // include the latest changed property value and we will need to store the
+  // device or service paths to issue another round of GetProperties.
+  std::set<std::string> device_paths_with_stale_properties_;
+  std::set<std::string> network_service_paths_with_stale_properties_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

@@ -27,13 +27,14 @@
 
 #include "dawn/tests/AdapterTestConfig.h"
 
+#include <webgpu/webgpu_cpp.h>
+
 #include <initializer_list>
 #include <ostream>
 #include <string>
 #include <vector>
 
 #include "dawn/common/Assert.h"
-#include "dawn/webgpu_cpp.h"
 
 BackendTestConfig::BackendTestConfig(wgpu::BackendType backendType,
                                      std::initializer_list<const char*> forceEnabledWorkarounds,
@@ -66,6 +67,12 @@ BackendTestConfig NullBackend(std::initializer_list<const char*> forceEnabledWor
                              forceDisabledWorkarounds);
 }
 
+BackendTestConfig WebGPUBackend(std::initializer_list<const char*> forceEnabledWorkarounds,
+                                std::initializer_list<const char*> forceDisabledWorkarounds) {
+    return BackendTestConfig(wgpu::BackendType::WebGPU, forceEnabledWorkarounds,
+                             forceDisabledWorkarounds);
+}
+
 BackendTestConfig OpenGLBackend(std::initializer_list<const char*> forceEnabledWorkarounds,
                                 std::initializer_list<const char*> forceDisabledWorkarounds) {
     return BackendTestConfig(wgpu::BackendType::OpenGL, forceEnabledWorkarounds,
@@ -84,18 +91,24 @@ BackendTestConfig VulkanBackend(std::initializer_list<const char*> forceEnabledW
                              forceDisabledWorkarounds);
 }
 
-TestAdapterProperties::TestAdapterProperties(const wgpu::AdapterProperties& properties,
-                                             bool selected)
-    : vendorID(properties.vendorID),
-      vendorName(properties.vendorName),
-      architecture(properties.architecture),
-      deviceID(properties.deviceID),
-      name(properties.name),
-      driverDescription(properties.driverDescription),
-      adapterType(properties.adapterType),
-      backendType(properties.backendType),
-      compatibilityMode(properties.compatibilityMode),
-      selected(selected) {}
+TestAdapterProperties::TestAdapterProperties(const wgpu::AdapterInfo& info,
+                                             bool selected,
+                                             bool compatibilityMode,
+                                             wgpu::BackendType innerBackendType)
+    : vendorID(info.vendorID),
+      vendorName(info.vendor),
+      architecture(info.architecture),
+      deviceID(info.deviceID),
+      name(info.device),
+      driverDescription(info.description),
+      adapterType(info.adapterType),
+      backendType(info.backendType),
+      innerBackendType(innerBackendType),
+      compatibilityMode(compatibilityMode),
+      selected(selected) {
+    DAWN_ASSERT((backendType == wgpu::BackendType::WebGPU) !=
+                (innerBackendType == wgpu::BackendType::Undefined));
+}
 
 std::string TestAdapterProperties::ParamName() const {
     switch (backendType) {
@@ -113,6 +126,8 @@ std::string TestAdapterProperties::ParamName() const {
             return "OpenGLES";
         case wgpu::BackendType::Vulkan:
             return "Vulkan";
+        case wgpu::BackendType::WebGPU:
+            return "WebGPU";
         case wgpu::BackendType::Undefined:
         default:
             DAWN_UNREACHABLE();

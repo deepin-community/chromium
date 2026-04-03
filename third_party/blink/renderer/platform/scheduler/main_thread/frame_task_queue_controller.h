@@ -8,7 +8,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
@@ -111,19 +110,18 @@ class PLATFORM_EXPORT FrameTaskQueueController {
   static MainThreadTaskQueue::QueueType QueueTypeFromQueueTraits(
       MainThreadTaskQueue::QueueTraits);
 
-  const raw_ptr<MainThreadSchedulerImpl, ExperimentalRenderer>
+  const raw_ptr<MainThreadSchedulerImpl, DanglingUntriaged>
       main_thread_scheduler_impl_;
-  const raw_ptr<FrameSchedulerImpl, ExperimentalRenderer> frame_scheduler_impl_;
-  const raw_ptr<Delegate, ExperimentalRenderer> delegate_;
+  const raw_ptr<FrameSchedulerImpl> frame_scheduler_impl_;
+  const raw_ptr<Delegate> delegate_;
 
-  using TaskQueueMap =
-      WTF::HashMap<MainThreadTaskQueue::QueueTraitsKeyType,
-                   scoped_refptr<MainThreadTaskQueue>>;
+  using TaskQueueMap = HashMap<MainThreadTaskQueue::QueueTraitsKeyType,
+                               scoped_refptr<MainThreadTaskQueue>>;
 
   // Map of all TaskQueues, indexed by QueueTraits.
   TaskQueueMap task_queues_;
 
-  using TaskQueueEnabledVoterMap = WTF::HashMap<
+  using TaskQueueEnabledVoterMap = HashMap<
       scoped_refptr<MainThreadTaskQueue>,
       std::unique_ptr<base::sequence_manager::TaskQueue::QueueEnabledVoter>>;
 

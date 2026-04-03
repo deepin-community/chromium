@@ -13,7 +13,7 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/no_state_prefetch/common/no_state_prefetch_final_status.h"
-#include "components/no_state_prefetch/common/prerender_origin.h"
+#include "components/no_state_prefetch/common/no_state_prefetch_origin.h"
 #include "url/gurl.h"
 
 namespace prerender {
@@ -68,7 +68,7 @@ class NoStatePrefetchHistory {
   void Clear();
 
   // Retrieves the entries as a list of values which can be displayed.
-  base::Value::List CopyEntriesAsValue() const;
+  base::ListValue CopyEntriesAsValue() const;
 
  private:
   std::list<Entry> entries_;

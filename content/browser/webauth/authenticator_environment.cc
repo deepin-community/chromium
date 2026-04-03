@@ -4,11 +4,11 @@
 
 #include "content/browser/webauth/authenticator_environment.h"
 
+#include <algorithm>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/no_destructor.h"
-#include "base/ranges/algorithm.h"
+#include "base/not_fatal_until.h"
 #include "content/browser/webauth/virtual_authenticator.h"
 #include "content/browser/webauth/virtual_discovery.h"
 #include "content/browser/webauth/virtual_fido_discovery_factory.h"
@@ -56,7 +56,7 @@ void AuthenticatorEnvironment::EnableVirtualAuthenticatorFor(
     bool enable_ui) {
   // Do not create a new virtual authenticator if there is one already defined
   // for the |node|.
-  if (base::Contains(virtual_authenticator_managers_, node)) {
+  if (virtual_authenticator_managers_.contains(node)) {
     return;
   }
 
@@ -70,7 +70,7 @@ void AuthenticatorEnvironment::EnableVirtualAuthenticatorFor(
 
 void AuthenticatorEnvironment::DisableVirtualAuthenticatorFor(
     FrameTreeNode* node) {
-  if (!base::Contains(virtual_authenticator_managers_, node)) {
+  if (!virtual_authenticator_managers_.contains(node)) {
     return;
   }
 
@@ -87,20 +87,11 @@ VirtualAuthenticatorManagerImpl*
 AuthenticatorEnvironment::MaybeGetVirtualAuthenticatorManager(
     FrameTreeNode* node) {
   for (; node; node = FrameTreeNode::From(node->parent())) {
-    if (base::Contains(virtual_authenticator_managers_, node)) {
+    if (virtual_authenticator_managers_.contains(node)) {
       return virtual_authenticator_managers_[node].get();
     }
   }
   return nullptr;
-}
-
-void AuthenticatorEnvironment::AddVirtualAuthenticatorReceiver(
-    FrameTreeNode* node,
-    mojo::PendingReceiver<blink::test::mojom::VirtualAuthenticatorManager>
-        receiver) {
-  auto it = virtual_authenticator_managers_.find(node);
-  DCHECK(it != virtual_authenticator_managers_.end());
-  it->second->AddReceiver(std::move(receiver));
 }
 
 bool AuthenticatorEnvironment::HasVirtualUserVerifyingPlatformAuthenticator(
@@ -112,7 +103,7 @@ bool AuthenticatorEnvironment::HasVirtualUserVerifyingPlatformAuthenticator(
   }
   std::vector<VirtualAuthenticator*> authenticators =
       authenticator_manager->GetAuthenticators();
-  return base::ranges::any_of(authenticators, [](VirtualAuthenticator* a) {
+  return std::ranges::any_of(authenticators, [](VirtualAuthenticator* a) {
     return a->is_user_verifying_platform_authenticator();
   });
 }

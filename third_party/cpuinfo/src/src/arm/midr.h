@@ -34,6 +34,7 @@
 #define CPUINFO_ARM_MIDR_KRYO_SILVER_820 UINT32_C(0x510F2110)
 #define CPUINFO_ARM_MIDR_EXYNOS_M1_M2 UINT32_C(0x530F0010)
 #define CPUINFO_ARM_MIDR_DENVER2 UINT32_C(0x4E0F0030)
+#define CPUINFO_ARM_MIDR_AMPERE_ALTRA UINT32_C(0x413fd0c1)
 
 inline static uint32_t midr_set_implementer(uint32_t midr, uint32_t implementer) {
 	return (midr & ~CPUINFO_ARM_MIDR_IMPLEMENTER_MASK) |
@@ -167,6 +168,11 @@ inline static bool midr_is_kryo_gold(uint32_t midr) {
 	return (midr & uarch_mask) == (CPUINFO_ARM_MIDR_KRYO_GOLD & uarch_mask);
 }
 
+inline static bool midr_is_ampere_altra(uint32_t midr) {
+	const uint32_t uarch_mask = CPUINFO_ARM_MIDR_IMPLEMENTER_MASK | CPUINFO_ARM_MIDR_PART_MASK;
+	return (midr & uarch_mask) == (CPUINFO_ARM_MIDR_AMPERE_ALTRA & uarch_mask);
+}
+
 inline static uint32_t midr_score_core(uint32_t midr) {
 	const uint32_t core_mask = CPUINFO_ARM_MIDR_IMPLEMENTER_MASK | CPUINFO_ARM_MIDR_PART_MASK;
 	switch (midr & core_mask) {
@@ -186,6 +192,7 @@ inline static uint32_t midr_score_core(uint32_t midr) {
 		case UINT32_C(0x4100D0D0): /* Cortex-A77 */
 		case UINT32_C(0x4100D0E0): /* Cortex-A76AE */
 		case UINT32_C(0x4100D410): /* Cortex-A78 */
+		case UINT32_C(0x4100D4B0): /* Cortex-A78C */
 		case UINT32_C(0x4100D470): /* Cortex-A710 */
 		case UINT32_C(0x4100D4D0): /* Cortex-A715 */
 		case UINT32_C(0x4800D400): /* Cortex-A76 (HiSilicon) */
@@ -214,6 +221,9 @@ inline static uint32_t midr_score_core(uint32_t midr) {
 		case UINT32_C(0x4100D030): /* Cortex-A53 */
 		case UINT32_C(0x4100D050): /* Cortex-A55 */
 		case UINT32_C(0x4100D460): /* Cortex-A510 */
+#if CPUINFO_ARCH_ARM64
+		case UINT32_C(0x4100D800): /* Cortex-A520 */
+#endif /* CPUINFO_ARCH_ARM64 */
 			/* Cortex-A53 is usually in LITTLE role, but can be in
 			 * big role w.r.t. Cortex-A35 */
 			return 2;

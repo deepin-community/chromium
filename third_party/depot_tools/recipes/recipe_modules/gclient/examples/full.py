@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-PYTHON_VERSION_COMPATIBILITY = 'PY3'
 
 DEPS = [
     'gclient',
@@ -20,7 +19,6 @@ TEST_CONFIGS = [
     'android',
     'boringssl',
     'build_internal',
-    'build_internal_scripts_slave',
     'catapult',
     'celab',
     'crashpad',
@@ -46,24 +44,25 @@ TEST_CONFIGS = [
     'infra_superproject',
     'infra_internal_superproject',
     'infradata_master_manager',
+    'infradata_cloud_run',
     'infradata_config',
+    'infradata_k8s',
     'infradata_rbe',
-    'internal_deps',
     'luci_gae',
     'luci_go',
     'luci_py',
-    'master_deps',
     'nacl',
     'devtools',
     'openscreen',
     'pdfium',
     'recipes_py',
     'recipes_py_bare',
-    'slave_deps',
     'tint',
     'webports',
     'with_branch_heads',
     'with_tags',
+    'ytdevinfra',
+    'ytdevinfra_github',
 ]
 
 DEPS_CONTENT = """
@@ -91,7 +90,7 @@ def RunSteps(api):
   for config_name in TEST_CONFIGS:
     api.gclient.make_config(config_name)
 
-  src_cfg = api.gclient.make_config(CACHE_DIR=api.path['cache'].join('git'))
+  src_cfg = api.gclient.make_config(CACHE_DIR=api.path.cache_dir / 'git')
   soln = src_cfg.solutions.add()
   soln.name = 'src'
   soln.url = 'https://chromium.googlesource.com/chromium/src.git'
@@ -109,7 +108,7 @@ def RunSteps(api):
   bl_cfg.revisions['src/third_party/angle'] = 'refs/heads/lkgr'
 
   bl_cfg.got_revision_mapping['src/blatley'] = 'got_blatley_revision'
-  with api.context(cwd=api.path['start_dir'].join('src', 'third_party')):
+  with api.context(cwd=api.path.start_dir.joinpath('src', 'third_party')):
     api.gclient.checkout(
         gclient_config=bl_cfg)
 

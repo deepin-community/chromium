@@ -14,7 +14,6 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/ptr_util.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
 #include "chromeos/ash/components/dbus/shill/shill_ipconfig_client.h"
@@ -171,11 +170,9 @@ class NetworkHealthProviderTest : public AshTestBase {
     AshTestSuite::LoadTestResources();
     AshTestBase::SetUp();
     SystemTokenCertDbStorage::Initialize();
-    scoped_feature_list_ = std::make_unique<base::test::ScopedFeatureList>();
-    scoped_feature_list_->InitAndEnableFeature(features::kCellularCarrierLock);
 
     scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
-        std::make_unique<user_manager::FakeUserManager>());
+        std::make_unique<user_manager::FakeUserManager>(local_state()));
 
     // NetworkHandler has pieces that depend on NetworkCertLoader so it's better
     // to initialize NetworkHandlerTestHelper after
@@ -185,11 +182,11 @@ class NetworkHealthProviderTest : public AshTestBase {
     network_handler_test_helper_ = std::make_unique<NetworkHandlerTestHelper>();
     network_handler_test_helper_->AddDefaultProfiles();
     network_handler_test_helper_->RegisterPrefs(user_prefs_.registry(),
-                                                local_state_.registry());
+                                                local_state()->registry());
     PrefProxyConfigTrackerImpl::RegisterProfilePrefs(user_prefs_.registry());
-    PrefProxyConfigTrackerImpl::RegisterPrefs(local_state_.registry());
+    PrefProxyConfigTrackerImpl::RegisterPrefs(local_state()->registry());
 
-    network_handler_test_helper_->InitializePrefs(&user_prefs_, &local_state_);
+    network_handler_test_helper_->InitializePrefs(&user_prefs_, local_state());
     ClearDevicesAndServices();
 
     cros_network_config_ =
@@ -204,8 +201,8 @@ class NetworkHealthProviderTest : public AshTestBase {
     managed_network_configuration_handler->SetPolicy(
         ::onc::ONC_SOURCE_DEVICE_POLICY,
         /*userhash=*/std::string(),
-        /*network_configs_onc=*/base::Value::List(),
-        /*global_network_config=*/base::Value::Dict());
+        /*network_configs_onc=*/base::ListValue(),
+        /*global_network_config=*/base::DictValue());
 
     EXPECT_TRUE(temp_dir_.CreateUniqueTempDir());
     network_health_provider_ = std::make_unique<NetworkHealthProvider>();
@@ -407,7 +404,7 @@ class NetworkHealthProviderTest : public AshTestBase {
   }
 
   void SetCellularSimLockStatus(std::string lock_type, bool sim_locked) {
-    base::Value::Dict sim_lock_status;
+    base::DictValue sim_lock_status;
     sim_lock_status.Set(shill::kSIMLockEnabledProperty, sim_locked);
     sim_lock_status.Set(shill::kSIMLockTypeProperty, lock_type);
     sim_lock_status.Set(shill::kSIMLockRetriesLeftProperty, 3);
@@ -469,7 +466,7 @@ class NetworkHealthProviderTest : public AshTestBase {
     base::RunLoop().RunUntilIdle();
   }
 
-  void SetNameServersForIPConfig(base::Value::List dns_servers) {
+  void SetNameServersForIPConfig(base::ListValue dns_servers) {
     ShillIPConfigClient::Get()->SetProperty(
         dbus::ObjectPath(kTestIPConfigPath), shill::kNameServersProperty,
         base::Value(std::move(dns_servers)), base::DoNothing());
@@ -541,13 +538,11 @@ class NetworkHealthProviderTest : public AshTestBase {
   }
 
   sync_preferences::TestingPrefServiceSyncable user_prefs_;
-  TestingPrefServiceSimple local_state_;
   std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
   std::unique_ptr<NetworkHandlerTestHelper> network_handler_test_helper_;
   std::unique_ptr<network_config::CrosNetworkConfig> cros_network_config_;
   std::unique_ptr<NetworkHealthProvider> network_health_provider_;
   base::ScopedTempDir temp_dir_;
-  std::unique_ptr<base::test::ScopedFeatureList> scoped_feature_list_;
 };
 
 TEST_F(NetworkHealthProviderTest, ZeroNetworksAvailable) {
@@ -1276,7 +1271,7 @@ TEST_F(NetworkHealthProviderTest, IPConfig) {
   SetIPAddressForIPConfig(ip_address);
   const int routing_prefix = 1;
   SetRoutingPrefixForIPConfig(routing_prefix);
-  base::Value::List dns_servers;
+  base::ListValue dns_servers;
   const std::string dns_server_1 = "192.168.1.100";
   const std::string dns_server_2 = "192.168.1.101";
   dns_servers.Append(dns_server_1);

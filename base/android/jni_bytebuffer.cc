@@ -8,40 +8,45 @@
 
 namespace base::android {
 
-base::span<const uint8_t> JavaByteBufferToSpan(JNIEnv* env, jobject buffer) {
+base::span<const uint8_t> JavaByteBufferToSpan(
+    JNIEnv* env,
+    const jni_zero::JavaRef<jobject>& buffer) {
   auto span = MaybeJavaByteBufferToSpan(env, buffer);
   CHECK(span.has_value());
   return *span;
 }
 
-base::span<uint8_t> JavaByteBufferToMutableSpan(JNIEnv* env, jobject buffer) {
+base::span<uint8_t> JavaByteBufferToMutableSpan(
+    JNIEnv* env,
+    const jni_zero::JavaRef<jobject>& buffer) {
   auto span = MaybeJavaByteBufferToMutableSpan(env, buffer);
   CHECK(span.has_value());
   return *span;
 }
 
-absl::optional<base::span<const uint8_t>> MaybeJavaByteBufferToSpan(
+std::optional<base::span<const uint8_t>> MaybeJavaByteBufferToSpan(
     JNIEnv* env,
-    jobject buffer) {
+    const jni_zero::JavaRef<jobject>& buffer) {
   auto span = MaybeJavaByteBufferToMutableSpan(env, buffer);
-  return span ? absl::make_optional(base::span<const uint8_t>(*span))
-              : absl::nullopt;
+  return span ? std::make_optional(base::span<const uint8_t>(*span))
+              : std::nullopt;
 }
 
-absl::optional<base::span<uint8_t>> MaybeJavaByteBufferToMutableSpan(
+std::optional<base::span<uint8_t>> MaybeJavaByteBufferToMutableSpan(
     JNIEnv* env,
-    jobject buffer) {
-  void* data = env->GetDirectBufferAddress(buffer);
-  jlong size = env->GetDirectBufferCapacity(buffer);
+    const jni_zero::JavaRef<jobject>& buffer) {
+  void* data = env->GetDirectBufferAddress(buffer.obj());
+  int64_t size = env->GetDirectBufferCapacity(buffer.obj());
 
   // !data && size == 0 is allowed - this is how a 0-length Buffer is
   // represented.
   if (size < 0 || (!data && size > 0)) {
-    return absl::nullopt;
+    return std::nullopt;
   }
 
-  return base::span<uint8_t>(static_cast<uint8_t*>(data),
-                             base::checked_cast<size_t>(size));
+  // SAFETY: This relies on the ByteBuffer to be internally valid.
+  return UNSAFE_BUFFERS(base::span<uint8_t>(static_cast<uint8_t*>(data),
+                                            base::checked_cast<size_t>(size)));
 }
 
 }  // namespace base::android

@@ -7,8 +7,10 @@
 #include <cstdint>
 #include <memory>
 
+#include "base/android/device_info.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -20,6 +22,9 @@ namespace password_manager {
 
 namespace {
 
+constexpr int kGMSCoreMinVersionForGetAffiliatedAPI = 232012000;
+constexpr int kGMSCoreMinVersionForGetAllLoginsWithBrandingAPI = 233812000;
+
 using JobId = PasswordStoreAndroidBackendBridgeHelper::JobId;
 
 }
@@ -27,12 +32,10 @@ using JobId = PasswordStoreAndroidBackendBridgeHelper::JobId;
 std::unique_ptr<PasswordStoreAndroidBackendBridgeHelper>
 PasswordStoreAndroidBackendBridgeHelper::Create(
     password_manager::IsAccountStore is_account_store) {
+  // The bridge is not supposed to be created when UPM is completely unusable.
+  // But it should be created for non-syncing users if sync is enabled later.
   return std::make_unique<PasswordStoreAndroidBackendBridgeHelperImpl>(
       is_account_store);
-}
-
-bool PasswordStoreAndroidBackendBridgeHelper::CanCreateBackend() {
-  return PasswordStoreAndroidBackendDispatcherBridge::CanCreateBackend();
 }
 
 PasswordStoreAndroidBackendBridgeHelperImpl::
@@ -84,18 +87,31 @@ PasswordStoreAndroidBackendBridgeHelperImpl::
 
 bool PasswordStoreAndroidBackendBridgeHelperImpl::
     CanUseGetAffiliatedPasswordsAPI() {
-  return PasswordStoreAndroidBackendDispatcherBridge::
-      CanUseGetAffiliatedPasswordsAPI();
+  int current_gms_core_version;
+  if (!base::StringToInt(base::android::device_info::gms_version_code(),
+                         &current_gms_core_version)) {
+    return false;
+  }
+  if (kGMSCoreMinVersionForGetAffiliatedAPI > current_gms_core_version) {
+    return false;
+  }
+
+  return true;
 }
 
 bool PasswordStoreAndroidBackendBridgeHelperImpl::
     CanUseGetAllLoginsWithBrandingInfoAPI() {
-  return PasswordStoreAndroidBackendDispatcherBridge::
-      CanUseGetAllLoginsWithBrandingInfoAPI();
-}
+  int current_gms_core_version;
+  if (!base::StringToInt(base::android::device_info::gms_version_code(),
+                         &current_gms_core_version)) {
+    return false;
+  }
+  if (kGMSCoreMinVersionForGetAllLoginsWithBrandingAPI >
+      current_gms_core_version) {
+    return false;
+  }
 
-bool PasswordStoreAndroidBackendBridgeHelperImpl::CanRemoveUnenrollment() {
-  return PasswordStoreAndroidBackendDispatcherBridge::CanRemoveUnenrollment();
+  return true;
 }
 
 void PasswordStoreAndroidBackendBridgeHelperImpl::SetConsumer(

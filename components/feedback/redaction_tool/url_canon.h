@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/numerics/clamped_math.h"
@@ -81,7 +82,7 @@ class CanonOutputT {
     // In VC2005, putting this common case first speeds up execution
     // dramatically because this branch is predicted as taken.
     if (cur_len_ < buffer_len_) {
-      buffer_[cur_len_] = ch;
+      UNSAFE_TODO(buffer_[cur_len_]) = ch;
       cur_len_++;
       return;
     }
@@ -93,7 +94,7 @@ class CanonOutputT {
     }
 
     // Actually do the insertion.
-    buffer_[cur_len_] = ch;
+    UNSAFE_TODO(buffer_[cur_len_]) = ch;
     cur_len_++;
   }
 

@@ -22,6 +22,7 @@ limitations under the License.
 #include "tensorflow/lite/core/c/builtin_op_data.h"
 #include "tensorflow/lite/kernels/cpu_backend_context.h"
 #include "tensorflow/lite/kernels/internal/common.h"
+#include "tensorflow/lite/kernels/internal/portable_tensor_utils.h"
 #include "tensorflow/lite/kernels/internal/quantization_util.h"
 #include "tensorflow/lite/kernels/test_util.h"
 
@@ -1079,7 +1080,10 @@ MatrixVectorData SetupMatrixVectorData(int rows, int cols, int batch,
     if ((i % 5) == 0 && negative) sign = -1;
     data.vectors.push_back(sign * (i % 50));
   }
-  data.scale_factors = {1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 5, 6, 7, 8};
+  for (int i = 0; i < batch; i++) {
+    data.scale_factors.insert(data.scale_factors.end(),
+                              {1, 2, 3, 4, 5, 6, 7, 8});
+  }
   data.results.resize(rows * batch, init_to_one ? 1 : 0);
 
   data.zeroed_matrix = data.matrix;
@@ -2109,7 +2113,7 @@ TEST(uKernels, UnpackInt4Basic) {
   const int8_t input[2] = {0x38, static_cast<int8_t>(0xBE)};
   const int8_t expected_output[4] = {-8, 3, -2, -5};
   int8_t actual_output[4];
-  UnpackDenseInt4IntoInt8(input, 4, actual_output);
+  UnpackPackedIntToInt8(input, 4, 4, actual_output);
   EXPECT_THAT(actual_output,
               testing::Pointwise(testing::Eq(), expected_output));
 }
@@ -2119,7 +2123,66 @@ TEST(uKernels, UnpackInt4OddLength) {
   const int8_t input[2] = {0x21, 0x43};
   const int8_t expected_output[3] = {1, 2, 3};
   int8_t actual_output[3];
-  UnpackDenseInt4IntoInt8(input, 3, actual_output);
+  UnpackPackedIntToInt8(input, 3, 4, actual_output);
+  EXPECT_THAT(actual_output,
+              testing::Pointwise(testing::Eq(), expected_output));
+}
+
+TEST(uKernels, UnpackInt2Basic) {
+  // INT2 ranges from [-2,1], so 0x2 or b'10' is mapped to -2 in two's
+  // complement. 0x3 or b'11' is mapped to -1.
+  const int8_t input[1] = {0x6C};
+  const int8_t expected_output[4] = {0, -1, -2, 1};
+  int8_t actual_output[4];
+  UnpackPackedIntToInt8(input, 4, 2, actual_output);
+  EXPECT_THAT(actual_output,
+              testing::Pointwise(testing::Eq(), expected_output));
+}
+
+TEST(uKernels, UnpackInt2OddLength) {
+  // `num_elements` is odd, so the last element 0x3 should be ignored
+  const int8_t input[1] = {static_cast<int8_t>(0xD8)};
+  const int8_t expected_output[3] = {0, -2, 1};
+  int8_t actual_output[3];
+  UnpackPackedIntToInt8(input, 3, 2, actual_output);
+  EXPECT_THAT(actual_output,
+              testing::Pointwise(testing::Eq(), expected_output));
+}
+
+TEST(uKernels, PackInt4Basic) {
+  const int8_t input[4] = {-8, 3, -2, -5};
+  const int8_t expected_output[2] = {0x38, static_cast<int8_t>(0xBE)};
+  int8_t actual_output[2];
+  PackInt8IntoDenseInt(input, 4, 4, actual_output);
+  EXPECT_THAT(actual_output,
+              testing::Pointwise(testing::Eq(), expected_output));
+}
+
+TEST(uKernels, PackInt4OddLength) {
+  // `num_elements` is odd, so the last element 0x4 should be ignored
+  const int8_t input[3] = {1, 2, 3};
+  const int8_t expected_output[2] = {0x21, 0x03};
+  int8_t actual_output[2];
+  PackInt8IntoDenseInt(input, 3, 4, actual_output);
+  EXPECT_THAT(actual_output,
+              testing::Pointwise(testing::Eq(), expected_output));
+}
+
+TEST(uKernels, PackInt2Basic) {
+  const int8_t input[4] = {0, -1, -2, 1};
+  const int8_t expected_output[1] = {0x6C};
+  int8_t actual_output[1];
+  PackInt8IntoDenseInt(input, 4, 2, actual_output);
+  EXPECT_THAT(actual_output,
+              testing::Pointwise(testing::Eq(), expected_output));
+}
+
+TEST(uKernels, PackInt2OddLength) {
+  // `num_elements` is odd
+  const int8_t input[3] = {0, -2, 1};
+  const int8_t expected_output[1] = {0x18};
+  int8_t actual_output[1];
+  PackInt8IntoDenseInt(input, 3, 2, actual_output);
   EXPECT_THAT(actual_output,
               testing::Pointwise(testing::Eq(), expected_output));
 }
@@ -2182,7 +2245,13 @@ BENCHMARK(BM_DotprodBatchOneMultiply)
     ->Args({640, 2048, 8, 8})
     ->Args({2048, 2048, 1, 1})
     ->Args({2048, 2048, 1, 8})
-    ->Args({2048, 2048, 8, 1});
+    ->Args({2048, 2048, 8, 1})
+    ->Args({4096, 4096, 8, 1})
+    ->Args({4096, 4096, 1, 8})
+    ->Args({8192, 8192, 8, 1})
+    ->Args({8192, 8192, 1, 8})
+    ->Args({16384, 16384, 8, 1})
+    ->Args({16384, 16384, 1, 8});
 
 void BM_DotprodBatchFourMultiply(benchmark::State& state) {
   const int rows = state.range(0);
@@ -2239,7 +2308,14 @@ BENCHMARK(BM_DotprodBatchFourMultiply)
     ->Args({2048, 2048, 4, 1})
     ->Args({2048, 2048, 4, 8})
     ->Args({2048, 2048, 5, 1})
-    ->Args({2048, 2048, 8, 1});
+    ->Args({2048, 2048, 8, 1})
+    ->Args({2048, 2048, 64, 1})
+    ->Args({2048, 2048, 1024, 1})
+    ->Args({4096, 4096, 1024, 1})
+    ->Args({8192, 8192, 1024, 1})
+    ->Args({8192, 8192, 1024, 8})
+    ->Args({16384, 16384, 1024, 1})
+    ->Args({16384, 8192, 1024, 1});
 
 void BM_DotprodSparseMultiply(benchmark::State& state) {
   const int rows = state.range(0);

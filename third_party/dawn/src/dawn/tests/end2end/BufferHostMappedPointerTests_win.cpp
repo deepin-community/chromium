@@ -25,10 +25,11 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include <windows.h>
 #include <utility>
 
 #include "dawn/common/Log.h"
+#include "dawn/common/MutexProtected.h"
+#include "dawn/common/windows_with_undefs.h"
 #include "dawn/tests/MockCallback.h"
 #include "dawn/tests/end2end/BufferHostMappedPointerTests.h"
 
@@ -58,8 +59,10 @@ class VMBackend : public BufferHostMappedPointerTestBackend {
 
         wgpu::BufferHostMappedPointer hostMappedDesc;
         hostMappedDesc.pointer = ptr;
-        hostMappedDesc.disposeCallback = mDisposeCallback.Callback();
-        hostMappedDesc.userdata = mDisposeCallback.MakeUserdata(ptr);
+        mDisposeCallback.Use([&](auto callback) {
+            hostMappedDesc.disposeCallback = callback->Callback();
+            hostMappedDesc.userdata = callback->MakeUserdata(ptr);
+        });
 
         wgpu::BufferDescriptor bufferDesc;
         bufferDesc.usage = usage;
@@ -70,15 +73,17 @@ class VMBackend : public BufferHostMappedPointerTestBackend {
         if (dawn::native::CheckIsErrorForTesting(buffer.Get())) {
             DeallocMemory();
         } else {
-            EXPECT_CALL(mDisposeCallback, Call(ptr))
-                .WillOnce(testing::InvokeWithoutArgs(DeallocMemory));
+            mDisposeCallback.Use([&](auto callback) {
+                EXPECT_CALL(*callback, Call(ptr))
+                    .WillOnce(testing::InvokeWithoutArgs(DeallocMemory));
+            });
         }
 
         return std::make_pair(std::move(buffer), hostMappedDesc.pointer);
     }
 
   private:
-    testing::MockCallback<WGPUCallback> mDisposeCallback;
+    MutexProtected<testing::MockCallback<WGPUCallback>> mDisposeCallback;
 };
 
 class MMapBackend : public BufferHostMappedPointerTestBackend {
@@ -119,7 +124,7 @@ class MMapBackend : public BufferHostMappedPointerTestBackend {
                                           NULL);                         // no template
         EXPECT_NE(tmpFileHandle, INVALID_HANDLE_VALUE);
 
-        LARGE_INTEGER largeSize;
+        LARGE_INTEGER largeSize = {};
         largeSize.QuadPart = size;
         HANDLE fileMappingHandle = CreateFileMapping(
             tmpFileHandle, nullptr, PAGE_READWRITE, largeSize.HighPart, largeSize.LowPart, nullptr);
@@ -140,8 +145,10 @@ class MMapBackend : public BufferHostMappedPointerTestBackend {
 
         wgpu::BufferHostMappedPointer hostMappedDesc;
         hostMappedDesc.pointer = ptr;
-        hostMappedDesc.disposeCallback = mDisposeCallback.Callback();
-        hostMappedDesc.userdata = mDisposeCallback.MakeUserdata(ptr);
+        mDisposeCallback.Use([&](auto callback) {
+            hostMappedDesc.disposeCallback = callback->Callback();
+            hostMappedDesc.userdata = callback->MakeUserdata(ptr);
+        });
 
         wgpu::BufferDescriptor bufferDesc;
         bufferDesc.usage = usage;
@@ -152,21 +159,87 @@ class MMapBackend : public BufferHostMappedPointerTestBackend {
         if (dawn::native::CheckIsErrorForTesting(buffer.Get())) {
             DeallocMemory();
         } else {
-            EXPECT_CALL(mDisposeCallback, Call(ptr))
-                .WillOnce(testing::InvokeWithoutArgs(DeallocMemory));
+            mDisposeCallback.Use([&](auto callback) {
+                EXPECT_CALL(*callback, Call(ptr))
+                    .WillOnce(testing::InvokeWithoutArgs(DeallocMemory));
+            });
         }
 
         return std::make_pair(std::move(buffer), hostMappedDesc.pointer);
     }
 
   private:
-    testing::MockCallback<WGPUCallback> mDisposeCallback;
+    MutexProtected<testing::MockCallback<WGPUCallback>> mDisposeCallback;
+};
+
+class NamedSharedMemoryBackend : public BufferHostMappedPointerTestBackend {
+  public:
+    static BufferHostMappedPointerTestBackend* GetInstance() {
+        static NamedSharedMemoryBackend backend;
+        return &backend;
+    }
+
+    const char* Name() const override { return "NamedSharedMemoryMapping"; }
+
+    std::pair<wgpu::Buffer, void*> CreateHostMappedBuffer(
+        wgpu::Device device,
+        wgpu::BufferUsage usage,
+        size_t size,
+        std::function<void(void*)> Populate) override {
+        LARGE_INTEGER largeSize = {};
+        largeSize.QuadPart = size;
+        // Create a named shared memory object by using INVALID_HANDLE_VALUE as input file handle.
+        // See https://learn.microsoft.com/en-us/windows/win32/memory/creating-named-shared-memory.
+        HANDLE sharedMemoryHandle =
+            CreateFileMapping(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, largeSize.HighPart,
+                              largeSize.LowPart, nullptr);
+
+        EXPECT_NE(sharedMemoryHandle, nullptr);
+
+        void* ptr = MapViewOfFile(sharedMemoryHandle, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+        EXPECT_NE(ptr, nullptr);
+        Populate(ptr);
+
+        auto DeallocMemory = [=]() {
+            // Cleanup mapping and handle.
+            EXPECT_TRUE(UnmapViewOfFile(ptr));
+            CloseHandle(sharedMemoryHandle);
+        };
+
+        wgpu::BufferHostMappedPointer hostMappedDesc;
+        hostMappedDesc.pointer = ptr;
+        mDisposeCallback.Use([&](auto callback) {
+            hostMappedDesc.disposeCallback = callback->Callback();
+            hostMappedDesc.userdata = callback->MakeUserdata(ptr);
+        });
+
+        wgpu::BufferDescriptor bufferDesc;
+        bufferDesc.usage = usage;
+        bufferDesc.size = size;
+        bufferDesc.nextInChain = &hostMappedDesc;
+
+        wgpu::Buffer buffer = device.CreateBuffer(&bufferDesc);
+        if (dawn::native::CheckIsErrorForTesting(buffer.Get())) {
+            DeallocMemory();
+        } else {
+            mDisposeCallback.Use([&](auto callback) {
+                EXPECT_CALL(*callback, Call(ptr))
+                    .WillOnce(testing::InvokeWithoutArgs(DeallocMemory));
+            });
+        }
+
+        return std::make_pair(std::move(buffer), hostMappedDesc.pointer);
+    }
+
+  private:
+    MutexProtected<testing::MockCallback<WGPUCallback>> mDisposeCallback;
 };
 
 DAWN_INSTANTIATE_PREFIXED_TEST_P(Win,
                                  BufferHostMappedPointerTests,
                                  {D3D12Backend()},
-                                 {VMBackend::GetInstance(), MMapBackend::GetInstance()});
+                                 {VMBackend::GetInstance(), MMapBackend::GetInstance(),
+                                  NamedSharedMemoryBackend::GetInstance()});
 
 }  // anonymous namespace
 }  // namespace dawn

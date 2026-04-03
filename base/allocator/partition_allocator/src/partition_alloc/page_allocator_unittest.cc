@@ -11,38 +11,39 @@
 #include <string>
 #include <vector>
 
-#include "build/build_config.h"
 #include "partition_alloc/address_space_randomization.h"
+#include "partition_alloc/build_config.h"
+#include "partition_alloc/buildflags.h"
 #include "partition_alloc/page_allocator_constants.h"
+#include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/cpu.h"
 #include "partition_alloc/partition_alloc_base/logging.h"
 #include "partition_alloc/partition_alloc_base/notreached.h"
-#include "partition_alloc/partition_alloc_buildflags.h"
 #include "partition_alloc/partition_alloc_config.h"
 #include "partition_alloc/tagging.h"
 
 #if defined(LINUX_NAME_REGION)
-#include "base/debug/proc_maps_linux.h"
+#include "partition_alloc/partition_alloc_base/debug/proc_maps_linux.h"  // nogncheck
 #endif
 
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_POSIX)
+#if PA_BUILDFLAG(IS_POSIX)
 #include <sys/mman.h>
 #include <sys/time.h>
 
 #include <csetjmp>
 #include <csignal>
-#endif  // BUILDFLAG(IS_POSIX)
+#endif  // PA_BUILDFLAG(IS_POSIX)
 
 #include "partition_alloc/arm_bti_test_functions.h"
 
-#if BUILDFLAG(HAS_MEMORY_TAGGING)
+#if PA_BUILDFLAG(HAS_MEMORY_TAGGING)
 #include <arm_acle.h>
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
+#if PA_BUILDFLAG(IS_ANDROID) || PA_BUILDFLAG(IS_LINUX)
 #define MTE_KILLED_BY_SIGNAL_AVAILABLE
 #endif
-#endif  // BUILDFLAG(HAS_MEMORY_TAGGING)
+#endif  // PA_BUILDFLAG(HAS_MEMORY_TAGGING)
 
 #if !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
@@ -140,12 +141,12 @@ TEST(PartitionAllocPageAllocatorTest, AllocFailure) {
   EXPECT_FALSE(ReserveAddressSpace(EasyAllocSize()));
 }
 
-// TODO(crbug.com/765801): Test failed on chromium.win/Win10 Tests x64.
-#if BUILDFLAG(IS_WIN) && defined(ARCH_CPU_64_BITS)
+// TODO(crbug.com/41344946): Test failed on chromium.win/Win10 Tests x64.
+#if PA_BUILDFLAG(IS_WIN) && PA_BUILDFLAG(PA_ARCH_CPU_64_BITS)
 #define MAYBE_ReserveAddressSpace DISABLED_ReserveAddressSpace
 #else
 #define MAYBE_ReserveAddressSpace ReserveAddressSpace
-#endif  // BUILDFLAG(IS_WIN) && defined(ARCH_CPU_64_BITS)
+#endif  // PA_BUILDFLAG(IS_WIN) && PA_BUILDFLAG(PA_ARCH_CPU_64_BITS)
 
 // Test that reserving address space can fail.
 TEST(PartitionAllocPageAllocatorTest, MAYBE_ReserveAddressSpace) {
@@ -226,7 +227,7 @@ TEST(PartitionAllocPageAllocatorTest,
   // extension.
   base::CPU cpu;
   if (!cpu.has_bti()) {
-#if BUILDFLAG(IS_IOS)
+#if PA_BUILDFLAG(IS_IOS)
     // Workaround for incorrectly failed iOS tests with GTEST_SKIP,
     // see crbug.com/912138 for details.
     return;
@@ -247,8 +248,9 @@ TEST(PartitionAllocPageAllocatorTest,
   ptrdiff_t invalid_offset =
       reinterpret_cast<char*>(arm_bti_test_function_invalid_offset) -
       reinterpret_cast<char*>(arm_bti_test_function);
-  memcpy(reinterpret_cast<void*>(buffer),
-         reinterpret_cast<void*>(arm_bti_test_function), function_range);
+  PA_UNSAFE_TODO(memcpy(reinterpret_cast<void*>(buffer),
+                        reinterpret_cast<void*>(arm_bti_test_function),
+                        function_range));
 
   // Next re-protect the page.
   SetSystemPagesAccess(
@@ -265,8 +267,9 @@ TEST(PartitionAllocPageAllocatorTest,
       reinterpret_cast<BTITestFunction>(buffer + invalid_offset);
   EXPECT_EQ(bti_enabled_fn(15), 18);
   // Next, attempt to call the function without the entrypoint.
-  EXPECT_EXIT({ bti_invalid_fn(15); }, testing::KilledBySignal(SIGILL),
-              "");  // Should crash with SIGILL.
+  EXPECT_EXIT(
+      { bti_invalid_fn(15); }, testing::KilledBySignal(SIGILL),
+      "");  // Should crash with SIGILL.
   FreePages(buffer, PageAllocationGranularity());
 #else
   PA_NOTREACHED();
@@ -282,7 +285,7 @@ TEST(PartitionAllocPageAllocatorTest,
   base::CPU cpu;
   if (!cpu.has_mte()) {
     // Skip this test if there's no MTE.
-#if BUILDFLAG(IS_IOS)
+#if PA_BUILDFLAG(IS_IOS)
     return;
 #else
     GTEST_SKIP();
@@ -290,6 +293,13 @@ TEST(PartitionAllocPageAllocatorTest,
   }
 
 #if defined(MTE_KILLED_BY_SIGNAL_AVAILABLE)
+  ChangeMemoryTaggingModeForCurrentThread(
+      TagViolationReportingMode::kSynchronous);
+  ASSERT_TRUE(GetMemoryTaggingModeForCurrentThread() !=
+              TagViolationReportingMode::kDisabled)
+      << "Test was built with MTE enabled and the CPU supports it, but MTE is "
+         "currently disabled in the device.";
+
   uintptr_t buffer =
       AllocPages(PageAllocationGranularity(), PageAllocationGranularity(),
                  PageAccessibilityConfiguration(
@@ -310,13 +320,14 @@ TEST(PartitionAllocPageAllocatorTest,
   EXPECT_EXIT(
       {
   // Switch to synchronous mode.
-#if BUILDFLAG(IS_ANDROID)
-        ChangeMemoryTaggingModeForAllThreadsPerProcess(
+#if PA_BUILDFLAG(IS_ANDROID)
+        bool success = ChangeMemoryTaggingModeForAllThreadsPerProcess(
             TagViolationReportingMode::kSynchronous);
+        EXPECT_TRUE(success);
 #else
         ChangeMemoryTaggingModeForCurrentThread(
             TagViolationReportingMode::kSynchronous);
-#endif  // BUILDFLAG(IS_ANDROID)
+#endif  // PA_BUILDFLAG(IS_ANDROID)
         EXPECT_EQ(GetMemoryTaggingModeForCurrentThread(),
                   TagViolationReportingMode::kSynchronous);
         // Write to the buffer using its previous tag. A segmentation fault
@@ -339,7 +350,7 @@ TEST(PartitionAllocPageAllocatorTest,
   base::CPU cpu;
   if (!cpu.has_mte()) {
     // Skip this test if there's no MTE.
-#if BUILDFLAG(IS_IOS)
+#if PA_BUILDFLAG(IS_IOS)
     return;
 #else
     GTEST_SKIP();
@@ -347,6 +358,13 @@ TEST(PartitionAllocPageAllocatorTest,
   }
 
 #if defined(MTE_KILLED_BY_SIGNAL_AVAILABLE)
+  ChangeMemoryTaggingModeForCurrentThread(
+      TagViolationReportingMode::kSynchronous);
+  ASSERT_TRUE(GetMemoryTaggingModeForCurrentThread() !=
+              TagViolationReportingMode::kDisabled)
+      << "Test was built with MTE enabled and the CPU supports it, but MTE is "
+         "currently disabled in the device.";
+
   uintptr_t buffer =
       AllocPages(PageAllocationGranularity(), PageAllocationGranularity(),
                  PageAccessibilityConfiguration(
@@ -362,13 +380,14 @@ TEST(PartitionAllocPageAllocatorTest,
   EXPECT_EXIT(
       {
   // Switch to asynchronous mode.
-#if BUILDFLAG(IS_ANDROID)
-        ChangeMemoryTaggingModeForAllThreadsPerProcess(
+#if PA_BUILDFLAG(IS_ANDROID)
+        bool success = ChangeMemoryTaggingModeForAllThreadsPerProcess(
             TagViolationReportingMode::kAsynchronous);
+        EXPECT_TRUE(success);
 #else
         ChangeMemoryTaggingModeForCurrentThread(
             TagViolationReportingMode::kAsynchronous);
-#endif  // BUILDFLAG(IS_ANDROID)
+#endif  // PA_BUILDFLAG(IS_ANDROID)
         EXPECT_EQ(GetMemoryTaggingModeForCurrentThread(),
                   TagViolationReportingMode::kAsynchronous);
         // Write to the buffer using its previous tag. A fault should be
@@ -387,7 +406,7 @@ TEST(PartitionAllocPageAllocatorTest,
 }
 
 // Test permission setting on POSIX, where we can set a trap handler.
-#if BUILDFLAG(IS_POSIX)
+#if PA_BUILDFLAG(IS_POSIX)
 
 namespace {
 sigjmp_buf g_continuation;
@@ -398,7 +417,7 @@ void SignalHandler(int signal, siginfo_t* info, void*) {
 }  // namespace
 
 // On Mac, sometimes we get SIGBUS instead of SIGSEGV, so handle that too.
-#if BUILDFLAG(IS_APPLE)
+#if PA_BUILDFLAG(IS_APPLE)
 #define EXTRA_FAULT_BEGIN_ACTION() \
   struct sigaction old_bus_action; \
   sigaction(SIGBUS, &action, &old_bus_action);
@@ -452,14 +471,18 @@ TEST(PartitionAllocPageAllocatorTest, InaccessiblePages) {
   FreePages(buffer, PageAllocationGranularity());
 }
 
-// TODO(crbug.com/1291888): Understand why we can't read from Read-Execute pages
-// on iOS.
-#if BUILDFLAG(IS_IOS)
-#define MAYBE_ReadExecutePages DISABLED_ReadExecutePages
-#else
-#define MAYBE_ReadExecutePages ReadExecutePages
-#endif  // BUILDFLAG(IS_IOS)
-TEST(PartitionAllocPageAllocatorTest, MAYBE_ReadExecutePages) {
+TEST(PartitionAllocPageAllocatorTest, ReadExecutePages) {
+  // Before iOS 18.6 on devices this appears to trigger a mach exception and not
+  // a fault signal, which doesn't work with the FAULT_TEST_BEGIN/FAULT_TEST_END
+  // logic. Skip on these devices.
+#if PA_BUILDFLAG(IS_IOS) && !TARGET_IPHONE_SIMULATOR
+  if (__builtin_available(iOS 18.6, *)) {
+  } else {
+    // Workaround for incorrectly failed iOS tests with GTEST_SKIP,
+    // see crbug.com/912138 for details.
+    return;
+  }
+#endif  // PA_BUILDFLAG(IS_IOS) && !TARGET_IPHONE_SIMULATOR
   uintptr_t buffer =
       AllocPages(PageAllocationGranularity(), PageAllocationGranularity(),
                  PageAccessibilityConfiguration(
@@ -483,7 +506,7 @@ TEST(PartitionAllocPageAllocatorTest, MAYBE_ReadExecutePages) {
   FreePages(buffer, PageAllocationGranularity());
 }
 
-#endif  // BUILDFLAG(IS_POSIX)
+#endif  // PA_BUILDFLAG(IS_POSIX)
 
 #if defined(LINUX_NAME_REGION)
 TEST(PartitionAllocPageAllocatorTest, PageTagging) {
@@ -497,9 +520,9 @@ TEST(PartitionAllocPageAllocatorTest, PageTagging) {
 
   auto is_region_named = [](uintptr_t start_address) {
     std::string proc_maps;
-    EXPECT_TRUE(::base::debug::ReadProcMaps(&proc_maps));
-    std::vector<::base::debug::MappedMemoryRegion> regions;
-    EXPECT_TRUE(::base::debug::ParseProcMaps(proc_maps, &regions));
+    EXPECT_TRUE(base::debug::ReadProcMaps(&proc_maps));
+    std::vector<base::debug::MappedMemoryRegion> regions;
+    EXPECT_TRUE(base::debug::ParseProcMaps(proc_maps, &regions));
 
     bool found = false;
     for (const auto& region : regions) {
@@ -516,7 +539,7 @@ TEST(PartitionAllocPageAllocatorTest, PageTagging) {
   DecommitAndZeroSystemPages(buffer, size);
   bool after = is_region_named(buffer);
 
-#if BUILDFLAG(IS_ANDROID)
+#if PA_BUILDFLAG(IS_ANDROID)
   EXPECT_TRUE(before) << "VMA tagging should always work on Android";
 #endif
   // When not running on Android, the prctl() command may be defined in the
@@ -539,7 +562,7 @@ TEST(PartitionAllocPageAllocatorTest, DecommitErasesMemory) {
                                 PageTag::kChromium);
   ASSERT_TRUE(buffer);
 
-  memset(reinterpret_cast<void*>(buffer), 42, size);
+  PA_UNSAFE_TODO(memset(reinterpret_cast<void*>(buffer), 42, size));
 
   DecommitSystemPages(buffer, size,
                       PageAccessibilityDisposition::kAllowKeepForPerf);
@@ -551,7 +574,7 @@ TEST(PartitionAllocPageAllocatorTest, DecommitErasesMemory) {
   uint8_t* recommitted_buffer = reinterpret_cast<uint8_t*>(buffer);
   uint32_t sum = 0;
   for (size_t i = 0; i < size; i++) {
-    sum += recommitted_buffer[i];
+    sum += PA_UNSAFE_TODO(recommitted_buffer[i]);
   }
   EXPECT_EQ(0u, sum) << "Data was not erased";
 
@@ -566,17 +589,17 @@ TEST(PartitionAllocPageAllocatorTest, DecommitAndZero) {
                                 PageTag::kChromium);
   ASSERT_TRUE(buffer);
 
-  memset(reinterpret_cast<void*>(buffer), 42, size);
+  PA_UNSAFE_TODO(memset(reinterpret_cast<void*>(buffer), 42, size));
 
   DecommitAndZeroSystemPages(buffer, size);
 
 // Test permission setting on POSIX, where we can set a trap handler.
-#if BUILDFLAG(IS_POSIX)
+#if PA_BUILDFLAG(IS_POSIX)
 
   FAULT_TEST_BEGIN()
 
   // Reading from buffer should now fault.
-  int* buffer0 = reinterpret_cast<int*>(buffer);
+  volatile int* buffer0 = reinterpret_cast<int*>(buffer);
   int buffer0_contents = *buffer0;
   EXPECT_EQ(buffer0_contents, *buffer0);
   EXPECT_TRUE(false);
@@ -595,7 +618,7 @@ TEST(PartitionAllocPageAllocatorTest, DecommitAndZero) {
   uint8_t* recommitted_buffer = reinterpret_cast<uint8_t*>(buffer);
   uint32_t sum = 0;
   for (size_t i = 0; i < size; i++) {
-    sum += recommitted_buffer[i];
+    sum += PA_UNSAFE_TODO(recommitted_buffer[i]);
   }
   EXPECT_EQ(0u, sum) << "Data was not erased";
 
@@ -631,7 +654,17 @@ TEST(PartitionAllocPageAllocatorTest, MappedPagesAccounting) {
   }
 }
 
-TEST(PartitionAllocPageAllocatorTest, AllocInaccessibleWillJitLater) {
+#if PA_BUILDFLAG(IS_IOS)
+// MAP_JIT is not supported without the com.apple.developer.cs.allow-jit
+// entitlement which unittests do not have. To toggle W^X of pages
+// BrowserEngineKit library is needed which is not supported
+// until the 17.4 SDK.
+#define MAYBE_AllocInaccessibleWillJitLater \
+  DISABLED_AllocInaccessibleWillJitLater
+#else
+#define MAYBE_AllocInaccessibleWillJitLater AllocInaccessibleWillJitLater
+#endif  // PA_BUILDFLAG(IS_IOS)
+TEST(PartitionAllocPageAllocatorTest, MAYBE_AllocInaccessibleWillJitLater) {
   // Verify that kInaccessibleWillJitLater allows read/write, and read/execute
   // permissions to be set.
   uintptr_t buffer =
@@ -650,14 +683,14 @@ TEST(PartitionAllocPageAllocatorTest, AllocInaccessibleWillJitLater) {
   FreePages(buffer, PageAllocationGranularity());
 }
 
-#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
-// TODO(crbug.com/1452151): Fix test to GTEST_SKIP() if MAP_JIT is in-use,
+#if PA_BUILDFLAG(IS_IOS) || PA_BUILDFLAG(IS_MAC)
+// TODO(crbug.com/40916148): Fix test to GTEST_SKIP() if MAP_JIT is in-use,
 // or to be run otherwise, since kReadWriteExecute is used in some other
 // configurations.
 #define MAYBE_AllocReadWriteExecute DISABLED_AllocReadWriteExecute
 #else
 #define MAYBE_AllocReadWriteExecute AllocReadWriteExecute
-#endif  // BUILDFLAG(IS_IOS) || BUILDFLAG(IS_MAC)
+#endif  // PA_BUILDFLAG(IS_IOS) || PA_BUILDFLAG(IS_MAC)
 TEST(PartitionAllocPageAllocatorTest, MAYBE_AllocReadWriteExecute) {
   // Verify that kReadWriteExecute is similarly functional.
   uintptr_t buffer =

@@ -6,17 +6,23 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/files/file.h"
+#include "base/files/file_path.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/threading/platform_thread.h"
-#include "build/build_config.h"
+#include "base/time/time.h"
 #include "sql/initialization.h"
 #include "sql/sandboxed_vfs_file.h"
 #include "sql/vfs_wrapper.h"
@@ -118,32 +124,26 @@ base::Time SqliteEpoch() {
       -kUnixEpochAsJulianDay * base::Time::kMillisecondsPerDay);
 }
 
-#if DCHECK_IS_ON()
 // `full_path_cstr` must be a filename argument passed to the VFS from SQLite.
 SandboxedVfsFileType VfsFileTypeFromPath(const char* full_path_cstr) {
-  base::StringPiece full_path(full_path_cstr);
+  std::string_view full_path(full_path_cstr);
 
-  const char* database_file_cstr = sqlite3_filename_database(full_path_cstr);
-  base::StringPiece database_file(database_file_cstr);
-  if (full_path == database_file)
+  if (full_path == sqlite3_filename_database(full_path_cstr)) {
     return SandboxedVfsFileType::kDatabase;
+  }
 
-  const char* journal_file_cstr = sqlite3_filename_journal(full_path_cstr);
-  base::StringPiece journal_file(journal_file_cstr);
-  if (full_path == journal_file)
+  if (full_path == sqlite3_filename_journal(full_path_cstr)) {
     return SandboxedVfsFileType::kJournal;
+  }
 
-  const char* wal_file_cstr = sqlite3_filename_wal(full_path_cstr);
-  base::StringPiece wal_file(wal_file_cstr);
-  if (full_path == wal_file)
+  if (full_path == sqlite3_filename_wal(full_path_cstr)) {
     return SandboxedVfsFileType::kWal;
+  }
 
   NOTREACHED()
       << "Argument is not a file name buffer passed from SQLite to a VFS: "
       << full_path;
-  return SandboxedVfsFileType::kDatabase;
 }
-#endif  // DCHECK_IS_ON()
 
 }  // namespace
 
@@ -178,11 +178,20 @@ int SandboxedVfs::Open(const char* full_path,
     return Open(full_path, result_file, new_flags, granted_flags);
   }
 
-  SandboxedVfsFile::Create(std::move(file), std::move(file_path),
-#if DCHECK_IS_ON()
-                           VfsFileTypeFromPath(full_path),
-#endif  // DCHECK_IS_ON()
-                           this, result_file);
+  SandboxedVfsFile* vfs_file =
+      delegate_->RetrieveSandboxedVfsFile(std::move(file), std::move(file_path),
+                                          VfsFileTypeFromPath(full_path), this);
+  if (!vfs_file) {
+    return SQLITE_CANTOPEN;
+  }
+
+  // Bind the sandboxed file pointer with the sqlite_file structure. This
+  // pointer can later be unboxed (retrieved from the vfs_file structure after
+  // an upcast from sqlite_file* to a SandboxedVfsFileSqliteBridge*) and use
+  // this pointer to redirect the calls (from the sqlite io_methods calls) to
+  // their corresponding sandboxed implementation.
+  SandboxedVfsFile::BindSandboxedFile(vfs_file, result_file);
+
   if (granted_flags)
     *granted_flags = requested_flags;
   return SQLITE_OK;
@@ -215,7 +224,6 @@ int SandboxedVfs::Access(const char* full_path, int flags, int& result) {
       break;
     default:
       NOTREACHED() << "Unsupported xAccess flags: " << flags;
-      return SQLITE_ERROR;
   }
   return SQLITE_OK;
 }
@@ -232,7 +240,7 @@ int SandboxedVfs::FullPathname(const char* file_path,
   size_t file_path_size = std::strlen(file_path) + 1;
   if (static_cast<size_t>(result_size) < file_path_size)
     return SQLITE_CANTOPEN;
-  std::memcpy(result, file_path, file_path_size);
+  UNSAFE_TODO(std::memcpy(result, file_path, file_path_size));
   return SQLITE_OK;
 }
 
@@ -241,7 +249,7 @@ int SandboxedVfs::Randomness(int result_size, char* result) {
   DCHECK(result);
 
   // TODO(pwnall): Figure out if we need a real implementation.
-  std::memset(result, 0, result_size);
+  UNSAFE_TODO(std::memset(result, 0, result_size));
   return result_size;
 }
 

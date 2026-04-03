@@ -25,16 +25,17 @@ const char kSize[] = "size";
 
 bool ParseResult(const std::string& status, std::string* ip, double* latency) {
   // Parses the result and returns IP and latency.
-  std::optional<base::Value> parsed_value(base::JSONReader::Read(status));
+  std::optional<base::Value> parsed_value(
+      base::JSONReader::Read(status, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
   if (!parsed_value || !parsed_value->is_dict())
     return false;
 
-  base::Value::Dict& result = parsed_value->GetDict();
+  base::DictValue& result = parsed_value->GetDict();
   if (result.size() != 1)
     return false;
 
   // Returns the first item.
-  base::Value::Dict::iterator iterator = result.begin();
+  base::DictValue::iterator iterator = result.begin();
   if (!iterator->second.is_dict())
     return false;
 

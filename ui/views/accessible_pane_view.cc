@@ -6,10 +6,12 @@
 
 #include <memory>
 
+#include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/focus/focus_search.h"
 #include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget.h"
@@ -50,7 +52,7 @@ class AccessiblePaneViewFocusSearch : public FocusSearch {
 AccessiblePaneView::AccessiblePaneView()
     : last_focused_view_tracker_(std::make_unique<ViewTracker>()) {
   focus_search_ = std::make_unique<AccessiblePaneViewFocusSearch>(this);
-  SetAccessibilityProperties(ax::mojom::Role::kPane);
+  GetViewAccessibility().SetRole(ax::mojom::Role::kPane);
 }
 
 AccessiblePaneView::~AccessiblePaneView() {
@@ -60,15 +62,18 @@ AccessiblePaneView::~AccessiblePaneView() {
 }
 
 bool AccessiblePaneView::SetPaneFocus(views::View* initial_focus) {
-  if (!GetVisible())
+  if (!GetVisible()) {
     return false;
+  }
 
-  if (!focus_manager_)
+  if (!focus_manager_) {
     focus_manager_ = GetFocusManager();
+  }
 
   View* focused_view = focus_manager_->GetFocusedView();
-  if (focused_view && !ContainsForFocusSearch(this, focused_view))
+  if (focused_view && !ContainsForFocusSearch(this, focused_view)) {
     last_focused_view_tracker_->SetView(focused_view);
+  }
 
   // Use the provided initial focus if it's visible and enabled, otherwise
   // use the first focusable child.
@@ -78,8 +83,9 @@ bool AccessiblePaneView::SetPaneFocus(views::View* initial_focus) {
   }
 
   // Return false if there are no focusable children.
-  if (!initial_focus)
+  if (!initial_focus) {
     return false;
+  }
 
   focus_manager_->SetFocusedView(initial_focus);
 
@@ -93,8 +99,9 @@ bool AccessiblePaneView::SetPaneFocus(views::View* initial_focus) {
   focus_manager_->AdvanceFocusIfNecessary();
 
   // If we already have pane focus, we're done.
-  if (pane_has_focus_)
+  if (pane_has_focus_) {
     return true;
+  }
 
   // Otherwise, set accelerators and start listening for focus change events.
   pane_has_focus_ = true;
@@ -103,6 +110,10 @@ bool AccessiblePaneView::SetPaneFocus(views::View* initial_focus) {
   focus_manager_->RegisterAccelerator(home_key_, normal, this);
   focus_manager_->RegisterAccelerator(end_key_, normal, this);
   focus_manager_->RegisterAccelerator(escape_key_, normal, this);
+  if (TraverseUsingUpDownKeys()) {
+    focus_manager_->RegisterAccelerator(up_key_, normal, this);
+    focus_manager_->RegisterAccelerator(down_key_, normal, this);
+  }
   focus_manager_->RegisterAccelerator(left_key_, normal, this);
   focus_manager_->RegisterAccelerator(right_key_, normal, this);
   focus_manager_->AddFocusChangeListener(this);
@@ -112,6 +123,10 @@ bool AccessiblePaneView::SetPaneFocus(views::View* initial_focus) {
 
 bool AccessiblePaneView::SetPaneFocusAndFocusDefault() {
   return SetPaneFocus(GetDefaultFocusableChild());
+}
+
+bool AccessiblePaneView::TraverseUsingUpDownKeys() {
+  return false;
 }
 
 views::View* AccessiblePaneView::GetDefaultFocusableChild() {
@@ -133,6 +148,10 @@ void AccessiblePaneView::RemovePaneFocus() {
   focus_manager_->UnregisterAccelerator(home_key_, this);
   focus_manager_->UnregisterAccelerator(end_key_, this);
   focus_manager_->UnregisterAccelerator(escape_key_, this);
+  if (TraverseUsingUpDownKeys()) {
+    focus_manager_->UnregisterAccelerator(up_key_, this);
+    focus_manager_->UnregisterAccelerator(down_key_, this);
+  }
   focus_manager_->UnregisterAccelerator(left_key_, this);
   focus_manager_->UnregisterAccelerator(right_key_, this);
 }
@@ -163,17 +182,22 @@ views::View* AccessiblePaneView::GetLastFocusableChild() {
 // View overrides:
 
 views::FocusTraversable* AccessiblePaneView::GetPaneFocusTraversable() {
-  if (pane_has_focus_)
+  if (pane_has_focus_) {
     return this;
-  else
+  } else {
     return nullptr;
+  }
 }
 
 bool AccessiblePaneView::AcceleratorPressed(
     const ui::Accelerator& accelerator) {
   views::View* focused_view = focus_manager_->GetFocusedView();
-  if (!ContainsForFocusSearch(this, focused_view))
+  if (!ContainsForFocusSearch(this, focused_view)) {
     return false;
+  }
+
+  // "Previous" and "Next" directions depend on UI direction.
+  bool rtl = base::i18n::IsRTL();
 
   using FocusChangeReason = views::FocusManager::FocusChangeReason;
   switch (accelerator.key_code()) {
@@ -181,8 +205,9 @@ bool AccessiblePaneView::AcceleratorPressed(
       RemovePaneFocus();
       View* last_focused_view = last_focused_view_tracker_->view();
       // Ignore |last_focused_view| if it's no longer in the same widget.
-      if (last_focused_view && GetWidget() != last_focused_view->GetWidget())
+      if (last_focused_view && GetWidget() != last_focused_view->GetWidget()) {
         last_focused_view = nullptr;
+      }
       if (last_focused_view) {
         focus_manager_->SetFocusedViewWithReason(
             last_focused_view, FocusChangeReason::kFocusRestore);
@@ -191,11 +216,23 @@ bool AccessiblePaneView::AcceleratorPressed(
       }
       return true;
     }
-    case ui::VKEY_LEFT:
+    case ui::VKEY_UP:
+      if (!TraverseUsingUpDownKeys()) {
+        return false;
+      }
       focus_manager_->AdvanceFocus(true);
       return true;
-    case ui::VKEY_RIGHT:
+    case ui::VKEY_DOWN:
+      if (!TraverseUsingUpDownKeys()) {
+        return false;
+      }
       focus_manager_->AdvanceFocus(false);
+      return true;
+    case ui::VKEY_LEFT:
+      focus_manager_->AdvanceFocus(!rtl);
+      return true;
+    case ui::VKEY_RIGHT:
+      focus_manager_->AdvanceFocus(rtl);
       return true;
     case ui::VKEY_HOME:
       focus_manager_->SetFocusedViewWithReason(
@@ -232,8 +269,9 @@ void AccessiblePaneView::OnWillChangeFocus(views::View* focused_before,
 
 void AccessiblePaneView::OnDidChangeFocus(views::View* focused_before,
                                           views::View* focused_now) {
-  if (!focused_now)
+  if (!focused_now) {
     return;
+  }
 
   views::FocusManager::FocusChangeReason reason =
       focus_manager_->focus_change_reason();

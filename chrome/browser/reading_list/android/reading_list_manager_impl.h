@@ -15,18 +15,19 @@
 
 class ReadingListModel;
 
+namespace reading_list {
+
 // Implementation of ReadingListManager.
 // 1. Holds a in memory bookmark node tree. Contains a folder root and reading
 // list nodes as children. Only has one level of children.
 // 2. Talk to reading list model, and sync with the in memory bookmark tree.
 // 3. Talk to observers to report model change events.
-// TODO(crbug.com/1510550): Refactor this to be part of the bookmarks dir.
-// - Better renamed to ReadingListAsBookmarkAdapter when moved.
 class ReadingListManagerImpl : public ReadingListManager,
                                public ReadingListModelObserver {
  public:
   using IdGenerationFunction = base::RepeatingCallback<int64_t(void)>;
 
+  // `reading_list_model` must not be null and must outlive `this`.
   ReadingListManagerImpl(ReadingListModel* reading_list_model,
                          const IdGenerationFunction& id_gen_func);
   ~ReadingListManagerImpl() override;
@@ -38,8 +39,6 @@ class ReadingListManagerImpl : public ReadingListManager,
                               reading_list::EntrySource source) override;
   void ReadingListWillRemoveEntry(const ReadingListModel* model,
                                   const GURL& url) override;
-  void ReadingListDidMoveEntry(const ReadingListModel* model,
-                               const GURL& url) override;
   void ReadingListDidUpdateEntry(const ReadingListModel* model,
                                  const GURL& url) override;
   void ReadingListDidApplyChanges(ReadingListModel* model) override;
@@ -62,6 +61,7 @@ class ReadingListManagerImpl : public ReadingListManager,
   bool IsReadingListBookmark(
       const bookmarks::BookmarkNode* node) const override;
   void Delete(const GURL& url) override;
+  void DeleteAll() override;
   const bookmarks::BookmarkNode* GetRoot() const override;
   size_t size() const override;
   size_t unread_size() const override;
@@ -69,9 +69,6 @@ class ReadingListManagerImpl : public ReadingListManager,
   void SetReadStatus(const GURL& url, bool read) override;
   bool GetReadStatus(const bookmarks::BookmarkNode* node) override;
   bool IsLoaded() const override;
-
-  // Sets the loaded bit for testing.
-  void SetIsLoadedForTests(bool is_loaded);
 
  private:
   // Finds the child in the bookmark tree by URL. Returns nullptr if not found.
@@ -102,5 +99,7 @@ class ReadingListManagerImpl : public ReadingListManager,
 
   base::ObserverList<Observer> observers_;
 };
+
+}  // namespace reading_list
 
 #endif  // CHROME_BROWSER_READING_LIST_ANDROID_READING_LIST_MANAGER_IMPL_H_

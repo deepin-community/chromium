@@ -70,9 +70,7 @@ features:
 future_on:
 - fuchsia
 owners:
-- drubery@chromium.org
-- rogerta@chromium.org
-- mad@chromium.org
+- cbe-cep-eng@google.com
 - domfc@chromium.org
 schema:
   items:
@@ -156,6 +154,8 @@ schema:
         type: object
     type: object
   type: array
+future_on:
+- android
 supported_on:
 - chrome.*:84-
 - chrome_os:84-

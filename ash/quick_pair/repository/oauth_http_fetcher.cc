@@ -23,10 +23,9 @@ namespace quick_pair {
 
 OAuthHttpFetcher::OAuthHttpFetcher(
     const net::PartialNetworkTrafficAnnotationTag& traffic_annotation,
-    const std::string& oauth_scope)
-    : traffic_annotation_(traffic_annotation) {
-  oauth_scopes_.insert(oauth_scope);
-}
+    signin::OAuthConsumerId oauth_consumer_id)
+    : traffic_annotation_(traffic_annotation),
+      oauth_consumer_id_(oauth_consumer_id) {}
 
 OAuthHttpFetcher::~OAuthHttpFetcher() = default;
 
@@ -54,30 +53,21 @@ void OAuthHttpFetcher::StartRequest(const GURL& url,
                                     FetchCompleteCallback callback) {
   CD_LOG(VERBOSE, Feature::FP) << __func__ << ": executing request to: " << url;
 
-  if (has_call_started_) {
-    CD_LOG(ERROR, Feature::FP)
-        << __func__
-        << ": Attempted to make an API call, but there is already a "
-           "request in progress.";
-    NOTREACHED();
-    return;
-  }
+  CHECK(!has_call_started_)
+      << __func__
+      << ": Attempted to make an API call, but there is already a "
+         "request in progress.";
 
-  signin::IdentityManager* identity_manager =
+  signin::IdentityManager* const identity_manager =
       QuickPairBrowserDelegate::Get()->GetIdentityManager();
-  if (!identity_manager) {
-    CD_LOG(ERROR, Feature::FP)
-        << __func__ << ": IdentityManager is not available.";
-    NOTREACHED();
-    return;
-  }
+  CHECK(identity_manager) << __func__ << ": IdentityManager is not available.";
 
   has_call_started_ = true;
   url_ = url;
   callback_ = std::move(callback);
   access_token_fetcher_ =
       std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-          "fastpair_client", identity_manager, oauth_scopes_,
+          oauth_consumer_id_, identity_manager,
           base::BindOnce(&OAuthHttpFetcher::OnAccessTokenFetched,
                          weak_ptr_factory_.GetWeakPtr()),
           signin::PrimaryAccountAccessTokenFetcher::Mode::kImmediate,
@@ -92,7 +82,7 @@ void OAuthHttpFetcher::OnAccessTokenFetched(
     CD_LOG(WARNING, Feature::FP)
         << __func__ << ": Failed to retrieve access token. "
         << error.ToString();
-    std::move(callback_).Run(nullptr, nullptr);
+    std::move(callback_).Run(std::nullopt, nullptr);
     return;
   }
 
@@ -101,7 +91,7 @@ void OAuthHttpFetcher::OnAccessTokenFetched(
   if (!url_loader_factory) {
     CD_LOG(WARNING, Feature::FP)
         << __func__ << ": URLLoaderFactory is not available.";
-    std::move(callback_).Run(nullptr, nullptr);
+    std::move(callback_).Run(std::nullopt, nullptr);
     return;
   }
 
@@ -137,7 +127,7 @@ std::string OAuthHttpFetcher::CreateApiCallBodyContentType() {
   }
 }
 
-std::string OAuthHttpFetcher::GetRequestTypeForBody(const std::string& body) {
+std::string OAuthHttpFetcher::GetRequestTypeForBody(std::string_view body) {
   switch (request_type_) {
     case RequestType::GET:
       return "GET";
@@ -152,7 +142,7 @@ std::string OAuthHttpFetcher::GetRequestTypeForBody(const std::string& body) {
 
 void OAuthHttpFetcher::ProcessApiCallSuccess(
     const network::mojom::URLResponseHead* head,
-    std::unique_ptr<std::string> body) {
+    std::optional<std::string> body) {
   CD_LOG(INFO, Feature::FP) << __func__;
 
   std::move(callback_).Run(
@@ -164,12 +154,12 @@ void OAuthHttpFetcher::ProcessApiCallSuccess(
 void OAuthHttpFetcher::ProcessApiCallFailure(
     int net_error,
     const network::mojom::URLResponseHead* head,
-    std::unique_ptr<std::string> body) {
+    std::optional<std::string> body) {
   CD_LOG(WARNING, Feature::FP) << __func__ << ": net_err=" << net_error;
 
-  std::move(callback_).Run(
-      nullptr, std::make_unique<FastPairHttpResult>(/*net_error=*/net_error,
-                                                    /*head=*/head));
+  std::move(callback_).Run(std::nullopt, std::make_unique<FastPairHttpResult>(
+                                             /*net_error=*/net_error,
+                                             /*head=*/head));
 }
 
 net::PartialNetworkTrafficAnnotationTag

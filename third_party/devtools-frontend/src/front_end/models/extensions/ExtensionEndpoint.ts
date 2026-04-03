@@ -1,22 +1,22 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-type Response = {
-  requestId: number,
-  result: unknown,
-  error: Error|null,
-};
+interface Response {
+  requestId: number;
+  result: unknown;
+  error: Error|null;
+}
 
-type Event = {
-  event: string,
-};
+interface Event {
+  event: string;
+}
 
 type Message = MessageEvent<Response|Event>;
 
 export class ExtensionEndpoint {
   private readonly port: MessagePort;
-  private nextRequestId: number = 0;
+  private nextRequestId = 0;
   private pendingRequests: Map<number, {
     resolve: (arg: unknown) => void,
     reject: (error: Error) => void,

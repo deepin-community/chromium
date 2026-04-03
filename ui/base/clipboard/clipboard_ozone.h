@@ -6,17 +6,21 @@
 #define UI_BASE_CLIPBOARD_CLIPBOARD_OZONE_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "build/chromeos_buildflags.h"
+#include "base/memory/weak_ptr.h"
 #include "ui/base/clipboard/clipboard.h"
+#include "ui/base/clipboard/clipboard_metrics.h"
+#include "ui/ozone/public/platform_clipboard.h"
 
 namespace ui {
 
 // Clipboard implementation for Ozone-based ports. It delegates the platform
 // specifics to the PlatformClipboard instance provided by the Ozone platform.
-// Currently, used on Linux Desktop, i.e: X11 and Wayland, and Lacros platforms.
+// Currently, used on Linux Desktop, i.e: X11 and Wayland platforms.
 class ClipboardOzone : public Clipboard {
  public:
   ClipboardOzone(const ClipboardOzone&) = delete;
@@ -43,6 +47,40 @@ class ClipboardOzone : public Clipboard {
   void Clear(ClipboardBuffer buffer) override;
   void ReadAvailableTypes(ClipboardBuffer buffer,
                           const DataTransferEndpoint* data_dst,
+                          ReadAvailableTypesCallback callback) const override;
+  void ReadText(ClipboardBuffer buffer,
+                const DataTransferEndpoint* data_dst,
+                ReadTextCallback callback) const override;
+  void ReadAsciiText(ClipboardBuffer buffer,
+                     const DataTransferEndpoint* data_dst,
+                     ReadAsciiTextCallback callback) const override;
+  void ReadHTML(ClipboardBuffer buffer,
+                const DataTransferEndpoint* data_dst,
+                ReadHtmlCallback callback) const override;
+  void ReadSvg(ClipboardBuffer buffer,
+               const DataTransferEndpoint* data_dst,
+               ReadSvgCallback callback) const override;
+  void ReadRTF(ClipboardBuffer buffer,
+               const DataTransferEndpoint* data_dst,
+               ReadRTFCallback callback) const override;
+  void ReadPng(ClipboardBuffer buffer,
+               const DataTransferEndpoint* data_dst,
+               ReadPngCallback callback) const override;
+  void ReadDataTransferCustomData(
+      ClipboardBuffer buffer,
+      const std::u16string& type,
+      const DataTransferEndpoint* data_dst,
+      ReadDataTransferCustomDataCallback callback) const override;
+  void ReadFilenames(ClipboardBuffer buffer,
+                     const DataTransferEndpoint* data_dst,
+                     ReadFilenamesCallback callback) const override;
+  void ReadBookmark(const DataTransferEndpoint* data_dst,
+                    ReadBookmarkCallback callback) const override;
+  void ReadData(const ClipboardFormatType& format,
+                const DataTransferEndpoint* data_dst,
+                ReadDataCallback callback) const override;
+  void ReadAvailableTypes(ClipboardBuffer buffer,
+                          const DataTransferEndpoint* data_dst,
                           std::vector<std::u16string>* types) const override;
   void ReadText(ClipboardBuffer buffer,
                 const DataTransferEndpoint* data_dst,
@@ -62,13 +100,10 @@ class ClipboardOzone : public Clipboard {
   void ReadRTF(ClipboardBuffer buffer,
                const DataTransferEndpoint* data_dst,
                std::string* result) const override;
-  void ReadPng(ClipboardBuffer buffer,
-               const DataTransferEndpoint* data_dst,
-               ReadPngCallback callback) const override;
-  void ReadCustomData(ClipboardBuffer buffer,
-                      const std::u16string& type,
-                      const DataTransferEndpoint* data_dst,
-                      std::u16string* result) const override;
+  void ReadDataTransferCustomData(ClipboardBuffer buffer,
+                                  const std::u16string& type,
+                                  const DataTransferEndpoint* data_dst,
+                                  std::u16string* result) const override;
   void ReadFilenames(ClipboardBuffer buffer,
                      const DataTransferEndpoint* data_dst,
                      std::vector<ui::FileInfo>* result) const override;
@@ -84,36 +119,63 @@ class ClipboardOzone : public Clipboard {
   void WritePortableAndPlatformRepresentations(
       ClipboardBuffer buffer,
       const ObjectMap& objects,
+      const std::vector<RawData>& raw_objects,
       std::vector<Clipboard::PlatformRepresentation> platform_representations,
-      std::unique_ptr<DataTransferEndpoint> data_src) override;
-  void WriteText(base::StringPiece text) override;
-  void WriteHTML(base::StringPiece markup,
-                 std::optional<base::StringPiece> source_url) override;
-  void WriteSvg(base::StringPiece markup) override;
-  void WriteRTF(base::StringPiece rtf) override;
+      std::unique_ptr<DataTransferEndpoint> data_src,
+      uint32_t privacy_types) override;
+  void WriteText(std::string_view text) override;
+  void WriteHTML(std::string_view markup,
+                 std::optional<std::string_view> source_url) override;
+  void WriteSvg(std::string_view markup) override;
+  void WriteRTF(std::string_view rtf) override;
   void WriteFilenames(std::vector<ui::FileInfo> filenames) override;
-  void WriteBookmark(base::StringPiece title, base::StringPiece url) override;
+  void WriteBookmark(std::string_view title, std::string_view url) override;
   void WriteWebSmartPaste() override;
   void WriteBitmap(const SkBitmap& bitmap) override;
   void WriteData(const ClipboardFormatType& format,
                  base::span<const uint8_t> data) override;
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Used for syncing clipboard sources between Lacros and Ash in ChromeOS.
-  void AddClipboardSourceToDataOffer(const ClipboardBuffer buffer);
+  // Used to put a source URL in the clipboard on other Ozone platforms.
+  void AddSourceToClipboard(const ClipboardBuffer buffer,
+                            std::unique_ptr<DataTransferEndpoint> data_src);
 
-  // Updates the source for the given buffer. It is used by
-  // `async_clipboard_ozone_` whenever some text is copied from Ash and pasted
-  // to Lacros.
-  void SetSource(ClipboardBuffer buffer,
-                 std::unique_ptr<DataTransferEndpoint> data_src);
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
+  void OnReadAvailableTypes(
+      ClipboardBuffer buffer,
+      ReadAvailableTypesCallback callback,
+      const std::vector<std::string>& available_types) const;
+  void OnReadCustomData(std::vector<std::u16string> types,
+                        ReadAvailableTypesCallback callback,
+                        const PlatformClipboard::Data& data) const;
+
+  template <typename Callback, typename ProcessCallback>
+  void ReadAsync(ClipboardBuffer buffer,
+                 const std::string& mime_type,
+                 std::optional<DataTransferEndpoint> data_dst,
+                 ClipboardFormatMetric metric,
+                 Callback callback,
+                 ProcessCallback process_cb) const;
+
+  template <typename Callback, typename ProcessCallback>
+  void OnReadAsync(ClipboardBuffer buffer,
+                   std::optional<DataTransferEndpoint> data_dst,
+                   ClipboardFormatMetric metric,
+                   Callback callback,
+                   ProcessCallback process_cb,
+                   const PlatformClipboard::Data& data) const;
+
+  template <typename Callback, typename ProcessCallback>
+  void OnReadAsyncSource(std::optional<DataTransferEndpoint> data_dst,
+                         ClipboardFormatMetric metric,
+                         Callback callback,
+                         ProcessCallback process_cb,
+                         const PlatformClipboard::Data& data,
+                         std::optional<DataTransferEndpoint> data_src) const;
 
   class AsyncClipboardOzone;
 
   std::unique_ptr<AsyncClipboardOzone> async_clipboard_ozone_;
-  base::flat_map<ClipboardBuffer, std::unique_ptr<DataTransferEndpoint>>
-      data_src_;
+
+  mutable base::WeakPtrFactory<ClipboardOzone> weak_factory_{this};
 };
 
 }  // namespace ui

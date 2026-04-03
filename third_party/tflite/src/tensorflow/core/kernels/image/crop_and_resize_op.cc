@@ -41,12 +41,8 @@ limitations under the License.
 #include "tensorflow/core/platform/stream_executor.h"
 #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
-#if GOOGLE_CUDA
-#include "xla/stream_executor/cuda/cuda_activation.h"
-using stream_executor::cuda::ScopedActivateExecutorContext;
-#elif TENSORFLOW_USE_ROCM
+#if TENSORFLOW_USE_ROCM
 #include "tensorflow/core/platform/rocm.h"
-using stream_executor::rocm::ScopedActivateExecutorContext;
 #endif
 
 namespace tensorflow {
@@ -56,9 +52,9 @@ typedef Eigen::ThreadPoolDevice CPUDevice;
 typedef Eigen::GpuDevice GPUDevice;
 using Callback = std::function<void()>;
 
-static inline Status ParseAndCheckBoxSizes(const Tensor& boxes,
-                                           const Tensor& box_index,
-                                           int* num_boxes) {
+static inline absl::Status ParseAndCheckBoxSizes(const Tensor& boxes,
+                                                 const Tensor& box_index,
+                                                 int* num_boxes) {
   if (boxes.NumElements() == 0 && box_index.NumElements() == 0) {
     *num_boxes = 0;
     return absl::OkStatus();
@@ -87,14 +83,16 @@ static inline Status ParseAndCheckBoxSizes(const Tensor& boxes,
 // [0, batch_size) then calls done.
 template <typename Device>
 inline void RunIfBoxIndexIsValid(
-    OpKernelContext* context, typename TTypes<int32, 1>::ConstTensor box_index,
-    int batch_size, const Callback& compute, const Callback& done);
+    OpKernelContext* context,
+    typename TTypes<int32_t, 1>::ConstTensor box_index, int batch_size,
+    const Callback& compute, const Callback& done);
 
 // Specialization of CheckValidBoxIndex for a CPUDevice.
 template <>
 inline void RunIfBoxIndexIsValid<CPUDevice>(
-    OpKernelContext* context, typename TTypes<int32, 1>::ConstTensor box_index,
-    int batch_size, const Callback& compute, const Callback& done) {
+    OpKernelContext* context,
+    typename TTypes<int32_t, 1>::ConstTensor box_index, int batch_size,
+    const Callback& compute, const Callback& done) {
   const int num_boxes = box_index.dimension(0);
   for (int b = 0; b < num_boxes; ++b) {
     OP_REQUIRES_ASYNC(
@@ -149,6 +147,11 @@ class CropAndResizeOp : public AsyncOpKernel {
         context, image_height > 0 && image_width > 0,
         errors::InvalidArgument("image dimensions must be positive"), done);
     OP_REQUIRES_ASYNC(
+        context, boxes.dims() == 2,
+        absl::InvalidArgumentError(absl::StrCat("boxes must be 2-D, got: ",
+                                                boxes.shape().DebugString())),
+        done);
+    OP_REQUIRES_ASYNC(
         context, TensorShapeUtils::IsVector(box_index.shape()),
         errors::InvalidArgument("box_indices must be rank 1 but is shape ",
                                 box_index.shape().DebugString()),
@@ -168,7 +171,7 @@ class CropAndResizeOp : public AsyncOpKernel {
         done);
 
     // Copy and validate crop sizes.
-    auto crop_size_vec = crop_size.vec<int32>();
+    auto crop_size_vec = crop_size.vec<int32_t>();
     const int crop_height = internal::SubtleMustCopy(crop_size_vec(0));
     const int crop_width = internal::SubtleMustCopy(crop_size_vec(1));
     OP_REQUIRES_ASYNC(
@@ -191,7 +194,7 @@ class CropAndResizeOp : public AsyncOpKernel {
       const Tensor& box_index = context->input(2);
       const bool status = functor::CropAndResize<Device, T>()(
           context, image.tensor<T, 4>(), boxes.tensor<float, 2>(),
-          box_index.tensor<int32, 1>(), method_, extrapolation_value_,
+          box_index.tensor<int32_t, 1>(), method_, extrapolation_value_,
           output->tensor<float, 4>());
 
       if (!status) {
@@ -200,14 +203,14 @@ class CropAndResizeOp : public AsyncOpKernel {
       }
     };
 
-    RunIfBoxIndexIsValid<Device>(context, box_index.tensor<int32, 1>(),
+    RunIfBoxIndexIsValid<Device>(context, box_index.tensor<int32_t, 1>(),
                                  batch_size, std::move(compute_callback),
                                  std::move(done));
   }
 
  private:
   float extrapolation_value_;
-  string method_;
+  std::string method_;
 };
 
 // Partial specialization of CropAndResize functor for a CPUDevice.
@@ -217,8 +220,8 @@ struct CropAndResize<CPUDevice, T> {
   bool operator()(OpKernelContext* context,
                   typename TTypes<T, 4>::ConstTensor image,
                   typename TTypes<float, 2>::ConstTensor boxes,
-                  typename TTypes<int32, 1>::ConstTensor box_index,
-                  const string& method_name, float extrapolation_value,
+                  typename TTypes<int32_t, 1>::ConstTensor box_index,
+                  const std::string& method_name, float extrapolation_value,
                   typename TTypes<float, 4>::Tensor crops) {
     const int batch_size = image.dimension(0);
     const int image_height = image.dimension(1);
@@ -402,7 +405,7 @@ class CropAndResizeGradImageOp : public AsyncOpKernel {
                       errors::InvalidArgument("image_size must have 4 elements",
                                               image_size.shape().DebugString()),
                       done);
-    auto image_size_vec = image_size.vec<int32>();
+    auto image_size_vec = image_size.vec<int32_t>();
     const int batch_size = internal::SubtleMustCopy(image_size_vec(0));
     const int image_height = internal::SubtleMustCopy(image_size_vec(1));
     const int image_width = internal::SubtleMustCopy(image_size_vec(2));
@@ -439,7 +442,7 @@ class CropAndResizeGradImageOp : public AsyncOpKernel {
       const Tensor& box_index = context->input(2);
       const bool status = functor::CropAndResizeBackpropImage<Device, T>()(
           context, grads.tensor<float, 4>(), boxes.tensor<float, 2>(),
-          box_index.tensor<int32, 1>(), output->tensor<T, 4>(), method_);
+          box_index.tensor<int32_t, 1>(), output->tensor<T, 4>(), method_);
 
       if (!status) {
         context->SetStatus(errors::Internal(
@@ -447,13 +450,13 @@ class CropAndResizeGradImageOp : public AsyncOpKernel {
       }
     };
 
-    RunIfBoxIndexIsValid<Device>(context, box_index.tensor<int32, 1>(),
+    RunIfBoxIndexIsValid<Device>(context, box_index.tensor<int32_t, 1>(),
                                  batch_size, std::move(compute_callback),
                                  std::move(done));
   }
 
  private:
-  string method_;
+  std::string method_;
 };
 
 // Partial specialization of CropAndResizeBackpropImage functor for a CPUDevice.
@@ -463,9 +466,9 @@ struct CropAndResizeBackpropImage<CPUDevice, T> {
   bool operator()(const OpKernelContext* context,
                   typename TTypes<float, 4>::ConstTensor grads,
                   typename TTypes<float, 2>::ConstTensor boxes,
-                  typename TTypes<int32, 1>::ConstTensor box_index,
+                  typename TTypes<int32_t, 1>::ConstTensor box_index,
                   typename TTypes<T, 4>::Tensor grads_image,
-                  const string& method_name) {
+                  const std::string& method_name) {
     const int batch_size = grads_image.dimension(0);
     const int image_height = grads_image.dimension(1);
     const int image_width = grads_image.dimension(2);
@@ -582,7 +585,7 @@ class CropAndResizeGradBoxesOp : public AsyncOpKernel {
  public:
   explicit CropAndResizeGradBoxesOp(OpKernelConstruction* context)
       : AsyncOpKernel(context) {
-    string method;
+    std::string method;
     OP_REQUIRES_OK(context, context->GetAttr("method", &method));
     OP_REQUIRES(context, method == "bilinear",
                 errors::InvalidArgument("method must be 'bilinear'", method));
@@ -657,14 +660,14 @@ class CropAndResizeGradBoxesOp : public AsyncOpKernel {
       const bool status = functor::CropAndResizeBackpropBoxes<Device, T>()(
           context->eigen_device<Device>(), grads.tensor<float, 4>(),
           image.tensor<T, 4>(), boxes.tensor<float, 2>(),
-          box_index.tensor<int32, 1>(), output->tensor<float, 2>());
+          box_index.tensor<int32_t, 1>(), output->tensor<float, 2>());
       if (!status) {
         context->SetStatus(errors::Internal(
             "Failed to launch CropAndResizeBackpropBoxes kernel."));
       }
     };
 
-    RunIfBoxIndexIsValid<Device>(context, box_index.tensor<int32, 1>(),
+    RunIfBoxIndexIsValid<Device>(context, box_index.tensor<int32_t, 1>(),
                                  batch_size, std::move(compute_callback),
                                  std::move(done));
   }
@@ -678,7 +681,7 @@ struct CropAndResizeBackpropBoxes<CPUDevice, T> {
                   typename TTypes<float, 4>::ConstTensor grads,
                   typename TTypes<T, 4>::ConstTensor image,
                   typename TTypes<float, 2>::ConstTensor boxes,
-                  typename TTypes<int32, 1>::ConstTensor box_index,
+                  typename TTypes<int32_t, 1>::ConstTensor box_index,
                   typename TTypes<float, 2>::Tensor grads_boxes) {
     const int batch_size = image.dimension(0);
     const int image_height = image.dimension(1);
@@ -868,9 +871,8 @@ inline void RunIfBoxIndexIsValid<GPUDevice>(
   se::DeviceMemoryBase wrapped(isvalid_dev.data(), sizeof(bool));
   const bool status =
       stream
-          ->ThenMemcpy(
-              isvalid_host_tensor.scalar<bool>().data() /* destination */,
-              wrapped /* source */, sizeof(bool))
+          ->Memcpy(isvalid_host_tensor.scalar<bool>().data() /* destination */,
+                   wrapped /* source */, sizeof(bool))
           .ok();
   OP_REQUIRES_ASYNC(
       context, status,
@@ -884,7 +886,8 @@ inline void RunIfBoxIndexIsValid<GPUDevice>(
                            compute, done]() {
     {
       auto stream = context->op_device_context()->stream();
-      ScopedActivateExecutorContext scoped_activation{stream->parent()};
+      std::unique_ptr<se::ActivateContext> scoped_activation =
+          stream->parent()->Activate();
       const bool isvalid = isvalid_host_tensor.scalar<bool>()();
       isvalid_dev_ref.Unref();
       OP_REQUIRES_ASYNC(
@@ -892,7 +895,7 @@ inline void RunIfBoxIndexIsValid<GPUDevice>(
           errors::OutOfRange("box_index has values outside [0, batch_size)"),
           done);
       compute();
-    }  // Release ScopedActivateExecutorContext to prevent deadlock when done
+    }  // Release ActivateContext to prevent deadlock when done
        // inlines another Op kernel, which may assume the original cuda Context.
 
     done();

@@ -15,13 +15,14 @@
 #include "tests/CtsEnforcement.h"
 #include "tests/TestType.h"
 #include "tools/Registry.h"
+#include "tools/timer/TimeUtils.h"
 
 #if defined(SK_GANESH) || defined(SK_GRAPHITE)
-namespace skgpu { enum class ContextType; }
+#include "tools/gpu/ContextType.h"
 #endif
 
 #if defined(SK_GANESH)
-#include "tools/gpu/GrContextFactory.h" // IWYU pragma: export (because it is used by a macro)
+#include "tools/ganesh/GrContextFactory.h"  // IWYU pragma: export (because it is used by a macro)
 #else
 namespace sk_gpu_test { class ContextInfo; }
 #endif
@@ -122,6 +123,11 @@ struct Test {
                     proc, nullptr, nullptr, nullptr, nullptr};
     }
 
+    static Test MakeCPUSerial(const char* name, CPUTestProc proc) {
+        return Test{name, TestType::kCPUSerial, CtsEnforcement::kNever,
+                    proc, nullptr, nullptr, nullptr, nullptr};
+    }
+
     static Test MakeGanesh(const char* name,
                            CtsEnforcement ctsEnforcement,
                            GaneshTestProc proc,
@@ -160,7 +166,8 @@ struct Test {
     }
 
     void cpu(skiatest::Reporter* r) const {
-        SkASSERT(this->fTestType == TestType::kCPU);
+        SkASSERT(this->fTestType == TestType::kCPU ||
+                 this->fTestType == TestType::kCPUSerial);
         TRACE_EVENT1("test_cpu", TRACE_FUNC, "name", this->fName/*these are static*/);
         this->fCPUProc(r);
     }
@@ -198,10 +205,11 @@ private:
 
 using TestRegistry = sk_tools::Registry<Test>;
 
-#if defined(SK_GANESH)
-using GpuContextType = skgpu::ContextType;
+
+#if defined(SK_GANESH) || defined(SK_GRAPHITE)
+    using GpuContextType = skgpu::ContextType;
 #else
-using GpuContextType = nullptr_t;
+    using GpuContextType = nullptr_t;
 #endif
 
 typedef void GrContextTestFn(Reporter*, const sk_gpu_test::ContextInfo&);
@@ -227,7 +235,8 @@ namespace graphite {
 
 using GraphiteTestFn = void(Reporter*,
                             skgpu::graphite::Context*,
-                            skiatest::graphite::GraphiteTestContext*);
+                            skiatest::graphite::GraphiteTestContext*,
+                            const TestOptions&);
 
 void RunWithGraphiteTestContexts(GraphiteTestFn*,
                                  ContextTypeFilterFn* filter,
@@ -249,9 +258,9 @@ public:
     double elapsedMs() const;
 
     /** Milliseconds since creation as an integer.
-        Behavior is undefined for durations longer than SK_MSecMax.
+        Behavior is undefined for durations longer than TimeUtils::MSecMax.
     */
-    SkMSec elapsedMsInt() const;
+    TimeUtils::MSec elapsedMsInt() const;
 private:
     double fStartNanos;
 };
@@ -313,6 +322,11 @@ using skiatest::Test;
     #define UNIX_ONLY_TEST DEF_TEST_DISABLED
 #endif
 
+#define DEF_SERIAL_TEST(name, reporter)                                                 \
+    static void test_##name(skiatest::Reporter*);                                       \
+    skiatest::TestRegistry name##TestRegistry(Test::MakeCPUSerial(#name, test_##name)); \
+    void test_##name(skiatest::Reporter* reporter)
+
 #define DEF_GRAPHITE_TEST(name, reporter, ctsEnforcement)                                \
     static void test_##name(skiatest::Reporter*);                                        \
     static void test_graphite_##name(skiatest::Reporter* reporter,                       \
@@ -324,40 +338,60 @@ using skiatest::Test;
     void test_##name(skiatest::Reporter* reporter)
 
 #define DEF_CONDITIONAL_GRAPHITE_TEST_FOR_CONTEXTS(                                                \
-        name, context_filter, reporter, graphite_ctx, test_ctx, opt_filter, cond, ctsEnforcement)  \
-    static void test_##name(skiatest::Reporter*, skgpu::graphite::Context*,                        \
-                            skiatest::graphite::GraphiteTestContext*);                             \
+        name, context_filter, reporter, graphite_ctx, test_ctx, options_name,                      \
+        opt_filter, cond, ctsEnforcement)                                                          \
+    static void test_##name(skiatest::Reporter*,                                                   \
+                            skgpu::graphite::Context*,                                             \
+                            skiatest::graphite::GraphiteTestContext*,                              \
+                            const skiatest::graphite::TestOptions&);                               \
     static void test_graphite_contexts_##name(skiatest::Reporter* _reporter,                       \
-                                              const skiatest::graphite::TestOptions& options) {    \
+                                              const skiatest::graphite::TestOptions& _options) {   \
         skiatest::graphite::RunWithGraphiteTestContexts(test_##name, context_filter,               \
-                                                        _reporter, options);                       \
+                                                        _reporter, _options);                      \
     }                                                                                              \
     skiatest::TestRegistry name##TestRegistry(                                                     \
             Test::MakeGraphite(#name, ctsEnforcement, test_graphite_contexts_##name, opt_filter),  \
             cond);                                                                                 \
-    void test_##name(skiatest::Reporter* reporter, skgpu::graphite::Context* graphite_ctx,         \
-                     skiatest::graphite::GraphiteTestContext* test_ctx)
+    void test_##name(skiatest::Reporter* reporter,                                                 \
+                     skgpu::graphite::Context* graphite_ctx,                                       \
+                     skiatest::graphite::GraphiteTestContext* test_ctx,                            \
+                     const skiatest::graphite::TestOptions& options_name)
 
-#define DEF_CONDITIONAL_GRAPHITE_TEST_FOR_ALL_CONTEXTS(name, reporter, graphite_ctx,            \
-                                                       test_ctx, cond, ctsEnforcement)          \
-    DEF_CONDITIONAL_GRAPHITE_TEST_FOR_CONTEXTS(name, nullptr, reporter, graphite_ctx, test_ctx, \
-                                               nullptr, cond, ctsEnforcement)
-
-#define DEF_CONDITIONAL_GRAPHITE_TEST_FOR_RENDERING_CONTEXTS(                 \
-        name, reporter, graphite_context, test_context, cond, ctsEnforcement) \
+#define DEF_CONDITIONAL_GRAPHITE_TEST_FOR_ALL_CONTEXTS(                       \
+        name, reporter, graphite_ctx, test_ctx, cond, ctsEnforcement)         \
     DEF_CONDITIONAL_GRAPHITE_TEST_FOR_CONTEXTS(name,                          \
-                                               skgpu::IsRenderingContext,     \
+                                               /* filter= */ nullptr,         \
                                                reporter,                      \
-                                               graphite_context,              \
-                                               test_context,                  \
-                                               nullptr,                       \
+                                               graphite_ctx,                  \
+                                               test_ctx,                      \
+                                               /* anonymous options */,       \
+                                               /* opt_filter= */ nullptr,     \
                                                cond,                          \
                                                ctsEnforcement)
 
-#define DEF_GRAPHITE_TEST_FOR_CONTEXTS(name, context_filter, reporter, graphite_ctx,         \
-                                       test_ctx, ctsEnforcement)                             \
-    DEF_CONDITIONAL_GRAPHITE_TEST_FOR_CONTEXTS(name, context_filter, reporter, graphite_ctx, \
-                                               test_ctx, nullptr, true, ctsEnforcement)
+#define DEF_CONDITIONAL_GRAPHITE_TEST_FOR_RENDERING_CONTEXTS(                 \
+        name, reporter, graphite_ctx, test_ctx, cond, ctsEnforcement)         \
+    DEF_CONDITIONAL_GRAPHITE_TEST_FOR_CONTEXTS(name,                          \
+                                               skgpu::IsRenderingContext,     \
+                                               reporter,                      \
+                                               graphite_ctx,                  \
+                                               test_ctx,                      \
+                                               /* anonymous options */,       \
+                                               /* opt_filter= */ nullptr,     \
+                                               cond,                          \
+                                               ctsEnforcement)
+
+#define DEF_GRAPHITE_TEST_FOR_CONTEXTS(                                         \
+        name, context_filter, reporter, graphite_ctx, test_ctx, ctsEnforcement) \
+    DEF_CONDITIONAL_GRAPHITE_TEST_FOR_CONTEXTS(name,                            \
+                                               context_filter,                  \
+                                               reporter,                        \
+                                               graphite_ctx,                    \
+                                               test_ctx,                        \
+                                               /* anonymous options */,         \
+                                               /* opt_filter= */ nullptr,       \
+                                               /* condition= */ true,           \
+                                               ctsEnforcement)
 
 #define DEF_GRAPHITE_TEST_FOR_ALL_CONTEXTS(name, reporter, graphite_ctx, ctsEnforcement)         \
     DEF_CONDITIONAL_GRAPHITE_TEST_FOR_ALL_CONTEXTS(name, reporter, graphite_ctx,                 \
@@ -471,14 +505,14 @@ using skiatest::Test;
                                  nullptr,                              \
                                  CtsEnforcement::kNever)
 
-#define REQUIRE_PDF_DOCUMENT(TEST_NAME, REPORTER)                          \
-    do {                                                                   \
-        SkNullWStream testStream;                                          \
-        auto testDoc = SkPDF::MakeDocument(&testStream);                   \
-        if (!testDoc) {                                                    \
-            INFOF(REPORTER, "PDF disabled; %s test skipped.", #TEST_NAME); \
-            return;                                                        \
-        }                                                                  \
+#define REQUIRE_PDF_DOCUMENT(TEST_NAME, REPORTER)                                               \
+    do {                                                                                        \
+        SkNullWStream testStream;                                                               \
+        auto testDoc = SkPDF::MakeDocument(&testStream, SkPDF::JPEG::MetadataWithCallbacks());  \
+        if (!testDoc) {                                                                         \
+            INFOF(REPORTER, "PDF disabled; %s test skipped.", #TEST_NAME);                      \
+            return;                                                                             \
+        }                                                                                       \
     } while (false)
 
 #endif

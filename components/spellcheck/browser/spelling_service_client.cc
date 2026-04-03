@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
+#include <string>
 
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
@@ -26,6 +28,7 @@
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "google_apis/google_api_keys.h"
+#include "net/http/http_response_headers.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
@@ -68,7 +71,7 @@ bool SpellingServiceClient::RequestTextCheck(
   DCHECK(pref);
 
   std::string dictionary;
-  const base::Value::List& dicts_list =
+  const base::ListValue& dicts_list =
       pref->GetList(spellcheck::prefs::kSpellCheckDictionaries);
   if (0u < dicts_list.size() && dicts_list[0].is_string())
     dictionary = dicts_list[0].GetString();
@@ -246,7 +249,7 @@ bool SpellingServiceClient::ParseResponse(
   //    }
   //  }
 
-  std::optional<base::Value::Dict> value =
+  std::optional<base::DictValue> value =
       base::JSONReader::ReadDict(data, base::JSON_ALLOW_TRAILING_COMMAS);
   if (!value) {
     return false;
@@ -261,7 +264,7 @@ bool SpellingServiceClient::ParseResponse(
   // Retrieve the array of Misspelling objects. When the input text does not
   // have misspelled words, it returns an empty JSON. (In this case, its HTTP
   // status is 200.) We just return true for this case.
-    const base::Value::List* misspellings =
+    const base::ListValue* misspellings =
         value->FindListByDottedPath(kMisspellingsRestPath);
 
     if (!misspellings) {
@@ -279,7 +282,7 @@ bool SpellingServiceClient::ParseResponse(
 
     std::optional<int> start = misspelling_dict->FindInt("charStart");
     std::optional<int> length = misspelling_dict->FindInt("charLength");
-    const base::Value::List* suggestions =
+    const base::ListValue* suggestions =
         misspelling_dict->FindList("suggestions");
     if (!start || !length || !suggestions) {
       return false;
@@ -294,7 +297,7 @@ bool SpellingServiceClient::ParseResponse(
     if (!replacement) {
       return false;
     }
-    SpellCheckResult result(SpellCheckResult::SPELLING, *start, *length,
+    SpellCheckResult result(spellcheck::Decoration::SPELLING, *start, *length,
                             base::UTF8ToUTF16(*replacement));
     results->push_back(result);
     }
@@ -309,12 +312,13 @@ SpellingServiceClient::TextCheckCallbackData::TextCheckCallbackData(
       callback(std::move(callback)),
       text(text) {}
 
-SpellingServiceClient::TextCheckCallbackData::~TextCheckCallbackData() {}
+SpellingServiceClient::TextCheckCallbackData::~TextCheckCallbackData() =
+    default;
 
 void SpellingServiceClient::OnSimpleLoaderComplete(
     SpellCheckLoaderList::iterator it,
     base::TimeTicks request_start,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   UMA_HISTOGRAM_TIMES("SpellCheck.SpellingService.RequestDuration",
                       base::TimeTicks::Now() - request_start);
 

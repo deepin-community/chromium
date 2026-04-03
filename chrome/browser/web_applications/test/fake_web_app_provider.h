@@ -11,8 +11,10 @@
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
+#include "chrome/browser/web_applications/extensions_manager.h"
+#include "chrome/browser/web_applications/test/fake_web_contents_manager.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
-#include "components/sync/test/mock_model_type_change_processor.h"
+#include "components/sync/test/mock_data_type_local_change_processor.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 class KeyedService;
@@ -27,7 +29,7 @@ namespace web_app {
 class AbstractWebAppDatabaseFactory;
 class ExternallyManagedAppManager;
 class FileUtilsWrapper;
-class IsolatedWebAppInstallationManager;
+class IsolatedWebAppDevInstallManager;
 class IsolatedWebAppUpdateManager;
 class OsIntegrationManager;
 class PreinstalledWebAppManager;
@@ -108,6 +110,11 @@ class FakeWebAppProvider : public WebAppProvider {
   // by default for unit tests, and can be enabled by setting this flag to true.
   void SetSynchronizePreinstalledAppsOnStartup(bool synchronize_on_startup);
 
+  // Call when the unit tets wants to trigger OS integration, removing the
+  // ScopedSuppressOsHooks in FakeOsIntegrationManager (allowing the
+  // OsIntegrationTestOverrideBlockingRegistration to work correctly).
+  void UseRealOsIntegrationManager();
+
   enum class AutomaticIwaUpdateStrategy {
     kDefault,
     kForceDisabled,
@@ -143,9 +150,9 @@ class FakeWebAppProvider : public WebAppProvider {
   void SetWebAppUiManager(std::unique_ptr<WebAppUiManager> ui_manager);
   void SetWebAppPolicyManager(
       std::unique_ptr<WebAppPolicyManager> web_app_policy_manager);
-  void SetIsolatedWebAppInstallationManager(
-      std::unique_ptr<IsolatedWebAppInstallationManager>
-          isolated_web_app_installation_manager);
+  void SetIsolatedWebAppDevInstallManager(
+      std::unique_ptr<IsolatedWebAppDevInstallManager>
+          isolated_web_app_dev_install_manager);
   void SetIsolatedWebAppUpdateManager(
       std::unique_ptr<IsolatedWebAppUpdateManager> iwa_update_manager);
 #if BUILDFLAG(IS_CHROMEOS)
@@ -161,6 +168,8 @@ class FakeWebAppProvider : public WebAppProvider {
           origin_association_manager);
   void SetWebContentsManager(
       std::unique_ptr<WebContentsManager> web_contents_manager);
+  void SetExtensionsManager(
+      std::unique_ptr<ExtensionsManager> extensions_manager);
 
   // These getters can be called at any time: no
   // WebAppProvider::CheckIsConnected() check performed. See
@@ -194,7 +203,11 @@ class FakeWebAppProvider : public WebAppProvider {
 
   FakeWebAppProvider* AsFakeWebAppProviderForTesting() override;
 
-  syncer::MockModelTypeChangeProcessor& processor() { return mock_processor_; }
+  FakeWebContentsManager* GetFakeWebContentsManager() const;
+
+  syncer::MockDataTypeLocalChangeProcessor& processor() {
+    return mock_processor_;
+  }
 
  private:
   // CHECK that `Start()` has not been called on this provider, and also
@@ -220,7 +233,7 @@ class FakeWebAppProvider : public WebAppProvider {
   AutomaticIwaUpdateStrategy automatic_iwa_update_strategy_ =
       AutomaticIwaUpdateStrategy::kForceDisabled;
 
-  testing::NiceMock<syncer::MockModelTypeChangeProcessor> mock_processor_;
+  ::testing::NiceMock<syncer::MockDataTypeLocalChangeProcessor> mock_processor_;
 };
 
 // Used in BrowserTests to ensure that the WebAppProvider that is create on

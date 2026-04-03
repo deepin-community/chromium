@@ -8,9 +8,9 @@
 #include <optional>
 
 #include "base/files/file_path.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/sequence_checker.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -185,7 +185,7 @@ class SmartChargingManager : public ui::UserActivityObserver,
   base::TimeDelta most_recent_video_start_time_;
   bool is_video_playing_ = false;
 
-  // TODO(crbug.com/1028853): This is for testing only. Need to remove when ukm
+  // TODO(crbug.com/40109338): This is for testing only. Need to remove when ukm
   // logger is available.
   power_manager::UserChargingEvent user_charging_event_for_test_;
   std::vector<power_manager::PastChargingEvents::Event> past_events_;

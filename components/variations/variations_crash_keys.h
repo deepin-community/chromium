@@ -33,11 +33,20 @@ COMPONENT_EXPORT(VARIATIONS) extern const char kVariationsSeedVersionKey[];
 // the API below.
 COMPONENT_EXPORT(VARIATIONS) void InitCrashKeys();
 
+// Resets and reinitializes crash keys that report the current set of active
+// FieldTrial groups for crash reports. This is used in certain process types
+// where the FieldTrialList itself is recreated.
+COMPONENT_EXPORT(VARIATIONS) void RecreateCrashKeys();
+
 // Updates variations crash keys by replacing the list of synthetic trials with
 // the specified list. Does not affect non-synthetic trials.
 COMPONENT_EXPORT(VARIATIONS)
 void UpdateCrashKeysWithSyntheticTrials(
     const std::vector<SyntheticTrialGroup>& synthetic_trials);
+
+// Sets the crash key for the variations seed version.
+COMPONENT_EXPORT(VARIATIONS)
+void SetVariationsSeedVersionCrashKey(const std::string& seed_version);
 
 // Clears the internal instance, for testing.
 COMPONENT_EXPORT(VARIATIONS) void ClearCrashKeysInstanceForTesting();

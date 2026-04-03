@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,38 +7,54 @@ import type * as Platform from '../platform/platform.js';
 
 const UIStrings = {
   /**
-   *@description The UI destination when right clicking an item that can be revealed
+   * @description The UI destination when right clicking an item that can be revealed
    */
   elementsPanel: 'Elements panel',
   /**
-   *@description The UI destination when right clicking an item that can be revealed
+   * @description The UI destination when right clicking an item that can be revealed
    */
   stylesSidebar: 'styles sidebar',
   /**
-   *@description The UI destination when right clicking an item that can be revealed
+   * @description The UI destination when right clicking an item that can be revealed
    */
   changesDrawer: 'Changes drawer',
   /**
-   *@description The UI destination when right clicking an item that can be revealed
+   * @description The UI destination when right clicking an item that can be revealed
    */
   issuesView: 'Issues view',
   /**
-   *@description The UI destination when right clicking an item that can be revealed
+   * @description The UI destination when right clicking an item that can be revealed
    */
   networkPanel: 'Network panel',
   /**
-   *@description The UI destination when right clicking an item that can be revealed
+   * @description The UI destination when right clicking an item that can be revealed
+   */
+  requestConditionsDrawer: 'Request conditions drawer',
+  /**
+   * @description The UI destination when right clicking an item that can be revealed
    */
   applicationPanel: 'Application panel',
   /**
-   *@description The UI destination when right clicking an item that can be revealed
+   * @description The UI destination when right clicking an item that can be revealed
    */
   sourcesPanel: 'Sources panel',
   /**
-   *@description The UI destination when right clicking an item that can be revealed
+   * @description The UI destination when right clicking an item that can be revealed
+   */
+  timelinePanel: 'Performance panel',
+  /**
+   * @description The UI destination when right clicking an item that can be revealed
    */
   memoryInspectorPanel: 'Memory inspector panel',
-};
+  /**
+   * @description The UI destination when revealing loaded resources through the Developer Resources Panel
+   */
+  developerResourcesPanel: 'Developer Resources panel',
+  /**
+   * @description The UI destination when revealing loaded resources through the Animations panel
+   */
+  animationsPanel: 'Animations panel',
+} as const;
 const str_ = i18n.i18n.registerUIStrings('core/common/Revealer.ts', UIStrings);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
 
@@ -62,7 +78,7 @@ let revealerRegistry: RevealerRegistry|undefined;
  * @see Revealer
  */
 export class RevealerRegistry {
-  private readonly registeredRevealers: RevealerRegistration<unknown>[] = [];
+  private readonly registeredRevealers: Array<RevealerRegistration<unknown>> = [];
 
   /**
    * Yields the singleton instance, creating it on-demand when necessary.
@@ -110,7 +126,7 @@ export class RevealerRegistry {
     return await revealers[0].reveal(revealable, omitFocus);
   }
 
-  getApplicableRegisteredRevealers(revealable: unknown): RevealerRegistration<unknown>[] {
+  getApplicableRegisteredRevealers(revealable: unknown): Array<RevealerRegistration<unknown>> {
     return this.registeredRevealers.filter(registration => {
       for (const contextType of registration.contextTypes()) {
         if (revealable instanceof contextType) {
@@ -148,7 +164,7 @@ export function registerRevealer<T>(registration: RevealerRegistration<T>): void
  * @param revealable the object to reveal.
  * @param omitFocus whether to omit focusing on the presentation of `revealable` afterwards.
  */
-export async function reveal(revealable: unknown, omitFocus: boolean = false): Promise<void> {
+export async function reveal(revealable: unknown, omitFocus = false): Promise<void> {
   await RevealerRegistry.instance().reveal(revealable, omitFocus);
 }
 
@@ -159,14 +175,18 @@ export interface RevealerRegistration<T> {
 }
 
 export const RevealerDestination = {
+  DEVELOPER_RESOURCES_PANEL: i18nLazyString(UIStrings.developerResourcesPanel),
   ELEMENTS_PANEL: i18nLazyString(UIStrings.elementsPanel),
   STYLES_SIDEBAR: i18nLazyString(UIStrings.stylesSidebar),
   CHANGES_DRAWER: i18nLazyString(UIStrings.changesDrawer),
   ISSUES_VIEW: i18nLazyString(UIStrings.issuesView),
   NETWORK_PANEL: i18nLazyString(UIStrings.networkPanel),
+  REQUEST_CONDITIONS_DRAWER: i18nLazyString(UIStrings.requestConditionsDrawer),
+  TIMELINE_PANEL: i18nLazyString(UIStrings.timelinePanel),
   APPLICATION_PANEL: i18nLazyString(UIStrings.applicationPanel),
   SOURCES_PANEL: i18nLazyString(UIStrings.sourcesPanel),
   MEMORY_INSPECTOR_PANEL: i18nLazyString(UIStrings.memoryInspectorPanel),
+  ANIMATIONS_PANEL: i18nLazyString(UIStrings.animationsPanel),
 };
 
 export type RevealerDestination = () => Platform.UIString.LocalizedString;

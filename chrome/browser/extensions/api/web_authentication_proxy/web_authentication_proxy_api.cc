@@ -10,6 +10,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/web_authentication_proxy.h"
 #include "content/public/browser/browser_context.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -58,7 +61,7 @@ void WebAuthenticationProxyAPI::OnListenerRemoved(
     return;
   }
   auto it = session_state_change_notifiers_.find(details.extension_id);
-  DCHECK(it != session_state_change_notifiers_.end());
+  CHECK(it != session_state_change_notifiers_.end());
   session_state_change_notifiers_.erase(it);
 }
 

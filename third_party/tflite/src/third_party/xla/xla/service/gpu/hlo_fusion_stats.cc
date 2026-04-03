@@ -15,17 +15,17 @@ limitations under the License.
 
 #include "xla/service/gpu/hlo_fusion_stats.h"
 
+#include <set>
 #include <string>
 
 #include "absl/status/status.h"
-#include "absl/strings/match.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_opcode.h"
-#include "xla/status.h"
 #include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace gpu {
@@ -45,9 +45,15 @@ class OpcodeCollector : public ConstDfsHloVisitorWithDefault {
         break;
       // Unary
       case HloOpcode::kAbs:
+      case HloOpcode::kAcos:
+      case HloOpcode::kAcosh:
+      case HloOpcode::kAsin:
+      case HloOpcode::kAsinh:
+      case HloOpcode::kAtanh:
       case HloOpcode::kCbrt:
       case HloOpcode::kCeil:
       case HloOpcode::kCos:
+      case HloOpcode::kCosh:
       case HloOpcode::kErf:
       case HloOpcode::kExp:
       case HloOpcode::kExpm1:
@@ -61,6 +67,7 @@ class OpcodeCollector : public ConstDfsHloVisitorWithDefault {
       case HloOpcode::kRsqrt:
       case HloOpcode::kSign:
       case HloOpcode::kSin:
+      case HloOpcode::kSinh:
       case HloOpcode::kSqrt:
       case HloOpcode::kTan:
       case HloOpcode::kTanh:
@@ -99,11 +106,6 @@ std::string HloOpcodeHistogram::ToString() {
                     "}: ", entry.second, "\n");
   }
   return result;
-}
-
-absl::Status HloFusionStatsVisitor::RunOnModule(HloModule* module) {
-  TF_RETURN_IF_ERROR(module->entry_computation()->Accept(this));
-  return absl::OkStatus();
 }
 
 std::string HloFusionStatsVisitor::ToString() {

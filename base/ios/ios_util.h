@@ -20,6 +20,14 @@ BASE_EXPORT bool IsRunningOnIOS16OrLater();
 // Returns whether the operating system is iOS 17 or later.
 BASE_EXPORT bool IsRunningOnIOS17OrLater();
 
+// Returns whether the operating system is iOS 18 or later.
+BASE_EXPORT bool IsRunningOnIOS18OrLater();
+
+// Returns whether the operating system is iOS 26 or later.
+// Note: there is no iOS version 19 to 25 (i.e. the version
+// following 18.x is 26.0).
+BASE_EXPORT bool IsRunningOnIOS26OrLater();
+
 // Returns whether the operating system is at the given version or later.
 BASE_EXPORT bool IsRunningOnOrLater(int32_t major,
                                     int32_t minor,
@@ -50,10 +58,6 @@ BASE_EXPORT bool IsMultipleScenesSupported();
 // iOS 15 introduced pre-warming, which launches and then pauses the app, to
 // speed up actual launch time.
 BASE_EXPORT bool IsApplicationPreWarmed();
-
-// The iPhone 14 Pro and Pro Max introduced a dynamic island. This should only
-// be called when working around UIKit bugs.
-BASE_EXPORT bool HasDynamicIsland();
 
 }  // namespace ios
 }  // namespace base

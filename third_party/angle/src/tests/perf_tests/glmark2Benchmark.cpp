@@ -7,6 +7,10 @@
 //   Runs the glmark2 benchmark.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_libc_calls
+#endif
+
 #include <gtest/gtest.h>
 
 #include <stdio.h>
@@ -181,9 +185,11 @@ class GLMark2Benchmark : public testing::TestWithParam<GLMark2TestParams>
         //     glmark2 2017.07
         // =======================================================
         //     OpenGL Information
-        //     GL_VENDOR:     ...
-        //     GL_RENDERER:   ...
-        //     GL_VERSION:    ...
+        //     GL_VENDOR:      ...
+        //     GL_RENDERER:    ...
+        //     GL_VERSION:     ...
+        //     Surface Config: ...
+        //     Surface Size:   ...
         // =======================================================
         // [test] config: FPS: uint FrameTime: float ms
         // [test] config: Not Supported
@@ -222,6 +228,10 @@ class GLMark2Benchmark : public testing::TestWithParam<GLMark2TestParams>
         // The fourth line is the GL_VERSION.  Expect it to include ANGLE, otherwise we are not
         // running against ANGLE.
         ASSERT_NE(line.find("ANGLE"), std::string::npos);
+
+        // Skip two Surface lines
+        std::getline(glmark2Output, line);
+        std::getline(glmark2Output, line);
 
         // Expect ==== at the bottom of the header
         std::getline(glmark2Output, line);

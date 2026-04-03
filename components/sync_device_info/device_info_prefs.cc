@@ -63,34 +63,29 @@ DeviceInfoPrefs::~DeviceInfoPrefs() = default;
 bool DeviceInfoPrefs::IsRecentLocalCacheGuid(
     const std::string& cache_guid) const {
   TRACE_EVENT0("sync", "DeviceInfoPrefs::IsRecentLocalCacheGuid");
-  const base::Value::List& recent_local_cache_guids =
+  const base::ListValue& recent_local_cache_guids =
       pref_service_->GetList(kDeviceInfoRecentGUIDsWithTimestamps);
 
-  for (const auto& v : recent_local_cache_guids) {
-    if (MatchesGuidInDictionary(v, cache_guid)) {
-      return true;
-    }
-  }
-
-  return false;
+  return std::any_of(recent_local_cache_guids.begin(),
+                     recent_local_cache_guids.end(),
+                     [&cache_guid](const base::Value& entry) {
+                       return MatchesGuidInDictionary(entry, cache_guid);
+                     });
 }
 
 void DeviceInfoPrefs::AddLocalCacheGuid(const std::string& cache_guid) {
   TRACE_EVENT0("sync", "DeviceInfoPrefs::AddLocalCacheGuid");
   ScopedListPrefUpdate update_cache_guids(pref_service_,
                                           kDeviceInfoRecentGUIDsWithTimestamps);
-  base::Value::List& update_list = update_cache_guids.Get();
+  base::ListValue& update_list = update_cache_guids.Get();
 
-  for (auto it = update_list.begin(); it != update_list.end(); it++) {
-    if (MatchesGuidInDictionary(*it, cache_guid)) {
-      // Remove it from the list, to be reinserted below, in the first
-      // position.
-      update_list.erase(it);
-      break;
-    }
-  }
+  // Remove any existing entries for this `cache_guid`, to be reinserted below,
+  // in the first position.
+  update_list.EraseIf([&cache_guid](const base::Value& entry) {
+    return MatchesGuidInDictionary(entry, cache_guid);
+  });
 
-  base::Value::Dict new_entry;
+  base::DictValue new_entry;
   new_entry.Set(kCacheGuidKey, cache_guid);
   new_entry.Set(kTimestampKey,
                 clock_->Now().ToDeltaSinceWindowsEpoch().InDays());

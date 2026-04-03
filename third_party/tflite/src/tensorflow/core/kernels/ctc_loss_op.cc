@@ -127,7 +127,7 @@ class CTCLossOp : public OpKernel {
         errors::InvalidArgument("len(sequence_length) != batch_size.  ",
                                 "len(sequence_length):  ", seq_len->dim_size(0),
                                 " batch_size: ", batch_size));
-    auto seq_len_t = seq_len->vec<int32>();
+    auto seq_len_t = seq_len->vec<int32_t>();
 
     OP_REQUIRES(ctx, labels_indices->dim_size(0) == labels_values->dim_size(0),
                 errors::InvalidArgument(
@@ -153,7 +153,7 @@ class CTCLossOp : public OpKernel {
         ctx, sparse::SparseTensor::Create(*labels_indices, *labels_values,
                                           labels_shape, order, &labels_sp));
 
-    Status labels_sp_valid = labels_sp.IndicesValid();
+    absl::Status labels_sp_valid = labels_sp.IndicesValid();
     OP_REQUIRES(ctx, labels_sp_valid.ok(),
                 errors::InvalidArgument("label SparseTensor is not valid: ",
                                         labels_sp_valid.message()));
@@ -166,7 +166,7 @@ class CTCLossOp : public OpKernel {
                                           0, " and ", batch_size,
                                           " but saw: ", batch_indices));
 
-      auto values = g.values<int32>();
+      auto values = g.values<int32_t>();
       std::vector<int>* b_values = &labels_t[batch_indices];
       b_values->resize(values.size());
       for (int i = 0; i < values.size(); ++i) (*b_values)[i] = values(i);
@@ -364,10 +364,11 @@ class CTCLossOpGPU : public OpKernel {
     stream_executor::DeviceMemory<uint8_t> scratch_memory;
     int ctc_loss_algo_id;
     bool cudnn_launch_status =
-        dnn->PrepareForCtcLoss(
-               stream, *probs_desc, probs_data, *grads_desc, labels_data,
-               labels_lengths_data, input_lengths_data, GetNumericOptions(),
-               &workspace_allocator, &scratch_memory, &ctc_loss_algo_id)
+        dnn->PrepareForCtcLoss(stream, *probs_desc, probs_data, *grads_desc,
+                               labels_data, labels_lengths_data,
+                               input_lengths_data, GetNumericOptionsForCuDnn(),
+                               &workspace_allocator, &scratch_memory,
+                               &ctc_loss_algo_id)
             .ok();
     if (cudnn_launch_status) {
       cudnn_launch_status = dnn->DoCtcLoss<float>(

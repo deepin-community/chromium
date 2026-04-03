@@ -13,7 +13,6 @@
 #include "core/fxcrt/fx_coordinates.h"
 #include "core/fxcrt/fx_memory.h"
 #include "core/fxcrt/retain_ptr.h"
-#include "core/fxcrt/span.h"
 #include "core/fxcrt/unowned_ptr.h"
 #include "core/fxge/cfx_fillrenderoptions.h"
 #include "core/fxge/cfx_graphstatedata.h"
@@ -44,7 +43,8 @@ class CFGAS_GEGraphics {
   CFX_RenderDevice* GetRenderDevice();
 
   void SetLineCap(CFX_GraphStateData::LineCap lineCap);
-  void SetLineDash(float dashPhase, pdfium::span<const float> dashArray);
+  // Dash phase is always set to 0.
+  void SetLineDash(std::vector<float> dash_array);
   void SetSolidLineDash();
   void SetLineWidth(float lineWidth);
   void EnableActOnDash();
@@ -87,9 +87,9 @@ class CFGAS_GEGraphics {
   void SetDIBitsWithMatrix(RetainPtr<CFX_DIBBase> source,
                            const CFX_Matrix& matrix);
 
-  UnownedPtr<CFX_RenderDevice> const m_renderDevice;
-  TInfo m_info;
-  std::vector<std::unique_ptr<TInfo>> m_infoStack;
+  UnownedPtr<CFX_RenderDevice> const render_device_;
+  TInfo info_;
+  std::vector<std::unique_ptr<TInfo>> info_stack_;
 };
 
 #endif  // XFA_FGAS_GRAPHICS_CFGAS_GEGRAPHICS_H_

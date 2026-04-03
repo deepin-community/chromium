@@ -17,64 +17,72 @@ from abc import ABC
 from dataclasses import dataclass
 import re
 import sys
-from typing import Any, Dict, List, Optional, Set, Tuple, NamedTuple
+from typing import Dict, List, Optional, NamedTuple
 
 from python.generators.sql_processing.docs_extractor import DocsExtractor
 from python.generators.sql_processing.utils import ObjKind
-
+from python.generators.sql_processing.utils import COLUMN_TYPES, MACRO_ARG_TYPES
 from python.generators.sql_processing.utils import ALLOWED_PREFIXES
 from python.generators.sql_processing.utils import OBJECT_NAME_ALLOWLIST
-
-from python.generators.sql_processing.utils import COLUMN_ANNOTATION_PATTERN
 from python.generators.sql_processing.utils import ANY_PATTERN
 from python.generators.sql_processing.utils import ARG_DEFINITION_PATTERN
-from python.generators.sql_processing.utils import ARG_ANNOTATION_PATTERN
+from python.generators.sql_processing.utils import CREATE_TABLE_ALLOWLIST
+from python.generators.sql_processing.utils import is_internal
 
 
-def is_internal(name: str) -> bool:
-  return re.match(r'^_.*', name, re.IGNORECASE) is not None
+@dataclass
+class DocParseOptions:
+  # TODO(lalitm): set this to true and/or remove this check once Google3 modules
+  # adhere to this check.
+  enforce_every_column_set_is_documented: bool = False
+  # Include internal artifacts (those starting with _) in the output
+  include_internal: bool = False
 
 
-def is_snake_case(s: str) -> bool:
-  """Returns true if the string is snake_case."""
+def _is_snake_case(s: str) -> bool:
   return re.fullmatch(r'^[a-z_0-9]*$', s) is not None
 
 
-# Parse a SQL comment (i.e. -- Foo\n -- bar.) into a string (i.e. "Foo bar.").
 def parse_comment(comment: str) -> str:
+  """
+  Parse a SQL comment (i.e. -- Foo\n -- bar.) into a string (i.e. "Foo bar.").
+  """
   return ' '.join(line.strip().lstrip('--').lstrip()
                   for line in comment.strip().split('\n'))
 
 
-class Arg(NamedTuple):
-  # TODO(b/307926059): the type is missing on old-style documentation for
-  # tables. Make it "str" after stdlib is migrated.
-  type: Optional[str]
-  description: str
-
-
-# Returns: error message if the name is not correct, None otherwise.
 def get_module_prefix_error(name: str, path: str, module: str) -> Optional[str]:
-  prefix = name.lower().split('_')[0]
+  """Returns error message if the name is not correct, None otherwise."""
+  # Internal artifacts (starting with _) don't need to follow naming conventions
+  if is_internal(name):
+    return None
   if module in ["common", "prelude", "deprecated"]:
-    if prefix == module:
+    if name.startswith(module):
       return (f'Names of tables/views/functions in the "{module}" module '
               f'should not start with {module}')
     return None
-  if prefix == module:
+  if name.startswith(module):
     # Module prefix is always allowed.
     return None
   allowed_prefixes = [module]
-  for (path_prefix, allowed_name_prefix) in ALLOWED_PREFIXES.items():
+  for (path_prefix, allowed_name_prefixes) in ALLOWED_PREFIXES.items():
     if path.startswith(path_prefix):
-      if prefix == allowed_name_prefix:
-        return None
-      allowed_prefixes.append(allowed_name_prefix)
+      for prefix in allowed_name_prefixes:
+        if name.startswith(prefix):
+          return None
+      allowed_prefixes.extend(allowed_name_prefixes)
     if path in OBJECT_NAME_ALLOWLIST and name in OBJECT_NAME_ALLOWLIST[path]:
       return None
   return (
       f'Names of tables/views/functions at path "{path}" should be prefixed '
       f'with one of following names: {", ".join(allowed_prefixes)}')
+
+
+class Arg(NamedTuple):
+  type: str
+  long_type: str
+  description: str
+  is_variadic: bool = False
 
 
 class AbstractDocParser(ABC):
@@ -83,11 +91,17 @@ class AbstractDocParser(ABC):
   class Column:
     pass
 
-  def __init__(self, path: str, module: str):
+  def __init__(
+      self,
+      path: str,
+      module: str,
+      options: DocParseOptions,
+  ):
     self.path = path
     self.module = module
     self.name = None
     self.errors = []
+    self.options = options
 
   def _parse_name(self, upper: bool = False):
     assert self.name
@@ -99,99 +113,81 @@ class AbstractDocParser(ABC):
     return self.name.strip()
 
   def _parse_desc_not_empty(self, desc: str):
-    if not desc:
+    # Internal artifacts don't need descriptions
+    if not desc and not is_internal(self.name):
       self._error('Description of the table/view/function/macro is missing')
-    return desc.strip()
+    return desc.strip() if desc else ""
 
-  def _validate_only_contains_annotations(self,
-                                          ans: List[DocsExtractor.Annotation],
-                                          ans_types: Set[str]):
-    used_ans_types = set(a.key for a in ans)
-    for type in used_ans_types.difference(ans_types):
-      self._error(f'Unknown documentation annotation {type}')
+  def _parse_columns(
+      self,
+      schema: str,
+      kind: ObjKind,
+  ) -> Dict[str, Arg]:
+    columns = self._parse_args_definition(schema) if schema else {}
 
-  def _parse_columns(self, ans: List[DocsExtractor.Annotation],
-                     schema: Optional[str]) -> Dict[str, Arg]:
-    column_annotations = {}
-    for t in ans:
-      if t.key != '@column':
-        continue
-      m = re.match(COLUMN_ANNOTATION_PATTERN, t.value)
-      if not m:
-        self._error(f'@column annotation value {t.value} does not match '
-                    f'pattern {COLUMN_ANNOTATION_PATTERN}')
-        continue
-      column_annotations[m.group(1)] = Arg(None, m.group(2).strip())
+    # Internal artifacts don't need column documentation
+    is_internal_artifact = is_internal(self.name)
 
-    if not schema:
-      # If we don't have schema, we have to accept annotations as the source of
-      # truth.
-      return column_annotations
+    if not schema and self.options.enforce_every_column_set_is_documented and not is_internal_artifact:
+      self._error(
+          'Description of the columns of table/view/function is missing')
+      return columns
 
-    columns = self._parse_args_definition(schema)
-
-    for column in columns:
-      inline_comment = columns[column].description
-      if not inline_comment and column not in column_annotations:
-        self._error(f'Column "{column}" is missing a description. Please add a '
-                    'comment in front of the column definition')
+    for column_name, properties in columns.items():
+      if not properties.description and not is_internal_artifact:
+        self._error(
+            f'Column "{column_name}" is missing a description. Please add a '
+            'comment in front of the column definition')
         continue
 
-      if column not in column_annotations:
-        continue
-      annotation = column_annotations[column].description
-      if inline_comment and annotation:
-        self._error(f'Column "{column}" is documented twice. Please remove the '
-                    '@column annotation')
-      if not inline_comment and annotation:
-        # Absorb old-style annotations.
-        columns[column] = Arg(columns[column].type, annotation)
+      upper_arg_type = properties.type.upper()
+      if kind is ObjKind.table_function:
+        if upper_arg_type not in COLUMN_TYPES:
+          self._error(
+              f'Table function column "{column_name}" has unsupported type "{properties.type}".'
+          )
+      elif kind is ObjKind.table_view:
+        if upper_arg_type not in COLUMN_TYPES:
+          self._error(
+              f'Table/view column "{column_name}" has unsupported type "{properties.type}".'
+          )
+      else:
+        self._error(f'This Perfetto SQL object doesnt support columns".')
 
-    # Check that the annotations match existing columns.
-    for annotation in column_annotations:
-      if annotation not in columns:
-        self._error(f'Column "{annotation}" is documented but does not exist '
-                    'in table definition')
     return columns
 
-  def _parse_args(self, ans: List[DocsExtractor.Annotation],
-                  sql_args_str: str) -> Dict[str, Arg]:
+  def _parse_args(self, sql_args_str: str, kind: ObjKind) -> Dict[str, Arg]:
     args = self._parse_args_definition(sql_args_str)
 
-    arg_annotations = {}
-    for an in ans:
-      if an.key != '@arg':
-        continue
-      m = re.match(ARG_ANNOTATION_PATTERN, an.value)
-      if m is None:
-        self._error(f'Expected arg documentation "{an.value}" to match pattern '
-                    f'{ARG_ANNOTATION_PATTERN}')
-        continue
-      arg_annotations[m.group(1)] = Arg(m.group(2), m.group(3).strip())
+    # Internal artifacts don't need arg documentation
+    is_internal_artifact = is_internal(self.name)
 
     for arg in args:
-      if not args[arg].description and arg not in arg_annotations:
+      if not args[arg].description and not is_internal_artifact:
         self._error(f'Arg "{arg}" is missing a description. '
                     'Please add a comment in front of the arg definition.')
-      if args[arg].description and arg in arg_annotations:
-        self._error(f'Arg "{arg}" is documented twice. '
-                    'Please remove the @arg annotation')
-      if not args[arg].description and arg in arg_annotations:
-        # Absorb old-style annotations.
-        # TODO(b/307926059): Remove it once stdlib is migrated.
-        args[arg] = Arg(args[arg].type, arg_annotations[arg].description)
 
-    for arg in arg_annotations:
-      if arg not in args:
-        self._error(
-            f'Arg "{arg}" is documented but not found in function definition.')
+      upper_arg_type = args[arg].type.upper()
+      if (kind is ObjKind.function or kind is ObjKind.table_function):
+        if upper_arg_type not in COLUMN_TYPES:
+          self._error(
+              f'Function arg "{arg}" has unsupported type "{args[arg].type}".')
+      elif (kind is ObjKind.macro):
+        if upper_arg_type not in MACRO_ARG_TYPES:
+          self._error(
+              f'Macro arg "{arg}" has unsupported type "{args[arg].type}".')
+      else:
+        self._error(f'This Perfetto SQL object doesnt support types".')
+
     return args
 
   # Parse function argument definition list or a table schema, e.g.
   # arg1 INT, arg2 STRING, including their comments.
+  # Supports variadic arguments with TYPE... syntax.
   def _parse_args_definition(self, args_str: str) -> Dict[str, Arg]:
     result = {}
     remaining_args = args_str.strip()
+    found_variadic = False
     while remaining_args:
       m = re.match(fr'^{ARG_DEFINITION_PATTERN}({ANY_PATTERN})', remaining_args)
       if not m:
@@ -203,7 +199,35 @@ class AbstractDocParser(ABC):
       comment = '' if groups[0] is None else parse_comment(groups[0])
       name = groups[-3]
       type = groups[-2]
-      result[name] = Arg(type, comment)
+
+      # Check for variadic syntax (TYPE...)
+      is_variadic = type.endswith('...')
+      if is_variadic:
+        if found_variadic:
+          self._error(
+              'Only one variadic argument is allowed and it must be last')
+          return result
+        found_variadic = True
+        type = type[:-3]  # Strip the trailing ...
+
+      # Validate that non-variadic args don't come after variadic
+      if found_variadic and not is_variadic:
+        self._error('Variadic argument must be the last argument')
+        return result
+
+      m = re.match(r'JOINID\(([_A-Za-z\.]*)\)', type)
+      if m:
+        result[name] = Arg('JOINID', type, comment, is_variadic)
+        remaining_args = groups[-1].lstrip().lstrip(',').lstrip()
+        continue
+
+      m = re.match(r'ID\(([_A-Za-z\.]*)\)', type)
+      if m:
+        result[name] = Arg('ID', type, comment, is_variadic)
+        remaining_args = groups[-1].lstrip().lstrip(',').lstrip()
+        continue
+
+      result[name] = Arg(type, type, comment, is_variadic)
       # Strip whitespace and comma and parse the next arg.
       remaining_args = groups[-1].lstrip().lstrip(',').lstrip()
 
@@ -231,36 +255,37 @@ class TableOrView:
 class TableViewDocParser(AbstractDocParser):
   """Parses documentation for CREATE TABLE and CREATE VIEW statements."""
 
-  def __init__(self, path: str, module: str):
-    super().__init__(path, module)
+  def __init__(self, path: str, module: str, options: DocParseOptions):
+    super().__init__(path, module, options)
 
   def parse(self, doc: DocsExtractor.Extract) -> Optional[TableOrView]:
     assert doc.obj_kind == ObjKind.table_view
 
     or_replace, perfetto_or_virtual, type, self.name, schema = doc.obj_match
 
+    # Skip internal artifacts early if not including them
+    if is_internal(self.name) and not self.options.include_internal:
+      return None
+
     if or_replace is not None:
       self._error(
           f'{type} "{self.name}": CREATE OR REPLACE is not allowed in stdlib '
           f'as standard library modules can only included once. Please just '
           f'use CREATE instead.')
-    if is_internal(self.name):
-      return None
+      return
 
-    is_perfetto_table_or_view = (
-        perfetto_or_virtual and perfetto_or_virtual.lower() == 'perfetto')
-    if not schema and is_perfetto_table_or_view:
+    if (type.lower() == "table" and not perfetto_or_virtual and
+        self.name not in CREATE_TABLE_ALLOWLIST):
       self._error(
-          f'{type} "{self.name}": schema is missing for a non-internal stdlib'
-          f' perfetto table or view')
+          f'{type} "{self.name}": Can only expose CREATE PERFETTO tables')
+      return
 
-    self._validate_only_contains_annotations(doc.annotations, {'@column'})
+    cols = self._parse_columns(schema, ObjKind.table_view)
     return TableOrView(
         name=self._parse_name(),
         type=type,
         desc=self._parse_desc_not_empty(doc.description),
-        cols=self._parse_columns(doc.annotations, schema),
-    )
+        cols=cols)
 
 
 class Function:
@@ -281,8 +306,8 @@ class Function:
 class FunctionDocParser(AbstractDocParser):
   """Parses documentation for CREATE_FUNCTION statements."""
 
-  def __init__(self, path: str, module: str):
-    super().__init__(path, module)
+  def __init__(self, path: str, module: str, options: DocParseOptions):
+    super().__init__(path, module, options)
 
   def parse(self, doc: DocsExtractor.Extract) -> Optional[Function]:
     or_replace, self.name, args, ret_comment, ret_type = doc.obj_match
@@ -293,26 +318,27 @@ class FunctionDocParser(AbstractDocParser):
           f'as standard library modules can only included once. Please just '
           f'use CREATE instead.')
 
-    # Ignore internal functions.
-    if is_internal(self.name):
+    # Ignore internal functions unless explicitly requested.
+    if is_internal(self.name) and not self.options.include_internal:
       return None
 
     name = self._parse_name()
 
-    if not is_snake_case(name):
+    if not _is_snake_case(name):
       self._error(f'Function name "{name}" is not snake_case'
                   f' (should be {name.casefold()})')
 
     ret_desc = None if ret_comment is None else parse_comment(ret_comment)
-    if not ret_desc:
+    # Internal artifacts don't need return descriptions
+    if not ret_desc and not is_internal(name):
       self._error(f'Function "{name}": return description is missing')
 
     return Function(
         name=name,
         desc=self._parse_desc_not_empty(doc.description),
-        args=self._parse_args(doc.annotations, args),
+        args=self._parse_args(args, ObjKind.function),
         return_type=ret_type,
-        return_desc=ret_desc,
+        return_desc=ret_desc if ret_desc else "",
     )
 
 
@@ -332,8 +358,8 @@ class TableFunction:
 class TableFunctionDocParser(AbstractDocParser):
   """Parses documentation for table function statements."""
 
-  def __init__(self, path: str, module: str):
-    super().__init__(path, module)
+  def __init__(self, path: str, module: str, options: DocParseOptions):
+    super().__init__(path, module, options)
 
   def parse(self, doc: DocsExtractor.Extract) -> Optional[TableFunction]:
     or_replace, self.name, args, ret_comment, columns = doc.obj_match
@@ -343,24 +369,23 @@ class TableFunctionDocParser(AbstractDocParser):
           f'Function "{self.name}": CREATE OR REPLACE is not allowed in stdlib '
           f'as standard library modules can only included once. Please just '
           f'use CREATE instead.')
+      return
 
-    # Ignore internal functions.
-    if is_internal(self.name):
+    # Ignore internal functions unless explicitly requested.
+    if is_internal(self.name) and not self.options.include_internal:
       return None
 
-    self._validate_only_contains_annotations(doc.annotations,
-                                             {'@arg', '@column'})
     name = self._parse_name()
 
-    if not is_snake_case(name):
+    if not _is_snake_case(name):
       self._error(f'Function name "{name}" is not snake_case'
                   f' (should be "{name.casefold()}")')
 
     return TableFunction(
         name=name,
         desc=self._parse_desc_not_empty(doc.description),
-        cols=self._parse_columns(doc.annotations, columns),
-        args=self._parse_args(doc.annotations, args),
+        cols=self._parse_columns(columns, ObjKind.table_function),
+        args=self._parse_args(args, ObjKind.table_function),
     )
 
 
@@ -383,8 +408,8 @@ class Macro:
 class MacroDocParser(AbstractDocParser):
   """Parses documentation for macro statements."""
 
-  def __init__(self, path: str, module: str):
-    super().__init__(path, module)
+  def __init__(self, path: str, module: str, options: DocParseOptions):
+    super().__init__(path, module, options)
 
   def parse(self, doc: DocsExtractor.Extract) -> Optional[Macro]:
     or_replace, self.name, args, return_desc, return_type = doc.obj_match
@@ -395,14 +420,13 @@ class MacroDocParser(AbstractDocParser):
           f'as standard library modules can only included once. Please just '
           f'use CREATE instead.')
 
-    # Ignore internal macros.
-    if is_internal(self.name):
+    # Ignore internal macros unless explicitly requested.
+    if is_internal(self.name) and not self.options.include_internal:
       return None
 
-    self._validate_only_contains_annotations(doc.annotations, set())
     name = self._parse_name()
 
-    if not is_snake_case(name):
+    if not _is_snake_case(name):
       self._error(f'Macro name "{name}" is not snake_case'
                   f' (should be "{name.casefold()}")')
 
@@ -411,76 +435,193 @@ class MacroDocParser(AbstractDocParser):
         desc=self._parse_desc_not_empty(doc.description),
         return_desc=parse_comment(return_desc),
         return_type=return_type,
-        args=self._parse_args(doc.annotations, args),
+        args=self._parse_args(args, ObjKind.macro),
     )
 
 
-class ParsedFile:
+class Include:
+  package: str
+  module: str
+  module_as_list: List[str]
+
+  def __init__(self, package: str, module: str, module_as_list: List[str]):
+    self.package = package
+    self.module = module
+    self.module_as_list = module_as_list
+
+
+class IncludeParser(AbstractDocParser):
+  """Parses the includes of module."""
+
+  def __init__(self, path: str, module: str, options: DocParseOptions):
+    super().__init__(path, module, options)
+
+  def parse(self, doc: DocsExtractor.Extract) -> Optional[Include]:
+    self.module = list(doc.obj_match)[0]
+    module_as_list = self.module.split('.')
+
+    return Include(
+        package=module_as_list[0],
+        module=self.module,
+        module_as_list=module_as_list,
+    )
+
+
+class ModuleDoc:
+  """Module-level documentation"""
+  name: str
+  desc: str
+
+  def __init__(self, name: str, desc: str):
+    self.name = name
+    self.desc = desc
+
+
+class ParsedModule:
+  """Data class containing all of the documentation of single SQL file"""
+  package_name: str = ""
+  module_as_list: List[str]
+  module: str
+  module_doc: Optional[ModuleDoc] = None
   errors: List[str] = []
   table_views: List[TableOrView] = []
   functions: List[Function] = []
   table_functions: List[TableFunction] = []
   macros: List[Macro] = []
+  includes: List[Include]
 
-  def __init__(self, errors: List[str], table_views: List[TableOrView],
-               functions: List[Function], table_functions: List[TableFunction],
-               macros: List[Macro]):
+  def __init__(self,
+               package_name: str,
+               module_as_list: List[str],
+               errors: List[str],
+               table_views: List[TableOrView],
+               functions: List[Function],
+               table_functions: List[TableFunction],
+               macros: List[Macro],
+               includes: List[Include],
+               module_doc: Optional[ModuleDoc] = None):
+    self.package_name = package_name
+    self.module_as_list = module_as_list
+    self.module = ".".join(module_as_list)
+    self.module_doc = module_doc
     self.errors = errors
     self.table_views = table_views
     self.functions = functions
     self.table_functions = table_functions
     self.macros = macros
+    self.includes = includes
 
 
-# Reads the provided SQL and, if possible, generates a dictionary with data
-# from documentation together with errors from validation of the schema.
-def parse_file(path: str, sql: str) -> Optional[ParsedFile]:
+def _extract_module_doc(sql: str) -> Optional[ModuleDoc]:
+  """Extracts module-level documentation from -- @module comments."""
+  lines = sql.split('\n')
+
+  # Find the @module line
+  module_name = None
+  module_desc_lines = []
+  in_module_doc = False
+
+  for line in lines:
+    stripped = line.strip()
+
+    # Check for @module directive
+    if stripped.startswith('-- @module'):
+      module_name = stripped[len('-- @module'):].strip()
+      in_module_doc = True
+      continue
+
+    # If we found @module, collect description lines
+    if in_module_doc:
+      if stripped.startswith('--'):
+        # Remove leading '--' and whitespace
+        desc_line = stripped[2:].lstrip()
+        module_desc_lines.append(desc_line)
+      elif stripped == '':
+        # Empty line is OK, keep collecting
+        continue
+      else:
+        # Non-comment line, stop collecting
+        break
+
+  if not module_name:
+    return None
+
+  # Join description lines with proper spacing
+  module_desc = '\n'.join(module_desc_lines).strip()
+
+  return ModuleDoc(name=module_name, desc=module_desc)
+
+
+def parse_file(
+    path: str,
+    sql: str,
+    options: DocParseOptions = DocParseOptions(),
+) -> Optional[ParsedModule]:
+  """Reads the provided SQL and, if possible, generates a dictionary with data
+    from documentation together with errors from validation of the schema."""
   if sys.platform.startswith('win'):
     path = path.replace('\\', '/')
 
-  # Get module name
-  module_name = path.split('/stdlib/')[-1].split('/')[0]
+  module_as_list: List[str] = path.split('/stdlib/')[-1].split(".sql")[0].split(
+      '/')
 
-  # Disable support for `deprecated` module
-  if module_name == "deprecated":
+  # Get package name
+  package_name = module_as_list[0]
+
+  # Disable support for `deprecated` package
+  if package_name == "deprecated":
     return
 
+  # Extract module-level documentation
+  module_doc = _extract_module_doc(sql)
+
   # Extract all the docs from the SQL.
-  extractor = DocsExtractor(path, module_name, sql)
+  extractor = DocsExtractor(path, package_name, sql)
   docs = extractor.extract()
   if extractor.errors:
-    return ParsedFile(extractor.errors, [], [], [], [])
+    return ParsedModule(package_name, module_as_list, extractor.errors, [], [],
+                        [], [], [], module_doc)
 
   # Parse the extracted docs.
-  errors = []
-  table_views = []
-  functions = []
-  table_functions = []
-  macros = []
+  # Note: We collect errors from all parsers even if the result is None (filtered out),
+  # to ensure validation errors are reported for internal artifacts.
+  errors: List[str] = []
+  table_views: List[TableOrView] = []
+  functions: List[Function] = []
+  table_functions: List[TableFunction] = []
+  macros: List[Macro] = []
+  includes: List[Include] = []
   for doc in docs:
     if doc.obj_kind == ObjKind.table_view:
-      parser = TableViewDocParser(path, module_name)
+      parser = TableViewDocParser(path, package_name, options)
       res = parser.parse(doc)
       if res:
         table_views.append(res)
       errors += parser.errors
     if doc.obj_kind == ObjKind.function:
-      parser = FunctionDocParser(path, module_name)
+      parser = FunctionDocParser(path, package_name, options)
       res = parser.parse(doc)
       if res:
         functions.append(res)
       errors += parser.errors
     if doc.obj_kind == ObjKind.table_function:
-      parser = TableFunctionDocParser(path, module_name)
+      parser = TableFunctionDocParser(path, package_name, options)
       res = parser.parse(doc)
       if res:
         table_functions.append(res)
       errors += parser.errors
     if doc.obj_kind == ObjKind.macro:
-      parser = MacroDocParser(path, module_name)
+      parser = MacroDocParser(path, package_name, options)
       res = parser.parse(doc)
       if res:
         macros.append(res)
       errors += parser.errors
+    if doc.obj_kind == ObjKind.include:
+      parser = IncludeParser(path, package_name, options)
+      res = parser.parse(doc)
+      if res:
+        includes.append(res)
+      errors += parser.errors
 
-  return ParsedFile(errors, table_views, functions, table_functions, macros)
+  return ParsedModule(package_name, module_as_list, errors, table_views,
+                      functions, table_functions, macros, includes, module_doc)

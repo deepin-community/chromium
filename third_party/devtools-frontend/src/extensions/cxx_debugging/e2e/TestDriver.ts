@@ -1,10 +1,10 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import {assert} from 'chai';
-import {type ElementHandle, type JSHandle} from 'puppeteer-core';
-
+import type {ElementHandle} from 'puppeteer-core';
+import {TestConfig} from 'test/conductor/test_config.js';
 import {
   CONSOLE_TAB_SELECTOR,
   focusConsolePrompt,
@@ -21,25 +21,12 @@ import {
   retrieveTopCallFrameWithoutResuming,
   SELECTED_THREAD_SELECTOR,
 } from 'test/e2e/helpers/sources-helpers.js';
-import {
-  $$,
-  assertNotNullOrUndefined,
-  click,
-  clickElement,
-  debuggerStatement,
-  getBrowserAndPages,
-  getPendingEvents,
-  installEventListener,
-  timeout,
-  waitFor,
-  waitForFunction,
-} from 'test/shared/helper.js';
-import {describe, it} from 'test/shared/mocha-extensions.js';
+import {getBrowserAndPagesWrappers} from 'test/shared/non_hosted_wrappers.js';
 
 import {
+  type Action,
   loadTests,
   openTestSuiteResourceInSourcesPanel,
-  type Action,
 } from './cxx-debugging-extension-helpers.js';
 
 const STEP_OVER_BUTTON = '[aria-label="Step over next function call"]';
@@ -53,18 +40,20 @@ function pausedReasonText(reason: string) {
     case 'step':
       return 'Debugger paused';
   }
+  return;
 }
 
-describe('CXX Debugging Extension Test Suite', function() {
+// Started failing recently, but not at every run
+describe.skip('[crbug.com/468345402] CXX Debugging Extension Test Suite', function() {
   for (const {name, test, script} of loadTests()) {
     if (!script) {
       continue;
     }
     it(name, async () => {
-      const {frontend} = getBrowserAndPages();
+      const {devToolsPage} = getBrowserAndPagesWrappers();
       try {
         await openTestSuiteResourceInSourcesPanel(test);
-        await installEventListener(frontend, 'DevTools.DebuggerPaused');
+        await devToolsPage.installEventListener('DevTools.DebuggerPaused');
 
         if (script === null || script.length === 0) {
           return;
@@ -86,15 +75,16 @@ describe('CXX Debugging Extension Test Suite', function() {
             continue;
           }
 
-          await waitForFunction(
-              async () => ((await getPendingEvents(frontend, 'DevTools.DebuggerPaused')) || []).length > 0);
+          await devToolsPage.waitForFunction(
+              async () => ((await devToolsPage.getPendingEvents('DevTools.DebuggerPaused')) || []).length > 0);
 
-          const stopped = await waitFor(PAUSE_INDICATOR_SELECTOR);
-          const stoppedText = await waitForFunction(async () => stopped.evaluate(node => node.textContent));
+          const stopped = await devToolsPage.waitFor(PAUSE_INDICATOR_SELECTOR);
+          const stoppedText =
+              await devToolsPage.waitForFunction(async () => await stopped.evaluate(node => node.textContent));
 
-          assert.equal(stoppedText, pausedReasonText(reason));
+          assert.strictEqual(stoppedText, pausedReasonText(reason));
 
-          const pausedLocation = await retrieveTopCallFrameWithoutResuming();
+          const pausedLocation = await retrieveTopCallFrameWithoutResuming(devToolsPage);
           if (pausedLocation?.includes('…')) {
             const pausedLocationSplit = pausedLocation.split('…');
             assert.isTrue(
@@ -117,42 +107,41 @@ describe('CXX Debugging Extension Test Suite', function() {
 
               if (variableName.startsWith('$')) {
                 if (variableType) {
-                  assert.isTrue(scopeVariable && scopeVariable.endsWith(`: ${variableType}`));
+                  assert.isTrue(scopeVariable?.endsWith(`: ${variableType}`));
                 } else if (value) {
-                  assert.isTrue(scopeVariable && scopeVariable.endsWith(`: ${value}`));
+                  assert.isTrue(scopeVariable?.endsWith(`: ${value}`));
                 }
-              } else {
-                if (variableType) {
-                  assert.equal(scopeVariable, `${variableName}: ${variableType}`);
-                } else if (value) {
-                  assert.equal(scopeVariable, `${variableName}: ${value}`);
-                }
+              } else if (variableType) {
+                assert.strictEqual(scopeVariable, `${variableName}: ${variableType}`);
+              } else if (value) {
+                assert.strictEqual(scopeVariable, `${variableName}: ${value}`);
               }
             }
           }
 
           if (evaluations) {
             // TODO(jarin) Without waiting here, the FE often misses the click on the console tab.
-            await timeout(500);
-            await click(CONSOLE_TAB_SELECTOR);
-            await focusConsolePrompt();
+            await devToolsPage.timeout(500);
+            await devToolsPage.click(CONSOLE_TAB_SELECTOR);
+            await focusConsolePrompt(devToolsPage);
 
             for (const {expression, value} of evaluations) {
-              await typeIntoConsoleAndWaitForResult(frontend, expression);
-              const evaluateResults = await frontend.evaluate(() => {
+              await typeIntoConsoleAndWaitForResult(expression, undefined, undefined, devToolsPage);
+              const evaluateResults = await devToolsPage.evaluate(() => {
                 return Array.from(document.querySelectorAll('.console-user-command-result'))
                     .map(node => node.textContent);
               });
               const result = evaluateResults[evaluateResults.length - 1];
-              assert.equal(result, value.toString());
+              assert.strictEqual(result, value.toString());
             }
 
-            await openSourcesPanel();
+            await openSourcesPanel(devToolsPage);
           }
 
           if (thread) {
-            const threadElement = await waitFor(SELECTED_THREAD_SELECTOR);
-            const threadText = await waitForFunction(async () => threadElement.evaluate(node => node.textContent));
+            const threadElement = await devToolsPage.waitFor(SELECTED_THREAD_SELECTOR);
+            const threadText =
+                await devToolsPage.waitForFunction(async () => await threadElement.evaluate(node => node.textContent));
             assert.include(threadText, thread, 'selected thread is not as expected');
           }
 
@@ -161,8 +150,8 @@ describe('CXX Debugging Extension Test Suite', function() {
         }
       } catch (e) {
         console.error(e.toString());
-        if (process.env['DEBUG_TEST']) {
-          await timeout(100000);
+        if (TestConfig.debug) {
+          await devToolsPage.timeout(100000);
         }
         throw e;
       }
@@ -171,17 +160,18 @@ describe('CXX Debugging Extension Test Suite', function() {
 });
 
 async function readScopeView(scope: string, variable: string[]) {
-  const scopeElement = await waitFor(`[aria-label="${scope}"]`);
+  const {devToolsPage} = getBrowserAndPagesWrappers();
+  const scopeElement = await devToolsPage.waitFor(`[aria-label="${scope}"]`);
   if (scopeElement === null) {
     throw new Error(`Scope entry for ${scope} not found`);
   }
 
-  let parentNode = await scopeElement.evaluateHandle(n => n.nextElementSibling);
+  let parentNode = await scopeElement.evaluateHandle(n => n.nextElementSibling!);
   assert(parentNode, 'Scope element has no siblings');
 
   const result = [];
   for (const node of variable) {
-    const elementHandle: ElementHandle<Element> = await getMember(node, parentNode);
+    const elementHandle = await getMember(node, parentNode);
     const isExpanded = await elementHandle.evaluate((node: Element) => {
       node.scrollIntoView();
       return node.getAttribute('aria-expanded');
@@ -194,9 +184,9 @@ async function readScopeView(scope: string, variable: string[]) {
       // not propagate the click event, so the element does not expand.
       // Selecting a child element instead eliminates this issue.
       if (name) {
-        await clickElement(name);
+        await devToolsPage.clickElement(name);
       } else {
-        await clickElement(elementHandle);
+        await devToolsPage.clickElement(elementHandle);
       }
     }
 
@@ -204,17 +194,17 @@ async function readScopeView(scope: string, variable: string[]) {
       result.push(await name.evaluate(node => node.textContent));
     }
 
-    parentNode = await elementHandle.evaluateHandle(n => n.nextElementSibling);
+    parentNode = await elementHandle.evaluateHandle(n => n.nextElementSibling!);
     assert(parentNode, 'Element has no siblings');
   }
   return result;
 
-  async function getMember(name: string, parentNode: ElementHandle|JSHandle<null>): Promise<ElementHandle<Element>> {
+  async function getMember(name: string, parentNode: ElementHandle): Promise<ElementHandle<Element>> {
     if (name.startsWith('$')) {
       const index = parseInt(name.slice(1), 10);
       if (!isNaN(index)) {
-        const members = await waitForFunction(async () => {
-          const elements = await $$('li', parentNode);
+        const members = await devToolsPage.waitForFunction(async () => {
+          const elements = await devToolsPage.$$('li', parentNode);
           if (elements.length > index) {
             return elements;
           }
@@ -224,15 +214,16 @@ async function readScopeView(scope: string, variable: string[]) {
       }
     }
     const elementHandle: ElementHandle<Element> =
-        await waitFor(`[data-object-property-name-for-test="${name}"]`, parentNode);
+        await devToolsPage.waitFor(`[data-object-property-name-for-test="${name}"]`, parentNode);
     return elementHandle;
   }
 }
 
 async function scrollToLine(lineNumber: number): Promise<void> {
-  await waitForFunction(async () => {
-    const visibleLines = await $$(CODE_LINE_SELECTOR);
-    assertNotNullOrUndefined(visibleLines[0]);
+  const {devToolsPage} = getBrowserAndPagesWrappers();
+  await devToolsPage.waitForFunction(async () => {
+    const visibleLines = await devToolsPage.$$(CODE_LINE_SELECTOR);
+    assert.exists(visibleLines[0]);
     const lineNumbers = await Promise.all(visibleLines.map(v => v.evaluate(e => Number(e.textContent ?? ''))));
     if (lineNumbers.includes(lineNumber)) {
       return true;
@@ -245,7 +236,7 @@ async function scrollToLine(lineNumber: number): Promise<void> {
 }
 
 async function doActions({actions, reason}: {actions?: Action[], reason: string}) {
-  const {frontend, target} = getBrowserAndPages();
+  const {inspectedPage, devToolsPage} = getBrowserAndPagesWrappers();
   let continuation;
   if (actions) {
     for (const step of actions) {
@@ -259,9 +250,9 @@ async function doActions({actions, reason}: {actions?: Action[], reason: string}
           if (!breakpoint) {
             throw new Error('Invalid breakpoint spec: missing `breakpoint`');
           }
-          await openFileInEditor(file);
+          await openFileInEditor(file, devToolsPage);
           await scrollToLine(Number(breakpoint));
-          await addBreakpointForLine(frontend, breakpoint);
+          await addBreakpointForLine(breakpoint, devToolsPage);
           break;
         }
         case 'remove_breakpoint': {
@@ -270,7 +261,7 @@ async function doActions({actions, reason}: {actions?: Action[], reason: string}
             throw new Error('Invalid breakpoint spec: missing `breakpoint`');
           }
           await scrollToLine(Number(breakpoint));
-          await removeBreakpointForLine(frontend, breakpoint);
+          await removeBreakpointForLine(breakpoint, devToolsPage);
           break;
         }
         case 'step_over':
@@ -295,20 +286,20 @@ async function doActions({actions, reason}: {actions?: Action[], reason: string}
 
   switch (continuation) {
     case 'step_over':
-      await click(STEP_OVER_BUTTON);
+      await devToolsPage.click(STEP_OVER_BUTTON);
       break;
     case 'step_out':
-      await click(STEP_OUT_BUTTON);
+      await devToolsPage.click(STEP_OUT_BUTTON);
       break;
     case 'step_into':
-      await click(STEP_INTO_BUTTON);
+      await devToolsPage.click(STEP_INTO_BUTTON);
       break;
     case 'reload':
-      await target.reload();
+      await inspectedPage.reload();
       break;
     default:
-      await waitFor(RESUME_BUTTON);
-      await click(RESUME_BUTTON);
+      await devToolsPage.waitFor(RESUME_BUTTON);
+      await devToolsPage.click(RESUME_BUTTON);
       break;
   }
 }

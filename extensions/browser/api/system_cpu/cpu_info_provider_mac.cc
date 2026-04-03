@@ -7,6 +7,7 @@
 #include <mach/mach_host.h>
 
 #include "base/apple/scoped_mach_port.h"
+#include "base/compiler_specific.h"
 #include "base/mac/mac_util.h"
 #include "base/system/sys_info.h"
 
@@ -40,11 +41,14 @@ bool CpuInfoProvider::QueryCpuTimePerProcessor(
     DCHECK_EQ(num_of_processors, static_cast<natural_t>(infos->size()));
 
     for (natural_t i = 0; i < num_of_processors; ++i) {
-      double user = static_cast<double>(cpu_infos[i].cpu_ticks[CPU_STATE_USER]),
-             sys =
-                 static_cast<double>(cpu_infos[i].cpu_ticks[CPU_STATE_SYSTEM]),
-             nice = static_cast<double>(cpu_infos[i].cpu_ticks[CPU_STATE_NICE]),
-             idle = static_cast<double>(cpu_infos[i].cpu_ticks[CPU_STATE_IDLE]);
+      double user = static_cast<double>(
+                 UNSAFE_TODO(cpu_infos[i]).cpu_ticks[CPU_STATE_USER]),
+             sys = static_cast<double>(
+                 UNSAFE_TODO(cpu_infos[i]).cpu_ticks[CPU_STATE_SYSTEM]),
+             nice = static_cast<double>(
+                 UNSAFE_TODO(cpu_infos[i]).cpu_ticks[CPU_STATE_NICE]),
+             idle = static_cast<double>(
+                 UNSAFE_TODO(cpu_infos[i]).cpu_ticks[CPU_STATE_IDLE]);
 
       infos->at(i).usage.kernel = sys;
       infos->at(i).usage.user = user + nice;

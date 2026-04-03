@@ -11,10 +11,9 @@
 #include "base/memory/scoped_refptr.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/reload_type.h"
-#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "net/dns/public/resolve_error_info.h"
+#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
-#include "third_party/blink/public/common/permissions_policy/permissions_policy.h"
 #include "third_party/blink/public/mojom/loader/referrer.mojom-forward.h"
 #include "ui/base/page_transition_types.h"
 
@@ -30,6 +29,7 @@ namespace content {
 
 class NavigationController;
 class NavigationHandle;
+class NavigationThrottleRegistry;
 class RenderFrameHost;
 class WebContents;
 struct GlobalRequestID;
@@ -245,7 +245,7 @@ class NavigationSimulator {
   // renderer-initiated navigations. For now this frame must belong to the same
   // process as the frame that is navigating.
   //
-  // TODO(https://crbug.com/1072790): Support cross-process initiators here by
+  // TODO(crbug.com/40127276): Support cross-process initiators here by
   // using NavigationRequest::CreateBrowserInitiated() (like
   // RenderFrameProxyHost does) for the navigation.
   virtual void SetInitiatorFrame(RenderFrameHost* initiator_frame_host) = 0;
@@ -283,7 +283,7 @@ class NavigationSimulator {
 
   // Simulate receiving Permissions-Policy headers.
   virtual void SetPermissionsPolicyHeader(
-      blink::ParsedPermissionsPolicy permissions_policy_header) = 0;
+      network::ParsedPermissionsPolicy permissions_policy_header) = 0;
 
   // Provides the contents mime type to be set at commit. It should be
   // specified before calling |ReadyToCommit| or |Commit|.
@@ -345,6 +345,12 @@ class NavigationSimulator {
   // simulated. It is an error to call this before Start() or after the
   // navigation has finished (successfully or not).
   virtual NavigationHandle* GetNavigationHandle() = 0;
+
+  // Returns the NavigationThrottleRegistry associated with the navigation
+  // being simulated. It is an error to call this before Start() or after the
+  // navigation has finished (successfully or not) as the runner does not
+  // outlive the NavigationHandle.
+  virtual NavigationThrottleRegistry& GetNavigationThrottleRegistry() = 0;
 
   // Returns the GlobalRequestID for the simulated navigation request. Can be
   // invoked after the navigation has completed. It is an error to call this

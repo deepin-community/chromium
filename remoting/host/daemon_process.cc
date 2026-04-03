@@ -11,7 +11,6 @@
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -36,12 +35,6 @@ namespace {
 
 // This is used for tagging system event logs.
 const char kApplicationName[] = "chromoting";
-
-std::ostream& operator<<(std::ostream& os, const ScreenResolution& resolution) {
-  return os << resolution.dimensions().width() << "x"
-            << resolution.dimensions().height() << " at "
-            << resolution.dpi().x() << "x" << resolution.dpi().y() << " DPI";
-}
 
 }  // namespace
 
@@ -182,11 +175,16 @@ DaemonProcess::DaemonProcess(
   // TODO(sammc): On OSX, mojo::core::SetMachPortProvider() should be called
   // with a base::PortProvider implementation. Add it here when this code is
   // used on OSX.
+
+  // Tests may use their own thread pool so create one if needed.
+  if (!base::ThreadPoolInstance::Get()) {
+    base::ThreadPoolInstance::CreateAndStartWithDefaultParams("Daemon");
+  }
 }
 
 void DaemonProcess::CreateDesktopSession(int terminal_id,
                                          const ScreenResolution& resolution,
-                                         bool virtual_terminal) {
+                                         bool is_curtained) {
   DCHECK(caller_task_runner()->BelongsToCurrentThread());
 
   // Validate the supplied terminal ID. An attempt to create a desktop session
@@ -203,7 +201,7 @@ void DaemonProcess::CreateDesktopSession(int terminal_id,
 
   // Create the desktop session.
   std::unique_ptr<DesktopSession> session =
-      DoCreateDesktopSession(terminal_id, resolution, virtual_terminal);
+      DoCreateDesktopSession(terminal_id, resolution, is_curtained);
   if (!session) {
     LOG(ERROR) << "Failed to create a desktop session.";
     SendTerminalDisconnected(terminal_id);
@@ -266,8 +264,6 @@ void DaemonProcess::Initialize() {
   config_watcher_->Watch(this);
   host_event_logger_ =
       HostEventLogger::Create(status_monitor_, kApplicationName);
-
-  base::ThreadPoolInstance::CreateAndStartWithDefaultParams("Daemon");
 
   StartChromotingHostServices();
 

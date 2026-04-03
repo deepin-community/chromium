@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "ash/constants/app_types.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
@@ -14,11 +13,13 @@
 #include "ash/wm/window_state.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "chromeos/ui/base/app_types.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "chromeos/ui/wm/fullscreen/pref_names.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 
 namespace ash {
 namespace {
@@ -38,15 +39,14 @@ bool IsOfficialBuildWithoutDcheck() {
 #endif
 }
 
-class FullscreenControllerTestBase : public AshTestBase {
+class FullscreenControllerTest : public AshTestBase {
  public:
-  FullscreenControllerTestBase() = default;
+  FullscreenControllerTest() = default;
 
-  FullscreenControllerTestBase(const FullscreenControllerTestBase&) = delete;
-  FullscreenControllerTestBase& operator=(const FullscreenControllerTestBase&) =
-      delete;
+  FullscreenControllerTest(const FullscreenControllerTest&) = delete;
+  FullscreenControllerTest& operator=(const FullscreenControllerTest&) = delete;
 
-  ~FullscreenControllerTestBase() override = default;
+  ~FullscreenControllerTest() override = default;
 
   // AshTestBase:
   void SetUp() override {
@@ -54,13 +54,16 @@ class FullscreenControllerTestBase : public AshTestBase {
     auto test_shell_delegate = std::make_unique<TestShellDelegate>();
     test_shell_delegate_ = test_shell_delegate.get();
 
-    AshTestBase::SetUp(std::move(test_shell_delegate));
+    set_shell_delegate(std::move(test_shell_delegate));
+    AshTestBase::SetUp();
 
     CreateFullscreenWindow();
   }
 
   void TearDown() override {
+    window_state_ = nullptr;
     window_.reset();
+    test_shell_delegate_ = nullptr;
     AshTestBase::TearDown();
   }
 
@@ -68,55 +71,31 @@ class FullscreenControllerTestBase : public AshTestBase {
   void CreateFullscreenWindow() {
     window_ = CreateTestWindow();
     window_->SetProperty(aura::client::kShowStateKey,
-                         ui::SHOW_STATE_FULLSCREEN);
-    SetPropertiesForNewFullscreenWindow(window_.get());
+                         ui::mojom::WindowShowState::kFullscreen);
     window_state_ = WindowState::Get(window_.get());
   }
 
-  virtual void SetPropertiesForNewFullscreenWindow(aura::Window* window) {}
-
   void SetKeepFullscreenWithoutNotificationAllowList(
       const std::string& pattern) {
-    base::Value::List list;
+    base::ListValue list;
     list.Append(pattern);
     Shell::Get()->session_controller()->GetPrimaryUserPrefService()->SetList(
         chromeos::prefs::kKeepFullscreenWithoutNotificationUrlAllowList,
         std::move(list));
   }
 
+  void SetUpShellDelegate(GURL url = kActiveUrl) {
+    test_shell_delegate_->SetLastCommittedURLForWindow(url);
+  }
+
   std::unique_ptr<aura::Window> window_;
-  raw_ptr<WindowState, DanglingUntriaged> window_state_ = nullptr;
-  raw_ptr<TestShellDelegate, DanglingUntriaged> test_shell_delegate_ = nullptr;
-};
-
-class FullscreenControllerTest : public FullscreenControllerTestBase,
-                                 public testing::WithParamInterface<bool> {
- protected:
-  void SetPropertiesForNewFullscreenWindow(aura::Window* window) override {
-    if (is_lacros_window_) {
-      window->SetProperty(aura::client::kAppType,
-                          static_cast<int>(AppType::LACROS));
-    }
-  }
-
-  void SetUpShellDelegate(bool should_exit_fullscreen, GURL url = kActiveUrl) {
-    // The shell delegate will only retrieve the active URL for ash-chrome
-    // windows and return the empty URL for lacros-chrome windows.
-    if (is_lacros_window_) {
-      test_shell_delegate_->SetLastCommittedURLForWindow(kEmptyUrl);
-      test_shell_delegate_->SetShouldExitFullscreenBeforeLock(
-          should_exit_fullscreen);
-    } else {
-      test_shell_delegate_->SetLastCommittedURLForWindow(url);
-    }
-  }
-
-  bool is_lacros_window_ = GetParam();
+  raw_ptr<WindowState> window_state_ = nullptr;
+  raw_ptr<TestShellDelegate> test_shell_delegate_ = nullptr;
 };
 
 // Test that full screen is exited after session unlock if the allow list pref
 // is unset.
-TEST_P(FullscreenControllerTest, ExitFullscreenIfUnsetPref) {
+TEST_F(FullscreenControllerTest, ExitFullscreenIfUnsetPref) {
   EXPECT_TRUE(window_state_->IsFullscreen());
 
   base::RunLoop run_loop;
@@ -130,9 +109,8 @@ TEST_P(FullscreenControllerTest, ExitFullscreenIfUnsetPref) {
 
 // Test that full screen is exited after session unlock if the URL of the active
 // window does not match any patterns from the allow list.
-TEST_P(FullscreenControllerTest, ExitFullscreenIfNonMatchingPref) {
-  bool should_exit_fullscreen = true;
-  SetUpShellDelegate(should_exit_fullscreen);
+TEST_F(FullscreenControllerTest, ExitFullscreenIfNonMatchingPref) {
+  SetUpShellDelegate();
 
   SetKeepFullscreenWithoutNotificationAllowList(kNonMatchingPattern);
 
@@ -144,17 +122,16 @@ TEST_P(FullscreenControllerTest, ExitFullscreenIfNonMatchingPref) {
   GetSessionControllerClient()->UnlockScreen();
   run_loop.Run();
 
-  EXPECT_EQ(window_state_->IsFullscreen(), !should_exit_fullscreen);
+  EXPECT_FALSE(window_state_->IsFullscreen());
 }
 
 // Test that full screen is not exited after session unlock if the URL of the
 // active window matches a pattern from the allow list.
-TEST_P(FullscreenControllerTest, KeepFullscreenIfMatchingPref) {
-  bool should_exit_fullscreen = false;
-  SetUpShellDelegate(should_exit_fullscreen);
+TEST_F(FullscreenControllerTest, KeepFullscreenIfMatchingPref) {
+  SetUpShellDelegate();
 
   // Set up the URL exempt list with one matching and one non-matching pattern.
-  base::Value::List list;
+  base::ListValue list;
   list.Append(kNonMatchingPattern);
   list.Append(kMatchingPattern);
   Shell::Get()->session_controller()->GetPrimaryUserPrefService()->SetList(
@@ -169,14 +146,13 @@ TEST_P(FullscreenControllerTest, KeepFullscreenIfMatchingPref) {
   GetSessionControllerClient()->UnlockScreen();
   run_loop.Run();
 
-  EXPECT_EQ(window_state_->IsFullscreen(), !should_exit_fullscreen);
+  EXPECT_TRUE(window_state_->IsFullscreen());
 }
 
 // Test that full screen is not exited after session unlock if the allow list
 // includes the wildcard character.
-TEST_P(FullscreenControllerTest, KeepFullscreenIfWildcardPref) {
-  bool should_exit_fullscreen = false;
-  SetUpShellDelegate(should_exit_fullscreen);
+TEST_F(FullscreenControllerTest, KeepFullscreenIfWildcardPref) {
+  SetUpShellDelegate();
 
   SetKeepFullscreenWithoutNotificationAllowList(kWildcardPattern);
 
@@ -188,14 +164,13 @@ TEST_P(FullscreenControllerTest, KeepFullscreenIfWildcardPref) {
   GetSessionControllerClient()->UnlockScreen();
   run_loop.Run();
 
-  EXPECT_EQ(window_state_->IsFullscreen(), !should_exit_fullscreen);
+  EXPECT_TRUE(window_state_->IsFullscreen());
 }
 
 // Test that full screen is exited after session unlock if the URL is not
 // available.
-TEST_P(FullscreenControllerTest, ExitFullscreenIfUnsetUrlUnsetPref) {
-  bool should_exit_fullscreen = true;
-  SetUpShellDelegate(should_exit_fullscreen, kEmptyUrl);
+TEST_F(FullscreenControllerTest, ExitFullscreenIfUnsetUrlUnsetPref) {
+  SetUpShellDelegate(kEmptyUrl);
 
   EXPECT_TRUE(window_state_->IsFullscreen());
 
@@ -205,14 +180,13 @@ TEST_P(FullscreenControllerTest, ExitFullscreenIfUnsetUrlUnsetPref) {
   GetSessionControllerClient()->UnlockScreen();
   run_loop.Run();
 
-  EXPECT_EQ(window_state_->IsFullscreen(), !should_exit_fullscreen);
+  EXPECT_FALSE(window_state_->IsFullscreen());
 }
 
 // Test that full screen is not exited after session unlock if the allow list
 // includes the wildcard character and the URL is not available.
-TEST_P(FullscreenControllerTest, KeepFullscreenIfUnsetUrlWildcardPref) {
-  bool should_exit_fullscreen = false;
-  SetUpShellDelegate(should_exit_fullscreen, kEmptyUrl);
+TEST_F(FullscreenControllerTest, KeepFullscreenIfUnsetUrlWildcardPref) {
+  SetUpShellDelegate(kEmptyUrl);
 
   SetKeepFullscreenWithoutNotificationAllowList(kWildcardPattern);
 
@@ -224,19 +198,13 @@ TEST_P(FullscreenControllerTest, KeepFullscreenIfUnsetUrlWildcardPref) {
   GetSessionControllerClient()->UnlockScreen();
   run_loop.Run();
 
-  EXPECT_EQ(window_state_->IsFullscreen(), !should_exit_fullscreen);
+  EXPECT_TRUE(window_state_->IsFullscreen());
 }
 
-INSTANTIATE_TEST_SUITE_P(All, FullscreenControllerTest, testing::Bool());
-
-using FullscreenControllerNotLacrosRelatedTest = FullscreenControllerTestBase;
-
-TEST_F(FullscreenControllerNotLacrosRelatedTest,
-       KeepFullscreenIfNoExitPropertySet) {
+TEST_F(FullscreenControllerTest, KeepFullscreenIfNoExitPropertySet) {
   window_->SetProperty(chromeos::kUseOverviewToExitFullscreen, true);
   window_->SetProperty(chromeos::kNoExitFullscreenOnLock, true);
-  window_->SetProperty(aura::client::kAppType,
-                       static_cast<int>(AppType::CROSTINI_APP));
+  window_->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::CROSTINI_APP);
 
   ASSERT_TRUE(window_state_->IsFullscreen());
 
@@ -249,7 +217,7 @@ TEST_F(FullscreenControllerNotLacrosRelatedTest,
   EXPECT_TRUE(window_state_->IsFullscreen());
 }
 
-TEST_F(FullscreenControllerNotLacrosRelatedTest,
+TEST_F(FullscreenControllerTest,
        NoExitPropertyNotAllowedIfOverviewPropertyIsNotSet) {
   // CHECK macro discards error message for the official build with
   // dcheck=false. See the definition in base/check.h for details.

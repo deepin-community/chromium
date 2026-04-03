@@ -3,9 +3,9 @@
  * Copyright 2024 Google Inc.
  * SPDX-License-Identifier: Apache-2.0
  */
-import type * as Bidi from 'chromium-bidi/lib/cjs/protocol/protocol.js';
+import type * as Bidi from 'webdriver-bidi-protocol';
 import { EventEmitter } from '../../common/EventEmitter.js';
-import { DisposableStack, disposeSymbol } from '../../util/disposable.js';
+import { disposeSymbol } from '../../util/disposable.js';
 import type { Browser } from './Browser.js';
 import type { BrowsingContext } from './BrowsingContext.js';
 import type { Session } from './Session.js';
@@ -33,9 +33,10 @@ export declare abstract class Realm extends EventEmitter<{
     sharedworker: SharedWorkerRealm;
 }> {
     #private;
-    protected readonly disposables: DisposableStack;
+    protected readonly disposables: import("../../util/disposable.js").DisposableStackPolyfill;
     readonly id: string;
     readonly origin: string;
+    protected executionContextId?: number;
     protected constructor(id: string, origin: string);
     get disposed(): boolean;
     protected abstract get session(): Session;
@@ -44,6 +45,7 @@ export declare abstract class Realm extends EventEmitter<{
     disown(handles: string[]): Promise<void>;
     callFunction(functionDeclaration: string, awaitPromise: boolean, options?: CallFunctionOptions): Promise<Bidi.Script.EvaluateResult>;
     evaluate(expression: string, awaitPromise: boolean, options?: EvaluateOptions): Promise<Bidi.Script.EvaluateResult>;
+    resolveExecutionContextId(): Promise<number>;
     [disposeSymbol](): void;
 }
 /**

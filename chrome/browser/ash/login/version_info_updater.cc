@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -15,17 +16,18 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/task/thread_pool.h"
+#include "base/version_info/version_info_values.h"
+#include "build/util/LASTCHANGE_commit_position.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "chromeos/version/version_loader.h"
-#include "components/version_info/version_info.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -48,6 +50,16 @@ const char kAttestedDeviceIdPrefix[] = "ADID:";
 
 // Strings used to generate the bluetooth device name.
 const char kBluetoothDeviceNamePrefix[] = "Bluetooth device name: ";
+
+constexpr std::string_view GetVersionNumberWithInformationalSuffix() {
+#if CHROMIUM_COMMIT_POSITION_IS_MAIN
+  // Adds the revision number as a suffix to the version number if the chrome
+  // is built from the main branch.
+  return PRODUCT_VERSION "-r" CHROMIUM_COMMIT_POSITION_NUMBER;
+#else
+  return PRODUCT_VERSION;
+#endif
+}
 
 }  // namespace
 
@@ -98,8 +110,8 @@ void VersionInfoUpdater::StartUpdate(bool is_chrome_branded) {
   auto callback = base::BindRepeating(&VersionInfoUpdater::UpdateEnterpriseInfo,
                                       base::Unretained(this));
   for (unsigned int i = 0; i < std::size(kReportingFlags); ++i) {
-    subscriptions_.push_back(
-        cros_settings_->AddSettingsObserver(kReportingFlags[i], callback));
+    subscriptions_.push_back(cros_settings_->AddSettingsObserver(
+        UNSAFE_TODO(kReportingFlags[i]), callback));
   }
 
   // Update device bluetooth info.
@@ -132,7 +144,7 @@ void VersionInfoUpdater::UpdateVersionLabel() {
   std::string label_text = l10n_util::GetStringFUTF8(
       IDS_LOGIN_VERSION_LABEL_FORMAT,
       l10n_util::GetStringUTF16(IDS_PRODUCT_NAME),
-      base::UTF8ToUTF16(version_info::GetVersionNumber()),
+      base::UTF8ToUTF16(GetVersionNumberWithInformationalSuffix()),
       base::UTF8ToUTF16(version_text_.value()),
       base::UTF8ToUTF16(GetDeviceIdsLabel()));
 
@@ -229,8 +241,9 @@ void VersionInfoUpdater::OnQueryAdbSideload(
       break;
   }
 
-  if (delegate_)
+  if (delegate_) {
     delegate_->OnAdbSideloadStatusUpdated(enabled);
+  }
 }
 
 }  // namespace ash

@@ -69,25 +69,21 @@ base::WeakPtr<TwentyEightDayImpl> TwentyEightDayImpl::GetWeakPtr() {
 
 void TwentyEightDayImpl::CheckMembershipOprf() {
   NOTREACHED();
-  return;
 }
 
 void TwentyEightDayImpl::OnCheckMembershipOprfComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   NOTREACHED();
-  return;
 }
 
 void TwentyEightDayImpl::CheckMembershipQuery(
     const psm_rlwe::PrivateMembershipRlweOprfResponse& oprf_response) {
   NOTREACHED();
-  return;
 }
 
 void TwentyEightDayImpl::OnCheckMembershipQueryComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   NOTREACHED();
-  return;
 }
 
 void TwentyEightDayImpl::CheckIn() {
@@ -117,14 +113,13 @@ void TwentyEightDayImpl::CheckIn() {
 }
 
 void TwentyEightDayImpl::OnCheckInComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   NOTREACHED();
-  return;
 }
 
 void TwentyEightDayImpl::OnCheckInCompleteCustom(
     const FresnelImportDataRequest import_request,
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   // Use RAII to reset |url_loader_| after current function scope.
   auto url_loader = std::move(url_loader_);
 
@@ -179,7 +174,7 @@ TwentyEightDayImpl::GenerateImportRequestBody() {
       GetParams()->GetChromeDeviceParams().market_segment;
 
   DeviceMetadata* device_metadata = import_request.mutable_device_metadata();
-  device_metadata->set_chromeos_version(utils::GetChromeMilestone());
+  device_metadata->set_chrome_milestone(utils::GetChromeMilestone());
   device_metadata->set_hardware_id(utils::GetFullHardwareClass());
   device_metadata->set_chromeos_channel(
       utils::GetChromeChannel(version_channel));
@@ -237,7 +232,7 @@ bool TwentyEightDayImpl::IsDevicePingRequired() {
 }
 
 void TwentyEightDayImpl::LoadActivesCachePref() {
-  const base::Value::Dict& actives_pref = GetParams()->GetLocalState()->GetDict(
+  const base::DictValue& actives_pref = GetParams()->GetLocalState()->GetDict(
       prefs::kDeviceActive28DayActivePingCache);
   actives_cache_ = actives_pref.Clone();
 }
@@ -251,7 +246,7 @@ void TwentyEightDayImpl::FilterActivesCache() {
   base::Time day_0 = GetParams()->GetActiveTs().UTCMidnight();
   base::Time day_27 = day_0 + base::Days(27);
 
-  base::Value::Dict new_actives_cache;
+  base::DictValue new_actives_cache;
 
   // Remove active cache entries if not between [day_0, day_27] inclusive.
   for (base::Time day = day_0; day <= day_27; day += base::Days(1)) {
@@ -426,7 +421,7 @@ void TwentyEightDayImpl::CheckMembershipOprfFirstPhase() {
 }
 
 void TwentyEightDayImpl::OnCheckMembershipOprfCompleteFirstPhase(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   // Use RAII to reset |url_loader_| after current function scope.
   auto url_loader = std::move(url_loader_);
 
@@ -436,14 +431,12 @@ void TwentyEightDayImpl::OnCheckMembershipOprfCompleteFirstPhase(
 
   // Convert serialized response body to oprf response protobuf.
   FresnelPsmRlweOprfResponse psm_oprf_response;
-  bool is_response_body_set = response_body.get() != nullptr;
-
-  if (!is_response_body_set ||
+  if (!response_body.has_value() ||
       !psm_oprf_response.ParseFromString(*response_body)) {
     LOG(ERROR) << "First phase OPRF response net code = " << net_code;
     LOG(ERROR) << "Response body was not set or could not be parsed into "
                << "FresnelPsmRlweOprfResponse proto. "
-               << "Is response body set = " << is_response_body_set;
+               << "Is response body set = " << response_body.has_value();
     std::move(callback_).Run();
     return;
   }
@@ -504,7 +497,7 @@ void TwentyEightDayImpl::CheckMembershipQueryFirstPhase(
 }
 
 void TwentyEightDayImpl::OnCheckMembershipQueryCompleteFirstPhase(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   // Use RAII to reset |url_loader_| after current function scope.
   auto url_loader = std::move(url_loader_);
 
@@ -514,14 +507,12 @@ void TwentyEightDayImpl::OnCheckMembershipQueryCompleteFirstPhase(
 
   // Convert serialized response body to fresnel query response protobuf.
   FresnelPsmRlweQueryResponse psm_query_response;
-  bool is_response_body_set = response_body.get() != nullptr;
-
-  if (!is_response_body_set ||
+  if (!response_body.has_value() ||
       !psm_query_response.ParseFromString(*response_body)) {
     LOG(ERROR) << "First phase query response net code = " << net_code;
     LOG(ERROR) << "Response body was not set or could not be parsed into "
                << "FresnelPsmRlweQueryResponse proto. "
-               << "Is response body set = " << is_response_body_set;
+               << "Is response body set = " << response_body.has_value();
     std::move(callback_).Run();
     return;
   }
@@ -680,7 +671,6 @@ TwentyEightDayImpl::GetPsmIdentifiersToQueryPhaseTwo() {
     return {};
   }
 
-  // TODO(hirthanan): Thoroughly evaluate different scenarios of calculations.
   base::TimeDelta time_diff = right_ts - left_ts;
   base::Time query_day = (left_ts + time_diff / 2).UTCMidnight();
   std::string window_id_query_day = utils::TimeToYYYYMMDDString(query_day);
@@ -689,7 +679,6 @@ TwentyEightDayImpl::GetPsmIdentifiersToQueryPhaseTwo() {
     NOTREACHED() << "Unexpectedly the Window ID is contained in the actives "
                     "cache already = "
                  << window_id_query_day;
-    return {};
   }
 
   std::optional<psm_rlwe::RlwePlaintextId> psm_id_query_day =
@@ -715,8 +704,6 @@ void TwentyEightDayImpl::CheckMembershipOprfSecondPhase() {
 
   if (!IsFirstPhaseComplete()) {
     NOTREACHED();
-    std::move(callback_).Run();
-    return;
   }
   PsmClientManager* psm_client_manager = GetParams()->GetPsmClientManager();
   psm_client_manager->SetPsmRlweClient(kPsmUseCase,
@@ -765,7 +752,7 @@ void TwentyEightDayImpl::CheckMembershipOprfSecondPhase() {
 }
 
 void TwentyEightDayImpl::OnCheckMembershipOprfCompleteSecondPhase(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   // Use RAII to reset |url_loader_| after current function scope.
   auto url_loader = std::move(url_loader_);
 
@@ -775,14 +762,12 @@ void TwentyEightDayImpl::OnCheckMembershipOprfCompleteSecondPhase(
 
   // Convert serialized response body to oprf response protobuf.
   FresnelPsmRlweOprfResponse psm_oprf_response;
-  bool is_response_body_set = response_body.get() != nullptr;
-
-  if (!is_response_body_set ||
+  if (!response_body.has_value() ||
       !psm_oprf_response.ParseFromString(*response_body)) {
     LOG(ERROR) << "Second phase OPRF response net code = " << net_code;
     LOG(ERROR) << "Response body was not set or could not be parsed into "
                << "FresnelPsmRlweOprfResponse proto. "
-               << "Is response body set = " << is_response_body_set;
+               << "Is response body set = " << response_body.has_value();
     std::move(callback_).Run();
     return;
   }
@@ -844,7 +829,7 @@ void TwentyEightDayImpl::CheckMembershipQuerySecondPhase(
 }
 
 void TwentyEightDayImpl::OnCheckMembershipQueryCompleteSecondPhase(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   // Use RAII to reset |url_loader_| after current function scope.
   auto url_loader = std::move(url_loader_);
 
@@ -854,14 +839,12 @@ void TwentyEightDayImpl::OnCheckMembershipQueryCompleteSecondPhase(
 
   // Convert serialized response body to fresnel query response protobuf.
   FresnelPsmRlweQueryResponse psm_query_response;
-  bool is_response_body_set = response_body.get() != nullptr;
-
-  if (!is_response_body_set ||
+  if (!response_body.has_value() ||
       !psm_query_response.ParseFromString(*response_body)) {
     LOG(ERROR) << "Second phase query response net code = " << net_code;
     LOG(ERROR) << "Response body was not set or could not be parsed into "
                << "FresnelPsmRlweQueryResponse proto. "
-               << "Is response body set = " << is_response_body_set;
+               << "Is response body set = " << response_body.has_value();
     std::move(callback_).Run();
     return;
   }
@@ -910,7 +893,6 @@ void TwentyEightDayImpl::OnCheckMembershipQueryCompleteSecondPhase(
   SaveActivesCachePref();
 
   if (IsSecondPhaseComplete()) {
-    // TODO(hirthanan): Finish implementation here.
     base::Time last_ping_ts = FindLeftMostKnownMembership() - base::Days(28);
     LOG(ERROR) << "Device pinged last on = " << last_ping_ts;
     SetLastPingTimestamp(last_ping_ts);

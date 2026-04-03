@@ -60,7 +60,7 @@ bool DeviceState::PropertyChanged(const std::string& key,
       country_code_.clear();
       return true;
     }
-    const base::Value::Dict& dict = value.GetDict();
+    const base::DictValue& dict = value.GetDict();
 
     const std::string* operator_name = dict.FindString(shill::kOperatorNameKey);
     if (operator_name) {
@@ -102,7 +102,7 @@ bool DeviceState::PropertyChanged(const std::string& key,
     if (!value.is_dict()) {
       return false;
     }
-    const base::Value::Dict& dict = value.GetDict();
+    const base::DictValue& dict = value.GetDict();
 
     // Set default values for SIM properties.
     sim_lock_type_.erase();
@@ -156,6 +156,8 @@ bool DeviceState::PropertyChanged(const std::string& key,
     return GetStringValue(key, value, &device_bus_type_);
   } else if (key == shill::kUsbEthernetMacAddressSourceProperty) {
     return GetStringValue(key, value, &mac_address_source_);
+  } else if (key == shill::kFlashingProperty) {
+    return GetBooleanValue(key, value, &flashing_);
   }
   return false;
 }
@@ -165,7 +167,7 @@ bool DeviceState::IsActive() const {
 }
 
 void DeviceState::IPConfigPropertiesChanged(const std::string& ip_config_path,
-                                            base::Value::Dict properties) {
+                                            base::DictValue properties) {
   NET_LOG(EVENT) << "IPConfig for: " << path()
                  << " Changed: " << ip_config_path;
   ip_configs_.Set(ip_config_path, std::move(properties));
@@ -205,7 +207,7 @@ std::string DeviceState::GetIpAddressByType(const std::string& type) const {
   for (const auto iter : ip_configs_) {
     if (!iter.second.is_dict())
       continue;
-    const base::Value::Dict& ip_config = iter.second.GetDict();
+    const base::DictValue& ip_config = iter.second.GetDict();
     const std::string* ip_config_method =
         ip_config.FindString(shill::kMethodProperty);
     if (!ip_config_method)
@@ -232,8 +234,7 @@ bool DeviceState::IsSimLocked() const {
       sim_lock_type_ == shill::kSIMLockPuk) {
     return true;
   }
-  return features::IsCellularCarrierLockEnabled() &&
-         sim_lock_type_ == shill::kSIMLockNetworkPin;
+  return sim_lock_type_ == shill::kSIMLockNetworkPin;
 }
 
 bool DeviceState::IsSimCarrierLocked() const {

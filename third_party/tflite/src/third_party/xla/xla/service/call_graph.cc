@@ -18,69 +18,32 @@ limitations under the License.
 #include <deque>
 #include <memory>
 #include <queue>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/memory/memory.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
+#include "absl/strings/string_view.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/map_util.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
-#include "tsl/platform/errors.h"
 
 namespace xla {
 
 using absl::StrAppendFormat;
 using absl::StrCat;
-
-std::string CallContextToString(CallContext context) {
-  switch (context) {
-    case CallContext::kNone:
-      return "kNone";
-    case CallContext::kControlFlow:
-      return "kControlFlow";
-    case CallContext::kEmbedded:
-      return "kEmbedded";
-    case CallContext::kBoth:
-      return "kBoth";
-  }
-}
-
-std::ostream& operator<<(std::ostream& out, const CallContext& context) {
-  out << CallContextToString(context);
-  return out;
-}
-
-CallContext GetInstructionCallContext(HloOpcode opcode) {
-  switch (opcode) {
-    case HloOpcode::kCall:
-    case HloOpcode::kConditional:
-    case HloOpcode::kWhile:
-    case HloOpcode::kAsyncStart:
-    case HloOpcode::kAsyncUpdate:
-    case HloOpcode::kAsyncDone:
-      return CallContext::kControlFlow;
-    case HloOpcode::kAllReduce:
-    case HloOpcode::kReduceScatter:
-    case HloOpcode::kAllReduceStart:
-    case HloOpcode::kMap:
-    case HloOpcode::kReduce:
-    case HloOpcode::kReduceWindow:
-    case HloOpcode::kScatter:
-    case HloOpcode::kSelectAndScatter:
-    case HloOpcode::kSort:
-    case HloOpcode::kTopK:
-    case HloOpcode::kFusion:
-    case HloOpcode::kCustomCall:
-      return CallContext::kEmbedded;
-    default:
-      return CallContext::kNone;
-  }
-}
 
 std::string CallSite::ToString() const {
   return StrCat(
@@ -148,15 +111,13 @@ CallGraph::CallGraph(
 
 const CallGraphNode& CallGraph::GetNode(
     const HloComputation* computation) const {
-  auto it = node_indices_.find(computation);
-  CHECK(it != node_indices_.end());
-  return nodes_[it->second];
+  DCHECK(node_indices_.contains(computation));
+  return nodes_[node_indices_.find(computation)->second];
 }
 
 CallGraphNode& CallGraph::GetNode(const HloComputation* computation) {
-  auto it = node_indices_.find(computation);
-  CHECK(it != node_indices_.end());
-  return nodes_[it->second];
+  DCHECK(node_indices_.contains(computation));
+  return nodes_[node_indices_.find(computation)->second];
 }
 
 bool CallGraph::DominatesHelper(
@@ -216,8 +177,8 @@ CallContext UnionContexts(CallContext a, CallContext b) {
   } else if (a == b) {
     return a;
   } else {
-    // Contexts are different and neither is kNone, ie one is kSequential and
-    // the other is kParallel.
+    // Contexts are different and neither is kNone, i.e. one is kControlFlow and
+    // the other is kEmbedded.
     return CallContext::kBoth;
   }
 }
@@ -365,13 +326,13 @@ std::unique_ptr<CallGraph> CallGraph::Build(
   return call_graph;
 }
 
-Status CallGraph::VisitNodesInternal(
+absl::Status CallGraph::VisitNodesInternal(
     VisitorFunction visitor_func, const CallGraphNode& node,
     absl::flat_hash_set<const CallGraphNode*>* visited) const {
   auto pair = visited->insert(&node);
   if (!pair.second) {
     // Node was not inserted. Node has already been visited.
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   for (const HloComputation* computation : node.callees()) {
@@ -382,8 +343,30 @@ Status CallGraph::VisitNodesInternal(
   return visitor_func(node);
 }
 
-Status CallGraph::VisitNodes(VisitorFunction visitor_func,
-                             bool visit_unreachable_nodes) const {
+absl::StatusOr<bool> CallGraph::VisitNodesInternal(
+    ChangedVisitorFunction visitor_func, const CallGraphNode& node,
+    absl::flat_hash_set<const CallGraphNode*>* visited) const {
+  auto pair = visited->insert(&node);
+  if (!pair.second) {
+    // Node was not inserted. Node has already been visited.
+    return false;
+  }
+
+  bool changed = false;
+  for (const HloComputation* computation : node.callees()) {
+    TF_ASSIGN_OR_RETURN(
+        bool node_changed,
+        VisitNodesInternal(visitor_func, GetNode(computation), visited));
+    changed |= node_changed;
+  }
+
+  TF_ASSIGN_OR_RETURN(bool node_changed, visitor_func(node));
+  changed |= node_changed;
+  return changed;
+}
+
+absl::Status CallGraph::VisitNodes(VisitorFunction visitor_func,
+                                   bool visit_unreachable_nodes) const {
   absl::flat_hash_set<const CallGraphNode*> visited;
   if (visit_unreachable_nodes) {
     // Traverse from all roots in the call graph.
@@ -398,7 +381,31 @@ Status CallGraph::VisitNodes(VisitorFunction visitor_func,
         visitor_func, GetNode(module_->entry_computation()), &visited));
   }
 
-  return OkStatus();
+  return absl::OkStatus();
+}
+
+absl::StatusOr<bool> CallGraph::VisitNodesWithReturn(
+    ChangedVisitorFunction visitor_func, bool visit_unreachable_nodes) const {
+  absl::flat_hash_set<const CallGraphNode*> visited;
+  bool changed = false;
+  if (visit_unreachable_nodes) {
+    // Traverse from all roots in the call graph.
+    for (const CallGraphNode& node : nodes()) {
+      if (node.callers().empty()) {
+        TF_ASSIGN_OR_RETURN(bool node_changed,
+                            VisitNodesInternal(visitor_func, node, &visited));
+        changed |= node_changed;
+      }
+    }
+  } else {
+    // Traverse only from the entry computation.
+    TF_ASSIGN_OR_RETURN(
+        changed,
+        VisitNodesInternal(visitor_func, GetNode(module_->entry_computation()),
+                           &visited));
+  }
+
+  return changed;
 }
 
 bool CallGraph::IsFlattened() const {
@@ -587,8 +594,7 @@ absl::flat_hash_set<const T*> CallGraph::NearestCommonAncestorsHelper(
         return nearest_common_ancestors.contains(nca);
       })) {
     absl::erase_if(nearest_common_ancestors, [&starting_nodes](const T* nca) {
-      return std::find(starting_nodes.begin(), starting_nodes.end(), nca) ==
-             starting_nodes.end();
+      return absl::c_find(starting_nodes, nca) == starting_nodes.end();
     });
   }
 

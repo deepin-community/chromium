@@ -24,6 +24,7 @@ limitations under the License.
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tensor/Utils/Utils.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "transforms/passes.h"
 
@@ -40,17 +41,17 @@ struct IndexCastConverter : public OpRewritePattern<T> {
  public:
   using OpRewritePattern<T>::OpRewritePattern;
   LogicalResult matchAndRewrite(T op, PatternRewriter &rewriter) const final {
-    auto resultTy = op.getType().template dyn_cast<RankedTensorType>();
+    auto resultTy = mlir::dyn_cast<RankedTensorType>(op.getType());
     if (!resultTy) return failure();
 
     SmallVector<Value> dynamicExtents =
         tensor::createDynamicDimValues(rewriter, op.getLoc(), op.getIn());
     rewriter.replaceOpWithNewOp<tensor::GenerateOp>(
         op, resultTy, dynamicExtents,
-        [&](OpBuilder &b, Location loc, ValueRange args) {
-          Value extent = b.create<tensor::ExtractOp>(loc, op.getIn(), args);
-          Value cast = b.create<T>(loc, resultTy.getElementType(), extent);
-          b.create<tensor::YieldOp>(loc, cast);
+        [&](OpBuilder& b, Location loc, ValueRange args) {
+          Value extent = tensor::ExtractOp::create(b, loc, op.getIn(), args);
+          Value cast = T::create(b, loc, resultTy.getElementType(), extent);
+          tensor::YieldOp::create(b, loc, cast);
         });
     return success();
   }
@@ -63,8 +64,7 @@ struct LowerIndexCastPass
     patterns.add<IndexCastConverter<arith::IndexCastOp>,
                  IndexCastConverter<arith::IndexCastUIOp>>(
         patterns.getContext());
-    if (failed(
-            applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       return signalPassFailure();
   }
 };

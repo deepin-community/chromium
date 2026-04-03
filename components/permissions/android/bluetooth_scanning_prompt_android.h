@@ -30,7 +30,7 @@ class BluetoothScanningPromptAndroid : public content::BluetoothScanningPrompt {
           const base::android::JavaRef<jstring>&,
           JniIntWrapper,
           const base::android::JavaRef<jobject>&,
-          jlong)>;
+          int64_t)>;
 
   BluetoothScanningPromptAndroid(
       content::RenderFrameHost* frame,
@@ -50,18 +50,13 @@ class BluetoothScanningPromptAndroid : public content::BluetoothScanningPrompt {
                          const std::u16string& device_name) override;
 
   // Report the dialog's result.
-  void OnDialogFinished(JNIEnv* env, jint event_type);
+  void OnDialogFinished(JNIEnv* env, int32_t event_type);
 
   static std::unique_ptr<BluetoothScanningPromptAndroid> CreateForTesting(
       content::RenderFrameHost* frame,
       const EventHandler& event_handler,
       std::unique_ptr<BluetoothScanningPromptAndroidDelegate> delegate,
-      CreateJavaDialogCallback create_java_dialog_callback) {
-    // Using `new` to access a non-public constructor.
-    return base::WrapUnique(new BluetoothScanningPromptAndroid(
-        frame, event_handler, std::move(delegate),
-        std::move(create_java_dialog_callback)));
-  }
+      CreateJavaDialogCallback create_java_dialog_callback);
 
  private:
   BluetoothScanningPromptAndroid(

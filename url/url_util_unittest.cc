@@ -9,14 +9,13 @@
 #include <optional>
 #include <string_view>
 
-#include "base/test/scoped_feature_list.h"
+#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest-message.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/third_party/mozilla/url_parse.h"
 #include "url/url_canon.h"
 #include "url/url_canon_stdstring.h"
-#include "url/url_features.h"
 #include "url/url_test_utils.h"
 
 namespace url {
@@ -30,6 +29,54 @@ class URLUtilTest : public testing::Test {
 
   ~URLUtilTest() override = default;
 
+ protected:
+  struct URLCase {
+    const std::string_view input;
+    const std::string_view expected;
+    bool expected_success;
+  };
+
+  struct ResolveRelativeCase {
+    const std::string_view base;
+    const std::string_view rel;
+    std::optional<std::string_view> expected;
+  };
+
+  void TestCanonicalize(const URLCase& url_case) {
+    std::string canonicalized;
+    StdStringCanonOutput output(&canonicalized);
+    Parsed parsed;
+    bool success =
+        Canonicalize(url_case.input,
+                     /*trim_path_end=*/false,
+                     /*charset_converter=*/nullptr, &output, &parsed);
+    output.Complete();
+    EXPECT_EQ(success, url_case.expected_success);
+    EXPECT_EQ(output.view(), url_case.expected);
+  }
+
+  void TestResolveRelative(const ResolveRelativeCase& test) {
+    SCOPED_TRACE(testing::Message()
+                 << "base: " << test.base << ", rel: " << test.rel);
+
+    Parsed base_parsed = ParseNonSpecialUrl(test.base);
+
+    std::string resolved;
+    StdStringCanonOutput output(&resolved);
+
+    Parsed resolved_parsed;
+    bool valid = ResolveRelative(test.base, base_parsed, test.rel, nullptr,
+                                 &output, &resolved_parsed);
+    output.Complete();
+
+    if (valid) {
+      ASSERT_TRUE(test.expected);
+      EXPECT_EQ(resolved, *test.expected);
+    } else {
+      EXPECT_FALSE(test.expected);
+    }
+  }
+
  private:
   ScopedSchemeRegistryForTests scoped_registry_;
 };
@@ -39,86 +86,77 @@ TEST_F(URLUtilTest, FindAndCompareScheme) {
 
   // Simple case where the scheme is found and matches.
   const char kStr1[] = "http://www.com/";
-  EXPECT_TRUE(FindAndCompareScheme(kStr1, static_cast<int>(strlen(kStr1)),
-                                   "http", nullptr));
-  EXPECT_TRUE(FindAndCompareScheme(
-      kStr1, static_cast<int>(strlen(kStr1)), "http", &found_scheme));
+  EXPECT_TRUE(FindAndCompareScheme(kStr1, "http", nullptr));
+  EXPECT_TRUE(FindAndCompareScheme(kStr1, "http", &found_scheme));
   EXPECT_TRUE(found_scheme == Component(0, 4));
 
   // A case where the scheme is found and doesn't match.
-  EXPECT_FALSE(FindAndCompareScheme(
-      kStr1, static_cast<int>(strlen(kStr1)), "https", &found_scheme));
+  EXPECT_FALSE(FindAndCompareScheme(kStr1, "https", &found_scheme));
   EXPECT_TRUE(found_scheme == Component(0, 4));
 
   // A case where there is no scheme.
   const char kStr2[] = "httpfoobar";
-  EXPECT_FALSE(FindAndCompareScheme(
-      kStr2, static_cast<int>(strlen(kStr2)), "http", &found_scheme));
+  EXPECT_FALSE(FindAndCompareScheme(kStr2, "http", &found_scheme));
   EXPECT_TRUE(found_scheme == Component());
 
   // When there is an empty scheme, it should match the empty scheme.
   const char kStr3[] = ":foo.com/";
-  EXPECT_TRUE(FindAndCompareScheme(
-      kStr3, static_cast<int>(strlen(kStr3)), "", &found_scheme));
+  EXPECT_TRUE(FindAndCompareScheme(kStr3, "", &found_scheme));
   EXPECT_TRUE(found_scheme == Component(0, 0));
 
   // But when there is no scheme, it should fail.
-  EXPECT_FALSE(FindAndCompareScheme("", 0, "", &found_scheme));
+  EXPECT_FALSE(FindAndCompareScheme("", "", &found_scheme));
   EXPECT_TRUE(found_scheme == Component());
 
   // When there is a whitespace char in scheme, it should canonicalize the URL
   // before comparison.
   const char whtspc_str[] = " \r\n\tjav\ra\nscri\tpt:alert(1)";
-  EXPECT_TRUE(FindAndCompareScheme(whtspc_str,
-                                   static_cast<int>(strlen(whtspc_str)),
-                                   "javascript", &found_scheme));
+  EXPECT_TRUE(FindAndCompareScheme(whtspc_str, "javascript", &found_scheme));
   EXPECT_TRUE(found_scheme == Component(1, 10));
 
   // Control characters should be stripped out on the ends, and kept in the
   // middle.
   const char ctrl_str[] = "\02jav\02scr\03ipt:alert(1)";
-  EXPECT_FALSE(FindAndCompareScheme(ctrl_str,
-                                    static_cast<int>(strlen(ctrl_str)),
-                                    "javascript", &found_scheme));
+  EXPECT_FALSE(FindAndCompareScheme(ctrl_str, "javascript", &found_scheme));
   EXPECT_TRUE(found_scheme == Component(1, 11));
 }
 
 TEST_F(URLUtilTest, IsStandard) {
   const char kHTTPScheme[] = "http";
-  EXPECT_TRUE(IsStandard(kHTTPScheme, Component(0, strlen(kHTTPScheme))));
+  EXPECT_TRUE(IsStandard(kHTTPScheme));
 
   const char kFooScheme[] = "foo";
-  EXPECT_FALSE(IsStandard(kFooScheme, Component(0, strlen(kFooScheme))));
+  EXPECT_FALSE(IsStandard(kFooScheme));
 }
 
 TEST_F(URLUtilTest, IsReferrerScheme) {
   const char kHTTPScheme[] = "http";
-  EXPECT_TRUE(IsReferrerScheme(kHTTPScheme, Component(0, strlen(kHTTPScheme))));
+  EXPECT_TRUE(IsReferrerScheme(kHTTPScheme));
 
   const char kFooScheme[] = "foo";
-  EXPECT_FALSE(IsReferrerScheme(kFooScheme, Component(0, strlen(kFooScheme))));
+  EXPECT_FALSE(IsReferrerScheme(kFooScheme));
 }
 
 TEST_F(URLUtilTest, AddReferrerScheme) {
   static const char kFooScheme[] = "foo";
-  EXPECT_FALSE(IsReferrerScheme(kFooScheme, Component(0, strlen(kFooScheme))));
+  EXPECT_FALSE(IsReferrerScheme(kFooScheme));
 
   url::ScopedSchemeRegistryForTests scoped_registry;
   AddReferrerScheme(kFooScheme, url::SCHEME_WITH_HOST);
-  EXPECT_TRUE(IsReferrerScheme(kFooScheme, Component(0, strlen(kFooScheme))));
+  EXPECT_TRUE(IsReferrerScheme(kFooScheme));
 }
 
 TEST_F(URLUtilTest, ShutdownCleansUpSchemes) {
   static const char kFooScheme[] = "foo";
-  EXPECT_FALSE(IsReferrerScheme(kFooScheme, Component(0, strlen(kFooScheme))));
+  EXPECT_FALSE(IsReferrerScheme(kFooScheme));
 
   {
     url::ScopedSchemeRegistryForTests scoped_registry;
     AddReferrerScheme(kFooScheme, url::SCHEME_WITH_HOST);
-    EXPECT_TRUE(IsReferrerScheme(kFooScheme, Component(0, strlen(kFooScheme))));
+    EXPECT_TRUE(IsReferrerScheme(kFooScheme));
   }
 
-  EXPECT_FALSE(IsReferrerScheme(kFooScheme, Component(0, strlen(kFooScheme))));
+  EXPECT_FALSE(IsReferrerScheme(kFooScheme));
 }
 
 TEST_F(URLUtilTest, GetStandardSchemeType) {
@@ -127,21 +165,18 @@ TEST_F(URLUtilTest, GetStandardSchemeType) {
   const char kHTTPScheme[] = "http";
   scheme_type = url::SCHEME_WITHOUT_AUTHORITY;
   EXPECT_TRUE(GetStandardSchemeType(kHTTPScheme,
-                                    Component(0, strlen(kHTTPScheme)),
                                     &scheme_type));
   EXPECT_EQ(url::SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION, scheme_type);
 
   const char kFilesystemScheme[] = "filesystem";
   scheme_type = url::SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION;
   EXPECT_TRUE(GetStandardSchemeType(kFilesystemScheme,
-                                    Component(0, strlen(kFilesystemScheme)),
                                     &scheme_type));
   EXPECT_EQ(url::SCHEME_WITHOUT_AUTHORITY, scheme_type);
 
   const char kFooScheme[] = "foo";
   scheme_type = url::SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION;
   EXPECT_FALSE(GetStandardSchemeType(kFooScheme,
-                                     Component(0, strlen(kFooScheme)),
                                      &scheme_type));
 }
 
@@ -161,23 +196,23 @@ TEST_F(URLUtilTest, ReplaceComponents) {
 
   // Check that the following calls do not cause crash
   Replacements<char> replacements;
-  replacements.SetRef("test", Component(0, 4));
-  ReplaceComponents(nullptr, 0, parsed, replacements, nullptr, &output,
+  replacements.SetRefStr("test");
+  ReplaceComponents(std::string_view(), parsed, replacements, nullptr, &output,
                     &new_parsed);
-  ReplaceComponents("", 0, parsed, replacements, nullptr, &output, &new_parsed);
+  ReplaceComponents("", parsed, replacements, nullptr, &output, &new_parsed);
   replacements.ClearRef();
-  replacements.SetHost("test", Component(0, 4));
-  ReplaceComponents(nullptr, 0, parsed, replacements, nullptr, &output,
+  replacements.SetHostStr("test");
+  ReplaceComponents(std::string_view(), parsed, replacements, nullptr, &output,
                     &new_parsed);
-  ReplaceComponents("", 0, parsed, replacements, nullptr, &output, &new_parsed);
+  ReplaceComponents("", parsed, replacements, nullptr, &output, &new_parsed);
 
   replacements.ClearHost();
-  ReplaceComponents(nullptr, 0, parsed, replacements, nullptr, &output,
+  ReplaceComponents(std::string_view(), parsed, replacements, nullptr, &output,
                     &new_parsed);
-  ReplaceComponents("", 0, parsed, replacements, nullptr, &output, &new_parsed);
-  ReplaceComponents(nullptr, 0, parsed, replacements, nullptr, &output,
+  ReplaceComponents("", parsed, replacements, nullptr, &output, &new_parsed);
+  ReplaceComponents(std::string_view(), parsed, replacements, nullptr, &output,
                     &new_parsed);
-  ReplaceComponents("", 0, parsed, replacements, nullptr, &output, &new_parsed);
+  ReplaceComponents("", parsed, replacements, nullptr, &output, &new_parsed);
 }
 
 static std::string CheckReplaceScheme(const char* base_url,
@@ -185,17 +220,16 @@ static std::string CheckReplaceScheme(const char* base_url,
   // Make sure the input is canonicalized.
   RawCanonOutput<32> original;
   Parsed original_parsed;
-  Canonicalize(base_url, strlen(base_url), true, nullptr, &original,
-               &original_parsed);
+  Canonicalize(base_url, true, nullptr, &original, &original_parsed);
 
   Replacements<char> replacements;
-  replacements.SetScheme(scheme, Component(0, strlen(scheme)));
+  replacements.SetSchemeStr(scheme);
 
   std::string output_string;
   StdStringCanonOutput output(&output_string);
   Parsed output_parsed;
-  ReplaceComponents(original.data(), original.length(), original_parsed,
-                    replacements, nullptr, &output, &output_parsed);
+  ReplaceComponents(original.view(), original_parsed, replacements, nullptr,
+                    &output, &output_parsed);
 
   output.Complete();
   return output_string;
@@ -267,23 +301,19 @@ TEST_F(URLUtilTest, DecodeURLEscapeSequences) {
     RawCanonOutputT<char16_t> output;
     DecodeURLEscapeSequences(decode_case.input,
                              DecodeURLMode::kUTF8OrIsomorphic, &output);
-    EXPECT_EQ(decode_case.output, base::UTF16ToUTF8(std::u16string(
-                                      output.data(), output.length())));
+    EXPECT_EQ(decode_case.output, base::UTF16ToUTF8(output.view()));
 
     RawCanonOutputT<char16_t> output_utf8;
     DecodeURLEscapeSequences(decode_case.input, DecodeURLMode::kUTF8,
                              &output_utf8);
-    EXPECT_EQ(decode_case.output,
-              base::UTF16ToUTF8(
-                  std::u16string(output_utf8.data(), output_utf8.length())));
+    EXPECT_EQ(decode_case.output, base::UTF16ToUTF8(output_utf8.view()));
   }
 
   // Our decode should decode %00
   const char zero_input[] = "%00";
   RawCanonOutputT<char16_t> zero_output;
   DecodeURLEscapeSequences(zero_input, DecodeURLMode::kUTF8, &zero_output);
-  EXPECT_NE("%00", base::UTF16ToUTF8(std::u16string(zero_output.data(),
-                                                    zero_output.length())));
+  EXPECT_NE("%00", base::UTF16ToUTF8(zero_output.view()));
 
   // Test the error behavior for invalid UTF-8.
   struct Utf8DecodeCase {
@@ -308,13 +338,13 @@ TEST_F(URLUtilTest, DecodeURLEscapeSequences) {
     DecodeURLEscapeSequences(utf8_decode_case.input,
                              DecodeURLMode::kUTF8OrIsomorphic, &output_iso);
     EXPECT_EQ(std::u16string(utf8_decode_case.expected_iso.data()),
-              std::u16string(output_iso.data(), output_iso.length()));
+              output_iso.view());
 
     RawCanonOutputT<char16_t> output_utf8;
     DecodeURLEscapeSequences(utf8_decode_case.input, DecodeURLMode::kUTF8,
                              &output_utf8);
     EXPECT_EQ(std::u16string(utf8_decode_case.expected_utf8.data()),
-              std::u16string(output_utf8.data(), output_utf8.length()));
+              output_utf8.view());
   }
 }
 
@@ -345,110 +375,8 @@ TEST_F(URLUtilTest, TestEncodeURIComponent) {
   for (const auto& encode_case : encode_cases) {
     RawCanonOutputT<char> buffer;
     EncodeURIComponent(encode_case.input, &buffer);
-    std::string output(buffer.data(), buffer.length());
-    EXPECT_EQ(encode_case.output, output);
+    EXPECT_EQ(encode_case.output, buffer.view());
   }
-}
-
-TEST_F(URLUtilTest, TestResolveRelativeWithNonStandardBase) {
-  // This tests non-standard (in the sense that IsStandard() == false)
-  // hierarchical schemes.
-  struct ResolveRelativeCase {
-    const char* base;
-    const char* rel;
-    bool is_valid;
-    const char* out;
-  } resolve_non_standard_cases[] = {
-      // Resolving a relative path against a non-hierarchical URL should fail.
-      {"scheme:opaque_data", "/path", false, ""},
-      // Resolving a relative path against a non-standard authority-based base
-      // URL doesn't alter the authority section.
-      {"scheme://Authority/", "../path", true, "scheme://Authority/path"},
-      // A non-standard hierarchical base is resolved with path URL
-      // canonicalization rules.
-      {"data:/Blah:Blah/", "file.html", true, "data:/Blah:Blah/file.html"},
-      {"data:/Path/../part/part2", "file.html", true,
-       "data:/Path/../part/file.html"},
-      {"data://text/html,payload", "//user:pass@host:33////payload22", true,
-       "data://user:pass@host:33////payload22"},
-      // Path URL canonicalization rules also apply to non-standard authority-
-      // based URLs.
-      {"custom://Authority/", "file.html", true,
-       "custom://Authority/file.html"},
-      {"custom://Authority/", "other://Auth/", true, "other://Auth/"},
-      {"custom://Authority/", "../../file.html", true,
-       "custom://Authority/file.html"},
-      {"custom://Authority/path/", "file.html", true,
-       "custom://Authority/path/file.html"},
-      {"custom://Authority:NoCanon/path/", "file.html", true,
-       "custom://Authority:NoCanon/path/file.html"},
-      // A path with an authority section gets canonicalized under standard URL
-      // rules, even though the base was non-standard.
-      {"content://content.Provider/", "//other.Provider", true,
-       "content://other.provider/"},
-      // Resolving an absolute URL doesn't cause canonicalization of the
-      // result.
-      {"about:blank", "custom://Authority", true, "custom://Authority"},
-      // Fragment URLs can be resolved against a non-standard base.
-      {"scheme://Authority/path", "#fragment", true,
-       "scheme://Authority/path#fragment"},
-      {"scheme://Authority/", "#fragment", true,
-       "scheme://Authority/#fragment"},
-      // Test resolving a fragment (only) against any kind of base-URL.
-      {"about:blank", "#id42", true, "about:blank#id42"},
-      {"about:blank", " #id42", true, "about:blank#id42"},
-      {"about:blank#oldfrag", "#newfrag", true, "about:blank#newfrag"},
-      {"about:blank", " #id:42", true, "about:blank#id:42"},
-      // A surprising side effect of allowing fragments to resolve against
-      // any URL scheme is we might break javascript: URLs by doing so...
-      {"javascript:alert('foo#bar')", "#badfrag", true,
-       "javascript:alert('foo#badfrag"},
-  };
-
-  for (const auto& test : resolve_non_standard_cases) {
-    SCOPED_TRACE(testing::Message()
-                 << "base: " << test.base << ", rel: " << test.rel);
-
-    Parsed base_parsed;
-    if (url::IsUsingStandardCompliantNonSpecialSchemeURLParsing()) {
-      ParseNonSpecialURL(test.base, strlen(test.base), &base_parsed);
-    } else {
-      ParsePathURL(test.base, strlen(test.base), /*trim_path_end=*/true,
-                   &base_parsed);
-    }
-
-    std::string resolved;
-    StdStringCanonOutput output(&resolved);
-    Parsed resolved_parsed;
-    bool valid =
-        ResolveRelative(test.base, strlen(test.base), base_parsed, test.rel,
-                        strlen(test.rel), nullptr, &output, &resolved_parsed);
-    output.Complete();
-
-    EXPECT_EQ(test.is_valid, valid);
-    if (test.is_valid && valid) {
-      EXPECT_EQ(test.out, resolved);
-    }
-  }
-}
-
-TEST_F(URLUtilTest, TestNoRefComponent) {
-  // The hash-mark must be ignored when mailto: scheme is parsed,
-  // even if the URL has a base and relative part.
-  const char* base = "mailto://to/";
-  const char* rel = "any#body";
-
-  Parsed base_parsed;
-  ParsePathURL(base, strlen(base), false, &base_parsed);
-
-  std::string resolved;
-  StdStringCanonOutput output(&resolved);
-  Parsed resolved_parsed;
-
-  bool valid = ResolveRelative(base, strlen(base), base_parsed, rel,
-                               strlen(rel), nullptr, &output, &resolved_parsed);
-  EXPECT_TRUE(valid);
-  EXPECT_FALSE(resolved_parsed.ref.is_valid());
 }
 
 TEST_F(URLUtilTest, PotentiallyDanglingMarkup) {
@@ -481,15 +409,13 @@ TEST_F(URLUtilTest, PotentiallyDanglingMarkup) {
 
   for (const auto& test : cases) {
     SCOPED_TRACE(::testing::Message() << test.base << ", " << test.rel);
-    Parsed base_parsed;
-    ParseStandardURL(test.base, strlen(test.base), &base_parsed);
+    Parsed base_parsed = ParseStandardUrl(test.base);
 
     std::string resolved;
     StdStringCanonOutput output(&resolved);
     Parsed resolved_parsed;
-    bool valid =
-        ResolveRelative(test.base, strlen(test.base), base_parsed, test.rel,
-                        strlen(test.rel), nullptr, &output, &resolved_parsed);
+    bool valid = ResolveRelative(test.base, base_parsed, test.rel, nullptr,
+                                 &output, &resolved_parsed);
     ASSERT_TRUE(valid);
     output.Complete();
 
@@ -504,7 +430,7 @@ TEST_F(URLUtilTest, PotentiallyDanglingMarkupAfterReplacement) {
   Parsed original_parsed;
   RawCanonOutput<32> original;
   const char* url = "htt\nps://example.com/<path";
-  Canonicalize(url, strlen(url), false, nullptr, &original, &original_parsed);
+  Canonicalize(url, false, nullptr, &original, &original_parsed);
   ASSERT_TRUE(original_parsed.potentially_dangling_markup);
 
   // Perform a replacement, and validate that the potentially_dangling_markup
@@ -513,8 +439,8 @@ TEST_F(URLUtilTest, PotentiallyDanglingMarkupAfterReplacement) {
   replacements.ClearRef();
   Parsed replaced_parsed;
   RawCanonOutput<32> replaced;
-  ReplaceComponents(original.data(), original.length(), original_parsed,
-                    replacements, nullptr, &replaced, &replaced_parsed);
+  ReplaceComponents(original.view(), original_parsed, replacements, nullptr,
+                    &replaced, &replaced_parsed);
   EXPECT_TRUE(replaced_parsed.potentially_dangling_markup);
 }
 
@@ -523,18 +449,18 @@ TEST_F(URLUtilTest, PotentiallyDanglingMarkupAfterSchemeOnlyReplacement) {
   Parsed original_parsed;
   RawCanonOutput<32> original;
   const char* url = "http://example.com/\n/<path";
-  Canonicalize(url, strlen(url), false, nullptr, &original, &original_parsed);
+  Canonicalize(url, false, nullptr, &original, &original_parsed);
   ASSERT_TRUE(original_parsed.potentially_dangling_markup);
 
   // Perform a replacement, and validate that the potentially_dangling_markup
   // flag carried over to the new Parsed object.
   Replacements<char> replacements;
   const char* new_scheme = "https";
-  replacements.SetScheme(new_scheme, Component(0, strlen(new_scheme)));
+  replacements.SetSchemeStr(new_scheme);
   Parsed replaced_parsed;
   RawCanonOutput<32> replaced;
-  ReplaceComponents(original.data(), original.length(), original_parsed,
-                    replacements, nullptr, &replaced, &replaced_parsed);
+  ReplaceComponents(original.view(), original_parsed, replacements, nullptr,
+                    &replaced, &replaced_parsed);
   EXPECT_TRUE(replaced_parsed.potentially_dangling_markup);
 }
 
@@ -587,7 +513,7 @@ std::optional<std::string> CanonicalizeSpec(std::string_view spec,
   std::string canonicalized;
   StdStringCanonOutput output(&canonicalized);
   Parsed parsed;
-  if (!Canonicalize(spec.data(), spec.size(), trim_path_end,
+  if (!Canonicalize(spec, trim_path_end,
                     /*charset_converter=*/nullptr, &output, &parsed)) {
     return {};
   }
@@ -712,152 +638,119 @@ TEST_F(URLUtilTest, TestHasInvalidURLEscapeSequences) {
   }
 }
 
-class URLUtilTypedTest : public ::testing::TestWithParam<bool> {
- public:
-  URLUtilTypedTest()
-      : use_standard_compliant_non_special_scheme_url_parsing_(GetParam()) {
-    if (use_standard_compliant_non_special_scheme_url_parsing_) {
-      scoped_feature_list_.InitAndEnableFeature(
-          kStandardCompliantNonSpecialSchemeURLParsing);
-    } else {
-      scoped_feature_list_.InitAndDisableFeature(
-          kStandardCompliantNonSpecialSchemeURLParsing);
-    }
-  }
-
- protected:
-  struct URLCase {
-    const std::string_view input;
-    const std::string_view expected;
-    bool expected_success;
-  };
-
+TEST_F(URLUtilTest, TestResolveRelativeWithNonStandardBase) {
+  // This tests non-standard (in the sense that IsStandard() == false)
+  // hierarchical schemes.
   struct ResolveRelativeCase {
-    const std::string_view base;
-    const std::string_view rel;
-    std::optional<std::string_view> expected;
+    const char* base;
+    const char* rel;
+    bool is_valid;
+    const char* out;
+  } resolve_non_standard_cases[] = {
+      // Resolving a relative path against a non-hierarchical URL should fail.
+      {"scheme:opaque_data", "/path", false, ""},
+      // Resolving a relative path against a non-standard authority-based base
+      // URL doesn't alter the authority section.
+      {"scheme://Authority/", "../path", true, "scheme://Authority/path"},
+      // A non-standard hierarchical base is resolved with path URL
+      // canonicalization rules.
+      {"data:/Blah:Blah/", "file.html", true, "data:/Blah:Blah/file.html"},
+      {"data:/Path/../part/part2", "file.html", true,
+       "data:/Path/../part/file.html"},
+      {"data://text/html,payload", "//user:pass@host:33////payload22", true,
+       "data://user:pass@host:33////payload22"},
+      // Path URL canonicalization rules also apply to non-standard authority-
+      // based URLs.
+      {"custom://Authority/", "file.html", true,
+       "custom://Authority/file.html"},
+      {"custom://Authority/", "other://Auth/", true, "other://Auth/"},
+      {"custom://Authority/", "../../file.html", true,
+       "custom://Authority/file.html"},
+      {"custom://Authority/path/", "file.html", true,
+       "custom://Authority/path/file.html"},
+      {"custom://Authority:NoCanon/path/", "file.html", true,
+       "custom://Authority:NoCanon/path/file.html"},
+      // A path with an authority section gets canonicalized under standard URL
+      // rules, even though the base was non-standard. Host case sensitivity
+      // should be preserved and trailing slash after a host soulld be removed.
+      {"content://content.Provider/", "//other.Provider", true,
+       "content://other.Provider"},
+      // Resolving an absolute URL doesn't cause canonicalization of the
+      // result.
+      {"about:blank", "custom://Authority", true, "custom://Authority"},
+      // Fragment URLs can be resolved against a non-standard base.
+      {"scheme://Authority/path", "#fragment", true,
+       "scheme://Authority/path#fragment"},
+      {"scheme://Authority/", "#fragment", true,
+       "scheme://Authority/#fragment"},
+      // Test resolving a fragment (only) against any kind of base-URL.
+      {"about:blank", "#id42", true, "about:blank#id42"},
+      {"about:blank", " #id42", true, "about:blank#id42"},
+      {"about:blank#oldfrag", "#newfrag", true, "about:blank#newfrag"},
+      {"about:blank", " #id:42", true, "about:blank#id:42"},
+      // A surprising side effect of allowing fragments to resolve against
+      // any URL scheme is we might break javascript: URLs by doing so...
+      {"javascript:alert('foo#bar')", "#badfrag", true,
+       "javascript:alert('foo#badfrag"},
   };
 
-  void TestCanonicalize(const URLCase& url_case) {
-    std::string canonicalized;
-    StdStringCanonOutput output(&canonicalized);
-    Parsed parsed;
-    bool success =
-        Canonicalize(url_case.input.data(), url_case.input.size(),
-                     /*trim_path_end=*/false,
-                     /*charset_converter=*/nullptr, &output, &parsed);
-    output.Complete();
-    EXPECT_EQ(success, url_case.expected_success);
-    EXPECT_EQ(output.view(), url_case.expected);
-  }
-
-  void TestResolveRelative(const ResolveRelativeCase& test) {
+  for (const auto& test : resolve_non_standard_cases) {
     SCOPED_TRACE(testing::Message()
                  << "base: " << test.base << ", rel: " << test.rel);
 
-    Parsed base_parsed;
-    if (url::IsUsingStandardCompliantNonSpecialSchemeURLParsing()) {
-      ParseNonSpecialURL(test.base.data(), test.base.size(), &base_parsed);
-    } else {
-      ParsePathURL(test.base.data(), test.base.size(), /*trim_path_end=*/true,
-                   &base_parsed);
-    }
-
+    Parsed base_parsed = ParseNonSpecialUrl(test.base);
     std::string resolved;
     StdStringCanonOutput output(&resolved);
-
     Parsed resolved_parsed;
-    bool valid = ResolveRelative(test.base.data(), test.base.size(),
-                                 base_parsed, test.rel.data(), test.rel.size(),
-                                 nullptr, &output, &resolved_parsed);
+    bool valid = ResolveRelative(test.base, base_parsed, test.rel, nullptr,
+                                 &output, &resolved_parsed);
     output.Complete();
 
-    if (valid) {
-      ASSERT_TRUE(test.expected);
-      EXPECT_EQ(resolved, *test.expected);
-    } else {
-      EXPECT_FALSE(test.expected);
+    EXPECT_EQ(test.is_valid, valid);
+    if (test.is_valid && valid) {
+      EXPECT_EQ(test.out, resolved);
     }
   }
+}
 
-  bool use_standard_compliant_non_special_scheme_url_parsing_;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-TEST_P(URLUtilTypedTest, Cannolicalize) {
+TEST_F(URLUtilTest, Cannolicalize) {
   // Verify that the feature flag changes canonicalization behavior,
   // focusing on key cases here as comprehesive testing is covered in other unit
   // tests.
-  if (use_standard_compliant_non_special_scheme_url_parsing_) {
-    URLCase cases[] = {
-        {"git://host/..", "git://host/", true},
-        {"git:// /", "git:///", false},
-        {"git:/..", "git:/", true},
-        {"mailto:/..", "mailto:/", true},
-    };
-    for (const auto& i : cases) {
-      TestCanonicalize(i);
-    }
-  } else {
-    // Every non-special URL is considered as an opaque path if the feature is
-    // disabled.
-    URLCase cases[] = {
-        {"git://host/..", "git://host/..", true},
-        {"git:// /", "git:// /", true},
-        {"git:/..", "git:/..", true},
-        {"mailto:/..", "mailto:/..", true},
-    };
-    for (const auto& i : cases) {
-      TestCanonicalize(i);
-    }
+  URLCase cases[] = {
+      {"git://host/..", "git://host/", true},
+      {"git:// /", "git:///", false},
+      {"git:/..", "git:/", true},
+      {"mailto:/..", "mailto:/", true},
+  };
+  for (const auto& i : cases) {
+    TestCanonicalize(i);
   }
 }
 
-TEST_P(URLUtilTypedTest, TestResolveRelativeWithNonSpecialBase) {
-  // Test flag-dependent behaviors. Existing tests in
-  // URLUtilTest::TestResolveRelativeWithNonStandardBase cover common cases.
+TEST_F(URLUtilTest, TestResolveRelativeWithNonSpecialBase) {
+  ResolveRelativeCase cases[] = {
+      {"scheme://Authority", "path", "scheme://Authority/path"},
+  };
+  for (const auto& i : cases) {
+    TestResolveRelative(i);
+  }
+}
+
+TEST_F(URLUtilTest, OpaqueNonSpecialScheme) {
+  // Ensure that the behavior of "android:" scheme URL is preserved, which is
+  // not URL Standard compliant.
   //
-  // TODO(crbug.com/1416006): Test common cases in this typed test too.
-  if (use_standard_compliant_non_special_scheme_url_parsing_) {
-    ResolveRelativeCase cases[] = {
-        {"scheme://Authority", "path", "scheme://Authority/path"},
-    };
-    for (const auto& i : cases) {
-      TestResolveRelative(i);
-    }
-  } else {
-    ResolveRelativeCase cases[] = {
-        // It's still possible to get an invalid path URL.
-        //
-        // Note: If the flag is enabled, "custom://Invalid:!#Auth/" is an
-        // invalid URL.
-        // ResolveRelative() should be never called.
-        {"custom://Invalid:!#Auth/", "file.html", std::nullopt},
+  // URL Standard-wise, "android://a b" is an invalid URL because the host part
+  // includes a space character, which is not allowed.
+  std::optional<std::string> res = CanonicalizeSpec("android://a b", false);
+  ASSERT_TRUE(res);
+  EXPECT_EQ(*res, "android://a b");
 
-        // Resolving should fail if the base URL is authority-based but is
-        // missing a path component (the '/' at the end).
-        {"scheme://Authority", "path", std::nullopt},
-
-        // In this case, the backslashes will not be canonicalized because it's
-        // a non-standard URL, but they will be treated as a path separators,
-        // giving the base URL here a path of "\".
-        //
-        // The result here is somewhat arbitrary. One could argue it should be
-        // either "aaa://a\" or "aaa://a/" since the path is being replaced with
-        // the "current directory". But in the context of resolving on data
-        // URLs, adding the requested dot doesn't seem wrong either.
-        //
-        // Note: If the flag is enabled, "aaa://a\\" is an invalid URL.
-        // ResolveRelative() should be never called.
-        {"aaa://a\\", "aaa:.", "aaa://a\\."}};
-    for (const auto& i : cases) {
-      TestResolveRelative(i);
-    }
-  }
+  // Test a "git:" scheme URL for comparison.
+  res = CanonicalizeSpec("git://a b", false);
+  // This is correct behavior because "git://a b" is an invalid URL.
+  EXPECT_FALSE(res);
 }
-
-INSTANTIATE_TEST_SUITE_P(All, URLUtilTypedTest, ::testing::Bool());
 
 }  // namespace url

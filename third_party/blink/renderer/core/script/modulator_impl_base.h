@@ -63,6 +63,7 @@ class ModulatorImplBase : public Modulator {
                  const ScriptFetchOptions&,
                  ModuleScriptCustomFetchType,
                  ModuleTreeClient*,
+                 v8::ModuleImportPhase,
                  String referrer) override;
   void FetchDescendantsForInlineScript(
       ModuleScript*,
@@ -82,10 +83,15 @@ class ModulatorImplBase : public Modulator {
                               String* failure_reason) final;
   void ResolveDynamically(const ModuleRequest& module_request,
                           const ReferrerScriptInfo&,
-                          ScriptPromiseResolver*) override;
+                          ScriptPromiseResolver<IDLAny>*) override;
+  void AddEntryToModuleMap(const KURL&, ModuleType, ModuleScript*) override;
 
   ModuleImportMeta HostGetImportMetaProperties(
       v8::Local<v8::Module>) const override;
+
+  String GetIntegrityMetadataString(const KURL&) const override;
+  IntegrityMetadataSet GetIntegrityMetadata(const KURL&) const override;
+
   ModuleType ModuleTypeFromRequest(
       const ModuleRequest& module_request) const override;
 
@@ -100,7 +106,7 @@ class ModulatorImplBase : public Modulator {
   void ProduceCacheModuleTree(ModuleScript*,
                               HeapHashSet<Member<const ModuleScript>>*);
 
-  Member<ScriptState> script_state_;
+  Member<ScriptState> const script_state_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
   Member<ModuleMap> map_;
   Member<ModuleTreeLinkerRegistry> tree_linker_registry_;

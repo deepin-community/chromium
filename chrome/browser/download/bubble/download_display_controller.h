@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_DOWNLOAD_BUBBLE_DOWNLOAD_DISPLAY_CONTROLLER_H_
 #define CHROME_BROWSER_DOWNLOAD_BUBBLE_DOWNLOAD_DISPLAY_CONTROLLER_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/power_monitor/power_observer.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/download/offline_item_model.h"
@@ -72,17 +73,6 @@ class DownloadDisplayController : public FullscreenObserver,
   // details are already hidden.
   void HideBubble();
 
-  // Opens the primary dialog to the item and scrolls to the item, and opens
-  // the security dialog if the item has a security warning. Returns whether
-  // bubble was opened to the requested item.
-  // Note: This method is currently used only for Lacros download notifications.
-  // It does not explicitly handle fullscreen conditions. See comment in
-  // implementation. In the future if there are other entry points to this
-  // method, non-immersive fullscreen (i.e. exclusive access bubble) will have
-  // to be handled explicitly.
-  bool OpenMostSpecificDialog(
-      const offline_items_collection::ContentId& content_id);
-
   // Start listening to full screen changes. This is separate from the
   // constructor as the exclusive access manager is constructed after
   // BrowserWindow.
@@ -106,6 +96,9 @@ class DownloadDisplayController : public FullscreenObserver,
   // update service, then updates the toolbar button state accordingly. Returns
   // the info about all models.
   const DownloadBubbleDisplayInfo& UpdateButtonStateFromUpdateService();
+
+  // Obtains and announces accessible alerts from the update service.
+  void HandleAccessibleAlerts();
 
   // Stops and restarts `icon_disappearance_timer_`. The toolbar button will
   // be hidden after the `interval`.

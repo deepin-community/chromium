@@ -28,11 +28,12 @@
 #ifndef SRC_DAWN_NATIVE_D3D11_QUEUED3D11_H_
 #define SRC_DAWN_NATIVE_D3D11_QUEUED3D11_H_
 
+#include <optional>
+#include <vector>
+
 #include "dawn/common/MutexProtected.h"
 #include "dawn/common/SerialMap.h"
-#include "dawn/native/SystemEvent.h"
 #include "dawn/native/d3d/QueueD3D.h"
-
 #include "dawn/native/d3d11/CommandRecordingContextD3D11.h"
 #include "dawn/native/d3d11/Forward.h"
 
@@ -41,53 +42,79 @@ namespace dawn::native::d3d11 {
 class Device;
 class SharedFence;
 
-class Queue final : public d3d::Queue {
+class Queue : public d3d::Queue {
   public:
     static ResultOrError<Ref<Queue>> Create(Device* device, const QueueDescriptor* descriptor);
 
-    ScopedCommandRecordingContext GetScopedPendingCommandContext(SubmitMode submitMode);
+    ScopedCommandRecordingContext GetScopedPendingCommandContext(SubmitMode submitMode,
+                                                                 bool lockD3D11Scope = true);
+    std::optional<ScopedCommandRecordingContext> TryGetScopedPendingCommandContext(
+        SubmitMode submitMode,
+        bool lockD3D11Scope = true);
     ScopedSwapStateCommandRecordingContext GetScopedSwapStatePendingCommandContext(
         SubmitMode submitMode);
-    MaybeError SubmitPendingCommands() override;
-    MaybeError NextSerial();
-    MaybeError WaitForSerial(ExecutionSerial serial);
+    virtual MaybeError NextSerial() = 0;
 
     // Separated from creation because it creates resources, which is not valid before the
     // DeviceBase is fully created.
     MaybeError InitializePendingContext();
 
-  private:
+    // Schedule a buffer for mapping.
+    void ScheduleBufferMapping(Ref<Buffer>&& buffer,
+                               wgpu::MapMode mode,
+                               ExecutionSerial readySerial);
+
+    const Ref<SharedFence>& GetSharedFence() const { return mSharedFence; }
+
+  protected:
     using d3d::Queue::Queue;
 
     ~Queue() override = default;
 
-    MaybeError Initialize();
+    MaybeError Initialize(bool useMonitoredFence);
+    MaybeError InitializeD3DFence(bool useMonitoredFence);
 
     MaybeError SubmitImpl(uint32_t commandCount, CommandBufferBase* const* commands) override;
     MaybeError WriteBufferImpl(BufferBase* buffer,
                                uint64_t bufferOffset,
                                const void* data,
                                size_t size) override;
-    MaybeError WriteTextureImpl(const ImageCopyTexture& destination,
+    MaybeError WriteTextureImpl(const TexelCopyTextureInfo& destination,
                                 const void* data,
                                 size_t dataSize,
-                                const TextureDataLayout& dataLayout,
+                                const TexelCopyBufferLayout& dataLayout,
                                 const Extent3D& writeSizePixel) override;
 
-    void DestroyImpl() override;
+    void DestroyImpl(DestroyReason reason) override;
     bool HasPendingCommands() const override;
-    ResultOrError<ExecutionSerial> CheckAndUpdateCompletedSerials() override;
     void ForceEventualFlushOfCommands() override;
-    MaybeError WaitForIdleForDestruction() override;
+    MaybeError WaitForIdleForDestructionImpl() override;
+    MaybeError SubmitPendingCommandsImpl() override;
+    ResultOrError<ExecutionSerial> CheckAndUpdateCompletedSerials() override;
 
     ResultOrError<Ref<d3d::SharedFence>> GetOrCreateSharedFence() override;
-    void SetEventOnCompletion(ExecutionSerial serial, HANDLE event) override;
+
+    virtual ResultOrError<ExecutionSerial> CheckCompletedSerialsImpl() = 0;
+
+    // Check and process scheduled buffer mappings.
+    MaybeError CheckScheduledBufferMappings(ExecutionSerial completedSerial);
+
+    // Helper template to create scoped command contexts with common logic
+    template <typename ScopedContextType, typename... Args>
+    ScopedContextType CreateScopedCommandContext(SubmitMode submitMode,
+                                                 CommandRecordingContext::Guard&& commands,
+                                                 Args&&... args);
 
     ComPtr<ID3D11Fence> mFence;
-    HANDLE mFenceEvent = nullptr;
     Ref<SharedFence> mSharedFence;
     MutexProtected<CommandRecordingContext, CommandRecordingContextGuard> mPendingCommands;
     std::atomic<bool> mPendingCommandsNeedSubmit = false;
+
+    struct BufferMapEntry {
+        Ref<Buffer> buffer;
+        wgpu::MapMode mode;
+    };
+    MutexProtected<SerialMap<ExecutionSerial, BufferMapEntry>> mPendingMapBuffers;
 };
 
 }  // namespace dawn::native::d3d11

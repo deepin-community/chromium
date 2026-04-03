@@ -10,22 +10,21 @@
 #include <string>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
-#include "chrome/browser/ash/authpolicy/kerberos_files_handler.h"
+#include "chrome/browser/ash/kerberos/kerberos_files_handler.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/scoped_testing_local_state.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/kerberos/kerberos_client.h"
 #include "chromeos/ash/components/dbus/kerberos/kerberos_service.pb.h"
+#include "components/prefs/testing_pref_service.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_task_environment.h"
@@ -129,8 +128,9 @@ class FakeKerberosCredentialsManagerObserver
 
 class MockKerberosFilesHandler : public KerberosFilesHandler {
  public:
-  explicit MockKerberosFilesHandler(base::RepeatingClosure get_kerberos_files)
-      : KerberosFilesHandler(get_kerberos_files) {}
+  MockKerberosFilesHandler(PrefService& local_state,
+                           base::RepeatingClosure get_kerberos_files)
+      : KerberosFilesHandler(local_state, get_kerberos_files) {}
 
   ~MockKerberosFilesHandler() override = default;
 
@@ -144,14 +144,12 @@ class KerberosCredentialsManagerTest : public testing::Test {
   using Account = kerberos::Account;
   using Accounts = std::vector<Account>;
 
-  KerberosCredentialsManagerTest()
-      : scoped_user_manager_(std::make_unique<FakeChromeUserManager>()),
-        local_state_(TestingBrowserProcess::GetGlobal()) {
+  KerberosCredentialsManagerTest() {
     SessionManagerClient::InitializeFakeInMemory();
     KerberosClient::InitializeFake();
     client_test_interface()->SetTaskDelay(base::TimeDelta());
 
-    fake_user_manager()->AddUser(AccountId::FromUserEmail(kProfileEmail));
+    user_manager_->AddUser(AccountId::FromUserEmail(kProfileEmail));
 
     // Setting the login password for the KerberosAccounts policy tests.
     UserContext* user_context =
@@ -167,8 +165,8 @@ class KerberosCredentialsManagerTest : public testing::Test {
     display_service_ =
         std::make_unique<NotificationDisplayServiceTester>(profile_.get());
 
-    mgr_ = std::make_unique<KerberosCredentialsManager>(local_state_.Get(),
-                                                        profile_.get());
+    mgr_ = std::make_unique<KerberosCredentialsManager>(
+        TestingBrowserProcess::GetGlobal()->local_state(), profile_.get());
 
     mgr_->AddObserver(&observer_);
   }
@@ -189,16 +187,11 @@ class KerberosCredentialsManagerTest : public testing::Test {
   }
 
   void SetPref(const char* name, base::Value value) {
-    local_state_.Get()->SetManagedPref(
+    TestingBrowserProcess::GetGlobal()->GetTestingLocalState()->SetManagedPref(
         name, std::make_unique<base::Value>(std::move(value)));
   }
 
  protected:
-  FakeChromeUserManager* fake_user_manager() {
-    return static_cast<FakeChromeUserManager*>(
-        user_manager::UserManager::Get());
-  }
-
   KerberosClient::TestInterface* client_test_interface() {
     return KerberosClient::Get()->GetTestInterface();
   }
@@ -362,8 +355,8 @@ class KerberosCredentialsManagerTest : public testing::Test {
 
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  user_manager::ScopedUserManager scoped_user_manager_;
-  ScopedTestingLocalState local_state_;
+  user_manager::TypedScopedUserManager<FakeChromeUserManager> user_manager_{
+      std::make_unique<FakeChromeUserManager>()};
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<NotificationDisplayServiceTester> display_service_;
   std::unique_ptr<KerberosCredentialsManager> mgr_;
@@ -382,16 +375,16 @@ TEST_F(KerberosCredentialsManagerTest, GetDefaultKerberosConfig) {
   const std::string default_config = mgr_->GetDefaultKerberosConfig();
 
   // Enforce strong crypto.
-  EXPECT_TRUE(base::Contains(default_config, "default_tgs_enctypes"));
-  EXPECT_TRUE(base::Contains(default_config, "default_tkt_enctypes"));
-  EXPECT_TRUE(base::Contains(default_config, "permitted_enctypes"));
-  EXPECT_TRUE(base::Contains(default_config, "aes256"));
-  EXPECT_TRUE(base::Contains(default_config, "aes128"));
-  EXPECT_FALSE(base::Contains(default_config, "des"));
-  EXPECT_FALSE(base::Contains(default_config, "rc4"));
+  EXPECT_TRUE(default_config.contains("default_tgs_enctypes"));
+  EXPECT_TRUE(default_config.contains("default_tkt_enctypes"));
+  EXPECT_TRUE(default_config.contains("permitted_enctypes"));
+  EXPECT_TRUE(default_config.contains("aes256"));
+  EXPECT_TRUE(default_config.contains("aes128"));
+  EXPECT_FALSE(default_config.contains("des"));
+  EXPECT_FALSE(default_config.contains("rc4"));
 
   // Allow forwardable tickets.
-  EXPECT_TRUE(base::Contains(default_config, "forwardable = true"));
+  EXPECT_TRUE(default_config.contains("forwardable = true"));
 }
 
 // The prefs::kKerberosEnabled pref toggles IsKerberosEnabled().
@@ -694,6 +687,7 @@ TEST_F(KerberosCredentialsManagerTest,
 TEST_F(KerberosCredentialsManagerTest,
        RemoveAccountRemoveLastAccountDeletesKerberosFiles) {
   auto files_handler = std::make_unique<MockKerberosFilesHandler>(
+      *TestingBrowserProcess::GetGlobal()->local_state(),
       mgr_->GetGetKerberosFilesCallbackForTesting());
   EXPECT_CALL(*files_handler, DeleteFiles());
   mgr_->SetKerberosFilesHandlerForTesting(std::move(files_handler));
@@ -780,13 +774,13 @@ TEST_F(KerberosCredentialsManagerTest, UpdateEnabledFromPrefKerberosEnabled) {
   mgr_->SetAddManagedAccountCallbackForTesting(
       GetRepeatingCallback(kTwoAccounts));
 
-  base::Value::Dict managed_account_1;
-  base::Value::Dict managed_account_2;
+  base::DictValue managed_account_1;
+  base::DictValue managed_account_2;
 
   managed_account_1.Set(kKeyPrincipal, kPrincipal);
   managed_account_2.Set(kKeyPrincipal, kOtherPrincipal);
 
-  base::Value::List managed_accounts;
+  base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
 
@@ -882,10 +876,10 @@ TEST_F(KerberosCredentialsManagerTest,
 // UpdateAccountsFromPref votes for not saving the password if Kerberos is
 // disabled. Also, no account is added.
 TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefKerberosDisabled) {
-  base::Value::Dict managed_account;
+  base::DictValue managed_account;
   managed_account.Set(kKeyPrincipal, kPrincipal);
 
-  base::Value::List managed_accounts;
+  base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account));
 
   SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
@@ -907,7 +901,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefNoAccounts) {
   AddAccountAndAuthenticate(kOtherPrincipal, kManaged, kerberos::ERROR_NONE,
                             kOneNotification, kTwoAccounts);
 
-  base::Value::List managed_accounts;
+  base::ListValue managed_accounts;
   SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
 
   VerifyVotedForSavingLoginPassword(kDontSaveLoginPassword);
@@ -922,12 +916,12 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefBadPrincipal) {
   // Starting with Kerberos enabled.
   SetPref(prefs::kKerberosEnabled, base::Value(true));
 
-  base::Value::Dict managed_account_1;
-  base::Value::Dict managed_account_2;
-  base::Value::Dict managed_account_3;
-  base::Value::Dict managed_account_4;
-  base::Value::Dict managed_account_5;
-  base::Value::Dict managed_account_6;
+  base::DictValue managed_account_1;
+  base::DictValue managed_account_2;
+  base::DictValue managed_account_3;
+  base::DictValue managed_account_4;
+  base::DictValue managed_account_5;
+  base::DictValue managed_account_6;
 
   managed_account_1.Set(kKeyPrincipal, kBadPrincipal1);
   managed_account_2.Set(kKeyPrincipal, kBadPrincipal2);
@@ -936,7 +930,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefBadPrincipal) {
   managed_account_5.Set(kKeyPrincipal, kBadPrincipal5);
   managed_account_6.Set(kKeyPrincipal, kBadManagedPrincipal);
 
-  base::Value::List managed_accounts;
+  base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
   managed_accounts.Append(std::move(managed_account_3));
@@ -960,7 +954,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefConfig) {
   mgr_->SetAddManagedAccountCallbackForTesting(
       GetRepeatingCallback(kTwoAccounts));
 
-  base::Value::List config;
+  base::ListValue config;
   config.Append(base::Value("config line 1"));
   config.Append(base::Value("config line 2"));
   config.Append(base::Value("config line 3"));
@@ -968,8 +962,8 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefConfig) {
   constexpr char expected_config[] =
       "config line 1\nconfig line 2\nconfig line 3\n";
 
-  base::Value::Dict managed_account_1;
-  base::Value::Dict managed_account_2;
+  base::DictValue managed_account_1;
+  base::DictValue managed_account_2;
 
   managed_account_1.Set(kKeyPrincipal, kPrincipal);
   managed_account_1.Set(kKeyPassword, kPassword);
@@ -978,7 +972,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefConfig) {
   managed_account_2.Set(kKeyPrincipal, kOtherPrincipal);
   managed_account_2.Set(kKeyPassword, kPassword);
 
-  base::Value::List managed_accounts;
+  base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
 
@@ -1009,15 +1003,15 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefPassword) {
   mgr_->SetAddManagedAccountCallbackForTesting(
       GetRepeatingCallback(kTwoAccounts));
 
-  base::Value::Dict managed_account_1;
-  base::Value::Dict managed_account_2;
+  base::DictValue managed_account_1;
+  base::DictValue managed_account_2;
 
   managed_account_1.Set(kKeyPrincipal, kPrincipal);
   managed_account_1.Set(kKeyPassword, kLoginPasswordPlaceholder);
   managed_account_2.Set(kKeyPrincipal, kOtherPrincipal);
   managed_account_2.Set(kKeyPassword, kPassword);
 
-  base::Value::List managed_accounts;
+  base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
 
@@ -1048,9 +1042,9 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefRememberPassword) {
   mgr_->SetAddManagedAccountCallbackForTesting(
       GetRepeatingCallback(kThreeAccounts));
 
-  base::Value::Dict managed_account_1;
-  base::Value::Dict managed_account_2;
-  base::Value::Dict managed_account_3;
+  base::DictValue managed_account_1;
+  base::DictValue managed_account_2;
+  base::DictValue managed_account_3;
 
   managed_account_1.Set(kKeyPrincipal, kPrincipal);
   managed_account_1.Set(kKeyPassword, kPassword);
@@ -1061,7 +1055,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefRememberPassword) {
   managed_account_3.Set(kKeyPassword, kPassword);
   managed_account_3.Set(kKeyRememberPasswordFromPolicy, kDontRememberPassword);
 
-  base::Value::List managed_accounts;
+  base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
   managed_accounts.Append(std::move(managed_account_3));
@@ -1097,13 +1091,13 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefClearAccounts) {
   mgr_->SetAddManagedAccountCallbackForTesting(
       GetRepeatingCallback(kTwoAccounts));
 
-  base::Value::Dict managed_account_1;
-  base::Value::Dict managed_account_2;
+  base::DictValue managed_account_1;
+  base::DictValue managed_account_2;
 
   managed_account_1.Set(kKeyPrincipal, kPrincipal);
   managed_account_2.Set(kKeyPrincipal, kOtherPrincipal);
 
-  base::Value::List managed_accounts;
+  base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
 
@@ -1125,7 +1119,7 @@ TEST_F(KerberosCredentialsManagerTest, UpdateAccountsFromPrefClearAccounts) {
 
 // UpdateAccountsFromPref retries to add account if addition fails for network
 // related errors.
-// TODO(https://crbug.com/1121383): Disabled due to flakiness.
+// TODO(crbug.com/40715458): Disabled due to flakiness.
 TEST_F(KerberosCredentialsManagerTest, DISABLED_UpdateAccountsFromPrefRetry) {
   // Starting with Kerberos enabled.
   SetPref(prefs::kKerberosEnabled, base::Value(true));
@@ -1136,12 +1130,12 @@ TEST_F(KerberosCredentialsManagerTest, DISABLED_UpdateAccountsFromPrefRetry) {
   mgr_->SetAddManagedAccountCallbackForTesting(
       GetRepeatingCallback((kOneFailure + 1) * kOneAccount));
 
-  base::Value::Dict managed_account_1;
+  base::DictValue managed_account_1;
 
   managed_account_1.Set(kKeyPrincipal, kPrincipal);
   managed_account_1.Set(kKeyPassword, kPassword);
 
-  base::Value::List managed_accounts;
+  base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account_1));
 
   SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
@@ -1175,12 +1169,12 @@ TEST_F(KerberosCredentialsManagerTest,
   mgr_->SetAddManagedAccountCallbackForTesting(
       GetRepeatingCallback((kThreeFailures + 1) * kOneAccount));
 
-  base::Value::Dict managed_account_1;
+  base::DictValue managed_account_1;
 
   managed_account_1.Set(kKeyPrincipal, kPrincipal);
   managed_account_1.Set(kKeyPassword, kPassword);
 
-  base::Value::List managed_accounts;
+  base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account_1));
 
   SetPref(prefs::kKerberosAccounts, base::Value(std::move(managed_accounts)));
@@ -1217,15 +1211,15 @@ TEST_F(KerberosCredentialsManagerTest,
   mgr_->SetAddManagedAccountCallbackForTesting(
       GetRepeatingCallback((kOneFailure + 1) * kTwoAccounts));
 
-  base::Value::Dict managed_account_1;
-  base::Value::Dict managed_account_2;
+  base::DictValue managed_account_1;
+  base::DictValue managed_account_2;
 
   managed_account_1.Set(kKeyPrincipal, kPrincipal);
   managed_account_1.Set(kKeyPassword, kPassword);
   managed_account_2.Set(kKeyPrincipal, kOtherPrincipal);
   managed_account_2.Set(kKeyPassword, kPassword);
 
-  base::Value::List managed_accounts;
+  base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
 
@@ -1264,15 +1258,15 @@ TEST_F(KerberosCredentialsManagerTest,
       KerberosCredentialsManager::kMaxFailureCountForManagedAccounts *
       kTwoAccounts));
 
-  base::Value::Dict managed_account_1;
-  base::Value::Dict managed_account_2;
+  base::DictValue managed_account_1;
+  base::DictValue managed_account_2;
 
   managed_account_1.Set(kKeyPrincipal, kPrincipal);
   managed_account_1.Set(kKeyPassword, kPassword);
   managed_account_2.Set(kKeyPrincipal, kOtherPrincipal);
   managed_account_2.Set(kKeyPassword, kPassword);
 
-  base::Value::List managed_accounts;
+  base::ListValue managed_accounts;
   managed_accounts.Append(std::move(managed_account_1));
   managed_accounts.Append(std::move(managed_account_2));
 

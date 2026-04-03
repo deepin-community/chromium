@@ -85,7 +85,7 @@ class RenderWidgetHostNSViewBridge : public mojom::RenderWidgetHostNSView,
   void ShowSharingServicePicker(
       const std::string& title,
       const std::string& text,
-      const std::string& url,
+      const GURL& url,
       const std::vector<std::string>& file_paths,
       ShowSharingServicePickerCallback callback) override;
   void Destroy() override;
@@ -101,7 +101,7 @@ class RenderWidgetHostNSViewBridge : public mojom::RenderWidgetHostNSView,
 
   // display::DisplayObserver implementation.
   void OnDisplayAdded(const display::Display&) override;
-  void OnDisplayRemoved(const display::Display&) override;
+  void OnDisplaysRemoved(const display::Displays&) override;
   void OnDisplayMetricsChanged(const display::Display&, uint32_t) override;
 
   void OnSharingServiceInvoked(ShowSharingServicePickerCallback callback,

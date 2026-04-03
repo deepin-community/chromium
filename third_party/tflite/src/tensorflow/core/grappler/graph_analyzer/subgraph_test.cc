@@ -16,13 +16,15 @@ limitations under the License.
 #include "tensorflow/core/grappler/graph_analyzer/subgraph.h"
 
 #include <algorithm>
-#include <string>
+#include <memory>
 #include <vector>
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "absl/memory/memory.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_format.h"
+#include "tensorflow/core/framework/graph.pb.h"
+#include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/grappler/graph_analyzer/test_tools.h"
 
 namespace tensorflow {
@@ -118,15 +120,15 @@ TEST(SubgraphTest, Iteration) {
   {
     SubgraphIterator sit(&sg);
     SubgraphIterator sit2(&sg);
-    std::vector<string> links;
+    std::vector<std::string> links;
     for (; !sit.AtEnd(); sit.Next()) {
       EXPECT_TRUE(sit == sit2);
       sit2.Next();
       EXPECT_FALSE(sit == sit2);
 
-      links.push_back(absl::StrFormat("[%s,%s,%s]", string(sit.GetPort()),
+      links.push_back(absl::StrFormat("[%s,%s,%s]", std::string(sit.GetPort()),
                                       sit.GetNeighbor().node->name(),
-                                      string(sit.GetNeighbor().port)));
+                                      std::string(sit.GetNeighbor().port)));
     }
     EXPECT_TRUE(sit == sit2);
 

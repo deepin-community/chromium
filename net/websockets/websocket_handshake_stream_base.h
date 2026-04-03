@@ -12,6 +12,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/memory/weak_ptr.h"
@@ -151,8 +152,7 @@ class NET_EXPORT WebSocketHandshakeStreamBase : public HttpStream {
 
   void SetRequestHeadersCallback(RequestHeadersCallback callback) override {}
 
-  static std::string MultipleHeaderValuesMessage(
-      const std::string& header_name);
+  static std::string MultipleHeaderValuesMessage(std::string_view header_name);
 
   // Subclasses need to implement this method so that the resulting weak
   // pointers are invalidated as soon as the derived class is destroyed.
@@ -166,9 +166,11 @@ class NET_EXPORT WebSocketHandshakeStreamBase : public HttpStream {
     WebSocketDeflateParameters deflate_parameters;
   };
 
-  static void AddVectorHeaderIfNonEmpty(const char* name,
-                                        const std::vector<std::string>& value,
-                                        HttpRequestHeaders* headers);
+  // Add the Sec-WebSocket-Extensions and Sec-WebSocket-Protocol headers to
+  // `headers`.
+  static void AddVectorHeaders(const std::vector<std::string>& extensions,
+                               const std::vector<std::string>& protocols,
+                               HttpRequestHeaders* headers);
 
   static bool ValidateSubProtocol(
       const HttpResponseHeaders* headers,

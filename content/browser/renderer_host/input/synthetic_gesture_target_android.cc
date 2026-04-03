@@ -5,18 +5,22 @@
 #include "content/browser/renderer_host/input/synthetic_gesture_target_android.h"
 
 #include "base/trace_event/trace_event.h"
+#include "content/browser/renderer_host/compositor_impl_android.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_android.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
-#include "content/public/android/content_jni_headers/SyntheticGestureTarget_jni.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
 #include "third_party/blink/public/common/input/web_touch_event.h"
 #include "ui/android/view_android.h"
+#include "ui/compositor/compositor.h"
 #include "ui/gfx/android/view_configuration.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "content/public/android/content_jni_headers/SyntheticGestureTarget_jni.h"
+
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 using blink::WebGestureEvent;
 using blink::WebInputEvent;
@@ -33,9 +37,24 @@ SyntheticGestureTargetAndroid::SyntheticGestureTargetAndroid(
   JNIEnv* env = base::android::AttachCurrentThread();
   java_ref_.Reset(
       Java_SyntheticGestureTarget_create(env, view->GetContainerView()));
+
+  ui::WindowAndroid* window = view_->GetWindowAndroid();
+  if (!window) {
+    return;
+  }
+
+  observed_compositor_ = static_cast<CompositorImpl*>(window->GetCompositor());
+  if (observed_compositor_) {
+    observed_compositor_->AddSimpleBeginFrameObserver(this);
+  }
 }
 
-SyntheticGestureTargetAndroid::~SyntheticGestureTargetAndroid() = default;
+SyntheticGestureTargetAndroid::~SyntheticGestureTargetAndroid() {
+  if (observed_compositor_) {
+    observed_compositor_->RemoveSimpleBeginFrameObserver(this);
+    observed_compositor_ = nullptr;
+  }
+}
 
 void SyntheticGestureTargetAndroid::TouchSetPointer(int index,
                                                     float x,
@@ -152,6 +171,28 @@ SyntheticGestureTargetAndroid::GetDefaultSyntheticGestureSourceType() const {
   return content::mojom::GestureSourceType::kTouchInput;
 }
 
+void SyntheticGestureTargetAndroid::GetVSyncParameters(
+    base::TimeTicks& timebase,
+    base::TimeDelta& interval) const {
+  timebase = vsync_timebase_;
+  interval = vsync_interval_;
+}
+
+void SyntheticGestureTargetAndroid::OnBeginFrame(
+    base::TimeTicks frame_begin_time,
+    base::TimeDelta frame_interval,
+    std::optional<base::TimeTicks> first_coalesced_frame_begin_time) {
+  vsync_timebase_ = frame_begin_time;
+  vsync_interval_ = frame_interval;
+}
+
+void SyntheticGestureTargetAndroid::OnBeginFrameSourceShuttingDown() {
+  if (observed_compositor_) {
+    observed_compositor_->RemoveSimpleBeginFrameObserver(this);
+    observed_compositor_ = nullptr;
+  }
+}
+
 float SyntheticGestureTargetAndroid::GetTouchSlopInDips() const {
   // TODO(jdduke): Have all targets use the same ui::GestureConfiguration
   // codepath.
@@ -172,3 +213,5 @@ RenderWidgetHostViewAndroid* SyntheticGestureTargetAndroid::GetView() const {
 }
 
 }  // namespace content
+
+DEFINE_JNI(SyntheticGestureTarget)

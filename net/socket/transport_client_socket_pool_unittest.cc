@@ -43,6 +43,7 @@
 #include "net/proxy_resolution/configured_proxy_resolution_service.h"
 #include "net/socket/client_socket_handle.h"
 #include "net/socket/connect_job.h"
+#include "net/socket/socket_pool_additional_capacity.h"
 #include "net/socket/socket_tag.h"
 #include "net/socket/socket_test_util.h"
 #include "net/socket/socks_connect_job.h"
@@ -78,26 +79,21 @@ const RequestPriority kDefaultPriority = LOW;
 class SOCKS5MockData {
  public:
   explicit SOCKS5MockData(IoMode mode) {
-    writes_ = std::make_unique<MockWrite[]>(2);
-    writes_[0] =
-        MockWrite(mode, kSOCKS5GreetRequest, kSOCKS5GreetRequestLength);
-    writes_[1] = MockWrite(mode, kSOCKS5OkRequest, kSOCKS5OkRequestLength);
+    writes_[0] = MockWrite(mode, kSOCKS5GreetRequest);
+    writes_[1] = MockWrite(mode, kSOCKS5OkRequest);
 
-    reads_ = std::make_unique<MockRead[]>(2);
-    reads_[0] =
-        MockRead(mode, kSOCKS5GreetResponse, kSOCKS5GreetResponseLength);
-    reads_[1] = MockRead(mode, kSOCKS5OkResponse, kSOCKS5OkResponseLength);
+    reads_[0] = MockRead(mode, kSOCKS5GreetResponse);
+    reads_[1] = MockRead(mode, kSOCKS5OkResponse);
 
-    data_ = std::make_unique<StaticSocketDataProvider>(
-        base::make_span(reads_.get(), 2u), base::make_span(writes_.get(), 2u));
+    data_ = std::make_unique<StaticSocketDataProvider>(reads_, writes_);
   }
 
   SocketDataProvider* data_provider() { return data_.get(); }
 
  private:
   std::unique_ptr<StaticSocketDataProvider> data_;
-  std::unique_ptr<MockWrite[]> writes_;
-  std::unique_ptr<MockRead[]> reads_;
+  std::array<MockWrite, 2> writes_;
+  std::array<MockRead, 2> reads_;
 };
 
 class TransportClientSocketPoolTest : public ::testing::Test,
@@ -134,9 +130,10 @@ class TransportClientSocketPoolTest : public ::testing::Test,
         http_network_session_->CreateCommonConnectJobParams());
     common_connect_job_params_->client_socket_factory = &client_socket_factory_;
     pool_ = std::make_unique<TransportClientSocketPool>(
-        kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout,
-        ProxyChain::Direct(), /*is_for_websockets=*/false,
-        common_connect_job_params_.get());
+        kMaxSockets, kMaxSocketsPerGroup,
+        SocketPoolAdditionalCapacity::Create(), kUnusedIdleSocketTimeout,
+        ProxyChain::Direct(),
+        /*is_for_websockets=*/false, common_connect_job_params_.get());
 
     tagging_common_connect_job_params_ =
         std::make_unique<CommonConnectJobParams>(
@@ -144,9 +141,10 @@ class TransportClientSocketPoolTest : public ::testing::Test,
     tagging_common_connect_job_params_->client_socket_factory =
         &tagging_client_socket_factory_;
     tagging_pool_ = std::make_unique<TransportClientSocketPool>(
-        kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout,
-        ProxyChain::Direct(), /*is_for_websockets=*/false,
-        tagging_common_connect_job_params_.get());
+        kMaxSockets, kMaxSocketsPerGroup,
+        SocketPoolAdditionalCapacity::Create(), kUnusedIdleSocketTimeout,
+        ProxyChain::Direct(),
+        /*is_for_websockets=*/false, tagging_common_connect_job_params_.get());
 
     common_connect_job_params_for_real_sockets_ =
         std::make_unique<CommonConnectJobParams>(
@@ -154,8 +152,10 @@ class TransportClientSocketPoolTest : public ::testing::Test,
     common_connect_job_params_for_real_sockets_->client_socket_factory =
         ClientSocketFactory::GetDefaultFactory();
     pool_for_real_sockets_ = std::make_unique<TransportClientSocketPool>(
-        kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout,
-        ProxyChain::Direct(), /*is_for_websockets=*/false,
+        kMaxSockets, kMaxSocketsPerGroup,
+        SocketPoolAdditionalCapacity::Create(), kUnusedIdleSocketTimeout,
+        ProxyChain::Direct(),
+        /*is_for_websockets=*/false,
         common_connect_job_params_for_real_sockets_.get());
   }
 
@@ -164,13 +164,15 @@ class TransportClientSocketPoolTest : public ::testing::Test,
         connect_backup_jobs_enabled_);
   }
 
-  int StartRequest(const std::string& host_name, RequestPriority priority) {
+  int StartRequest(const std::string& host_name,
+                   RequestPriority priority,
+                   TransportClientSocketPool* non_default_pool = nullptr) {
     ClientSocketPool::GroupId group_id(
         url::SchemeHostPort(url::kHttpScheme, host_name, 80),
         PrivacyMode::PRIVACY_MODE_DISABLED, NetworkAnonymizationKey(),
         SecureDnsPolicy::kAllow, /*disable_cert_network_fetches=*/false);
     return test_base_.StartRequestUsingPool(
-        pool_.get(), group_id, priority,
+        non_default_pool ?: pool_.get(), group_id, priority,
         ClientSocketPool::RespectLimits::ENABLED,
         ClientSocketPool::SocketParams::CreateForHttpForTesting());
   }
@@ -533,7 +535,8 @@ TEST_F(TransportClientSocketPoolTest, ReprioritizeRequests) {
 
 TEST_F(TransportClientSocketPoolTest, RequestIgnoringLimitsIsReprioritized) {
   TransportClientSocketPool pool(
-      kMaxSockets, 1, kUnusedIdleSocketTimeout, ProxyChain::Direct(),
+      kMaxSockets, 1, SocketPoolAdditionalCapacity::Create(),
+      kUnusedIdleSocketTimeout, ProxyChain::Direct(),
       /*is_for_websockets=*/false, common_connect_job_params_.get());
 
   // Creates a job which ignores limits whose priority is MAXIMUM_PRIORITY.
@@ -1057,9 +1060,9 @@ TEST(TransportClientSocketPoolStandaloneTest, DontCleanupOnIPAddressChange) {
   scoped_refptr<ClientSocketPool::SocketParams> params(
       ClientSocketPool::SocketParams::CreateForHttpForTesting());
   auto pool = std::make_unique<TransportClientSocketPool>(
-      kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout,
-      ProxyChain::Direct(), /*is_for_websockets=*/false,
-      common_connect_job_params.get(),
+      kMaxSockets, kMaxSocketsPerGroup, SocketPoolAdditionalCapacity::Create(),
+      kUnusedIdleSocketTimeout, ProxyChain::Direct(),
+      /*is_for_websockets=*/false, common_connect_job_params.get(),
       /*cleanup_on_ip_address_change=*/false);
   const ClientSocketPool::GroupId group_id(
       url::SchemeHostPort(url::kHttpScheme, "www.google.com", 80),
@@ -1506,7 +1509,8 @@ TEST_F(TransportClientSocketPoolTest, SOCKS) {
   const url::SchemeHostPort kDestination(url::kHttpScheme, "host", 80);
 
   TransportClientSocketPool proxy_pool(
-      kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout,
+      kMaxSockets, kMaxSocketsPerGroup, SocketPoolAdditionalCapacity::Create(),
+      kUnusedIdleSocketTimeout,
       ProxyUriToProxyChain("socks5://foopy",
                            /*default_scheme=*/ProxyServer::SCHEME_HTTP),
       /*is_for_websockets=*/false, tagging_common_connect_job_params_.get());
@@ -1520,14 +1524,15 @@ TEST_F(TransportClientSocketPoolTest, SOCKS) {
     tagging_client_socket_factory_.AddSocketDataProvider(data.data_provider());
     ClientSocketHandle handle;
     TestCompletionCallback callback;
-    int rv = handle.Init(
-        ClientSocketPool::GroupId(
-            kDestination, PrivacyMode::PRIVACY_MODE_DISABLED,
-            NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
-            /*disable_cert_network_fetches=*/false),
-        socket_params, TRAFFIC_ANNOTATION_FOR_TESTS, LOW, SocketTag(),
-        ClientSocketPool::RespectLimits::ENABLED, callback.callback(),
-        ClientSocketPool::ProxyAuthCallback(), &proxy_pool, NetLogWithSource());
+    int rv =
+        handle.Init(ClientSocketPool::GroupId(
+                        kDestination, PrivacyMode::PRIVACY_MODE_DISABLED,
+                        NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
+                        /*disable_cert_network_fetches=*/false),
+                    socket_params, TRAFFIC_ANNOTATION_FOR_TESTS, LOW,
+                    SocketTag(), ClientSocketPool::RespectLimits::ENABLED,
+                    callback.callback(), ClientSocketPool::ProxyAuthCallback(),
+                    &proxy_pool, NetLogWithSource());
     EXPECT_THAT(callback.GetResult(rv), IsOk());
     EXPECT_TRUE(handle.is_initialized());
     EXPECT_TRUE(handle.socket());
@@ -1549,7 +1554,7 @@ TEST_F(TransportClientSocketPoolTest, SpdyOneConnectJobTwoRequestsError) {
 
   // Create a socket pool which only allows a single connection at a time.
   TransportClientSocketPool pool(
-      1, 1, kUnusedIdleSocketTimeout,
+      1, 1, SocketPoolAdditionalCapacity::Create(), kUnusedIdleSocketTimeout,
       ProxyUriToProxyChain("https://unresolvable.proxy.name",
                            /*default_scheme=*/ProxyServer::SCHEME_HTTP),
       /*is_for_websockets=*/false, tagging_common_connect_job_params_.get());
@@ -1558,7 +1563,8 @@ TEST_F(TransportClientSocketPoolTest, SpdyOneConnectJobTwoRequestsError) {
 
   SpdyTestUtil spdy_util;
   spdy::SpdySerializedFrame connect(spdy_util.ConstructSpdyConnect(
-      nullptr, 0, 1, HttpProxyConnectJob::kH2QuicTunnelPriority,
+      base::span<const std::string_view>(), 1,
+      HttpProxyConnectJob::kH2QuicTunnelPriority,
       HostPortPair::FromSchemeHostPort(kEndpoint)));
 
   MockWrite writes[] = {
@@ -1573,7 +1579,7 @@ TEST_F(TransportClientSocketPoolTest, SpdyOneConnectJobTwoRequestsError) {
   SequencedSocketData socket_data(MockConnect(SYNCHRONOUS, OK), reads, writes);
   tagging_client_socket_factory_.AddSocketDataProvider(&socket_data);
   SSLSocketDataProvider ssl_data(SYNCHRONOUS, OK);
-  ssl_data.next_proto = kProtoHTTP2;
+  ssl_data.next_proto = NextProto::kProtoHTTP2;
   tagging_client_socket_factory_.AddSSLSocketDataProvider(&ssl_data);
 
   // Second connection also fails.  Not a vital part of this test, but allows
@@ -1640,14 +1646,15 @@ TEST_F(TransportClientSocketPoolTest, SpdyAuthOneConnectJobTwoRequests) {
 
   // Create a socket pool which only allows a single connection at a time.
   TransportClientSocketPool pool(
-      1, 1, kUnusedIdleSocketTimeout,
+      1, 1, SocketPoolAdditionalCapacity::Create(), kUnusedIdleSocketTimeout,
       ProxyUriToProxyChain("https://unresolvable.proxy.name",
                            /*default_scheme=*/ProxyServer::SCHEME_HTTP),
       /*is_for_websockets=*/false, tagging_common_connect_job_params_.get());
 
   SpdyTestUtil spdy_util;
   spdy::SpdySerializedFrame connect(spdy_util.ConstructSpdyConnect(
-      nullptr, 0, 1, HttpProxyConnectJob::kH2QuicTunnelPriority,
+      base::span<const std::string_view>(), 1,
+      HttpProxyConnectJob::kH2QuicTunnelPriority,
       HostPortPair::FromSchemeHostPort(kEndpoint)));
 
   MockWrite writes[] = {
@@ -1659,12 +1666,12 @@ TEST_F(TransportClientSocketPoolTest, SpdyAuthOneConnectJobTwoRequests) {
   // ERROR_CODE_HTTP_1_1_REQUIRED.
 
   const char kAuthStatus[] = "407";
-  const char* const kAuthChallenge[] = {
+  const std::string_view kAuthChallenge[] = {
       "proxy-authenticate",
       "NTLM",
   };
-  spdy::SpdySerializedFrame connect_auth_resp(spdy_util.ConstructSpdyReplyError(
-      kAuthStatus, kAuthChallenge, std::size(kAuthChallenge) / 2, 1));
+  spdy::SpdySerializedFrame connect_auth_resp(
+      spdy_util.ConstructSpdyReplyError(kAuthStatus, kAuthChallenge, 1));
   spdy::SpdySerializedFrame reset(
       spdy_util.ConstructSpdyRstStream(1, spdy::ERROR_CODE_HTTP_1_1_REQUIRED));
   MockRead reads[] = {
@@ -1676,7 +1683,7 @@ TEST_F(TransportClientSocketPoolTest, SpdyAuthOneConnectJobTwoRequests) {
   SequencedSocketData socket_data(MockConnect(SYNCHRONOUS, OK), reads, writes);
   tagging_client_socket_factory_.AddSocketDataProvider(&socket_data);
   SSLSocketDataProvider ssl_data(SYNCHRONOUS, OK);
-  ssl_data.next_proto = kProtoHTTP2;
+  ssl_data.next_proto = NextProto::kProtoHTTP2;
   tagging_client_socket_factory_.AddSSLSocketDataProvider(&ssl_data);
 
   // Second connection fails, and gets a different error.  Not a vital part of
@@ -1759,7 +1766,8 @@ TEST_F(TransportClientSocketPoolTest, HttpTunnelSetupRedirect) {
       SCOPED_TRACE(use_https_proxy);
 
       TransportClientSocketPool proxy_pool(
-          kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout,
+          kMaxSockets, kMaxSocketsPerGroup,
+          SocketPoolAdditionalCapacity::Create(), kUnusedIdleSocketTimeout,
           ProxyUriToProxyChain(
               use_https_proxy ? "https://proxy.test" : "http://proxy.test",
               /*default_scheme=*/ProxyServer::SCHEME_HTTP),
@@ -1770,10 +1778,11 @@ TEST_F(TransportClientSocketPoolTest, HttpTunnelSetupRedirect) {
           MockWrite(ASYNC, 0,
                     "CONNECT host.test:443 HTTP/1.1\r\n"
                     "Host: host.test:443\r\n"
-                    "Proxy-Connection: keep-alive\r\n\r\n"),
+                    "Proxy-Connection: keep-alive\r\n"
+                    "User-Agent: test-ua\r\n\r\n"),
       };
       MockRead reads[] = {
-          MockRead(ASYNC, 1, kResponseText.c_str()),
+          MockRead(ASYNC, 1, kResponseText),
       };
 
       SequencedSocketData data(reads, writes);
@@ -1813,12 +1822,8 @@ TEST_F(TransportClientSocketPoolTest, NetworkAnonymizationKey) {
   const char kHost[] = "bar.test";
 
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      // enabled_features
-      {features::kPartitionConnectionsByNetworkIsolationKey,
-       features::kSplitHostCacheByNetworkIsolationKey},
-      // disabled_features
-      {});
+  scoped_feature_list.InitAndEnableFeature(
+      features::kPartitionConnectionsByNetworkIsolationKey);
 
   session_deps_.host_resolver->set_ondemand_mode(true);
 
@@ -1850,12 +1855,8 @@ TEST_F(TransportClientSocketPoolTest, NetworkAnonymizationKeySsl) {
   const char kHost[] = "bar.test";
 
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      // enabled_features
-      {features::kPartitionConnectionsByNetworkIsolationKey,
-       features::kSplitHostCacheByNetworkIsolationKey},
-      // disabled_features
-      {});
+  scoped_feature_list.InitAndEnableFeature(
+      features::kPartitionConnectionsByNetworkIsolationKey);
 
   session_deps_.host_resolver->set_ondemand_mode(true);
 
@@ -1897,17 +1898,14 @@ TEST_F(TransportClientSocketPoolTest, NetworkAnonymizationKeyHttpProxy) {
       "http://proxy.test", /*default_scheme=*/ProxyServer::SCHEME_HTTP);
 
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      // enabled_features
-      {features::kPartitionConnectionsByNetworkIsolationKey,
-       features::kSplitHostCacheByNetworkIsolationKey},
-      // disabled_features
-      {});
+  scoped_feature_list.InitAndEnableFeature(
+      features::kPartitionConnectionsByNetworkIsolationKey);
 
   session_deps_.host_resolver->set_ondemand_mode(true);
 
   TransportClientSocketPool proxy_pool(
-      kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout, kProxyChain,
+      kMaxSockets, kMaxSocketsPerGroup, SocketPoolAdditionalCapacity::Create(),
+      kUnusedIdleSocketTimeout, kProxyChain,
       /*is_for_websockets=*/false, tagging_common_connect_job_params_.get());
 
   TransportClientSocketPool::GroupId group_id1(
@@ -1966,18 +1964,15 @@ TEST_F(TransportClientSocketPoolTest, NetworkAnonymizationKeyHttpsProxy) {
       "https://proxy.test", /*default_scheme=*/ProxyServer::SCHEME_HTTP);
 
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      // enabled_features
-      {features::kPartitionConnectionsByNetworkIsolationKey,
-       features::kSplitHostCacheByNetworkIsolationKey},
-      // disabled_features
-      {});
+  scoped_feature_list.InitAndEnableFeature(
+      features::kPartitionConnectionsByNetworkIsolationKey);
 
   session_deps_.host_resolver->set_ondemand_mode(true);
 
   TransportClientSocketPool proxy_pool(
-      kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout, kProxyChain,
-      false /* is_for_websockets */, tagging_common_connect_job_params_.get());
+      kMaxSockets, kMaxSocketsPerGroup, SocketPoolAdditionalCapacity::Create(),
+      kUnusedIdleSocketTimeout, kProxyChain, false /* is_for_websockets */,
+      tagging_common_connect_job_params_.get());
 
   TransportClientSocketPool::GroupId group_id1(
       url::SchemeHostPort(url::kHttpScheme, kHost, 80),
@@ -2036,12 +2031,8 @@ TEST_F(TransportClientSocketPoolTest, NetworkAnonymizationKeySocks4Proxy) {
       "socks4://proxy.test", /*default_scheme=*/ProxyServer::SCHEME_HTTP);
 
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      // enabled_features
-      {features::kPartitionConnectionsByNetworkIsolationKey,
-       features::kSplitHostCacheByNetworkIsolationKey},
-      // disabled_features
-      {});
+  scoped_feature_list.InitAndEnableFeature(
+      features::kPartitionConnectionsByNetworkIsolationKey);
 
   session_deps_.host_resolver->set_ondemand_mode(true);
 
@@ -2055,7 +2046,8 @@ TEST_F(TransportClientSocketPoolTest, NetworkAnonymizationKeySocks4Proxy) {
   tagging_client_socket_factory_.AddSocketDataProvider(&data2);
 
   TransportClientSocketPool proxy_pool(
-      kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout, kProxyChain,
+      kMaxSockets, kMaxSocketsPerGroup, SocketPoolAdditionalCapacity::Create(),
+      kUnusedIdleSocketTimeout, kProxyChain,
       /*is_for_websockets=*/false, tagging_common_connect_job_params_.get());
 
   TransportClientSocketPool::GroupId group_id1(
@@ -2128,17 +2120,14 @@ TEST_F(TransportClientSocketPoolTest, NetworkAnonymizationKeySocks5Proxy) {
       "socks5://proxy.test", /*default_scheme=*/ProxyServer::SCHEME_HTTP);
 
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      // enabled_features
-      {features::kPartitionConnectionsByNetworkIsolationKey,
-       features::kSplitHostCacheByNetworkIsolationKey},
-      // disabled_features
-      {});
+  scoped_feature_list.InitAndEnableFeature(
+      features::kPartitionConnectionsByNetworkIsolationKey);
 
   session_deps_.host_resolver->set_ondemand_mode(true);
 
   TransportClientSocketPool proxy_pool(
-      kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout, kProxyChain,
+      kMaxSockets, kMaxSocketsPerGroup, SocketPoolAdditionalCapacity::Create(),
+      kUnusedIdleSocketTimeout, kProxyChain,
       /*is_for_websockets=*/false, tagging_common_connect_job_params_.get());
 
   TransportClientSocketPool::GroupId group_id1(
@@ -2247,6 +2236,27 @@ TEST_F(TransportClientSocketPoolTest, HasActiveSocket) {
   // HasActiveSocket() must return false after closing the socket.
   EXPECT_FALSE(pool_->HasActiveSocket(group_id1));
   EXPECT_FALSE(pool_->HasActiveSocket(group_id2));
+}
+
+TEST_F(TransportClientSocketPoolTest,
+       ValidateAdditionalCapacityForTransportClientSocketPool) {
+  TransportClientSocketPool pool(
+      /*socket_soft_cap=*/256, kMaxSocketsPerGroup, kFieldTrialPool,
+      kUnusedIdleSocketTimeout, ProxyChain::Direct(),
+      /*is_for_websockets=*/false, common_connect_job_params_.get());
+  ValidateAdditionalCapacityForSocketPool(
+      base::BindLambdaForTesting([&]() {
+        StartRequest(base::StringPrintf("a%da", base::RandUint64()),
+                     kDefaultPriority, &pool);
+        return pool.StateForTest();
+      }),
+      base::BindLambdaForTesting([&]() { RunUntilIdle(); }),
+      base::BindLambdaForTesting([&]() {
+        EXPECT_TRUE(ReleaseOneConnection(ClientSocketPoolTest::NO_KEEP_ALIVE));
+        return pool.StateForTest();
+      }),
+      base::BindLambdaForTesting([&]() { return pool.SocketsInUse(); }));
+  ReleaseAllConnections(ClientSocketPoolTest::NO_KEEP_ALIVE);
 }
 
 // Test that SocketTag passed into TransportClientSocketPool is applied to
@@ -2362,8 +2372,8 @@ TEST_F(TransportClientSocketPoolTest, Tag) {
   int rv_high_pri = handle_high_pri.Init(
       kGroupId, params, std::nullopt /* proxy_annotation_tag */, HIGHEST, tag2,
       ClientSocketPool::RespectLimits::ENABLED, callback_high_pri.callback(),
-      ClientSocketPool::ProxyAuthCallback(), pool_for_real_sockets_.get(),
-      NetLogWithSource());
+      ClientSocketPool::ProxyAuthCallback(),
+      pool_for_real_sockets_.get(), NetLogWithSource());
   EXPECT_THAT(callback_high_pri.GetResult(rv_high_pri), IsOk());
   EXPECT_TRUE(handle_high_pri.socket());
   EXPECT_TRUE(handle_high_pri.socket()->IsConnected());
@@ -2390,7 +2400,8 @@ TEST_F(TransportClientSocketPoolTest, TagSOCKSProxy) {
   session_deps_.host_resolver->set_synchronous_mode(true);
 
   TransportClientSocketPool proxy_pool(
-      kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout,
+      kMaxSockets, kMaxSocketsPerGroup, SocketPoolAdditionalCapacity::Create(),
+      kUnusedIdleSocketTimeout,
       ProxyUriToProxyChain("socks5://proxy",
                            /*default_scheme=*/ProxyServer::SCHEME_HTTP),
       /*is_for_websockets=*/false, tagging_common_connect_job_params_.get());
@@ -2411,10 +2422,11 @@ TEST_F(TransportClientSocketPoolTest, TagSOCKSProxy) {
   tagging_client_socket_factory_.AddSocketDataProvider(
       data_sync.data_provider());
   ClientSocketHandle handle;
-  int rv = handle.Init(
-      kGroupId, socks_params, TRAFFIC_ANNOTATION_FOR_TESTS, LOW, tag1,
-      ClientSocketPool::RespectLimits::ENABLED, CompletionOnceCallback(),
-      ClientSocketPool::ProxyAuthCallback(), &proxy_pool, NetLogWithSource());
+  int rv = handle.Init(kGroupId, socks_params, TRAFFIC_ANNOTATION_FOR_TESTS,
+                       LOW, tag1, ClientSocketPool::RespectLimits::ENABLED,
+                       CompletionOnceCallback(),
+                       ClientSocketPool::ProxyAuthCallback(),
+                       &proxy_pool, NetLogWithSource());
   EXPECT_THAT(rv, IsOk());
   EXPECT_TRUE(handle.is_initialized());
   EXPECT_TRUE(handle.socket());
@@ -2504,8 +2516,8 @@ TEST_F(TransportClientSocketPoolTest, TagSSLDirect) {
   int rv = handle.Init(
       kGroupId, socket_params, std::nullopt /* proxy_annotation_tag */, LOW,
       tag1, ClientSocketPool::RespectLimits::ENABLED, callback.callback(),
-      ClientSocketPool::ProxyAuthCallback(), pool_for_real_sockets_.get(),
-      NetLogWithSource());
+      ClientSocketPool::ProxyAuthCallback(),
+      pool_for_real_sockets_.get(), NetLogWithSource());
   EXPECT_THAT(callback.GetResult(rv), IsOk());
   EXPECT_TRUE(handle.socket());
   EXPECT_TRUE(handle.socket()->IsConnected());
@@ -2574,8 +2586,8 @@ TEST_F(TransportClientSocketPoolTest, TagSSLDirectTwoSockets) {
   int rv = handle.Init(
       kGroupId, socket_params, std::nullopt /* proxy_annotation_tag */, LOW,
       tag1, ClientSocketPool::RespectLimits::ENABLED, callback.callback(),
-      ClientSocketPool::ProxyAuthCallback(), pool_for_real_sockets_.get(),
-      NetLogWithSource());
+      ClientSocketPool::ProxyAuthCallback(),
+      pool_for_real_sockets_.get(), NetLogWithSource());
   EXPECT_TRUE(rv == OK || rv == ERR_IO_PENDING) << "Result: " << rv;
   // Abort and request socket with |tag2|.
   handle.Reset();
@@ -2640,8 +2652,8 @@ TEST_F(TransportClientSocketPoolTest, TagSSLDirectTwoSocketsFullPool) {
     rv = tcp_handle.Init(
         kGroupId, socket_params, std::nullopt /* proxy_annotation_tag */, LOW,
         tag1, ClientSocketPool::RespectLimits::ENABLED, callback.callback(),
-        ClientSocketPool::ProxyAuthCallback(), pool_for_real_sockets_.get(),
-        NetLogWithSource());
+        ClientSocketPool::ProxyAuthCallback(),
+        pool_for_real_sockets_.get(), NetLogWithSource());
     EXPECT_THAT(callback.GetResult(rv), IsOk());
     EXPECT_TRUE(tcp_handle.socket());
     EXPECT_TRUE(tcp_handle.socket()->IsConnected());
@@ -2651,8 +2663,8 @@ TEST_F(TransportClientSocketPoolTest, TagSSLDirectTwoSocketsFullPool) {
   rv = handle_to_be_canceled.Init(
       kGroupId, socket_params, std::nullopt /* proxy_annotation_tag */, LOW,
       tag1, ClientSocketPool::RespectLimits::ENABLED, callback.callback(),
-      ClientSocketPool::ProxyAuthCallback(), pool_for_real_sockets_.get(),
-      NetLogWithSource());
+      ClientSocketPool::ProxyAuthCallback(),
+      pool_for_real_sockets_.get(), NetLogWithSource());
   EXPECT_THAT(rv, IsError(ERR_IO_PENDING));
   rv = handle.Init(kGroupId, socket_params,
                    std::nullopt /* proxy_annotation_tag */, LOW, tag2,
@@ -2691,7 +2703,8 @@ TEST_F(TransportClientSocketPoolTest, TagHttpProxyNoTunnel) {
   SocketTag tag2(getuid(), 0x87654321);
 
   TransportClientSocketPool proxy_pool(
-      kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout,
+      kMaxSockets, kMaxSocketsPerGroup, SocketPoolAdditionalCapacity::Create(),
+      kUnusedIdleSocketTimeout,
       ProxyUriToProxyChain("http://proxy",
                            /*default_scheme=*/ProxyServer::SCHEME_HTTP),
       /*is_for_websockets=*/false, tagging_common_connect_job_params_.get());
@@ -2712,10 +2725,11 @@ TEST_F(TransportClientSocketPoolTest, TagHttpProxyNoTunnel) {
 
   // Verify requested socket is tagged properly.
   ClientSocketHandle handle;
-  int rv = handle.Init(
-      kGroupId, socket_params, TRAFFIC_ANNOTATION_FOR_TESTS, LOW, tag1,
-      ClientSocketPool::RespectLimits::ENABLED, CompletionOnceCallback(),
-      ClientSocketPool::ProxyAuthCallback(), &proxy_pool, NetLogWithSource());
+  int rv = handle.Init(kGroupId, socket_params, TRAFFIC_ANNOTATION_FOR_TESTS,
+                       LOW, tag1, ClientSocketPool::RespectLimits::ENABLED,
+                       CompletionOnceCallback(),
+                       ClientSocketPool::ProxyAuthCallback(),
+                       &proxy_pool, NetLogWithSource());
   EXPECT_THAT(rv, IsOk());
   EXPECT_TRUE(handle.is_initialized());
   ASSERT_TRUE(handle.socket());
@@ -2750,7 +2764,8 @@ TEST_F(TransportClientSocketPoolTest, TagHttpProxyTunnel) {
   SocketTag tag2(getuid(), 0x87654321);
 
   TransportClientSocketPool proxy_pool(
-      kMaxSockets, kMaxSocketsPerGroup, kUnusedIdleSocketTimeout,
+      kMaxSockets, kMaxSocketsPerGroup, SocketPoolAdditionalCapacity::Create(),
+      kUnusedIdleSocketTimeout,
       ProxyUriToProxyChain("http://proxy",
                            /*default_scheme=*/ProxyServer::SCHEME_HTTP),
       /*is_for_websockets=*/false, tagging_common_connect_job_params_.get());
@@ -2760,9 +2775,10 @@ TEST_F(TransportClientSocketPoolTest, TagHttpProxyTunnel) {
   std::string request =
       "CONNECT www.google.com:443 HTTP/1.1\r\n"
       "Host: www.google.com:443\r\n"
-      "Proxy-Connection: keep-alive\r\n\r\n";
+      "Proxy-Connection: keep-alive\r\n"
+      "User-Agent: test-ua\r\n\r\n";
   MockWrite writes[] = {
-      MockWrite(SYNCHRONOUS, 0, request.c_str()),
+      MockWrite(SYNCHRONOUS, 0, request),
   };
   MockRead reads[] = {
       MockRead(SYNCHRONOUS, 1, "HTTP/1.1 200 Connection Established\r\n\r\n"),
@@ -2786,10 +2802,11 @@ TEST_F(TransportClientSocketPoolTest, TagHttpProxyTunnel) {
 
   // Verify requested socket is tagged properly.
   ClientSocketHandle handle;
-  int rv = handle.Init(
-      kGroupId, socket_params, TRAFFIC_ANNOTATION_FOR_TESTS, LOW, tag1,
-      ClientSocketPool::RespectLimits::ENABLED, CompletionOnceCallback(),
-      ClientSocketPool::ProxyAuthCallback(), &proxy_pool, NetLogWithSource());
+  int rv = handle.Init(kGroupId, socket_params, TRAFFIC_ANNOTATION_FOR_TESTS,
+                       LOW, tag1, ClientSocketPool::RespectLimits::ENABLED,
+                       CompletionOnceCallback(),
+                       ClientSocketPool::ProxyAuthCallback(),
+                       &proxy_pool, NetLogWithSource());
   EXPECT_THAT(rv, IsOk());
   EXPECT_TRUE(handle.is_initialized());
   ASSERT_TRUE(handle.socket());
@@ -2832,139 +2849,6 @@ class TransportClientSocketPoolMockNowSourceTest
       : TransportClientSocketPoolTest(
             base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
 };
-
-// Tests that changing the idle unused socket timeout using the experiment
-// works. The test first sets the value of timeout duration for idle sockets.
-// Next, it opens |kNumIdleSockets| sockets. To trigger the cleanup of idle
-// sockets that may have timedout, it then opens one more socket. This is
-// required since requesting a new socket triggers cleanup of idle timedout
-// sockets. Next, the test verifies the count of idle timed-out sockets.
-TEST_F(TransportClientSocketPoolMockNowSourceTest, IdleUnusedSocketTimeout) {
-  const url::SchemeHostPort kSchemeHostPort1(url::kHttpScheme, "www.foo.com",
-                                             80);
-  const url::SchemeHostPort kSchemeHostPort2(url::kHttpScheme, "www.bar.com",
-                                             80);
-
-  const struct {
-    bool use_first_socket;
-    int fast_forward_seconds;
-    int unused_idle_socket_timeout_seconds;
-    bool expect_idle_socket;
-  } kTests[] = {
-      // When the clock is fast forwarded by a duration longer than
-      // |unused_idle_socket_timeout_seconds|, the first unused idle socket is
-      // expected to be timedout, and cleared.
-      {false, 0, 0, false},
-      {false, 9, 10, true},
-      {false, 11, 10, false},
-      {false, 19, 20, true},
-      {false, 21, 20, false},
-      // If |use_first_socket| is true, then the test would write some data to
-      // the socket, thereby marking it as "used". Thereafter, this idle socket
-      // should be timedout based on used idle socket timeout, and changing
-      // |unused_idle_socket_timeout_seconds| should not affect the
-      // |expected_idle_sockets|.
-      {true, 0, 0, true},
-      {true, 9, 10, true},
-      {true, 11, 10, true},
-      {true, 19, 20, true},
-      {true, 21, 20, true},
-  };
-
-  for (const auto& test : kTests) {
-    SpdySessionDependencies session_deps(
-        ConfiguredProxyResolutionService::CreateDirect());
-    std::unique_ptr<HttpNetworkSession> session(
-        SpdySessionDependencies::SpdyCreateSession(&session_deps));
-
-    base::test::ScopedFeatureList scoped_feature_list_;
-    std::map<std::string, std::string> parameters;
-    parameters["unused_idle_socket_timeout_seconds"] =
-        base::NumberToString(test.unused_idle_socket_timeout_seconds);
-    scoped_feature_list_.InitAndEnableFeatureWithParameters(
-        net::features::kNetUnusedIdleSocketTimeout, parameters);
-
-    const char kWriteData[] = "1";
-    const MockWrite kWrites[] = {MockWrite(SYNCHRONOUS, kWriteData)};
-
-    SequencedSocketData provider_socket_1(MockConnect(ASYNC, OK),
-                                          base::span<MockRead>(), kWrites);
-    {
-      // Create 1 socket.
-      scoped_refptr<ClientSocketPool::SocketParams> socket_params =
-          ClientSocketPool::SocketParams::CreateForHttpForTesting();
-      session_deps.socket_factory->AddSocketDataProvider(&provider_socket_1);
-      ClientSocketHandle connection;
-      TestCompletionCallback callback;
-      int rv = connection.Init(
-          ClientSocketPool::GroupId(
-              kSchemeHostPort1, PrivacyMode::PRIVACY_MODE_DISABLED,
-              NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
-              /*disable_cert_network_fetches=*/false),
-          ClientSocketPool::SocketParams::CreateForHttpForTesting(),
-          /*proxy_annotation_tag=*/std::nullopt, MEDIUM, SocketTag(),
-          ClientSocketPool::RespectLimits::ENABLED, callback.callback(),
-          ClientSocketPool::ProxyAuthCallback(),
-          session->GetSocketPool(HttpNetworkSession::NORMAL_SOCKET_POOL,
-                                 ProxyChain::Direct()),
-          NetLogWithSource());
-      EXPECT_THAT(callback.GetResult(rv), IsOk());
-      EXPECT_FALSE(connection.socket()->WasEverUsed());
-
-      // Writing some data to the socket should set WasEverUsed.
-      if (test.use_first_socket) {
-        // Generate |socket_write_data| from kMockWriteData by appending null
-        // character to the latter.
-        auto write_buffer = base::MakeRefCounted<StringIOBuffer>(kWriteData);
-        TestCompletionCallback write_callback;
-        rv = connection.socket()->Write(
-            write_buffer.get(), write_buffer->size(), write_callback.callback(),
-            TRAFFIC_ANNOTATION_FOR_TESTS);
-        EXPECT_EQ(rv, 1);
-        EXPECT_TRUE(connection.socket()->WasEverUsed());
-      }
-    }
-
-    EXPECT_EQ(1, session
-                     ->GetSocketPool(HttpNetworkSession::NORMAL_SOCKET_POOL,
-                                     ProxyChain::Direct())
-                     ->IdleSocketCount());
-
-    // Moving the clock forward may cause the idle socket to be timedout.
-    FastForwardBy(base::Seconds(test.fast_forward_seconds));
-
-    {
-      // Request a new socket to trigger cleanup of idle timedout sockets.
-      scoped_refptr<ClientSocketPool::SocketParams> socket_params =
-          ClientSocketPool::SocketParams::CreateForHttpForTesting();
-      SequencedSocketData provider_socket_2(MockConnect(ASYNC, OK),
-                                            base::span<MockRead>(),
-                                            base::span<MockWrite>());
-      session_deps.socket_factory->AddSocketDataProvider(&provider_socket_2);
-      ClientSocketHandle connection;
-      TestCompletionCallback callback;
-      int rv = connection.Init(
-          ClientSocketPool::GroupId(
-              kSchemeHostPort2, PrivacyMode::PRIVACY_MODE_DISABLED,
-              NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
-              /*disable_cert_network_fetches=*/false),
-          socket_params, /*proxy_annotation_tag=*/std::nullopt, MEDIUM,
-          SocketTag(), ClientSocketPool::RespectLimits::ENABLED,
-          callback.callback(), ClientSocketPool::ProxyAuthCallback(),
-          session->GetSocketPool(HttpNetworkSession::NORMAL_SOCKET_POOL,
-                                 ProxyChain::Direct()),
-          NetLogWithSource());
-      EXPECT_THAT(callback.GetResult(rv), IsOk());
-      connection.socket()->Disconnect();
-    }
-
-    EXPECT_EQ(test.expect_idle_socket ? 1 : 0,
-              session
-                  ->GetSocketPool(HttpNetworkSession::NORMAL_SOCKET_POOL,
-                                  ProxyChain::Direct())
-                  ->IdleSocketCount());
-  }
-}
 
 }  // namespace
 

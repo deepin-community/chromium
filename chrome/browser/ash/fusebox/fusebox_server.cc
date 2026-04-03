@@ -9,10 +9,13 @@
 
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "base/files/file_util.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/notimplemented.h"
+#include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -36,6 +39,7 @@
 #include "storage/browser/file_system/file_system_url.h"
 #include "storage/common/file_system/file_system_util.h"
 #include "third_party/cros_system_api/dbus/fusebox/dbus-constants.h"
+#include "url/url_util.h"
 
 // This file provides the "business logic" half of the FuseBox server, coupled
 // with the "D-Bus protocol logic" half in fusebox_service_provider.cc.
@@ -46,7 +50,7 @@ namespace {
 
 Server* g_server_instance = nullptr;
 
-bool UseTempFile(const std::string_view fs_url_as_string) {
+bool UseTempFile(std::string_view fs_url_as_string) {
   // MTP (the protocol) does not support incremental writes. When creating an
   // MTP file (via FuseBox), we need to supply its contents as a whole. Up
   // until that transfer, spool incremental writes to a temporary file.
@@ -54,7 +58,7 @@ bool UseTempFile(const std::string_view fs_url_as_string) {
                           file_manager::util::kFuseBoxSubdirPrefixMTP);
 }
 
-bool UseEmptyTruncateWorkaround(const std::string_view fs_url_as_string,
+bool UseEmptyTruncateWorkaround(std::string_view fs_url_as_string,
                                 int64_t length) {
   // Not all storage::AsyncFileUtil back-ends implement the CreateFile or
   // Truncate methods. When they don't, and truncating to a zero length, work
@@ -66,9 +70,9 @@ bool UseEmptyTruncateWorkaround(const std::string_view fs_url_as_string,
 
 std::pair<std::string, bool> ResolvePrefixMap(
     const fusebox::Server::PrefixMap& prefix_map,
-    const std::string& s) {
+    std::string_view s) {
   size_t i = s.find('/');
-  if (i == std::string::npos) {
+  if (i == std::string_view::npos) {
     i = s.size();
   }
   auto iter = prefix_map.find(s.substr(0, i));
@@ -128,7 +132,7 @@ ParseError::ParseError(int posix_error_code_arg, bool is_moniker_root_arg)
 base::expected<Parsed, ParseError> ParseFileSystemURL(
     const fusebox::MonikerMap& moniker_map,
     const fusebox::Server::PrefixMap& prefix_map,
-    const std::string& fs_url_as_string) {
+    std::string_view fs_url_as_string) {
   scoped_refptr<storage::FileSystemContext> fs_context =
       file_manager::util::GetFileManagerFileSystemContext(
           ProfileManager::GetActiveUserProfile());
@@ -140,13 +144,31 @@ base::expected<Parsed, ParseError> ParseFileSystemURL(
     return base::unexpected(ParseError(EFAULT));
   }
 
+  // encoded is fs_url_as_string transformed such that "fsp.hash/x/y#z.txt"
+  // becomes "fsp.hash/x%2Fy%23z.txt". The "#" in particular would otherwise be
+  // problematic, since the conversion from string to GURL does not consider
+  // the "#y.txt" part of the URL path, even though "#" is a valid character
+  // for ChromeOS (Linux) file names.
+  //
+  // The initial "/" stays a slash, not a "%2F", since that is what
+  // ResolvePrefixMap and MonikerMap::ExtractToken expects to find.
+  std::string encoded;
+  size_t slash = fs_url_as_string.find('/');
+  if (slash == std::string_view::npos) {
+    encoded = std::string(fs_url_as_string);
+  } else {
+    url::RawCanonOutputT<char> canon_output;
+    url::EncodeURIComponent(fs_url_as_string.substr(slash + 1), &canon_output);
+    encoded = base::StrCat(
+        {fs_url_as_string.substr(0, slash + 1), canon_output.view()});
+  }
+
   storage::FileSystemURL fs_url;
   bool read_only = false;
 
   // Intercept any moniker names and replace them by their linked target.
   using ResultType = fusebox::MonikerMap::ExtractTokenResult::ResultType;
-  auto extract_token_result =
-      fusebox::MonikerMap::ExtractToken(fs_url_as_string);
+  auto extract_token_result = fusebox::MonikerMap::ExtractToken(encoded);
   switch (extract_token_result.result_type) {
     case ResultType::OK: {
       auto resolved = moniker_map.Resolve(extract_token_result.token);
@@ -159,7 +181,7 @@ base::expected<Parsed, ParseError> ParseFileSystemURL(
       break;
     }
     case ResultType::NOT_A_MONIKER_FS_URL: {
-      auto resolved = ResolvePrefixMap(prefix_map, fs_url_as_string);
+      auto resolved = ResolvePrefixMap(prefix_map, encoded);
       if (resolved.first.empty()) {
         LOG(ERROR) << "Unresolvable Prefix";
         return base::unexpected(ParseError(ENOENT));
@@ -648,18 +670,18 @@ void Server::FuseFileMapEntry::DoWrite2(const Write2RequestProto& request,
 void Server::FuseFileMapEntry::Do(PendingOp& op,
                                   base::WeakPtr<Server> weak_ptr_server,
                                   uint64_t fuse_handle) {
-  if (absl::holds_alternative<PendingFlush>(op)) {
-    PendingFlush& pending = absl::get<PendingFlush>(op);
+  if (std::holds_alternative<PendingFlush>(op)) {
+    PendingFlush& pending = std::get<PendingFlush>(op);
     DoFlush(pending.first,
             base::BindOnce(&Server::OnFlush, weak_ptr_server, fuse_handle,
                            std::move(pending.second)));
-  } else if (absl::holds_alternative<PendingRead2>(op)) {
-    PendingRead2& pending = absl::get<PendingRead2>(op);
+  } else if (std::holds_alternative<PendingRead2>(op)) {
+    PendingRead2& pending = std::get<PendingRead2>(op);
     DoRead2(pending.first,
             base::BindOnce(&Server::OnRead2, weak_ptr_server, fuse_handle,
                            std::move(pending.second)));
-  } else if (absl::holds_alternative<PendingWrite2>(op)) {
-    PendingWrite2& pending = absl::get<PendingWrite2>(op);
+  } else if (std::holds_alternative<PendingWrite2>(op)) {
+    PendingWrite2& pending = std::get<PendingWrite2>(op);
     DoWrite2(pending.first,
              base::BindOnce(&Server::OnWrite2, weak_ptr_server, fuse_handle,
                             std::move(pending.second)));
@@ -783,7 +805,7 @@ void Server::UnregisterFSURLPrefix(const std::string& subdir) {
 }
 
 storage::FileSystemURL Server::ResolveFilename(Profile* profile,
-                                               const std::string& filename) {
+                                               std::string_view filename) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   if (!base::StartsWith(filename, file_manager::util::kFuseBoxMediaSlashPath)) {
@@ -817,9 +839,13 @@ base::FilePath Server::InverseResolveFSURL(
   }
 
   if (best_size > 0) {
+    const std::string relative_path = base::UnescapeURLComponent(
+        fs_url_as_string.substr(best_size),
+        base::UnescapeRule::SPACES |
+            base::UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS);
     return storage::StringToFilePath(
         base::StrCat({file_manager::util::kFuseBoxMediaSlashPath, best_subdir,
-                      fs_url_as_string.substr(best_size)}));
+                      relative_path}));
   }
 
   return base::FilePath();
@@ -828,7 +854,7 @@ base::FilePath Server::InverseResolveFSURL(
 void Server::GetDebugJSONForKey(
     std::string_view key,
     base::OnceCallback<void(JSONKeyValuePair)> callback) {
-  base::Value::Dict subdirs;
+  base::DictValue subdirs;
   subdirs.Set(kMonikerSubdir, base::Value("[special]"));
   for (const auto& i : prefix_map_) {
     subdirs.Set(i.first,
@@ -837,7 +863,7 @@ void Server::GetDebugJSONForKey(
                      i.second.read_only ? " (read-only)" : " (read-write)"})));
   }
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set("monikers", moniker_map_.GetDebugJSON());
   dict.Set("subdirs", std::move(subdirs));
   std::move(callback).Run(std::make_pair(key, base::Value(std::move(dict))));
@@ -864,15 +890,15 @@ void Server::Close2(const Close2RequestProto& request_proto,
   fuse_file_map_.erase(iter);
 
   for (auto& pending_op : pending_ops) {
-    if (absl::holds_alternative<PendingRead2>(pending_op)) {
+    if (std::holds_alternative<PendingRead2>(pending_op)) {
       Read2ResponseProto read2_response_proto;
       read2_response_proto.set_posix_error_code(EBUSY);
-      std::move(absl::get<PendingRead2>(pending_op).second)
+      std::move(std::get<PendingRead2>(pending_op).second)
           .Run(read2_response_proto);
-    } else if (absl::holds_alternative<PendingWrite2>(pending_op)) {
+    } else if (std::holds_alternative<PendingWrite2>(pending_op)) {
       Write2ResponseProto write2_response_proto;
       write2_response_proto.set_posix_error_code(EBUSY);
-      std::move(absl::get<PendingWrite2>(pending_op).second)
+      std::move(std::get<PendingWrite2>(pending_op).second)
           .Run(write2_response_proto);
     } else {
       NOTREACHED();
@@ -1058,7 +1084,8 @@ void Server::Read2(const Read2RequestProto& request_proto,
     response_proto.set_posix_error_code(ENOENT);
     std::move(callback).Run(response_proto);
     return;
-  } else if (!iter->second.readable_) {
+  }
+  if (!iter->second.readable_) {
     Read2ResponseProto response_proto;
     response_proto.set_posix_error_code(EACCES);
     std::move(callback).Run(response_proto);

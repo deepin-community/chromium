@@ -22,6 +22,11 @@ void SmartPrivacyProtectionScreenHandler::Show() {
   ShowInWebUI();
 }
 
+base::WeakPtr<SmartPrivacyProtectionView>
+SmartPrivacyProtectionScreenHandler::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
 void SmartPrivacyProtectionScreenHandler::DeclareLocalizedValues(
     ::login::LocalizedValuesBuilder* builder) {
   builder->Add("smartPrivacyProtectionScreenTitle",
@@ -39,7 +44,7 @@ void SmartPrivacyProtectionScreenHandler::DeclareLocalizedValues(
 }
 
 void SmartPrivacyProtectionScreenHandler::GetAdditionalParameters(
-    base::Value::Dict* dict) {
+    base::DictValue* dict) {
   dict->Set("isQuickDimEnabled", base::Value(features::IsQuickDimEnabled()));
 }
 

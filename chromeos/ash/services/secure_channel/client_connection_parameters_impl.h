@@ -6,9 +6,7 @@
 #define CHROMEOS_ASH_SERVICES_SECURE_CHANNEL_CLIENT_CONNECTION_PARAMETERS_IMPL_H_
 
 #include "chromeos/ash/services/secure_channel/client_connection_parameters.h"
-#include "chromeos/ash/services/secure_channel/public/mojom/nearby_connector.mojom-forward.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/nearby_connector.mojom-shared.h"
-#include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom-shared.h"
 #include "chromeos/ash/services/secure_channel/public/mojom/secure_channel.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -68,7 +66,7 @@ class ClientConnectionParametersImpl : public ClientConnectionParameters {
           nearby_connection_state_listener_receiver) override;
   void UpdateBleDiscoveryState(
       mojom::DiscoveryResult discovery_state,
-      absl::optional<mojom::DiscoveryErrorCode> potential_error_code) override;
+      std::optional<mojom::DiscoveryErrorCode> potential_error_code) override;
   void UpdateNearbyConnectionState(
       mojom::NearbyConnectionStep step,
       mojom::NearbyConnectionStepResult result) override;

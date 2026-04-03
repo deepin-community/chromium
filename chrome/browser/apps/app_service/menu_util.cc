@@ -4,6 +4,7 @@
 
 #include "chrome/browser/apps/app_service/menu_util.h"
 
+#include <string_view>
 #include <utility>
 
 #include "ash/public/cpp/app_menu_constants.h"
@@ -12,7 +13,6 @@
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
@@ -197,11 +197,10 @@ void PopulateItemFromMenuItem(const apps::MenuItemPtr& item,
     case apps::MenuItemType::kRadio:
     case apps::MenuItemType::kSubmenu:
       NOTREACHED();
-      break;
   }
 }
 
-base::StringPiece MenuTypeToString(MenuType menu_type) {
+std::string_view MenuTypeToString(MenuType menu_type) {
   switch (menu_type) {
     case MenuType::kShelf:
       return "shelf";
@@ -210,7 +209,7 @@ base::StringPiece MenuTypeToString(MenuType menu_type) {
   }
 }
 
-MenuType MenuTypeFromString(base::StringPiece menu_type) {
+MenuType MenuTypeFromString(std::string_view menu_type) {
   if (base::EqualsCaseInsensitiveASCII(menu_type, "shelf")) {
     return MenuType::kShelf;
   }
@@ -246,11 +245,11 @@ MenuItems CreateBrowserMenuItems(const Profile* profile) {
 }
 
 ui::ColorId GetColorIdForMenuItemIcon() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   return ui::kColorAshSystemUIMenuIcon;
 #else
   return ui::kColorMenuIcon;
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 uint32_t StringIdForUseLaunchTypeCommand(uint32_t command_id) {
@@ -268,7 +267,6 @@ uint32_t StringIdForUseLaunchTypeCommand(uint32_t command_id) {
       [[fallthrough]];
     default:
       NOTREACHED();
-      return 0;
   }
 }
 

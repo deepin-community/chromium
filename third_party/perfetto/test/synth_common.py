@@ -198,6 +198,25 @@ class Trace(object):
   def add_atrace_instant(self, ts, tid, pid, buf):
     self.add_print(ts, tid, 'I|{}|{}'.format(pid, buf))
 
+  def add_atrace_instant_for_track(self, ts, tid, pid, track_name, buf):
+    self.add_print(ts, tid, 'N|{}|{}|{}'.format(pid, track_name, buf))
+
+  def add_atrace_for_thread(self, ts, ts_end, buf, tid, pid):
+    self.add_atrace_begin(ts=ts, tid=tid, pid=pid, buf=buf)
+    self.add_atrace_end(ts=ts_end, tid=tid, pid=pid)
+
+  def add_async_atrace_for_thread(self, ts, ts_end, buf, tid, pid):
+    self.add_atrace_async_begin(ts=ts, tid=tid, pid=pid, buf=buf)
+    self.add_atrace_async_end(ts=ts_end, tid=tid, pid=pid, buf=buf)
+
+  def add_frame(self, vsync, ts_do_frame, ts_end_do_frame, tid, pid):
+    self.add_atrace_for_thread(
+        ts=ts_do_frame,
+        ts_end=ts_end_do_frame,
+        buf="Choreographer#doFrame %d" % vsync,
+        tid=tid,
+        pid=pid)
+
   def add_process(self, pid, ppid, cmdline, uid=None):
     process = self.packet.process_tree.processes.add()
     process.pid = pid
@@ -215,8 +234,8 @@ class Trace(object):
       thread.name = name
     self.proc_map[tid] = cmdline
 
-  def add_battery_counters(self, ts, charge_uah, cap_prct, curr_ua,
-                           curr_avg_ua):
+  def add_battery_counters(self, ts, charge_uah, cap_prct, curr_ua, curr_avg_ua,
+                           voltage_uv):
     self.packet = self.trace.packet.add()
     self.packet.timestamp = ts
     battery_count = self.packet.battery
@@ -224,6 +243,7 @@ class Trace(object):
     battery_count.capacity_percent = cap_prct
     battery_count.current_ua = curr_ua
     battery_count.current_avg_ua = curr_avg_ua
+    battery_count.voltage_uv = voltage_uv
 
   def add_binder_transaction(self, transaction_id, ts_start, ts_end, tid, pid,
                              reply_id, reply_ts_start, reply_ts_end, reply_tid,
@@ -234,7 +254,7 @@ class Trace(object):
     binder_transaction.debug_id = transaction_id
     binder_transaction.to_proc = reply_pid
     binder_transaction.to_thread = reply_tid
-    binder_transaction.reply = False
+    binder_transaction.reply = 0
 
     # Binder reply start
     ftrace = self.__add_ftrace_event(reply_ts_start, reply_tid)
@@ -247,7 +267,7 @@ class Trace(object):
     reply_binder_transaction.debug_id = reply_id
     reply_binder_transaction.to_proc = pid
     reply_binder_transaction.to_thread = tid
-    reply_binder_transaction.reply = True
+    reply_binder_transaction.reply = 1
 
     # Binder transaction finish
     ftrace = self.__add_ftrace_event(ts_end, tid)
@@ -255,13 +275,14 @@ class Trace(object):
     reply_binder_transaction_received.debug_id = reply_id
 
   def add_battery_counters_no_curr_ua(self, ts, charge_uah, cap_prct,
-                                      curr_avg_ua):
+                                      curr_avg_ua, voltage_uv):
     self.packet = self.trace.packet.add()
     self.packet.timestamp = ts
     battery_count = self.packet.battery
     battery_count.charge_counter_uah = charge_uah
     battery_count.capacity_percent = cap_prct
     battery_count.current_avg_ua = curr_avg_ua
+    battery_count.voltage_uv = voltage_uv
 
   def add_power_rails_desc(self, index_val, name):
     power_rails = self.packet.power_rails
@@ -312,6 +333,7 @@ class Trace(object):
 
   def add_gpu_counter_spec(self,
                            ts,
+                           gpu_id,
                            counter_id,
                            name,
                            description=None,
@@ -320,6 +342,7 @@ class Trace(object):
     packet = self.add_packet()
     packet.timestamp = ts
     gpu_counters = packet.gpu_counter_event
+    gpu_counters.gpu_id = gpu_id
     counter_desc = gpu_counters.counter_descriptor
     spec = counter_desc.specs.add()
     spec.counter_id = counter_id
@@ -509,23 +532,6 @@ class Trace(object):
       packet.track_descriptor.process.process_name = process_name
     return packet
 
-  def add_chrome_process_track_descriptor(
-      self,
-      process_track,
-      pid=None,
-      process_type=None,
-      host_app_package_name="org.chromium.chrome"):
-    if process_type is None:
-      process_type = self.prototypes.ChromeProcessDescriptor \
-        .ProcessType \
-        .PROCESS_RENDERER
-
-    packet = self.add_process_track_descriptor(process_track, pid=pid)
-    chrome_process = packet.track_descriptor.chrome_process
-    chrome_process.process_type = process_type
-    chrome_process.host_app_package_name = host_app_package_name
-    return packet
-
   def add_thread_track_descriptor(self,
                                   process_track,
                                   thread_track,
@@ -542,27 +548,6 @@ class Trace(object):
       packet.track_descriptor.thread.tid = tid
     if thread_name is not None:
       packet.track_descriptor.thread.thread_name = thread_name
-    return packet
-
-  def add_chrome_thread_track_descriptor(self,
-                                         process_track,
-                                         thread_track,
-                                         trusted_packet_sequence_id=None,
-                                         pid=None,
-                                         tid=None,
-                                         thread_type=None):
-    if thread_type is None:
-      thread_type = self.prototypes.ThreadDescriptor \
-        .ChromeThreadType \
-        .CHROME_THREAD_TYPE_UNSPECIFIED
-
-    packet = self.add_thread_track_descriptor(
-        process_track,
-        thread_track,
-        trusted_packet_sequence_id=trusted_packet_sequence_id,
-        pid=pid,
-        tid=tid)
-    packet.track_descriptor.thread.chrome_thread_type = thread_type
     return packet
 
   def add_trace_packet_defaults(self,
@@ -586,31 +571,6 @@ class Trace(object):
       .BuiltinCounterType \
       .COUNTER_THREAD_TIME_NS
     return packet
-
-  def add_chrome_thread_with_cpu_counter(self,
-                                         process_track,
-                                         thread_track,
-                                         trusted_packet_sequence_id=None,
-                                         counter_track=None,
-                                         pid=None,
-                                         tid=None,
-                                         thread_type=None):
-    self.add_chrome_thread_track_descriptor(
-        process_track,
-        thread_track,
-        trusted_packet_sequence_id=trusted_packet_sequence_id,
-        pid=pid,
-        tid=tid,
-        thread_type=thread_type)
-    self.add_trace_packet_defaults(
-        trusted_packet_sequence_id=trusted_packet_sequence_id,
-        counter_track=counter_track,
-        thread_track=thread_track)
-
-    self.add_counter_track_descriptor(
-        trusted_packet_sequence_id=trusted_packet_sequence_id,
-        counter_track=counter_track,
-        thread_track=thread_track)
 
   def add_track_event_slice_begin(self,
                                   name,
@@ -783,7 +743,8 @@ class Trace(object):
                                            gpu_composition,
                                            jank_type,
                                            prediction_type,
-                                           jank_severity_type=None):
+                                           jank_severity_type=None,
+                                           jank_score=0):
     packet = self.add_packet()
     packet.timestamp = ts
     event = packet.frame_timeline_event.actual_surface_frame_start
@@ -804,6 +765,7 @@ class Trace(object):
       else:
         event.jank_severity_type = jank_severity_type
       event.prediction_type = prediction_type
+      event.jank_severity_score = jank_score
 
   def add_frame_end_event(self, ts, cookie):
     packet = self.add_packet()
@@ -823,19 +785,21 @@ def read_descriptor(file_name):
 
 
 def create_pool(args):
-  trace_descriptor = read_descriptor(args.trace_descriptor)
-
   pool = descriptor_pool.DescriptorPool()
-  for file in trace_descriptor.file:
-    pool.Add(file)
-
+  for descriptor_file in args.trace_descriptors:
+    trace_descriptor = read_descriptor(descriptor_file)
+    for file in trace_descriptor.file:
+      pool.Add(file)
   return pool
 
 
 def create_trace():
   parser = argparse.ArgumentParser()
   parser.add_argument(
-      'trace_descriptor', type=str, help='location of trace descriptor')
+      'trace_descriptors',
+      type=str,
+      nargs='+',
+      help='locations of trace descriptors')
   args = parser.parse_args()
 
   pool = create_pool(args)
@@ -850,6 +814,11 @@ def create_trace():
         setattr(res, desc.name, desc.number)
       return res
 
+  ChromeEnums = namedtuple('ChromeEnums', [
+      'ProcessType',
+      'ThreadType',
+  ])
+
   ChromeLatencyInfo = namedtuple('ChromeLatencyInfo', [
       'ComponentType',
       'Step',
@@ -857,9 +826,11 @@ def create_trace():
 
   Prototypes = namedtuple('Prototypes', [
       'TrackEvent',
+      'ChromeEnums',
       'ChromeRAILMode',
       'ChromeLatencyInfo',
       'ChromeProcessDescriptor',
+      'ChromeTrackEvent',
       'CounterDescriptor',
       'ThreadDescriptor',
   ])
@@ -875,6 +846,14 @@ def create_trace():
   prototypes = Prototypes(
       TrackEvent=get_message_class(
           pool, pool.FindMessageTypeByName('perfetto.protos.TrackEvent')),
+      ChromeEnums=ChromeEnums(
+          ProcessType=EnumPrototype.from_descriptor(
+              pool.FindEnumTypeByName(
+                  'perfetto.protos.chrome_enums.ProcessType')),
+          ThreadType=EnumPrototype.from_descriptor(
+              pool.FindEnumTypeByName(
+                  'perfetto.protos.chrome_enums.ThreadType')),
+      ),
       ChromeRAILMode=EnumPrototype.from_descriptor(
           pool.FindEnumTypeByName('perfetto.protos.ChromeRAILMode')),
       ChromeLatencyInfo=chrome_latency_info_prototypes,
@@ -882,6 +861,8 @@ def create_trace():
           pool,
           pool.FindMessageTypeByName(
               'perfetto.protos.ChromeProcessDescriptor')),
+      ChromeTrackEvent=get_message_class(
+          pool, pool.FindMessageTypeByName('perfetto.protos.ChromeTrackEvent')),
       CounterDescriptor=get_message_class(
           pool,
           pool.FindMessageTypeByName('perfetto.protos.CounterDescriptor')),

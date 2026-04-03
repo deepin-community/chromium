@@ -5,6 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_PERFORMANCE_TIMING_FOR_REPORTING_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TIMING_PERFORMANCE_TIMING_FOR_REPORTING_H_
 
+#include <array>
+
 #include "base/time/time.h"
 #include "third_party/blink/public/common/performance/largest_contentful_paint_type.h"
 #include "third_party/blink/public/web/web_performance_metrics_for_reporting.h"
@@ -39,8 +41,7 @@ class CORE_EXPORT PerformanceTimingForReporting final
     std::optional<base::TimeDelta> first_input_delay;
   };
 
-  using BackForwardCacheRestoreTimings =
-      WTF::Vector<BackForwardCacheRestoreTiming>;
+  using BackForwardCacheRestoreTimings = Vector<BackForwardCacheRestoreTiming>;
 
   explicit PerformanceTimingForReporting(ExecutionContext*);
 
@@ -61,6 +62,9 @@ class CORE_EXPORT PerformanceTimingForReporting final
   // The time the first paint operation was performed.
   uint64_t FirstPaintForMetrics() const;
 
+  // The first paint as full-resolution monotonic time.
+  base::TimeTicks FirstPaintAsMonotonicTimeForMetrics() const;
+
   // The time the first paint operation for image was performed.
   uint64_t FirstImagePaint() const;
 
@@ -74,7 +78,7 @@ class CORE_EXPORT PerformanceTimingForReporting final
 
   // The time of the first 'contentful' paint. A contentful paint is a paint
   // that includes content of some kind (for example, text or image content).
-  uint64_t FirstContentfulPaintIgnoringSoftNavigations() const;
+  uint64_t FirstContentfulPaint() const;
 
   // The first 'contentful' paint as full-resolution monotonic time. Intended to
   // be used for correlation with other events internal to blink.
@@ -94,13 +98,6 @@ class CORE_EXPORT PerformanceTimingForReporting final
 
   LargestContentfulPaintDetailsForReporting
   LargestContentfulPaintDetailsForMetrics() const;
-
-  LargestContentfulPaintDetailsForReporting
-  SoftNavigationLargestContentfulPaintDetailsForMetrics() const;
-
-  LargestContentfulPaintDetailsForReporting
-  PopulateLargestContentfulPaintDetailsForReporting(
-      const LargestContentfulPaintDetails& timing) const;
 
   // The time at which the frame is first eligible for painting due to not
   // being throttled. A zero value indicates throttling.
@@ -158,15 +155,16 @@ class CORE_EXPORT PerformanceTimingForReporting final
   // available.
   std::optional<base::TimeDelta> UserTimingMarkInteractive() const;
 
+  // The name and startTime of the user timing mark.
+  std::optional<std::tuple<AtomicString, base::TimeDelta>>
+  CustomUserTimingMark() const;
+
   uint64_t ParseStart() const;
   uint64_t ParseStop() const;
   uint64_t ParseBlockedOnScriptLoadDuration() const;
   uint64_t ParseBlockedOnScriptLoadFromDocumentWriteDuration() const;
   uint64_t ParseBlockedOnScriptExecutionDuration() const;
   uint64_t ParseBlockedOnScriptExecutionFromDocumentWriteDuration() const;
-
-  // The time of the first paint after a portal activation.
-  std::optional<base::TimeTicks> LastPortalActivatedPaint() const;
 
   // The start time of the prerender activation navigation.
   std::optional<base::TimeDelta> PrerenderActivationStart() const;
@@ -176,6 +174,10 @@ class CORE_EXPORT PerformanceTimingForReporting final
   uint64_t MonotonicTimeToIntegerMilliseconds(base::TimeTicks) const;
 
   std::unique_ptr<TracedValue> GetNavigationTracingData();
+
+  LargestContentfulPaintDetailsForReporting
+  PopulateLargestContentfulPaintDetailsForReporting(
+      const LargestContentfulPaintDetails& timing) const;
 
  private:
   const DocumentTiming* GetDocumentTiming() const;

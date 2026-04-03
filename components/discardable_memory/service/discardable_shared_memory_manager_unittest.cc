@@ -1,18 +1,23 @@
 // Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 #include "components/discardable_memory/service/discardable_shared_memory_manager.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
+#include <array>
 #include <memory>
 
+#include "base/compiler_specific.h"
+#include "base/memory/memory_pressure_listener_registry.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
 #include "base/threading/simple_thread.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace discardable_memory {
@@ -22,7 +27,7 @@ const int kInvalidUniqueID = -1;
 
 class TestDiscardableSharedMemory : public base::DiscardableSharedMemory {
  public:
-  TestDiscardableSharedMemory() {}
+  TestDiscardableSharedMemory() = default;
 
   explicit TestDiscardableSharedMemory(base::UnsafeSharedMemoryRegion region)
       : DiscardableSharedMemory(std::move(region)) {}
@@ -56,8 +61,8 @@ class TestDiscardableSharedMemoryManager
 
  private:
   // Overriden from DiscardableSharedMemoryManager:
-  void OnMemoryPressure(base::MemoryPressureListener::MemoryPressureLevel
-                            memory_pressure_level) override {
+  void OnMemoryPressure(
+      base::MemoryPressureLevel memory_pressure_level) override {
     DiscardableSharedMemoryManager::OnMemoryPressure(memory_pressure_level);
     ++on_memory_pressure_call_count_;
   }
@@ -78,6 +83,7 @@ class DiscardableSharedMemoryManagerTest : public testing::Test {
     manager_ = std::make_unique<TestDiscardableSharedMemoryManager>();
   }
 
+  base::MemoryPressureListenerRegistry memory_pressure_listener_registry_;
   // DiscardableSharedMemoryManager requires a message loop and a worker thread.
   base::test::TaskEnvironment task_environment_;
   std::unique_ptr<TestDiscardableSharedMemoryManager> manager_;
@@ -85,8 +91,8 @@ class DiscardableSharedMemoryManagerTest : public testing::Test {
 
 TEST_F(DiscardableSharedMemoryManagerTest, AllocateForClient) {
   const int kDataSize = 1024;
-  uint8_t data[kDataSize];
-  memset(data, 0x80, kDataSize);
+  std::array<uint8_t, kDataSize> data;
+  data.fill(0x80);
 
   base::UnsafeSharedMemoryRegion shared_region;
   manager_->AllocateLockedDiscardableSharedMemoryForClient(
@@ -97,12 +103,12 @@ TEST_F(DiscardableSharedMemoryManagerTest, AllocateForClient) {
   bool rv = memory.Map(kDataSize);
   ASSERT_TRUE(rv);
 
-  memcpy(memory.memory(), data, kDataSize);
+  memory.memory().copy_from(data);
   memory.SetNow(base::Time::FromSecondsSinceUnixEpoch(1));
   memory.Unlock(0, 0);
 
   ASSERT_EQ(base::DiscardableSharedMemory::SUCCESS, memory.Lock(0, 0));
-  EXPECT_EQ(memcmp(data, memory.memory(), kDataSize), 0);
+  EXPECT_EQ(data, memory.memory());
   memory.Unlock(0, 0);
 }
 
@@ -246,14 +252,23 @@ TEST_F(DiscardableSharedMemoryManagerTest,
   memory2.Unlock(0, 0);
 }
 
-TEST_F(DiscardableSharedMemoryManagerTest, OnMemoryPressure) {
-  // Flush to ensure MemoryPressureListener is created so that memory pressure
-  // notifications are received..
+// Memory pressure listeners are disabled on Windows and Mac, so this test
+// is disabled on those platforms as it relies on receiving notifications.
+//
+// TODO(crbug.com/483018445): Check the kSuppressMemoryMonitor feature flag
+// instead of buildflags once the feature is exposed publicly or moved to base.
+// Currently, it is internal to components/memory_pressure.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#define MAYBE_OnMemoryPressure DISABLED_OnMemoryPressure
+#else
+#define MAYBE_OnMemoryPressure OnMemoryPressure
+#endif
+TEST_F(DiscardableSharedMemoryManagerTest, MAYBE_OnMemoryPressure) {
   task_environment_.RunUntilIdle();
 
-  const base::MemoryPressureListener::MemoryPressureLevel pressure_levels[] = {
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE,
-      base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL};
+  const base::MemoryPressureLevel pressure_levels[] = {
+      base::MEMORY_PRESSURE_LEVEL_MODERATE,
+      base::MEMORY_PRESSURE_LEVEL_CRITICAL};
 
   for (auto pressure : pressure_levels) {
     base::MemoryPressureListener::NotifyMemoryPressure(pressure);
@@ -283,7 +298,7 @@ class SetMemoryLimitRunner : public base::DelegateSimpleThread::Delegate {
  public:
   SetMemoryLimitRunner(DiscardableSharedMemoryManager* manager, size_t limit)
       : manager_(manager), limit_(limit) {}
-  ~SetMemoryLimitRunner() override {}
+  ~SetMemoryLimitRunner() override = default;
 
   void Run() override { manager_->SetMemoryLimit(limit_); }
 

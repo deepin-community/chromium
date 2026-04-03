@@ -9,52 +9,53 @@
 #include <algorithm>
 #include <utility>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/span.h"
 #include "core/fxcrt/span_util.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
 
 namespace fxcrt {
 
 template <typename T>
 pdfium::span<T> StringTemplate<T>::GetBuffer(size_t nMinBufLength) {
-  if (!m_pData) {
+  if (!data_) {
     if (nMinBufLength == 0) {
       return pdfium::span<T>();
     }
-    m_pData = StringData::Create(nMinBufLength);
-    m_pData->m_nDataLength = 0;
-    m_pData->m_String[0] = 0;
-    return pdfium::span<T>(m_pData->m_String, m_pData->m_nAllocLength);
+    data_ = StringData::Create(nMinBufLength);
+    data_->data_length_ = 0;
+    data_->string_[0] = 0;
+    return data_->alloc_span();
   }
-  if (m_pData->CanOperateInPlace(nMinBufLength)) {
-    return pdfium::span<T>(m_pData->m_String, m_pData->m_nAllocLength);
+  if (data_->CanOperateInPlace(nMinBufLength)) {
+    return data_->alloc_span();
   }
-  nMinBufLength = std::max(nMinBufLength, m_pData->m_nDataLength);
+  nMinBufLength = std::max(nMinBufLength, data_->data_length_);
   if (nMinBufLength == 0) {
     return pdfium::span<T>();
   }
   RetainPtr<StringData> pNewData = StringData::Create(nMinBufLength);
-  pNewData->CopyContents(*m_pData);
-  pNewData->m_nDataLength = m_pData->m_nDataLength;
-  m_pData = std::move(pNewData);
-  return pdfium::span<T>(m_pData->m_String, m_pData->m_nAllocLength);
+  pNewData->CopyContents(*data_);
+  pNewData->data_length_ = data_->data_length_;
+  data_ = std::move(pNewData);
+  return data_->alloc_span();
 }
 
 template <typename T>
 void StringTemplate<T>::ReleaseBuffer(size_t nNewLength) {
-  if (!m_pData) {
+  if (!data_) {
     return;
   }
-  nNewLength = std::min(nNewLength, m_pData->m_nAllocLength);
+  nNewLength = std::min(nNewLength, data_->alloc_length_);
   if (nNewLength == 0) {
     clear();
     return;
   }
-  DCHECK_EQ(m_pData->m_nRefs, 1);
-  m_pData->m_nDataLength = nNewLength;
-  m_pData->m_String[nNewLength] = 0;
-  if (m_pData->m_nAllocLength - nNewLength >= 32) {
+  DCHECK_EQ(data_->refs_, 1);
+  data_->data_length_ = nNewLength;
+  data_->capacity_span()[nNewLength] = 0;
+  if (data_->alloc_length_ - nNewLength >= 32) {
     // Over arbitrary threshold, so pay the price to relocate.  Force copy to
     // always occur by holding a second reference to the string.
     StringTemplate preserve(*this);
@@ -64,40 +65,24 @@ void StringTemplate<T>::ReleaseBuffer(size_t nNewLength) {
 
 template <typename T>
 size_t StringTemplate<T>::Remove(T chRemove) {
-  if (IsEmpty()) {
+  size_t count = std::count(span().begin(), span().end(), chRemove);
+  if (count == 0) {
     return 0;
   }
-
-  T* pstrSource = m_pData->m_String;
-  T* pstrEnd = m_pData->m_String + m_pData->m_nDataLength;
-  while (pstrSource < pstrEnd) {
-    if (*pstrSource == chRemove) {
-      break;
+  ReallocBeforeWrite(data_->data_length_);
+  auto src_span = data_->span();
+  auto dst_span = data_->span();
+  // Perform self-intersecting copy in forwards order.
+  while (!src_span.empty()) {
+    if (src_span[0] != chRemove) {
+      dst_span[0] = src_span[0];
+      dst_span = dst_span.template subspan<1u>();
     }
-    pstrSource++;
+    src_span = src_span.template subspan<1u>();
   }
-  if (pstrSource == pstrEnd) {
-    return 0;
-  }
-
-  ptrdiff_t copied = pstrSource - m_pData->m_String;
-  ReallocBeforeWrite(m_pData->m_nDataLength);
-  pstrSource = m_pData->m_String + copied;
-  pstrEnd = m_pData->m_String + m_pData->m_nDataLength;
-
-  T* pstrDest = pstrSource;
-  while (pstrSource < pstrEnd) {
-    if (*pstrSource != chRemove) {
-      *pstrDest = *pstrSource;
-      pstrDest++;
-    }
-    pstrSource++;
-  }
-
-  *pstrDest = 0;
-  size_t nCount = static_cast<size_t>(pstrSource - pstrDest);
-  m_pData->m_nDataLength -= nCount;
-  return nCount;
+  data_->data_length_ -= count;
+  data_->capacity_span()[data_->data_length_] = 0;
+  return count;
 }
 
 template <typename T>
@@ -108,19 +93,19 @@ size_t StringTemplate<T>::Insert(size_t index, T ch) {
   }
   const size_t new_length = cur_length + 1;
   ReallocBeforeWrite(new_length);
-  fxcrt::spanmove(m_pData->capacity_span().subspan(index + 1),
-                  m_pData->capacity_span().subspan(index, new_length - index));
-  m_pData->m_String[index] = ch;
-  m_pData->m_nDataLength = new_length;
+  fxcrt::spanmove(data_->capacity_span().subspan(index + 1),
+                  data_->capacity_span().subspan(index, new_length - index));
+  data_->capacity_span()[index] = ch;
+  data_->data_length_ = new_length;
   return new_length;
 }
 
 template <typename T>
 size_t StringTemplate<T>::Delete(size_t index, size_t count) {
-  if (!m_pData) {
+  if (!data_) {
     return 0;
   }
-  size_t old_length = m_pData->m_nDataLength;
+  size_t old_length = data_->data_length_;
   if (count == 0 || index != std::clamp<size_t>(index, 0, old_length)) {
     return old_length;
   }
@@ -132,17 +117,17 @@ size_t StringTemplate<T>::Delete(size_t index, size_t count) {
   // Include the NUL char not accounted for in lengths.
   size_t chars_to_copy = old_length - removal_length + 1;
   fxcrt::spanmove(
-      m_pData->capacity_span().subspan(index),
-      m_pData->capacity_span().subspan(removal_length, chars_to_copy));
-  m_pData->m_nDataLength = old_length - count;
-  return m_pData->m_nDataLength;
+      data_->capacity_span().subspan(index),
+      data_->capacity_span().subspan(removal_length, chars_to_copy));
+  data_->data_length_ = old_length - count;
+  return data_->data_length_;
 }
 
 template <typename T>
 void StringTemplate<T>::SetAt(size_t index, T ch) {
   DCHECK(IsValidIndex(index));
-  ReallocBeforeWrite(m_pData->m_nDataLength);
-  m_pData->span()[index] = ch;
+  ReallocBeforeWrite(data_->data_length_);
+  data_->span()[index] = ch;
 }
 
 template <typename T>
@@ -153,14 +138,14 @@ std::optional<size_t> StringTemplate<T>::Find(T ch, size_t start) const {
 template <typename T>
 std::optional<size_t> StringTemplate<T>::Find(StringView str,
                                               size_t start) const {
-  if (!m_pData) {
+  if (!data_) {
     return std::nullopt;
   }
   if (!IsValidIndex(start)) {
     return std::nullopt;
   }
   std::optional<size_t> result =
-      spanpos(m_pData->span().subspan(start), str.span());
+      spanpos(data_->span().subspan(start), str.span());
   if (!result.has_value()) {
     return std::nullopt;
   }
@@ -169,12 +154,12 @@ std::optional<size_t> StringTemplate<T>::Find(StringView str,
 
 template <typename T>
 std::optional<size_t> StringTemplate<T>::ReverseFind(T ch) const {
-  if (!m_pData) {
+  if (!data_) {
     return std::nullopt;
   }
-  size_t nLength = m_pData->m_nDataLength;
+  size_t nLength = data_->data_length_;
   while (nLength--) {
-    if (m_pData->m_String[nLength] == ch) {
+    if (data_->span()[nLength] == ch) {
       return nLength;
     }
   }
@@ -183,13 +168,13 @@ std::optional<size_t> StringTemplate<T>::ReverseFind(T ch) const {
 
 template <typename T>
 size_t StringTemplate<T>::Replace(StringView oldstr, StringView newstr) {
-  if (!m_pData || oldstr.IsEmpty()) {
+  if (!data_ || oldstr.IsEmpty()) {
     return 0;
   }
   size_t count = 0;
   {
     // Limit span lifetime.
-    pdfium::span<const T> search_span = m_pData->span();
+    pdfium::span<const T> search_span = data_->span();
     while (true) {
       std::optional<size_t> found = spanpos(search_span, oldstr.span());
       if (!found.has_value()) {
@@ -202,8 +187,8 @@ size_t StringTemplate<T>::Replace(StringView oldstr, StringView newstr) {
   if (count == 0) {
     return 0;
   }
-  size_t nNewLength = m_pData->m_nDataLength +
-                      count * (newstr.GetLength() - oldstr.GetLength());
+  size_t nNewLength =
+      data_->data_length_ + count * (newstr.GetLength() - oldstr.GetLength());
   if (nNewLength == 0) {
     clear();
     return count;
@@ -211,7 +196,7 @@ size_t StringTemplate<T>::Replace(StringView oldstr, StringView newstr) {
   RetainPtr<StringData> newstr_data = StringData::Create(nNewLength);
   {
     // Spans can't outlive StringData buffers.
-    pdfium::span<const T> search_span = m_pData->span();
+    pdfium::span<const T> search_span = data_->span();
     pdfium::span<T> dest_span = newstr_data->span();
     for (size_t i = 0; i < count; i++) {
       size_t found = spanpos(search_span, oldstr.span()).value();
@@ -222,13 +207,98 @@ size_t StringTemplate<T>::Replace(StringView oldstr, StringView newstr) {
     dest_span = spancpy(dest_span, search_span);
     CHECK(dest_span.empty());
   }
-  m_pData = std::move(newstr_data);
+  data_ = std::move(newstr_data);
   return count;
 }
 
 template <typename T>
+void StringTemplate<T>::Trim(T ch) {
+  TrimFront(ch);
+  TrimBack(ch);
+}
+
+template <typename T>
+void StringTemplate<T>::TrimFront(T ch) {
+  TrimFront(StringView(ch));
+}
+
+template <typename T>
+void StringTemplate<T>::TrimBack(T ch) {
+  TrimBack(StringView(ch));
+}
+
+template <typename T>
+void StringTemplate<T>::Trim(StringView targets) {
+  TrimFront(targets);
+  TrimBack(targets);
+}
+
+template <typename T>
+void StringTemplate<T>::TrimFront(StringView targets) {
+  if (!data_ || targets.IsEmpty()) {
+    return;
+  }
+
+  size_t len = GetLength();
+  if (len == 0) {
+    return;
+  }
+
+  size_t pos = 0;
+  while (pos < len) {
+    size_t i = 0;
+    while (i < targets.GetLength() && targets.CharAt(i) != data_->span()[pos]) {
+      i++;
+    }
+    if (i == targets.GetLength()) {
+      break;
+    }
+    pos++;
+  }
+  if (!pos) {
+    return;
+  }
+
+  ReallocBeforeWrite(len);
+  size_t nDataLength = len - pos;
+  // Move the terminating NUL as well.
+  fxcrt::spanmove(data_->capacity_span(),
+                  data_->capacity_span().subspan(pos, nDataLength + 1));
+  data_->data_length_ = nDataLength;
+}
+
+template <typename T>
+void StringTemplate<T>::TrimBack(StringView targets) {
+  if (!data_ || targets.IsEmpty()) {
+    return;
+  }
+
+  size_t pos = GetLength();
+  if (pos == 0) {
+    return;
+  }
+
+  while (pos) {
+    size_t i = 0;
+    while (i < targets.GetLength() &&
+           targets.CharAt(i) != data_->span()[pos - 1]) {
+      i++;
+    }
+    if (i == targets.GetLength()) {
+      break;
+    }
+    pos--;
+  }
+  if (pos < data_->data_length_) {
+    ReallocBeforeWrite(data_->data_length_);
+    data_->data_length_ = pos;
+    data_->capacity_span()[data_->data_length_] = 0;
+  }
+}
+
+template <typename T>
 void StringTemplate<T>::ReallocBeforeWrite(size_t nNewLength) {
-  if (m_pData && m_pData->CanOperateInPlace(nNewLength)) {
+  if (data_ && data_->CanOperateInPlace(nNewLength)) {
     return;
   }
   if (nNewLength == 0) {
@@ -236,34 +306,37 @@ void StringTemplate<T>::ReallocBeforeWrite(size_t nNewLength) {
     return;
   }
   RetainPtr<StringData> pNewData = StringData::Create(nNewLength);
-  if (m_pData) {
-    size_t nCopyLength = std::min(m_pData->m_nDataLength, nNewLength);
-    pNewData->CopyContents({m_pData->m_String, nCopyLength});
-    pNewData->m_nDataLength = nCopyLength;
+  if (data_) {
+    size_t nCopyLength = std::min(data_->data_length_, nNewLength);
+    // SAFETY: copy of no more than data_length_ bytes.
+    pNewData->CopyContents(
+        UNSAFE_BUFFERS(pdfium::span(data_->string_, nCopyLength)));
+    pNewData->data_length_ = nCopyLength;
   } else {
-    pNewData->m_nDataLength = 0;
+    pNewData->data_length_ = 0;
   }
-  pNewData->m_String[pNewData->m_nDataLength] = 0;
-  m_pData = std::move(pNewData);
+  pNewData->capacity_span()[pNewData->data_length_] = 0;
+  data_ = std::move(pNewData);
 }
 
 template <typename T>
 void StringTemplate<T>::AllocBeforeWrite(size_t nNewLength) {
-  if (m_pData && m_pData->CanOperateInPlace(nNewLength)) {
+  if (data_ && data_->CanOperateInPlace(nNewLength)) {
     return;
   }
   if (nNewLength == 0) {
     clear();
     return;
   }
-  m_pData = StringData::Create(nNewLength);
+  data_ = StringData::Create(nNewLength);
 }
 
 template <typename T>
 void StringTemplate<T>::AssignCopy(const T* pSrcData, size_t nSrcLen) {
   AllocBeforeWrite(nSrcLen);
-  m_pData->CopyContents({pSrcData, nSrcLen});
-  m_pData->m_nDataLength = nSrcLen;
+  // SAFETY: AllocBeforeWrite() ensures `nSrcLen` bytes available.
+  data_->CopyContents(UNSAFE_BUFFERS(pdfium::span(pSrcData, nSrcLen)));
+  data_->data_length_ = nSrcLen;
 }
 
 template <typename T>
@@ -271,34 +344,35 @@ void StringTemplate<T>::Concat(const T* pSrcData, size_t nSrcLen) {
   if (!pSrcData || nSrcLen == 0) {
     return;
   }
-
-  if (!m_pData) {
-    m_pData = StringData::Create({pSrcData, nSrcLen});
+  // SAFETY: required from caller.
+  // TODO(tsepez): should be UNSAFE_BUFFER_USAGE or pass span.
+  auto src_span = UNSAFE_BUFFERS(pdfium::span(pSrcData, nSrcLen));
+  if (!data_) {
+    data_ = StringData::Create(src_span);
     return;
   }
-
-  if (m_pData->CanOperateInPlace(m_pData->m_nDataLength + nSrcLen)) {
-    m_pData->CopyContentsAt(m_pData->m_nDataLength, {pSrcData, nSrcLen});
-    m_pData->m_nDataLength += nSrcLen;
+  if (data_->CanOperateInPlace(data_->data_length_ + nSrcLen)) {
+    data_->CopyContentsAt(data_->data_length_, src_span);
+    data_->data_length_ += nSrcLen;
     return;
   }
-
-  size_t nConcatLen = std::max(m_pData->m_nDataLength / 2, nSrcLen);
+  // Increase size by at least 50% to amortize repeated concatenations.
+  size_t nGrowLen = std::max(data_->data_length_ / 2, nSrcLen);
   RetainPtr<StringData> pNewData =
-      StringData::Create(m_pData->m_nDataLength + nConcatLen);
-  pNewData->CopyContents(*m_pData);
-  pNewData->CopyContentsAt(m_pData->m_nDataLength, {pSrcData, nSrcLen});
-  pNewData->m_nDataLength = m_pData->m_nDataLength + nSrcLen;
-  m_pData = std::move(pNewData);
+      StringData::Create(data_->data_length_ + nGrowLen);
+  pNewData->CopyContents(*data_);
+  pNewData->CopyContentsAt(data_->data_length_, src_span);
+  pNewData->data_length_ = data_->data_length_ + nSrcLen;
+  data_ = std::move(pNewData);
 }
 
 template <typename T>
 void StringTemplate<T>::clear() {
-  if (m_pData && m_pData->CanOperateInPlace(0)) {
-    m_pData->m_nDataLength = 0;
+  if (data_ && data_->CanOperateInPlace(0)) {
+    data_->data_length_ = 0;
     return;
   }
-  m_pData.Reset();
+  data_.Reset();
 }
 
 // Instantiate.

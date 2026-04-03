@@ -5,9 +5,11 @@
 #include "quiche/quic/core/quic_crypto_client_stream.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
+#include "openssl/ssl.h"
 #include "quiche/quic/core/crypto/crypto_protocol.h"
 #include "quiche/quic/core/crypto/crypto_utils.h"
 #include "quiche/quic/core/crypto/null_encrypter.h"
@@ -35,13 +37,18 @@ QuicCryptoClientStream::QuicCryptoClientStream(
     : QuicCryptoClientStreamBase(session) {
   QUICHE_DCHECK_EQ(Perspective::IS_CLIENT,
                    session->connection()->perspective());
-  switch (session->connection()->version().handshake_protocol) {
-    case PROTOCOL_QUIC_CRYPTO:
+  switch (session->connection()->version().transport_version) {
+    case QUIC_VERSION_UNSUPPORTED:
+      QUIC_BUG(quic_bug_10296_1)
+          << "Attempting to create QuicCryptoClientStream for unknown "
+             "handshake protocol";
+      break;
+    case QUIC_VERSION_46:
       handshaker_ = std::make_unique<QuicCryptoClientHandshaker>(
           server_id, this, session, std::move(verify_context), crypto_config,
           proof_handler);
       break;
-    case PROTOCOL_TLS1_3: {
+    default: {
       auto handshaker = std::make_unique<TlsClientHandshaker>(
           server_id, this, session, std::move(verify_context), crypto_config,
           proof_handler, has_application_state);
@@ -49,10 +56,6 @@ QuicCryptoClientStream::QuicCryptoClientStream(
       handshaker_ = std::move(handshaker);
       break;
     }
-    case PROTOCOL_UNSUPPORTED:
-      QUIC_BUG(quic_bug_10296_1)
-          << "Attempting to create QuicCryptoClientStream for unknown "
-             "handshake protocol";
   }
 }
 
@@ -137,6 +140,15 @@ std::string QuicCryptoClientStream::chlo_hash() const {
   return handshaker_->chlo_hash();
 }
 
+bool QuicCryptoClientStream::MatchedTrustAnchorIdForTesting() const {
+  return handshaker_->MatchedTrustAnchorIdForTesting();
+}
+
+std::optional<ssl_compliance_policy_t>
+QuicCryptoClientStream::SslCompliancePolicyForTesting() const {
+  return handshaker_->SslCompliancePolicyForTesting();
+}
+
 void QuicCryptoClientStream::OnOneRttPacketAcknowledged() {
   handshaker_->OnOneRttPacketAcknowledged();
 }
@@ -145,9 +157,9 @@ void QuicCryptoClientStream::OnHandshakePacketSent() {
   handshaker_->OnHandshakePacketSent();
 }
 
-void QuicCryptoClientStream::OnConnectionClosed(QuicErrorCode error,
-                                                ConnectionCloseSource source) {
-  handshaker_->OnConnectionClosed(error, source);
+void QuicCryptoClientStream::OnConnectionClosed(
+    const QuicConnectionCloseFrame& frame, ConnectionCloseSource source) {
+  handshaker_->OnConnectionClosed(frame.quic_error_code, source);
 }
 
 void QuicCryptoClientStream::OnHandshakeDoneReceived() {

@@ -13,8 +13,7 @@
 #include "components/crx_file/id_util.h"
 #include "components/search_engines/search_engines_pref_names.h"
 
-BrandcodedDefaultSettings::BrandcodedDefaultSettings() {
-}
+BrandcodedDefaultSettings::BrandcodedDefaultSettings() = default;
 
 BrandcodedDefaultSettings::BrandcodedDefaultSettings(const std::string& prefs) {
   if (!prefs.empty()) {
@@ -34,10 +33,9 @@ BrandcodedDefaultSettings::BrandcodedDefaultSettings(const std::string& prefs) {
   }
 }
 
-BrandcodedDefaultSettings::~BrandcodedDefaultSettings() {
-}
+BrandcodedDefaultSettings::~BrandcodedDefaultSettings() = default;
 
-std::optional<base::Value::List>
+std::optional<base::ListValue>
 BrandcodedDefaultSettings::GetSearchProviderOverrides() const {
   return ExtractList(prefs::kSearchProviderOverrides);
 }
@@ -61,7 +59,7 @@ std::optional<bool> BrandcodedDefaultSettings::GetShowHomeButton() const {
 bool BrandcodedDefaultSettings::GetExtensions(
     std::vector<std::string>* extension_ids) const {
   DCHECK(extension_ids);
-  const base::Value::Dict* extensions = master_dictionary_.FindDictByDottedPath(
+  const base::DictValue* extensions = master_dictionary_.FindDictByDottedPath(
       installer::initial_preferences::kExtensionsBlock);
   if (extensions) {
     for (const auto extension_id : *extensions) {
@@ -86,14 +84,14 @@ bool BrandcodedDefaultSettings::GetRestoreOnStartup(
   return true;
 }
 
-std::optional<base::Value::List>
+std::optional<base::ListValue>
 BrandcodedDefaultSettings::GetUrlsToRestoreOnStartup() const {
   return ExtractList(prefs::kURLsToRestoreOnStartup);
 }
 
-std::optional<base::Value::List> BrandcodedDefaultSettings::ExtractList(
+std::optional<base::ListValue> BrandcodedDefaultSettings::ExtractList(
     const char* pref_name) const {
-  const base::Value::List* value =
+  const base::ListValue* value =
       master_dictionary_.FindListByDottedPath(pref_name);
   if (value && !value->empty()) {
     return value->Clone();

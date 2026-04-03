@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/values.h"
@@ -125,7 +126,7 @@ class BluetoothSocketListenFunction : public BluetoothSocketAsyncApiFunction {
       const std::optional<std::string>& name,
       device::BluetoothAdapter::CreateServiceCallback callback,
       device::BluetoothAdapter::CreateServiceErrorCallback error_callback) = 0;
-  virtual base::Value::List CreateResults() = 0;
+  virtual base::ListValue CreateResults() = 0;
 
   virtual int socket_id() const = 0;
   virtual const std::string& uuid() const = 0;
@@ -163,7 +164,7 @@ class BluetoothSocketListenUsingRfcommFunction
                      device::BluetoothAdapter::CreateServiceCallback callback,
                      device::BluetoothAdapter::CreateServiceErrorCallback
                          error_callback) override;
-  base::Value::List CreateResults() override;
+  base::ListValue CreateResults() override;
 
  protected:
   ~BluetoothSocketListenUsingRfcommFunction() override;
@@ -191,7 +192,7 @@ class BluetoothSocketListenUsingL2capFunction
                      device::BluetoothAdapter::CreateServiceCallback callback,
                      device::BluetoothAdapter::CreateServiceErrorCallback
                          error_callback) override;
-  base::Value::List CreateResults() override;
+  base::ListValue CreateResults() override;
 
  protected:
   ~BluetoothSocketListenUsingL2capFunction() override;
@@ -213,7 +214,7 @@ class BluetoothSocketAbstractConnectFunction :
   ResponseAction Run() override;
 
   // Subclasses should implement this method to connect to the service
-  // registered with |uuid| on the |device|.
+  // registered with `uuid` on the `device`.
   virtual void ConnectToService(device::BluetoothDevice* device,
                                 const device::BluetoothUUID& uuid) = 0;
 

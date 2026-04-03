@@ -15,16 +15,14 @@ limitations under the License.
 
 #include "tensorflow/lite/tools/delegates/compatibility/common/delegate_compatibility_checker_base.h"
 
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <utility>
-#include <vector>
+#include <cstdlib>
 
 #include "absl/status/status.h"
-#include "tensorflow/lite/core/c/common.h"
-#include "tensorflow/lite/interpreter.h"
+#include "tensorflow/lite/model_builder.h"
+#include "tensorflow/lite/schema/schema_generated.h"
 #include "tensorflow/lite/tools/delegates/compatibility/common/delegate_compatibility_checker_util.h"
+#include "tensorflow/lite/tools/delegates/compatibility/protos/compatibility_result.pb.h"
+#include "tensorflow/lite/tools/versioning/op_signature.h"
 
 namespace tflite {
 namespace tools {
@@ -56,9 +54,7 @@ absl::Status DelegateCompatibilityCheckerBase::checkOpCompatibilityOffline(
     proto::OpCompatibilityResult* op_result) {
   OpSignature op_sig = tflite::GetOpSignature(op_code, op, subgraph, model);
   auto status = checkOpSigCompatibility(op_sig, op_result);
-  if (op_sig.builtin_data) {
-    free(op_sig.builtin_data);
-  }
+  free(op_sig.builtin_data);
   return status;
 }
 

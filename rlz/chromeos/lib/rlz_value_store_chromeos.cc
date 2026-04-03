@@ -5,11 +5,11 @@
 #include "rlz/chromeos/lib/rlz_value_store_chromeos.h"
 
 #include <algorithm>
+#include <string_view>
 #include <tuple>
 
 #include "base/base_paths.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/functional/bind.h"
@@ -18,9 +18,9 @@
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/notimplemented.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
@@ -158,8 +158,8 @@ void OnSetRlzPingSent(int retry_count, bool success) {
 std::optional<base::Value> CopyWithoutEmptyChildren(const base::Value& value) {
   switch (value.type()) {
     case base::Value::Type::DICT: {
-      base::Value::Dict dict;
-      const base::Value::Dict& dict_in = value.GetDict();
+      base::DictValue dict;
+      const base::DictValue& dict_in = value.GetDict();
 
       for (auto it = dict_in.begin(); it != dict_in.end(); ++it) {
         std::optional<base::Value> item_copy =
@@ -175,7 +175,7 @@ std::optional<base::Value> CopyWithoutEmptyChildren(const base::Value& value) {
     }
 
     case base::Value::Type::LIST: {
-      base::Value::List list;
+      base::ListValue list;
       list.reserve(value.GetList().size());
 
       for (const base::Value& item : value.GetList()) {
@@ -271,7 +271,7 @@ bool RlzValueStoreChromeOS::ReadAccessPointRlz(AccessPoint access_point,
   const std::string* rlz_value = rlz_store_.FindStringByDottedPath(
       GetKeyName(kAccessPointKey, access_point));
   if (rlz_value && rlz_value->size() < rlz_size) {
-    strncpy(rlz, rlz_value->c_str(), rlz_size);
+    UNSAFE_TODO(strncpy(rlz, rlz_value->c_str(), rlz_size));
     return true;
   }
   if (rlz_size > 0)
@@ -317,7 +317,7 @@ bool RlzValueStoreChromeOS::ReadProductEvents(
     Product product,
     std::vector<std::string>* events) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  const base::Value::List* events_list =
+  const base::ListValue* events_list =
       rlz_store_.FindListByDottedPath(GetKeyName(kProductEventKey, product));
   if (!events_list)
     return false;
@@ -359,8 +359,9 @@ bool RlzValueStoreChromeOS::AddStatefulEvent(Product product,
                                              const char* event_rlz) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (strcmp(event_rlz, "CAF") == 0)
+  if (UNSAFE_TODO(strcmp(event_rlz, "CAF")) == 0) {
     SetRlzPingSent(/*retry_count=*/0);
+  }
 
   return AddValueToList(GetKeyName(kStatefulEventKey, product),
                         base::Value(event_rlz));
@@ -373,10 +374,10 @@ bool RlzValueStoreChromeOS::IsStatefulEvent(Product product,
   const bool event_exists = ListContainsValue(
       GetKeyName(kStatefulEventKey, product), base::Value(event_rlz));
 
-  if (strcmp(event_rlz, "CAF") == 0) {
+  if (UNSAFE_TODO(strcmp(event_rlz, "CAF")) == 0) {
     ash::system::StatisticsProvider* stats =
         ash::system::StatisticsProvider::GetInstance();
-    if (const std::optional<base::StringPiece> should_send_rlz_ping_value =
+    if (const std::optional<std::string_view> should_send_rlz_ping_value =
             stats->GetMachineStatistic(ash::system::kShouldSendRlzPingKey)) {
       if (should_send_rlz_ping_value ==
           ash::system::kShouldSendRlzPingValueFalse) {
@@ -453,9 +454,7 @@ void RlzValueStoreChromeOS::WriteStore() {
   base::Value copy = CopyWithoutEmptyChildren(base::Value(rlz_store_.Clone()))
                          .value_or(base::Value(base::Value::Type::DICT));
   if (!serializer.Serialize(copy)) {
-    LOG(ERROR) << "Failed to serialize RLZ data";
-    NOTREACHED();
-    return;
+    NOTREACHED() << "Failed to serialize RLZ data";
   }
   if (!base::ImportantFileWriter::WriteFileAtomically(store_path_, json_data))
     LOG(ERROR) << "Error writing RLZ store";
@@ -463,14 +462,14 @@ void RlzValueStoreChromeOS::WriteStore() {
 
 bool RlzValueStoreChromeOS::AddValueToList(const std::string& list_name,
                                            base::Value value) {
-  base::Value::List* list = rlz_store_.FindListByDottedPath(list_name);
+  base::ListValue* list = rlz_store_.FindListByDottedPath(list_name);
   if (!list) {
     list =
         &rlz_store_
              .SetByDottedPath(list_name, base::Value(base::Value::Type::LIST))
              ->GetList();
   }
-  if (!base::Contains(*list, value)) {
+  if (!std::ranges::contains(*list, value)) {
     list->Append(std::move(value));
   }
   return true;
@@ -478,7 +477,7 @@ bool RlzValueStoreChromeOS::AddValueToList(const std::string& list_name,
 
 bool RlzValueStoreChromeOS::RemoveValueFromList(const std::string& list_name,
                                                 const base::Value& to_remove) {
-  base::Value::List* list = rlz_store_.FindListByDottedPath(list_name);
+  base::ListValue* list = rlz_store_.FindListByDottedPath(list_name);
   if (!list)
     return false;
 
@@ -490,11 +489,11 @@ bool RlzValueStoreChromeOS::RemoveValueFromList(const std::string& list_name,
 
 bool RlzValueStoreChromeOS::ListContainsValue(const std::string& list_name,
                                               const base::Value& value) const {
-  const base::Value::List* list = rlz_store_.FindListByDottedPath(list_name);
+  const base::ListValue* list = rlz_store_.FindListByDottedPath(list_name);
   if (!list)
     return false;
 
-  return base::Contains(*list, value);
+  return std::ranges::contains(*list, value);
 }
 
 bool RlzValueStoreChromeOS::HasAccessPointRlz(AccessPoint access_point) const {

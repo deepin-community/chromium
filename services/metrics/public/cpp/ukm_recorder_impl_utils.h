@@ -5,7 +5,8 @@
 #ifndef SERVICES_METRICS_PUBLIC_CPP_UKM_RECORDER_IMPL_UTILS_H_
 #define SERVICES_METRICS_PUBLIC_CPP_UKM_RECORDER_IMPL_UTILS_H_
 
-#include "base/metrics/histogram_macros.h"
+#include <stdint.h>
+
 #include "services/metrics/public/cpp/metrics_export.h"
 
 namespace ukm {
@@ -24,7 +25,8 @@ enum class DroppedDataReason {
   EXTENSION_NOT_SYNCED = 7,
   NOT_MATCHED = 8,
   EMPTY_URL = 9,
-  REJECTED_BY_FILTER = 10,
+  // Not used anymore:
+  // REJECTED_BY_FILTER = 10,
   SAMPLING_UNCONFIGURED = 11,
   MSBB_CONSENT_DISABLED = 12,
   APPS_CONSENT_DISABLED = 13,
@@ -36,6 +38,8 @@ enum class DroppedDataReason {
 
 void METRICS_EXPORT RecordDroppedEntry(uint64_t event_hash,
                                        DroppedDataReason reason);
+
+void METRICS_EXPORT RecordDroppedWebDXFeaturesSet(DroppedDataReason reason);
 
 }  // namespace ukm
 

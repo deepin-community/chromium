@@ -6,6 +6,8 @@
 
 #include <stddef.h>
 
+#include <array>
+
 #include "base/check.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
@@ -52,18 +54,19 @@ struct ProxyModeValidationEntry {
 
 // List of entries determining which proxy policies can be specified, depending
 // on the ProxyMode.
-constexpr ProxyModeValidationEntry kProxyModeValidationMap[] = {
-    {ProxyPrefs::kDirectProxyModeName, false, false, false, false,
-     IDS_POLICY_PROXY_MODE_DISABLED_ERROR},
-    {ProxyPrefs::kAutoDetectProxyModeName, false, false, false, false,
-     IDS_POLICY_PROXY_MODE_AUTO_DETECT_ERROR},
-    {ProxyPrefs::kPacScriptProxyModeName, true, true, false, false,
-     IDS_POLICY_PROXY_MODE_PAC_URL_ERROR},
-    {ProxyPrefs::kFixedServersProxyModeName, false, false, true, true,
-     IDS_POLICY_PROXY_MODE_FIXED_SERVERS_ERROR},
-    {ProxyPrefs::kSystemProxyModeName, false, false, false, false,
-     IDS_POLICY_PROXY_MODE_SYSTEM_ERROR},
-};
+constexpr auto kProxyModeValidationMap =
+    std::to_array<ProxyModeValidationEntry>({
+        {ProxyPrefs::kDirectProxyModeName, false, false, false, false,
+         IDS_POLICY_PROXY_MODE_DISABLED_ERROR},
+        {ProxyPrefs::kAutoDetectProxyModeName, false, false, false, false,
+         IDS_POLICY_PROXY_MODE_AUTO_DETECT_ERROR},
+        {ProxyPrefs::kPacScriptProxyModeName, true, true, false, false,
+         IDS_POLICY_PROXY_MODE_PAC_URL_ERROR},
+        {ProxyPrefs::kFixedServersProxyModeName, false, false, true, true,
+         IDS_POLICY_PROXY_MODE_FIXED_SERVERS_ERROR},
+        {ProxyPrefs::kSystemProxyModeName, false, false, false, false,
+         IDS_POLICY_PROXY_MODE_SYSTEM_ERROR},
+    });
 
 // Cannot be constexpr because the values of the strings are defined in an
 // automatically generated .cc file.
@@ -76,7 +79,7 @@ const base::Value* GetProxyPolicyValue(const base::Value* value,
   if (!value) {
     return nullptr;
   }
-  const base::Value::Dict* settings = value->GetIfDict();
+  const base::DictValue* settings = value->GetIfDict();
   if (!settings) {
     return nullptr;
   }
@@ -195,7 +198,7 @@ base::Value RemapProxyPolicies(const PolicyMap& policies) {
   PolicyMap::Entry current_priority;  // Defaults to the lowest priority.
   policy::PolicySource inherited_source =
       policy::POLICY_SOURCE_ENTERPRISE_DEFAULT;
-  base::Value::Dict proxy_settings;
+  base::DictValue proxy_settings;
   for (auto* policy : kDeprecatedProxyPolicies) {
     const PolicyMap::Entry* entry = policies.Get(policy);
     if (!entry)
@@ -231,9 +234,9 @@ base::Value RemapProxyPolicies(const PolicyMap& policies) {
 // policies, but the providers then expose them through a unified
 // DictionaryValue.
 
-ProxyPolicyHandler::ProxyPolicyHandler() {}
+ProxyPolicyHandler::ProxyPolicyHandler() = default;
 
-ProxyPolicyHandler::~ProxyPolicyHandler() {}
+ProxyPolicyHandler::~ProxyPolicyHandler() = default;
 
 bool ProxyPolicyHandler::CheckPolicySettings(const PolicyMap& policies,
                                              PolicyErrorMap* errors) {
@@ -342,14 +345,13 @@ void ProxyPolicyHandler::ApplyPolicySettings(const PolicyMap& policies,
         proxy_mode = ProxyPrefs::MODE_SYSTEM;
         break;
       default:
-        proxy_mode = ProxyPrefs::MODE_DIRECT;
         NOTREACHED();
     }
   } else {
     return;
   }
 
-  auto set_proxy_pref_value = [&prefs](base::Value::Dict dict) {
+  auto set_proxy_pref_value = [&prefs](base::DictValue dict) {
     prefs->SetValue(prefs::kProxy, base::Value(std::move(dict)));
   };
 

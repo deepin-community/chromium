@@ -20,21 +20,21 @@
 #include "ash/shelf/shelf_component.h"
 #include "ash/shelf/shelf_layout_manager_observer.h"
 #include "ash/shelf/shelf_observer.h"
+#include "ash/wm/overview/overview_observer.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
 enum class AnimationChangeType;
-class ApplicationDragAndDropHost;
 class DragHandle;
-class FocusCycler;
 class HotseatWidget;
 class LoginShelfView;
 class Shelf;
 class ShelfLayoutManager;
 class ShelfNavigationWidget;
 class ShelfView;
+class ShelfWidgetDelegateView;
 class StatusAreaWidget;
 
 // The ShelfWidget manages the shelf view (which contains the shelf icons) and
@@ -44,7 +44,8 @@ class ASH_EXPORT ShelfWidget : public SessionObserver,
                                public ShelfComponent,
                                public ShelfLayoutManagerObserver,
                                public ShelfObserver,
-                               public views::Widget {
+                               public views::Widget,
+                               public OverviewObserver {
  public:
   explicit ShelfWidget(Shelf* shelf);
 
@@ -82,10 +83,6 @@ class ASH_EXPORT ShelfWidget : public SessionObserver,
 
   bool IsShowingMenu() const;
 
-  // Sets the focus cycler. Also adds the shelf to the cycle.
-  void SetFocusCycler(FocusCycler* focus_cycler);
-  FocusCycler* GetFocusCycler();
-
   // See Shelf::GetScreenBoundsOfItemIconForWindow().
   gfx::Rect GetScreenBoundsOfItemIconForWindow(aura::Window* window);
 
@@ -93,9 +90,6 @@ class ASH_EXPORT ShelfWidget : public SessionObserver,
   // not include portions of the shelf that extend beyond its own display,
   // as those are not visible to the user.
   gfx::Rect GetVisibleShelfBounds() const;
-
-  // Returns the ApplicationDragAndDropHost for this shelf.
-  ApplicationDragAndDropHost* GetDragAndDropHostForAppList();
 
   // Fetch the LoginShelfView instance.
   // TODO(https://crbug.com/1343114): remove this method after the login shelf
@@ -113,6 +107,10 @@ class ASH_EXPORT ShelfWidget : public SessionObserver,
   gfx::Rect GetTargetBounds() const override;
   void UpdateLayout(bool animate) override;
   void UpdateTargetBoundsForGesture(int shelf_position) override;
+
+  // OverviewObserver:
+  void OnOverviewModeStarting() override;
+  void OnOverviewModeEnding(OverviewSession* overview_session) override;
 
   // TODO(manucornet): Remove this method when all this widget's layout
   // logic is part of this class.
@@ -181,8 +179,7 @@ class ASH_EXPORT ShelfWidget : public SessionObserver,
   }
 
  private:
-  class DelegateView;
-  friend class DelegateView;
+  friend class ShelfWidgetDelegateView;
 
   // Hides shelf widget if IsVisible() returns true.
   void HideIfShown();
@@ -211,7 +208,7 @@ class ASH_EXPORT ShelfWidget : public SessionObserver,
 
   // |delegate_view_| is the contents view of this widget and is cleaned up
   // during CloseChildWindows of the associated RootWindowController.
-  raw_ptr<DelegateView, DanglingUntriaged> delegate_view_;
+  raw_ptr<ShelfWidgetDelegateView, DanglingUntriaged> delegate_view_;
 
   // Animates the shelf background to/from the hotseat background during hotseat
   // transitions.

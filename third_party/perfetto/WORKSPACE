@@ -12,20 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This file is used only in standalone builds. This file is ignored both in
-# embedder builds (i.e. when other projects pull perfetto under /third_party/
-# or similar) and in google internal builds.
+# This file is intentionally minimal. Standalone Perfetto builds use bzlmod
+# (see MODULE.bazel). This WORKSPACE file exists only for compatibility with
+# older Bazel versions that don't support bzlmod.
+#
+# Embedders who depend on Perfetto via WORKSPACE should use deps.bzl:
+#   load("@perfetto//bazel:deps.bzl", "perfetto_deps")
+#   perfetto_deps()
 
 workspace(name = "perfetto")
-
-new_local_repository(
-    name = "perfetto_cfg",
-    path = "bazel/standalone",
-    build_file_content = ""
-)
-
-load("@perfetto//bazel:deps.bzl", "perfetto_deps")
-perfetto_deps()
-
-load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")
-protobuf_deps()

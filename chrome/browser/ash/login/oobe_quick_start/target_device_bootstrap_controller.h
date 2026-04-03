@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
@@ -19,11 +20,10 @@
 #include "chrome/browser/ash/login/oobe_quick_start/connectivity/qr_code.h"
 #include "chrome/browser/ash/login/oobe_quick_start/connectivity/target_device_connection_broker.h"
 #include "chrome/browser/ash/login/oobe_quick_start/second_device_auth_broker.h"
-#include "chrome/browser/nearby_sharing/public/cpp/nearby_connections_manager.h"
 #include "chromeos/ash/components/quick_start/types.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "mojo/public/cpp/bindings/shared_remote.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 
 namespace ash::quick_start {
 
@@ -71,22 +71,25 @@ class TargetDeviceBootstrapController
 
     std::string email;
     std::string auth_code;
-    std::string gaia_id;
+    GaiaId gaia_id;
     // TODO(b/318664950) - Remove once the server starts sending the gaia_id.
     std::string access_token;
     std::string refresh_token;
+    // The URL path and parameters to be used when showing the 'fallback' URL
+    // flow of QuickStart. Only exists when Gaia demands an extra verification.
+    std::optional<std::string> fallback_url_path;
   };
 
   using ConnectionClosedReason =
       TargetDeviceConnectionBroker::ConnectionClosedReason;
 
-  using Payload = absl::variant<absl::monostate,
-                                ErrorCode,
-                                QRCode::PixelData,
-                                PinString,
-                                EmailString,
-                                mojom::WifiCredentials,
-                                GaiaCredentials>;
+  using Payload = std::variant<std::monostate,
+                               ErrorCode,
+                               QRCode,
+                               PinString,
+                               EmailString,
+                               mojom::WifiCredentials,
+                               GaiaCredentials>;
 
   struct Status {
     Status();
@@ -103,7 +106,7 @@ class TargetDeviceBootstrapController
         delete;
     virtual ~AccessibilityManagerWrapper() = default;
 
-    virtual bool IsSpokenFeedbackEnabled() const = 0;
+    virtual bool AllowQRCodeUX() const = 0;
   };
 
   class Observer : public base::CheckedObserver {
@@ -164,7 +167,6 @@ class TargetDeviceBootstrapController
   void OnConnectionRejected() override;
   void OnConnectionClosed(ConnectionClosedReason reason) override;
 
-  std::string GetDiscoverableName();
   void AttemptWifiCredentialTransfer();
 
   // The first step in the account transfer is to request basic account info via
@@ -175,12 +177,17 @@ class TargetDeviceBootstrapController
   // Initiates the actual account transfer via a cryptographic handshake between
   // the two devices in conjunction with Google servers.
   void AttemptGoogleAccountTransfer();
+  static void SetGaiaCredentialsResponseForTesting(GaiaCredentials test_creds);
 
   // Called when the flow is aborted due to an error, or cancelled by the user.
   void Cleanup();
 
   // Called when account transfer is complete.
   void OnSetupComplete();
+
+  bool did_transfer_wifi() const {
+    return session_context_.did_transfer_wifi();
+  }
 
  private:
   friend class TargetDeviceBootstrapControllerTest;

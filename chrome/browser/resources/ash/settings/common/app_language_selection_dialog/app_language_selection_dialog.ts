@@ -16,20 +16,18 @@ import 'chrome://resources/ash/common/cr_elements/cr_shared_style.css.js';
 import './app_language_selection_item.js';
 import '../../settings_shared.css.js';
 
-import {App, Locale} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
-import {getAppIcon} from 'chrome://resources/cr_components/app_management/util.js';
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
-import {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
-import {CrSearchFieldElement} from 'chrome://resources/ash/common/cr_elements/cr_search_field/cr_search_field.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
+import type {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
+import type {CrSearchFieldElement} from 'chrome://resources/ash/common/cr_elements/cr_search_field/cr_search_field.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
-import {DomRepeatEvent, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import type {App, Locale} from 'chrome://resources/cr_components/app_management/app_management.mojom-webui.js';
+import {getAppIcon} from 'chrome://resources/cr_components/app_management/util.js';
+import {type DomRepeatEvent, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {AppManagementBrowserProxy} from '../app_management/browser_proxy.js';
 
 import {getTemplate} from './app_language_selection_dialog.html.js';
 
-// Keep this in sync with tools/metrics/histograms/metadata/arc/histograms.xml
-// Arc.AppLanguageSwitch.{SettingsPage}.TargetLanguage.
 export enum AppLanguageSelectionDialogEntryPoint {
   APPS_MANAGEMENT_PAGE = 'AppsManagementPage',
   LANGUAGES_PAGE = 'LanguagesPage',
@@ -92,9 +90,6 @@ export class AppLanguageSelectionDialogElement extends
         this.app.id,
         this.selectedLanguage_!.localeTag,
     );
-    chrome.metricsPrivate.recordSparseValueWithHashMetricName(
-        `Arc.AppLanguageSwitch.${this.entryPoint}.TargetLanguage`,
-        this.selectedLanguage_!.localeTag);
     this.$.dialog.close();
   }
 

@@ -32,7 +32,6 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_FILEAPI_FILE_READER_LOADER_H_
 
 #include "base/dcheck_is_on.h"
-#include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom-blink.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -96,8 +95,27 @@ class CORE_EXPORT FileReaderLoader : public GarbageCollected<FileReaderLoader>,
 
  private:
   void StartInternal(scoped_refptr<BlobDataHandle>, bool is_sync);
+
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class FailureType {
+    kMojoPipeCreation = 0,
+    kSyncDataNotAllLoaded = 1,
+    kSyncOnCompleteNotReceived = 2,
+    kBackendReadError = 3,
+    kReadSizesIncorrect = 4,
+    kDataPipeNotReadableWithBytesLeft = 5,
+    kMojoPipeClosedEarly = 6,
+    // Any MojoResult error we aren't expecting during data pipe reading falls
+    // into this bucket. If there are a large number of errors reported here,
+    // then there can be a new enumeration reported for mojo pipe errors.
+    kMojoPipeUnexpectedReadError = 7,
+    kClientFailure = 8,
+    kMaxValue = kClientFailure,
+  };
+
   void Cleanup();
-  void Failed(FileErrorCode);
+  void Failed(FileErrorCode, FailureType type);
 
   bool IsSyncLoad() { return is_sync_; }
 

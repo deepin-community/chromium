@@ -2,40 +2,45 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import {BrowserProxy} from './browser_proxy.js';
-import {getTemplate} from './deprecated_apps_link.html.js';
+import {getCss} from './deprecated_apps_link.css.js';
+import {getHtml} from './deprecated_apps_link.html.js';
 
-export class DeprecatedAppsLinkElement extends PolymerElement {
+export class DeprecatedAppsLinkElement extends CrLitElement {
   static get is() {
     return 'deprecated-apps-link';
   }
 
-  static get properties() {
+  static override get styles() {
+    return getCss();
+  }
+
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
-      deprecationLinkString: String,
+      deprecationLinkString: {type: String},
     };
   }
 
-  deprecationLinkString: string = '';
-  display: string = 'none';
-
-  static get template() {
-    return getTemplate();
-  }
+  accessor deprecationLinkString: string = '';
+  display: boolean = false;
 
   constructor() {
     super();
 
     BrowserProxy.getInstance().handler.getDeprecationLinkString().then(
         result => {
-          this.display = result.linkString === '' ? 'none' : 'inline-flex';
+          this.display = !!result.linkString && result.linkString.length > 0;
           this.deprecationLinkString = result.linkString;
         });
   }
 
-  private linkClicked_() {
+  protected onLinkClick_() {
     BrowserProxy.getInstance().handler.launchDeprecatedAppDialog();
   }
 }

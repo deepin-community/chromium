@@ -1,34 +1,34 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 export const enum Category {
-  Animation = 'animation',
-  AuctionWorklet = 'auction-worklet',
-  Canvas = 'canvas',
-  Clipboard = 'clipboard',
-  Control = 'control',
-  Device = 'device',
-  DomMutation = 'dom-mutation',
-  DragDrop = 'drag-drop',
-  Geolocation = 'geolocation',
-  Keyboard = 'keyboard',
-  Load = 'load',
-  Media = 'media',
-  Mouse = 'mouse',
-  Notification = 'notification',
-  Parse = 'parse',
-  PictureInPicture = 'picture-in-picture',
-  Pointer = 'pointer',
-  Script = 'script',
-  SharedStorageWorklet = 'shared-storage-worklet',
-  Timer = 'timer',
-  Touch = 'touch',
-  TrustedTypeViolation = 'trusted-type-violation',
-  WebAudio = 'web-audio',
-  Window = 'window',
-  Worker = 'worker',
-  Xhr = 'xhr',
+  ANIMATION = 'animation',
+  AUCTION_WORKLET = 'auction-worklet',
+  CANVAS = 'canvas',
+  CLIPBOARD = 'clipboard',
+  CONTROL = 'control',
+  DEVICE = 'device',
+  DOM_MUTATION = 'dom-mutation',
+  DRAG_DROP = 'drag-drop',
+  GEOLOCATION = 'geolocation',
+  KEYBOARD = 'keyboard',
+  LOAD = 'load',
+  MEDIA = 'media',
+  MOUSE = 'mouse',
+  NOTIFICATION = 'notification',
+  PARSE = 'parse',
+  PICTURE_IN_PICTURE = 'picture-in-picture',
+  POINTER = 'pointer',
+  SCRIPT = 'script',
+  SHARED_STORAGE_WORKLET = 'shared-storage-worklet',
+  TIMER = 'timer',
+  TOUCH = 'touch',
+  TRUSTED_TYPE_VIOLATION = 'trusted-type-violation',
+  WEB_AUDIO = 'web-audio',
+  WINDOW = 'window',
+  WORKER = 'worker',
+  XHR = 'xhr',
 }
 
 export class CategorizedBreakpoint {
@@ -42,12 +42,12 @@ export class CategorizedBreakpoint {
   readonly name: string;
 
   readonly #category: Category;
-  private enabledInternal: boolean;
+  #enabled: boolean;
 
   constructor(category: Category, name: string) {
     this.#category = category;
     this.name = name;
-    this.enabledInternal = false;
+    this.#enabled = false;
   }
 
   category(): Category {
@@ -55,10 +55,10 @@ export class CategorizedBreakpoint {
   }
 
   enabled(): boolean {
-    return this.enabledInternal;
+    return this.#enabled;
   }
 
   setEnabled(enabled: boolean): void {
-    this.enabledInternal = enabled;
+    this.#enabled = enabled;
   }
 }

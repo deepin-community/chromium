@@ -4,9 +4,14 @@
 // found in the LICENSE file.
 //
 // CLImage.cpp: Implements the cl::Image class.
+//
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "libANGLE/CLImage.h"
-
+#include "libANGLE/CLContext.h"
 #include "libANGLE/cl_utils.h"
 
 #include <cstring>
@@ -65,15 +70,15 @@ angle::Result Image::getInfo(ImageInfo name,
             copySize  = sizeof(mDesc.width);
             break;
         case ImageInfo::Height:
-            copyValue = &mDesc.height;
+            copyValue = Is1DImage(mDesc.type) ? &valSizeT : &mDesc.height;
             copySize  = sizeof(mDesc.height);
             break;
         case ImageInfo::Depth:
-            copyValue = &mDesc.depth;
+            copyValue = Is3DImage(mDesc.type) ? &mDesc.depth : &valSizeT;
             copySize  = sizeof(mDesc.depth);
             break;
         case ImageInfo::ArraySize:
-            copyValue = &mDesc.arraySize;
+            copyValue = IsArrayType(mDesc.type) ? &mDesc.arraySize : &valSizeT;
             copySize  = sizeof(mDesc.arraySize);
             break;
         case ImageInfo::Buffer:
@@ -115,23 +120,27 @@ angle::Result Image::getInfo(ImageInfo name,
 
 Image::~Image() = default;
 
-bool Image::isRegionValid(const cl::MemOffsets &origin, const cl::Coordinate &region) const
+bool Image::isRegionValid(const cl::Offset &origin, const cl::Extents &region) const
 {
     switch (getType())
     {
         case MemObjectType::Image1D:
         case MemObjectType::Image1D_Buffer:
-            return origin.x + region.x <= mDesc.width;
+            return origin.x + region.width <= mDesc.width;
         case MemObjectType::Image2D:
-            return origin.x + region.x <= mDesc.width && origin.y + region.y <= mDesc.height;
+            return origin.x + region.width <= mDesc.width &&
+                   origin.y + region.height <= mDesc.height;
         case MemObjectType::Image3D:
-            return origin.x + region.x <= mDesc.width && origin.y + region.y <= mDesc.height &&
-                   origin.z + region.z <= mDesc.depth;
+            return origin.x + region.width <= mDesc.width &&
+                   origin.y + region.height <= mDesc.height &&
+                   origin.z + region.depth <= mDesc.depth;
         case MemObjectType::Image1D_Array:
-            return origin.x + region.x <= mDesc.width && origin.y + region.y <= mDesc.arraySize;
+            return origin.x + region.width <= mDesc.width &&
+                   origin.y + region.height <= mDesc.arraySize;
         case MemObjectType::Image2D_Array:
-            return origin.x + region.x <= mDesc.width && origin.y + region.y <= mDesc.height &&
-                   origin.z + region.z <= mDesc.arraySize;
+            return origin.x + region.width <= mDesc.width &&
+                   origin.y + region.height <= mDesc.height &&
+                   origin.z + region.depth <= mDesc.arraySize;
         default:
             ASSERT(false);
             break;
@@ -146,9 +155,10 @@ Image::Image(Context &context,
              const ImageDescriptor &desc,
              Memory *parent,
              void *hostPtr)
-    : Memory(*this, context, std::move(properties), flags, format, desc, parent, hostPtr),
-      mFormat(format),
-      mDesc(desc)
-{}
+    : Memory(context, std::move(properties), flags, parent, hostPtr), mFormat(format), mDesc(desc)
+{
+    mSize = getSliceSize() * getDepth() * getArraySize();
+    ANGLE_CL_IMPL_TRY(context.getImpl().createImage(*this, hostPtr, &mImpl));
+}
 
 }  // namespace cl

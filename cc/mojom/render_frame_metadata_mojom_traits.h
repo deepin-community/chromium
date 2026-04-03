@@ -6,10 +6,12 @@
 #define CC_MOJOM_RENDER_FRAME_METADATA_MOJOM_TRAITS_H_
 
 #include <optional>
+
 #include "base/component_export.h"
 #include "build/build_config.h"
 #include "cc/mojom/render_frame_metadata.mojom-shared.h"
 #include "cc/trees/render_frame_metadata.h"
+#include "cc/trees/tracked_element_bounds.h"
 #include "services/viz/public/cpp/compositing/local_surface_id_mojom_traits.h"
 #include "skia/public/mojom/skcolor4f_mojom_traits.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -96,6 +98,16 @@ struct COMPONENT_EXPORT(CC_SHARED_MOJOM_TRAITS)
   static viz::VerticalScrollDirection new_vertical_scroll_direction(
       const cc::RenderFrameMetadata& metadata) {
     return metadata.new_vertical_scroll_direction;
+  }
+
+  static int64_t primary_main_frame_item_sequence_number(
+      const cc::RenderFrameMetadata& metadata) {
+    return metadata.primary_main_frame_item_sequence_number;
+  }
+
+  static const cc::TrackedElementBounds& tracked_element_bounds(
+      const cc::RenderFrameMetadata& metadata) {
+    return metadata.tracked_element_bounds;
   }
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)

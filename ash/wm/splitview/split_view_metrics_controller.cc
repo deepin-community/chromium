@@ -4,8 +4,12 @@
 
 #include "ash/wm/splitview/split_view_metrics_controller.h"
 
+#include <algorithm>
+#include <vector>
+
 #include "ash/root_window_controller.h"
 #include "ash/root_window_settings.h"
+#include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/wm/desks/desk.h"
 #include "ash/wm/desks/desks_util.h"
@@ -21,10 +25,8 @@
 #include "ash/wm/wm_metrics.h"
 #include "base/check_op.h"
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/time/time.h"
 #include "chromeos/ui/base/display_util.h"
 #include "chromeos/ui/base/window_state_type.h"
@@ -98,7 +100,7 @@ bool IsRecordingTabletMultiDisplaySplitView() {
 // Number of root windows in split view.
 int NumRootWindowsInSplitViewRecording() {
   auto root_windows = Shell::GetAllRootWindows();
-  return base::ranges::count_if(root_windows, [](aura::Window* root_window) {
+  return std::ranges::count_if(root_windows, [](aura::Window* root_window) {
     return SplitViewController::Get(root_window)
         ->split_view_metrics_controller()
         ->in_split_view_recording();
@@ -106,7 +108,7 @@ int NumRootWindowsInSplitViewRecording() {
 }
 
 bool InTabletMode() {
-  return display::Screen::GetScreen()->InTabletMode();
+  return display::Screen::Get()->InTabletMode();
 }
 
 bool TopTwoVisibleWindowsBothSnapped(
@@ -199,7 +201,7 @@ SplitViewMetricsController::SplitViewMetricsController(
   aura::Env::GetInstance()->AddObserver(this);
 
   const display::Display display =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(
+      display::Screen::Get()->GetDisplayNearestWindow(
           split_view_controller->root_window());
   orientation_ = GetDeviceOrientation(display);
   ResetTimeAndCounter();
@@ -296,7 +298,7 @@ void SplitViewMetricsController::OnWindowParentChanged(aura::Window* window,
   if (parent && desks_util::IsDeskContainer(parent)) {
     if (parent->GetId() != current_desk_->container_id()) {
       RemoveObservedWindow(window);
-    } else if (base::Contains(no_state_observed_windows_, window)) {
+    } else if (no_state_observed_windows_.contains(window)) {
       WindowState::Get(window)->AddObserver(this);
       no_state_observed_windows_.erase(window);
     }
@@ -422,7 +424,7 @@ void SplitViewMetricsController::OnWindowInitialized(aura::Window* window) {
   // Note: The display id saved in window_info has no value. Need to use the
   // restore bounds/
   if (!window_info->current_bounds.has_value() ||
-      !display::Screen::GetScreen()
+      !display::Screen::Get()
            ->GetDisplayNearestWindow(split_view_controller_->root_window())
            .work_area()
            .Contains(window_info->current_bounds.value())) {
@@ -522,7 +524,7 @@ void SplitViewMetricsController::StopRecordSplitViewMetrics() {
 }
 
 bool SplitViewMetricsController::IsObservingWindow(aura::Window* window) const {
-  return base::Contains(observed_windows_, window);
+  return std::ranges::contains(observed_windows_, window);
 }
 
 void SplitViewMetricsController::AddObservedWindow(aura::Window* window) {
@@ -551,7 +553,7 @@ void SplitViewMetricsController::RemoveObservedWindow(aura::Window* window) {
     }
     first_minimized_window_state_ = nullptr;
   }
-  if (base::Erase(observed_windows_, window)) {
+  if (std::erase(observed_windows_, window)) {
     WindowState::Get(window)->RemoveObserver(this);
     window->RemoveObserver(this);
   }
@@ -579,7 +581,7 @@ void SplitViewMetricsController::AddOrStackWindowOnTop(aura::Window* window) {
   if (!CanIncludeWindowInMruList(window))
     return;
 
-  auto iter = base::ranges::find(observed_windows_, window);
+  auto iter = std::ranges::find(observed_windows_, window);
   if (iter == observed_windows_.end()) {
     AddObservedWindow(window);
   } else {
@@ -695,7 +697,7 @@ void SplitViewMetricsController::MaybeStartOrEndRecordSnapTwoWindowsDuration(
     if (first_snapped_window_ && !first_snapped_time_.is_null() &&
         window_state->window() != first_snapped_window_ &&
         window_state->GetStateType() ==
-            GetOppositeSnapType(first_snapped_window_)) {
+            ToWindowStateType(GetOppositeSnapType(first_snapped_window_))) {
       // If this is a different window that got snapped on the opposite side,
       // record the duration since `first_snapped_time_`.
       RecordSnapTwoWindowsDuration(base::TimeTicks::Now() -
@@ -748,7 +750,8 @@ void SplitViewMetricsController::MaybeStartOrEndRecordCloseTwoWindowsDuration(
     }
     // If `window` has the opposite state type of `first_closed_state_type_`,
     // record the duration.
-    if (GetOppositeSnapType(window) == first_closed_state_type_ &&
+    if (ToWindowStateType(GetOppositeSnapType(window)) ==
+            first_closed_state_type_ &&
         !first_closed_time_.is_null()) {
       RecordCloseTwoWindowsDuration(base::TimeTicks::Now() -
                                     first_closed_time_);

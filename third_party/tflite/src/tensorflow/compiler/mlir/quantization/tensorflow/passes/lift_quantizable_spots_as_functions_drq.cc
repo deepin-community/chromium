@@ -12,23 +12,28 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
+#include <cstdint>
 #include <memory>
 #include <utility>
 
 #include "llvm/ADT/StringRef.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
+#include "llvm/Support/CommandLine.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/Diagnostics.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/IR/PatternMatch.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Rewrite/FrozenRewritePatternSet.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/Support/TypeID.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
-#include "tensorflow/compiler/mlir/lite/quantization/quantization_utils.h"
-#include "tensorflow/compiler/mlir/quantization/common/attrs_and_constraints.h"
 #include "tensorflow/compiler/mlir/quantization/common/lift_as_function_call.h"  // IWYU pragma: keep
+#include "tensorflow/compiler/mlir/quantization/common/quantization_lib/quantization_utils.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/ops/tf_op_quant_spec.h"
+#include "tensorflow/compiler/mlir/quantization/tensorflow/passes/passes.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/quantization_options.pb.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_dialect.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
@@ -39,6 +44,7 @@ namespace {
 
 using QuantMethod =
     ::tensorflow::quantization::QuantizationMethod::PresetMethod;
+using ::tensorflow::quantization::OpSet;
 
 class LiftQuantizableSpotsAsFunctionsDRQPass
     : public PassWrapper<LiftQuantizableSpotsAsFunctionsDRQPass,
@@ -136,7 +142,8 @@ class CheckQuantizableOps
       // This op is guaranteed to be a constant as ODS checks IsConstTensor.
       // Check if the number of elements meets the requirement.
       int current_num_elements =
-          call_op.getOperand(idx).getType().cast<ShapedType>().getNumElements();
+          mlir::cast<ShapedType>(call_op.getOperand(idx).getType())
+              .getNumElements();
       if (current_num_elements < min_num_elements_for_weights_) {
         call_op.emitRemark("Quantization is skipped for ")
             << call_op->getName().getStringRef().str() << " because it has "
@@ -148,7 +155,7 @@ class CheckQuantizableOps
     }
 
     StringRef function_name =
-        call_op.getFAttr().cast<FlatSymbolRefAttr>().getValue();
+        mlir::cast<FlatSymbolRefAttr>(call_op.getFAttr()).getValue();
     if ((quantization_method_ == tensorflow::quantization::QuantizationMethod::
                                      METHOD_DYNAMIC_RANGE_INT8) &&
         (function_name.contains("batch_matmul") ||
@@ -184,7 +191,7 @@ void LiftQuantizableSpotsAsFunctionsDRQPass::runOnOperation() {
                                     min_num_elements_for_weights_);
   FrozenRewritePatternSet frozen_patterns(std::move(patterns));
   for (auto func : module.getOps<func::FuncOp>()) {
-    if (failed(applyPatternsAndFoldGreedily(func, frozen_patterns))) {
+    if (failed(applyPatternsGreedily(func, frozen_patterns))) {
       func.emitError()
           << "quant-lift-quantizable-spots-as-functions-drq failed.";
       signalPassFailure();
@@ -195,6 +202,7 @@ void LiftQuantizableSpotsAsFunctionsDRQPass::runOnOperation() {
 }  // namespace
 
 std::unique_ptr<OperationPass<ModuleOp>>
+
 CreateLiftQuantizableSpotsAsFunctionsDRQPass(
     const QuantMethod quantization_method, const OpSet target_opset,
     const int min_num_elements_for_weights) {

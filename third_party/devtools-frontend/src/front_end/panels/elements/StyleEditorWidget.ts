@@ -1,14 +1,15 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
 
-import * as IconButton from '../../ui/components/icon_button/icon_button.js';
+import {createIcon} from '../../ui/kit/kit.js';
 import * as UI from '../../ui/legacy/legacy.js';
-import type * as ElementsComponents from './components/components.js';
 
-import {type StylePropertiesSection} from './StylePropertiesSection.js';
+import type * as ElementsComponents from './components/components.js';
+import type {StylePropertiesSection} from './StylePropertiesSection.js';
 import {StylePropertyTreeElement} from './StylePropertyTreeElement.js';
-import {type StylesSidebarPane} from './StylesSidebarPane.js';
+import type {StylesSidebarPane} from './StylesSidebarPane.js';
 
 type PropertySelectedEvent = ElementsComponents.StylePropertyEditor.PropertySelectedEvent;
 type PropertyDeselectedEvent = ElementsComponents.StylePropertyEditor.PropertyDeselectedEvent;
@@ -20,6 +21,7 @@ interface Editor extends HTMLElement {
     computedProperties: Map<String, String>,
   };
   getEditableProperties(): Array<{propertyName: string}>;
+  jslogContext: string;
 }
 
 /**
@@ -34,7 +36,7 @@ export class StyleEditorWidget extends UI.Widget.VBox {
   #triggerKey: string|undefined;
 
   constructor() {
-    super(true);
+    super({useShadowDom: true});
     this.contentElement.tabIndex = 0;
     this.setDefaultFocusedElement(this.contentElement);
     this.editorContainer = document.createElement('div');
@@ -118,16 +120,20 @@ export class StyleEditorWidget extends UI.Widget.VBox {
   static createTriggerButton(
       pane: StylesSidebarPane, section: StylePropertiesSection, editorClass: {new(): Editor}, buttonTitle: string,
       triggerKey: string): HTMLElement {
-    const triggerButton = createButton(buttonTitle);
+    const triggerButton = createIcon('flex-wrap', 'styles-pane-button');
+    triggerButton.title = buttonTitle;
+    triggerButton.role = 'button';
 
     triggerButton.onclick = async event => {
       event.stopPropagation();
       const popoverHelper = pane.swatchPopoverHelper();
       const widget = StyleEditorWidget.instance();
+      widget.element.classList.toggle('with-padding', true);
       widget.setEditor(editorClass);
       widget.bindContext(pane, section);
       widget.setTriggerKey(triggerKey);
       await widget.render();
+      widget.focus();
       const scrollerElement = triggerButton.enclosingNodeOrSelfWithClass('style-panes-wrapper');
       const onScroll = (): void => {
         popoverHelper.hide(true);
@@ -142,24 +148,13 @@ export class StyleEditorWidget extends UI.Widget.VBox {
         scrollerElement.addEventListener('scroll', onScroll);
       }
     };
+    triggerButton.onmouseup = event => {
+      // Stop propagation to prevent the property editor from being activated.
+      event.stopPropagation();
+    };
 
     return triggerButton;
   }
-}
-
-function createButton(buttonTitle: string): HTMLButtonElement {
-  const button = document.createElement('button');
-  button.classList.add('styles-pane-button');
-  button.tabIndex = 0;
-  button.title = buttonTitle;
-  button.onmouseup = event => {
-    // Stop propagation to prevent the property editor from being activated.
-    event.stopPropagation();
-  };
-  const icon = new IconButton.Icon.Icon();
-  icon.data = {iconName: 'flex-wrap', color: 'var(--sys-color-token-subtle)', width: '16px', height: '16px'};
-  button.appendChild(icon);
-  return button;
 }
 
 function ensureTreeElementForProperty(section: StylePropertiesSection, propertyName: string): StylePropertyTreeElement {

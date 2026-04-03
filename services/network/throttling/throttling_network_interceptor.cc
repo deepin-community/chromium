@@ -74,8 +74,6 @@ void ThrottlingNetworkInterceptor::UpdateConditions(
   }
 
   // Throttling.
-  DCHECK(conditions_.download_throughput() != 0 ||
-         conditions_.upload_throughput() != 0);
   offset_ = now;
 
   download_last_tick_ = 0;
@@ -272,11 +270,9 @@ void ThrottlingNetworkInterceptor::StopThrottle(
 void ThrottlingNetworkInterceptor::RemoveRecord(
     ThrottleRecords* records,
     const ThrottleCallback& callback) {
-  records->erase(std::remove_if(records->begin(), records->end(),
-                                [&callback](const ThrottleRecord& record) {
-                                  return record.callback == callback;
-                                }),
-                 records->end());
+  std::erase_if(*records, [&callback](const ThrottleRecord& record) {
+    return record.callback == callback;
+  });
 }
 
 bool ThrottlingNetworkInterceptor::IsOffline() {

@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_value.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "third_party/blink/renderer/platform/wtf/forward.h"
 
 namespace blink {
 namespace cssvalue {
@@ -22,6 +23,7 @@ class CORE_EXPORT CSSViewValue : public CSSValue {
 
   String CustomCSSText() const;
   bool Equals(const CSSViewValue&) const;
+  bool HasRandomFunctions() const;
   void TraceAfterDispatch(blink::Visitor*) const;
 
  private:

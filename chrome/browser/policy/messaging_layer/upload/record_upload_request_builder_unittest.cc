@@ -54,7 +54,7 @@ class RecordUploadRequestBuilderTest
 
  protected:
   EncryptedRecord GenerateEncryptedRecord(
-      const std::string_view encrypted_wrapped_record,
+      std::string_view encrypted_wrapped_record,
       const bool set_compression = false) const {
     EncryptedRecord record;
     record.set_encrypted_wrapped_record(std::string(encrypted_wrapped_record));
@@ -212,7 +212,7 @@ TEST_P(RecordUploadRequestBuilderTest, AcceptEncryptedRecordsList) {
       request_payload.value(),
       AllOf(IsDataUploadRequestValid(),
             IsEncryptionKeyRequestUploadRequestValid(need_encryption_key())));
-  base::Value::List* const record_list = request_payload->FindList(
+  base::ListValue* const record_list = request_payload->FindList(
       UploadEncryptedReportingRequestBuilder::GetEncryptedRecordListPath());
   ASSERT_TRUE(record_list);
   EXPECT_EQ(record_list->size(), records.size());
@@ -349,12 +349,18 @@ TEST_P(RecordUploadRequestBuilderTest, AcceptRequestId) {
   builder.SetRequestId(request_id);
 
   const auto request_payload = builder.Build();
-  ASSERT_TRUE(request_payload.has_value());
-  EXPECT_THAT(request_payload.value(),
-              IsEncryptionKeyRequestUploadRequestValid(need_encryption_key()));
-  auto* payload_request_id =
-      request_payload->FindString(reporting::json_keys::kRequestId);
-  EXPECT_THAT(*payload_request_id, ::testing::StrEq(request_id));
+  if (need_encryption_key()) {
+    ASSERT_TRUE(request_payload.has_value());
+    EXPECT_THAT(
+        request_payload.value(),
+        IsEncryptionKeyRequestUploadRequestValid(need_encryption_key()));
+    auto* payload_request_id =
+        request_payload->FindString(reporting::json_keys::kRequestId);
+    EXPECT_THAT(*payload_request_id, ::testing::StrEq(request_id));
+  } else {
+    // With no `need_encryption_key` request is invalid.
+    ASSERT_FALSE(request_payload.has_value());
+  }
 }
 
 TEST_P(RecordUploadRequestBuilderTest, DenyRequestIdWhenBadRecordSet) {
@@ -383,7 +389,7 @@ TEST_P(RecordUploadRequestBuilderTest,
                                        memory_resource_);
   EXPECT_TRUE(record_reservation.reserved());
 
-  std::optional<base::Value::Dict> compressionless_payload =
+  std::optional<base::DictValue> compressionless_payload =
       EncryptedRecordDictionaryBuilder(std::move(compressionless_record),
                                        record_reservation,
                                        is_generation_guid_required())
@@ -403,7 +409,7 @@ TEST_P(RecordUploadRequestBuilderTest, IncludeCompressionRequest) {
                                        memory_resource_);
   EXPECT_TRUE(record_reservation.reserved());
 
-  std::optional<base::Value::Dict> compressed_record_payload =
+  std::optional<base::DictValue> compressed_record_payload =
       EncryptedRecordDictionaryBuilder(std::move(compressed_record),
                                        record_reservation,
                                        is_generation_guid_required())
@@ -423,7 +429,9 @@ TEST_P(RecordUploadRequestBuilderTest, ConfigFileRequestExperimentEnabled) {
   UploadEncryptedReportingRequestBuilder builder(is_generation_guid_required(),
                                                  need_encryption_key());
 
-  EXPECT_THAT(builder.Build().value(),
+  const auto payload_result = builder.Build();
+  EXPECT_TRUE(payload_result.has_value());
+  EXPECT_THAT(payload_result.value(),
               IsConfigurationFileRequestUploadRequestValid(true));
 }
 
@@ -433,8 +441,15 @@ TEST_P(RecordUploadRequestBuilderTest, ConfigFileRequestExperimentDisabled) {
   UploadEncryptedReportingRequestBuilder builder(is_generation_guid_required(),
                                                  need_encryption_key());
 
-  EXPECT_THAT(builder.Build().value(),
-              IsConfigurationFileRequestUploadRequestValid(false));
+  const auto payload_result = builder.Build();
+  if (need_encryption_key()) {
+    EXPECT_TRUE(payload_result.has_value());
+    EXPECT_THAT(payload_result.value(),
+                IsConfigurationFileRequestUploadRequestValid(false));
+  } else {
+    // With no `need_encryption_key` the request is invalid - empty.
+    EXPECT_FALSE(payload_result.has_value());
+  }
 }
 
 TEST_P(RecordUploadRequestBuilderTest, ClientAutomatedTestExperimentEnabled) {
@@ -443,7 +458,9 @@ TEST_P(RecordUploadRequestBuilderTest, ClientAutomatedTestExperimentEnabled) {
   UploadEncryptedReportingRequestBuilder builder(is_generation_guid_required(),
                                                  need_encryption_key());
 
-  EXPECT_THAT(builder.Build().value(), IsSourceRequestUploadRequestValid(true));
+  const auto payload_result = builder.Build();
+  EXPECT_TRUE(payload_result.has_value());
+  EXPECT_THAT(payload_result.value(), IsSourceRequestUploadRequestValid(true));
 }
 
 TEST_P(RecordUploadRequestBuilderTest, ClientAutomatedTestExperimentDisabled) {
@@ -451,9 +468,15 @@ TEST_P(RecordUploadRequestBuilderTest, ClientAutomatedTestExperimentDisabled) {
   scoped_feature_list.InitAndDisableFeature(kClientAutomatedTest);
   UploadEncryptedReportingRequestBuilder builder(is_generation_guid_required(),
                                                  need_encryption_key());
-
-  EXPECT_THAT(builder.Build().value(),
-              IsSourceRequestUploadRequestValid(false));
+  const auto payload_result = builder.Build();
+  if (need_encryption_key()) {
+    EXPECT_TRUE(payload_result.has_value());
+    EXPECT_THAT(payload_result.value(),
+                IsSourceRequestUploadRequestValid(false));
+  } else {
+    // With no `need_encryption_key` the request is invalid - empty.
+    EXPECT_FALSE(payload_result.has_value());
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(RequestBuilderSettings,

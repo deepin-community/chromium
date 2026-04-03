@@ -5,8 +5,8 @@
 #include "chrome/browser/ui/webui/flags/flags_ui_handler.h"
 
 #include "base/test/task_environment.h"
-#include "components/flags_ui/flags_storage.h"
-#include "components/flags_ui/flags_ui_constants.h"
+#include "components/webui/flags/flags_storage.h"
+#include "components/webui/flags/flags_ui_constants.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/test_web_ui.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -90,7 +90,7 @@ TEST_F(FlagsUIHandlerTest, HandlesSetString) {
 
   web_ui_.HandleReceivedMessage(
       flags_ui::kSetStringFlag,
-      base::Value::List().Append(kTestFeature).Append("value"));
+      base::ListValue().Append(kTestFeature).Append("value"));
   EXPECT_EQ("value", storage_->GetStringFlag(kTestFeature));
 }
 
@@ -101,11 +101,60 @@ TEST_F(FlagsUIHandlerTest, HandlesSetOriginList) {
 
   web_ui_.HandleReceivedMessage(
       flags_ui::kSetOriginListFlag,
-      base::Value::List()
+      base::ListValue()
           .Append(kTestFeature)
           .Append("https://foo.com,invalid,http://bar.org"));
   EXPECT_EQ("https://foo.com,http://bar.org",
             storage_->GetOriginListFlag(kTestFeature));
+}
+
+TEST_F(FlagsUIHandlerTest, HandleRequestExperimentalFeatures) {
+  base::ListValue args;
+  args.Append("callbackId");
+  web_ui_.HandleReceivedMessage(flags_ui::kRequestExperimentalFeatures, args);
+
+  EXPECT_EQ(1u, web_ui_.call_data().size());
+  auto& call_data = *(web_ui_.call_data().back());
+  EXPECT_EQ("cr.webUIResponse", call_data.function_name());
+  EXPECT_EQ("callbackId", call_data.arg1()->GetString());
+  EXPECT_TRUE(call_data.arg2()->GetBool());
+  const base::DictValue& response = call_data.arg3()->GetDict();
+
+  // Check that entries for both "supported_features" and "unsupported_features"
+  // exist.
+  const base::ListValue& supported =
+      *response.FindList(flags_ui::kSupportedFeatures);
+  EXPECT_GT(supported.size(), 0u);
+  const base::ListValue& unsupported =
+      *response.FindList(flags_ui::kUnsupportedFeatures);
+  EXPECT_GT(unsupported.size(), 0u);
+}
+
+// Tests for chrome://flags/deprecated
+TEST_F(FlagsUIHandlerTest, HandleRequestDeprecatedFeatures) {
+  base::ListValue args;
+  args.Append("callbackId");
+  web_ui_.HandleReceivedMessage("requestDeprecatedFeatures", args);
+
+  EXPECT_EQ(1u, web_ui_.call_data().size());
+  auto& call_data = *(web_ui_.call_data().back());
+  EXPECT_EQ("cr.webUIResponse", call_data.function_name());
+  EXPECT_EQ("callbackId", call_data.arg1()->GetString());
+  EXPECT_TRUE(call_data.arg2()->GetBool());
+  const base::DictValue& response = call_data.arg3()->GetDict();
+
+  // Check that exactly 1 entry is returned as part of "supported_features".
+  const base::ListValue& supported =
+      *response.FindList(flags_ui::kSupportedFeatures);
+  EXPECT_EQ(1u, supported.size());
+  const base::DictValue& feature = supported[0].GetDict();
+  const std::string& internal_name = *feature.FindString("internal_name");
+  EXPECT_EQ("deprecate-unload", internal_name);
+
+  // Check that no entry is returned as part of "unsupported_features".
+  const base::ListValue& unsupported =
+      *response.FindList(flags_ui::kUnsupportedFeatures);
+  EXPECT_EQ(0u, unsupported.size());
 }
 
 }  // namespace

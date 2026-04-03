@@ -21,38 +21,36 @@ limitations under the License.
 #include <vector>
 
 #include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "xla/backends/interpreter/executable.h"
 #include "xla/backends/interpreter/platform_id.h"
 #include "xla/hlo/evaluator/hlo_evaluator.h"
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
-#include "xla/hlo/ir/hlo_module_group.h"
+#include "xla/hlo/pass/hlo_pass_pipeline.h"
+#include "xla/hlo/transforms/expanders/cholesky_expander.h"
+#include "xla/hlo/transforms/expanders/dynamic_index_splitter.h"
+#include "xla/hlo/transforms/expanders/eigh_expander.h"
+#include "xla/hlo/transforms/expanders/qr_expander.h"
 #include "xla/literal.h"
 #include "xla/service/batchnorm_expander.h"
-#include "xla/service/cholesky_expander.h"
-#include "xla/service/comparison_expander.h"
 #include "xla/service/compiler.h"
 #include "xla/service/computation_placer.h"
 #include "xla/service/custom_call_target_registry.h"
 #include "xla/service/dynamic_dimension_inference.h"
-#include "xla/service/dynamic_index_splitter.h"
-#include "xla/service/eigh_expander.h"
 #include "xla/service/executable.h"
 #include "xla/service/hlo_cost_analysis.h"
-#include "xla/service/hlo_pass_pipeline.h"
 #include "xla/service/layout_assignment.h"
-#include "xla/service/qr_expander.h"
 #include "xla/service/topk_rewriter.h"
 #include "xla/service/triangular_solve_expander.h"
-#include "xla/status.h"
 #include "xla/status_macros.h"
-#include "xla/statusor.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
-#include "tsl/platform/errors.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace interpreter {
@@ -61,7 +59,7 @@ namespace {
 
 // Handles custom_call ops during evaluation by routing them through the global
 // CPU registry used by other CPU-based backends.
-StatusOr<Literal> HandleEvaluatorCustomCall(
+absl::StatusOr<Literal> HandleEvaluatorCustomCall(
     const HloInstruction* custom_call, absl::Span<const Literal*> operands) {
   // Find the target C function in the global registry.
   auto* registry = CustomCallTargetRegistry::Global();
@@ -89,7 +87,7 @@ StatusOr<Literal> HandleEvaluatorCustomCall(
 
 }  // namespace
 
-Status InterpreterCompiler::RunHloOptimization(HloModule* hlo_module) {
+absl::Status InterpreterCompiler::RunHloOptimization(HloModule* hlo_module) {
   HloPassPipeline pipeline("Interpreter");
 
   // The TopkDecomposer generates a compare op with type=TOTALORDER and must
@@ -99,7 +97,6 @@ Status InterpreterCompiler::RunHloOptimization(HloModule* hlo_module) {
   pipeline.AddPass<CholeskyExpander>();
   pipeline.AddPass<QrExpander>();
   pipeline.AddPass<EighExpander>();
-  pipeline.AddPass<ComparisonExpander>();
   pipeline.AddPass<TriangularSolveExpander>();
   pipeline.AddPass<BatchNormExpander>(
       /*rewrite_training_op=*/true,
@@ -111,7 +108,7 @@ Status InterpreterCompiler::RunHloOptimization(HloModule* hlo_module) {
   return pipeline.Run(hlo_module).status();
 }
 
-StatusOr<std::unique_ptr<HloModule>> InterpreterCompiler::RunHloPasses(
+absl::StatusOr<std::unique_ptr<HloModule>> InterpreterCompiler::RunHloPasses(
     std::unique_ptr<HloModule> hlo_module, se::StreamExecutor* /*stream_exec*/,
     const CompileOptions& /*options*/) {
   VLOG(1) << "Run hlo passes on graph " << hlo_module->name();
@@ -119,7 +116,7 @@ StatusOr<std::unique_ptr<HloModule>> InterpreterCompiler::RunHloPasses(
   return std::move(hlo_module);
 }
 
-StatusOr<std::unique_ptr<Executable>> InterpreterCompiler::RunBackend(
+absl::StatusOr<std::unique_ptr<Executable>> InterpreterCompiler::RunBackend(
     std::unique_ptr<HloModule> hlo_module, se::StreamExecutor* stream_exec,
     const CompileOptions& /*options*/) {
   TF_RET_CHECK(stream_exec != nullptr);
@@ -148,35 +145,24 @@ StatusOr<std::unique_ptr<Executable>> InterpreterCompiler::RunBackend(
   return std::move(executable);
 }
 
-StatusOr<std::vector<std::unique_ptr<Executable>>> InterpreterCompiler::Compile(
-    std::unique_ptr<HloModuleGroup> module_group,
-    std::vector<std::vector<se::StreamExecutor*>> stream_exec,
-    const CompileOptions& options) {
-  if (module_group->empty()) {
-    return std::vector<std::unique_ptr<Executable>>();
-  }
-  if (module_group->size() > 1) {
-    return tsl::errors::Unimplemented(
-        "Compilation of multiple HLO modules is not supported on Interpreter.");
-  }
-  if (stream_exec.size() != 1 || stream_exec[0].size() != 1) {
-    return tsl::errors::Unimplemented("Unexpected number of StreamExecutor's.");
-  }
-  auto hlo_modules = module_group->ConsumeModules();
-  TF_ASSIGN_OR_RETURN(auto module, RunHloPasses(std::move(hlo_modules[0]),
-                                                stream_exec[0][0], options));
-  TF_ASSIGN_OR_RETURN(auto executable, RunBackend(std::move(module),
-                                                  stream_exec[0][0], options));
+absl::StatusOr<std::vector<std::unique_ptr<Executable>>>
+InterpreterCompiler::Compile(std::unique_ptr<HloModule> hlo_module,
+                             std::vector<se::StreamExecutor*> stream_exec,
+                             const CompileOptions& options) {
+  TF_ASSIGN_OR_RETURN(
+      hlo_module, RunHloPasses(std::move(hlo_module), stream_exec[0], options));
+  TF_ASSIGN_OR_RETURN(auto executable, RunBackend(std::move(hlo_module),
+                                                  stream_exec[0], options));
   std::vector<std::unique_ptr<Executable>> ret;
   ret.push_back(std::move(executable));
   return std::move(ret);
 }
 
-StatusOr<std::vector<std::unique_ptr<AotCompilationResult>>>
+absl::StatusOr<std::vector<std::unique_ptr<CompiledModule>>>
 InterpreterCompiler::CompileAheadOfTime(
-    std::unique_ptr<HloModuleGroup> module_group,
+    std::unique_ptr<HloModule> hlo_module,
     const AotCompilationOptions& aot_options) {
-  return tsl::errors::InvalidArgument(
+  return absl::InvalidArgumentError(
       "AOT compilation not supported on Interpreter");
 }
 

@@ -10,9 +10,9 @@
 #include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "device/fido/fido_authenticator.h"
-#include "device/fido/fido_constants.h"
 #include "device/fido/pin.h"
-#include "device/fido/public_key_credential_descriptor.h"
+#include "device/fido/public/fido_constants.h"
+#include "device/fido/public/public_key_credential_descriptor.h"
 
 namespace device {
 
@@ -197,7 +197,6 @@ void CredentialManagementHandler::GetCredentials(
     // AuthenticatorRemoved() may have been called, but the observer would have
     // seen a FidoAuthenticatorRemoved() call.
     NOTREACHED();
-    return;
   }
   get_credentials_callback_ = std::move(callback);
   state_ = State::kGettingCredentials;
@@ -252,7 +251,6 @@ void CredentialManagementHandler::DeleteCredentials(
     // AuthenticatorRemoved() may have been called, but the observer would have
     // seen a FidoAuthenticatorRemoved() call.
     NOTREACHED();
-    return;
   }
   DCHECK(pin_token_);
 
@@ -287,7 +285,6 @@ void CredentialManagementHandler::UpdateUserInformation(
     // AuthenticatorRemoved() may have been called, but the observer would have
     // seen a FidoAuthenticatorRemoved() call.
     NOTREACHED();
-    return;
   }
   DCHECK(pin_token_);
 

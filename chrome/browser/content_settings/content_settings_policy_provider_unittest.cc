@@ -17,8 +17,11 @@
 #include "components/content_settings/core/browser/content_settings_mock_observer.h"
 #include "components/content_settings/core/browser/content_settings_rule.h"
 #include "components/content_settings/core/browser/content_settings_utils.h"
+#include "components/content_settings/core/browser/permission_settings_registry.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_utils.h"
+#include "components/content_settings/core/common/features.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/content_settings/core/test/content_settings_test_utils.h"
 #include "components/prefs/pref_service.h"
@@ -32,6 +35,8 @@ using ::testing::_;
 
 namespace content_settings {
 
+constexpr char kTestSubdomainPattern[] = "[*.]google.com";
+
 class PolicyProviderTest : public testing::Test {
   content::BrowserTaskEnvironment task_environment_;
 };
@@ -42,18 +47,16 @@ TEST_F(PolicyProviderTest, DefaultGeolocationContentSetting) {
       profile.GetTestingPrefService();
   PolicyProvider provider(prefs);
 
-  std::unique_ptr<RuleIterator> rule_iterator(provider.GetRuleIterator(
-      ContentSettingsType::GEOLOCATION, false,
-      content_settings::PartitionKey::GetDefaultForTesting()));
+  std::unique_ptr<RuleIterator> rule_iterator(
+      provider.GetRuleIterator(ContentSettingsType::GEOLOCATION, false));
   EXPECT_FALSE(rule_iterator);
 
   // Change the managed value of the default geolocation setting
   prefs->SetManagedPref(prefs::kManagedDefaultGeolocationSetting,
                         std::make_unique<base::Value>(CONTENT_SETTING_BLOCK));
 
-  rule_iterator = provider.GetRuleIterator(
-      ContentSettingsType::GEOLOCATION, false,
-      content_settings::PartitionKey::GetDefaultForTesting());
+  rule_iterator =
+      provider.GetRuleIterator(ContentSettingsType::GEOLOCATION, false);
   ASSERT_TRUE(rule_iterator);
   EXPECT_TRUE(rule_iterator->HasNext());
   std::unique_ptr<Rule> rule = rule_iterator->Next();
@@ -62,6 +65,116 @@ TEST_F(PolicyProviderTest, DefaultGeolocationContentSetting) {
   EXPECT_EQ(ContentSettingsPattern::Wildcard(), rule->primary_pattern);
   EXPECT_EQ(ContentSettingsPattern::Wildcard(), rule->secondary_pattern);
   EXPECT_EQ(CONTENT_SETTING_BLOCK, ValueToContentSetting(rule->value));
+
+  provider.ShutdownOnUIThread();
+}
+
+TEST_F(PolicyProviderTest, GeolocationWithOptionsContentSetting) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      features::kApproximateGeolocationPermission);
+
+  TestingProfile profile;
+  sync_preferences::TestingPrefServiceSyncable* prefs =
+      profile.GetTestingPrefService();
+  PolicyProvider provider(prefs);
+
+  std::unique_ptr<RuleIterator> rule_iterator(provider.GetRuleIterator(
+      ContentSettingsType::GEOLOCATION_WITH_OPTIONS, false));
+  EXPECT_FALSE(rule_iterator);
+
+  // Change the managed value of the default geolocation setting
+  prefs->SetManagedPref(prefs::kManagedDefaultGeolocationSetting,
+                        std::make_unique<base::Value>(CONTENT_SETTING_BLOCK));
+
+  rule_iterator = provider.GetRuleIterator(
+      ContentSettingsType::GEOLOCATION_WITH_OPTIONS, false);
+  ASSERT_TRUE(rule_iterator);
+  EXPECT_TRUE(rule_iterator->HasNext());
+  std::unique_ptr<Rule> rule = rule_iterator->Next();
+  EXPECT_FALSE(rule_iterator->HasNext());
+
+  EXPECT_EQ(ContentSettingsPattern::Wildcard(), rule->primary_pattern);
+  EXPECT_EQ(ContentSettingsPattern::Wildcard(), rule->secondary_pattern);
+
+  auto* info = PermissionSettingsRegistry::GetInstance()->Get(
+      ContentSettingsType::GEOLOCATION_WITH_OPTIONS);
+  auto setting =
+      std::get<GeolocationSetting>(ValueToPermissionSetting(info, rule->value));
+  EXPECT_EQ(PermissionOption::kDenied, setting.approximate);
+  EXPECT_EQ(PermissionOption::kDenied, setting.precise);
+
+  provider.ShutdownOnUIThread();
+}
+
+TEST_F(PolicyProviderTest, PreciseGeolocationAllowedForUrlsWithOptions) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      features::kApproximateGeolocationPermission);
+
+  TestingProfile profile;
+  sync_preferences::TestingPrefServiceSyncable* prefs =
+      profile.GetTestingPrefService();
+  PolicyProvider provider(prefs);
+
+  base::ListValue list;
+  list.Append(kTestSubdomainPattern);
+  prefs->SetManagedPref(prefs::kManagedPreciseGeolocationAllowedForUrls,
+                        std::move(list));
+
+  std::unique_ptr<RuleIterator> rule_iterator = provider.GetRuleIterator(
+      ContentSettingsType::GEOLOCATION_WITH_OPTIONS, false);
+  ASSERT_TRUE(rule_iterator);
+  EXPECT_TRUE(rule_iterator->HasNext());
+  std::unique_ptr<Rule> rule = rule_iterator->Next();
+  EXPECT_FALSE(rule_iterator->HasNext());
+
+  EXPECT_EQ(ContentSettingsPattern::FromString(kTestSubdomainPattern),
+            rule->primary_pattern);
+  EXPECT_EQ(ContentSettingsPattern::Wildcard(), rule->secondary_pattern);
+
+  auto* info = PermissionSettingsRegistry::GetInstance()->Get(
+      ContentSettingsType::GEOLOCATION_WITH_OPTIONS);
+  auto setting =
+      std::get<GeolocationSetting>(ValueToPermissionSetting(info, rule->value));
+  EXPECT_EQ(PermissionOption::kAllowed, setting.approximate);
+  EXPECT_EQ(PermissionOption::kAllowed, setting.precise);
+
+  provider.ShutdownOnUIThread();
+}
+
+TEST_F(PolicyProviderTest, GeolocationBlockedForUrlsWithOptions) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      features::kApproximateGeolocationPermission);
+
+  TestingProfile profile;
+  sync_preferences::TestingPrefServiceSyncable* prefs =
+      profile.GetTestingPrefService();
+  PolicyProvider provider(prefs);
+
+  base::ListValue list;
+  list.Append(kTestSubdomainPattern);
+  prefs->SetManagedPref(prefs::kManagedGeolocationBlockedForUrls,
+                        std::move(list));
+
+  std::unique_ptr<RuleIterator> rule_iterator = provider.GetRuleIterator(
+      ContentSettingsType::GEOLOCATION_WITH_OPTIONS, false);
+  ASSERT_TRUE(rule_iterator);
+  EXPECT_TRUE(rule_iterator->HasNext());
+  std::unique_ptr<Rule> rule = rule_iterator->Next();
+  EXPECT_FALSE(rule_iterator->HasNext());
+
+  EXPECT_EQ(ContentSettingsPattern::FromString(kTestSubdomainPattern),
+            rule->primary_pattern);
+  EXPECT_EQ(ContentSettingsPattern::Wildcard(), rule->secondary_pattern);
+
+  auto* info = PermissionSettingsRegistry::GetInstance()->Get(
+      ContentSettingsType::GEOLOCATION_WITH_OPTIONS);
+  auto setting =
+      std::get<GeolocationSetting>(ValueToPermissionSetting(info, rule->value));
+  EXPECT_EQ(PermissionOption::kDenied, setting.approximate);
+  EXPECT_EQ(PermissionOption::kDenied, setting.precise);
 
   provider.ShutdownOnUIThread();
 }
@@ -75,9 +188,8 @@ TEST_F(PolicyProviderTest, ManagedDefaultContentSettings) {
   prefs->SetManagedPref(prefs::kManagedDefaultCookiesSetting,
                         std::make_unique<base::Value>(CONTENT_SETTING_BLOCK));
 
-  std::unique_ptr<RuleIterator> rule_iterator(provider.GetRuleIterator(
-      ContentSettingsType::COOKIES, false,
-      content_settings::PartitionKey::GetDefaultForTesting()));
+  std::unique_ptr<RuleIterator> rule_iterator(
+      provider.GetRuleIterator(ContentSettingsType::COOKIES, false));
   EXPECT_TRUE(rule_iterator->HasNext());
   std::unique_ptr<Rule> rule = rule_iterator->Next();
   EXPECT_FALSE(rule_iterator->HasNext());
@@ -119,7 +231,7 @@ TEST_F(PolicyProviderTest, GettingManagedContentSettings) {
   sync_preferences::TestingPrefServiceSyncable* prefs =
       profile.GetTestingPrefService();
 
-  base::Value::List list;
+  base::ListValue list;
   list.Append("[*.]google.com");
   prefs->SetManagedPref(prefs::kManagedImagesBlockedForUrls, std::move(list));
 
@@ -151,8 +263,7 @@ TEST_F(PolicyProviderTest, GettingManagedContentSettings) {
   // SetWebsiteSetting does nothing.
   bool owned = provider.SetWebsiteSetting(
       yt_url_pattern, yt_url_pattern, ContentSettingsType::COOKIES,
-      base::Value(CONTENT_SETTING_BLOCK), /*constraints=*/{},
-      content_settings::PartitionKey::GetDefaultForTesting());
+      base::Value(CONTENT_SETTING_BLOCK), /*constraints=*/{});
   EXPECT_FALSE(owned);
   EXPECT_EQ(CONTENT_SETTING_DEFAULT,
             TestUtils::GetContentSetting(&provider, youtube_url, youtube_url,
@@ -178,7 +289,7 @@ TEST_F(PolicyProviderTest, AutoSelectCertificateList) {
   // certificates.
   std::string pattern_str("\"pattern\":\"[*.]google.com\"");
   std::string filter_str("\"filter\":{\"ISSUER\":{\"CN\":\"issuer name\"}}");
-  base::Value::List list;
+  base::ListValue list;
   list.Append("{" + pattern_str + "," + filter_str + "}");
   prefs->SetManagedPref(prefs::kManagedAutoSelectCertificateForUrls,
                         std::move(list));
@@ -192,7 +303,7 @@ TEST_F(PolicyProviderTest, AutoSelectCertificateList) {
       ContentSettingsType::AUTO_SELECT_CERTIFICATE, false);
 
   ASSERT_EQ(base::Value::Type::DICT, cert_filter_setting.type());
-  base::Value::List* cert_filters =
+  base::ListValue* cert_filters =
       cert_filter_setting.GetDict().FindList("filters");
   ASSERT_TRUE(cert_filters);
   ASSERT_FALSE(cert_filters->empty());
@@ -217,7 +328,7 @@ TEST_F(PolicyProviderTest, InvalidAutoSelectCertificateList) {
   std::string filter_str("\"filter\":{\"ISSUER\":{\"CN\":\"issuer name\"}}");
 
   // Missing pattern should be rejected.
-  base::Value::List missing_pattern_value;
+  base::ListValue missing_pattern_value;
   missing_pattern_value.Append("{" + filter_str + "}");
   prefs->SetManagedPref(prefs::kManagedAutoSelectCertificateForUrls,
                         std::move(missing_pattern_value));
@@ -227,7 +338,7 @@ TEST_F(PolicyProviderTest, InvalidAutoSelectCertificateList) {
                 ContentSettingsType::AUTO_SELECT_CERTIFICATE, false));
 
   // Non-dict value should be rejected.
-  base::Value::List no_dict_value;
+  base::ListValue no_dict_value;
   no_dict_value.Append(pattern_str + "," + filter_str);
   prefs->SetManagedPref(prefs::kManagedAutoSelectCertificateForUrls,
                         std::move(no_dict_value));
@@ -237,7 +348,7 @@ TEST_F(PolicyProviderTest, InvalidAutoSelectCertificateList) {
                 ContentSettingsType::AUTO_SELECT_CERTIFICATE, false));
 
   // Missing filter should be rejected.
-  base::Value::List missing_filter_value;
+  base::ListValue missing_filter_value;
   missing_filter_value.Append("{" + pattern_str + "}");
   prefs->SetManagedPref(prefs::kManagedAutoSelectCertificateForUrls,
                         std::move(missing_filter_value));
@@ -247,7 +358,7 @@ TEST_F(PolicyProviderTest, InvalidAutoSelectCertificateList) {
                 ContentSettingsType::AUTO_SELECT_CERTIFICATE, false));
 
   // Valid configuration should not be rejected.
-  base::Value::List valid_value;
+  base::ListValue valid_value;
   valid_value.Append("{" + pattern_str + "," + filter_str + "}");
   prefs->SetManagedPref(prefs::kManagedAutoSelectCertificateForUrls,
                         std::move(valid_value));
@@ -266,14 +377,13 @@ TEST_F(PolicyProviderTest, InvalidManagedDefaultContentSetting) {
   PolicyProvider provider(prefs);
 
   prefs->SetManagedPref(
-      prefs::kManagedDefaultCookiesSetting,
-      std::make_unique<base::Value>(CONTENT_SETTING_DETECT_IMPORTANT_CONTENT));
+      prefs::kManagedDefaultJavaScriptSetting,
+      std::make_unique<base::Value>(CONTENT_SETTING_SESSION_ONLY));
 
   // The setting provided in the cookies pref is not valid for cookies. It
   // should be ignored.
-  std::unique_ptr<RuleIterator> rule_iterator(provider.GetRuleIterator(
-      ContentSettingsType::COOKIES, false,
-      content_settings::PartitionKey::GetDefaultForTesting()));
+  std::unique_ptr<RuleIterator> rule_iterator(
+      provider.GetRuleIterator(ContentSettingsType::COOKIES, false));
   EXPECT_FALSE(rule_iterator);
 
   provider.ShutdownOnUIThread();
@@ -282,51 +392,51 @@ TEST_F(PolicyProviderTest, InvalidManagedDefaultContentSetting) {
 TEST_F(PolicyProviderTest, CookiesAllowedForUrlsUsageHistogram) {
   const struct TestCase {
     std::string desc;
-    base::Value::List managed_pref;
+    base::ListValue managed_pref;
     std::optional<net::CookiesAllowedForUrlsUsage> expected_bucket;
   } test_cases[] = {
       {
           "NoRules",
-          base::Value::List(),
+          base::ListValue(),
           std::nullopt,
       },
       {
           "WildcardPrimaryOnly",
-          base::Value::List().Append("*,https://www.a.com/"),
+          base::ListValue().Append("*,https://www.a.com/"),
           net::CookiesAllowedForUrlsUsage::kWildcardPrimaryOnly,
       },
       {
           "WildcardSecondaryOnly",
-          base::Value::List().Append("https://www.a.com/"),
+          base::ListValue().Append("https://www.a.com/"),
           net::CookiesAllowedForUrlsUsage::kWildcardSecondaryOnly,
       },
       {"ExplicitOnly",
-       base::Value::List().Append("https://www.a.com/,https://www.b.com/"),
+       base::ListValue().Append("https://www.a.com/,https://www.b.com/"),
        net::CookiesAllowedForUrlsUsage::kExplicitOnly},
       {
           "ExplicitAndPrimaryWildcard",
-          base::Value::List()
+          base::ListValue()
               .Append("*,https://www.a.com/")
               .Append("https://www.a.com/,https://www.b.com/"),
           net::CookiesAllowedForUrlsUsage::kExplicitAndPrimaryWildcard,
       },
       {
           "ExplicityAndSecondaryWildcard",
-          base::Value::List()
+          base::ListValue()
               .Append("https://www.a.com/")
               .Append("https://www.a.com/,https://www.b.com/"),
           net::CookiesAllowedForUrlsUsage::kExplicitAndSecondaryWildcard,
       },
       {
           "WildcardOnly",
-          base::Value::List()
+          base::ListValue()
               .Append("*,https://www.a.com/")
               .Append("https://www.a.com/"),
           net::CookiesAllowedForUrlsUsage::kWildcardOnly,
       },
       {
           "AllPresent",
-          base::Value::List()
+          base::ListValue()
               .Append("*,https://www.a.com/")
               .Append("https://www.a.com/")
               .Append("https://www.a.com/,https://www.b.com/"),
@@ -344,11 +454,11 @@ TEST_F(PolicyProviderTest, CookiesAllowedForUrlsUsageHistogram) {
     // Set some other cookie-related prefs to make sure they do not impact
     // results.
     prefs->SetManagedPref(prefs::kManagedCookiesBlockedForUrls,
-                          base::Value::List()
+                          base::ListValue()
                               .Append("https://www.c.com/")
                               .Append("*,https://www.c.com/"));
     prefs->SetManagedPref(prefs::kManagedCookiesSessionOnlyForUrls,
-                          base::Value::List()
+                          base::ListValue()
                               .Append("https://www.d.com/")
                               .Append("https://www.d.com/,https://www.e.com/"));
     base::HistogramTester histogram_tester;

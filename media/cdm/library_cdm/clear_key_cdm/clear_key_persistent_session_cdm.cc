@@ -206,9 +206,6 @@ void ClearKeyPersistentSessionCdm::OnFileReadForLoadSession(
                                   &key_added, &exception, &error_message)) {
     NOTREACHED() << "Saved session data is not usable, error = "
                  << error_message;
-    // Return an empty string to indicate that the session was not found.
-    promise->resolve(std::string());
-    return;
   }
 
   // FinishUpdate() needs a SimpleCdmPromise, so create a wrapper promise.
@@ -344,7 +341,7 @@ void ClearKeyPersistentSessionCdm::OnFileWrittenForRemoveSession(
     std::unique_ptr<CdmFileAdapter> file,
     std::unique_ptr<SimpleCdmPromise> promise,
     bool success) {
-  DCHECK(success);
+  CHECK(success);
 }
 
 CdmContext* ClearKeyPersistentSessionCdm::GetCdmContext() {

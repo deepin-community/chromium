@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/feature_list.h"
@@ -11,6 +12,7 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/run_loop.h"
+#include "base/strings/string_util.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_restrictions.h"
@@ -55,7 +57,7 @@ class SandboxedNetworkListBrowserTest : public ContentBrowserTest {
         lpac_enabled = true;
         break;
       default:
-        NOTREACHED_NORETURN();
+        NOTREACHED();
     }
 
     std::vector<base::test::FeatureRef> enabled_features;
@@ -95,7 +97,7 @@ class SandboxedNetworkListBrowserTest : public ContentBrowserTest {
 #endif  // BUILDFLAG(IS_ANDROID)
 
   void WriteInterfacesToFile(const base::FilePath& path) {
-    base::Value::List interfaces_list;
+    base::ListValue interfaces_list;
     base::RunLoop run_loop;
     std::vector<net::NetworkInterface> interfaces;
     GetNetworkService()->GetNetworkList(
@@ -108,7 +110,7 @@ class SandboxedNetworkListBrowserTest : public ContentBrowserTest {
     run_loop.Run();
 
     for (const auto& interface : interfaces) {
-      base::Value::Dict interface_dict;
+      base::DictValue interface_dict;
       interface_dict.Set("name", interface.name);
       interface_dict.Set("type", interface.type);
       interface_dict.Set("address", interface.address.ToString());
@@ -129,15 +131,15 @@ class SandboxedNetworkListBrowserTest : public ContentBrowserTest {
     return (contents1 == contents2);
   }
 
-  base::FilePath GetPersistentPathLocation(base::StringPiece name) {
+  base::FilePath GetPersistentPathLocation(std::string_view name) {
     return shell()->web_contents()->GetBrowserContext()->GetPath().AppendASCII(
         name);
   }
 
  private:
   size_t GetTestPreCount() {
-    constexpr base::StringPiece kPreTestPrefix = "PRE_";
-    base::StringPiece test_name =
+    constexpr std::string_view kPreTestPrefix = "PRE_";
+    std::string_view test_name =
         testing::UnitTest::GetInstance()->current_test_info()->name();
     size_t count = 0;
     while (base::StartsWith(test_name, kPreTestPrefix)) {

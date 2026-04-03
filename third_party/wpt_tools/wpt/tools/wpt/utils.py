@@ -46,8 +46,11 @@ def untar(fileobj, dest="."):
     """Extract tar archive."""
     logger.debug("untar")
     fileobj = seekable(fileobj)
+    kwargs = {}
+    if sys.version_info.major >= 3 and sys.version_info.minor >= 12:
+        kwargs["filter"] = "tar"
     with tarfile.open(fileobj=fileobj) as tar_data:
-        tar_data.extractall(path=dest)
+        tar_data.extractall(path=dest, **kwargs)
 
 
 def unzip(fileobj, dest=None, limit=None):
@@ -142,7 +145,7 @@ def get_download_to_descriptor(fd, url, max_retries=5):
                 # Maximum retries or unknown error
                 raise
 
-def rmtree(path):
+def rmtree(path: str) -> None:
     # This works around two issues:
     # 1. Cannot delete read-only files owned by us (e.g. files extracted from tarballs)
     # 2. On Windows, we sometimes just need to retry in case the file handler

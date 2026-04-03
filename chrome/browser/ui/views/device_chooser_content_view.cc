@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/device_chooser_content_view.h"
 
+#include <array>
 #include <string>
 
 #include "base/functional/bind.h"
@@ -14,10 +15,11 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
@@ -37,7 +39,11 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/layout_provider.h"
+#include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
+
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(DeviceChooserContentView,
+                                      kDeviceChooserDialogBubbleElementId);
 
 DeviceChooserContentView::DeviceChooserContentView(
     views::TableViewObserver* table_view_observer,
@@ -46,6 +52,8 @@ DeviceChooserContentView::DeviceChooserContentView(
   chooser_controller_->set_view(this);
 
   SetPreferredSize(gfx::Size(402, 320));
+  SetProperty(views::kElementIdentifierKey,
+              kDeviceChooserDialogBubbleElementId);
 
   if (chooser_controller_->ShouldShowSelectAllCheckbox()) {
     SetLayoutManager(std::make_unique<views::BoxLayout>(
@@ -73,8 +81,10 @@ DeviceChooserContentView::DeviceChooserContentView(
   table_view_ = table_view.get();
   table_view->SetSelectOnRemove(false);
   table_view->set_observer(table_view_observer);
-  table_view->GetViewAccessibility().OverrideName(l10n_util::GetStringUTF16(
-      IDS_DEVICE_CHOOSER_ACCNAME_COMPATIBLE_DEVICES_LIST));
+  table_view->GetViewAccessibility().SetName(
+      l10n_util::GetStringUTF16(
+          IDS_DEVICE_CHOOSER_ACCNAME_COMPATIBLE_DEVICES_LIST),
+      ax::mojom::NameFrom::kAttribute);
 
   table_parent_ = AddChildView(
       views::TableView::CreateScrollViewWithTable(std::move(table_view)));
@@ -106,37 +116,41 @@ DeviceChooserContentView::DeviceChooserContentView(
   no_options_view_ = add_centering_view(std::move(no_options_help));
 
   // Link that explains that Bluetooth must be turned on.
-  std::u16string link_text = l10n_util::GetStringUTF16(
-      IDS_BLUETOOTH_DEVICE_CHOOSER_TURN_ON_BLUETOOTH_LINK_TEXT);
-  size_t offset = 0;
-  std::u16string text = l10n_util::GetStringFUTF16(
-      IDS_BLUETOOTH_DEVICE_CHOOSER_TURN_ADAPTER_OFF, link_text, &offset);
-  auto adapter_off_help = std::make_unique<views::StyledLabel>();
-  adapter_off_help->SetText(text);
-  adapter_off_help->AddStyleRange(
-      gfx::Range(offset, offset + link_text.size()),
-      views::StyledLabel::RangeStyleInfo::CreateForLink(base::BindRepeating(
-          &permissions::ChooserController::OpenAdapterOffHelpUrl,
-          base::Unretained(chooser_controller_.get()))));
-  adapter_off_view_ = add_centering_view(std::move(adapter_off_help));
+  if (chooser_controller_->ShouldShowAdapterOffView()) {
+    std::u16string link_text = l10n_util::GetStringUTF16(
+        chooser_controller_->GetTurnAdapterOnLinkTextMessageId());
+    size_t offset = 0;
+    std::u16string text = l10n_util::GetStringFUTF16(
+        chooser_controller_->GetAdapterOffMessageId(), link_text, &offset);
+    auto adapter_off_help = std::make_unique<views::StyledLabel>();
+    adapter_off_help->SetText(text);
+    adapter_off_help->AddStyleRange(
+        gfx::Range(offset, offset + link_text.size()),
+        views::StyledLabel::RangeStyleInfo::CreateForLink(base::BindRepeating(
+            &permissions::ChooserController::OpenAdapterOffHelpUrl,
+            base::Unretained(chooser_controller_.get()))));
+    adapter_off_view_ = add_centering_view(std::move(adapter_off_help));
+  }
 
   // Link that explains that OS Bluetooth permission must be granted.
-  link_text = l10n_util::GetStringUTF16(
-      IDS_BLUETOOTH_DEVICE_CHOOSER_AUTHORIZE_BLUETOOTH_LINK_TEXT);
-  text = l10n_util::GetStringFUTF16(
-      IDS_BLUETOOTH_DEVICE_CHOOSER_AUTHORIZE_BLUETOOTH, link_text);
-  size_t text_end = text.size();
-  auto adapter_unauthorized_help = std::make_unique<views::StyledLabel>();
-  adapter_unauthorized_help->SetHorizontalAlignment(
-      gfx::HorizontalAlignment::ALIGN_CENTER);
-  adapter_unauthorized_help->SetText(text);
-  adapter_unauthorized_help->AddStyleRange(
-      gfx::Range(text_end - link_text.size(), text_end),
-      views::StyledLabel::RangeStyleInfo::CreateForLink(base::BindRepeating(
-          &permissions::ChooserController::OpenPermissionPreferences,
-          base::Unretained(chooser_controller_.get()))));
-  adapter_unauthorized_view_ =
-      add_centering_view(std::move(adapter_unauthorized_help));
+  if (chooser_controller_->ShouldShowAdapterUnauthorizedView()) {
+    std::u16string link_text = l10n_util::GetStringUTF16(
+        chooser_controller_->GetAuthorizeBluetoothLinkTextMessageId());
+    std::u16string text = l10n_util::GetStringFUTF16(
+        chooser_controller_->GetBluetoothUnauthorizedMessageId(), link_text);
+    size_t text_end = text.size();
+    auto adapter_unauthorized_help = std::make_unique<views::StyledLabel>();
+    adapter_unauthorized_help->SetHorizontalAlignment(
+        gfx::HorizontalAlignment::ALIGN_CENTER);
+    adapter_unauthorized_help->SetText(text);
+    adapter_unauthorized_help->AddStyleRange(
+        gfx::Range(text_end - link_text.size(), text_end),
+        views::StyledLabel::RangeStyleInfo::CreateForLink(base::BindRepeating(
+            &permissions::ChooserController::OpenPermissionPreferences,
+            base::Unretained(chooser_controller_.get()))));
+    adapter_unauthorized_view_ =
+        add_centering_view(std::move(adapter_unauthorized_help));
+  }
 
   UpdateTableView();
 }
@@ -178,15 +192,15 @@ ui::ImageModel DeviceChooserContentView::GetIcon(size_t row) {
   }
 
   int level = chooser_controller_->GetSignalStrengthLevel(row);
-  if (level == -1)
+  if (level == -1) {
     return ui::ImageModel();
+  }
 
-  constexpr int kSignalStrengthLevelImageIds[5] = {
+  static constexpr std::array kSignalStrengthLevelImageIds{
       IDR_SIGNAL_0_BAR, IDR_SIGNAL_1_BAR, IDR_SIGNAL_2_BAR, IDR_SIGNAL_3_BAR,
       IDR_SIGNAL_4_BAR};
   DCHECK_GE(level, 0);
-  DCHECK_LT(static_cast<size_t>(level),
-            std::size(kSignalStrengthLevelImageIds));
+  DCHECK_LT(static_cast<size_t>(level), kSignalStrengthLevelImageIds.size());
   return ui::ImageModel::FromImageSkia(
       *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
           kSignalStrengthLevelImageIds[level]));
@@ -223,10 +237,13 @@ void DeviceChooserContentView::OnAdapterEnabledChanged(bool enabled) {
   adapter_enabled_ = enabled;
   UpdateTableView();
 
-  ShowReScanButton(enabled);
+  if (re_scan_button_) {
+    ShowReScanButton(enabled);
+  }
 
-  if (GetWidget() && GetWidget()->GetRootView())
+  if (GetWidget() && GetWidget()->GetRootView()) {
     GetWidget()->GetRootView()->DeprecatedLayoutImmediately();
+  }
 }
 
 void DeviceChooserContentView::OnAdapterAuthorizationChanged(bool authorized) {
@@ -235,7 +252,9 @@ void DeviceChooserContentView::OnAdapterAuthorizationChanged(bool authorized) {
   adapter_authorized_ = authorized;
   UpdateTableView();
 
-  ShowReScanButton(authorized);
+  if (re_scan_button_) {
+    ShowReScanButton(authorized);
+  }
 }
 
 void DeviceChooserContentView::OnRefreshStateChanged(bool refreshing) {
@@ -247,13 +266,15 @@ void DeviceChooserContentView::OnRefreshStateChanged(bool refreshing) {
     UpdateTableView();
   }
 
-  if (refreshing)
+  if (refreshing) {
     ShowThrobber();
-  else
+  } else {
     ShowReScanButton(/*enable=*/true);
+  }
 
-  if (GetWidget() && GetWidget()->GetRootView())
+  if (GetWidget() && GetWidget()->GetRootView()) {
     GetWidget()->GetRootView()->DeprecatedLayoutImmediately();
+  }
 }
 
 std::u16string DeviceChooserContentView::GetWindowTitle() const {
@@ -271,23 +292,14 @@ std::unique_ptr<views::View> DeviceChooserContentView::CreateExtraView() {
 
   if (chooser_controller_->ShouldShowHelpButton()) {
     std::unique_ptr<views::ImageButton> help_button;
-    if (features::IsChromeRefresh2023()) {
-      help_button = views::ImageButton::CreateIconButton(
-          base::BindRepeating(
-              &permissions::ChooserController::OpenHelpCenterUrl,
-              base::Unretained(chooser_controller_.get())),
-          vector_icons::kHelpOutlineIcon,
-          l10n_util::GetStringUTF16(IDS_LEARN_MORE),
-          views::ImageButton::MaterialIconStyle::kLarge,
-          views::LayoutProvider::Get()->GetInsetsMetric(
-              views::INSETS_VECTOR_IMAGE_BUTTON));
-    } else {
-      help_button = views::CreateVectorImageButtonWithNativeTheme(
-          base::BindRepeating(
-              &permissions::ChooserController::OpenHelpCenterUrl,
-              base::Unretained(chooser_controller_.get())),
-          vector_icons::kHelpOutlineIcon);
-    }
+    help_button = views::ImageButton::CreateIconButton(
+        base::BindRepeating(&permissions::ChooserController::OpenHelpCenterUrl,
+                            base::Unretained(chooser_controller_.get())),
+        vector_icons::kHelpOutlineIcon,
+        l10n_util::GetStringUTF16(IDS_LEARN_MORE),
+        views::ImageButton::MaterialIconStyle::kLarge,
+        views::LayoutProvider::Get()->GetInsetsMetric(
+            views::INSETS_VECTOR_IMAGE_BUTTON));
     help_button->SetTooltipText(l10n_util::GetStringUTF16(IDS_LEARN_MORE));
     container->AddChildView(std::move(help_button));
   }
@@ -310,7 +322,7 @@ std::unique_ptr<views::View> DeviceChooserContentView::CreateExtraView() {
   auto throbber_label = std::make_unique<views::Label>(
       throbber_strings.first, views::style::CONTEXT_LABEL,
       views::style::STYLE_DISABLED);
-  throbber_label->SetTooltipText(throbber_strings.second);
+  throbber_label->SetCustomTooltipText(throbber_strings.second);
   throbber_label_ = throbber_container->AddChildView(std::move(throbber_label));
 
   if (chooser_controller_->ShouldShowReScanButton()) {
@@ -348,9 +360,9 @@ std::unique_ptr<views::View> DeviceChooserContentView::CreateExtraView() {
 }
 
 bool DeviceChooserContentView::IsDialogButtonEnabled(
-    ui::DialogButton button) const {
+    ui::mojom::DialogButton button) const {
   return chooser_controller_->BothButtonsAlwaysEnabled() ||
-         button != ui::DIALOG_BUTTON_OK ||
+         button != ui::mojom::DialogButton::kOk ||
          !table_view_->selection_model().empty();
 }
 
@@ -389,9 +401,16 @@ void DeviceChooserContentView::UpdateTableView() {
     is_initialized_ = true;
   }
   no_options_view_->SetVisible(RowCount() == 0 && is_initialized_ &&
-                               adapter_enabled_);
-  adapter_off_view_->SetVisible(!adapter_enabled_);
-  adapter_unauthorized_view_->SetVisible(!adapter_authorized_);
+                               adapter_enabled_ && adapter_authorized_);
+  if (adapter_off_view_) {
+    adapter_off_view_->SetVisible(!adapter_enabled_ && adapter_authorized_);
+  }
+  if (adapter_unauthorized_view_) {
+    adapter_unauthorized_view_->SetVisible(!adapter_authorized_);
+  }
+  if (!adapter_enabled_ || !adapter_authorized_) {
+    HideThrobber();
+  }
 }
 
 void DeviceChooserContentView::SelectAllCheckboxChanged() {
@@ -400,8 +419,9 @@ void DeviceChooserContentView::SelectAllCheckboxChanged() {
 }
 
 void DeviceChooserContentView::ShowThrobber() {
-  if (re_scan_button_)
+  if (re_scan_button_) {
     re_scan_button_->SetVisible(false);
+  }
 
   throbber_->SetVisible(true);
   throbber_label_->SetVisible(true);

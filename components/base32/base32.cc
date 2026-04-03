@@ -6,7 +6,9 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <limits>
+#include <string_view>
 
 #include "base/check_op.h"
 #include "base/numerics/safe_math.h"
@@ -15,7 +17,9 @@ namespace base32 {
 
 namespace {
 
-constexpr char kEncoding[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+constexpr auto kEncoding =
+    std::to_array<const char>("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567");
+static_assert(kEncoding.size() == 33);  // 32 symbols + null terminator
 constexpr char kPaddingChar = '=';
 
 // Returns a 5 bit number between [0,31] matching the provided base 32 encoded
@@ -47,7 +51,7 @@ std::string Base32Encode(base::span<const uint8_t> input,
   // That is: ceil(input.size() * 8.0 / 5.0) ==
   //          (input.size() * 8 + 4) / 5.
   const size_t unpadded_length =
-      ((base::MakeCheckedNum(input.size()) * 8 + 4) / 5).ValueOrDie();
+      ((base::CheckedNumeric(input.size()) * 8 + 4) / 5).ValueOrDie();
 
   std::string output;
   const size_t encoded_length = policy == Base32EncodePolicy::INCLUDE_PADDING
@@ -82,17 +86,18 @@ std::string Base32Encode(base::span<const uint8_t> input,
   return output;
 }
 
-std::vector<uint8_t> Base32Decode(base::StringPiece input) {
+std::vector<uint8_t> Base32Decode(std::string_view input) {
   // Remove padding, if any
   const size_t padding_index = input.find(kPaddingChar);
-  if (padding_index != base::StringPiece::npos)
+  if (padding_index != std::string_view::npos) {
     input.remove_suffix(input.size() - padding_index);
+  }
 
   if (input.empty())
     return std::vector<uint8_t>();
 
   const size_t decoded_length =
-      (base::MakeCheckedNum(input.size()) * 5 / 8).ValueOrDie();
+      (base::CheckedNumeric(input.size()) * 5 / 8).ValueOrDie();
 
   std::vector<uint8_t> output;
   output.reserve(decoded_length);

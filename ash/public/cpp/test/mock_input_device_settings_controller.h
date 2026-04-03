@@ -8,6 +8,7 @@
 #include "ash/public/cpp/ash_public_export.h"
 #include "ash/public/cpp/input_device_settings_controller.h"
 #include "ash/public/mojom/input_device_settings.mojom.h"
+#include "base/functional/callback.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace ash {
@@ -114,6 +115,13 @@ class ASH_PUBLIC_EXPORT MockInputDeviceSettingsController
               OnGraphicsTabletButtonPressed,
               (DeviceId device_id, const mojom::Button& button),
               (override));
+  MOCK_METHOD(
+      void,
+      GetDeviceImageDataUrl,
+      (const std::string& device_key,
+       base::OnceCallback<void(const std::optional<std::string>&)> callback),
+      (override));
+  MOCK_METHOD(void, ResetNotificationDeviceTracking, (), (override));
   MOCK_METHOD(void, AddObserver, (Observer * observer), (override));
   MOCK_METHOD(void, RemoveObserver, (Observer * observer), (override));
 };

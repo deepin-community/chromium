@@ -16,12 +16,14 @@
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/event_router_forwarder.h"
-#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/common/extensions/api/activity_log_private.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/extension_system_provider.h"
 #include "extensions/browser/extensions_browser_client.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -88,7 +90,7 @@ void ActivityLogAPI::StartOrStopListeningForExtensionActivities() {
 }
 
 void ActivityLogAPI::OnExtensionActivity(scoped_refptr<Action> activity) {
-  base::Value::List value;
+  base::ListValue value;
   ExtensionActivity activity_arg = activity->ConvertToExtensionActivity();
   value.Append(activity_arg.ToValue());
   auto event = std::make_unique<Event>(

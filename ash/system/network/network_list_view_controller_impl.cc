@@ -7,12 +7,12 @@
 #include <memory>
 #include <vector>
 
+#include "ash/ash_element_identifiers.h"
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/bluetooth_config_service.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
-#include "ash/shell_delegate.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/ash_color_provider.h"
 #include "ash/style/typography.h"
@@ -28,7 +28,6 @@
 #include "base/timer/timer.h"
 #include "chromeos/ash/components/dbus/hermes/hermes_manager_client.h"
 #include "chromeos/ash/services/bluetooth_config/public/cpp/cros_bluetooth_config_util.h"
-#include "chromeos/ash/services/multidevice_setup/public/mojom/multidevice_setup.mojom.h"
 #include "chromeos/services/network_config/public/cpp/cros_network_config_util.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
 #include "chromeos/services/network_config/public/mojom/network_types.mojom-shared.h"
@@ -37,6 +36,8 @@
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/controls/image_view.h"
+#include "ui/views/view.h"
+#include "ui/views/view_class_properties.h"
 
 namespace ash {
 
@@ -51,6 +52,7 @@ using ::chromeos::network_config::mojom::DeviceStateProperties;
 using ::chromeos::network_config::mojom::DeviceStateType;
 using ::chromeos::network_config::mojom::FilterType;
 using ::chromeos::network_config::mojom::GlobalPolicy;
+using ::chromeos::network_config::mojom::InhibitReason;
 using ::chromeos::network_config::mojom::ManagedPropertiesPtr;
 using ::chromeos::network_config::mojom::NetworkFilter;
 using ::chromeos::network_config::mojom::NetworkStateProperties;
@@ -67,7 +69,7 @@ constexpr auto kWifiGroupLabelPadding = gfx::Insets::TLBR(8, 22, 8, 4);
 // Helper function to remove `*view` from its view hierarchy, delete the view,
 // and reset the value of `*view` to be `nullptr`.
 template <class T>
-void RemoveAndResetViewIfExists(T** view) {
+void RemoveAndResetViewIfExists(raw_ptr<T>* view) {
   DCHECK(view);
 
   if (!*view) {
@@ -77,8 +79,7 @@ void RemoveAndResetViewIfExists(T** view) {
   views::View* parent = (*view)->parent();
 
   if (parent) {
-    parent->RemoveChildViewT(*view);
-    *view = nullptr;
+    parent->RemoveChildViewT(view->ExtractAsDangling());
   }
 }
 
@@ -98,6 +99,16 @@ bool IsCellularDeviceInhibited() {
   }
   return cellular_device->inhibit_reason !=
          chromeos::network_config::mojom::InhibitReason::kNotInhibited;
+}
+
+bool IsCellularDeviceFlashing() {
+  const DeviceStateProperties* cellular_device =
+      Shell::Get()->system_tray_model()->network_state_model()->GetDevice(
+          NetworkType::kCellular);
+  if (!cellular_device) {
+    return false;
+  }
+  return cellular_device->is_flashing;
 }
 
 bool IsESimSupported() {
@@ -124,18 +135,7 @@ bool IsESimSupported() {
   return false;
 }
 
-bool IsCellularSimLocked() {
-  const DeviceStateProperties* cellular_device =
-      Shell::Get()->system_tray_model()->network_state_model()->GetDevice(
-          NetworkType::kCellular);
-  return cellular_device &&
-         !cellular_device->sim_lock_status->lock_type.empty();
-}
-
 NetworkType GetMobileSectionNetworkType() {
-  if (features::IsInstantHotspotRebrandEnabled()) {
-    return NetworkType::kCellular;
-  }
   return NetworkType::kMobile;
 }
 
@@ -153,18 +153,6 @@ NetworkListViewControllerImpl::NetworkListViewControllerImpl(
   remote_cros_bluetooth_config_->ObserveSystemProperties(
       cros_system_properties_observer_receiver_.BindNewPipeAndPassRemote());
 
-  if (features::IsInstantHotspotRebrandEnabled()) {
-    Shell::Get()->shell_delegate()->BindMultiDeviceSetup(
-        multidevice_setup_remote_.BindNewPipeAndPassReceiver());
-
-    multidevice_setup_remote_->AddHostStatusObserver(
-        host_status_observer_receiver_.BindNewPipeAndPassRemote());
-
-    multidevice_setup_remote_->GetHostStatus(
-        base::BindOnce(&NetworkListViewControllerImpl::OnHostStatusChanged,
-                       weak_ptr_factory_.GetWeakPtr()));
-  }
-
   GetNetworkStateList();
 }
 
@@ -181,6 +169,10 @@ void NetworkListViewControllerImpl::NetworkListChanged() {
   GetNetworkStateList();
 }
 
+void NetworkListViewControllerImpl::DeviceStateListChanged() {
+  UpdateMobileSection();
+}
+
 void NetworkListViewControllerImpl::GlobalPolicyChanged() {
   UpdateMobileSection();
   GetNetworkStateList();
@@ -193,11 +185,7 @@ void NetworkListViewControllerImpl::OnPropertiesUpdated(
   }
 
   bluetooth_system_state_ = properties->system_state;
-  if (features::IsInstantHotspotRebrandEnabled()) {
-    UpdateTetherHostsSection();
-  } else {
-    UpdateMobileSection();
-  }
+  UpdateMobileSection();
 }
 
 void NetworkListViewControllerImpl::GetNetworkStateList() {
@@ -206,15 +194,6 @@ void NetworkListViewControllerImpl::GetNetworkStateList() {
                          chromeos::network_config::mojom::kNoLimit),
       base::BindOnce(&NetworkListViewControllerImpl::OnGetNetworkStateList,
                      weak_ptr_factory_.GetWeakPtr()));
-}
-
-void NetworkListViewControllerImpl::OnHostStatusChanged(
-    multidevice_setup::mojom::HostStatus host_status,
-    const std::optional<multidevice::RemoteDevice>& host_device) {
-  has_phone_eligible_for_setup_ =
-      (host_status ==
-       multidevice_setup::mojom::HostStatus::kEligibleHostExistsButNoHostSet);
-  GetNetworkStateList();
 }
 
 void NetworkListViewControllerImpl::OnGetNetworkStateList(
@@ -275,7 +254,7 @@ void NetworkListViewControllerImpl::OnGetNetworkStateList(
         &previous_network_views);
 
     // Add mobile status message to NetworkDetailedNetworkView's
-    // `mobile_network_list_view_` if it exist.
+    // `mobile_network_list_view_` if it exists.
     if (mobile_status_message_) {
       network_detailed_network_view()
           ->GetNetworkList(GetMobileSectionNetworkType())
@@ -285,6 +264,8 @@ void NetworkListViewControllerImpl::OnGetNetworkStateList(
     if (ShouldAddESimEntry()) {
       mobile_item_index = CreateConfigureNetworkEntry(
           &add_esim_entry_, GetMobileSectionNetworkType(), mobile_item_index);
+      add_esim_entry_->SetProperty(views::kElementIdentifierKey,
+                                   kNetworkAddEsimElementId);
     } else {
       RemoveAndResetViewIfExists(&add_esim_entry_);
     }
@@ -292,36 +273,6 @@ void NetworkListViewControllerImpl::OnGetNetworkStateList(
     network_detailed_network_view()->ReorderMobileListView(index++);
   } else {
     RemoveAndResetViewIfExists(&mobile_header_view_);
-  }
-
-  if (features::IsInstantHotspotRebrandEnabled()) {
-    if (ShouldTetherHostsSectionBeShown()) {
-      if (!tether_hosts_header_view_) {
-        tether_hosts_header_view_ =
-            network_detailed_network_view()->AddTetherHostsSectionHeader();
-      }
-
-      UpdateTetherHostsSection();
-      network_detailed_network_view()->ReorderTetherHostsTopContainer(index++);
-
-      size_t tether_item_index = 0;
-      tether_item_index = CreateItemViewsIfMissingAndReorder(
-          NetworkType::kTether, tether_item_index, networks,
-          &previous_network_views);
-
-      // Add tether hosts status message to NetworkDetailedNetworkView's
-      // `tether_hosts_network_list_view_` if it exist.
-      if (tether_hosts_status_message_) {
-        network_detailed_network_view()
-            ->GetNetworkList(NetworkType::kTether)
-            ->ReorderChildView(tether_hosts_status_message_,
-                               tether_item_index++);
-      }
-
-      network_detailed_network_view()->ReorderTetherHostsListView(index++);
-    } else {
-      RemoveAndResetViewIfExists(&tether_hosts_header_view_);
-    }
   }
 
   UpdateWifiSection();
@@ -487,8 +438,9 @@ void NetworkListViewControllerImpl::MaybeShowConnectionWarningManagedIcon(
 }
 
 bool NetworkListViewControllerImpl::ShouldAddESimEntry() const {
-  const bool is_add_esim_enabled =
-      is_mobile_network_enabled_ && !IsCellularDeviceInhibited();
+  const bool is_add_esim_enabled = is_mobile_network_enabled_ &&
+                                   !IsCellularDeviceInhibited() &&
+                                   !IsCellularDeviceFlashing();
 
   bool is_add_esim_visible = IsESimSupported();
   const GlobalPolicy* global_policy = model()->global_policy();
@@ -557,10 +509,9 @@ void NetworkListViewControllerImpl::SetConnectionWarningIcon(
   // Set 'info' icon on left side.
   std::unique_ptr<views::ImageView> image_view = base::WrapUnique(
       TrayPopupUtils::CreateMainImageView(/*use_wide_layout=*/false));
-  image_view->SetImage(gfx::CreateVectorIcon(
+  image_view->SetImage(ui::ImageModel::FromVectorIcon(
       use_managed_icon ? kSystemTrayManagedIcon : kSystemMenuInfoIcon,
-      AshColorProvider::Get()->GetContentLayerColor(
-          AshColorProvider::ContentLayerType::kIconColorPrimary)));
+      cros_tokens::kIconColorPrimary));
   image_view->SetBackground(views::CreateSolidBackground(SK_ColorTRANSPARENT));
   image_view->SetID(newIconId);
   connection_warning_icon_ = image_view.get();
@@ -574,10 +525,6 @@ bool NetworkListViewControllerImpl::ShouldMobileDataSectionBeShown() {
     return true;
   }
 
-  if (features::IsInstantHotspotRebrandEnabled()) {
-    return false;
-  }
-
   const DeviceStateType tether_state =
       model()->GetDeviceState(NetworkType::kTether);
 
@@ -588,37 +535,6 @@ bool NetworkListViewControllerImpl::ShouldMobileDataSectionBeShown() {
 
   // Hide the section if Tether is PROHIBITED.
   if (tether_state == DeviceStateType::kProhibited) {
-    return false;
-  }
-
-  // Secondary users cannot enable Bluetooth, and Tether is only UNINITIALIZED
-  // if Bluetooth is disabled. Hide the section in this case.
-  if (tether_state == DeviceStateType::kUninitialized && IsSecondaryUser()) {
-    return false;
-  }
-
-  return true;
-}
-
-bool NetworkListViewControllerImpl::ShouldTetherHostsSectionBeShown() {
-  // The section should never be shown if the feature flag is disabled.
-  if (!features::IsInstantHotspotRebrandEnabled()) {
-    return false;
-  }
-
-  // The Tether Hosts section should always be shown if there is an eligible
-  // device which has not been set up yet.
-  if (has_phone_eligible_for_setup_) {
-    return true;
-  }
-
-  const DeviceStateType tether_state =
-      model()->GetDeviceState(NetworkType::kTether);
-
-  // Hide the section if Tether is Unavailable, Prohibited, or Disabled.
-  if (tether_state == DeviceStateType::kUnavailable ||
-      tether_state == DeviceStateType::kProhibited ||
-      tether_state == DeviceStateType::kDisabled) {
     return false;
   }
 
@@ -654,7 +570,7 @@ size_t NetworkListViewControllerImpl::CreateWifiGroupHeader(
                : IDS_ASH_QUICK_SETTINGS_UNKNOWN_NETWORKS));
   header->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_TO_HEAD);
   header->SetBorder(views::CreateEmptyBorder(kWifiGroupLabelPadding));
-  header->SetEnabledColorId(cros_tokens::kCrosSysOnSurfaceVariant);
+  header->SetEnabledColor(cros_tokens::kCrosSysOnSurfaceVariant);
   TypographyProvider::Get()->StyleLabel(TypographyToken::kCrosBody2, *header);
 
   if (is_known) {
@@ -671,7 +587,7 @@ size_t NetworkListViewControllerImpl::CreateWifiGroupHeader(
 }
 
 size_t NetworkListViewControllerImpl::CreateConfigureNetworkEntry(
-    HoverHighlightView** configure_network_entry_ptr,
+    raw_ptr<HoverHighlightView>* configure_network_entry_ptr,
     NetworkType type,
     size_t index) {
   if (*configure_network_entry_ptr) {
@@ -690,30 +606,6 @@ void NetworkListViewControllerImpl::UpdateMobileSection() {
     return;
   }
   UpdateMobileToggleAndSetStatusMessage();
-}
-
-void NetworkListViewControllerImpl::UpdateTetherHostsSection() {
-  if (!tether_hosts_header_view_) {
-    return;
-  }
-
-  network_detailed_network_view()->UpdateTetherHostsStatus(true);
-
-  if (!IsBluetoothEnabledOrEnabling(bluetooth_system_state_)) {
-    CreateInfoLabelIfMissingAndUpdate(
-        IDS_ASH_STATUS_TRAY_NETWORK_TETHER_NO_BLUETOOTH,
-        &tether_hosts_status_message_);
-    return;
-  }
-
-  if (!has_tether_networks_) {
-    CreateInfoLabelIfMissingAndUpdate(
-        IDS_ASH_STATUS_TRAY_NETWORK_NO_TETHER_DEVICES_FOUND,
-        &tether_hosts_status_message_);
-    return;
-  }
-
-  RemoveAndResetViewIfExists(&tether_hosts_status_message_);
 }
 
 void NetworkListViewControllerImpl::UpdateWifiSection() {
@@ -783,7 +675,37 @@ void NetworkListViewControllerImpl::UpdateMobileToggleAndSetStatusMessage() {
                                           /*animate_toggle=*/true);
       network_detailed_network_view()->UpdateMobileStatus(true);
 
+      if (has_cellular_networks_ || has_tether_networks_) {
+        RemoveAndResetViewIfExists(&mobile_status_message_);
+        return;
+      }
+      const InhibitReason inhibit_reason = GetCellularInhibitReason();
+      if (inhibit_reason == InhibitReason::kInstallingProfile ||
+          inhibit_reason == InhibitReason::kRefreshingProfileList ||
+          inhibit_reason == InhibitReason::kRequestingAvailableProfiles) {
+        CreateInfoLabelIfMissingAndUpdate(
+            GetCellularInhibitReasonMessageId(inhibit_reason),
+            &mobile_status_message_);
+        return;
+      }
       RemoveAndResetViewIfExists(&mobile_status_message_);
+      return;
+    }
+
+    if (IsCellularDeviceFlashing()) {
+      // When a device is flashing, it cannot process any new operations. Thus,
+      // keep the toggle on to show users that the device is active, but set it
+      // to be disabled to make it clear that users cannot update it until
+      // operation completes.
+      CreateInfoLabelIfMissingAndUpdate(IDS_ASH_STATUS_TRAY_UPDATING,
+                                        &mobile_status_message_);
+
+      mobile_header_view_->SetToggleVisibility(/*visible=*/true);
+      mobile_header_view_->SetToggleState(/*enabled=*/false,
+                                          /*is_on=*/true,
+                                          /*animate_toggle=*/true);
+      network_detailed_network_view()->UpdateMobileStatus(true);
+
       return;
     }
 
@@ -795,13 +717,6 @@ void NetworkListViewControllerImpl::UpdateMobileToggleAndSetStatusMessage() {
     // The toggle will never be enabled during cellular state transitions.
     toggle_enabled &=
         cellular_enabled || cellular_state == DeviceStateType::kDisabled;
-
-    // The toggle will never be enabled if the device is SIM locked and we
-    // cannot open the Settings UI.
-    toggle_enabled &=
-        cellular_enabled ||
-        Shell::Get()->session_controller()->ShouldEnableSettings() ||
-        !IsCellularSimLocked();
 
     mobile_header_view_->SetToggleVisibility(/*visibility=*/true);
     mobile_header_view_->SetToggleState(/*enabled=*/toggle_enabled,
@@ -819,9 +734,7 @@ void NetworkListViewControllerImpl::UpdateMobileToggleAndSetStatusMessage() {
     network_detailed_network_view()->UpdateMobileStatus(cellular_enabled);
 
     if (cellular_enabled) {
-      if (has_cellular_networks_ ||
-          (has_tether_networks_ &&
-           !features::IsInstantHotspotRebrandEnabled())) {
+      if (has_cellular_networks_ || has_tether_networks_) {
         RemoveAndResetViewIfExists(&mobile_status_message_);
         return;
       }
@@ -878,7 +791,7 @@ void NetworkListViewControllerImpl::UpdateMobileToggleAndSetStatusMessage() {
 
 void NetworkListViewControllerImpl::CreateInfoLabelIfMissingAndUpdate(
     int message_id,
-    TrayInfoLabel** info_label_ptr) {
+    raw_ptr<TrayInfoLabel>* info_label_ptr) {
   DCHECK(message_id);
   DCHECK(info_label_ptr);
 
@@ -903,12 +816,6 @@ void NetworkListViewControllerImpl::CreateInfoLabelIfMissingAndUpdate(
         NetworkListViewControllerViewChildId::kWifiStatusMessage));
     *info_label_ptr = network_detailed_network_view()
                           ->GetNetworkList(NetworkType::kWiFi)
-                          ->AddChildView(std::move(info));
-  } else if (info_label_ptr == &tether_hosts_status_message_) {
-    info->SetID(static_cast<int>(
-        NetworkListViewControllerViewChildId::kTetherHostsStatusMessage));
-    *info_label_ptr = network_detailed_network_view()
-                          ->GetNetworkList(NetworkType::kTether)
                           ->AddChildView(std::move(info));
   } else {
     NOTREACHED();
@@ -987,8 +894,7 @@ void NetworkListViewControllerImpl::ShowConnectionWarning(
       base::WrapUnique(TrayPopupUtils::CreateDefaultLabel());
   label->SetText(GenerateLabelText());
   label->SetBackground(views::CreateSolidBackground(SK_ColorTRANSPARENT));
-  label->SetEnabledColor(AshColorProvider::Get()->GetContentLayerColor(
-      AshColorProvider::ContentLayerType::kTextColorPrimary));
+  label->SetEnabledColor(cros_tokens::kTextColorPrimary);
   label->SetAutoColorReadabilityEnabled(false);
   TypographyProvider::Get()->StyleLabel(TypographyToken::kCrosBody2, *label);
   label->SetID(static_cast<int>(
@@ -1011,9 +917,10 @@ void NetworkListViewControllerImpl::ShowConnectionWarning(
 }
 
 void NetworkListViewControllerImpl::HideConnectionWarning() {
-  // If `connection_warning_icon_` existed, it must be cleared first because
-  // `connection_warning_` owns it.
+  // If `connection_warning_icon_` or `connection_warning_label_` existed, they
+  // must be cleared first because `connection_warning_` owns them.
   RemoveAndResetViewIfExists(&connection_warning_icon_);
+  RemoveAndResetViewIfExists(&connection_warning_label_);
   RemoveAndResetViewIfExists(&connection_warning_);
 }
 

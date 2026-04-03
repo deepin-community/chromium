@@ -6,30 +6,27 @@
 #define ASH_SYSTEM_UNIFIED_UNIFIED_SYSTEM_TRAY_CONTROLLER_H_
 
 #include <memory>
-#include <vector>
 
 #include "ash/ash_export.h"
 #include "ash/system/audio/unified_volume_slider_controller.h"
 #include "ash/system/media/quick_settings_media_view_controller.h"
-#include "ash/system/media/unified_media_controls_controller.h"
 #include "ash/system/time/calendar_metrics.h"
 #include "ash/system/unified/quick_settings_view.h"
 #include "ash/system/unified/unified_system_tray_model.h"
+#include "base/memory/advanced_memory_safety_checks.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/safety_checks.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "chromeos/dbus/power/power_manager_client.h"
 #include "components/global_media_controls/public/constants.h"
-
-namespace views {
-class View;
-}  // namespace views
+#include "ui/views/controls/slider.h"
+#include "ui/views/view.h"
 
 namespace ash {
 
 class DetailedViewController;
 class FeaturePodControllerBase;
 class PaginationController;
-class UnifiedMediaControlsController;
 class UnifiedBrightnessSliderController;
 class UnifiedVolumeSliderController;
 class UnifiedSystemTrayBubble;
@@ -38,7 +35,7 @@ class UnifiedSystemTrayModel;
 // Controller class of `QuickSettingsView`. Handles events of the view.
 class ASH_EXPORT UnifiedSystemTrayController
     : public UnifiedVolumeSliderController::Delegate,
-      public UnifiedMediaControlsController::Delegate {
+      public chromeos::PowerManagerClient::Observer {
   // Do not remove this macro!
   // The macro is maintained by the memory safety team.
   ADVANCED_MEMORY_SAFETY_CHECKS();
@@ -89,6 +86,9 @@ class ASH_EXPORT UnifiedSystemTrayController
 
   // Show user selector view. Called from the view.
   void ShowUserChooserView();
+  // Show the detailed view of Quick Share, formerly Nearby Share. Called from
+  // the view.
+  void ShowNearbyShareDetailedView();
   // Show the detailed view of network. Called from the view.
   void ShowNetworkDetailedView();
   // Show the detailed view of hotspot. Called from the view.
@@ -111,8 +111,6 @@ class ASH_EXPORT UnifiedSystemTrayController
   void ShowAudioDetailedView();
   // Show the detailed view of display. Called from the view.
   void ShowDisplayDetailedView();
-  // Show the detailed view of notifier settings. Called from the view.
-  void ShowNotifierSettingsView();
   // Show the detailed view of media controls. Called from the view.
   void ShowMediaControlsDetailedView(
       global_media_controls::GlobalMediaControlsEntryPoint entry_point,
@@ -137,9 +135,9 @@ class ASH_EXPORT UnifiedSystemTrayController
   // UnifiedVolumeSliderController::Delegate:
   void OnAudioSettingsButtonClicked() override;
 
-  // UnifedMediaControlsController::Delegate;
-  void ShowMediaControls() override;
-  void OnMediaControlsViewClicked() override;
+  // PowerManagerClient::Observer:
+  void LidEventReceived(chromeos::PowerManagerClient::LidState state,
+                        base::TimeTicks timestamp) override;
 
   // Sets whether the quick settings view should show the media view.
   void SetShowMediaView(bool show_media_view);
@@ -162,6 +160,10 @@ class ASH_EXPORT UnifiedSystemTrayController
     return media_view_controller_.get();
   }
 
+  bool showing_accessibility_detailed_view() const {
+    return showing_accessibility_detailed_view_;
+  }
+
   bool showing_audio_detailed_view() const {
     return showing_audio_detailed_view_;
   }
@@ -178,7 +180,15 @@ class ASH_EXPORT UnifiedSystemTrayController
     media_view_controller_ = std::move(test_controller);
   }
 
+  void ShutDownDetailedViewController();
+  void PrepareBubbleDestroy();
+
+  // Enable or disable the brightness slider view.
+  void UpdateBrightnessSlider() const;
+  bool GetBrightnessSliderEnabledForTesting() const;
+
  private:
+  friend class AccessibilityFeaturePodControllerTest;
   friend class SystemTrayTestApi;
   friend class UnifiedBrightnessViewTest;
   friend class UnifiedMessageCenterBubbleTest;
@@ -197,11 +207,15 @@ class ASH_EXPORT UnifiedSystemTrayController
 
   bool ShouldShowDeferredUpdateDialog() const;
 
+  // Get the initial lid state.
+  void OnGetSwitchStates(
+      std::optional<chromeos::PowerManagerClient::SwitchStates> switch_states);
+
   // Model that stores UI specific variables. Unowned.
   scoped_refptr<UnifiedSystemTrayModel> model_;
 
   // Unowned. Owned by Views hierarchy.
-  raw_ptr<QuickSettingsView, DanglingUntriaged> quick_settings_view_ = nullptr;
+  raw_ptr<QuickSettingsView> quick_settings_view_ = nullptr;
 
   // Unowned.
   raw_ptr<UnifiedSystemTrayBubble> bubble_ = nullptr;
@@ -216,17 +230,18 @@ class ASH_EXPORT UnifiedSystemTrayController
 
   std::unique_ptr<PaginationController> pagination_controller_;
 
-  std::unique_ptr<UnifiedMediaControlsController> media_controls_controller_;
   std::unique_ptr<QuickSettingsMediaViewController> media_view_controller_;
 
   // Controller of volume slider. Owned.
   std::unique_ptr<UnifiedVolumeSliderController> volume_slider_controller_;
-  raw_ptr<views::View, DanglingUntriaged> unified_volume_view_ = nullptr;
+  raw_ptr<views::View> unified_volume_view_ = nullptr;
 
   // Controller of brightness slider. Owned.
   std::unique_ptr<UnifiedBrightnessSliderController>
       brightness_slider_controller_;
-  raw_ptr<views::View, DanglingUntriaged> unified_brightness_view_ = nullptr;
+  raw_ptr<views::View> unified_brightness_view_ = nullptr;
+
+  bool showing_accessibility_detailed_view_ = false;
 
   bool showing_audio_detailed_view_ = false;
 
@@ -234,7 +249,12 @@ class ASH_EXPORT UnifiedSystemTrayController
 
   bool showing_calendar_view_ = false;
 
+  chromeos::PowerManagerClient::LidState lid_state_ =
+      chromeos::PowerManagerClient::LidState::OPEN;
+
   base::ObserverList<Observer> observers_;
+
+  base::WeakPtrFactory<UnifiedSystemTrayController> weak_ptr_factory_{this};
 };
 
 }  // namespace ash

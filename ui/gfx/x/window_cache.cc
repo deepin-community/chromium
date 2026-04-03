@@ -4,12 +4,12 @@
 
 #include "ui/gfx/x/window_cache.h"
 
+#include <algorithm>
+#include <vector>
+
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase_vector.h"
 #include "base/functional/bind.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -148,7 +148,7 @@ Window WindowCache::GetWindowAtPoint(gfx::Point point_px,
   point_px -= gfx::Vector2d(info->x_px, info->y_px);
   if (info->bounding_rects_px && info->input_rects_px) {
     for (const auto& rects : {info->bounding_rects_px, info->input_rects_px}) {
-      if (!base::ranges::any_of(*rects, [&point_px](const Rectangle& x_rect) {
+      if (!std::ranges::any_of(*rects, [&point_px](const Rectangle& x_rect) {
             gfx::Rect rect{x_rect.x, x_rect.y, x_rect.width, x_rect.height};
             return rect.Contains(point_px);
           })) {
@@ -195,8 +195,8 @@ void WindowCache::OnEvent(const Event& event) {
       if (auto* siblings = GetChildren(info->parent)) {
         Window window = configure->window;
         Window above = configure->above_sibling;
-        auto src = base::ranges::find(*siblings, window);
-        auto dst = base::ranges::find(*siblings, above);
+        auto src = std::ranges::find(*siblings, window);
+        auto dst = std::ranges::find(*siblings, above);
         auto end = siblings->end();
         if (src != end && (dst != end || above == Window::None)) {
           dst = above == Window::None ? siblings->begin() : ++dst;
@@ -228,7 +228,7 @@ void WindowCache::OnEvent(const Event& event) {
   } else if (auto* destroy = event.As<DestroyNotifyEvent>()) {
     if (auto* info = GetInfo(destroy->window)) {
       if (auto* siblings = GetChildren(info->parent)) {
-        base::Erase(*siblings, destroy->window);
+        std::erase(*siblings, destroy->window);
       }
       windows_.erase(destroy->window);
     }
@@ -243,7 +243,7 @@ void WindowCache::OnEvent(const Event& event) {
   } else if (auto* reparent = event.As<ReparentNotifyEvent>()) {
     if (auto* info = GetInfo(reparent->window)) {
       if (auto* old_siblings = GetChildren(info->parent)) {
-        base::Erase(*old_siblings, reparent->window);
+        std::erase(*old_siblings, reparent->window);
       }
       if (auto* new_siblings = GetChildren(reparent->parent)) {
         new_siblings->push_back(reparent->window);
@@ -258,7 +258,7 @@ void WindowCache::OnEvent(const Event& event) {
   } else if (auto* circulate = event.As<CirculateEvent>()) {
     if (auto* info = GetInfo(circulate->window)) {
       if (auto* siblings = GetChildren(info->parent)) {
-        base::Erase(*siblings, circulate->window);
+        std::erase(*siblings, circulate->window);
         if (circulate->place == Place::OnTop) {
           siblings->push_back(circulate->window);
         } else {
@@ -269,7 +269,7 @@ void WindowCache::OnEvent(const Event& event) {
   } else if (auto* shape = event.As<Shape::NotifyEvent>()) {
     Window window = shape->affected_window;
     Shape::Sk kind = shape->shape_kind;
-    if (kind != Shape::Sk::Clip && base::Contains(windows_, window)) {
+    if (kind != Shape::Sk::Clip && windows_.contains(window)) {
       AddRequest(connection_->shape().GetRectangles(window, kind),
                  &WindowCache::OnGetRectanglesResponse, window, kind);
     }
@@ -277,7 +277,7 @@ void WindowCache::OnEvent(const Event& event) {
 }
 
 void WindowCache::AddWindow(Window window, Window parent) {
-  if (base::Contains(windows_, window)) {
+  if (windows_.contains(window)) {
     return;
   }
   WindowInfo& info = windows_[window];
@@ -383,10 +383,14 @@ void WindowCache::OnGetPropertyResponse(Window window,
     } else if (atom == gtk_frame_extents_) {
       if (response->format == CHAR_BIT * sizeof(int32_t) &&
           response->value_len == 4) {
-        const int32_t* frame_extents = response->value->front_as<int32_t>();
-        info->gtk_frame_extents_px =
-            gfx::Insets::TLBR(frame_extents[2], frame_extents[0],
-                              frame_extents[3], frame_extents[1]);
+        const int32_t* frame_extents = response->value->cast_to<int32_t>();
+        // This is safe: we've checked (in the condition above) that the
+        // response contains four int32_ts. It would be nice if instead
+        // GetPropertyResponse had a way to convert its value safely into a
+        // span<T> for some T.
+        UNSAFE_BUFFERS(info->gtk_frame_extents_px = gfx::Insets::TLBR(
+                           frame_extents[2], frame_extents[0], frame_extents[3],
+                           frame_extents[1]));
       } else {
         info->gtk_frame_extents_px = gfx::Insets();
       }
@@ -405,7 +409,6 @@ void WindowCache::OnGetRectanglesResponse(
         break;
       case Shape::Sk::Clip:
         NOTREACHED();
-        break;
       case Shape::Sk::Input:
         info->input_rects_px = std::move(response->rectangles);
         break;

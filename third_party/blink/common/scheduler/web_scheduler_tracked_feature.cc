@@ -8,6 +8,8 @@
 #include <map>
 #include <vector>
 
+#include "third_party/blink/public/common/features.h"
+
 namespace blink {
 namespace scheduler {
 
@@ -17,7 +19,7 @@ std::atomic_bool disable_align_wake_ups{false};
 
 struct FeatureNames {
   std::string short_name;
-  std::string human_readable;
+  const char* human_readable;
 };
 
 FeatureNames FeatureToNames(WebSchedulerTrackedFeature feature) {
@@ -25,39 +27,44 @@ FeatureNames FeatureToNames(WebSchedulerTrackedFeature feature) {
     case WebSchedulerTrackedFeature::kWebSocket:
       return {"websocket", "WebSocket live connection"};
     case WebSchedulerTrackedFeature::kWebSocketSticky:
-      return {"websocket", "WebSocket used"};
+      return {"websocket-used-with-ccns",
+              "WebSocket used in the page with Cache-Control: no store"};
     case WebSchedulerTrackedFeature::kWebTransport:
       return {"webtransport", "WebTransport live connection"};
     case WebSchedulerTrackedFeature::kWebTransportSticky:
-      return {"webtransport", "WebTransport used"};
+      return {"webtransport-used-with-ccns",
+              "WebTransport used in the page with Cache-Control: no store"};
     case WebSchedulerTrackedFeature::kWebRTC:
-      return {"webrtc", "WebRTC live connection"};
+      return {"rtc", "WebRTC live connection"};
     case WebSchedulerTrackedFeature::kWebRTCSticky:
-      return {"webrtc", "WebRTC used"};
+      return {"rtc-used-with-ccns",
+              "WebRTC used in the page with Cache-Control: no store"};
     case WebSchedulerTrackedFeature::kMainResourceHasCacheControlNoCache:
-      return {"cache-control-no-cache",
+      return {"response-cache-control-no-cache",
               "main resource has Cache-Control: No-Cache"};
     case WebSchedulerTrackedFeature::kMainResourceHasCacheControlNoStore:
-      return {"cache-control-no-store",
+      return {"response-cache-control-no-store",
               "main resource has Cache-Control: No-Store"};
     case WebSchedulerTrackedFeature::kSubresourceHasCacheControlNoCache:
-      return {"cache-control-no-cache",
+      return {"response-cache-control-no-cache",
               "subresource has Cache-Control: No-Cache"};
     case WebSchedulerTrackedFeature::kSubresourceHasCacheControlNoStore:
-      return {"cache-control-no-store",
+      return {"response-cache-control-no-store",
               "subresource has Cache-Control: No-Store"};
     case WebSchedulerTrackedFeature::kContainsPlugins:
-      return {"contains-plugins", "page contains plugins"};
+      return {"plugins", "page contains plugins"};
     case WebSchedulerTrackedFeature::kDocumentLoaded:
       return {"document-loaded", "document loaded"};
     case WebSchedulerTrackedFeature::kSharedWorker:
-      return {"shared-worker", "Shared worker present"};
+      return {"sharedworker", "Shared worker present"};
     case WebSchedulerTrackedFeature::kOutstandingNetworkRequestFetch:
       return {"fetch", "outstanding network request (fetch)"};
     case WebSchedulerTrackedFeature::kOutstandingNetworkRequestXHR:
-      return {"outstanding-network", "outstanding network request (XHR)"};
+      return {"outstanding-network-request",
+              "outstanding network request (XHR)"};
     case WebSchedulerTrackedFeature::kOutstandingNetworkRequestOthers:
-      return {"outstanding-network", "outstanding network request (others)"};
+      return {"outstanding-network-request",
+              "outstanding network request (others)"};
     case WebSchedulerTrackedFeature::kRequestedMIDIPermission:
       return {"midi", "requested midi permission"};
     case WebSchedulerTrackedFeature::kRequestedAudioCapturePermission:
@@ -71,7 +78,7 @@ FeatureNames FeatureToNames(WebSchedulerTrackedFeature feature) {
     case WebSchedulerTrackedFeature::kBroadcastChannel:
       return {"broadcastchannel", "requested broadcast channel permission"};
     case WebSchedulerTrackedFeature::kWebXR:
-      return {"webxr", "WebXR"};
+      return {"webxrdevice", "WebXR"};
     case WebSchedulerTrackedFeature::kWebLocks:
       return {"lock", "WebLocks"};
     case WebSchedulerTrackedFeature::kWebHID:
@@ -79,57 +86,73 @@ FeatureNames FeatureToNames(WebSchedulerTrackedFeature feature) {
     case WebSchedulerTrackedFeature::kWebShare:
       return {"webshare", "WebShare"};
     case WebSchedulerTrackedFeature::kRequestedStorageAccessGrant:
-      return {"storage-access", "requested storage access permission"};
+      return {"storageaccess", "requested storage access permission"};
     case WebSchedulerTrackedFeature::kWebNfc:
       return {"webnfc", "WebNfc"};
     case WebSchedulerTrackedFeature::kPrinting:
-      return {"printing", "Printing"};
-    case WebSchedulerTrackedFeature::kWebDatabase:
-      return {"web-database", "WebDatabase"};
+      return {base::FeatureList::IsEnabled(
+                  features::kBackForwardCacheUpdateNotRestoredReasonsName)
+                  ? "masked"
+                  : "printing",
+              "Printing"};
     case WebSchedulerTrackedFeature::kPictureInPicture:
-      return {"picture-in-picture", "PictureInPicture"};
-    case WebSchedulerTrackedFeature::kPortal:
-      return {"portal", "Portal"};
+      return {"pictureinpicturewindow", "PictureInPicture"};
     case WebSchedulerTrackedFeature::kSpeechRecognizer:
-      return {"speech-recognizer", "SpeechRecognizer"};
+      return {"speechrecognition", "SpeechRecognizer"};
     case WebSchedulerTrackedFeature::kIdleManager:
-      return {"idle-manager", "IdleManager"};
+      return {"idledetector", "IdleManager"};
     case WebSchedulerTrackedFeature::kPaymentManager:
-      return {"payment-manager", "PaymentManager"};
-    case WebSchedulerTrackedFeature::kSpeechSynthesis:
-      return {"speech-synthesis", "SpeechSynthesis"};
+      return {"paymentrequest", "PaymentManager"};
     case WebSchedulerTrackedFeature::kKeyboardLock:
-      return {"keyboard-lock", "KeyboardLock"};
+      return {"keyboardlock", "KeyboardLock"};
     case WebSchedulerTrackedFeature::kWebOTPService:
-      return {"sms", "SMSService"};
+      return {"otpcredential", "SMSService"};
     case WebSchedulerTrackedFeature::kOutstandingNetworkRequestDirectSocket:
-      return {"outstanding-network",
+      return {"outstanding-network-request",
               "outstanding network request (direct socket)"};
     case WebSchedulerTrackedFeature::kInjectedJavascript:
-      return {"injected-javascript", "External javascript injected"};
+      return {base::FeatureList::IsEnabled(
+                  features::kBackForwardCacheUpdateNotRestoredReasonsName)
+                  ? "masked"
+                  : "injected-javascript",
+              "External javascript injected"};
     case WebSchedulerTrackedFeature::kInjectedStyleSheet:
-      return {"injected-stylesheet", "External systesheet injected"};
+      return {base::FeatureList::IsEnabled(
+                  features::kBackForwardCacheUpdateNotRestoredReasonsName)
+                  ? "masked"
+                  : "injected-stylesheet",
+              "External stylesheet injected"};
     case WebSchedulerTrackedFeature::kKeepaliveRequest:
-      return {"keepalive-request", "requests with keepalive set"};
+      return {"response-keep-alive", "requests with keepalive set"};
     case WebSchedulerTrackedFeature::kDummy:
       return {"Dummy", "Dummy for testing"};
     case WebSchedulerTrackedFeature::
         kJsNetworkRequestReceivedCacheControlNoStoreResource:
-      return {"cache-control-no-store",
+      return {"response-cache-control-no-store-with-js-network-request",
               "JavaScript network request received Cache-Control: no-store "
               "resource"};
     case WebSchedulerTrackedFeature::kIndexedDBEvent:
-      return {"indexed-db-event", "IndexedDB event is pending"};
+      return {"idbversionchangeevent", "IndexedDB event is pending"};
     case WebSchedulerTrackedFeature::kWebSerial:
       return {"webserial", "Serial port open"};
     case WebSchedulerTrackedFeature::kSmartCard:
-      return {"smart-card", "SmartCardContext used"};
+      return {"smartcardconnection", "SmartCardContext used"};
     case WebSchedulerTrackedFeature::kLiveMediaStreamTrack:
-      return {"media-stream", "page has live MediaStreamTrack"};
+      return {"mediastream", "page has live MediaStreamTrack"};
     case WebSchedulerTrackedFeature::kUnloadHandler:
-      return {"unload-handler", "page contains unload handler"};
+      return {base::FeatureList::IsEnabled(
+                  features::kBackForwardCacheUpdateNotRestoredReasonsName)
+                  ? "unload-handler"
+                  : "unload-listener",
+              "page contains unload handler"};
     case WebSchedulerTrackedFeature::kParserAborted:
       return {"parser-aborted", "parser was aborted"};
+    case WebSchedulerTrackedFeature::kWebBluetooth:
+      return {"webbluetooth", "Active Bluetooth connection"};
+    case WebSchedulerTrackedFeature::kWebAuthentication:
+      return {"webauthn", "Active WebAuthn transaction"};
+    case WebSchedulerTrackedFeature::kSharedWorkerMessage:
+      return {"sharedworker-message", "Message posted from SharedWorker"};
   }
   return {};
 }
@@ -156,7 +179,7 @@ ShortStringToFeatureMap() {
 
 }  // namespace
 
-std::string FeatureToHumanReadableString(WebSchedulerTrackedFeature feature) {
+const char* FeatureToHumanReadableString(WebSchedulerTrackedFeature feature) {
   return FeatureToNames(feature).human_readable;
 }
 
@@ -204,7 +227,6 @@ WebSchedulerTrackedFeatures StickyFeatures() {
           WebSchedulerTrackedFeature::kRequestedVideoCapturePermission,
           WebSchedulerTrackedFeature::kRequestedBackForwardCacheBlockedSensors,
           WebSchedulerTrackedFeature::kRequestedBackgroundWorkPermission,
-          WebSchedulerTrackedFeature::kWebLocks,
           WebSchedulerTrackedFeature::kRequestedStorageAccessGrant,
           WebSchedulerTrackedFeature::kWebNfc,
           WebSchedulerTrackedFeature::kPrinting,
@@ -232,25 +254,6 @@ void DisableAlignWakeUpsForProcess() {
 // static
 bool IsAlignWakeUpsDisabledForProcess() {
   return disable_align_wake_ups.load(std::memory_order_relaxed);
-}
-
-// static
-std::vector<uint64_t> ToEnumBitMasks(WebSchedulerTrackedFeatures features) {
-  // We need one mask per 64 values, so the length of the mask should be
-  // kValueCount / 64 (round up).
-  std::vector<uint64_t> masks(
-      (WebSchedulerTrackedFeatures::kValueCount + 63u) / 64u, 0);
-  // It's guaranteed that `kValueCount` will be positive, so the size of the
-  // `masks` will be at least 1.
-  // See `//base/containers/enum_set.h`.
-  CHECK_GT(masks.size(), 0u);
-  for (auto feature : features) {
-    uint32_t value =
-        static_cast<std::underlying_type_t<WebSchedulerTrackedFeature>>(
-            feature);
-    masks[value / 64] |= 1ull << (value % 64);
-  }
-  return masks;
 }
 
 }  // namespace scheduler

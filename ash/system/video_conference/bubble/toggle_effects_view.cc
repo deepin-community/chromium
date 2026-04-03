@@ -12,6 +12,7 @@
 #include "ash/bubble/bubble_utils.h"
 #include "ash/constants/ash_features.h"
 #include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/style/icon_button.h"
 #include "ash/style/typography.h"
@@ -36,9 +37,11 @@
 #include "ui/gfx/font.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/button.h"
+#include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
@@ -82,7 +85,7 @@ class ToggleEffectsButtonLabel : public views::Label {
 
     SetID(video_conference::BubbleViewID::kToggleEffectLabel);
     SetAutoColorReadabilityEnabled(false);
-    SetEnabledColorId(cros_tokens::kCrosSysOnPrimaryContainer);
+    SetEnabledColor(cros_tokens::kCrosSysOnPrimaryContainer);
     SetMultiLine(true);
     SetMaxLines(kMaxLinesForLabel);
     SetProperty(
@@ -103,7 +106,7 @@ class ToggleEffectsButtonLabel : public views::Label {
 
   ~ToggleEffectsButtonLabel() override = default;
 
-  void SetText(const std::u16string& new_text) override {
+  void SetText(std::u16string_view new_text) override {
     views::Label::SetText(new_text);
 
     // Need to size to the new preferred size to know the number of lines
@@ -128,10 +131,13 @@ class ToggleEffectsButtonLabel : public views::Label {
 
   gfx::Size CalculatePreferredSize(
       const views::SizeBounds &available_size) const override {
-    // TODO(crbug.com/1349528): The size constraint is not passed down from
+    // TODO(crbug.com/40233803): The size constraint is not passed down from
     // the views tree in the first round of layout, so multiline label might
     // be broken here. We need to explicitly set the size to fix this.
-    return gfx::Size(label_max_width_, GetHeightForWidth(label_max_width_));
+    return gfx::Size(label_max_width_,
+                     views::Label::CalculatePreferredSize(
+                         views::SizeBounds(label_max_width_, {}))
+                         .height());
   }
 
  private:
@@ -228,7 +234,7 @@ ToggleEffectsButton::ToggleEffectsButton(
       l10n_util::GetStringUTF16(
           toggled_ ? VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_ON
                    : VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_OFF)));
-  SetAccessibleRole(ax::mojom::Role::kToggleButton);
+  GetViewAccessibility().SetRole(ax::mojom::Role::kToggleButton);
   SetFocusBehavior(FocusBehavior::ALWAYS);
 
   UpdateColorsAndBackground();
@@ -238,15 +244,32 @@ ToggleEffectsButton::ToggleEffectsButton(
   if (container_id.has_value()) {
     SetID(container_id.value());
   }
+
+  VideoConferenceTrayController::Get()->GetEffectsManager().AddObserver(this);
 }
 
-ToggleEffectsButton::~ToggleEffectsButton() = default;
+ToggleEffectsButton::~ToggleEffectsButton() {
+  VideoConferenceTrayController::Get()->GetEffectsManager().RemoveObserver(
+      this);
+}
+
+void ToggleEffectsButton::OnEffectChanged(VcEffectId effect_id, bool is_on) {
+  if (effect_id != effect_id_ || is_on == toggled_) {
+    return;
+  }
+
+  toggled_ = is_on;
+  UpdateColorsAndBackground();
+  UpdateTooltip();
+}
 
 void ToggleEffectsButton::OnButtonClicked(const ui::Event& event) {
-  callback_.Run(event);
-
   // Sets the toggled state.
   toggled_ = !toggled_;
+
+  // Run `callback_` after `toggled_` is updated to avoid duplicated work with
+  // OnCameraEffectChange().
+  callback_.Run(event);
 
   base::UmaHistogramBoolean(
       video_conference_utils::GetEffectHistogramNameForClick(effect_id_),
@@ -256,27 +279,31 @@ void ToggleEffectsButton::OnButtonClicked(const ui::Event& event) {
       !toggled_, ui::HapticTouchpadEffectStrength::kMedium);
 
   UpdateColorsAndBackground();
-  SetTooltipText(l10n_util::GetStringFUTF16(
-      VIDEO_CONFERENCE_TOGGLE_BUTTON_TOOLTIP,
-      l10n_util::GetStringUTF16(accessible_name_id_),
-      l10n_util::GetStringUTF16(
-          toggled_ ? VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_ON
-                   : VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_OFF)));
+  UpdateTooltip();
 }
 
 void ToggleEffectsButton::UpdateColorsAndBackground() {
   ui::ColorId background_color_id =
       toggled_ ? cros_tokens::kCrosSysSystemPrimaryContainer
                : cros_tokens::kCrosSysSystemOnBase;
-  SetBackground(views::CreateThemedRoundedRectBackground(background_color_id,
-                                                         kButtonCornerRadius));
+  SetBackground(views::CreateRoundedRectBackground(background_color_id,
+                                                   kButtonCornerRadius));
 
   ui::ColorId foreground_color_id =
       toggled_ ? cros_tokens::kCrosSysSystemOnPrimaryContainer
                : cros_tokens::kCrosSysOnSurface;
   icon_->SetImage(ui::ImageModel::FromVectorIcon(
       *vector_icon_, foreground_color_id, kIconSize));
-  label_->SetEnabledColorId(foreground_color_id);
+  label_->SetEnabledColor(foreground_color_id);
+}
+
+void ToggleEffectsButton::UpdateTooltip() {
+  SetTooltipText(l10n_util::GetStringFUTF16(
+      VIDEO_CONFERENCE_TOGGLE_BUTTON_TOOLTIP,
+      l10n_util::GetStringUTF16(accessible_name_id_),
+      l10n_util::GetStringUTF16(
+          toggled_ ? VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_ON
+                   : VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_OFF)));
 }
 
 BEGIN_METADATA(ToggleEffectsButton);
@@ -292,7 +319,8 @@ ToggleEffectsView::ToggleEffectsView(
       .SetMainAxisAlignment(views::LayoutAlignment::kCenter)
       .SetCrossAxisAlignment(views::LayoutAlignment::kStretch)
       .SetDefault(views::kMarginsKey,
-                  gfx::Insets::TLBR(0, 0, kButtonContainerSpacing, 0));
+                  gfx::Insets::TLBR(0, 0, kButtonContainerSpacing, 0))
+      .SetIgnoreDefaultMainAxisMargins(true);
 
   // The effects manager provides the toggle effects in rows.
   auto& effects_manager = controller->GetEffectsManager();
@@ -307,7 +335,11 @@ ToggleEffectsView::ToggleEffectsView(
         .SetCrossAxisAlignment(views::LayoutAlignment::kStretch)
         .SetDefault(views::kMarginsKey,
                     gfx::Insets::TLBR(0, kButtonContainerSpacing / 2, 0,
-                                      kButtonContainerSpacing / 2));
+                                      kButtonContainerSpacing / 2))
+        .SetIgnoreDefaultMainAxisMargins(true);
+
+    // TODO(crbug.com/40232718): See View::SetLayoutManagerUseConstrainedSpace.
+    row_view->SetLayoutManagerUseConstrainedSpace(false);
 
     // Add a button for each item in the row.
     for (auto* tile : row) {

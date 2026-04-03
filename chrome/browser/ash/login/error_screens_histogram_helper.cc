@@ -51,7 +51,6 @@ std::string GetErrorStateString(NetworkError::ErrorState state) {
       return ".None";
     default:
       NOTREACHED() << "Invalid ErrorState " << state;
-      return std::string();
   }
 }
 

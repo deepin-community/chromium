@@ -13,6 +13,7 @@
 #include <memory>
 
 #include "base/apple/scoped_cftyperef.h"
+#include "base/containers/heap_array.h"
 #include "base/mac/scoped_ioplugininterface.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -64,11 +65,17 @@ class XboxControllerMac final : public AbstractHapticGamepad {
     LED_NUM_PATTERNS
   };
 
-  enum OpenDeviceResult {
-    OPEN_SUCCEEDED = 0,
-    OPEN_FAILED,
-    OPEN_FAILED_EXCLUSIVE_ACCESS
+  // This enum is used for the Gamepad.UsbDeviceOpenMacResult histogram.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(OpenDeviceResult)
+  enum class OpenDeviceResult {
+    kOpenSucceeded = 0,
+    kOpenFailed,
+    kOpenFailedExclusiveAccess,
+    kMaxValue = kOpenFailedExclusiveAccess
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/others/enums.xml:GamepadUsbDeviceOpenMacResult)
 
   struct Data {
     bool buttons[15];
@@ -186,8 +193,7 @@ class XboxControllerMac final : public AbstractHapticGamepad {
   // aren't correctly framed. The 360 controller frames its packets with a 2
   // byte header (type, total length) so we can reframe the packet data
   // ourselves.
-  uint16_t read_buffer_size_ = 0;
-  std::unique_ptr<uint8_t[]> read_buffer_;
+  base::HeapArray<uint8_t> read_buffer_;
 
   // The pattern that the LEDs on the device are currently displaying, or
   // LED_NUM_PATTERNS if unknown.

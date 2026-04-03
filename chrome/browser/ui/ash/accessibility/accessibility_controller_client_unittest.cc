@@ -8,8 +8,8 @@
 
 #include "ash/accessibility/accessibility_controller.h"
 #include "ash/public/cpp/accessibility_controller_enums.h"
-#include "ash/test/ash_test_base.h"
 #include "base/time/time.h"
+#include "chrome/test/base/chrome_ash_test_base.h"
 #include "chromeos/ash/components/audio/sounds.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -51,8 +51,6 @@ class FakeAccessibilityControllerClient : public AccessibilityControllerClient {
     return dictation_on_;
   }
   void SilenceSpokenFeedback() override { ++silence_spoken_feedback_count_; }
-  void OnTwoFingerTouchStart() override { ++on_two_finger_touch_start_count_; }
-  void OnTwoFingerTouchStop() override { ++on_two_finger_touch_stop_count_; }
   bool ShouldToggleSpokenFeedbackViaTouch() const override { return true; }
   void PlaySpokenFeedbackToggleCountdown(int tick_count) override {
     spoken_feedback_toggle_count_down_ = tick_count;
@@ -86,7 +84,7 @@ class FakeAccessibilityControllerClient : public AccessibilityControllerClient {
 
 }  // namespace
 
-class AccessibilityControllerClientTest : public ash::AshTestBase {
+class AccessibilityControllerClientTest : public ChromeAshTestBase {
  public:
   AccessibilityControllerClientTest() = default;
 
@@ -133,16 +131,6 @@ TEST_F(AccessibilityControllerClientTest, MethodCalls) {
   EXPECT_EQ(0, client.silence_spoken_feedback_count_);
   client.SilenceSpokenFeedback();
   EXPECT_EQ(1, client.silence_spoken_feedback_count_);
-
-  // Tests OnTwoFingerTouchStart method call.
-  EXPECT_EQ(0, client.on_two_finger_touch_start_count_);
-  client.OnTwoFingerTouchStart();
-  EXPECT_EQ(1, client.on_two_finger_touch_start_count_);
-
-  // Tests OnTwoFingerTouchStop method call.
-  EXPECT_EQ(0, client.on_two_finger_touch_stop_count_);
-  client.OnTwoFingerTouchStop();
-  EXPECT_EQ(1, client.on_two_finger_touch_stop_count_);
 
   // Tests ShouldToggleSpokenFeedbackViaTouch method call.
   EXPECT_TRUE(client.ShouldToggleSpokenFeedbackViaTouch());

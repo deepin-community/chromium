@@ -37,12 +37,10 @@ class GPU_GLES2_EXPORT ImageReaderGLOwner : public TextureOwner,
   ImageReaderGLOwner(const ImageReaderGLOwner&) = delete;
   ImageReaderGLOwner& operator=(const ImageReaderGLOwner&) = delete;
 
-  gl::GLContext* GetContext() const override;
-  gl::GLSurface* GetSurface() const override;
   void SetFrameAvailableCallback(
       const base::RepeatingClosure& frame_available_cb) override;
   gl::ScopedJavaSurface CreateJavaSurface() const override;
-  void UpdateTexImage() override;
+  bool UpdateTexImage(bool discard) override;
   void ReleaseBackBuffers() override;
   std::unique_ptr<base::android::ScopedHardwareBufferFenceSync>
   GetAHardwareBuffer() override;
@@ -91,10 +89,10 @@ class GPU_GLES2_EXPORT ImageReaderGLOwner : public TextureOwner,
     base::ScopedFD ready_fence_;
   };
 
-  ImageReaderGLOwner(std::unique_ptr<AbstractTextureAndroid> texture,
-                     Mode secure_mode,
+  ImageReaderGLOwner(Mode secure_mode,
                      scoped_refptr<SharedContextState> context_state,
-                     scoped_refptr<RefCountedLock> drdc_lock);
+                     scoped_refptr<RefCountedLock> drdc_lock,
+                     TextureOwnerCodecType type_for_metrics);
   ~ImageReaderGLOwner() override;
 
   // Registers and releases a ref on the image. Once the ref-count for an image
@@ -144,9 +142,6 @@ class GPU_GLES2_EXPORT ImageReaderGLOwner : public TextureOwner,
   AImageRefMap image_refs_ GUARDED_BY(lock_);
   std::atomic<size_t> total_estimated_size_in_bytes_ = 0;
 
-  // The context and surface that were used to create |texture_id_|.
-  scoped_refptr<gl::GLContext> context_;
-  scoped_refptr<gl::GLSurface> surface_;
   int32_t max_images_ = 0;
 
   // Frame available callback handling. ImageListener registered with
@@ -159,6 +154,8 @@ class GPU_GLES2_EXPORT ImageReaderGLOwner : public TextureOwner,
 
   // This class is created on gpu main thread.
   THREAD_CHECKER(gpu_main_thread_checker_);
+
+  const TextureOwnerCodecType type_for_metrics_;
 };
 
 }  // namespace gpu

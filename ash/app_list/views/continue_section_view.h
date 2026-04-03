@@ -81,8 +81,6 @@ class ASH_EXPORT ContinueSectionView : public views::View,
   void RemovedFromWidget() override;
 
   // views::FocusChangeListener:
-  void OnWillChangeFocus(views::View* focused_before,
-                         views::View* focused_now) override {}
   void OnDidChangeFocus(views::View* focused_before,
                         views::View* focused_now) override;
 
@@ -146,7 +144,7 @@ class ASH_EXPORT ContinueSectionView : public views::View,
 
   // If set, the amount of horizontal space available for the continue section -
   // used to configure layout for the continue section privacy notice toast.
-  absl::optional<int> available_width_;
+  std::optional<int> available_width_;
 
   bool tablet_mode_ = false;
 

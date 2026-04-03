@@ -17,13 +17,12 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
 #include "ui/views/layout/fill_layout.h"
-
-namespace {
 
 class NetworkProfileBubbleView : public views::BubbleDialogDelegateView {
   METADATA_HEADER(NetworkProfileBubbleView, views::BubbleDialogDelegateView)
@@ -59,7 +58,7 @@ NetworkProfileBubbleView::NetworkProfileBubbleView(
     : BubbleDialogDelegateView(anchor, views::BubbleBorder::TOP_RIGHT),
       navigator_(navigator),
       profile_(profile) {
-  SetButtons(ui::DIALOG_BUTTON_OK);
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk));
   auto* learn_more = SetExtraView(
       std::make_unique<views::Link>(l10n_util::GetStringUTF16(IDS_LEARN_MORE)));
   learn_more->SetCallback(base::BindRepeating(
@@ -69,7 +68,7 @@ NetworkProfileBubbleView::NetworkProfileBubbleView(
 ////////////////////////////////////////////////////////////////////////////////
 // NetworkProfileBubbleView, private:
 
-NetworkProfileBubbleView::~NetworkProfileBubbleView() {}
+NetworkProfileBubbleView::~NetworkProfileBubbleView() = default;
 
 void NetworkProfileBubbleView::Init() {
   SetLayoutManager(std::make_unique<views::FillLayout>());
@@ -80,7 +79,7 @@ void NetworkProfileBubbleView::Init() {
   constexpr int kNotificationBubbleWidth = 250;
   label->SizeToFit(kNotificationBubbleWidth);
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  AddChildView(label);
+  AddChildViewRaw(label);
 }
 
 bool NetworkProfileBubbleView::Accept() {
@@ -98,7 +97,7 @@ void NetworkProfileBubbleView::LinkClicked(const ui::Event& event) {
       GURL("https://sites.google.com/a/chromium.org/dev/administrators/"
            "common-problems-and-solutions#network_profile"),
       content::Referrer(), disposition, ui::PAGE_TRANSITION_LINK, false);
-  navigator_->OpenURL(params);
+  navigator_->OpenURL(params, /*navigation_handle_callback=*/{});
 
   // If the user interacted with the bubble we don't reduce the number of
   // warnings left.
@@ -111,24 +110,22 @@ void NetworkProfileBubbleView::LinkClicked(const ui::Event& event) {
 BEGIN_METADATA(NetworkProfileBubbleView)
 END_METADATA
 
-}  // namespace
-
 // static
-void NetworkProfileBubble::ShowNotification(Browser* browser) {
+void NetworkProfileBubble::ShowNotification(BrowserWindowInterface* browser) {
   views::View* anchor = NULL;
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
   if (browser_view && browser_view->toolbar()) {
     anchor = browser_view->toolbar_button_provider()->GetAppMenuButton();
   }
   NetworkProfileBubbleView* bubble =
-      new NetworkProfileBubbleView(anchor, browser, browser->profile());
+      new NetworkProfileBubbleView(anchor, browser, browser->GetProfile());
   views::BubbleDialogDelegateView::CreateBubble(bubble)->Show();
 
   NetworkProfileBubble::SetNotificationShown(true);
 
   // Mark the time of the last bubble and reduce the number of warnings left
   // before the next silence period starts.
-  PrefService* prefs = browser->profile()->GetPrefs();
+  PrefService* prefs = browser->GetProfile()->GetPrefs();
   prefs->SetInt64(prefs::kNetworkProfileLastWarningTime,
                   base::Time::Now().ToTimeT());
   int left_warnings = prefs->GetInteger(prefs::kNetworkProfileWarningsLeft);

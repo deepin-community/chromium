@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_split.h"
 #include "chromeos/ash/components/disks/disk.h"
@@ -32,9 +31,10 @@ FakeDiskMountManager::MountRequest::MountRequest(const MountRequest& other) =
 
 FakeDiskMountManager::MountRequest::~MountRequest() = default;
 
-FakeDiskMountManager::RemountAllRequest::RemountAllRequest(
+FakeDiskMountManager::RemountRequest::RemountRequest(
+    std::string device_path,
     MountAccessMode access_mode)
-    : access_mode(access_mode) {}
+    : device_path(std::move(device_path)), access_mode(access_mode) {}
 
 FakeDiskMountManager::FakeDiskMountManager() = default;
 
@@ -55,7 +55,7 @@ const DiskMountManager::Disks& FakeDiskMountManager::disks() const {
 }
 
 const Disk* FakeDiskMountManager::FindDiskBySourcePath(
-    const std::string& source_path) const {
+    std::string_view source_path) const {
   Disks::const_iterator iter = disks_.find(source_path);
   return iter != disks_.end() ? iter->get() : nullptr;
 }
@@ -138,9 +138,9 @@ void FakeDiskMountManager::UnmountPath(const std::string& mount_path,
   }
 }
 
-void FakeDiskMountManager::RemountAllRemovableDrives(
-    MountAccessMode access_mode) {
-  remount_all_requests_.emplace_back(access_mode);
+void FakeDiskMountManager::RemountRemovableDrive(const Disk& disk,
+                                                 MountAccessMode access_mode) {
+  remount_requests_.emplace_back(disk.device_path(), access_mode);
 }
 
 bool FakeDiskMountManager::FinishAllUnmountPathRequests() {
@@ -184,7 +184,7 @@ bool FakeDiskMountManager::AddDiskForTest(std::unique_ptr<Disk> disk) {
 
 bool FakeDiskMountManager::AddMountPointForTest(const MountPoint& mount_point) {
   if (mount_point.mount_type == MountType::kDevice &&
-      !base::Contains(disks_, mount_point.source_path)) {
+      !disks_.contains(mount_point.source_path)) {
     // Device mount point must have a disk entry.
     return false;
   }

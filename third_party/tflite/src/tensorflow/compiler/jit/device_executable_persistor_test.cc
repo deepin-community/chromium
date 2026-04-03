@@ -35,7 +35,8 @@ limitations under the License.
 #include "xla/client/executable_build_options.h"
 #include "xla/client/local_client.h"
 #include "xla/pjrt/pjrt_client.h"
-#include "xla/pjrt/tfrt_cpu_pjrt_client.h"
+#include "xla/pjrt/plugin/xla_cpu/cpu_client_options.h"
+#include "xla/pjrt/plugin/xla_cpu/xla_cpu_pjrt_client.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/errors.h"
 #include "tensorflow/core/platform/status_matchers.h"
@@ -71,18 +72,19 @@ class DeviceExecutionPersistorTest : public ::testing::Test {
                             BuildSampleCompilationResult());
   }
 
-  StatusOr<std::unique_ptr<xla::LocalExecutable>> BuildSampleExecutable() {
+  absl::StatusOr<std::unique_ptr<xla::LocalExecutable>>
+  BuildSampleExecutable() {
     return xla_compiler_client_->BuildExecutable(DefaultXlaOptions(),
                                                  compilation_result_add_);
   }
 
-  StatusOr<std::unique_ptr<xla::PjRtLoadedExecutable>>
+  absl::StatusOr<std::unique_ptr<xla::PjRtLoadedExecutable>>
   BuildSamplePjRtExecutable() {
     return pjrt_compiler_client_->BuildExecutable(DefaultPjRtOptions(),
                                                   compilation_result_add_);
   }
 
-  StatusOr<XlaCompiler::CompilationResult> BuildSampleCompilationResult(
+  absl::StatusOr<XlaCompiler::CompilationResult> BuildSampleCompilationResult(
       bool mul = false) {
     std::unique_ptr<Graph> graph(new Graph(OpRegistry::Global()));
     Scope scope = Scope::NewRootScope().ExitOnError();
@@ -133,17 +135,18 @@ class DeviceExecutionPersistorTest : public ::testing::Test {
     return options;
   }
 
-  Status CreatePjRtCompilerClient() {
+  absl::Status CreatePjRtCompilerClient() {
     // Create PjRtClient manually while GetOrCreatePjRtClient() is WIP.
+    xla::CpuClientOptions options;
+    options.asynchronous = true;
+    options.cpu_device_count = 1;
     TF_RETURN_IF_ERROR(SetPjRtClientInTFGlobalResourceManager(
-        DEVICE_CPU_XLA_JIT,
-        xla::GetTfrtCpuClient(/*asynchronous=*/true, /*cpu_device_count=*/1)
-            .value()));
+        DEVICE_CPU_XLA_JIT, xla::GetXlaPjrtCpuClient(options).value()));
     TF_ASSIGN_OR_RETURN(auto pjrt_client,
                         GetOrCreatePjRtClient(DeviceType(DEVICE_CPU_XLA_JIT)));
     pjrt_compiler_client_ =
         std::make_unique<PjRtDeviceCompilerClient>(pjrt_client);
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   std::unique_ptr<FunctionLibraryDefinition> flib_def_;
@@ -162,13 +165,14 @@ class DeviceExecutionPersistorTest : public ::testing::Test {
 class MockXlaCompilerClient : public XlaDeviceCompilerClient {
  public:
   MockXlaCompilerClient() : XlaDeviceCompilerClient(nullptr) {}
-  MOCK_METHOD(StatusOr<std::string>, SerializeExecutable,
+  MOCK_METHOD(absl::StatusOr<std::string>, SerializeExecutable,
               (const xla::LocalExecutable& executable), (override));
-  MOCK_METHOD(StatusOr<std::string>, BuildSerializedExecutable,
+  MOCK_METHOD(absl::StatusOr<std::string>, BuildSerializedExecutable,
               (const XlaCompiler::Options& options,
                const XlaCompiler::CompilationResult& result),
               (override));
-  MOCK_METHOD(StatusOr<std::unique_ptr<xla::LocalExecutable>>, LoadExecutable,
+  MOCK_METHOD(absl::StatusOr<std::unique_ptr<xla::LocalExecutable>>,
+              LoadExecutable,
               (const XlaCompiler::Options& options,
                const XlaCompiler::CompilationResult& result,
                const std::string& serialized_executable),
@@ -178,13 +182,13 @@ class MockXlaCompilerClient : public XlaDeviceCompilerClient {
 class MockPjRtCompilerClient : public PjRtDeviceCompilerClient {
  public:
   MockPjRtCompilerClient() : PjRtDeviceCompilerClient(nullptr) {}
-  MOCK_METHOD(StatusOr<std::string>, SerializeExecutable,
+  MOCK_METHOD(absl::StatusOr<std::string>, SerializeExecutable,
               (const xla::PjRtLoadedExecutable& executable), (override));
-  MOCK_METHOD(StatusOr<std::string>, BuildSerializedExecutable,
+  MOCK_METHOD(absl::StatusOr<std::string>, BuildSerializedExecutable,
               (const XlaCompiler::Options& options,
                const XlaCompiler::CompilationResult& result),
               (override));
-  MOCK_METHOD(StatusOr<std::unique_ptr<xla::PjRtLoadedExecutable>>,
+  MOCK_METHOD(absl::StatusOr<std::unique_ptr<xla::PjRtLoadedExecutable>>,
               LoadExecutable,
               (const XlaCompiler::Options& options,
                const XlaCompiler::CompilationResult& result,
@@ -209,7 +213,7 @@ std::string GetFilePath(XlaSerializedCacheKey key,
   return io::JoinPath(persistent_cache_dir, file_name);
 }
 
-StatusOr<XlaSerializedCacheEntry> ReadCacheEntryFromFile(
+absl::StatusOr<XlaSerializedCacheEntry> ReadCacheEntryFromFile(
     XlaSerializedCacheKey key, const std::string& persistent_cache_dir) {
   std::string file_path = GetFilePath(key, persistent_cache_dir);
   XlaSerializedCacheEntry entry;
@@ -218,7 +222,7 @@ StatusOr<XlaSerializedCacheEntry> ReadCacheEntryFromFile(
 }
 
 XlaSerializedCacheKey CreateCacheKey(
-    uint64 signature_hash,
+    uint64_t signature_hash,
     const XlaCompiler::CompilationResult& compilation_result,
     const DeviceType& device_type, const std::string& persistence_prefix,
     bool compiled_using_pjrt = false) {
@@ -285,7 +289,8 @@ TEST_F(DeviceExecutionPersistorTest, PersistSerializeAlreadyBuiltExecutable) {
 
   MockXlaCompilerClient mock_client;
   EXPECT_CALL(mock_client, SerializeExecutable(_))
-      .WillOnce(Return(StatusOr<std::string>(serialized_xla_executable_)));
+      .WillOnce(
+          Return(absl::StatusOr<std::string>(serialized_xla_executable_)));
 
   TF_ASSERT_OK_AND_ASSIGN(auto executable, BuildSampleExecutable());
   TF_EXPECT_OK(persistor.TryToPersistExecutable(
@@ -344,7 +349,7 @@ TEST_F(DeviceExecutionPersistorTest, PersistSerializeExecutableError) {
       persistor.TryToPersistExecutable(
           /*signature_hash=*/123, "signature_string", DefaultXlaOptions(),
           compilation_result_add_, *executable, &mock_client),
-      testing::StatusIs(error::INVALID_ARGUMENT));
+      absl_testing::StatusIs(error::INVALID_ARGUMENT));
 }
 
 TEST_F(DeviceExecutionPersistorTest, PersistExecutableEmpty) {
@@ -367,7 +372,7 @@ TEST_F(DeviceExecutionPersistorTest, PersistExecutableEmpty) {
       persistor.TryToPersistExecutable(
           /*signature_hash=*/123, "signature_string", DefaultXlaOptions(),
           compilation_result_add_, empty_executable, &mock_client),
-      testing::StatusIs(error::FAILED_PRECONDITION));
+      absl_testing::StatusIs(error::FAILED_PRECONDITION));
 }
 
 TEST_F(DeviceExecutionPersistorTest, LoadCacheDirNotSet) {
@@ -454,7 +459,7 @@ TEST_F(DeviceExecutionPersistorTest, LoadSerializedKeyMismatch) {
   EXPECT_TRUE(loaded_executable.has_value());
   EXPECT_FALSE(loaded_executable->ok());
   EXPECT_THAT(loaded_executable.value(),
-              testing::StatusIs(error::INVALID_ARGUMENT));
+              absl_testing::StatusIs(error::INVALID_ARGUMENT));
 }
 
 TEST_F(DeviceExecutionPersistorTest, LoadSerializedHloMismatch) {
@@ -497,7 +502,7 @@ TEST_F(DeviceExecutionPersistorTest, LoadSerializedHloMismatch) {
   EXPECT_TRUE(loaded_executable.has_value());
   EXPECT_FALSE(loaded_executable->ok());
   EXPECT_THAT(loaded_executable.value(),
-              testing::StatusIs(error::INVALID_ARGUMENT));
+              absl_testing::StatusIs(error::INVALID_ARGUMENT));
 }
 
 TEST_F(DeviceExecutionPersistorTest, LoadStrictChecksDisabled) {
@@ -574,7 +579,7 @@ TEST_F(DeviceExecutionPersistorTest, LoadSerializedExecutableEmpty) {
   EXPECT_TRUE(loaded_executable.has_value());
   EXPECT_FALSE(loaded_executable->ok());
   EXPECT_THAT(loaded_executable.value(),
-              testing::StatusIs(error::INVALID_ARGUMENT));
+              absl_testing::StatusIs(error::INVALID_ARGUMENT));
 }
 
 TEST_F(DeviceExecutionPersistorTest, PersistPjRtAndXlaExecutables) {

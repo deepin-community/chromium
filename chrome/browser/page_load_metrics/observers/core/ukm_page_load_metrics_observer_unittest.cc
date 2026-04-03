@@ -7,14 +7,18 @@
 #include <memory>
 #include <optional>
 
+#include "base/byte_count.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/metrics_hashes.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/test/test_trace_processor.h"
 #include "base/test/trace_event_analyzer.h"
+#include "base/test/trace_test_utils.h"
 #include "base/time/time.h"
 #include "base/trace_event/traced_value.h"
+#include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
@@ -63,7 +67,6 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/performance/largest_contentful_paint_type.h"
 #include "third_party/metrics_proto/system_profile.pb.h"
-#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 using content::NavigationSimulator;
 using content::RenderFrameHost;
@@ -72,12 +75,6 @@ using page_load_metrics::PageVisitFinalStatus;
 using testing::AnyNumber;
 using testing::Mock;
 using testing::Return;
-using UserInteractionLatenciesPtr =
-    page_load_metrics::mojom::UserInteractionLatenciesPtr;
-using UserInteractionLatencies =
-    page_load_metrics::mojom::UserInteractionLatencies;
-using UserInteractionLatency = page_load_metrics::mojom::UserInteractionLatency;
-using UserInteractionType = page_load_metrics::mojom::UserInteractionType;
 
 namespace {
 
@@ -154,12 +151,15 @@ class UkmPageLoadMetricsObserverTest
 
   TestingProfile::TestingFactories GetTestingFactories() const override {
     return {
-        {BookmarkModelFactory::GetInstance(),
-         BookmarkModelFactory::GetDefaultFactory()},
-        {HistoryServiceFactory::GetInstance(),
-         HistoryServiceFactory::GetDefaultFactory()},
-        {TemplateURLServiceFactory::GetInstance(),
-         base::BindRepeating(&TemplateURLServiceFactory::BuildInstanceFor)}};
+        TestingProfile::TestingFactory{
+            BookmarkModelFactory::GetInstance(),
+            BookmarkModelFactory::GetDefaultFactory()},
+        TestingProfile::TestingFactory{
+            HistoryServiceFactory::GetInstance(),
+            HistoryServiceFactory::GetDefaultFactory()},
+        TestingProfile::TestingFactory{
+            TemplateURLServiceFactory::GetInstance(),
+            base::BindRepeating(&TemplateURLServiceFactory::BuildInstanceFor)}};
   }
 
   MockNetworkQualityProvider& mock_network_quality_provider() {
@@ -466,6 +466,37 @@ TEST_F(UkmPageLoadMetricsObserverTest, LargestImagePaint) {
 
   TestLCP(600, LargestContentTextOrImage::kImage, true /* test_main_frame */,
           30 /* image_bpp = "8.0 - 9.0" */, net::RequestPriority::MEDIUM);
+}
+
+TEST_F(UkmPageLoadMetricsObserverTest, LargestImagePaintCrossOrigin) {
+  page_load_metrics::mojom::PageLoadTiming timing;
+  page_load_metrics::InitPageLoadTimingForTest(&timing);
+  timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
+  timing.paint_timing->largest_contentful_paint->largest_image_paint =
+      base::Milliseconds(600);
+  timing.paint_timing->largest_contentful_paint->largest_image_paint_size = 50u;
+  timing.paint_timing->largest_contentful_paint->image_bpp = 8.5;
+  timing.paint_timing->largest_contentful_paint->type =
+      blink::LargestContentfulPaintTypeToUKMFlags(
+          blink::LargestContentfulPaintType::kImage |
+          blink::LargestContentfulPaintType::kCrossOrigin);
+  timing.paint_timing->largest_contentful_paint->image_request_priority_valid =
+      true;
+  timing.paint_timing->largest_contentful_paint->image_request_priority_value =
+      net::RequestPriority::MEDIUM;
+  PopulateExperimentalLCP(timing.paint_timing);
+  PopulateRequiredTimingFields(&timing);
+
+  NavigateAndCommit(GURL(kTestUrl1));
+  tester()->SimulateTimingUpdate(timing);
+
+  // Simulate closing the tab.
+  DeleteContents();
+
+  TestLCP(600, LargestContentTextOrImage::kImage, true /* test_main_frame */,
+          30 /* image_bpp = "8.0 - 9.0" */, net::RequestPriority::MEDIUM,
+          blink::LargestContentfulPaintType::kImage |
+              blink::LargestContentfulPaintType::kCrossOrigin);
 }
 
 TEST_F(UkmPageLoadMetricsObserverTest, LargestImagePaintVideo) {
@@ -871,17 +902,9 @@ TEST_F(UkmPageLoadMetricsObserverTest, LargestTextPaint) {
 }
 
 TEST_F(UkmPageLoadMetricsObserverTest, LargestContentfulPaint_Trace) {
-  // TODO(https://crbug.com/1266001): Improve unit tests support for tracing.
-  // In particular, the initialization call below is most likely too narrow /
-  // doesn't take care of everything that is needed.  In the future we might
-  // need to 1) initialize tracing from a better place (maybe
-  // RenderViewHostTestEnabler) and 2) initialize more broadly (maybe via
-  // tracing::PerfettoTracedProcess::SetupForTesting method once it is
-  // reintroduced).
-  perfetto::internal::TrackRegistry::InitializeInstance();
-
+  base::test::TracingEnvironment tracing_environment_;
   using trace_analyzer::Query;
-  trace_analyzer::Start("*");
+  trace_analyzer::Start("loading");
   {
     page_load_metrics::mojom::PageLoadTiming timing;
     page_load_metrics::InitPageLoadTimingForTest(&timing);
@@ -906,7 +929,7 @@ TEST_F(UkmPageLoadMetricsObserverTest, LargestContentfulPaint_Trace) {
   EXPECT_EQ(1u, events.size());
   EXPECT_EQ("loading", events[0]->category);
   ASSERT_TRUE(events[0]->HasDictArg("data"));
-  base::Value::Dict arg = events[0]->GetKnownArgAsDict("data");
+  base::DictValue arg = events[0]->GetKnownArgAsDict("data");
   int time = arg.FindInt("durationInMilliseconds").value_or(0);
   EXPECT_EQ(600, time);
   int size = arg.FindInt("size").value_or(0);
@@ -919,6 +942,7 @@ TEST_F(UkmPageLoadMetricsObserverTest, LargestContentfulPaint_Trace) {
 TEST_F(UkmPageLoadMetricsObserverTest,
        LargestContentfulPaint_Trace_InvalidateCandidate) {
   using trace_analyzer::Query;
+  base::test::TracingEnvironment tracing_environment_;
   trace_analyzer::Start("loading");
   {
     page_load_metrics::mojom::PageLoadTiming timing;
@@ -1273,25 +1297,17 @@ TEST_F(UkmPageLoadMetricsObserverTest,
 TEST_F(UkmPageLoadMetricsObserverTest, NormalizedUserInteractionLatencies) {
   NavigateAndCommit(GURL(kTestUrl1));
 
-  page_load_metrics::mojom::InputTiming input_timing;
-  input_timing.num_interactions = 3;
-  input_timing.max_event_durations =
-      UserInteractionLatencies::NewUserInteractionLatencies({});
-  auto& max_event_durations =
-      input_timing.max_event_durations->get_user_interaction_latencies();
+  std::vector<page_load_metrics::mojom::EventTimingPtr> event_timings;
 
   base::TimeTicks current_time = base::TimeTicks::Now();
-  max_event_durations.emplace_back(UserInteractionLatency::New(
-      base::Milliseconds(50), UserInteractionType::kKeyboard, 1,
-      current_time + base::Milliseconds(1000)));
-  max_event_durations.emplace_back(UserInteractionLatency::New(
-      base::Milliseconds(100), UserInteractionType::kTapOrClick, 2,
-      current_time + base::Milliseconds(2000)));
-  max_event_durations.emplace_back(UserInteractionLatency::New(
-      base::Milliseconds(150), UserInteractionType::kDrag, 3,
-      current_time + base::Milliseconds(3000)));
+  event_timings.emplace_back(page_load_metrics::mojom::EventTiming::New(
+      base::Milliseconds(50), 1, current_time + base::Milliseconds(1000)));
+  event_timings.emplace_back(page_load_metrics::mojom::EventTiming::New(
+      base::Milliseconds(100), 2, current_time + base::Milliseconds(2000)));
+  event_timings.emplace_back(page_load_metrics::mojom::EventTiming::New(
+      base::Milliseconds(150), 3, current_time + base::Milliseconds(3000)));
 
-  tester()->SimulateInputTimingUpdate(input_timing);
+  tester()->SimulateEventTimingUpdate(event_timings);
 
   // Simulate closing the tab.
   DeleteContents();
@@ -1325,18 +1341,12 @@ TEST_F(UkmPageLoadMetricsObserverTest,
        NormalizedUserInteractionLatenciesRecordOnHidden) {
   NavigateAndCommit(GURL(kTestUrl1));
 
-  page_load_metrics::mojom::InputTiming input_timing;
-  input_timing.num_interactions = 3;
-  input_timing.max_event_durations =
-      UserInteractionLatencies::NewUserInteractionLatencies({});
-  auto& max_event_durations =
-      input_timing.max_event_durations->get_user_interaction_latencies();
+  std::vector<page_load_metrics::mojom::EventTimingPtr> event_timings;
 
-  max_event_durations.emplace_back(UserInteractionLatency::New(
-      base::Milliseconds(50), UserInteractionType::kKeyboard, 0,
-      base::TimeTicks::Now()));
+  event_timings.emplace_back(page_load_metrics::mojom::EventTiming::New(
+      base::Milliseconds(50), 1, base::TimeTicks::Now()));
 
-  tester()->SimulateInputTimingUpdate(input_timing);
+  tester()->SimulateEventTimingUpdate(event_timings);
 
   // Simulate hiding the tab (the new INP metrics should be recorded at the
   // first hide).
@@ -1551,19 +1561,21 @@ TEST_F(UkmPageLoadMetricsObserverTest, PageSizeMetrics) {
 
   std::vector<page_load_metrics::mojom::ResourceDataUpdatePtr> resources;
   // Cached resource.
-  resources.push_back(CreateResource(true /* was_cached */, 0 /* delta_bytes */,
-                                     20 * 1024 /* encoded_body_length */,
-                                     30 * 1024 /* decoded_body_length */,
-                                     true /* is_complete */));
+  resources.push_back(CreateResource(/*was_cached=*/true,
+                                     /*delta_bytes=*/base::ByteCount(0),
+                                     /*encoded_body_length=*/base::KiB(20),
+                                     /*decoded_body_length=*/base::KiB(30),
+                                     /*is_complete=*/true));
   // Uncached resource.
   resources.push_back(CreateResource(
-      false /* was_cached */, 40 * 1024 /* delta_bytes */,
-      40 * 1024 /* encoded_body_length */, 50 * 1024 /* decoded_body_length */,
-      true /* is_complete */));
+      /*was_cached=*/false, /*delta_bytes=*/base::KiB(40),
+      /*encoded_body_length=*/base::KiB(40),
+      /*decoded_body_length=*/base::KiB(50),
+      /*is_complete=*/true));
   tester()->SimulateResourceDataUseUpdate(resources);
 
-  int64_t network_bytes = 0;
-  int64_t cache_bytes = 0;
+  base::ByteCount network_bytes;
+  base::ByteCount cache_bytes;
   for (const auto& request : resources) {
     if (request->cache_type ==
         page_load_metrics::mojom::CacheType::kNotCached) {
@@ -1577,8 +1589,9 @@ TEST_F(UkmPageLoadMetricsObserverTest, PageSizeMetrics) {
   DeleteContents();
 
   int64_t bucketed_network_bytes =
-      ukm::GetExponentialBucketMin(network_bytes, 1.3);
-  int64_t bucketed_cache_bytes = ukm::GetExponentialBucketMin(cache_bytes, 1.3);
+      ukm::GetExponentialBucketMin(network_bytes.InBytes(), 1.3);
+  int64_t bucketed_cache_bytes =
+      ukm::GetExponentialBucketMin(cache_bytes.InBytes(), 1.3);
 
   std::map<ukm::SourceId, ukm::mojom::UkmEntryPtr> merged_entries =
       tester()->test_ukm_recorder().GetMergedEntriesByName(
@@ -1600,22 +1613,24 @@ TEST_F(UkmPageLoadMetricsObserverTest, JSSizeMetrics) {
 
   std::vector<page_load_metrics::mojom::ResourceDataUpdatePtr> resources;
   // 30 kilobytes after decoding.
-  resources.push_back(CreateResource(true /* was_cached */, 0 /* delta_bytes */,
-                                     20 * 1024 /* encoded_body_length */,
-                                     30 * 1024 /* decoded_body_length */,
-                                     true /* is_complete */));
+  resources.push_back(CreateResource(/*was_cached=*/true,
+                                     /*delta_bytes=*/base::ByteCount(0),
+                                     /*encoded_body_length=*/base::KiB(20),
+                                     /*decoded_body_length=*/base::KiB(30),
+                                     /*is_complete=*/true));
 
   // 50 kilobytes after decoding.
   resources.push_back(CreateResource(
-      false /* was_cached */, 40 * 1024 /* delta_bytes */,
-      40 * 1024 /* encoded_body_length */, 50 * 1024 /* decoded_body_length */,
-      true /* is_complete */));
+      /*was_cached=*/false, /*delta_bytes=*/base::KiB(40),
+      /*encoded_body_length=*/base::KiB(40),
+      /*decoded_body_length=*/base::KiB(50),
+      /*is_complete=*/true));
 
   // 120 kilobytes after decoding, not JS.
   resources.push_back(CreateResource(
-      false /* was_cached */, 40 * 1024 /* delta_bytes */,
-      100 * 1024 /* encoded_body_length */,
-      120 * 1024 /* decoded_body_length */, true /* is_complete */));
+      /*was_cached=*/false, /*delta_bytes=*/base::KiB(40),
+      /*encoded_body_length=*/base::KiB(100),
+      /*decoded_body_length=*/base::KiB(120), /*is_complete=*/true));
 
   resources[0]->mime_type = "application/javascript";
   resources[1]->mime_type = "application/javascript";
@@ -1629,7 +1644,7 @@ TEST_F(UkmPageLoadMetricsObserverTest, JSSizeMetrics) {
   // Metrics look at decoded body length.
   // 30 + 50 = 80 kilobytes.
   int64_t bucketed_network_js_bytes =
-      ukm::GetExponentialBucketMinForBytes(80 * 1024);
+      ukm::GetExponentialBucketMinForBytes(base::KiB(80).InBytes());
 
   std::map<ukm::SourceId, ukm::mojom::UkmEntryPtr> merged_entries =
       tester()->test_ukm_recorder().GetMergedEntriesByName(
@@ -1650,22 +1665,23 @@ TEST_F(UkmPageLoadMetricsObserverTest, JSMaxSizeMetrics) {
   std::vector<page_load_metrics::mojom::ResourceDataUpdatePtr> resources;
 
   // 30 kilobytes after decoding.
-  resources.push_back(CreateResource(true /* was_cached */, 0 /* delta_bytes */,
-                                     20 * 1024 /* encoded_body_length */,
-                                     30 * 1024 /* decoded_body_length */,
-                                     true /* is_complete */));
+  resources.push_back(CreateResource(/*was_cached=*/true,
+                                     /*delta_bytes=*/base::ByteCount(0),
+                                     /*encoded_body_length=*/base::KiB(20),
+                                     /*decoded_body_length=*/base::KiB(30),
+                                     /*is_complete=*/true));
 
   // 500 kilobytes after decoding.
   resources.push_back(CreateResource(
-      false /* was_cached */, 400 * 1024 /* delta_bytes */,
-      400 * 1024 /* encoded_body_length */,
-      500 * 1024 /* decoded_body_length */, true /* is_complete */));
+      /*was_cached=*/false, /*delta_bytes=*/base::KiB(400),
+      /*encoded_body_length=*/base::KiB(400),
+      /*decoded_body_length=*/base::KiB(500), /*is_complete=*/true));
 
   // 120 kilobytes after decoding, not JS.
   resources.push_back(CreateResource(
-      false /* was_cached */, 40 * 1024 /* delta_bytes */,
-      100 * 1024 /* encoded_body_length */,
-      120 * 1024 /* decoded_body_length */, true /* is_complete */));
+      /*was_cached=*/false, /*delta_bytes=*/base::KiB(40),
+      /*encoded_body_length=*/base::KiB(100),
+      /*decoded_body_length=*/base::KiB(120), /*is_complete=*/true));
 
   resources[0]->mime_type = "application/javascript";
   resources[1]->mime_type = "application/javascript";
@@ -1700,17 +1716,20 @@ TEST_F(UkmPageLoadMetricsObserverTest, ImageMediaSizeMetrics) {
 
   std::vector<page_load_metrics::mojom::ResourceDataUpdatePtr> resources;
   resources.push_back(CreateResource(
-      false /* was_cached */, 10 * 1024 /* delta_bytes */,
-      10 * 1024 /* encoded_body_length */, 10 * 1024 /* decoded_body_length */,
-      true /* is_complete */));
+      /*was_cached=*/false, /*delta_bytes=*/base::KiB(10),
+      /*encoded_body_length=*/base::KiB(10),
+      /*decoded_body_length=*/base::KiB(10),
+      /*is_complete=*/true));
   resources.push_back(CreateResource(
-      false /* was_cached */, 20 * 1024 /* delta_bytes */,
-      20 * 1024 /* encoded_body_length */, 20 * 1024 /* decoded_body_length */,
-      true /* is_complete */));
+      /*was_cached=*/false, /*delta_bytes=*/base::KiB(20),
+      /*encoded_body_length=*/base::KiB(20),
+      /*decoded_body_length=*/base::KiB(20),
+      /*is_complete=*/true));
   resources.push_back(CreateResource(
-      false /* was_cached */, 50 * 1024 /* delta_bytes */,
-      50 * 1024 /* encoded_body_length */, 50 * 1024 /* decoded_body_length */,
-      true /* is_complete */));
+      /*was_cached=*/false, /*delta_bytes=*/base::KiB(50),
+      /*encoded_body_length=*/base::KiB(50),
+      /*decoded_body_length=*/base::KiB(50),
+      /*is_complete=*/true));
 
   resources[0]->mime_type = "image/png";
   resources[0]->is_main_frame_resource = true;
@@ -1770,23 +1789,23 @@ TEST_F(UkmPageLoadMetricsObserverTest, CpuTimeMetrics) {
 TEST_F(UkmPageLoadMetricsObserverTest, LayoutInstability) {
   NavigateAndCommit(GURL(kTestUrl1));
   base::TimeTicks current_time = base::TimeTicks::Now();
-  page_load_metrics::mojom::FrameRenderDataUpdate render_data(1.0, 1.0, {});
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data;
   render_data.new_layout_shifts.emplace_back(
       page_load_metrics::mojom::LayoutShift::New(
-          current_time - base::Milliseconds(4000), 0.5));
+          current_time - base::Milliseconds(4000), 0.5, false));
   render_data.new_layout_shifts.emplace_back(
       page_load_metrics::mojom::LayoutShift::New(
-          current_time - base::Milliseconds(3500), 0.5));
+          current_time - base::Milliseconds(3500), 0.5, false));
 
   tester()->SimulateRenderDataUpdate(render_data);
 
   // Simulate hiding the tab (the report should include shifts after hide).
   web_contents()->WasHidden();
 
-  page_load_metrics::mojom::FrameRenderDataUpdate render_data_2(1.5, 0.0, {});
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data_2;
   render_data_2.new_layout_shifts.emplace_back(
       page_load_metrics::mojom::LayoutShift::New(
-          current_time - base::Milliseconds(2500), 1.5));
+          current_time - base::Milliseconds(2500), 1.5, true));
   tester()->SimulateRenderDataUpdate(render_data_2);
 
   // Simulate closing the tab.
@@ -1821,8 +1840,8 @@ TEST_F(UkmPageLoadMetricsObserverTest, LayoutInstability) {
               testing::ElementsAre(base::Bucket(25, 1)));
   EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
                   "PageLoad.LayoutInstability.MaxCumulativeShiftScore."
-                  "SessionWindow.Gap1000ms.Max5000ms"),
-              testing::ElementsAre(base::Bucket(25, 1)));
+                  "SessionWindow.Gap1000ms.Max5000ms2"),
+              testing::ElementsAre(base::Bucket(24000, 1)));
 }
 
 TEST_F(UkmPageLoadMetricsObserverTest, SoftNavigationCount) {
@@ -1831,13 +1850,15 @@ TEST_F(UkmPageLoadMetricsObserverTest, SoftNavigationCount) {
 
   auto soft_navigation_metrics =
       page_load_metrics::mojom::SoftNavigationMetrics(
-          1, base::Milliseconds(12), "00000-00000-00000-00000",
+          1, base::Milliseconds(12), 42000, base::UnguessableToken::Create(),
           page_load_metrics::mojom::LargestContentfulPaintTiming::New());
 
   content::MockNavigationHandle navigation_handle;
   navigation_handle.set_has_committed(true);
   navigation_handle.set_is_in_primary_main_frame(true);
   navigation_handle.set_is_same_document(true);
+  navigation_handle.set_same_document_metrics_token(
+      base::UnguessableToken::Create());
 
   // Simulate the detection of soft navigation so that the ukm source id for
   // soft navigation is initialized.
@@ -1868,13 +1889,13 @@ TEST_F(UkmPageLoadMetricsObserverTest,
        ExperimentalLayoutInstabilityRecordOnHidden) {
   NavigateAndCommit(GURL(kTestUrl1));
   base::TimeTicks current_time = base::TimeTicks::Now();
-  page_load_metrics::mojom::FrameRenderDataUpdate render_data(1.0, 1.0, {});
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data;
   render_data.new_layout_shifts.emplace_back(
       page_load_metrics::mojom::LayoutShift::New(
-          current_time - base::Milliseconds(4000), 0.5));
+          current_time - base::Milliseconds(4000), 0.5, false));
   render_data.new_layout_shifts.emplace_back(
       page_load_metrics::mojom::LayoutShift::New(
-          current_time - base::Milliseconds(3500), 0.5));
+          current_time - base::Milliseconds(3500), 0.5, false));
 
   tester()->SimulateRenderDataUpdate(render_data);
 
@@ -1902,10 +1923,10 @@ TEST_F(UkmPageLoadMetricsObserverTest,
         100);
   }
 
-  page_load_metrics::mojom::FrameRenderDataUpdate render_data_2(1.5, 0.0, {});
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data_2;
   render_data_2.new_layout_shifts.emplace_back(
       page_load_metrics::mojom::LayoutShift::New(
-          current_time - base::Milliseconds(2500), 1.5));
+          current_time - base::Milliseconds(2500), 1.5, true));
   tester()->SimulateRenderDataUpdate(render_data_2);
 
   // Simulate closing the tab (the CLS metrics should include all the shifts
@@ -1950,8 +1971,8 @@ TEST_F(UkmPageLoadMetricsObserverTest,
               testing::ElementsAre(base::Bucket(25, 1)));
   EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
                   "PageLoad.LayoutInstability.MaxCumulativeShiftScore."
-                  "SessionWindow.Gap1000ms.Max5000ms"),
-              testing::ElementsAre(base::Bucket(25, 1)));
+                  "SessionWindow.Gap1000ms.Max5000ms2"),
+              testing::ElementsAre(base::Bucket(24000, 1)));
   EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
                   "PageLoad.LayoutInstability."
                   "CumulativeShiftScoreAtFirstOnHidden"),
@@ -1959,7 +1980,7 @@ TEST_F(UkmPageLoadMetricsObserverTest,
   // The layout shift score was originally 1, after multiplying 10000, it
   // should fit into the bucket of value 9130, with a histogram of maximum
   // value of 24000.
-  const base::HistogramBase::Sample max_cls = 9130;
+  const base::HistogramBase::Sample32 max_cls = 9130;
   EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
                   "PageLoad.LayoutInstability."
                   "MaxCumulativeShiftScoreAtFirstOnHidden.SessionWindow."
@@ -1976,13 +1997,13 @@ TEST_F(UkmPageLoadMetricsObserverTest,
 
   // Bring the tab to the foreground and simulate a layout shift.
   web_contents()->WasShown();
-  page_load_metrics::mojom::FrameRenderDataUpdate render_data(1.0, 1.0, {});
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data;
   render_data.new_layout_shifts.emplace_back(
       page_load_metrics::mojom::LayoutShift::New(
-          current_time - base::Milliseconds(4000), 0.5));
+          current_time - base::Milliseconds(4000), 0.5, false));
   render_data.new_layout_shifts.emplace_back(
       page_load_metrics::mojom::LayoutShift::New(
-          current_time - base::Milliseconds(3500), 0.5));
+          current_time - base::Milliseconds(3500), 0.5, false));
 
   tester()->SimulateRenderDataUpdate(render_data);
 
@@ -2015,7 +2036,7 @@ TEST_F(UkmPageLoadMetricsObserverTest,
   // The layout shift score was originally 1, after multiplying 10000, it
   // should fit into the bucket of value 9130, with a histogram of maximum
   // value of 24000.
-  const base::HistogramBase::Sample max_cls = 9130;
+  const base::HistogramBase::Sample32 max_cls = 9130;
   EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
                   "PageLoad.LayoutInstability."
                   "MaxCumulativeShiftScoreAtFirstOnHidden.SessionWindow."
@@ -2139,7 +2160,11 @@ TEST_F(UkmPageLoadMetricsObserverTest, LayoutInstabilitySubframeAggregation) {
   NavigateAndCommit(GURL(kTestUrl1));
 
   // Simulate layout instability in the main frame.
-  page_load_metrics::mojom::FrameRenderDataUpdate render_data(1.0, 1.0, {});
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data;
+  render_data.new_layout_shifts.push_back(
+      page_load_metrics::mojom::LayoutShift::New(base::TimeTicks::Now(), 1.0,
+                                                 false));
+
   tester()->SimulateRenderDataUpdate(render_data);
 
   RenderFrameHost* subframe =
@@ -2149,7 +2174,10 @@ TEST_F(UkmPageLoadMetricsObserverTest, LayoutInstabilitySubframeAggregation) {
               ->AppendChild("subframe"));
 
   // Simulate layout instability in the subframe.
-  render_data.layout_shift_delta = 1.5;
+  render_data.new_layout_shifts.clear();
+  render_data.new_layout_shifts.push_back(
+      page_load_metrics::mojom::LayoutShift::New(base::TimeTicks::Now(), 1.5,
+                                                 false));
   tester()->SimulateRenderDataUpdate(render_data, subframe);
 
   // Simulate closing the tab.
@@ -2159,11 +2187,6 @@ TEST_F(UkmPageLoadMetricsObserverTest, LayoutInstabilitySubframeAggregation) {
   EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
                   "PageLoad.LayoutInstability.CumulativeShiftScore"),
               testing::ElementsAre(base::Bucket(25, 1)));
-
-  // Main-frame (DCLS) score includes only the LS scores in the main frame.
-  EXPECT_THAT(tester()->histogram_tester().GetAllSamples(
-                  "PageLoad.LayoutInstability.CumulativeShiftScore.MainFrame"),
-              testing::ElementsAre(base::Bucket(10, 1)));
 
   const auto& ukm_recorder = tester()->test_ukm_recorder();
   std::map<ukm::SourceId, ukm::mojom::UkmEntryPtr> merged_entries =
@@ -2735,7 +2758,7 @@ TEST_F(UkmPageLoadMetricsObserverTest, CLSNeverForegroundedNoReport) {
   web_contents()->WasHidden();
   NavigateAndCommit(GURL(kTestUrl1));
 
-  page_load_metrics::mojom::FrameRenderDataUpdate render_data(1.0, 1.0, {});
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data;
   tester()->SimulateRenderDataUpdate(render_data);
 
   // Simulate closing the tab.
@@ -2769,7 +2792,10 @@ class CLSUkmPageLoadMetricsObserverTest
 void CLSUkmPageLoadMetricsObserverTest::SimulateShiftDelta(
     float delta,
     content::RenderFrameHost* frame) {
-  page_load_metrics::mojom::FrameRenderDataUpdate render_data(delta, delta, {});
+  page_load_metrics::mojom::FrameRenderDataUpdate render_data;
+  render_data.new_layout_shifts.push_back(
+      page_load_metrics::mojom::LayoutShift::New(base::TimeTicks::Now(), delta,
+                                                 false));
   tester()->SimulateRenderDataUpdate(render_data, frame);
 }
 
@@ -2949,13 +2975,12 @@ TEST_F(UkmPageLoadMetricsObserverTest, TestRefreshRateThrottled) {
   TestingPrefServiceSimple local_state;
   performance_manager::user_tuning::prefs::RegisterLocalStatePrefs(
       local_state.registry());
-  local_state.SetInteger(
-      performance_manager::user_tuning::prefs::kBatterySaverModeState,
-      static_cast<int>(performance_manager::user_tuning::prefs::
-                           BatterySaverModeState::kEnabled));
   performance_manager::user_tuning::TestUserPerformanceTuningManagerEnvironment
       uptm_environment;
   uptm_environment.SetUp(&local_state);
+  performance_manager::user_tuning::
+      TestUserPerformanceTuningManagerEnvironment::SetBatterySaverMode(
+          &local_state, true);
 
   NavigateAndCommit(GURL(kTestUrl1));
 
@@ -2977,7 +3002,6 @@ TEST_F(UkmPageLoadMetricsObserverTest, TestRefreshRateThrottled) {
 // The following tests are ensure that Page Load metrics are recorded in a
 // trace. Currently enabled only for platforms where USE_PERFETTO_CLIENT_LIBRARY
 // is true (Android, Linux) as test infra (TestTraceProcessor) requires it.
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
 class TracingWebContentsObserver : public content::WebContentsObserver {
  public:
   explicit TracingWebContentsObserver(content::WebContents* contents)
@@ -3070,4 +3094,3 @@ TEST_F(UkmPageLoadMetricsObserverTest, TestTracingUserTimingMetrics) {
                                      std::vector<std::string>{
                                          base::NumberToString(navigation_id)}));
 }
-#endif

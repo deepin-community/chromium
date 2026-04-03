@@ -52,7 +52,7 @@
 #include "content/public/browser/storage_partition_config.h"
 #include "extensions/buildflags/buildflags.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/extensions/api/downloads/downloads_api.h"
 #endif
 
@@ -113,7 +113,7 @@ class DownloadHistoryData : public base::SupportsUserData::Data {
   DownloadHistoryData(const DownloadHistoryData&) = delete;
   DownloadHistoryData& operator=(const DownloadHistoryData&) = delete;
 
-  ~DownloadHistoryData() override {}
+  ~DownloadHistoryData() override = default;
 
   PersistenceState state() const { return state_; }
   void SetState(PersistenceState s) { state_ = s; }
@@ -143,7 +143,7 @@ const char DownloadHistoryData::kKey[] =
 
 history::DownloadRow GetDownloadRow(download::DownloadItem* item) {
   std::string by_ext_id, by_ext_name;
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   extensions::DownloadedByExtension* by_ext =
       extensions::DownloadedByExtension::Get(item);
   if (by_ext) {
@@ -209,7 +209,7 @@ ShouldUpdateHistoryResult ShouldUpdateHistory(
   // Chrome will write the http response data to a temporary file, and later
   // rename it. If Chrome is killed before committing the history here,
   // that temporary file will still get permanently left.
-  // See http://crbug.com/664677.
+  // See http://crbug.com/40493321.
   if (previous == nullptr || previous->current_path != current.current_path) {
     return ShouldUpdateHistoryResult::UPDATE_IMMEDIATELY;
   }
@@ -277,7 +277,7 @@ bool ShouldSkipLoadingDownload(const history::DownloadRow& row,
   if (file_path.empty())
     return false;
   auto iter = file_path_count->find(file_path);
-  DCHECK(iter != file_path_count->end());
+  CHECK(iter != file_path_count->end());
   --iter->second;
   if (iter->second < 1)
     return false;
@@ -291,7 +291,7 @@ DownloadHistory::HistoryAdapter::HistoryAdapter(
     history::HistoryService* history)
     : history_(history) {
 }
-DownloadHistory::HistoryAdapter::~HistoryAdapter() {}
+DownloadHistory::HistoryAdapter::~HistoryAdapter() = default;
 
 void DownloadHistory::HistoryAdapter::QueryDownloads(
     history::HistoryService::DownloadQueryCallback callback) {
@@ -314,8 +314,8 @@ void DownloadHistory::HistoryAdapter::RemoveDownloads(
   history_->RemoveDownloads(ids);
 }
 
-DownloadHistory::Observer::Observer() {}
-DownloadHistory::Observer::~Observer() {}
+DownloadHistory::Observer::Observer() = default;
+DownloadHistory::Observer::~Observer() = default;
 
 // static
 bool DownloadHistory::IsPersisted(const download::DownloadItem* item) {
@@ -443,7 +443,7 @@ void DownloadHistory::LoadHistoryDownloads(
     // modification, so that observers who care about the extra info may have an
     // updated view of the item.
     bool should_update_observers = false;
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
     if (!row.by_ext_id.empty() && !row.by_ext_name.empty()) {
       new extensions::DownloadedByExtension(item, row.by_ext_id,
                                             row.by_ext_name);
@@ -657,7 +657,7 @@ void DownloadHistory::OnDownloadRestoredFromHistory(
 
 bool DownloadHistory::NeedToUpdateDownloadHistory(
     download::DownloadItem* item) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // Always populate new extension downloads to history.
   DownloadHistoryData* data = DownloadHistoryData::Get(item);
   extensions::DownloadedByExtension* by_ext =

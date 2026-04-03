@@ -7,11 +7,12 @@
 
 #include <optional>
 
+#include "base/android/jni_android.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/scoped_observation.h"
 #include "components/content_settings/browser/ui/cookie_controls_controller.h"
 #include "components/content_settings/browser/ui/cookie_controls_view.h"
-#include "components/content_settings/core/common/cookie_controls_status.h"
+#include "components/content_settings/core/common/cookie_controls_state.h"
 
 namespace content_settings {
 
@@ -23,10 +24,10 @@ class CookieControlsBridge : public CookieControlsObserver {
   // CookieControlsController.
   CookieControlsBridge(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& jweb_contents_android,
-      const base::android::JavaParamRef<jobject>&
-          joriginal_browser_context_handle);
+      const base::android::JavaRef<jobject>& obj,
+      const base::android::JavaRef<jobject>& jweb_contents_android,
+      const base::android::JavaRef<jobject>& joriginal_browser_context_handle,
+      bool is_incognito_branded);
 
   CookieControlsBridge(const CookieControlsBridge&) = delete;
   CookieControlsBridge& operator=(const CookieControlsBridge&) = delete;
@@ -35,12 +36,13 @@ class CookieControlsBridge : public CookieControlsObserver {
 
   void UpdateWebContents(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jweb_contents_android,
-      const base::android::JavaParamRef<jobject>&
-          joriginal_browser_context_handle);
+      const base::android::JavaRef<jobject>& jweb_contents_android,
+      const base::android::JavaRef<jobject>& joriginal_browser_context_handle,
+      bool is_incognito_branded);
 
-  // Called by the Java counterpart when it is getting garbage collected.
-  void Destroy(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  // Destroys the CookieControlsBridge object. This needs to be called on the
+  // java side when the object is not in use anymore.
+  void Destroy(JNIEnv* env);
 
   void SetThirdPartyCookieBlockingEnabledForSite(JNIEnv* env,
                                                  bool block_cookies);
@@ -49,36 +51,24 @@ class CookieControlsBridge : public CookieControlsObserver {
 
   void OnEntryPointAnimated(JNIEnv* env);
 
-  int GetCookieControlsStatus(JNIEnv* env);
-
-  int GetBreakageConfidenceLevel(JNIEnv* env);
-
   // CookieControlsObserver:
-  // TODO(b/317975095): Remove `status` in favor of `control_visible` and
-  // `protections_on`.
-  void OnStatusChanged(CookieControlsStatus status,
-                       bool controls_visible,
-                       bool protections_on,
+  void OnStatusChanged(CookieControlsState controls_state,
                        CookieControlsEnforcement enforcement,
-                       CookieBlocking3pcdStatus blocking_status,
                        base::Time expiration) override;
-  void OnSitesCountChanged(int allowed_third_party_sites_count,
-                           int blocked_third_party_sites_count) override;
-  void OnBreakageConfidenceLevelChanged(
-      CookieControlsBreakageConfidenceLevel level) override;
+
+  void OnCookieControlsIconStatusChanged(
+      bool icon_visible,
+      CookieControlsState controls_state,
+      bool should_highlight) override;
+
+  void OnReloadThresholdExceeded() override;
 
  private:
   base::android::ScopedJavaGlobalRef<jobject> jobject_;
-  CookieControlsStatus status_ = CookieControlsStatus::kUninitialized;
+  CookieControlsState controls_state_ = CookieControlsState::kHidden;
   CookieControlsEnforcement enforcement_ =
       CookieControlsEnforcement::kNoEnforcement;
-  CookieControlsBreakageConfidenceLevel level_ =
-      CookieControlsBreakageConfidenceLevel::kUninitialized;
   std::optional<base::Time> expiration_;
-  std::optional<int> blocked_cookies_;
-  std::optional<int> allowed_cookies_;
-  std::optional<int> blocked_third_party_sites_count_;
-  std::optional<int> allowed_third_party_sites_count_;
   std::unique_ptr<CookieControlsController> controller_;
   base::ScopedObservation<CookieControlsController, CookieControlsObserver>
       observation_{this};

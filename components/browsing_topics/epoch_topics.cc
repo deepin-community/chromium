@@ -4,7 +4,8 @@
 
 #include "components/browsing_topics/epoch_topics.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/hash/legacy_hash.h"
 #include "base/json/values_util.h"
 #include "base/logging.h"
@@ -38,6 +39,13 @@ bool ShouldUseRandomTopic(uint64_t random_or_top_topic_decision_hash) {
 EpochTopics::EpochTopics(base::Time calculation_time)
     : calculation_time_(calculation_time) {}
 
+EpochTopics::EpochTopics(base::Time calculation_time,
+                         CalculatorResultStatus calculator_result_status)
+    : calculation_time_(calculation_time),
+      calculator_result_status_(calculator_result_status) {
+  CHECK_NE(calculator_result_status, CalculatorResultStatus::kSuccess);
+}
+
 EpochTopics::EpochTopics(
     std::vector<TopicAndDomains> top_topics_and_observing_domains,
     size_t padded_top_topics_start_index,
@@ -53,8 +61,8 @@ EpochTopics::EpochTopics(
       taxonomy_version_(taxonomy_version),
       model_version_(model_version),
       calculation_time_(calculation_time),
-      from_manually_triggered_calculation_(
-          from_manually_triggered_calculation) {
+      from_manually_triggered_calculation_(from_manually_triggered_calculation),
+      calculator_result_status_(CalculatorResultStatus::kSuccess) {
   DCHECK_EQ(base::checked_cast<int>(top_topics_and_observing_domains_.size()),
             blink::features::kBrowsingTopicsNumberOfTopTopicsPerEpoch.Get());
   DCHECK_LE(padded_top_topics_start_index,
@@ -71,24 +79,26 @@ EpochTopics& EpochTopics::operator=(EpochTopics&&) = default;
 EpochTopics::~EpochTopics() = default;
 
 // static
-EpochTopics EpochTopics::FromDictValue(const base::Value::Dict& dict_value) {
+EpochTopics EpochTopics::FromDictValue(const base::DictValue& dict_value) {
   const base::Value* calculation_time_value =
       dict_value.Find(kCalculationTimeNameKey);
-  if (!calculation_time_value)
+  std::optional<base::Time> maybe_calculation_time =
+      base::ValueToTime(calculation_time_value);
+  if (!maybe_calculation_time) {
     return EpochTopics(base::Time());
+  }
 
-  base::Time calculation_time =
-      base::ValueToTime(calculation_time_value).value();
+  base::Time calculation_time = maybe_calculation_time.value();
 
   std::vector<TopicAndDomains> top_topics_and_observing_domains;
-  const base::Value::List* top_topics_and_observing_domains_value =
+  const base::ListValue* top_topics_and_observing_domains_value =
       dict_value.FindList(kTopTopicsAndObservingDomainsNameKey);
   if (!top_topics_and_observing_domains_value)
     return EpochTopics(calculation_time);
 
   for (const base::Value& topic_and_observing_domains_value :
        *top_topics_and_observing_domains_value) {
-    const base::Value::Dict* topic_and_observing_domains_dict_value =
+    const base::DictValue* topic_and_observing_domains_dict_value =
         topic_and_observing_domains_value.GetIfDict();
     if (!topic_and_observing_domains_dict_value)
       return EpochTopics(calculation_time);
@@ -141,15 +151,15 @@ EpochTopics EpochTopics::FromDictValue(const base::Value::Dict& dict_value) {
                      /*from_manually_triggered_calculation=*/false);
 }
 
-base::Value::Dict EpochTopics::ToDictValue() const {
-  base::Value::List top_topics_and_observing_domains_list;
+base::DictValue EpochTopics::ToDictValue() const {
+  base::ListValue top_topics_and_observing_domains_list;
   for (const TopicAndDomains& topic_and_domains :
        top_topics_and_observing_domains_) {
     top_topics_and_observing_domains_list.Append(
         topic_and_domains.ToDictValue());
   }
 
-  base::Value::Dict result_dict;
+  base::DictValue result_dict;
   result_dict.Set(kTopTopicsAndObservingDomainsNameKey,
                   std::move(top_topics_and_observing_domains_list));
   result_dict.Set(kPaddedTopTopicsStartIndexNameKey,
@@ -227,7 +237,7 @@ void EpochTopics::ClearTopic(Topic topic) {
     SemanticTree semantic_tree;
     std::vector<Topic> top_topic_ancestors =
         semantic_tree.GetAncestorTopics(top_topic_and_domains.topic());
-    if (base::Contains(top_topic_ancestors, topic)) {
+    if (std::ranges::contains(top_topic_ancestors, topic)) {
       top_topic_and_domains = TopicAndDomains();
     }
   }
@@ -238,6 +248,17 @@ void EpochTopics::ClearContextDomain(
   for (TopicAndDomains& topic_and_domains : top_topics_and_observing_domains_) {
     topic_and_domains.ClearDomain(hashed_context_domain);
   }
+}
+
+void EpochTopics::ScheduleExpiration(base::OnceClosure on_expiration_callback) {
+  CHECK(!expiration_timer_);
+  expiration_timer_ = std::make_unique<base::WallClockTimer>();
+
+  expiration_timer_->Start(
+      FROM_HERE,
+      calculation_time_ +
+          blink::features::kBrowsingTopicsEpochRetentionDuration.Get(),
+      std::move(on_expiration_callback));
 }
 
 }  // namespace browsing_topics

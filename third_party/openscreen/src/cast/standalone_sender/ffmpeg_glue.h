@@ -25,7 +25,7 @@ namespace openscreen::cast {
 
 namespace internal {
 
-// Convenience allocator for a new AVFormatContext, given a file |path|. Returns
+// Convenience allocator for a new AVFormatContext, given a file `path`. Returns
 // nullptr on error. Note: MakeUniqueAVFormatContext() is the public API.
 AVFormatContext* CreateAVFormatContextForFile(const char* path);
 
@@ -55,19 +55,19 @@ AVFormatContext* CreateAVFormatContextForFile(const char* path);
 
 DEFINE_AV_UNIQUE_PTR(AVFormatContext,
                      ::openscreen::cast::internal::CreateAVFormatContextForFile,
-                     avformat_close_input);
+                     avformat_close_input)
 DEFINE_AV_UNIQUE_PTR(AVCodecContext,
                      avcodec_alloc_context3,
-                     avcodec_free_context);
-DEFINE_AV_UNIQUE_PTR(AVPacket, av_packet_alloc, av_packet_free);
-DEFINE_AV_UNIQUE_PTR(AVFrame, av_frame_alloc, av_frame_free);
-DEFINE_AV_UNIQUE_PTR(SwrContext, swr_alloc, swr_free);
+                     avcodec_free_context)
+DEFINE_AV_UNIQUE_PTR(AVPacket, av_packet_alloc, av_packet_free)
+DEFINE_AV_UNIQUE_PTR(AVFrame, av_frame_alloc, av_frame_free)
+DEFINE_AV_UNIQUE_PTR(SwrContext, swr_alloc, swr_free)
 
 #undef DEFINE_AV_UNIQUE_PTR
 
 // The av_err2str macro uses a compound literal, which is a C99-only feature.
 // So instead, we roll our own here.
-// TODO(https://issuetracker.google.com/224642520): dedup with standalone
+// TODO(issuetracker.google.com/224642520): dedup with standalone
 // receiver.
 std::string AvErrorToString(int error_num);
 

@@ -13,7 +13,11 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "chrome/browser/metrics/first_web_contents_profiler_base.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/waap/initial_web_ui_manager.h"
+#include "chrome/common/chrome_features.h"
 #include "components/startup_metric_utils/browser/startup_metric_utils.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -47,15 +51,23 @@ class FirstWebContentsProfiler : public FirstWebContentsProfilerBase {
   ~FirstWebContentsProfiler() override = default;
 };
 
+// FirstWebContentsProfiler is created before the main MessageLoop starts
+// running. It is generally expected that any visible WebContents at this
+// time will have a pending NavigationEntry, i.e. should have dispatched
+// DidStartNavigation() but notDidFinishNavigation().
+//
+// This assumption does not hold true on ChromeOS during a session restore,
+// where the profiler is created before the navigation starts. The base
+// class (`FirstWebContentsProfilerBase`) contains the logic to handle this
+// specific case.
+//
+// This seemingly empty constructor is necessary. It serves as a public
+// entry point to call the protected constructor of the base class, which is
+// required because this class is instantiated by the free function
+// `BeginFirstWebContentsProfiling`.
 FirstWebContentsProfiler::FirstWebContentsProfiler(
     content::WebContents* web_contents)
-    : FirstWebContentsProfilerBase(web_contents) {
-  // FirstWebContentsProfiler is created before the main MessageLoop starts
-  // running. At that time, any visible WebContents should have a pending
-  // NavigationEntry, i.e. should have dispatched DidStartNavigation() but not
-  // DidFinishNavigation().
-  DCHECK(web_contents->GetController().GetPendingEntry());
-}
+    : FirstWebContentsProfilerBase(web_contents) {}
 
 void FirstWebContentsProfiler::RecordFinishReason(
     StartupProfilingFinishReason finish_reason) {
@@ -82,15 +94,42 @@ bool FirstWebContentsProfiler::WasStartupInterrupted() {
 
 }  // namespace
 
+// Determines the WebContents to profile for startup metrics.
+// This is typically the currently visible WebContents. However, if window
+// visibility is deferred, e.g., waiting for the WebUI toolbar to finish
+// loading, it instead returns the active WebContents without relying on a
+// strict visibility check.
+content::WebContents* GetWebContentsToProfile(
+    BrowserWindowInterface* browser_interface) {
+  content::WebContents* visible_contents =
+      FirstWebContentsProfilerBase::GetVisibleContents(browser_interface);
+  if (visible_contents) {
+    return visible_contents;
+  }
+
+  const auto* manager = InitialWebUIManager::From(browser_interface);
+  if (manager && manager->IsShowPending()) {
+    return browser_interface->GetTabStripModel()->GetActiveWebContents();
+  }
+
+  return nullptr;
+}
+
 void BeginFirstWebContentsProfiling() {
   content::WebContents* visible_contents = nullptr;
-  const BrowserList* browser_list = BrowserList::GetInstance();
-  for (Browser* browser : *browser_list) {
-    visible_contents =
-        FirstWebContentsProfilerBase::GetVisibleContents(browser);
-    if (visible_contents)
-      break;
-  }
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [&](BrowserWindowInterface* browser) {
+        if (features::kWebUIReloadButtonDeferBrowserViewShow.Get()) {
+          visible_contents = GetWebContentsToProfile(browser);
+        } else {
+          visible_contents =
+              FirstWebContentsProfilerBase::GetVisibleContents(browser);
+        }
+        if (visible_contents) {
+          return false;  // stop iterating
+        }
+        return true;  // continue iterating
+      });
 
   if (!visible_contents) {
     RecordFirstWebContentsFinishReason(

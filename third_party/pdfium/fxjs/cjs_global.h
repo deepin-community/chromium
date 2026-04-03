@@ -35,16 +35,19 @@ class CJS_Global final : public CJS_Object {
   static void DefineJSObjects(CFXJS_Engine* pEngine);
   static void DefineAllProperties(CFXJS_Engine* pEngine);
 
-  static void queryprop_static(
+  static v8::Intercepted queryprop_static(
       v8::Local<v8::Name> property,
       const v8::PropertyCallbackInfo<v8::Integer>& info);
-  static void getprop_static(v8::Local<v8::Name> property,
-                             const v8::PropertyCallbackInfo<v8::Value>& info);
-  static void putprop_static(v8::Local<v8::Name> property,
-                             v8::Local<v8::Value> value,
-                             const v8::PropertyCallbackInfo<v8::Value>& info);
-  static void delprop_static(v8::Local<v8::Name> property,
-                             const v8::PropertyCallbackInfo<v8::Boolean>& info);
+  static v8::Intercepted getprop_static(
+      v8::Local<v8::Name> property,
+      const v8::PropertyCallbackInfo<v8::Value>& info);
+  static v8::Intercepted putprop_static(
+      v8::Local<v8::Name> property,
+      v8::Local<v8::Value> value,
+      const v8::PropertyCallbackInfo<void>& info);
+  static v8::Intercepted delprop_static(
+      v8::Local<v8::Name> property,
+      const v8::PropertyCallbackInfo<v8::Boolean>& info);
   static void enumprop_static(const v8::PropertyCallbackInfo<v8::Array>& info);
 
   static void setPersistent_static(
@@ -68,7 +71,7 @@ class CJS_Global final : public CJS_Object {
   static const JSMethodSpec MethodSpecs[];
 
   void UpdateGlobalPersistentVariables();
-  // TODO(crbug.com/pdfium/926): This method is never called.
+  // TODO(crbug.com/42271902): This method is never called.
   void CommitGlobalPersisitentVariables();
   void DestroyGlobalPersisitentVariables();
   CJS_Result SetGlobalVariables(const ByteString& propname,
@@ -93,8 +96,8 @@ class CJS_Global final : public CJS_Object {
   void EnumProperties(CJS_Runtime* pRuntime,
                       const v8::PropertyCallbackInfo<v8::Array>& info);
 
-  std::map<ByteString, std::unique_ptr<JSGlobalData>> m_MapGlobal;
-  UnownedPtr<CFX_GlobalData> m_pGlobalData;
+  std::map<ByteString, std::unique_ptr<JSGlobalData>> map_global_;
+  UnownedPtr<CFX_GlobalData> global_data_;
 };
 
 #endif  // FXJS_CJS_GLOBAL_H_

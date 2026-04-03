@@ -65,11 +65,19 @@ struct VulkanDeviceKnobs {
     VkPhysicalDevice16BitStorageFeaturesKHR _16BitStorageFeatures;
     VkPhysicalDeviceSubgroupSizeControlFeaturesEXT subgroupSizeControlFeatures;
     VkPhysicalDeviceZeroInitializeWorkgroupMemoryFeaturesKHR zeroInitializeWorkgroupMemoryFeatures;
+    VkPhysicalDeviceShaderDemoteToHelperInvocationFeaturesEXT demoteToHelperInvocationFeatures;
     VkPhysicalDeviceShaderIntegerDotProductFeaturesKHR shaderIntegerDotProductFeatures;
     VkPhysicalDeviceDepthClipEnableFeaturesEXT depthClipEnableFeatures;
     VkPhysicalDeviceRobustness2FeaturesEXT robustness2Features;
-    VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR
-        shaderSubgroupUniformControlFlowFeatures;
+    VkPhysicalDeviceSamplerYcbcrConversionFeatures samplerYCbCrConversionFeatures;
+    VkPhysicalDeviceShaderSubgroupExtendedTypesFeaturesKHR shaderSubgroupExtendedTypes;
+    VkPhysicalDeviceVulkanMemoryModelFeatures vulkanMemoryModelFeatures;
+    VkPhysicalDeviceCooperativeMatrixFeaturesKHR cooperativeMatrixFeatures;
+    VkPhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures;
+    VkPhysicalDevicePipelineRobustnessFeatures pipelineRobustnessFeatures;
+    VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeatures;
+    VkPhysicalDeviceMultisampledRenderToSingleSampledFeaturesEXT
+        multisampledRenderToSingleSampledFeatures;
 
     bool HasExt(DeviceExt ext) const;
     DeviceExtSet extensions;
@@ -84,8 +92,13 @@ struct VulkanDeviceInfo : VulkanDeviceKnobs {
     VkPhysicalDeviceMaintenance4Properties propertiesMaintenance4;
     VkPhysicalDeviceSubgroupProperties subgroupProperties;
     VkPhysicalDeviceExternalMemoryHostPropertiesEXT externalMemoryHostProperties;
+    VkPhysicalDeviceCooperativeMatrixPropertiesKHR cooperativeMatrixProperties;
+    VkPhysicalDeviceDescriptorIndexingProperties descriptorIndexingProperties;
+    VkPhysicalDevicePipelineRobustnessProperties pipelineRobustnessProperties;
+    VkPhysicalDeviceMaintenance5Properties propertiesMaintenance5;
 
     std::vector<VkQueueFamilyProperties> queueFamilies;
+    std::vector<VkCooperativeMatrixPropertiesKHR> cooperativeMatrixConfigs;
 
     std::vector<VkMemoryType> memoryTypes;
     std::vector<VkMemoryHeap> memoryHeaps;

@@ -2,19 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "extensions/browser/extension_user_script_loader.h"
+
 #include "base/one_shot_event.h"
 #include "base/test/test_future.h"
 #include "base/test/values_test_util.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/test/base/ui_test_utils.h"
+#include "chrome/browser/profiles/profile.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
-#include "extensions/browser/api/scripting/scripting_constants.h"
-#include "extensions/browser/api/scripting/scripting_utils.h"
 #include "extensions/browser/extension_system.h"
-#include "extensions/browser/extension_user_script_loader.h"
+#include "extensions/browser/scripting_constants.h"
+#include "extensions/browser/scripting_utils.h"
 #include "extensions/browser/state_store.h"
 #include "extensions/browser/user_script_manager.h"
+#include "extensions/buildflags/buildflags.h"
 #include "net/dns/mock_host_resolver.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -71,7 +76,7 @@ class ExtensionUserScriptLoaderBrowserTest : public ExtensionApiTest {
 // This series of tests exercises that the migration we have in place for our
 // serializations of user scripts works properly, preserving old records. It is
 // split into three steps.
-// TODO(https://crbug.com/1494155): We can remove this test once the migration
+// TODO(crbug.com/40286091): We can remove this test once the migration
 // is fully complete.
 // Step 1: Load an extension and populate it with old-style data.
 IN_PROC_BROWSER_TEST_F(ExtensionUserScriptLoaderBrowserTest,
@@ -101,11 +106,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionUserScriptLoaderBrowserTest,
                        PRE_OldDynamicContentScriptEntriesAreMigrated) {
   WaitForSystemReady();
 
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(),
+  content::WebContents* active_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(
+      active_contents,
       embedded_test_server()->GetURL("example.com", "/simple.html")));
-  EXPECT_EQ(u"script injected",
-            browser()->tab_strip_model()->GetActiveWebContents()->GetTitle());
+  EXPECT_EQ(u"script injected", active_contents->GetTitle());
 
   const Extension* extension = nullptr;
   for (const auto& entry :
@@ -177,11 +182,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionUserScriptLoaderBrowserTest,
 IN_PROC_BROWSER_TEST_F(ExtensionUserScriptLoaderBrowserTest,
                        OldDynamicContentScriptEntriesAreMigrated) {
   WaitForSystemReady();
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(),
+  content::WebContents* active_contents = GetActiveWebContents();
+  ASSERT_TRUE(NavigateToURL(
+      active_contents,
       embedded_test_server()->GetURL("example.com", "/simple.html")));
-  EXPECT_EQ(u"script injected",
-            browser()->tab_strip_model()->GetActiveWebContents()->GetTitle());
+  EXPECT_EQ(u"script injected", active_contents->GetTitle());
 }
 
 }  // namespace extensions

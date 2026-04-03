@@ -2,12 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <stddef.h>
-#include <memory>
-
 #include "media/mojo/services/mojo_video_encoder_metrics_provider_service.h"
 
+#include <stddef.h>
+
+#include <array>
+#include <memory>
+
 #include "base/run_loop.h"
+#include "base/strings/strcat.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_message_loop.h"
 #include "components/ukm/test_ukm_recorder.h"
@@ -451,7 +454,7 @@ TEST_F(
 
 TEST_F(MojoVideoEncoderMetricsProviderServiceTest,
        CreateAndTwoInitializeAndSetEncodedFrameCounts_ReportTwoUKMs) {
-  const struct {
+  struct MetricsCases {
     mojom::VideoEncoderUseCase use_case;
     VideoCodecProfile profile;
     gfx::Size size;
@@ -459,7 +462,8 @@ TEST_F(MojoVideoEncoderMetricsProviderServiceTest,
     SVCScalabilityMode svc_mode;
     EncoderStatus::Codes status;
     uint64_t num_encoded_frames;
-  } kMetricsCases[] = {
+  };
+  const auto kMetricsCases = std::to_array<MetricsCases>({
       {
           mojom::VideoEncoderUseCase::kWebRTC,
           VP9PROFILE_PROFILE0,
@@ -478,7 +482,7 @@ TEST_F(MojoVideoEncoderMetricsProviderServiceTest,
           EncoderStatus::Codes::kOk,
           300,
       },
-  };
+  });
   constexpr uint64_t kEncoderId = 0;
   auto [test_recorder, provider] = Create(kTestURL);
   for (const auto& metrics : kMetricsCases) {
@@ -509,7 +513,7 @@ TEST_F(MojoVideoEncoderMetricsProviderServiceTest,
 }
 
 TEST_F(MojoVideoEncoderMetricsProviderServiceTest, HandleTwoEncoders) {
-  const struct {
+  struct MetricsCases {
     uint64_t encoder_id;
     mojom::VideoEncoderUseCase use_case;
     VideoCodecProfile profile;
@@ -518,7 +522,8 @@ TEST_F(MojoVideoEncoderMetricsProviderServiceTest, HandleTwoEncoders) {
     SVCScalabilityMode svc_mode;
     EncoderStatus::Codes status;
     uint64_t num_encoded_frames;
-  } kMetricsCases[] = {
+  };
+  const auto kMetricsCases = std::to_array<MetricsCases>({
       {
           0,
           mojom::VideoEncoderUseCase::kWebRTC,
@@ -539,7 +544,7 @@ TEST_F(MojoVideoEncoderMetricsProviderServiceTest, HandleTwoEncoders) {
           EncoderStatus::Codes::kOk,
           300,
       },
-  };
+  });
   auto [test_recorder, provider] = Create(kTestURL);
   for (const auto& metrics : kMetricsCases) {
     provider->Initialize(metrics.encoder_id, metrics.use_case, metrics.profile,

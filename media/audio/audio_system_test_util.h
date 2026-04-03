@@ -21,7 +21,7 @@ namespace media {
 
 // For tests only. Creates AudioSystem callbacks to be passed to AudioSystem
 // methods. When AudioSystem calls such a callback, it verifies treading
-// expectations and checks recieved parameters against expected values passed
+// expectations and checks received parameters against expected values passed
 // during its creation. After that it calls |on_cb_received| closure.
 // Note AudioSystemCallbackExpectations object must outlive all the callbacks
 // it produced, since they contain raw pointers to it.
@@ -179,15 +179,6 @@ TYPED_TEST_P(AudioSystemTestTemplate, GetOutputStreamParameters) {
   wait_loop.Run();
 }
 
-TYPED_TEST_P(AudioSystemTestTemplate, GetDefaultOutputStreamParameters) {
-  base::RunLoop wait_loop;
-  this->audio_system()->GetOutputStreamParameters(
-      AudioDeviceDescription::kDefaultDeviceId,
-      this->expectations_.GetAudioParamsCallback(
-          FROM_HERE, wait_loop.QuitClosure(), this->default_output_params_));
-  wait_loop.Run();
-}
-
 TYPED_TEST_P(AudioSystemTestTemplate,
              GetOutputStreamParametersForDefaultDeviceNoDevices) {
   this->audio_manager()->SetHasOutputDevices(false);
@@ -245,8 +236,8 @@ TYPED_TEST_P(AudioSystemTestTemplate,
              GetInputDeviceDescriptionsNoInputDevices) {
   this->output_device_descriptions_.emplace_back(
       "output_device_name", "output_device_id", "group_id");
-  EXPECT_EQ(0, static_cast<int>(this->input_device_descriptions_.size()));
-  EXPECT_EQ(1, static_cast<int>(this->output_device_descriptions_.size()));
+  EXPECT_EQ(0u, this->input_device_descriptions_.size());
+  EXPECT_EQ(1u, this->output_device_descriptions_.size());
 
   base::RunLoop wait_loop;
   this->audio_system()->GetDeviceDescriptions(
@@ -263,8 +254,8 @@ TYPED_TEST_P(AudioSystemTestTemplate, GetInputDeviceDescriptions) {
       "input_device_name1", "input_device_id1", "group_id1");
   this->input_device_descriptions_.emplace_back(
       "input_device_name2", "input_device_id2", "group_id2");
-  EXPECT_EQ(2, static_cast<int>(this->input_device_descriptions_.size()));
-  EXPECT_EQ(1, static_cast<int>(this->output_device_descriptions_.size()));
+  EXPECT_EQ(2u, this->input_device_descriptions_.size());
+  EXPECT_EQ(1u, this->output_device_descriptions_.size());
 
   base::RunLoop wait_loop;
   this->audio_system()->GetDeviceDescriptions(
@@ -278,8 +269,8 @@ TYPED_TEST_P(AudioSystemTestTemplate,
              GetOutputDeviceDescriptionsNoInputDevices) {
   this->input_device_descriptions_.emplace_back("input_device_name",
                                                 "input_device_id", "group_id");
-  EXPECT_EQ(0, static_cast<int>(this->output_device_descriptions_.size()));
-  EXPECT_EQ(1, static_cast<int>(this->input_device_descriptions_.size()));
+  EXPECT_EQ(0u, this->output_device_descriptions_.size());
+  EXPECT_EQ(1u, this->input_device_descriptions_.size());
 
   base::RunLoop wait_loop;
   this->audio_system()->GetDeviceDescriptions(
@@ -296,8 +287,8 @@ TYPED_TEST_P(AudioSystemTestTemplate, GetOutputDeviceDescriptions) {
       "output_device_name1", "output_device_id1", "group_id1");
   this->output_device_descriptions_.emplace_back(
       "output_device_name2", "output_device_id2", "group_id2");
-  EXPECT_EQ(2, static_cast<int>(this->output_device_descriptions_.size()));
-  EXPECT_EQ(1, static_cast<int>(this->input_device_descriptions_.size()));
+  EXPECT_EQ(2u, this->output_device_descriptions_.size());
+  EXPECT_EQ(1u, this->input_device_descriptions_.size());
 
   base::RunLoop wait_loop;
   this->audio_system()->GetDeviceDescriptions(
@@ -351,7 +342,6 @@ REGISTER_TYPED_TEST_SUITE_P(
     GetInputStreamParametersNormal,
     GetInputStreamParametersNoDevice,
     GetOutputStreamParameters,
-    GetDefaultOutputStreamParameters,
     GetOutputStreamParametersForDefaultDeviceNoDevices,
     GetOutputStreamParametersForNonDefaultDeviceNoDevices,
     HasInputDevices,

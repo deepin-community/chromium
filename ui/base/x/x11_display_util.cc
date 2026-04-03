@@ -6,6 +6,7 @@
 
 #include <dlfcn.h>
 
+#include <algorithm>
 #include <bit>
 #include <bitset>
 #include <numeric>
@@ -14,11 +15,13 @@
 
 #include "base/bits.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/containers/flat_map.h"
 #include "base/logging.h"
+#include "base/notimplemented.h"
 #include "base/numerics/clamped_math.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/x/x11_util.h"
 #include "ui/display/util/display_util.h"
@@ -46,6 +49,9 @@ constexpr const char kRandrEdidProperty[] = "EDID";
 std::map<x11::RandR::Output, size_t> GetMonitors(
     const x11::Response<x11::RandR::GetMonitorsReply>& reply) {
   std::map<x11::RandR::Output, size_t> output_to_monitor;
+  if (!reply) {
+    return output_to_monitor;
+  }
   for (size_t monitor = 0; monitor < reply->monitors.size(); monitor++) {
     for (x11::RandR::Output output : reply->monitors[monitor].outputs) {
       output_to_monitor[output] = monitor;
@@ -68,8 +74,9 @@ gfx::Rect GetWorkAreaSync(x11::Future<x11::GetPropertyReply> future) {
   if (!response || response->format != 32 || response->value_len != 4) {
     return gfx::Rect();
   }
-  const uint32_t* value = response->value->front_as<uint32_t>();
-  return gfx::Rect(value[0], value[1], value[2], value[3]);
+  const uint32_t* value = response->value->cast_to<uint32_t>();
+  return gfx::Rect(value[0], UNSAFE_TODO(value[1]), UNSAFE_TODO(value[2]),
+                   UNSAFE_TODO(value[3]));
 }
 
 x11::Future<x11::GetPropertyReply> GetIccProfileFuture(
@@ -89,11 +96,11 @@ x11::Future<x11::GetPropertyReply> GetIccProfileFuture(
 
 gfx::ICCProfile GetIccProfileSync(x11::Future<x11::GetPropertyReply> future) {
   auto response = future.Sync();
-  if (!response || !response->value->size()) {
+  if (!response || !response->value_len) {
     return gfx::ICCProfile();
   }
-  return gfx::ICCProfile::FromData(response->value->data(),
-                                   response->value->size());
+  return gfx::ICCProfile::FromData(response->value->bytes(),
+                                   response->value_len * response->format / 8u);
 }
 
 x11::Future<x11::RandR::GetOutputPropertyReply> GetEdidFuture(
@@ -127,7 +134,7 @@ void ClipWorkArea(std::vector<display::Display>* displays,
 
   // If the work area entirely contains exactly one display, assume it's meant
   // for that display (and so do nothing).
-  if (base::ranges::count_if(*displays, [&](const display::Display& display) {
+  if (std::ranges::count_if(*displays, [&](const display::Display& display) {
         return get_work_area(display).Contains(display.bounds());
       }) == 1) {
     return;
@@ -137,7 +144,7 @@ void ClipWorkArea(std::vector<display::Display>* displays,
   // it's meant for that display and intersect the work area with only that
   // display.
   const auto found =
-      base::ranges::find_if(*displays, [&](const display::Display& display) {
+      std::ranges::find_if(*displays, [&](const display::Display& display) {
         return display.bounds().Contains(get_work_area(display));
       });
 
@@ -296,6 +303,7 @@ std::vector<display::Display> BuildDisplaysFromXRandRInfo(
     const display::DisplayConfig& display_config,
     size_t* primary_display_index_out) {
   DCHECK(primary_display_index_out);
+  auto* command_line = base::CommandLine::ForCurrentProcess();
   const float primary_scale = display_config.primary_scale;
 
   auto* connection = x11::Connection::Get();
@@ -345,7 +353,7 @@ std::vector<display::Display> BuildDisplaysFromXRandRInfo(
   connection->Flush();
 
   std::vector<x11::Future<x11::GetPropertyReply>> icc_futures{n_iccs};
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kHeadless)) {
+  if (!command_line->HasSwitch(switches::kHeadless)) {
     for (size_t monitor = 0; monitor < n_iccs; ++monitor) {
       icc_futures[monitor] = GetIccProfileFuture(connection, monitor);
     }
@@ -443,11 +451,18 @@ std::vector<display::Display> BuildDisplaysFromXRandRInfo(
     }
 
     const std::string name(output_info->name.begin(), output_info->name.end());
-    if (base::StartsWith(name, "eDP") || base::StartsWith(name, "LVDS")) {
+    auto process_type =
+        command_line->GetSwitchValueASCII("type");
+    if (name.starts_with("eDP") || name.starts_with("LVDS")) {
       display::SetInternalDisplayIds({display_id});
-      // Use localized variant of "Built-in display" for internal displays.
+      // For browser process which has access to resource bundle,
+      // use localized variant of "Built-in display" for internal displays.
       // This follows the ozone DRM behavior (i.e. ChromeOS).
-      display.set_label(l10n_util::GetStringUTF8(IDS_DISPLAY_NAME_INTERNAL));
+      if (process_type.empty()) {
+        display.set_label(l10n_util::GetStringUTF8(IDS_DISPLAY_NAME_INTERNAL));
+      } else {
+        display.set_label("Built-in display");
+      }
     } else {
       display.set_label(edid_parser.display_name());
     }
@@ -472,8 +487,8 @@ std::vector<display::Display> BuildDisplaysFromXRandRInfo(
         color_space = display::GetColorSpaceFromEdid(edid_parser);
       }
 
-      display.SetColorSpaces(
-          gfx::DisplayColorSpaces(color_space, gfx::BufferFormat::BGRA_8888));
+      display.SetColorSpaces(gfx::DisplayColorSpaces(
+          color_space, viz::SinglePlaneFormat::kBGRA_8888));
     }
 
     display.set_color_depth(depth);
@@ -519,7 +534,7 @@ base::TimeDelta GetPrimaryDisplayRefreshIntervalFromXrandr() {
                                               &primary_display_index);
   CHECK_LT(primary_display_index, displays.size());
 
-  // TODO(crbug.com/726842): It might make sense here to pick the output that
+  // TODO(crbug.com/41321728): It might make sense here to pick the output that
   // the window is on. On the other hand, if compositing is enabled, all drawing
   // might be synced to the primary output anyway. Needs investigation.
   auto frequency = displays[primary_display_index].display_frequency();

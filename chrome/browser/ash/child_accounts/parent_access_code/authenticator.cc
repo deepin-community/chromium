@@ -7,9 +7,11 @@
 #include <utility>
 #include <vector>
 
-#include "base/big_endian.h"
 #include "base/logging.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "crypto/hash.h"
+#include "crypto/hmac.h"
 
 namespace ash {
 namespace parent_access {
@@ -31,7 +33,7 @@ constexpr char kClockDriftDictKey[] = "clock_drift_tolerance";
 
 // static
 std::optional<AccessCodeConfig> AccessCodeConfig::FromDictionary(
-    const base::Value::Dict& dict) {
+    const base::DictValue& dict) {
   const std::string* secret = dict.FindString(kSharedSecretDictKey);
   if (!secret || secret->empty())
     return std::nullopt;
@@ -72,8 +74,8 @@ AccessCodeConfig& AccessCodeConfig::operator=(AccessCodeConfig&&) = default;
 
 AccessCodeConfig::~AccessCodeConfig() = default;
 
-base::Value::Dict AccessCodeConfig::ToDictionary() const {
-  base::Value::Dict config;
+base::DictValue AccessCodeConfig::ToDictionary() const {
+  base::DictValue config;
   config.Set(kSharedSecretDictKey, base::Value(shared_secret_));
   config.Set(kCodeValidityDictKey,
              base::Value(static_cast<int>(code_validity_.InSeconds())));
@@ -96,16 +98,6 @@ AccessCode& AccessCode::operator=(const AccessCode&) = default;
 
 AccessCode::~AccessCode() = default;
 
-bool AccessCode::operator==(const AccessCode& rhs) const {
-  return code_ == rhs.code() && valid_from_ == rhs.valid_from() &&
-         valid_to_ == rhs.valid_to();
-}
-
-bool AccessCode::operator!=(const AccessCode& rhs) const {
-  return code_ != rhs.code() || valid_from_ != rhs.valid_from() ||
-         valid_to_ != rhs.valid_to();
-}
-
 std::ostream& operator<<(std::ostream& out, const AccessCode& code) {
   return out << code.code() << " [" << code.valid_from() << " - "
              << code.valid_to() << "]";
@@ -115,10 +107,7 @@ std::ostream& operator<<(std::ostream& out, const AccessCode& code) {
 constexpr base::TimeDelta Authenticator::kAccessCodeGranularity;
 
 Authenticator::Authenticator(AccessCodeConfig config)
-    : config_(std::move(config)) {
-  bool result = hmac_.Init(config_.shared_secret());
-  DCHECK(result);
-}
+    : config_(std::move(config)) {}
 
 Authenticator::~Authenticator() = default;
 
@@ -134,23 +123,18 @@ std::optional<AccessCode> Authenticator::Generate(base::Time timestamp) const {
   const int64_t adjusted_timestamp =
       interval_beginning_timestamp / kAccessCodeGranularity.InMilliseconds();
 
-  // The algorithm for PAC generation is using data in Big-endian byte order to
-  // feed HMAC.
-  std::string big_endian_timestamp(sizeof(adjusted_timestamp), 0);
-  base::WriteBigEndian(&big_endian_timestamp[0], adjusted_timestamp);
+  std::array<uint8_t, sizeof(uint64_t)> big_endian_timestamp =
+      base::U64ToBigEndian(
+          // NOTE: This will convert negative numbers to large positive ones.
+          static_cast<uint64_t>(adjusted_timestamp));
 
-  std::vector<uint8_t> digest(hmac_.DigestLength());
-  if (!hmac_.Sign(big_endian_timestamp, &digest[0], digest.size())) {
-    LOG(ERROR) << "Signing HMAC data to generate Parent Access Code failed";
-    return std::nullopt;
-  }
+  auto digest = crypto::hmac::SignSha1(
+      base::as_byte_span(config_.shared_secret()), big_endian_timestamp);
 
   // Read 4 bytes in Big-endian order starting from |offset|.
-  const int8_t offset = digest.back() & 0xf;
-  int32_t result;
-  std::vector<uint8_t> slice(digest.begin() + offset,
-                             digest.begin() + offset + sizeof(result));
-  base::ReadBigEndian(slice.data(), &result);
+  const size_t offset = digest.back() & 0xf;
+  int32_t result =
+      base::U32FromBigEndian(base::span(digest).subspan(offset).first<4>());
   // Clear sign bit.
   result &= 0x7fffffff;
 

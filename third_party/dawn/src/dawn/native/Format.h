@@ -60,10 +60,34 @@
 
 namespace dawn::native {
 
+enum class FormatCapability : uint16_t {
+    None = 0x0,
+    Multisample = 0x1,
+    Renderable = 0x2,
+    Resolve = 0x4,
+    StorageROnly = 0x8,   // Read-Only.
+    StorageWOnly = 0x10,  // Write-Only
+    StorageRW = 0x20,     // When set StorageR/WOnly will be set as well.
+    PLS = 0x40,
+    Blendable = 0x80,
+};
+}  // namespace dawn::native
+
+template <>
+struct wgpu::IsWGPUBitmask<dawn::native::FormatCapability> {
+    static constexpr bool enable = true;
+};
+
+namespace dawn::native {
+
 enum class Aspect : uint8_t;
 class DeviceBase;
 
 // This mirrors wgpu::TextureSampleType as a bitmask instead.
+// NOTE: SampleTypeBit::External does not have an equivalent TextureSampleType. All future
+// additions to SampleTypeBit that have an equivalent TextureSampleType should use
+// SampleTypeBit::External's value and update SampleTypeBit::External to a higher value.
+// TODO(crbug.com/dawn/2476): Validate SampleTypeBit::External is compatible with Sampler.
 enum class SampleTypeBit : uint8_t {
     None = 0x0,
     Float = 0x1,
@@ -71,6 +95,7 @@ enum class SampleTypeBit : uint8_t {
     Depth = 0x4,
     Sint = 0x8,
     Uint = 0x10,
+    External = 0x20,
 };
 
 // Converts a wgpu::TextureSampleType to its bitmask representation.
@@ -88,11 +113,21 @@ enum class TextureComponentType {
     Uint,
 };
 
-struct RequiresFeature {
-    wgpu::FeatureName feature;
+enum class TextureSubsampling {
+    Undefined,
+    e420,
+    e422,
+    e444,
 };
 
-struct CompatibilityMode {};
+struct RequiresFeature {
+    wgpu::FeatureName feature;
+    auto operator<=>(const RequiresFeature&) const = default;
+};
+
+struct CompatibilityMode {
+    auto operator<=>(const CompatibilityMode&) const = default;
+};
 
 using UnsupportedReason =
     std::variant</* is supported */ std::monostate, RequiresFeature, CompatibilityMode>;
@@ -106,7 +141,9 @@ struct AspectInfo {
 
 // The number of formats Dawn knows about. Asserts in BuildFormatTable ensure that this is the
 // exact number of known format.
-static constexpr uint32_t kKnownFormatCount = 104;
+static constexpr uint32_t kWebGPUFormatCount = 95;
+static constexpr uint32_t kDawnFormatCount = 14;
+static constexpr uint32_t kKnownFormatCount = kWebGPUFormatCount + kDawnFormatCount;
 
 using FormatIndex = TypedInteger<struct FormatIndexT, uint32_t>;
 
@@ -118,17 +155,34 @@ struct Format {
     wgpu::TextureFormat format = wgpu::TextureFormat::Undefined;
 
     static const UnsupportedReason supported;
+    FormatCapability caps = FormatCapability::None;
 
     // TODO(crbug.com/dawn/1332): These members could be stored in a Format capability matrix.
-    bool isRenderable = false;
+    bool isBC = false;
+    bool isASTC = false;
     bool isCompressed = false;
     // A format can be known but not supported because it is part of a disabled extension.
     UnsupportedReason unsupportedReason;
-    bool supportsStorageUsage = false;
-    bool supportsReadWriteStorageUsage = false;
-    bool supportsMultisample = false;
-    bool supportsResolveTarget = false;
-    bool supportsStorageAttachment = false;
+    bool IsRenderable() const { return static_cast<bool>(caps & FormatCapability::Renderable); }
+    bool IsBlendable() const { return static_cast<bool>(caps & FormatCapability::Blendable); }
+    bool SupportsMultisample() const {
+        return static_cast<bool>(caps & FormatCapability::Multisample);
+    }
+    bool SupportsResolveTarget() const {
+        return static_cast<bool>(caps & FormatCapability::Resolve);
+    }
+    bool SupportsReadOnlyStorageUsage() const {
+        return static_cast<bool>(caps & FormatCapability::StorageROnly);
+    }
+    bool SupportsWriteOnlyStorageUsage() const {
+        return static_cast<bool>(caps & FormatCapability::StorageWOnly);
+    }
+    bool SupportsReadWriteStorageUsage() const {
+        return static_cast<bool>(caps & FormatCapability::StorageRW);
+    }
+    bool SupportsStorageAttachment() const {
+        return static_cast<bool>(caps & FormatCapability::PLS);
+    }
     Aspect aspects{};
     // Only used for renderable color formats:
     uint8_t componentCount = 0;                  // number of color channels
@@ -162,6 +216,9 @@ struct Format {
     // formats. Only stores a single view format because Dawn currently only supports sRGB format
     // reinterpretation.
     wgpu::TextureFormat baseViewFormat = wgpu::TextureFormat::Undefined;
+    // Chroma subsampling used by multi-planar formats (e.g. 4:2:0 is 1/2 horizontal and 1/2
+    // vertical resolution for UV plane, 4:2:2 is 1/2 horizontal and 1/1 vertical resolution).
+    TextureSubsampling subSampling = TextureSubsampling::Undefined;
 
     // Returns true if the formats are copy compatible.
     // Currently means they differ only in sRGB-ness.

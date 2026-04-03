@@ -32,12 +32,18 @@ source_set("traced_perf_main") {
     ":producer",
     "../../../gn:default_deps",
     "../../../src/base",
+    "../../../src/base:version",
     "../../../src/tracing/ipc/producer",
   ]
   sources = [
     "traced_perf.cc",
     "traced_perf.h",
   ]
+
+  # Abseil is only used in Perfetto via the gRPC/libprotobuf.
+  if (perfetto_build_standalone || is_perfetto_build_generator) {
+    assert_no_deps = [ "../../../buildtools:abseil_cpp" ]
+  }
 }
 
 source_set("producer") {
@@ -59,7 +65,7 @@ source_set("producer") {
     "../../../protos/perfetto/trace/profiling:zero",
     "../../../src/base",
     "../../../src/base:unix_socket",
-    "../../../src/traced/probes/ftrace:ftrace_procfs",
+    "../../../src/traced/probes/ftrace:tracefs",
     "../../../src/tracing/ipc/producer",
     "../common:callstack_trie",
     "../common:interner",
@@ -101,6 +107,8 @@ source_set("unwinding") {
     "../common:unwind_support",
   ]
   sources = [
+    "frame_pointer_unwinder.cc",
+    "frame_pointer_unwinder.h",
     "unwind_queue.h",
     "unwinding.cc",
     "unwinding.h",
@@ -147,6 +155,7 @@ source_set("producer_unittests") {
   ]
   sources = [
     "event_config_unittest.cc",
+    "frame_pointer_unwinder_unittest.cc",
     "perf_producer_unittest.cc",
     "unwind_queue_unittest.cc",
   ]

@@ -13,34 +13,65 @@
 // limitations under the License.
 
 import {indentWithTab} from '@codemirror/commands';
-import {Transaction} from '@codemirror/state';
-import {oneDarkTheme} from '@codemirror/theme-one-dark';
+import {EditorState, Transaction} from '@codemirror/state';
+import {oneDark} from '@codemirror/theme-one-dark';
 import {keymap} from '@codemirror/view';
 import {basicSetup, EditorView} from 'codemirror';
+import {javascript} from '@codemirror/lang-javascript';
 import m from 'mithril';
+import {removeFalsyValues} from '../base/array_utils';
+import {assertUnreachable} from '../base/logging';
+import {perfettoSql} from '../base/perfetto_sql_lang/language';
+import {HTMLAttrs} from './common';
+import {classNames} from '../base/classnames';
 
-export interface EditorAttrs {
-  // Initial state for the editor.
-  initialText?: string;
+type EditorLanguage = 'perfetto-sql' | 'javascript';
 
-  // Changing generation is used to force resetting of the editor state
-  // to the current value of initialText.
-  generation?: number;
+export interface EditorAttrs extends HTMLAttrs {
+  // Content of the editor. If defined, the editor operates in controlled mode,
+  // otherwise it operates in uncontrolled mode.
+  // - In controlled mode, the content of the editor is managed by the caller
+  //   and should be used in conjunction with onUpdate to manage the state of
+  //   the editor.
+  // - In uncontrolled mode, the content of the editor is managed internally by
+  //   the editor itself.
+  readonly text?: string;
+
+  // Which language use for syntax highlighting et al. Defaults to none.
+  readonly language?: EditorLanguage;
+
+  // Whether the editor should be focused on creation.
+  readonly autofocus?: boolean;
+
+  // Whether the editor should fill the height of its container.
+  readonly fillHeight?: boolean;
+
+  // Whether the editor content is readonly.
+  readonly readonly?: boolean;
 
   // Callback for the Ctrl/Cmd + Enter key binding.
   onExecute?: (text: string) => void;
 
-  // Callback for every change to the text.
+  // Callback for the Ctrl/Cmd + S key binding.
+  onSave?: () => void;
+
+  // Callback for every change to the editor's content.
   onUpdate?: (text: string) => void;
 }
 
 export class Editor implements m.ClassComponent<EditorAttrs> {
   private editorView?: EditorView;
-  private generation?: number;
+  private latestText?: string;
+
+  focus() {
+    this.editorView?.focus();
+  }
 
   oncreate({dom, attrs}: m.CVnodeDOM<EditorAttrs>) {
+    this.latestText = attrs.text;
     const keymaps = [indentWithTab];
     const onExecute = attrs.onExecute;
+    const onSave = attrs.onSave;
     const onUpdate = attrs.onUpdate;
 
     if (onExecute) {
@@ -60,42 +91,95 @@ export class Editor implements m.ClassComponent<EditorAttrs> {
             text = selectedText;
           }
           onExecute(text);
+          m.redraw();
           return true;
         },
       });
     }
 
-    let dispatch;
-    if (onUpdate) {
-      dispatch = (tr: Transaction, view: EditorView) => {
-        view.update([tr]);
-        const text = view.state.doc.toString();
-        onUpdate(text);
-      };
+    if (onSave) {
+      keymaps.push({
+        key: 'Mod-s',
+        run: (_view: EditorView) => {
+          onSave();
+          m.redraw();
+          return true;
+        },
+      });
     }
 
-    this.generation = attrs.generation;
+    const dispatch = (tr: Transaction, view: EditorView) => {
+      view.update([tr]);
+      const text = view.state.doc.toString();
+      // Only fire onUpdate when text actually changes, not for cursor
+      // movements, selection changes, or other non-text transactions.
+      if (onUpdate && text !== this.latestText) {
+        this.latestText = text;
+        onUpdate(text);
+        m.redraw();
+      } else {
+        this.latestText = text;
+      }
+    };
+
+    const lang = (() => {
+      switch (attrs.language) {
+        case undefined:
+          return undefined;
+        case 'perfetto-sql':
+          return perfettoSql();
+        case 'javascript':
+          return javascript();
+        default:
+          assertUnreachable(attrs.language);
+      }
+    })();
+
+    const readonly = (() => {
+      if (attrs.readonly) {
+        return [
+          EditorState.readOnly.of(true),
+          EditorView.editable.of(false),
+          // Enable keyboard commands by allowing focus.
+          EditorView.contentAttributes.of({tabindex: '0'}),
+        ];
+      }
+      return [];
+    })();
 
     this.editorView = new EditorView({
-      doc: attrs.initialText ?? '',
-      extensions: [
+      doc: attrs.text,
+      extensions: removeFalsyValues([
         keymap.of(keymaps),
-        oneDarkTheme,
+        ...readonly,
+        oneDark,
         basicSetup,
-      ],
+        lang,
+      ]),
       parent: dom,
       dispatch,
     });
+
+    if (attrs.autofocus) {
+      this.focus();
+    }
   }
 
   onupdate({attrs}: m.CVnodeDOM<EditorAttrs>): void {
-    const {initialText, generation} = attrs;
+    // Uncontrolled mode: no need to do anything.
+    if (attrs.text === undefined) {
+      return;
+    }
+
     const editorView = this.editorView;
-    if (editorView && this.generation !== generation) {
+    if (editorView && attrs.text !== this.latestText) {
       const state = editorView.state;
-      editorView.dispatch(state.update(
-        {changes: {from: 0, to: state.doc.length, insert: initialText}}));
-      this.generation = generation;
+      editorView.dispatch(
+        state.update({
+          changes: {from: 0, to: state.doc.length, insert: attrs.text},
+        }),
+      );
+      this.latestText = attrs.text;
     }
   }
 
@@ -106,7 +190,14 @@ export class Editor implements m.ClassComponent<EditorAttrs> {
     }
   }
 
-  view({}: m.Vnode<EditorAttrs, this>): void|m.Children {
-    return m('.pf-editor');
+  view({attrs}: m.Vnode<EditorAttrs>): m.Children {
+    const className = classNames(
+      attrs.className,
+      attrs.fillHeight && 'pf-editor--fill-height',
+    );
+    return m('.pf-editor', {
+      className: className,
+      ref: attrs.ref,
+    });
   }
 }

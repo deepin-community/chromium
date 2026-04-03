@@ -8,11 +8,13 @@
 
 #include "base/containers/flat_map.h"
 #include "base/strings/string_util.h"
+#include "components/autofill/core/browser/autofill_server_prediction.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/proto/password_requirements.pb.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/signatures.h"
+#include "components/autofill/core/common/unique_ids.h"
 #include "components/password_manager/core/browser/browser_save_password_progress_logger.h"
 #include "components/password_manager/core/browser/generation/password_generator.h"
 #include "components/password_manager/core/browser/password_feature_manager.h"
@@ -25,6 +27,7 @@
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "url/gurl.h"
 
+using autofill::AutofillServerPrediction;
 using autofill::AutofillType;
 using autofill::CalculateFieldSignatureForField;
 using autofill::CalculateFormSignature;
@@ -32,6 +35,7 @@ using autofill::FieldSignature;
 using autofill::FormData;
 using autofill::FormFieldData;
 using autofill::FormSignature;
+using autofill::password_generation::PasswordGenerationType;
 
 namespace password_manager {
 
@@ -49,15 +53,17 @@ PasswordGenerationFrameHelper::~PasswordGenerationFrameHelper() = default;
 void PasswordGenerationFrameHelper::PrefetchSpec(const GURL& origin) {
   // IsGenerationEnabled is called multiple times and it is sufficient to
   // log debug data once.
-  if (!IsGenerationEnabled(/*log_debug_data=*/false))
+  if (!IsGenerationEnabled(/*log_debug_data=*/false)) {
     return;
+  }
 
   // It is legit to have no PasswordRequirementsService on some platforms where
   // it has not been implemented.
   PasswordRequirementsService* password_requirements_service =
       client_->GetPasswordRequirementsService();
-  if (!password_requirements_service)
+  if (!password_requirements_service) {
     return;
+  }
 
   // Fetch password requirements for the domain.
   password_requirements_service->PrefetchSpec(origin);
@@ -65,27 +71,29 @@ void PasswordGenerationFrameHelper::PrefetchSpec(const GURL& origin) {
 
 void PasswordGenerationFrameHelper::ProcessPasswordRequirements(
     const FormData& form,
-    const base::flat_map<autofill::FieldGlobalId,
-                         AutofillType::ServerPrediction>& predictions) {
+    const base::flat_map<autofill::FieldGlobalId, AutofillServerPrediction>&
+        predictions) {
   // IsGenerationEnabled is called multiple times and it is sufficient to
   // log debug data once.
-  if (!IsGenerationEnabled(/*log_debug_data=*/false))
+  if (!IsGenerationEnabled(/*log_debug_data=*/false)) {
     return;
+  }
 
   // It is legit to have no PasswordRequirementsService on some platforms where
   // it has not been implemented.
   PasswordRequirementsService* password_requirements_service =
       client_->GetPasswordRequirementsService();
-  if (!password_requirements_service)
+  if (!password_requirements_service) {
     return;
+  }
 
   // Store password requirements from the autofill server.
   FormSignature form_signature = autofill::CalculateFormSignature(form);
-  for (const FormFieldData& field : form.fields) {
+  for (const FormFieldData& field : form.fields()) {
     if (auto it = predictions.find(field.global_id());
         it != predictions.end() && it->second.password_requirements) {
       password_requirements_service->AddSpec(
-          form.url.DeprecatedGetOriginAsURL(), form_signature,
+          form.url().DeprecatedGetOriginAsURL(), form_signature,
           CalculateFieldSignatureForField(field),
           *it->second.password_requirements);
     }
@@ -101,12 +109,13 @@ bool PasswordGenerationFrameHelper::IsGenerationEnabled(
   std::unique_ptr<Logger> logger;
   if (log_debug_data && password_manager_util::IsLoggingActive(client_)) {
     logger = std::make_unique<BrowserSavePasswordProgressLogger>(
-        client_->GetLogManager());
+        client_->GetCurrentLogManager());
   }
 
   GURL url = driver_->GetLastCommittedURL();
-  if (url.DomainIs("google.com"))
+  if (url.DomainIs("google.com")) {
     return false;
+  }
 
   if (!password_manager_util::IsAbleToSavePasswords(client_)) {
     if (logger) {
@@ -117,21 +126,35 @@ bool PasswordGenerationFrameHelper::IsGenerationEnabled(
   }
 
   if (!client_->IsSavingAndFillingEnabled(url)) {
-    if (logger)
+    if (logger) {
       logger->LogMessage(Logger::STRING_GENERATION_DISABLED_SAVING_DISABLED);
+    }
     return false;
   }
 
-  if (client_->GetPasswordFeatureManager()->IsGenerationEnabled())
+  if (client_->GetPasswordFeatureManager()->IsGenerationEnabled()) {
     return true;
-  if (logger)
+  }
+  if (logger) {
     logger->LogMessage(Logger::STRING_GENERATION_DISABLED_NO_SYNC);
+  }
 
   return false;
 }
 
+bool PasswordGenerationFrameHelper::IsManualGenerationEnabledField(
+    autofill::FieldRendererId field_renderer_id) const {
+  return generation_enabled_fields_.contains(field_renderer_id);
+}
+
+void PasswordGenerationFrameHelper::AddManualGenerationEnabledField(
+    autofill::FieldRendererId field_renderer_id) {
+  generation_enabled_fields_.insert(field_renderer_id);
+}
+
 std::u16string PasswordGenerationFrameHelper::GeneratePassword(
     const GURL& last_committed_url,
+    PasswordGenerationType generation_type,
     autofill::FormSignature form_signature,
     autofill::FieldSignature field_signature,
     uint64_t max_length) {
@@ -149,13 +172,19 @@ std::u16string PasswordGenerationFrameHelper::GeneratePassword(
   // Choose the password length as the minimum of default length, what website
   // allows, and what the autofill server suggests.
   uint32_t target_length = autofill::kDefaultPasswordLength;
-  if (max_length && max_length < target_length)
+  if (max_length && max_length < target_length) {
     target_length = max_length;
-  if (spec.has_max_length() && spec.max_length() < target_length)
+  }
+  // Ignore crowdsourced password length when generation is triggered on the
+  // manual fallback.
+  if ((generation_type != PasswordGenerationType::kManual) &&
+      spec.has_max_length() && spec.max_length() < target_length) {
     target_length = spec.max_length();
+  }
   spec.set_max_length(target_length);
+
   if (password_manager_util::IsLoggingActive(client_)) {
-    BrowserSavePasswordProgressLogger logger(client_->GetLogManager());
+    BrowserSavePasswordProgressLogger logger(client_->GetCurrentLogManager());
     logger.LogPasswordRequirements(
         last_committed_url.DeprecatedGetOriginAsURL(), form_signature,
         field_signature, spec);

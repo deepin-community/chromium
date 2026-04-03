@@ -8,10 +8,10 @@
 #include <optional>
 #include <string>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/run_loop.h"
+#include "base/strings/string_util.h"
 #include "base/test/bind.h"
 #include "base/test/repeating_test_future.h"
 #include "base/test/test_future.h"
@@ -55,11 +55,7 @@ apps::FileHandler GetTestFileHandler(const std::string& action,
 class WebAppFileHandlerRegistrationLinuxBrowserTest
     : public InProcessBrowserTest {
  protected:
-  WebAppFileHandlerRegistrationLinuxBrowserTest() {
-    base::ScopedAllowBlockingForTesting allow_blocking;
-    override_registration_ =
-        OsIntegrationTestOverrideImpl::OverrideForTesting();
-  }
+  WebAppFileHandlerRegistrationLinuxBrowserTest() = default;
 
   Profile* profile() { return browser()->profile(); }
 
@@ -70,21 +66,14 @@ class WebAppFileHandlerRegistrationLinuxBrowserTest
   }
 
   void TearDownOnMainThread() override {
-    test::UninstallAllWebApps(browser()->profile());
-    {
-      base::ScopedAllowBlockingForTesting allow_blocking;
-      override_registration_.reset();
-    }
   }
 
   const base::FilePath GetUserApplicationsDir() {
-    return override_registration_->test_override->applications_dir().Append(
-        "applications");
+    return override_registration_.test_override().applications();
   }
 
   std::optional<webapps::InstallResultCode> result_code_;
-  std::unique_ptr<OsIntegrationTestOverrideImpl::BlockingRegistration>
-      override_registration_;
+  OsIntegrationTestOverrideBlockingRegistration override_registration_;
 };
 
 // Verify that the MIME type registration callback is called with
@@ -150,8 +139,8 @@ IN_PROC_BROWSER_TEST_F(
   // the update-desktop-database call.
   EXPECT_TRUE(base::StartsWith(xdg_commands_called[1].xdg_command,
                                "update-desktop-database"));
-  EXPECT_TRUE(base::Contains(xdg_commands_called[1].xdg_command,
-                             GetUserApplicationsDir().value()));
+  EXPECT_TRUE(xdg_commands_called[1].xdg_command.contains(
+      GetUserApplicationsDir().value()));
 }
 
 }  // namespace web_app

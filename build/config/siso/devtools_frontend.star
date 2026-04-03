@@ -1,4 +1,9 @@
-load("@builtin//encoding.star", "json")
+# -*- bazel-starlark -*-
+# Copyright 2025 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+"""Siso configuration for devtools-frontend."""
+
 load("@builtin//path.star", "path")
 load("@builtin//struct.star", "module")
 load("./config.star", "config")
@@ -26,19 +31,17 @@ def __step_config(ctx, step_config):
     })
 
     # TODO: b/308405411 - Enable remote-devtools-frontend-typescript by default.
-    if config.get(ctx, "remote-devtools-frontend-typescript"):
-        step_config["rules"].extend([
-            {
-                "name": "devtools-frontend/typescript/ts_library",
-                "command_prefix": "python3 ../../third_party/devtools-frontend/src/third_party/typescript/ts_library.py",
-                "exclude_input_patterns": [
-                    "*.stamp",
-                ],
-                "remote": True,
-                "handler": "devtools_frontend/typescript_ts_library",
-                "output_local": True,
-            },
-        ])
+    remote_run = config.get(ctx, "googlechrome") and config.get(ctx, "remote-devtools-frontend-typescript")
+    step_config["rules"].extend([
+        {
+            "name": "devtools-frontend/typescript/ts_library",
+            "command_prefix": "python3 ../../third_party/devtools-frontend/src/third_party/typescript/ts_library.py",
+            "remote": remote_run,
+            "handler": "devtools_frontend/typescript_ts_library",
+            "output_local": True,
+            "timeout": "2m",
+        },
+    ])
     return step_config
 
 def _ts_library(ctx, cmd):

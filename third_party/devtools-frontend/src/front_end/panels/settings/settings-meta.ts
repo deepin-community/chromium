@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,46 +13,70 @@ import type * as Settings from './settings.js';
 
 const UIStrings = {
   /**
-   *@description Text for keyboard shortcuts
+   * @description Text for keyboard shortcuts
    */
   shortcuts: 'Shortcuts',
   /**
-   *@description Text in Settings Screen of the Settings
+   * @description Text in Settings Screen of the Settings
    */
   preferences: 'Preferences',
   /**
-   *@description Text in Settings Screen of the Settings
+   * @description Text in Settings Screen of the Settings
    */
   experiments: 'Experiments',
   /**
-   *@description Title of Ignore List settings
+   * @description Text in Settings Screen of the Settings
    */
-  ignoreList: 'Ignore List',
+  greenDevProtoTypes: 'GreenDev',
   /**
-   *@description Command for showing the keyboard shortcuts in Settings
+   * @description Command for showing the GreenDev tab in the Settings Screen
+   */
+  showGreenDev: 'Show GreenDev',
+  /**
+   * @description Title of Ignore list settings
+   */
+  ignoreList: 'Ignore list',
+  /**
+   * @description Command for showing the keyboard shortcuts in Settings
    */
   showShortcuts: 'Show Shortcuts',
   /**
-   *@description Command for showing the preference tab in the Settings Screen
+   * @description Command for showing the preference tab in the Settings Screen
    */
   showPreferences: 'Show Preferences',
   /**
-   *@description Command for showing the experiments tab in the Settings Screen
+   * @description Command for showing the experiments tab in the Settings Screen
    */
   showExperiments: 'Show Experiments',
   /**
-   *@description Command for showing the Ignore List settings
+   * @description Command for showing the Ignore list settings
    */
-  showIgnoreList: 'Show Ignore List',
+  showIgnoreList: 'Show Ignore list',
   /**
-   *@description Name of the Settings view
+   * @description Name of the Settings view
    */
   settings: 'Settings',
   /**
-   *@description Text for the documentation of something
+   * @description Text for the documentation of something
    */
   documentation: 'Documentation',
-};
+  /**
+   * @description Text for AI innovation settings
+   */
+  aiInnovations: 'AI innovations',
+  /**
+   * @description Command for showing the AI innovation settings
+   */
+  showAiInnovations: 'Show AI innovations',
+  /**
+   * @description Text of a DOM element in Workspace Settings Tab of the Workspace settings in Settings
+   */
+  workspace: 'Workspace',
+  /**
+   * @description Command for showing the Workspace tool in Settings
+   */
+  showWorkspace: 'Show Workspace settings',
+} as const;
 
 const str_ = i18n.i18n.registerUIStrings('panels/settings/settings-meta.ts', UIStrings);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
@@ -76,6 +100,39 @@ UI.ViewManager.registerViewExtension({
     const Settings = await loadSettingsModule();
     return new Settings.SettingsScreen.GenericSettingsTab();
   },
+  iconName: 'gear',
+});
+
+UI.ViewManager.registerViewExtension({
+  location: UI.ViewManager.ViewLocationValues.SETTINGS_VIEW,
+  id: 'workspace',
+  title: i18nLazyString(UIStrings.workspace),
+  commandPrompt: i18nLazyString(UIStrings.showWorkspace),
+  order: 1,
+  async loadView() {
+    const Settings = await loadSettingsModule();
+    return new Settings.WorkspaceSettingsTab.WorkspaceSettingsTab();
+  },
+  iconName: 'folder',
+});
+
+UI.ViewManager.registerViewExtension({
+  location: UI.ViewManager.ViewLocationValues.SETTINGS_VIEW,
+  id: 'chrome-ai',
+  title: i18nLazyString(UIStrings.aiInnovations),
+  commandPrompt: i18nLazyString(UIStrings.showAiInnovations),
+  order: 2,
+  async loadView() {
+    const Settings = await loadSettingsModule();
+    return new Settings.AISettingsTab.AISettingsTab();
+  },
+  iconName: 'button-magic',
+  settings: ['console-insights-enabled'],
+  condition: config => {
+    return (config?.aidaAvailability?.enabled &&
+            (config?.devToolsConsoleInsights?.enabled || config?.devToolsFreestyler?.enabled)) ??
+        false;
+  },
 });
 
 UI.ViewManager.registerViewExtension({
@@ -84,11 +141,12 @@ UI.ViewManager.registerViewExtension({
   title: i18nLazyString(UIStrings.experiments),
   commandPrompt: i18nLazyString(UIStrings.showExperiments),
   order: 3,
-  experiment: Root.Runtime.ExperimentName.ALL,
+  experiment: Root.ExperimentNames.ExperimentName.ALL,
   async loadView() {
     const Settings = await loadSettingsModule();
     return new Settings.SettingsScreen.ExperimentsSettingsTab();
   },
+  iconName: 'experiment',
 });
 
 UI.ViewManager.registerViewExtension({
@@ -100,6 +158,23 @@ UI.ViewManager.registerViewExtension({
   async loadView() {
     const Settings = await loadSettingsModule();
     return new Settings.FrameworkIgnoreListSettingsTab.FrameworkIgnoreListSettingsTab();
+  },
+  iconName: 'clear-list',
+});
+
+UI.ViewManager.registerViewExtension({
+  location: UI.ViewManager.ViewLocationValues.SETTINGS_VIEW,
+  id: 'greendev-prototypes',
+  title: i18nLazyString(UIStrings.greenDevProtoTypes),
+  commandPrompt: i18nLazyString(UIStrings.showGreenDev),
+  order: 101,
+  async loadView() {
+    const Settings = await loadSettingsModule();
+    return new Settings.SettingsScreen.GreenDevSettingsTab();
+  },
+  iconName: 'experiment',
+  condition: config => {
+    return Boolean(config?.devToolsGreenDevUi?.enabled);
   },
 });
 
@@ -113,6 +188,7 @@ UI.ViewManager.registerViewExtension({
     const Settings = await loadSettingsModule();
     return new Settings.KeybindsSettingsTab.KeybindsSettingsTab();
   },
+  iconName: 'keyboard',
 });
 
 UI.ActionRegistration.registerActionExtension({
@@ -135,14 +211,14 @@ UI.ActionRegistration.registerActionExtension({
       shortcut: 'Shift+?',
     },
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+,',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+,',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
@@ -171,14 +247,14 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+K Ctrl+S',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+K Meta+S',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
@@ -201,6 +277,7 @@ Common.Revealer.registerRevealer({
     return [
       Common.Settings.Setting,
       Root.Runtime.Experiment,
+      Root.Runtime.HostExperiment,
     ];
   },
   destination: undefined,

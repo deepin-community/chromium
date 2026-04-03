@@ -8,7 +8,6 @@
 #include "components/webcrypto/algorithm_implementation.h"
 #include "components/webcrypto/algorithm_implementations.h"
 #include "components/webcrypto/status.h"
-#include "crypto/openssl_util.h"
 
 namespace webcrypto {
 
@@ -32,9 +31,7 @@ class AlgorithmRegistry {
         hkdf_(CreateHkdfImplementation()),
         pbkdf2_(CreatePbkdf2Implementation()),
         ed25519_(CreateEd25519Implementation()),
-        x25519_(CreateX25519Implementation()) {
-    crypto::EnsureOpenSSLInit();
-  }
+        x25519_(CreateX25519Implementation()) {}
 
   const AlgorithmImplementation* GetAlgorithm(
       blink::WebCryptoAlgorithmId id) const {
@@ -72,6 +69,9 @@ class AlgorithmRegistry {
         return ed25519_.get();
       case blink::kWebCryptoAlgorithmIdX25519:
         return x25519_.get();
+      // TODO(crbug.com/450627018): implement chacha20poly1305
+      // TODO(crbug.com/450848555): implement ML-DSA 44/65/87
+      // TODO(crbug.com/450627019): implement ML-KEM 768/1024
       default:
         return nullptr;
     }

@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {addEntries, ENTRIES, getCaller, pending, repeatUntil, sendBrowserTestCommand, sendTestMessage, TestEntryInfo} from '../test_util.js';
+import type {TestEntryInfo} from '../test_util.js';
+import {addEntries, ENTRIES, getCaller, openEntryChoosingWindow, pending, pollForChosenEntry, repeatUntil, sendBrowserTestCommand, sendTestMessage} from '../test_util.js';
 
-import {openAndWaitForClosingDialog, openEntryChoosingWindow, pollForChosenEntry, remoteCall} from './background.js';
+import {remoteCall} from './background.js';
+import {NO_ENTRIES_CHOSEN} from './choose_entry_const.js';
 import {DirectoryTreePageObject} from './page_objects/directory_tree.js';
 import {BASIC_LOCAL_ENTRY_SET} from './test_data.js';
 
@@ -91,7 +93,7 @@ async function setUpFileEntrySet(volume: string): Promise<TestEntryInfo[]> {
  * Adds the basic file entry sets then opens the file dialog on the volume. Once
  * file |name| is shown, select it and click the Ok button.
  *
- * @param volume Volume name for openAndWaitForClosingDialog.
+ * @param volume Volume name for  remoteCall.openAndWaitForClosingDialog.
  * @param name File name to select in the dialog.
  * @param useBrowserOpen Whether to launch the dialog from the browser.
  * @return Promise to be fulfilled on success.
@@ -105,13 +107,12 @@ async function openFileDialogClickOkButton(
   const closer = clickOpenFileDialogButton.bind(null, name, okButton);
 
   const entrySet = await setUpFileEntrySet(volume);
-  const result = await openAndWaitForClosingDialog(
-                     {type: 'openFile'}, volume, entrySet, closer,
-                     useBrowserOpen) as Entry;
+  const result = await remoteCall.openAndWaitForClosingDialog(
+      {type: 'openFile'}, volume, entrySet, closer, useBrowserOpen);
   // If the file is opened via the filesystem API, check the name matches.
   // Otherwise, the caller is responsible for verifying the returned URL.
   if (!useBrowserOpen) {
-    chrome.test.assertEq(name, result.name);
+    chrome.test.assertEq(name, result);
   }
 
   return result;
@@ -139,7 +140,7 @@ async function clickOkButtonExpectName(
  * Once file |name| is shown, select it and click the Ok button, again clicking
  * Ok in the confirmation dialog.
  *
- * @param volume Volume name for openAndWaitForClosingDialog.
+ * @param volume Volume name for  remoteCall.openAndWaitForClosingDialog.
  * @param name File name to select in the dialog.
  * @return Promise to be fulfilled on success.
  */
@@ -167,17 +168,16 @@ async function saveFileDialogClickOkButton(
   };
 
   const entrySet = await setUpFileEntrySet(volume);
-  const result =
-      await openAndWaitForClosingDialog(
-          {type: 'saveFile'}, volume, entrySet, closer, false) as Entry;
-  chrome.test.assertEq(name, result.name);
+  const result = await remoteCall.openAndWaitForClosingDialog(
+      {type: 'saveFile'}, volume, entrySet, closer, false);
+  chrome.test.assertEq(name, result);
 }
 
 /**
  * Adds the basic file entry sets then opens the file dialog on the volume. Once
  * file |name| is shown, select it and verify that the Ok button is disabled.
  *
- * @param volume Volume name for openAndWaitForClosingDialog.
+ * @param volume Volume name for  remoteCall.openAndWaitForClosingDialog.
  * @param name File name to select in the dialog where the OK button should be
  *     disabled
  * @param enabledName File name to select where the OK button should be enabled,
@@ -202,15 +202,16 @@ async function openFileDialogExpectOkButtonDisabled(
 
   const entrySet = await setUpFileEntrySet(volume);
   chrome.test.assertEq(
-      undefined,
-      await openAndWaitForClosingDialog({type}, volume, entrySet, closer));
+      NO_ENTRIES_CHOSEN,
+      await remoteCall.openAndWaitForClosingDialog(
+          {type}, volume, entrySet, closer));
 }
 
 /**
  * Adds the basic file entry sets then opens the file dialog on the volume. Once
  * file |name| is shown, verifies that it's dimmed according to added classes.
  *
- * @param volume Volume name for openAndWaitForClosingDialog.
+ * @param volume Volume name for  remoteCall.openAndWaitForClosingDialog.
  * @param name File name to check for being dimmed in the dialog.
  * @return Promise to be fulfilled on success.
  */
@@ -239,15 +240,16 @@ async function openFileDialogExpectEntryDimmed(
 
   const entrySet = await setUpFileEntrySet(volume);
   chrome.test.assertEq(
-      undefined,
-      await openAndWaitForClosingDialog({type}, volume, entrySet, closer));
+      NO_ENTRIES_CHOSEN,
+      await remoteCall.openAndWaitForClosingDialog(
+          {type}, volume, entrySet, closer));
 }
 
 /**
  * Adds the basic file entry sets then opens the file dialog on the volume. Once
  * file |name| is shown, select it and click the Cancel button.
  *
- * @param volume Volume name for openAndWaitForClosingDialog.
+ * @param volume Volume name for  remoteCall.openAndWaitForClosingDialog.
  * @param name File name to select in the dialog.
  * @return Promise to be fulfilled on success.
  */
@@ -258,8 +260,8 @@ async function openFileDialogClickCancelButton(
 
   const entrySet = await setUpFileEntrySet(volume);
   chrome.test.assertEq(
-      undefined,
-      await openAndWaitForClosingDialog(
+      NO_ENTRIES_CHOSEN,
+      await remoteCall.openAndWaitForClosingDialog(
           {type: 'openFile'}, volume, entrySet, closer));
 }
 
@@ -267,7 +269,7 @@ async function openFileDialogClickCancelButton(
  * Adds the basic file entry sets then opens the file dialog on the volume. Once
  * file |name| is shown, select it and send an Escape key.
  *
- * @param volume Volume name for openAndWaitForClosingDialog.
+ * @param volume Volume name for  remoteCall.openAndWaitForClosingDialog.
  * @param name File name to select in the dialog.
  * @return Promise to be fulfilled on success.
  */
@@ -278,8 +280,8 @@ async function openFileDialogSendEscapeKey(
 
   const entrySet = await setUpFileEntrySet(volume);
   chrome.test.assertEq(
-      undefined,
-      await openAndWaitForClosingDialog(
+      NO_ENTRIES_CHOSEN,
+      await remoteCall.openAndWaitForClosingDialog(
           {type: 'openFile'}, volume, entrySet, closer));
 }
 
@@ -560,7 +562,7 @@ export async function openMultiFileDialogDriveOfficeFile() {
   // Wait for initial load to finish.
   await remoteCall.waitFor('isFileManagerLoaded', appId, true);
 
-  const directoryTree = await DirectoryTreePageObject.create(appId, remoteCall);
+  const directoryTree = await DirectoryTreePageObject.create(appId);
   await directoryTree.navigateToPath('/My Drive');
 
   // Sort the file names so we can compare the array directly with the entries
@@ -580,10 +582,8 @@ export async function openMultiFileDialogDriveOfficeFile() {
   const okButton = '.button-panel button.ok:enabled';
   await remoteCall.waitAndClickElement(appId, okButton);
 
-  const chosenEntries = ((await pollForChosenEntry(getCaller())) as Entry[])
-                            .map(entry => entry.name)
-                            .sort();
-  chrome.test.assertEq(selectFileNames, chosenEntries);
+  const chosenEntries = await pollForChosenEntry(getCaller());
+  chrome.test.assertEq(selectFileNames.toString(), chosenEntries);
 }
 
 /**
@@ -852,8 +852,7 @@ async function showSaveAndConfirmExpecting(
   await remoteCall.waitForElement(dialog, '#filename-input-textbox');
 
   await clickOkButtonExpectName(dialog, expectName, 'saveAs');
-  const entry = await pollForChosenEntry(caller) as Entry;
-  return entry.name;
+  return await pollForChosenEntry(caller);
 }
 
 /**
@@ -923,7 +922,7 @@ export async function openFileDialogFileListShowContextMenu() {
       appId, expectedRows, {ignoreLastModifiedTime: true});
 
   // Navigate to Downloads folder.
-  const directoryTree = await DirectoryTreePageObject.create(appId, remoteCall);
+  const directoryTree = await DirectoryTreePageObject.create(appId);
   await directoryTree.navigateToPath('/My files/Downloads');
 
   // Right-click "photos" folder to show context menu.
@@ -1022,7 +1021,7 @@ export async function openFileDialogGuestOs() {
   await remoteCall.waitFor('isFileManagerLoaded', appId, true);
 
   // Click the Guest OS placeholder.
-  const directoryTree = await DirectoryTreePageObject.create(appId, remoteCall);
+  const directoryTree = await DirectoryTreePageObject.create(appId);
   await directoryTree.selectPlaceholderItemByType('bruschetta');
 
   // Wait for the directory scanning to finish to guarantee the FileWatcher call
@@ -1058,7 +1057,7 @@ export async function saveFileDialogGuestOs() {
   await remoteCall.waitFor('isFileManagerLoaded', appId, true);
 
   // Click the Guest OS placeholder.
-  const directoryTree = await DirectoryTreePageObject.create(appId, remoteCall);
+  const directoryTree = await DirectoryTreePageObject.create(appId);
   await directoryTree.selectPlaceholderItemByType('bruschetta');
 
   // Wait for the directory scanning to finish to guarantee the FileWatcher call

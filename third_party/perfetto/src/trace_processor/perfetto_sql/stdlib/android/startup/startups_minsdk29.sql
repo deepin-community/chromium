@@ -18,53 +18,71 @@ INCLUDE PERFETTO MODULE android.startup.startup_events;
 -- Marks the beginning of the trace and is equivalent to when the statsd startup
 -- logging begins.
 CREATE PERFETTO VIEW _activity_intent_received AS
-SELECT ts FROM slice
-WHERE name = 'MetricsLogger:launchObserverNotifyIntentStarted';
+SELECT
+  ts
+FROM slice
+WHERE
+  name = 'MetricsLogger:launchObserverNotifyIntentStarted';
 
 -- We partition the trace into spans based on posted activity intents.
 -- We will refine these progressively in the next steps to only encompass
 -- activity starts.
 CREATE PERFETTO TABLE _activity_intent_recv_spans AS
 SELECT
-  ROW_NUMBER()
-  OVER(ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS startup_id,
   ts,
-  LEAD(ts, 1, trace_end()) OVER(ORDER BY ts) - ts AS dur
+  lead(ts, 1, trace_end()) OVER (ORDER BY ts) - ts AS dur
 FROM _activity_intent_received
-ORDER BY ts;
+ORDER BY
+  ts;
 
 -- Filter activity_intent_recv_spans, keeping only the ones that triggered
 -- a startup.
 CREATE PERFETTO VIEW _startup_partitions AS
-SELECT * FROM _activity_intent_recv_spans AS spans
-WHERE 1 = (
-  SELECT COUNT(1)
-  FROM _startup_events
-  WHERE _startup_events.ts BETWEEN spans.ts AND spans.ts + spans.dur);
+SELECT
+  *
+FROM _activity_intent_recv_spans AS spans
+WHERE
+  1 = (
+    SELECT
+      count(1)
+    FROM _startup_events
+    WHERE
+      _startup_events.ts BETWEEN spans.ts AND spans.ts + spans.dur
+  );
 
 -- Successful activity startup. The end of the 'launching' event is not related
 -- to whether it actually succeeded or not.
 CREATE PERFETTO VIEW _activity_intent_startup_successful AS
-SELECT ts FROM slice
-WHERE name = 'MetricsLogger:launchObserverNotifyActivityLaunchFinished';
+SELECT
+  ts
+FROM slice
+WHERE
+  name = 'MetricsLogger:launchObserverNotifyActivityLaunchFinished';
 
 -- Use the starting event package name. The finish event package name
 -- is not reliable in the case of failed startups.
 CREATE PERFETTO TABLE _startups_minsdk29 AS
 SELECT
-  "minsdk29" as sdk,
-  lpart.startup_id,
   lpart.ts,
   le.ts_end,
   le.ts_end - lpart.ts AS dur,
   package_name AS package,
   NULL AS startup_type
 FROM _startup_partitions AS lpart
-JOIN _startup_events le ON
-  (le.ts BETWEEN lpart.ts AND lpart.ts + lpart.dur)
-  AND (le.ts_end BETWEEN lpart.ts AND lpart.ts + lpart.dur)
-WHERE (
-  SELECT COUNT(1)
-  FROM _activity_intent_startup_successful AS successful
-  WHERE successful.ts BETWEEN lpart.ts AND lpart.ts + lpart.dur
-) > 0;
+JOIN _startup_events AS le
+  ON (
+    le.ts BETWEEN lpart.ts AND lpart.ts + lpart.dur
+  )
+  AND (
+    le.ts_end BETWEEN lpart.ts AND lpart.ts + lpart.dur
+  )
+WHERE
+  (
+    SELECT
+      count(1)
+    FROM _activity_intent_startup_successful AS successful
+    WHERE
+      successful.ts BETWEEN lpart.ts AND lpart.ts + lpart.dur
+  ) > 0
+ORDER BY
+  lpart.ts;

@@ -6,11 +6,13 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <sstream>
 #include <utility>
 
+#include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/containers/adapters.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -18,10 +20,10 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "cc/mojo_embedder/async_layer_tree_frame_sink.h"
 #include "cc/trees/layer_tree_frame_sink.h"
 #include "components/viz/common/features.h"
@@ -55,6 +57,7 @@
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor/layer_type.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/events/event_target_iterator.h"
@@ -154,7 +157,7 @@ class ScopedCursorHider {
       client::CursorClient* cursor_client = client::GetCursorClient(window_);
       if (cursor_client) {
         const display::Display& display =
-            display::Screen::GetScreen()->GetDisplayNearestWindow(window_);
+            display::Screen::Get()->GetDisplayNearestWindow(window_);
         cursor_client->SetDisplay(display);
         cursor_client->ShowCursor();
       }
@@ -183,6 +186,8 @@ Window::Window(WindowDelegate* delegate, client::WindowType type)
 }
 
 Window::~Window() {
+  // TODO(crbug.com/461127606): Crash on re-entrant destruction.
+  CHECK(!is_destroying_, base::NotFatalUntil::M149);
   is_destroying_ = true;
   WindowOcclusionTracker::ScopedPause pause_occlusion_tracking;
 
@@ -249,18 +254,19 @@ Window::~Window() {
   if (frame_sink_id_.is_valid() && !embeds_external_client_) {
     auto* context_factory = Env::GetInstance()->context_factory();
     auto* host_frame_sink_manager = context_factory->GetHostFrameSinkManager();
-    host_frame_sink_manager->InvalidateFrameSinkId(frame_sink_id_, this);
+    host_frame_sink_manager->InvalidateFrameSinkId(frame_sink_id_, this, {});
   }
 }
 
 void Window::Init(ui::LayerType layer_type) {
+  CHECK(!layer()) << "Window is already initialized";
+
   WindowOcclusionTracker::ScopedPause pause_occlusion_tracking;
 
   SetLayer(std::make_unique<ui::Layer>(layer_type));
   layer()->SetVisible(false);
   layer()->set_delegate(this);
   UpdateLayerName();
-  layer()->SetFillsBoundsOpaquely(!transparent_);
   Env::GetInstance()->NotifyWindowInitialized(this);
 }
 
@@ -320,15 +326,19 @@ bool Window::GetTransparent() const {
 }
 
 void Window::SetTransparent(bool transparent) {
+  CHECK(layer());
   if (transparent == transparent_)
     return;
   transparent_ = transparent;
-  if (layer())
+
+  if (layer()->type() != ui::LAYER_SOLID_COLOR) {
     layer()->SetFillsBoundsOpaquely(!transparent_);
+  }
   TriggerChangedCallback(&transparent_);
 }
 
 void Window::SetFillsBoundsCompletely(bool fills_bounds) {
+  CHECK(layer());
   layer()->SetFillsBoundsCompletely(fills_bounds);
 }
 
@@ -352,7 +362,9 @@ const WindowTreeHost* Window::GetHost() const {
 }
 
 void Window::Show() {
-  DCHECK_EQ(visible_, layer()->GetTargetVisibility());
+  CHECK(layer());
+  CHECK_EQ(visible_, layer()->GetTargetVisibility());
+
   // It is not allowed that a window is visible but the layers alpha is fully
   // transparent since the window would still be considered to be active but
   // could not be seen.
@@ -361,11 +373,15 @@ void Window::Show() {
 }
 
 void Window::Hide() {
+  CHECK(layer());
+
   // RootWindow::OnVisibilityChanged will call ReleaseCapture.
   SetVisibleInternal(false);
 }
 
 bool Window::IsVisible() const {
+  CHECK(layer());
+
   // Layer visibility can be inconsistent with window visibility, for example
   // when a Window is hidden, we want this function to return false immediately
   // after, even though the client may decide to animate the hide effect (and
@@ -374,7 +390,11 @@ bool Window::IsVisible() const {
 }
 
 Window::OcclusionState Window::GetOcclusionState() const {
+#if BUILDFLAG(IS_CHROMEOS)
+  return occlusion_state_override_.value_or(occlusion_state_);
+#else
   return occlusion_state_;
+#endif
 }
 
 ScopedWindowCaptureRequest Window::MakeWindowCapturable() {
@@ -404,6 +424,7 @@ gfx::Rect Window::GetActualBoundsInRootWindow() const {
 }
 
 const gfx::Transform& Window::transform() const {
+  CHECK(layer());
   return layer()->transform();
 }
 
@@ -434,6 +455,7 @@ gfx::Rect Window::GetActualBoundsInScreen() const {
 }
 
 void Window::SetTransform(const gfx::Transform& transform) {
+  CHECK(layer());
   WindowOcclusionTracker::ScopedPause pause_occlusion_tracking;
   for (WindowObserver& observer : observers_)
     observer.OnWindowTargetTransformChanging(this, transform);
@@ -456,6 +478,7 @@ std::unique_ptr<WindowTargeter> Window::SetEventTargeter(
 }
 
 void Window::SetBounds(const gfx::Rect& new_bounds) {
+  CHECK(layer());
   if (parent_ && parent_->layout_manager()) {
     parent_->layout_manager()->SetChildBounds(this, new_bounds);
   } else {
@@ -473,6 +496,7 @@ void Window::SetBounds(const gfx::Rect& new_bounds) {
 
 void Window::SetBoundsInScreen(const gfx::Rect& new_bounds_in_screen,
                                const display::Display& dst_display) {
+  CHECK(layer());
   if (auto* screen_position_client =
           aura::client::GetScreenPositionClient(GetRootWindow())) {
     screen_position_client->SetBounds(this, new_bounds_in_screen, dst_display);
@@ -486,10 +510,12 @@ gfx::Rect Window::GetTargetBounds() const {
 }
 
 void Window::ScheduleDraw() {
+  CHECK(layer());
   layer()->ScheduleDraw();
 }
 
 void Window::SchedulePaintInRect(const gfx::Rect& rect) {
+  CHECK(layer());
   layer()->SchedulePaint(rect);
 }
 
@@ -527,7 +553,7 @@ void Window::AddChild(Window* child) {
 
   Window* old_root = child->GetRootWindow();
 
-  DCHECK(!base::Contains(children_, child));
+  DCHECK(!std::ranges::contains(children_, child));
   if (child->parent())
     child->parent()->RemoveChildImpl(child, this);
 
@@ -610,6 +636,33 @@ void Window::ConvertPointToTarget(const Window* source,
     if (target_client)
       target_client->ConvertPointFromScreen(target, point);
   } else {
+#if BUILDFLAG(IS_CHROMEOS)
+    // TODO(b/319939913): Remove this log when the issue is fixed.
+    auto get_root = [](const ui::Layer* layer) {
+      const ui::Layer* root = layer;
+      while (root->parent()) {
+        root = root->parent();
+      }
+      return root;
+    };
+    auto chain_name = [](const aura::Window* window) {
+      std::ostringstream out;
+      out << "[";
+      out << window->GetName();
+      while (window->parent()) {
+        window = window->parent();
+        out << "]-[" << window->GetName();
+      }
+      out << "]";
+      return out.str();
+    };
+    if (get_root(source->layer()) != get_root(target->layer())) {
+      LOG(ERROR) << "Root layer in source and target window are different. "
+                    "source chain="
+                 << chain_name(source)
+                 << ", target chain=" << chain_name(target);
+    }
+#endif
     ui::Layer::ConvertPointToLayer(source->layer(), target->layer(),
                                    /*use_target_transform=*/true, point);
   }
@@ -682,6 +735,8 @@ bool Window::HasObserver(const WindowObserver* observer) const {
 }
 
 void Window::SetEventTargetingPolicy(EventTargetingPolicy policy) {
+  CHECK(layer());
+
   // If the event targeting is blocked on the window, do not allow change event
   // targeting policy until all event targeting blockers are removed from the
   // window.
@@ -898,7 +953,8 @@ void Window::GetDebugInfo(const aura::Window* active_window,
                                 ->VisibleWindowCanOccludeOtherWindows(this);
   bool has_opaque_regions = !opaque_regions_for_occlusion().empty();
   *out << " " << name << "<" << GetId() << ">";
-  *out << " (" << this << ")" << " type=" << GetType();
+  *out << " (" << this << ")"
+       << " type=" << aura::Window::WindowTypeToString(GetType());
   *out << ((this == active_window) ? " [active]" : "")
        << ((this == focused_window) ? " [focused]" : "")
        << ((this == capture_window) ? " [capture]" : "")
@@ -907,8 +963,8 @@ void Window::GetDebugInfo(const aura::Window* active_window,
        << (has_opaque_regions ? " [opaque_regions]" : "")
        << (can_occlude_others ? " [occlude others]" : "")
        << (GetOcclusionState() != aura::Window::OcclusionState::UNKNOWN
-               ? base::UTF16ToUTF8(
-                     aura::Window::OcclusionStateToString(GetOcclusionState()))
+               ? (" " + base::UTF16ToUTF8(aura::Window::OcclusionStateToString(
+                            GetOcclusionState())))
                      .c_str()
                : "")
        << " " << bounds().ToString()
@@ -964,7 +1020,7 @@ void Window::RemoveOrDestroyChildren() {
     if (child->owned_by_parent_) {
       delete child;
       // Deleting the child so remove it from out children_ list.
-      DCHECK(!base::Contains(children_, child));
+      DCHECK(!std::ranges::contains(children_, child));
     } else {
       // Even if we can't delete the child, we still need to remove it from the
       // parent so that relevant bookkeeping (parent_ back-pointers etc) are
@@ -1064,6 +1120,13 @@ void Window::SetOcclusionInfo(OcclusionState occlusion_state,
   OcclusionState old_occlusion_state = occlusion_state_;
   occlusion_state_ = occlusion_state;
   occluded_region_in_root_ = occluded_region;
+
+#if BUILDFLAG(IS_CHROMEOS)
+  if (occlusion_state_override_) {
+    return;
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
   if (delegate_)
     delegate_->OnWindowOcclusionChanged(old_occlusion_state, occlusion_state);
 
@@ -1093,8 +1156,8 @@ void Window::RemoveChildImpl(Window* child, Window* new_parent) {
   if (child->OwnsLayer())
     layer()->Remove(child->layer());
   child->parent_ = nullptr;
-  auto i = base::ranges::find(children_, child);
-  DCHECK(i != children_.end());
+  auto i = std::ranges::find(children_, child);
+  CHECK(i != children_.end());
   children_.erase(i);
   child->OnParentChanged();
   if (layout_manager_)
@@ -1126,9 +1189,9 @@ void Window::StackChildRelativeTo(Window* child,
     return;
 
   const size_t child_i =
-      base::ranges::find(children_, child) - children_.begin();
+      std::ranges::find(children_, child) - children_.begin();
   const size_t target_i =
-      base::ranges::find(children_, target) - children_.begin();
+      std::ranges::find(children_, target) - children_.begin();
 
   DCHECK_LT(child_i, children_.size()) << "Child was not in list of children!";
   DCHECK_LT(target_i, children_.size())
@@ -1341,8 +1404,6 @@ std::unique_ptr<cc::LayerTreeFrameSink> Window::CreateLayerTreeFrameSink() {
       frame_sink_id_, std::move(sink_receiver), std::move(client_remote));
 
   cc::mojo_embedder::AsyncLayerTreeFrameSink::InitParams params;
-  params.gpu_memory_buffer_manager =
-      Env::GetInstance()->context_factory()->GetGpuMemoryBufferManager();
   params.pipes.compositor_frame_sink_remote = std::move(sink_remote);
   params.pipes.client_receiver = std::move(client_receiver);
   auto frame_sink =
@@ -1425,6 +1486,10 @@ void Window::TrackOcclusionState() {
   Env::GetInstance()->GetWindowOcclusionTracker()->Track(this);
 }
 
+void Window::UntrackOcclusionState() {
+  Env::GetInstance()->GetWindowOcclusionTracker()->Untrack(this);
+}
+
 bool Window::RequiresDoubleTapGestureEvents() const {
   return delegate_ && delegate_->RequiresDoubleTapGestureEvents();
 }
@@ -1434,12 +1499,31 @@ const std::u16string Window::OcclusionStateToString(OcclusionState state) {
   return ui::metadata::TypeConverter<OcclusionState>::ToString(state);
 }
 
+// static
+std::string_view Window::WindowTypeToString(client::WindowType type) {
+  switch (type) {
+    case client::WINDOW_TYPE_UNKNOWN:
+      return "unknown";
+    case client::WINDOW_TYPE_NORMAL:
+      return "normal";
+    case client::WINDOW_TYPE_POPUP:
+      return "popup";
+    case client::WINDOW_TYPE_CONTROL:
+      return "control";
+    case client::WINDOW_TYPE_MENU:
+      return "menu";
+    case client::WINDOW_TYPE_TOOLTIP:
+      return "tooltip";
+  }
+}
+
 void Window::SetOpaqueRegionsForOcclusion(
     const std::vector<gfx::Rect>& opaque_regions_for_occlusion) {
   // Opaque regions for occlusion do not apply to opaque windows, so only
   // allow opaque regions for occlusion to be set for them if they are the
   // same as the window bounds size.
-  DCHECK(GetTransparent() || opaque_regions_for_occlusion.empty() ||
+  DCHECK(GetTransparent() || layer()->type() == ui::LAYER_NOT_DRAWN ||
+         opaque_regions_for_occlusion.empty() ||
          (opaque_regions_for_occlusion.size() == 1 &&
           opaque_regions_for_occlusion[0] == gfx::Rect(bounds().size())));
   if (opaque_regions_for_occlusion == opaque_regions_for_occlusion_)
@@ -1449,6 +1533,28 @@ void Window::SetOpaqueRegionsForOcclusion(
     observer.OnWindowOpaqueRegionsForOcclusionChanged(this);
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
+void Window::SetOcclusionStateOverride(
+    std::optional<OcclusionState> occlusion_state) {
+  if (occlusion_state == occlusion_state_override_) {
+    return;
+  }
+  auto old_occlusion_state =
+      occlusion_state ? occlusion_state_override_.value_or(occlusion_state_)
+                      : occlusion_state_override_.value();
+  occlusion_state_override_ = occlusion_state;
+
+  if (delegate_) {
+    delegate_->OnWindowOcclusionChanged(old_occlusion_state,
+                                        GetOcclusionState());
+  }
+
+  for (WindowObserver& observer : observers_) {
+    observer.OnWindowOcclusionChanged(this);
+  }
+}
+#endif
+
 void Window::NotifyResizeLoopStarted() {
   for (auto& observer : observers_)
     observer.OnResizeLoopStarted(this);
@@ -1457,6 +1563,14 @@ void Window::NotifyResizeLoopStarted() {
 void Window::NotifyResizeLoopEnded() {
   for (auto& observer : observers_)
     observer.OnResizeLoopEnded(this);
+}
+
+void Window::NotifyMoveLoopStarted() {
+  observers_.Notify(&WindowObserver::OnMoveLoopStarted, this);
+}
+
+void Window::NotifyMoveLoopEnded() {
+  observers_.Notify(&WindowObserver::OnMoveLoopEnded, this);
 }
 
 void Window::OnPaintLayer(const ui::PaintContext& context) {
@@ -1486,13 +1600,13 @@ void Window::OnLayerBoundsChanged(const gfx::Rect& old_bounds,
 
   // Trigger the changed notification for each of the bounds "properties".
   if (old_bounds.x() != bounds_.x())
-    TriggerChangedCallback(&bounds_ + kBoundsX);
+    TriggerChangedCallback(UNSAFE_TODO(&bounds_ + kBoundsX));
   if (old_bounds.y() != bounds_.y())
-    TriggerChangedCallback(&bounds_ + kBoundsY);
+    TriggerChangedCallback(UNSAFE_TODO(&bounds_ + kBoundsY));
   if (old_bounds.width() != bounds_.width())
-    TriggerChangedCallback(&bounds_ + kBoundsWidth);
+    TriggerChangedCallback(UNSAFE_TODO(&bounds_ + kBoundsWidth));
   if (old_bounds.height() != bounds_.height())
-    TriggerChangedCallback(&bounds_ + kBoundsHeight);
+    TriggerChangedCallback(UNSAFE_TODO(&bounds_ + kBoundsHeight));
 }
 
 void Window::OnLayerOpacityChanged(ui::PropertyChangeReason reason) {
@@ -1514,8 +1628,11 @@ void Window::OnLayerFillsBoundsOpaquelyChanged(
   WindowOcclusionTracker::ScopedPause pause_occlusion_tracking;
 
   // Non-transparent windows should not have opaque regions for occlusion set.
-  if (!GetTransparent())
+#if DCHECK_IS_ON()
+  if (!GetTransparent() && layer()->type() != ui::LAYER_NOT_DRAWN) {
     DCHECK(opaque_regions_for_occlusion_.empty());
+  }
+#endif
 
   for (WindowObserver& observer : observers_)
     observer.OnWindowTransparentChanged(this, reason);
@@ -1801,6 +1918,8 @@ bool Window::GetVisible() const {
 }
 
 void Window::SetVisible(bool visible) {
+  CHECK(layer());
+
   if (visible == IsVisible())
     return;
   if (visible)

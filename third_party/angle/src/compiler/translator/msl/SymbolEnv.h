@@ -10,8 +10,8 @@
 #include <unordered_set>
 
 #include "compiler/translator/Compiler.h"
+#include "compiler/translator/Name.h"
 #include "compiler/translator/Types.h"
-#include "compiler/translator/msl/Name.h"
 #include "compiler/translator/msl/Reference.h"
 
 namespace sh
@@ -38,7 +38,9 @@ class VarField
 
     ANGLE_INLINE bool operator==(const VarField &other) const
     {
-        return mVariable == other.mVariable && mField == other.mField;
+        const int thisVarId  = mVariable ? mVariable->uniqueId().get() : -1;
+        const int otherVarId = other.mVariable ? mVariable->uniqueId().get() : -1;
+        return thisVarId == otherVarId && mField == other.mField;
     }
 
   private:

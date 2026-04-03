@@ -13,6 +13,9 @@
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(
     EmbeddedPermissionPromptPreviouslyGrantedView,
+    kContinueAllowingId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(
+    EmbeddedPermissionPromptPreviouslyGrantedView,
     kStopAllowingId);
 
 EmbeddedPermissionPromptPreviouslyGrantedView::
@@ -44,8 +47,7 @@ std::u16string EmbeddedPermissionPromptPreviouslyGrantedView::GetWindowTitle()
   }
 
   return l10n_util::GetStringFUTF16(IDS_EMBEDDED_PROMPT_PREVIOUSLY_ALLOWED,
-                                    permission_name,
-                                    GetUrlIdentityObject().name);
+                                    permission_name);
 }
 
 void EmbeddedPermissionPromptPreviouslyGrantedView::RunButtonCallback(
@@ -76,7 +78,8 @@ EmbeddedPermissionPromptPreviouslyGrantedView::GetButtonsConfiguration() const {
   std::vector<ButtonConfiguration> buttons;
   buttons.emplace_back(
       l10n_util::GetStringUTF16(IDS_EMBEDDED_PROMPT_CONTINUE_ALLOWING),
-      ButtonType::kContinueAllowing, ui::ButtonStyle::kTonal);
+      ButtonType::kContinueAllowing, ui::ButtonStyle::kTonal,
+      kContinueAllowingId);
 
   buttons.emplace_back(
       l10n_util::GetStringUTF16(IDS_EMBEDDED_PROMPT_STOP_ALLOWING),

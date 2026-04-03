@@ -31,59 +31,56 @@
 
 #include "dawn/native/ChainUtils.h"
 #include "dawn/native/vulkan/DeviceVk.h"
+#include "dawn/utils/SystemHandle.h"
 
 namespace dawn::native::vulkan {
 
 // static
 ResultOrError<Ref<SharedFence>> SharedFence::Create(
     Device* device,
-    const char* label,
+    StringView label,
     const SharedFenceVkSemaphoreZirconHandleDescriptor* descriptor) {
     DAWN_INVALID_IF(descriptor->handle == 0, "Zircon handle (%d) was invalid.", descriptor->handle);
 
-    SystemHandle handle;
-    DAWN_TRY_ASSIGN(handle, SystemHandle::Duplicate(descriptor->handle));
+    dawn::utils::SystemHandle handle = dawn::utils::SystemHandle::Duplicate(descriptor->handle);
     auto fence = AcquireRef(new SharedFence(device, label, std::move(handle)));
     fence->mType = wgpu::SharedFenceType::VkSemaphoreZirconHandle;
     return fence;
 }
 
 // static
-ResultOrError<Ref<SharedFence>> SharedFence::Create(
-    Device* device,
-    const char* label,
-    const SharedFenceVkSemaphoreSyncFDDescriptor* descriptor) {
+ResultOrError<Ref<SharedFence>> SharedFence::Create(Device* device,
+                                                    StringView label,
+                                                    const SharedFenceSyncFDDescriptor* descriptor) {
     DAWN_INVALID_IF(descriptor->handle < 0, "File descriptor (%d) was invalid.",
                     descriptor->handle);
-    SystemHandle handle;
-    DAWN_TRY_ASSIGN(handle, SystemHandle::Duplicate(descriptor->handle));
+    dawn::utils::SystemHandle handle = dawn::utils::SystemHandle::Duplicate(descriptor->handle);
     auto fence = AcquireRef(new SharedFence(device, label, std::move(handle)));
-    fence->mType = wgpu::SharedFenceType::VkSemaphoreSyncFD;
+    fence->mType = wgpu::SharedFenceType::SyncFD;
     return fence;
 }
 
 // static
 ResultOrError<Ref<SharedFence>> SharedFence::Create(
     Device* device,
-    const char* label,
+    StringView label,
     const SharedFenceVkSemaphoreOpaqueFDDescriptor* descriptor) {
     DAWN_INVALID_IF(descriptor->handle < 0, "File descriptor (%d) was invalid.",
                     descriptor->handle);
-    SystemHandle handle;
-    DAWN_TRY_ASSIGN(handle, SystemHandle::Duplicate(descriptor->handle));
+    dawn::utils::SystemHandle handle = dawn::utils::SystemHandle::Duplicate(descriptor->handle);
     auto fence = AcquireRef(new SharedFence(device, label, std::move(handle)));
     fence->mType = wgpu::SharedFenceType::VkSemaphoreOpaqueFD;
     return fence;
 }
 
-SharedFence::SharedFence(Device* device, const char* label, SystemHandle handle)
+SharedFence::SharedFence(Device* device, StringView label, dawn::utils::SystemHandle handle)
     : SharedFenceBase(device, label), mHandle(std::move(handle)) {}
 
-void SharedFence::DestroyImpl() {
+void SharedFence::DestroyImpl(DestroyReason reason) {
     mHandle.Close();
 }
 
-const SystemHandle& SharedFence::GetHandle() const {
+const dawn::utils::SystemHandle& SharedFence::GetHandle() const {
     return mHandle;
 }
 
@@ -94,14 +91,14 @@ MaybeError SharedFence::ExportInfoImpl(UnpackedPtr<SharedFenceExportInfo>& info)
     DAWN_TRY(info.ValidateSubset<SharedFenceVkSemaphoreZirconHandleExportInfo>());
     auto* exportInfo = info.Get<SharedFenceVkSemaphoreZirconHandleExportInfo>();
     if (exportInfo != nullptr) {
-        exportInfo->handle = mHandle;
+        exportInfo->handle = mHandle.Get();
     }
 #elif DAWN_PLATFORM_IS(LINUX)
     switch (mType) {
-        case wgpu::SharedFenceType::VkSemaphoreSyncFD:
-            DAWN_TRY(info.ValidateSubset<SharedFenceVkSemaphoreSyncFDExportInfo>());
+        case wgpu::SharedFenceType::SyncFD:
+            DAWN_TRY(info.ValidateSubset<SharedFenceSyncFDExportInfo>());
             {
-                auto* exportInfo = info.Get<SharedFenceVkSemaphoreSyncFDExportInfo>();
+                auto* exportInfo = info.Get<SharedFenceSyncFDExportInfo>();
                 if (exportInfo != nullptr) {
                     exportInfo->handle = mHandle.Get();
                 }

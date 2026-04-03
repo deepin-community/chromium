@@ -8,12 +8,15 @@
 #include <memory>
 #include <string>
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/sync/model/syncable_service.h"
 #include "extensions/browser/api/storage/settings_observer.h"
 #include "extensions/browser/api/storage/value_store_cache.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_id.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace base {
 class FilePath;
@@ -45,7 +48,7 @@ class SyncValueStoreCache : public ValueStoreCache {
   ~SyncValueStoreCache() override;
 
   base::WeakPtr<SyncValueStoreCache> AsWeakPtr();
-  syncer::SyncableService* GetSyncableService(syncer::ModelType type);
+  syncer::SyncableService* GetSyncableService(syncer::DataType type);
 
   // ValueStoreCache implementation:
   void RunWithValueStoreForExtension(

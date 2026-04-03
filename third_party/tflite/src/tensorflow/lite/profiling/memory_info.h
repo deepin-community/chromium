@@ -15,7 +15,10 @@ limitations under the License.
 #ifndef TENSORFLOW_LITE_PROFILING_MEMORY_INFO_H_
 #define TENSORFLOW_LITE_PROFILING_MEMORY_INFO_H_
 
+#include <stddef.h>
+
 #include <cstdint>
+#include <ostream>
 #include <sstream>
 
 namespace tflite {
@@ -27,14 +30,19 @@ struct MemoryUsage {
 
   // Indicates whether obtaining memory usage is supported on the platform, thus
   // indicating whether the values defined in this struct make sense or not.
+  // Note that even if this returns true, some of the fields in the struct may
+  // not be supported by GetMemoryUsage(); in such cases, unsupported fields
+  // will be set to kValueNotSet (zero) or -1.
   static bool IsSupported();
 
   MemoryUsage()
       : mem_footprint_kb(kValueNotSet),
         total_allocated_bytes(kValueNotSet),
-        in_use_allocated_bytes(kValueNotSet) {}
+        in_use_allocated_bytes(kValueNotSet),
+        private_footprint_bytes(kValueNotSet) {}
 
   // The memory footprint (in kilobytes).
+  //
   // For Linux:
   // This is the maximum memory size (in kilobytes) occupied by an OS process
   // that is held in main memory (RAM). Such memory usage information is
@@ -51,18 +59,42 @@ struct MemoryUsage {
   //    + purgeable_nonvolatile
   //    + purgeable_nonvolatile_compressed
   //    + page_table
+  //
+  // For Windows:
+  // This is the current memory size (in kilobytes) occupied by the OS process
+  // that is held in main memory (RAM). This is generally referred to as the
+  // working set size. This is an alias to
+  // PROCESS_MEMORY_COUNTERS::WorkingSetSize.
   int64_t mem_footprint_kb;
 
-  // Total non-mmapped space allocated from system in bytes.
+  // Total non-mmapped heap space allocated from system in bytes.
   // For Linux, this is an alias to mallinfo::arena.
   // For Mac, this is an alias to mstats::bytes_total
+  // For Windows, this is an alias to HEAP_SUMMARY::cbCommitted
+  // for the default process heap.
+  //
+  // This does not count mmapped heap space, nor does it count non-heap
+  // uses of memory such as other mmapped space, thread stacks, globals,
+  // code, etc.
   size_t total_allocated_bytes;
 
-  // Total allocated (including mmapped) bytes that's in use (i.e. excluding
-  // those are freed).
+  // Total allocated (including mmapped) heap bytes that are in use
+  // (i.e. excluding those have been freed).
   // For Linux, this is an alias to mallinfo::uordblks.
   // For Mac, this is an alias to mstats::bytes_used
+  // For Windows, this is an alias to HEAP_SUMMARY::cbAllocated
+  // for the default process heap.
+  //
+  // This does not count non-heap uses of mmap, nor does it count other
+  // non-heap uses of memory such as thread stacks, globals, code, etc.
   size_t in_use_allocated_bytes;
+
+  // Private footprint (in kilobytes).
+  //
+  // For Linux this is the rusage::ru_maxrss + VmSwap.
+  // For Mac this is the task_vm_info::phys_footprint.
+  // For Windows this is the PrivateUsage.
+  size_t private_footprint_bytes;
 
   MemoryUsage operator+(MemoryUsage const& obj) const {
     MemoryUsage res;
@@ -71,6 +103,8 @@ struct MemoryUsage {
         total_allocated_bytes + obj.total_allocated_bytes;
     res.in_use_allocated_bytes =
         in_use_allocated_bytes + obj.in_use_allocated_bytes;
+    res.private_footprint_bytes =
+        private_footprint_bytes + obj.private_footprint_bytes;
     return res;
   }
 
@@ -81,6 +115,8 @@ struct MemoryUsage {
         total_allocated_bytes - obj.total_allocated_bytes;
     res.in_use_allocated_bytes =
         in_use_allocated_bytes - obj.in_use_allocated_bytes;
+    res.private_footprint_bytes =
+        private_footprint_bytes - obj.private_footprint_bytes;
     return res;
   }
 
@@ -94,8 +130,7 @@ struct MemoryUsage {
 };
 
 // Return the memory usage from the system.
-// Note: this currently only works on Linux-based systems. Support on other
-// systems will be added later.
+// Note: this currently only works on Linux-based, Apple, and Windows systems.
 MemoryUsage GetMemoryUsage();
 
 }  // namespace memory

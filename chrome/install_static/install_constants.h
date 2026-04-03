@@ -9,8 +9,9 @@
 #ifndef CHROME_INSTALL_STATIC_INSTALL_CONSTANTS_H_
 #define CHROME_INSTALL_STATIC_INSTALL_CONSTANTS_H_
 
-#include <stdint.h>
 #include <windows.h>
+
+#include <stdint.h>
 
 #include "chrome/install_static/buildflags.h"
 
@@ -98,6 +99,9 @@ struct InstallConstants {
   // Windows.
   const wchar_t* browser_prog_id_description;
 
+  // The URL scheme for direct launches.
+  const char* direct_launch_url_scheme;
+
   // The prefix for the browser pdf viewer's ProgID.  This prefix may be no more
   // than 11 characters long; see ShellUtil::GetBrowserProgId and
   // https://msdn.microsoft.com/library/windows/desktop/dd542719.aspx.
@@ -128,6 +132,13 @@ struct InstallConstants {
   // elevation functionality.
   IID elevator_iid;
 
+  // The CLSID of the COM server that provides ETW tracing functionality.
+  CLSID tracing_service_clsid;
+
+  // The IID and the TypeLib of the ISystemTraceSession interface that provides
+  // ETW tracing functionality.
+  IID tracing_service_iid;
+
   // The default name for this mode's update channel.
   const wchar_t* default_channel_name;
 
@@ -148,6 +159,12 @@ struct InstallConstants {
 
   // The resource id of this mode's main application icon.
   int16_t app_icon_resource_id;
+
+  //  The index of this mode's html doc icon in the main executable.
+  int html_doc_icon_resource_index;
+
+  // The index of this mode's pdf doc icon in the main executable.
+  int pdf_doc_icon_resource_index;
 
   // The app container sid prefix for sandbox.
   const wchar_t* sandbox_sid_prefix;

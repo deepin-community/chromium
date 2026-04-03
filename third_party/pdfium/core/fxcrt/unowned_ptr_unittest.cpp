@@ -9,9 +9,10 @@
 #include <memory>
 #include <set>
 #include <utility>
+#include <vector>
 
+#include "core/fxcrt/containers/contains.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/base/containers/contains.h"
 
 #if defined(PDF_USE_PARTITION_ALLOC)
 #include "partition_alloc/shim/allocator_shim_default_dispatch_to_partition_alloc.h"
@@ -264,11 +265,29 @@ TEST(UnownedPtr, TransparentCompare) {
   EXPECT_FALSE(pdfium::Contains(holder, &foos[1]));
 }
 
+TEST(UnownedPtr, RangesEqualsTo) {
+  std::vector<UnownedPtr<Clink>> empty_vec;
+  {
+    UnownedPtr<Clink> ptr;
+    auto it = std::ranges::find(empty_vec, ptr);
+    ASSERT_TRUE(it == empty_vec.end());
+  }
+  {
+    auto ptr = std::make_unique<Clink>();
+    auto it = std::ranges::find(empty_vec, ptr.get());
+    ASSERT_TRUE(it == empty_vec.end());
+  }
+  {
+    auto it = std::ranges::find(empty_vec, nullptr);
+    ASSERT_TRUE(it == empty_vec.end());
+  }
+}
+
 #if defined(PDF_USE_PARTITION_ALLOC)
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) &&   \
-    BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT) &&   \
-    !BUILDFLAG(ENABLE_DANGLING_RAW_PTR_CHECKS) && \
-    BUILDFLAG(HAS_64_BIT_POINTERS)
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) &&   \
+    PA_BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT) &&   \
+    !PA_BUILDFLAG(ENABLE_DANGLING_RAW_PTR_CHECKS) && \
+    PA_BUILDFLAG(HAS_64_BIT_POINTERS)
 
 TEST(UnownedPtr, DanglingGetsQuarantined) {
   partition_alloc::PartitionRoot* root =
@@ -293,7 +312,7 @@ TEST(UnownedPtr, DanglingGetsQuarantined) {
       original_byte_count);
 }
 
-#endif  // BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) ...
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC) ...
 #endif  // PDF_USE_PARTITION_ALLOC
 
 }  // namespace fxcrt

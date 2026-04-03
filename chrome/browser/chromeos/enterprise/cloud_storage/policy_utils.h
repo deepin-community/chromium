@@ -7,7 +7,6 @@
 
 #include "base/values.h"
 
-class PrefRegistrySimple;
 class Profile;
 
 namespace extensions::api::odfs_config_private {
@@ -16,17 +15,13 @@ enum class Mount;
 
 namespace chromeos::cloud_storage {
 
-// Registers the profile prefs related to cloud storage.
-void RegisterProfilePrefs(PrefRegistrySimple* registry);
-
 // Returns the mount mode derived from the MicrosoftOneDriveMount policy.
 extensions::api::odfs_config_private::Mount GetMicrosoftOneDriveMount(
     const Profile* profile);
 
 // Returns the mount mode derived from the MicrosoftOneDriveAccountRestrictions
 // policy.
-base::Value::List GetMicrosoftOneDriveAccountRestrictions(
-    const Profile* profile);
+base::ListValue GetMicrosoftOneDriveAccountRestrictions(const Profile* profile);
 
 }  // namespace chromeos::cloud_storage
 

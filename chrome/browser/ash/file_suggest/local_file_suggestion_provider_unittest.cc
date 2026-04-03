@@ -16,6 +16,7 @@
 #include "chrome/browser/ash/file_suggest/file_suggest_util.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "storage/browser/file_system/external_mount_points.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -135,11 +136,7 @@ TEST_F(LocalFileSuggestionProviderTest, OldFilesNotReturned) {
   WriteFile(Path("new.txt"));
   WriteFile(Path("old.png"));
   auto now = base::Time::Now();
-  base::TouchFile(
-      Path("old.png"), now,
-      now -
-          base::Days(
-              LocalFileSuggestionProvider::kDefaultMaxLastModifiedTimeInDays));
+  base::TouchFile(Path("old.png"), now, now - GetMaxFileSuggestionRecency());
 
   GetProvider()->OnFilesOpened(
       {OpenEvent(Path("new.txt")), OpenEvent(Path("old.png"))});
@@ -168,7 +165,7 @@ class LocalFileSuggestionProviderTrashTest
         profile_->GetPath().Append(file_manager::trash::kTrashFolderName);
     ASSERT_TRUE(base::CreateDirectory(trash_folder_));
 
-    // Ensure the My files and Downloads mount points are appropriately mocked
+    // Ensure the MyFiles and Downloads mount points are appropriately mocked
     // to allow the trash locations to be parented at the test directory.
     storage::ExternalMountPoints::GetSystemInstance()->RegisterFileSystem(
         file_manager::util::GetDownloadsMountPointName(profile_),

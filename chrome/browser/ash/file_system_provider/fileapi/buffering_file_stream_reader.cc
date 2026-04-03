@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -75,9 +76,9 @@ int BufferingFileStreamReader::CopyFromPreloadingBuffer(
     int buffer_length) {
   const int read_bytes = std::min(buffer_length, preloaded_bytes_);
 
-  memcpy(buffer->data(),
-         preloading_buffer_->data() + preloading_buffer_offset_,
-         read_bytes);
+  UNSAFE_TODO(memcpy(buffer->data(),
+                     preloading_buffer_->data() + preloading_buffer_offset_,
+                     read_bytes));
   preloading_buffer_offset_ += read_bytes;
   preloaded_bytes_ -= read_bytes;
 

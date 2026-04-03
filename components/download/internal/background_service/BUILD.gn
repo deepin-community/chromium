@@ -134,7 +134,7 @@ source_set("common") {
     "//components/download/internal/background_service/ios:background_service",
     "//components/download/internal/background_service/ios:unit_tests",
     "//components/download/internal/background_service/test:test_support",
-    "//ios/chrome/browser/download/model/background_service:background_service",
+    "//ios/chrome/browser/download/model/background_service",
   ]
 
   deps = [
@@ -209,7 +209,7 @@ source_set("unit_tests") {
       "in_memory_download_unittest.cc",
       "init_aware_background_download_service_unittest.cc",
       "model_impl_unittest.cc",
-      "navigation_monitor_impl_unittests.cc",
+      "navigation_monitor_impl_unittest.cc",
       "proto_conversions_unittest.cc",
       "scheduler/device_status_listener_unittest.cc",
       "scheduler/scheduler_impl_unittest.cc",

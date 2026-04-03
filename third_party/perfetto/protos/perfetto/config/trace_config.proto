@@ -19,14 +19,16 @@ syntax = "proto2";
 package perfetto.protos;
 
 import "protos/perfetto/common/builtin_clock.proto";
+import "protos/perfetto/common/semantic_type.proto";
 import "protos/perfetto/config/data_source_config.proto";
+import "protos/perfetto/config/priority_boost/priority_boost_config.proto";
 
 // The overall config that is used when starting a new tracing session through
 // ProducerPort::StartTracing().
 // It contains the general config for the logging buffer(s) and the configs for
 // all the data source being enabled.
 //
-// Next id: 39.
+// Next id: 45.
 message TraceConfig {
   message BufferConfig {
     optional uint32 size_kb = 1;
@@ -61,12 +63,36 @@ message TraceConfig {
     // that case we don't want to retain another in-memory copy of the buffer.
     optional bool transfer_on_clone = 5;
 
-    // Used in conjuction with transfer_on_clone. When true the buffer is
+    // Used in conjunction with transfer_on_clone. When true the buffer is
     // cleared before issuing the Flush(reason=kTraceClone). This is to ensure
     // that if the data source took too long to write the data in a previous
     // clone-related flush, we don't end up with a mixture of leftovers from
     // the previous write and new data.
     optional bool clear_before_clone = 6;
+
+    // Optional name for this buffer. If set, data sources can reference this
+    // buffer by name using |target_buffer_name| in DataSourceConfig instead of
+    // using the buffer index. Buffer names must be unique within a tracing
+    // session. This provides a more human-readable and less error-prone way to
+    // configure which buffer a data source writes to.
+    optional string name = 7;
+
+    // When true, uses the experimental TraceBufferV2 implementation for this
+    // buffer. This is for testing purposes only and may be removed in future
+    // versions.
+    enum ExperimentalMode {
+      // Use the default V1 implementation.
+      MODE_UNSPECIFIED = 0;
+
+      // Use TraceBufferV2.
+      TRACE_BUFFER_V2 = 1;
+
+      // Use both V1 and V2 in shadow mode. Data is written to both buffers,
+      // but only V1 data is returned. Comparison stats are reported to
+      // validate V2 returns equivalent data.
+      TRACE_BUFFER_V2_SHADOW_MODE = 2;
+    }
+    optional ExperimentalMode experimental_mode = 8;
   }
   repeated BufferConfig buffers = 1;
 
@@ -87,6 +113,16 @@ message TraceConfig {
     // "bar"] will enable data sources on both "foo" and "bar" (if they exist).
     repeated string producer_name_filter = 2;
     repeated string producer_name_regex_filter = 3;
+
+    // Filter by machine names. The name of a machine is determined by the
+    // PERFETTO_MACHINE_NAME env variable. In Android systems, if the env
+    // variable is not set then the
+    // persist.traced_relay.machine_name system property is used. If the
+    // sysprop isn't set or not in an Android system, then the machine name by
+    // default is set to the utsname sysname (e.g. Linux), which can be obtained
+    // via the 'uname -s' command. As a convenience, one can use "host" to refer
+    // to the host machine, which is the machine running traced.
+    repeated string machine_name_filter = 4;
   }
   repeated DataSource data_sources = 2;
 
@@ -234,7 +270,9 @@ message TraceConfig {
     // a 24 hour period.
     // On R-, this override only affected userdebug builds. Since S, it also
     // affects user builds.
-    optional uint64 max_upload_per_day_bytes = 1;
+    // In 24Q3+ (V+), this override is a noop because upload guardrail logic
+    // was removed from Perfetto.
+    optional uint64 max_upload_per_day_bytes = 1 [deprecated = true];
 
     // Overrides the guardrail for maximum trace buffer size.
     // Available on U+
@@ -254,6 +292,10 @@ message TraceConfig {
   // to commit their data into the tracing service. This can be used for
   // quasi-real-time streaming mode and to guarantee some partial ordering of
   // events in the trace in windows of X ms.
+  //
+  // Warning: Perfetto automatically handles periodic flushing so in most
+  // scenarios setting this field is not needed. High frequency flushing can
+  // significantly impact performance.
   optional uint32 flush_period_ms = 13;
 
   // Wait for this long for producers to acknowledge flush requests.
@@ -436,11 +478,8 @@ message TraceConfig {
   }
   optional IncrementalStateConfig incremental_state_config = 21;
 
-  // Additional guardrail used by the Perfetto command line client.
-  // On user builds when --dropbox is set perfetto will refuse to trace unless
-  // this is also set.
-  // Added in Q.
-  optional bool allow_user_build_tracing = 19;
+  // No longer needed as we unconditionally allow tracing on user builds.
+  optional bool allow_user_build_tracing = 19 [deprecated = true];
 
   // If set the tracing service will ensure there is at most one tracing session
   // with this key.
@@ -618,6 +657,31 @@ message TraceConfig {
       // The string which should appear after the tgid in atrace tracepoint
       // strings.
       optional string atrace_payload_starts_with = 3;
+
+      // Optional name for the rule. When merging chains (e.g. via
+      // string_filter_chain_v54), rules with matching names in the newer chain
+      // will overwrite rules in the base chain. Rules without a name (empty or
+      // unset) are always treated as distinct and will be appended.
+      // See /rfcs/0011-subset-string-filter-rules.md for design details.
+      // Introduced in: Perfetto v54.
+      optional string name = 4;
+
+      // The semantic types this rule applies to.
+      //
+      // SEMANTIC_TYPE_UNSPECIFIED (0) is treated as its own distinct category:
+      // - If empty, the rule applies only to fields with UNSPECIFIED type.
+      // - If non-empty, the rule applies only to fields whose semantic type
+      //   is explicitly listed. To match UNSPECIFIED fields, you must include
+      //   SEMANTIC_TYPE_UNSPECIFIED in the list.
+      //
+      // Examples:
+      //   semantic_type: []           -> matches only UNSPECIFIED fields
+      //   semantic_type: [ATRACE]     -> matches only ATRACE fields
+      //   semantic_type: [UNSPECIFIED, ATRACE] -> matches both
+      //
+      // See /rfcs/0011-subset-string-filter-rules.md for design details.
+      // Introduced in: Perfetto v54.
+      repeated SemanticType semantic_type = 5;
     }
 
     // A chain is a list of rules which string will be sequentially checked
@@ -626,6 +690,43 @@ message TraceConfig {
       repeated StringFilterRule rules = 1;
     }
     optional StringFilterChain string_filter_chain = 3;
+
+    // Bytecode overlay for Perfetto v54+. This overlay is applied on top of
+    // bytecode_v2 to upgrade specific simple fields to new values. Old Perfetto
+    // versions ignore this field; new versions apply it.
+    //
+    // The motivation for this is that adding new opcodes in a backwards
+    // compatible way while also minimizing config size is hard. Instead, the
+    // overlay mechanism allows us to "patch" specific fields in the original
+    // bytecode_v2 with new semantics.
+    //
+    // See RFC 0011-subset-string-filter-rules.md for more info.
+    //
+    // Note:
+    // Unlike bytecode_v2 (which uses implicit message indices via EndOfMessage
+    // markers), this overlay uses a triplet format with explicit indices:
+    //   [msg_index, field_id << 3 | opcode, argument] ... [checksum]
+    // Each entry is exactly 3 varints. The argument is 0 when not needed.
+    // Entries must be sorted by (msg_index, field_id).
+    //
+    // The parser processes bytecode_v2 and this overlay simultaneously:
+    //  - any field not mentioned in the overlay is parsed as usual
+    //  - any field in the overlay but *not* in the bytecode_v2 is added
+    //    with its overlay value
+    //  - any field in both the overlay and bytecode_v2 takes the value in the
+    //    overlay, the bytecode_v2 value is ignored.
+    //
+    // Introduced in: Perfetto v54.
+    optional bytes bytecode_overlay_v54 = 4;
+
+    // String filter chain for Perfetto v54+. Rules in this chain either
+    // overwrite rules in string_filter_chain (if the name matches) or are
+    // appended (if the name doesn't match). This allows modifying existing
+    // rules (e.g., changing policy) without duplicating the entire chain.
+    // Rules without a name are always appended.
+    // See /rfcs/0011-subset-string-filter-rules.md for design details.
+    // Introduced in: Perfetto v54.
+    optional StringFilterChain string_filter_chain_v54 = 5;
   }
   // old field number for trace_filter
   reserved 32;
@@ -690,4 +791,151 @@ message TraceConfig {
     optional uint32 max_delay_ms = 2;
   }
   optional CmdTraceStartDelay cmd_trace_start_delay = 35;
+
+  // When non-empty, ensures that for a each semaphore named `name at most
+  // `max_other_session_count`` *other* sessions (whose value is taken of the
+  // minimum of all values specified by this config or any already-running
+  // session) can be be running.
+  //
+  // If a semaphore "acquisition" fails, EnableTracing will return an error
+  // and the tracing session will not be started (or elgible to start in
+  // the case of deferred sessions).
+  //
+  // This is easiest to explain with an example. Suppose the tracing service has
+  // the following active tracing sessions:
+  //   S1 = [{name=foo, max_other_session_count=2},
+  //         {name=bar, max_other_session_count=0}]
+  //   S2 = [{name=foo, max_other_session_count=1},
+  //         {name=baz, max_other_session_count=1}]
+  //
+  // Then, for a new session, the following would be the expected behaviour of
+  // EnableSession given the state of `session_semaphores`.
+  //   Q: session_semaphores = []
+  //   A: Allowed because it does not specify any semaphores. Will be allowed
+  //      no matter the state of any other tracing session.
+  //   Q: session_semaphores = [{name=baz, max_other_session_count=1}]
+  //   A: Allowed because both S2 and this config specify
+  //      max_other_session_count=1 for baz.
+  //   Q: session_semaphores = [{name=foo, max_other_session_count=3}]
+  //   A: Denied because S2 specified max_other_session_count=1 for foo and S1
+  //      takes that slot.
+  //   Q: session_semaphores = [{name=bar, max_other_session_count=0}]
+  //   A: Denied because S1 takes the the slot specified by both S1 and
+  //      this config.
+  //
+  // Introduced in 24Q3 (Android V).
+  message SessionSemaphore {
+    // The name of the semaphore. Acts as a unique identifier across all
+    // tracing sessions (including the one being started).
+    optional string name = 1;
+
+    // The maximum number of *other* sesssions which specify the same semaphore
+    // which can be active. The minimum of this value across all tracing
+    // sessions and the value specified by the config is used when deciding
+    // whether the tracing session can be started.
+    optional uint64 max_other_session_count = 2;
+  }
+  repeated SessionSemaphore session_semaphores = 39;
+
+  // Priority boost to be applied to the traced process, when the session is
+  // running.
+  optional PriorityBoostConfig priority_boost = 40;
+
+  // When set to a value > 0, this tracing session will be started in
+  // "exclusive mode". This has the following semantics:
+  // - It can only be set by shell or root users.
+  // - A new exclusive session will only be started if its priority is strictly
+  //   higher than any other active tracing session.
+  // - If a new exclusive session is started, all other existing tracing
+  //   sessions (exclusive or not) are aborted.
+  // - While an exclusive session is active, any new non-exclusive session (or
+  //   any exclusive session with a lower or equal priority) will be rejected.
+  //
+  // Introduced in: perfetto v52.
+  // Supported on: Android 25Q3+.
+  optional uint32 exclusive_prio = 41;
+
+  // Previously 'no_flush_before_write_into_file'. Now replaced by
+  // 'write_flush_mode' to provide more granular control over flushing behavior
+  // when streaming traces into a file. The original boolean was not enough to
+  // represent the desired default behavior (flushing periodically but not
+  // necessarily on every write).
+  reserved 42;
+
+  enum WriteFlushMode {
+    // Same as WRITE_FLUSH_AUTO.
+    WRITE_FLUSH_UNSPECIFIED = 0;
+
+    // Default mode. The service automatically determines the flush frequency
+    // to balance performance and data freshness:
+    // 1) If file_write_period_ms <= 5s (kDefaultWriteIntoFilePeriodMs):
+    //    Flushes are NOT issued on every write. Instead, a periodic flush is
+    //    issued every 5s.
+    // 2) If file_write_period_ms > 5s:
+    //    A flush is issued before every periodic write into the file.
+    WRITE_FLUSH_AUTO = 1;
+
+    // The following modes are intended for advanced usage and not recommended
+    // for general use.
+
+    // Do not flush buffers before periodic writes into the file.
+    // Use this mode if you want to minimize the performance impact of flushes
+    // and can tolerate potentially missing the most recent data in the trace
+    // file until the end of the session or an explicit flush.
+    // When this mode is selected, |flush_period_ms| is respected.
+    WRITE_FLUSH_DISABLED = 2;
+
+    // Issue a flush before every periodic write into the file.
+    // This ensures that each write into the file contains the most up-to-date
+    // data from all data sources, but may have a higher performance overhead.
+    WRITE_FLUSH_ENABLED = 3;
+  }
+
+  // Configures how the service should handle flushing data from producers
+  // before periodically writing the trace into the output file.
+  // Only applicable when |write_into_file| is true.
+  //
+  // By default, if |write_into_file| is set, the service periodically issues
+  // a Flush() to all data sources before writing buffers into the file.
+  // This ensures the file always contains the latest available data.
+  //
+  // Introduced in: perfetto v54.
+  // Supported on: Android 26Q1+.
+  optional WriteFlushMode write_flush_mode = 44;
+
+  enum FFlushMode {
+    // Default: same as FFLUSH_DISABLED.
+    FFLUSH_UNSPECIFIED = 0;
+
+    // Do not explicitly sync the file to storage after each write pass.
+    FFLUSH_DISABLED = 1;
+
+    // Explicitly sync the file to storage (via fdatasync) after each periodic
+    // write pass. Increases data durability at the cost of higher disk I/O
+    // overhead.
+    FFLUSH_ENABLED = 2;
+  }
+
+  // Whether to sync the output file to storage after each periodic write pass.
+  // Only applicable when |write_into_file| is true.
+  //
+  // By default, no fflush is invoked. FFLUSH_ENABLED must be set to explicitly
+  // sync to storage on every write.
+  //
+  // Introduced in: perfetto v54.
+  // Supported on: Android 26Q1+.
+  optional FFlushMode fflush_post_write = 45;
+
+  // When true, data sources in remote producers (machines connected via
+  // traced_relay) will be matched by default. When false (the default), data
+  // sources only match the host machine. In either case, an explicit
+  // |DataSource.machine_name_filter| takes priority.
+  //
+  // NB: perfetto versions before v54 do not have this option and match across
+  // machines by default. To be compatible across this version boundary, either
+  // set this field to true, or set an explicit machine_name_filter on all data
+  // sources.
+  //
+  // Introduced in: perfetto v54.
+  optional bool trace_all_machines = 43;
 }

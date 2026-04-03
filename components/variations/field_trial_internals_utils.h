@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/component_export.h"
+#include "base/containers/flat_map.h"
 #include "base/containers/span.h"
 #include "base/metrics/field_trial.h"
 #include "base/time/time.h"
@@ -23,7 +24,7 @@ class VariationsSeed;
 class EntropyProviders;
 
 // This file supports temporary forcing of field trials through the
-// chrome://field-trial-internals page.
+// chrome://metrics-internals/#field-trials page.
 
 // Forced trial expiration:
 // When field trials are forced with field-trial-internals, they remain active
@@ -88,7 +89,7 @@ base::flat_map<std::string, std::string> RefreshAndGetFieldTrialOverrides(
 // associated with the study is active, it will be available to force.
 COMPONENT_EXPORT(VARIATIONS)
 std::vector<StudyGroupNames> GetStudiesAvailableToForce(
-    VariationsSeed seed,
+    const VariationsSeed& seed,
     const EntropyProviders& entropy_providers,
     const ClientFilterableState& client_filterable_state);
 

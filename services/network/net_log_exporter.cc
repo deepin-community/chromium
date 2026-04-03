@@ -42,7 +42,7 @@ NetLogExporter::~NetLogExporter() {
 }
 
 void NetLogExporter::Start(base::File destination,
-                           base::Value::Dict extra_constants,
+                           base::DictValue extra_constants,
                            net::NetLogCaptureMode capture_mode,
                            uint64_t max_file_size,
                            StartCallback callback) {
@@ -72,16 +72,16 @@ void NetLogExporter::Start(base::File destination,
         // Note: this a static method which takes a weak pointer as an argument,
         // so it will run if |this| is deleted.
         base::BindOnce(&NetLogExporter::StartWithScratchDirOrCleanup,
-                       AsWeakPtr(), std::move(extra_constants), capture_mode,
-                       max_file_size, std::move(callback)));
+                       weak_ptr_factory_.GetWeakPtr(),
+                       std::move(extra_constants), capture_mode, max_file_size,
+                       std::move(callback)));
   } else {
     StartWithScratchDir(std::move(extra_constants), capture_mode, max_file_size,
                         std::move(callback), base::FilePath());
   }
 }
 
-void NetLogExporter::Stop(base::Value::Dict polled_data,
-                          StopCallback callback) {
+void NetLogExporter::Stop(base::DictValue polled_data, StopCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   if (state_ != STATE_RUNNING) {
@@ -89,7 +89,7 @@ void NetLogExporter::Stop(base::Value::Dict polled_data,
     return;
   }
 
-  base::Value::Dict net_info =
+  base::DictValue net_info =
       net::GetNetInfo(network_context_->url_request_context());
   net_info.Merge(std::move(polled_data));
 
@@ -138,7 +138,7 @@ base::FilePath NetLogExporter::CreateScratchDir(
 
 void NetLogExporter::StartWithScratchDirOrCleanup(
     base::WeakPtr<NetLogExporter> object,
-    base::Value::Dict extra_constants,
+    base::DictValue extra_constants,
     net::NetLogCaptureMode capture_mode,
     uint64_t max_file_size,
     StartCallback callback,
@@ -161,7 +161,7 @@ void NetLogExporter::StartWithScratchDirOrCleanup(
 }
 
 void NetLogExporter::StartWithScratchDir(
-    base::Value::Dict extra_constants,
+    base::DictValue extra_constants,
     net::NetLogCaptureMode capture_mode,
     uint64_t max_file_size,
     StartCallback callback,
@@ -177,18 +177,18 @@ void NetLogExporter::StartWithScratchDir(
 
   state_ = STATE_RUNNING;
 
-  base::Value::Dict constants = net::GetNetConstants();
+  base::DictValue constants = net::GetNetConstants();
   constants.Merge(std::move(extra_constants));
 
   if (max_file_size != kUnlimitedFileSize) {
     file_net_observer_ = net::FileNetLogObserver::CreateBoundedPreExisting(
         scratch_dir_path, std::move(destination_), max_file_size, capture_mode,
-        std::make_unique<base::Value::Dict>(std::move(constants)));
+        std::make_unique<base::DictValue>(std::move(constants)));
   } else {
     DCHECK(scratch_dir_path.empty());
     file_net_observer_ = net::FileNetLogObserver::CreateUnboundedPreExisting(
         std::move(destination_), capture_mode,
-        std::make_unique<base::Value::Dict>(std::move(constants)));
+        std::make_unique<base::DictValue>(std::move(constants)));
   }
 
   // There might not be a NetworkService object e.g. on iOS; in that case

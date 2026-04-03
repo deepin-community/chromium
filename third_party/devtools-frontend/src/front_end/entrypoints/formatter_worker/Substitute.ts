@@ -1,4 +1,4 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,18 +20,22 @@ interface Replacement {
   isShorthandAssignmentProperty: boolean;
 }
 
-// Given an |expression| and a mapping from names to new names, the |computeSubstitution|
-// function returns a list of replacements sorted by the offset. The function throws if
-// it cannot parse the expression or the substitution is impossible to perform (for example
-// if the substitution target is 'this' within a function, it would become bound there).
+/**
+ * Given an |expression| and a mapping from names to new names, the |computeSubstitution|
+ * function returns a list of replacements sorted by the offset. The function throws if
+ * it cannot parse the expression or the substitution is impossible to perform (for example
+ * if the substitution target is 'this' within a function, it would become bound there).
+ **/
 function computeSubstitution(expression: string, nameMap: Map<string, string|null>): Replacement[] {
   // Parse the expression and find variables and scopes.
-  const root =
-      Acorn.parse(
-          expression,
-          {ecmaVersion: ECMA_VERSION, allowAwaitOutsideFunction: true, ranges: false, checkPrivateFields: false} as
-              acorn.Options) as Acorn.ESTree.Node;
-  const scopeVariables = new ScopeVariableAnalysis(root);
+  const root = Acorn.parse(expression, {
+    ecmaVersion: ECMA_VERSION,
+    allowAwaitOutsideFunction: true,
+    allowImportExportEverywhere: true,
+    checkPrivateFields: false,
+    ranges: false,
+  } as acorn.Options) as Acorn.ESTree.Node;
+  const scopeVariables = new ScopeVariableAnalysis(root, expression);
   scopeVariables.run();
   const freeVariables = scopeVariables.getFreeVariables();
   const result: Replacement[] = [];
@@ -76,7 +80,7 @@ function computeSubstitution(expression: string, nameMap: Map<string, string|nul
     }
     // If there is a capturing binder, rename the bound variable.
     for (const binder of binders) {
-      if (binder.definitionKind === DefinitionKind.Fixed) {
+      if (binder.definitionKind === DefinitionKind.FIXED) {
         // If the identifier is bound to a fixed name, such as 'this',
         // then refuse to do the substitution.
         throw new Error(`Cannot avoid capture of '${rename}'`);

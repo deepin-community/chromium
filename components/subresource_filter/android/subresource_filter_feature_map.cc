@@ -5,8 +5,10 @@
 #include "base/android/feature_map.h"
 #include "base/feature_list.h"
 #include "base/no_destructor.h"
-#include "components/subresource_filter/android/subresource_filter_jni_headers/SubresourceFilterFeatureMap_jni.h"
 #include "components/subresource_filter/core/browser/subresource_filter_features.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/subresource_filter/android/subresource_filter_jni_headers/SubresourceFilterFeatureMap_jni.h"
 
 namespace subresource_filter {
 
@@ -22,15 +24,17 @@ const base::Feature* const kFeaturesExposedToJava[] = {
 
 // static
 base::android::FeatureMap* GetFeatureMap() {
-  static base::NoDestructor<base::android::FeatureMap> kFeatureMap(std::vector(
-      std::begin(kFeaturesExposedToJava), std::end(kFeaturesExposedToJava)));
+  static base::NoDestructor<base::android::FeatureMap> kFeatureMap(
+      kFeaturesExposedToJava);
   return kFeatureMap.get();
 }
 
 }  // namespace
 
-static jlong JNI_SubresourceFilterFeatureMap_GetNativeMap(JNIEnv* env) {
-  return reinterpret_cast<jlong>(GetFeatureMap());
+static int64_t JNI_SubresourceFilterFeatureMap_GetNativeMap(JNIEnv* env) {
+  return reinterpret_cast<int64_t>(GetFeatureMap());
 }
 
 }  // namespace subresource_filter
+
+DEFINE_JNI(SubresourceFilterFeatureMap)

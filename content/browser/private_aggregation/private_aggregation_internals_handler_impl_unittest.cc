@@ -81,7 +81,7 @@ void VerifyWebUIAggregatableReport(
 
   base::Value report_body = base::test::ParseJson(web_report.report_body);
   ASSERT_TRUE(report_body.is_dict());
-  const base::Value::Dict& report_body_dict = report_body.GetDict();
+  const base::DictValue& report_body_dict = report_body.GetDict();
 
   if (report) {
     EXPECT_EQ(report_body_dict, report->GetAsJson());
@@ -241,8 +241,8 @@ TEST_F(PrivateAggregationInternalsHandlerImplTest, NotifyReportHandled) {
 
   aggregation_service::TestHpkeKey hpke_key{/*key_id=*/"id123"};
   std::optional<AggregatableReport> report =
-      AggregatableReport::Provider().CreateFromRequestAndPublicKeys(
-          request, {hpke_key.GetPublicKey()});
+      AggregatableReport::Provider().CreateFromRequestAndPublicKey(
+          request, hpke_key.GetPublicKey());
 
   base::Time now = base::Time::Now();
 
@@ -268,8 +268,8 @@ TEST_F(PrivateAggregationInternalsHandlerImplTest, NotifyReportHandled_NoId) {
 
   aggregation_service::TestHpkeKey hpke_key{/*key_id=*/"id123"};
   std::optional<AggregatableReport> report =
-      AggregatableReport::Provider().CreateFromRequestAndPublicKeys(
-          request, {hpke_key.GetPublicKey()});
+      AggregatableReport::Provider().CreateFromRequestAndPublicKey(
+          request, hpke_key.GetPublicKey());
 
   base::Time now = base::Time::Now();
 

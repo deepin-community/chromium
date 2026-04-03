@@ -5,10 +5,14 @@
 #include "components/policy/core/browser/configuration_policy_handler_list.h"
 
 #include "base/check_is_test.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/strings/string_split.h"
+#include "build/android_buildflags.h"
 #include "components/policy/core/browser/configuration_policy_handler.h"
 #include "components/policy/core/browser/configuration_policy_handler_parameters.h"
 #include "components/policy/core/browser/policy_error_map.h"
+#include "components/policy/core/common/features.h"
 #include "components/policy/core/common/policy_logger.h"
 #include "components/policy/core/common/values_util.h"
 #include "components/policy/policy_constants.h"
@@ -95,6 +99,30 @@ void ConfigurationPolicyHandlerList::PrepareForDisplaying(
     handler->PrepareForDisplaying(policies);
 }
 
+bool ConfigurationPolicyHandlerList::IsBlockedDesktopAndroidPolicy(
+    const std::string& policy_name) const {
+#if BUILDFLAG(IS_DESKTOP_ANDROID)
+  // The allowlist is not used if kDesktopAndroidPolicy is off. So that all
+  // policies are allowed by default without Finch config.
+  if (!base::FeatureList::IsEnabled(features::kDesktopAndroidPolicy)) {
+    return false;
+  }
+
+  auto allowlist_str =
+      features::kDesktopAndroidPolicyAllowlist.Get();
+  for (const auto& allowed_policy :
+       base::SplitStringPiece(allowlist_str, ",", base::TRIM_WHITESPACE,
+                              base::SPLIT_WANT_NONEMPTY)) {
+    if (allowed_policy == policy_name) {
+      return false;
+    }
+  }
+  return true;
+#else
+  return false;
+#endif  // BUILDFLAG(IS_DESKTOP_ANDROID)
+}
+
 bool ConfigurationPolicyHandlerList::IsPolicySupported(
     const base::flat_set<std::string>& future_policies_allowed,
     PoliciesSet* future_policies_blocked,
@@ -114,6 +142,10 @@ bool ConfigurationPolicyHandlerList::IsPolicySupported(
     return true;
   }
 
+  if (IsBlockedDesktopAndroidPolicy(entry.first)) {
+    return false;
+  }
+
   if (IsBlockedFuturePolicy(future_policies_allowed, *policy_details, entry)) {
     if (future_policies_blocked) {
       future_policies_blocked->insert(entry.first);
@@ -128,7 +160,7 @@ bool ConfigurationPolicyHandlerList::IsBlockedPlatformDevicePolicy(
     const PolicyDetails& policy_details,
     PolicyMap::const_reference entry) const {
   if (entry.second.source == POLICY_SOURCE_PLATFORM &&
-      policy_details.is_device_policy) {
+      policy_details.scope == kDevice) {
     // Device Policy is only implemented as Cloud Policy (not Platform Policy).
     LOG_POLICY(WARNING, POLICY_PROCESSING)
         << "Ignoring device platform policy: " << entry.first;
@@ -141,6 +173,13 @@ bool ConfigurationPolicyHandlerList::IsBlockedFuturePolicy(
     const base::flat_set<std::string>& future_policies_allowed,
     const PolicyDetails& policy_details,
     PolicyMap::const_reference entry) const {
+#if BUILDFLAG(IS_DESKTOP_ANDROID)
+  if (base::FeatureList::IsEnabled(features::kFuturePoliciesOnDesktopAndroid) &&
+      policy_details.is_future) {
+    return false;
+  }
+#endif  // BUILDFLAG(IS_DESKTOP_ANDROID)
+
   return !are_future_policies_allowed_by_default_ && policy_details.is_future &&
          !future_policies_allowed.contains(entry.first);
 }

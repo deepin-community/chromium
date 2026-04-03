@@ -2,12 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/web_applications/commands/navigate_and_trigger_install_dialog_command.h"
+
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/web_applications/web_app_controller_browsertest.h"
+#include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -18,9 +22,10 @@
 namespace web_app {
 
 class NavigateAndTriggerInstallDialogCommandTest
-    : public WebAppControllerBrowserTest {
+    : public WebAppBrowserTestBase {
  public:
   const GURL kOriginUrl = GURL("https://test.com");
+  NavigateAndTriggerInstallDialogCommandTest() = default;
 };
 
 IN_PROC_BROWSER_TEST_F(NavigateAndTriggerInstallDialogCommandTest,
@@ -30,7 +35,7 @@ IN_PROC_BROWSER_TEST_F(NavigateAndTriggerInstallDialogCommandTest,
   ASSERT_TRUE(NavigateAndAwaitInstallabilityCheck(browser(), test_url));
 
   // The browser should have one tab.
-  EXPECT_EQ(1, browser()->tab_strip_model()->GetTabCount());
+  EXPECT_EQ(1, browser()->tab_strip_model()->count());
 
   content::TestNavigationObserver navigation_observer(test_url);
   navigation_observer.StartWatchingNewWebContents();
@@ -44,7 +49,7 @@ IN_PROC_BROWSER_TEST_F(NavigateAndTriggerInstallDialogCommandTest,
           }));
   navigation_observer.Wait();
   // The browser should now have 2 tabs.
-  EXPECT_EQ(2, browser()->tab_strip_model()->GetTabCount());
+  EXPECT_EQ(2, browser()->tab_strip_model()->count());
   // The active tab should be the |test_url| we navigated to.
   EXPECT_EQ(test_url,
             chrome_test_utils::GetActiveWebContents(this)->GetVisibleURL());
@@ -137,5 +142,4 @@ IN_PROC_BROWSER_TEST_F(NavigateAndTriggerInstallDialogCommandTest,
 
   loop.Run();
 }
-
 }  // namespace web_app

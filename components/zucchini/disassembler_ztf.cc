@@ -5,12 +5,15 @@
 #include "components/zucchini/disassembler_ztf.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdio>
 #include <iterator>
 #include <limits>
 #include <numeric>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ref.h"
 #include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
@@ -259,9 +262,9 @@ class ZtfWriter {
   void WriteNumber(ztf::dim_t value) {
     size_t size = config_.digits_per_dim + 1;
     DCHECK_LE(size, kMaxDigitCount + 1);
-    char digits[kMaxDigitCount + 1];  // + 1 for terminator.
-    int len =
-        snprintf(digits, size, "%0*u", config_.digits_per_dim, std::abs(value));
+    std::array<char, kMaxDigitCount + 1> digits;  // + 1 for terminator.
+    int len = UNSAFE_TODO(snprintf(digits.data(), size, "%0*u",
+                                   config_.digits_per_dim, std::abs(value)));
     DCHECK_EQ(len, config_.digits_per_dim);
     for (int i = 0; i < len; ++i)
       image_.write(offset_++, digits[i]);
@@ -398,7 +401,7 @@ bool ReadZtfHeader(ConstBufferView image) {
 
 /******** ZtfTranslator ********/
 
-ZtfTranslator::ZtfTranslator() {}
+ZtfTranslator::ZtfTranslator() = default;
 
 ZtfTranslator::~ZtfTranslator() = default;
 

@@ -7,11 +7,11 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "base/version.h"
@@ -25,7 +25,7 @@ class PrefService;
 
 namespace user_manager {
 
-class UserManagerBase;
+class UserManagerImpl;
 
 // Enum describing whether a user's profile requires policy. If kPolicyRequired,
 // the profile initialization code will ensure that valid policy is loaded
@@ -58,7 +58,7 @@ class USER_MANAGER_EXPORT KnownUser final {
 
   // Returns `nullptr` if value is not found or not a string.
   const std::string* FindStringPath(const AccountId& account_id,
-                                    base::StringPiece path) const;
+                                    std::string_view path) const;
 
   // Returns true if |account_id| preference by |path| does exist,
   // fills in |out_value|. Otherwise returns false.
@@ -72,7 +72,7 @@ class USER_MANAGER_EXPORT KnownUser final {
                      const std::string& in_value);
 
   std::optional<bool> FindBoolPath(const AccountId& account_id,
-                                   base::StringPiece path) const;
+                                   std::string_view path) const;
 
   // Returns true if |account_id| preference by |path| does exist,
   // fills in |out_value|. Otherwise returns false.
@@ -88,7 +88,7 @@ class USER_MANAGER_EXPORT KnownUser final {
   // Return std::nullopt if the value is not found or doesn't have the int
   // type.
   std::optional<int> FindIntPath(const AccountId& account_id,
-                                 base::StringPiece path) const;
+                                 std::string_view path) const;
 
   // Returns true if |account_id| preference by |path| does exist,
   // fills in |out_value|. Otherwise returns false.
@@ -100,6 +100,22 @@ class USER_MANAGER_EXPORT KnownUser final {
   void SetIntegerPref(const AccountId& account_id,
                       const std::string& path,
                       const int in_value);
+
+  // Return std::nullopt if the value is not found or doesn't have the double
+  // type.
+  std::optional<double> FindDoublePath(const AccountId& account_id,
+                                       std::string_view path) const;
+
+  // Returns true if |account_id| preference by |path| does exist,
+  // fills in |out_value|. Otherwise returns false.
+  bool GetDoublePrefForTest(const AccountId& account_id,
+                            const std::string& path,
+                            double* out_value);
+
+  // Updates user's identified by |account_id| double preference |path|.
+  void SetDoublePref(const AccountId& account_id,
+                     const std::string& path,
+                     const double in_value);
 
   // Returns true if |account_id| preference by |path| does exist,
   // fills in |out_value|. Otherwise returns false.
@@ -131,8 +147,8 @@ class USER_MANAGER_EXPORT KnownUser final {
   // to find known account_id on Chrome restart.
   void SaveKnownUser(const AccountId& account_id);
 
-  // Updates |account_id.account_type_| and |account_id.GetGaiaId()| or
-  // |account_id.GetObjGuid()| for user with |account_id|.
+  // Updates `account_id.account_type_` and `account_id.gaia_id_` for user with
+  // `account_id`.
   void UpdateId(const AccountId& account_id);
 
   // Find GAIA ID for user with `account_id`, returns `nullptr` if not found.
@@ -189,9 +205,9 @@ class USER_MANAGER_EXPORT KnownUser final {
   // when the property isn't present. For the format of the value, refer to
   // chromeos/ash/components/login/auth/challenge_response/known_user_pref_utils.h.
   void SetChallengeResponseKeys(const AccountId& account_id,
-                                base::Value::List value);
+                                base::ListValue value);
 
-  base::Value::List GetChallengeResponseKeys(const AccountId& account_id);
+  base::ListValue GetChallengeResponseKeys(const AccountId& account_id);
 
   void SetLastOnlineSignin(const AccountId& account_id, base::Time time);
 
@@ -230,9 +246,9 @@ class USER_MANAGER_EXPORT KnownUser final {
   void PinAutosubmitSetBackfillNotNeeded(const AccountId& account_id);
   void PinAutosubmitSetBackfillNeededForTests(const AccountId& account_id);
 
-  base::Value::Dict GetAuthFactorCache(const AccountId& account_id);
+  base::DictValue GetAuthFactorCache(const AccountId& account_id);
   void SetAuthFactorCache(const AccountId& account_id,
-                          const base::Value::Dict cache);
+                          const base::DictValue cache);
 
   // Setter and getter for password sync token used for syncing SAML passwords
   // across multiple user devices.
@@ -263,12 +279,6 @@ class USER_MANAGER_EXPORT KnownUser final {
 
   std::string GetPendingOnboardingScreen(const AccountId& account_id);
 
-  // Records whether Lacros is enabled for the user.
-  void SetLacrosEnabled(const AccountId& account_id, bool enabled);
-  // Returns true if at least one user has Lacros enabled, false otherwise.
-  // It defaults to false for users for which there's no information.
-  bool GetLacrosEnabledForAnyUser();
-
   bool UserExists(const AccountId& account_id);
 
   // Register known user prefs.
@@ -276,7 +286,7 @@ class USER_MANAGER_EXPORT KnownUser final {
 
  private:
   friend class KnownUserTest;
-  friend class UserManagerBase;
+  friend class UserManagerImpl;
 
   FRIEND_TEST_ALL_PREFIXES(KnownUserTest,
                            CleanEphemeralUsersRemovesEphemeralAdOnly);
@@ -285,17 +295,11 @@ class USER_MANAGER_EXPORT KnownUser final {
 
   // Performs a lookup of properties associated with |account_id|. Returns
   // nullptr if not found.
-  const base::Value::Dict* FindPrefs(const AccountId& account_id) const;
+  const base::DictValue* FindPrefs(const AccountId& account_id) const;
 
   // Removes all user preferences associated with |account_id|.
-  // Not exported as code should not be calling this outside this component
+  // Not exported, as code should not be calling this outside this component.
   void RemovePrefs(const AccountId& account_id);
-
-  // Removes all ephemeral users.
-  void CleanEphemeralUsers();
-
-  // Marks if user is ephemeral and should be removed on log out.
-  void SetIsEphemeralUser(const AccountId& account_id, bool is_ephemeral);
 
   // Removes all obsolete prefs from all users.
   void CleanObsoletePrefs();

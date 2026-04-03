@@ -21,8 +21,9 @@ XRHitTestResult::XRHitTestResult(
     const device::mojom::blink::XRHitResult& hit_result)
     : session_(session),
       mojo_from_this_(hit_result.mojo_from_result),
-      plane_id_(hit_result.plane_id != 0
-                    ? std::optional<uint64_t>(hit_result.plane_id)
+      plane_id_(hit_result.plane_id.has_value() &&
+                        *hit_result.plane_id != device::kInvalidPlaneId
+                    ? hit_result.plane_id
                     : std::nullopt) {}
 
 XRPose* XRHitTestResult::getPose(XRSpace* other,
@@ -51,8 +52,9 @@ XRPose* XRHitTestResult::getPose(XRSpace* other,
   return MakeGarbageCollected<XRPose>(other_offset_from_this, false);
 }
 
-ScriptPromise XRHitTestResult::createAnchor(ScriptState* script_state,
-                                            ExceptionState& exception_state) {
+ScriptPromise<XRAnchor> XRHitTestResult::createAnchor(
+    ScriptState* script_state,
+    ExceptionState& exception_state) {
   DVLOG(2) << __func__;
 
   if (!session_->IsFeatureEnabled(device::mojom::XRSessionFeature::ANCHORS)) {

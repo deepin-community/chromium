@@ -31,9 +31,10 @@
 namespace dawn::wire {
 
 WireServer::WireServer(const WireServerDescriptor& descriptor)
-    : mImpl(new server::Server(*descriptor.procs,
-                               descriptor.serializer,
-                               descriptor.memoryTransferService)) {}
+    : mImpl(server::Server::Create(*descriptor.procs,
+                                   descriptor.serializer,
+                                   descriptor.memoryTransferService,
+                                   descriptor.useSpontaneousCallbacks)) {}
 
 WireServer::~WireServer() {
     mImpl.reset();
@@ -43,46 +44,24 @@ const volatile char* WireServer::HandleCommands(const volatile char* commands, s
     return mImpl->HandleCommands(commands, size);
 }
 
+bool WireServer::InjectBuffer(WGPUBuffer buffer, const Handle& handle, const Handle& deviceHandle) {
+    return mImpl->InjectBuffer(buffer, handle, deviceHandle) == WireResult::Success;
+}
+
 bool WireServer::InjectTexture(WGPUTexture texture,
-                               uint32_t id,
-                               uint32_t generation,
-                               uint32_t deviceId,
-                               uint32_t deviceGeneration) {
-    return mImpl->InjectTexture(texture, {id, generation, deviceId, deviceGeneration}) ==
-           WireResult::Success;
+                               const Handle& handle,
+                               const Handle& deviceHandle) {
+    return mImpl->InjectTexture(texture, handle, deviceHandle) == WireResult::Success;
 }
 
-bool WireServer::InjectSwapChain(WGPUSwapChain swapchain,
-                                 uint32_t id,
-                                 uint32_t generation,
-                                 uint32_t deviceId,
-                                 uint32_t deviceGeneration) {
-    return mImpl->InjectSwapChain(swapchain, {id, generation, deviceId, deviceGeneration}) ==
-           WireResult::Success;
+bool WireServer::InjectSurface(WGPUSurface surface,
+                               const Handle& handle,
+                               const Handle& instanceHandle) {
+    return mImpl->InjectSurface(surface, handle, instanceHandle) == WireResult::Success;
 }
 
-bool WireServer::InjectDevice(WGPUDevice device, uint32_t id, uint32_t generation) {
-    return mImpl->InjectDevice(device, {id, generation}) == WireResult::Success;
-}
-
-bool WireServer::InjectInstance(WGPUInstance instance, uint32_t id, uint32_t generation) {
-    return mImpl->InjectInstance(instance, {id, generation}) == WireResult::Success;
-}
-
-bool WireServer::InjectTexture(WGPUTexture texture, const TextureReservation& reservation) {
-    return mImpl->InjectTexture(texture, reservation) == WireResult::Success;
-}
-
-bool WireServer::InjectSwapChain(WGPUSwapChain swapchain, const SwapChainReservation& reservation) {
-    return mImpl->InjectSwapChain(swapchain, reservation) == WireResult::Success;
-}
-
-bool WireServer::InjectDevice(WGPUDevice device, const DeviceReservation& reservation) {
-    return mImpl->InjectDevice(device, reservation) == WireResult::Success;
-}
-
-bool WireServer::InjectInstance(WGPUInstance instance, const InstanceReservation& reservation) {
-    return mImpl->InjectInstance(instance, reservation) == WireResult::Success;
+bool WireServer::InjectInstance(WGPUInstance instance, const Handle& handle) {
+    return mImpl->InjectInstance(instance, handle) == WireResult::Success;
 }
 
 WGPUDevice WireServer::GetDevice(uint32_t id, uint32_t generation) {
@@ -107,11 +86,16 @@ MemoryTransferService::WriteHandle::WriteHandle() = default;
 MemoryTransferService::WriteHandle::~WriteHandle() = default;
 
 void MemoryTransferService::WriteHandle::SetTarget(void* data) {
-    mTargetData = data;
+    mTargetData = static_cast<uint8_t*>(data);
 }
 void MemoryTransferService::WriteHandle::SetDataLength(size_t dataLength) {
     mDataLength = dataLength;
 }
+std::span<uint8_t> MemoryTransferService::WriteHandle::GetTarget() const {
+    DAWN_ASSERT(mTargetData != nullptr);
+    return std::span<uint8_t>(mTargetData, mDataLength);
+}
+
 }  // namespace server
 
 }  // namespace dawn::wire

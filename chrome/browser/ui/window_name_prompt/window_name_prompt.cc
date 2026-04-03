@@ -6,7 +6,7 @@
 #include "base/metrics/user_metrics.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -21,10 +21,11 @@ void SetBrowserTitleFromTextfield(Browser* browser,
                                   ui::DialogModel* dialog_model) {
   std::string text = base::UTF16ToUTF8(
       dialog_model->GetTextfieldByUniqueId(kWindowNameFieldId)->text());
-  if (text.empty())
+  if (text.empty()) {
     base::RecordAction(base::UserMetricsAction("WindowNaming_Cleared"));
-  else
+  } else {
     base::RecordAction(base::UserMetricsAction("WindowNaming_Set"));
+  }
   browser->SetWindowUserTitle(text);
 }
 

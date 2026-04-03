@@ -4,7 +4,8 @@
 
 #include "media/capture/video/video_capture_metrics.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
@@ -141,7 +142,7 @@ VideoResolutionDesignation ResolutionNameFromSize(gfx::Size frame_size) {
     frame_size.set_width(frame_size.height());
     frame_size.set_width(tmp);
   }
-  auto* it = kResolutions.find(frame_size);
+  auto it = kResolutions.find(frame_size);
   return it != kResolutions.end() ? it->second
                                   : VideoResolutionDesignation::kUnknown;
 }
@@ -151,7 +152,8 @@ VideoResolutionDesignation ResolutionNameFromSize(gfx::Size frame_size) {
 enum class VideoEffectStatus {
   kUnsupported = 0,
   kSupported = 1,
-  kMaxValue = kSupported
+  kEnabled = 2,
+  kMaxValue = kEnabled
 };
 
 }  // namespace
@@ -184,59 +186,45 @@ void LogCaptureDeviceMetrics(
       }
     }
   }
-  base::UmaHistogramCustomCounts("Media.VideoCapture.Device.TotalAvailable",
-                                 devices_info.size(), 0, 5, 5);
 }
 
-void LogCaptureDeviceHashedModelId(
-    const media::VideoCaptureDeviceDescriptor& descriptor) {
-  // descriptor.model_id has the form "XXXX:XXXX" when a USB device is detected,
-  // and empty otherwise.
-  constexpr int kModelIdStrLength = 9;
-  constexpr int kColonPosIndex = 4;
-  uint32_t mapping = 0;
-  if (descriptor.model_id.length() == kModelIdStrLength) {
-    const std::string vid = descriptor.model_id.substr(0, kColonPosIndex);
-    const std::string pid =
-        descriptor.model_id.substr(kColonPosIndex + 1, kModelIdStrLength);
-    const std::string usb_id = vid + pid;
-    // Check if resulting usb_id is a valid Hex Number, otherwise reporting 0
-    if (std::all_of(usb_id.begin(), usb_id.end(), ::isxdigit)) {
-      std::stringstream ss;
-      ss << std::hex << usb_id;
-      ss >> mapping;
-    }
+VideoEffectStatus GetStatus(bool is_supported, bool is_enabled) {
+  if (!is_supported) {
+    return VideoEffectStatus::kUnsupported;
   }
-  UMA_HISTOGRAM_SPARSE("Media.VideoCapture.Device.Opened.ByModelId", mapping);
+  return is_enabled ? VideoEffectStatus::kEnabled
+                    : VideoEffectStatus::kSupported;
 }
 
 void LogCaptureDeviceEffects(mojom::PhotoStatePtr photo_state) {
   const bool has_background_blur =
-      photo_state->supported_background_blur_modes &&
-      base::Contains(photo_state->supported_background_blur_modes.value(),
-                     mojom::BackgroundBlurMode::BLUR);
-  UMA_HISTOGRAM_ENUMERATION("Media.VideoCapture.Device.Effect.BackgroundBlur",
-                            has_background_blur
-                                ? VideoEffectStatus::kSupported
-                                : VideoEffectStatus::kUnsupported);
+      std::ranges::contains(photo_state->supported_background_blur_modes,
+                            mojom::BackgroundBlurMode::BLUR);
+  const bool background_blur_enabled =
+      photo_state->background_blur_mode != mojom::BackgroundBlurMode::OFF;
+  UMA_HISTOGRAM_ENUMERATION(
+      "Media.VideoCapture.Device.Effect2.BackgroundBlur",
+      GetStatus(has_background_blur, background_blur_enabled));
 
   const bool has_face_framing =
-      photo_state->supported_face_framing_modes &&
-      photo_state->supported_face_framing_modes.value().size() > 0;
-  UMA_HISTOGRAM_ENUMERATION("Media.VideoCapture.Device.Effect.FaceFraming",
-                            has_face_framing ? VideoEffectStatus::kSupported
-                                             : VideoEffectStatus::kUnsupported);
+      photo_state->supported_face_framing_modes.size() > 0;
+  const bool face_framing_enabled =
+      photo_state->current_face_framing_mode != mojom::MeteringMode::NONE;
+  UMA_HISTOGRAM_ENUMERATION("Media.VideoCapture.Device.Effect2.FaceFraming",
+                            GetStatus(has_face_framing, face_framing_enabled));
 
   const bool has_eye_gaze_correction =
-      photo_state->supported_eye_gaze_correction_modes &&
-      (base::Contains(photo_state->supported_eye_gaze_correction_modes.value(),
-                      mojom::EyeGazeCorrectionMode::ON) ||
-       base::Contains(photo_state->supported_eye_gaze_correction_modes.value(),
-                      mojom::EyeGazeCorrectionMode::STARE));
+
+      std::ranges::contains(photo_state->supported_eye_gaze_correction_modes,
+                            mojom::EyeGazeCorrectionMode::ON) ||
+      std::ranges::contains(photo_state->supported_eye_gaze_correction_modes,
+                            mojom::EyeGazeCorrectionMode::STARE);
+  const bool eye_gaze_correction_enabled =
+      photo_state->current_eye_gaze_correction_mode !=
+      mojom::EyeGazeCorrectionMode::OFF;
   UMA_HISTOGRAM_ENUMERATION(
-      "Media.VideoCapture.Device.Effect.EyeGazeCorrection",
-      has_eye_gaze_correction ? VideoEffectStatus::kSupported
-                              : VideoEffectStatus::kUnsupported);
+      "Media.VideoCapture.Device.Effect2.EyeGazeCorrection",
+      GetStatus(has_eye_gaze_correction, eye_gaze_correction_enabled));
 }
 
 void LogCaptureCurrentDeviceResolution(int width, int height) {

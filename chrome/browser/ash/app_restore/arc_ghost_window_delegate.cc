@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/app_restore/arc_ghost_window_delegate.h"
 
+#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "chrome/browser/ash/app_restore/arc_ghost_window_shell_surface.h"
 #include "chrome/browser/ash/app_restore/arc_window_utils.h"
@@ -55,7 +56,7 @@ void ArcGhostWindowDelegate::OnStateChanged(
     return;
 
   display::Display display;
-  const display::Screen* screen = display::Screen::GetScreen();
+  const display::Screen* screen = display::Screen::Get();
   auto display_existed = screen->GetDisplayWithDisplayId(display_id_, &display);
   DCHECK(display_existed);
 
@@ -92,7 +93,8 @@ void ArcGhostWindowDelegate::OnBoundsChanged(
     int64_t display_id,
     const gfx::Rect& bounds_in_screen,
     bool is_resize,
-    int bounds_change) {
+    int bounds_change,
+    bool is_adjusted_bounds) {
   auto* window_state =
       WindowState::Get(shell_surface_->GetWidget()->GetNativeWindow());
 
@@ -100,7 +102,7 @@ void ArcGhostWindowDelegate::OnBoundsChanged(
     return;
 
   display::Display target_display;
-  const display::Screen* screen = display::Screen::GetScreen();
+  const display::Screen* screen = display::Screen::Get();
 
   if (!screen->GetDisplayWithDisplayId(display_id, &target_display))
     return;

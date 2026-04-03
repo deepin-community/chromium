@@ -4,6 +4,7 @@
 
 #include "content/browser/renderer_host/navigation_metrics_utils.h"
 
+#include "base/metrics/histogram_macros.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_client.h"
@@ -11,19 +12,19 @@
 
 namespace content {
 
-void MaybeRecordAdClickMainFrameNavigationUseCounter(
+void MaybeRecordAdClickMainFrameNavigationMetrics(
     RenderFrameHostImpl* initiator_frame,
-    blink::mojom::NavigationInitiatorActivationAndAdStatus
-        initiator_activation_and_ad_status) {
+    bool started_with_transient_activation,
+    bool started_by_ad) {
   if (!initiator_frame) {
     return;
   }
 
-  if (initiator_activation_and_ad_status ==
-      blink::mojom::NavigationInitiatorActivationAndAdStatus::
-          kStartedWithTransientActivationFromAd) {
+  if (started_with_transient_activation && started_by_ad) {
     GetContentClient()->browser()->LogWebFeatureForCurrentPage(
         initiator_frame, blink::mojom::WebFeature::kAdClickMainFrameNavigation);
+
+    UMA_HISTOGRAM_BOOLEAN("Navigation.MainFrame.FromAdClick", true);
   }
 }
 

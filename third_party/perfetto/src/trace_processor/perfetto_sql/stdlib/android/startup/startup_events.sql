@@ -13,16 +13,18 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
+INCLUDE PERFETTO MODULE slices.with_context;
+
 -- All activity startup events.
 CREATE PERFETTO TABLE _startup_events AS
 SELECT
   ts,
   dur,
   ts + dur AS ts_end,
-  STR_SPLIT(s.name, ": ", 1) AS package_name
-FROM slice s
-JOIN process_track t ON s.track_id = t.id
-JOIN process USING(upid)
+  str_split(s.name, ": ", 1) AS package_name
+FROM process_slice AS s
 WHERE
   s.name GLOB 'launching: *'
-  AND (process.name IS NULL OR process.name = 'system_server');
+  AND (
+    process_name IS NULL OR process_name = 'system_server'
+  );

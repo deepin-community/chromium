@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ash/webui/shortcut_customization_ui/shortcut_customization_app_ui.h"
 
 #include <memory>
@@ -27,10 +28,10 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/resources/grit/webui_resources.h"
 #include "ui/views/widget/widget.h"
 #include "ui/webui/color_change_listener/color_change_handler.h"
 #include "ui/webui/mojo_web_ui_controller.h"
+#include "ui/webui/resources/grit/webui_resources.h"
 
 namespace ash {
 
@@ -150,11 +151,15 @@ void AddLocalizedStrings(content::WebUIDataSource* source) {
       {"subcategoryDesks", IDS_SHORTCUT_CUSTOMIZATION_SUBCATEGORY_DESKS},
       {"subcategoryChromeVox",
        IDS_SHORTCUT_CUSTOMIZATION_SUBCATEGORY_CHROMEVOX},
+      {"subcategoryMouseKeys",
+       IDS_SHORTCUT_CUSTOMIZATION_SUBCATEGORY_MOUSE_KEYS},
       {"subcategoryVisibility",
        IDS_SHORTCUT_CUSTOMIZATION_SUBCATEGORY_VISIBILITY},
       {"subcategoryAccessibilityNavigation",
        IDS_SHORTCUT_CUSTOMIZATION_SUBCATEGORY_ACCESSIBILITY_NAVIGATION},
       {"noShortcutAssigned", IDS_SHORTCUT_CUSTOMIZATION_NO_SHORTCUT_ASSIGNED},
+      {"iconLabelAccessibility",
+       IDS_SHORTCUT_CUSTOMIZATION_ICON_LABEL_ACCESSIBILITY},
       {"iconLabelArrowDown", IDS_SHORTCUT_CUSTOMIZATION_ICON_LABEL_ARROW_DOWN},
       {"iconLabelArrowLeft", IDS_SHORTCUT_CUSTOMIZATION_ICON_LABEL_ARROW_LEFT},
       {"iconLabelArrowRight",
@@ -180,8 +185,14 @@ void AddLocalizedStrings(content::WebUIDataSource* source) {
        IDS_SHORTCUT_CUSTOMIZATION_ICON_LABEL_BROWSER_REFRESH},
       {"iconLabelBrowserSearch",
        IDS_SHORTCUT_CUSTOMIZATION_ICON_LABEL_BROWSER_SEARCH},
+      {"iconLabelCameraAccessToggle",
+       IDS_SHORTCUT_CUSTOMIZATION_ICON_LABEL_CAMERA_ACCESS_TOGGLE},
       {"iconLabelContextMenu",
        IDS_SHORTCUT_CUSTOMIZATION_ICON_LABEL_CONTEXT_MENU},
+      {"iconLabelDoNotDisturb",
+       IDS_SHORTCUT_CUSTOMIZATION_ICON_LABEL_DO_NOT_DISTURB},
+      {"iconLabelEnableSelectToSpeak",
+       IDS_SHORTCUT_CUSTOMIZATION_ICON_LABEL_ENABLE_SELECT_TO_SPEAK},
       {"iconLabelEnableOrToggleDictation",
        IDS_SHORTCUT_CUSTOMIZATION_ICON_LABEL_ENABLE_OR_TOGGLE_DICTATION},
       {"iconLabelEmojiPicker",
@@ -230,6 +241,9 @@ void AddLocalizedStrings(content::WebUIDataSource* source) {
        IDS_SHORTCUT_CUSTOMIZATION_ICON_LABEL_VIEW_ALL_APPS},
       {"iconLabelZoomToggle",
        IDS_SHORTCUT_CUSTOMIZATION_ICON_LABEL_ZOOM_TOGGLE},
+      {"blockQuickInsertKey",
+       IDS_SHORTCUT_CUSTOMIZATION_BLOCK_QUICK_INSERT_KEY_ERROR_MESSAGE},
+      {"iconLabelQuickInsert", IDS_KEYBOARD_QUICK_INSERT_LABEL},
   };
 
   source->AddLocalizedStrings(kLocalizedStrings);
@@ -242,11 +256,10 @@ void AddFeatureFlags(content::WebUIDataSource* html_source) {
   html_source->AddBoolean(
       "isCustomizationAllowed",
       Shell::Get()->accelerator_prefs()->IsCustomizationAllowed());
+  html_source->AddBoolean("isJellyEnabledForShortcutCustomization", true);
   html_source->AddBoolean(
-      "isJellyEnabledForShortcutCustomization",
-      ash::features::IsJellyEnabledForShortcutCustomization());
-  html_source->AddBoolean("isInputDeviceSettingsSplitEnabled",
-                          features::IsInputDeviceSettingsSplitEnabled());
+      "hasFunctionKey",
+      Shell::Get()->keyboard_capability()->HasFunctionKeyOnAnyKeyboard());
 }
 
 }  // namespace
@@ -262,10 +275,7 @@ ShortcutCustomizationAppUI::ShortcutCustomizationAppUI(content::WebUI* web_ui)
 
   ash::EnableTrustedTypesCSP(source);
 
-  const auto resources =
-      base::make_span(kAshShortcutCustomizationAppResources,
-                      kAshShortcutCustomizationAppResourcesSize);
-  SetUpWebUIDataSource(source, resources,
+  SetUpWebUIDataSource(source, kAshShortcutCustomizationAppResources,
                        IDR_ASH_SHORTCUT_CUSTOMIZATION_APP_INDEX_HTML);
   AddLocalizedStrings(source);
 
@@ -284,7 +294,7 @@ ShortcutCustomizationAppUI::~ShortcutCustomizationAppUI() {
 }
 
 void ShortcutCustomizationAppUI::OnShortcutPolicyUpdated() {
-  base::Value::Dict update_data;
+  base::DictValue update_data;
   // Update 'isCustomizationAllowed" when policy changes.
   update_data.Set("isCustomizationAllowed",
                   Shell::Get()->accelerator_prefs()->IsCustomizationAllowed());
@@ -329,15 +339,6 @@ void ShortcutCustomizationAppUI::BindInterface(
   DCHECK(search_handler);
 
   search_handler->BindInterface(std::move(receiver));
-}
-
-void ShortcutCustomizationAppUI::BindInterface(
-    mojo::PendingReceiver<color_change_listener::mojom::PageHandler> receiver) {
-  // BindInterface should not be called unless jelly-colors and
-  // scanning-app-jelly flags are enabled.
-  CHECK(features::IsJellyEnabledForShortcutCustomization());
-  color_provider_handler_ = std::make_unique<ui::ColorChangeHandler>(
-      web_ui()->GetWebContents(), std::move(receiver));
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(ShortcutCustomizationAppUI)

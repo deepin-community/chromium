@@ -5,7 +5,7 @@
 #include "components/headless/select_file_dialog/headless_select_file_dialog.h"
 
 #include "base/memory/ptr_util.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace headless {
 
@@ -43,14 +43,13 @@ class HeadlessSelectFileDialog : public ui::SelectFileDialog {
                       int file_type_index,
                       const base::FilePath::StringType& default_extension,
                       gfx::NativeWindow owning_window,
-                      void* params,
                       const GURL* caller) override {
     if (callback_) {
       std::move(callback_).Run(type);
     }
 
     if (listener_) {
-      listener_->FileSelectionCanceled(/*params=*/nullptr);
+      listener_->FileSelectionCanceled();
     }
   }
 

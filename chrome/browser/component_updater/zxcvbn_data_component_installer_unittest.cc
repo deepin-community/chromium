@@ -5,12 +5,12 @@
 #include "chrome/browser/component_updater/zxcvbn_data_component_installer.h"
 
 #include <optional>
+#include <string_view>
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
@@ -47,7 +47,7 @@ zxcvbn::RankedDicts ParseRankedDictionaries(const base::FilePath& install_dir) {
   }
 
   // The contained StringPieces hold references to the strings in raw_dicts.
-  std::vector<std::vector<base::StringPiece>> dicts;
+  std::vector<std::vector<std::string_view>> dicts;
   for (const auto& raw_dict : raw_dicts) {
     dicts.push_back(base::SplitStringPiece(
         raw_dict, "\r\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY));
@@ -74,25 +74,26 @@ class ZxcvbnDataComponentInstallerPolicyTest : public ::testing::Test {
 
   const base::Version& version() const { return version_; }
 
-  const base::Value::Dict& manifest() const { return manifest_; }
+  const base::DictValue& manifest() const { return manifest_; }
 
   const base::FilePath& GetPath() const {
     return component_install_dir_.GetPath();
   }
 
-  void SetVersion(base::StringPiece version_str) {
+  void SetVersion(std::string_view version_str) {
     version_ = base::Version(version_str);
     manifest_.Set("version", version_str);
   }
 
   void CreateEmptyTextFiles() {
-    for (auto filename : ZxcvbnDataComponentInstallerPolicy::kFileNames) {
+    for (const auto& filename :
+         ZxcvbnDataComponentInstallerPolicy::kFileNames) {
       base::WriteFile(GetPath().Append(filename), "");
     }
   }
 
   void CreateInvalidCombinedBinaryFile() {
-    constexpr uint8_t marker[1] = {0x70};
+    static constexpr uint8_t marker[1] = {0x70};
     ASSERT_TRUE(base::WriteFile(
         GetPath().Append(
             ZxcvbnDataComponentInstallerPolicy::kCombinedRankedDictsFileName),
@@ -100,7 +101,7 @@ class ZxcvbnDataComponentInstallerPolicyTest : public ::testing::Test {
   }
 
   void CreateValidCombinedBinaryFile() {
-    constexpr uint8_t marker[1] = {0x80};
+    static constexpr uint8_t marker[1] = {0x80};
     ASSERT_TRUE(base::WriteFile(
         GetPath().Append(
             ZxcvbnDataComponentInstallerPolicy::kCombinedRankedDictsFileName),
@@ -164,7 +165,7 @@ class ZxcvbnDataComponentInstallerPolicyTest : public ::testing::Test {
  private:
   base::test::TaskEnvironment task_env_;
   base::Version version_;
-  base::Value::Dict manifest_;
+  base::DictValue manifest_;
   ZxcvbnDataComponentInstallerPolicy policy_;
   base::ScopedTempDir component_install_dir_;
 };
@@ -204,7 +205,7 @@ TEST_F(ZxcvbnDataComponentInstallerPolicyTest,
 TEST_F(ZxcvbnDataComponentInstallerPolicyTest,
        VerifyInstallationExpectsValidVersion) {
   // Verification fails for a missing version.
-  EXPECT_FALSE(policy().VerifyInstallation(base::Value::Dict(), GetPath()));
+  EXPECT_FALSE(policy().VerifyInstallation(base::DictValue(), GetPath()));
 
   // Verification fails for an invalid version.
   SetVersion("1.x2");

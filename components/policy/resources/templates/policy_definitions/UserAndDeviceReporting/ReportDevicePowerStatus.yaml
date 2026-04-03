@@ -4,6 +4,7 @@ desc: |-
   Setting the policy to Enabled has enrolled devices report hardware statistics and identifiers related to power.
 
         Setting the policy to Disabled or leaving it unset means enrolled devices don't report power statistics.
+default: false
 device_only: true
 example_value: false
 features:
@@ -14,7 +15,7 @@ items:
 - caption: Disable device power status reporting
   value: false
 owners:
-- cros-reporting-team@google.com
+- cros-reporting-eng@google.com
 - lbaraz@chromium.org
 - antrim@chromium.org
 schema:
@@ -24,3 +25,4 @@ supported_on:
 tags:
 - admin-sharing
 type: main
+generate_device_proto: False

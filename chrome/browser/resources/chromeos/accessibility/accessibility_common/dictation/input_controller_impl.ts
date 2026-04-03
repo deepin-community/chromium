@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {EditableNodeData, InputController} from '/common/action_fulfillment/input_controller.js';
+import type {EditableNodeData} from '/common/action_fulfillment/input_controller.js';
+import {InputController} from '/common/action_fulfillment/input_controller.js';
 import {EventHandler} from '/common/event_handler.js';
 import {TestImportManager} from '/common/testing/test_import_manager.js';
 
 import {EditingUtil} from './editing_util.js';
-import {FocusHandler} from './focus_handler.js';
+import type {FocusHandler} from './focus_handler.js';
 import {LocaleInfo} from './locale_info.js';
 
 type AutomationNode = chrome.automation.AutomationNode;
@@ -141,10 +142,10 @@ export class InputControllerImpl extends InputController {
    * Connect as the active Input Method Manager.
    * @param callback The callback to run after IME is connected.
    */
-  connect(callback: () => void): void {
+  async connect(callback: () => void): Promise<void> {
     this.onConnectCallback_ = callback;
-    chrome.inputMethodPrivate.getCurrentInputMethod(
-        (method: string) => this.saveCurrentInputMethodAndStart_(method));
+    const method = await chrome.inputMethodPrivate.getCurrentInputMethod();
+    this.saveCurrentInputMethodAndStart_(method);
   }
 
   /**
@@ -189,6 +190,23 @@ export class InputControllerImpl extends InputController {
       const {value, selStart} = data as EditableNodeData;
       text = EditingUtil.smartCapitalization(value, selStart, text);
       text = EditingUtil.smartSpacing(value, selStart, text);
+    }
+
+    if (!LocaleInfo.considerSpaces()) {
+      // Remove spaces from within `text`, if there are any. In practice, it's
+      // possible for the speech recognition service to return text with spaces
+      // within the utterance, even if that language doesn't separate words
+      // with spaces (e.g. Japanese).
+      let textNoSpaces = '';
+      for (const char of text) {
+        if (char === ' ') {
+          continue;
+        }
+
+        textNoSpaces += char;
+      }
+
+      text = textNoSpaces;
     }
 
     chrome.input.ime.commitText({contextID: this.activeImeContextId_, text});

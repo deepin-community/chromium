@@ -2,10 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <stdint.h>
+
 #include <utility>
 
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/threading/platform_thread.h"
@@ -15,6 +22,7 @@
 #include "content/browser/storage_partition_impl_map.h"            // nogncheck
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_content_client_initializer.h"
@@ -40,7 +48,8 @@ using url::Origin;
 namespace content {
 
 const size_t kNumRenderers = 2;
-const char* kCmdline[] = {"file_system_manager_mojolpm_fuzzer", nullptr};
+constexpr const char* kCmdline[] = {"file_system_manager_mojolpm_fuzzer",
+                                    nullptr};
 
 mojolpm::FuzzerEnvironment& GetEnvironment() {
   static base::NoDestructor<mojolpm::FuzzerEnvironmentWithTaskEnvironment>
@@ -88,8 +97,8 @@ class FileSystemManagerTestcase
   void TearDownOnIOThread(base::OnceClosure done_closure);
   void TearDownOnUIThread(base::OnceClosure done_closure);
 
-  // Used by AddFileSystemManager to create and bind FileSystemManagerImpl on the
-  // UI thread.
+  // Used by AddFileSystemManager to create and bind FileSystemManagerImpl on
+  // the UI thread.
   void AddFileSystemManagerImpl(
       uint32_t id,
       content::fuzzing::file_system_manager::proto::NewFileSystemManagerAction::
@@ -113,8 +122,8 @@ class FileSystemManagerTestcase
   scoped_refptr<storage::FileSystemContext> file_system_context_;
   scoped_refptr<ChromeBlobStorageContext> blob_storage_context_;
 
-  // Mapping from renderer id to FileSystemManagerImpl instances being fuzzed.
-  // Access only from UI thread.
+  // Array of FileSystemManagerImpl instances being fuzzed. Render process ID is
+  // equal to array index + 1. Access only from UI thread.
   std::unique_ptr<FileSystemManagerImpl>
       file_system_manager_impls_[kNumRenderers];
 };
@@ -166,9 +175,13 @@ void FileSystemManagerTestcase::SetUpOnUIThread(
   // other methods are expected to be called on the IO thread - see comments in
   // content/browser/file_system/file_system_manager_impl.h
   for (size_t i = 0; i < kNumRenderers; i++) {
+    // Process IDs must be greater than 0.
+    uint32_t process_id = i + 1;
+
+    p->Add(process_id, &browser_context_);
     file_system_manager_impls_[i] = std::make_unique<FileSystemManagerImpl>(
-        i, file_system_context_, blob_storage_context_);
-    p->Add(i, &browser_context_);
+        p->CreateHandle(process_id), file_system_context_,
+        blob_storage_context_);
   }
 
   GetFuzzerTaskRunner()->PostTask(FROM_HERE, std::move(done_closure));
@@ -196,8 +209,9 @@ void FileSystemManagerTestcase::TearDownOnUIThread(
     base::OnceClosure done_closure) {
   ChildProcessSecurityPolicyImpl* p =
       ChildProcessSecurityPolicyImpl::GetInstance();
-  for (size_t i = 0; i < kNumRenderers; i++) {
-    p->Remove(i);
+
+  for (size_t process_id = 1; process_id <= kNumRenderers; process_id++) {
+    p->Remove(process_id);
   }
 
   GetIOThreadTaskRunner({})->PostTask(
@@ -225,7 +239,7 @@ void FileSystemManagerTestcase::RunAction(const ProtoAction& action,
 
     case ProtoAction::kRunThread:
       if (action.run_thread().id() == ThreadId_UI) {
-        content::GetUIThreadTaskRunner({})->PostTaskAndReply(
+        GetUIThreadTaskRunner({})->PostTaskAndReply(
             FROM_HERE, base::DoNothing(), std::move(run_closure));
       } else if (action.run_thread().id() == ThreadId_IO) {
         content::GetIOThreadTaskRunner({})->PostTaskAndReply(
@@ -255,12 +269,9 @@ void FileSystemManagerTestcase::AddFileSystemManagerImpl(
         RenderProcessId render_process_id,
     const storage_key_proto::StorageKey& storage_key,
     mojo::PendingReceiver<::blink::mojom::FileSystemManager>&& receiver) {
-  size_t offset = render_process_id ==
-                          content::fuzzing::file_system_manager::proto::
-                              NewFileSystemManagerAction_RenderProcessId_ZERO
-                      ? 0
-                      : 1;
-  file_system_manager_impls_[offset]->BindReceiver(
+  // Int value of `RenderProcessId` corresponds to the index of that process in
+  // the array.
+  file_system_manager_impls_[static_cast<int>(render_process_id)]->BindReceiver(
       storage_key_proto::Convert(storage_key), std::move(receiver));
 }
 

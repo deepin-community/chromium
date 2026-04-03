@@ -6,7 +6,7 @@ import {AutomationUtil} from '/common/automation_util.js';
 import {ParagraphUtils} from '/common/paragraph_utils.js';
 import {TestImportManager} from '/common/testing/test_import_manager.js';
 
-import {PrefsManager} from './prefs_manager.js';
+import type {PrefsManager} from './prefs_manager.js';
 
 type AutomationNode = chrome.automation.AutomationNode;
 const EventType = chrome.automation.EventType;
@@ -320,8 +320,6 @@ export class UiManager {
    * Renders user selection rect, in the form of a focus ring.
    */
   setSelectionRect(rect: chrome.accessibilityPrivate.ScreenRect): void {
-    // TODO(crbug.com/1185238): Support showing two focus rings at once, in case
-    // a focus ring highlighting a node group is already present.
     this.setFocusRings_(
         [rect], false /* don't draw background */, false /* panelVisible */);
   }

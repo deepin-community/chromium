@@ -6,6 +6,10 @@
 
 // ProgramGL.cpp: Implements the class methods for ProgramGL.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/gl/ProgramGL.h"
 
 #include "common/WorkerThread.h"
@@ -89,6 +93,17 @@ std::string GetTransformFeedbackVaryingMappedName(const gl::SharedCompiledShader
     return std::string();
 }
 
+std::string TrimArraySuffix(const char *inputName, size_t nameLen)
+{
+    std::string name(inputName, nameLen);
+    size_t open = name.find_last_of('[');
+    if (open != std::string::npos && name.back() == ']')
+    {
+        name = name.substr(0, open);
+    }
+    return name;
+}
+
 }  // anonymous namespace
 
 class ProgramGL::LinkTaskGL final : public LinkTask
@@ -98,37 +113,50 @@ class ProgramGL::LinkTaskGL final : public LinkTask
                bool hasNativeParallelCompile,
                const FunctionsGL *functions,
                const gl::Extensions &extensions,
-               GLuint programID)
+               GLuint programID,
+               bool passthroughShaders)
         : mProgram(program),
           mHasNativeParallelCompile(hasNativeParallelCompile),
           mFunctions(functions),
           mExtensions(extensions),
-          mProgramID(programID)
+          mProgramID(programID),
+          mPassthroughShaders(passthroughShaders)
     {}
     ~LinkTaskGL() override = default;
 
-    std::vector<std::shared_ptr<LinkSubTask>> link(const gl::ProgramLinkedResources &resources,
-                                                   const gl::ProgramMergedVaryings &mergedVaryings,
-                                                   bool *areSubTasksOptionalOut) override
+    void link(const gl::ProgramLinkedResources &resources,
+              const gl::ProgramMergedVaryings &mergedVaryings,
+              std::vector<std::shared_ptr<LinkSubTask>> *linkSubTasksOut,
+              std::vector<std::shared_ptr<LinkSubTask>> *postLinkSubTasksOut) override
     {
-        mProgram->linkJobImpl(mExtensions);
+        ASSERT(linkSubTasksOut && linkSubTasksOut->empty());
+        ASSERT(postLinkSubTasksOut && postLinkSubTasksOut->empty());
+
+        if (mPassthroughShaders)
+        {
+            mResult = mProgram->passthroughLinkJobImpl(mExtensions);
+        }
+        else
+        {
+            mResult = mProgram->linkJobImpl(mExtensions);
+        }
 
         // If there is no native parallel compile, do the post-link right away.
-        if (!mHasNativeParallelCompile)
+        if (mResult == angle::Result::Continue && !mHasNativeParallelCompile)
         {
             mResult = mProgram->postLinkJobImpl(resources);
         }
 
         // See comment on mResources
         mResources = &resources;
-        return {};
+        return;
     }
 
     angle::Result getResult(const gl::Context *context, gl::InfoLog &infoLog) override
     {
         ANGLE_TRACE_EVENT0("gpu.angle", "LinkTaskGL::getResult");
 
-        if (mHasNativeParallelCompile)
+        if (mResult == angle::Result::Continue && mHasNativeParallelCompile)
         {
             mResult = mProgram->postLinkJobImpl(*mResources);
         }
@@ -152,6 +180,7 @@ class ProgramGL::LinkTaskGL final : public LinkTask
     const FunctionsGL *mFunctions;
     const gl::Extensions &mExtensions;
     const GLuint mProgramID;
+    const bool mPassthroughShaders;
 
     angle::Result mResult = angle::Result::Continue;
 
@@ -197,11 +226,11 @@ angle::Result ProgramGL::load(const gl::Context *context,
     // Read the binary format, size and blob
     GLenum binaryFormat   = stream->readInt<GLenum>();
     GLint binaryLength    = stream->readInt<GLint>();
-    const uint8_t *binary = stream->data() + stream->offset();
+    angle::Span<const uint8_t> binary = stream->remainingSpan().first(binaryLength);
     stream->skip(binaryLength);
 
     // Load the binary
-    mFunctions->programBinary(mProgramID, binaryFormat, binary, binaryLength);
+    mFunctions->programBinary(mProgramID, binaryFormat, binary.data(), binaryLength);
 
     // Verify that the program linked.  Ensure failure if program binary is intentionally corrupted,
     // even if the corruption didn't really cause a failure.
@@ -215,7 +244,7 @@ angle::Result ProgramGL::load(const gl::Context *context,
     executableGL->reapplyUBOBindings();
 
     *loadTaskOut = {};
-    *resultOut   = egl::CacheGetResult::GetSuccess;
+    *resultOut   = egl::CacheGetResult::Success;
 
     return angle::Result::Continue;
 }
@@ -241,7 +270,7 @@ void ProgramGL::save(const gl::Context *context, gl::BinaryOutputStream *stream)
         ++binary[0];
     }
 
-    stream->writeBytes(binary.data(), binaryLength);
+    stream->writeBytes(angle::as_byte_span(binary).first(binaryLength));
 
     // Re-apply UBO bindings to work around driver bugs.
     if (features.reapplyUBOBindingsAfterUsingBinaryProgram.enabled)
@@ -279,74 +308,140 @@ void ProgramGL::prepareForLink(const gl::ShaderMap<ShaderImpl *> &shaders)
     }
 }
 
+void ProgramGL::prepareForPassthroughLink(
+    gl::ShaderMap<gl::SharedCompiledShaderState> *outAttachedShaders)
+{
+    ASSERT(mAttachedShaders[gl::ShaderType::Compute] == 0);
+
+    attachShaders();
+    applyTransformFeedbackState();
+
+    // Bind only the attribute locations that the frontend requested. Automatically assigned
+    // locations are queried after link and given back to the frontend.
+    for (const auto &attributeBinding : mState.getAttributeBindings())
+    {
+        mFunctions->bindAttribLocation(mProgramID, attributeBinding.second,
+                                       attributeBinding.first.c_str());
+    }
+
+    mFunctions->linkProgram(mProgramID);
+
+    if (!checkLinkStatus())
+    {
+        return;
+    }
+
+    // Gather the uniforms from the linked program. We can't distinguish if they are from the
+    // fragment or vertex shader so set all the uniforms on both stages.
+    std::vector<sh::ShaderVariable> uniforms;
+    {
+        GLint numUniforms = 0;
+        mFunctions->getProgramiv(mProgramID, GL_ACTIVE_UNIFORMS, &numUniforms);
+
+        GLint activeUniformMaxLength = 0;
+        mFunctions->getProgramiv(mProgramID, GL_ACTIVE_UNIFORM_MAX_LENGTH, &activeUniformMaxLength);
+
+        std::vector<char> uniformNameBuf(activeUniformMaxLength, 0);
+        for (GLint uniformIndex = 0; uniformIndex < numUniforms; uniformIndex++)
+        {
+            GLsizei length = 0;
+            GLint size     = 0;
+            GLenum type    = GL_NONE;
+            mFunctions->getActiveUniform(mProgramID, uniformIndex, activeUniformMaxLength, &length,
+                                         &size, &type, uniformNameBuf.data());
+
+            std::string name = TrimArraySuffix(uniformNameBuf.data(), length);
+
+            sh::ShaderVariable uniform(type);
+            uniform.precision  = GL_HIGH_FLOAT;
+            uniform.name       = name;
+            uniform.mappedName = std::move(name);
+            uniform.staticUse  = true;
+            uniform.active     = true;
+            if (size > 1)
+            {
+                uniform.setArraySize(size);
+            }
+
+            uniforms.push_back(std::move(uniform));
+        }
+    }
+
+    // Reflect the attribute information from the linked program.
+    {
+        gl::SharedCompiledShaderState originalVertexState =
+            mState.getAttachedShader(gl::ShaderType::Vertex);
+        gl::SharedCompiledShaderState vertexState =
+            std::make_shared<gl::CompiledShaderState>(*originalVertexState.get());
+
+        GLint numAttributes = 0;
+        mFunctions->getProgramiv(mProgramID, GL_ACTIVE_ATTRIBUTES, &numAttributes);
+
+        GLint activeAttributeMaxLength = 0;
+        mFunctions->getProgramiv(mProgramID, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH,
+                                 &activeAttributeMaxLength);
+
+        std::vector<char> attribNameBuf(activeAttributeMaxLength, 0);
+        for (GLint attribIndex = 0; attribIndex < numAttributes; attribIndex++)
+        {
+            GLsizei length = 0;
+            GLint size     = 0;
+            GLenum type    = GL_NONE;
+            mFunctions->getActiveAttrib(mProgramID, attribIndex, activeAttributeMaxLength, &length,
+                                        &size, &type, attribNameBuf.data());
+
+            sh::ShaderVariable attribute(type);
+            attribute.precision  = GL_HIGH_FLOAT;
+            attribute.name       = std::string(attribNameBuf.data(), length);
+            attribute.mappedName = attribute.name;
+            attribute.staticUse  = true;
+            attribute.active     = true;
+            attribute.location   = mFunctions->getAttribLocation(mProgramID, attribNameBuf.data());
+            attribute.hasImplicitLocation = false;
+
+            vertexState->allAttributes.push_back(attribute);
+            vertexState->activeAttributes.push_back(std::move(attribute));
+        }
+
+        vertexState->uniforms = uniforms;
+
+        (*outAttachedShaders)[gl::ShaderType::Vertex] = vertexState;
+    }
+
+    // Outputs are not reflectable from a linked program with only ES2/3.
+    {
+        gl::SharedCompiledShaderState originalFragmentState =
+            mState.getAttachedShader(gl::ShaderType::Fragment);
+        gl::SharedCompiledShaderState fragmentState =
+            std::make_shared<gl::CompiledShaderState>(*originalFragmentState.get());
+
+        fragmentState->uniforms = std::move(uniforms);
+
+        (*outAttachedShaders)[gl::ShaderType::Fragment] = fragmentState;
+    }
+}
+
 angle::Result ProgramGL::link(const gl::Context *context, std::shared_ptr<LinkTask> *linkTaskOut)
 {
     ANGLE_TRACE_EVENT0("gpu.angle", "ProgramGL::link");
 
     *linkTaskOut = std::make_shared<LinkTaskGL>(this, mRenderer->hasNativeParallelCompile(),
-                                                mFunctions, context->getExtensions(), mProgramID);
+                                                mFunctions, context->getExtensions(), mProgramID,
+                                                context->getState().usesPassthroughShaders());
 
     return angle::Result::Continue;
 }
 
-void ProgramGL::linkJobImpl(const gl::Extensions &extensions)
+angle::Result ProgramGL::linkJobImpl(const gl::Extensions &extensions)
 {
     ANGLE_TRACE_EVENT0("gpu.angle", "ProgramGL::linkJobImpl");
     const gl::ProgramExecutable &executable = mState.getExecutable();
-    ProgramExecutableGL *executableGL       = getExecutable();
 
-    if (mAttachedShaders[gl::ShaderType::Compute] != 0)
+    attachShaders();
+
+    if (mAttachedShaders[gl::ShaderType::Compute] == 0)
     {
-        mFunctions->attachShader(mProgramID, mAttachedShaders[gl::ShaderType::Compute]);
-    }
-    else
-    {
-        // Set the transform feedback state
-        std::vector<std::string> transformFeedbackVaryingMappedNames;
-        const gl::ShaderType tfShaderType =
-            executable.hasLinkedShaderStage(gl::ShaderType::Geometry) ? gl::ShaderType::Geometry
-                                                                      : gl::ShaderType::Vertex;
-        const gl::SharedCompiledShaderState &tfShaderState = mState.getAttachedShader(tfShaderType);
-        for (const auto &tfVarying : mState.getTransformFeedbackVaryingNames())
-        {
-            std::string tfVaryingMappedName =
-                GetTransformFeedbackVaryingMappedName(tfShaderState, tfVarying);
-            transformFeedbackVaryingMappedNames.push_back(tfVaryingMappedName);
-        }
-
-        if (transformFeedbackVaryingMappedNames.empty())
-        {
-            // Only clear the transform feedback state if transform feedback varyings have already
-            // been set.
-            if (executableGL->mHasAppliedTransformFeedbackVaryings)
-            {
-                ASSERT(mFunctions->transformFeedbackVaryings);
-                mFunctions->transformFeedbackVaryings(mProgramID, 0, nullptr,
-                                                      mState.getTransformFeedbackBufferMode());
-                executableGL->mHasAppliedTransformFeedbackVaryings = false;
-            }
-        }
-        else
-        {
-            ASSERT(mFunctions->transformFeedbackVaryings);
-            std::vector<const GLchar *> transformFeedbackVaryings;
-            for (const auto &varying : transformFeedbackVaryingMappedNames)
-            {
-                transformFeedbackVaryings.push_back(varying.c_str());
-            }
-            mFunctions->transformFeedbackVaryings(
-                mProgramID, static_cast<GLsizei>(transformFeedbackVaryingMappedNames.size()),
-                &transformFeedbackVaryings[0], mState.getTransformFeedbackBufferMode());
-            executableGL->mHasAppliedTransformFeedbackVaryings = true;
-        }
-
-        for (const gl::ShaderType shaderType : gl::kAllGraphicsShaderTypes)
-        {
-            if (mAttachedShaders[shaderType] != 0)
-            {
-                mFunctions->attachShader(mProgramID, mAttachedShaders[shaderType]);
-            }
-        }
+        applyTransformFeedbackState();
 
         // Bind attribute locations to match the GL layer.
         for (const gl::ProgramInput &attribute : executable.getProgramInputs())
@@ -370,13 +465,15 @@ void ProgramGL::linkJobImpl(const gl::Extensions &extensions)
             if (fragmentShader && fragmentShader->shaderVersion == 100 &&
                 mFunctions->standard == STANDARD_GL_DESKTOP)
             {
+                ASSERT(!mFeatures.avoidBindFragDataLocation.enabled);
+
                 const auto &shaderOutputs = fragmentShader->activeOutputVariables;
                 for (const auto &output : shaderOutputs)
                 {
-                    // TODO(http://anglebug.com/1085) This could be cleaner if the transformed names
-                    // would be set correctly in ShaderVariable::mappedName. This would require some
-                    // refactoring in the translator. Adding a mapped name dictionary for builtins
-                    // into the symbol table would be one fairly clean way to do it.
+                    // TODO(http://anglebug.com/40644593) This could be cleaner if the transformed
+                    // names would be set correctly in ShaderVariable::mappedName. This would
+                    // require some refactoring in the translator. Adding a mapped name dictionary
+                    // for builtins into the symbol table would be one fairly clean way to do it.
                     if (output.name == "gl_SecondaryFragColorEXT")
                     {
                         mFunctions->bindFragDataLocationIndexed(mProgramID, 0, 0,
@@ -414,59 +511,64 @@ void ProgramGL::linkJobImpl(const gl::Extensions &extensions)
             else if (fragmentShader && fragmentShader->shaderVersion >= 300)
             {
                 // ESSL 3.00 and up.
-                const auto &outputLocations          = executable.getOutputLocations();
-                const auto &secondaryOutputLocations = executable.getSecondaryOutputLocations();
-                for (size_t outputLocationIndex = 0u; outputLocationIndex < outputLocations.size();
-                     ++outputLocationIndex)
-                {
-                    const gl::VariableLocation &outputLocation =
-                        outputLocations[outputLocationIndex];
-                    if (outputLocation.arrayIndex == 0 && outputLocation.used() &&
-                        !outputLocation.ignored)
-                    {
-                        const gl::ProgramOutput &outputVar =
-                            executable.getOutputVariables()[outputLocation.index];
-                        if (outputVar.pod.location == -1 || outputVar.pod.index == -1)
+                auto assignOutputLocations =
+                    [this](const std::vector<gl::VariableLocation> &locations) {
+                        const gl::ProgramExecutable &executable = mState.getExecutable();
+                        for (size_t outputLocationIndex = 0u;
+                             outputLocationIndex < locations.size(); ++outputLocationIndex)
                         {
-                            // We only need to assign the location and index via the API in case the
-                            // variable doesn't have a shader-assigned location and index. If a
-                            // variable doesn't have its location set in the shader it doesn't have
-                            // the index set either.
-                            ASSERT(outputVar.pod.index == -1);
+                            const gl::VariableLocation &outputLocation =
+                                locations[outputLocationIndex];
+                            if (outputLocation.arrayIndex != 0 || !outputLocation.used() ||
+                                outputLocation.ignored)
+                            {
+                                continue;
+                            }
+
+                            const gl::ProgramOutput &outputVar =
+                                executable.getOutputVariables()[outputLocation.index];
+                            if (outputVar.pod.hasShaderAssignedLocation)
+                            {
+                                continue;
+                            }
+
+                            // We only need to assign the location and index via the API if the
+                            // variable doesn't have a shader-assigned location.
+                            ASSERT(outputVar.pod.index != -1);
+
+                            // Avoid calling glBindFragDataLocationIndexed unless the application
+                            // did it explicitly to avoid Qualcomm driver bugs with multiple render
+                            // targets.
+                            if (mFeatures.avoidBindFragDataLocation.enabled &&
+                                !outputVar.pod.hasApiAssignedLocation)
+                            {
+                                continue;
+                            }
+
                             mFunctions->bindFragDataLocationIndexed(
-                                mProgramID, static_cast<int>(outputLocationIndex), 0,
-                                outputVar.mappedName.c_str());
+                                mProgramID, static_cast<int>(outputLocationIndex),
+                                outputVar.pod.index, outputVar.mappedName.c_str());
                         }
-                    }
-                }
-                for (size_t outputLocationIndex = 0u;
-                     outputLocationIndex < secondaryOutputLocations.size(); ++outputLocationIndex)
+                    };
+
+                ANGLE_GL_CLEAR_ERRORS(mFunctions);
+
+                assignOutputLocations(executable.getOutputLocations());
+                assignOutputLocations(executable.getSecondaryOutputLocations());
+
+                GLenum error = mFunctions->getError();
+                if (error != GL_NO_ERROR)
                 {
-                    const gl::VariableLocation &outputLocation =
-                        secondaryOutputLocations[outputLocationIndex];
-                    if (outputLocation.arrayIndex == 0 && outputLocation.used() &&
-                        !outputLocation.ignored)
-                    {
-                        const gl::ProgramOutput &outputVar =
-                            executable.getOutputVariables()[outputLocation.index];
-                        if (outputVar.pod.location == -1 || outputVar.pod.index == -1)
-                        {
-                            // We only need to assign the location and index via the API in case the
-                            // variable doesn't have a shader-assigned location and index.  If a
-                            // variable doesn't have its location set in the shader it doesn't have
-                            // the index set either.
-                            ASSERT(outputVar.pod.index == -1);
-                            mFunctions->bindFragDataLocationIndexed(
-                                mProgramID, static_cast<int>(outputLocationIndex), 1,
-                                outputVar.mappedName.c_str());
-                        }
-                    }
+                    executable.getInfoLog()
+                        << "Failed to bind frag data locations. See http://anglebug.com/42267082";
+                    return angle::Result::Stop;
                 }
             }
         }
     }
 
     mFunctions->linkProgram(mProgramID);
+    return angle::Result::Continue;
 }
 
 angle::Result ProgramGL::postLinkJobImpl(const gl::ProgramLinkedResources &resources)
@@ -503,6 +605,74 @@ angle::Result ProgramGL::postLinkJobImpl(const gl::ProgramLinkedResources &resou
     getExecutable()->postLink(mFunctions, mStateManager, mFeatures, mProgramID);
 
     return angle::Result::Continue;
+}
+
+angle::Result ProgramGL::passthroughLinkJobImpl(const gl::Extensions &extensions)
+{
+    ASSERT(!extensions.blendFuncExtendedEXT);
+    return angle::Result::Continue;
+}
+
+void ProgramGL::attachShaders()
+{
+    if (mAttachedShaders[gl::ShaderType::Compute] != 0)
+    {
+        mFunctions->attachShader(mProgramID, mAttachedShaders[gl::ShaderType::Compute]);
+    }
+    else
+    {
+        for (const gl::ShaderType shaderType : gl::kAllGraphicsShaderTypes)
+        {
+            if (mAttachedShaders[shaderType] != 0)
+            {
+                mFunctions->attachShader(mProgramID, mAttachedShaders[shaderType]);
+            }
+        }
+    }
+}
+
+void ProgramGL::applyTransformFeedbackState()
+{
+    const gl::ProgramExecutable &executable = mState.getExecutable();
+    ProgramExecutableGL *executableGL       = getExecutable();
+
+    std::vector<std::string> transformFeedbackVaryingMappedNames;
+    const gl::ShaderType tfShaderType = executable.hasLinkedShaderStage(gl::ShaderType::Geometry)
+                                            ? gl::ShaderType::Geometry
+                                            : gl::ShaderType::Vertex;
+    const gl::SharedCompiledShaderState &tfShaderState = mState.getAttachedShader(tfShaderType);
+    for (const auto &tfVarying : mState.getTransformFeedbackVaryingNames())
+    {
+        std::string tfVaryingMappedName =
+            GetTransformFeedbackVaryingMappedName(tfShaderState, tfVarying);
+        transformFeedbackVaryingMappedNames.push_back(tfVaryingMappedName);
+    }
+
+    if (transformFeedbackVaryingMappedNames.empty())
+    {
+        // Only clear the transform feedback state if transform feedback varyings have already
+        // been set.
+        if (executableGL->mHasAppliedTransformFeedbackVaryings)
+        {
+            ASSERT(mFunctions->transformFeedbackVaryings);
+            mFunctions->transformFeedbackVaryings(mProgramID, 0, nullptr,
+                                                  mState.getTransformFeedbackBufferMode());
+            executableGL->mHasAppliedTransformFeedbackVaryings = false;
+        }
+    }
+    else
+    {
+        ASSERT(mFunctions->transformFeedbackVaryings);
+        std::vector<const GLchar *> transformFeedbackVaryings;
+        for (const auto &varying : transformFeedbackVaryingMappedNames)
+        {
+            transformFeedbackVaryings.push_back(varying.c_str());
+        }
+        mFunctions->transformFeedbackVaryings(
+            mProgramID, static_cast<GLsizei>(transformFeedbackVaryingMappedNames.size()),
+            &transformFeedbackVaryings[0], mState.getTransformFeedbackBufferMode());
+        executableGL->mHasAppliedTransformFeedbackVaryings = true;
+    }
 }
 
 GLboolean ProgramGL::validate(const gl::Caps & /*caps*/)
@@ -755,6 +925,13 @@ void ProgramGL::linkResources(const gl::ProgramLinkedResources &resources)
     std::map<int, unsigned int> sizeMap;
     getAtomicCounterBufferSizeMap(&sizeMap);
     resources.atomicCounterBufferLinker.link(sizeMap);
+
+    const gl::SharedCompiledShaderState &fragmentShader =
+        mState.getAttachedShader(gl::ShaderType::Fragment);
+    if (fragmentShader != nullptr)
+    {
+        resources.pixelLocalStorageLinker.link(fragmentShader->pixelLocalStorageFormats);
+    }
 }
 
 void ProgramGL::onUniformBlockBinding(gl::UniformBlockIndex uniformBlockIndex)

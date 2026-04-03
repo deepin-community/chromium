@@ -6,20 +6,23 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/format_macros.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/task_environment.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/history_url_provider.h"
 #include "components/omnibox/browser/mock_autocomplete_provider_client.h"
 #include "components/omnibox/browser/test_scheme_classifier.h"
-#include "components/search_engines/template_url_service.h"
+#include "components/search_engines/search_engines_test_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "third_party/metrics_proto/omnibox_focus_type.pb.h"
@@ -47,7 +50,7 @@ const char16_t kSubpageThree[] = u"three";
 
 class FakeAutocompleteProviderClient : public MockAutocompleteProviderClient {
  public:
-  FakeAutocompleteProviderClient() {}
+  FakeAutocompleteProviderClient() = default;
   FakeAutocompleteProviderClient(const FakeAutocompleteProviderClient&) =
       delete;
   FakeAutocompleteProviderClient& operator=(
@@ -87,28 +90,28 @@ class FakeAutocompleteProviderClient : public MockAutocompleteProviderClient {
 }  // namespace
 
 class BuiltinProviderTest : public testing::Test {
+ public:
+  BuiltinProviderTest(const BuiltinProviderTest&) = delete;
+  BuiltinProviderTest& operator=(const BuiltinProviderTest&) = delete;
+
  protected:
   struct TestData {
     const std::u16string input;
     const std::vector<GURL> output;
   };
 
-  BuiltinProviderTest() : provider_(nullptr) {}
-  ~BuiltinProviderTest() override {}
-  BuiltinProviderTest(const BuiltinProviderTest&) = delete;
-  BuiltinProviderTest& operator=(const BuiltinProviderTest&) = delete;
+  BuiltinProviderTest() = default;
+  ~BuiltinProviderTest() override = default;
 
   void SetUp() override {
     client_ = std::make_unique<FakeAutocompleteProviderClient>();
-    client_->set_template_url_service(
-        std::make_unique<TemplateURLService>(nullptr, 0));
     provider_ = new BuiltinProvider(client_.get());
   }
   void TearDown() override { provider_ = nullptr; }
 
-  void RunTest(const TestData cases[], size_t num_cases) {
+  void RunTest(base::span<const TestData> cases) {
     ACMatches matches;
-    for (size_t i = 0; i < num_cases; ++i) {
+    for (size_t i = 0; i < cases.size(); ++i) {
       SCOPED_TRACE(base::StringPrintf(
           "case %" PRIuS ": %s", i, base::UTF16ToUTF8(cases[i].input).c_str()));
       AutocompleteInput input(cases[i].input, metrics::OmniboxEventProto::OTHER,
@@ -124,6 +127,8 @@ class BuiltinProviderTest : public testing::Test {
     }
   }
 
+  base::test::TaskEnvironment task_environment_;
+  search_engines::SearchEnginesTestEnvironment search_engines_test_environment_;
   std::unique_ptr<FakeAutocompleteProviderClient> client_;
   scoped_refptr<BuiltinProvider> provider_;
 };
@@ -171,7 +176,7 @@ TEST_F(BuiltinProviderTest, TypingScheme) {
       {u"ChRoMe://", {kURL1, kURL2, kURL3}},
   };
 
-  RunTest(typing_scheme_cases, std::size(typing_scheme_cases));
+  RunTest(typing_scheme_cases);
 }
 
 TEST_F(BuiltinProviderTest, NonEmbedderURLs) {
@@ -189,7 +194,7 @@ TEST_F(BuiltinProviderTest, NonEmbedderURLs) {
       {u"scheme://host/path?query#ref", {}},
   };
 
-  RunTest(test_cases, std::size(test_cases));
+  RunTest(test_cases);
 }
 
 TEST_F(BuiltinProviderTest, EmbedderProvidedURLs) {
@@ -238,7 +243,7 @@ TEST_F(BuiltinProviderTest, EmbedderProvidedURLs) {
       {kEmbedder + kSep2 + kHostM3, {kURLM2, kURLM3}},
   };
 
-  RunTest(test_cases, std::size(test_cases));
+  RunTest(test_cases);
 }
 
 TEST_F(BuiltinProviderTest, AboutBlank) {
@@ -296,7 +301,7 @@ TEST_F(BuiltinProviderTest, AboutBlank) {
       {kAboutBlank.substr(0, 9) + u"#r", {}},
   };
 
-  RunTest(about_blank_cases, std::size(about_blank_cases));
+  RunTest(about_blank_cases);
 }
 
 TEST_F(BuiltinProviderTest, DoesNotSupportMatchesOnFocus) {
@@ -329,7 +334,7 @@ TEST_F(BuiltinProviderTest, Subpages) {
       {kSubpage + kPageTwo, {kURLTwo}},
   };
 
-  RunTest(settings_subpage_cases, std::size(settings_subpage_cases));
+  RunTest(settings_subpage_cases);
 }
 
 TEST_F(BuiltinProviderTest, Inlining) {
@@ -347,7 +352,8 @@ TEST_F(BuiltinProviderTest, Inlining) {
   struct InliningTestData {
     const std::u16string input;
     const std::u16string expected_inline_autocompletion;
-  } cases[] = {
+  };
+  auto cases = std::to_array<InliningTestData>({
       // Typing along "about://media" should not yield an inline autocompletion
       // until the completion is unique.  We don't bother checking every single
       // character before the first "m" is typed.
@@ -424,7 +430,7 @@ TEST_F(BuiltinProviderTest, Inlining) {
       {kAbout + kSep + kHostB.substr(0, 2) + u"/", std::u16string()},
       {kAbout + kSep + kHostB.substr(0, 2) + u"a", std::u16string()},
       {kAbout + kSep + kHostB.substr(0, 2) + u"+", std::u16string()},
-  };
+  });
 
   ACMatches matches;
   for (size_t i = 0; i < std::size(cases); ++i) {

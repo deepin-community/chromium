@@ -44,7 +44,7 @@ void SpellCheckClient::CheckSpelling(
     const blink::WebString& text,
     size_t& misspelled_offset,
     size_t& misspelled_length,
-    blink::WebVector<blink::WebString>* optional_suggestions) {
+    std::vector<blink::WebString>* optional_suggestions) {
   if (!enabled_) {
     misspelled_offset = 0;
     misspelled_length = 0;
@@ -57,6 +57,9 @@ void SpellCheckClient::CheckSpelling(
 
 void SpellCheckClient::RequestCheckingOfText(
     const blink::WebString& text,
+    const std::vector<blink::WebSpellingMarker>& spelling_markers,
+    blink::WebTextCheckClient::ShouldForceRefreshTextCheckService
+        should_force_refresh,
     std::unique_ptr<blink::WebTextCheckingCompletion> completion) {
   if (!enabled_ || text.IsEmpty()) {
     if (completion) {
@@ -74,7 +77,9 @@ void SpellCheckClient::RequestCheckingOfText(
 
   last_requested_text_checking_completion_ = std::move(completion);
   last_requested_text_check_string_ = text;
-  if (spell_checker_.HasInCache(text)) {
+  if (should_force_refresh ==
+          blink::WebTextCheckClient::ShouldForceRefreshTextCheckService::kNo &&
+      spell_checker_.HasInCache(text)) {
     FinishLastTextCheck();
   } else {
     frame_->GetTaskRunner(blink::TaskType::kInternalTest)
@@ -99,7 +104,7 @@ void SpellCheckClient::FinishLastTextCheck() {
                                     &misspelled_position, &misspelled_length);
       if (!misspelled_length)
         break;
-      blink::WebVector<blink::WebString> suggestions;
+      std::vector<blink::WebString> suggestions;
       spell_checker_.FillSuggestionList(
           blink::WebString::FromUTF16(
               text.substr(misspelled_position, misspelled_length)),

@@ -438,14 +438,14 @@ TEST_F(LayoutBoxTest, LocationContainerOfSVG) {
 
   // The foreign object's location is not affected by SVGRoot's writing-mode.
   EXPECT_FALSE(foreign->LocationContainer());
-  EXPECT_EQ(PhysicalSize(100, 80), foreign->Size());
+  EXPECT_EQ(PhysicalSize(100, 80), foreign->StitchedSize());
   EXPECT_EQ(PhysicalOffset(44, 77), foreign->PhysicalLocation());
   // The writing mode style should be still be inherited.
   EXPECT_TRUE(foreign->HasFlippedBlocksWritingMode());
 
   // The child of the foreign object is affected by writing-mode.
   EXPECT_EQ(foreign, child->LocationContainer());
-  EXPECT_EQ(PhysicalSize(33, 55), child->Size());
+  EXPECT_EQ(PhysicalSize(33, 55), child->StitchedSize());
   EXPECT_EQ(PhysicalOffset(67, 0), child->PhysicalLocation());
   EXPECT_TRUE(child->HasFlippedBlocksWritingMode());
 }
@@ -874,7 +874,7 @@ TEST_F(LayoutBoxTest, DelayedInvalidationLayoutViewScrolled) {
   EXPECT_TRUE(layout_view->MayNeedPaintInvalidationAnimatedBackgroundImage());
 
   // Scroll down at least by a viewport height.
-  GetDocument().domWindow()->scrollBy(0, 10000);
+  GetDocument().domWindow()->scrollByForTesting(0, 10000);
   GetDocument().View()->UpdateAllLifecyclePhasesForTest();
 
   EXPECT_FALSE(layout_view->ShouldDelayFullPaintInvalidation());
@@ -1436,7 +1436,6 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsNonScrollable) {
   // 50 = border_left, 20 = border_top
   // 445 = padding_left + (width - scrollbar_width) + padding_right
   // 324 = padding_top + (height - scrollbar_height) + padding_bottom
-  EXPECT_EQ(PhysicalRect(50, 20, 445, 324), normal->NoOverflowRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), normal->PhysicalPaddingBoxRect());
   // 90 = border_left + padding_left, 30 = border_top + padding_top
   // 385 = width - scrollbar_width, 284 = height - scrollbar_height
@@ -1448,7 +1447,6 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsNonScrollable) {
   EXPECT_ZERO_SCROLL(vlr);
   EXPECT_EQ(gfx::Vector2d(), vlr->OriginAdjustmentForScrollbars());
   EXPECT_EQ(PhysicalRect(0, 0, 540, 400), vlr->PhysicalBorderBoxRect());
-  EXPECT_EQ(PhysicalRect(50, 20, 445, 324), vlr->NoOverflowRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), vlr->PhysicalPaddingBoxRect());
   EXPECT_EQ(PhysicalRect(90, 30, 385, 284), vlr->PhysicalContentBoxRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), vlr->ScrollableOverflowRect());
@@ -1458,7 +1456,6 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsNonScrollable) {
   EXPECT_ZERO_SCROLL(vrl);
   EXPECT_EQ(gfx::Vector2d(), vrl->OriginAdjustmentForScrollbars());
   EXPECT_EQ(PhysicalRect(0, 0, 540, 400), vrl->PhysicalBorderBoxRect());
-  EXPECT_EQ(PhysicalRect(50, 20, 445, 324), vrl->NoOverflowRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), vrl->PhysicalPaddingBoxRect());
   EXPECT_EQ(PhysicalRect(90, 30, 385, 284), vrl->PhysicalContentBoxRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), vrl->ScrollableOverflowRect());
@@ -1469,7 +1466,6 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsNonScrollable) {
   // right by 15px.
   EXPECT_EQ(gfx::Vector2d(15, 0), rtl->OriginAdjustmentForScrollbars());
   EXPECT_EQ(PhysicalRect(0, 0, 540, 400), rtl->PhysicalBorderBoxRect());
-  EXPECT_EQ(PhysicalRect(65, 20, 445, 324), rtl->NoOverflowRect());
   EXPECT_EQ(PhysicalRect(65, 20, 445, 324), rtl->PhysicalPaddingBoxRect());
   EXPECT_EQ(PhysicalRect(105, 30, 385, 284), rtl->PhysicalContentBoxRect());
   EXPECT_EQ(PhysicalRect(65, 20, 445, 324), rtl->ScrollableOverflowRect());
@@ -1479,7 +1475,6 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsNonScrollable) {
   EXPECT_ZERO_SCROLL(rtl_vlr);
   EXPECT_EQ(gfx::Vector2d(), rtl_vlr->OriginAdjustmentForScrollbars());
   EXPECT_EQ(PhysicalRect(0, 0, 540, 400), rtl_vlr->PhysicalBorderBoxRect());
-  EXPECT_EQ(PhysicalRect(50, 20, 445, 324), rtl_vlr->NoOverflowRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), rtl_vlr->PhysicalPaddingBoxRect());
   EXPECT_EQ(PhysicalRect(90, 30, 385, 284), rtl_vlr->PhysicalContentBoxRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), rtl_vlr->ScrollableOverflowRect());
@@ -1489,7 +1484,6 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsNonScrollable) {
   EXPECT_ZERO_SCROLL(rtl_vrl);
   EXPECT_EQ(gfx::Vector2d(), rtl_vrl->OriginAdjustmentForScrollbars());
   EXPECT_EQ(PhysicalRect(0, 0, 540, 400), rtl_vrl->PhysicalBorderBoxRect());
-  EXPECT_EQ(PhysicalRect(50, 20, 445, 324), rtl_vrl->NoOverflowRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), rtl_vrl->PhysicalPaddingBoxRect());
   EXPECT_EQ(PhysicalRect(90, 30, 385, 284), rtl_vrl->PhysicalContentBoxRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), rtl_vrl->ScrollableOverflowRect());
@@ -1533,7 +1527,6 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsScrollable) {
   EXPECT_EQ(gfx::PointF(), scrollable_area->ScrollPosition());
   // These are the same as in the NonScrollable test.
   EXPECT_EQ(PhysicalRect(0, 0, 540, 400), normal->PhysicalBorderBoxRect());
-  EXPECT_EQ(PhysicalRect(50, 20, 445, 324), normal->NoOverflowRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), normal->PhysicalPaddingBoxRect());
   EXPECT_EQ(PhysicalRect(90, 30, 385, 284), normal->PhysicalContentBoxRect());
 
@@ -1550,7 +1543,6 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsScrollable) {
   EXPECT_EQ(gfx::PointF(), scrollable_area->ScrollPosition());
   // These are the same as in the NonScrollable test.
   EXPECT_EQ(PhysicalRect(0, 0, 540, 400), vlr->PhysicalBorderBoxRect());
-  EXPECT_EQ(PhysicalRect(50, 20, 445, 324), vlr->NoOverflowRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), vlr->PhysicalPaddingBoxRect());
   EXPECT_EQ(PhysicalRect(90, 30, 385, 284), vlr->PhysicalContentBoxRect());
 
@@ -1567,7 +1559,6 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsScrollable) {
   EXPECT_EQ(gfx::PointF(1615, 0), scrollable_area->ScrollPosition());
   // These are the same as in the NonScrollable test.
   EXPECT_EQ(PhysicalRect(0, 0, 540, 400), vrl->PhysicalBorderBoxRect());
-  EXPECT_EQ(PhysicalRect(50, 20, 445, 324), vrl->NoOverflowRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), vrl->PhysicalPaddingBoxRect());
   EXPECT_EQ(PhysicalRect(90, 30, 385, 284), vrl->PhysicalContentBoxRect());
 
@@ -1583,7 +1574,6 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsScrollable) {
   EXPECT_EQ(gfx::PointF(1615, 0), scrollable_area->ScrollPosition());
   // These are the same as in the NonScrollable test.
   EXPECT_EQ(PhysicalRect(0, 0, 540, 400), rtl->PhysicalBorderBoxRect());
-  EXPECT_EQ(PhysicalRect(65, 20, 445, 324), rtl->NoOverflowRect());
   EXPECT_EQ(PhysicalRect(65, 20, 445, 324), rtl->PhysicalPaddingBoxRect());
   EXPECT_EQ(PhysicalRect(105, 30, 385, 284), rtl->PhysicalContentBoxRect());
 
@@ -1600,7 +1590,6 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsScrollable) {
   EXPECT_EQ(gfx::PointF(0, 716), scrollable_area->ScrollPosition());
   // These are the same as in the NonScrollable test.
   EXPECT_EQ(PhysicalRect(0, 0, 540, 400), rtl_vlr->PhysicalBorderBoxRect());
-  EXPECT_EQ(PhysicalRect(50, 20, 445, 324), rtl_vlr->NoOverflowRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), rtl_vlr->PhysicalPaddingBoxRect());
   EXPECT_EQ(PhysicalRect(90, 30, 385, 284), rtl_vlr->PhysicalContentBoxRect());
 
@@ -1620,7 +1609,6 @@ TEST_F(LayoutBoxTest, GeometriesWithScrollbarsScrollable) {
   EXPECT_EQ(gfx::Vector2d(), rtl_vrl->OriginAdjustmentForScrollbars());
   // These are the same as in the NonScrollable test.
   EXPECT_EQ(PhysicalRect(0, 0, 540, 400), rtl_vrl->PhysicalBorderBoxRect());
-  EXPECT_EQ(PhysicalRect(50, 20, 445, 324), rtl_vrl->NoOverflowRect());
   EXPECT_EQ(PhysicalRect(50, 20, 445, 324), rtl_vrl->PhysicalPaddingBoxRect());
   EXPECT_EQ(PhysicalRect(90, 30, 385, 284), rtl_vrl->PhysicalContentBoxRect());
 }
@@ -1694,7 +1682,7 @@ TEST_F(LayoutBoxTest, HasReflection) {
   check_has_layer_and_reflection("svg-text", false);
 }
 
-TEST_F(LayoutBoxTest, PhysicalVisualOverflowRectIncludingFilters) {
+TEST_F(LayoutBoxTest, VisualOverflowRectIncludingFilters) {
   SetBodyInnerHTML(R"HTML(
     <div style="zoom: 2">
       <div id="target" style="filter: blur(2px); width: 100px; height: 100px">
@@ -1807,8 +1795,6 @@ TEST_F(LayoutBoxTest, HitTestResizerStackedWithTextAreaChild) {
 }
 
 TEST_F(LayoutBoxTest, AnchorInFragmentedContainingBlock) {
-  ScopedCSSAnchorPositioningForTest enabled(true);
-
   // Create a 3-column multicol layout with a fragmented containing block,
   // and a fragmented anchor element that starts from the second fragment.
   InsertStyleElement(R"CSS(
@@ -1853,8 +1839,6 @@ TEST_F(LayoutBoxTest, AnchorInFragmentedContainingBlock) {
 }
 
 TEST_F(LayoutBoxTest, AnchorInInlineContainingBlock) {
-  ScopedCSSAnchorPositioningForTest enabled(true);
-
   SetBodyInnerHTML(R"HTML(
     <div>
       <span id="not-implicit-anchor">not implicit anchor</span>
@@ -1875,8 +1859,6 @@ TEST_F(LayoutBoxTest, AnchorInInlineContainingBlock) {
 }
 
 TEST_F(LayoutBoxTest, AnchorInInlineContainingBlockWithNameConflicts) {
-  ScopedCSSAnchorPositioningForTest enabled(true);
-
   SetBodyInnerHTML(R"HTML(
     <div>
       <span style="position: relative">
@@ -1964,7 +1946,7 @@ TEST_F(LayoutBoxTest, IsUserScrollableLayoutView) {
   EXPECT_FALSE(GetLayoutView().IsUserScrollable());
 }
 
-TEST_F(LayoutBoxTest, LogicalTopLogicalLeft) {
+TEST_F(LayoutBoxTest, LogicalRectInContainer) {
   SetBodyInnerHTML(R"HTML("
     <style>
     .c { contain: layout; }
@@ -1986,40 +1968,58 @@ TEST_F(LayoutBoxTest, LogicalTopLogicalLeft) {
   constexpr LayoutUnit kTopMargin(3);
   constexpr LayoutUnit kRightMargin(5);
   constexpr LayoutUnit kLeftMargin(11);
+  constexpr LayoutUnit kSize(1);
 
   // Target DIVs are placed at (3, 11) from its container top-left.
-  LayoutBox* target = GetLayoutBoxByElementId("htb-htb");
-  EXPECT_EQ(kTopMargin, target->LogicalTop());
-  EXPECT_EQ(kLeftMargin, target->LogicalLeft());
-  target = GetLayoutBoxByElementId("htb-vrl");
-  EXPECT_EQ(kLeftMargin, target->LogicalTop());
-  EXPECT_EQ(kTopMargin, target->LogicalLeft());
-  target = GetLayoutBoxByElementId("htb-vlr");
-  EXPECT_EQ(kLeftMargin, target->LogicalTop());
-  EXPECT_EQ(kTopMargin, target->LogicalLeft());
+  EXPECT_EQ(LogicalRect(kLeftMargin, kTopMargin, kSize, kSize),
+            GetLayoutBoxByElementId("htb-htb")->LogicalRectInContainer());
+  EXPECT_EQ(LogicalRect(kLeftMargin, kTopMargin, kSize, kSize),
+            GetLayoutBoxByElementId("htb-vrl")->LogicalRectInContainer());
+  EXPECT_EQ(LogicalRect(kLeftMargin, kTopMargin, kSize, kSize),
+            GetLayoutBoxByElementId("htb-vlr")->LogicalRectInContainer());
 
-  // Container's writing-mode doesn't matter if it is vertical-lr.
-  target = GetLayoutBoxByElementId("vlr-htb");
-  EXPECT_EQ(kTopMargin, target->LogicalTop());
-  EXPECT_EQ(kLeftMargin, target->LogicalLeft());
-  target = GetLayoutBoxByElementId("vlr-vrl");
-  EXPECT_EQ(kLeftMargin, target->LogicalTop());
-  EXPECT_EQ(kTopMargin, target->LogicalLeft());
-  target = GetLayoutBoxByElementId("vlr-vlr");
-  EXPECT_EQ(kLeftMargin, target->LogicalTop());
-  EXPECT_EQ(kTopMargin, target->LogicalLeft());
+  // Target DIVs are placed at (3, 11) in the vertical-lr container too.
+  EXPECT_EQ(LogicalRect(kTopMargin, kLeftMargin, kSize, kSize),
+            GetLayoutBoxByElementId("vlr-htb")->LogicalRectInContainer());
+  EXPECT_EQ(LogicalRect(kTopMargin, kLeftMargin, kSize, kSize),
+            GetLayoutBoxByElementId("vlr-vrl")->LogicalRectInContainer());
+  EXPECT_EQ(LogicalRect(kTopMargin, kLeftMargin, kSize, kSize),
+            GetLayoutBoxByElementId("vlr-vlr")->LogicalRectInContainer());
 
-  // In a vertical-rl container, LogicalTop() and LogicalLeft() return
-  // flipped-block offsets.
-  target = GetLayoutBoxByElementId("vrl-htb");
-  EXPECT_EQ(kTopMargin, target->LogicalTop());
-  EXPECT_EQ(kRightMargin, target->LogicalLeft());
-  target = GetLayoutBoxByElementId("vrl-vrl");
-  EXPECT_EQ(kRightMargin, target->LogicalTop());
-  EXPECT_EQ(kTopMargin, target->LogicalLeft());
-  target = GetLayoutBoxByElementId("vrl-vlr");
-  EXPECT_EQ(kRightMargin, target->LogicalTop());
-  EXPECT_EQ(kTopMargin, target->LogicalLeft());
+  // In the vertical-rl container.
+  EXPECT_EQ(LogicalRect(kTopMargin, kRightMargin, kSize, kSize),
+            GetLayoutBoxByElementId("vrl-htb")->LogicalRectInContainer());
+  EXPECT_EQ(LogicalRect(kTopMargin, kRightMargin, kSize, kSize),
+            GetLayoutBoxByElementId("vrl-vrl")->LogicalRectInContainer());
+  EXPECT_EQ(LogicalRect(kTopMargin, kRightMargin, kSize, kSize),
+            GetLayoutBoxByElementId("vrl-vlr")->LogicalRectInContainer());
+}
+
+TEST_F(LayoutBoxTest,
+       VisualOverflowRectWithEmptyInlineChildAndReflectAndOutline) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      body {
+        margin: 0;
+      }
+      #box {
+        -webkit-box-reflect: above;
+        contain: size;
+        outline: 6px solid black;
+      }
+      #span {
+        outline: 2px solid black;
+      }
+    </style>
+    <div id="box">
+      <span id="span"></span>
+    </div>
+  )HTML");
+  const auto* box = GetLayoutBoxByElementId("box");
+  const auto* span = To<LayoutInline>(GetLayoutObjectByElementId("span"));
+  EXPECT_EQ(PhysicalRect(-6, -6, 812, 12), box->SelfVisualOverflowRect());
+  EXPECT_EQ(PhysicalRect(-6, -6, 812, 12), box->VisualOverflowRect());
+  EXPECT_EQ(PhysicalRect(-2, -2, 4, 4), span->VisualOverflowRect());
 }
 
 class LayoutBoxBackgroundPaintLocationTest : public RenderingTest,
@@ -2164,6 +2164,22 @@ TEST_P(LayoutBoxBackgroundPaintLocationTest, BorderBoxClipColorSolidBorder) {
   // border is opaque so it completely covers the background outside of the
   // padding-box.
   EXPECT_EQ(kBackgroundPaintInContentsSpace, ScrollerBackgroundPaintLocation());
+}
+
+TEST_P(LayoutBoxBackgroundPaintLocationTest,
+       BorderBoxClipColorSolidBorderWithBorderShape) {
+  SetBodyInnerHTML(kCommonStyle + R"HTML(
+    <div id='scroller'
+         style='background: white border-box; border: 10px solid black;
+                border-shape: circle();'>
+      <div class='spacer'></div>
+    </div>
+  )HTML");
+
+  // Border-shape clips are computed in border box space, so the background
+  // must stay in that space as well.
+  EXPECT_EQ(kBackgroundPaintInBorderBoxSpace,
+            ScrollerBackgroundPaintLocation());
 }
 
 TEST_P(LayoutBoxBackgroundPaintLocationTest,

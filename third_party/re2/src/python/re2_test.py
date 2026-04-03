@@ -315,6 +315,12 @@ class Re2RegexpTest(ReRegexpTest):
     re2.purge()
     self.assertEqual(re2._Regexp._make.cache_info().currsize, 0)
 
+  def test_options(self):
+    opt = re2.Options()
+    opt.case_sensitive = False
+    r = re2.compile('test', opt)
+    self.assertIsNotNone(r.search('TEST'))
+    self.assertIsNotNone(re2.search(r, 'TEST'))
 
 class Re2EscapeTest(parameterized.TestCase):
   """Contains tests that apply to the re2 module only.
@@ -476,6 +482,13 @@ class FilterTest(absltest.TestCase):
     self.assertEqual('Goodbye, \\w+\\.', f.re(2).pattern)
     # Verify whether the underlying RE2 object is usable.
     self.assertEqual(0, f.re(2).groups)
+
+  def test_issue_484(self):
+    # Previously, the shim would dereference a null pointer and crash.
+    f = re2.Filter()
+    with self.assertRaisesRegex(re2.error,
+                                r'Match\(\) called before compiling'):
+      f.Match('')
 
 
 if __name__ == '__main__':

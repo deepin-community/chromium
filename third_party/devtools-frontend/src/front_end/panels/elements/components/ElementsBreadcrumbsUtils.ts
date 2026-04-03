@@ -1,10 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import * as i18n from '../../../core/i18n/i18n.js';
 
-import {type DOMNode} from './Helper.js';
+import type {DOMNode} from './Helper.js';
 
 const UIStrings = {
   /**
@@ -12,7 +12,7 @@ const UIStrings = {
    * is a text node, meaning it contains text only and no other HTML elements. Should be translatd.
    */
   text: '(text)',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/elements/components/ElementsBreadcrumbsUtils.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 

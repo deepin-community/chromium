@@ -29,12 +29,23 @@
 #define SRC_DAWN_COMMON_WGSLFEATUREMAPPING_H_
 
 #define DAWN_FOREACH_WGSL_FEATURE(X)                                               \
-    X(kUndefined, Undefined)                                                       \
     /* ------------------------------------------------------------------------ */ \
     X(kPacked4X8IntegerDotProduct, Packed4x8IntegerDotProduct)                     \
     X(kPointerCompositeAccess, PointerCompositeAccess)                             \
     X(kReadonlyAndReadwriteStorageTextures, ReadonlyAndReadwriteStorageTextures)   \
     X(kUnrestrictedPointerParameters, UnrestrictedPointerParameters)               \
+    X(kSizedBindingArray, SizedBindingArray)                                       \
+    X(kTexelBuffers, TexelBuffers)                                                 \
+    X(kFragmentDepth, FragmentDepth)                                               \
+    X(kImmediateAddressSpace, ImmediateAddressSpace)                               \
+    X(kChromiumPrint, ChromiumPrint)                                               \
+    X(kUniformBufferStandardLayout, UniformBufferStandardLayout)                   \
+    X(kSubgroupId, SubgroupId)                                                     \
+    X(kSubgroupUniformity, SubgroupUniformity)                                     \
+    X(kTextureAndSamplerLet, TextureAndSamplerLet)                                 \
+    X(kBufferView, BufferView)                                                     \
+    X(kFilteringParameters, FilteringParameters)                                   \
+    X(kSwizzleAssignment, SwizzleAssignment)                                       \
     /* ----------------- entries below are only for testing  ------------------ */ \
     X(kChromiumTestingUnimplemented, ChromiumTestingUnimplemented)                 \
     X(kChromiumTestingUnsafeExperimental, ChromiumTestingUnsafeExperimental)       \

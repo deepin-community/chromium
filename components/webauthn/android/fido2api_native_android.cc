@@ -4,15 +4,20 @@
 
 #include <jni.h>
 
+#include <cstdint>
+#include <optional>
+#include <utility>
+#include <vector>
+
 #include "base/android/jni_array.h"
-#include "components/cbor/values.h"
-#include "components/webauthn/android/jni_headers/Fido2Api_jni.h"
+#include "base/android/scoped_java_ref.h"
 #include "device/fido/attestation_object.h"
-#include "device/fido/authenticator_data.h"
-#include "device/fido/fido_constants.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/webauthn/android/jni_headers/Fido2Api_jni.h"
 
 using base::android::JavaByteArrayToByteVector;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 using base::android::ToJavaByteArray;
 
@@ -24,17 +29,16 @@ namespace webauthn {
 //
 // [1] https://www.w3.org/TR/webauthn/#attestation-object
 // [2] https://w3c.github.io/webauthn/#sctn-public-key-easy
-static jboolean JNI_Fido2Api_ParseAttestationObject(
+static bool JNI_Fido2Api_ParseAttestationObject(
     JNIEnv* env,
-    const base::android::JavaParamRef<jbyteArray>& jattestation_object_bytes,
-    jboolean attestation_acceptable,
-    const base::android::JavaParamRef<jobject>& out_result) {
+    const base::android::JavaRef<jbyteArray>& jattestation_object_bytes,
+    const base::android::JavaRef<jobject>& out_result) {
   std::vector<uint8_t> attestation_object_bytes;
   JavaByteArrayToByteVector(env, jattestation_object_bytes,
                             &attestation_object_bytes);
   std::optional<device::AttestationObject::ResponseFields> fields =
       device::AttestationObject::ParseForResponseFields(
-          std::move(attestation_object_bytes), attestation_acceptable);
+          std::move(attestation_object_bytes), /*attestation_acceptable=*/true);
   if (!fields) {
     return false;
   }
@@ -53,3 +57,5 @@ static jboolean JNI_Fido2Api_ParseAttestationObject(
 }
 
 }  // namespace webauthn
+
+DEFINE_JNI(Fido2Api)

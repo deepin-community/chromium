@@ -7,11 +7,11 @@
 #include <optional>
 
 #include "third_party/blink/renderer/core/layout/constraint_space.h"
-#include "third_party/blink/renderer/core/layout/geometry/physical_offset.h"
-#include "third_party/blink/renderer/core/layout/geometry/physical_size.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/geometry/length_functions.h"
+#include "third_party/blink/renderer/platform/geometry/physical_offset.h"
+#include "third_party/blink/renderer/platform/geometry/physical_size.h"
 
 namespace blink {
 
@@ -30,19 +30,20 @@ LogicalOffset ComputeRelativeOffset(
                          LayoutUnit size) -> std::optional<LayoutUnit> {
     if (length.IsAuto())
       return std::nullopt;
-    if (length.IsPercentOrCalc() && size == kIndefiniteSize)
+    if (length.HasPercent() && size == kIndefiniteSize) {
       return std::nullopt;
+    }
     return MinimumValueForLength(length, size);
   };
 
   std::optional<LayoutUnit> left =
-      ResolveInset(child_style.UsedLeft(), physical_size.width);
+      ResolveInset(child_style.Left(), physical_size.width);
   std::optional<LayoutUnit> right =
-      ResolveInset(child_style.UsedRight(), physical_size.width);
+      ResolveInset(child_style.Right(), physical_size.width);
   std::optional<LayoutUnit> top =
-      ResolveInset(child_style.UsedTop(), physical_size.height);
+      ResolveInset(child_style.Top(), physical_size.height);
   std::optional<LayoutUnit> bottom =
-      ResolveInset(child_style.UsedBottom(), physical_size.height);
+      ResolveInset(child_style.Bottom(), physical_size.height);
 
   // Common case optimization.
   if (!left && !right && !top && !bottom)
@@ -85,7 +86,6 @@ LogicalOffset ComputeRelativeOffset(
                                                  : LogicalOffset(*top, *left);
     default:
       NOTREACHED();
-      return LogicalOffset();
   }
 }
 

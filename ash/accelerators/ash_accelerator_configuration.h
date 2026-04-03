@@ -13,11 +13,11 @@
 #include "ash/public/cpp/accelerator_configuration.h"
 #include "ash/public/cpp/accelerators.h"
 #include "ash/public/cpp/session/session_observer.h"
-#include "ash/public/mojom/accelerator_configuration.mojom-shared.h"
 #include "ash/public/mojom/accelerator_configuration.mojom.h"
 #include "ash/public/mojom/accelerator_info.mojom.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/types/optional_ref.h"
@@ -76,6 +76,8 @@ class ASH_EXPORT AshAcceleratorConfiguration : public AcceleratorConfiguration,
   bool IsMutable() const override;
   // Return true if the accelerator is deprecated.
   bool IsDeprecated(const ui::Accelerator& accelerator) const override;
+  // Return true if the accelerator data does not allow users to modify.
+  bool IsAcceleratorLocked(const ui::Accelerator& accelerator) const override;
   mojom::AcceleratorConfigResult AddUserAccelerator(
       AcceleratorActionId action_id,
       const ui::Accelerator& accelerator) override;
@@ -131,6 +133,8 @@ class ASH_EXPORT AshAcceleratorConfiguration : public AcceleratorConfiguration,
   // Returns true if the `id` is a valid ash accelerator ID.
   bool IsValid(uint32_t id) const;
 
+  bool HasCustomAccelerators();
+
  private:
   friend class AshAcceleratorConfigurationTest;
 
@@ -185,14 +189,15 @@ class ASH_EXPORT AshAcceleratorConfiguration : public AcceleratorConfiguration,
 
   // A local copy of the pref overrides, allows modifying the overrides before
   // updating the override pref.
-  base::Value::Dict accelerator_overrides_;
+  base::DictValue accelerator_overrides_;
 
   std::vector<ui::Accelerator> accelerators_;
 
   AcceleratorActionMap deprecated_accelerators_to_id_;
 
   // A map of accelerator ID's that are deprecated.
-  std::map<AcceleratorActionId, const DeprecatedAcceleratorData*>
+  std::map<AcceleratorActionId,
+           raw_ptr<const DeprecatedAcceleratorData, CtnExperimental>>
       actions_with_deprecations_;
 
   // One accelerator action ID can potentially have multiple accelerators
@@ -209,12 +214,17 @@ class ASH_EXPORT AshAcceleratorConfiguration : public AcceleratorConfiguration,
   // data is set.
   ActionIdToAcceleratorsMap default_id_to_accelerators_cache_;
   AcceleratorActionMap default_accelerators_to_id_cache_;
-  std::map<AcceleratorActionId, const DeprecatedAcceleratorData*>
+  std::map<AcceleratorActionId,
+           raw_ptr<const DeprecatedAcceleratorData, CtnExperimental>>
       default_actions_with_deprecations_cache_;
   AcceleratorActionMap default_deprecated_accelerators_to_id_cache_;
 
   // List of all observer clients.
   base::ObserverList<Observer> observer_list_;
+
+  // Set of locked accelerators key combinations from an action while the
+  // action itself may not be locked.
+  base::flat_set<ui::Accelerator> locked_accelerator_set_;
 };
 
 }  // namespace ash

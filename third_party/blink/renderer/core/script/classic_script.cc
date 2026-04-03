@@ -96,10 +96,10 @@ ClassicScript* ClassicScript::CreateFromResource(
     ScriptResource* resource,
     const ScriptFetchOptions& fetch_options) {
   // Check if we can use the script streamer.
-  ResourceScriptStreamer* streamer;
+  ScriptStreamer* streamer;
   ScriptStreamer::NotStreamingReason not_streamed_reason;
-  std::tie(streamer, not_streamed_reason) = ResourceScriptStreamer::TakeFrom(
-      resource, mojom::blink::ScriptType::kClassic);
+  std::tie(streamer, not_streamed_reason) =
+      ScriptStreamer::TakeFrom(resource, mojom::blink::ScriptType::kClassic);
   DCHECK_EQ(!streamer, not_streamed_reason !=
                            ScriptStreamer::NotStreamingReason::kInvalid);
 
@@ -116,7 +116,7 @@ ClassicScript* ClassicScript::CreateFromResource(
   // We lose the encoding information from ScriptResource.
   // Not sure if that matters.
   return MakeGarbageCollected<ClassicScript>(
-      resource->SourceText(), source_url, base_url, fetch_options,
+      resource->GetSourceText(), source_url, base_url, fetch_options,
       ScriptSourceLocationType::kExternalFile,
       resource->GetResponse().IsCorsSameOrigin()
           ? SanitizeScriptErrors::kDoNotSanitize
@@ -137,12 +137,14 @@ ClassicScript* ClassicScript::CreateUnspecifiedScript(
 
 ClassicScript* ClassicScript::CreateUnspecifiedScript(
     const WebScriptSource& source,
-    SanitizeScriptErrors sanitize_script_errors) {
+    SanitizeScriptErrors sanitize_script_errors,
+    ScriptStreamer* streamer) {
   return MakeGarbageCollected<ClassicScript>(
       ParkableString(String(source.code).Impl()),
       StripFragmentIdentifier(source.url), KURL() /* base_url */,
       ScriptFetchOptions(), ScriptSourceLocationType::kUnknown,
-      sanitize_script_errors);
+      sanitize_script_errors, nullptr, TextPosition::MinimumPosition(),
+      streamer, ScriptStreamer::NotStreamingReason::kInlineScript);
 }
 
 ClassicScript::ClassicScript(
@@ -200,8 +202,7 @@ v8::ScriptOrigin ClassicScript::CreateScriptOrigin(v8::Isolate* isolate) const {
   // start at 1 only for historic reasons now. I guess we could change it, but
   // there's not much benefit doing so.
   return v8::ScriptOrigin(
-      isolate, V8String(isolate, SourceUrl()),
-      StartPosition().line_.ZeroBasedInt(),
+      V8String(isolate, SourceUrl()), StartPosition().line_.ZeroBasedInt(),
       StartPosition().column_.ZeroBasedInt(),
       GetSanitizeScriptErrors() == SanitizeScriptErrors::kDoNotSanitize, -1,
       source_map_url_or_null,
@@ -215,8 +216,11 @@ ScriptEvaluationResult ClassicScript::RunScriptOnScriptStateAndReturnValue(
     ScriptState* script_state,
     ExecuteScriptPolicy policy,
     V8ScriptRunner::RethrowErrorsOption rethrow_errors) {
+  if (!script_state) {
+    return ScriptEvaluationResult::FromClassicNotRun();
+  }
   bool sanitize = GetSanitizeScriptErrors() == SanitizeScriptErrors::kSanitize;
-  probe::EvaluateScriptBlock probe_scope(script_state,
+  probe::EvaluateScriptBlock probe_scope(*script_state,
                                          sanitize ? SourceUrl() : BaseUrl(),
                                          /*module=*/false, sanitize);
 

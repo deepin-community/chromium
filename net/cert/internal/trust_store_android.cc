@@ -10,6 +10,7 @@
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "net/android/network_library.h"
+#include "net/cert/internal/platform_trust_store.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util.h"
 #include "third_party/boringssl/src/pki/cert_errors.h"
@@ -50,6 +51,11 @@ class TrustStoreAndroid::Impl
     return trust_store_.GetTrust(cert);
   }
 
+  std::shared_ptr<const bssl::MTCAnchor> GetTrustedMTCIssuerOf(
+      const bssl::ParsedCertificate* cert) {
+    return trust_store_.GetTrustedMTCIssuerOf(cert);
+  }
+
   int generation() { return generation_; }
 
  private:
@@ -62,9 +68,14 @@ class TrustStoreAndroid::Impl
   bssl::TrustStoreInMemory trust_store_;
 };
 
-TrustStoreAndroid::TrustStoreAndroid() = default;
+TrustStoreAndroid::TrustStoreAndroid() {
+  // It's okay for ObserveCertDBChanges to be called on a different sequence
+  // than the object was constructed on.
+  DETACH_FROM_SEQUENCE(certdb_observer_sequence_checker_);
+}
 
 TrustStoreAndroid::~TrustStoreAndroid() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(certdb_observer_sequence_checker_);
   if (is_observing_certdb_changes_) {
     CertDatabase::GetInstance()->RemoveObserver(this);
   }
@@ -78,6 +89,7 @@ void TrustStoreAndroid::Initialize() {
 // rather than in the constructor to avoid having to add a TaskEnvironment to
 // every unit test that uses TrustStoreAndroid.
 void TrustStoreAndroid::ObserveCertDBChanges() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(certdb_observer_sequence_checker_);
   if (!is_observing_certdb_changes_) {
     is_observing_certdb_changes_ = true;
     CertDatabase::GetInstance()->AddObserver(this);
@@ -117,6 +129,17 @@ void TrustStoreAndroid::SyncGetIssuersOf(const bssl::ParsedCertificate* cert,
 bssl::CertificateTrust TrustStoreAndroid::GetTrust(
     const bssl::ParsedCertificate* cert) {
   return MaybeInitializeAndGetImpl()->GetTrust(cert);
+}
+
+std::shared_ptr<const bssl::MTCAnchor> TrustStoreAndroid::GetTrustedMTCIssuerOf(
+    const bssl::ParsedCertificate* cert) {
+  return MaybeInitializeAndGetImpl()->GetTrustedMTCIssuerOf(cert);
+}
+
+std::vector<net::PlatformTrustStore::CertWithTrust>
+TrustStoreAndroid::GetAllUserAddedCerts() {
+  // TODO(crbug.com/40928765): implement this.
+  return {};
 }
 
 }  // namespace net

@@ -4,6 +4,7 @@
 
 #include "ash/quick_pair/scanning/fast_pair/fast_pair_scanner_impl.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "ash/constants/ash_features.h"
@@ -17,13 +18,11 @@
 #include "ash/quick_pair/fast_pair_handshake/fast_pair_gatt_service_client.h"
 #include "ash/quick_pair/fast_pair_handshake/fast_pair_handshake.h"
 #include "ash/quick_pair/fast_pair_handshake/fast_pair_handshake_lookup.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
@@ -63,11 +62,11 @@ class FastPairScannerObserver
 
   void OnDeviceLost(device::BluetoothDevice* device) override {
     device_addreses_.erase(
-        base::ranges::find(device_addreses_, device->GetAddress()));
+        std::ranges::find(device_addreses_, device->GetAddress()));
   }
 
   bool DoesDeviceListContainTestDevice(const std::string& address) {
-    return base::Contains(device_addreses_, address);
+    return std::ranges::contains(device_addreses_, address);
   }
 
   int on_device_found_count() { return on_device_found_count_; }

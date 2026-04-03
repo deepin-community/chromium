@@ -27,7 +27,7 @@ LanguagePackEventRouter::LanguagePackEventRouter(
   obs_.Observe(language_packs::LanguagePackManager::GetInstance());
 }
 
-LanguagePackEventRouter::~LanguagePackEventRouter() {}
+LanguagePackEventRouter::~LanguagePackEventRouter() = default;
 
 void LanguagePackEventRouter::OnPackStateChanged(
     const language_packs::PackResult& pack_result) {
@@ -47,7 +47,7 @@ void LanguagePackEventRouter::OnPackStateChanged(
           ->GetInputMethodIdsFromHandwritingLanguage(pack_result.language_code);
   change.status = LanguagePackResultToExtensionStatus(pack_result);
 
-  base::Value::List args = OnLanguagePackStatusChanged::Create(change);
+  base::ListValue args = OnLanguagePackStatusChanged::Create(change);
 
   auto event = std::make_unique<extensions::Event>(
       extensions::events::INPUT_METHOD_PRIVATE_ON_LANGUAGE_PACK_STATUS_CHANGED,

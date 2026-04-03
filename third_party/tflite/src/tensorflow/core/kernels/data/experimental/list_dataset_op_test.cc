@@ -32,7 +32,8 @@ class ListDatasetOpTest : public DatasetOpsTestBase {};
 
 class ListDatasetParams : public DatasetParams {
  public:
-  ListDatasetParams(std::vector<std::vector<Tensor>> elements, string node_name)
+  ListDatasetParams(std::vector<std::vector<Tensor>> elements,
+                    std::string node_name)
       : DatasetParams(ListOutputTypes(elements), ListOutputShapes(elements),
                       std::move(node_name)) {
     input_types_.reserve(elements.size() * elements.front().size());
@@ -47,7 +48,8 @@ class ListDatasetParams : public DatasetParams {
 
   std::vector<Tensor> GetInputTensors() const override { return tensors_; }
 
-  Status GetInputNames(std::vector<string>* input_names) const override {
+  absl::Status GetInputNames(
+      std::vector<std::string>* input_names) const override {
     input_names->reserve(tensors_.size());
     for (int i = 0; i < tensors_.size(); ++i) {
       input_names->emplace_back(absl::StrCat("tensors_", i));
@@ -55,7 +57,7 @@ class ListDatasetParams : public DatasetParams {
     return absl::OkStatus();
   }
 
-  Status GetAttributes(AttributeVector* attr_vector) const override {
+  absl::Status GetAttributes(AttributeVector* attr_vector) const override {
     *attr_vector = {{"Tinput_types", input_types_},
                     {"output_types", output_dtypes_},
                     {"output_shapes", output_shapes_},
@@ -63,7 +65,7 @@ class ListDatasetParams : public DatasetParams {
     return absl::OkStatus();
   }
 
-  string dataset_type() const override { return "List"; }
+  std::string dataset_type() const override { return "List"; }
 
   int64_t num_elements() const {
     return tensors_.size() / num_tensors_per_element();
@@ -96,7 +98,7 @@ class ListDatasetParams : public DatasetParams {
       const std::vector<std::vector<Tensor>>& input_elements) {
     std::vector<PartialTensorShape> output_shapes;
     for (const auto& tensor : input_elements.front()) {
-      gtl::InlinedVector<int64_t, 4> partial_dim_sizes;
+      absl::InlinedVector<int64_t, 4UL> partial_dim_sizes;
       partial_dim_sizes.reserve(tensor.dims());
       for (int i = 0; i < tensor.dims(); ++i) {
         partial_dim_sizes.push_back(tensor.dim_size(i));
@@ -115,18 +117,18 @@ ListDatasetParams PlainListDatasetParams() {
   std::vector<std::vector<Tensor>> elements = {
       {CreateTensor<int64_t>(TensorShape({}), {1}),
        CreateTensor<int64_t>(TensorShape({2}), {1, 2}),
-       CreateTensor<uint32>(TensorShape({}), {2}),
-       CreateTensor<uint32>(TensorShape({2}), {2, 3}),
-       CreateTensor<uint64>(TensorShape({}), {3}),
-       CreateTensor<uint64>(TensorShape({2}), {3, 4}),
+       CreateTensor<uint32_t>(TensorShape({}), {2}),
+       CreateTensor<uint32_t>(TensorShape({2}), {2, 3}),
+       CreateTensor<uint64_t>(TensorShape({}), {3}),
+       CreateTensor<uint64_t>(TensorShape({2}), {3, 4}),
        CreateTensor<double>(TensorShape({1}), {37.0}),
        CreateTensor<tstring>(TensorShape({1}), {"a"})},
       {CreateTensor<int64_t>(TensorShape({}), {2}),
        CreateTensor<int64_t>(TensorShape({2}), {3, 4}),
-       CreateTensor<uint32>(TensorShape({}), {3}),
-       CreateTensor<uint32>(TensorShape({2}), {4, 5}),
-       CreateTensor<uint64>(TensorShape({}), {4}),
-       CreateTensor<uint64>(TensorShape({2}), {5, 6}),
+       CreateTensor<uint32_t>(TensorShape({}), {3}),
+       CreateTensor<uint32_t>(TensorShape({2}), {4, 5}),
+       CreateTensor<uint64_t>(TensorShape({}), {4}),
+       CreateTensor<uint64_t>(TensorShape({2}), {5, 6}),
        CreateTensor<double>(TensorShape({1}), {38.0}),
        CreateTensor<tstring>(TensorShape({1}), {"b"})}};
 
@@ -158,18 +160,18 @@ std::vector<GetNextTestCase<ListDatasetParams>> GetNextTestCases() {
       {/*dataset_params=*/PlainListDatasetParams(),
        /*expected_outputs=*/{CreateTensor<int64_t>(TensorShape({}), {1}),
                              CreateTensor<int64_t>(TensorShape({2}), {1, 2}),
-                             CreateTensor<uint32>(TensorShape({}), {2}),
-                             CreateTensor<uint32>(TensorShape({2}), {2, 3}),
-                             CreateTensor<uint64>(TensorShape({}), {3}),
-                             CreateTensor<uint64>(TensorShape({2}), {3, 4}),
+                             CreateTensor<uint32_t>(TensorShape({}), {2}),
+                             CreateTensor<uint32_t>(TensorShape({2}), {2, 3}),
+                             CreateTensor<uint64_t>(TensorShape({}), {3}),
+                             CreateTensor<uint64_t>(TensorShape({2}), {3, 4}),
                              CreateTensor<double>(TensorShape({1}), {37.0}),
                              CreateTensor<tstring>(TensorShape({1}), {"a"}),
                              CreateTensor<int64_t>(TensorShape({}), {2}),
                              CreateTensor<int64_t>(TensorShape({2}), {3, 4}),
-                             CreateTensor<uint32>(TensorShape({}), {3}),
-                             CreateTensor<uint32>(TensorShape({2}), {4, 5}),
-                             CreateTensor<uint64>(TensorShape({}), {4}),
-                             CreateTensor<uint64>(TensorShape({2}), {5, 6}),
+                             CreateTensor<uint32_t>(TensorShape({}), {3}),
+                             CreateTensor<uint32_t>(TensorShape({2}), {4, 5}),
+                             CreateTensor<uint64_t>(TensorShape({}), {4}),
+                             CreateTensor<uint64_t>(TensorShape({2}), {5, 6}),
                              CreateTensor<double>(TensorShape({1}), {38.0}),
                              CreateTensor<tstring>(TensorShape({1}), {"b"})}},
       {/*dataset_params=*/NestedListDatasetParams(),
@@ -316,18 +318,18 @@ IteratorSaveAndRestoreTestCases() {
        /*expected_outputs=*/
        {CreateTensor<int64_t>(TensorShape({}), {1}),
         CreateTensor<int64_t>(TensorShape({2}), {1, 2}),
-        CreateTensor<uint32>(TensorShape({}), {2}),
-        CreateTensor<uint32>(TensorShape({2}), {2, 3}),
-        CreateTensor<uint64>(TensorShape({}), {3}),
-        CreateTensor<uint64>(TensorShape({2}), {3, 4}),
+        CreateTensor<uint32_t>(TensorShape({}), {2}),
+        CreateTensor<uint32_t>(TensorShape({2}), {2, 3}),
+        CreateTensor<uint64_t>(TensorShape({}), {3}),
+        CreateTensor<uint64_t>(TensorShape({2}), {3, 4}),
         CreateTensor<double>(TensorShape({1}), {37.0}),
         CreateTensor<tstring>(TensorShape({1}), {"a"}),
         CreateTensor<int64_t>(TensorShape({}), {2}),
         CreateTensor<int64_t>(TensorShape({2}), {3, 4}),
-        CreateTensor<uint32>(TensorShape({}), {3}),
-        CreateTensor<uint32>(TensorShape({2}), {4, 5}),
-        CreateTensor<uint64>(TensorShape({}), {4}),
-        CreateTensor<uint64>(TensorShape({2}), {5, 6}),
+        CreateTensor<uint32_t>(TensorShape({}), {3}),
+        CreateTensor<uint32_t>(TensorShape({2}), {4, 5}),
+        CreateTensor<uint64_t>(TensorShape({}), {4}),
+        CreateTensor<uint64_t>(TensorShape({2}), {5, 6}),
         CreateTensor<double>(TensorShape({1}), {38.0}),
         CreateTensor<tstring>(TensorShape({1}), {"b"})}},
       {/*dataset_params=*/NestedListDatasetParams(),

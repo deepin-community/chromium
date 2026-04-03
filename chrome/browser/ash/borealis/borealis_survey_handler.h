@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_ASH_BOREALIS_BOREALIS_SURVEY_HANDLER_H_
 #define CHROME_BROWSER_ASH_BOREALIS_BOREALIS_SURVEY_HANDLER_H_
 
+#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ash/borealis/borealis_window_manager.h"
 #include "chrome/browser/ash/hats/hats_notification_controller.h"
@@ -29,7 +30,6 @@ class BorealisSurveyHandler
   void OnWindowManagerDeleted(BorealisWindowManager* window_manager) override;
 
  private:
-  friend class AshTestBase;
   friend class BorealisSurveyHandlerTest;
   FRIEND_TEST_ALL_PREFIXES(BorealisSurveyHandlerTest,
                            GetGameIdReturnsCorrectId);

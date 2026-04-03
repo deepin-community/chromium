@@ -4,7 +4,11 @@
 
 #include "ui/display/win/display_config_helper.h"
 
+#include <cstdint>
+#include <string_view>
 #include <vector>
+
+#include "base/compiler_specific.h"
 
 namespace display::win {
 
@@ -52,6 +56,11 @@ std::optional<DISPLAYCONFIG_PATH_INFO> GetDisplayConfigPathInfo(
     return std::nullopt;
   }
 
+  return GetDisplayConfigPathInfo(monitor_info);
+}
+
+DISPLAY_EXPORT std::optional<DISPLAYCONFIG_PATH_INFO> GetDisplayConfigPathInfo(
+    MONITORINFOEX monitor_info) {
   // Look for a path info with a matching name.
   for (const auto& info : GetDisplayConfigPathInfos()) {
     DISPLAYCONFIG_SOURCE_DEVICE_NAME device_name = {};
@@ -60,7 +69,8 @@ std::optional<DISPLAYCONFIG_PATH_INFO> GetDisplayConfigPathInfo(
     device_name.header.adapterId = info.sourceInfo.adapterId;
     device_name.header.id = info.sourceInfo.id;
     if ((::DisplayConfigGetDeviceInfo(&device_name.header) == ERROR_SUCCESS) &&
-        (wcscmp(monitor_info.szDevice, device_name.viewGdiDeviceName) == 0)) {
+        (FixedArrayToStringView(monitor_info.szDevice) ==
+         FixedArrayToStringView(device_name.viewGdiDeviceName))) {
       return info;
     }
   }

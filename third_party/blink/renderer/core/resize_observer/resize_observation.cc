@@ -36,8 +36,9 @@ gfx::SizeF ComputeZoomAdjustedSVGBox(ResizeObserverBoxOptions box_option,
       const ComputedStyle& style = layout_object.StyleRef();
       const gfx::SizeF scaled_bounding_box_size(
           gfx::ScaleSize(bounding_box_size, style.EffectiveZoom()));
-      return ResizeObserverUtilities::ComputeSnappedDevicePixelContentBox(
-          scaled_bounding_box_size, layout_object, style);
+      return gfx::SizeF(
+          ResizeObserverUtilities::ComputeSnappedDevicePixelContentBox(
+              scaled_bounding_box_size, layout_object, style));
     }
   }
 }
@@ -50,22 +51,30 @@ constexpr LogicalSize kInitialObservationSize(kIndefiniteSize, kIndefiniteSize);
 
 ResizeObservation::ResizeObservation(Element* target,
                                      ResizeObserver* observer,
-                                     ResizeObserverBoxOptions observed_box)
+                                     ResizeObserverBoxOptions observed_box,
+                                     bool fire_on_every_paint)
     : target_(target),
       observer_(observer),
       observation_size_(kInitialObservationSize),
-      observed_box_(observed_box) {
+      observed_box_(observed_box),
+      fire_on_every_paint_(fire_on_every_paint) {
   DCHECK(target_);
   DCHECK(observer_);
 }
 
 bool ResizeObservation::ObservationSizeOutOfSync() {
-  if (observation_size_ == ComputeTargetSize())
+  if (observation_size_ == ComputeTargetSize()) {
     return false;
+  }
+
+  const Element* target = target_.Get();
+  if (!target) {
+    return false;
+  }
 
   // Skip resize observations on locked elements.
-  if (UNLIKELY(target_ && DisplayLockUtilities::IsInLockedSubtreeCrossingFrames(
-                              *target_))) {
+  if (DisplayLockUtilities::IsInLockedSubtreeCrossingFrames(*target))
+      [[unlikely]] {
     return false;
   }
 
@@ -73,9 +82,9 @@ bool ResizeObservation::ObservationSizeOutOfSync() {
   // This is used by contain-intrinsic-size delegate to implement the following
   // resolution:
   // https://github.com/w3c/csswg-drafts/issues/7606#issuecomment-1240015961
-  if (observer_->SkipNonAtomicInlineObservations() &&
-      target_->GetLayoutObject() && target_->GetLayoutObject()->IsInline() &&
-      !target_->GetLayoutObject()->IsAtomicInlineLevel()) {
+  const LayoutObject* layout_object = target->GetLayoutObject();
+  if (observer_->SkipNonAtomicInlineObservations() && layout_object &&
+      layout_object->IsNonAtomicInline()) {
     return false;
   }
 
@@ -100,11 +109,16 @@ size_t ResizeObservation::TargetDepth() {
 }
 
 LogicalSize ResizeObservation::ComputeTargetSize() const {
-  if (!target_ || !target_->GetLayoutObject())
+  const Element* target = target_.Get();
+  if (!target) {
     return LogicalSize();
-  const LayoutObject& layout_object = *target_->GetLayoutObject();
-  if (layout_object.IsSVGChild()) {
-    gfx::SizeF size = ComputeZoomAdjustedSVGBox(observed_box_, layout_object);
+  }
+  const LayoutObject* layout_object = target_->GetLayoutObject();
+  if (!layout_object) {
+    return LogicalSize();
+  }
+  if (layout_object->IsSVGChild()) {
+    gfx::SizeF size = ComputeZoomAdjustedSVGBox(observed_box_, *layout_object);
     return LogicalSize(LayoutUnit(size.width()), LayoutUnit(size.height()));
   }
   if (const auto* layout_box = DynamicTo<LayoutBox>(layout_object)) {
@@ -113,6 +127,24 @@ LogicalSize ResizeObservation::ComputeTargetSize() const {
     return LogicalSize(LayoutUnit(size.width()), LayoutUnit(size.height()));
   }
   return LogicalSize();
+}
+
+bool ResizeObservation::NeedsObservationForRepaint() const {
+  if (!fire_on_every_paint_) {
+    return false;
+  }
+  CHECK(RuntimeEnabledFeatures::CanvasDrawElementEnabled());
+  const Element* target = target_.Get();
+  if (!target) {
+    return false;
+  }
+  const LayoutObject* layout_object = target->GetLayoutObject();
+  if (!layout_object || !layout_object->HasLayer()) {
+    return false;
+  }
+  return To<LayoutBoxModelObject>(layout_object)
+      ->Layer()
+      ->SelfOrDescendantNeedsRepaint();
 }
 
 void ResizeObservation::Trace(Visitor* visitor) const {

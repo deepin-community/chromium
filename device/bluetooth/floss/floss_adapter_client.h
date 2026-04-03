@@ -14,6 +14,7 @@
 #include "base/observer_list.h"
 #include "dbus/exported_object.h"
 #include "dbus/object_path.h"
+#include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_device.h"
 #include "device/bluetooth/bluetooth_export.h"
 #include "device/bluetooth/floss/floss_dbus_client.h"
@@ -107,6 +108,12 @@ class DEVICE_BLUETOOTH_EXPORT FlossAdapterClient : public FlossDBusClient {
     kAnonymous = 0xff,
   };
 
+  enum class BtAdapterRole {
+    kCentral = 0,
+    kPeripheral,
+    kCentralPeripheral,
+  };
+
   struct VendorProductInfo {
     uint8_t vendorIdSrc;
     uint16_t vendorId;
@@ -147,6 +154,10 @@ class DEVICE_BLUETOOTH_EXPORT FlossAdapterClient : public FlossDBusClient {
     // some amount of time ago).
     virtual void AdapterClearedDevice(const FlossDeviceId& device_cleared) {}
 
+    // Notification sent when a found device has forgotten its keys or been
+    // reset. It will be sent when bond loss is detected.
+    virtual void AdapterKeyMissingDevice(const FlossDeviceId& device) {}
+
     // Notification sent when a device property has changed.
     virtual void AdapterDevicePropertyChanged(BtPropertyType prop_type,
                                               const FlossDeviceId& device) {}
@@ -178,10 +189,14 @@ class DEVICE_BLUETOOTH_EXPORT FlossAdapterClient : public FlossDBusClient {
     // Notification sent when a remote device becomes disconnected.
     virtual void AdapterDeviceDisconnected(const FlossDeviceId& device) {}
 
+    // Notification sent when a remote device fails to connect.
+    virtual void AdapterDeviceConnectionFailed(const FlossDeviceId& device,
+                                               uint32_t status) {}
+
     // Notification sent when requested SDP search has completed.
     virtual void SdpSearchComplete(const FlossDeviceId device,
                                    const device::BluetoothUUID uuid,
-                                   const std::vector<BtSdpRecord> records) {}
+                                   const std::vector<BtSdpRecord>& records) {}
 
     // Notification sent when an SDP record has finished being created and
     // assigned a handle.
@@ -249,6 +264,13 @@ class DEVICE_BLUETOOTH_EXPORT FlossAdapterClient : public FlossDBusClient {
                           FlossDeviceId device,
                           BluetoothTransport transport);
 
+  // Create a bond with the given device and transport. API version >= 0.4.0,
+  // add callback status.
+  virtual void CreateBond(
+      ResponseCallback<FlossDBusClient::BtifStatus> callback,
+      FlossDeviceId device,
+      BluetoothTransport transport);
+
   // Cancel a bond process.
   virtual void CancelBondProcess(ResponseCallback<bool> callback,
                                  FlossDeviceId device);
@@ -300,6 +322,11 @@ class DEVICE_BLUETOOTH_EXPORT FlossAdapterClient : public FlossDBusClient {
   virtual void ConnectAllEnabledProfiles(ResponseCallback<Void> callback,
                                          const FlossDeviceId& device);
 
+  // Connect to all enabled profiles. API version >= 0.4.0, add callback status.
+  virtual void ConnectAllEnabledProfiles(
+      ResponseCallback<FlossDBusClient::BtifStatus> callback,
+      const FlossDeviceId& device);
+
   // Disconnect all enabled profiles.
   virtual void DisconnectAllEnabledProfiles(ResponseCallback<Void> callback,
                                             const FlossDeviceId& device);
@@ -343,6 +370,10 @@ class DEVICE_BLUETOOTH_EXPORT FlossAdapterClient : public FlossDBusClient {
   virtual void RemoveSdpRecord(ResponseCallback<bool> callback,
                                const int32_t& handle);
 
+  std::vector<BtAdapterRole> GetSupportedRoles() {
+    return property_roles_.Get();
+  }
+
   // Get the object path for this adapter.
   const dbus::ObjectPath* GetObjectPath() const { return &adapter_path_; }
 
@@ -383,6 +414,10 @@ class DEVICE_BLUETOOTH_EXPORT FlossAdapterClient : public FlossDBusClient {
   void OnDeviceCleared(dbus::MethodCall* method_call,
                        dbus::ExportedObject::ResponseSender response_sender);
 
+  // Handle callback |OnDeviceKeyMissing| on exported object path.
+  void OnDeviceKeyMissing(dbus::MethodCall* method_call,
+                          dbus::ExportedObject::ResponseSender response_sender);
+
   // Handle callback |OnDevicePropertiesChanged| on exported object path.
   void OnDevicePropertiesChanged(
       dbus::MethodCall* method_call,
@@ -419,6 +454,11 @@ class DEVICE_BLUETOOTH_EXPORT FlossAdapterClient : public FlossDBusClient {
 
   // Handle callback |OnDeviceDisconnected| on exported object path.
   void OnDeviceDisconnected(
+      dbus::MethodCall* method_call,
+      dbus::ExportedObject::ResponseSender response_sender);
+
+  // Handle callback |OnDeviceConnectionFailed| on exported object path.
+  void OnDeviceConnectionFailed(
       dbus::MethodCall* method_call,
       dbus::ExportedObject::ResponseSender response_sender);
 
@@ -488,6 +528,10 @@ class DEVICE_BLUETOOTH_EXPORT FlossAdapterClient : public FlossDBusClient {
   FlossProperty<bool> property_ext_adv_supported_{
       kAdapterInterface, adapter::kCallbackInterface,
       adapter::kIsLeExtendedAdvertisingSupported, nullptr};
+
+  FlossProperty<std::vector<BtAdapterRole>> property_roles_{
+      kAdapterInterface, adapter::kCallbackInterface,
+      adapter::kGetSupportedRoles, nullptr};
 
   // Object path for exported callbacks registered against adapter interface.
   static const char kExportedCallbacksPath[];

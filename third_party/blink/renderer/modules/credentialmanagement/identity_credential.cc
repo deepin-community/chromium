@@ -24,17 +24,22 @@ constexpr char kIdentityCredentialType[] = "identity";
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+//
+// LINT.IfChange(FedCmCspStatus)
 enum class FedCmCspStatus {
   kSuccess = 0,
   kFailedPathButPassedOrigin = 1,
   kFailedOrigin = 2,
+
   kMaxValue = kFailedOrigin
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmCspStatus)
 
-void OnDisconnect(ScriptPromiseResolver* resolver, DisconnectStatus status) {
+void OnDisconnect(ScriptPromiseResolver<IDLUndefined>* resolver,
+                  DisconnectStatus status) {
   if (status != DisconnectStatus::kSuccess) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
-        DOMExceptionCode::kNetworkError, "Error disconnecting account."));
+    resolver->RejectWithDOMException(DOMExceptionCode::kNetworkError,
+                                     "Error disconnecting account.");
     return;
   }
   resolver->Resolve();
@@ -42,18 +47,16 @@ void OnDisconnect(ScriptPromiseResolver* resolver, DisconnectStatus status) {
 
 }  // namespace
 
-IdentityCredential* IdentityCredential::Create(const String& token,
-                                               bool is_auto_selected) {
-  if (RuntimeEnabledFeatures::FedCmAutoSelectedFlagEnabled()) {
-    return MakeGarbageCollected<IdentityCredential>(token, is_auto_selected);
-  } else {
-    return MakeGarbageCollected<IdentityCredential>(token);
-  }
+IdentityCredential* IdentityCredential::Create(const ScriptValue& token,
+                                               bool is_auto_selected,
+                                               const String& config_url) {
+  return MakeGarbageCollected<IdentityCredential>(token, is_auto_selected,
+                                                  config_url);
 }
 
 bool IdentityCredential::IsRejectingPromiseDueToCSP(
     ContentSecurityPolicy* policy,
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolverBase* resolver,
     const KURL& provider_url) {
   if (policy->AllowConnectToSource(provider_url, provider_url,
                                    RedirectStatus::kNoRedirect,
@@ -77,57 +80,59 @@ bool IdentityCredential::IsRejectingPromiseDueToCSP(
                               FedCmCspStatus::kFailedOrigin);
   }
 
-  WTF::String error =
-      "Refused to connect to '" + provider_url.ElidedString() +
-      "' because it violates the document's Content Security Policy.";
-  resolver->Reject(MakeGarbageCollected<DOMException>(
-      DOMExceptionCode::kNetworkError, error));
+  String error =
+      StrCat({"Refused to connect to '", provider_url.ElidedString(),
+              "' because it violates the document's Content Security Policy."});
+  resolver->RejectWithDOMException(DOMExceptionCode::kNetworkError, error);
   return true;
 }
 
-IdentityCredential::IdentityCredential(const String& token,
-                                       bool is_auto_selected)
+IdentityCredential::IdentityCredential(const ScriptValue& token,
+                                       bool is_auto_selected,
+                                       const String& config_url)
     : Credential(/* id = */ "", kIdentityCredentialType),
-      token_(token),
-      is_auto_selected_(is_auto_selected) {}
+      token_value_(token),
+      is_auto_selected_(is_auto_selected),
+      config_url_(config_url) {}
 
 bool IdentityCredential::IsIdentityCredential() const {
   return true;
 }
 
+ScriptValue IdentityCredential::token(ScriptState* script_state) const {
+  return token_value_;
+}
+
 // static
-ScriptPromise IdentityCredential::disconnect(
+ScriptPromise<IDLUndefined> IdentityCredential::disconnect(
     ScriptState* script_state,
     const blink::IdentityCredentialDisconnectOptions* options,
     ExceptionState& exception_state) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
+  auto promise = resolver->Promise();
 
-  if (!options->hasConfigURL()) {
-    resolver->Reject(V8ThrowException::CreateTypeError(
-        script_state->GetIsolate(), "configURL is required"));
-    return promise;
-  }
-
+  // configURL, accountHint, and clientId are required. But the latter is marked
+  // optional due to the dictionary being reused for digital credentials. So we
+  // have to check that one manually.
   if (!options->hasClientId()) {
-    resolver->Reject(V8ThrowException::CreateTypeError(
-        script_state->GetIsolate(), "clientId is required"));
+    resolver->RejectWithTypeError("clientId is required");
     return promise;
   }
 
   if (!resolver->GetExecutionContext()->IsFeatureEnabled(
-          mojom::blink::PermissionsPolicyFeature::kIdentityCredentialsGet)) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
+          network::mojom::PermissionsPolicyFeature::kIdentityCredentialsGet)) {
+    resolver->RejectWithDOMException(
         DOMExceptionCode::kNotAllowedError,
-        "The 'identity-credentials-get` feature is not enabled in this "
-        "document."));
+        "The 'identity-credentials-get' feature is not enabled in this "
+        "document.");
     return promise;
   }
 
   KURL provider_url(options->configURL());
   if (!provider_url.IsValid()) {
-    resolver->Reject(MakeGarbageCollected<DOMException>(
-        DOMExceptionCode::kInvalidStateError, "configURL is invalid"));
+    resolver->RejectWithDOMException(DOMExceptionCode::kInvalidStateError,
+                                     "configURL is invalid");
     return promise;
   }
 
@@ -143,10 +148,14 @@ ScriptPromise IdentityCredential::disconnect(
 
   mojom::blink::IdentityCredentialDisconnectOptionsPtr disconnect_options =
       blink::mojom::blink::IdentityCredentialDisconnectOptions::From(*options);
-  auth_request->Disconnect(
-      std::move(disconnect_options),
-      WTF::BindOnce(&OnDisconnect, WrapPersistent(resolver)));
+  auth_request->Disconnect(std::move(disconnect_options),
+                           BindOnce(&OnDisconnect, WrapPersistent(resolver)));
   return promise;
+}
+
+void IdentityCredential::Trace(Visitor* visitor) const {
+  visitor->Trace(token_value_);
+  Credential::Trace(visitor);
 }
 
 }  // namespace blink

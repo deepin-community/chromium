@@ -12,20 +12,20 @@
 #include "base/memory/raw_ptr.h"
 #include "ui/display/types/display_snapshot.h"
 #include "ui/display/types/native_display_delegate.h"
+#include "ui/gfx/display_color_spaces.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/ozone/platform/wayland/common/wayland_object.h"
 
 namespace ui {
 
-class XDGOutput;
-class WaylandZcrColorManager;
-class WaylandZcrColorManagementOutput;
 class WaylandConnection;
-class WaylandZAuraOutput;
+class WaylandWpColorManagementOutput;
+class WaylandWpColorManager;
+class XDGOutput;
 
 // WaylandOutput objects keep track of wl_output information received through
 // the Wayland protocol, along with other related protocol extensions, such as,
-// xdg-output and ChromeOS's aura-shell.
+// xdg-output.
 class WaylandOutput : public wl::GlobalObjectRegistrar<WaylandOutput> {
  public:
   // Instances of this class are identified by an 32-bit unsigned int value,
@@ -33,8 +33,6 @@ class WaylandOutput : public wl::GlobalObjectRegistrar<WaylandOutput> {
   // wayland-linux, it is mostly used interchangeably with WaylandScreen's
   // `display::Display::id1` property, which is an int64_t instead, though it is
   // worth bearing in mind they are slightly different, under the hood.
-  // On lacros, the display id sent from ash-chrome is used for
-  // `display::Display::id`.
   using Id = uint32_t;
 
   static constexpr char kInterfaceName[] = "wl_output";
@@ -107,9 +105,7 @@ class WaylandOutput : public wl::GlobalObjectRegistrar<WaylandOutput> {
 
   void Initialize(Delegate* delegate);
   void InitializeXdgOutput(zxdg_output_manager_v1* manager);
-  void InitializeZAuraOutput(zaura_shell* aura_shell);
-  void InitializeColorManagementOutput(WaylandZcrColorManager* manager);
-  float GetUIScaleFactor() const;
+  void InitializeWpColorManagementOutput(WaylandWpColorManager* manager);
 
   const Metrics& GetMetrics() const;
   void SetMetrics(const Metrics& metrics);
@@ -118,8 +114,8 @@ class WaylandOutput : public wl::GlobalObjectRegistrar<WaylandOutput> {
   // with calls to GetMetrics().
   Id output_id() const { return output_id_; }
   float scale_factor() const;
-  WaylandZcrColorManagementOutput* color_management_output() const {
-    return color_management_output_.get();
+  WaylandWpColorManagementOutput* wp_color_management_output() const {
+    return wp_color_management_output_.get();
   }
 
   // Returns true if the output has all the state information available
@@ -128,7 +124,6 @@ class WaylandOutput : public wl::GlobalObjectRegistrar<WaylandOutput> {
   bool IsReady() const;
 
   wl_output* get_output() { return output_.get(); }
-  zaura_output* get_zaura_output();
 
   void SetScaleFactorForTesting(float scale_factor);
 
@@ -138,11 +133,12 @@ class WaylandOutput : public wl::GlobalObjectRegistrar<WaylandOutput> {
 
   void set_delegate_for_testing(Delegate* delegate) { delegate_ = delegate; }
   XDGOutput* xdg_output_for_testing() { return xdg_output_.get(); }
-  WaylandZAuraOutput* aura_output_for_testing() { return aura_output_.get(); }
 
  private:
   FRIEND_TEST_ALL_PREFIXES(WaylandOutputTest, NameAndDescriptionFallback);
+  FRIEND_TEST_ALL_PREFIXES(WaylandOutputTest, ScaleFactorCalculation);
   FRIEND_TEST_ALL_PREFIXES(WaylandOutputTest, ScaleFactorFallback);
+  FRIEND_TEST_ALL_PREFIXES(WaylandOutputTest, ScaleFactorCalculationNoop);
 
   static constexpr int32_t kDefaultScaleFactor = 1;
 
@@ -187,8 +183,7 @@ class WaylandOutput : public wl::GlobalObjectRegistrar<WaylandOutput> {
   const Id output_id_ = 0;
   wl::Object<wl_output> output_;
   std::unique_ptr<XDGOutput> xdg_output_;
-  std::unique_ptr<WaylandZAuraOutput> aura_output_;
-  std::unique_ptr<WaylandZcrColorManagementOutput> color_management_output_;
+  std::unique_ptr<WaylandWpColorManagementOutput> wp_color_management_output_;
 
   float scale_factor_ = kDefaultScaleFactor;
   int32_t panel_transform_ = WL_OUTPUT_TRANSFORM_NORMAL;

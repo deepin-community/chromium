@@ -20,7 +20,7 @@
 #include "chrome/browser/nearby_sharing/nearby_share_feature_status.h"
 #include "chrome/browser/nearby_sharing/nearby_sharing_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/ash/session_controller_client_impl.h"
+#include "chrome/browser/ui/ash/session/session_controller_client_impl.h"
 #include "chrome/browser/ui/webui/ash/multidevice_setup/multidevice_setup_dialog.h"
 #include "chromeos/ash/components/multidevice/logging/logging.h"
 #include "chromeos/ash/components/osauth/public/auth_session_storage.h"
@@ -74,9 +74,6 @@ const char kIsCameraRollFilePermissionGranted[] =
     "isCameraRollFilePermissionGranted";
 const char kIsPhoneHubFeatureCombinedSetupSupported[] =
     "isPhoneHubFeatureCombinedSetupSupported";
-const char kIsChromeOSSyncedSessionSharingEnabled[] =
-    "isChromeOSSyncedSessionSharingEnabled";
-const char kIsLacrosTabSyncEnabled[] = "isLacrosTabSyncEnabled";
 
 void OnRetrySetHostNowResult(bool success) {
   if (success) {
@@ -103,8 +100,6 @@ MultideviceHandler::MultideviceHandler(
       apps_access_manager_(apps_access_manager),
       camera_roll_manager_(camera_roll_manager),
       browser_tabs_model_provider_(browser_tabs_model_provider) {
-  CHECK((multidevice_setup_client_ != nullptr) ==
-        multidevice_setup::AreAnyMultiDeviceFeaturesAllowed(prefs_));
   pref_change_registrar_.Init(prefs_);
 }
 
@@ -210,13 +205,6 @@ void MultideviceHandler::OnJavascriptAllowed() {
     camera_roll_manager_observation_.Observe(camera_roll_manager_.get());
   }
 
-  if (phonehub::BrowserTabsModelProviderImpl::
-          IsLacrosSessionSyncFeatureEnabled() &&
-      browser_tabs_model_provider_) {
-    browser_tabs_model_provider_observation_.Observe(
-        browser_tabs_model_provider_.get());
-  }
-
   if (NearbySharingServiceFactory::IsNearbyShareSupportedForBrowserContext(
           Profile::FromWebUI(web_ui()))) {
     pref_change_registrar_.Add(
@@ -263,14 +251,6 @@ void MultideviceHandler::OnJavascriptDisallowed() {
     DCHECK(camera_roll_manager_observation_.IsObservingSource(
         camera_roll_manager_.get()));
     camera_roll_manager_observation_.Reset();
-  }
-
-  if (phonehub::BrowserTabsModelProviderImpl::
-          IsLacrosSessionSyncFeatureEnabled() &&
-      browser_tabs_model_provider_) {
-    DCHECK(browser_tabs_model_provider_observation_.IsObservingSource(
-        browser_tabs_model_provider_));
-    browser_tabs_model_provider_observation_.Reset();
   }
 
   // Ensure that pending callbacks do not complete and cause JS to be evaluated.
@@ -324,8 +304,7 @@ void MultideviceHandler::OnNearbySharingEnabledChanged() {
 }
 
 void MultideviceHandler::UpdatePageContent() {
-  base::Value::Dict page_content_dictionary =
-      GeneratePageContentDataDictionary();
+  base::DictValue page_content_dictionary = GeneratePageContentDataDictionary();
   PA_LOG(INFO) << "Updating MultiDevice settings page content with: "
                << page_content_dictionary << ".";
   FireWebUIListener("settings.updateMultidevicePageContentData",
@@ -333,14 +312,14 @@ void MultideviceHandler::UpdatePageContent() {
 }
 
 void MultideviceHandler::HandleShowMultiDeviceSetupDialog(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(args.empty());
   multidevice_setup::MultiDeviceSetupDialog::Show();
   ash::phonehub::util::LogMultiDeviceSetupDialogEntryPoint(
       ash::phonehub::util::MultiDeviceSetupDialogEntrypoint::kSettingsPage);
 }
 
-void MultideviceHandler::HandleGetPageContent(const base::Value::List& args) {
+void MultideviceHandler::HandleGetPageContent(const base::ListValue& args) {
   // This callback is expected to be the first one executed when the page is
   // loaded, so it should be the one to allow JS calls.
   AllowJavascript();
@@ -348,8 +327,7 @@ void MultideviceHandler::HandleGetPageContent(const base::Value::List& args) {
   const base::Value& callback_id = args[0];
   DCHECK(callback_id.is_string());
 
-  base::Value::Dict page_content_dictionary =
-      GeneratePageContentDataDictionary();
+  base::DictValue page_content_dictionary = GeneratePageContentDataDictionary();
   PA_LOG(INFO) << "Responding to getPageContentData() request with: "
                << page_content_dictionary << ".";
 
@@ -357,10 +335,10 @@ void MultideviceHandler::HandleGetPageContent(const base::Value::List& args) {
 }
 
 void MultideviceHandler::HandleSetFeatureEnabledState(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   const auto& list = args;
   DCHECK_GE(list.size(), 3u);
-  std::string callback_id = list[0].GetString();
+  const std::string& callback_id = list[0].GetString();
 
   int feature_as_int = list[1].GetInt();
 
@@ -391,20 +369,20 @@ void MultideviceHandler::HandleSetFeatureEnabledState(
   }
 }
 
-void MultideviceHandler::HandleRemoveHostDevice(const base::Value::List& args) {
+void MultideviceHandler::HandleRemoveHostDevice(const base::ListValue& args) {
   DCHECK(args.empty());
   multidevice_setup_client_->RemoveHostDevice();
 }
 
 void MultideviceHandler::HandleRetryPendingHostSetup(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(args.empty());
   multidevice_setup_client_->RetrySetHostNow(
       base::BindOnce(&OnRetrySetHostNowResult));
 }
 
 void MultideviceHandler::HandleAttemptNotificationSetup(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(features::IsPhoneHubEnabled());
   DCHECK(!notification_access_operation_);
 
@@ -425,14 +403,14 @@ void MultideviceHandler::HandleAttemptNotificationSetup(
 }
 
 void MultideviceHandler::HandleCancelNotificationSetup(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(features::IsPhoneHubEnabled());
   DCHECK(notification_access_operation_);
 
   notification_access_operation_.reset();
 }
 
-void MultideviceHandler::HandleAttemptAppsSetup(const base::Value::List& args) {
+void MultideviceHandler::HandleAttemptAppsSetup(const base::ListValue& args) {
   DCHECK(features::IsEcheSWAEnabled());
   DCHECK(!apps_access_operation_);
 
@@ -451,7 +429,7 @@ void MultideviceHandler::HandleAttemptAppsSetup(const base::Value::List& args) {
   DCHECK(apps_access_operation_);
 }
 
-void MultideviceHandler::HandleCancelAppsSetup(const base::Value::List& args) {
+void MultideviceHandler::HandleCancelAppsSetup(const base::ListValue& args) {
   DCHECK(features::IsEcheSWAEnabled());
   DCHECK(apps_access_operation_);
 
@@ -460,7 +438,7 @@ void MultideviceHandler::HandleCancelAppsSetup(const base::Value::List& args) {
 }
 
 void MultideviceHandler::HandleAttemptCombinedFeatureSetup(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   bool camera_roll = false;
   if (args[0].is_bool()) {
     camera_roll = args[0].GetBool();
@@ -507,7 +485,7 @@ void MultideviceHandler::HandleAttemptCombinedFeatureSetup(
 }
 
 void MultideviceHandler::HandleCancelCombinedFeatureSetup(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(features::IsPhoneHubEnabled());
   DCHECK(combined_access_operation_);
 
@@ -515,7 +493,7 @@ void MultideviceHandler::HandleCancelCombinedFeatureSetup(
 }
 
 void MultideviceHandler::HandleAttemptFeatureSetupConnection(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(features::IsPhoneHubEnabled());
   DCHECK(!feature_setup_connection_operation_);
 
@@ -525,7 +503,7 @@ void MultideviceHandler::HandleAttemptFeatureSetupConnection(
 }
 
 void MultideviceHandler::HandleCancelFeatureSetupConnection(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(features::IsPhoneHubEnabled());
   DCHECK(feature_setup_connection_operation_);
 
@@ -533,15 +511,15 @@ void MultideviceHandler::HandleCancelFeatureSetupConnection(
 }
 
 void MultideviceHandler::HandleShowBrowserSyncSettings(
-    const base::Value::List& args) {
-  ash::NewWindowDelegate::GetPrimary()->OpenUrl(
+    const base::ListValue& args) {
+  ash::NewWindowDelegate::GetInstance()->OpenUrl(
       GURL("chrome://settings/syncSetup/advanced"),
       ash::NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       ash::NewWindowDelegate::Disposition::kSwitchToTab);
 }
 
 void MultideviceHandler::LogPhoneHubPermissionSetUpScreenAction(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   int setup_screen_int = args[0].GetInt();
   int setup_action_int = args[1].GetInt();
   LogPermissionOnboardingDialogAction(
@@ -550,21 +528,21 @@ void MultideviceHandler::LogPhoneHubPermissionSetUpScreenAction(
 }
 
 void MultideviceHandler::LogPhoneHubPermissionSetUpButtonClicked(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   int setup_mode = args[0].GetInt();
   LogPermissionOnboardingSettingsClicked(
       static_cast<PermissionsOnboardingSetUpMode>(setup_mode));
 }
 
 void MultideviceHandler::LogPhoneHubPermissionOnboardingSetupMode(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   int setup_mode = args[0].GetInt();
   LogPermissionOnboardingSetupMode(
       static_cast<PermissionsOnboardingSetUpMode>(setup_mode));
 }
 
 void MultideviceHandler::LogPhoneHubPermissionOnboardingSetupResult(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   int completed_mode = args[0].GetInt();
   LogPermissionOnboardingSetupResult(
       static_cast<PermissionsOnboardingSetUpMode>(completed_mode));
@@ -616,8 +594,8 @@ void MultideviceHandler::OnSetFeatureStateEnabledResult(
   ResolveJavascriptCallback(base::Value(js_callback_id), base::Value(success));
 }
 
-base::Value::Dict MultideviceHandler::GeneratePageContentDataDictionary() {
-  base::Value::Dict page_content_dictionary;
+base::DictValue MultideviceHandler::GeneratePageContentDataDictionary() {
+  base::DictValue page_content_dictionary;
 
   multidevice_setup::MultiDeviceSetupClient::HostStatusWithDevice
       host_status_with_device = GetHostStatusWithDevice();
@@ -744,19 +722,6 @@ base::Value::Dict MultideviceHandler::GeneratePageContentDataDictionary() {
                                   ? multidevice_feature_access_manager_
                                         ->GetFeatureSetupRequestSupported()
                                   : false);
-
-  bool is_lacros_session_sync_feature_enabled = phonehub::
-      BrowserTabsModelProviderImpl::IsLacrosSessionSyncFeatureEnabled();
-  page_content_dictionary.Set(kIsChromeOSSyncedSessionSharingEnabled,
-                              is_lacros_session_sync_feature_enabled);
-
-  if (is_lacros_session_sync_feature_enabled && browser_tabs_model_provider_) {
-    page_content_dictionary.Set(
-        kIsLacrosTabSyncEnabled,
-        browser_tabs_model_provider_->IsBrowserTabSyncEnabled());
-  } else {
-    page_content_dictionary.Set(kIsLacrosTabSyncEnabled, false);
-  }
 
   return page_content_dictionary;
 }

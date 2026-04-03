@@ -4,9 +4,9 @@
 
 module autofill.mojom;
 
+import "mojo/public/mojom/base/string16.mojom";
 import "mojo/public/mojom/base/text_direction.mojom";
 import "mojo/public/mojom/base/time.mojom";
-import "mojo/public/mojom/base/string16.mojom";
 import "mojo/public/mojom/base/unguessable_token.mojom";
 import "ui/gfx/geometry/mojom/geometry.mojom";
 import "url/mojom/url.mojom";
@@ -27,9 +27,10 @@ enum FormControlType {
   kInputText = 9,
   kInputUrl = 10,
   kSelectOne = 11,
-  kSelectMultiple = 12,
-  kSelectList = 13,
+  // deprecated: kSelectMultiple = 12,
+  // deprecated: kSelectList = 13
   kTextArea = 14,
+  kInputDate = 15,
 };
 
 // The list of all HTML autocomplete field mode hints supported by Chrome.
@@ -61,11 +62,11 @@ enum HtmlFieldType {
   kAddressLine1 = 8,
   kAddressLine2 = 9,
   kAddressLine3 = 10,
-  kAddressLevel1 = 11,   // For U.S. addresses, corresponds to the state.
-  kAddressLevel2 = 12,   // For U.S. addresses, corresponds to the city.
-  kAddressLevel3 = 13,   // An area that is more specific than LEVEL2.
-  kCountryCode = 14,     // The ISO 3166-1-alpha-2 country code.
-  kCountryName = 15,     // The localized country name.
+  kAddressLevel1 = 11,  // For U.S. addresses, corresponds to the state.
+  kAddressLevel2 = 12,  // For U.S. addresses, corresponds to the city.
+  kAddressLevel3 = 13,  // An area that is more specific than LEVEL2.
+  kCountryCode = 14,  // The ISO 3166-1-alpha-2 country code.
+  kCountryName = 15,  // The localized country name.
   kPostalCode = 16,
   // kFullAddress = 17 is deprecated.
 
@@ -110,8 +111,7 @@ enum HtmlFieldType {
   kCreditCardExp2DigitYear = 44,
   kCreditCardExp4DigitYear = 45,
 
-  // Universal Payment Interface - Virtual Payment Address.
-  kUpiVpa = 46,
+  // kUpiVpa = 46 is deprecated.
 
   // Phone number verification one-time-codes.
   kOneTimeCode = 47,
@@ -167,7 +167,10 @@ enum SubmissionSource {
   // Normal form submission (i.e. user presses the submit button and no
   // JavaScript is involved). Observed via RenderFrameObserver::WillSubmitForm.
   FORM_SUBMISSION = 5,
-  // The form or field was hidden or removed after autofilling it.
+  // The form or field was hidden or removed after autofilling it. Autofill
+  // ignores such submissions on non-WebView because mutations of the form can
+  // happen for other reasons than submission. PWM however considers this a
+  // valid source since mutations of password forms are more rare.
   DOM_MUTATION_AFTER_AUTOFILL = 6,
 };
 
@@ -189,17 +192,17 @@ enum ButtonTitleType {
   NONE = 0,
   BUTTON_ELEMENT_SUBMIT_TYPE = 1,  // <button type='submit'>
   BUTTON_ELEMENT_BUTTON_TYPE = 2,  // <button type='button'>
-  INPUT_ELEMENT_SUBMIT_TYPE = 3,   // <input type='submit'>
-  INPUT_ELEMENT_BUTTON_TYPE = 4,   // <input type='button'>
-  HYPERLINK = 5,                   // e.g. <a class='button'>
-  DIV = 6,                         // e.g. <div id='submit'>
-  SPAN = 7                         // e.g. <span name='btn'>
+  INPUT_ELEMENT_SUBMIT_TYPE = 3,  // <input type='submit'>
+  INPUT_ELEMENT_BUTTON_TYPE = 4,  // <input type='button'>
+  HYPERLINK = 5,  // e.g. <a class='button'>
+  DIV = 6,  // e.g. <div id='submit'>
+  SPAN = 7,  // e.g. <span name='btn'>
 };
 
 // Describes various criteria (e.g. there are empty fields in the form) that
 // affect whether a form is ready for submission. Don't change IDs as they are
 // used for metrics.
-// TODO(crbug.com/1283004): Basically, the browser needs just a boolean: submit
+// TODO(crbug.com/40209736): Basically, the browser needs just a boolean: submit
 // or not. Once related projects (crbug.com/1393043, crbug.com/1319364) are
 // done or archived, this enum can be removed.
 enum SubmissionReadinessState {
@@ -212,7 +215,7 @@ enum SubmissionReadinessState {
 
   // Various blockers of forms submission.
   // There is only a sole password field.
-  // TODO(crbug.com/1319364): For now this entry doesn't trigger submission,
+  // TODO(crbug.com/40223173): For now this entry doesn't trigger submission,
   // but ideally Touch-To-Fill should be able to log a user in with just one
   // tap, i.e. TTF should submit both single username and single password
   // forms.
@@ -233,11 +236,15 @@ enum SubmissionReadinessState {
   kTwoFields = 7,
 
   // There is only a sole username field.
-  // TODO(crbug.com/1319364): For now this entry doesn't trigger submission,
+  // TODO(crbug.com/40223173): For now this entry doesn't trigger submission,
   // but ideally Touch-To-Fill should be able to log a user in with just one
   // tap, i.e. TTF should submit both single username and single password
   // forms.
   kNoPasswordField = 8,
+
+  // A child frame which is likely to be CAPTCHA was detected within the
+  // password form. Do not trigger submission in this case.
+  kLikelyHasCaptcha = 9,
 };
 
 // autofill::FrameToken (components/autofill/core/common/unique_ids.h)
@@ -265,38 +272,15 @@ struct FieldRendererId {
   uint64 id;
 };
 
+// autofill::FillId (components/autofill/core/common/unique_ids.h)
+struct FillId {
+  mojo_base.mojom.UnguessableToken id;
+};
+
 // autofill::SelectOption (components/autofill/core/common/form_field_data.h)
 struct SelectOption {
   mojo_base.mojom.String16 value;
-  mojo_base.mojom.String16 content;
-};
-
-// autofill::Section::Autocomplete
-// (components/autofill/core/common/form_field_data.h)
-struct SectionAutocomplete {
-  string section;
-  HtmlFieldMode html_field_mode;
-};
-
-// autofill::Section::FieldIdentifier
-// (components/autofill/core/common/form_field_data.h)
-struct SectionFieldIdentifier {
-  string field_name;
-  uint64 local_frame_id;
-  FieldRendererId field_renderer_id;
-};
-
-// autofill::Section::SectionValue
-// (components/autofill/core/common/form_field_data.h)
-union SectionValue {
-  bool default_section;
-  SectionAutocomplete autocomplete;
-  SectionFieldIdentifier field_identifier;
-};
-
-// autofill::Section (components/autofill/core/common/form_field_data.h)
-struct Section {
-  SectionValue value;
+  mojo_base.mojom.String16 text;
 };
 
 // autofill::AutocompleteParsingResult
@@ -305,6 +289,8 @@ struct AutocompleteParsingResult {
   string section;
   HtmlFieldMode mode;
   HtmlFieldType field_type;
+  bool webauthn;
+  bool webidentity;
 };
 
 // autofill::FormFieldData (components/autofill/core/common/form_field_data.h)
@@ -325,26 +311,30 @@ struct FormFieldData {
 
   // From which source the label is inferred.
   enum LabelSource {
-    kUnknown,           // No label.
-    kLabelTag,          // <label> sibling/ancestor.
-    kPTag,              // <p> sibling.
-    kDivTable,          // <div> ancestor.
-    kTdTag,             // <td> sibling.
-    kDdTag,             // <dd> sibling.
-    kLiTag,             // <li> ancestor.
-    kPlaceHolder,       // placeholder attribute.
-    kAriaLabel,         // aria-label attribute.
-    kCombined,          // Text node sibling (includes <b>, etc).
-    kValue,             // value attribute.
-    kForId,             // <label> for-attribute that links to an control
+    kUnknown,  // No label.
+    kLabelTag,  // <label> sibling/ancestor.
+    kPTag,  // <p> sibling.
+    kDivTable,  // <div> ancestor.
+    kTdTag,  // <td> sibling.
+    kDdTag,  // <dd> sibling.
+    kLiTag,  // <li> ancestor.
+    kPlaceHolder,  // placeholder attribute.
+    kAriaLabel,  // aria-label attribute.
+    kCombined,  // Text node sibling (includes <b>, etc).
+    kValue,  // value attribute.
+    kForId,  // <label> for-attribute that links to an control
                         // via it's id attribute.
-    kForName,           // <label> for-attribute that links to an control
+
+    kForName,  // <label> for-attribute that links to an control
                         // viait's name attribute.
-    kForShadowHostId,   // <label> for-attribute that links to an control
+
+    kForShadowHostId,  // <label> for-attribute that links to an control
                         // (inside a shadow DOM) via it's id attribute.
-    kForShadowHostName, // <label> for-attribute that links to an control
+
+    kForShadowHostName,  // <label> for-attribute that links to an control
                         // (inside a shadow DOM) via it's name attribute.
-    kOverlayingLabel,   // Succeeding DOM node overlaying the input.
+
+    kOverlayingLabel,  // Succeeding DOM node overlaying the input.
   };
 
   mojo_base.mojom.String16 label;
@@ -356,10 +346,12 @@ struct FormFieldData {
   FormControlType form_control_type;
   string autocomplete_attribute;
   AutocompleteParsingResult? parsed_autocomplete;
+  mojo_base.mojom.String16 pattern;
   mojo_base.mojom.String16 placeholder;
   mojo_base.mojom.String16 css_classes;
   mojo_base.mojom.String16 aria_label;
   mojo_base.mojom.String16 aria_description;
+  mojo_base.mojom.String16 nonce;
   FieldRendererId renderer_id;
   FormRendererId host_form_id;
   uint32 properties_mask;
@@ -368,7 +360,6 @@ struct FormFieldData {
   uint64 max_length;
   bool is_user_edited;
   bool is_autofilled;
-  Section section;
   CheckStatus check_status;
   bool is_focusable;
   bool is_visible;
@@ -378,6 +369,7 @@ struct FormFieldData {
   bool is_enabled;
   bool is_readonly;
   mojo_base.mojom.String16 user_input;
+  bool allows_writing_suggestions;
 
   array<SelectOption> options;
 
@@ -395,8 +387,8 @@ struct FormFieldData {
 struct FormFieldData_FillData {
   mojo_base.mojom.String16 value;
   FieldRendererId renderer_id;
+  FormRendererId host_form_id;
   bool is_autofilled;
-  Section section;
   bool force_override;
 };
 
@@ -420,13 +412,7 @@ struct FormData {
   array<FormFieldData> fields;
   array<FieldRendererId> username_predictions;
   bool is_gaia_with_skip_save_password_form;
-};
-
-// autofill::FormData::FillData
-// (components/autofill/core/common/form_filling_data.h)
-struct FormData_FillData {
-  FormRendererId renderer_id;
-  array<FormFieldData_FillData> fields;
+  bool likely_contains_captcha;
 };
 
 // autofill::FormFieldDataPredictions
@@ -435,11 +421,16 @@ struct FormFieldDataPredictions {
   string host_form_signature;
   string signature;
   string heuristic_type;
+  // The type predicted by the Password Manager's ML model.
+  string pwm_ml_type;
   // Empty if server predictions have not arrived, yet.
   string? server_type;
   string html_type;
   string overall_type;
+  string attribute_types;
+  string format_string;
   string parseable_name;
+  string parseable_label;
   string section;
   // See AutofillField for information on the ranks.
   uint32 rank;
@@ -453,7 +444,21 @@ struct FormFieldDataPredictions {
 struct FormDataPredictions {
   FormData data;
   string signature;
+
+  // Signature used for server-side overrides of predictions on forms where the
+  // regular signature is unstable (e.g. due to random form or field names).
+  // It is based on the form's scheme, host, and field control types. To avoid
+  // collisions on small forms (2 fields or less), it also incorporates the
+  // URL path, reference, or query.
   string alternative_signature;
+
+  // A stable signature used for collecting and serving crowdsourced
+  // predictions. It is calculated similarly to `alternative_signature` (using
+  // scheme, host, and field types) but is more stable for small forms (2 fields
+  // or less) because it strictly excludes the URL path, reference, and query
+  // components.
+  string structural_form_signature;
+
   array<FormFieldDataPredictions> fields;
 };
 
@@ -464,6 +469,7 @@ struct PasswordAndMetadata {
   mojo_base.mojom.String16 password_value;
   string realm;
   bool uses_account_store;
+  bool is_grouped_affiliation;
 };
 
 // autofill::PasswordFormFillData
@@ -473,17 +479,17 @@ struct PasswordFormFillData {
   url.mojom.Url url;
   FieldRendererId username_element_renderer_id;
   FieldRendererId password_element_renderer_id;
-  bool username_may_use_prefilled_placeholder;
   PasswordAndMetadata preferred_login;
   array<PasswordAndMetadata> additional_logins;
   bool wait_for_username;
+  array<FieldRendererId> suggestion_banned_fields;
 };
 
 // autofill::PasswordFormGenerationData
 // (components/autofill/core/common/password_form_generation_data.h)
 struct PasswordFormGenerationData {
-   FieldRendererId new_password_renderer_id;
-   FieldRendererId confirmation_password_renderer_id;
+  FieldRendererId new_password_renderer_id;
+  FieldRendererId confirmation_password_renderer_id;
 };
 
 // autofill::password_generation::PasswordGenerationUIData
@@ -496,21 +502,28 @@ struct PasswordGenerationUIData {
   bool is_generation_element_password_type;
   mojo_base.mojom.TextDirection text_direction;
   FormData form_data;
-  bool input_field_empty;
+  bool generation_rejected;
+};
+
+// autofill::TriggeringField
+// (components/autofill/core/common/password_form_fill_data.h)
+struct TriggeringField {
+  FieldRendererId element_id;
+  AutofillSuggestionTriggerSource trigger_source;
+  mojo_base.mojom.TextDirection text_direction;
+  mojo_base.mojom.String16 typed_username;
+  bool show_webauthn_credentials;
+  bool show_identity_credentials;
+  gfx.mojom.RectF bounds;
 };
 
 // autofill::PasswordSuggestionRequest
 // (components/autofill/core/common/password_form_fill_data.h)
 struct PasswordSuggestionRequest {
-  FieldRendererId element_id;
+  TriggeringField field;
   FormData form_data;
-  AutofillSuggestionTriggerSource trigger_source;
   uint64 username_field_index;
   uint64 password_field_index;
-  mojo_base.mojom.TextDirection text_direction;
-  mojo_base.mojom.String16 typed_username;
-  bool show_webauthn_credentials;
-  gfx.mojom.RectF bounds;
 };
 
 // autofill::ParsingResult
@@ -538,20 +551,21 @@ enum AutofillSuggestionAvailability {
 // Represents whether an autofill action, which is an operation that changes a
 // form, will persist (kFill) or will be cleared later (kPreview).
 enum ActionPersistence {
-  kFill,     // The action is filled.
+  kFill,  // The action is filled.
   kPreview,  // The action is previewed and will be cleared afterwards.
 };
 
 // The possible actions that Autofill can perform on forms.
-enum ActionType {
+enum FormActionType {
   kFill,  // Autofill should fill the form.
   kUndo,  // Autofill should undo some previous fill operation on the form.
 };
 
-// Indicates which part of a text field's value Autofill replaces.
-enum TextReplacement {
-  kReplaceAll,        // Replace the field's current value.
+// The possible actions that Autofill can perform on fields.
+enum FieldActionType {
+  kReplaceAll,  // Replace the field's current value.
   kReplaceSelection,  // Replace only the currently selected text.
+  kSelectAll,  // Selects all the text within this field.
 };
 
 // Describes which action triggered Autofill suggestions. This has implications
@@ -562,61 +576,99 @@ enum TextReplacement {
 // This then invokes `AutofillManager::OnAskForValuesToFill()` in the browser
 // process. In some cases, suggestions get updated. This happens solely in the
 // browser process.
+// Must stay in sync with AutofillSuggestionTriggerSource in
+// histograms/enums.xml. Do not reorder or remove items.
 enum AutofillSuggestionTriggerSource {
   // Used as a default value and cannot be used to trigger suggestions.
-  kUnspecified,
+  kUnspecified = 0,
   // Suggestions triggered by either:
   // - Clicking or tapping a text input (TAB key doesn't count).
   // - Focusing a text input using a screen reader.
-  // Suggestion of this type can trigger FastCheckout or TouchToFill.
-  kFormControlElementClicked,
+  // A suggestion of this type can trigger TouchToFill.
+  kFormControlElementClicked = 1,
   // Suggestions triggered by focusing a textarea without click or tab
-  // interaction. Currently, this only generates suggestions from Compose.
-  kTextareaFocusedWithoutClick,
+  // interaction. Currently, this is only triggered on Desktop platforms and
+  // only generates Compose suggestions.
+  kTextareaFocusedWithoutClick = 2,
   // Suggestions triggered as above except that the target is a
   // contenteditable element rather than a form control element.
-  kContentEditableClicked,
+  kContentEditableClicked = 3,
   // Suggestions triggered by modifying the content of a text input.
-  kTextFieldDidChange,
+  kTextFieldValueChanged = 4,
   // Suggestions triggered by pressing the down key on a text input. This auto
   // selects the first suggestion.
-  kTextFieldDidReceiveKeyDown,
+  kTextFieldDidReceiveKeyDown = 5,
   // Suggestions triggered by the clicking onto the "triangle" on an
   // <input list=...> to show <datalist> suggestions. While this also counts
   // as a kFormControlElementClicked event, it is triggered slightly later.
   // As of crrev.com/c/107353005, prefix matching for such suggestions is
   // skipped, to make them behave more like a <select>.
-  // TODO(crbug.com/1007974): It's unclear if this is still necessary.
-  kOpenTextDataListChooser,
-  // Credit card suggestions offer users with Sync transport eligiblity an
-  // option to display cards from their account. This causes the suggestions to
-  // update. The updated suggested are considered to have this trigger source.
-  kShowCardsFromAccount,
+  // TODO(crbug.com/40100455): It's unclear if this is still necessary.
+  kOpenTextDataListChooser = 6,
+  // kShowCardsFromAccount = 7 is deprecated
   // The suggestion triggering logic through Blink events (e.g.
   // `kFormControlElementClicked`) is shared with the password manager. However,
   // the trigger source is not propagated to the password manager specific
   // code (password_autofill_agent.cc and onwards to the browser process).
   // On the browser process side, all password suggestions are treated as
   // `kPasswordManager`. On the renderer side, `kPasswordManager` is unused.
-  kPasswordManager,
+  kPasswordManager = 8,
   // Since iOS has no renderer, it has separate suggestion triggering logic.
   // This code currently doesn't distinguish between different suggestion
   // trigger sources. They are all treated as `kiOS`. See crbug.com/1448447.
-  kiOS,
-  // Suggestions triggered by selecting the Autofill address manual fallback
-  // entry from the Chrome context menu. This trigger source is also used to
-  // reopen the Autofill popup after the user closed a dialog opened from the
-  // popup.
-  kManualFallbackAddress,
-  // Suggestions triggered by selecting the Autofill payment methods manual
-  // fallback entry from the Chrome context menu.
-  kManualFallbackPayments,
+  kiOS = 9,
+  // kManualFallbackAddress = 10 is deprecated
+  // kManualFallbackPayments = 11 is deprecated
   // Suggestions triggered by selecting the Autofill password manager manual
   // fallback entry from the Chrome context menu.
-  kManualFallbackPasswords,
+  kManualFallbackPasswords = 12,
+  // Suggestions triggered by selecting the Plus Address manual fallback entry
+  // from the Chrome context menu.
+  kManualFallbackPlusAddresses = 13,
   // Suggestions are triggered after the user the user closed a dialog. For
   // example, this can be profile edit or delete dialog. This trigger source
   // is used only if the suggestions were triggered manually via the Chrome
   // context menu.
-  kShowPromptAfterDialogClosedNonManualFallback,
+  // kShowPromptAfterDialogClosedNonManualFallback = 14 is deprecated.
+  // The compose saved state notification is triggered when the compose dialog
+  // loses focus and is closed.
+  kComposeDialogLostFocus = 15,
+  // The compose proactive nudge is triggered after a delay by the compose
+  // manager.
+  kComposeDelayedProactiveNudge = 16,
+  // Password manager renderer received password suggestions from the browser
+  // after the field was focused (likely due to autofocus on the page load).
+  kPasswordManagerProcessedFocusedField = 17,
+  // kAutofillAi = 18 is deprecated
+  // An update to the suggestions is triggered, e.g. because a user decided
+  // to refresh a plus address suggestion or because a network request for a
+  // plus address suggestion terminated and its result needs to be shown.
+  // This value is not allowed to be sent from the renderer to the browser since
+  // it disables some of the click-jacking protections in the browser.
+  kPlusAddressUpdatedInBrowserProcess = 19,
+  // Suggestion triggered when Password Manager detects a potentially failed
+  // login attempt that used a credential with a recovery password.
+  kProactivePasswordRecovery = 20,
+  // Suggestions triggered by the GLIC service.
+  kGlic = 21,
+};
+
+// Encapsulates the data for a potential "Sign in with Google" button.
+struct SiwgButtonData {
+  // The DOM node ID of the button element.
+  int64 dom_node_id;
+  // The visible text of the button.
+  mojo_base.mojom.String16 text;
+  // The HTML id attribute of the button.
+  mojo_base.mojom.String16 id_attribute;
+  // The HTML class attribute of the button.
+  mojo_base.mojom.String16 class_attribute;
+  // The ARIA label of the button.
+  mojo_base.mojom.String16 aria_label;
+  // The HTML href attribute of the button.
+  mojo_base.mojom.String16 href_attribute;
+  // The HTML role attribute of the button.
+  mojo_base.mojom.String16 role;
+  // The HTML tag name of the button.
+  mojo_base.mojom.String16 tag_name;
 };

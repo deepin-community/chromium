@@ -10,7 +10,7 @@
 
 #include "base/test/mock_callback.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
-#include "components/autofill/core/browser/autofill_client.h"
+#include "components/autofill/core/browser/foundations/autofill_client.h"
 #include "components/browser_ui/device_lock/android/test_device_lock_bridge.h"
 #include "content/public/browser/web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -21,9 +21,8 @@ namespace {
 
 const std::u16string kUserProvidedNickname = u"My doctor's IBAN";
 
-}  // namespace
-
-using SaveIbanOfferUserDecision = AutofillClient::SaveIbanOfferUserDecision;
+using SaveIbanOfferUserDecision =
+    payments::PaymentsAutofillClient::SaveIbanOfferUserDecision;
 using LocalCallbackArgs = std::pair<SaveIbanOfferUserDecision, std::u16string>;
 
 class AutofillSaveIbanDelegateTest : public ChromeRenderViewHostTestHarness {
@@ -47,7 +46,7 @@ class AutofillSaveIbanDelegateTest : public ChromeRenderViewHostTestHarness {
   void LocalCallback(SaveIbanOfferUserDecision decision,
                      std::u16string_view nickname);
 
-  AutofillClient::SaveIbanPromptCallback MakeLocalCallback();
+  payments::PaymentsAutofillClient::SaveIbanPromptCallback MakeLocalCallback();
 
   std::optional<LocalCallbackArgs> local_offer_decision_;
 
@@ -62,7 +61,7 @@ void AutofillSaveIbanDelegateTest::LocalCallback(
   local_offer_decision_.emplace(decision, nickname);
 }
 
-AutofillClient::SaveIbanPromptCallback
+payments::PaymentsAutofillClient::SaveIbanPromptCallback
 AutofillSaveIbanDelegateTest::MakeLocalCallback() {
   return base::BindOnce(
       &AutofillSaveIbanDelegateTest::LocalCallback,
@@ -158,4 +157,5 @@ TEST_F(AutofillSaveIbanDelegateTest, DeviceLockRequirementsNotMet) {
                                          /*user_provided_nickname=*/u"")));
 }
 
+}  // namespace
 }  // namespace autofill

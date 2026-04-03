@@ -6,10 +6,18 @@
 
 #include <utility>
 
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/trace_event/trace_event.h"
 
 namespace viz {
+
+namespace {
+
+BASE_FEATURE(kExternalBeginFrameSourceWinUsesRunOrPostTask,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+}  // namespace
 
 ExternalBeginFrameSourceWin::ExternalBeginFrameSourceWin(
     uint32_t restart_id,
@@ -25,13 +33,22 @@ ExternalBeginFrameSourceWin::~ExternalBeginFrameSourceWin() {
 
 void ExternalBeginFrameSourceWin::OnVSync(base::TimeTicks vsync_time,
                                           base::TimeDelta vsync_interval) {
-  if (!task_runner_->RunsTasksInCurrentSequence()) {
-    task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(&ExternalBeginFrameSourceWin::OnVSync,
-                       weak_factory_.GetWeakPtr(), vsync_time, vsync_interval));
-    return;
+  auto callback =
+      base::BindOnce(&ExternalBeginFrameSourceWin::OnVSyncOnSequence,
+                     weak_factory_.GetWeakPtr(), vsync_time, vsync_interval);
+  if (base::FeatureList::IsEnabled(
+          kExternalBeginFrameSourceWinUsesRunOrPostTask)) {
+    task_runner_->RunOrPostTask(base::subtle::RunOrPostTaskPassKey(), FROM_HERE,
+                                std::move(callback));
+  } else {
+    task_runner_->PostTask(FROM_HERE, std::move(callback));
   }
+}
+
+void ExternalBeginFrameSourceWin::OnVSyncOnSequence(
+    base::TimeTicks vsync_time,
+    base::TimeDelta vsync_interval) {
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
   vsync_interval_ = vsync_interval;
   if (skip_next_vsync_) {
     TRACE_EVENT_INSTANT0("gpu",
@@ -46,7 +63,8 @@ void ExternalBeginFrameSourceWin::OnVSync(base::TimeTicks vsync_time,
     vsync_interval *= 2;
   }
   auto begin_frame_args = begin_frame_args_generator_.GenerateBeginFrameArgs(
-      source_id(), vsync_time, vsync_time + vsync_interval, vsync_interval);
+      source_id(), vsync_time, vsync_time + vsync_interval, vsync_interval,
+      vsync_interval_);
   ExternalBeginFrameSource::OnBeginFrame(begin_frame_args);
 }
 
@@ -68,7 +86,8 @@ BeginFrameArgs ExternalBeginFrameSourceWin::GetMissedBeginFrameArgs(
   if (!last_begin_frame_args_.IsValid() ||
       frame_time > last_begin_frame_args_.frame_time) {
     last_begin_frame_args_ = begin_frame_args_generator_.GenerateBeginFrameArgs(
-        source_id(), frame_time, frame_time + interval, interval);
+        source_id(), frame_time, frame_time + interval, interval,
+        vsync_interval_);
   }
 
   return ExternalBeginFrameSource::GetMissedBeginFrameArgs(obs);
@@ -89,13 +108,6 @@ void ExternalBeginFrameSourceWin::SetPreferredInterval(
   skip_next_vsync_ = false;
 }
 
-void ExternalBeginFrameSourceWin::SetDynamicBeginFrameDeadlineOffsetSource(
-    DynamicBeginFrameDeadlineOffsetSource*
-        dynamic_begin_frame_deadline_offset_source) {
-  begin_frame_args_generator_.set_dynamic_begin_frame_deadline_offset_source(
-      dynamic_begin_frame_deadline_offset_source);
-}
-
 void ExternalBeginFrameSourceWin::OnNeedsBeginFrames(bool needs_begin_frames) {
   if (observing_vsync_ == needs_begin_frames) {
     return;
@@ -109,7 +121,8 @@ void ExternalBeginFrameSourceWin::OnNeedsBeginFrames(bool needs_begin_frames) {
   }
 }
 
-void ExternalBeginFrameSourceWin::SetVSyncDisplayID(int64_t display_id) {
+void ExternalBeginFrameSourceWin::SetVSyncDisplayID(int64_t display_id,
+                                                    bool force_update) {
   // TODO(sunnyps): See if we should use non-primary displays for driving vsync.
 }
 

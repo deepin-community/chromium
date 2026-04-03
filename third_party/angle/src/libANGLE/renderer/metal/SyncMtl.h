@@ -94,8 +94,8 @@ class EGLSyncMtl final : public EGLSyncImpl
     egl::Error dupNativeFenceFD(const egl::Display *display, EGLint *result) const override;
 
   private:
-    mtl::AutoObjCPtr<id<MTLSharedEvent>> mSharedEvent;
-
+    angle::ObjCPtr<id<MTLSharedEvent>> mSharedEvent;
+    EGLenum mType = EGL_NONE;
     std::unique_ptr<mtl::SyncImpl> mSync;
 };
 

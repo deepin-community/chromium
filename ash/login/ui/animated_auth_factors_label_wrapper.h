@@ -7,7 +7,6 @@
 
 #include "ash/ash_export.h"
 #include "ash/login/ui/auth_factor_model.h"
-#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -19,7 +18,6 @@ class Label;
 
 namespace ash {
 
-// TODO(b/216696664): Add unit tests for this class.
 class ASH_EXPORT AnimatedAuthFactorsLabelWrapper : public views::View {
   METADATA_HEADER(AnimatedAuthFactorsLabelWrapper, views::View)
 
@@ -38,7 +36,8 @@ class ASH_EXPORT AnimatedAuthFactorsLabelWrapper : public views::View {
   views::Label* label() { return current_label_; }
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
 
  private:
   int previous_label_id_ = 0;

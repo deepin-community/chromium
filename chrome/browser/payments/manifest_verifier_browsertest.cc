@@ -5,6 +5,7 @@
 #include "components/payments/content/manifest_verifier.h"
 
 #include <stdint.h>
+
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -14,8 +15,8 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "components/payments/content/payment_manifest_web_data_service.h"
 #include "components/payments/content/utility/payment_manifest_parser.h"
+#include "components/payments/content/web_payments_web_data_service.h"
 #include "components/payments/core/const_csp_checker.h"
 #include "components/payments/core/test_payment_manifest_downloader.h"
 #include "components/webdata_services/web_data_service_wrapper_factory.h"
@@ -33,13 +34,13 @@ namespace {
 // Tests for the manifest verifier.
 class ManifestVerifierBrowserTest : public InProcessBrowserTest {
  public:
-  ManifestVerifierBrowserTest() {}
+  ManifestVerifierBrowserTest() = default;
 
   ManifestVerifierBrowserTest(const ManifestVerifierBrowserTest&) = delete;
   ManifestVerifierBrowserTest& operator=(const ManifestVerifierBrowserTest&) =
       delete;
 
-  ~ManifestVerifierBrowserTest() override {}
+  ~ManifestVerifierBrowserTest() override = default;
 
   // Starts the HTTPS test server on localhost.
   void SetUpOnMainThread() override {
@@ -68,7 +69,7 @@ class ManifestVerifierBrowserTest : public InProcessBrowserTest {
     auto parser = std::make_unique<payments::PaymentManifestParser>(
         std::make_unique<ErrorLogger>());
     auto cache = webdata_services::WebDataServiceWrapperFactory::
-        GetPaymentManifestWebDataServiceForBrowserContext(
+        GetWebPaymentsWebDataServiceForBrowserContext(
             context, ServiceAccessType::EXPLICIT_ACCESS);
 
     ManifestVerifier verifier(url::Origin::Create(GURL("https://chromium.org")),
@@ -91,10 +92,6 @@ class ManifestVerifierBrowserTest : public InProcessBrowserTest {
   }
 
   const std::string& error_message() const { return error_message_; }
-
-  bool did_download_before_verification() const {
-    return did_download_before_verification_;
-  }
 
   // Expects that the verified payment app with |id| has the |expected_scope|
   // and the |expected_methods| and the
@@ -125,7 +122,6 @@ class ManifestVerifierBrowserTest : public InProcessBrowserTest {
       const std::string& error_message) {
     verified_apps_ = std::move(apps);
     error_message_ = error_message;
-    did_download_before_verification_ = test_downloader_->DidCompleteDownload();
   }
 
   // Serves the payment method manifest files.
@@ -137,8 +133,6 @@ class ManifestVerifierBrowserTest : public InProcessBrowserTest {
   content::InstalledPaymentAppsFinder::PaymentApps verified_apps_;
 
   std::string error_message_;
-
-  bool did_download_before_verification_{false};
 };
 
 // Absence of payment handlers should result in absence of verified payment
@@ -551,58 +545,6 @@ IN_PROC_BROWSER_TEST_F(ManifestVerifierBrowserTest,
 
     EXPECT_TRUE(verified_apps().empty());
     EXPECT_TRUE(error_message().empty()) << error_message();
-  }
-}
-
-void VerifyForCacheHitPaymentMethodHistogramTest(
-    ManifestVerifierBrowserTest* harness) {
-  content::InstalledPaymentAppsFinder::PaymentApps apps;
-  apps[0] = std::make_unique<content::StoredPaymentApp>();
-  apps[0]->scope = GURL("https://alicepay.test/webpay");
-  apps[0]->enabled_methods = {"https://ikepay.test/webpay"};
-
-  harness->Verify(std::move(apps));
-
-  EXPECT_EQ(1U, harness->verified_apps().size());
-  harness->ExpectApp(0, "https://alicepay.test/webpay",
-                     {"https://ikepay.test/webpay"}, true);
-  EXPECT_TRUE(harness->error_message().empty()) << harness->error_message();
-}
-
-// Test recording PaymentManifestVerifier.CacheHitPaymentMethod UMA histogram.
-IN_PROC_BROWSER_TEST_F(ManifestVerifierBrowserTest,
-                       CacheHitPaymentMethodHistogram) {
-  {
-    base::HistogramTester histogram_tester;
-
-    // Cache miss, payment method manifest will be cached.
-    VerifyForCacheHitPaymentMethodHistogramTest(this);
-
-    // Download should complete prior to calling verification callback for cache
-    // miss.
-    EXPECT_TRUE(did_download_before_verification());
-
-    EXPECT_THAT(histogram_tester.GetAllSamples(
-                    "PaymentRequest.ManifestVerifierCacheHitPaymentMethod"),
-                BucketsAre(base::Bucket(false, 1)));
-  }
-
-  test_downloader_->ResetTestState();
-
-  {
-    base::HistogramTester histogram_tester;
-
-    // Cache hit.
-    VerifyForCacheHitPaymentMethodHistogramTest(this);
-
-    // Verification callback should be called prior to download starting for
-    // cache hit.
-    EXPECT_FALSE(did_download_before_verification());
-    EXPECT_TRUE(test_downloader_->DidCompleteDownload());
-
-    EXPECT_THAT(histogram_tester.GetAllSamples(
-                    "PaymentRequest.ManifestVerifierCacheHitPaymentMethod"),
-                BucketsAre(base::Bucket(true, 1)));
   }
 }
 

@@ -26,9 +26,11 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/bubble/tooltip_icon.h"
 #include "ui/views/controls/button/button.h"
+#include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
@@ -52,8 +54,7 @@ class CircularImageView : public views::ImageView {
 void CircularImageView::OnPaint(gfx::Canvas* canvas) {
   // Display the avatar picture as a circle.
   gfx::Rect bounds(GetImageBounds());
-  SkPath circular_mask;
-  circular_mask.addCircle(
+  const SkPath circular_mask = SkPath::Circle(
       SkIntToScalar(bounds.x() + bounds.right()) / 2,
       SkIntToScalar(bounds.y() + bounds.bottom()) / 2,
       SkIntToScalar(std::min(bounds.height(), bounds.width())) / 2);
@@ -133,8 +134,8 @@ CredentialsItemView::CredentialsItemView(
     lower_label_ = text_container->AddChildView(std::move(lower_label));
   }
 
-  // Add info icon with a tooltip providing the source of the credential if
-  // this is not an exact match.
+  // Add info icon with a tooltip providing the source of the PSL, affiliated
+  // and grouped credentials.
   if (form->match_type.has_value() &&
       password_manager_util::GetMatchType(*form) !=
           password_manager_util::GetLoginMatchType::kExact) {
@@ -154,36 +155,20 @@ CredentialsItemView::CredentialsItemView(
     }
   }
 
-  if (!upper_text.empty() && !lower_text.empty())
-    SetAccessibleName(upper_text + u"\n" + lower_text);
-  else
-    SetAccessibleName(upper_text + lower_text);
+  if (!upper_text.empty() && !lower_text.empty()) {
+    GetViewAccessibility().SetName(upper_text + u"\n" + lower_text);
+  } else {
+    GetViewAccessibility().SetName(upper_text + lower_text);
+  }
 
   SetFocusBehavior(FocusBehavior::ALWAYS);
+  SetInstallFocusRingOnFocus(true);
+  // With Focus Ring on Focus there is a line around the button.
+  // We want to remove this line so setting the thickness as 0.
+  views::FocusRing::Get(this)->SetHaloThickness(0.0f);
 }
 
 CredentialsItemView::~CredentialsItemView() = default;
-
-void CredentialsItemView::SetStoreIndicatorIcon(
-    password_manager::PasswordForm::Store store) {
-  if (store == password_manager::PasswordForm::Store::kAccountStore &&
-      !store_indicator_icon_view_) {
-    store_indicator_icon_view_ =
-        AddChildView(std::make_unique<views::ImageView>());
-    store_indicator_icon_view_->SetCanProcessEventsWithinSubtree(false);
-    store_indicator_icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-        vector_icons::kGoogleGLogoIcon,
-#else
-        vector_icons::kSyncIcon,
-#endif  // !BUILDFLAG(GOOGLE_CHROME_BRANDING)
-        gfx::kPlaceholderColor));
-  } else if (store == password_manager::PasswordForm::Store::kProfileStore &&
-             store_indicator_icon_view_) {
-    RemoveChildView(store_indicator_icon_view_);
-    store_indicator_icon_view_ = nullptr;
-  }
-}
 
 void CredentialsItemView::UpdateAvatar(const gfx::ImageSkia& image) {
   image_view_->SetImage(
@@ -195,7 +180,8 @@ int CredentialsItemView::GetPreferredHeight() const {
 }
 
 void CredentialsItemView::OnPaintBackground(gfx::Canvas* canvas) {
-  if (GetState() == STATE_PRESSED || GetState() == STATE_HOVERED) {
+  if (GetState() == STATE_PRESSED || GetState() == STATE_HOVERED ||
+      HasFocus()) {
     canvas->DrawColor(
         GetColorProvider()->GetColor(ui::kColorMenuItemBackgroundSelected));
   }

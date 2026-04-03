@@ -24,12 +24,6 @@ TEST_F('AccessibilityCommonE2ETest', 'ToggleFeatures', function() {
     assertTrue(pref.value);
     assertTrue(Boolean(accessibilityCommon.getAutoclickForTest()));
 
-    // Check that FaceGaze is disabled by default.
-    const enabled = await this.getFeature(
-        chrome.accessibilityPrivate.AccessibilityFeature.FACE_GAZE);
-    assertFalse(enabled);
-    assertFalse(Boolean(accessibilityCommon.getFaceGazeForTest()));
-
     // Next, flip on screen magnifier and verify all prefs and internal state.
     await this.setPref('settings.a11y.screen_magnifier', true);
     pref = await this.getPref('settings.a11y.autoclick');
@@ -77,49 +71,29 @@ TEST_F('AccessibilityCommonE2ETest', 'ToggleFeatures', function() {
   })();
 });
 
-GEN('#include "ui/accessibility/accessibility_features.h"');
+TEST_F('AccessibilityCommonE2ETest', 'FaceGazeEnabled', function() {
+  this.newCallback(async () => {
+    let pref = await this.getPref('settings.a11y.face_gaze.enabled');
+    assertEquals('settings.a11y.face_gaze.enabled', pref.key);
+    assertFalse(pref.value);
 
-/**
- * Accessibility common extension browser tests with enabled FaceGaze feature.
- */
-AccessibilityCommonWithFaceGazeEnabledE2ETest =
-    class extends AccessibilityCommonE2ETest {
-  /** @override */
-  get featureList() {
-    return {enabled: ['features::kAccessibilityFaceGaze']};
-  }
-};
+    // FaceGaze should not be loaded yet.
+    assertFalse(Boolean(accessibilityCommon.getFaceGazeForTest()));
 
-TEST_F(
-    'AccessibilityCommonWithFaceGazeEnabledE2ETest', 'FaceGazeEnabled',
-    function() {
-      this.newCallback(async () => {
-        // Check that FaceGaze is enabled from the command line.
-        const enabled = await this.getFeature(
-            chrome.accessibilityPrivate.AccessibilityFeature.FACE_GAZE);
-        assertTrue(enabled);
+    // Update the pref, FaceGaze should be loaded.
+    await this.setPref('settings.a11y.face_gaze.enabled', true);
+    pref = await this.getPref('settings.a11y.face_gaze.enabled');
+    assertEquals('settings.a11y.face_gaze.enabled', pref.key);
+    assertTrue(pref.value);
 
-        let pref = await this.getPref('settings.a11y.face_gaze.enabled');
-        assertEquals('settings.a11y.face_gaze.enabled', pref.key);
-        assertFalse(pref.value);
+    // Now it is loaded.
+    assertTrue(Boolean(accessibilityCommon.getFaceGazeForTest()));
 
-        // FaceGaze should not be loaded yet.
-        assertFalse(Boolean(accessibilityCommon.getFaceGazeForTest()));
-
-        // Update the pref, FaceGaze should be loaded.
-        await this.setPref('settings.a11y.face_gaze.enabled', true);
-        pref = await this.getPref('settings.a11y.face_gaze.enabled');
-        assertEquals('settings.a11y.face_gaze.enabled', pref.key);
-        assertTrue(pref.value);
-
-        // Now it is loaded.
-        assertTrue(Boolean(accessibilityCommon.getFaceGazeForTest()));
-
-        // Unloads when the pref is turned off.
-        await this.setPref('settings.a11y.face_gaze.enabled', false);
-        pref = await this.getPref('settings.a11y.face_gaze.enabled');
-        assertEquals('settings.a11y.face_gaze.enabled', pref.key);
-        assertFalse(pref.value);
-        assertFalse(Boolean(accessibilityCommon.getFaceGazeForTest()));
-      })();
-    });
+    // Unloads when the pref is turned off.
+    await this.setPref('settings.a11y.face_gaze.enabled', false);
+    pref = await this.getPref('settings.a11y.face_gaze.enabled');
+    assertEquals('settings.a11y.face_gaze.enabled', pref.key);
+    assertFalse(pref.value);
+    assertFalse(Boolean(accessibilityCommon.getFaceGazeForTest()));
+  })();
+});

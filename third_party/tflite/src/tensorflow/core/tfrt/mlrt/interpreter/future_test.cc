@@ -18,7 +18,11 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include "tsl/platform/status_matchers.h"
+#include "absl/status/status.h"
+#include "absl/status/status_matchers.h"
+#include "absl/status/statusor.h"
+#include "xla/tsl/concurrency/async_value_ref.h"
+#include "xla/tsl/platform/status_matchers.h"
 
 namespace mlrt {
 namespace {
@@ -125,7 +129,7 @@ TEST(FutureTest, Error) {
     ASSERT_TRUE(future.IsError());
     EXPECT_THAT(
         future.GetError(),
-        ::tsl::testing::StatusIs(absl::StatusCode::kInternal, "test error"));
+        absl_testing::StatusIs(absl::StatusCode::kInternal, "test error"));
   }
 
   {
@@ -138,7 +142,7 @@ TEST(FutureTest, Error) {
     std::move(promise).SetError(absl::InternalError("test error"));
 
     EXPECT_THAT(
-        r, ::tsl::testing::StatusIs(absl::StatusCode::kInternal, "test error"));
+        r, absl_testing::StatusIs(absl::StatusCode::kInternal, "test error"));
   }
 
   {
@@ -149,7 +153,7 @@ TEST(FutureTest, Error) {
     std::move(promise).SetError(absl::InternalError("test error"));
 
     EXPECT_THAT(
-        s, ::tsl::testing::StatusIs(absl::StatusCode::kInternal, "test error"));
+        s, absl_testing::StatusIs(absl::StatusCode::kInternal, "test error"));
   }
 }
 

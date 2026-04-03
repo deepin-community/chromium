@@ -4,16 +4,15 @@
 
 #include "content/browser/generic_sensor/web_contents_sensor_provider_proxy.h"
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "content/browser/generic_sensor/frame_sensor_provider_proxy.h"
 #include "content/public/browser/device_service.h"
 
@@ -44,10 +43,9 @@ ScopedVirtualSensorForDevTools::ScopedVirtualSensorForDevTools(
         switch (result) {
           case device::mojom::CreateVirtualSensorResult::
               kSensorTypeAlreadyOverridden:
-            NOTREACHED_NORETURN()
-                << "WebContentsSensorProviderProxy::"
-                   "CreateVirtualSensorForDevTools() should have "
-                   "prevented this result";
+            NOTREACHED() << "WebContentsSensorProviderProxy::"
+                            "CreateVirtualSensorForDevTools() should have "
+                            "prevented this result";
           case device::mojom::CreateVirtualSensorResult::kSuccess:
             break;
         }
@@ -126,7 +124,7 @@ void WebContentsSensorProviderProxy::CreateVirtualSensor(
     device::mojom::VirtualSensorMetadataPtr metadata,
     device::mojom::SensorProvider::CreateVirtualSensorCallback callback) {
   // CHECK that this was called via CreateVirtualSensorForDevTools().
-  CHECK(base::Contains(virtual_sensor_types_for_devtools_, type));
+  CHECK(virtual_sensor_types_for_devtools_.contains(type));
   EnsureDeviceServiceConnection();
   sensor_provider_->CreateVirtualSensor(type, std::move(metadata),
                                         std::move(callback));

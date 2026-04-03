@@ -14,17 +14,16 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/types/cxx23_to_underlying.h"
-#include "chrome/updater/util/unit_test_util.h"
+#include "chrome/updater/test/unit_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
 
-using updater::tagging::AppArgs;
-using updater::tagging::ErrorCode;
-using updater::tagging::NeedsAdmin;
-using updater::tagging::RuntimeModeArgs;
-using updater::tagging::TagArgs;
+using ::updater::tagging::AppArgs;
+using ::updater::tagging::ErrorCode;
+using ::updater::tagging::NeedsAdmin;
+using ::updater::tagging::RuntimeModeArgs;
+using ::updater::tagging::TagArgs;
 
 // Builder pattern helper to construct the TagArgs struct.
 class TagArgsBuilder {
@@ -77,6 +76,10 @@ class TagArgsBuilder {
   }
   TagArgsBuilder& WithRuntimeMode(RuntimeModeArgs runtime_mode) {
     this->inner_.runtime_mode = runtime_mode;
+    return *this;
+  }
+  TagArgsBuilder& WithEnrollmentToken(const std::string& enrollment_token) {
+    this->inner_.enrollment_token = enrollment_token;
     return *this;
   }
 
@@ -501,7 +504,7 @@ TEST(TagParserTest, TagEndsInAmpersand) {
 }
 
 TEST(TagParserTest, WhitespaceOnly) {
-  for (const auto* whitespace : {"", " ", "\t", "\r", "\n", "\r\n"}) {
+  for (const auto& whitespace : {"", " ", "\t", "\r", "\n", "\r\n"}) {
     VerifyTagParseSuccess(whitespace, std::nullopt, TagArgsBuilder().Build());
   }
 }
@@ -654,7 +657,7 @@ TEST(TagParserTest, BackwardSlash3) {
 }
 
 TEST(TagParserTest, AppArgsMustHaveValue) {
-  for (const auto* tag :
+  for (const auto& tag :
        {"appguid", "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&ap",
         "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&experiments",
         "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&appname",
@@ -968,7 +971,7 @@ TEST(TagParserTest, InstallDataIndexValid) {
 
 TEST(TagParserTest, BrowserTypeValid) {
   std::tuple<std::string_view, TagArgs::BrowserType>
-      pairs[base::to_underlying(TagArgs::BrowserType::kMax)] = {
+      pairs[std::to_underlying(TagArgs::BrowserType::kMax)] = {
           {"0", TagArgs::BrowserType::kUnknown},
           {"1", TagArgs::BrowserType::kDefault},
           {"2", TagArgs::BrowserType::kInternetExplorer},
@@ -1101,6 +1104,7 @@ TEST(TagParserTestMultipleEntries, TestNotStartingWithAppId) {
 // that is saved.
 TEST(TagParserTestMultipleEntries, ThreeApplications) {
   VerifyTagParseSuccess(
+      "etoken=5d086552-4514-4dfb-8a3e-337024ec35ac&"
       "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
       "appname=TestApp&"
       "needsadmin=false&"
@@ -1132,6 +1136,7 @@ TEST(TagParserTestMultipleEntries, ThreeApplications) {
        "appguid=8617EE50-F91C-4DC1-B937-0969EEF59B0B&"
        "installerdata=installerdata_app1"},
       TagArgsBuilder()
+          .WithEnrollmentToken("5d086552-4514-4dfb-8a3e-337024ec35ac")
           .WithBundleName("TestApp")
           .WithInstallationId("98CEC468-9429-4984-AEDE-4F53C6A14869")
           .WithBrandCode("g00g")
@@ -1203,10 +1208,56 @@ TEST(TagParserTest, RuntimeModeValidSystem) {
 }
 
 TEST(TagParserTest, RuntimeModeValidUser) {
-  VerifyTagParseSuccess("runtime=true&needsadmin=false", std::nullopt,
-                        TagArgsBuilder()
-                            .WithRuntimeMode(RuntimeModeArgsBuilder().Build())
-                            .Build());
+  VerifyTagParseSuccess(
+      "runtime=true&needsadmin=false", std::nullopt,
+      TagArgsBuilder()
+          .WithRuntimeMode(
+              RuntimeModeArgsBuilder().WithNeedsAdmin(NeedsAdmin::kNo).Build())
+          .Build());
+}
+
+TEST(TagParserTest, EnrollmentTokenBeforeApp) {
+  VerifyTagParseSuccess(
+      "etoken=5d086552-4514-4dfb-8a3e-337024ec35ac&"
+      "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
+      "appname=Hello",
+      std::nullopt,
+      TagArgsBuilder()
+          .WithEnrollmentToken("5d086552-4514-4dfb-8a3e-337024ec35ac")
+          .WithBundleName("Hello")
+          .WithApp(AppArgsBuilder("D0324988-DA8A-49e5-BCE5-925FCD04EAB7")
+                       .WithAppName("Hello")
+                       .Build())
+          .Build());
+}
+
+TEST(TagParserTest, EnrollmentTokenAfterApp) {
+  VerifyTagParseSuccess(
+      "appguid=D0324988-DA8A-49e5-BCE5-925FCD04EAB7&"
+      "appname=Hello&"
+      "etoken=5d086552-4514-4dfb-8a3e-337024ec35ac",
+      std::nullopt,
+      TagArgsBuilder()
+          .WithEnrollmentToken("5d086552-4514-4dfb-8a3e-337024ec35ac")
+          .WithBundleName("Hello")
+          .WithApp(AppArgsBuilder("D0324988-DA8A-49e5-BCE5-925FCD04EAB7")
+                       .WithAppName("Hello")
+                       .Build())
+          .Build());
+}
+
+TEST(TagParserTest, EnrollmentTokenInvalidValue) {
+  VerifyTagParseFail("etoken=5d086552-4514-____-8a3e-337024ec35ac",
+                     std::nullopt,
+                     ErrorCode::kGlobal_EnrollmentTokenValueIsInvalid);
+}
+
+TEST(TagParserTest, EnrollmentTokenValid) {
+  VerifyTagParseSuccess(
+      "etoken=5d086552-4514-4dfb-8a3e-337024ec35ac", std::nullopt,
+      TagArgsBuilder()
+          .WithEnrollmentToken("5d086552-4514-4dfb-8a3e-337024ec35ac")
+          .Build());
 }
 
 TEST(TagExtractorTest, AdvanceIt) {
@@ -1424,9 +1475,8 @@ INSTANTIATE_TEST_SUITE_P(
     }));
 
 TEST_P(MsiTagTestMsiReadTagTest, TestCases) {
-  const auto tag_args =
-      tagging::BinaryReadTag(test::GetTestFilePath("tagged_msi")
-                                 .AppendASCII(GetParam().msi_file_name));
+  const auto tag_args = tagging::BinaryReadTag(
+      test::GetTestFilePath("tagged_msi").AppendUTF8(GetParam().msi_file_name));
   EXPECT_EQ(tag_args.has_value(), GetParam().expected_tag_args.has_value());
   if (GetParam().expected_tag_args) {
     test::ExpectTagArgsEqual(*tag_args, *GetParam().expected_tag_args);
@@ -1480,9 +1530,9 @@ TEST_P(MsiTagTestMsiWriteTagTest, TestCases) {
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
   base::FilePath out_file;
   ASSERT_TRUE(CreateTemporaryFileInDir(temp_dir.GetPath(), &out_file));
-  const base::FilePath in_out_file = out_file.AddExtensionASCII(".msi");
+  const base::FilePath in_out_file = out_file.AddExtensionUTF8(".msi");
   const base::FilePath msi_file_path =
-      test::GetTestFilePath("tagged_msi").AppendASCII(GetParam().msi_file_name);
+      test::GetTestFilePath("tagged_msi").AppendUTF8(GetParam().msi_file_name);
   ASSERT_TRUE(base::CopyFile(msi_file_path, in_out_file));
 
   for (const auto& [msi_file, out_msi_file] :

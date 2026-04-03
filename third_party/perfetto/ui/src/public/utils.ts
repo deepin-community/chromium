@@ -12,27 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import m from 'mithril';
+import {TimeSpan} from '../base/time';
+import {exists} from '../base/utils';
+import {Trace} from './trace';
 
-import {Selection} from '../common/state';
-import {BottomTab} from '../frontend/bottom_tab';
-
-import {DetailsPanel, Tab} from '.';
-
-export function getTrackName(args: Partial<{
-  name: string | null,
-  utid: number,
-  processName: string | null,
-  pid: number | null,
-  threadName: string | null,
-  tid: number | null,
-  upid: number | null,
-  userName: string | null,
-  uid: number | null,
-  kind: string,
-  threadTrack: boolean,
-  uidTrack: boolean
-}>) {
+export function getTrackName(
+  args: Partial<{
+    name: string | null;
+    utid: number | null;
+    processName: string | null;
+    pid: number | bigint | null;
+    threadName: string | null;
+    tid: number | bigint | null;
+    upid: number | null;
+    userName: string | null;
+    uid: number | null;
+    kind: string;
+    threadTrack: boolean;
+    uidTrack: boolean;
+    machine: number | null;
+  }>,
+) {
   const {
     name,
     upid,
@@ -46,6 +46,7 @@ export function getTrackName(args: Partial<{
     kind,
     threadTrack,
     uidTrack,
+    machine,
   } = args;
 
   const hasName = name !== undefined && name !== null && name !== '[NULL]';
@@ -65,6 +66,7 @@ export function getTrackName(args: Partial<{
   // upid/utid) we show the track kind to help with tracking
   // down where this is coming from.
   const kindSuffix = hasKind ? ` (${kind})` : '';
+  const machineLabel = maybeMachineLabel(machine ?? undefined);
 
   if (isThreadTrack && hasName && hasTid) {
     return `${name} (${tid})`;
@@ -72,16 +74,18 @@ export function getTrackName(args: Partial<{
     return `${name} (${userName})`;
   } else if (isUidTrack && hasName && hasUid) {
     return `${name} ${uid}`;
+  } else if (hasName && !hasUpid && !hasUtid) {
+    return `${name}${machineLabel}`;
   } else if (hasName) {
     return `${name}`;
-  } else if (hasUpid && hasPid && hasProcessName) {
-    return `${processName} ${pid}`;
-  } else if (hasUpid && hasPid) {
-    return `Process ${pid}`;
   } else if (hasThreadName && hasTid) {
     return `${threadName} ${tid}`;
   } else if (hasTid) {
     return `Thread ${tid}`;
+  } else if (hasUpid && hasPid && hasProcessName) {
+    return `${processName} ${pid}${machineLabel}`;
+  } else if (hasUpid && hasPid) {
+    return `Process ${pid}${machineLabel}`;
   } else if (hasUpid) {
     return `upid: ${upid}${kindSuffix}`;
   } else if (hasUtid) {
@@ -94,75 +98,41 @@ export function getTrackName(args: Partial<{
   return 'Unknown';
 }
 
-export interface BottomTabAdapterAttrs {
-  tabFactory: (sel: Selection) => BottomTab | undefined;
-}
-
-
-/**
- * This adapter wraps a BottomTab, converting it into a the new "current
- * selection" API.
- * This adapter is required because most bottom tab implementations expect to
- * be created when the selection changes, however current selection sections
- * stick around in memory forever and produce a section only when they detect a
- * relevant selection.
- * This adapter, given a bottom tab factory function, will simply call the
- * factory function whenever the selection changes. It's up to the implementer
- * to work out whether the selection is relevant and to construct a bottom tab.
- *
- * @example
- * new BottomTabAdapter({
-      tabFactory: (sel) => {
-        if (sel.kind !== 'CHROME_SLICE') {
-          return undefined;
-        }
-        return new ChromeSliceDetailsTab({
-          config: {
-            table: sel.table ?? 'slice',
-            id: sel.id,
-          },
-          engine: ctx.engine,
-          uuid: uuidv4(),
-        });
-      },
-    })
- */
-export class BottomTabToSCSAdapter implements DetailsPanel {
-  private oldSelection?: Selection;
-  private bottomTab?: BottomTab;
-  private attrs: BottomTabAdapterAttrs;
-
-  constructor(attrs: BottomTabAdapterAttrs) {
-    this.attrs = attrs;
-  }
-
-  render(selection: Selection): m.Children {
-    // Detect selection changes, assuming selection is immutable
-    if (selection !== this.oldSelection) {
-      this.oldSelection = selection;
-      this.bottomTab = this.attrs.tabFactory(selection);
-    }
-
-    return this.bottomTab?.renderPanel();
-  }
-
-  // Note: Must be called after render()
-  isLoading(): boolean {
-    return this.bottomTab?.isLoading() ?? false;
+export function getThreadOrProcUri(
+  upid: number | null,
+  utid: number | null,
+): string {
+  if (exists(upid)) {
+    return `/process_${upid}`;
+  } else if (exists(utid)) {
+    return `/thread_${utid}`;
+  } else {
+    throw new Error('No upid or utid defined...');
   }
 }
 
-/**
- * This adapter wraps a BottomTab, converting it to work with the Tab API.
- */
-export class BottomTabToTabAdapter implements Tab {
-  constructor(private bottomTab: BottomTab) {}
-
-  getTitle(): string {
-    return this.bottomTab.getTitle();
+export function getThreadUriPrefix(upid: number | null, utid: number): string {
+  if (exists(upid)) {
+    return `/process_${upid}/thread_${utid}`;
+  } else {
+    return `/thread_${utid}`;
   }
+}
 
-  render(): m.Children {
-    return this.bottomTab.viewTab();
+// Returns the time span of the current selection, or the visible window if
+// there is no current selection.
+export async function getTimeSpanOfSelectionOrVisibleWindow(
+  trace: Trace,
+): Promise<TimeSpan> {
+  const range = await trace.selection.getTimeSpanOfSelection();
+  if (exists(range)) {
+    return new TimeSpan(range.start, range.end);
+  } else {
+    return trace.timeline.visibleWindow.toTimeSpan();
   }
+}
+
+export function maybeMachineLabel(machine?: number): string {
+  const m = machine ?? 0;
+  return m > 0 ? ` (machine ${m})` : '';
 }

@@ -3,26 +3,29 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-from __future__ import print_function
-
-import collections
 import itertools
-import sys
 import tempfile
 from typing import Iterable, Set
 import unittest
 from unittest import mock
 
-import six
-
+# vpython-provided modules.
+# pylint: disable=import-error
 from pyfakefs import fake_filesystem_unittest
+# pylint: enable=import-error
 
+# //testing imports.
 from unexpected_passes_common import data_types
 from unexpected_passes_common import result_output
 from unexpected_passes_common import unittest_utils as uu
 
-from blinkpy.common.system import executive
+# //third_party/blink/tools imports.
+from blinkpy.w3c import buganizer
 
+# Protected access is allowed for unittests.
+# pylint: disable=protected-access
+
+NON_WILDCARD = data_types.WildcardType.NON_WILDCARD
 
 def CreateTextOutputPermutations(text: str, inputs: Iterable[str]) -> Set[str]:
   """Creates permutations of |text| filled with the contents of |inputs|.
@@ -79,7 +82,7 @@ class ConvertUnmatchedResultsToStringDictUnittest(unittest.TestCase):
                               'build_id')
         ],
     }
-    # TODO(crbug.com/1198237): Hard-code the tag string once only Python 3 is
+    # TODO(crbug.com/40177248): Hard-code the tag string once only Python 3 is
     # supported.
     expected_output = {
         'foo': {
@@ -110,7 +113,7 @@ class ConvertTestExpectationMapToStringDictUnittest(unittest.TestCase):
         data_types.ExpectationBuilderMap({
             data_types.Expectation('foo/test', ['win', 'intel'], [
                                        'RetryOnFailure'
-                                   ]):
+                                   ], NON_WILDCARD):
             data_types.BuilderStepMap({
                 'builder':
                 data_types.StepBuildStatsMap({
@@ -124,7 +127,7 @@ class ConvertTestExpectationMapToStringDictUnittest(unittest.TestCase):
             }),
             data_types.Expectation('foo/test', ['linux', 'intel'], [
                                        'RetryOnFailure'
-                                   ]):
+                                   ], NON_WILDCARD):
             data_types.BuilderStepMap({
                 'builder':
                 data_types.StepBuildStatsMap({
@@ -134,7 +137,7 @@ class ConvertTestExpectationMapToStringDictUnittest(unittest.TestCase):
             }),
             data_types.Expectation('foo/test', ['mac', 'intel'], [
                                        'RetryOnFailure'
-                                   ]):
+                                   ], NON_WILDCARD):
             data_types.BuilderStepMap({
                 'builder':
                 data_types.StepBuildStatsMap({
@@ -144,86 +147,47 @@ class ConvertTestExpectationMapToStringDictUnittest(unittest.TestCase):
             }),
         }),
     })
-    # TODO(crbug.com/1198237): Remove the Python 2 version once we are fully
-    # switched to Python 3.
-    if six.PY2:
-      expected_output = {
-          'expectation_file': {
-              'foo/test': {
-                  '"RetryOnFailure" expectation on "win intel"': {
-                      'builder': {
-                          'Fully passed in the following': [
-                              'all_pass (2/2 passed)',
-                          ],
-                          'Never passed in the following': [
-                              'all_fail (0/2 passed)',
-                          ],
-                          'Partially passed in the following': {
-                              'some_pass (1/2 passed)': [
-                                  data_types.BuildLinkFromBuildId('build_id0'),
-                              ],
-                          },
-                      },
-                  },
-                  '"RetryOnFailure" expectation on "intel linux"': {
-                      'builder': {
-                          'Fully passed in the following': [
-                              'all_pass (2/2 passed)',
-                          ],
-                      },
-                  },
-                  '"RetryOnFailure" expectation on "mac intel"': {
-                      'builder': {
-                          'Never passed in the following': [
-                              'all_fail (0/2 passed)',
-                          ],
-                      },
-                  },
-              },
-          },
-      }
-    else:
-      # Set ordering does not appear to be stable between test runs, as we can
-      # get either order of tags. So, generate them now instead of hard coding
-      # them.
-      linux_tags = ' '.join(set(['linux', 'intel']))
-      win_tags = ' '.join(set(['win', 'intel']))
-      mac_tags = ' '.join(set(['mac', 'intel']))
-      expected_output = {
-          'expectation_file': {
-              'foo/test': {
-                  '"RetryOnFailure" expectation on "%s"' % linux_tags: {
-                      'builder': {
-                          'Fully passed in the following': [
-                              'all_pass (2/2 passed)',
-                          ],
-                      },
-                  },
-                  '"RetryOnFailure" expectation on "%s"' % win_tags: {
-                      'builder': {
-                          'Fully passed in the following': [
-                              'all_pass (2/2 passed)',
-                          ],
-                          'Partially passed in the following': {
-                              'some_pass (1/2 passed)': [
-                                  data_types.BuildLinkFromBuildId('build_id0'),
-                              ],
-                          },
-                          'Never passed in the following': [
-                              'all_fail (0/2 passed)',
-                          ],
-                      },
-                  },
-                  '"RetryOnFailure" expectation on "%s"' % mac_tags: {
-                      'builder': {
-                          'Never passed in the following': [
-                              'all_fail (0/2 passed)',
-                          ],
-                      },
-                  },
-              },
-          },
-      }
+    # Set ordering does not appear to be stable between test runs, as we can
+    # get either order of tags. So, generate them now instead of hard coding
+    # them.
+    linux_tags = ' '.join(set(['linux', 'intel']))
+    win_tags = ' '.join(set(['win', 'intel']))
+    mac_tags = ' '.join(set(['mac', 'intel']))
+    expected_output = {
+        'expectation_file': {
+            'foo/test': {
+                '"RetryOnFailure" expectation on "%s"' % linux_tags: {
+                    'builder': {
+                        'Fully passed in the following': [
+                            'all_pass (2/2 passed)',
+                        ],
+                    },
+                },
+                '"RetryOnFailure" expectation on "%s"' % win_tags: {
+                    'builder': {
+                        'Fully passed in the following': [
+                            'all_pass (2/2 passed)',
+                        ],
+                        'Partially passed in the following': {
+                            'some_pass (1/2 passed)': [
+                                data_types.BuildLinkFromBuildId('build_id0'),
+                            ],
+                        },
+                        'Never passed in the following': [
+                            'all_fail (0/2 passed)',
+                        ],
+                    },
+                },
+                '"RetryOnFailure" expectation on "%s"' % mac_tags: {
+                    'builder': {
+                        'Never passed in the following': [
+                            'all_fail (0/2 passed)',
+                        ],
+                    },
+                },
+            },
+        },
+    }
 
     str_dict = result_output._ConvertTestExpectationMapToStringDict(
         expectation_map)
@@ -241,38 +205,29 @@ class ConvertUnusedExpectationsToStringDictUnittest(unittest.TestCase):
     unused = {
         'foo_file': [
             data_types.Expectation('foo/test', ['win', 'nvidia'],
-                                   ['Failure', 'Timeout']),
+                                   ['Failure', 'Timeout'], NON_WILDCARD),
         ],
         'bar_file': [
-            data_types.Expectation('bar/test', ['win'], ['Failure']),
-            data_types.Expectation('bar/test2', ['win'], ['RetryOnFailure'])
+            data_types.Expectation('bar/test', ['win'], ['Failure'],
+                                   NON_WILDCARD),
+            data_types.Expectation('bar/test2', ['win'], ['RetryOnFailure'],
+                                   NON_WILDCARD)
         ],
     }
-    if six.PY2:
-      expected_output = {
-          'foo_file': [
-              '[ win nvidia ] foo/test [ Failure Timeout ]',
-          ],
-          'bar_file': [
-              '[ win ] bar/test [ Failure ]',
-              '[ win ] bar/test2 [ RetryOnFailure ]',
-          ],
-      }
-    else:
-      # Set ordering does not appear to be stable between test runs, as we can
-      # get either order of tags. So, generate them now instead of hard coding
-      # them.
-      tags = ' '.join(['nvidia', 'win'])
-      results = ' '.join(['Failure', 'Timeout'])
-      expected_output = {
-          'foo_file': [
-              '[ %s ] foo/test [ %s ]' % (tags, results),
-          ],
-          'bar_file': [
-              '[ win ] bar/test [ Failure ]',
-              '[ win ] bar/test2 [ RetryOnFailure ]',
-          ],
-      }
+    # Set ordering does not appear to be stable between test runs, as we can
+    # get either order of tags. So, generate them now instead of hard coding
+    # them.
+    tags = ' '.join(['nvidia', 'win'])
+    results = ' '.join(['Failure', 'Timeout'])
+    expected_output = {
+        'foo_file': [
+            '[ %s ] foo/test [ %s ]' % (tags, results),
+        ],
+        'bar_file': [
+            '[ win ] bar/test [ Failure ]',
+            '[ win ] bar/test2 [ RetryOnFailure ]',
+        ],
+    }
     self.assertEqual(
         result_output._ConvertUnusedExpectationsToStringDict(unused),
         expected_output)
@@ -320,37 +275,7 @@ class HtmlToFileUnittest(fake_filesystem_unittest.TestCase):
     result_output._RecursiveHtmlToFile(expectation_map, self._file_handle)
     self._file_handle.close()
     # pylint: disable=line-too-long
-    # TODO(crbug.com/1198237): Remove the Python 2 version once we've fully
-    # switched to Python 3.
-    if six.PY2:
-      expected_output = """\
-<button type="button" class="collapsible_group">foo</button>
-<div class="content">
-  <button type="button" class="collapsible_group">"RetryOnFailure" expectation on "win intel"</button>
-  <div class="content">
-    <button type="button" class="collapsible_group">builder</button>
-    <div class="content">
-      <button type="button" class="collapsible_group">Never passed in the following</button>
-      <div class="content">
-        <p>all_fail (0/2)</p>
-      </div>
-      <button type="button" class="highlighted_collapsible_group">Fully passed in the following</button>
-      <div class="content">
-        <p>all_pass (2/2)</p>
-      </div>
-      <button type="button" class="collapsible_group">Partially passed in the following</button>
-      <div class="content">
-        <button type="button" class="collapsible_group">some_pass (1/2)</button>
-        <div class="content">
-          <p><a href="http://ci.chromium.org/b/build_id0">http://ci.chromium.org/b/build_id0</a></p>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-"""
-    else:
-      expected_output = """\
+    expected_output = """\
 <button type="button" class="collapsible_group">foo</button>
 <div class="content">
   <button type="button" class="collapsible_group">"RetryOnFailure" expectation on "win intel"</button>
@@ -462,23 +387,7 @@ class PrintToFileUnittest(fake_filesystem_unittest.TestCase):
     result_output.RecursivePrintToFile(expectation_map, 0, self._file_handle)
     self._file_handle.close()
 
-    # TODO(crbug.com/1198237): Keep the Python 3 version once we are fully
-    # switched.
-    if six.PY2:
-      expected_output = """\
-foo
-  "RetryOnFailure" expectation on "win intel"
-    builder
-      Never passed in the following
-        all_fail (0/2)
-      Fully passed in the following
-        all_pass (2/2)
-      Partially passed in the following
-        some_pass (1/2)
-          http://ci.chromium.org/b/build_id0
-"""
-    else:
-      expected_output = """\
+    expected_output = """\
 foo
   "RetryOnFailure" expectation on "win intel"
     builder
@@ -550,10 +459,12 @@ class OutputResultsUnittest(fake_filesystem_unittest.TestCase):
 
   def testOutputResultsSmoketest(self) -> None:
     """Test that nothing blows up when outputting."""
+    # yapf: disable
     expectation_map = data_types.TestExpectationMap({
         'foo':
         data_types.ExpectationBuilderMap({
-            data_types.Expectation('foo', ['win', 'intel'], 'RetryOnFailure'):
+            data_types.Expectation(
+                'foo', ['win', 'intel'], 'RetryOnFailure', NON_WILDCARD):
             data_types.BuilderStepMap({
                 'stale':
                 data_types.StepBuildStatsMap({
@@ -561,7 +472,7 @@ class OutputResultsUnittest(fake_filesystem_unittest.TestCase):
                     uu.CreateStatsWithPassFails(2, 0),
                 }),
             }),
-            data_types.Expectation('foo', ['linux'], 'Failure'):
+            data_types.Expectation('foo', ['linux'], 'Failure', NON_WILDCARD):
             data_types.BuilderStepMap({
                 'semi_stale':
                 data_types.StepBuildStatsMap({
@@ -573,7 +484,7 @@ class OutputResultsUnittest(fake_filesystem_unittest.TestCase):
                     uu.CreateStatsWithPassFails(0, 2),
                 }),
             }),
-            data_types.Expectation('foo', ['mac'], 'Failure'):
+            data_types.Expectation('foo', ['mac'], 'Failure', NON_WILDCARD):
             data_types.BuilderStepMap({
                 'active':
                 data_types.StepBuildStatsMap({
@@ -583,6 +494,7 @@ class OutputResultsUnittest(fake_filesystem_unittest.TestCase):
             }),
         }),
     })
+    # yapf: enable
     unmatched_results = {
         'builder': [
             data_types.Result('foo', ['win', 'intel'], 'Failure', 'step_name',
@@ -591,7 +503,8 @@ class OutputResultsUnittest(fake_filesystem_unittest.TestCase):
     }
     unmatched_expectations = {
         'foo_file': [
-            data_types.Expectation('foo', ['linux'], 'RetryOnFailure'),
+            data_types.Expectation('foo', ['linux'], 'RetryOnFailure',
+                                   NON_WILDCARD),
         ],
     }
 
@@ -633,6 +546,7 @@ class OutputAffectedUrlsUnittest(fake_filesystem_unittest.TestCase):
         'https://crbug.com/angleproject/1234',
         'http://crbug.com/2345',
         'crbug.com/3456',
+        'b/9999',
     ]
     orphaned_urls = ['https://crbug.com/1234', 'crbug.com/3456']
     result_output._OutputAffectedUrls(urls, orphaned_urls, self._file_handle)
@@ -642,7 +556,8 @@ class OutputAffectedUrlsUnittest(fake_filesystem_unittest.TestCase):
                                   'https://crbug.com/1234 '
                                   'https://crbug.com/angleproject/1234 '
                                   'http://crbug.com/2345 '
-                                  'https://crbug.com/3456\n'
+                                  'https://crbug.com/3456 '
+                                  'https://b/9999\n'
                                   'Closable bugs: '
                                   'https://crbug.com/1234 '
                                   'https://crbug.com/3456\n'))
@@ -659,12 +574,13 @@ class OutputUrlsForClDescriptionUnittest(fake_filesystem_unittest.TestCase):
     urls = [
         'crbug.com/1234',
         'https://crbug.com/angleproject/2345',
+        'b/9999',
     ]
     result_output._OutputUrlsForClDescription(urls, [], self._file_handle)
     self._file_handle.close()
     with open(self._filepath) as f:
       self.assertEqual(f.read(), ('Affected bugs for CL description:\n'
-                                  'Bug: 1234, angleproject:2345\n'))
+                                  'Bug: 9999, 1234, angleproject:2345\n'))
 
   def testBugLimit(self) -> None:
     """Tests that only a certain number of bugs are allowed per line."""
@@ -776,10 +692,10 @@ class OutputUrlsForClDescriptionUnittest(fake_filesystem_unittest.TestCase):
     orphaned_urls = [
         'crbug.com/0',
     ]
-    mock_monorail = MockMonorailApi()
+    mock_buganizer = MockBuganizerClient()
     with mock.patch.object(result_output,
-                           '_GetMonorailApi',
-                           return_value=mock_monorail):
+                           '_GetBuganizerClient',
+                           return_value=mock_buganizer):
       result_output._OutputUrlsForClDescription(urls,
                                                 orphaned_urls,
                                                 self._file_handle,
@@ -789,94 +705,116 @@ class OutputUrlsForClDescriptionUnittest(fake_filesystem_unittest.TestCase):
       self.assertEqual(f.read(), ('Affected bugs for CL description:\n'
                                   'Bug: 1\n'
                                   'Bug: 0\n'))
-    mock_monorail.insert_comment.assert_called_once_with(
-        'chromium', 0, result_output.MONORAIL_COMMENT)
+    mock_buganizer.NewComment.assert_called_once_with(
+        'crbug.com/0', result_output.BUGANIZER_COMMENT)
 
 
-class MockMonorailApi:
+class MockBuganizerClient:
 
   def __init__(self):
-    self.comment_list = {'items': []}
-    self.insert_comment = mock.Mock()
+    self.comment_list = []
+    self.NewComment = mock.Mock()
 
-  def get_comment_list(self, _, __) -> dict:
+  def GetIssueComments(self, _) -> list:
     return self.comment_list
 
 
 class PostCommentsToOrphanedBugsUnittest(unittest.TestCase):
 
   def setUp(self):
-    self._monorail_api = MockMonorailApi()
-    self._monorail_patcher = mock.patch.object(result_output,
-                                               '_GetMonorailApi',
-                                               return_value=self._monorail_api)
-    self._monorail_patcher.start()
-    self.addCleanup(self._monorail_patcher.stop)
+    self._buganizer_client = MockBuganizerClient()
+    self._buganizer_patcher = mock.patch.object(
+        result_output,
+        '_GetBuganizerClient',
+        return_value=self._buganizer_client)
+    self._buganizer_patcher.start()
+    self.addCleanup(self._buganizer_patcher.stop)
 
   def testBasic(self):
     """Tests the basic/happy path scenario."""
-    self._monorail_api.comment_list = {
-        'items': [
-            {
-                'content': 'Not matching',
-            },
-        ],
-    }
+    self._buganizer_client.comment_list.append({'comment': 'Not matching'})
     result_output._PostCommentsToOrphanedBugs(
         ['crbug.com/0', 'crbug.com/angleproject/0'])
-    self.assertEqual(self._monorail_api.insert_comment.call_count, 2)
-    self._monorail_api.insert_comment.assert_any_call(
-        'chromium', 0, result_output.MONORAIL_COMMENT)
-    self._monorail_api.insert_comment.assert_any_call(
-        'angleproject', 0, result_output.MONORAIL_COMMENT)
+    self.assertEqual(self._buganizer_client.NewComment.call_count, 2)
+    self._buganizer_client.NewComment.assert_any_call(
+        'crbug.com/0', result_output.BUGANIZER_COMMENT)
+    self._buganizer_client.NewComment.assert_any_call(
+        'crbug.com/angleproject/0', result_output.BUGANIZER_COMMENT)
 
   def testNoDuplicateComments(self):
     """Tests that duplicate comments are not posted on bugs."""
-    self._monorail_api.comment_list = {
-        'items': [
-            {
-                'content': result_output.MONORAIL_COMMENT,
-            },
-        ],
-    }
+    self._buganizer_client.comment_list.append(
+        {'comment': result_output.BUGANIZER_COMMENT})
     result_output._PostCommentsToOrphanedBugs(
         ['crbug.com/0', 'crbug.com/angleproject/0'])
-    self._monorail_api.insert_comment.assert_not_called()
+    self._buganizer_client.NewComment.assert_not_called()
 
   def testInvalidBugUrl(self):
     """Tests behavior when a non-crbug URL is provided."""
+    with mock.patch.object(self._buganizer_client,
+                           'GetIssueComments',
+                           side_effect=buganizer.BuganizerError):
+      with self.assertLogs(level='WARNING') as log_manager:
+        result_output._PostCommentsToOrphanedBugs(['somesite.com/0'])
+        for message in log_manager.output:
+          if 'Could not fetch or add comments for somesite.com/0' in message:
+            break
+        else:
+          self.fail('Did not find expected log message')
+    self._buganizer_client.NewComment.assert_not_called()
 
-    def not_called(_, __, ___):
-      raise RuntimeError()
-
-    self._monorail_api.get_comment_list = not_called
-
-    with self.assertLogs(level='WARNING') as log_manager:
-      result_output._PostCommentsToOrphanedBugs(['somesite.com/0'])
-      for message in log_manager.output:
-        if ('Unable to extract Monorail information from '
-            'somesite.com/0') in message:
-          break
-      else:
-        self.fail('Did not find expected log message')
-    self._monorail_api.insert_comment.assert_not_called()
-
-  def testAuthError(self):
-    """Tests behavior when LUCI auth fails."""
+  def testServiceDiscoveryError(self):
+    """Tests behavior when service discovery fails."""
     with mock.patch.object(result_output,
-                           '_ExtractMonorailInfoFromUrl') as mock_extract:
-      with mock.patch.object(result_output,
-                             '_GetMonorailApi',
-                             side_effect=executive.ScriptError):
-        with self.assertLogs(level='ERROR') as log_manager:
-          result_output._PostCommentsToOrphanedBugs(['crbug.com/0'])
-          for message in log_manager.output:
-            if ('Encountered error when authenticating, cannot post '
-                'comments') in message:
-              break
-          else:
-            self.fail('Did not find expected log message')
-        mock_extract.assert_not_called()
+                           '_GetBuganizerClient',
+                           side_effect=buganizer.BuganizerError):
+      with self.assertLogs(level='ERROR') as log_manager:
+        result_output._PostCommentsToOrphanedBugs(['crbug.com/0'])
+        for message in log_manager.output:
+          if ('Encountered error when authenticating, cannot post '
+              'comments') in message:
+            break
+        else:
+          self.fail('Did not find expected log message')
+
+  def testGetIssueCommentsError(self):
+    """Tests behavior when GetIssueComments encounters an error."""
+    with mock.patch.object(self._buganizer_client,
+                           'GetIssueComments',
+                           side_effect=({
+                               'error': ':('
+                           }, [{
+                               'comment': 'Not matching'
+                           }])):
+      with self.assertLogs(level='ERROR') as log_manager:
+        result_output._PostCommentsToOrphanedBugs(
+            ['crbug.com/0', 'crbug.com/1'])
+        for message in log_manager.output:
+          if 'Failed to get comments from crbug.com/0: :(' in message:
+            break
+        else:
+          self.fail('Did not find expected log message')
+    self._buganizer_client.NewComment.assert_called_once_with(
+        'crbug.com/1', result_output.BUGANIZER_COMMENT)
+
+  def testGetIssueCommentsUnspecifiedError(self):
+    """Tests behavior when GetIssueComments encounters an unspecified error."""
+    with mock.patch.object(self._buganizer_client,
+                           'GetIssueComments',
+                           side_effect=({}, [{
+                               'comment': 'Not matching'
+                           }])):
+      with self.assertLogs(level='ERROR') as log_manager:
+        result_output._PostCommentsToOrphanedBugs(
+            ['crbug.com/0', 'crbug.com/1'])
+        for message in log_manager.output:
+          if ('Failed to get comments from crbug.com/0: error not provided'
+              in message):
+            break
+        else:
+          self.fail('Did not find expected log message')
+    self._buganizer_client.NewComment.assert_called_once_with(
+        'crbug.com/1', result_output.BUGANIZER_COMMENT)
 
 
 def _Dedent(s: str) -> str:

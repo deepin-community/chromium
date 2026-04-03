@@ -96,7 +96,7 @@ REGISTER_OP("AudioMicrofrontend")
 
       ShapeHandle output = ctx->MakeShape({num_frames, num_features});
       ctx->set_output(0, output);
-      return OkStatus();
+      return absl::OkStatus();
     })
     .Doc(R"doc(
 Audio Microfrontend Op.
@@ -292,8 +292,8 @@ class AudioMicrofrontendOp : public OpKernel {
 
 REGISTER_KERNEL_BUILDER(Name("AudioMicrofrontend")
                             .Device(tensorflow::DEVICE_CPU)
-                            .TypeConstraint<uint16>("out_type"),
-                        AudioMicrofrontendOp<uint16>);
+                            .TypeConstraint<uint16_t>("out_type"),
+                        AudioMicrofrontendOp<uint16_t>);
 REGISTER_KERNEL_BUILDER(Name("AudioMicrofrontend")
                             .Device(tensorflow::DEVICE_CPU)
                             .TypeConstraint<float>("out_type"),

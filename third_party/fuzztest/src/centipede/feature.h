@@ -22,7 +22,7 @@
 //
 // This library must not depend on anything other than libc so that fuzz targets
 // using it doesn't gain redundant coverage. For the same reason this library
-// uses raw __builtin_trap instead of CHECKs.
+// uses raw __builtin_trap instead of FUZZTEST_CHECKs.
 // We make an exception for <algorithm> for std::sort/std::unique,
 // since <algorithm> is very lightweight.
 // This library is also header-only, with all functions defined as inline.
@@ -35,12 +35,13 @@
 // include it into runner.
 // <vector> is an exception, because it's too clumsy w/o it, and it introduces
 // minimal code footprint.
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <vector>
 
-namespace centipede {
+namespace fuzztest::internal {
 
 // Feature is an integer that identifies some unique behaviour
 // of the fuzz target exercised by a given input.
@@ -138,20 +139,65 @@ inline constexpr Domain k8bitCounters = {__COUNTER__};
 inline constexpr Domain kDataFlow = {__COUNTER__};
 // Features derived from instrumenting CMP instructions. TODO(kcc): remove.
 inline constexpr Domain kCMP = {__COUNTER__};
-
 // Features in the following domains are created for comparison instructions
-// 'a CMP b'. One component of the feature is the context, i.e. where the
-// comparison happened. Another component depends on {a,b}.
+// 'a CMP b' and primitive comparison functions e.g. 'memcmp(a, b)'. One
+// component of the feature is the context, i.e. where the comparison happened.
+// Another component depends on {a,b}.
 //
 // a == b.
 // The other domains (kCMPModDiff, kCMPHamming, kCMPDiffLog) are for a != b.
 inline constexpr Domain kCMPEq = {__COUNTER__};
-// (a - b) if |a-b| < 32, see ABToCmpModDiff.
+// When a != b, we measure the "scores" of the comparison and embed them into
+// comparison score features (see below), and perfer higher scores. Each domain
+// below measure one kind of distance between the operands (inverted for
+// scoring).
+//
+// Numeric difference - see `ABToCmpModDiff`.
 inline constexpr Domain kCMPModDiff = {__COUNTER__};
-// hamming_distance(a, b), ABToCmpHamming.
+// Hamming distance - see ABToCmpHamming.
 inline constexpr Domain kCMPHamming = {__COUNTER__};
-// log2(a > b ? a - b : b - a), see ABToCmpDiffLog.
+// Logarithm of the numeric difference  - see ABToCmpDiffLog.
 inline constexpr Domain kCMPDiffLog = {__COUNTER__};
+// A list of all the CMP domains.
+inline constexpr std::array kCMPDomains = {
+    kCMP, kCMPEq, kCMPModDiff, kCMPHamming, kCMPDiffLog,
+};
+
+// A list of all the CMP score domains.
+//
+// CMP score domains are different than other domains: CMP score features carry
+// scores in the lower (kCMPScoreBits) bits. Thus they can be compared against
+// each others if the other bits match. We prefer features with higher scores as
+// they indicate closer inputs to flip the corresponding conditions to reach new
+// branches.
+inline constexpr std::array kCMPScoreDomains = {
+    kCMPModDiff,
+    kCMPHamming,
+    kCMPDiffLog,
+};
+static_assert(
+    [] {
+      for (size_t i = 0; i + 1 < kCMPScoreDomains.size(); ++i) {
+        if (kCMPScoreDomains[i].end() != kCMPScoreDomains[i + 1].begin()) {
+          return false;
+        }
+      }
+      return true;
+    }(),
+    "kCMPScoreDomains must have adjacent domains in order");
+
+inline constexpr int kCMPScoreBits = 6;
+inline constexpr feature_t kCMPScoreBitmask =
+    (feature_t{1} << kCMPScoreBits) - 1;
+
+inline constexpr size_t CMPScoreFeatureIndex(feature_t feature) {
+  return (feature - kCMPScoreDomains.front().begin()) >> kCMPScoreBits;
+}
+
+inline constexpr bool IsComparisonScoreFeature(feature_t feature) {
+  return kCMPScoreDomains.front().begin() <= feature &&
+         feature < kCMPScoreDomains.back().end();
+}
 
 // Features derived from observing function call stacks.
 inline constexpr Domain kCallStack = {__COUNTER__};
@@ -163,13 +209,24 @@ inline constexpr Domain kPCPair = {__COUNTER__};
 // __attribute__((section("__centipede_extra_features"))).
 // There is no hard guarantee how many user domains are available, feel free to
 // add or remove domains as needed.
-inline constexpr Domain kUserDomains[] = {
-    {__COUNTER__}, {__COUNTER__}, {__COUNTER__}, {__COUNTER__},
-    {__COUNTER__}, {__COUNTER__}, {__COUNTER__}, {__COUNTER__},
-    {__COUNTER__}, {__COUNTER__}, {__COUNTER__}, {__COUNTER__},
-    {__COUNTER__}, {__COUNTER__}, {__COUNTER__}, {__COUNTER__},
-};
-
+inline constexpr std::array<Domain, 16> kUserDomains = {{
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+    {__COUNTER__},
+}};
 // A fake domain, not actually used, must be last.
 inline constexpr Domain kLastDomain = {__COUNTER__};
 // For now, check that all domains (except maybe for kLastDomain) fit
@@ -218,18 +275,25 @@ inline size_t ConvertPcPairToNumber(uintptr_t pc1, uintptr_t pc2,
   return pc1 * max_pc + pc2;
 }
 
-// Transforms {a,b}, a!=b, into a number in [0,64) using a-b.
+// Transforms {a,b}, a!=b, into a number in [0,64) using abs(a-b):
+//
+// Returns 64 - abs(a-b) if abs(a-b) < 64, otherwise returns 0. The return value
+// is higher or equal for smaller abs(a-b).
 inline uintptr_t ABToCmpModDiff(uintptr_t a, uintptr_t b) {
-  uintptr_t diff = a - b;
-  return diff <= 32 ? diff : -diff < 32 ? 32 + -diff : 0;
+  const uintptr_t abs_diff = a > b ? a - b : b - a;
+  return abs_diff < 64 ? 64 - abs_diff : 0;
 }
 
 // Transforms {a,b}, a!=b, into a number in [0,64) using hamming distance.
+//
+// The return value is higher for smaller hamming distance.
 inline uintptr_t ABToCmpHamming(uintptr_t a, uintptr_t b) {
-  return __builtin_popcountll(a ^ b) - 1;
+  return 64 - __builtin_popcountll(a ^ b);
 }
 
-// Transforms {a,b}, a!=b, into a number in [0,64) using log2(a-b).
+// Transforms {a,b}, a!=b, into a number in [0,64) using log2(abs(a-b)).
+//
+// The return value is higher or equal for smaller log2(abs(a-b)).
 inline uintptr_t ABToCmpDiffLog(uintptr_t a, uintptr_t b) {
   return __builtin_clzll(a > b ? a - b : b - a);
 }
@@ -264,6 +328,6 @@ class FeatureArray {
   size_t num_features_ = 0;
 };
 
-}  // namespace centipede
+}  // namespace fuzztest::internal
 
 #endif  // THIRD_PARTY_CENTIPEDE_FEATURE_H_

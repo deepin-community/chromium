@@ -15,6 +15,17 @@
 
 namespace arc {
 
+//
+// Keys for reading the model JSON.
+//
+
+// Key for summary data in <top>.information.
+inline constexpr char kKeyInformation[] = "information";
+
+// Keys in information JSON.
+inline constexpr char kKeyDuration[] = "duration";
+inline constexpr char kKeyPerceivedFps[] = "perceived_fps";
+
 class ArcTracingModel;
 class PresentFramesTracer;
 
@@ -164,15 +175,15 @@ class ArcTracingGraphicsModel {
   bool Build(const ArcTracingModel& common_model,
              const PresentFramesTracer& present_frames);
 
-  // Serializes the model to |base::Value::Dict|, this can be passed to
+  // Serializes the model to |base::DictValue|, this can be passed to
   // javascript for rendering.
-  base::Value::Dict Serialize() const;
+  base::DictValue Serialize() const;
   // Serializes the model to Json string.
   std::string SerializeToJson() const;
   // Loads the model from Json string.
   bool LoadFromJson(const std::string& json_data);
-  // Loads the model from |base::Value::Dict|.
-  bool LoadFromValue(const base::Value::Dict& root);
+  // Loads the model from |base::DictValue|.
+  bool LoadFromValue(const base::DictValue& root);
 
   uint64_t duration() const { return duration_; }
   base::Time timestamp() const { return timestamp_; }
@@ -209,8 +220,12 @@ class ArcTracingGraphicsModel {
   ViewMap view_buffers_;
   // To avoid overlapping events are stored interlaced.
   EventsContainer chrome_top_level_;
-  // Total duration of this model.
+  // Total duration of this model in microseconds.
   uint32_t duration_ = 0;
+  // Effective FPS - counts only swapped frames with new app commits.
+  double perceived_fps_ = 0;
+  // App FPS, which is the number of commits from ARC Wayland client per second.
+  double app_fps_ = 0;
   // Title of the traced app.
   std::string app_title_;
   // PNG content of traced app.

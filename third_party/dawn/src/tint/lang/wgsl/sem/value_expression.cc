@@ -42,14 +42,12 @@ ValueExpression::ValueExpression(const ast::Expression* declaration,
                                  core::EvaluationStage stage,
                                  const Statement* statement,
                                  const core::constant::Value* constant,
-                                 bool has_side_effects,
                                  const Variable* root_ident /* = nullptr */)
     : Base(declaration, statement),
       root_identifier_(root_ident),
       type_(type),
       stage_(stage),
-      constant_(std::move(constant)),
-      has_side_effects_(has_side_effects) {
+      constant_(std::move(constant)) {
     TINT_ASSERT(type_);
     TINT_ASSERT((constant != nullptr) == (stage == core::EvaluationStage::kConstant));
     if (constant != nullptr) {
@@ -68,7 +66,7 @@ const ValueExpression* ValueExpression::UnwrapMaterialize() const {
 
 const ValueExpression* ValueExpression::UnwrapLoad() const {
     if (auto* l = As<Load>()) {
-        return l->Reference();
+        return l->Source();
     }
     return this;
 }
@@ -76,7 +74,7 @@ const ValueExpression* ValueExpression::UnwrapLoad() const {
 const ValueExpression* ValueExpression::Unwrap() const {
     return Switch(
         this,  // note: An expression can only be wrapped by a Load or Materialize, not both.
-        [&](const Load* load) { return load->Reference(); },
+        [&](const Load* load) { return load->Source(); },
         [&](const Materialize* materialize) { return materialize->Expr(); },
         [&](Default) { return this; });
 }

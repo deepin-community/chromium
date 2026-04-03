@@ -4,6 +4,9 @@
 
 #include "ash/wm/desks/templates/saved_desk_presenter.h"
 
+#include <algorithm>
+#include <vector>
+
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/app_types_util.h"
 #include "ash/public/cpp/desk_template.h"
@@ -16,7 +19,7 @@
 #include "ash/wm/desks/desk_bar_view_base.h"
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/desks/desks_util.h"
-#include "ash/wm/desks/legacy_desk_bar_view.h"
+#include "ash/wm/desks/overview_desk_bar_view.h"
 #include "ash/wm/desks/templates/saved_desk_item_view.h"
 #include "ash/wm/desks/templates/saved_desk_library_view.h"
 #include "ash/wm/desks/templates/saved_desk_metrics_util.h"
@@ -25,12 +28,12 @@
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/overview/overview_grid.h"
 #include "ash/wm/overview/overview_session.h"
-#include "base/containers/cxx20_erase_vector.h"
 #include "base/functional/bind.h"
 #include "base/i18n/number_formatting.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/scoped_multi_source_observation.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
 #include "third_party/re2/src/re2/re2.h"
@@ -150,7 +153,7 @@ class WindowCloseObserver : public aura::WindowObserver {
 
     // If any of the observed windows belong to an ARC app, we need to handle
     // things a bit differently.
-    has_arc_app_ = base::ranges::any_of(windows, &IsArcWindow);
+    has_arc_app_ = std::ranges::any_of(windows, &IsArcWindow);
 
     // Observe the windows that we are going to close. Since `windows` here are
     // all non-all-desks windows or non-transient windows, we can observe all
@@ -329,16 +332,30 @@ SavedDeskPresenter::~SavedDeskPresenter() = default;
 
 size_t SavedDeskPresenter::GetEntryCount(DeskTemplateType type) const {
   auto* model = GetDeskModel();
-  return type == DeskTemplateType::kTemplate
-             ? model->GetDeskTemplateEntryCount()
-             : model->GetSaveAndRecallDeskEntryCount();
+  switch (type) {
+    case DeskTemplateType::kTemplate:
+      return model->GetDeskTemplateEntryCount();
+    case DeskTemplateType::kSaveAndRecall:
+      return model->GetSaveAndRecallDeskEntryCount();
+    case DeskTemplateType::kCoral:
+      return model->GetCoralEntryCount();
+    default:
+      NOTREACHED();
+  }
 }
 
 size_t SavedDeskPresenter::GetMaxEntryCount(DeskTemplateType type) const {
   auto* model = GetDeskModel();
-  return type == DeskTemplateType::kTemplate
-             ? model->GetMaxDeskTemplateEntryCount()
-             : model->GetMaxSaveAndRecallDeskEntryCount();
+  switch (type) {
+    case DeskTemplateType::kTemplate:
+      return model->GetMaxDeskTemplateEntryCount();
+    case DeskTemplateType::kSaveAndRecall:
+      return model->GetMaxSaveAndRecallDeskEntryCount();
+    case DeskTemplateType::kCoral:
+      return model->GetMaxCoralEntryCount();
+    default:
+      NOTREACHED();
+  }
 }
 
 ash::DeskTemplate* SavedDeskPresenter::FindOtherEntryWithName(
@@ -357,7 +374,7 @@ void SavedDeskPresenter::UpdateUIForSavedDeskLibrary() {
   // The library and the library button is always hidden if we enter tablet
   // mode. If not in tablet mode, the library button is visible if there are
   // saved desks in the model, *or* we are already showing the library.
-  const bool in_tablet_mode = display::Screen::GetScreen()->InTabletMode();
+  const bool in_tablet_mode = display::Screen::Get()->InTabletMode();
 
   for (auto& overview_grid : overview_session_->grid_list()) {
     const bool is_showing_library = overview_grid->IsShowingSavedDeskLibrary();
@@ -367,7 +384,7 @@ void SavedDeskPresenter::UpdateUIForSavedDeskLibrary() {
       overview_grid->HideSavedDeskLibrary(/*exit_overview=*/false);
     }
 
-    if (LegacyDeskBarView* desks_bar_view = overview_grid->desks_bar_view()) {
+    if (OverviewDeskBarView* desks_bar_view = overview_grid->desks_bar_view()) {
       // Library UI needs an update. If it's currently in the library page, keep
       // the UI visible.
       desks_bar_view->set_library_ui_visibility(
@@ -410,15 +427,15 @@ void SavedDeskPresenter::LaunchSavedDesk(
     return;
   }
 
-  // Copy fields we need from `desk_template` since we're about to move it.
+  // Copy fields we need from `saved_desk` since we're about to move it.
   const auto saved_desk_type = saved_desk->type();
   Desk* new_desk = desks_controller->CreateNewDeskForSavedDesk(
       saved_desk_type, saved_desk->template_name());
 
-  // Set the lacros profile ID for the newly created desk. This is effectively a
-  // no-op if `lacros_profile_id` returns zero.
-  new_desk->SetLacrosProfileId(saved_desk->lacros_profile_id(),
-                               /*source=*/std::nullopt);
+  if (saved_desk->type() == DeskTemplateType::kCoral) {
+    new_desk->set_tab_app_entities(
+        mojo::Clone(saved_desk->coral_tab_app_entities()));
+  }
 
   LaunchSavedDeskIntoNewDesk(std::move(saved_desk), root_window, new_desk);
 
@@ -436,7 +453,7 @@ void SavedDeskPresenter::MaybeSaveActiveDeskAsSavedDesk(
       base::BindOnce(&SavedDeskPresenter::SaveOrUpdateSavedDesk,
                      weak_ptr_factory_.GetWeakPtr(),
                      /*is_update=*/false, root_window_to_show),
-      template_type, root_window_to_show);
+      template_type, root_window_to_show, /*coral_app_id_allowlist=*/{});
 }
 
 void SavedDeskPresenter::SaveOrUpdateSavedDesk(
@@ -564,7 +581,8 @@ void SavedDeskPresenter::LaunchSavedDeskIntoNewDesk(
       OverviewGrid* overview_grid =
           overview_session->GetGridWithRootWindow(root_window);
 
-      const LegacyDeskBarView* desks_bar_view = overview_grid->desks_bar_view();
+      const OverviewDeskBarView* desks_bar_view =
+          overview_grid->desks_bar_view();
       DCHECK(desks_bar_view);
       DeskMiniView* mini_view = desks_bar_view->FindMiniViewForDesk(new_desk);
       DCHECK(mini_view);
@@ -692,7 +710,7 @@ void SavedDeskPresenter::OnAddOrUpdateEntry(
           Shell::Get()->mru_window_tracker()->BuildMruWindowList(kActiveDesk);
 
       // Get rid of transient windows and all-desks windows.
-      base::EraseIf(windows, [](aura::Window* window) {
+      std::erase_if(windows, [](aura::Window* window) {
         return wm::GetTransientParent(window) != nullptr ||
                desks_util::IsWindowVisibleOnAllWorkspaces(window);
       });

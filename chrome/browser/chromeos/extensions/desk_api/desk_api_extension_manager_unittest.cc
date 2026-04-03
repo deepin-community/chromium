@@ -13,6 +13,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -35,16 +36,16 @@ std::unique_ptr<base::Value> ParseManifest(std::string manifest) {
   return deserializer.Deserialize(&error_code, &error_message);
 }
 
-const base::Value::List* GetMatchesListFromManifest(
+const base::ListValue* GetMatchesListFromManifest(
     const base::Value* manifest_value) {
-  const base::Value::Dict* manifest_dict = manifest_value->GetIfDict();
+  const base::DictValue* manifest_dict = manifest_value->GetIfDict();
 
   if (!manifest_dict) {
     ADD_FAILURE() << "No manifest dict";
     return nullptr;
   }
 
-  const base::Value::Dict* externally_connectable_dict =
+  const base::DictValue* externally_connectable_dict =
       manifest_dict->FindDict(kExternallyConnectableKey);
 
   if (!externally_connectable_dict) {
@@ -93,7 +94,7 @@ class TestDelegate : public DeskApiExtensionManager::Delegate {
 
 void SetDeskAPIPolicies(PrefService* pref_service,
                         bool enabled,
-                        const base::Value::List& allowlist) {
+                        const base::ListValue& allowlist) {
   pref_service->SetBoolean(::prefs::kDeskAPIThirdPartyAccessEnabled, enabled);
   pref_service->SetList(::prefs::kDeskAPIThirdPartyAllowlist,
                         allowlist.Clone());
@@ -101,12 +102,12 @@ void SetDeskAPIPolicies(PrefService* pref_service,
 
 void EnableDeskAPI(PrefService* pref_service) {
   // Create an arbitrary allowlist.
-  auto allowlist = base::Value::List().Append("http://*.domain1.com/*");
+  auto allowlist = base::ListValue().Append("http://*.domain1.com/*");
   SetDeskAPIPolicies(pref_service, true, allowlist);
 }
 
 void DisableDeskAPI(PrefService* pref_service) {
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   SetDeskAPIPolicies(pref_service, false, allowlist);
 }
 
@@ -251,7 +252,7 @@ TEST_F(DeskApiExtensionManagerTest, DoNotInstallExtensionWithEmptyAllowlist) {
   DeskApiExtensionManager extension_manager(
       component_loader, affiliated_user_profile_, std::move(delegate));
 
-  base::Value::List empty_allowlist;
+  base::ListValue empty_allowlist;
   SetDeskAPIPolicies(affiliated_user_profile_->GetPrefs(), true,
                      empty_allowlist);
   task_environment_.RunUntilIdle();
@@ -289,7 +290,7 @@ TEST_F(DeskApiExtensionManagerTest, GenerateManifestFromPolicyAllowlist) {
   constexpr char test_domain2[] = "http://*.domain2.com/*";
 
   auto domain_allowlist =
-      base::Value::List().Append(test_domain1).Append(test_domain2);
+      base::ListValue().Append(test_domain1).Append(test_domain2);
 
   SetDeskAPIPolicies(affiliated_user_profile_->GetPrefs(), true,
                      domain_allowlist);
@@ -301,7 +302,7 @@ TEST_F(DeskApiExtensionManagerTest, GenerateManifestFromPolicyAllowlist) {
   const base::Value* installed_manifest_value =
       delegate_raw_ptr->GetInstalledManifest();
   ASSERT_TRUE(installed_manifest_value);
-  const base::Value::List* installed_matches_list =
+  const base::ListValue* installed_matches_list =
       GetMatchesListFromManifest(installed_manifest_value);
   ASSERT_TRUE(installed_matches_list);
   EXPECT_EQ(domain_allowlist, *installed_matches_list);
@@ -320,7 +321,7 @@ TEST_F(DeskApiExtensionManagerTest, GenerateManifestIgnoresInvalidURLPattern) {
   constexpr char test_domain2[] = "\"Invalid URL Pattern\"";
 
   auto domain_allowlist =
-      base::Value::List().Append(test_domain1).Append(test_domain2);
+      base::ListValue().Append(test_domain1).Append(test_domain2);
 
   SetDeskAPIPolicies(affiliated_user_profile_->GetPrefs(), true,
                      domain_allowlist);
@@ -332,7 +333,7 @@ TEST_F(DeskApiExtensionManagerTest, GenerateManifestIgnoresInvalidURLPattern) {
   const base::Value* installed_manifest_value =
       delegate_raw_ptr->GetInstalledManifest();
   ASSERT_TRUE(installed_manifest_value);
-  const base::Value::List* installed_matches_list =
+  const base::ListValue* installed_matches_list =
       GetMatchesListFromManifest(installed_manifest_value);
   ASSERT_TRUE(installed_matches_list);
   EXPECT_EQ(1ul, installed_matches_list->size());

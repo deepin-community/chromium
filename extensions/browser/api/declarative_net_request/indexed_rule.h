@@ -6,8 +6,10 @@
 #define EXTENSIONS_BROWSER_API_DECLARATIVE_NET_REQUEST_INDEXED_RULE_H_
 
 #include <stdint.h>
+
 #include <optional>
 #include <string>
+
 #include "base/containers/flat_set.h"
 #include "components/url_pattern_index/flat/url_pattern_index_generated.h"
 #include "extensions/common/api/declarative_net_request.h"
@@ -62,9 +64,11 @@ struct IndexedRule {
   std::vector<std::string> excluded_initiator_domains;
   std::vector<std::string> request_domains;
   std::vector<std::string> excluded_request_domains;
+  std::vector<std::string> top_domains;
+  std::vector<std::string> excluded_top_domains;
 
-  // Note: For redirect rules, exactly one of |redirect_url|,
-  // |regex_substitution| or |url_transform|  will be set.
+  // Note: For redirect rules, exactly one of `redirect_url`,
+  // `regex_substitution` or `url_transform` will be set.
   // The redirect url for the rule.
   std::optional<std::string> redirect_url;
   // The regex substitution for this rule.

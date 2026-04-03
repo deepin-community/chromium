@@ -9,12 +9,14 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "components/content_relationship_verification/digital_asset_links_handler.h"
-#include "components/installedapp/android/jni_headers/InstalledAppProviderImpl_jni.h"
 #include "content/public/browser/android/browser_context_handle.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/installedapp/android/jni_headers/InstalledAppProviderImpl_jni.h"
 
 namespace {
 
@@ -32,12 +34,13 @@ void DidGetResult(
 
 namespace installedapp {
 
-void JNI_InstalledAppProviderImpl_CheckDigitalAssetLinksRelationshipForWebApk(
+static void
+JNI_InstalledAppProviderImpl_CheckDigitalAssetLinksRelationshipForWebApk(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& jhandle,
-    const base::android::JavaParamRef<jstring>& jwebDomain,
-    const base::android::JavaParamRef<jstring>& jmanifestUrl,
-    const base::android::JavaParamRef<jobject>& jcallback) {
+    const base::android::JavaRef<jobject>& jhandle,
+    const base::android::JavaRef<jstring>& jwebDomain,
+    const base::android::JavaRef<jstring>& jmanifestUrl,
+    const base::android::JavaRef<jobject>& jcallback) {
   content::BrowserContext* browser_context =
       content::BrowserContextFromJavaHandle(jhandle);
 
@@ -63,3 +66,5 @@ void JNI_InstalledAppProviderImpl_CheckDigitalAssetLinksRelationshipForWebApk(
 }
 
 }  // namespace installedapp
+
+DEFINE_JNI(InstalledAppProviderImpl)

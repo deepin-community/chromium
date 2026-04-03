@@ -8,7 +8,6 @@
 #include <limits>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -32,8 +31,8 @@ namespace bluez {
 
 namespace {
 
-// Stream operator for logging vector<uint8_t>.
-std::ostream& operator<<(std::ostream& out, const std::vector<uint8_t> bytes) {
+// Stream operator for logging span<uint8_t>.
+std::ostream& operator<<(std::ostream& out, base::span<const uint8_t> bytes) {
   out << "[";
   for (auto iter = bytes.begin(); iter != bytes.end(); ++iter) {
     out << base::StringPrintf("%02X", *iter);
@@ -174,7 +173,7 @@ void BluetoothRemoteGattCharacteristicBlueZ::ReadRemoteCharacteristic(
 }
 
 void BluetoothRemoteGattCharacteristicBlueZ::WriteRemoteCharacteristic(
-    const std::vector<uint8_t>& value,
+    base::span<const uint8_t> value,
     WriteType write_type,
     base::OnceClosure callback,
     ErrorCallback error_callback) {
@@ -204,7 +203,7 @@ void BluetoothRemoteGattCharacteristicBlueZ::WriteRemoteCharacteristic(
 }
 
 void BluetoothRemoteGattCharacteristicBlueZ::
-    DeprecatedWriteRemoteCharacteristic(const std::vector<uint8_t>& value,
+    DeprecatedWriteRemoteCharacteristic(base::span<const uint8_t> value,
                                         base::OnceClosure callback,
                                         ErrorCallback error_callback) {
   DVLOG(1) << "Sending GATT characteristic write request to characteristic: "
@@ -222,7 +221,7 @@ void BluetoothRemoteGattCharacteristicBlueZ::
 
 #if BUILDFLAG(IS_CHROMEOS)
 void BluetoothRemoteGattCharacteristicBlueZ::PrepareWriteRemoteCharacteristic(
-    const std::vector<uint8_t>& value,
+    base::span<const uint8_t> value,
     base::OnceClosure callback,
     ErrorCallback error_callback) {
   DVLOG(1) << "Sending GATT characteristic prepare write request to "
@@ -282,7 +281,7 @@ void BluetoothRemoteGattCharacteristicBlueZ::UnsubscribeFromNotifications(
 
 void BluetoothRemoteGattCharacteristicBlueZ::GattDescriptorAdded(
     const dbus::ObjectPath& object_path) {
-  if (base::Contains(descriptors_, object_path.value())) {
+  if (descriptors_.contains(object_path.value())) {
     DVLOG(1) << "Remote GATT characteristic descriptor already exists: "
              << object_path.value();
     return;

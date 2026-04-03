@@ -15,9 +15,16 @@ limitations under the License.
 
 #include "tensorflow/dtensor/mlir/collectives_common.h"
 
+#include <cstddef>
 #include <map>
 #include <string>
 #include <vector>
+
+#include "absl/container/flat_hash_set.h"
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/types.h"
+#include "tensorflow/dtensor/cc/dstatus.h"
+#include "tensorflow/dtensor/cc/tensor_layout.h"
 
 namespace tensorflow {
 namespace dtensor {
@@ -31,7 +38,7 @@ namespace dtensor {
 // a multi-host cluster will generate the same grouping, and therefore the same
 // XLA program fingerprint, independently. std::map guarantees the same
 // iteration order.
-using AllReducePartitions = std::map<DeviceLocation, std::vector<int32>>;
+using AllReducePartitions = std::map<DeviceLocation, std::vector<int32_t>>;
 
 // Computes AllReduce partitions using reduced mesh dimension names.
 //
@@ -53,11 +60,11 @@ StatusOr<AllReducePartitions> GetAllReducePartitionsFromReducedDims(
     const dtensor::Layout& output_layout,
     const absl::flat_hash_set<std::string>& reduced_dims) {
   AllReducePartitions partitions;
-  for (int64 device = 0; device < output_layout.num_devices(); ++device) {
+  for (int64_t device = 0; device < output_layout.num_devices(); ++device) {
     TF_ASSIGN_OR_RETURN(const DeviceLocation device_loc,
                         output_layout.mesh().device_location(device));
     DeviceLocation kept_dims;
-    for (int64 dim_idx = 0; dim_idx < device_loc.size(); ++dim_idx) {
+    for (int64_t dim_idx = 0; dim_idx < device_loc.size(); ++dim_idx) {
       if (!reduced_dims.contains(output_layout.mesh().dim_name(dim_idx))) {
         kept_dims.push_back(device_loc[dim_idx]);
       }

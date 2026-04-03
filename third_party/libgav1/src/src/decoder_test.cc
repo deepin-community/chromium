@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <memory>
 #include <new>
+#include <vector>
 
 #include "gtest/gtest.h"
 #include "src/decoder_test_data.h"
@@ -27,8 +28,10 @@ namespace {
 
 constexpr uint8_t kFrame1[] = {OBU_TEMPORAL_DELIMITER, OBU_SEQUENCE_HEADER,
                                OBU_FRAME_1};
+constexpr uint8_t kFrame1MeanQp = 81;
 
 constexpr uint8_t kFrame2[] = {OBU_TEMPORAL_DELIMITER, OBU_FRAME_2};
+constexpr uint8_t kFrame2MeanQp = 81;
 
 constexpr uint8_t kFrame1WithHdrCllAndHdrMdcv[] = {
     OBU_TEMPORAL_DELIMITER, OBU_SEQUENCE_HEADER, OBU_METADATA_HDR_CLL,
@@ -36,6 +39,10 @@ constexpr uint8_t kFrame1WithHdrCllAndHdrMdcv[] = {
 
 constexpr uint8_t kFrame2WithItutT35[] = {OBU_TEMPORAL_DELIMITER,
                                           OBU_METADATA_ITUT_T35, OBU_FRAME_2};
+
+constexpr uint8_t kFrame2WithMultipleItutT35[] = {
+    OBU_TEMPORAL_DELIMITER, OBU_METADATA_ITUT_T35, OBU_METADATA_ITUT_T35,
+    OBU_FRAME_2};
 
 class DecoderTest : public testing::Test {
  public:
@@ -344,7 +351,7 @@ TEST_F(DecoderTest, MetadataObu) {
   ASSERT_NE(buffer, nullptr);
   EXPECT_EQ(buffer->has_hdr_cll, 1);
   EXPECT_EQ(buffer->has_hdr_mdcv, 1);
-  EXPECT_EQ(buffer->has_itut_t35, 0);
+  EXPECT_EQ(buffer->itut_t35_count, 0);
   EXPECT_EQ(released_input_buffer_, &kFrame1WithHdrCllAndHdrMdcv);
 
   // libgav1 has decoded frame1 and is holding a reference to it.
@@ -365,9 +372,9 @@ TEST_F(DecoderTest, MetadataObu) {
   ASSERT_NE(buffer, nullptr);
   EXPECT_EQ(buffer->has_hdr_cll, 0);
   EXPECT_EQ(buffer->has_hdr_mdcv, 0);
-  EXPECT_EQ(buffer->has_itut_t35, 1);
-  EXPECT_NE(buffer->itut_t35.payload_bytes, nullptr);
-  EXPECT_GT(buffer->itut_t35.payload_size, 0);
+  EXPECT_EQ(buffer->itut_t35_count, 1);
+  EXPECT_NE(buffer->itut_t35[0].payload_bytes, nullptr);
+  EXPECT_GT(buffer->itut_t35[0].payload_size, 0);
   EXPECT_EQ(released_input_buffer_, &kFrame2WithItutT35);
 
   EXPECT_EQ(frames_in_use_, 2);
@@ -376,6 +383,109 @@ TEST_F(DecoderTest, MetadataObu) {
   status = decoder_->SignalEOS();
   EXPECT_EQ(status, kStatusOk);
   EXPECT_EQ(frames_in_use_, 0);
+}
+
+TEST_F(DecoderTest, MetadataObuMultipleItutT35) {
+  StatusCode status;
+  const DecoderBuffer* buffer;
+
+  // Enqueue frame1 for decoding.
+  status = decoder_->EnqueueFrame(
+      kFrame1WithHdrCllAndHdrMdcv, sizeof(kFrame1WithHdrCllAndHdrMdcv), 0,
+      const_cast<uint8_t*>(kFrame1WithHdrCllAndHdrMdcv));
+  ASSERT_EQ(status, kStatusOk);
+
+  // Dequeue the output of frame1.
+  status = decoder_->DequeueFrame(&buffer);
+  ASSERT_EQ(status, kStatusOk);
+  ASSERT_NE(buffer, nullptr);
+  EXPECT_EQ(buffer->has_hdr_cll, 1);
+  EXPECT_EQ(buffer->has_hdr_mdcv, 1);
+  EXPECT_EQ(buffer->itut_t35_count, 0);
+  EXPECT_EQ(released_input_buffer_, &kFrame1WithHdrCllAndHdrMdcv);
+
+  // libgav1 has decoded frame1 and is holding a reference to it.
+  EXPECT_EQ(frames_in_use_, 1);
+  EXPECT_EQ(buffer_private_data_, buffer->buffer_private_data);
+
+  // Enqueue frame2 for decoding.
+  status = decoder_->EnqueueFrame(
+      kFrame2WithMultipleItutT35, sizeof(kFrame2WithMultipleItutT35), 0,
+      const_cast<uint8_t*>(kFrame2WithMultipleItutT35));
+  ASSERT_EQ(status, kStatusOk);
+
+  EXPECT_EQ(frames_in_use_, 1);
+
+  // Dequeue the output of frame2.
+  status = decoder_->DequeueFrame(&buffer);
+  ASSERT_EQ(status, kStatusOk);
+  ASSERT_NE(buffer, nullptr);
+  EXPECT_EQ(buffer->has_hdr_cll, 0);
+  EXPECT_EQ(buffer->has_hdr_mdcv, 0);
+  EXPECT_EQ(buffer->itut_t35_count, 2);
+  EXPECT_NE(buffer->itut_t35[0].payload_bytes, nullptr);
+  EXPECT_GT(buffer->itut_t35[0].payload_size, 0);
+  EXPECT_NE(buffer->itut_t35[1].payload_bytes, nullptr);
+  EXPECT_GT(buffer->itut_t35[1].payload_size, 0);
+  EXPECT_EQ(released_input_buffer_, &kFrame2WithMultipleItutT35);
+
+  EXPECT_EQ(frames_in_use_, 2);
+  EXPECT_EQ(buffer_private_data_, buffer->buffer_private_data);
+
+  status = decoder_->SignalEOS();
+  EXPECT_EQ(status, kStatusOk);
+  EXPECT_EQ(frames_in_use_, 0);
+}
+
+class ParseOnlyTest : public testing::Test {
+ public:
+  void SetUp() override;
+
+ protected:
+  std::unique_ptr<Decoder> decoder_;
+};
+
+void ParseOnlyTest::SetUp() {
+  decoder_.reset(new (std::nothrow) Decoder());
+  ASSERT_NE(decoder_, nullptr);
+  DecoderSettings settings = {};
+  settings.parse_only = true;  // parse_only mode activated
+  ASSERT_EQ(decoder_->Init(&settings), kStatusOk);
+}
+
+TEST_F(ParseOnlyTest, NonFrameParallelModeParseOnly) {
+  StatusCode status;
+  const DecoderBuffer* buffer;
+
+  // Enqueue frame1 for decoding.
+  status = decoder_->EnqueueFrame(kFrame1, sizeof(kFrame1), 0,
+                                  const_cast<uint8_t*>(kFrame1));
+  ASSERT_EQ(status, kStatusOk);
+
+  // Dequeue the output of frame1.
+  status = decoder_->DequeueFrame(&buffer);
+  ASSERT_EQ(status, kStatusOk);
+  ASSERT_EQ(buffer,
+            nullptr);  // in the parse only case the buffer should be nullptr
+
+  // Frame 1 has 1 coding block and the value of it is kFrame1MeanQp.
+  std::vector<int> frame1_qp = decoder_->GetFramesMeanQpInTemporalUnit();
+  EXPECT_EQ(frame1_qp[0], kFrame1MeanQp);
+
+  // Enqueue frame2 for decoding.
+  status = decoder_->EnqueueFrame(kFrame2, sizeof(kFrame2), 0,
+                                  const_cast<uint8_t*>(kFrame2));
+  ASSERT_EQ(status, kStatusOk);
+
+  // Dequeue the output of frame2.
+  status = decoder_->DequeueFrame(&buffer);
+  ASSERT_EQ(status, kStatusOk);
+  ASSERT_EQ(buffer,
+            nullptr);  // in the parse only case the buffer should be nullptr
+
+  // Frame 2 has 4 coding blocks and the mean value of them is kFrame2MeanQp.
+  std::vector<int> frame2_qp = decoder_->GetFramesMeanQpInTemporalUnit();
+  EXPECT_EQ(frame2_qp[0], kFrame2MeanQp);
 }
 
 }  // namespace

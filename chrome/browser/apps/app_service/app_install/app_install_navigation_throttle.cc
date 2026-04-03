@@ -5,20 +5,28 @@
 #include "chrome/browser/apps/app_service/app_install/app_install_navigation_throttle.h"
 
 #include <memory>
+#include <optional>
 #include <string_view>
 
-#include "base/containers/contains.h"
+#include "base/functional/callback.h"
+#include "base/strings/string_util.h"
+#include "base/unguessable_token.h"
 #include "chrome/browser/apps/app_service/app_install/app_install_service.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
+#include "chrome/browser/apps/link_capturing/link_capturing_navigation_throttle.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/constants/chromeos_features.h"
+#include "chromeos/constants/url_constants.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/package_id.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/gfx/native_ui_types.h"
 #include "url/url_util.h"
+
+static_assert(BUILDFLAG(IS_CHROMEOS));
 
 namespace apps {
 
@@ -26,57 +34,129 @@ namespace {
 
 using ThrottleCheckResult = content::NavigationThrottle::ThrottleCheckResult;
 
-using std::literals::string_view_literals::operator""sv;
-
-// For matching URIs of the form: almanac://install-app?package_id=<package id>
-constexpr std::string_view kAppInstallScheme = "almanac"sv;
-constexpr std::string_view kAppInstallPath = "//install-app"sv;
-constexpr std::string_view kAppInstallPackageIdParam = "package_id"sv;
+constexpr std::string_view kAppInstallHost = "install-app";
+constexpr std::string_view kAppInstallPath = "//install-app";
+constexpr std::string_view kAppInstallPackageIdParam = "package_id";
+constexpr std::string_view kAppInstallSourceParam = "source";
 
 constexpr size_t kMaxDecodeLength = 2048;
+
+AppInstallSurface SourceParamToAppInstallSurface(std::string_view source) {
+  if (base::EqualsCaseInsensitiveASCII(source, "showoff")) {
+    return AppInstallSurface::kAppInstallUriShowoff;
+  }
+  if (base::EqualsCaseInsensitiveASCII(source, "mall")) {
+    return AppInstallSurface::kAppInstallUriMall;
+  }
+  if (base::EqualsCaseInsensitiveASCII(source, "mallv2")) {
+    return AppInstallSurface::kAppInstallUriMallV2;
+  }
+  if (base::EqualsCaseInsensitiveASCII(source, "getit")) {
+    return AppInstallSurface::kAppInstallUriGetit;
+  }
+  if (base::EqualsCaseInsensitiveASCII(source, "launcher")) {
+    return AppInstallSurface::kAppInstallUriLauncher;
+  }
+  if (base::EqualsCaseInsensitiveASCII(source, "peripherals")) {
+    return AppInstallSurface::kAppInstallUriPeripherals;
+  }
+  return AppInstallSurface::kAppInstallUriUnknown;
+}
+
+// Retrieves an identifier to the window we are anchoring to.
+std::optional<AppInstallService::WindowIdentifier> GetAnchorWindow(
+    content::WebContents* web_contents,
+    AppServiceProxy* proxy) {
+  return web_contents->GetTopLevelNativeWindow();
+}
+
+bool IsNavigationUserInitiated(content::NavigationThrottleRegistry& registry) {
+  content::NavigationHandle& handle = registry.GetNavigationHandle();
+  if (!handle.IsRendererInitiated()) {
+    return true;
+  }
+
+  return handle.StartedWithTransientActivation();
+}
 
 }  // namespace
 
 // static
-std::unique_ptr<content::NavigationThrottle>
-AppInstallNavigationThrottle::MaybeCreate(content::NavigationHandle* handle) {
-  if (chromeos::features::IsAppInstallServiceUriEnabled()) {
-    return std::make_unique<apps::AppInstallNavigationThrottle>(handle);
-  }
-  return nullptr;
+base::OnceCallback<void(bool created)>&
+AppInstallNavigationThrottle::MaybeCreateCallbackForTesting() {
+  static base::NoDestructor<base::OnceCallback<void(bool created)>> callback;
+  return *callback;
 }
 
 // static
-std::optional<PackageId> AppInstallNavigationThrottle::ExtractPackageId(
-    std::string_view query) {
+void AppInstallNavigationThrottle::MaybeCreateAndAdd(
+    content::NavigationThrottleRegistry& registry) {
+  bool create = IsNavigationUserInitiated(registry);
+  if (create) {
+    registry.AddThrottle(
+        std::make_unique<apps::AppInstallNavigationThrottle>(registry));
+  }
+
+  if (MaybeCreateCallbackForTesting()) {
+    std::move(MaybeCreateCallbackForTesting()).Run(create);
+  }
+}
+
+AppInstallNavigationThrottle::QueryParams::QueryParams() = default;
+
+AppInstallNavigationThrottle::QueryParams::QueryParams(
+    std::optional<std::string> serialized_package_id,
+    AppInstallSurface source)
+    : serialized_package_id(std::move(serialized_package_id)), source(source) {}
+
+AppInstallNavigationThrottle::QueryParams::QueryParams(QueryParams&&) = default;
+
+AppInstallNavigationThrottle::QueryParams::~QueryParams() = default;
+
+bool AppInstallNavigationThrottle::QueryParams::operator==(
+    const QueryParams& other) const {
+  return serialized_package_id == other.serialized_package_id &&
+         source == other.source;
+}
+
+// static
+AppInstallNavigationThrottle::QueryParams
+AppInstallNavigationThrottle::ExtractQueryParams(std::string_view query) {
+  QueryParams result;
   url::Component query_slice(0, query.length());
   url::Component key_slice;
   url::Component value_slice;
   while (url::ExtractQueryKeyValue(query, &query_slice, &key_slice,
                                    &value_slice)) {
-    if (query.substr(key_slice.begin, key_slice.len) !=
-        kAppInstallPackageIdParam) {
-      continue;
+    std::string_view key = query.substr(key_slice.begin, key_slice.len);
+
+    auto decode_value = [&]() {
+      url::RawCanonOutputW<kMaxDecodeLength> decoded_value;
+      url::DecodeURLEscapeSequences(
+          query.substr(value_slice.begin, value_slice.len),
+          url::DecodeURLMode::kUTF8OrIsomorphic, &decoded_value);
+
+      // TODO(b/299825321): Make DecodeURLEscapeSequences() work with
+      // RawCanonOutput to avoid this redundant UTF8 -> UTF16 -> UTF8
+      // conversion.
+      return base::UTF16ToUTF8(decoded_value.view());
+    };
+
+    if (key == kAppInstallPackageIdParam) {
+      std::string serialized_package_id = decode_value();
+      if (!serialized_package_id.empty()) {
+        result.serialized_package_id = std::move(serialized_package_id);
+      }
+    } else if (key == kAppInstallSourceParam) {
+      result.source = SourceParamToAppInstallSurface(decode_value());
     }
-
-    url::RawCanonOutputW<kMaxDecodeLength> decoded_value;
-    url::DecodeURLEscapeSequences(
-        query.substr(value_slice.begin, value_slice.len),
-        url::DecodeURLMode::kUTF8OrIsomorphic, &decoded_value);
-
-    // TODO(b/299825321): Make DecodeURLEscapeSequences() work with
-    // RawCanonOutput to avoid this redundant UTF8 -> UTF16 -> UTF8
-    // conversion.
-    return PackageId::FromString(base::UTF16ToUTF8(decoded_value.view()));
   }
-  return std::nullopt;
+  return result;
 }
 
 AppInstallNavigationThrottle::AppInstallNavigationThrottle(
-    content::NavigationHandle* navigation_handle)
-    : content::NavigationThrottle(navigation_handle) {
-  CHECK(chromeos::features::IsAppInstallServiceUriEnabled());
-}
+    content::NavigationThrottleRegistry& registry)
+    : content::NavigationThrottle(registry) {}
 
 AppInstallNavigationThrottle::~AppInstallNavigationThrottle() = default;
 
@@ -88,30 +168,47 @@ ThrottleCheckResult AppInstallNavigationThrottle::WillStartRequest() {
   return HandleRequest();
 }
 
-// TODO(b/299825321): Make this require redirection from an Almanac server.
 ThrottleCheckResult AppInstallNavigationThrottle::WillRedirectRequest() {
   return HandleRequest();
 }
 
 ThrottleCheckResult AppInstallNavigationThrottle::HandleRequest() {
-  // TODO(b/304680258): Integration test this flow.
   const GURL& url = navigation_handle()->GetURL();
-  if (url.SchemeIs(kAppInstallScheme) && url.path_piece() == kAppInstallPath) {
-    std::optional<PackageId> package_id = ExtractPackageId(url.query_piece());
-    // TODO(b/303350800): Generalize to work with all app types.
-    if (package_id.has_value() && package_id->app_type() == AppType::kWeb) {
-      Profile* profile = Profile::FromBrowserContext(
-          navigation_handle()->GetWebContents()->GetBrowserContext());
-      auto* proxy = AppServiceProxyFactory::GetForProfile(profile);
-      proxy->AppInstallService().InstallApp(
-          AppInstallSurface::kAppInstallNavigationThrottle, package_id.value(),
-          base::DoNothing());
-    }
 
+  if (!url.SchemeIs(chromeos::kAppInstallUriScheme)) {
+    return content::NavigationThrottle::PROCEED;
+  }
+
+  // We accept `cros-apps:install-app` or `cros-apps://install-app`, when parsed
+  // with an opaque path (no host, path starts with //) or not.
+  if (url.GetHost() != kAppInstallHost && url.path() != kAppInstallHost &&
+      url.path() != kAppInstallPath) {
+    return content::NavigationThrottle::PROCEED;
+  }
+
+  QueryParams query_params = ExtractQueryParams(url.query());
+  if (!query_params.serialized_package_id.has_value()) {
     return content::NavigationThrottle::CANCEL_AND_IGNORE;
   }
 
-  return content::NavigationThrottle::PROCEED;
+  content::WebContents* web_contents = navigation_handle()->GetWebContents();
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents->GetBrowserContext());
+  auto* proxy = AppServiceProxyFactory::GetForProfile(profile);
+
+  std::optional<AppInstallService::WindowIdentifier> anchor_window =
+      GetAnchorWindow(web_contents, proxy);
+
+  proxy->AppInstallService().InstallAppWithFallback(
+      query_params.source,
+      std::move(query_params.serialized_package_id).value(), anchor_window,
+      base::DoNothing());
+
+  if (!web_contents->GetLastCommittedURL().is_valid()) {
+    web_contents->ClosePage();
+  }
+
+  return content::NavigationThrottle::CANCEL_AND_IGNORE;
 }
 
 }  // namespace apps

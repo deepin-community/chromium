@@ -5,9 +5,11 @@
 #ifndef UI_BASE_EMOJI_EMOJI_PANEL_HELPER_H_
 #define UI_BASE_EMOJI_EMOJI_PANEL_HELPER_H_
 
+#include <string>
+
 #include "base/component_export.h"
 #include "base/functional/callback_forward.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 
 namespace ui {
 
@@ -18,7 +20,7 @@ COMPONENT_EXPORT(UI_BASE_EMOJI) bool IsEmojiPanelSupported();
 // Invokes the commands to show the Emoji Panel.
 COMPONENT_EXPORT(UI_BASE_EMOJI) void ShowEmojiPanel();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // Invokes the commands to show the Emoji Panel in tablet mode (ChromeOS only).
 COMPONENT_EXPORT(UI_BASE_EMOJI) void ShowTabletModeEmojiPanel();
 
@@ -29,19 +31,30 @@ enum class COMPONENT_EXPORT(UI_BASE_EMOJI) EmojiPickerCategory {
   kGifs,
 };
 
+enum class COMPONENT_EXPORT(UI_BASE_EMOJI) EmojiPickerFocusBehavior {
+  kOnlyShowWhenFocused,
+  kAlwaysShow,
+};
+
+using EmojiKeyboardCallback =
+    base::RepeatingCallback<void(EmojiPickerCategory,
+                                 EmojiPickerFocusBehavior,
+                                 const std::string& initial_query)>;
+
 // Show the emoji picker pre scrolled to a specific category
 COMPONENT_EXPORT(UI_BASE_EMOJI)
-void ShowEmojiPanelInSpecificMode(EmojiPickerCategory category);
+void ShowEmojiPanelInSpecificMode(EmojiPickerCategory category,
+                                  EmojiPickerFocusBehavior focus_behavior,
+                                  const std::string& initial_query);
 
 // Sets a callback to show the emoji panel (ChromeOS only).
 COMPONENT_EXPORT(UI_BASE_EMOJI)
-void SetShowEmojiKeyboardCallback(
-    base::RepeatingCallback<void(EmojiPickerCategory)> callback);
+void SetShowEmojiKeyboardCallback(EmojiKeyboardCallback callback);
 
 // Sets a callback to show the emoji panel in tablet mode (ChromeOS only).
 COMPONENT_EXPORT(UI_BASE_EMOJI)
 void SetTabletModeShowEmojiKeyboardCallback(base::RepeatingClosure callback);
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace ui
 

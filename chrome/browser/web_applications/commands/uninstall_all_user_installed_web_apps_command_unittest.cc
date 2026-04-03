@@ -4,9 +4,19 @@
 
 #include "chrome/browser/web_applications/commands/uninstall_all_user_installed_web_apps_command.h"
 
+#include <memory>
+
 #include "base/memory/scoped_refptr.h"
+#include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
+#include "chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.h"
+#include "chrome/browser/browsing_data/chrome_browsing_data_remover_delegate_factory.h"
+#include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
+#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
+#include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
+#include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_test.h"
 #include "chrome/browser/web_applications/policy/web_app_policy_constants.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/mock_file_utils_wrapper.h"
@@ -17,41 +27,72 @@
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
+#include "chrome/browser/web_applications/web_app_management_type.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
+#include "content/public/browser/browsing_data_remover.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace web_app {
 
-class UninstallAllUserInstalledWebAppsCommandTest : public WebAppTest {
+namespace {
+
+void WaitForPendingDataClearingTasks(Profile* profile) {
+  content::BrowsingDataRemover* browsing_data_remover =
+      profile->GetBrowsingDataRemover();
+  if (browsing_data_remover->GetPendingTaskCountForTesting() == 0) {
+    return;
+  }
+
+  base::test::TestFuture<void> future;
+  browsing_data_remover->SetWouldCompleteCallbackForTesting(
+      base::BindLambdaForTesting([&](base::OnceClosure callback) {
+        if (browsing_data_remover->GetPendingTaskCountForTesting() == 1) {
+          future.SetValue();
+        }
+        std::move(callback).Run();
+      }));
+  CHECK(future.Wait());
+}
+}  // namespace
+
+class UninstallAllUserInstalledWebAppsCommandTest : public IsolatedWebAppTest {
  public:
-  UninstallAllUserInstalledWebAppsCommandTest() = default;
+  UninstallAllUserInstalledWebAppsCommandTest()
+      : IsolatedWebAppTest(WithDevMode{}) {}
 
   void SetUp() override {
-    WebAppTest::SetUp();
-
+    IsolatedWebAppTest::SetUp();
     test::AwaitStartWebAppProviderAndSubsystems(profile());
   }
 
   void TearDown() override {
-    provider()->Shutdown();
-    WebAppTest::TearDown();
+    // IWAs will start a data clearing job when uninstalled, which needs to
+    // complete before we delete the Profile.
+    WaitForPendingDataClearingTasks(profile());
+    IsolatedWebAppTest::TearDown();
   }
 
-  WebAppProvider* provider() { return WebAppProvider::GetForTest(profile()); }
+  WebAppProvider* web_app_provider() {
+    return WebAppProvider::GetForTest(profile());
+  }
 
-  WebAppRegistrar& registrar_unsafe() { return provider()->registrar_unsafe(); }
+  WebAppRegistrar& registrar_unsafe() {
+    return web_app_provider()->registrar_unsafe();
+  }
 };
 
 TEST_F(UninstallAllUserInstalledWebAppsCommandTest, NoUserInstalledWebApps) {
   WebAppTestInstallWithOsHooksObserver observer(profile());
   observer.BeginListening();
   {
-    base::Value::Dict app_policy;
+    base::DictValue app_policy;
     app_policy.Set(web_app::kUrlKey, "https://example.com/install");
     ScopedListPrefUpdate update(profile()->GetPrefs(),
                                 prefs::kWebAppInstallForceList);
@@ -60,20 +101,22 @@ TEST_F(UninstallAllUserInstalledWebAppsCommandTest, NoUserInstalledWebApps) {
   webapps::AppId app_id = observer.Wait();
 
   base::test::TestFuture<const std::optional<std::string>&> future;
-  provider()->command_manager().ScheduleCommand(
+  web_app_provider()->command_manager().ScheduleCommand(
       std::make_unique<UninstallAllUserInstalledWebAppsCommand>(
           webapps::WebappUninstallSource::kHealthcareUserInstallCleanup,
           *profile(), future.GetCallback()));
   EXPECT_EQ(future.Get(), std::nullopt);
 
-  EXPECT_TRUE(registrar_unsafe().IsInstalled(app_id));
+  EXPECT_TRUE(provider().registrar_unsafe().AppMatches(
+      app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
 }
 
 TEST_F(UninstallAllUserInstalledWebAppsCommandTest, RemovesUserInstallSources) {
+  base::HistogramTester tester;
   WebAppTestInstallWithOsHooksObserver observer(profile());
   observer.BeginListening();
   {
-    base::Value::Dict app_policy;
+    base::DictValue app_policy;
     app_policy.Set(web_app::kUrlKey, "https://example.com/install");
     ScopedListPrefUpdate update(profile()->GetPrefs(),
                                 prefs::kWebAppInstallForceList);
@@ -91,15 +134,20 @@ TEST_F(UninstallAllUserInstalledWebAppsCommandTest, RemovesUserInstallSources) {
   EXPECT_TRUE(web_app->GetSources().Has(WebAppManagement::kSync));
 
   base::test::TestFuture<const std::optional<std::string>&> future;
-  provider()->command_manager().ScheduleCommand(
+  web_app_provider()->command_manager().ScheduleCommand(
       std::make_unique<UninstallAllUserInstalledWebAppsCommand>(
           webapps::WebappUninstallSource::kHealthcareUserInstallCleanup,
           *profile(), future.GetCallback()));
   EXPECT_EQ(future.Get(), std::nullopt);
 
-  EXPECT_TRUE(registrar_unsafe().IsInstalled(app_id));
+  EXPECT_TRUE(provider().registrar_unsafe().AppMatches(
+      app_id, WebAppFilter::InstalledInOperatingSystemForTesting()));
   EXPECT_TRUE(web_app->GetSources().Has(WebAppManagement::kPolicy));
   EXPECT_FALSE(web_app->GetSources().Has(WebAppManagement::kSync));
+  EXPECT_THAT(
+      tester.GetAllSamples("Webapp.Install.UninstallEvent"),
+      base::BucketsAre(base::Bucket(
+          webapps::WebappUninstallSource::kHealthcareUserInstallCleanup, 1)));
 }
 
 TEST_F(UninstallAllUserInstalledWebAppsCommandTest,
@@ -112,26 +160,65 @@ TEST_F(UninstallAllUserInstalledWebAppsCommandTest,
       profile(), "app from sync", GURL("https://example2.com"),
       webapps::WebappInstallSource::SYNC);
 
+  const std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app_bundle3 =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder().SetName("iwa from installer"))
+          .BuildBundle();
+  app_bundle3->FakeInstallPageState(profile());
+  app_bundle3->TrustSigningKey();
+  webapps::AppId app_id3 = app_bundle3->InstallChecked(profile()).app_id();
+
+  const std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app_bundle4 =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder().SetName("iwa from dev ui"))
+          .BuildBundle();
+  webapps::AppId app_id4 =
+      app_bundle4
+          ->InstallWithSource(profile(),
+                              &IsolatedWebAppInstallSource::FromDevUi)
+          .value()
+          .app_id();
+
+  const std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app_bundle5 =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder().SetName("iwa from dev command line"))
+          .BuildBundle();
+  webapps::AppId app_id5 =
+      app_bundle5
+          ->InstallWithSource(profile(),
+                              &IsolatedWebAppInstallSource::FromDevCommandLine)
+          .value()
+          .app_id();
+
   base::test::TestFuture<const std::optional<std::string>&> future;
-  provider()->command_manager().ScheduleCommand(
+  web_app_provider()->command_manager().ScheduleCommand(
       std::make_unique<UninstallAllUserInstalledWebAppsCommand>(
           webapps::WebappUninstallSource::kHealthcareUserInstallCleanup,
           *profile(), future.GetCallback()));
   EXPECT_EQ(future.Get(), std::nullopt);
 
-  EXPECT_FALSE(registrar_unsafe().IsInstalled(app_id1));
-  EXPECT_FALSE(registrar_unsafe().IsInstalled(app_id2));
+  EXPECT_FALSE(registrar_unsafe().GetInstallState(app_id1).has_value());
+  EXPECT_FALSE(registrar_unsafe().GetInstallState(app_id2).has_value());
+  EXPECT_FALSE(registrar_unsafe().GetInstallState(app_id3).has_value());
+  EXPECT_FALSE(registrar_unsafe().GetInstallState(app_id4).has_value());
+  EXPECT_FALSE(registrar_unsafe().GetInstallState(app_id5).has_value());
+
+  // TODO(crbug.com/40277668): As a temporary fix to avoid race conditions with
+  // `ScopedProfileKeepAlive`s, manually shutdown `KeyedService`s holding them.
+  provider().Shutdown();
+  ChromeBrowsingDataRemoverDelegateFactory::GetForProfile(profile())
+      ->Shutdown();
 }
 
 class UninstallAllUserInstalledWebAppsCommandWithIconManagerTest
     : public UninstallAllUserInstalledWebAppsCommandTest {
  public:
   void SetUp() override {
-    WebAppTest::SetUp();
+    IsolatedWebAppTest::SetUp();
 
     file_utils_wrapper_ =
         base::MakeRefCounted<testing::NiceMock<MockFileUtilsWrapper>>();
-    fake_provider().SetFileUtils(file_utils_wrapper_);
+    provider().SetFileUtils(file_utils_wrapper_);
 
     test::AwaitStartWebAppProviderAndSubsystems(profile());
   }
@@ -157,13 +244,13 @@ TEST_F(UninstallAllUserInstalledWebAppsCommandWithIconManagerTest,
       .WillOnce(testing::Return(false));
 
   base::test::TestFuture<const std::optional<std::string>&> future;
-  provider()->command_manager().ScheduleCommand(
+  web_app_provider()->command_manager().ScheduleCommand(
       std::make_unique<UninstallAllUserInstalledWebAppsCommand>(
           webapps::WebappUninstallSource::kHealthcareUserInstallCleanup,
           *profile(), future.GetCallback()));
   EXPECT_EQ(future.Get(), app_id + "[Sync]: kError");
 
-  EXPECT_FALSE(registrar_unsafe().IsInstalled(app_id));
+  EXPECT_FALSE(registrar_unsafe().GetInstallState(app_id).has_value());
 }
 
 }  // namespace web_app

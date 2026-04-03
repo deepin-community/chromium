@@ -30,20 +30,71 @@
 #include <utility>
 
 #include "dawn/dawn_proc.h"
+#include "dawn/native/ChainUtils.h"
+
+using testing::_;
+using testing::AtMost;
 
 namespace dawn::native {
 
-DawnMockTest::DawnMockTest() {
-    dawnProcSetProcs(&dawn::native::GetProcs());
+DawnMockTest::DawnMockTest() : mDeviceToggles(ToggleStage::Device) {}
 
-    auto deviceMock = AcquireRef(new ::testing::NiceMock<DeviceMock>());
+void DawnMockTest::SetUp() {
+    dawnProcSetProcs(&dawn::native::GetProcs());
+    Ref<InstanceBase> instance = APICreateInstance(nullptr);
+    const auto& adapters = instance->EnumerateAdapters();
+    DAWN_ASSERT(!adapters.empty());
+
+    wgpu::DeviceDescriptor desc = {};
+    desc.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous,
+                               mDeviceLostCallback.Callback());
+    desc.SetUncapturedErrorCallback(mDeviceErrorCallback.TemplatedCallback(),
+                                    mDeviceErrorCallback.TemplatedCallbackUserdata());
+    desc.requiredFeatureCount = mRequiredFeatures.size();
+    desc.requiredFeatures = mRequiredFeatures.data();
+    DeviceDescriptor* nativeDesc = reinterpret_cast<DeviceDescriptor*>(&desc);
+
+    auto result = ValidateAndUnpack(nativeDesc);
+    DAWN_ASSERT(result.IsSuccess());
+    UnpackedPtr<DeviceDescriptor> unpackedDesc = result.AcquireSuccess();
+
+    Ref<DeviceBase::DeviceLostEvent> lostEvent = DeviceBase::DeviceLostEvent::Create(nativeDesc);
+
+    mDeviceToggles.SetForTesting(Toggle::AllowUnsafeAPIs, true, true);
+    auto deviceMock = AcquireRef(new ::testing::NiceMock<DeviceMock>(
+        adapters[0].Get(), unpackedDesc, mDeviceToggles, std::move(lostEvent)));
     mDeviceMock = deviceMock.Get();
     device = wgpu::Device::Acquire(ToAPI(ReturnToAPI<DeviceBase>(std::move(deviceMock))));
 }
 
+void DawnMockTest::DropDevice() {
+    if (device == nullptr) {
+        return;
+    }
+
+    EXPECT_CALL(mDeviceLostCallback, Call(CHandleIs(nullptr), wgpu::DeviceLostReason::Destroyed, _))
+        .Times(AtMost(1));
+
+    // Since the device owns the instance in these tests, we need to explicitly verify that the
+    // instance has completed all work. To do this, we take an additional ref to the instance here
+    // and use it to process events until completion after dropping the device.
+    Ref<InstanceBase> instance = mDeviceMock->GetInstance();
+
+    mDeviceMock = nullptr;
+    device = nullptr;
+
+    do {
+    } while (instance->ProcessEvents());
+    instance = nullptr;
+}
+
 DawnMockTest::~DawnMockTest() {
-    device = wgpu::Device();
+    DropDevice();
     dawnProcSetProcs(nullptr);
+}
+
+void DawnMockTest::ProcessEvents() {
+    mDeviceMock->GetInstance()->ProcessEvents();
 }
 
 }  // namespace dawn::native

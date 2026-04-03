@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {ByteReader, SeekOrigin} from './byte_reader.js';
+import type {ByteReader} from './byte_reader.js';
+import {SeekOrigin} from './byte_reader.js';
 import type {Id3v2Frame, ParserMetadata} from './metadata_item.js';
 import {MetadataParser, type MetadataParserLogger} from './metadata_parser.js';
 
@@ -40,6 +41,8 @@ export class Id3Parser extends MetadataParser {
         // fall through
       case 1:
         rv |= reader.readScalar(1, false);
+      default:
+        break;
     }
 
     return rv;
@@ -213,6 +216,8 @@ export class Id3Parser extends MetadataParser {
         frame.size = Id3Parser.readSynchSafe_(reader, 4);
         frame.headerSize = 10;
         frame.flags = reader.readScalar(2, false);
+        break;
+      default:
         break;
     }
 

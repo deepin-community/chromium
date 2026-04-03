@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
@@ -27,7 +28,7 @@
 #include "third_party/skia/include/core/SkMallocPixelRef.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkScalar.h"
-#include "third_party/skia/include/effects/SkGradientShader.h"
+#include "third_party/skia/include/effects/SkGradient.h"
 #include "ui/display/screen.h"
 #include "ui/display/screen_base.h"
 
@@ -60,10 +61,10 @@ class Etc1ThumbnailHelperTest : public ::testing::Test {
 
   thumbnail::Etc1ThumbnailHelper& GetInterface() { return *interface_; }
   SkPaint SetupPaint() {
-    SkColor colors[] = {SK_ColorRED, SK_ColorGREEN, SK_ColorBLUE};
+    SkColor4f colors[] = {SkColors::kRed, SkColors::kGreen, SkColors::kBlue};
     SkScalar pos[] = {0, SK_Scalar1 / 2, SK_Scalar1};
     SkPaint paint;
-    paint.setShader(SkGradientShader::MakeSweep(256, 256, colors, pos, 3));
+    paint.setShader(SkShaders::SweepGradient({256, 256}, {{colors, pos, SkTileMode::kClamp}, {}}));
     return paint;
   }
 
@@ -122,8 +123,7 @@ TEST_F(Etc1ThumbnailHelperTest, CompressAndDecompressThumbnail) {
           &compressed_data_copy, &data_size_copy)
           .Then(loop1.QuitClosure());
 
-  GetInterface().Compress(image, gfx::Size(kWidth, kHeight),
-                          std::move(compress_once));
+  GetInterface().Compress(image, true, std::move(compress_once));
   loop1.Run();
 
   // Decompress the image
@@ -192,8 +192,7 @@ TEST_F(Etc1ThumbnailHelperTest, WriteReadAndDeleteThumbnail) {
           &compressed_data_copy, &data_size_copy)
           .Then(loop1.QuitClosure());
 
-  GetInterface().Compress(image, gfx::Size(kWidth, kHeight),
-                          std::move(compress_once));
+  GetInterface().Compress(image, true, std::move(compress_once));
   loop1.Run();
 
   // Write the image
@@ -252,9 +251,9 @@ TEST_F(Etc1ThumbnailHelperTest, WriteReadAndDeleteThumbnail) {
   EXPECT_EQ(data_size_copy.width(), read_data_size.width());
   EXPECT_EQ(data_size_copy.height(), read_data_size.height());
 
-  EXPECT_EQ(
-      0, memcmp(compressed_data_copy->pixels(), read_compressed_data->pixels(),
-                compressed_data_copy->rowBytes()));
+  EXPECT_EQ(0, UNSAFE_TODO(memcmp(compressed_data_copy->pixels(),
+                                  read_compressed_data->pixels(),
+                                  compressed_data_copy->rowBytes())));
 
   base::FilePath file_path_post_read = GetFile(tab_id);
   EXPECT_TRUE(base::PathExists(file_path_post_read));

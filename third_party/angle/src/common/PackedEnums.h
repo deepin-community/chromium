@@ -9,6 +9,10 @@
 #ifndef COMMON_PACKEDGLENUMS_H_
 #define COMMON_PACKEDGLENUMS_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "common/PackedEGLEnums_autogen.h"
 #include "common/PackedGLEnums_autogen.h"
 
@@ -239,6 +243,7 @@ TextureType ImageTypeToTextureType(GLenum imageType);
 
 bool IsMultisampled(gl::TextureType type);
 bool IsArrayTextureType(gl::TextureType type);
+bool IsLayeredTextureType(gl::TextureType type);
 
 bool IsStaticBufferUsage(BufferUsage useage);
 
@@ -784,12 +789,6 @@ typename std::enable_if<IsResourceIDType<T>::value, bool>::type operator<(const 
 template <typename ResourceIDType>
 GLuint GetIDValue(ResourceIDType id);
 
-template <>
-inline GLuint GetIDValue(GLuint id)
-{
-    return id;
-}
-
 template <typename ResourceIDType>
 inline GLuint GetIDValue(ResourceIDType id)
 {
@@ -929,6 +928,27 @@ PackParam(FromT from)
             typename std::remove_const<typename std::remove_pointer<FromT>::type>::type>::value,
         "Data types are different");
     return reinterpret_cast<EnumT>(from);
+}
+
+// Optimized specialization to avoid function call in common cases
+template <>
+ANGLE_INLINE typename gl::BufferBinding PackParam<gl::BufferBinding>(GLenum from)
+{
+    if (ANGLE_LIKELY(from == GL_ARRAY_BUFFER))
+    {
+        return gl::BufferBinding::Array;
+    }
+    if (ANGLE_LIKELY(from == GL_ELEMENT_ARRAY_BUFFER))
+    {
+        return gl::BufferBinding::ElementArray;
+    }
+    if (ANGLE_LIKELY(from == GL_UNIFORM_BUFFER))
+    {
+        return gl::BufferBinding::Uniform;
+    }
+
+    // Fall back to the default implementation
+    return FromGLenum<gl::BufferBinding>(from);
 }
 }  // namespace gl
 

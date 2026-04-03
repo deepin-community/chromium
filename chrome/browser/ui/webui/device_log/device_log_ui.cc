@@ -10,7 +10,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/values.h"
-#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/device_log_resources.h"
 #include "chrome/grit/device_log_resources_map.h"
@@ -21,6 +20,7 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "ui/base/webui/web_ui_util.h"
+#include "ui/webui/webui_util.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "base/strings/utf_string_conversions.h"
@@ -28,22 +28,22 @@
 #include "ui/base/l10n/l10n_util.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/crosapi/browser_manager.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
 namespace chromeos {
+
+DeviceLogUIConfig::DeviceLogUIConfig()
+    : DefaultWebUIConfig(content::kChromeUIScheme,
+                         chrome::kChromeUIDeviceLogHost) {}
 
 namespace {
 
 class DeviceLogMessageHandler : public content::WebUIMessageHandler {
  public:
-  DeviceLogMessageHandler() {}
+  DeviceLogMessageHandler() = default;
 
   DeviceLogMessageHandler(const DeviceLogMessageHandler&) = delete;
   DeviceLogMessageHandler& operator=(const DeviceLogMessageHandler&) = delete;
 
-  ~DeviceLogMessageHandler() override {}
+  ~DeviceLogMessageHandler() override = default;
 
   // WebUIMessageHandler implementation.
   void RegisterMessages() override {
@@ -53,20 +53,10 @@ class DeviceLogMessageHandler : public content::WebUIMessageHandler {
     web_ui()->RegisterMessageCallback(
         "clearLog", base::BindRepeating(&DeviceLogMessageHandler::ClearLog,
                                         base::Unretained(this)));
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    web_ui()->RegisterMessageCallback(
-        "isLacrosEnabled",
-        base::BindRepeating(&DeviceLogMessageHandler::IsLacrosEnabled,
-                            base::Unretained(this)));
-    web_ui()->RegisterMessageCallback(
-        "openBrowserDeviceLog",
-        base::BindRepeating(&DeviceLogMessageHandler::OpenBrowserDevieLog,
-                            base::Unretained(this)));
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
   }
 
  private:
-  void GetLog(const base::Value::List& value) {
+  void GetLog(const base::ListValue& value) {
     AllowJavascript();
     std::string callback_id = value[0].GetString();
     base::Value data(device_event_log::GetAsString(
@@ -75,27 +65,9 @@ class DeviceLogMessageHandler : public content::WebUIMessageHandler {
     ResolveJavascriptCallback(base::Value(callback_id), data);
   }
 
-  void ClearLog(const base::Value::List& value) const {
+  void ClearLog(const base::ListValue& value) const {
     device_event_log::ClearAll();
   }
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  void IsLacrosEnabled(const base::Value::List& value) {
-    AllowJavascript();
-    const bool is_lacros_enabled = crosapi::browser_util::IsLacrosEnabled();
-    std::string callback_id = value[0].GetString();
-    ResolveJavascriptCallback(base::Value(callback_id),
-                              base::Value(is_lacros_enabled));
-  }
-
-  void OpenBrowserDevieLog(const base::Value::List& args) const {
-    // Note: This will only be called by the UI when Lacros is available.
-    DCHECK(crosapi::BrowserManager::Get());
-    crosapi::BrowserManager::Get()->SwitchToTab(
-        GURL(chrome::kChromeUIDeviceLogUrl),
-        /*path_behavior=*/NavigateParams::RESPECT);
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 };
 
 }  // namespace
@@ -107,57 +79,44 @@ DeviceLogUI::DeviceLogUI(content::WebUI* web_ui)
   content::WebUIDataSource* html = content::WebUIDataSource::CreateAndAdd(
       web_ui->GetWebContents()->GetBrowserContext(),
       chrome::kChromeUIDeviceLogHost);
+  webui::SetupWebUIDataSource(html, kDeviceLogResources,
+                              IDR_DEVICE_LOG_DEVICE_LOG_UI_HTML);
 
   static constexpr webui::LocalizedString kStrings[] = {
-      {"titleText", IDS_DEVICE_LOG_TITLE},
       {"autoRefreshText", IDS_DEVICE_AUTO_REFRESH},
-      {"logRefreshText", IDS_DEVICE_LOG_REFRESH},
+      {"autoSelectTypes", IDS_DEVICE_SELECT_TYPES},
       {"logClearText", IDS_DEVICE_LOG_CLEAR},
       {"logClearTypesText", IDS_DEVICE_LOG_CLEAR_TYPES},
-      {"logNoEntriesText", IDS_DEVICE_LOG_NO_ENTRIES},
-      {"logLevelLabel", IDS_DEVICE_LOG_LEVEL_LABEL},
-      {"logLevelErrorText", IDS_DEVICE_LOG_LEVEL_ERROR},
-      {"logLevelUserText", IDS_DEVICE_LOG_LEVEL_USER},
-      {"logLevelEventText", IDS_DEVICE_LOG_LEVEL_EVENT},
+      {"logEntryFormat", IDS_DEVICE_LOG_ENTRY},
       {"logLevelDebugText", IDS_DEVICE_LOG_LEVEL_DEBUG},
+      {"logLevelErrorText", IDS_DEVICE_LOG_LEVEL_ERROR},
+      {"logLevelEventText", IDS_DEVICE_LOG_LEVEL_EVENT},
       {"logLevelFileinfoText", IDS_DEVICE_LOG_FILEINFO},
+      {"logLevelLabel", IDS_DEVICE_LOG_LEVEL_LABEL},
       {"logLevelTimeDetailText", IDS_DEVICE_LOG_TIME_DETAIL},
+      {"logLevelUserText", IDS_DEVICE_LOG_LEVEL_USER},
+      {"logNoEntriesText", IDS_DEVICE_LOG_NO_ENTRIES},
+      {"logRefreshText", IDS_DEVICE_LOG_REFRESH},
+      {"logTypeBluetoothText", IDS_DEVICE_LOG_TYPE_BLUETOOTH},
+      {"logTypeCameraText", IDS_DEVICE_LOG_TYPE_CAMERA},
+      {"logTypeDisplayText", IDS_DEVICE_LOG_TYPE_DISPLAY},
+      {"logTypeExtensionsText", IDS_DEVICE_LOG_TYPE_EXTENSIONS},
+      {"logTypeFidoText", IDS_DEVICE_LOG_TYPE_FIDO},
+      {"logTypeFirmwareText", IDS_DEVICE_LOG_TYPE_FIRMWARE},
+      {"logTypeGeolocationText", IDS_DEVICE_LOG_TYPE_GEOLOCATION},
+      {"logTypeHidText", IDS_DEVICE_LOG_TYPE_HID},
       {"logTypeLoginText", IDS_DEVICE_LOG_TYPE_LOGIN},
+      {"logTypeMemoryText", IDS_DEVICE_LOG_TYPE_MEMORY},
       {"logTypeNetworkText", IDS_DEVICE_LOG_TYPE_NETWORK},
       {"logTypePowerText", IDS_DEVICE_LOG_TYPE_POWER},
-      {"logTypeBluetoothText", IDS_DEVICE_LOG_TYPE_BLUETOOTH},
-      {"logTypeUsbText", IDS_DEVICE_LOG_TYPE_USB},
-      {"logTypeHidText", IDS_DEVICE_LOG_TYPE_HID},
       {"logTypePrinterText", IDS_DEVICE_LOG_TYPE_PRINTER},
-      {"logTypeFidoText", IDS_DEVICE_LOG_TYPE_FIDO},
       {"logTypeSerialText", IDS_DEVICE_LOG_TYPE_SERIAL},
-      {"logTypeCameraText", IDS_DEVICE_LOG_TYPE_CAMERA},
-      {"logTypeGeolocationText", IDS_DEVICE_LOG_TYPE_GEOLOCATION},
-      {"logTypeExtensionsText", IDS_DEVICE_LOG_TYPE_EXTENSIONS},
-      {"logTypeDisplayText", IDS_DEVICE_LOG_TYPE_DISPLAY},
-      {"logTypeFirmwareText", IDS_DEVICE_LOG_TYPE_FIRMWARE},
-      {"logEntryFormat", IDS_DEVICE_LOG_ENTRY},
+      {"logTypeUsbText", IDS_DEVICE_LOG_TYPE_USB},
+      {"titleText", IDS_DEVICE_LOG_TITLE},
   };
   html->AddLocalizedStrings(kStrings);
-
-#if BUILDFLAG(IS_CHROMEOS)
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  auto device_log_url = base::UTF8ToUTF16(chrome::kChromeUIDeviceLogUrl);
-#elif BUILDFLAG(IS_CHROMEOS_LACROS)
-  auto device_log_url = base::UTF8ToUTF16(chrome::kOsUIDeviceLogURL);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-  auto os_link_container = l10n_util::GetStringFUTF16(
-      IDS_DEVICE_LOG_OS_LINK_CONTAINER, device_log_url);
-  html->AddString("osLinkContainer", os_link_container);
-#endif  // BUILDFLAG(IS_CHROMEOS)
-
-  html->UseStringsJs();
-  html->AddResourcePaths(base::make_span(kDeviceLogResources,
-                                         kDeviceLogResourcesSize));
-  html->SetDefaultResource(IDR_DEVICE_LOG_DEVICE_LOG_UI_HTML);
 }
 
-DeviceLogUI::~DeviceLogUI() {
-}
+DeviceLogUI::~DeviceLogUI() = default;
 
 }  // namespace chromeos

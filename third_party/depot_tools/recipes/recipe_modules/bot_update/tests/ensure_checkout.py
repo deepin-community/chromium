@@ -4,7 +4,6 @@
 
 from recipe_engine import post_process
 
-PYTHON_VERSION_COMPATIBILITY = 'PY3'
 
 DEPS = [
   'bot_update',
@@ -17,6 +16,8 @@ def RunSteps(api):
   api.gclient.set_config('depot_tools')
   api.bot_update.ensure_checkout()
   api.bot_update.ensure_checkout(no_fetch_tags=True, enforce_fetch=True)
+  api.bot_update.ensure_checkout(step_tags={'tag': 'value'})
+  api.bot_update.ensure_checkout(clean_ignored=True)
 
 
 def GenTests(api):

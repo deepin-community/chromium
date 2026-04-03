@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import {TestImportManager} from '../../testing/test_import_manager.js';
-import {Context, ContextChecker} from '../context_checker.js';
+import type {Context, ContextChecker} from '../context_checker.js';
 
 import {MacroName} from './macro_names.js';
 
@@ -25,6 +25,18 @@ export enum MacroError {
   // Actuation would fail to be successful. For example, the text area might
   // no longer be active, or the action cannot be taken in the given context.
   FAILED_ACTUATION,
+}
+
+/**
+ * Which direction this macro will move its associated behavior toward,
+ * i.e. ON when turning on Dictation or entering scroll mode,
+ * OFF when pausing FaceGaze or ending a drag and drop action, or
+ * NONE if this macro does not toggle behavior at all.
+ */
+export enum ToggleDirection {
+  NONE = 'none',
+  ON = 'on',
+  OFF = 'off',
 }
 
 /**
@@ -78,6 +90,35 @@ export class Macro {
   }
 
   /**
+   * Whether this macro should trigger when the action starts and when it ends.
+   * For example, a mouse click would trigger a press when a user's action
+   * begins and then a release when the action ends.
+   */
+  triggersAtActionStartAndEnd(): boolean {
+    return false;
+  }
+
+  /**
+   * Whether this macro performs a toggle behavior. For example, toggling on
+   * Dictation.
+   */
+  isToggle(): boolean {
+    return false;
+  }
+
+  /**
+   * Get the toggle direction if this macro has toggle behavior.
+   * @return ToggleDirection representing the direction this macro will move its
+   *     associated behavior toward when run.
+   *    ToggleDirection.NONE if this macro is not a toggle,
+   *    ToggleDirection.ON if this macro will turn on its associated behavior,
+   *    ToggleDirection.OFF if this macro will turn off its associated behavior.
+   */
+  getToggleDirection(): ToggleDirection {
+    return ToggleDirection.NONE;
+  }
+
+  /**
    * Checks whether a macro can attempt to run in the current context.
    * If this macro has several steps, just checks the first step.
    */
@@ -106,7 +147,7 @@ export class Macro {
 
   /** Protected helper method to create a CheckContextResult with an error. */
   protected createFailureCheckContextResult_(
-      error: MacroError, failedContext: Context): CheckContextResult {
+      error: MacroError, failedContext?: Context): CheckContextResult {
     return {canTryAction: false, error, failedContext};
   }
 

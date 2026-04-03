@@ -9,8 +9,9 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/run_until.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -116,14 +117,8 @@ void WaitForFullscreenAnimation() {
 
 }  // namespace
 
-// TODO(1119576): Flaky under Lacros.
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#define MAYBE_EscapeExitsFullscreen DISABLED_EscapeExitsFullscreen
-#else
-#define MAYBE_EscapeExitsFullscreen EscapeExitsFullscreen
-#endif
 IN_PROC_BROWSER_TEST_F(ChromeMimeHandlerViewInteractiveUITest,
-                       MAYBE_EscapeExitsFullscreen) {
+                       EscapeExitsFullscreen) {
   // Use the testing subclass of MimeHandlerViewGuest.
   TestMimeHandlerViewGuest::RegisterTestGuestViewType(GetGuestViewManager());
 
@@ -144,6 +139,7 @@ IN_PROC_BROWSER_TEST_F(ChromeMimeHandlerViewInteractiveUITest,
   ASSERT_TRUE(guest_view);
 
   auto* guest_rwh = guest_view->GetGuestMainFrame()->GetRenderWidgetHost();
+  ASSERT_TRUE(guest_rwh);
 
   // Wait for fullscreen mode.
   fullscreen_waiter.Wait();

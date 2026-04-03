@@ -43,6 +43,10 @@ class AutofillSaveCardBottomSheetBridge {
       const AutofillSaveCardUiInfo& ui_info,
       std::unique_ptr<AutofillSaveCardDelegateAndroid> delegate);
 
+  // Hides the save card bottom sheet. The reason for closing it will be set as
+  // BottomSheetController.StateChangeReason.INTERACTION_COMPLETE.
+  virtual void Hide();
+
   // -- JNI calls bridged to AutofillSaveCardDelegate --
   // Called when the UI is shown.
   void OnUiShown(JNIEnv* env);
@@ -52,6 +56,9 @@ class AutofillSaveCardBottomSheetBridge {
   void OnUiCanceled(JNIEnv* env);
   // Called if the user has ignored the prompt.
   void OnUiIgnored(JNIEnv* env);
+
+  void SetSaveCardDelegateForTesting(
+      std::unique_ptr<AutofillSaveCardDelegateAndroid> delegate);
 
  protected:
   // Used in tests to inject dependencies.

@@ -114,10 +114,17 @@ public:
                           bool isFunctionReturnValue);
 
     /**
-     * Associates previously-created slots with an SkSL variable. (This would result in multiple
-     * variables sharing a slot range.)
+     * Associates previously-created slots with an SkSL variable; this can allow multiple variables
+     * to share overlapping ranges. If the variable was already associated with a slot range,
+     * returns the previously associated range.
      */
-    void mapVariableToSlots(const Variable& v, SlotRange range);
+    std::optional<SlotRange> mapVariableToSlots(const Variable& v, SlotRange range);
+
+    /**
+     * Deletes the existing mapping between a variable and its slots; a future call to
+     * `getVariableSlots` will see this as a brand new variable and associate new slots.
+     */
+    void unmapVariableSlots(const Variable& v);
 
     /** Looks up the slots associated with an SkSL variable; creates the slot if necessary. */
     SlotRange getVariableSlots(const Variable& v);
@@ -211,10 +218,14 @@ public:
      */
     int getFunctionDebugInfo(const FunctionDeclaration& decl);
 
+    /** Returns true for variables with slots in fProgramSlots; immutables or uniforms are false. */
+    bool hasVariableSlots(const Variable& v) {
+        return !IsUniform(v) && !fImmutableVariables.contains(&v);
+    }
+
     /** Looks up the slots associated with an SkSL variable; creates the slots if necessary. */
     SlotRange getVariableSlots(const Variable& v) {
-        SkASSERT(!IsUniform(v));
-        SkASSERT(!fImmutableVariables.contains(&v));
+        SkASSERT(this->hasVariableSlots(v));
         return fProgramSlots.getVariableSlots(v);
     }
 
@@ -1180,9 +1191,17 @@ SlotRange SlotManager::createSlots(std::string name,
     return result;
 }
 
-void SlotManager::mapVariableToSlots(const Variable& v, SlotRange range) {
+std::optional<SlotRange> SlotManager::mapVariableToSlots(const Variable& v, SlotRange range) {
     SkASSERT(v.type().slotCount() == SkToSizeT(range.count));
+    const SlotRange* existingEntry = fSlotMap.find(&v);
+    std::optional<SlotRange> originalRange = existingEntry ? std::optional(*existingEntry)
+                                                           : std::nullopt;
     fSlotMap.set(&v, range);
+    return originalRange;
+}
+
+void SlotManager::unmapVariableSlots(const Variable& v) {
+    fSlotMap.remove(&v);
 }
 
 SlotRange SlotManager::getVariableSlots(const Variable& v) {
@@ -1371,8 +1390,14 @@ std::optional<SlotRange> Generator::writeFunction(
     }
 
     // Handle parameter lvalues.
+    struct RemappedSlotRange {
+        const Variable* fVariable;
+        std::optional<SlotRange> fSlotRange;
+    };
     SkSpan<Variable* const> parameters = function.declaration().parameters();
     TArray<std::unique_ptr<LValue>> lvalues;
+    TArray<RemappedSlotRange> remappedSlotRanges;
+
     if (function.declaration().isMain()) {
         // For main(), the parameter slots have already been populated by `writeProgram`, but we
         // still need to explicitly emit trace ops for the variables in main(), since they are
@@ -1394,6 +1419,17 @@ std::optional<SlotRange> Generator::writeFunction(
             const Expression& arg = *arguments[index];
             const Variable& param = *parameters[index];
 
+            // If we are passing a child effect to a function, we need to add its mapping to our
+            // child map.
+            if (arg.type().isEffectChild()) {
+                if (int* childIndex = fChildEffectMap.find(arg.as<VariableReference>()
+                                                              .variable())) {
+                    SkASSERT(!fChildEffectMap.find(&param));
+                    fChildEffectMap[&param] = *childIndex;
+                }
+                continue;
+            }
+
             // Use LValues for out-parameters and inout-parameters, so we can store back to them
             // later.
             if (IsInoutParameter(param) || IsOutParameter(param)) {
@@ -1409,13 +1445,39 @@ std::optional<SlotRange> Generator::writeFunction(
                     }
                     this->popToSlotRangeUnmasked(this->getVariableSlots(param));
                 }
-            } else {
-                // Copy input arguments into their respective parameter slots.
-                if (!this->pushExpression(arg)) {
-                    return std::nullopt;
-                }
-                this->popToSlotRangeUnmasked(this->getVariableSlots(param));
+                continue;
             }
+
+            // If a parameter is never read by the function, we don't need to populate its slots.
+            ProgramUsage::VariableCounts paramCounts = fProgram.fUsage->get(param);
+            if (paramCounts.fRead == 0) {
+                // Honor the expression's side effects, if any.
+                if (Analysis::HasSideEffects(arg)) {
+                    if (!this->pushExpression(arg, /*usesResult=*/false)) {
+                        return std::nullopt;
+                    }
+                    this->discardExpression(arg.type().slotCount());
+                }
+                continue;
+            }
+
+            // If the expression is a plain variable and the parameter is never written to, we don't
+            // need to copy it; we can just share the slots from the existing variable.
+            if (paramCounts.fWrite == 0 && arg.is<VariableReference>()) {
+                const Variable& var = *arg.as<VariableReference>().variable();
+                if (this->hasVariableSlots(var)) {
+                    std::optional<SlotRange> originalRange =
+                            fProgramSlots.mapVariableToSlots(param, this->getVariableSlots(var));
+                    remappedSlotRanges.push_back({&param, originalRange});
+                    continue;
+                }
+            }
+
+            // Copy input arguments into their respective parameter slots.
+            if (!this->pushExpression(arg)) {
+                return std::nullopt;
+            }
+            this->popToSlotRangeUnmasked(this->getVariableSlots(param));
         }
     }
 
@@ -1466,6 +1528,23 @@ std::optional<SlotRange> Generator::writeFunction(
                 return std::nullopt;
             }
             this->discardExpression(param.type().slotCount());
+        }
+    }
+
+    // Restore any remapped parameter slot ranges to their original values.
+    for (const RemappedSlotRange& remapped : remappedSlotRanges) {
+        if (remapped.fSlotRange.has_value()) {
+            fProgramSlots.mapVariableToSlots(*remapped.fVariable, *remapped.fSlotRange);
+        } else {
+            fProgramSlots.unmapVariableSlots(*remapped.fVariable);
+        }
+    }
+
+    // Remove any child-effect mappings that were made for this call.
+    for (size_t index = 0; index < arguments.size(); ++index) {
+        const Expression& arg = *arguments[index];
+        if (arg.type().isEffectChild()) {
+            fChildEffectMap.remove(parameters[index]);
         }
     }
 
@@ -3289,9 +3368,9 @@ bool Generator::pushIntrinsic(IntrinsicKind intrinsic,
             subexpressionStack.exit();
             subexpressionStack.pushClone(/*slots=*/3);
 
-            fBuilder.swizzle(/*consumedSlots=*/3, {1, 2, 0});
+            fBuilder.swizzle(/*consumedSlots=*/3, {{1, 2, 0}});
             subexpressionStack.enter();
-            fBuilder.swizzle(/*consumedSlots=*/3, {2, 0, 1});
+            fBuilder.swizzle(/*consumedSlots=*/3, {{2, 0, 1}});
             subexpressionStack.exit();
 
             // Push `arg1.zxy` onto this stack and `arg1.yzx` onto the next stack. Perform the
@@ -3304,11 +3383,11 @@ bool Generator::pushIntrinsic(IntrinsicKind intrinsic,
             subexpressionStack.exit();
             subexpressionStack.pushClone(/*slots=*/3);
 
-            fBuilder.swizzle(/*consumedSlots=*/3, {2, 0, 1});
+            fBuilder.swizzle(/*consumedSlots=*/3, {{2, 0, 1}});
             fBuilder.binary_op(BuilderOp::mul_n_floats, 3);
 
             subexpressionStack.enter();
-            fBuilder.swizzle(/*consumedSlots=*/3, {1, 2, 0});
+            fBuilder.swizzle(/*consumedSlots=*/3, {{1, 2, 0}});
             fBuilder.binary_op(BuilderOp::mul_n_floats, 3);
             subexpressionStack.exit();
 

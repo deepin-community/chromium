@@ -25,7 +25,9 @@
 #include "base/test/scoped_feature_list.h"
 #include "chromeos/ash/components/login/auth/auth_events_recorder.h"
 #include "ui/base/accelerators/accelerator.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/display/manager/display_manager.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
+#include "ui/views/accessibility/view_accessibility.h"
 
 namespace ash {
 
@@ -35,7 +37,8 @@ constexpr char kNotificationCenterTrayNoNotificationsToastId[] =
 class NotificationCenterTrayTestBase : public AshTestBase {
  public:
   NotificationCenterTrayTestBase(bool enable_notification_center_controller)
-      : enable_notification_center_controller_(
+      : AshTestBase(base::test::TaskEnvironment::TimeSource::MOCK_TIME),
+        enable_notification_center_controller_(
             enable_notification_center_controller) {
     scoped_feature_list_.InitWithFeatureState(
         features::kNotificationCenterController,
@@ -175,8 +178,8 @@ TEST_P(NotificationCenterTrayTest, ClickOnTrayAfterRemovingNotifications) {
 
   // Make sure animations don't complete immediately for the rest of the test,
   // so that we can click on the tray while its running its hide animation.
-  ui::ScopedAnimationDurationScaleMode animation_duration_scale(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode animation_duration_scale(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Remove all notifications and verify that the tray's hide animation is
   // running.
@@ -315,19 +318,6 @@ TEST_P(NotificationCenterTrayTest, DoNotDisturbUpdatesPinnedIcons) {
   EXPECT_TRUE(test_api()->IsNotificationIconShown());
 }
 
-TEST_P(NotificationCenterTrayTest, NoPrivacyIndicatorsWhenVcEnabled) {
-  // No privacy indicators when `kVideoConference` is enabled.
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      /*enabled_features=*/{features::kVideoConference,
-                            features::kCameraEffectsSupportedByHardware},
-      /*disabled_features=*/{});
-
-  auto notification_tray =
-      std::make_unique<NotificationCenterTray>(GetPrimaryShelf());
-  EXPECT_FALSE(notification_tray->privacy_indicators_view());
-}
-
 // Tests that the focus ring is visible and has proper size when the
 // notification center tray is focused.
 TEST_P(NotificationCenterTrayTest, FocusRing) {
@@ -389,8 +379,8 @@ TEST_P(NotificationCenterTrayTest,
   // scheduled, but `TrayItemView` animations are bypassed when the animation
   // duration scale mode is set to ZERO_DURATION. Hence, set the animation
   // duration scale mode to something else for this test.
-  ui::ScopedAnimationDurationScaleMode test_duration_mode(
-      ui::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+  gfx::ScopedAnimationDurationScaleMode test_duration_mode(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // This test relies on the lock screen actually being created (and creating
   // the lock screen requires the existence of an `AuthEventsRecorder`).
@@ -425,6 +415,53 @@ TEST_P(NotificationCenterTrayTest,
   // Verify that the `NotificationCounterView` on the secondary display is not
   // visible.
   EXPECT_FALSE(secondary_notification_counter_view->GetVisible());
+}
+
+// Tests that the privacy indicators view is created and show/hide accordingly
+// when updated.
+TEST_P(NotificationCenterTrayTest, PrivacyIndicatorsVisibility) {
+  auto* notification_tray = StatusAreaWidgetTestHelper::GetStatusAreaWidget()
+                                ->notification_center_tray();
+  auto* privacy_indicators_view = notification_tray->privacy_indicators_view();
+  EXPECT_TRUE(privacy_indicators_view);
+
+  EXPECT_FALSE(privacy_indicators_view->GetVisible());
+
+  scoped_refptr<PrivacyIndicatorsNotificationDelegate> delegate =
+      base::MakeRefCounted<PrivacyIndicatorsNotificationDelegate>();
+
+  // Updates the controller to simulate camera access, the privacy indicators
+  // should become visible.
+  PrivacyIndicatorsController::Get()->UpdatePrivacyIndicators(
+      /*app_id=*/"app_id", /*app_name=*/u"App Name",
+      /*is_camera_used=*/true,
+      /*is_microphone_used=*/false, delegate, PrivacyIndicatorsSource::kApps);
+  EXPECT_TRUE(privacy_indicators_view->GetVisible());
+
+  // Updates the controller to simulate that camera and microphone are not
+  // accessed, the privacy indicators should be hidden.
+  PrivacyIndicatorsController::Get()->UpdatePrivacyIndicators(
+      /*app_id=*/"app_id", /*app_name=*/u"App Name",
+      /*is_camera_used=*/false,
+      /*is_microphone_used=*/false, delegate, PrivacyIndicatorsSource::kApps);
+  // Fast forward by the minimum duration the privacy indicator should be held.
+  task_environment()->FastForwardBy(
+      PrivacyIndicatorsController::kPrivacyIndicatorsMinimumHoldDuration);
+  EXPECT_FALSE(privacy_indicators_view->GetVisible());
+}
+
+// Tests that the TrayBubbleView instance has the correct name in the
+// accessibility cache.
+TEST_P(NotificationCenterTrayTest, BubbleViewAccessibleName) {
+  test_api()->AddNotification();
+  test_api()->ToggleBubble();
+  EXPECT_TRUE(test_api()->IsBubbleShown());
+
+  TrayBubbleView* bubble_view = test_api()->GetBubble()->GetBubbleView();
+  ui::AXNodeData node_data;
+  bubble_view->GetViewAccessibility().GetAccessibleNodeData(&node_data);
+  EXPECT_EQ(node_data.GetString16Attribute(ax::mojom::StringAttribute::kName),
+            test_api()->GetTray()->GetAccessibleNameForBubble());
 }
 
 // Test fixture that disables notification popups.
@@ -479,57 +516,6 @@ TEST_P(NotificationCenterTrayNoPopupsTest,
       test_api()->IsNotificationIconShownOnDisplay(secondary_display_id));
   EXPECT_TRUE(
       test_api()->IsNotificationCounterShownOnDisplay(secondary_display_id));
-}
-
-// Test suite for the notification center when `kPrivacyIndicators` is enabled.
-class NotificationCenterTrayPrivacyIndicatorsTest : public AshTestBase {
- public:
-  NotificationCenterTrayPrivacyIndicatorsTest() = default;
-  NotificationCenterTrayPrivacyIndicatorsTest(
-      const NotificationCenterTrayPrivacyIndicatorsTest&) = delete;
-  NotificationCenterTrayPrivacyIndicatorsTest& operator=(
-      const NotificationCenterTrayPrivacyIndicatorsTest&) = delete;
-  ~NotificationCenterTrayPrivacyIndicatorsTest() override = default;
-
-  void SetUp() override {
-    scoped_feature_list_.InitWithFeatures({features::kPrivacyIndicators}, {});
-
-    AshTestBase::SetUp();
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-// Tests that the privacy indicators view is created and show/hide accordingly
-// when updated.
-TEST_F(NotificationCenterTrayPrivacyIndicatorsTest,
-       PrivacyIndicatorsVisibility) {
-  auto* notification_tray = StatusAreaWidgetTestHelper::GetStatusAreaWidget()
-                                ->notification_center_tray();
-  auto* privacy_indicators_view = notification_tray->privacy_indicators_view();
-  EXPECT_TRUE(privacy_indicators_view);
-
-  EXPECT_FALSE(privacy_indicators_view->GetVisible());
-
-  scoped_refptr<PrivacyIndicatorsNotificationDelegate> delegate =
-      base::MakeRefCounted<PrivacyIndicatorsNotificationDelegate>();
-
-  // Updates the controller to simulate camera access, the privacy indicators
-  // should become visible.
-  PrivacyIndicatorsController::Get()->UpdatePrivacyIndicators(
-      /*app_id=*/"app_id", /*app_name=*/u"App Name",
-      /*is_camera_used=*/true,
-      /*is_microphone_used=*/false, delegate, PrivacyIndicatorsSource::kApps);
-  EXPECT_TRUE(privacy_indicators_view->GetVisible());
-
-  // Updates the controller to simulate that camera and microphone are not
-  // accessed, the privacy indicators should be hidden.
-  PrivacyIndicatorsController::Get()->UpdatePrivacyIndicators(
-      /*app_id=*/"app_id", /*app_name=*/u"App Name",
-      /*is_camera_used=*/false,
-      /*is_microphone_used=*/false, delegate, PrivacyIndicatorsSource::kApps);
-  EXPECT_FALSE(privacy_indicators_view->GetVisible());
 }
 
 // TODO(b/252875025):

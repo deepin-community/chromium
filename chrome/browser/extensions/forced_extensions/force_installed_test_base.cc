@@ -3,21 +3,25 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/forced_extensions/force_installed_test_base.h"
-#include "base/memory/raw_ptr.h"
 
+#include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/external_provider_impl.h"
-#include "chrome/browser/extensions/forced_extensions/install_stage_tracker.h"
+#include "chrome/browser/extensions/forced_extensions/install_stage_tracker_factory.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/policy/core/common/policy_service_impl.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/forced_extensions/install_stage_tracker.h"
 #include "extensions/browser/pref_names.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_builder.h"
 #include "testing/gmock/include/gmock/gmock.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -55,26 +59,27 @@ void ForceInstalledTestBase::SetUp() {
 
   prefs_ = profile_->GetTestingPrefService();
   registry_ = ExtensionRegistry::Get(profile_);
-  install_stage_tracker_ = InstallStageTracker::Get(profile_);
+  install_stage_tracker_ =
+      InstallStageTrackerFactory::GetForBrowserContext(profile_);
   force_installed_tracker_ =
       std::make_unique<ForceInstalledTracker>(registry_, profile_);
 }
 
 void ForceInstalledTestBase::SetupForceList(ExtensionOrigin origin) {
-  base::Value::List list;
+  base::ListValue list;
   const std::string update_url = origin == ExtensionOrigin::kWebStore
                                      ? kExtensionUpdateUrl
                                      : kOffStoreUpdateUrl;
   list.Append(base::StrCat({kExtensionId1, ";", update_url}));
   list.Append(base::StrCat({kExtensionId2, ";", update_url}));
-  base::Value::Dict dict =
-      base::Value::Dict()
+  base::DictValue dict =
+      base::DictValue()
           .Set(kExtensionId1,
-               base::Value::Dict().Set(ExternalProviderImpl::kExternalUpdateUrl,
-                                       update_url))
+               base::DictValue().Set(ExternalProviderImpl::kExternalUpdateUrl,
+                                     update_url))
           .Set(kExtensionId2,
-               base::Value::Dict().Set(ExternalProviderImpl::kExternalUpdateUrl,
-                                       update_url));
+               base::DictValue().Set(ExternalProviderImpl::kExternalUpdateUrl,
+                                     update_url));
   prefs_->SetManagedPref(pref_names::kInstallForceList, std::move(dict));
 
   EXPECT_CALL(policy_provider_, IsInitializationComplete(testing::_))
@@ -91,7 +96,7 @@ void ForceInstalledTestBase::SetupForceList(ExtensionOrigin origin) {
 }
 
 void ForceInstalledTestBase::SetupEmptyForceList() {
-  prefs_->SetManagedPref(pref_names::kInstallForceList, base::Value::Dict());
+  prefs_->SetManagedPref(pref_names::kInstallForceList, base::DictValue());
 
   EXPECT_CALL(policy_provider_, IsInitializationComplete(testing::_))
       .WillRepeatedly(testing::Return(true));

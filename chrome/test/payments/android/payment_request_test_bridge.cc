@@ -7,8 +7,10 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "base/no_destructor.h"
-#include "chrome/test/test_support_jni_headers/PaymentRequestTestBridge_jni.h"
 #include "content/public/browser/web_contents.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/test/payment_test_support_jni_headers/PaymentRequestTestBridge_jni.h"
 
 namespace payments {
 
@@ -118,20 +120,20 @@ void SetUseNativeObserverOnPaymentRequestForTesting(
   callbacks.on_ui_displayed = std::move(on_ui_displayed);
 
   Java_PaymentRequestTestBridge_setUseNativeObserverForTest(
-      env, reinterpret_cast<jlong>(&callbacks.on_can_make_payment_called),
-      reinterpret_cast<jlong>(&callbacks.on_can_make_payment_returned),
-      reinterpret_cast<jlong>(&callbacks.on_has_enrolled_instrument_called),
-      reinterpret_cast<jlong>(&callbacks.on_has_enrolled_instrument_returned),
-      reinterpret_cast<jlong>(&callbacks.on_show_instruments_ready),
-      reinterpret_cast<jlong>(&callbacks.set_app_descriptions),
-      reinterpret_cast<jlong>(&callbacks.set_shipping_section_visible),
-      reinterpret_cast<jlong>(&callbacks.set_contact_section_visible),
-      reinterpret_cast<jlong>(&callbacks.on_error_displayed),
-      reinterpret_cast<jlong>(&callbacks.on_not_supported_error),
-      reinterpret_cast<jlong>(&callbacks.on_connection_terminated),
-      reinterpret_cast<jlong>(&callbacks.on_abort_called),
-      reinterpret_cast<jlong>(&callbacks.on_complete_called),
-      reinterpret_cast<jlong>(&callbacks.on_ui_displayed));
+      env, reinterpret_cast<int64_t>(&callbacks.on_can_make_payment_called),
+      reinterpret_cast<int64_t>(&callbacks.on_can_make_payment_returned),
+      reinterpret_cast<int64_t>(&callbacks.on_has_enrolled_instrument_called),
+      reinterpret_cast<int64_t>(&callbacks.on_has_enrolled_instrument_returned),
+      reinterpret_cast<int64_t>(&callbacks.on_show_instruments_ready),
+      reinterpret_cast<int64_t>(&callbacks.set_app_descriptions),
+      reinterpret_cast<int64_t>(&callbacks.set_shipping_section_visible),
+      reinterpret_cast<int64_t>(&callbacks.set_contact_section_visible),
+      reinterpret_cast<int64_t>(&callbacks.on_error_displayed),
+      reinterpret_cast<int64_t>(&callbacks.on_not_supported_error),
+      reinterpret_cast<int64_t>(&callbacks.on_connection_terminated),
+      reinterpret_cast<int64_t>(&callbacks.on_abort_called),
+      reinterpret_cast<int64_t>(&callbacks.on_complete_called),
+      reinterpret_cast<int64_t>(&callbacks.on_ui_displayed));
 }
 
 // This runs callbacks given to SetUseNativeObserverOnPaymentRequestForTesting()
@@ -141,17 +143,17 @@ void SetUseNativeObserverOnPaymentRequestForTesting(
 // destroyed after running it.
 static void JNI_PaymentRequestTestBridge_ResolvePaymentRequestObserverCallback(
     JNIEnv* env,
-    jlong callback_ptr) {
+    int64_t callback_ptr) {
   auto* callback = reinterpret_cast<base::RepeatingClosure*>(callback_ptr);
   callback->Run();
 }
 
 static void JNI_PaymentRequestTestBridge_SetAppDescriptions(
     JNIEnv* env,
-    jlong callback_ptr,
-    const base::android::JavaParamRef<jobjectArray>& japp_labels,
-    const base::android::JavaParamRef<jobjectArray>& japp_sublabels,
-    const base::android::JavaParamRef<jobjectArray>& japp_totals) {
+    int64_t callback_ptr,
+    const base::android::JavaRef<jobjectArray>& japp_labels,
+    const base::android::JavaRef<jobjectArray>& japp_sublabels,
+    const base::android::JavaRef<jobjectArray>& japp_totals) {
   std::vector<std::string> app_labels;
   base::android::AppendJavaStringArrayToStringVector(env, japp_labels,
                                                      &app_labels);
@@ -179,11 +181,13 @@ static void JNI_PaymentRequestTestBridge_SetAppDescriptions(
 
 static void JNI_PaymentRequestTestBridge_InvokeBooleanCallback(
     JNIEnv* env,
-    jlong callback_ptr,
-    jboolean jvalue) {
+    int64_t callback_ptr,
+    bool jvalue) {
   auto* callback =
       reinterpret_cast<base::RepeatingCallback<void(bool)>*>(callback_ptr);
   callback->Run(jvalue);
 }
 
 }  // namespace payments
+
+DEFINE_JNI(PaymentRequestTestBridge)

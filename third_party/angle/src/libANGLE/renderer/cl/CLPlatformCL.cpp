@@ -16,9 +16,12 @@
 #include "libANGLE/renderer/cl/CLDeviceCL.h"
 #include "libANGLE/renderer/cl/cl_util.h"
 
+namespace OpenCLIcdLoader
+{
 extern "C" {
 #include "icd.h"
 }  // extern "C"
+}  // namespace OpenCLIcdLoader
 
 namespace rx
 {
@@ -49,10 +52,10 @@ CLPlatformCL::~CLPlatformCL() = default;
 
 CLPlatformImpl::Info CLPlatformCL::createInfo() const
 {
-    // Verify that the platform is valid
-    // TODO(aannestrand) platform may be valid even when clGetPlatformIDs is NULL
-    // http://anglebug.com/8447
-    if (mNative == nullptr || mNative->getDispatch().clGetPlatformIDs == nullptr ||
+    // Verify that the platform is valid.
+    // We ignore clGetPlatformIDs for ICD case since the ICD Loader has already verified
+    // clIcdGetPlatformIDsKHR exists and is valid.
+    if (mNative == nullptr || (!mIsIcd && mNative->getDispatch().clGetPlatformIDs == nullptr) ||
         mNative->getDispatch().clGetPlatformInfo == nullptr ||
         mNative->getDispatch().clGetDeviceIDs == nullptr ||
         mNative->getDispatch().clGetDeviceInfo == nullptr ||
@@ -143,17 +146,10 @@ CLPlatformImpl::Info CLPlatformCL::createInfo() const
         return Info{};
     }
 
-    // TODO(jplate) Remove workaround after bug is fixed http://anglebug.com/6053
+    // TODO(jplate) Remove workaround after bug is fixed http://anglebug.com/42264583
     if (info.versionStr.compare(0u, 15u, "OpenCL 3.0 CUDA", 15u) == 0)
     {
         extensionStr.append(" cl_khr_depth_images cl_khr_image2d_from_buffer");
-    }
-
-    // Limit version number to supported version
-    if (info.versionStr[7] != '1')
-    {
-        info.versionStr[7] = '1';
-        info.versionStr[9] = '2';
     }
 
     const cl_version version = ExtractCLVersion(info.versionStr);
@@ -340,7 +336,7 @@ CLDeviceImpl::CreateDatas CLPlatformCL::createDevices() const
                         nullptr) == CL_SUCCESS)
                 {
                     // If default device found, select it
-                    if (types[index].isSet(CL_DEVICE_TYPE_DEFAULT))
+                    if (types[index].intersects(CL_DEVICE_TYPE_DEFAULT))
                     {
                         defaultIndex = index;
                     }
@@ -437,7 +433,7 @@ void CLPlatformCL::Initialize(CreateFuncs &createFuncs, bool isIcd)
     // Using khrIcdInitialize() of the third party Khronos OpenCL ICD Loader to
     // enumerate the available OpenCL implementations on the system. They will be
     // stored in the singly linked list khrIcdVendors of the C struct KHRicdVendor.
-    khrIcdInitialize();
+    OpenCLIcdLoader::khrIcdInitialize();
 
     // The ICD loader will also enumerate ANGLE's OpenCL library if it is registered. Our
     // OpenCL entry points for the ICD enumeration are reentrant, but at this point of the
@@ -446,17 +442,18 @@ void CLPlatformCL::Initialize(CreateFuncs &createFuncs, bool isIcd)
 
     // Iterating through the singly linked list khrIcdVendors to create
     // an ANGLE CL pass-through platform for each found ICD platform.
-    for (KHRicdVendor *vendorIt = khrIcdVendors; vendorIt != nullptr; vendorIt = vendorIt->next)
+    for (OpenCLIcdLoader::KHRicdVendor *vendorIt = OpenCLIcdLoader::khrIcdVendors;
+         vendorIt != nullptr; vendorIt           = vendorIt->next)
     {
         cl_platform_id nativePlatform = vendorIt->platform;
-        createFuncs.emplace_back([nativePlatform](const cl::Platform &platform) {
-            return Ptr(new CLPlatformCL(platform, nativePlatform));
+        createFuncs.emplace_back([nativePlatform, isIcd](const cl::Platform &platform) {
+            return Ptr(new CLPlatformCL(platform, nativePlatform, isIcd));
         });
     }
 }
 
-CLPlatformCL::CLPlatformCL(const cl::Platform &platform, cl_platform_id native)
-    : CLPlatformImpl(platform), mNative(native)
+CLPlatformCL::CLPlatformCL(const cl::Platform &platform, cl_platform_id native, bool isIcd)
+    : CLPlatformImpl(platform), mNative(native), mIsIcd(isIcd)
 {}
 
 }  // namespace rx

@@ -30,8 +30,7 @@
 #include "ui/aura/client/window_types.h"
 #include "ui/aura/window.h"
 
-namespace ash {
-namespace app_time {
+namespace ash::app_time {
 
 namespace {
 
@@ -636,7 +635,7 @@ TEST_F(AppActivityRegistryTest, RestoredApplicationInformation) {
   EXPECT_EQ(registry().GetActiveTime(kApp1), active_timedelta);
 
   // Now let's test that the app activity are stored appropriately.
-  const base::Value::List& list =
+  const base::ListValue& list =
       prefs()->GetList(prefs::kPerAppTimeLimitsAppActivities);
 
   const std::vector<PersistedAppInfo> app_infos =
@@ -678,7 +677,7 @@ TEST_F(AppActivityRegistryTest, RemoveUninstalledApplications) {
   registry().OnSuccessfullyReported(base::Time::Now());
 
   // Now let's test that the app activity are stored appropriately.
-  const base::Value::List& list =
+  const base::ListValue& list =
       prefs()->GetList(prefs::kPerAppTimeLimitsAppActivities);
 
   const std::vector<PersistedAppInfo> app_infos =
@@ -687,15 +686,16 @@ TEST_F(AppActivityRegistryTest, RemoveUninstalledApplications) {
           /* include_app_activity_array */ true);
 
   EXPECT_EQ(app_infos.size(), 3u);
-  for (const auto& entry : app_infos)
+  for (const auto& entry : app_infos) {
     EXPECT_EQ(entry.active_times().size(), 0u);
+  }
 
   // kApp1 will still be present since it still has activity.
   registry().OnResetTimeReached(base::Time::Now());
   registry().SaveAppActivity();
   registry().OnSuccessfullyReported(base::Time::Now());
 
-  const base::Value::List& new_list =
+  const base::ListValue& new_list =
       prefs()->GetList(prefs::kPerAppTimeLimitsAppActivities);
 
   const std::vector<PersistedAppInfo> final_app_infos =
@@ -726,7 +726,7 @@ TEST_F(AppActivityRegistryTest, RemoveOldEntries) {
   ReInitializeRegistry();
 
   // Now let's test that the app activity are stored appropriately.
-  const base::Value::List& list =
+  const base::ListValue& list =
       prefs()->GetList(prefs::kPerAppTimeLimitsAppActivities);
 
   const std::vector<PersistedAppInfo> app_infos =
@@ -1105,5 +1105,4 @@ TEST_F(AppActivityRegistryTest, GoogleSlidesPaused) {
   CreateAppActivityForApp(kGoogleSlidesApp, base::Hours(1));
 }
 
-}  // namespace app_time
-}  // namespace ash
+}  // namespace ash::app_time

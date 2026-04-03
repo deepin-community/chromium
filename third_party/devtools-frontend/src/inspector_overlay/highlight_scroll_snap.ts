@@ -1,10 +1,9 @@
 
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {type Bounds, type PathCommands, type Position} from './common.js';
-
+import type {Bounds, PathCommands, Position} from './common.js';
 import {drawPath, emptyBounds, type LineStyle, type PathBounds} from './highlight_common.js';
 
 type SnapAlignment = 'none'|'start'|'end'|'center';

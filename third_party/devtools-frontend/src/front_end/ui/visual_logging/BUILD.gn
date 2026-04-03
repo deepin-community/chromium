@@ -1,13 +1,16 @@
-# Copyright 2023 The Chromium Authors. All rights reserved.
+# Copyright 2023 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("../../../scripts/build/ninja/devtools_entrypoint.gni")
 import("../../../scripts/build/ninja/devtools_module.gni")
+import("../../../scripts/build/typescript/typescript.gni")
 
-devtools_module("visual_logging") {
+devtools_ui_module("visual_logging") {
   sources = [
+    "Debugging.ts",
     "DomState.ts",
+    "KnownContextValues.ts",
     "Loggable.ts",
     "LoggingConfig.ts",
     "LoggingDriver.ts",
@@ -18,6 +21,8 @@ devtools_module("visual_logging") {
   deps = [
     "../../core/common:bundle",
     "../../core/host:bundle",
+    "../../core/platform:bundle",
+    "../../core/root:bundle",
     "../components/render_coordinator:bundle",
   ]
 }
@@ -28,11 +33,13 @@ devtools_entrypoint("bundle") {
   deps = [ ":visual_logging" ]
 
   visibility = [
-    "../../../test/unittests/front_end/ui/visual_logging/*",
+    ":*",
     "../../entrypoints/device_mode_emulation_frame/*",
+    "../../entrypoints/inspector_main/*",
     "../../entrypoints/main/*",
     "../../panels/*",
     "../components/*",
+    "../kit/*",
     "../legacy/*",
   ]
 }
@@ -42,5 +49,28 @@ devtools_entrypoint("testing") {
 
   deps = [ ":visual_logging" ]
 
-  visibility = [ "../../../test/unittests/front_end/ui/visual_logging/*" ]
+  visibility = [
+    ":unittests",
+    "../../testing/*",
+  ]
+}
+
+devtools_ui_module("unittests") {
+  testonly = true
+
+  sources = [
+    "Debugging.test.ts",
+    "DomState.test.ts",
+    "LoggingConfig.test.ts",
+    "LoggingDriver.test.ts",
+    "LoggingEvents.test.ts",
+    "LoggingState.test.ts",
+    "NonDomState.test.ts",
+  ]
+
+  deps = [
+    ":bundle",
+    ":testing",
+    "../../testing",
+  ]
 }

@@ -6,8 +6,10 @@
 #define UI_DISPLAY_TYPES_DISPLAY_COLOR_MANAGEMENT_H_
 
 #include <memory>
+#include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "third_party/skia/modules/skcms/skcms.h"
 #include "ui/display/types/display_types_export.h"
 #include "ui/display/types/gamma_ramp_rgb_entry.h"
@@ -18,7 +20,7 @@ namespace display {
 // channels.
 class DISPLAY_TYPES_EXPORT GammaCurve {
  public:
-  explicit GammaCurve(const std::vector<GammaRampRGBEntry>& lut);
+  explicit GammaCurve(std::vector<GammaRampRGBEntry>&& lut);
   GammaCurve();
   GammaCurve(const GammaCurve& other);
   GammaCurve(GammaCurve&& other);
@@ -42,6 +44,10 @@ class DISPLAY_TYPES_EXPORT GammaCurve {
   // Evaluate at a point `x` in [0, 1]. If `x` is not in that interval then this
   // function will clamp `x` to [0, 1].
   void Evaluate(float x, uint16_t& r, uint16_t& g, uint16_t& b) const;
+
+  // Evaluate at the specified RGB values. Input values will be clamped to the
+  // [0, 1] interval.
+  void Evaluate(base::span<float, 3> rgb) const;
 
   // Display as a string for debugging.
   std::string ToString() const;

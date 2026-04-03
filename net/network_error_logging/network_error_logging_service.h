@@ -13,6 +13,7 @@
 
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
+#include "base/rand_util.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 #include "net/base/ip_address.h"
@@ -52,9 +53,8 @@ class NET_EXPORT NetworkErrorLoggingService {
     NelPolicyKey(const NelPolicyKey& other);
     ~NelPolicyKey();
 
-    bool operator<(const NelPolicyKey& other) const;
-    bool operator==(const NelPolicyKey& other) const;
-    bool operator!=(const NelPolicyKey& other) const;
+    friend bool operator==(const NelPolicyKey&, const NelPolicyKey&) = default;
+    friend auto operator<=>(const NelPolicyKey&, const NelPolicyKey&) = default;
 
     // The NAK of the request this policy was received from. This will be used
     // for any requests uploading reports according to this policy. (Not
@@ -116,6 +116,9 @@ class NET_EXPORT NetworkErrorLoggingService {
   struct NET_EXPORT RequestDetails {
     RequestDetails();
     RequestDetails(const RequestDetails& other);
+    RequestDetails(RequestDetails&& other);
+    RequestDetails& operator=(const RequestDetails& other);
+    RequestDetails& operator=(RequestDetails&& other);
     ~RequestDetails();
 
     // NetworkAnonymizationKey of the request triggering the error. Not included
@@ -146,6 +149,10 @@ class NET_EXPORT NetworkErrorLoggingService {
   struct NET_EXPORT SignedExchangeReportDetails {
     SignedExchangeReportDetails();
     SignedExchangeReportDetails(const SignedExchangeReportDetails& other);
+    SignedExchangeReportDetails(SignedExchangeReportDetails&& other);
+    SignedExchangeReportDetails& operator=(
+        const SignedExchangeReportDetails& other);
+    SignedExchangeReportDetails& operator=(SignedExchangeReportDetails&& other);
     ~SignedExchangeReportDetails();
 
     // NetworkAnonymizationKey of the request triggering the error. Not included
@@ -289,13 +296,21 @@ class NET_EXPORT NetworkErrorLoggingService {
   virtual PersistentNelStore* GetPersistentNelStoreForTesting();
   virtual ReportingService* GetReportingServiceForTesting();
 
+  // Loads a specified list of Nel policies and marks the service as
+  // initialized.
+  virtual void LoadPoliciesForTesting(std::vector<NelPolicy> policies);
+
  protected:
   NetworkErrorLoggingService();
 
   // Unowned:
   raw_ptr<const base::Clock> clock_;
-  raw_ptr<ReportingService, DanglingUntriaged> reporting_service_ = nullptr;
+  raw_ptr<ReportingService> reporting_service_ = nullptr;
   bool shut_down_ = false;
+
+  // Sampler for metrics.
+  // TODO(crbug.com/450428442): Remove this sampler after we investigate OOM.
+  const base::MetricsSubSampler sampler_;
 };
 
 // Persistent storage for NEL policies.

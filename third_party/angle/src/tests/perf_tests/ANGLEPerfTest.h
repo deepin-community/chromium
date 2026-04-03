@@ -87,6 +87,7 @@ class ANGLEPerfTest : public testing::Test, angle::NonCopyable
     enum class RunTrialPolicy
     {
         FinishEveryStep,
+        RunContinuouslyWarmup,
         RunContinuously,
     };
 
@@ -105,7 +106,6 @@ class ANGLEPerfTest : public testing::Test, angle::NonCopyable
     void runTrial(double maxRunTime, int maxStepsToRun, RunTrialPolicy runPolicy);
 
     // Overriden in trace perf tests.
-    virtual void saveScreenshot(const std::string &screenshotName) {}
     virtual void computeGPUTime() {}
 
     void calibrateStepsToRun();
@@ -131,11 +131,15 @@ class ANGLEPerfTest : public testing::Test, angle::NonCopyable
         FAIL() << reason;
     }
 
+    void atraceCounter(const char *counterName, int64_t counterValue);
+
     std::string mName;
     std::string mBackend;
     std::string mStory;
     Timer mTrialTimer;
     uint64_t mGPUTimeNs;
+    double mFrameWallTimeSec;
+    double mBusyWaitCpuTimeSec;
     bool mSkipTest;
     std::string mSkipTestReason;
     std::unique_ptr<perf_test::PerfResultReporter> mReporter;
@@ -152,6 +156,7 @@ class ANGLEPerfTest : public testing::Test, angle::NonCopyable
         std::vector<GLuint64> samples;
     };
     std::map<GLuint, CounterInfo> mPerfCounterInfo;
+    GLuint mPerfMonitor;
     std::vector<uint64_t> mProcessMemoryUsageKBSamples;
 };
 
@@ -179,6 +184,7 @@ struct RenderTestParams : public angle::PlatformParameters
     EGLenum colorSpace             = EGL_COLORSPACE_LINEAR;
     bool multisample               = false;
     EGLint samples                 = -1;
+    bool isCL                      = false;
 };
 
 class ANGLERenderTest : public ANGLEPerfTest
@@ -217,8 +223,8 @@ class ANGLERenderTest : public ANGLEPerfTest
     void setWebGLCompatibilityEnabled(bool webglCompatibility);
     void setRobustResourceInit(bool enabled);
 
-    void startGpuTimer();
-    void stopGpuTimer();
+    virtual void startGpuTimer();
+    virtual void stopGpuTimer(bool mayNeedFlush = true);
 
     void beginInternalTraceEvent(const char *name);
     void endInternalTraceEvent(const char *name);
@@ -231,13 +237,18 @@ class ANGLERenderTest : public ANGLEPerfTest
     bool mIsTimestampQueryAvailable;
     bool mEnableDebugCallback = true;
 
+    void startTest() override;
+    void finishTest() override;
+
+    // non-const, so tests (e.g., TracePerfTest,
+    // ProgramPipelineObjectBenchmark) can set the values they need.
+    ConfigParameters &getConfigParams() { return mConfigParams; }
+
   private:
     void SetUp() override;
     void TearDown() override;
 
     void step() override;
-    void startTest() override;
-    void finishTest() override;
     void computeGPUTime() override;
 
     void skipTestIfMissingExtensionPrerequisites();
@@ -258,6 +269,13 @@ class ANGLERenderTest : public ANGLEPerfTest
     ConfigParameters mConfigParams;
     bool mSwapEnabled;
 
+    enum class EndQueryFlushPolicy
+    {
+        NoFlush,
+        Flush,
+        FenceSync
+    };
+
     struct TimestampSample
     {
         GLuint beginQuery;
@@ -266,6 +284,7 @@ class ANGLERenderTest : public ANGLEPerfTest
 
     GLuint mCurrentTimestampBeginQuery = 0;
     std::queue<TimestampSample> mTimestampQueries;
+    EndQueryFlushPolicy mEndQueryFlushPolicy = EndQueryFlushPolicy::NoFlush;
 
     // Trace event record that can be output.
     std::vector<TraceEvent> mTraceEventBuffer;

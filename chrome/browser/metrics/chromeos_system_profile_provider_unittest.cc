@@ -31,6 +31,7 @@
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/dbus/tpm_manager/tpm_manager_client.h"
+#include "components/prefs/pref_service.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_task_environment.h"
@@ -155,12 +156,12 @@ class ChromeOSSystemProfileProviderTest : public testing::Test {
 TEST_F(ChromeOSSystemProfileProviderTest, MultiProfileUserCount) {
   // |scoped_enabler| takes over the lifetime of |user_manager|.
   auto* user_manager = new ash::FakeChromeUserManager();
-  // TODO(crbug/1154780): Overload operator-> in ScopedUserManager.
+  // TODO(crbug.com/40735060): Overload operator-> in ScopedUserManager.
   user_manager::ScopedUserManager scoped_enabler(
       base::WrapUnique(user_manager));
-  user_manager->AddKioskAppUser(account_id1);
-  user_manager->AddKioskAppUser(account_id2);
-  user_manager->AddKioskAppUser(account_id3);
+  user_manager->AddKioskChromeAppUser(account_id1);
+  user_manager->AddKioskChromeAppUser(account_id2);
+  user_manager->AddKioskChromeAppUser(account_id3);
 
   user_manager->LoginUser(account_id1);
   user_manager->LoginUser(account_id3);
@@ -175,12 +176,12 @@ TEST_F(ChromeOSSystemProfileProviderTest, MultiProfileUserCount) {
 TEST_F(ChromeOSSystemProfileProviderTest, MultiProfileCountInvalidated) {
   // |scoped_enabler| takes over the lifetime of |user_manager|.
   auto* user_manager = new ash::FakeChromeUserManager();
-  // TODO(crbug/1154780): Overload operator-> in ScopedUserManager.
+  // TODO(crbug.com/40735060): Overload operator-> in ScopedUserManager.
   user_manager::ScopedUserManager scoped_enabler(
       base::WrapUnique(user_manager));
-  user_manager->AddKioskAppUser(account_id1);
-  user_manager->AddKioskAppUser(account_id2);
-  user_manager->AddKioskAppUser(account_id3);
+  user_manager->AddKioskChromeAppUser(account_id1);
+  user_manager->AddKioskChromeAppUser(account_id2);
+  user_manager->AddKioskChromeAppUser(account_id3);
 
   user_manager->LoginUser(account_id1);
 
@@ -210,10 +211,10 @@ TEST_F(ChromeOSSystemProfileProviderTest,
 
   // |scoped_enabler| takes over the lifetime of |user_manager|.
   auto* user_manager = new ash::FakeChromeUserManager();
-  // TODO(crbug/1154780): Overload operator-> in ScopedUserManager.
+  // TODO(crbug.com/40735060): Overload operator-> in ScopedUserManager.
   user_manager::ScopedUserManager scoped_enabler(
       base::WrapUnique(user_manager));
-  user_manager->AddKioskAppUser(account_id1);
+  user_manager->AddKioskChromeAppUser(account_id1);
   user_manager->LoginUser(account_id1);
   const user_manager::User* primary_user = user_manager->GetPrimaryUser();
   ash::ProfileHelper::Get()->SetUserToProfileMappingForTesting(
@@ -249,6 +250,22 @@ TEST_F(ChromeOSSystemProfileProviderTest, FullHardwareClass) {
       system_profile.hardware().full_hardware_class();
 
   EXPECT_EQ(expected_full_hw_class, proto_full_hw_class);
+}
+
+TEST_F(ChromeOSSystemProfileProviderTest, UpdatedHardwareClass) {
+  const std::string expected_updated_hw_class = "updated_hardware_class_foo";
+  fake_statistics_provider_.SetUpdatedHardwareClass(expected_updated_hw_class);
+
+  TestChromeOSSystemProfileProvider provider;
+  provider.OnDidCreateMetricsLog();
+  metrics::SystemProfileProto system_profile;
+  provider.ProvideSystemProfileMetrics(&system_profile);
+
+  ASSERT_TRUE(system_profile.has_hardware());
+  std::string proto_updated_hw_class =
+      system_profile.hardware().updated_hardware_class();
+
+  EXPECT_EQ(expected_updated_hw_class, proto_updated_hw_class);
 }
 
 TEST_F(ChromeOSSystemProfileProviderTest, DemoModeDimensions) {

@@ -26,6 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_FETCH_FETCH_PARAMETERS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_LOADER_FETCH_FETCH_PARAMETERS_H_
 
+#include "base/memory/stack_allocated.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/script/script_type.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/script/script_type.mojom-shared.h"
@@ -105,7 +106,7 @@ class PLATFORM_EXPORT FetchParameters {
       TextResourceDecoderOptions::ContentType content_type) {
     decoder_options_.OverrideContentType(content_type);
   }
-  void SetCharset(const WTF::TextEncoding& charset) {
+  void SetCharset(const TextEncoding& charset) {
     SetDecoderOptions(TextResourceDecoderOptions(
         TextResourceDecoderOptions::kPlainTextContent, charset));
   }
@@ -219,6 +220,8 @@ class PLATFORM_EXPORT FetchParameters {
   bool IsPotentiallyLCPInfluencer() const {
     return is_potentially_lcp_influencer_;
   }
+
+  void Trace(Visitor* visitor) const { visitor->Trace(options_); }
 
  private:
   ResourceRequest resource_request_;

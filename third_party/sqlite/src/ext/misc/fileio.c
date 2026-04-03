@@ -40,7 +40,7 @@
 **   modification-time of the target file is set to this value before
 **   returning.
 **
-**   If three or more arguments are passed to this function and an
+**   If five or more arguments are passed to this function and an
 **   error is encountered, an exception is raised.
 **
 ** READFILE(FILE):
@@ -92,24 +92,27 @@ SQLITE_EXTENSION_INIT1
 #  include <dirent.h>
 #  include <utime.h>
 #  include <sys/time.h>
+#  define STRUCT_STAT struct stat
 #else
 #  include "windows.h"
 #  include <io.h>
 #  include <direct.h>
 #  include "test_windirent.h"
 #  define dirent DIRENT
-#  ifndef chmod
-#    define chmod _chmod
-#  endif
-#  ifndef stat
-#    define stat _stat
-#  endif
-#  define mkdir(path,mode) _mkdir(path)
-#  define lstat(path,buf) stat(path,buf)
+#  define STRUCT_STAT struct _stat
+#  define chmod(path,mode) fileio_chmod(path,mode)
+#  define mkdir(path,mode) fileio_mkdir(path)
 #endif
 #include <time.h>
 #include <errno.h>
 
+/* When used as part of the CLI, the sqlite3_stdio.h module will have
+** been included before this one. In that case use the sqlite3_stdio.h
+** #defines.  If not, create our own for fopen().
+*/
+#ifndef _SQLITE3_STDIO_H_
+# define sqlite3_fopen fopen
+#endif
 
 /*
 ** Structure of the fsdir() table-valued function
@@ -122,6 +125,40 @@ SQLITE_EXTENSION_INIT1
 #define FSDIR_COLUMN_DATA     3     /* File content */
 #define FSDIR_COLUMN_PATH     4     /* Path to top of search */
 #define FSDIR_COLUMN_DIR      5     /* Path is relative to this directory */
+
+/*
+** UTF8 chmod() function for Windows
+*/
+#if defined(_WIN32) || defined(WIN32)
+static int fileio_chmod(const char *zPath, int pmode){
+  sqlite3_int64 sz = strlen(zPath);
+  wchar_t *b1 = sqlite3_malloc64( (sz+1)*sizeof(b1[0]) );
+  int rc;
+  if( b1==0 ) return -1;
+  sz = MultiByteToWideChar(CP_UTF8, 0, zPath, sz, b1, sz);
+  b1[sz] = 0;
+  rc = _wchmod(b1, pmode);
+  sqlite3_free(b1);
+  return rc;
+}
+#endif
+
+/*
+** UTF8 mkdir() function for Windows
+*/
+#if defined(_WIN32) || defined(WIN32)
+static int fileio_mkdir(const char *zPath){
+  sqlite3_int64 sz = strlen(zPath);
+  wchar_t *b1 = sqlite3_malloc64( (sz+1)*sizeof(b1[0]) );
+  int rc;
+  if( b1==0 ) return -1;
+  sz = MultiByteToWideChar(CP_UTF8, 0, zPath, sz, b1, sz);
+  b1[sz] = 0;
+  rc = _wmkdir(b1);
+  sqlite3_free(b1);
+  return rc;
+}
+#endif
 
 
 /*
@@ -142,7 +179,7 @@ static void readFileContents(sqlite3_context *ctx, const char *zName){
   sqlite3 *db;
   int mxBlob;
 
-  in = fopen(zName, "rb");
+  in = sqlite3_fopen(zName, "rb");
   if( in==0 ){
     /* File does not exist or is unreadable. Leave the result set to NULL. */
     return;
@@ -253,7 +290,7 @@ LPWSTR utf8_to_utf16(const char *z){
 */
 static void statTimesToUtc(
   const char *zPath,
-  struct stat *pStatBuf
+  STRUCT_STAT *pStatBuf
 ){
   HANDLE hFindFile;
   WIN32_FIND_DATAW fd;
@@ -281,10 +318,16 @@ static void statTimesToUtc(
 */
 static int fileStat(
   const char *zPath,
-  struct stat *pStatBuf
+  STRUCT_STAT *pStatBuf
 ){
 #if defined(_WIN32)
-  int rc = stat(zPath, pStatBuf);
+  sqlite3_int64 sz = strlen(zPath);
+  wchar_t *b1 = sqlite3_malloc64( (sz+1)*sizeof(b1[0]) );
+  int rc;
+  if( b1==0 ) return 1;
+  sz = MultiByteToWideChar(CP_UTF8, 0, zPath, sz, b1, sz);
+  b1[sz] = 0;
+  rc = _wstat(b1, pStatBuf);
   if( rc==0 ) statTimesToUtc(zPath, pStatBuf);
   return rc;
 #else
@@ -299,12 +342,10 @@ static int fileStat(
 */
 static int fileLinkStat(
   const char *zPath,
-  struct stat *pStatBuf
+  STRUCT_STAT *pStatBuf
 ){
 #if defined(_WIN32)
-  int rc = lstat(zPath, pStatBuf);
-  if( rc==0 ) statTimesToUtc(zPath, pStatBuf);
-  return rc;
+  return fileStat(zPath, pStatBuf);
 #else
   return lstat(zPath, pStatBuf);
 #endif
@@ -334,7 +375,7 @@ static int makeDirectory(
     int i = 1;
 
     while( rc==SQLITE_OK ){
-      struct stat sStat;
+      STRUCT_STAT sStat;
       int rc2;
 
       for(; zCopy[i]!='/' && i<nCopy; i++);
@@ -372,7 +413,9 @@ static int writeFile(
 #if !defined(_WIN32) && !defined(WIN32)
   if( S_ISLNK(mode) ){
     const char *zTo = (const char*)sqlite3_value_text(pData);
-    if( zTo==0 || symlink(zTo, zFile)<0 ) return 1;
+    if( zTo==0 ) return 1;
+    unlink(zFile);
+    if( symlink(zTo, zFile)<0 ) return 1;
   }else
 #endif
   {
@@ -382,7 +425,7 @@ static int writeFile(
         ** be an error though - if there is already a directory at the same
         ** path and either the permissions already match or can be changed
         ** to do so using chmod(), it is not an error.  */
-        struct stat sStat;
+        STRUCT_STAT sStat;
         if( errno!=EEXIST
          || 0!=fileStat(zFile, &sStat)
          || !S_ISDIR(sStat.st_mode)
@@ -395,7 +438,7 @@ static int writeFile(
       sqlite3_int64 nWrite = 0;
       const char *z;
       int rc = 0;
-      FILE *out = fopen(zFile, "wb");
+      FILE *out = sqlite3_fopen(zFile, "wb");
       if( out==0 ) return 1;
       z = (const char*)sqlite3_value_blob(pData);
       if( z ){
@@ -428,7 +471,7 @@ static int writeFile(
 
     GetSystemTime(&currentTime);
     SystemTimeToFileTime(&currentTime, &lastAccess);
-    intervals = Int32x32To64(mtime, 10000000) + 116444736000000000;
+    intervals = (mtime*10000000) + 116444736000000000;
     lastWrite.dwLowDateTime = (DWORD)intervals;
     lastWrite.dwHighDateTime = intervals >> 32;
     zUnicodeName = sqlite3_win32_utf8_to_unicode(zFile);
@@ -458,13 +501,19 @@ static int writeFile(
       return 1;
     }
 #else
-    /* Legacy unix */
-    struct timeval times[2];
-    times[0].tv_usec = times[1].tv_usec = 0;
-    times[0].tv_sec = time(0);
-    times[1].tv_sec = mtime;
-    if( utimes(zFile, times) ){
-      return 1;
+    /* Legacy unix. 
+    **
+    ** Do not use utimes() on a symbolic link - it sees through the link and
+    ** modifies the timestamps on the target. Or fails if the target does 
+    ** not exist.  */
+    if( 0==S_ISLNK(mode) ){
+      struct timeval times[2];
+      times[0].tv_usec = times[1].tv_usec = 0;
+      times[0].tv_sec = time(0);
+      times[1].tv_sec = mtime;
+      if( utimes(zFile, times) ){
+        return 1;
+      }
     }
 #endif
   }
@@ -578,7 +627,7 @@ struct fsdir_cursor {
   const char *zBase;
   int nBase;
 
-  struct stat sStat;         /* Current lstat() results */
+  STRUCT_STAT sStat;         /* Current lstat() results */
   char *zPath;               /* Path to current entry */
   sqlite3_int64 iRowid;      /* Current rowid */
 };

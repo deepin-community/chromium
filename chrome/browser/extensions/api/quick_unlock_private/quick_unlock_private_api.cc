@@ -4,15 +4,14 @@
 
 #include "chrome/browser/extensions/api/quick_unlock_private/quick_unlock_private_api.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <utility>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
-#include "base/ranges/algorithm.h"
 #include "chrome/browser/ash/login/quick_unlock/auth_token.h"
 #include "chrome/browser/ash/login/quick_unlock/pin_backend.h"
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_factory.h"
@@ -20,8 +19,8 @@
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_utils.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/extensions/api/quick_unlock_private/quick_unlock_private_ash_utils.h"
+#include "chrome/browser/extensions/profile_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/login/auth/public/authentication_error.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
@@ -103,15 +102,16 @@ bool AreModesEqual(const QuickUnlockModeList& a, const QuickUnlockModeList& b) {
   // This is a slow comparison algorithm, but the number of entries in |a| and
   // |b| will always be very low (0-3 items) so it doesn't matter.
   for (auto mode : a) {
-    if (!base::Contains(b, mode))
+    if (!std::ranges::contains(b, mode)) {
       return false;
+    }
   }
 
   return true;
 }
 
 bool IsPinNumeric(const std::string& pin) {
-  return base::ranges::all_of(pin, ::isdigit);
+  return std::ranges::all_of(pin, ::isdigit);
 }
 
 // Reads and sanitizes the pin length policy.
@@ -167,12 +167,12 @@ bool IsPinDifficultEnough(const std::string& pin) {
     return true;
 
   // Check if it is on the list of most common PINs.
-  if (base::Contains(kMostCommonPins, pin))
+  if (std::ranges::contains(kMostCommonPins, pin)) {
     return false;
+  }
 
   // Check for same digits, increasing and decreasing PIN simultaneously.
   bool is_same = true;
-  // TODO(sammiequon): Should longer PINs (5+) be still subjected to this?
   bool is_increasing = true;
   bool is_decreasing = true;
   for (size_t i = 1; i < pin.length(); ++i) {
@@ -196,7 +196,7 @@ Profile* GetActiveProfile(content::BrowserContext* browser_context) {
   // When OOBE continues in-session as Furst Run UI, it is still executed
   // under Sign-In profile.
   if (ash::ProfileHelper::IsSigninProfile(profile))
-    return ProfileManager::GetPrimaryUserProfile();
+    return profile_util::GetPrimaryUserProfile();
 
   return profile;
 }
@@ -257,7 +257,7 @@ QuickUnlockPrivateSetLockScreenEnabledFunction::
     : chrome_details_(this) {}
 
 QuickUnlockPrivateSetLockScreenEnabledFunction::
-    ~QuickUnlockPrivateSetLockScreenEnabledFunction() {}
+    ~QuickUnlockPrivateSetLockScreenEnabledFunction() = default;
 
 ExtensionFunction::ResponseAction
 QuickUnlockPrivateSetLockScreenEnabledFunction::Run() {
@@ -340,7 +340,9 @@ QuickUnlockPrivateCanAuthenticatePinFunction::Run() {
 }
 
 void QuickUnlockPrivateCanAuthenticatePinFunction::HandleCanAuthenticateResult(
-    bool result) {
+    bool result,
+    cryptohome::PinLockAvailability available_at) {
+  // |available_at| is ignored.
   Respond(ArgumentList(
       quick_unlock_private::CanAuthenticatePin::Results::Create(result)));
 }
@@ -352,7 +354,7 @@ QuickUnlockPrivateGetAvailableModesFunction::
     : chrome_details_(this) {}
 
 QuickUnlockPrivateGetAvailableModesFunction::
-    ~QuickUnlockPrivateGetAvailableModesFunction() {}
+    ~QuickUnlockPrivateGetAvailableModesFunction() = default;
 
 ExtensionFunction::ResponseAction
 QuickUnlockPrivateGetAvailableModesFunction::Run() {
@@ -392,10 +394,10 @@ void QuickUnlockPrivateGetActiveModesFunction::OnGetActiveModes(
 // quickUnlockPrivate.checkCredential
 
 QuickUnlockPrivateCheckCredentialFunction::
-    QuickUnlockPrivateCheckCredentialFunction() {}
+    QuickUnlockPrivateCheckCredentialFunction() = default;
 
 QuickUnlockPrivateCheckCredentialFunction::
-    ~QuickUnlockPrivateCheckCredentialFunction() {}
+    ~QuickUnlockPrivateCheckCredentialFunction() = default;
 
 ExtensionFunction::ResponseAction
 QuickUnlockPrivateCheckCredentialFunction::Run() {
@@ -441,10 +443,10 @@ QuickUnlockPrivateCheckCredentialFunction::Run() {
 }
 
 QuickUnlockPrivateGetCredentialRequirementsFunction::
-    QuickUnlockPrivateGetCredentialRequirementsFunction() {}
+    QuickUnlockPrivateGetCredentialRequirementsFunction() = default;
 
 QuickUnlockPrivateGetCredentialRequirementsFunction::
-    ~QuickUnlockPrivateGetCredentialRequirementsFunction() {}
+    ~QuickUnlockPrivateGetCredentialRequirementsFunction() = default;
 
 ExtensionFunction::ResponseAction
 QuickUnlockPrivateGetCredentialRequirementsFunction::Run() {

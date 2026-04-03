@@ -41,7 +41,6 @@ limitations under the License.
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/platform/test_benchmark.h"
-#include "tensorflow/core/platform/tracing.h"
 #include "tensorflow/core/public/session_options.h"
 
 namespace tensorflow {
@@ -110,14 +109,14 @@ class ExecutorTest : public ::testing::Test {
     rendez_ = NewLocalRendezvous();
   }
 
-  Status Run(Rendezvous* rendez) {
+  absl::Status Run(Rendezvous* rendez) {
     Executor::Args args;
     args.rendezvous = rendez;
     args.runner = runner_;
     return exec_->Run(args);
   }
 
-  Status Run(CallFrameInterface* call_frame) {
+  absl::Status Run(CallFrameInterface* call_frame) {
     Executor::Args args;
     args.call_frame = call_frame;
     args.runner = runner_;
@@ -171,8 +170,9 @@ float V(const Tensor& tensor) {
   return tensor.scalar<float>()();
 }
 
-Rendezvous::ParsedKey Key(const string& sender, const uint64 incarnation,
-                          const string& receiver, const string& name) {
+Rendezvous::ParsedKey Key(const std::string& sender, const uint64_t incarnation,
+                          const std::string& receiver,
+                          const std::string& name) {
   Rendezvous::ParsedKey result;
   TF_CHECK_OK(
       Rendezvous::ParseKey(Rendezvous::CreateKey(sender, incarnation, receiver,
@@ -364,8 +364,8 @@ void BM_executor(::testing::benchmark::State& state) {
   Graph* g = new Graph(OpRegistry::Global());
   random::PhiloxRandom philox(1729, 17);
   random::SimplePhilox rand(&philox);
-  uint64 cur = 0;
-  uint32 r = 1 + rand.Rand32() % width;
+  uint64_t cur = 0;
+  uint32_t r = 1 + rand.Rand32() % width;
   std::vector<Node*> ready_nodes;
   for (int i = 0; i < r; ++i) {
     ready_nodes.push_back(test::graph::NoOp(g, {}));
@@ -393,7 +393,7 @@ void BM_executor(::testing::benchmark::State& state) {
   test::Benchmark("cpu", g, nullptr, nullptr, nullptr,
                   "SINGLE_THREADED_EXECUTOR", /*old_benchmark_api=*/false)
       .Run(state);
-  state.SetLabel(strings::StrCat("Nodes = ", cur));
+  state.SetLabel(absl::StrCat("Nodes = ", cur));
   state.SetItemsProcessed(cur * static_cast<int64_t>(state.iterations()));
 }
 
@@ -425,7 +425,7 @@ void BM_const_identity(::testing::benchmark::State& state) {
                   "SINGLE_THREADED_EXECUTOR",
                   /*old_benchmark_api=*/false)
       .Run(state);
-  state.SetLabel(strings::StrCat("Nodes = ", (1 + outputs_per_const) * width));
+  state.SetLabel(absl::StrCat("Nodes = ", (1 + outputs_per_const) * width));
   state.SetItemsProcessed((1 + outputs_per_const) * width *
                           static_cast<int64_t>(state.iterations()));
 }

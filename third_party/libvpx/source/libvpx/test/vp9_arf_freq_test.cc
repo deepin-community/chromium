@@ -10,7 +10,7 @@
 
 #include <memory>
 
-#include "third_party/googletest/src/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 
 #include "test/codec_factory.h"
 #include "test/encode_test_driver.h"
@@ -18,6 +18,7 @@
 #include "test/y4m_video_source.h"
 #include "test/yuv_video_source.h"
 #include "vp9/encoder/vp9_ratectrl.h"
+#include "vpx_config.h"
 
 namespace {
 
@@ -27,7 +28,7 @@ const int kBitrate = 500;
 #define ARF_NOT_SEEN 1000001
 #define ARF_SEEN_ONCE 1000000
 
-typedef struct {
+struct TestVideoParam {
   const char *filename;
   unsigned int width;
   unsigned int height;
@@ -37,12 +38,12 @@ typedef struct {
   vpx_img_fmt fmt;
   vpx_bit_depth_t bit_depth;
   unsigned int profile;
-} TestVideoParam;
+};
 
-typedef struct {
+struct TestEncodeParam {
   libvpx_test::TestMode mode;
   int cpu_used;
-} TestEncodeParam;
+};
 
 const TestVideoParam kTestVectors[] = {
   // artificially increase framerate to trigger default check
@@ -57,9 +58,12 @@ const TestVideoParam kTestVectors[] = {
 };
 
 const TestEncodeParam kEncodeVectors[] = {
+#if !CONFIG_REALTIME_ONLY
   { ::libvpx_test::kOnePassGood, 2 }, { ::libvpx_test::kOnePassGood, 5 },
   { ::libvpx_test::kTwoPassGood, 1 }, { ::libvpx_test::kTwoPassGood, 2 },
-  { ::libvpx_test::kTwoPassGood, 5 }, { ::libvpx_test::kRealTime, 5 },
+  { ::libvpx_test::kTwoPassGood, 5 },
+#endif
+  { ::libvpx_test::kRealTime, 5 },
 };
 
 const int kMinArfVectors[] = {

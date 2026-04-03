@@ -11,10 +11,13 @@
 
 #include "base/containers/flat_map.h"
 #include "build/build_config.h"
-#include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/common/signatures.h"
 #include "components/autofill/core/common/unique_ids.h"
+
+namespace autofill {
+struct AutofillServerPrediction;
+}
 
 namespace password_manager {
 
@@ -24,7 +27,8 @@ enum class CredentialFieldType {
   kSingleUsername,
   kCurrentPassword,
   kNewPassword,
-  kConfirmationPassword
+  kConfirmationPassword,
+  kNonCredential
 };
 
 // Transforms the general field type to the information useful for password
@@ -33,11 +37,20 @@ CredentialFieldType DeriveFromFieldType(autofill::FieldType type);
 
 // Contains server predictions for a field.
 struct PasswordFieldPrediction {
+  PasswordFieldPrediction(autofill::FieldRendererId renderer_id,
+                          autofill::FieldSignature signature,
+                          autofill::FieldType type,
+                          bool is_override);
+  PasswordFieldPrediction(const PasswordFieldPrediction&);
+  PasswordFieldPrediction& operator=(const PasswordFieldPrediction&);
+  PasswordFieldPrediction(PasswordFieldPrediction&&);
+  PasswordFieldPrediction& operator=(PasswordFieldPrediction&&);
+  ~PasswordFieldPrediction();
+
   autofill::FieldRendererId renderer_id;
   autofill::FieldSignature signature;
   autofill::FieldType type;
-  bool may_use_prefilled_placeholder = false;
-  bool is_override = false;
+  bool is_override;
 
   friend bool operator==(const PasswordFieldPrediction& lhs,
                          const PasswordFieldPrediction& rhs) = default;
@@ -67,8 +80,7 @@ FormPredictions ConvertToFormPredictions(
     int driver_id,
     const autofill::FormData& form,
     const base::flat_map<autofill::FieldGlobalId,
-                         autofill::AutofillType::ServerPrediction>&
-        predictions);
+                         autofill::AutofillServerPrediction>& predictions);
 
 }  // namespace password_manager
 

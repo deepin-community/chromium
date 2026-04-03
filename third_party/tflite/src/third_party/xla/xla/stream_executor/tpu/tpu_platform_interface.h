@@ -20,16 +20,13 @@ limitations under the License.
 
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "xla/stream_executor/event.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/tpu/c_api_decl.h"
 #include "xla/stream_executor/tpu/tpu_topology.h"
 
 namespace tensorflow {
 namespace tpu {
-
-// TODO(skyewm): get rid of TpuTopologyPtr and either use SE_TpuTopology* or
-// return a TpuTopologyExternal.
-typedef SE_TpuTopology* TpuTopologyPtr;
 
 class TpuPlatformInterface : public stream_executor::Platform {
  public:
@@ -52,11 +49,13 @@ class TpuPlatformInterface : public stream_executor::Platform {
 
   virtual bool ShouldRegisterTpuDeviceToDeviceCopy() = 0;
 
-  virtual const TpuTopologyPtr GetTopologyPtr() = 0;
+  virtual const SE_TpuTopology* GetTopologyPtr() = 0;
 
   virtual const TpuHostLocationExternal GetTpuHostLocation() const = 0;
 
   virtual TpuRuntimeVersion version() const = 0;
+
+  virtual void EraseEvent(stream_executor::Event* key) {};
 
   TpuTopologyExternal topology() {
     return TpuTopologyExternal(GetTopologyPtr());

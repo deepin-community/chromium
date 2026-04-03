@@ -4,36 +4,33 @@
 
 #include "chrome/app/chrome_exe_main_win.h"
 
+#include <tchar.h>
 #include <windows.h>
 
 #include <malloc.h>
 #include <stddef.h>
-#include <tchar.h>
 
 #include <algorithm>
 #include <array>
 #include <string>
+#include <vector>
 
 #include "base/at_exit.h"
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/debug/alias.h"
 #include "base/debug/handle_hooks_win.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
-#include "base/path_service.h"
 #include "base/process/memory.h"
 #include "base/process/process.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/win/current_module.h"
-#include "base/win/registry.h"
 #include "base/win/win_util.h"
 #include "base/win/windows_version.h"
 #include "build/build_config.h"
@@ -80,7 +77,7 @@ void SetCwdForBrowserProcess() {
     return;
 
   base::SetCurrentDirectory(
-      base::FilePath(base::FilePath::StringPieceType(&buffer[0], length))
+      base::FilePath(base::FilePath::StringViewType(&buffer[0], length))
           .DirName());
 }
 
@@ -109,10 +106,10 @@ bool AttemptFastNotify(const base::CommandLine& command_line) {
     return false;
   policy::path_parser::CheckUserDataDirPolicy(&user_data_dir);
 
-  HWND chrome = chrome::FindRunningChromeWindow(user_data_dir);
+  HWND chrome = FindRunningChromeWindow(user_data_dir);
   if (!chrome)
     return false;
-  return chrome::AttemptToNotifyRunningChrome(chrome) == chrome::NOTIFY_SUCCESS;
+  return AttemptToNotifyRunningChrome(chrome) == NotifyChromeResult::kSuccess;
 }
 
 // Returns true if the child process |command_line| contains a /prefetch:#
@@ -136,50 +133,6 @@ bool HasValidWindowsPrefetchArgument(const base::CommandLine& command_line) {
     return base::StringToInt(value, &profile) && profile >= 1 &&
            profile <=
                (base::win::GetVersion() < base::win::Version::WIN11 ? 8 : 16);
-  }
-  return false;
-}
-
-// Some users are getting stuck in compatibility mode. Try to help them escape.
-// See http://crbug.com/581499. Returns true if a compatibility mode entry was
-// removed.
-bool RemoveAppCompatFlagsEntry() {
-  base::FilePath current_exe;
-  if (!base::PathService::Get(base::FILE_EXE, &current_exe))
-    return false;
-  if (!current_exe.IsAbsolute())
-    return false;
-  base::win::RegKey key;
-  if (key.Open(HKEY_CURRENT_USER,
-               L"Software\\Microsoft\\Windows "
-               L"NT\\CurrentVersion\\AppCompatFlags\\Layers",
-               KEY_READ | KEY_WRITE) == ERROR_SUCCESS) {
-    std::wstring layers;
-    if (key.ReadValue(current_exe.value().c_str(), &layers) == ERROR_SUCCESS) {
-      std::vector<std::wstring> tokens = base::SplitString(
-          layers, L" ", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-      size_t initial_size = tokens.size();
-      static const wchar_t* const kCompatModeTokens[] = {
-          L"WIN95",       L"WIN98",       L"WIN4SP5",  L"WIN2000",  L"WINXPSP2",
-          L"WINXPSP3",    L"VISTARTM",    L"VISTASP1", L"VISTASP2", L"WIN7RTM",
-          L"WINSRV03SP1", L"WINSRV08SP1", L"WIN8RTM",
-      };
-      for (const wchar_t* compat_mode_token : kCompatModeTokens) {
-        base::Erase(tokens, compat_mode_token);
-      }
-      LONG result;
-      if (tokens.empty()) {
-        result = key.DeleteValue(current_exe.value().c_str());
-      } else {
-        std::wstring without_compat_mode_tokens =
-            base::JoinString(tokens, L" ");
-        result = key.WriteValue(current_exe.value().c_str(),
-                                without_compat_mode_tokens.c_str());
-      }
-
-      // Return if we changed anything so that we can restart.
-      return tokens.size() != initial_size && result == ERROR_SUCCESS;
-    }
   }
   return false;
 }
@@ -293,7 +246,7 @@ int main() {
   install_static::InitializeFromPrimaryModule();
   SignalInitializeCrashReporting();
   if (IsBrowserProcess())
-    chrome::DisableDelayLoadFailureHooksForMainExecutable();
+    DisableDelayLoadFailureHooksForMainExecutable();
 #if defined(ARCH_CPU_32_BITS)
   // Intentionally crash if converting to a fiber failed.
   CHECK_EQ(fiber_status, FiberStatus::kSuccess);
@@ -302,6 +255,7 @@ int main() {
   // Done here to ensure that OOMs that happen early in process initialization
   // are correctly signaled to the OS.
   base::EnableTerminationOnOutOfMemory();
+  logging::RegisterAbslAbortHook();
 
   // Initialize the CommandLine singleton from the environment.
   base::CommandLine::Init(0, nullptr);
@@ -391,10 +345,6 @@ int main() {
   if (AttemptFastNotify(*command_line))
     return 0;
 
-  if (!command_line->HasSwitch(switches::kNoAppCompatClear)) {
-    RemoveAppCompatFlagsEntry();
-  }
-
   // Load and launch the chrome dll. *Everything* happens inside.
   VLOG(1) << "About to load main DLL.";
   MainDllLoader* loader = MakeMainDllLoader();
@@ -404,8 +354,7 @@ int main() {
 
   // Process shutdown is hard and some process types have been crashing during
   // shutdown. TerminateCurrentProcessImmediately is safer and faster.
-  if (process_type == switches::kUtilityProcess ||
-      process_type == switches::kPpapiPluginProcess) {
+  if (process_type == switches::kUtilityProcess) {
     base::Process::TerminateCurrentProcessImmediately(rc);
   }
   return rc;

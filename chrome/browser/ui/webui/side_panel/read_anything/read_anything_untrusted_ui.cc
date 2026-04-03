@@ -11,7 +11,6 @@
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/side_panel/read_anything/read_anything_untrusted_page_handler.h"
 #include "chrome/browser/ui/webui/theme_source.h"
-#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/side_panel_read_anything_resources.h"
@@ -23,31 +22,21 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
-#include "read_anything_untrusted_ui.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/base/webui/web_ui_util.h"
-#include "ui/resources/grit/webui_resources.h"
 #include "ui/views/style/platform_style.h"
+#include "ui/webui/resources/grit/webui_resources.h"
+#include "ui/webui/webui_util.h"
 
 ReadAnythingUIUntrustedConfig::ReadAnythingUIUntrustedConfig()
-    : WebUIConfig(content::kChromeUIUntrustedScheme,
-                  chrome::kChromeUIUntrustedReadAnythingSidePanelHost) {}
+    : DefaultTopChromeWebUIConfig(
+          content::kChromeUIUntrustedScheme,
+          chrome::kChromeUIUntrustedReadAnythingSidePanelHost) {}
 
 ReadAnythingUIUntrustedConfig::~ReadAnythingUIUntrustedConfig() = default;
 
-std::unique_ptr<content::WebUIController>
-ReadAnythingUIUntrustedConfig::CreateWebUIController(content::WebUI* web_ui,
-                                                     const GURL& url) {
-  return std::make_unique<ReadAnythingUntrustedUI>(web_ui);
-}
-
-bool ReadAnythingUIUntrustedConfig::IsWebUIEnabled(
-    content::BrowserContext* browser_context) {
-  return features::IsReadAnythingEnabled();
-}
-
 ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
-    : ui::UntrustedBubbleWebUIController(web_ui) {
+    : UntrustedTopChromeWebUIController(web_ui) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       web_ui->GetWebContents()->GetBrowserContext(),
       chrome::kChromeUIUntrustedReadAnythingSidePanelURL);
@@ -67,7 +56,33 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
       {"darkColorTitle", IDS_READING_MODE_DARK_COLOR_LABEL},
       {"yellowColorTitle", IDS_READING_MODE_YELLOW_COLOR_LABEL},
       {"blueColorTitle", IDS_READING_MODE_BLUE_COLOR_LABEL},
+      {"highContrastColorTitle", IDS_READING_MODE_HIGH_CONTRAST_COLOR_LABEL},
+      {"lowContrastColorTitle", IDS_READING_MODE_LOW_CONTRAST_COLOR_LABEL},
+      {"sepiaLightColorTitle", IDS_READING_MODE_SEPIA_LIGHT_COLOR_LABEL},
+      {"sepiaDarkColorTitle", IDS_READING_MODE_SEPIA_DARK_COLOR_LABEL},
       {"fontResetTitle", IDS_READING_MODE_FONT_RESET},
+      {"fontResetTooltip", IDS_READING_MODE_FONT_RESET_TOOLTIP},
+      {"autoHighlightTitle", IDS_READING_MODE_AUTO_HIGHLIGHT_LABEL},
+      {"wordHighlightTitle", IDS_READING_MODE_WORD_HIGHLIGHT_LABEL},
+      {"phraseHighlightTitle", IDS_READING_MODE_PHRASE_HIGHLIGHT_LABEL},
+      {"sentenceHighlightTitle", IDS_READING_MODE_SENTENCE_HIGHLIGHT_LABEL},
+      {"noHighlightTitle", IDS_READING_MODE_OFF_HIGHLIGHT_LABEL},
+      {"lineFocusWindowHeading", IDS_READING_MODE_LINE_FOCUS_WINDOW_HEADING},
+      {"lineFocusStyleHeading", IDS_READING_MODE_LINE_FOCUS_STYLE_HEADING},
+      {"lineFocusOneLineTitle", IDS_READING_MODE_LINE_FOCUS_SMALL_FOCUS_LABEL},
+      {"lineFocusThreeLineTitle",
+       IDS_READING_MODE_LINE_FOCUS_MEDIUM_FOCUS_LABEL},
+      {"lineFocusFiveLineTitle", IDS_READING_MODE_LINE_FOCUS_LARGE_FOCUS_LABEL},
+      {"lineFocusUnderlineTitle", IDS_READING_MODE_LINE_FOCUS_UNDERLINE_LABEL},
+      {"lineFocusLineHeading", IDS_READING_MODE_LINE_FOCUS_LINE_HEADING},
+      {"lineFocusMovementHeading",
+       IDS_READING_MODE_LINE_FOCUS_MOVEMENT_HEADING},
+      {"lineFocusStaticLineTitle",
+       IDS_READING_MODE_LINE_FOCUS_STATIC_LINE_LABEL},
+      {"lineFocusStaticTitle", IDS_READING_MODE_LINE_FOCUS_STATIC_LABEL},
+      {"lineFocusCursorLineTitle",
+       IDS_READING_MODE_LINE_FOCUS_CURSOR_LINE_LABEL},
+      {"lineFocusOffTitle", IDS_READING_MODE_LINE_FOCUS_OFF_LABEL},
       {"turnHighlightOff", IDS_READING_MODE_TURN_HIGHLIGHT_OFF},
       {"turnHighlightOn", IDS_READING_MODE_TURN_HIGHLIGHT_ON},
       {"lineSpacingStandardTitle", IDS_READING_MODE_SPACING_COMBOBOX_STANDARD},
@@ -80,21 +95,88 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
       {"letterSpacingVeryWideTitle",
        IDS_READING_MODE_SPACING_COMBOBOX_VERY_WIDE},
       {"playDescription", IDS_READING_MODE_PLAY_DESCRIPTION},
-      {"playLabel", IDS_READING_MODE_PLAY_SPEECH},
-      {"pauseLabel", IDS_READING_MODE_PAUSE_SPEECH},
+      {"playAriaLabel", IDS_READING_MODE_PLAY_SPEECH},
+      {"stopLabel", IDS_READING_MODE_STOP_SPEECH},
+      {"playTooltip", IDS_READING_MODE_PLAY_TOOLTIP},
+      {"previewTooltip", IDS_READING_MODE_PREVIEW_TOOLTIP},
+      {"pauseTooltip", IDS_READING_MODE_PAUSE_TOOLTIP},
       {"previousSentenceLabel", IDS_READING_MODE_NAVIGATE_PREVIOUS_SENTENCE},
       {"nextSentenceLabel", IDS_READING_MODE_NAVIGATE_NEXT_SENTENCE},
       {"moreOptionsLabel", IDS_READING_MODE_MORE_OPTIONS},
+      {"settingsLabel", IDS_READING_MODE_SETTINGS},
       {"voiceSpeedLabel", IDS_READING_MODE_VOICE_SPEED},
+      {"voiceHighlightLabel", IDS_READING_MODE_VOICE_HIGHLIGHT},
+      {"voiceSpeedWithRateLabel", IDS_READING_MODE_VOICE_SPEED_WITH_RATE},
+      {"voiceSpeedOptionTitle", IDS_READING_MODE_VOICE_SPEED_OPTION_TITLE},
       {"voiceSelectionLabel", IDS_READING_MODE_VOICE_SELECTION},
+      {"systemVoiceLabel", IDS_READING_MODE_SYSTEM_VOICE},
       {"increaseFontSizeLabel",
        IDS_READING_MODE_INCREASE_FONT_SIZE_BUTTON_LABEL},
       {"decreaseFontSizeLabel",
        IDS_READING_MODE_DECREASE_FONT_SIZE_BUTTON_LABEL},
+      {"increaseFontSizeAnnouncement",
+       IDS_READING_MODE_INCREASE_FONT_SIZE_ANNOUNCEMENT},
+      {"decreaseFontSizeAnnouncement",
+       IDS_READING_MODE_DECREASE_FONT_SIZE_ANNOUNCEMENT},
       {"disableLinksLabel", IDS_READING_MODE_DISABLE_LINKS_BUTTON_LABEL},
       {"enableLinksLabel", IDS_READING_MODE_ENABLE_LINKS_BUTTON_LABEL},
+      {"imagesLabel", IDS_READING_MODE_IMAGES_LABEL},
+      {"disableImagesLabel", IDS_READING_MODE_DISABLE_IMAGES_BUTTON_LABEL},
+      {"enableImagesLabel", IDS_READING_MODE_ENABLE_IMAGES_BUTTON_LABEL},
+      {"pinLabel", IDS_READING_MODE_PIN_LABEL},
+      {"disablePinLabel", IDS_READING_MODE_DISABLE_PIN_BUTTON_LABEL},
+      {"enablePinLabel", IDS_READING_MODE_ENABLE_PIN_BUTTON_LABEL},
       {"readingModeToolbarLabel", IDS_READING_MODE_TOOLBAR_LABEL},
+      {"readingModeReadAloudToolbarLabel",
+       IDS_READING_MODE_READ_ALOUD_TOOLBAR_LABEL},
       {"readingModeVoicePreviewText", IDS_READING_MODE_VOICE_PREVIEW_STRING},
+      {"readingModeVoiceMenuDownloading",
+       IDS_READING_MODE_VOICE_MENU_DOWNLOADING},
+      {"readingModeFontLoadingText", IDS_READING_MODE_FONT_LOADING_STRING},
+      {"readingModeLanguageMenu", IDS_READING_MODE_LANGUAGE_MENU},
+      {"readingModeLanguageMenuTitle", IDS_READING_MODE_LANGUAGE_MENU_TITLE},
+      {"readingModeLanguageMenuClose", IDS_READING_MODE_LANGUAGE_MENU_CLOSE},
+      {"readingModeLanguageMenuSearchLabel",
+       IDS_READING_MODE_LANGUAGE_MENU_SEARCH_LABEL},
+      {"readingModeLanguageMenuSearchClear",
+       IDS_READING_MODE_LANGUAGE_MENU_SEARCH_CLEAR},
+      {"readingModeLanguageMenuDownloading",
+       IDS_READING_MODE_LANGUAGE_MENU_DOWNLOADING},
+      {"readingModeLanguageMenuVoicesUnavailable",
+       IDS_READING_MODE_LANGUAGE_MENU_VOICES_UNAVAILABLE},
+      {"readingModeLanguageMenuNoInternet",
+       IDS_READING_MODE_LANGUAGE_MENU_NO_INTERNET},
+      {"readingModeVoiceMenuNoInternet",
+       IDS_READING_MODE_VOICE_MENU_NO_INTERNET},
+      {"readingModeLanguageMenuNoSpace",
+       IDS_READING_MODE_LANGUAGE_MENU_NO_SPACE},
+      {"readingModeLanguageMenuNoSpaceButVoicesExist",
+       IDS_READING_MODE_LANGUAGE_MENU_NO_SPACE_BUT_VOICES_EXIST},
+      {"readingModeVoiceMenuNoSpace", IDS_READING_MODE_VOICE_MENU_NO_SPACE},
+      {"previewVoiceAccessibilityLabel",
+       IDS_READING_MODE_VOICE_MENU_PREVIEW_LANGUAGE},
+      {"languageMenuNoResults", IDS_READING_MODE_LANGUAGE_MENU_NO_RESULTS},
+      {"readingModeVoiceDownloadedTitle",
+       IDS_READING_MODE_VOICE_DOWNLOADED_TITLE},
+      {"readingModeLanguageMenuItemLabel",
+       IDS_READING_MODE_LANGUAGE_MENU_ITEM_LABEL},
+      {"readingModeVoiceDownloadedMessage",
+       IDS_READING_MODE_VOICE_DOWNLOADED_MESSAGE},
+      {"menu", IDS_MENU},
+      {"selected", IDS_READING_MODE_ITEM_SELECTED},
+      {"allocationError", IDS_READING_MODE_LANGUAGE_MENU_NO_SPACE},
+      {"allocationErrorHighQuality",
+       IDS_READING_MODE_LANGUAGE_MENU_NO_SPACE_BUT_VOICES_EXIST},
+      {"allocationErrorNoVoices", IDS_READING_MODE_TOAST_NO_SPACE},
+      {"languageMenuDownloadFailed",
+       IDS_READING_MODE_LANGUAGE_MENU_DOWNLOAD_FAILED},
+      {"cantUseReadAloud", IDS_READING_MODE_CANT_USE_READ_ALOUD},
+      {"lineFocusLabel", IDS_READING_MODE_LINE_FOCUS_LABEL},
+      {"sidePanelLabel", IDS_READING_MODE_SIDE_PANEL_LABEL},
+      {"fullScreenLabel", IDS_READING_MODE_FULL_SCREEN_LABEL},
+      {"fullPageLabel", IDS_READING_MODE_VIEW_FULL_PAGE_LABEL},
+      {"viewLabel", IDS_READING_MODE_VIEW_LABEL},
+      {"linksLabel", IDS_READING_MODE_LINKS_LABEL},
   };
   for (const auto& str : kLocalizedStrings) {
     webui::AddLocalizedString(source, str.name, str.id);
@@ -110,12 +192,10 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
                           IDR_WEBUI_JS_TEST_LOADER_UTIL_JS);
   source->AddResourcePath("test_loader.html", IDR_WEBUI_TEST_LOADER_HTML);
   webui::EnableTrustedTypesCSP(source);
-  webui::SetupChromeRefresh2023(source);
-  source->AddResourcePaths(base::make_span(
-      kSidePanelReadAnythingResources, kSidePanelReadAnythingResourcesSize));
-  source->AddResourcePath("", IDR_SIDE_PANEL_READ_ANYTHING_READ_ANYTHING_HTML);
-  source->AddResourcePaths(base::make_span(kSidePanelSharedResources,
-                                           kSidePanelSharedResourcesSize));
+  source->AddResourcePaths(kSidePanelReadAnythingResources);
+  source->SetDefaultResource(
+      IDR_SIDE_PANEL_READ_ANYTHING_APP_READ_ANYTHING_HTML);
+  source->AddResourcePaths(kSidePanelSharedResources);
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::ScriptSrc,
       "script-src 'self' chrome-untrusted://resources "
@@ -130,7 +210,14 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
       "https://fonts.gstatic.com;");
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::ImgSrc,
-      "img-src 'self' data: chrome-untrusted://resources;");
+      "img-src 'self' data: chrome://resources https: "
+      "chrome-untrusted://resources;");
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::TrustedTypes,
+      "trusted-types reader-mode-policy lit-html-desktop "
+      "static-types "
+      "parse-html-subset polymer-html-literal "
+      "polymer-template-event-attribute-policy;");
   raw_ptr<Profile> profile = Profile::FromWebUI(web_ui);
 
   // If the ThemeSource isn't added here, since Read Anything is
@@ -143,15 +230,6 @@ ReadAnythingUntrustedUI::ReadAnythingUntrustedUI(content::WebUI* web_ui)
 ReadAnythingUntrustedUI::~ReadAnythingUntrustedUI() = default;
 
 WEB_UI_CONTROLLER_TYPE_IMPL(ReadAnythingUntrustedUI)
-
-void ReadAnythingUntrustedUI::BindInterface(
-    mojo::PendingReceiver<color_change_listener::mojom::PageHandler>
-        pending_receiver) {
-  if (features::IsReadAnythingWebUIToolbarEnabled()) {
-    color_provider_handler_ = std::make_unique<ui::ColorChangeHandler>(
-        web_ui()->GetWebContents(), std::move(pending_receiver));
-  }
-}
 
 void ReadAnythingUntrustedUI::BindInterface(
     mojo::PendingReceiver<read_anything::mojom::UntrustedPageHandlerFactory>
@@ -167,7 +245,18 @@ void ReadAnythingUntrustedUI::CreateUntrustedPageHandler(
   DCHECK(page);
   read_anything_untrusted_page_handler_ =
       std::make_unique<ReadAnythingUntrustedPageHandler>(
-          std::move(page), std::move(receiver), web_ui());
+          std::move(page), std::move(receiver), web_ui(),
+          /*use_screen_ai_service=*/true);
+
+  // This code is called as part of a screen2x data generation workflow, where
+  // the browser is opened by a CLI and the read-anything side panel is
+  // automatically opened. Therefore we force the UI to show right away rather
+  // than waiting for all UI artifacts to load, as in the general case.
+  if (features::IsDataCollectionModeForScreen2xEnabled()) {
+    if (embedder()) {
+      embedder()->ShowUI();
+    }
+  }
 }
 
 void ReadAnythingUntrustedUI::ShouldShowUI() {

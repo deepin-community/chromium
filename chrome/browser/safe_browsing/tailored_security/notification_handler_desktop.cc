@@ -5,6 +5,7 @@
 #include "chrome/browser/safe_browsing/tailored_security/notification_handler_desktop.h"
 
 #include "base/metrics/histogram_functions.h"
+#include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/notifications/notification_display_service_factory.h"
@@ -31,10 +32,9 @@
 #include "ui/color/color_provider.h"
 #include "ui/message_center/public/cpp/message_center_constants.h"
 #include "ui/message_center/public/cpp/notification.h"
-#include "ui/native_theme/common_theme.h"
 #include "ui/native_theme/native_theme.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/notifier_catalogs.h"
 #endif
 
@@ -54,7 +54,7 @@ void LogUnconsentedOutcome(TailoredSecurityOutcome outcome) {
       outcome);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 
 message_center::NotifierId GetPromotionNotifierId() {
   return message_center::NotifierId(
@@ -126,28 +126,18 @@ void DisplayTailoredSecurityUnconsentedPromotionNotification(Profile* profile) {
       kTailoredSecurityUnconsentedPromotionNotificationId;
   const std::u16string& title = l10n_util::GetStringUTF16(
       IDS_TAILORED_SECURITY_UNCONSENTED_PROMOTION_NOTIFICATION_TITLE);
-  const std::u16string& description =
-      (base::FeatureList::IsEnabled(
-          safe_browsing::kTailoredSecurityUpdatedMessages))
-          ? l10n_util::GetStringUTF16(
-                IDS_TAILORED_SECURITY_UNCONSENTED_PROMOTION_NOTIFICATION_DESCRIPTION_UPDATED)
-          : l10n_util::GetStringUTF16(
-                IDS_TAILORED_SECURITY_UNCONSENTED_PROMOTION_NOTIFICATION_DESCRIPTION);
+  const std::u16string& description = l10n_util::GetStringUTF16(
+      IDS_TAILORED_SECURITY_UNCONSENTED_PROMOTION_NOTIFICATION_DESCRIPTION);
   const std::u16string& primary_button = l10n_util::GetStringUTF16(
       IDS_TAILORED_SECURITY_UNCONSENTED_PROMOTION_NOTIFICATION_ACCEPT);
   const std::u16string& secondary_button =
       l10n_util::GetStringUTF16(IDS_NO_THANKS);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   const message_center::NotifierId notifier_id = GetPromotionNotifierId();
 #else
   const message_center::NotifierId notifier_id = GetNotifierId();
 #endif
-  auto icon = (base::FeatureList::IsEnabled(
-                  safe_browsing::kTailoredSecurityUpdatedMessages))
-                  ? GetNotificationIcon()
-                  : ui::ImageModel::FromVectorIcon(
-                        kSafetyCheckIcon, ui::kColorAccent,
-                        message_center::kNotificationIconSize);
+  auto icon = GetNotificationIcon();
   LogUnconsentedOutcome(TailoredSecurityOutcome::kShown);
   message_center::Notification notification(
       message_center::NOTIFICATION_TYPE_SIMPLE, notification_id, title,

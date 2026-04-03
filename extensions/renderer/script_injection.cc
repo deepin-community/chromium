@@ -29,11 +29,11 @@
 #include "extensions/renderer/scripts_run_info.h"
 #include "extensions/renderer/trace_util.h"
 #include "third_party/blink/public/platform/web_isolated_world_info.h"
+#include "third_party/blink/public/web/extension_script_streamer.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_script_execution_callback.h"
 #include "third_party/blink/public/web/web_script_source.h"
-#include "url/gurl.h"
 
 using perfetto::protos::pbzero::ChromeTrackEvent;
 
@@ -68,7 +68,7 @@ class ScriptInjection::FrameWatcher : public content::RenderFrameObserver {
   }
   void OnDestruct() override { injection_->invalidate_render_frame(); }
 
-  raw_ptr<ScriptInjection, ExperimentalRenderer> injection_;
+  raw_ptr<ScriptInjection> injection_;
 };
 
 ScriptInjection::ScriptInjection(
@@ -96,30 +96,39 @@ ScriptInjection::ScriptInjection(
 
 ScriptInjection::~ScriptInjection() {
   if (!complete_)
-    NotifyWillNotInject(ScriptInjector::WONT_INJECT);
+    NotifyWillNotInject(ScriptInjector::InjectFailureReason::kWontInject);
 
   TRACE_EVENT_END("extensions", perfetto::Track::FromPointer(this),
                   ChromeTrackEvent::kRenderProcessHost,
                   content::RenderThread::Get(),
                   ChromeTrackEvent::kChromeExtensionId,
-                  ExtensionIdForTracing(host_id().id));
+                  ExtensionIdForTracing(injection_host_ ? host_id().id : ""));
 }
 
 ScriptInjection::InjectionResult ScriptInjection::TryToInject(
     mojom::RunLocation current_location,
     ScriptsRunInfo* scripts_run_info,
     StatusUpdatedCallback async_updated_callback) {
+  if (current_location == mojom::RunLocation::kUndefined &&
+      render_frame_->IsInFencedFrameTree() && render_frame_->IsMainFrame()) {
+    // Fenced frames do not navigate to about:blank by default the way iframes
+    // do. They cannot accept script injections until they perform an initial
+    // navigation.
+    NotifyWillNotInject(ScriptInjector::InjectFailureReason::kNotAllowed);
+    return InjectionResult::kFinished;  // We're done.
+  }
+
   if (current_location < run_location_)
-    return INJECTION_WAITING;  // Wait for the right location.
+    return InjectionResult::kWaiting;  // Wait for the right location.
 
   if (request_id_ != kInvalidRequestId) {
     // We're waiting for permission right now, try again later.
-    return INJECTION_WAITING;
+    return InjectionResult::kWaiting;
   }
 
   if (!injection_host_) {
-    NotifyWillNotInject(ScriptInjector::EXTENSION_REMOVED);
-    return INJECTION_FINISHED;  // We're done.
+    NotifyWillNotInject(ScriptInjector::InjectFailureReason::kExtensionRemoved);
+    return InjectionResult::kFinished;  // We're done.
   }
 
   blink::WebLocalFrame* web_frame = render_frame_->GetWebFrame();
@@ -127,29 +136,29 @@ ScriptInjection::InjectionResult ScriptInjection::TryToInject(
       injection_host_.get(), web_frame,
       ExtensionFrameHelper::Get(render_frame_)->tab_id())) {
     case PermissionsData::PageAccess::kDenied:
-      NotifyWillNotInject(ScriptInjector::NOT_ALLOWED);
-      return INJECTION_FINISHED;  // We're done.
+      NotifyWillNotInject(ScriptInjector::InjectFailureReason::kNotAllowed);
+      return InjectionResult::kFinished;  // We're done.
     case PermissionsData::PageAccess::kWithheld:
       RequestPermissionFromBrowser(std::move(async_updated_callback));
-      return INJECTION_WAITING;  // Wait around for permission.
+      return InjectionResult::kWaiting;  // Wait around for permission.
     case PermissionsData::PageAccess::kAllowed:
       InjectionResult result = Inject(scripts_run_info);
       // If the injection is blocked, we need to set the manager so we can
       // notify it upon completion.
-      if (result == INJECTION_BLOCKED)
+      if (result == InjectionResult::kBlocked) {
         async_completion_callback_ = std::move(async_updated_callback);
+      }
       return result;
   }
 
   NOTREACHED();
-  return INJECTION_FINISHED;
 }
 
 ScriptInjection::InjectionResult ScriptInjection::OnPermissionGranted(
     ScriptsRunInfo* scripts_run_info) {
   if (!injection_host_) {
-    NotifyWillNotInject(ScriptInjector::EXTENSION_REMOVED);
-    return INJECTION_FINISHED;
+    NotifyWillNotInject(ScriptInjector::InjectFailureReason::kExtensionRemoved);
+    return InjectionResult::kFinished;
   }
 
   return Inject(scripts_run_info);
@@ -201,7 +210,7 @@ ScriptInjection::InjectionResult ScriptInjection::Inject(
   // be run in multiple rules, and the script has already run.
   // See crbug.com/631247.
   if (!should_inject_js && !should_inject_or_remove_css) {
-    return INJECTION_FINISHED;
+    return InjectionResult::kFinished;
   }
 
   if (should_inject_js)
@@ -219,7 +228,7 @@ ScriptInjection::InjectionResult ScriptInjection::Inject(
     ++scripts_run_info->num_blocking_js;
   }
 
-  return complete_ ? INJECTION_FINISHED : INJECTION_BLOCKED;
+  return complete_ ? InjectionResult::kFinished : InjectionResult::kBlocked;
 }
 
 void ScriptInjection::InjectJs(std::set<std::string>* executing_scripts,
@@ -227,8 +236,12 @@ void ScriptInjection::InjectJs(std::set<std::string>* executing_scripts,
   TRACE_RENDERER_EXTENSION_EVENT("ScriptInjection::InjectJs", host_id().id);
 
   DCHECK(!did_inject_js_);
+
+  ExtensionFrameHelper* frame_helper = ExtensionFrameHelper::Get(render_frame_);
+  CHECK(frame_helper);
+
   std::vector<blink::WebScriptSource> sources = injector_->GetJsSources(
-      run_location_, executing_scripts, num_injected_js_scripts);
+      run_location_, executing_scripts, num_injected_js_scripts, frame_helper);
   DCHECK(!sources.empty());
 
   base::ElapsedTimer exec_timer;
@@ -249,25 +262,60 @@ void ScriptInjection::InjectJs(std::set<std::string>* executing_scripts,
           ? blink::mojom::EvaluationTiming::kAsynchronous
           : blink::mojom::EvaluationTiming::kSynchronous;
 
-  int32_t world_id = blink::kMainDOMWorldId;
+  std::optional<std::string> world_id = injector_->GetExecutionWorldId();
+  const std::string& host_string_id = injection_host_->id().id;
   const mojom::ExecutionWorld execution_world = injector_->GetExecutionWorld();
+
+  // We limit the number of user script worlds that may be active on a given
+  // document. Check if this is within bounds.
+  if (execution_world == mojom::ExecutionWorld::kUserScript) {
+    const std::set<std::optional<std::string>>* active_user_script_worlds =
+        frame_helper->GetActiveUserScriptWorlds(host_string_id);
+
+    // TODO(devlin): It'd be nice to isolate this logic into
+    // IsolatedWorldManager instead of having it shared with
+    // ExtensionFrameHelper and this class, but ExtensionFrameHelper is the
+    // one that's able to track this information (as a per-frame object that
+    // can be cleared on a new document). If we had something like
+    // DocumentUserData on the renderer, that would be a better fit.
+    constexpr size_t kMaxActiveUserScriptWorldCount = 10;
+    if (active_user_script_worlds &&
+        active_user_script_worlds->size() >= kMaxActiveUserScriptWorldCount &&
+        !active_user_script_worlds->contains(world_id)) {
+      // If there are 10 or more active user script worlds, we use the default
+      // world for future injections.
+      // Note: This *can* mean that up to 11 user script worlds for this
+      // exist on the document, since the first ten can correspond to "named"
+      // worlds and then we'll create a new one for the default world. However,
+      // that's better than needing to choose a new world "at random" to inject
+      // in.
+      world_id = std::nullopt;
+    }
+
+    // Register the world as active. This is a no-op if it's already registered.
+    frame_helper->AddActiveUserScriptWorld(host_string_id, world_id);
+  }
+
+  int32_t blink_world_id = blink::kMainDOMWorldId;
   switch (execution_world) {
     case mojom::ExecutionWorld::kIsolated:
     case mojom::ExecutionWorld::kUserScript:
-      world_id =
+      blink_world_id =
           IsolatedWorldManager::GetInstance().GetOrCreateIsolatedWorldForHost(
-              *injection_host_, execution_world);
+              *injection_host_, execution_world, world_id);
       if (injection_host_->id().type == mojom::HostID::HostType::kExtensions &&
           log_activity_) {
-        DOMActivityLogger::AttachToWorld(world_id, injection_host_->id().id);
+        DOMActivityLogger::AttachToWorld(blink_world_id, host_string_id);
       }
+
       break;
     case mojom::ExecutionWorld::kMain:
-      world_id = blink::kMainDOMWorldId;
+      blink_world_id = blink::kMainDOMWorldId;
       break;
   }
+
   render_frame_->GetWebFrame()->RequestExecuteScript(
-      world_id, sources, injector_->IsUserGesture(), execution_option,
+      blink_world_id, sources, injector_->IsUserGesture(), execution_option,
       blink::mojom::LoadEventBlockingOption::kBlock,
       base::BindOnce(&ScriptInjection::OnJsInjectionCompleted,
                      weak_ptr_factory_.GetWeakPtr()),
@@ -349,7 +397,7 @@ void ScriptInjection::InjectOrRemoveCss(
         // (i.e. x - y = x + -y and x | y = ~(~x & ~y)), so it is handled here
         // in the injection function.
         //
-        // TODO(https://crbug.com/1116061): Extend this API's capabilities to
+        // TODO(crbug.com/40144586): Extend this API's capabilities to
         // also remove CSS added by content scripts?
         web_frame->GetDocument().RemoveInsertedStyleSheet(source.key,
                                                           blink_css_origin);

@@ -8,9 +8,7 @@
 #include <memory>
 
 #include "base/memory/scoped_refptr.h"
-#include "base/task/single_thread_task_runner.h"
 #include "base/unguessable_token.h"
-#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/blink/public/mojom/loader/pause_subresource_loading_handle.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
@@ -18,13 +16,14 @@
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
-namespace ukm {
-class UkmRecorder;
+namespace base {
+class SingleThreadTaskRunner;
 }
 
 namespace blink {
 
 class AgentGroupScheduler;
+class DocumentResourceCoordinator;
 class PageScheduler;
 
 class FrameScheduler : public FrameOrWorkerScheduler {
@@ -32,9 +31,6 @@ class FrameScheduler : public FrameOrWorkerScheduler {
   class PLATFORM_EXPORT Delegate : public FrameOrWorkerScheduler::Delegate {
    public:
     ~Delegate() override = default;
-
-    virtual ukm::UkmRecorder* GetUkmRecorder() = 0;
-    virtual ukm::SourceId GetUkmSourceId() = 0;
 
     // Called when a frame has exceeded a total task time threshold (100ms).
     virtual void UpdateTaskTime(base::TimeDelta time) = 0;
@@ -44,6 +40,12 @@ class FrameScheduler : public FrameOrWorkerScheduler {
     virtual void OnTaskCompleted(base::TimeTicks start_time,
                                  base::TimeTicks end_time) = 0;
     virtual void MainFrameInteractive() {}
+    virtual void MainFrameFirstMeaningfulPaint() {}
+
+    // Returns a `DocumentResourceCoordinator` to inform of feature usage by the
+    // frame. May be nullptr when the PerformanceManagerInstrumentation feature
+    // is disabled or in tests.
+    virtual DocumentResourceCoordinator* GetDocumentResourceCoordinator() = 0;
   };
 
   ~FrameScheduler() override = default;
@@ -159,10 +161,10 @@ class FrameScheduler : public FrameOrWorkerScheduler {
 
   // Tells the scheduler that the first meaningful paint has occurred for this
   // frame.
-  virtual void OnFirstMeaningfulPaint(base::TimeTicks timestamp) = 0;
+  virtual void OnFirstMeaningfulPaint() = 0;
 
-  // Tells the scheduler that the load event has been dispatched for this frame.
-  virtual void OnDispatchLoadEvent() = 0;
+  // Tells the scheduler that a new document has been installed for this frame.
+  virtual void OnDidInstallNewDocument() = 0;
 
   // Returns true if this frame is should not throttled (e.g. due to an active
   // connection).
@@ -170,9 +172,6 @@ class FrameScheduler : public FrameOrWorkerScheduler {
   // use GetPageScheduler()->IsExemptFromBudgetBasedThrottling for the status
   // of the page.
   virtual bool IsExemptFromBudgetBasedThrottling() const = 0;
-
-  // Returns UKM source id for recording metrics associated with this frame.
-  virtual ukm::SourceId GetUkmSourceId() = 0;
 
   FrameScheduler* ToFrameScheduler() override { return this; }
 
@@ -183,7 +182,7 @@ class FrameScheduler : public FrameOrWorkerScheduler {
 
   // Returns the list of active features which currently tracked by the
   // scheduler for back-forward cache metrics.
-  virtual WTF::HashSet<SchedulingPolicy::Feature>
+  virtual HashSet<SchedulingPolicy::Feature>
   GetActiveFeaturesTrackedForBackForwardCacheMetrics() = 0;
 
   // TODO(altimin): Move FrameScheduler object to oilpan.
@@ -192,6 +191,10 @@ class FrameScheduler : public FrameOrWorkerScheduler {
   // Notifies the delegate the list of active features for this frame if they
   // have changed since the last notification.
   virtual void ReportActiveSchedulerTrackedFeatures() = 0;
+
+  // Returns the cumulative wall time spent in tasks for this frame not yet
+  // reported to the browser process via `Delegate::UpdateTaskTime()`.
+  virtual base::TimeDelta UnreportedTaskTime() const = 0;
 };
 
 }  // namespace blink

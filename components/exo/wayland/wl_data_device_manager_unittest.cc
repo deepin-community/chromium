@@ -7,7 +7,6 @@
 
 #include "ash/drag_drop/drag_drop_controller.h"
 #include "ash/shell.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/test/bind.h"
 #include "components/exo/wayland/test/client_util.h"
@@ -42,7 +41,7 @@ class InputListenerImpl : public test::InputListener {
 
 }  // namespace
 
-// TODO(crbug.com/1521845): enable the flaky test.
+// TODO(crbug.com/41494812): enable the flaky test.
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_Mouse DISABLED_Mouse
 #else
@@ -83,7 +82,7 @@ TEST_F(DataDeviceManagerTest, MAYBE_Mouse) {
     // process events on client side. This should not start D&D, (thus it will
     // not start nested loop) because the button has already been released
     PostToClientAndWait([&](test::TestClient* client) {
-      EXPECT_TRUE(base::Contains(input_listener->button_serial_map, BTN_LEFT));
+      EXPECT_TRUE(input_listener->button_serial_map.contains(BTN_LEFT));
       auto* shell_client_data = client->GetDataAs<test::ShellClientData>();
       uint32_t serial = input_listener->button_serial_map[BTN_LEFT];
       shell_client_data->StartDrag(serial);
@@ -107,7 +106,7 @@ TEST_F(DataDeviceManagerTest, MAYBE_Mouse) {
         base::DoNothing());
 
     PostToClientAndWait([&](test::TestClient* client) {
-      EXPECT_TRUE(base::Contains(input_listener->button_serial_map, BTN_LEFT));
+      EXPECT_TRUE(input_listener->button_serial_map.contains(BTN_LEFT));
       auto* shell_client_data = client->GetDataAs<test::ShellClientData>();
       uint32_t serial = input_listener->button_serial_map[BTN_LEFT];
       shell_client_data->StartDrag(serial);
@@ -133,7 +132,7 @@ TEST_F(DataDeviceManagerTest, MAYBE_Mouse) {
         base::DoNothing());
 
     PostToClientAndWait([&](test::TestClient* client) {
-      EXPECT_TRUE(base::Contains(input_listener->button_serial_map, BTN_LEFT));
+      EXPECT_TRUE(input_listener->button_serial_map.contains(BTN_LEFT));
       auto* shell_client_data = client->GetDataAs<test::ShellClientData>();
       uint32_t serial = input_listener->button_serial_map[BTN_LEFT];
       shell_client_data->StartDrag(serial);
@@ -142,7 +141,7 @@ TEST_F(DataDeviceManagerTest, MAYBE_Mouse) {
   }
 }
 
-// TODO(crbug.com/1521845): enable the flaky test.
+// TODO(crbug.com/41494812): enable the flaky test.
 #if defined(MEMORY_SANITIZER)
 #define MAYBE_Touch DISABLED_Touch
 #else
@@ -182,7 +181,7 @@ TEST_F(DataDeviceManagerTest, MAYBE_Touch) {
     // process events on client side. This should not start D&D, (thus it will
     // not start nested loop) because the button has already been released
     PostToClientAndWait([&](test::TestClient* client) {
-      EXPECT_TRUE(base::Contains(input_listener->touch_serial_map, 0));
+      EXPECT_TRUE(input_listener->touch_serial_map.contains(0));
       auto* shell_client_data = client->GetDataAs<test::ShellClientData>();
       uint32_t serial = input_listener->touch_serial_map[0];
       shell_client_data->StartDrag(serial);
@@ -218,7 +217,7 @@ TEST_F(DataDeviceManagerTest, MAYBE_Touch) {
         base::DoNothing());
 
     PostToClientAndWait([&](test::TestClient* client) {
-      EXPECT_TRUE(base::Contains(input_listener->touch_serial_map, 0));
+      EXPECT_TRUE(input_listener->touch_serial_map.contains(0));
       auto* shell_client_data = client->GetDataAs<test::ShellClientData>();
       uint32_t serial = input_listener->touch_serial_map[0];
       shell_client_data->StartDrag(serial);

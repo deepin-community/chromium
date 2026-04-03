@@ -11,7 +11,7 @@
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/performance_manager/policies/page_discarding_helper.h"
+#include "chrome/browser/performance_manager/policies/discard_eligibility_policy.h"
 #include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/graph/page_node.h"
 
@@ -23,22 +23,15 @@ namespace performance_manager::policies {
 // when to release memory from browser or VMs or container. When there are a lot
 // of background processes in browser, resourced would avoid killing perceptible
 // apps in VMs or container.
-class ReportPageProcessesPolicy : public GraphOwned,
-                                  public PageNode::ObserverDefaultImpl {
+class ReportPageProcessesPolicy : public GraphOwned, public PageNodeObserver {
  public:
-  struct PageProcess {
-    PageProcess(base::ProcessId pid,
-                bool host_protected_page,
-                bool host_visible_page,
-                bool host_focused_page)
-        : pid(pid),
-          host_protected_page(host_protected_page),
-          host_visible_page(host_visible_page),
-          host_focused_page(host_focused_page) {}
-    base::ProcessId pid;
+  struct PageState {
     bool host_protected_page;
     bool host_visible_page;
     bool host_focused_page;
+    base::TimeTicks last_visible;
+
+    friend bool operator==(const PageState&, const PageState&) = default;
   };
 
   ReportPageProcessesPolicy();
@@ -51,7 +44,7 @@ class ReportPageProcessesPolicy : public GraphOwned,
   void OnPassedToGraph(Graph* graph) override;
   void OnTakenFromGraph(Graph* graph) override;
 
-  // PageNode::ObserverDefaultImpl:
+  // PageNodeObserver:
   void OnPageNodeAdded(const PageNode* page_node) override;
   void OnBeforePageNodeRemoved(const PageNode* page_node) override;
   void OnIsVisibleChanged(const PageNode* page_node) override;
@@ -67,7 +60,8 @@ class ReportPageProcessesPolicy : public GraphOwned,
   // from Chrome or VMs or containers.
   //
   // It's virtual for testing.
-  virtual void ReportPageProcesses(std::vector<PageProcess> processes);
+  virtual void ReportPageProcesses(
+      base::flat_map<base::ProcessId, PageState> processes);
 
  private:
   // ReportPageProcessesPolicy is active when receiving page node events.
@@ -87,7 +81,7 @@ class ReportPageProcessesPolicy : public GraphOwned,
   // reporting.
   base::RetainingOneShotTimer delayed_report_timer_;
 
-  raw_ptr<Graph> graph_ = nullptr;
+  base::flat_map<base::ProcessId, PageState> previously_reported_pages_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

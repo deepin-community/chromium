@@ -34,6 +34,7 @@
 #include "third_party/blink/renderer/platform/bindings/v8_dom_activity_logger.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_client_settings_object.h"
+#include "third_party/blink/renderer/platform/loader/fetch/fetch_context.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_info.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
@@ -49,9 +50,9 @@ namespace {
 
 // The list of features which should be reported as deprecated.
 constexpr WebFeature kDeprecatedAddressSpaceFeatures[] = {
-    WebFeature::kAddressSpacePublicNonSecureContextEmbeddedPrivate,
-    WebFeature::kAddressSpacePublicNonSecureContextEmbeddedLocal,
-    WebFeature::kAddressSpacePrivateNonSecureContextEmbeddedLocal,
+    WebFeature::kAddressSpacePublicNonSecureContextEmbeddedLocalV2,
+    WebFeature::kAddressSpacePublicNonSecureContextEmbeddedLoopbackV2,
+    WebFeature::kAddressSpaceLocalNonSecureContextEmbeddedLoopbackV2,
 };
 
 // Returns whether |feature| is deprecated.
@@ -131,8 +132,7 @@ void ResourceLoadObserverForFrame::DidStartRequest(
           Resource::ResourceTypeToString(resource_type, initiator_name),
           params.Url()};
       activity_logger->LogEvent(document_->GetExecutionContext(),
-                                "blinkRequestResource", argv.size(),
-                                argv.data());
+                                "blinkRequestResource", argv);
     }
   }
 }
@@ -154,7 +154,7 @@ void ResourceLoadObserverForFrame::WillSendRequest(
   }
 
   frame->GetAttributionSrcLoader()->MaybeRegisterAttributionHeaders(
-      request, redirect_response, resource);
+      request, redirect_response);
 
   probe::WillSendRequest(
       document_->domWindow(), document_loader_,
@@ -186,6 +186,22 @@ void ResourceLoadObserverForFrame::DidReceiveResponse(
     ResponseSource response_source) {
   LocalFrame* frame = document_->GetFrame();
   DCHECK(frame);
+
+  // Track resource metrics by identifier for byte tracking in DidReceiveData.
+  // Only track resources that actually have responses and will send data.
+  if (!guardrails_policy_state_initialized_) {
+    guardrails_policy_state_ =
+        document_->GetExecutionContext()->GetGuardrailsPolicyState();
+    guardrails_policy_state_initialized_ = true;
+  }
+  if (guardrails_policy_state_.has_value() && resource &&
+      resource->GetType() == ResourceType::kImage &&
+      response_source != ResponseSource::kFromMemoryCache) {
+    KURL resource_url = resource ? resource->Url() : request.Url();
+    resource_metrics_by_identifier_.Set(identifier,
+                                        ResourceMetrics(resource_url));
+  }
+
   LocalFrameClient* frame_client = frame->Client();
 
   DCHECK(frame_client);
@@ -256,8 +272,8 @@ void ResourceLoadObserverForFrame::DidReceiveResponse(
         document_loader_->GetContentSecurityNotifier());
   }
 
-  frame->GetAttributionSrcLoader()->MaybeRegisterAttributionHeaders(
-      request, response, resource);
+  frame->GetAttributionSrcLoader()->MaybeRegisterAttributionHeaders(request,
+                                                                    response);
 
   frame->Loader().Progress().IncrementProgress(identifier, response);
   probe::DidReceiveResourceResponse(GetProbe(), identifier, document_loader_,
@@ -267,14 +283,30 @@ void ResourceLoadObserverForFrame::DidReceiveResponse(
                                                   response);
 }
 
+void ResourceLoadObserverForFrame::CheckGuardrailsPolicyForSizeLimit(
+    uint64_t identifier,
+    uint64_t bytes) {
+  auto metrics_it = resource_metrics_by_identifier_.find(identifier);
+  if (metrics_it != resource_metrics_by_identifier_.end()) {
+    ResourceMetrics& metrics = metrics_it->value;
+    metrics.accumulated_bytes += bytes;
+
+    if (document_->GetExecutionContext()->CheckGuardrailsPolicyForAssetSize(
+            GuardrailPolicyAssetType::kImage, metrics.accumulated_bytes,
+            metrics.url)) {
+      resource_metrics_by_identifier_.erase(identifier);
+    }
+  }
+}
+
 void ResourceLoadObserverForFrame::DidReceiveData(
     uint64_t identifier,
-    base::span<const char> chunk) {
+    base::SpanOrSize<const char> chunk) {
   LocalFrame* frame = document_->GetFrame();
   DCHECK(frame);
   frame->Loader().Progress().IncrementProgress(identifier, chunk.size());
-  probe::DidReceiveData(GetProbe(), identifier, document_loader_, chunk.data(),
-                        chunk.size());
+  CheckGuardrailsPolicyForSizeLimit(identifier, chunk.size());
+  probe::DidReceiveData(GetProbe(), identifier, document_loader_, chunk);
 }
 
 void ResourceLoadObserverForFrame::DidReceiveTransferSizeUpdate(
@@ -300,6 +332,7 @@ void ResourceLoadObserverForFrame::DidFinishLoading(
   LocalFrame* frame = document_->GetFrame();
   DCHECK(frame);
   frame->Loader().Progress().CompleteProgress(identifier);
+  resource_metrics_by_identifier_.erase(identifier);
   probe::DidFinishLoading(GetProbe(), identifier, document_loader_, finish_time,
                           encoded_data_length, decoded_body_length);
 
@@ -321,6 +354,7 @@ void ResourceLoadObserverForFrame::DidFailLoading(
   LocalFrame* frame = document_->GetFrame();
   DCHECK(frame);
   frame->Loader().Progress().CompleteProgress(identifier);
+  resource_metrics_by_identifier_.erase(identifier);
 
   probe::DidFailLoading(GetProbe(), identifier, document_loader_, error,
                         frame->GetDevToolsFrameToken());
@@ -354,6 +388,13 @@ void ResourceLoadObserverForFrame::DidChangeRenderBlockingBehavior(
             resource->GetResourceRequest(),
             params.GetResourceRequest().GetRenderBlockingBehavior());
       });
+}
+
+bool ResourceLoadObserverForFrame::InterestedInAllRequests() {
+  if (GetProbe()) {
+    return GetProbe()->HasInspectorNetworkAgents();
+  }
+  return false;
 }
 
 void ResourceLoadObserverForFrame::Trace(Visitor* visitor) const {

@@ -15,8 +15,6 @@ limitations under the License.
 
 #include <functional>
 #include <memory>
-#include <string>
-#include <vector>
 
 #include "absl/strings/str_cat.h"
 #include "llvm/ADT/SmallVector.h"
@@ -65,14 +63,14 @@ struct XlaClusterFormationPass
 void EncapsulatePartitionedCall(Operation *call_op,
                                 mlir::StringAttr callee_name) {
   OpBuilder builder(call_op);
-  auto cluster = builder.create<mlir::tf_device::ClusterOp>(
-      call_op->getLoc(), call_op->getResultTypes());
+  auto cluster = mlir::tf_device::ClusterOp::create(builder, call_op->getLoc(),
+                                                    call_op->getResultTypes());
   cluster.getBody().push_back(new Block);
   call_op->replaceAllUsesWith(cluster.getResults());
   call_op->moveBefore(&cluster.GetBody(), cluster.GetBody().end());
   builder.setInsertionPointToEnd(&cluster.GetBody());
-  builder.create<mlir::tf_device::ReturnOp>(call_op->getLoc(),
-                                            call_op->getResults());
+  mlir::tf_device::ReturnOp::create(builder, call_op->getLoc(),
+                                    call_op->getResults());
   // Propagate necessary attributes to the cluster so that when it's outlined,
   // the function will have correct attributes.
   mlir::TF::CopyDeviceAndUnderscoredAttributes(call_op, cluster);
@@ -117,8 +115,8 @@ mlir::LogicalResult EncapsulateFirstXlaCompilablePartitionedCalls(
   // performance.
   for (auto &pcall_op : noinline_pcall_ops) {
     auto call = llvm::cast<CallOpInterface>(pcall_op.getOperation());
-    auto callee =
-        llvm::cast<FuncOp>(call.resolveCallable(&symbol_table_collection));
+    auto callee = llvm::cast<FuncOp>(
+        call.resolveCallableInTable(&symbol_table_collection));
     callee->setAttr(noinline_attr_name, builder.getBoolAttr(true));
   }
   return mlir::success();

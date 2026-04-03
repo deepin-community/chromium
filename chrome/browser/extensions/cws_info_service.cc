@@ -4,9 +4,14 @@
 
 #include "chrome/browser/extensions/cws_info_service.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+#include <optional>
+#include <string>
+#include <string_view>
+
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/queue.h"
+#include "base/features.h"
 #include "base/i18n/time_formatting.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
@@ -29,13 +34,18 @@
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/pref_names.h"
+#include "extensions/buildflags/buildflags.h"
+#include "google_apis/common/api_key_request_util.h"
 #include "google_apis/google_api_keys.h"
 #include "net/base/load_flags.h"
+#include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace {
 
@@ -155,22 +165,14 @@ void RecordNetworkHistograms(const network::SimpleURLLoader* url_loader) {
 
 namespace extensions {
 
-// Allow periodic retrieval of extensions metadata from the Chrome Web Store
-// (CWS). This is effectively a kill-switch for the feature.
-BASE_FEATURE(kCWSInfoService,
-             "CWSInfoService",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 // Increase the frequency of periodic retrieval of extensions metadata from
 // CWS. This feature is used only for testing purposes.
-BASE_FEATURE(kCWSInfoFastCheck,
-             "CWSInfoFastCheck",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kCWSInfoFastCheck, base::FEATURE_DISABLED_BY_DEFAULT);
 
 namespace {
 
-base::Value::Dict GetDictFromStoreMetadataProto(const StoreMetadata* metadata) {
-  base::Value::Dict dict;
+base::DictValue GetDictFromStoreMetadataProto(const StoreMetadata* metadata) {
+  base::DictValue dict;
   if (!metadata) {
     dict.Set(kIsPresent, false);
   } else {
@@ -184,7 +186,7 @@ base::Value::Dict GetDictFromStoreMetadataProto(const StoreMetadata* metadata) {
 
     const auto& proto_labels = metadata->labels();
     for (const auto* label : kLabels) {
-      dict.Set(label, base::Contains(proto_labels, label));
+      dict.Set(label, std::ranges::contains(proto_labels, label));
     }
   }
 
@@ -198,9 +200,9 @@ bool SaveInfoIfChanged(ExtensionPrefs* extension_prefs,
                        const StoreMetadata* new_info) {
   bool saved = false;
 
-  const base::Value::Dict* saved_dict =
+  const base::DictValue* saved_dict =
       extension_prefs->ReadPrefAsDict(id, kCWSInfo);
-  base::Value::Dict new_dict = GetDictFromStoreMetadataProto(new_info);
+  base::DictValue new_dict = GetDictFromStoreMetadataProto(new_info);
   if (!saved_dict || *saved_dict != new_dict) {
     // The metadata is new or is different from that saved in extension prefs.
     saved = true;
@@ -250,7 +252,7 @@ CWSInfoService::CWSInfoService(Profile* profile)
   // option is enabled.
   startup_delay_secs_ = base::FeatureList::IsEnabled(kCWSInfoFastCheck)
                             ? kFastStartupCheckDelaySeconds
-                            : base::RandInt(/*min=*/30, /*max=*/600);
+                            : base::RandIntInclusive(/*min=*/30, /*max=*/600);
   ScheduleCheck(startup_delay_secs_);
 }
 
@@ -263,7 +265,7 @@ void CWSInfoService::Shutdown() {
 
 std::optional<bool> CWSInfoService::IsLiveInCWS(
     const Extension& extension) const {
-  const base::Value::Dict* cws_info_dict =
+  const base::DictValue* cws_info_dict =
       extension_prefs_->ReadPrefAsDict(extension.id(), kCWSInfo);
   if (cws_info_dict == nullptr) {
     return std::nullopt;
@@ -276,7 +278,7 @@ std::optional<bool> CWSInfoService::IsLiveInCWS(
 
 std::optional<CWSInfoService::CWSInfo> CWSInfoService::GetCWSInfo(
     const Extension& extension) const {
-  const base::Value::Dict* cws_info_dict =
+  const base::DictValue* cws_info_dict =
       extension_prefs_->ReadPrefAsDict(extension.id(), kCWSInfo);
   if (cws_info_dict == nullptr) {
     return std::nullopt;
@@ -361,6 +363,11 @@ void CWSInfoService::CheckAndMaybeFetchInfo() {
 }
 
 void CWSInfoService::ScheduleCheck(int seconds) {
+  if (base::features::IsReducePPMsEnabled() && !info_check_timer_.IsRunning()) {
+    info_check_timer_.SetTaskRunner(
+        content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT}));
+  }
+
   info_check_timer_.Start(FROM_HERE, base::Seconds(seconds), this,
                           &CWSInfoService::CheckAndMaybeFetchInfo);
 }
@@ -426,8 +433,7 @@ void CWSInfoService::SendRequest() {
   resource_request->method = "POST";
   resource_request->load_flags = net::LOAD_DISABLE_CACHE;
   resource_request->headers.SetHeader("X-HTTP-Method-Override", "GET");
-  resource_request->headers.SetHeader("X-Goog-Api-Key",
-                                      google_apis::GetAPIKey());
+  google_apis::AddAPIKeyToRequest(*resource_request, google_apis::GetAPIKey());
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
 
   url_loader_ = network::SimpleURLLoader::Create(std::move(resource_request),
@@ -444,7 +450,7 @@ void CWSInfoService::SendRequest() {
   info_requests_++;
 }
 
-void CWSInfoService::OnResponseReceived(std::unique_ptr<std::string> response) {
+void CWSInfoService::OnResponseReceived(std::optional<std::string> response) {
   CHECK(url_loader_);
   RecordNetworkHistograms(url_loader_.get());
 
@@ -521,7 +527,7 @@ bool CWSInfoService::MaybeSaveResponseToPrefs(
     }
   }
 
-  // Process any resquested ids missing from the response. These ids represent
+  // Process any requested ids missing from the response. These ids represent
   // extensions that are no longer available from the store.
   for (const auto& id : active_fetch_->requests.front().ids) {
     if (extension_prefs_->HasPrefForExtension(id) == false) {
@@ -550,7 +556,7 @@ static_assert(static_cast<int>(CWSInfoService::CWSViolationType::kUnknown) == 4,
 CWSInfoService::CWSViolationType CWSInfoService::GetViolationTypeFromString(
     const std::string& violation_type_str) {
   static constexpr auto violation_type_str_map =
-      base::MakeFixedFlatMap<base::StringPiece,
+      base::MakeFixedFlatMap<std::string_view,
                              CWSInfoService::CWSViolationType>(
           {{"none", CWSInfoService::CWSViolationType::kNone},
            {"malware", CWSInfoService::CWSViolationType::kMalware},
@@ -558,7 +564,7 @@ CWSInfoService::CWSViolationType CWSInfoService::GetViolationTypeFromString(
            {"minor-policy-violation",
             CWSInfoService::CWSViolationType::kMinorPolicy}});
 
-  const auto* it = violation_type_str_map.find(violation_type_str);
+  const auto it = violation_type_str_map.find(violation_type_str);
   return it != violation_type_str_map.end() ? it->second
                                             : CWSViolationType::kUnknown;
 }

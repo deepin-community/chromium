@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "ash/system/notification_center/notification_style_utils.h"
+
 #include <memory>
 
 #include "ash/strings/grit/ash_strings.h"
@@ -11,6 +12,7 @@
 #include "ash/style/dark_light_mode_controller_impl.h"
 #include "ash/style/pill_button.h"
 #include "ash/system/notification_center/message_center_constants.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_id.h"
@@ -40,7 +42,7 @@ gfx::ImageSkia CreateNotificationAppIcon(
       cros_tokens::kCrosSysOnPrimary);
   SkColor icon_background_color = CalculateIconBackgroundColor(notification);
 
-  // TODO(crbug.com/768748): figure out if this has a performance impact and
+  // TODO(crbug.com/40541732): figure out if this has a performance impact and
   // cache images if so.
   gfx::Image masked_small_icon = notification->GenerateMaskedSmallIcon(
       kNotificationAppIconImageSize, icon_color, icon_background_color,
@@ -76,17 +78,17 @@ gfx::ImageSkia CreateNotificationItemIcon(
 
 SkColor CalculateIconBackgroundColor(
     const message_center::Notification* notification) {
-  SkColor default_color = AshColorProvider::Get()->GetControlsLayerColor(
-      AshColorProvider::ControlsLayerType::kControlBackgroundColorActive);
+  SkColor default_color = GetColorProviderForNativeTheme()->GetColor(
+      kColorAshControlBackgroundColorActive);
 
   if (!notification) {
     return default_color;
   }
 
   auto color_id = notification->accent_color_id();
-  absl::optional<SkColor> accent_color = notification->accent_color();
+  std::optional<SkColor> accent_color = notification->accent_color();
 
-  if (!color_id || !accent_color.has_value()) {
+  if (!color_id && !accent_color.has_value()) {
     return default_color;
   }
 
@@ -113,7 +115,7 @@ SkColor CalculateIconBackgroundColor(
                      : gfx::kPlaceholderColor;
   return color_utils::BlendForMinContrast(
              fg_color, bg_color,
-             /*high_contrast_foreground=*/absl::nullopt, minContrastRatio)
+             /*high_contrast_foreground=*/std::nullopt, minContrastRatio)
       .color;
 }
 
@@ -124,12 +126,8 @@ void ConfigureLabelStyle(views::Label* label,
   label->SetAutoColorReadabilityEnabled(false);
   label->SetFontList(
       gfx::FontList({kGoogleSansFont}, gfx::Font::NORMAL, size, font_weight));
-  auto layer_type =
-      is_color_primary
-          ? ash::AshColorProvider::ContentLayerType::kTextColorPrimary
-          : ash::AshColorProvider::ContentLayerType::kTextColorSecondary;
-  label->SetEnabledColor(
-      ash::AshColorProvider::Get()->GetContentLayerColor(layer_type));
+  label->SetEnabledColor(is_color_primary ? cros_tokens::kTextColorPrimary
+                                          : cros_tokens::kTextColorSecondary);
 }
 
 ui::ColorProvider* GetColorProviderForNativeTheme() {
@@ -144,8 +142,14 @@ std::unique_ptr<views::Background> CreateNotificationBackground(
     bool is_popup_notification,
     bool is_grouped_child_notification) {
   ui::ColorId background_color_id =
-      is_popup_notification ? static_cast<ui::ColorId>(kColorAshShieldAndBase80)
-                            : cros_tokens::kCrosSysSystemOnBase;
+      is_popup_notification ? cros_tokens::kCrosSysSystemBaseElevatedOpaque
+                            : cros_tokens::kCrosSysSystemOnBaseOpaque;
+  if (chromeos::features::IsSystemBlurEnabled()) {
+    background_color_id =
+        is_popup_notification
+            ? static_cast<ui::ColorId>(kColorAshShieldAndBase80)
+            : cros_tokens::kCrosSysSystemOnBase;
+  }
 
   const gfx::RoundedCornersF background_radii(top_radius, top_radius,
                                               bottom_radius, bottom_radius);
@@ -155,16 +159,19 @@ std::unique_ptr<views::Background> CreateNotificationBackground(
                                               background_radii);
   }
 
-  return views::CreateThemedRoundedRectBackground(background_color_id,
-                                                  background_radii);
+  return views::CreateRoundedRectBackground(background_color_id,
+                                            background_radii);
 }
 
 void StyleNotificationPopup(message_center::MessageView* notification_view) {
   notification_view->SetPaintToLayer();
   auto* layer = notification_view->layer();
-  layer->SetFillsBoundsOpaquely(false);
-  layer->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
-  layer->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+  if (chromeos::features::IsSystemBlurEnabled()) {
+    layer->SetFillsBoundsOpaquely(false);
+    layer->SetBackgroundBlur(ColorProvider::kBackgroundBlurSigma);
+    layer->SetBackdropFilterQuality(ColorProvider::kBackgroundBlurQuality);
+  }
+
   layer->SetRoundedCornerRadius(
       gfx::RoundedCornersF{kMessagePopupCornerRadius});
   layer->SetIsFastRoundedCorner(true);
@@ -185,7 +192,7 @@ std::unique_ptr<views::LabelButton> GenerateNotificationLabelButton(
   std::unique_ptr<PillButton> actions_button = std::make_unique<PillButton>(
       std::move(callback), label, PillButton::Type::kFloatingWithoutIcon,
       /*icon=*/nullptr, kNotificationPillButtonHorizontalSpacing);
-  actions_button->SetButtonTextColorId(cros_tokens::kCrosSysOnSurface);
+  actions_button->SetButtonTextColor(cros_tokens::kCrosSysOnSurface);
 
   return actions_button;
 }

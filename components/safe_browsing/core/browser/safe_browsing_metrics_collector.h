@@ -14,11 +14,28 @@
 #include "base/values.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
-#include "components/safe_browsing/core/browser/db/hit_report.h"
+#include "components/safe_browsing/core/common/threat_enums.h"
 
 class PrefService;
 
 namespace safe_browsing {
+
+// Describes the reason for an unwanted notification revocation.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(NotificationRevocationSource)
+enum class NotificationRevocationSource {
+  kSocialEngineeringBlocklist = 0,
+  kSafeBrowsingUnwantedRevocation = 1,
+  kStandardOneTapUnsubscribe = 2,
+  kSuspiciousWarningOneTapUnsubscribe = 3,
+  kDisruptiveAutoRevocation = 4,
+  kUserManuallyChangedSiteSetting = 5,
+  kUnknown = 6,
+  kSuspiciousContentAutoRevocation = 7,
+  kMaxValue = kSuspiciousContentAutoRevocation,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/safe_browsing/enums.xml:NotificationRevocationSource)
 
 // This class is for logging Safe Browsing metrics regularly. Metrics are logged
 // everyday or at startup, if the last logging time was more than a day ago.
@@ -79,8 +96,10 @@ class SafeBrowsingMetricsCollector : public KeyedService {
     // The user bypasses an interstitial that is triggered by the local Safe
     // Browsing database through Android Safe Browsing API.
     ANDROID_SAFEBROWSING_INTERSTITIAL_BYPASS = 15,
+    // The user started a download deep scan
+    DOWNLOAD_DEEP_SCAN = 16,
 
-    kMaxValue = ANDROID_SAFEBROWSING_INTERSTITIAL_BYPASS
+    kMaxValue = DOWNLOAD_DEEP_SCAN
   };
 
   using EventTypeFilter = base::RepeatingCallback<bool(const EventType&)>;
@@ -113,6 +132,11 @@ class SafeBrowsingMetricsCollector : public KeyedService {
 
   ~SafeBrowsingMetricsCollector() override = default;
 
+  // Log the histogram that shows the revocation source when notification
+  // permissions are removed.
+  static void LogSafeBrowsingNotificationRevocationSourceHistogram(
+      NotificationRevocationSource source);
+
   // Checks the last logging time. If the time is longer than a day ago, log
   // immediately. Otherwise, schedule the next logging with delay.
   void StartLogging();
@@ -137,45 +161,8 @@ class SafeBrowsingMetricsCollector : public KeyedService {
   void Shutdown() override;
 
  private:
+  friend class SafeBrowsingMetricsCollectorTest;
   FRIEND_TEST_ALL_PREFIXES(SafeBrowsingMetricsCollectorTest, GetUserState);
-  FRIEND_TEST_ALL_PREFIXES(SafeBrowsingMetricsCollectorTest,
-                           ProtegoRequestIsNotLoggedWhenEsbIsNotEnabled);
-  FRIEND_TEST_ALL_PREFIXES(
-      SafeBrowsingMetricsCollectorTest,
-      ProtegoRequestLogsNoneIfNotRecordedBeforeFirstRunOfCollector);
-  FRIEND_TEST_ALL_PREFIXES(
-      SafeBrowsingMetricsCollectorTest,
-      ProtegoRequestLogsWithTokenWhenPingSincePreviousLogTime);
-  FRIEND_TEST_ALL_PREFIXES(
-      SafeBrowsingMetricsCollectorTest,
-      ProtegoRequestLogsWithoutTokenWhenPingSincePreviousLogTime);
-  FRIEND_TEST_ALL_PREFIXES(
-      SafeBrowsingMetricsCollectorTest,
-      ProtegoRequestLogsWithTokenWhenPingMoreRecentThanWithoutToken);
-  FRIEND_TEST_ALL_PREFIXES(
-      SafeBrowsingMetricsCollectorTest,
-      ProtegoRequestLogsWithoutTokenWhenPingMoreRecentThanWithToken);
-  FRIEND_TEST_ALL_PREFIXES(
-      SafeBrowsingMetricsCollectorTest,
-      ProtegoRequestLogsNoneWhenNoPingWithTokenSincePreviousLogTime);
-  FRIEND_TEST_ALL_PREFIXES(
-      SafeBrowsingMetricsCollectorTest,
-      ProtegoRequestLogsNoneWhenNoPingWithoutTokenSincePreviousLogTime);
-  FRIEND_TEST_ALL_PREFIXES(
-      SafeBrowsingMetricsCollectorTest,
-      ProtegoRequestLogsWithTokenWhenPingBeforeCollectorHasEverRun);
-  FRIEND_TEST_ALL_PREFIXES(
-      SafeBrowsingMetricsCollectorTest,
-      ProtegoRequestLogsWithoutTokenWhenPingBeforeCollectorHasEverRun);
-  FRIEND_TEST_ALL_PREFIXES(
-      SafeBrowsingMetricsCollectorTest,
-      NewProtegoRequestLogsWithTokenWhenWithTokenWasSendWithinLast24HRS);
-  FRIEND_TEST_ALL_PREFIXES(
-      SafeBrowsingMetricsCollectorTest,
-      NewProtegoRequestLogsWithoutTokenWhenWithoutTokenWasSendWithinLast24HRS);
-  FRIEND_TEST_ALL_PREFIXES(
-      SafeBrowsingMetricsCollectorTest,
-      NewProtegoRequestLogsWithTokenWhenNoPingWasSendWithinLast24HRS);
 
   // The type of Protego ping that was sent by an enhanced protection
   // user. These values are persisted to logs. Entries should not be renumbered
@@ -194,7 +181,7 @@ class SafeBrowsingMetricsCollector : public KeyedService {
 
   // For daily metrics.
   void LogMetricsAndScheduleNextLogging();
-  void MaybeLogDailyEsbProtegoPingSentLast24Hours();
+  void MaybeLogDailyEsbProtegoPingSent();
   void ScheduleNextLoggingAfterInterval(base::TimeDelta interval);
   void LogDailyOptInMetrics();
   void LogDailyEventMetrics();
@@ -221,11 +208,15 @@ class SafeBrowsingMetricsCollector : public KeyedService {
   std::optional<SafeBrowsingMetricsCollector::Event>
   GetLatestEventFromEventTypeFilter(UserState user_state,
                                     EventTypeFilter event_type_filter);
-  const base::Value::Dict* GetSafeBrowsingEventDictionary(UserState user_state);
+  const base::DictValue* GetSafeBrowsingEventDictionary(UserState user_state);
   int GetEventCountSince(UserState user_state,
                          EventType event_type,
                          base::Time since_time);
   UserState GetUserState();
+
+  ProtegoPingType GetMostRecentPingType(base::Time last_ping_with_token,
+                                        base::Time last_ping_without_token,
+                                        base::TimeDelta time_delta);
 
   raw_ptr<PrefService> pref_service_;
   PrefChangeRegistrar pref_change_registrar_;

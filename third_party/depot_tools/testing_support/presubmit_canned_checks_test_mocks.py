@@ -81,6 +81,10 @@ class MockInputApi(object):
         self.presubmit_local_path = os.path.dirname(__file__)
         self.logging = logging.getLogger('PRESUBMIT')
 
+    @property
+    def is_windows(self):
+        return self.platform == 'win32'
+
     def CreateMockFileInPath(self, f_list):
         self.os_path.exists = lambda x: x in f_list
 
@@ -258,10 +262,12 @@ class MockChange(object):
     This class can be used in presubmit unittests to mock the query of the
     current change.
     """
-    def __init__(self, changed_files, description=''):
+
+    def __init__(self, changed_files, description='', issue=0):
         self._changed_files = changed_files
         self.footers = defaultdict(list)
         self._description = description
+        self.issue = issue
 
     def LocalPaths(self):
         return self._changed_files

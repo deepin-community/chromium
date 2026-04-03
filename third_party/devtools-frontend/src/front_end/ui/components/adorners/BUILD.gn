@@ -1,22 +1,25 @@
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("../../../../scripts/build/ninja/devtools_entrypoint.gni")
 import("../../../../scripts/build/ninja/devtools_module.gni")
 import("../../../../scripts/build/ninja/generate_css.gni")
+import("../../../../scripts/build/typescript/typescript.gni")
 import("../visibility.gni")
 
 generate_css("css_files") {
   sources = [ "adorner.css" ]
 }
 
-devtools_module("adorners") {
+devtools_ui_module("adorners") {
   sources = [ "Adorner.ts" ]
 
   deps = [
     "../../../core/platform:bundle",
-    "../../../ui/lit-html:bundle",
+    "../../../ui/legacy:bundle",
+    "../../../ui/lit:bundle",
+    "../../../ui/visual_logging:bundle",
     "../helpers:bundle",
   ]
 }
@@ -30,4 +33,17 @@ devtools_entrypoint("bundle") {
   ]
 
   visibility = default_components_visibility + [ "../../legacy/*" ]
+}
+
+devtools_ui_module("unittests") {
+  testonly = true
+
+  sources = [ "Adorner.test.ts" ]
+
+  deps = [
+    ":bundle",
+    "../../../core/common:bundle",
+    "../../../core/platform:bundle",
+    "../../../testing",
+  ]
 }

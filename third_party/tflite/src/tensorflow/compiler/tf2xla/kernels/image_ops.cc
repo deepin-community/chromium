@@ -14,31 +14,33 @@ limitations under the License.
 ==============================================================================*/
 
 #include <array>
+#include <cstdint>
+#include <limits>
 #include <numeric>
 #include <string>
 #include <vector>
 
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "tensorflow/compiler/tf2xla/kernels/gather_op_helpers.h"
-#include "tensorflow/compiler/tf2xla/lib/util.h"
-#include "tensorflow/compiler/tf2xla/mlir_xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/lib/arithmetic.h"
-#include "xla/client/lib/comparators.h"
-#include "xla/client/lib/constants.h"
-#include "xla/client/lib/dynamic_shaped_ops.h"
-#include "xla/client/lib/loops.h"
-#include "xla/client/lib/sorting.h"
-#include "xla/client/xla_builder.h"
-#include "xla/shape_util.h"
-#include "xla/util.h"
+#include "xla/hlo/builder/lib/arithmetic.h"
+#include "xla/hlo/builder/lib/comparators.h"
+#include "xla/hlo/builder/lib/constants.h"
+#include "xla/hlo/builder/lib/dynamic_shaped_ops.h"
+#include "xla/hlo/builder/lib/loops.h"
+#include "xla/hlo/builder/lib/sorting.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/xla_data.pb.h"
+#include "tensorflow/core/framework/op_kernel.h"
+#include "tensorflow/core/framework/op_requires.h"
 #include "tensorflow/core/framework/tensor_shape.h"
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/platform/errors.h"
-#include "tensorflow/core/platform/status.h"
+#include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
 namespace {
@@ -347,14 +349,15 @@ struct WhileCondFn {
   explicit WhileCondFn(int64_t num_boxes, int64_t output_size)
       : num_boxes(num_boxes), output_size(output_size) {}
 
-  StatusOr<xla::XlaOp> operator()(absl::Span<const xla::XlaOp> values,
-                                  xla::XlaBuilder* cond_builder) const {
+  absl::StatusOr<xla::XlaOp> operator()(absl::Span<const xla::XlaOp> values,
+                                        xla::XlaBuilder* cond_builder) const {
     xla::XlaOp row_idx = values[0];
     xla::XlaOp row_in_bounds =
-        xla::Lt(row_idx, xla::ConstantR0<int32>(cond_builder, num_boxes));
+        xla::Lt(row_idx, xla::ConstantR0<int32_t>(cond_builder, num_boxes));
     xla::XlaOp num_outputs_so_far = values[1];
-    xla::XlaOp results_not_full = xla::Lt(
-        num_outputs_so_far, xla::ConstantR0<int32>(cond_builder, output_size));
+    xla::XlaOp results_not_full =
+        xla::Lt(num_outputs_so_far,
+                xla::ConstantR0<int32_t>(cond_builder, output_size));
     return xla::And(row_in_bounds, results_not_full);
   }
 };
@@ -368,13 +371,13 @@ struct SuppressBodyFn {
 
   explicit SuppressBodyFn(int64_t num_boxes) : num_boxes(num_boxes) {}
 
-  StatusOr<std::vector<xla::XlaOp>> operator()(
+  absl::StatusOr<std::vector<xla::XlaOp>> operator()(
       absl::Span<const xla::XlaOp> values, xla::XlaBuilder* builder) const {
     auto row_idx = values[0];
     auto num_outputs_so_far = values[1];
     auto iou_mask = values[2];
     auto included_iou = values[3];
-    auto zero = xla::ConstantR0<int32>(builder, 0);
+    auto zero = xla::ConstantR0<int32_t>(builder, 0);
     // Determine if current elem is active using a slice.
     // TODO(b/118437727): The only reason we need an explicit vector is because
     // some old GCCs can't deduce the right type for MakeConstSpan, and
@@ -385,7 +388,7 @@ struct SuppressBodyFn {
     active_elem = xla::Reshape(active_elem, {});
     // Increment output count iff current elem is not suppressed.
     num_outputs_so_far = xla::Select(
-        active_elem, num_outputs_so_far + xla::ConstantR0<int32>(builder, 1),
+        active_elem, num_outputs_so_far + xla::ConstantR0<int32_t>(builder, 1),
         num_outputs_so_far);
     // Slice out the row_idx.
     auto row_iou = xla::DynamicSlice(iou_mask, {row_idx, zero}, {1, num_boxes});
@@ -411,7 +414,7 @@ struct SuppressBodyFn {
     }
     included_iou =
         xla::Select(cond, xla::And(included_iou, supp_mask), included_iou);
-    row_idx = row_idx + xla::ConstantR0<int32>(builder, 1);
+    row_idx = row_idx + xla::ConstantR0<int32_t>(builder, 1);
     return std::vector<xla::XlaOp>{row_idx, num_outputs_so_far, iou_mask,
                                    included_iou};
   }
@@ -455,7 +458,7 @@ class NonMaxSuppressionOp : public XlaOpKernel {
                 errors::InvalidArgument(
                     "scores size ", std::to_string(scores_shape.dim_size(0)),
                     " must equal number of boxes ", std::to_string(num_boxes)));
-    OP_REQUIRES(context, num_boxes <= kint32max,
+    OP_REQUIRES(context, num_boxes <= std::numeric_limits<int32_t>::max(),
                 errors::InvalidArgument("XLA compilation requires number of "
                                         "boxes to be <= kint32max, got ",
                                         num_boxes));
@@ -476,7 +479,7 @@ class NonMaxSuppressionOp : public XlaOpKernel {
     OP_REQUIRES(
         context, output_size >= 0,
         errors::InvalidArgument("Need output_size >= 0, got ", output_size));
-    OP_REQUIRES(context, output_size <= kint32max,
+    OP_REQUIRES(context, output_size <= std::numeric_limits<int32_t>::max(),
                 errors::InvalidArgument("Need output_size <= kint32Max, got ",
                                         output_size));
     const xla::XlaOp score_thresh = context->Input("score_threshold");
@@ -563,8 +566,8 @@ class NonMaxSuppressionOp : public XlaOpKernel {
 
     std::vector<xla::XlaOp> init_values;
     init_values.reserve(4);
-    init_values.push_back(xla::ConstantR0<int32>(builder, 0));  // col_idx
-    init_values.push_back(xla::ConstantR0<int32>(builder, 0));  // num_outputs
+    init_values.push_back(xla::ConstantR0<int32_t>(builder, 0));  // col_idx
+    init_values.push_back(xla::ConstantR0<int32_t>(builder, 0));  // num_outputs
     init_values.push_back(iou_thresh_mask);
     init_values.push_back(included_iou);
 
@@ -594,8 +597,8 @@ class NonMaxSuppressionOp : public XlaOpKernel {
     // can be suppressed by score threshold.
     xla::XlaOp ones_included = xla::Select(
         included,
-        xla::Broadcast(xla::ConstantR0<int32>(builder, 1), {num_boxes}),
-        xla::Broadcast(xla::ConstantR0<int32>(builder, 0), {num_boxes}));
+        xla::Broadcast(xla::ConstantR0<int32_t>(builder, 1), {num_boxes}),
+        xla::Broadcast(xla::ConstantR0<int32_t>(builder, 0), {num_boxes}));
     // num_valid is scalar. Value should be bound by output_size.
 
     xla::XlaOp num_valid_total = xla::Reduce(
@@ -603,8 +606,8 @@ class NonMaxSuppressionOp : public XlaOpKernel {
         /*init_value=*/xla::ConstantR0<int>(builder, 0),
         /*computation=*/CreateScalarAddComputation(xla::S32, builder),
         /*dimensions_to_reduce=*/{0});
-    xla::XlaOp num_valid =
-        xla::Min(num_valid_total, xla::ConstantR0<int32>(builder, output_size));
+    xla::XlaOp num_valid = xla::Min(
+        num_valid_total, xla::ConstantR0<int32_t>(builder, output_size));
 
     // Re-index into the original scores input tensor, using a Gather.
     // Boxes were suppressed in the sorted domain.
@@ -619,8 +622,9 @@ class NonMaxSuppressionOp : public XlaOpKernel {
                   /*dtype=*/gather_type, DT_INT32, builder, &selected_indices));
 
     if (!pad_to_max_output_size) {
-      StatusOr<xla::XlaOp> rebounded_result = xla::SetDimensionSizeWithRebound(
-          &context->value_inference(), selected_indices, num_valid, 0);
+      absl::StatusOr<xla::XlaOp> rebounded_result =
+          xla::SetDimensionSizeWithRebound(&context->value_inference(),
+                                           selected_indices, num_valid, 0);
       if (rebounded_result.ok()) {
         selected_indices = *rebounded_result;
       } else {

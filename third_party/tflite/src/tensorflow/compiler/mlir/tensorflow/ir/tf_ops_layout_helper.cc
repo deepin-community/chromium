@@ -15,6 +15,12 @@ limitations under the License.
 
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops_layout_helper.h"
 
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+
+#include "mlir/Support/LLVM.h"  // from @llvm-project
+
 namespace mlir {
 namespace TF {
 
@@ -60,7 +66,7 @@ ArrayAttr ShuffleArrayAttr(ArrayAttr attr, ArrayRef<int64_t> permutation,
 
 // Shuffle ranked tensor dimensions according to the permutation.
 Type ShuffleRankedTensorType(Type type, ArrayRef<int64_t> permutation) {
-  if (auto ranked_type = type.dyn_cast<RankedTensorType>()) {
+  if (auto ranked_type = mlir::dyn_cast<RankedTensorType>(type)) {
     ArrayRef<int64_t> shape = ranked_type.getShape();
     assert(permutation.size() == shape.size());
 

@@ -12,8 +12,10 @@
 #include <string>
 
 #include "base/atomic_sequence_num.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "base/notimplemented.h"
 #include "base/strings/stringprintf.h"
 #include "components/exo/notification.h"
 #include "components/exo/notification_surface.h"
@@ -143,9 +145,10 @@ void notification_shell_create_notification(wl_client* client,
   std::vector<std::string> button_strings;
   const char* data = static_cast<const char*>(buttons->data);
   int len = 0;
-  for (const char *pos = data; pos < data + buttons->size; ++pos, ++len) {
+  for (const char* pos = data; pos < UNSAFE_TODO(data + buttons->size);
+       UNSAFE_TODO(++pos), ++len) {
     if (*pos == '\0') {
-      button_strings.emplace_back(std::string(pos - len, len));
+      button_strings.emplace_back(std::string(UNSAFE_TODO(pos - len), len));
       len = 0;
     }
   }

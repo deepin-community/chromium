@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "ash/components/arc/arc_prefs.h"
 #include "ash/constants/ash_switches.h"
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
@@ -15,6 +14,7 @@
 #include "chrome/browser/ash/policy/handlers/configuration_policy_handler_ash.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "components/policy/proto/cloud_policy.pb.h"
@@ -95,14 +95,14 @@ std::optional<base::Value> ParsePolicyJson(const std::string& arc_policy) {
 
 std::map<std::string, std::set<std::string>> CreateInstallTypeMap(
     const base::Value& dict) {
-  const base::Value::List* const packages =
+  const base::ListValue* const packages =
       dict.GetDict().FindList(kApplicationsKey);
   if (!packages)
     return {};
 
   std::map<std::string, std::set<std::string>> install_type_map;
   for (const auto& package : *packages) {
-    const base::Value::Dict* package_dict = package.GetIfDict();
+    const base::DictValue* package_dict = package.GetIfDict();
     if (!package_dict) {
       continue;
     }

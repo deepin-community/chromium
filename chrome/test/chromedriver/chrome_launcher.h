@@ -19,7 +19,7 @@ class DevToolsEventListener;
 
 namespace base {
 class FilePath;
-enum TerminationStatus;
+enum TerminationStatus : int;
 }  // namespace base
 
 namespace network::mojom {
@@ -38,6 +38,7 @@ Status LaunchChrome(network::mojom::URLLoaderFactory* factory,
                     const Capabilities& capabilities,
                     std::vector<std::unique_ptr<DevToolsEventListener>>
                         devtools_event_listeners,
+                    base::RepeatingClosure on_socket_message,
                     bool w3c_compliant,
                     std::unique_ptr<Chrome>& chrome);
 
@@ -47,8 +48,8 @@ Status ProcessExtensions(const std::vector<std::string>& extensions,
                          Switches& switches,
                          std::vector<std::string>& bg_pages);
 Status PrepareUserDataDir(const base::FilePath& user_data_dir,
-                          const base::Value::Dict* custom_prefs,
-                          const base::Value::Dict* custom_local_state);
+                          const base::DictValue* custom_prefs,
+                          const base::DictValue* custom_local_state);
 Status ParseDevToolsActivePortFile(const base::FilePath& user_data_dir,
                                    int& port);
 Status RemoveOldDevToolsActivePortFile(const base::FilePath& user_data_dir);

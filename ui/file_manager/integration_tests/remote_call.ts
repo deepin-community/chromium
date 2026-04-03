@@ -2,8 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {ElementObject, KeyModifiers, VolumeType} from './prod/file_manager/shared_types.js';
-import {getCaller, pending, repeatUntil, sendTestMessage} from './test_util.js';
+import {DirectoryTreePageObject} from './file_manager/page_objects/directory_tree.js';
+import {BASIC_CROSTINI_ENTRY_SET, BASIC_DRIVE_ENTRY_SET, BASIC_LOCAL_ENTRY_SET} from './file_manager/test_data.js';
+import type {ElementObject, FilesAppState, KeyModifiers, VolumeType} from './prod/file_manager/shared_types.js';
+import {addEntries, getCaller, openEntryChoosingWindow, pending, pollForChosenEntry, repeatUntil, sendTestMessage, TestEntryInfo} from './test_util.js';
 
 export type MenuObject = ElementObject&{
   items?: ElementObject[],
@@ -13,13 +15,13 @@ export type MenuObject = ElementObject&{
  * that if step() is defined at the time of this call, invoke it to start the
  * test auto-stepping ball rolling.
  */
-window.autoStep = () => {
-  window.autostep = window.autostep || false;
-  if (!window.autostep) {
-    window.autostep = true;
+globalThis.autoStep = () => {
+  globalThis.autostep = globalThis.autostep || false;
+  if (!globalThis.autostep) {
+    globalThis.autostep = true;
   }
-  if (window.autostep && typeof window.step === 'function') {
-    window.step();
+  if (globalThis.autostep && typeof globalThis.step === 'function') {
+    globalThis.step();
   }
 };
 
@@ -46,7 +48,7 @@ export class RemoteCall {
   /**
    * @param origin ID of the app to be manipulated.
    */
-  constructor(private origin_: string) {}
+  constructor(protected origin_: string) {}
 
   /**
    * Checks whether step by step tests are enabled or not.
@@ -92,11 +94,13 @@ export class RemoteCall {
       }
       window.currentStep = new Promise(resolve => {
         finishCurrentStep = () => {
+          // eslint-disable-next-line no-console
           console.groupEnd();
           window.currentStep = null;
           resolve();
         };
       });
+      // eslint-disable-next-line no-console
       console.group('Executing: ' + func + ' on ' + appId + ' with args: ');
       console.info(args);
       if (window.autostep !== true) {
@@ -702,20 +706,14 @@ export class RemoteCallFilesApp extends RemoteCall {
     return repeatUntil(async () => {
       const element = await this.callRemoteTestUtil<ElementObject|null>(
           'getActiveElement', appId, []);
-      // TODO(b/285977941): Remove this special handling.
-      // For new directory tree implementation, directory tree itself
+      // For directory tree implementation, directory tree itself
       // ("#directory-tree") is not focusable, the underlying tree item will be
       // focused, for directory tree related focus check, the `elementId` format
       // will be "directory-tree#<tree item label>", so we need to check the
-      // label here for the new tree.
+      // label here for the tree.
       if (elementId.startsWith('directory-tree#')) {
         const treeItemLabel = elementId.split('#')[1];
-        // For new tree.
         if (element && element.attributes['label'] === treeItemLabel) {
-          return true;
-        }
-        // For old tree.
-        if (element && element.attributes['id'] === 'directory-tree') {
           return true;
         }
       }
@@ -904,18 +902,9 @@ export class RemoteCallFilesApp extends RemoteCall {
    * @param menu The name of the menu.
    * @return Promise to be fulfilled with the menu.
    */
-  async getMenu(appId: string, menu: string|string[]):
-      Promise<undefined|MenuObject> {
-    let menuId = '';
-    // TODO: Implement for other menus.
-    if (menu === 'context-menu') {
-      menuId = '#file-context-menu';
-    } else if (menu === 'tasks') {
-      menuId = '#tasks-menu';
-    }
-
+  async getMenu(appId: string, menu: string): Promise<undefined|MenuObject> {
+    const menuId = this.getMenuId(menu);
     if (!menuId) {
-      console.error(`Invalid menu '${menu}'`);
       return;
     }
 
@@ -924,6 +913,41 @@ export class RemoteCallFilesApp extends RemoteCall {
     // Query all the menu items.
     menuElement.items = await this.queryElements(appId, `${menuId} > *`);
     return menuElement;
+  }
+
+  getMenuId(menu: string) {
+    // TODO: Implement for other menus.
+    if (menu === 'context-menu') {
+      return '#file-context-menu';
+    } else if (menu === 'tasks') {
+      return '#tasks-menu';
+    }
+
+    console.error(`Invalid menu '${menu}'`);
+    return '';
+  }
+
+  async waitForMenuItem(appId: string, menu: string, commandId: string):
+      Promise<undefined|MenuObject> {
+    const menuId = this.getMenuId(menu);
+    if (!menuId) {
+      return;
+    }
+
+    const visibleMenu = `${menuId}:not([hidden])`;
+    const visibleMenuItem = `[command="${commandId}"]:not([hidden])`;
+
+    await this.waitForElement(appId, visibleMenu);
+    await this.waitForElement(appId, visibleMenuItem);
+
+    return this.getMenu(appId, menu);
+  }
+
+  async waitAndClickMenuItem(appId: string, menu: string, commandId: string) {
+    await this.waitForMenuItem(appId, menu, commandId);
+    const visibleMenuItem =
+        `[command="${commandId}"]:not([hidden]):not([disabled])`;
+    await this.waitAndClickElement(appId, visibleMenuItem);
   }
 
   /**
@@ -995,7 +1019,7 @@ export class RemoteCallFilesApp extends RemoteCall {
 
       const actualText =
           await this.waitForElement(appId, ['xf-nudge', '#text']);
-      console.log(actualText);
+      console.info(actualText);
       chrome.test.assertEq(actualText.text, expectedText);
 
       return true;
@@ -1130,7 +1154,7 @@ export class RemoteCallFilesApp extends RemoteCall {
 
   /** Fakes the response from spaced when it retrieves the free space. */
   async setSpacedFreeSpace(freeSpace: bigint) {
-    console.log(freeSpace);
+    console.info(freeSpace);
     await sendTestMessage(
         {name: 'setSpacedFreeSpace', freeSpace: String(freeSpace)});
   }
@@ -1179,5 +1203,247 @@ export class RemoteCallFilesApp extends RemoteCall {
       totalUserBytes,
       organizationLimitExceeded,
     });
+  }
+
+  /**
+   * Opens a Files app's main window.
+   * @param initialRoot Root path to be used as a default current directory
+   *     during initialization. Can be null, for no default path.
+   * @param appState App state to be passed with on opening the Files app.
+   * @return Promise to be fulfilled after window creating.
+   */
+  async openNewWindow(initialRoot: null|string, appState?: null|FilesAppState):
+      Promise<string> {
+    appState = appState ?? {};
+    if (initialRoot) {
+      const tail = `external${initialRoot}`;
+      appState.currentDirectoryURL = `filesystem:${this.origin_}/${tail}`;
+    }
+
+    const launchDir = appState ? appState.currentDirectoryURL : undefined;
+    const type = appState ? appState.type : undefined;
+    const volumeFilter = appState ? appState.volumeFilter : undefined;
+    const searchQuery = appState ? appState.searchQuery : undefined;
+    const appId = await sendTestMessage({
+      name: 'launchFileManager',
+      launchDir,
+      type,
+      volumeFilter,
+      searchQuery,
+    });
+
+    return appId;
+  }
+
+  /**
+   * Opens a file dialog and waits for closing it.
+   * @param dialogParams Dialog parameters to be passed to
+   *     openEntryChoosingWindow() function.
+   * @param volumeType Volume icon type passed to the directory page object's
+   *     selectItemByType function.
+   * @param expectedSet Expected set of the entries.
+   * @param closeDialog Function to close the dialog.
+   * @param useBrowserOpen Whether to launch the select file dialog via a
+   *     browser OpenFile() call.
+   * @param debug Whether to debug the waitForWindow().
+   * @return Promise to be fulfilled with the result entry of the dialog.
+   */
+  async openAndWaitForClosingDialog(
+      dialogParams: chrome.fileSystem.ChooseEntryOptions, volumeType: string,
+      expectedSet: TestEntryInfo[], closeDialog: (a: string) => Promise<void>,
+      useBrowserOpen: boolean = false,
+      debug: boolean = false): Promise<string> {
+    const caller = getCaller();
+    let resultPromise: () => Promise<string>;
+    if (useBrowserOpen) {
+      await sendTestMessage({name: 'runSelectFileDialog'});
+      resultPromise = async(): Promise<string> => {
+        return await sendTestMessage(
+            {name: 'waitForSelectFileDialogNavigation'});
+      };
+    } else {
+      await openEntryChoosingWindow(dialogParams);
+      resultPromise = (): Promise<string> => {
+        return pollForChosenEntry(caller);
+      };
+    }
+
+    const appId = await this.waitForWindow(debug);
+    await this.waitForElement(appId, '#file-list');
+    await this.waitFor('isFileManagerLoaded', appId, true);
+    const directoryTree = await DirectoryTreePageObject.create(appId);
+    await directoryTree.selectItemByType(volumeType);
+    await this.waitForFiles(appId, TestEntryInfo.getExpectedRows(expectedSet));
+    await closeDialog(appId);
+    await repeatUntil(async () => {
+      const windows = await this.getWindows();
+      if (windows[appId] !== appId) {
+        return;
+      }
+      return pending(caller, 'Waiting for Window %s to hide.', appId);
+    });
+    return await resultPromise();
+  }
+
+  /**
+   * Opens a Files app's main window and waits until it is initialized. Fills
+   * the window with initial files. Should be called for the first window only.
+   * @param initialRoot Root path to be used as a default current directory
+   *     during initialization. Can be null, for no default path.
+   * @param initialLocalEntries List of initial entries to load in Downloads
+   *     (defaults to a basic entry set).
+   * @param initialDriveEntries List of initial entries to load in Google Drive
+   *     (defaults to a basic entry set).
+   * @param appState App state to be passed with on opening the Files app.
+   * @return Promise to be fulfilled with the window ID.
+   */
+  async setupAndWaitUntilReady(
+      initialRoot: null|string,
+      initialLocalEntries: TestEntryInfo[] = BASIC_LOCAL_ENTRY_SET,
+      initialDriveEntries: TestEntryInfo[] = BASIC_DRIVE_ENTRY_SET,
+      appState?: FilesAppState): Promise<string> {
+    const localEntriesPromise = addEntries(['local'], initialLocalEntries);
+    const driveEntriesPromise = addEntries(['drive'], initialDriveEntries);
+
+    const appId = await this.openNewWindow(initialRoot, appState);
+    await this.waitForElement(appId, '#detail-table');
+
+    // Wait until the elements are loaded in the table.
+    await Promise.all([
+      this.waitForFileListChange(appId, 0),
+      localEntriesPromise,
+      driveEntriesPromise,
+    ]);
+    await this.waitFor('isFileManagerLoaded', appId, true);
+    return appId;
+  }
+
+  /**
+   * Creates a folder shortcut to |directoryName| using the context menu. Note
+   * the current directory must be a parent of the given |directoryName|.
+   *
+   * @param appId Files app windowId.
+   * @param directoryName Directory of shortcut to be created.
+   * @return Promise fulfilled on success.
+   */
+  async createShortcut(appId: string, directoryName: string): Promise<void> {
+    await this.waitUntilSelected(appId, directoryName);
+
+    await this.waitForElement(appId, ['.table-row[selected]']);
+    chrome.test.assertTrue(await this.callRemoteTestUtil(
+        'fakeMouseRightClick', appId, ['.table-row[selected]']));
+
+    await this.waitForElement(appId, '#file-context-menu:not([hidden])');
+    await this.waitForElement(
+        appId, '[command="#pin-folder"]:not([hidden]):not([disabled])');
+    chrome.test.assertTrue(await this.callRemoteTestUtil(
+        'fakeMouseClick', appId,
+        ['[command="#pin-folder"]:not([hidden]):not([disabled])']));
+
+    const directoryTree = await DirectoryTreePageObject.create(appId);
+    await directoryTree.waitForShortcutItemByLabel(directoryName);
+  }
+
+  /**
+   * Mounts crostini volume by clicking on the fake crostini root.
+   * @param appId Files app windowId.
+   * @param initialEntries List of initial entries to load in Crostini (defaults
+   *     to a basic entry set).
+   */
+  async mountCrostini(
+      appId: string,
+      initialEntries: TestEntryInfo[] = BASIC_CROSTINI_ENTRY_SET) {
+    const directoryTree = await DirectoryTreePageObject.create(appId);
+
+    // Add entries to crostini volume, but do not mount.
+    await addEntries(['crostini'], initialEntries);
+
+    // Linux files fake root is shown.
+    await directoryTree.waitForPlaceholderItemByType('crostini');
+
+    // Mount crostini, and ensure real root and files are shown.
+    await directoryTree.selectPlaceholderItemByType('crostini');
+    await directoryTree.waitForItemByType('crostini');
+    const files = TestEntryInfo.getExpectedRows(initialEntries);
+    await this.waitForFiles(appId, files);
+  }
+
+  /**
+   * Registers a GuestOS, mounts the volume, and populates it with tbe specified
+   * entries.
+   * @param appId Files app windowId.
+   * @param initialEntries List of initial entries to load in the volume.
+   */
+  async mountGuestOs(appId: string, initialEntries: TestEntryInfo[]) {
+    await sendTestMessage({
+      name: 'registerMountableGuest',
+      displayName: 'Bluejohn',
+      canMount: true,
+      vmType: 'bruschetta',
+    });
+    const directoryTree = await DirectoryTreePageObject.create(appId);
+
+    // Wait for the GuestOS fake root then click it.
+    await directoryTree.selectPlaceholderItemByType('bruschetta');
+
+    // Wait for the volume to get mounted.
+    await directoryTree.waitForItemByType('bruschetta');
+
+    // Add entries to GuestOS volume
+    await addEntries(['guest_os_0'], initialEntries);
+
+    // Ensure real root and files are shown.
+    const files = TestEntryInfo.getExpectedRows(initialEntries);
+    await this.waitForFiles(appId, files);
+  }
+
+  /**
+   * Returns true if the SinglePartitionFormat flag is on.
+   * @param appId Files app windowId.
+   */
+  async isSinglePartitionFormat(appId: string) {
+    const dialog =
+        await this.waitForElement(appId, ['files-format-dialog', 'cr-dialog']);
+    const flag = dialog.attributes['single-partition-format'] || '';
+    return !!flag;
+  }
+
+  /**
+   * Shows hidden files to facilitate tests again the .Trash directory.
+   */
+  async showHiddenFiles(appId: string, check: boolean = true) {
+    // Open the gear menu by clicking the gear button.
+    chrome.test.assertTrue(await this.callRemoteTestUtil(
+        'fakeMouseClick', appId, ['#gear-button']));
+
+    // Wait for menu to not be hidden.
+    await this.waitForElement(appId, '#gear-menu:not([hidden])');
+
+    // Wait for menu item to appear.
+    await this.waitForElement(
+        appId,
+        `#gear-menu-toggle-hidden-files:not([disabled])${
+            check ? ':not([checked])' : '[checked]'}`);
+
+    // Click the menu item.
+    await this.callRemoteTestUtil(
+        'fakeMouseClick', appId, ['#gear-menu-toggle-hidden-files']);
+  }
+
+  /**
+   * Sets the local user files policies to enable migration to `provider`.
+   * @param provider Where local files should be moved. One of
+   *     microsoft_onedrive, google_drive.
+   */
+  async setLocalFilesMigrationDestination(provider: string) {
+    // Set the destination first, otherwise migration can be complete
+    // immediately, if MyFiles are empty.
+    await sendTestMessage({
+      name: 'skyvault:setMigrationDestination',
+      provider: provider,
+    });
+    // Disable local storage - migration destination is ignored otherwise.
+    await sendTestMessage(
+        {name: 'skyvault:setLocalFilesEnabled', enabled: false});
   }
 }

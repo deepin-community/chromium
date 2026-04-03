@@ -4,8 +4,9 @@
 
 #include "chromeos/ash/services/cellular_setup/esim_profile.h"
 
+#include <algorithm>
+
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
@@ -24,7 +25,6 @@
 #include "chromeos/ash/services/cellular_setup/esim_manager.h"
 #include "chromeos/ash/services/cellular_setup/esim_mojo_utils.h"
 #include "chromeos/ash/services/cellular_setup/euicc.h"
-#include "chromeos/ash/services/cellular_setup/public/mojom/esim_manager.mojom-shared.h"
 #include "chromeos/ash/services/cellular_setup/public/mojom/esim_manager.mojom.h"
 #include "components/device_event_log/device_event_log.h"
 #include "components/user_manager/user_manager.h"
@@ -63,7 +63,7 @@ ESimProfile::InstallProfileCallback CreateTimedInstallProfileCallback(
         std::move(callback).Run(result);
         if (result != mojom::ProfileInstallResult::kSuccess)
           return;
-        UMA_HISTOGRAM_MEDIUM_TIMES(
+        DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES(
             "Network.Cellular.ESim.ProfileDownload.PendingProfile.Latency",
             base::Time::Now() - installation_start_time);
       },
@@ -463,7 +463,7 @@ bool ESimProfile::ProfileExistsOnEuicc() {
   HermesEuiccClient::Properties* euicc_properties =
       HermesEuiccClient::Get()->GetProperties(euicc_->path());
 
-  return base::Contains(euicc_properties->profiles().value(), path_);
+  return std::ranges::contains(euicc_properties->profiles().value(), path_);
 }
 
 bool ESimProfile::IsProfileInstalled() {

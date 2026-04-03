@@ -4,19 +4,26 @@
 
 #include "content/web_test/renderer/gamepad_controller.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <string>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
+#include "base/strings/utf_string_conversions.h"
 #include "content/public/renderer/render_frame.h"
+#include "device/gamepad/public/cpp/gamepad.h"
 #include "gin/arguments.h"
 #include "gin/handle.h"
 #include "gin/object_template_builder.h"
 #include "gin/wrappable.h"
 #include "mojo/public/cpp/system/platform_handle.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "v8/include/cppgc/allocation.h"
+#include "v8/include/v8-cppgc.h"
 #include "v8/include/v8.h"
 
 using device::Gamepad;
@@ -36,10 +43,14 @@ int64_t CurrentTimeInMicroseconds() {
 
 }  // namespace
 
-class GamepadControllerBindings
+class GamepadControllerBindings final
     : public gin::Wrappable<GamepadControllerBindings> {
  public:
-  static gin::WrapperInfo kWrapperInfo;
+  static constexpr gin::WrapperInfo kWrapperInfo = {
+      {gin::kEmbedderNativeGin},
+      gin::kGamepadControllerBindings};
+
+  const gin::WrapperInfo* wrapper_info() const override { return &kWrapperInfo; }
 
   GamepadControllerBindings(const GamepadControllerBindings&) = delete;
   GamepadControllerBindings& operator=(const GamepadControllerBindings&) =
@@ -48,11 +59,10 @@ class GamepadControllerBindings
   static void Install(base::WeakPtr<GamepadController> controller,
                       blink::WebLocalFrame* frame);
 
- private:
   explicit GamepadControllerBindings(
       base::WeakPtr<GamepadController> controller);
-  ~GamepadControllerBindings() override;
 
+ private:
   // gin::Wrappable.
   gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
       v8::Isolate* isolate) override;
@@ -60,7 +70,8 @@ class GamepadControllerBindings
   void Connect(int index);
   void DispatchConnected(int index);
   void Disconnect(int index);
-  void SetId(int index, const std::string& src);
+  void DispatchRawInputChanged(int index);
+  void SetId(int index, const std::u16string& src);
   void SetButtonCount(int index, int buttons);
   void SetButtonData(int index, int button, double data);
   void SetAxisCount(int index, int axes);
@@ -77,9 +88,6 @@ class GamepadControllerBindings
   base::WeakPtr<GamepadController> controller_;
 };
 
-gin::WrapperInfo GamepadControllerBindings::kWrapperInfo = {
-    gin::kEmbedderNativeGin};
-
 // static
 void GamepadControllerBindings::Install(
     base::WeakPtr<GamepadController> controller,
@@ -92,22 +100,18 @@ void GamepadControllerBindings::Install(
 
   v8::Context::Scope context_scope(context);
 
-  gin::Handle<GamepadControllerBindings> bindings =
-      gin::CreateHandle(isolate, new GamepadControllerBindings(controller));
-  if (bindings.IsEmpty())
-    return;
+  auto* bindings = cppgc::MakeGarbageCollected<GamepadControllerBindings>(
+      isolate->GetCppHeap()->GetAllocationHandle(), controller);
   v8::Local<v8::Object> global = context->Global();
   global
       ->Set(context, gin::StringToV8(isolate, "gamepadController"),
-            bindings.ToV8())
+            gin::ConvertToV8(isolate, bindings).ToLocalChecked())
       .Check();
 }
 
 GamepadControllerBindings::GamepadControllerBindings(
     base::WeakPtr<GamepadController> controller)
     : controller_(controller) {}
-
-GamepadControllerBindings::~GamepadControllerBindings() {}
 
 gin::ObjectTemplateBuilder GamepadControllerBindings::GetObjectTemplateBuilder(
     v8::Isolate* isolate) {
@@ -117,6 +121,8 @@ gin::ObjectTemplateBuilder GamepadControllerBindings::GetObjectTemplateBuilder(
       .SetMethod("dispatchConnected",
                  &GamepadControllerBindings::DispatchConnected)
       .SetMethod("disconnect", &GamepadControllerBindings::Disconnect)
+      .SetMethod("dispatchRawInputChanged",
+                 &GamepadControllerBindings::DispatchRawInputChanged)
       .SetMethod("setId", &GamepadControllerBindings::SetId)
       .SetMethod("setButtonCount", &GamepadControllerBindings::SetButtonCount)
       .SetMethod("setButtonData", &GamepadControllerBindings::SetButtonData)
@@ -145,7 +151,13 @@ void GamepadControllerBindings::Disconnect(int index) {
     controller_->Disconnect(index);
 }
 
-void GamepadControllerBindings::SetId(int index, const std::string& src) {
+void GamepadControllerBindings::DispatchRawInputChanged(int index) {
+  if (controller_) {
+    controller_->DispatchRawInputChanged(index);
+  }
+}
+
+void GamepadControllerBindings::SetId(int index, const std::u16string& src) {
   if (controller_)
     controller_->SetId(index, src);
 }
@@ -261,6 +273,14 @@ void GamepadController::MonitorImpl::DispatchDisconnected(
     observer_remote_->GamepadDisconnected(index, pad);
 }
 
+void GamepadController::MonitorImpl::DispatchRawInputChanged(
+    int index,
+    const device::Gamepad& pad) {
+  if (observer_remote_) {
+    observer_remote_->GamepadRawInputChanged(index, pad);
+  }
+}
+
 void GamepadController::MonitorImpl::Reset() {
   missed_dispatches_.reset();
 }
@@ -297,7 +317,7 @@ void GamepadController::Reset() {
   if (!gamepads_)
     return;  // Shared memory failed.
 
-  memset(gamepads_, 0, sizeof(*gamepads_));
+  gamepads_->data.items.fill(Gamepad());
   for (auto& monitor : monitors_)
     monitor->Reset();
 }
@@ -306,7 +326,7 @@ void GamepadController::Install(RenderFrame* frame) {
   if (!gamepads_)
     return;  // Shared memory failed.
 
-  frame->GetBrowserInterfaceBroker()->SetBinderForTesting(
+  frame->GetBrowserInterfaceBroker().SetBinderForTesting(
       device::mojom::GamepadMonitor::Name_,
       base::BindRepeating(&GamepadController::OnInterfaceRequest,
                           base::Unretained(this)));
@@ -377,16 +397,33 @@ void GamepadController::Disconnect(int index) {
   gamepads_->seqlock.WriteEnd();
 }
 
-void GamepadController::SetId(int index, const std::string& src) {
-  if (index < 0 || index >= static_cast<int>(Gamepads::kItemsLengthCap))
+void GamepadController::DispatchRawInputChanged(int index) {
+  if (index < 0 || index >= static_cast<int>(Gamepads::kItemsLengthCap)) {
     return;
-  const char* p = src.c_str();
+  }
+
   const int64_t now = CurrentTimeInMicroseconds();
   gamepads_->seqlock.WriteBegin();
   Gamepad& pad = gamepads_->data.items[index];
-  memset(pad.id, 0, sizeof(pad.id));
-  for (unsigned i = 0; *p && i < Gamepad::kIdLengthCap - 1; ++i)
-    pad.id[i] = *p++;
+  pad.timestamp = now;
+
+  for (auto& monitor : monitors_) {
+    monitor->DispatchRawInputChanged(index, pad);
+  }
+  gamepads_->seqlock.WriteEnd();
+}
+
+void GamepadController::SetId(int index, const std::u16string& u16str) {
+  if (index < 0 || index >= static_cast<int>(Gamepads::kItemsLengthCap))
+    return;
+  const int64_t now = CurrentTimeInMicroseconds();
+  gamepads_->seqlock.WriteBegin();
+  Gamepad& pad = gamepads_->data.items[index];
+  pad.id.fill(0);
+  for (size_t i = 0; i < std::min(u16str.length(), Gamepad::kIdLengthCap - 1);
+       ++i) {
+    pad.id[i] = u16str[i];
+  }
   pad.timestamp = now;
   gamepads_->seqlock.WriteEnd();
 }

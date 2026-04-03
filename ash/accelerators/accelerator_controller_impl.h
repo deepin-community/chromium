@@ -20,13 +20,15 @@
 #include "ash/accelerators/accelerator_table.h"
 #include "ash/accelerators/ash_accelerator_configuration.h"
 #include "ash/accelerators/exit_warning_handler.h"
+#include "ash/accelerators/suspend_state_machine.h"
 #include "ash/accelerators/tablet_volume_controller.h"
+#include "ash/accelerators/top_row_key_usage_recorder.h"
 #include "ash/accessibility/accessibility_controller.h"
 #include "ash/accessibility/ui/accessibility_confirmation_dialog.h"
 #include "ash/ash_export.h"
 #include "ash/public/cpp/accelerators.h"
+#include "ash/system/input_device_settings/input_device_settings_notification_controller.h"
 #include "base/files/file_path.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/timer/timer.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -41,7 +43,6 @@ namespace ash {
 
 struct AcceleratorData;
 class ExitWarningHandler;
-class DebugDelegate;
 
 // AcceleratorControllerImpl provides functions for registering or unregistering
 // global keyboard accelerators, which are handled earlier than any windows. It
@@ -53,6 +54,16 @@ class ASH_EXPORT AcceleratorControllerImpl
       public AshAcceleratorConfiguration::Observer,
       public AcceleratorPrefs::Observer {
  public:
+  // Used to record the keyboard type which triggers a screenshot action via the
+  // overview key. Do not reorder values of this enum.
+  enum class OverviewBasedScreenshotKeyboardType {
+    kNonChromeOSKeyboard,
+    kChromeOSKeyboardWithScreenshot,
+    kChromeOSKeyboardWithoutScreenshot,
+    kMinValue = kNonChromeOSKeyboard,
+    kMaxValue = kChromeOSKeyboardWithoutScreenshot,
+  };
+
   // TestApi is used for tests to get internal implementation details.
   class TestApi {
    public:
@@ -97,8 +108,7 @@ class ASH_EXPORT AcceleratorControllerImpl
     void SetCanHandleCapsLock(bool can_handle);
 
    private:
-    raw_ptr<AcceleratorControllerImpl, DanglingUntriaged>
-        controller_;  // Not owned.
+    raw_ptr<AcceleratorControllerImpl> controller_;  // Not owned.
   };
 
   explicit AcceleratorControllerImpl(AshAcceleratorConfiguration* config);
@@ -184,9 +194,6 @@ class ASH_EXPORT AcceleratorControllerImpl
     return accelerator_configuration_;
   }
 
-  // Sets |DebugDelegate| which is implemented by lacros-chrome.
-  void SetDebugDelegate(DebugDelegate* delegate);
-
  private:
   // A map for looking up actions from accelerators.
   using AcceleratorActionMap = ui::AcceleratorMap<AcceleratorAction>;
@@ -212,10 +219,6 @@ class ASH_EXPORT AcceleratorControllerImpl
   // data the action needs.
   void PerformAction(AcceleratorAction action,
                      const ui::Accelerator& accelerator);
-
-  // Performs |action| on |DebugDelegate|s if registered and debug accelerators
-  // are enabled.
-  void PerformDebugActionOnDelegateIfEnabled(AcceleratorAction action);
 
   // Returns whether performing |action| should consume the key event.
   bool ShouldActionConsumeKeyEvent(AcceleratorAction action);
@@ -247,6 +250,10 @@ class ASH_EXPORT AcceleratorControllerImpl
   std::unique_ptr<AcceleratorCapslockStateMachine> capslock_state_machine_;
   std::unique_ptr<AcceleratorShiftDisableCapslockStateMachine>
       shift_disable_state_machine_;
+  std::unique_ptr<SuspendStateMachine> suspend_state_machine_;
+
+  // Metrics recorders that listen to the input stream to emit metrics.
+  std::unique_ptr<TopRowKeyUsageRecorder> top_row_key_usage_recorder_;
 
   // Manages all accelerator mappings.
   raw_ptr<AshAcceleratorConfiguration> accelerator_configuration_;
@@ -288,9 +295,8 @@ class ASH_EXPORT AcceleratorControllerImpl
   // presses a volume key while setting the desired volume.
   base::DelayTimer output_volume_metric_delay_timer_;
 
-  // Please refer to the comment on |DebugInterfaceAsh| for the lifetime of this
-  // pointer.
-  raw_ptr<DebugDelegate> debug_delegate_ = nullptr;
+  std::unique_ptr<InputDeviceSettingsNotificationController>
+      notification_controller_;
 };
 
 }  // namespace ash

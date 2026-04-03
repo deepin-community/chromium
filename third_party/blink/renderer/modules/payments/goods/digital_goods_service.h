@@ -6,7 +6,6 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_PAYMENTS_GOODS_DIGITAL_GOODS_SERVICE_H_
 
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/mojom/digital_goods/digital_goods.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
@@ -30,13 +29,13 @@ class DigitalGoodsService final : public ScriptWrappable {
   ~DigitalGoodsService() override;
 
   // IDL Interface:
-  ScriptPromiseTyped<IDLSequence<ItemDetails>> getDetails(
+  ScriptPromise<IDLSequence<ItemDetails>> getDetails(
       ScriptState*,
       const Vector<String>& item_ids);
-  ScriptPromiseTyped<IDLSequence<PurchaseDetails>> listPurchases(ScriptState*);
-  ScriptPromiseTyped<IDLSequence<PurchaseDetails>> listPurchaseHistory(
-      ScriptState*);
-  ScriptPromise consume(ScriptState*, const String& purchase_token);
+  ScriptPromise<IDLSequence<PurchaseDetails>> listPurchases(ScriptState*);
+  ScriptPromise<IDLSequence<PurchaseDetails>> listPurchaseHistory(ScriptState*);
+  ScriptPromise<IDLUndefined> consume(ScriptState*,
+                                      const String& purchase_token);
 
   void Trace(Visitor* visitor) const override;
 

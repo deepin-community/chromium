@@ -19,8 +19,8 @@ import time
 import uuid
 
 import gclient_paths
-import reclient_metrics
-
+import ninja
+import siso
 
 THIS_DIR = os.path.dirname(__file__)
 RECLIENT_LOG_CLEANUP = os.path.join(THIS_DIR, 'reclient_log_cleanup.py')
@@ -139,19 +139,24 @@ def set_reproxy_metrics_flags(tool):
         RBE_metrics_project=chromium-reclient-metrics
         RBE_invocation_id=$AUTONINJA_BUILD_ID
         RBE_metrics_table=rbe_metrics.builds
-        RBE_metrics_labels=source=developer,tool={tool}
+        RBE_metrics_labels=\
+                source=developer,\
+                tool={tool},\
+                creds_cache_status={auth_status},\
+                creds_cache_mechanism={auth_mechanism},\
+                host={host}
         RBE_metrics_prefix=go.chromium.org
     """
     autoninja_id = os.environ.get("AUTONINJA_BUILD_ID")
     if autoninja_id is not None:
-        os.environ.setdefault("RBE_invocation_id",
-                              "%s/%s" % (get_hostname(), autoninja_id))
+        os.environ.setdefault("RBE_invocation_id", autoninja_id)
     os.environ.setdefault("RBE_metrics_project", "chromium-reclient-metrics")
     os.environ.setdefault("RBE_metrics_table", "rbe_metrics.builds")
     labels = "source=developer,tool=" + tool
     auth_status, auth_mechanism = auth_cache_status()
     labels += ",creds_cache_status=" + auth_status
     labels += ",creds_cache_mechanism=" + auth_mechanism
+    labels += ",host=" + get_hostname()
     os.environ.setdefault("RBE_metrics_labels", labels)
     os.environ.setdefault("RBE_metrics_prefix", "go.chromium.org")
 
@@ -170,7 +175,8 @@ def datetime_now():
 # Deletes the tree at dir if it exists.
 def rmtree_if_exists(rm_dir):
     if os.path.exists(rm_dir) and os.path.isdir(rm_dir):
-        shutil.rmtree(rm_dir)
+        shutil.rmtree(rm_dir, ignore_errors=True)
+
 
 def set_reproxy_path_flags(out_dir, make_dirs=True):
     """Helper to setup the logs and cache directories for reclient.
@@ -280,10 +286,33 @@ def set_win_defaults():
     # Reduce local resource fraction used to do local compile actions on
     # windows, to try and prevent machine saturation.
     os.environ.setdefault("RBE_local_resource_fraction", "0.05")
+    # Set execution strategy to remote_local_fallback while racing performance
+    # on windows is addressed.
+    os.environ.setdefault("RBE_exec_strategy", "remote_local_fallback")
+    # Turn off creds caching for windows, as luci-auth as credshelper shouldn't
+    # use it.
+    os.environ.setdefault("RBE_enable_creds_cache", "false")
+    # Extend timeouts on windows
+    os.environ.setdefault("RBE_exec_timeout","4m")
+    os.environ.setdefault("RBE_reclient_timeout","8m")
+
+
+def workspace_is_cog():
+    return sys.platform == "linux" and os.path.realpath(
+        os.getcwd()).startswith("/google/cog")
+
+
+# pylint: disable=line-too-long
+def reclient_setup_docs_url():
+    if sys.platform == "darwin":
+        return "https://chromium.googlesource.com/chromium/src/+/main/docs/mac_build_instructions.md#use-reclient"
+    if sys.platform.startswith("win"):
+        return "https://chromium.googlesource.com/chromium/src/+/main/docs/windows_build_instructions.md#use-reclient"
+    return "https://chromium.googlesource.com/chromium/src/+/main/docs/linux/build_instructions.md#use-reclient"
 
 
 @contextlib.contextmanager
-def build_context(argv, tool):
+def build_context(argv, tool, should_collect_logs=False):
     # If use_remoteexec is set, but the reclient binaries or configs don't
     # exist, display an error message and stop.  Otherwise, the build will
     # attempt to run with rewrapper wrapping actions, but will fail with
@@ -309,7 +338,7 @@ def build_context(argv, tool):
         yield 1
         return
 
-    if reclient_metrics.check_status(ninja_out):
+    if should_collect_logs:
         set_reproxy_metrics_flags(tool)
 
     if os.environ.get('RBE_instance', None):
@@ -318,6 +347,10 @@ def build_context(argv, tool):
 
     remote_disabled = os.environ.get('RBE_remote_disabled')
     if remote_disabled not in ('1', 't', 'T', 'true', 'TRUE', 'True'):
+        # If we are building inside a Cog workspace, racing is likely not a
+        # performance improvement, so we disable it by default.
+        if workspace_is_cog():
+            os.environ.setdefault("RBE_exec_strategy", "remote_local_fallback")
         set_racing_defaults()
         if sys.platform == "darwin":
             set_mac_defaults()
@@ -331,8 +364,13 @@ def build_context(argv, tool):
     reproxy_ret_code = start_reproxy(reclient_cfg, reclient_bin_dir)
     if os.environ.get('NINJA_SUMMARIZE_BUILD') == '1':
         elapsed = time.time() - start
-        print('%1.3f s to start reproxy' % elapsed)
+        print('%1.3fs to start reproxy' % elapsed)
     if reproxy_ret_code != 0:
+        print(f'''Failed to start reproxy!
+See above error message for details.
+Ensure you have completed the reproxy setup instructions:
+{reclient_setup_docs_url()}''',
+              file=sys.stderr)
         yield reproxy_ret_code
         return
     try:
@@ -342,4 +380,31 @@ def build_context(argv, tool):
         stop_reproxy(reclient_cfg, reclient_bin_dir)
         if os.environ.get('NINJA_SUMMARIZE_BUILD') == '1':
             elapsed = time.time() - start
-            print('%1.3f s to stop reproxy' % elapsed)
+            print('%1.3fs to stop reproxy' % elapsed)
+
+
+def run_ninja(ninja_cmd, should_collect_logs=False):
+    """Runs Ninja in build_context()."""
+    # TODO: crbug.com/345113094 - rename the `tool` label to `ninja`.
+    with build_context(ninja_cmd, "ninja_reclient",
+                       should_collect_logs) as ret_code:
+        if ret_code:
+            return ret_code
+        try:
+            return ninja.main(ninja_cmd)
+        except KeyboardInterrupt:
+            print("Shutting down reproxy...", file=sys.stderr)
+            return 1
+
+
+def run_siso(siso_cmd, should_collect_logs=False):
+    """Runs Siso in build_context()."""
+    # TODO: crbug.com/345113094 - rename the `autosiso` label to `siso`.
+    with build_context(siso_cmd, "autosiso", should_collect_logs) as ret_code:
+        if ret_code:
+            return ret_code
+        try:
+            return siso.main(siso_cmd)
+        except KeyboardInterrupt:
+            print("Shutting down reproxy...", file=sys.stderr)
+            return 1

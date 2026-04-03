@@ -28,7 +28,7 @@ void OnGotExtensionValue(GetExtensionKeyPermissionsServiceCallback callback,
     return;
   }
 
-  base::Value::List store_state_list;
+  base::ListValue store_state_list;
   if (value && value->is_list()) {
     store_state_list = std::move(*value).TakeList();
   } else if (value) {
@@ -54,7 +54,7 @@ void ExtensionKeyPermissionsServiceFactory::GetForBrowserContextAndExtension(
       extensions::ExtensionSystem::Get(context)->state_store();
 
   // Must not be nullptr since KeyPermissionsServiceFactory depends on
-  // ExtensionSystemFactory.
+  // ChromeExtensionSystemFactory.
   DCHECK(state_store);
 
   state_store->GetExtensionValue(

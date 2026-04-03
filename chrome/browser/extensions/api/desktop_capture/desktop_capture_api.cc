@@ -11,8 +11,11 @@
 #include "chrome/common/chrome_switches.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/buildflags/buildflags.h"
 #include "net/base/url_util.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -29,15 +32,17 @@ const char kDesktopCaptureApiTabUrlNotSecure[] =
     "URL scheme for the specified tab is not secure.";
 const char kTargetTabRequiredFromServiceWorker[] =
     "A target tab is required when called from a service worker context.";
+#if BUILDFLAG(IS_ANDROID)
+const char kAtLeastOneSourceTypeMustBeSpecified[] =
+    "At least one source type must be specified.";
+#endif
 }  // namespace
 
 DesktopCaptureChooseDesktopMediaFunction::
-    DesktopCaptureChooseDesktopMediaFunction() {
-}
+    DesktopCaptureChooseDesktopMediaFunction() = default;
 
 DesktopCaptureChooseDesktopMediaFunction::
-    ~DesktopCaptureChooseDesktopMediaFunction() {
-}
+    ~DesktopCaptureChooseDesktopMediaFunction() = default;
 
 ExtensionFunction::ResponseAction
 DesktopCaptureChooseDesktopMediaFunction::Run() {
@@ -48,11 +53,19 @@ DesktopCaptureChooseDesktopMediaFunction::Run() {
   DesktopCaptureRequestsRegistry::GetInstance()->AddRequest(source_process_id(),
                                                             request_id_, this);
 
-  mutable_args().erase(args().begin());
+  GetMutableArgs().erase(args().begin());
 
   std::optional<api::desktop_capture::ChooseDesktopMedia::Params> params =
       api::desktop_capture::ChooseDesktopMedia::Params::Create(args());
   EXTENSION_FUNCTION_VALIDATE(params);
+
+#if BUILDFLAG(IS_ANDROID)
+  // Android does not use DesktopMediaList so we validate sources here instead
+  // of in the media code.
+  if (!params->sources.size()) {
+    return RespondNow(Error(kAtLeastOneSourceTypeMustBeSpecified));
+  }
+#endif
 
   // |target_render_frame_host| is the RenderFrameHost for which the stream is
   // created, and will also be used to determine where to show the picker's UI.
@@ -99,8 +112,9 @@ DesktopCaptureChooseDesktopMediaFunction::Run() {
     target_render_frame_host = render_frame_host();
   }
 
-  if (!target_render_frame_host)
+  if (!target_render_frame_host) {
     return RespondNow(Error(kTargetTabRequiredFromServiceWorker));
+  }
 
   const bool exclude_system_audio =
       params->options &&
@@ -136,9 +150,9 @@ std::string DesktopCaptureChooseDesktopMediaFunction::GetExtensionTargetName()
 }
 
 DesktopCaptureCancelChooseDesktopMediaFunction::
-    DesktopCaptureCancelChooseDesktopMediaFunction() {}
+    DesktopCaptureCancelChooseDesktopMediaFunction() = default;
 
 DesktopCaptureCancelChooseDesktopMediaFunction::
-    ~DesktopCaptureCancelChooseDesktopMediaFunction() {}
+    ~DesktopCaptureCancelChooseDesktopMediaFunction() = default;
 
 }  // namespace extensions

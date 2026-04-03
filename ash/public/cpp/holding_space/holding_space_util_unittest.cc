@@ -52,7 +52,8 @@ std::unique_ptr<ui::OSExchangeData> CreateOSExchangeData(
         std::unordered_map<std::u16string, std::u16string>(
             {{u"fs/sources", file_system_sources}}),
         &pickle);
-    data->SetPickledData(ui::ClipboardFormatType::WebCustomDataType(), pickle);
+    data->SetPickledData(ui::ClipboardFormatType::DataTransferCustomType(),
+                         pickle);
   }
 
   if (!filenames.empty()) {
@@ -90,10 +91,10 @@ TEST_F(HoldingSpaceUtilAshTest, ExtractFilePaths) {
 
   // Configure the `client` to crack file system URLs.
   ON_CALL(client, CrackFileSystemUrl)
-      .WillByDefault(testing::Invoke([](const GURL& file_system_url) {
+      .WillByDefault([](const GURL& file_system_url) {
         return base::FilePath(base::StrCat(
             {"//path/to/", std::string(&file_system_url.spec().back())}));
-      }));
+      });
 
   // Case: Empty.
   data = CreateOSExchangeData(file_system_sources, filenames);
@@ -182,7 +183,7 @@ TEST_F(HoldingSpaceUtilTest, GetAllFileSystemTypes) {
         should_exist_in_all_types_set = true;
     }
 
-    EXPECT_EQ(base::Contains(all_types, type), should_exist_in_all_types_set);
+    EXPECT_EQ(all_types.contains(type), should_exist_in_all_types_set);
   }
 }
 
@@ -198,15 +199,9 @@ TEST_F(HoldingSpaceUtilTest, GetAllItemTypes) {
 
     switch (type) {
       case HoldingSpaceItem::Type::kArcDownload:
-      case HoldingSpaceItem::Type::kCameraAppPhoto:
-      case HoldingSpaceItem::Type::kCameraAppScanJpg:
-      case HoldingSpaceItem::Type::kCameraAppScanPdf:
-      case HoldingSpaceItem::Type::kCameraAppVideoGif:
-      case HoldingSpaceItem::Type::kCameraAppVideoMp4:
       case HoldingSpaceItem::Type::kDiagnosticsLog:
       case HoldingSpaceItem::Type::kDownload:
       case HoldingSpaceItem::Type::kDriveSuggestion:
-      case HoldingSpaceItem::Type::kLacrosDownload:
       case HoldingSpaceItem::Type::kLocalSuggestion:
       case HoldingSpaceItem::Type::kNearbyShare:
       case HoldingSpaceItem::Type::kPhoneHubCameraRoll:
@@ -220,7 +215,7 @@ TEST_F(HoldingSpaceUtilTest, GetAllItemTypes) {
         should_exist_in_all_types_set = true;
     }
 
-    EXPECT_EQ(base::Contains(all_types, type), should_exist_in_all_types_set);
+    EXPECT_EQ(all_types.contains(type), should_exist_in_all_types_set);
   }
 }
 
@@ -307,21 +302,6 @@ TEST_F(HoldingSpaceUtilTest, ItemTypeToString) {
       case HoldingSpaceItem::Type::kArcDownload:
         expected_string = "ArcDownload";
         break;
-      case HoldingSpaceItem::Type::kCameraAppPhoto:
-        expected_string = "CameraAppPhoto";
-        break;
-      case HoldingSpaceItem::Type::kCameraAppScanJpg:
-        expected_string = "CameraAppScanJpg";
-        break;
-      case HoldingSpaceItem::Type::kCameraAppScanPdf:
-        expected_string = "CameraAppScanPdf";
-        break;
-      case HoldingSpaceItem::Type::kCameraAppVideoGif:
-        expected_string = "CameraAppVideoGif";
-        break;
-      case HoldingSpaceItem::Type::kCameraAppVideoMp4:
-        expected_string = "CameraAppVideoMp4";
-        break;
       case HoldingSpaceItem::Type::kDiagnosticsLog:
         expected_string = "DiagnosticsLog";
         break;
@@ -330,9 +310,6 @@ TEST_F(HoldingSpaceUtilTest, ItemTypeToString) {
         break;
       case HoldingSpaceItem::Type::kDriveSuggestion:
         expected_string = "DriveSuggestion";
-        break;
-      case HoldingSpaceItem::Type::kLacrosDownload:
-        expected_string = "LacrosDownload";
         break;
       case HoldingSpaceItem::Type::kLocalSuggestion:
         expected_string = "LocalSuggestion";

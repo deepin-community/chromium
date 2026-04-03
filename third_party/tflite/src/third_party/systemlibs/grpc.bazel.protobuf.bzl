@@ -1,5 +1,7 @@
 """Utility functions for generating protobuf code."""
 
+load("@rules_proto//proto:defs.bzl", "ProtoInfo")
+
 _PROTO_EXTENSION = ".proto"
 _VIRTUAL_IMPORTS = "/_virtual_imports/"
 
@@ -161,7 +163,7 @@ def includes_from_deps(deps):
     return [
         file
         for src in deps
-        for file in src[ProtoInfo].transitive_imports.to_list()
+        for file in src[ProtoInfo].transitive_sources.to_list()
     ]
 
 def get_proto_arguments(protos, genfiles_dir_path):

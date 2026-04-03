@@ -5,9 +5,15 @@
 #ifndef UI_BASE_CLIPBOARD_CLIPBOARD_UTIL_WIN_H_
 #define UI_BASE_CLIPBOARD_CLIPBOARD_UTIL_WIN_H_
 
+#include <windows.h>
+
+#include <shellapi.h>
 #include <shlobj.h>
 #include <stddef.h>
+
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -15,9 +21,8 @@
 #include "base/component_export.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
+#include "ui/base/clipboard/clipboard_url_info.h"
 #include "ui/base/clipboard/file_info.h"
-
-class GURL;
 
 namespace ui {
 
@@ -30,6 +35,7 @@ namespace clipboard_util {
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD)
 bool HasUrl(IDataObject* data_object, bool convert_filenames);
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD) bool HasFilenames(IDataObject* data_object);
+COMPONENT_EXPORT(UI_BASE_CLIPBOARD) bool HasRealFiles(IDataObject* data_object);
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD)
 bool HasVirtualFilenames(IDataObject* data_object);
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD) bool HasPlainText(IDataObject* data_object);
@@ -41,29 +47,32 @@ COMPONENT_EXPORT(UI_BASE_CLIPBOARD) bool HasHtml(IDataObject* data_object);
 // Helper methods to extract information from an IDataObject.  These methods
 // return true if the requested data type is found in |data_object|.
 
-// Only returns true if url->is_valid() is true.
+// Returns true if any supported clipboard format produces at least one URL
+// entry.
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD)
-bool GetUrl(IDataObject* data_object,
-            GURL* url,
-            std::u16string* title,
-            bool convert_filenames);
+bool GetUrlInfos(IDataObject* data_object,
+                 std::vector<ClipboardUrlInfo>& url_infos,
+                 bool convert_filenames);
 // Only returns true if |*filenames| is not empty.
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD)
 bool GetFilenames(IDataObject* data_object,
                   std::vector<std::wstring>* filenames);
+
+// Returns filenames from the HDROP.
+COMPONENT_EXPORT(UI_BASE_CLIPBOARD)
+std::vector<std::wstring> GetFilenames(HDROP hdrop);
 
 // Creates a new STGMEDIUM object to hold files.
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD)
 STGMEDIUM CreateStorageForFileNames(const std::vector<FileInfo>& filenames);
 
 // Fills a vector of display names of "virtual files" in the data store, but
-// does not actually retrieve the file contents. Display names are assured to
-// be unique. Method is called on drag enter of the Chromium drop target, when
-// only the display names are needed. Method only returns true if |filenames|
-// is not empty.
+// does not actually retrieve the file contents. Display names are assured to be
+// unique. Method is called on drag enter of the Chromium drop target, when only
+// the display names are needed. If there are no display names, returns nullopt.
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD)
-bool GetVirtualFilenames(IDataObject* data_object,
-                         std::vector<base::FilePath>* filenames);
+std::optional<std::vector<base::FilePath>> GetVirtualFilenames(
+    IDataObject* data_object);
 
 // Retrieves "virtual file" contents via creation of intermediary temp files.
 // Method is called on dropping on the Chromium drop target. Since creating
@@ -72,7 +81,7 @@ bool GetVirtualFilenames(IDataObject* data_object,
 // file paths and display names. The method will invoke the callback with an
 // empty vector if there are no virtual files in the data object.
 //
-// TODO(https://crbug.com/951574): Implement virtual file extraction to
+// TODO(crbug.com/41452260): Implement virtual file extraction to
 // dynamically stream data to the renderer when File's bytes are actually
 // requested
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD)
@@ -98,20 +107,20 @@ bool GetFileContents(IDataObject* data_object,
 // to avoid polluting the ::RegisterClipboardFormat() namespace with random
 // strings from web content.
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD)
-bool GetWebCustomData(
+bool GetDataTransferCustomData(
     IDataObject* data_object,
     std::unordered_map<std::u16string, std::u16string>* custom_data);
 
 // Helper method for converting between MS CF_HTML format and plain
 // text/html.
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD)
-std::string HtmlToCFHtml(base::StringPiece html, base::StringPiece base_url);
+std::string HtmlToCFHtml(std::string_view html, std::string_view base_url);
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD)
-void CFHtmlToHtml(base::StringPiece cf_html,
+void CFHtmlToHtml(std::string_view cf_html,
                   std::string* html,
                   std::string* base_url);
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD)
-void CFHtmlExtractMetadata(base::StringPiece cf_html,
+void CFHtmlExtractMetadata(std::string_view cf_html,
                            std::string* base_url,
                            size_t* html_start,
                            size_t* fragment_start,

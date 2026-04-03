@@ -6,7 +6,6 @@ import itertools
 import re
 
 from recipe_engine import recipe_api
-from recipe_engine import util as recipe_util
 
 class GitApi(recipe_api.RecipeApi):
   _GIT_HASH_RE = re.compile('[0-9a-f]{40}', re.IGNORECASE)
@@ -21,7 +20,7 @@ class GitApi(recipe_api.RecipeApi):
     options = kwargs.pop('git_config_options', {})
     for k, v in sorted(options.items()):
       git_cmd.extend(['-c', '%s=%s' % (k, v)])
-    with self.m.context(cwd=(self.m.context.cwd or self.m.path['checkout'])):
+    with self.m.context(cwd=(self.m.context.cwd or self.m.path.checkout_dir)):
       return self.m.step(name, git_cmd + list(args), infra_step=infra_step,
                           **kwargs)
 
@@ -98,7 +97,7 @@ class GitApi(recipe_api.RecipeApi):
       return result
     except Exception as ex:
       if step_result:
-        step_result.presentation.logs['exception'] = recipe_util.format_ex(ex)
+        step_result.presentation.logs['exception'] = repr(ex)
         step_result.presentation.status = self.m.step.WARNING
       if raise_on_failure:
         raise recipe_api.InfraFailure('count-objects failed: %s' % ex)
@@ -123,7 +122,9 @@ class GitApi(recipe_api.RecipeApi):
                use_git_cache=False,
                progress=True,
                tags=False,
-               depth=None):
+               depth=None,
+               no_auto_gc=False,
+               run_maintenance=False):
     """Performs a full git checkout and returns sha1 of checked out revision.
 
     Args:
@@ -159,6 +160,8 @@ class GitApi(recipe_api.RecipeApi):
       * tags (bool): Also fetch tags.
       * depth (int): if > 0, limit fetching to the given number of commits from
         the tips of the remote tree.
+      * no_auto_gc: whether to turn off the automatic garbage collection.
+      * run_maintenance: run additional maintenance step to optimize repo data.
 
     Returns: If the checkout was successful, this returns the commit hash of
       the checked-out-repo. Otherwise this returns None.
@@ -178,10 +181,10 @@ class GitApi(recipe_api.RecipeApi):
       # ex: ssh://host:repo/foobar/.git
       dir_path = dir_path or dir_path.rsplit('/', 1)[-1]
 
-      dir_path = self.m.path['start_dir'].join(dir_path)
+      dir_path = self.m.path.start_dir / dir_path
 
     if 'checkout' not in self.m.path:
-      self.m.path['checkout'] = dir_path
+      self.m.path.checkout_dir = dir_path
 
     git_setup_args = ['--path', dir_path, '--url', url]
 
@@ -203,12 +206,12 @@ class GitApi(recipe_api.RecipeApi):
       if use_git_cache:
         with self.m.context(env={'PATH': path}):
           self('cache', 'populate', '-c',
-               self.m.path['cache'].join('git'), url,
+               self.m.path.cache_dir / 'git', url,
                name='populate cache',
                raise_on_failure=raise_on_failure)
           dir_cmd = self(
               'cache', 'exists', '--quiet',
-              '--cache-dir', self.m.path['cache'].join('git'), url,
+              '--cache-dir', self.m.path.cache_dir / 'git', url,
               raise_on_failure=raise_on_failure,
               stdout=self.m.raw_io.output(),
               step_test_data=lambda:
@@ -264,6 +267,9 @@ class GitApi(recipe_api.RecipeApi):
         assert isinstance(depth, int)
         fetch_args += ['--depth', depth]
 
+      if no_auto_gc:
+        fetch_args.append('--no-auto-gc')
+
       fetch_step_name = 'git fetch%s' % step_suffix
       if display_fetch_size:
         count_objects_before_fetch = self.count_objects(
@@ -281,6 +287,20 @@ class GitApi(recipe_api.RecipeApi):
             previous_result=count_objects_before_fetch,
             step_test_data=lambda: self.m.raw_io.test_api.stream_output(
                 self.test_api.count_objects_output(2000)))
+
+      if run_maintenance:
+        self('maintenance',
+             'run',
+             '--task',
+             'incremental-repack',
+             '--task',
+             'commit-graph',
+             '--task',
+             'loose-objects',
+             '--task',
+             'pack-refs',
+             name='git maintenance%s' % step_suffix,
+             raise_on_failure=False)
 
       if file_name:
         self('checkout', '-f', checkout_ref, '--', file_name,
@@ -468,3 +488,33 @@ class GitApi(recipe_api.RecipeApi):
                           stdout=self.m.raw_io.output_text(add_output_log=True),
                           step_test_data=step_test_data)
     return [l.strip() for l in step_result.stdout.strip().splitlines()]
+
+  def ls_remote(self, url, ref, name=None, **kwargs):
+    """Request the head revision for a given ref using ls-remote. Raise a
+    StepFailure if the ref does not exist, or more than one ref was found.
+
+    Args:
+      * url (str): url of remote repo to use as upstream.
+      * ref (str): ref to query head revision.
+      * name (str):  Name of the infra step.
+
+    Returns: A git revision.
+    """
+    cwd = self.m.context.cwd or self.m.path.start_dir
+    name = name or f'Retrieve revision for {ref}'
+    cmd = ['ls-remote', url, ref]
+
+    with self.m.context(cwd):
+      result = self(*cmd,
+                    name=name,
+                    stdout=self.m.raw_io.output_text(),
+                    **kwargs)
+      lines = result.stdout.strip().splitlines()
+
+    if len(lines) > 1:
+      raise self.m.step.StepFailure(f'Multiple remote refs found for {ref}')
+
+    if not lines:
+      raise self.m.step.StepFailure(f'No remote ref found for {ref}')
+
+    return lines[0].split('\t')[0]

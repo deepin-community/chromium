@@ -124,7 +124,7 @@ class TestNetworkChangeNotifier : public net::NetworkChangeNotifier {
   TestNetworkChangeNotifier& operator=(const TestNetworkChangeNotifier&) =
       delete;
 
-  ~TestNetworkChangeNotifier() override {}
+  ~TestNetworkChangeNotifier() override = default;
 
   net::NetworkChangeNotifier::ConnectionType GetCurrentConnectionType()
       const override {
@@ -149,7 +149,7 @@ class TestURLLoaderClient : public network::mojom::URLLoaderClient {
     virtual void OnComplete() = 0;
 
    protected:
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
   };
 
   explicit TestURLLoaderClient(Observer* observer) : observer_(observer) {}
@@ -157,7 +157,7 @@ class TestURLLoaderClient : public network::mojom::URLLoaderClient {
   TestURLLoaderClient(const TestURLLoaderClient&) = delete;
   TestURLLoaderClient& operator=(const TestURLLoaderClient&) = delete;
 
-  ~TestURLLoaderClient() override {}
+  ~TestURLLoaderClient() override = default;
 
   void OnReceiveEarlyHints(network::mojom::EarlyHintsPtr early_hints) override {
   }
@@ -290,7 +290,7 @@ class OfflinePageRequestHandlerTest : public testing::Test {
   OfflinePageRequestHandlerTest& operator=(
       const OfflinePageRequestHandlerTest&) = delete;
 
-  ~OfflinePageRequestHandlerTest() override {}
+  ~OfflinePageRequestHandlerTest() override = default;
 
   void SetUp() override;
   void TearDown() override;
@@ -370,7 +370,7 @@ class OfflinePageRequestHandlerTest : public testing::Test {
   static std::unique_ptr<KeyedService> BuildTestOfflinePageModel(
       SimpleFactoryKey* key);
 
-  // TODO(https://crbug.com/809610): The static members below will be removed
+  // TODO(crbug.com/40561648): The static members below will be removed
   // once the reference to BuildTestOfflinePageModel in SetUp is converted to a
   // base::OnceCallback.
   static base::FilePath private_archives_dir_;
@@ -1211,7 +1211,7 @@ TEST_F(OfflinePageRequestHandlerTest, TinyFile) {
   std::string expected_data("hello world");
   base::FilePath temp_file_path = CreateFileWithContent(expected_data);
   ArchiveValidator archive_validator;
-  archive_validator.Update(expected_data.c_str(), expected_data.length());
+  archive_validator.Update(expected_data);
   std::string expected_digest = archive_validator.Finish();
   int expected_size = expected_data.length();
 
@@ -1231,7 +1231,7 @@ TEST_F(OfflinePageRequestHandlerTest, SmallFile) {
   std::string expected_data(MakeContentOfSize(2 * 1024));
   base::FilePath temp_file_path = CreateFileWithContent(expected_data);
   ArchiveValidator archive_validator;
-  archive_validator.Update(expected_data.c_str(), expected_data.length());
+  archive_validator.Update(expected_data);
   std::string expected_digest = archive_validator.Finish();
   int expected_size = expected_data.length();
 
@@ -1251,7 +1251,7 @@ TEST_F(OfflinePageRequestHandlerTest, BigFile) {
   std::string expected_data(MakeContentOfSize(3 * 1024 * 1024));
   base::FilePath temp_file_path = CreateFileWithContent(expected_data);
   ArchiveValidator archive_validator;
-  archive_validator.Update(expected_data.c_str(), expected_data.length());
+  archive_validator.Update(expected_data);
   std::string expected_digest = archive_validator.Finish();
   int expected_size = expected_data.length();
 
@@ -1270,7 +1270,7 @@ TEST_F(OfflinePageRequestHandlerTest, LoadFromFileUrlIntent) {
 
   std::string expected_data(MakeContentOfSize(2 * 1024));
   ArchiveValidator archive_validator;
-  archive_validator.Update(expected_data.c_str(), expected_data.length());
+  archive_validator.Update(expected_data);
   std::string expected_digest = archive_validator.Finish();
   int expected_size = expected_data.length();
 
@@ -1305,7 +1305,7 @@ TEST_F(OfflinePageRequestHandlerTest, IntentFileNotFound) {
 
   std::string expected_data(MakeContentOfSize(2 * 1024));
   ArchiveValidator archive_validator;
-  archive_validator.Update(expected_data.c_str(), expected_data.length());
+  archive_validator.Update(expected_data);
   std::string expected_digest = archive_validator.Finish();
   int expected_size = expected_data.length();
 
@@ -1342,7 +1342,7 @@ TEST_F(OfflinePageRequestHandlerTest, IntentFileModifiedInTheMiddle) {
 
   std::string expected_data(MakeContentOfSize(2 * 1024));
   ArchiveValidator archive_validator;
-  archive_validator.Update(expected_data.c_str(), expected_data.length());
+  archive_validator.Update(expected_data);
   std::string expected_digest = archive_validator.Finish();
   int expected_size = expected_data.length();
 
@@ -1380,7 +1380,7 @@ TEST_F(OfflinePageRequestHandlerTest, IntentFileModifiedWithMoreDataAppended) {
 
   std::string expected_data(MakeContentOfSize(2 * 1024));
   ArchiveValidator archive_validator;
-  archive_validator.Update(expected_data.c_str(), expected_data.length());
+  archive_validator.Update(expected_data);
   std::string expected_digest = archive_validator.Finish();
   int expected_size = expected_data.length();
 

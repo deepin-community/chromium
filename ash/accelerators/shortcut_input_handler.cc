@@ -9,6 +9,7 @@
 #include "ash/public/mojom/input_device_settings.mojom.h"
 #include "ash/shell.h"
 #include "base/strings/utf_string_conversions.h"
+#include "ui/base/accelerators/ash/quick_insert_event_property.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/dom/dom_code.h"
@@ -22,7 +23,30 @@ namespace {
 
 constexpr int kKeyboardModifierFlags = ui::EF_CONTROL_DOWN |
                                        ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN |
-                                       ui::EF_ALT_DOWN;
+                                       ui::EF_ALT_DOWN | ui::EF_FUNCTION_DOWN;
+
+ui::KeyboardCode RetrieveKeyCode(const ui::KeyEvent& event) {
+  // Remap positional keys in the current layout to the corresponding US layout
+  // KeyboardCode.
+  ui::KeyboardCode key_code =
+      ui::KeycodeConverter::MapPositionalDomCodeToUSShortcutKey(
+          event.code(), event.key_code());
+  if (key_code == ui::VKEY_UNKNOWN) {
+    key_code = event.key_code();
+  }
+  // TODO(b/327436148): Fix display mirror icon
+  if (key_code == ui::VKEY_UNKNOWN &&
+      event.code() == ui::DomCode::SHOW_ALL_WINDOWS) {
+    // Show all windows is through VKEY_MEDIA_LAUNCH_APP1.
+    key_code = ui::VKEY_MEDIA_LAUNCH_APP1;
+  }
+
+  if (ui::HasQuickInsertProperty(event)) {
+    key_code = ui::VKEY_QUICK_INSERT;
+  }
+
+  return key_code;
+}
 
 }  // namespace
 
@@ -39,10 +63,9 @@ ShortcutInputHandler::~ShortcutInputHandler() {
 
 void ShortcutInputHandler::Initialize() {
   CHECK(Shell::Get());
-  if (!features::IsPeripheralCustomizationEnabled() &&
-      !::features::IsShortcutCustomizationEnabled()) {
+  if (!features::IsPeripheralCustomizationEnabled()) {
     LOG(ERROR) << "ShortcutInputHandler can only be initialized if "
-               << "shortcut or peripherals customization flags are enabled.";
+               << "peripherals customization flag is enabled.";
     return;
   }
 
@@ -63,20 +86,12 @@ void ShortcutInputHandler::OnKeyEvent(ui::KeyEvent* event) {
     return;
   }
 
-  // Remap positional keys in the current layout to the corresponding US layout
-  // KeyboardCode.
-  ui::KeyboardCode key_code =
-      ui::KeycodeConverter::MapPositionalDomCodeToUSShortcutKey(
-          event->code(), event->key_code());
-  if (key_code == ui::VKEY_UNKNOWN) {
-    key_code = event->key_code();
-  }
-
+  const ui::KeyboardCode key_code = RetrieveKeyCode(*event);
   mojom::KeyEvent key_event(key_code, static_cast<int>(event->code()),
                             static_cast<int>(event->GetDomKey()),
                             event->flags() & kKeyboardModifierFlags,
                             base::UTF16ToUTF8(GetKeyDisplay(key_code)));
-  if (event->type() == ui::ET_KEY_PRESSED) {
+  if (event->type() == ui::EventType::kKeyPressed) {
     for (auto& observer : observers_) {
       observer.OnShortcutInputEventPressed(key_event);
     }
@@ -97,20 +112,12 @@ void ShortcutInputHandler::OnPrerewriteKeyInputEvent(
     return;
   }
 
-  // Remap positional keys in the current layout to the corresponding US layout
-  // KeyboardCode.
-  ui::KeyboardCode key_code =
-      ui::KeycodeConverter::MapPositionalDomCodeToUSShortcutKey(
-          event.code(), event.key_code());
-  if (key_code == ui::VKEY_UNKNOWN) {
-    key_code = event.key_code();
-  }
-
+  const ui::KeyboardCode key_code = RetrieveKeyCode(event);
   mojom::KeyEvent key_event(key_code, static_cast<int>(event.code()),
                             static_cast<int>(event.GetDomKey()),
                             event.flags() & kKeyboardModifierFlags,
                             base::UTF16ToUTF8(GetKeyDisplay(key_code)));
-  if (event.type() == ui::ET_KEY_PRESSED) {
+  if (event.type() == ui::EventType::kKeyPressed) {
     for (auto& observer : observers_) {
       observer.OnPrerewrittenShortcutInputEventPressed(key_event);
     }

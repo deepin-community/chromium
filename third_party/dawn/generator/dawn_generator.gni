@@ -86,32 +86,33 @@ template("dawn_json_generator") {
       rebase_path("${dawn_root}/src/dawn/dawn.json", root_build_dir),
       "--wire-json",
       rebase_path("${dawn_root}/src/dawn/dawn_wire.json", root_build_dir),
+      "--kotlin-json",
+      rebase_path("${dawn_root}/src/dawn/dawn_kotlin.json", root_build_dir),
       "--targets",
       invoker.target,
+      "--webgpu-kt-docs",
+      rebase_path("${dawn_root}/src/dawn/webgpu_kt_docs.json", root_build_dir),
+
+      # IMPORTANT: If adding a new file here, add it to `inputs`, too. See
+      # crbug.com/466134210 for more context.
     ]
 
-    forward_variables_from(invoker, "*", [ "target" ])
-  }
-}
-
-template("dawn_json_lpm_generator") {
-  dawn_generator(target_name) {
-    script = "${dawn_root}/generator/dawn_json_generator.py"
-
-    # The base arguments for the generator: from this dawn.json, generate this
-    # target using templates in this directory.
-    args = [
-      "--dawn-json",
-      rebase_path("${dawn_root}/src/dawn/dawn.json", root_build_dir),
-      "--wire-json",
-      rebase_path("${dawn_root}/src/dawn/dawn_wire.json", root_build_dir),
-      "--lpm-json",
-      rebase_path("${dawn_root}/src/dawn/fuzzers/lpmfuzz/dawn_lpm.json",
-                  root_build_dir),
-      "--targets",
-      invoker.target,
+    inputs = [
+      "${dawn_root}/src/dawn/dawn.json",
+      "${dawn_root}/src/dawn/dawn_wire.json",
+      "${dawn_root}/src/dawn/dawn_kotlin.json",
+      "${dawn_root}/third_party/webgpu-headers/src/webgpu.json",
     ]
 
-    forward_variables_from(invoker, "*", [ "target" ])
+    forward_variables_from(invoker,
+                           "*",
+                           [
+                             "target",
+                             "inputs",
+                           ])
+
+    if (defined(invoker.inputs)) {
+      inputs += invoker.inputs
+    }
   }
 }

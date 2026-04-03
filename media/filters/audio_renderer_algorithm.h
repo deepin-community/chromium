@@ -27,6 +27,7 @@
 #include <optional>
 #include <vector>
 
+#include "base/containers/heap_array.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
@@ -67,7 +68,7 @@ class MEDIA_EXPORT AudioRendererAlgorithm {
   // mask changes.
   //
   // E.g., If |channel_mask| is [true, false] only the first channel will be
-  // used to construct the playback rate adapated signal. This is useful if
+  // used to construct the playback rate adapted signal. This is useful if
   // channel upmixing has been performed prior to this point.
   void SetChannelMask(std::vector<bool> channel_mask);
 
@@ -140,12 +141,21 @@ class MEDIA_EXPORT AudioRendererAlgorithm {
   // correspond to the audio input (some samples may be duplicated or skipped).
   double DelayInFrames(double playback_rate) const;
 
+  // Returns the timestamp of the first AudioBuffer in `audio_buffer_` if any
+  // buffers exist.
+  std::optional<base::TimeDelta> FrontTimestamp() const;
+
   // Returns the samples per second for this audio stream.
   int samples_per_second() const { return samples_per_second_; }
 
   std::vector<bool> channel_mask_for_testing() { return channel_mask_; }
 
   FillBufferMode last_mode_for_testing() { return last_mode_; }
+
+  // WSOLA is a non-linear operation, so in order for AudioClock to be correct
+  // we need to expose the actual rate of input frames consumed. This is updated
+  // after every call to FillBuffer().
+  double effective_playback_rate() const { return effective_playback_rate_; }
 
  private:
   FillBufferMode ChooseBufferMode(double playback_rate);
@@ -304,11 +314,11 @@ class MEDIA_EXPORT AudioRendererAlgorithm {
   std::unique_ptr<AudioBus> wsola_output_;
 
   // Overlap-and-add window.
-  std::unique_ptr<float[]> ola_window_;
+  base::HeapArray<float> ola_window_;
 
   // Transition window, used to update |optimal_block_| by a weighted sum of
   // |optimal_block_| and |target_block_|.
-  std::unique_ptr<float[]> transition_window_;
+  base::HeapArray<float> transition_window_;
 
   // Auxiliary variables to avoid allocation in every iteration.
 
@@ -335,6 +345,8 @@ class MEDIA_EXPORT AudioRendererAlgorithm {
   // The initial and maximum capacity calculated by Initialize().
   int64_t initial_capacity_;
   int64_t max_capacity_;
+
+  double effective_playback_rate_ = 0;
 
   FillBufferMode last_mode_ = FillBufferMode::kPassthrough;
 };

@@ -6,18 +6,20 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_pref_names.h"
+#include "chrome/browser/ash/bruschetta/bruschetta_service.h"
+#include "chrome/browser/ash/bruschetta/bruschetta_service_factory.h"
 #include "chrome/browser/ash/guest_os/guest_id.h"
 #include "chrome/browser/ash/guest_os/guest_os_pref_names.h"
-#include "chrome/browser/ash/guest_os/virtual_machines/virtual_machines_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/experiences/guest_os/virtual_machines/virtual_machines_util.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace bruschetta {
 
 namespace {
-std::optional<const base::Value::Dict*> GetConfigWithEnabledLevel(
+std::optional<const base::DictValue*> GetConfigWithEnabledLevel(
     const Profile* profile,
     const std::string& config_id,
     prefs::PolicyEnabledState enabled_level) {
@@ -48,19 +50,25 @@ const char kUefiDlc[] = "edk2-ovmf-dlc";
 
 const char kBruschettaVmName[] = "bru";
 
-const char* BruschettaResultString(const BruschettaResult res) {
-#define ENTRY(name)            \
-  case BruschettaResult::name: \
-    return #name
+const std::string BruschettaResultString(const BruschettaResult res) {
   switch (res) {
-    ENTRY(kUnknown);
-    ENTRY(kSuccess);
-    ENTRY(kDlcInstallError);
-    ENTRY(kStartVmFailed);
-    ENTRY(kTimeout);
-    ENTRY(kForbiddenByPolicy);
+    case BruschettaResult::kUnknown:
+      return l10n_util::GetStringUTF8(IDS_BRUSCHETTA_RESULT_UNKNOWN);
+    case BruschettaResult::kSuccess:
+      return l10n_util::GetStringUTF8(IDS_BRUSCHETTA_RESULT_SUCCESS);
+    case BruschettaResult::kDlcInstallError:
+      return l10n_util::GetStringUTF8(IDS_BRUSCHETTA_RESULT_DLC_INSTALL_ERROR);
+    case BruschettaResult::kStartVmFailed:
+      return l10n_util::GetStringUTF8(IDS_BRUSCHETTA_RESULT_START_VM_FAILED);
+    case BruschettaResult::kTimeout:
+      return l10n_util::GetStringUTF8(IDS_BRUSCHETTA_RESULT_TIMEOUT);
+    case BruschettaResult::kForbiddenByPolicy:
+      return l10n_util::GetStringUTF8(
+          IDS_BRUSCHETTA_RESULT_FORBIDDEN_BY_POLICY);
+    case BruschettaResult::kConciergeUnavailable:
+      return l10n_util::GetStringUTF8(
+          IDS_BRUSCHETTA_RESULT_CONCIERGE_UNAVAILABLE);
   }
-#undef ENTRY
   return "unknown code";
 }
 
@@ -73,7 +81,7 @@ guest_os::GuestId MakeBruschettaId(std::string vm_name) {
                            "penguin"};
 }
 
-std::optional<const base::Value::Dict*> GetRunnableConfig(
+std::optional<const base::DictValue*> GetRunnableConfig(
     const Profile* profile,
     const std::string& config_id) {
   return GetConfigWithEnabledLevel(profile, config_id,
@@ -84,7 +92,7 @@ base::FilePath BruschettaChromeOSBaseDirectory() {
   return base::FilePath("/mnt/shared");
 }
 
-std::optional<const base::Value::Dict*> GetInstallableConfig(
+std::optional<const base::DictValue*> GetInstallableConfig(
     const Profile* profile,
     const std::string& config_id) {
   return GetConfigWithEnabledLevel(profile, config_id,
@@ -96,9 +104,9 @@ bool HasInstallableConfig(const Profile* profile,
   return GetInstallableConfig(profile, config_id).has_value();
 }
 
-base::flat_map<std::string, base::Value::Dict> GetInstallableConfigs(
+base::flat_map<std::string, base::DictValue> GetInstallableConfigs(
     const Profile* profile) {
-  base::flat_map<std::string, base::Value::Dict> ret;
+  base::flat_map<std::string, base::DictValue> ret;
   for (auto it :
        profile->GetPrefs()->GetDict(prefs::kBruschettaVMConfiguration)) {
     if (HasInstallableConfig(profile, it.first)) {
@@ -151,7 +159,7 @@ std::string GetVmUsername(const Profile* profile) {
   return username.substr(0, username.find("@"));
 }
 
-std::optional<const base::Value::Dict*> GetConfigForGuest(
+std::optional<const base::DictValue*> GetConfigForGuest(
     Profile* profile,
     const guest_os::GuestId& guest_id,
     prefs::PolicyEnabledState enabled_level) {
@@ -188,7 +196,7 @@ std::u16string GetOverallVmName(Profile* profile) {
       bruschetta::GetInstallableConfigs(profile).extract();
   if (!configs.empty()) {
     SortInstallableConfigs(&configs);
-    const base::Value::Dict& first_vm = configs[0].second;
+    const base::DictValue& first_vm = configs[0].second;
     const auto* name = first_vm.FindString(prefs::kPolicyNameKey);
     if (name) {
       return base::UTF8ToUTF16(*name);
@@ -224,6 +232,15 @@ std::string GetDisplayName(Profile* profile, guest_os::GuestId guest) {
   // <vm_name>:<container_name>, but container_name isn't meaningful for us
   // so just use the vm_name instead.
   return guest.vm_name;
+}
+
+bool IsBruschettaRunning(Profile* profile) {
+  auto* service = bruschetta::BruschettaServiceFactory::GetForProfile(profile);
+  return service && service->IsVmRunning(kBruschettaVmName);
+}
+
+std::string GetBruschettaDisplayName(Profile* profile) {
+  return GetDisplayName(profile, GetBruschettaAlphaId());
 }
 
 }  // namespace bruschetta

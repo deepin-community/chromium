@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -58,7 +58,7 @@ std::string GetErrorNameForShillError(const std::string& shill_error_name) {
 
 void GetPropertiesCallback(const std::string& device_path,
                            network_handler::ResultCallback callback,
-                           std::optional<base::Value::Dict> result) {
+                           std::optional<base::DictValue> result) {
   if (!result) {
     NET_LOG(ERROR) << "GetProperties failed: " << NetworkPathId(device_path);
     std::move(callback).Run(device_path, std::nullopt);
@@ -143,7 +143,7 @@ void NetworkDeviceHandlerImpl::SetDeviceProperty(
       shill::kCellularPolicyAllowRoamingProperty};
 
   for (size_t i = 0; i < std::size(blocked_properties); ++i) {
-    if (property_name == blocked_properties[i]) {
+    if (property_name == UNSAFE_TODO(blocked_properties[i])) {
       InvokeErrorCallback(
           device_path, std::move(error_callback),
           "SetDeviceProperty called on blocked property " + property_name);
@@ -309,9 +309,7 @@ void NetworkDeviceHandlerImpl::DeviceListChanged() {
   ApplyCellularAllowRoamingToShill();
   ApplyMACAddressRandomizationToShill();
   ApplyUsbEthernetMacAddressSourceToShill();
-  ApplyUseAttachApnToShill();
   ApplyWakeOnWifiAllowedToShill();
-  ApplyPasspointInterworkingSelectEnabledToShill();
 }
 
 void NetworkDeviceHandlerImpl::DevicePropertiesUpdated(
@@ -379,7 +377,7 @@ void NetworkDeviceHandlerImpl::HandleWifiFeatureSupportedProperty(
     std::string support_property_name,
     WifiFeatureSupport* feature_support_to_set,
     const std::string& device_path,
-    std::optional<base::Value::Dict> properties) {
+    std::optional<base::DictValue> properties) {
   if (!properties) {
     return;
   }
@@ -421,18 +419,6 @@ void NetworkDeviceHandlerImpl::ApplyWakeOnWifiAllowedToShill() {
       shill::kWakeOnWiFiSupportedProperty, &wake_on_wifi_supported_);
 }
 
-void NetworkDeviceHandlerImpl::
-    ApplyPasspointInterworkingSelectEnabledToShill() {
-  // Get the setting from feature flags.
-  passpoint_allowed_ =
-      base::FeatureList::IsEnabled(features::kPasspointARCSupport);
-  // Passpoint is supported on all WiFi devices.
-  passpoint_supported_ = WifiFeatureSupport::SUPPORTED;
-  ApplyWifiFeatureToShillIfSupported(
-      shill::kPasspointInterworkingSelectEnabledProperty, passpoint_allowed_,
-      /*support_property_name=*/"", &passpoint_supported_);
-}
-
 void NetworkDeviceHandlerImpl::ApplyUsbEthernetMacAddressSourceToShill() {
   // Do nothing else if MAC address source is not specified yet.
   if (usb_ethernet_mac_address_source_.empty()) {
@@ -467,25 +453,6 @@ void NetworkDeviceHandlerImpl::ApplyUsbEthernetMacAddressSourceToShill() {
           usb_ethernet_mac_address_source_, network_handler::ErrorCallback()));
 }
 
-void NetworkDeviceHandlerImpl::ApplyUseAttachApnToShill() {
-  NetworkStateHandler::DeviceStateList list;
-  network_state_handler_->GetDeviceListByType(NetworkTypePattern::Cellular(),
-                                              &list);
-  if (list.empty()) {
-    NET_LOG(DEBUG) << "No cellular device available.";
-    return;
-  }
-  for (NetworkStateHandler::DeviceStateList::const_iterator it = list.begin();
-       it != list.end(); ++it) {
-    const DeviceState* device_state = *it;
-
-    SetDevicePropertyInternal(device_state->path(),
-                              shill::kUseAttachAPNProperty,
-                              /*value=*/base::Value(true), base::DoNothing(),
-                              network_handler::ErrorCallback());
-  }
-}
-
 void NetworkDeviceHandlerImpl::OnSetUsbEthernetMacAddressSourceError(
     const std::string& device_path,
     const std::string& device_mac_address,
@@ -507,8 +474,8 @@ bool NetworkDeviceHandlerImpl::IsUsbEnabledDevice(
   return device_state && device_state->link_up() &&
          device_state->Matches(NetworkTypePattern::Ethernet()) &&
          device_state->device_bus_type() == shill::kDeviceBusTypeUsb &&
-         !base::Contains(mac_address_change_not_supported_,
-                         device_state->mac_address());
+         !mac_address_change_not_supported_.contains(
+             device_state->mac_address());
 }
 
 void NetworkDeviceHandlerImpl::UpdatePrimaryEnabledUsbEthernetDevice() {

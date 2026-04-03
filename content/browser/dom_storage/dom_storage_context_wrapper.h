@@ -9,13 +9,11 @@
 #include <optional>
 #include <string>
 
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/thread_annotations.h"
-#include "base/threading/sequence_bound.h"
 #include "components/services/storage/public/mojom/local_storage_control.mojom.h"
 #include "components/services/storage/public/mojom/session_storage_control.mojom.h"
 #include "components/services/storage/public/mojom/storage_usage_info.mojom.h"
@@ -36,9 +34,6 @@ class StorageKey;
 
 namespace storage {
 class SpecialStoragePolicy;
-namespace mojom {
-class Partition;
-}  // namespace mojom
 }  // namespace storage
 
 namespace content {
@@ -81,15 +76,19 @@ class CONTENT_EXPORT DOMStorageContextWrapper
   storage::mojom::SessionStorageControl* GetSessionStorageControl();
   storage::mojom::LocalStorageControl* GetLocalStorageControl();
 
+  void PerformLocalStorageCleanup(base::OnceClosure callback);
+  void PerformSessionStorageCleanup(base::OnceClosure callback);
+
+  using GetSessionStorageUsageCallback =
+      base::OnceCallback<void(const std::vector<SessionStorageUsageInfo>&)>;
+  void GetSessionStorageUsage(GetSessionStorageUsageCallback callback);
+
   // DOMStorageContext implementation.
   void GetLocalStorageUsage(GetLocalStorageUsageCallback callback) override;
-  void GetSessionStorageUsage(GetSessionStorageUsageCallback callback) override;
   void DeleteLocalStorage(const blink::StorageKey& storage_key,
                           base::OnceClosure callback) override;
-  void PerformLocalStorageCleanup(base::OnceClosure callback) override;
   void DeleteSessionStorage(const SessionStorageUsageInfo& usage_info,
                             base::OnceClosure callback) override;
-  void PerformSessionStorageCleanup(base::OnceClosure callback) override;
   scoped_refptr<SessionStorageNamespace> RecreateSessionStorage(
       const std::string& namespace_id) override;
   void StartScavengingUnusedSessionStorage() override;
@@ -126,7 +125,9 @@ class CONTENT_EXPORT DOMStorageContextWrapper
   // Pushes information about known Session Storage namespaces down to the
   // Storage Service instance after a crash. This in turn allows renderer
   // clients to re-establish working connections.
-  void RecoverFromStorageServiceCrash();
+  void OnSessionStorageDisconnected();
+  // Resets LocalStorage related StorageAreas after disconnection.
+  void OnLocalStorageDisconnected();
 
  private:
   friend class DOMStorageContextWrapperTest;
@@ -146,10 +147,6 @@ class CONTENT_EXPORT DOMStorageContextWrapper
 
   // Note: can be called on multiple threads, protected by a mutex.
   void RemoveNamespace(const std::string& namespace_id);
-
-  // Called on UI thread when the system is under memory pressure.
-  void OnMemoryPressure(
-      base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level);
 
   void PurgeMemory(PurgeOption purge_option);
 
@@ -179,17 +176,14 @@ class CONTENT_EXPORT DOMStorageContextWrapper
   // Profile wasn't destructed. This map allows the restored session to re-use
   // the SessionStorageNamespaceImpl objects that are still alive thanks to the
   // sessions component.
-  std::map<std::string, SessionStorageNamespaceImpl*> alive_namespaces_
-      GUARDED_BY(alive_namespaces_lock_);
+  std::map<std::string, raw_ptr<SessionStorageNamespaceImpl, CtnExperimental>>
+      alive_namespaces_ GUARDED_BY(alive_namespaces_lock_);
   mutable base::Lock alive_namespaces_lock_;
 
   // Unowned reference to our owning partition. This is always valid until it's
   // reset to null if/when the partition is destroyed. May also be null in
   // tests.
   raw_ptr<StoragePartitionImpl> partition_;
-
-  // To receive memory pressure signals.
-  std::unique_ptr<base::MemoryPressureListener> memory_pressure_listener_;
 
   // Connections to the partition's Session and Local Storage control interfaces
   // within the Storage Service.

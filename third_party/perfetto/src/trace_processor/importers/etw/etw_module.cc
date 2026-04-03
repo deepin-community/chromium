@@ -15,37 +15,19 @@
  */
 
 #include "src/trace_processor/importers/etw/etw_module.h"
-#include "perfetto/base/build_config.h"
-#include "perfetto/trace_processor/trace_blob_view.h"
-#include "src/trace_processor/importers/etw/etw_tokenizer.h"
 
-#include "protos/perfetto/trace/trace_packet.pbzero.h"
+#include <cstdint>
 
-namespace perfetto {
-namespace trace_processor {
+#include "src/trace_processor/importers/common/parser_types.h"
+#include "src/trace_processor/importers/proto/proto_importer_module.h"
 
-using perfetto::protos::pbzero::TracePacket;
+namespace perfetto::trace_processor {
 
-EtwModule::EtwModule(TraceProcessorContext* context) : tokenizer_(context) {
-  RegisterForField(TracePacket::kEtwEventsFieldNumber, context);
-}
+EtwModule::EtwModule(ProtoImporterModuleContext* module_context)
+    : ProtoImporterModule(module_context) {}
 
-ModuleResult EtwModule::TokenizePacket(
-    const protos::pbzero::TracePacket::Decoder& decoder,
-    TraceBlobView* packet,
-    int64_t /*packet_timestamp*/,
-    PacketSequenceState* seq_state,
-    uint32_t field_id) {
-  switch (field_id) {
-    case TracePacket::kEtwEventsFieldNumber: {
-      auto etw_field = decoder.etw_events();
-      tokenizer_.TokenizeEtwBundle(
-          packet->slice(etw_field.data, etw_field.size), seq_state);
-      return ModuleResult::Handled();
-    }
-  }
-  return ModuleResult::Ignored();
-}
+void EtwModule::ParseEtwEventData(uint32_t /*cpu*/,
+                                  int64_t /*ts*/,
+                                  const TracePacketData&) {}
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

@@ -1,21 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-'use strict';
 
-const fs = require('fs');
-const path = require('path');
+import espree from '@typescript-eslint/parser';
+import fs from 'node:fs';
+import path from 'node:path';
 
-const SRC_PATH = path.resolve(__dirname, '..');
-const NODE_MODULES_PATH = path.resolve(SRC_PATH, 'node_modules');
-const espree = require(path.resolve(NODE_MODULES_PATH, '@typescript-eslint', 'parser'));
 const parseOptions = {
-  ecmaVersion: 11,
+  ecmaVersion: 'latest',
   sourceType: 'module',
   range: true,
 };
-
-const USER_METRICS_ENUM_ENDPOINT = 'MaxValue';
 
 /**
  * Determines if a node is a class declaration.
@@ -56,13 +51,21 @@ function findFunctionInClass(classNode, functionName) {
 /**
  * Determines if AST Node is a call to register a DevtoolsExperiment
  */
-function isExperimentRegistrationCall(node) {
-  return node.expression && node.expression.type === 'CallExpression' &&
-      node.expression.callee.property.name === 'register';
+function isExperimentRegistrationCall(expression) {
+  return (expression && expression.type === 'CallExpression' && expression.callee.property.name === 'register');
 }
 
 /**
- * Extract the enum Root.Runtime.ExperimentName to a map
+ * Determines if AST Node is a call to register a DevtoolsHostExperiment
+ */
+function isHostExperimentRegistrationCall(expression) {
+  return (
+      expression && expression.type === 'CallExpression' &&
+      expression.callee.property.name === 'registerHostExperiment');
+}
+
+/**
+ * Extract the enum Root.ExperimentNames.ExperimentName to a map
  */
 function getExperimentNameEnum(mainImplFile) {
   const mainAST = espree.parse(mainImplFile, parseOptions);
@@ -86,7 +89,7 @@ function getExperimentNameEnum(mainImplFile) {
 }
 
 /**
- * Determine if node is of the form Root.Runtime.ExperimentName.NAME, and if so
+ * Determine if node is of the form Root.ExperimentNames.ExperimentName.NAME, and if so
  * return NAME as string.
  */
 function isExperimentNameReference(node) {
@@ -96,7 +99,7 @@ function isExperimentNameReference(node) {
   if (node.object.type !== 'MemberExpression' || node.object.property?.name !== 'ExperimentName') {
     return false;
   }
-  if (node.object.object.type !== 'MemberExpression' || node.object.object.property?.name !== 'Runtime') {
+  if (node.object.object.type !== 'MemberExpression' || node.object.object.property?.name !== 'ExperimentNames') {
     return false;
   }
   if (node.object.object.object.type !== 'Identifier' || node.object.object.object.name !== 'Root') {
@@ -124,7 +127,10 @@ function getMainImplExperimentList(mainImplFile, experimentNames) {
   }
 
   // Find function in MainImpl Class
-  const initializeExperimentNode = findFunctionInClass(mainImplClassNode, 'initializeExperiments');
+  const initializeExperimentNode = findFunctionInClass(
+      mainImplClassNode,
+      'initializeExperiments',
+  );
   if (!initializeExperimentNode) {
     return null;
   }
@@ -132,26 +138,40 @@ function getMainImplExperimentList(mainImplFile, experimentNames) {
   // Get list of experiments
   const experiments = [];
   for (const statement of initializeExperimentNode.value.body.body) {
-    if (isExperimentRegistrationCall(statement)) {
+    let expression = null;
+    if (statement.expression && statement.expression.type === 'CallExpression') {
+      expression = statement.expression;
+    } else if (statement.type === 'VariableDeclaration') {
+      expression = statement.declarations[0].init;
+    }
+
+    let experimentNameArg = '';
+    if (isExperimentRegistrationCall(expression)) {
       // Experiment name is first argument of registration call
-      const experimentNameArg = statement.expression.arguments[0];
-      // The experiment name can either be a literal, e.g. 'fooExperiment'..
-      if (experimentNameArg.type === 'Literal') {
-        experiments.push(experimentNameArg.value);
-      } else {
-        // .. or a member of Root.Runtime.ExperimentName.
-        const experimentName = isExperimentNameReference(experimentNameArg);
-        if (experimentName) {
-          const translatedName = experimentNames.get(experimentName);
-          if (!translatedName) {
-            console.log('Failed to resolve Root.Runtime.ExperimentName.${experimentName} to a string');
-            process.exit(1);
-          }
-          experiments.push(translatedName);
-        } else {
-          console.log('Unexpected argument to Root.Runtime.experiments.register: ', experimentNameArg);
+      experimentNameArg = expression.arguments[0];
+    } else if (isHostExperimentRegistrationCall(expression)) {
+      // Experiment name is the value of the `name` property of the first
+      // argument of registration call
+      experimentNameArg = expression.arguments[0].properties.find(property => property.key.name === 'name').value;
+    }
+    // Translate the Root.ExperimentNames.ExperimentName to a string
+    if (experimentNameArg) {
+      const experimentName = isExperimentNameReference(experimentNameArg);
+      if (experimentName) {
+        const translatedName = experimentNames.get(experimentName);
+        if (!translatedName) {
+          console.log(
+              'Failed to resolve Root.ExperimentNames.${experimentName} to a string',
+          );
           process.exit(1);
         }
+        experiments.push(translatedName);
+      } else {
+        console.log(
+            'Unexpected argument to Root.Runtime.experiments.register: ',
+            experimentNameArg,
+        );
+        process.exit(1);
       }
     }
   }
@@ -162,17 +182,21 @@ function getMainImplExperimentList(mainImplFile, experimentNames) {
  * Determines if AST Node is the DevtoolsExperiments Enum declaration
  */
 function isExperimentEnumDeclaration(node) {
-  return node.type === 'ExportNamedDeclaration' && node?.declaration?.id?.name === 'DevtoolsExperiments';
+  return (node.type === 'ExportNamedDeclaration' && node?.declaration?.id?.name === 'DevtoolsExperiments');
 }
 
 /**
  * Gets list of experiments registered in UserMetrics.ts
  */
 function getUserMetricExperimentList(userMetricsFile) {
-  const userMetricsAST = espree.parse(userMetricsFile, {ecmaVersion: 11, sourceType: 'module', range: true});
+  const userMetricsAST = espree.parse(userMetricsFile, parseOptions);
   for (const node of userMetricsAST.body) {
     if (isExperimentEnumDeclaration(node)) {
-      return node.declaration.members.map(member => member.id.value);
+      return node.declaration.members.filter(member => member.id.name !== 'MAX_VALUE')
+          .filter(
+              member => member.id.type === 'Literal' || member.id.type === 'Identifier',
+              )
+          .map(member => member.id.value ?? member.id.name);
     }
   }
   return null;
@@ -186,14 +210,20 @@ function compareExperimentLists(mainImplList, userMetricsList) {
   let errorFound = false;
   if (!mainImplList) {
     console.log(
-        'Changes to Devtools Experiment registration have prevented this check from finding registered experiments.');
-    console.log('Please update scripts/check_experiments.js to account for the new experiment registration.');
+        'Changes to Devtools Experiment registration have prevented this check from finding registered experiments.',
+    );
+    console.log(
+        'Please update scripts/check_experiments.js to account for the new experiment registration.',
+    );
     errorFound = true;
   }
   if (!userMetricsList) {
     console.log(
-        'Changes to Devtools Experiment UserMetrics enum have prevented this check from finding experiments registered for telemetry.');
-    console.log('Please update scripts/check_experiments.js to account for the new experiment telemetry format.');
+        'Changes to Devtools Experiment UserMetrics enum have prevented this check from finding experiments registered for telemetry.',
+    );
+    console.log(
+        'Please update scripts/check_experiments.js to account for the new experiment telemetry format.',
+    );
     errorFound = true;
   }
   if (errorFound) {
@@ -201,23 +231,33 @@ function compareExperimentLists(mainImplList, userMetricsList) {
   }
 
   // Ensure both lists match
-  const missingTelemetry = mainImplList.filter(experiment => !userMetricsList.includes(experiment));
+  const missingTelemetry = mainImplList.filter(
+      experiment => !userMetricsList.includes(experiment),
+  );
   const staleTelemetry = userMetricsList.filter(
-      experiment => !mainImplList.includes(experiment) && experiment !== USER_METRICS_ENUM_ENDPOINT);
+      experiment => !mainImplList.includes(experiment),
+  );
   if (missingTelemetry.length) {
-    console.log('Devtools Experiments have been added without corresponding histogram update!');
+    console.log(
+        'Devtools Experiments have been added without corresponding histogram update!',
+    );
     console.log(missingTelemetry.join('\n'));
     console.log(
-        'Please ensure that the DevtoolsExperiments enum in UserMetrics.ts is updated with the new experiment.');
+        'Please ensure that the DevtoolsExperiments enum in UserMetrics.ts is updated with the new experiment.',
+    );
     console.log(
-        'Please ensure that a corresponding CL is openend against chromium.src/tools/metrics/histograms/enums.xml to update the DevtoolsExperiments enum');
+        'Please ensure that a corresponding CL is opened against chromium.src/tools/metrics/histograms/metadata/dev/enums.xml to update the DevtoolsExperiments enum',
+    );
     errorFound = true;
   }
   if (staleTelemetry.length) {
-    console.log('Devtools Experiments that are no longer registered are still listed in the telemetry enum!');
+    console.log(
+        'Devtools Experiments that are no longer registered are still listed in the telemetry enum!',
+    );
     console.log(staleTelemetry.join('\n'));
     console.log(
-        'Please ensure that the DevtoolsExperiments enum in UserMetrics.ts is updated to remove these stale experiments.');
+        'Please ensure that the DevtoolsExperiments enum in UserMetrics.ts is updated to remove these stale experiments.',
+    );
     errorFound = true;
   }
   if (errorFound) {
@@ -227,18 +267,41 @@ function compareExperimentLists(mainImplList, userMetricsList) {
 }
 
 function main() {
-  const mainImplPath = path.resolve(__dirname, '..', 'front_end', 'entrypoints', 'main', 'MainImpl.ts');
+  const mainImplPath = path.resolve(
+      import.meta.dirname,
+      '..',
+      'front_end',
+      'entrypoints',
+      'main',
+      'MainImpl.ts',
+  );
   const mainImplFile = fs.readFileSync(mainImplPath, 'utf-8');
 
-  const userMetricsPath = path.resolve(__dirname, '..', 'front_end', 'core', 'host', 'UserMetrics.ts');
+  const userMetricsPath = path.resolve(
+      import.meta.dirname,
+      '..',
+      'front_end',
+      'core',
+      'host',
+      'UserMetrics.ts',
+  );
   const userMetricsFile = fs.readFileSync(userMetricsPath, 'utf-8');
 
-  const runtimePath = path.resolve(__dirname, '..', 'front_end', 'core', 'root', 'Runtime.ts');
-  const runtimeFile = fs.readFileSync(runtimePath, 'utf-8');
-  const experimentNames = getExperimentNameEnum(runtimeFile);
+  const experimentNamesPath = path.resolve(
+      import.meta.dirname,
+      '..',
+      'front_end',
+      'core',
+      'root',
+      'ExperimentNames.ts',
+  );
+  const experimentNamesFile = fs.readFileSync(experimentNamesPath, 'utf-8');
+  const experimentNames = getExperimentNameEnum(experimentNamesFile);
 
   compareExperimentLists(
-      getMainImplExperimentList(mainImplFile, experimentNames), getUserMetricExperimentList(userMetricsFile));
+      getMainImplExperimentList(mainImplFile, experimentNames),
+      getUserMetricExperimentList(userMetricsFile),
+  );
 }
 
 main();

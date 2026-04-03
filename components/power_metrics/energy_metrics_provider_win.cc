@@ -4,14 +4,14 @@
 
 #include "components/power_metrics/energy_metrics_provider_win.h"
 
+#include <initguid.h>
 #include <windows.h>
+
 #include <devioctl.h>
-
-#include <initguid.h>  // This has to be before emi.h
-
 #include <emi.h>
 #include <setupapi.h>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/memory/free_deleter.h"
 #include "base/memory/ptr_util.h"
@@ -65,11 +65,11 @@ std::unique_ptr<EnergyMetricsProviderWin> EnergyMetricsProviderWin::Create() {
   return base::WrapUnique(new EnergyMetricsProviderWin());
 }
 
-absl::optional<EnergyMetricsProvider::EnergyMetrics>
+std::optional<EnergyMetricsProvider::EnergyMetrics>
 EnergyMetricsProviderWin::CaptureMetrics() {
   if (!Initialize()) {
     handle_.Close();
-    return absl::nullopt;
+    return std::nullopt;
   }
 
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
@@ -85,7 +85,7 @@ EnergyMetricsProviderWin::CaptureMetrics() {
                        measurement_data.data(), measurement_data_size_bytes,
                        &bytes_returned, nullptr)) {
     PLOG(ERROR) << "IOCTL_EMI_GET_MEASUREMENT failed";
-    return absl::nullopt;
+    return std::nullopt;
   }
   CHECK_EQ(bytes_returned, measurement_data_size_bytes);
 
@@ -126,7 +126,7 @@ bool EnergyMetricsProviderWin::Initialize() {
 
   // Pick the first device interface in the returned device information set.
   //
-  // TODO(crbug.com/1385251): Determine if the first device interface is always
+  // TODO(crbug.com/40879127): Determine if the first device interface is always
   // the desired one.
   SP_DEVICE_INTERFACE_DATA dev_data = {0};
   dev_data.cbSize = sizeof(dev_data);
@@ -214,16 +214,16 @@ bool EnergyMetricsProviderWin::Initialize() {
   // respectively.
   if (emi_version.EmiVersion == EMI_VERSION_V1) {
     EMI_METADATA_V1* metadata_v1 =
-        reinterpret_cast<EMI_METADATA_V1*>(metadata_buf.data());
+        UNSAFE_TODO(reinterpret_cast<EMI_METADATA_V1*>(metadata_buf.data()));
     metric_types_.push_back(metadata_v1->MeteredHardwareName);
   } else if (emi_version.EmiVersion == EMI_VERSION_V2) {
     EMI_METADATA_V2* metadata_v2 =
-        reinterpret_cast<EMI_METADATA_V2*>(metadata_buf.data());
+        UNSAFE_TODO(reinterpret_cast<EMI_METADATA_V2*>(metadata_buf.data()));
     EMI_CHANNEL_V2* channel = &metadata_v2->Channels[0];
     // EMI v2 has a different channel for each metric.
     for (int i = 0; i < metadata_v2->ChannelCount; ++i) {
       metric_types_.push_back(channel->ChannelName);
-      channel = EMI_CHANNEL_V2_NEXT_CHANNEL(channel);
+      channel = UNSAFE_TODO(EMI_CHANNEL_V2_NEXT_CHANNEL(channel));
     }
   }
 

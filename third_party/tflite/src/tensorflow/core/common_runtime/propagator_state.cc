@@ -51,7 +51,7 @@ PropagatorState::~PropagatorState() {
   }
 }
 
-void PropagatorState::ActivateRoots(gtl::ArraySlice<const NodeItem*> roots,
+void PropagatorState::ActivateRoots(absl::Span<const NodeItem* const> roots,
                                     TaggedNodeSeq* ready) {
   mutex_lock l(root_frame_->mu);
   IterationState* root_iter = root_frame_->GetIteration(0);
@@ -65,7 +65,7 @@ void PropagatorState::ActivateRoots(gtl::ArraySlice<const NodeItem*> roots,
 void PropagatorState::PropagateOutputs(const TaggedNode& tagged_node,
                                        EntryVector* outputs,
                                        TaggedNodeSeq* ready) {
-  profiler::TraceMe activity(
+  tsl::profiler::TraceMe activity(
       [&]() {
         return strings::StrCat(
             "ExecutorPropagateOutputs#", "id=", step_id_,
@@ -75,7 +75,7 @@ void PropagatorState::PropagateOutputs(const TaggedNode& tagged_node,
             tagged_node.node_item->num_output_control_edges,
             ",input_frame=", tagged_node.input_frame->frame_id, "#");
       },
-      profiler::GetTFTraceMeLevel(/*is_expensive=*/false));
+      tsl::profiler::GetTFTraceMeLevel(/*is_expensive=*/false));
 
   const NodeItem* const item = tagged_node.node_item;
   FrameState* const input_frame = tagged_node.input_frame;
@@ -157,12 +157,12 @@ void PropagatorState::PropagateOutputs(const TaggedNode& tagged_node,
       }
       if (output_frame != nullptr) {
         if (need_create_iter) {
-          profiler::TraceMe activit1y(
+          tsl::profiler::TraceMe activit1y(
               [&]() {
-                return strings::StrCat(
+                return absl::StrCat(
                     "PropagateOutputs::NextIteration::CreateIterationState");
               },
-              profiler::GetTFTraceMeLevel(/*is_expensive=*/false));
+              tsl::profiler::GetTFTraceMeLevel(/*is_expensive=*/false));
           mutex_lock l(input_frame->mu);
           if (input_iter->iter_num == input_frame->iteration_count) {
             // Check another time since another thread may create the required
@@ -259,7 +259,7 @@ void PropagatorState::FindOrCreateChildFrame(FrameState* frame,
   const ImmutableExecutorState::FrameInfo& frame_info =
       immutable_state_.get_enter_frame_info(node_item);
 
-  const uint64 child_id = Hash64Combine(
+  const uint64_t child_id = Hash64Combine(
       frame->frame_id,
       Hash64Combine(iter_state->iter_num, Hash64(frame_info.name)));
 
@@ -275,7 +275,7 @@ void PropagatorState::FindOrCreateChildFrame(FrameState* frame,
   // Need to create a new frame instance.
   // Note that this new frame instance is created without any locks.
   if (vlog_) {
-    const string child_name = strings::StrCat(
+    const std::string child_name = strings::StrCat(
         frame->frame_name, ";", iter_state->iter_num, ";", frame_info.name);
     VLOG(2) << "Create frame: " << child_name << " id: " << child_id;
   }

@@ -6,6 +6,7 @@
 import 'chrome://resources/cr_elements/icons.html.js';
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
+import '../settings_page/settings_section.js';
 import './safety_hub_module.js';
 
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
@@ -13,13 +14,15 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {routes} from '../route.js';
 import {Router, RouteObserverMixin} from '../router.js';
+import type {Route} from '../router.js';
 import type {MetricsBrowserProxy} from '../metrics_browser_proxy.js';
-import { MetricsBrowserProxyImpl, SafetyHubEntryPoint} from '../metrics_browser_proxy.js';
+import {MetricsBrowserProxyImpl, SafetyHubEntryPoint} from '../metrics_browser_proxy.js';
+import {SettingsViewMixin} from '../settings_page/settings_view_mixin.js';
 
-import type {SafetyHubBrowserProxy} from './safety_hub_browser_proxy.js';
-import { SafetyHubBrowserProxyImpl} from './safety_hub_browser_proxy.js';
+import type {EntryPointInfo, SafetyHubBrowserProxy} from './safety_hub_browser_proxy.js';
+import {SafetyHubBrowserProxyImpl} from './safety_hub_browser_proxy.js';
 import {getTemplate} from './safety_hub_entry_point.html.js';
-import type { SettingsSafetyHubModuleElement } from './safety_hub_module.js';
+import type {SettingsSafetyHubModuleElement} from './safety_hub_module.js';
 // clang-format on
 
 export interface SettingsSafetyHubEntryPointElement {
@@ -30,7 +33,7 @@ export interface SettingsSafetyHubEntryPointElement {
 }
 
 const SettingsSafetyHubEntryPointElementBase =
-    RouteObserverMixin(I18nMixin(PolymerElement));
+    SettingsViewMixin(RouteObserverMixin(I18nMixin(PolymerElement)));
 
 export class SettingsSafetyHubEntryPointElement extends
     SettingsSafetyHubEntryPointElementBase {
@@ -55,10 +58,7 @@ export class SettingsSafetyHubEntryPointElement extends
         value: false,
       },
 
-      headerString_: {
-        type: String,
-        computed: 'computeHeaderString_(hasRecommendations_)',
-      },
+      headerString_: String,
 
       subheaderString_: String,
 
@@ -69,32 +69,31 @@ export class SettingsSafetyHubEntryPointElement extends
     };
   }
 
-  private buttonClass_: string;
-  private hasRecommendations_: boolean;
-  private headerString_: string;
-  private subheaderString_: string;
-  private headerIconColor_: string;
+  declare private buttonClass_: string;
+  declare private hasRecommendations_: boolean;
+  declare private headerString_: string;
+  declare private subheaderString_: string;
+  declare private headerIconColor_: string;
   private safetyHubBrowserProxy_: SafetyHubBrowserProxy =
       SafetyHubBrowserProxyImpl.getInstance();
   private metricsBrowserProxy_: MetricsBrowserProxy =
       MetricsBrowserProxyImpl.getInstance();
 
   override connectedCallback() {
-    this.safetyHubBrowserProxy_.getSafetyHubHasRecommendations().then(
-        (hasRecommendations: boolean) => {
-          this.hasRecommendations_ = hasRecommendations;
-        });
-
-    this.safetyHubBrowserProxy_.getSafetyHubEntryPointSubheader().then(
-        (subheader: string) => {
-          this.subheaderString_ = subheader;
+    this.safetyHubBrowserProxy_.getSafetyHubEntryPointData().then(
+        (entryPoint: EntryPointInfo) => {
+          this.hasRecommendations_ = entryPoint.hasRecommendations;
+          this.headerString_ = entryPoint.header;
+          this.subheaderString_ = entryPoint.subheader;
         });
     // This should be called after the data for modules are retrieved so that
     // currentRouteChanged is called afterwards.
     super.connectedCallback();
   }
 
-  override currentRouteChanged() {
+  override currentRouteChanged(newRoute: Route, oldRoute?: Route) {
+    super.currentRouteChanged(newRoute, oldRoute);
+
     if (Router.getInstance().getCurrentRoute() !== routes.PRIVACY) {
       return;
     }
@@ -113,11 +112,6 @@ export class SettingsSafetyHubEntryPointElement extends
     return this.hasRecommendations_ ? 'action-button' : '';
   }
 
-  private computeHeaderString_() {
-    return this.hasRecommendations_ ? this.i18n('safetyHubEntryPointHeader') :
-                                      '';
-  }
-
   private computeHeaderIconColor_() {
     return this.hasRecommendations_ ? 'blue' : '';
   }
@@ -131,6 +125,13 @@ export class SettingsSafetyHubEntryPointElement extends
           SafetyHubEntryPoint.PRIVACY_SAFE);
     }
     Router.getInstance().navigateTo(routes.SAFETY_HUB);
+  }
+
+  // SettingsViewMixin implementation.
+  override getFocusConfig() {
+    return new Map([
+      [routes.SAFETY_HUB.path, '#button'],
+    ]);
   }
 }
 

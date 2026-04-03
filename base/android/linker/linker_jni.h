@@ -62,14 +62,6 @@
 #error "Unsupported target abi"
 #endif
 
-#if !defined(PAGE_SIZE)
-#define PAGE_SIZE (1 << 12)
-#define PAGE_MASK (~(PAGE_SIZE - 1))
-#endif
-
-#define PAGE_START(x) ((x)&PAGE_MASK)
-#define PAGE_END(x) PAGE_START((x) + (PAGE_SIZE - 1))
-
 // Copied from //base/posix/eintr_wrapper.h to avoid depending on //base.
 #define HANDLE_EINTR(x)                                     \
   ({                                                        \
@@ -102,9 +94,17 @@ class String {
   size_t size_;
 };
 
+inline uintptr_t PageStart(size_t page_size, uintptr_t x) {
+  return x & ~(page_size - 1);
+}
+
+inline uintptr_t PageEnd(size_t page_size, uintptr_t x) {
+  return PageStart(page_size, x + page_size - 1);
+}
+
 // Returns true iff casting a java-side |address| to uintptr_t does not lose
 // bits.
-bool IsValidAddress(jlong address);
+bool IsValidAddress(int64_t address);
 
 // Find the jclass JNI reference corresponding to a given |class_name|.
 // |env| is the current JNI environment handle.
@@ -185,9 +185,11 @@ struct LibInfo_class {
                    uintptr_t* load_address,
                    size_t* load_size) {
     if (load_address) {
-      jlong java_address = env->GetLongField(library_info_obj, load_address_id);
-      if (!IsValidAddress(java_address))
+      int64_t java_address =
+          env->GetLongField(library_info_obj, load_address_id);
+      if (!IsValidAddress(java_address)) {
         return false;
+      }
       *load_address = static_cast<uintptr_t>(java_address);
     }
     if (load_size) {
@@ -237,8 +239,6 @@ enum class RelroSharingStatus {
   EXTERNAL_LOAD_ADDRESS_RESET = 8,
   COUNT = 9,
 };
-
-struct SharedMemoryFunctions;
 
 // Holds address ranges of the loaded native library, its RELRO region, along
 // with the RELRO FD identifying the shared memory region. Carries the same
@@ -311,8 +311,6 @@ class NativeLibInfo {
   size_t get_relro_start_for_testing() const { return relro_start_; }
   size_t get_load_size_for_testing() const { return load_size_; }
 
-  static bool SharedMemoryFunctionsSupportedForTesting();
-
   bool FindRelroAndLibraryRangesInElfForTesting() {
     return FindRelroAndLibraryRangesInElf();
   }
@@ -345,16 +343,15 @@ class NativeLibInfo {
 
   // Initializes |relro_fd_| with a newly created read-only shared memory region
   // sized as the library's RELRO and with identical data.
-  bool CreateSharedRelroFd(const SharedMemoryFunctions& functions);
+  bool CreateSharedRelroFd();
 
   // Assuming that RELRO-related information is populated, memory-maps the RELRO
   // FD on top of the library's RELRO.
-  bool ReplaceRelroWithSharedOne(const SharedMemoryFunctions& functions) const;
+  bool ReplaceRelroWithSharedOne() const;
 
   // Returns true iff the RELRO address and size, along with the contents are
   // equal among the two.
-  bool RelroIsIdentical(const NativeLibInfo& external_lib_info,
-                        const SharedMemoryFunctions& functions) const;
+  bool RelroIsIdentical(const NativeLibInfo& external_lib_info) const;
 
   static constexpr int kInvalidFd = -1;
   uintptr_t load_address_ = 0;

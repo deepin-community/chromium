@@ -17,6 +17,7 @@
 #include "content/browser/storage_partition_impl.h"
 #include "third_party/blink/public/common/cache_storage/cache_storage_utils.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_fetch_response_callback.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace content {
 
@@ -32,27 +33,26 @@ ServiceWorkerCacheStorageMatcher::ServiceWorkerCacheStorageMatcher(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!request_->blob);
-  TRACE_EVENT_WITH_FLOW0(
+  TRACE_EVENT(
       "ServiceWorker",
       "ServiceWorkerCacheStorageMatcher::ServiceWorkerCacheStorageMatcher",
-      TRACE_ID_LOCAL(this), TRACE_EVENT_FLAG_FLOW_OUT);
+      perfetto::Flow::FromPointer(this));
 }
 
 ServiceWorkerCacheStorageMatcher::~ServiceWorkerCacheStorageMatcher() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  TRACE_EVENT_WITH_FLOW0(
+  TRACE_EVENT(
       "ServiceWorker",
       "ServiceWorkerCacheStorageMatcher::~ServiceWorkerCacheStorageMatcher",
-      TRACE_ID_LOCAL(this), TRACE_EVENT_FLAG_FLOW_IN);
+      perfetto::TerminatingFlow::FromPointer(this));
 }
 
 void ServiceWorkerCacheStorageMatcher::Run() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  TRACE_EVENT_WITH_FLOW0("ServiceWorker",
-                         "ServiceWorkerCacheStorageMatcher::Run",
-                         TRACE_ID_LOCAL(this),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
-  dispatch_event_time_ = base::TimeTicks::Now();
+  TRACE_EVENT("ServiceWorker", "ServiceWorkerCacheStorageMatcher::Run",
+              perfetto::Flow::FromPointer(this));
+  CHECK(cache_lookup_start_.is_null());
+  cache_lookup_start_ = base::TimeTicks::Now();
   // If `GetMainScriptResponse` is not set, it need to be set from the
   // installed script.  Or, calling the fallback function may fail.
   if (!version_->GetMainScriptResponse()) {
@@ -78,17 +78,20 @@ void ServiceWorkerCacheStorageMatcher::Run() {
     return;
   }
   // Since this is offloading the cache storage API access in ServiceWorker,
-  // we need to follow COEP used there.
+  // we need to follow COEP and DIP used there.
   // The reason why COEP is enforced to the cache storage API can be seen in:
   // crbug.com/991428.
   const network::CrossOriginEmbedderPolicy* coep =
       version_->cross_origin_embedder_policy();
-  if (!coep) {
+  const network::DocumentIsolationPolicy* dip =
+      version_->document_isolation_policy();
+  if (!coep || !dip) {
     FailFallback();
     return;
   }
   control->AddReceiver(
-      *coep, mojo::NullRemote(),
+      *coep, version_->embedded_worker()->GetCoepReporter(), *dip,
+      version_->embedded_worker()->GetDipReporter(),
       storage::BucketLocator::ForDefaultBucket(version_->key()),
       storage::mojom::CacheStorageOwner::kCacheAPI,
       remote_.BindNewPipeAndPassReceiver());
@@ -108,60 +111,50 @@ void ServiceWorkerCacheStorageMatcher::Run() {
 }
 
 void ServiceWorkerCacheStorageMatcher::DidMatch(
-    blink::mojom::MatchResultPtr result) {
+    blink::mojom::CacheStorage::MatchResult result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  TRACE_EVENT_WITH_FLOW0("ServiceWorker",
-                         "ServiceWorkerCacheStorageMatcher::DidMatch",
-                         TRACE_ID_LOCAL(this),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT("ServiceWorker", "ServiceWorkerCacheStorageMatcher::DidMatch",
+              perfetto::Flow::FromPointer(this));
+  cache_lookup_duration_ = base::TimeTicks::Now() - cache_lookup_start_;
+  base::UmaHistogramTimes(
+      "ServiceWorker.StaticRouter.MainResource.CacheLookupDuration",
+      cache_lookup_duration_);
 
   auto timing = blink::mojom::ServiceWorkerFetchEventTiming::New();
-  timing->dispatch_event_time = dispatch_event_time_;
-  timing->respond_with_settled_time = base::TimeTicks::Now();
-  switch (result->which()) {
-    case blink::mojom::MatchResult::Tag::kStatus:  // error fallback.
-      base::UmaHistogramEnumeration(
-          "ServiceWorker.StaticRouter.MainResource.CacheStorageError",
-          result->get_status());
-      RunCallback(
-          blink::ServiceWorkerStatusCode::kOk,
-          ServiceWorkerFetchDispatcher::FetchEventResult::kShouldFallback,
-          blink::mojom::FetchAPIResponse::New(), nullptr, std::move(timing));
-      break;
-    case blink::mojom::MatchResult::Tag::kResponse:  // we got fetch response.
-      if (result->get_response()->parsed_headers) {
-        // We intend to reset the parsed header. Or, invalid parsed headers
-        // should be set.
-        //
-        // According to content/browser/cache_storage/cache_storage_cache.cc,
-        // the field looks not set up with the meaningful value.
-        // Also, the Cache Storage API code looks not using the parsed_header
-        // according to third_party/blink/renderer/core/fetch/response.cc.
-        // (It can be tracked from
-        // third_party/blink/renderer/modules/cache_storage/cache_storage.cc)
-        result->get_response()->parsed_headers.reset();
-      }
-      RunCallback(blink::ServiceWorkerStatusCode::kOk,
-                  ServiceWorkerFetchDispatcher::FetchEventResult::kGotResponse,
-                  std::move(result->get_response()), nullptr,
-                  std::move(timing));
-      break;
-    case blink::mojom::MatchResult::Tag::kEagerResponse:
-      // EagerResponse, which should be used only if `in_related_fetch_event`
-      // is set.
-      NOTREACHED_NORETURN();
+  if (!result.has_value()) {
+    base::UmaHistogramEnumeration(
+        "ServiceWorker.StaticRouter.MainResource.CacheStorageError",
+        result.error());
+    RunCallback(blink::ServiceWorkerStatusCode::kOk,
+                ServiceWorkerFetchDispatcher::FetchEventResult::kShouldFallback,
+                blink::mojom::FetchAPIResponse::New(), nullptr,
+                std::move(timing));
+    return;
   }
+  // EagerResponse should be used only if `in_related_fetch_event` is set.
+  CHECK(result.value()->is_response());
+  auto& response = result.value()->get_response();
+  if (response->parsed_headers) {
+    // We intend to reset the parsed header. Or, invalid parsed headers
+    // should be set.
+    //
+    // According to content/browser/cache_storage/cache_storage_cache.cc,
+    // the field looks not set up with the meaningful value.
+    // Also, the Cache Storage API code looks not using the parsed_header
+    // according to third_party/blink/renderer/core/fetch/response.cc.
+    // (It can be tracked from
+    // third_party/blink/renderer/modules/cache_storage/cache_storage.cc)
+    response->parsed_headers.reset();
+  }
+  RunCallback(blink::ServiceWorkerStatusCode::kOk,
+              ServiceWorkerFetchDispatcher::FetchEventResult::kGotResponse,
+              std::move(response), nullptr, std::move(timing));
 }
 
 void ServiceWorkerCacheStorageMatcher::FailFallback() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  TRACE_EVENT_WITH_FLOW0("ServiceWorker",
-                         "ServiceWorkerCacheStorageMatcher::FailFallback",
-                         TRACE_ID_LOCAL(this),
-                         TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT);
-  auto timing = blink::mojom::ServiceWorkerFetchEventTiming::New();
-  timing->dispatch_event_time = dispatch_event_time_;
-  timing->respond_with_settled_time = base::TimeTicks::Now();
+  TRACE_EVENT("ServiceWorker", "ServiceWorkerCacheStorageMatcher::FailFallback",
+              perfetto::Flow::FromPointer(this));
 
   // `Run` method will be called in
   // `ServiceWorkerMainResourceLoader::StartRequest`.
@@ -178,7 +171,8 @@ void ServiceWorkerCacheStorageMatcher::FailFallback() {
           weak_ptr_factory_.GetWeakPtr(),
           blink::ServiceWorkerStatusCode::kErrorFailed,
           ServiceWorkerFetchDispatcher::FetchEventResult::kShouldFallback,
-          blink::mojom::FetchAPIResponse::New(), nullptr, std::move(timing)));
+          blink::mojom::FetchAPIResponse::New(), nullptr,
+          blink::mojom::ServiceWorkerFetchEventTiming::New()));
   return;
 }
 
@@ -189,9 +183,8 @@ void ServiceWorkerCacheStorageMatcher::RunCallback(
     blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream,
     blink::mojom::ServiceWorkerFetchEventTimingPtr timing) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  TRACE_EVENT_WITH_FLOW0("ServiceWorker",
-                         "ServiceWorkerCacheStorageMatcher::RunCallback",
-                         TRACE_ID_LOCAL(this), TRACE_EVENT_FLAG_FLOW_IN);
+  TRACE_EVENT("ServiceWorker", "ServiceWorkerCacheStorageMatcher::RunCallback",
+              perfetto::TerminatingFlow::FromPointer(this));
   // Fetch dispatcher can be completed at this point due to a failure of
   // starting up a worker. In that case, let's simply ignore it.
   if (!fetch_callback_) {

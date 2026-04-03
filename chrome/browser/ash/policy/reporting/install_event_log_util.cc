@@ -6,18 +6,25 @@
 
 #include <set>
 
-#include "base/hash/md5.h"
 #include "base/i18n/time_formatting.h"
-#include "base/json/json_string_value_serializer.h"
+#include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
+#include "crypto/obsolete/md5.h"
 
 namespace em = enterprise_management;
 
 namespace policy {
+
+// This is a separate function and not in `namespace {}` so it can be friended
+// by crypto/obsolete/md5, as required for using that class.
+crypto::obsolete::Md5 MakeMd5HasherForPolicyEventId() {
+  return {};
+}
 
 namespace {
 // Common Key names used when building the dictionary to pass to the Chrome
@@ -57,35 +64,22 @@ constexpr char kCrxInstallErrorDetail[] = "crxInstallErrorDetail";
 constexpr char kFetchErrorCode[] = "fetchErrorCode";
 constexpr char kFetchTries[] = "fetchTries";
 
-// Calculates hash for the given |event| and |context|, and stores the hash in
-// |hash|. Returns true if |event| and |context| are json serializable and
-// |hash| is not nullptr, otherwise return false.
-bool GetHash(const base::Value::Dict& event,
-             const base::Value::Dict& context,
-             std::string* hash) {
-  if (hash == nullptr) {
-    return false;
+// Serializes |event| and |context| as JSON and returns the MD5 hash of the two JSON strings
+// concatenated together. Returns std::nullopt if either |event| or |context| cannot be
+// serialized.
+std::optional<std::string> GetHash(const base::DictValue& event,
+                                   const base::DictValue& context) {
+  std::optional<std::string> event_json = base::WriteJson(event);
+  std::optional<std::string> context_json = base::WriteJson(context);
+
+  if (!event_json || !context_json) {
+    return std::nullopt;
   }
 
-  std::string serialized_string;
-  JSONStringValueSerializer serializer(&serialized_string);
-  if (!serializer.Serialize(event)) {
-    return false;
-  }
-
-  base::MD5Context ctx;
-  base::MD5Init(&ctx);
-  base::MD5Update(&ctx, serialized_string);
-
-  if (!serializer.Serialize(context)) {
-    return false;
-  }
-  base::MD5Update(&ctx, serialized_string);
-
-  base::MD5Digest digest;
-  base::MD5Final(&digest, &ctx);
-  *hash = base::MD5DigestToBase16(digest);
-  return true;
+  crypto::obsolete::Md5 hasher = MakeMd5HasherForPolicyEventId();
+  hasher.Update(base::as_byte_span(*event_json));
+  hasher.Update(base::as_byte_span(*context_json));
+  return base::HexEncodeLower(hasher.Finish());
 }
 
 }  // namespace
@@ -96,12 +90,12 @@ std::string GetSerialNumber() {
           ""));
 }
 
-base::Value::List ConvertExtensionProtoToValue(
+base::ListValue ConvertExtensionProtoToValue(
     const em::ExtensionInstallReportRequest* extension_install_report_request,
-    const base::Value::Dict& context) {
+    const base::DictValue& context) {
   DCHECK(extension_install_report_request);
 
-  base::Value::List event_list;
+  base::ListValue event_list;
   std::set<extensions::ExtensionId> seen_ids;
 
   for (const em::ExtensionInstallReport& extension_install_report :
@@ -109,7 +103,7 @@ base::Value::List ConvertExtensionProtoToValue(
     for (const em::ExtensionInstallReportLogEvent&
              extension_install_report_log_event :
          extension_install_report.logs()) {
-      base::Value::Dict wrapper = ConvertExtensionEventToValue(
+      base::DictValue wrapper = ConvertExtensionEventToValue(
           extension_install_report.has_extension_id()
               ? extension_install_report.extension_id()
               : "",
@@ -130,12 +124,12 @@ base::Value::List ConvertExtensionProtoToValue(
   return event_list;
 }
 
-base::Value::Dict ConvertExtensionEventToValue(
+base::DictValue ConvertExtensionEventToValue(
     const extensions::ExtensionId& extension_id,
     const em::ExtensionInstallReportLogEvent&
         extension_install_report_log_event,
-    const base::Value::Dict& context) {
-  base::Value::Dict event;
+    const base::DictValue& context) {
+  base::DictValue event;
   if (!extension_id.empty()) {
     event.Set(kExtensionId, extension_id);
   }
@@ -235,7 +229,7 @@ base::Value::Dict ConvertExtensionEventToValue(
   }
 
   auto wrapper =
-      base::Value::Dict().Set(kExtensionInstallEvent, std::move(event));
+      base::DictValue().Set(kExtensionInstallEvent, std::move(event));
 
   if (extension_install_report_log_event.has_timestamp()) {
     // Format the current time (UTC) in RFC3339 format
@@ -245,27 +239,26 @@ base::Value::Dict ConvertExtensionEventToValue(
     wrapper.Set(kTime, base::TimeFormatAsIso8601(timestamp));
   }
 
-  std::string event_id;
-  if (GetHash(wrapper, context, &event_id)) {
-    wrapper.Set(kEventId, event_id);
+  if (auto event_id = GetHash(wrapper, context)) {
+    wrapper.Set(kEventId, *event_id);
   }
 
   return wrapper;
 }
 
-base::Value::List ConvertArcAppProtoToValue(
+base::ListValue ConvertArcAppProtoToValue(
     const em::AppInstallReportRequest* app_install_report_request,
-    const base::Value::Dict& context) {
+    const base::DictValue& context) {
   DCHECK(app_install_report_request);
 
-  base::Value::List event_list;
+  base::ListValue event_list;
   std::set<std::string> seen_ids;
 
   for (const em::AppInstallReport& app_install_report :
        app_install_report_request->app_install_reports()) {
     for (const em::AppInstallReportLogEvent& app_install_report_log_event :
          app_install_report.logs()) {
-      base::Value::Dict wrapper = ConvertArcAppEventToValue(
+      base::DictValue wrapper = ConvertArcAppEventToValue(
           app_install_report.has_package() ? app_install_report.package() : "",
           app_install_report_log_event, context);
       auto* id = wrapper.FindString(kEventId);
@@ -284,11 +277,11 @@ base::Value::List ConvertArcAppProtoToValue(
   return event_list;
 }
 
-base::Value::Dict ConvertArcAppEventToValue(
+base::DictValue ConvertArcAppEventToValue(
     const std::string& package,
     const em::AppInstallReportLogEvent& app_install_report_log_event,
-    const base::Value::Dict& context) {
-  base::Value::Dict event;
+    const base::DictValue& context) {
+  base::DictValue event;
 
   if (!package.empty()) {
     event.Set(kAppPackage, package);
@@ -334,7 +327,7 @@ base::Value::Dict ConvertArcAppEventToValue(
   event.Set(kSerialNumber, GetSerialNumber());
 
   auto wrapper =
-      base::Value::Dict().Set(kAndroidAppInstallEvent, std::move(event));
+      base::DictValue().Set(kAndroidAppInstallEvent, std::move(event));
 
   if (app_install_report_log_event.has_timestamp()) {
     // Format the current time (UTC) in RFC3339 format
@@ -344,9 +337,8 @@ base::Value::Dict ConvertArcAppEventToValue(
     wrapper.Set(kTime, base::TimeFormatAsIso8601(timestamp));
   }
 
-  std::string event_id;
-  if (GetHash(wrapper, context, &event_id)) {
-    wrapper.Set(kEventId, event_id);
+  if (auto event_id = GetHash(wrapper, context)) {
+    wrapper.Set(kEventId, *event_id);
   }
 
   return wrapper;

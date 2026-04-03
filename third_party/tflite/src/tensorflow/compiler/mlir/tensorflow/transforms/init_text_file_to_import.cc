@@ -13,7 +13,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
+#include <memory>
 #include <numeric>
+#include <string>
+#include <utility>
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Casting.h"
@@ -45,7 +49,7 @@ static constexpr int kTextFileIndex_LineNumber = -1;
 class InitTextFileToImportPass
     : public impl::InitTextFileToImportPassBase<InitTextFileToImportPass> {
  public:
-  InitTextFileToImportPass() {}
+  InitTextFileToImportPass() = default;
   InitTextFileToImportPass(const InitTextFileToImportPass&) {}
   explicit InitTextFileToImportPass(std::string saved_model_dir) {
     saved_model_dir_ = saved_model_dir;
@@ -119,20 +123,19 @@ class ConvertInitializeTableFromTextFileV2
     std::iota(line_nums.begin(), line_nums.end(), 0);
 
     // Create constant ops for keys an values.
-    Value key_constant_tensor = rewriter.create<arith::ConstantOp>(
-        op.getLoc(),
+    Value key_constant_tensor = arith::ConstantOp::create(
+        rewriter, op.getLoc(),
         DenseStringElementsAttr::get(
             RankedTensorType::get(static_cast<int64_t>(lines.size()),
                                   StringType::get(rewriter.getContext())),
             lines));
 
-    Value value_constant_tensor = rewriter.create<arith::ConstantOp>(
-        op.getLoc(), rewriter.getI64TensorAttr(line_nums));
+    Value value_constant_tensor = arith::ConstantOp::create(
+        rewriter, op.getLoc(), rewriter.getI64TensorAttr(line_nums));
 
     // Replace the given op with LookupTableImportV2Op.
-    rewriter.create<LookupTableImportV2Op>(op.getLoc(), op.getTableHandle(),
-                                           key_constant_tensor,
-                                           value_constant_tensor);
+    LookupTableImportV2Op::create(rewriter, op.getLoc(), op.getTableHandle(),
+                                  key_constant_tensor, value_constant_tensor);
     rewriter.eraseOp(op);
     return success();
   }
@@ -148,7 +151,7 @@ void InitTextFileToImportPass::runOnOperation() {
 
   patterns.add<ConvertInitializeTableFromTextFileV2>(
       context, StringRef(saved_model_dir_));
-  (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
+  (void)applyPatternsGreedily(func, std::move(patterns));
 }
 
 }  // namespace

@@ -9,10 +9,12 @@
 
 #include "base/component_export.h"
 #include "base/containers/enum_set.h"
-#include "base/unguessable_token.h"
+#include "base/functional/callback.h"
 #include "components/account_id/account_id.h"
 
 namespace ash {
+
+class UserContext;
 
 // This token represents authentication proof. It can be safely passed
 // between components, and can be used to obtain authenticated
@@ -57,7 +59,8 @@ enum class AshAuthFactor {
   kLegacyPin = 5,
   kLegacyFingerprint = 6,
   kLocalPassword = 7,
-  kMaxValue = kLocalPassword,
+  kFingerprint = 8,
+  kMaxValue = kFingerprint,
 };
 
 using AuthFactorsSet = base::EnumSet<AshAuthFactor,
@@ -76,6 +79,18 @@ struct COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_OSAUTH) AuthAttemptVector {
   AuthPurpose purpose;
 
   bool operator==(const AuthAttemptVector&) const = default;
+};
+
+using BorrowContextCallback =
+    base::OnceCallback<void(std::unique_ptr<UserContext>)>;
+
+// Maps the values of the same-named policy located in
+// components/policy/resources/templates/policy_definitions/Signin/LocalAuthFactorsComplexity.yaml.
+enum class LocalAuthFactorsComplexity {
+  kNone = 1,
+  kLow,
+  kMedium,
+  kHigh,
 };
 
 }  // namespace ash

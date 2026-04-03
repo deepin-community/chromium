@@ -5,71 +5,177 @@
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
 
 #include <optional>
+#include <string>
+#include <variant>
 #include <vector>
 
-#include "base/metrics/histogram_functions.h"
+#include "base/base64.h"
+#include "base/base64url.h"
+#include "base/logging.h"
 #include "base/notreached.h"
+#include "base/strings/strcat.h"
+#include "base/strings/utf_string_conversions.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/supervised_user/core/browser/family_link_user_log_record.h"
+#include "components/strings/grit/components_strings.h"
+#include "components/supervised_user/core/browser/proto/parent_access_callback.pb.h"
+#include "components/supervised_user/core/browser/proto/transaction_data.pb.h"
+#include "components/supervised_user/core/browser/supervised_user_log_record.h"
+#include "components/supervised_user/core/common/features.h"
 #include "components/supervised_user/core/common/pref_names.h"
 #include "components/supervised_user/core/common/supervised_user_constants.h"
+#include "components/url_formatter/url_formatter.h"
 #include "components/url_matcher/url_util.h"
+#include "net/base/url_util.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
 
 namespace supervised_user {
 
 namespace {
 
-std::optional<FamilyLinkUserLogRecord::Segment> GetLogSegmentForHistogram(
-    const std::vector<FamilyLinkUserLogRecord>& records) {
-  std::optional<FamilyLinkUserLogRecord::Segment> merged_log_segment;
-  for (const FamilyLinkUserLogRecord& record : records) {
-    std::optional<FamilyLinkUserLogRecord::Segment> supervision_status =
-        record.GetSupervisionStatusForPrimaryAccount();
-    if (merged_log_segment.has_value() &&
-        merged_log_segment.value() != supervision_status) {
-      return FamilyLinkUserLogRecord::Segment::kMixedProfile;
-    }
-    merged_log_segment = supervision_status;
+// Url query param returned from the PACP widget with an encoded parent approval
+// result.
+constexpr char kParentAccessResultQueryParameter[] = "result";
+
+// Url that contains the approval result in PACP parent approval requests.
+constexpr char kPacpOriginUrlHost[] = "families.google.com";
+
+#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
+// Returns the text that will be shown as the PACP widget subtitle, containing
+// information about the blocked hostname and the blocking reason.
+std::string GetBlockingReasonSubtitle(
+    const std::u16string& blocked_hostname,
+    supervised_user::FilteringBehaviorReason filtering_reason) {
+  int message_id = 0;
+  switch (filtering_reason) {
+    case FilteringBehaviorReason::DEFAULT:
+      message_id = IDS_PARENT_WEBSITE_APPROVAL_BLOCK_ALL_URL;
+      break;
+    case FilteringBehaviorReason::ASYNC_CHECKER:
+      message_id = IDS_PARENT_WEBSITE_APPROVAL_SAFE_SITES_URL;
+      break;
+    case FilteringBehaviorReason::MANUAL:
+      message_id = IDS_PARENT_WEBSITE_APPROVAL_MANUAL_URL;
+      break;
+    case FilteringBehaviorReason::FILTER_DISABLED:
+      NOTREACHED() << "No blocking reason when the filter is disabled";
   }
-  return merged_log_segment;
+  return l10n_util::GetStringFUTF8(message_id, blocked_hostname);
 }
 
-std::optional<WebFilterType> GetWebFilterForHistogram(
-    const std::vector<FamilyLinkUserLogRecord>& records) {
-  std::optional<WebFilterType> merged_log_segment;
-  for (const FamilyLinkUserLogRecord& record : records) {
-    std::optional<WebFilterType> web_filter =
-        record.GetWebFilterTypeForPrimaryAccount();
-    if (!web_filter.has_value()) {
-      continue;
-    }
+// Returns a base64-encoded `TransactionData` proto message that encapsulates
+// the blocked url so that PACP can consume it.
+std::string GetBase64EncodedInTransactionalDataForPayload(
+    const std::u16string& blocked_hostname,
+    supervised_user::FilteringBehaviorReason filtering_reason) {
+  static constexpr char kPacpUrlPayloadMessageType[] =
+      "type.googleapis.com/"
+      "kids.platform.parentaccess.ui.common.proto.LocalApprovalPayload";
 
-    if (merged_log_segment.has_value() &&
-        merged_log_segment.value() != web_filter) {
-      return WebFilterType::kMixed;
-    }
-    merged_log_segment = web_filter;
-  }
-  return merged_log_segment;
+  CHECK(!blocked_hostname.empty());
+  kids::platform::parentaccess::proto::LocalApprovalPayload approval_url;
+  approval_url.set_url_approval_context(
+      GetBlockingReasonSubtitle(blocked_hostname, filtering_reason));
+
+  kids::platform::parentaccess::proto::TransactionData transaction_data;
+  transaction_data.mutable_payload()->set_value(
+      approval_url.SerializeAsString());
+  transaction_data.mutable_payload()->set_type_url(kPacpUrlPayloadMessageType);
+  std::string base_64_url_encoded_data;
+  base::Base64UrlEncode(transaction_data.SerializeAsString(),
+                        base::Base64UrlEncodePolicy::INCLUDE_PADDING,
+                        &base_64_url_encoded_data);
+  CHECK_GT(base_64_url_encoded_data.length(), 0UL);
+  return base_64_url_encoded_data;
 }
+#endif  // BUILDFLAG(IS_IOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
+        // BUILDFLAG(IS_WIN)
 }  // namespace
 
-std::string FilteringBehaviorReasonToString(FilteringBehaviorReason reason) {
-  switch (reason) {
-    case FilteringBehaviorReason::DEFAULT:
-      return "Default";
-    case FilteringBehaviorReason::ASYNC_CHECKER:
-      return "AsyncChecker";
-    case FilteringBehaviorReason::MANUAL:
-      return "Manual";
-    case FilteringBehaviorReason::ALLOWLIST:
-      return "Allowlist";
-    case FilteringBehaviorReason::NOT_SIGNED_IN:
-      return "NotSignedIn";
+ParentAccessCallbackParsedResult::ParentAccessCallbackParsedResult(
+    ParentAccessWidgetError error)
+    : result_(error) {}
+ParentAccessCallbackParsedResult::ParentAccessCallbackParsedResult(
+    kids::platform::parentaccess::client::proto::ParentAccessCallback callback)
+    : result_(callback) {}
+ParentAccessCallbackParsedResult::~ParentAccessCallbackParsedResult() = default;
+
+std::optional<ParentAccessWidgetError>
+ParentAccessCallbackParsedResult::GetError() const {
+  if (std::holds_alternative<ParentAccessWidgetError>(result_)) {
+    return std::get<ParentAccessWidgetError>(result_);
   }
-  return "Unknown";
+  return std::nullopt;
+}
+
+std::optional<kids::platform::parentaccess::client::proto::ParentAccessCallback>
+ParentAccessCallbackParsedResult::GetCallback() const {
+  if (std::holds_alternative<
+          kids::platform::parentaccess::client::proto::ParentAccessCallback>(
+          result_)) {
+    return std::get<
+        kids::platform::parentaccess::client::proto::ParentAccessCallback>(
+        result_);
+  }
+  return std::nullopt;
+}
+
+// static
+ParentAccessCallbackParsedResult
+ParentAccessCallbackParsedResult::ParseParentAccessCallbackResult(
+    const std::string& encoded_parent_access_callback_proto) {
+  std::string decoded_parent_access_callback;
+  if (!base::Base64UrlDecode(encoded_parent_access_callback_proto,
+                             base::Base64UrlDecodePolicy::IGNORE_PADDING,
+                             &decoded_parent_access_callback)) {
+    LOG(ERROR) << "ParentAccessHandler::ParentAccessResult: Error decoding "
+                  "parent_access_result from base64";
+    return ParentAccessCallbackParsedResult(
+        ParentAccessWidgetError::kDecodingError);
+  }
+
+  kids::platform::parentaccess::client::proto::ParentAccessCallback
+      parent_access_callback;
+  if (!parent_access_callback.ParseFromString(decoded_parent_access_callback)) {
+    LOG(ERROR) << "ParentAccessHandler::ParentAccessResult: Error parsing "
+                  "decoded_parent_access_result to proto";
+    return ParentAccessCallbackParsedResult(
+        ParentAccessWidgetError::kParsingError);
+  }
+
+  return ParentAccessCallbackParsedResult(parent_access_callback);
+}
+
+std::optional<std::string> MaybeGetPacpResultFromUrl(const GURL& url) {
+  std::string result_value;
+  bool contains_result_query_param = net::GetValueForKeyInQuery(
+      url,
+      /*search_key=*/kParentAccessResultQueryParameter,
+      /*out_value=*/&result_value);
+
+  if (!url.GetHost().starts_with(kPacpOriginUrlHost) ||
+      !contains_result_query_param) {
+    return std::nullopt;
+  }
+  return result_value;
+}
+
+std::string FamilyRoleToString(kidsmanagement::FamilyRole role) {
+  switch (role) {
+    case kidsmanagement::CHILD:
+      return "child";
+    case kidsmanagement::MEMBER:
+      return "member";
+    case kidsmanagement::PARENT:
+      return "parent";
+    case kidsmanagement::HEAD_OF_HOUSEHOLD:
+      return "family_manager";
+    default:
+      // Keep the previous semantics - other values were not allowed.
+      NOTREACHED();
+  }
 }
 
 GURL NormalizeUrl(const GURL& url) {
@@ -80,31 +186,47 @@ GURL NormalizeUrl(const GURL& url) {
   return url_matcher::util::Normalize(effective_url);
 }
 
-bool AreWebFilterPrefsDefault(const PrefService& pref_service) {
-  return pref_service
-             .FindPreference(prefs::kDefaultSupervisedUserFilteringBehavior)
-             ->IsDefaultValue() ||
-         pref_service.FindPreference(prefs::kSupervisedUserSafeSites)
-             ->IsDefaultValue();
-}
+#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
+GURL GetParentAccessURL(
+    const std::string& locale,
+    const GURL& blocked_url,
+    supervised_user::FilteringBehaviorReason filtering_reason) {
+  // Parent Access widget constants, used in the local web approval
+  // flow.
+  // URL hosting the Parent Access widget.
+  static constexpr char kBaseUrl[] = "https://families.google.com/parentaccess";
+  // URL to which the Parent Access widget redirects on approval.
+  static constexpr char kContinueUrl[] = "https://families.google.com";
 
-bool EmitLogRecordHistograms(
-    const std::vector<FamilyLinkUserLogRecord>& records) {
-  bool did_emit_histogram = false;
-  std::optional<FamilyLinkUserLogRecord::Segment> segment =
-      GetLogSegmentForHistogram(records);
-  if (segment.has_value()) {
-    base::UmaHistogramEnumeration(kFamilyLinkUserLogSegmentHistogramName,
-                                  segment.value());
-    did_emit_histogram = true;
-  }
-  std::optional<WebFilterType> web_filter = GetWebFilterForHistogram(records);
-  if (web_filter.has_value()) {
-    base::UmaHistogramEnumeration(
-        kFamilyLinkUserLogSegmentWebFilterHistogramName, web_filter.value());
-    did_emit_histogram = true;
-  }
-  return did_emit_histogram;
-}
+  // Caller Ids for Desktop and iOS platforms.
+#if BUILDFLAG(IS_IOS)
+  static constexpr char kCallerId[] = "qSTnVRdQ";
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  static constexpr char kCallerId[] = "clwAA5XJ";
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 
+  GURL url(kBaseUrl);
+  GURL::Replacements replacements;
+  std::string query = base::StrCat(
+      {"callerid=", kCallerId, "&hl=", locale, "&continue=", kContinueUrl});
+  if (base::FeatureList::IsEnabled(
+          kLocalWebApprovalsWidgetSupportsUrlPayload) &&
+      !blocked_url.GetHost().empty()) {
+    // Prepare blocked URL hostname for user-friendly display, including
+    // internationalized domain name (IDN) conversion if necessary.
+    std::u16string blocked_hostname = url_formatter::FormatUrl(
+        blocked_url,
+        url_formatter::kFormatUrlOmitHTTP | url_formatter::kFormatUrlOmitHTTPS |
+            url_formatter::kFormatUrlOmitDefaults,
+        base::UnescapeRule::SPACES, nullptr, nullptr, nullptr);
+    query += base::StrCat(
+        {"&transaction-data=", GetBase64EncodedInTransactionalDataForPayload(
+                                   blocked_hostname, filtering_reason)});
+  }
+  replacements.SetQueryStr(query);
+  return url.ReplaceComponents(replacements);
+}
+#endif  // BUILDFLAG(IS_IOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) ||
+        // BUILDFLAG(IS_WIN)
 }  // namespace supervised_user

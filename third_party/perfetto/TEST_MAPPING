@@ -1,7 +1,20 @@
 {
+  "art-mainline-presubmit": [
+    {
+      "name": "CtsPerfettoTestCases",
+      "options": [
+        {
+          "include-filter": "HeapprofdJavaCtsTest*"
+        }
+      ]
+    }
+  ],
   "presubmit": [
     {
       "name": "CtsPerfettoTestCases"
+    },
+    {
+      "name": "CtsPerfettoReporterTestCases"
     },
     // Additional presubmit tests that explicitly exercise
     // Perfetto's backend
@@ -22,6 +35,11 @@
   "hwasan-presubmit": [
     {
       "name": "CtsPerfettoTestCases"
+    }
+  ],
+  "postsubmit": [
+    {
+      "name": "libtracing_perfetto_tests"
     }
   ]
 }

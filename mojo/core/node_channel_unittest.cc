@@ -4,6 +4,7 @@
 
 #include "mojo/core/node_channel.h"
 
+#include "base/compiler_specific.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
@@ -25,6 +26,13 @@ using testing::_;
 
 class NodeChannelTest : public testing::Test {
  public:
+  void SetUp() override {
+    if (IsMojoIpczEnabled()) {
+      GTEST_SKIP() << "NodeChannel is never used when ipcz is enabled, so "
+                   << "these tests are neither supported nor relevant.";
+    }
+  }
+
   MockNodeChannelDelegate local_delegate_;
   MockNodeChannelDelegate remote_delegate_;
 };
@@ -102,7 +110,7 @@ TEST_F(NodeChannelTest, MessagesCannotBeSmallerThanOldestVersion) {
   auto message =
       Channel::Message::CreateMessage(capacity, capacity, /*num_handles=*/0);
 
-  memset(message->mutable_payload(), 0, capacity);
+  UNSAFE_TODO(memset(message->mutable_payload(), 0, capacity));
 
   // Set the type of this message as REQUEST_PORT_MERGE (6)
   *reinterpret_cast<uint32_t*>(message->mutable_payload()) = 6;

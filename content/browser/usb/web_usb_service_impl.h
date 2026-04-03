@@ -5,7 +5,6 @@
 #ifndef CONTENT_BROWSER_USB_WEB_USB_SERVICE_IMPL_H_
 #define CONTENT_BROWSER_USB_WEB_USB_SERVICE_IMPL_H_
 
-#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -120,8 +119,8 @@ class CONTENT_EXPORT WebUsbServiceImpl : public blink::mojom::WebUsbService,
   mojo::AssociatedRemoteSet<device::mojom::UsbDeviceManagerClient> clients_;
 
   // A UsbDeviceClient tracks a UsbDevice pipe that has been passed to Blink.
-  std::vector<std::unique_ptr<UsbDeviceClient>> device_clients_;
   int connection_count_ = 0;
+  std::vector<std::unique_ptr<UsbDeviceClient>> device_clients_;
 
   base::WeakPtrFactory<WebUsbServiceImpl> weak_factory_{this};
 };

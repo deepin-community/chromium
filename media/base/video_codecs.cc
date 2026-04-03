@@ -11,7 +11,7 @@
 namespace media {
 
 // The names come from src/third_party/ffmpeg/libavcodec/codec_desc.c
-// TODO(crbug.com/1357080): The returned strings are used by ChunkDemuxer in
+// TODO(crbug.com/40236537): The returned strings are used by ChunkDemuxer in
 // the code logic as well in tests. Merge with GetCodecNameForUMA() if possible.
 std::string GetCodecName(VideoCodec codec) {
   switch (codec) {
@@ -38,7 +38,7 @@ std::string GetCodecName(VideoCodec codec) {
     case VideoCodec::kAV1:
       return "av1";
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 // Reported as part of some UMA names. NEVER change existing strings!
@@ -67,7 +67,7 @@ std::string GetCodecNameForUMA(VideoCodec codec) {
     case VideoCodec::kAV1:
       return "AV1";
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 std::string GetProfileName(VideoCodecProfile profile) {
@@ -146,38 +146,8 @@ std::string GetProfileName(VideoCodecProfile profile) {
       return "av1 profile high";
     case AV1PROFILE_PROFILE_PRO:
       return "av1 profile pro";
-    case VVCPROFILE_MAIN10:
-      return "vvc profile main10";
-    case VVCPROFILE_MAIN12:
-      return "vvc profile main12";
-    case VVCPROFILE_MAIN12_INTRA:
-      return "vvc profile main12 intra";
-    case VVCPROIFLE_MULTILAYER_MAIN10:
-      return "vvc profile multilayer main10";
-    case VVCPROFILE_MAIN10_444:
-      return "vvc profile main10 444";
-    case VVCPROFILE_MAIN12_444:
-      return "vvc profile main12 444";
-    case VVCPROFILE_MAIN16_444:
-      return "vvc profile main16 444";
-    case VVCPROFILE_MAIN12_444_INTRA:
-      return "vvc profile main12 444 intra";
-    case VVCPROFILE_MAIN16_444_INTRA:
-      return "vvc profile main16 444 intra";
-    case VVCPROFILE_MULTILAYER_MAIN10_444:
-      return "vvc profile multilayer main10 444";
-    case VVCPROFILE_MAIN10_STILL_PICTURE:
-      return "vvc profile main10 still picture";
-    case VVCPROFILE_MAIN12_STILL_PICTURE:
-      return "vvc profile main12 still picture";
-    case VVCPROFILE_MAIN10_444_STILL_PICTURE:
-      return "vvc profile main10 444 still picture";
-    case VVCPROFILE_MAIN12_444_STILL_PICTURE:
-      return "vvc profile main12 444 still picture";
-    case VVCPROFILE_MAIN16_444_STILL_PICTURE:
-      return "vvc profile main16 444 still picture";
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 std::string BuildH264MimeSuffix(media::VideoCodecProfile profile,
@@ -271,25 +241,6 @@ VideoCodec VideoCodecProfileToVideoCodec(VideoCodecProfile profile) {
     case AV1PROFILE_PROFILE_HIGH:
     case AV1PROFILE_PROFILE_PRO:
       return VideoCodec::kAV1;
-    // TODO(crbugs.com/1417910): Update to VideoCodec::kVVC when
-    // the production VVC decoder is enabled and corresponding
-    // enum is allowed to be added.
-    case VVCPROFILE_MAIN10:
-    case VVCPROFILE_MAIN12:
-    case VVCPROFILE_MAIN12_INTRA:
-    case VVCPROIFLE_MULTILAYER_MAIN10:
-    case VVCPROFILE_MAIN10_444:
-    case VVCPROFILE_MAIN12_444:
-    case VVCPROFILE_MAIN16_444:
-    case VVCPROFILE_MAIN12_444_INTRA:
-    case VVCPROFILE_MAIN16_444_INTRA:
-    case VVCPROFILE_MULTILAYER_MAIN10_444:
-    case VVCPROFILE_MAIN10_STILL_PICTURE:
-    case VVCPROFILE_MAIN12_STILL_PICTURE:
-    case VVCPROFILE_MAIN10_444_STILL_PICTURE:
-    case VVCPROFILE_MAIN12_444_STILL_PICTURE:
-    case VVCPROFILE_MAIN16_444_STILL_PICTURE:
-      return VideoCodec::kUnknown;
   }
 }
 

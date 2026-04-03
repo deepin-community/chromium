@@ -11,13 +11,15 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 
+#include <algorithm>
 #include <bitset>
 #include <limits>
 #include <utility>
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
@@ -29,7 +31,6 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "ui/base/cursor/mojom/cursor_type.mojom-shared.h"
@@ -114,7 +115,7 @@ void DrawPixmap(x11::Connection* connection,
 
   auto color_type = ColorTypeForVisual(visual);
   if (color_type == kUnknown_SkColorType) {
-    // TODO(https://crbug.com/1066670): Add a fallback path in case any users
+    // TODO(crbug.com/40124639): Add a fallback path in case any users
     // are running a server that uses visual types for which Skia doesn't have
     // a corresponding color format.
     return;
@@ -133,7 +134,7 @@ void DrawPixmap(x11::Connection* connection,
   for (int row = 0; row < height; row += rows_per_request) {
     size_t n_rows = std::min<size_t>(rows_per_request, height - row);
     auto data = base::MakeRefCounted<base::RefCountedStaticMemory>(
-        vec.data() + row * row_bytes, n_rows * row_bytes);
+        base::span(vec).subspan(row * row_bytes, n_rows * row_bytes));
     connection->PutImage({
         .format = x11::ImageFormat::ZPixmap,
         .drawable = drawable,
@@ -247,15 +248,14 @@ void SetUseOSWindowFrame(x11::Window window, bool use_os_window_frame) {
     uint32_t status;
   } MotifWmHints;
 
-  MotifWmHints motif_hints;
-  memset(&motif_hints, 0, sizeof(motif_hints));
+  MotifWmHints motif_hints = {};
   // Signals that the reader of the _MOTIF_WM_HINTS property should pay
   // attention to the value of |decorations|.
   motif_hints.flags = (1u << 1);
   motif_hints.decorations = use_os_window_frame ? 1 : 0;
 
   std::vector<uint32_t> hints(sizeof(MotifWmHints) / sizeof(uint32_t));
-  memcpy(hints.data(), &motif_hints, sizeof(MotifWmHints));
+  UNSAFE_TODO(memcpy(hints.data(), &motif_hints, sizeof(MotifWmHints)));
   x11::Atom hint_atom = x11::GetAtom("_MOTIF_WM_HINTS");
   x11::Connection::Get()->SetArrayProperty(window, hint_atom, hint_atom, hints);
 }
@@ -294,7 +294,11 @@ bool GetRawBytesOfProperty(x11::Window window,
   if (!response || !response->format) {
     return false;
   }
-  *out_data = response->value;
+  // SAFETY: The GetProperty response has a `format` which specified the number
+  // of bits per object in the `value` and `value_len` for the number of
+  // objects, so `value_len * format / 8` gives the number of bytes in `value`.
+  *out_data = UNSAFE_BUFFERS(x11::SizedRefCountedMemory::From(
+      response->value, response->value_len * response->format / 8u));
   if (out_type) {
     *out_type = response->type;
   }
@@ -307,7 +311,7 @@ void SetWindowClassHint(x11::Connection* connection,
                         const std::string& res_class) {
   auto str =
       base::StringPrintf("%s%c%s", res_name.c_str(), '\0', res_class.c_str());
-  std::vector<char> data(str.data(), str.data() + str.size() + 1);
+  std::vector<char> data(str.data(), UNSAFE_TODO(str.data() + str.size() + 1));
   x11::Connection::Get()->SetArrayProperty(window, x11::Atom::WM_CLASS,
                                            x11::Atom::STRING, data);
 }
@@ -439,7 +443,7 @@ WindowManagerName GuessWindowManager() {
   if (name == "i3") {
     return WM_I3;
   }
-  if (base::StartsWith(name, "IceWM", base::CompareCase::SENSITIVE)) {
+  if (name.starts_with("IceWM")) {
     return WM_ICE_WM;
   }
   if (name == "ion3") {
@@ -545,7 +549,6 @@ UMALinuxWindowManager GetWindowManagerUMA() {
       return UMALinuxWindowManager::kXmonad;
   }
   NOTREACHED();
-  return UMALinuxWindowManager::kOther;
 }
 
 bool IsX11WindowFullScreen(x11::Window window) {
@@ -557,7 +560,7 @@ bool IsX11WindowFullScreen(x11::Window window) {
     std::vector<x11::Atom> atom_properties;
     if (x11::Connection::Get()->GetArrayProperty(
             window, x11::GetAtom("_NET_WM_STATE"), &atom_properties)) {
-      return base::Contains(atom_properties, fullscreen_atom);
+      return std::ranges::contains(atom_properties, fullscreen_atom);
     }
   }
 
@@ -691,7 +694,7 @@ gfx::ImageSkia GetNativeWindowIcon(intptr_t target_window_id) {
 
   for (long y = 0; y < height; ++y) {
     for (long x = 0; x < width; ++x) {
-      pixels_data[result.rowBytesAsPixels() * y + x] =
+      UNSAFE_TODO(pixels_data[result.rowBytesAsPixels() * y + x]) =
           static_cast<uint32_t>(data[start + width * y + x]);
     }
   }

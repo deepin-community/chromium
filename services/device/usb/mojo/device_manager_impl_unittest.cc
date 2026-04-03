@@ -16,7 +16,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
-#include "build/chromeos_buildflags.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/device/public/mojom/usb_enumeration_options.mojom.h"
@@ -26,7 +25,6 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::_;
-using ::testing::Invoke;
 
 namespace device {
 
@@ -119,7 +117,6 @@ TEST_F(USBDeviceManagerImplTest, GetDevices) {
       device_manager.BindNewPipeAndPassReceiver());
 
   auto filter = mojom::UsbDeviceFilter::New();
-  filter->has_vendor_id = true;
   filter->vendor_id = 0x1234;
   UsbEnumerationOptionsPtr options = mojom::UsbEnumerationOptions::New();
   options->filters.push_back(std::move(filter));

@@ -6,11 +6,13 @@
 
 #include <utility>
 
+#include "base/notimplemented.h"
 #include "build/build_config.h"
 #include "content/browser/renderer_host/render_frame_proxy_host.h"
 #include "content/browser/renderer_host/render_widget_host_view_child_frame.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/web_contents_view_delegate.h"
+#include "content/public/common/buildflags.h"
 #include "third_party/blink/public/mojom/input/focus_type.mojom.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/display/display_util.h"
@@ -102,12 +104,35 @@ gfx::Rect WebContentsViewChildFrame::GetContainerBounds() const {
 }
 
 void WebContentsViewChildFrame::SetInitialFocus() {
-  NOTREACHED();
+  // This should only be reachable in Webium, not other uses.
+  CHECK(base::FeatureList::IsEnabled(features::kAttachUnownedInnerWebContents));
+
+  if (web_contents_->FocusLocationBarByDefault()) {
+    web_contents_->SetFocusToLocationBar();
+  } else {
+    Focus();
+  }
 }
 
 gfx::Rect WebContentsViewChildFrame::GetViewBounds() const {
-  NOTREACHED();
+  if (RenderWidgetHostView* view = web_contents_->GetRenderWidgetHostView()) {
+    return view->GetViewBounds();
+  }
+
   return gfx::Rect();
+}
+
+void WebContentsViewChildFrame::Resize(const gfx::Rect& new_bounds) {
+  // This is intentionally empty. The size of WebContentsViewChildFrame is
+  // controlled by the embedder.
+}
+
+gfx::Size WebContentsViewChildFrame::GetSize() const {
+  if (RenderWidgetHostView* view = web_contents_->GetRenderWidgetHostView()) {
+    return view->GetViewBounds().size();
+  }
+
+  return gfx::Size();
 }
 
 void WebContentsViewChildFrame::CreateView(gfx::NativeView context) {
@@ -149,24 +174,37 @@ void WebContentsViewChildFrame::OnCapturerCountChanged() {}
 
 void WebContentsViewChildFrame::FullscreenStateChanged(bool is_fullscreen) {}
 
-void WebContentsViewChildFrame::UpdateWindowControlsOverlay(
-    const gfx::Rect& bounding_rect) {}
-
 BackForwardTransitionAnimationManager*
 WebContentsViewChildFrame::GetBackForwardTransitionAnimationManager() {
   return nullptr;
 }
 
+void WebContentsViewChildFrame::DestroyBackForwardTransitionAnimationManager() {
+}
+
 void WebContentsViewChildFrame::RestoreFocus() {
-  NOTREACHED();
+  NOTIMPLEMENTED();
 }
 
 void WebContentsViewChildFrame::Focus() {
-  NOTREACHED();
+  if (!base::FeatureList::IsEnabled(features::kAttachUnownedInnerWebContents)) {
+    return;
+  }
+
+  if (delegate_ && delegate_->Focus()) {
+    return;
+  }
+
+  RenderWidgetHostView* rwhv = web_contents_->GetRenderWidgetHostView();
+  if (rwhv) {
+    rwhv->Focus();
+  }
+
+  web_contents_->SetAsFocusedWebContentsIfNecessary();
 }
 
 void WebContentsViewChildFrame::StoreFocus() {
-  NOTREACHED();
+  NOTIMPLEMENTED();
 }
 
 void WebContentsViewChildFrame::FocusThroughTabTraversal(bool reverse) {
@@ -174,11 +212,6 @@ void WebContentsViewChildFrame::FocusThroughTabTraversal(bool reverse) {
 }
 
 DropData* WebContentsViewChildFrame::GetDropData() const {
-  NOTREACHED();
-  return nullptr;
-}
-
-void WebContentsViewChildFrame::TransferDragSecurityInfo(WebContentsView*) {
   NOTREACHED();
 }
 
@@ -204,7 +237,10 @@ void WebContentsViewChildFrame::TakeFocus(bool reverse) {
 void WebContentsViewChildFrame::ShowContextMenu(
     RenderFrameHost& render_frame_host,
     const ContextMenuParams& params) {
-  NOTREACHED();
+  if (delegate_) {
+    delegate_->ShowContextMenu(render_frame_host, params);
+    // WARNING: we may have been deleted during the call to ShowContextMenu().
+  }
 }
 
 #if BUILDFLAG(USE_EXTERNAL_POPUP_MENU)
@@ -212,7 +248,6 @@ void WebContentsViewChildFrame::ShowPopupMenu(
     RenderFrameHost* render_frame_host,
     mojo::PendingRemote<blink::mojom::PopupMenuClient> popup_client,
     const gfx::Rect& bounds,
-    int item_height,
     double item_font_size,
     int selected_item,
     std::vector<blink::mojom::MenuItemPtr> menu_items,
@@ -221,7 +256,7 @@ void WebContentsViewChildFrame::ShowPopupMenu(
 #if BUILDFLAG(IS_MAC)
   NoOpPopupMenuHelperDelegate delegate;
   PopupMenuHelper helper(&delegate, render_frame_host, std::move(popup_client));
-  helper.ShowPopupMenu(bounds, item_height, item_font_size, selected_item,
+  helper.ShowPopupMenu(bounds, item_font_size, selected_item,
                        std::move(menu_items), right_aligned,
                        allow_multiple_selection);
 #endif  // BUILDFLAG(IS_MAC)

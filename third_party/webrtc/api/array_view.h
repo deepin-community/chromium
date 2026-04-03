@@ -13,15 +13,18 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <iterator>
+#include <span>
 #include <type_traits>
 
+#include "absl/base/macros.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/type_traits.h"
 
-namespace rtc {
+namespace webrtc {
 
-// tl;dr: rtc::ArrayView is the same thing as gsl::span from the Guideline
+// tl;dr: ArrayView is the same thing as gsl::span from the Guideline
 //        Support Library.
 //
 // Many functions read from or write to arrays. The obvious way to do this is
@@ -36,10 +39,10 @@ namespace rtc {
 //   }
 //
 // This is flexible, since it doesn't matter how the array is stored (C array,
-// std::vector, rtc::Buffer, ...), but it's error-prone because the caller has
-// to correctly specify the array length:
+// std::vector, Buffer, ...), but it's error-prone because the caller
+// has to correctly specify the array length:
 //
-//   Contains17(arr, arraysize(arr));     // C array
+//   Contains17(arr, std::size(arr));     // C array
 //   Contains17(arr.data(), arr.size());  // std::vector
 //   Contains17(arr, size);               // pointer + size
 //   ...
@@ -47,11 +50,11 @@ namespace rtc {
 // It's also kind of messy to have two separate arguments for what is
 // conceptually a single thing.
 //
-// Enter rtc::ArrayView<T>. It contains a T pointer (to an array it doesn't
+// Enter ArrayView<T>. It contains a T pointer (to an array it doesn't
 // own) and a count, and supports the basic things you'd expect, such as
 // indexing and iteration. It allows us to write our function like this:
 //
-//   bool Contains17(rtc::ArrayView<const int> arr) {
+//   bool Contains17(ArrayView<const int> arr) {
 //     for (auto e : arr) {
 //       if (e == 17)
 //         return true;
@@ -64,7 +67,7 @@ namespace rtc {
 //
 //   Contains17(arr);                             // C array
 //   Contains17(arr);                             // std::vector
-//   Contains17(rtc::ArrayView<int>(arr, size));  // pointer + size
+//   Contains17(ArrayView<int>(arr, size));  // pointer + size
 //   Contains17(nullptr);                         // nullptr -> empty ArrayView
 //   ...
 //
@@ -96,7 +99,7 @@ class ArrayViewBase {
   static_assert(Size > 0, "ArrayView size must be variable or non-negative");
 
  public:
-  ArrayViewBase(T* data, size_t size) : data_(data) {}
+  ArrayViewBase(T* data, size_t /* size */) : data_(data) {}
 
   static constexpr size_t size() { return Size; }
   static constexpr bool empty() { return false; }
@@ -113,7 +116,7 @@ class ArrayViewBase {
 template <typename T>
 class ArrayViewBase<T, 0> {
  public:
-  explicit ArrayViewBase(T* data, size_t size) {}
+  explicit ArrayViewBase(T* /* data */, size_t /* size */) {}
 
   static constexpr size_t size() { return 0; }
   static constexpr bool empty() { return true; }
@@ -130,8 +133,8 @@ class ArrayViewBase<T, array_view_internal::kArrayViewVarSize> {
   ArrayViewBase(T* data, size_t size)
       : data_(size == 0 ? nullptr : data), size_(size) {}
 
-  size_t size() const { return size_; }
-  bool empty() const { return size_ == 0; }
+  constexpr size_t size() const { return size_; }
+  constexpr bool empty() const { return size_ == 0; }
   T* data() const { return data_; }
 
  protected:
@@ -212,18 +215,21 @@ class ArrayView final : public array_view_internal::ArrayViewBase<T, Size> {
   // N>, but not the other way around. We also don't allow conversion from
   // ArrayView<T> to ArrayView<T, N>, or from ArrayView<T, M> to ArrayView<T,
   // N> when M != N.
-  template <
-      typename U,
-      typename std::enable_if<Size != array_view_internal::kArrayViewVarSize &&
-                              HasDataAndSize<U, T>::value>::type* = nullptr>
+  template <typename U,
+            typename std::enable_if_t<
+                !std::is_same_v<ArrayView, std::remove_reference_t<U>> &&
+                Size != array_view_internal::kArrayViewVarSize &&
+                HasDataAndSize<U, T>::value>* = nullptr>
   ArrayView(U& u)  // NOLINT
       : ArrayView(u.data(), u.size()) {
     static_assert(U::size() == Size, "Sizes must match exactly");
   }
-  template <
-      typename U,
-      typename std::enable_if<Size != array_view_internal::kArrayViewVarSize &&
-                              HasDataAndSize<U, T>::value>::type* = nullptr>
+
+  template <typename U,
+            typename std::enable_if_t<
+                !std::is_same_v<ArrayView, std::remove_reference_t<U>> &&
+                Size != array_view_internal::kArrayViewVarSize &&
+                HasDataAndSize<U, T>::value>* = nullptr>
   ArrayView(const U& u)  // NOLINT(runtime/explicit)
       : ArrayView(u.data(), u.size()) {
     static_assert(U::size() == Size, "Sizes must match exactly");
@@ -238,18 +244,21 @@ class ArrayView final : public array_view_internal::ArrayViewBase<T, Size> {
   // ArrayView<T, N> to ArrayView<T> or ArrayView<const T>,
   // std::vector<T> to ArrayView<T> or ArrayView<const T>,
   // const std::vector<T> to ArrayView<const T>,
-  // rtc::Buffer to ArrayView<uint8_t> or ArrayView<const uint8_t>, and
-  // const rtc::Buffer to ArrayView<const uint8_t>.
-  template <
-      typename U,
-      typename std::enable_if<Size == array_view_internal::kArrayViewVarSize &&
-                              HasDataAndSize<U, T>::value>::type* = nullptr>
+  // Buffer to ArrayView<uint8_t> or ArrayView<const uint8_t>, and
+  // const Buffer to ArrayView<const uint8_t>.
+  template <typename U,
+            typename std::enable_if_t<
+                !std::is_same_v<ArrayView, std::remove_reference_t<U>> &&
+                Size == array_view_internal::kArrayViewVarSize &&
+                HasDataAndSize<U, T>::value>* = nullptr>
   ArrayView(U& u)  // NOLINT
       : ArrayView(u.data(), u.size()) {}
-  template <
-      typename U,
-      typename std::enable_if<Size == array_view_internal::kArrayViewVarSize &&
-                              HasDataAndSize<U, T>::value>::type* = nullptr>
+
+  template <typename U,
+            typename std::enable_if_t<
+                !std::is_same_v<ArrayView, std::remove_reference_t<U>> &&
+                Size == array_view_internal::kArrayViewVarSize &&
+                HasDataAndSize<U, T>::value>* = nullptr>
   ArrayView(const U& u)  // NOLINT(runtime/explicit)
       : ArrayView(u.data(), u.size()) {}
 
@@ -278,6 +287,20 @@ class ArrayView final : public array_view_internal::ArrayViewBase<T, Size> {
     return std::make_reverse_iterator(cbegin());
   }
 
+  constexpr ArrayView<T> subspan(size_t offset,
+                                 size_t count = std::dynamic_extent) const {
+    ABSL_HARDENING_ASSERT(offset <= this->size());
+    if (count == std::dynamic_extent) {
+      count = this->size() - offset;
+    } else {
+      ABSL_HARDENING_ASSERT(count <= this->size() - offset);
+    }
+    return ArrayView<T>(this->data() + offset, count);
+  }
+
+  // Prefer to use `subspan` instead of `subview` in new code.
+  // TODO: bugs.webrtc.org/439801349 - make deprecated when all usages in
+  // WebRTC and chromium are migrated to subspan.
   ArrayView<T> subview(size_t offset, size_t size) const {
     return offset < this->size()
                ? ArrayView<T>(this->data() + offset,
@@ -329,6 +352,7 @@ inline ArrayView<U, Size> reinterpret_array_view(ArrayView<T, Size> view) {
   return ArrayView<U, Size>(reinterpret_cast<U*>(view.data()), view.size());
 }
 
-}  // namespace rtc
+}  //  namespace webrtc
+
 
 #endif  // API_ARRAY_VIEW_H_

@@ -13,7 +13,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cassert>
+#include <cstdint>
 #include <memory>
+#include <string>
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -25,6 +28,7 @@ limitations under the License.
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
 #include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Transforms/Passes.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops_layout_helper.h"
@@ -49,7 +53,7 @@ TransposeOp ReuseExistingTranspose(const OpOperand* operand,
     auto tranpose_op = *it;
     for (auto tranpose_operand : tranpose_op.getOperands()) {
       auto ranked_tranpose_type =
-          tranpose_operand.getType().dyn_cast_or_null<RankedTensorType>();
+          mlir::dyn_cast_or_null<RankedTensorType>(tranpose_operand.getType());
       if (!ranked_tranpose_type) continue;
       if (ranked_tranpose_type.getRank() == permutation.size() &&
           operand->get().getType() ==
@@ -155,21 +159,21 @@ void LayoutAssignmentPass::runOnOperation() {
 
     // Permute arguments into the target data format.
     builder.setInsertionPoint(op);
-    auto arg_perm = builder.create<ConstOp>(loc, perm_attr(args_permutation));
+    auto arg_perm = ConstOp::create(builder, loc, perm_attr(args_permutation));
 
     for (int64_t arg : layout_sensitive_interface.GetLayoutDependentArgs()) {
-      op->setOperand(
-          arg, builder.create<TransposeOp>(loc, op->getOperand(arg), arg_perm));
+      op->setOperand(arg, TransposeOp::create(builder, loc, op->getOperand(arg),
+                                              arg_perm));
     }
 
     // Permute results back to the original data format.
     builder.setInsertionPointAfter(op);
-    auto res_perm = builder.create<ConstOp>(loc, perm_attr(res_permutation));
+    auto res_perm = ConstOp::create(builder, loc, perm_attr(res_permutation));
 
     for (int64_t res : layout_sensitive_interface.GetLayoutDependentResults()) {
       OpResult result = op->getResult(res);
 
-      auto transposed_res = builder.create<TransposeOp>(loc, result, res_perm);
+      auto transposed_res = TransposeOp::create(builder, loc, result, res_perm);
       result.replaceAllUsesWith(transposed_res);
       transposed_res.setOperand(0, result);
     }
@@ -201,7 +205,7 @@ void MoveTransposeBefore(Operation* op, SmallVector<Operation*, 8>* work_list) {
       if (!perm) return;
 
       // With the same permutation indices.
-      auto dense_elem_attr = perm.getValue().dyn_cast<DenseElementsAttr>();
+      auto dense_elem_attr = mlir::dyn_cast<DenseElementsAttr>(perm.getValue());
       if (!dense_elem_attr) return;
 
       if (!permutation_op) permutation_op = perm;
@@ -217,7 +221,7 @@ void MoveTransposeBefore(Operation* op, SmallVector<Operation*, 8>* work_list) {
   // Nothing to do here.
   if (!permutation_op || transpose_ops.empty()) return;
   SmallVector<int64_t, 4> permutation;
-  auto perm_attr = permutation_op.getValue().cast<DenseElementsAttr>();
+  auto perm_attr = mlir::cast<DenseElementsAttr>(permutation_op.getValue());
   for (const auto& value : perm_attr.getValues<APInt>())
     permutation.push_back(value.getSExtValue());
 
@@ -227,10 +231,11 @@ void MoveTransposeBefore(Operation* op, SmallVector<Operation*, 8>* work_list) {
   if (op->hasTrait<OpTrait::ResultsBroadcastableShape>()) {
     auto transpose_op = *transpose_ops.begin();
     auto result_type =
-        transpose_op.getResult().getType().dyn_cast_or_null<ShapedType>();
+        mlir::dyn_cast_or_null<ShapedType>(transpose_op.getResult().getType());
     auto is_valid_move =
         llvm::all_of(op->getOperands(), [result_type](Value operand) -> bool {
-          auto operand_type = operand.getType().dyn_cast_or_null<ShapedType>();
+          auto operand_type =
+              mlir::dyn_cast_or_null<ShapedType>(operand.getType());
           return result_type && operand_type && result_type.hasRank() &&
                  operand_type.hasRank() &&
                  result_type.getRank() == operand_type.getRank();
@@ -269,7 +274,7 @@ void MoveTransposeBefore(Operation* op, SmallVector<Operation*, 8>* work_list) {
     // If no transpose available for using, create new one.
     if (!transpose)
       transpose =
-          builder.create<TransposeOp>(loc, operand.get(), permutation_op);
+          TransposeOp::create(builder, loc, operand.get(), permutation_op);
 
     operand.set(transpose);
   }
@@ -343,7 +348,7 @@ void MoveTransposeAfter(Operation* op, SmallVector<Operation*, 8>* work_list,
     if (!perm) return;
 
     // With the same permutation indices.
-    auto dense_elem_attr = perm.getValue().dyn_cast<DenseElementsAttr>();
+    auto dense_elem_attr = mlir::dyn_cast<DenseElementsAttr>(perm.getValue());
     if (!dense_elem_attr) return;
 
     if (!permutation_op) permutation_op = perm;
@@ -365,7 +370,7 @@ void MoveTransposeAfter(Operation* op, SmallVector<Operation*, 8>* work_list,
 
   SmallVector<int64_t, 8> permutation;
 
-  auto attr = permutation_op.getValue().cast<DenseElementsAttr>();
+  auto attr = mlir::cast<DenseElementsAttr>(permutation_op.getValue());
   for (const auto& value : attr.getValues<APInt>())
     permutation.push_back(value.getSExtValue());
 
@@ -373,7 +378,7 @@ void MoveTransposeAfter(Operation* op, SmallVector<Operation*, 8>* work_list,
   if (fold_operands && fold_transpose_in_ops) {
     SmallVector<int64_t, 8> permutation;
 
-    auto attr = permutation_op.getValue().cast<DenseElementsAttr>();
+    auto attr = mlir::cast<DenseElementsAttr>(permutation_op.getValue());
     for (const auto& value : attr.getValues<APInt>())
       permutation.push_back(value.getSExtValue());
 
@@ -408,7 +413,7 @@ void MoveTransposeAfter(Operation* op, SmallVector<Operation*, 8>* work_list,
     // update the result type in `FoldOperandsPermutation`.
     if (layout_agnostic)
       result.setType(ReversePermuteShapedType(
-          result.getType().cast<ShapedType>(), permutation));
+          mlir::cast<ShapedType>(result.getType()), permutation));
 
     // Try to push transpose further down.
     for (Operation* user : result.getUsers()) {
@@ -422,9 +427,9 @@ void MoveTransposeAfter(Operation* op, SmallVector<Operation*, 8>* work_list,
       transpose.getOperation()->moveBefore(op->getNextNode());
       transpose.setOperand(0, result);
       transpose.setOperand(1, permutation_op);
-      transpose.getResult().setType(original_type[idx].cast<TensorType>());
+      transpose.getResult().setType(mlir::cast<TensorType>(original_type[idx]));
     } else {
-      transpose = builder.create<TransposeOp>(loc, result, permutation_op);
+      transpose = TransposeOp::create(builder, loc, result, permutation_op);
     }
 
     // Forward all users to the transpose operation.

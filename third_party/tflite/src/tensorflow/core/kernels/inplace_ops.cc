@@ -30,8 +30,8 @@ typedef Eigen::ThreadPoolDevice CPUDevice;
 namespace functor {
 
 template <typename Device, typename T>
-Status DoParallelConcatUpdate(const Device& d, const Tensor& value, int32_t loc,
-                              Tensor* output) {
+absl::Status DoParallelConcatUpdate(const Device& d, const Tensor& value,
+                                    int32_t loc, Tensor* output) {
   auto Tvalue = value.shaped<T, 2>({1, value.NumElements()});
   auto Toutput = output->flat_outer_dims<T>();
   auto nrows = Toutput.dimension(0);
@@ -41,8 +41,8 @@ Status DoParallelConcatUpdate(const Device& d, const Tensor& value, int32_t loc,
 }
 
 template <>
-Status DoParallelConcat(const CPUDevice& d, const Tensor& value, int32_t loc,
-                        Tensor* output) {
+absl::Status DoParallelConcat(const CPUDevice& d, const Tensor& value,
+                              int32_t loc, Tensor* output) {
   CHECK_EQ(value.dtype(), output->dtype());
   switch (value.dtype()) {
 #define CASE(type)                  \
@@ -106,7 +106,7 @@ class ParallelConcatUpdate : public OpKernel {
   }
 
  private:
-  int32 loc_;
+  int32_t loc_;
 };
 
 template <typename Device, typename T>
@@ -199,7 +199,7 @@ REGISTER_KERNEL_BUILDER(Name("_ParallelConcatUpdate")
                             .HostMemory("value")
                             .HostMemory("update")
                             .HostMemory("output")
-                            .TypeConstraint<int32>("T"),
+                            .TypeConstraint<int32_t>("T"),
                         ParallelConcatUpdate<CPUDevice>);
 #endif
 
@@ -240,8 +240,8 @@ class InplaceOpBase : public OpKernel {
   }
 
  protected:
-  virtual Status DoCompute(OpKernelContext* ctx, const Tensor& i,
-                           const Tensor& v, Tensor* y) = 0;
+  virtual absl::Status DoCompute(OpKernelContext* ctx, const Tensor& i,
+                                 const Tensor& v, Tensor* y) = 0;
 };
 
 }  // end namespace
@@ -251,7 +251,7 @@ namespace functor {
 template <typename T>
 void DoInplaceOp(const CPUDevice& d, InplaceOpType op, const Tensor& i,
                  const Tensor& v, Tensor* y) {
-  auto Ti = i.flat<int32>();
+  auto Ti = i.flat<int32_t>();
   auto Tv = v.flat_outer_dims<T>();
   auto Ty = y->flat_outer_dims<T>();
   auto nrows = Ty.dimension(0);
@@ -274,7 +274,7 @@ void DoInplaceOp(const CPUDevice& d, InplaceOpType op, const Tensor& i,
 // String type only supports inplace update.
 void DoInplaceStringUpdateOp(const CPUDevice& d, const Tensor& i,
                              const Tensor& v, Tensor* y) {
-  auto Ti = i.flat<int32>();
+  auto Ti = i.flat<int32_t>();
   auto Tv = v.flat_outer_dims<tstring>();
   auto Ty = y->flat_outer_dims<tstring>();
   auto nrows = Ty.dimension(0);
@@ -285,16 +285,16 @@ void DoInplaceStringUpdateOp(const CPUDevice& d, const Tensor& i,
 }
 
 template <>
-Status DoInplace(const CPUDevice& device, InplaceOpType op, const Tensor& i,
-                 const Tensor& v, Tensor* y) {
+absl::Status DoInplace(const CPUDevice& device, InplaceOpType op,
+                       const Tensor& i, const Tensor& v, Tensor* y) {
   CHECK_EQ(v.dtype(), y->dtype());
   if (op == I_UPDATE) {
     if (v.dtype() == DT_STRING) {
       DoInplaceStringUpdateOp(device, i, v, y);
-      return OkStatus();
+      return absl::OkStatus();
     } else if (v.dtype() == DT_BOOL) {
       DoInplaceOp<bool>(device, op, i, v, y);
-      return OkStatus();
+      return absl::OkStatus();
     }
   }
   switch (v.dtype()) {
@@ -308,7 +308,7 @@ Status DoInplace(const CPUDevice& device, InplaceOpType op, const Tensor& i,
       return errors::InvalidArgument("Unsupported data type: ",
                                      DataTypeString(v.dtype()));
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // end namespace functor
@@ -320,8 +320,8 @@ class InplaceOp : public InplaceOpBase {
   explicit InplaceOp(OpKernelConstruction* ctx) : InplaceOpBase(ctx) {}
 
  protected:
-  Status DoCompute(OpKernelContext* ctx, const Tensor& i, const Tensor& v,
-                   Tensor* y) override {
+  absl::Status DoCompute(OpKernelContext* ctx, const Tensor& i, const Tensor& v,
+                         Tensor* y) override {
     const auto& d = ctx->eigen_device<Device>();
     return ::tensorflow::functor::DoInplace(d, op, i, v, y);
   }
@@ -339,8 +339,8 @@ class CopyOpBase : public OpKernel {
   }
 
  protected:
-  virtual Status DoCompute(OpKernelContext* ctx, const Tensor& x,
-                           Tensor* y) = 0;
+  virtual absl::Status DoCompute(OpKernelContext* ctx, const Tensor& x,
+                                 Tensor* y) = 0;
 };
 
 template <typename Device>
@@ -349,7 +349,8 @@ class CopyOp : public CopyOpBase {
   explicit CopyOp(OpKernelConstruction* ctx) : CopyOpBase(ctx) {}
 
  protected:
-  Status DoCompute(OpKernelContext* ctx, const Tensor& x, Tensor* y) override {
+  absl::Status DoCompute(OpKernelContext* ctx, const Tensor& x,
+                         Tensor* y) override {
     const auto& d = ctx->eigen_device<Device>();
     return ::tensorflow::functor::DoCopy(d, x, y);
   }
@@ -362,7 +363,7 @@ namespace functor {
 typedef Eigen::ThreadPoolDevice CPUDevice;
 
 template <>
-Status DoCopy(const CPUDevice& device, const Tensor& x, Tensor* y) {
+absl::Status DoCopy(const CPUDevice& device, const Tensor& x, Tensor* y) {
   CHECK_EQ(x.dtype(), y->dtype());
   switch (x.dtype()) {
 #define CASE(type)                                   \
@@ -378,7 +379,7 @@ Status DoCopy(const CPUDevice& device, const Tensor& x, Tensor* y) {
       return errors::InvalidArgument("Unsupported data type: ",
                                      DataTypeString(x.dtype()));
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // end namespace functor
@@ -397,10 +398,10 @@ class EmptyOp : public OpKernel {
         ctx, TensorShapeUtils::IsVector(shape.shape()),
         errors::InvalidArgument("shape must be a vector of int32, got shape ",
                                 shape.shape().DebugString()));
-    auto dims = shape.flat<int32>();
+    auto dims = shape.flat<int32_t>();
     TensorShape out_shape;
     OP_REQUIRES_OK(ctx, TensorShapeUtils::MakeShape(
-                            reinterpret_cast<const int32*>(dims.data()),
+                            reinterpret_cast<const int32_t*>(dims.data()),
                             dims.size(), &out_shape));
     Tensor* out = nullptr;
     OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &out));
@@ -462,7 +463,7 @@ REGISTER(uint8_t);
 REGISTER(int64_t);
 REGISTER(uint64_t);
 
-REGISTER_EMPTY(int32, GPU);
+REGISTER_EMPTY(int32_t, GPU);
 #undef REGISTER
 
 #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
@@ -473,7 +474,7 @@ REGISTER_KERNEL_BUILDER(Name("InplaceUpdate")
                             .HostMemory("i")
                             .HostMemory("v")
                             .HostMemory("y")
-                            .TypeConstraint<int32>("T"),
+                            .TypeConstraint<int32_t>("T"),
                         InplaceOp<CPUDevice, functor::I_UPDATE>);
 REGISTER_KERNEL_BUILDER(Name("InplaceAdd")
                             .Device(DEVICE_DEFAULT)
@@ -481,7 +482,7 @@ REGISTER_KERNEL_BUILDER(Name("InplaceAdd")
                             .HostMemory("i")
                             .HostMemory("v")
                             .HostMemory("y")
-                            .TypeConstraint<int32>("T"),
+                            .TypeConstraint<int32_t>("T"),
                         InplaceOp<CPUDevice, functor::I_ADD>);
 REGISTER_KERNEL_BUILDER(Name("InplaceSub")
                             .Device(DEVICE_DEFAULT)
@@ -489,14 +490,14 @@ REGISTER_KERNEL_BUILDER(Name("InplaceSub")
                             .HostMemory("i")
                             .HostMemory("v")
                             .HostMemory("y")
-                            .TypeConstraint<int32>("T"),
+                            .TypeConstraint<int32_t>("T"),
                         InplaceOp<CPUDevice, functor::I_SUB>);
 
 REGISTER_KERNEL_BUILDER(Name("DeepCopy")
                             .Device(DEVICE_DEFAULT)
                             .HostMemory("x")
                             .HostMemory("y")
-                            .TypeConstraint<int32>("T"),
+                            .TypeConstraint<int32_t>("T"),
                         CopyOp<CPUDevice>);
 
 }  // end namespace

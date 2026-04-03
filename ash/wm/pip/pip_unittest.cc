@@ -32,20 +32,6 @@
 
 namespace ash {
 
-namespace {
-
-std::unique_ptr<views::Widget> CreateWidget(aura::Window* context) {
-  std::unique_ptr<views::Widget> widget(new views::Widget);
-  views::Widget::InitParams params;
-  params.delegate = new views::WidgetDelegateView();
-  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  params.context = context;
-  widget->Init(std::move(params));
-  return widget;
-}
-
-}  // namespace
-
 class PipTest : public AshTestBase {
  public:
   PipTest() = default;
@@ -62,6 +48,17 @@ class PipTest : public AshTestBase {
   }
 
   void TearDown() override { AshTestBase::TearDown(); }
+
+  static std::unique_ptr<views::Widget> CreateWidget(aura::Window* context) {
+    std::unique_ptr<views::Widget> widget(new views::Widget);
+    views::Widget::InitParams params(
+        views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+    params.delegate = new views::WidgetDelegateView(
+        views::WidgetDelegateView::CreatePassKey());
+    params.context = context;
+    widget->Init(std::move(params));
+    return widget;
+  }
 };
 
 TEST_F(PipTest, ShowInactive) {
@@ -151,7 +148,7 @@ TEST_F(PipTest, ShortcutNavigation) {
 TEST_F(PipTest, PipInitialPositionAvoidsObstacles) {
   UpdateDisplay("500x400");
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(gfx::Rect(100, 300, 100, 100)));
+      CreateTestWindowInShell({.bounds = {100, 300, 100, 100}}));
   WindowState* window_state = WindowState::Get(window.get());
   const WMEvent enter_pip(WM_EVENT_PIP);
   window_state->OnWMEvent(&enter_pip);
@@ -159,7 +156,7 @@ TEST_F(PipTest, PipInitialPositionAvoidsObstacles) {
 
   auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboard(/*lock=*/true);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
   aura::Window* keyboard_window = keyboard_controller->GetKeyboardWindow();
   keyboard_window->SetBounds(gfx::Rect(0, 300, 400, 100));
 
@@ -175,12 +172,12 @@ TEST_F(PipTest, TargetBoundsAffectedByWorkAreaChange) {
   // Place a keyboard window at the initial position of a PIP window.
   auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboard(/*lock=*/true);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
   aura::Window* keyboard_window = keyboard_controller->GetKeyboardWindow();
   keyboard_window->SetBounds(gfx::Rect(0, 300, 400, 100));
 
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(gfx::Rect(100, 300, 100, 100)));
+      CreateTestWindowInShell({.bounds = {100, 300, 100, 100}}));
   WindowState* window_state = WindowState::Get(window.get());
   const WMEvent enter_pip(WM_EVENT_PIP);
   window_state->OnWMEvent(&enter_pip);
@@ -196,7 +193,7 @@ TEST_F(PipTest, PipRestoresToPreviousBoundsOnMovementAreaChangeIfTheyExist) {
   ForceHideShelvesForTest();
   UpdateDisplay("500x400");
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(gfx::Rect(200, 200, 100, 100)));
+      CreateTestWindowInShell({.bounds = {200, 200, 100, 100}}));
   WindowState* window_state = WindowState::Get(window.get());
   const WMEvent enter_pip(WM_EVENT_PIP);
   window_state->OnWMEvent(&enter_pip);
@@ -298,7 +295,7 @@ TEST_F(PipTest, PipSnappedToEdgeWhenSavingSnapFraction) {
   ForceHideShelvesForTest();
   UpdateDisplay("500x400");
   std::unique_ptr<aura::Window> window(
-      CreateTestWindowInShellWithBounds(gfx::Rect(200, 200, 100, 100)));
+      CreateTestWindowInShell({.bounds = {200, 200, 100, 100}}));
   WindowState* window_state = WindowState::Get(window.get());
   const WMEvent enter_pip(WM_EVENT_PIP);
   window_state->OnWMEvent(&enter_pip);
@@ -308,7 +305,7 @@ TEST_F(PipTest, PipSnappedToEdgeWhenSavingSnapFraction) {
   // edges.
   auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboardInDisplay(window_state->GetDisplay());
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
   aura::Window* keyboard_window = keyboard_controller->GetKeyboardWindow();
   keyboard_window->SetBounds(gfx::Rect(0, 300, 400, 100));
 

@@ -19,7 +19,7 @@ class OpaqueBrowserFrameViewLayoutDelegate;
 namespace views {
 class Button;
 class Label;
-}
+}  // namespace views
 
 // Calculates the position of the widgets in the opaque browser frame view.
 //
@@ -38,6 +38,7 @@ class OpaqueBrowserFrameViewLayout : public views::LayoutManager {
 
   // Constants public for testing only.
   static constexpr int kNonClientExtraTopThickness = 1;
+  static constexpr int kFrameShadowThickness = 1;
   static const int kTopFrameEdgeThickness;
   static const int kSideFrameEdgeThickness;
   static const int kIconLeftSpacing;
@@ -62,12 +63,8 @@ class OpaqueBrowserFrameViewLayout : public views::LayoutManager {
       const std::vector<views::FrameButton>& leading_buttons,
       const std::vector<views::FrameButton>& trailing_buttons);
 
-  gfx::Rect GetBoundsForTabStripRegion(const gfx::Size& tabstrip_minimum_size,
-                                       int total_width) const;
-  gfx::Rect GetBoundsForWebAppFrameToolbar(
-      const gfx::Size& toolbar_preferred_size) const;
-  void LayoutWebAppWindowTitle(const gfx::Rect& available_space,
-                               views::Label& window_title_label) const;
+  // Retrieves the given frame button, if present.
+  const views::Button* GetFrameButton(views::FrameButton which) const;
 
   // Returns the bounds of the window required to display the content area at
   // the specified bounds.
@@ -88,8 +85,6 @@ class OpaqueBrowserFrameViewLayout : public views::LayoutManager {
   // window to the top of the tabs. If |restored| is true, this is calculated as
   // if the window was restored, regardless of its current state.
   int NonClientTopHeight(bool restored) const;
-
-  int GetTabStripInsetsTop(bool restored) const;
 
   // Returns the y-coordinate of the caption button when native frame buttons
   // are disabled.  If |restored| is true, acts as if the window is restored
@@ -127,9 +122,6 @@ class OpaqueBrowserFrameViewLayout : public views::LayoutManager {
 
   const gfx::Rect& client_view_bounds() const { return client_view_bounds_; }
 
-  // Returns the extra thickness of the area above the tabs.
-  int GetNonClientRestoredExtraThickness() const;
-
   // Enables or disables WCO and updates child views accordingly.
   void SetWindowControlsOverlayEnabled(bool enabled, views::View* host);
 
@@ -141,14 +133,10 @@ class OpaqueBrowserFrameViewLayout : public views::LayoutManager {
   // the other overrides.
   gfx::Size GetMinimumSize(const views::View* host) const override;
 
-
  protected:
   // Whether a specific button should be inserted on the leading or trailing
   // side.
-  enum ButtonAlignment {
-    ALIGN_LEADING,
-    ALIGN_TRAILING
-  };
+  enum class ButtonAlignment { kAlignLeading, kAlignTrailing };
 
   struct TopAreaPadding {
     int leading;
@@ -190,6 +178,8 @@ class OpaqueBrowserFrameViewLayout : public views::LayoutManager {
   int minimum_size_for_buttons_ = 0;
 
  private:
+  friend class OpaqueBrowserFrameViewLayoutTest;
+
   // Layout various sub-components of this view.
   void LayoutWindowControls();
   void LayoutTitleBar();
@@ -220,6 +210,9 @@ class OpaqueBrowserFrameViewLayout : public views::LayoutManager {
 
   // views::LayoutManager:
   gfx::Size GetPreferredSize(const views::View* host) const override;
+  gfx::Size GetPreferredSize(
+      const views::View* host,
+      const views::SizeBounds& available_size) const override;
   void ViewAdded(views::View* host, views::View* view) override;
   void ViewRemoved(views::View* host, views::View* view) override;
 
@@ -239,12 +232,10 @@ class OpaqueBrowserFrameViewLayout : public views::LayoutManager {
   int forced_window_caption_spacing_ = -1;
 
   // Window controls.
-  // These fields are not raw_ptr<> because they are assigned to |auto*| in
-  // ranged loop on an array initializer literal comprising of those pointers.
-  RAW_PTR_EXCLUSION views::Button* minimize_button_ = nullptr;
-  RAW_PTR_EXCLUSION views::Button* maximize_button_ = nullptr;
-  RAW_PTR_EXCLUSION views::Button* restore_button_ = nullptr;
-  RAW_PTR_EXCLUSION views::Button* close_button_ = nullptr;
+  raw_ptr<views::Button> minimize_button_ = nullptr;
+  raw_ptr<views::Button> maximize_button_ = nullptr;
+  raw_ptr<views::Button> restore_button_ = nullptr;
+  raw_ptr<views::Button> close_button_ = nullptr;
 
   raw_ptr<views::View> window_icon_ = nullptr;
   raw_ptr<views::Label, DanglingUntriaged> window_title_ = nullptr;

@@ -9,8 +9,8 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "chrome/browser/ash/auth/legacy_fingerprint_engine.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
-#include "chrome/browser/ui/ash/auth/legacy_fingerprint_engine.h"
 #include "chromeos/ash/components/login/auth/auth_performer.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -84,7 +84,7 @@ class FingerprintSetupScreen : public BaseScreen,
   bool ShouldBeSkipped(const WizardContext& context) const override;
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
 
  private:
   void StartAddingFinger();

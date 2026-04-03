@@ -6,11 +6,13 @@
 #define CHROME_BROWSER_UI_ASH_NETWORK_NETWORK_PORTAL_SIGNIN_CONTROLLER_H_
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/network/network_state.h"
 #include "chromeos/ash/components/network/network_state_handler_observer.h"
+#include "components/prefs/pref_service.h"
 #include "ui/views/widget/widget_observer.h"
 #include "url/gurl.h"
 
@@ -36,7 +38,10 @@ class NetworkPortalSigninController : public views::WidgetObserver,
     kIncognitoDisabledByPolicy = 6,
     // Incognito mode is disabled by parental controls.
     kIncognitoDisabledByParentalControls = 7,
-    kMaxValue = 7,
+    // Show in a dialog window on top of the floating workspace dialog
+    // inside the session.
+    kFloatingWorkspaceDialog = 8,
+    kMaxValue = 8,
   };
   friend std::ostream& operator<<(std::ostream& stream,
                                   const SigninMode& signin_mode);
@@ -57,12 +62,19 @@ class NetworkPortalSigninController : public views::WidgetObserver,
   friend std::ostream& operator<<(std::ostream& stream,
                                   const SigninSource& signin_mode);
 
-  static NetworkPortalSigninController* Get();
-
   NetworkPortalSigninController(const NetworkPortalSigninController&) = delete;
   NetworkPortalSigninController& operator=(
       const NetworkPortalSigninController&) = delete;
   ~NetworkPortalSigninController() override;
+
+  // Initializes the global instance.
+  static void Init(PrefService& local_state);
+
+  // Deletes the global instance.
+  static void Shutdown();
+
+  // Returns the global pointer to NetworkPortalSigninController.
+  static NetworkPortalSigninController* Get();
 
   // Shows the signin UI.
   void ShowSignin(SigninSource source);
@@ -83,7 +95,9 @@ class NetworkPortalSigninController : public views::WidgetObserver,
 
  protected:
   friend class base::NoDestructor<NetworkPortalSigninController>;
-  NetworkPortalSigninController();
+  friend class NetworkPortalSigninControllerTest;
+
+  explicit NetworkPortalSigninController(PrefService& local_state);
 
   // Shows the signin UI in a dialog window using the 'signin' (login) profile.
   // Overridden in tests.
@@ -97,9 +111,14 @@ class NetworkPortalSigninController : public views::WidgetObserver,
   // in tests.
   virtual void ShowTab(Profile* profile, const GURL& url);
 
+  // Shows the signin UI in a browser tab using the active user profile.
+  // Overridden in tests.
+  virtual void ShowActiveProfileTab(const GURL& url);
+
   SigninMode GetSigninMode(NetworkState::PortalState portal_state) const;
 
  private:
+  raw_ref<PrefService> local_state_;
   raw_ptr<views::Widget> dialog_widget_ = nullptr;
   base::ScopedObservation<views::Widget, views::WidgetObserver>
       dialog_widget_observation_{this};

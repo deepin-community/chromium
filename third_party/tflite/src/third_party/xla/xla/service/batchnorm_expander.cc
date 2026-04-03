@@ -24,6 +24,8 @@ limitations under the License.
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/function_ref.h"
 #include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/dfs_hlo_visitor_with_default.h"
@@ -35,12 +37,9 @@ limitations under the License.
 #include "xla/literal_util.h"
 #include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/status.h"
-#include "xla/statusor.h"
+#include "xla/tsl/platform/statusor.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/status.h"
-#include "tsl/platform/statusor.h"
 
 namespace xla {
 
@@ -52,11 +51,11 @@ using std::optional;
 // operations into smaller operations.
 class BatchNormExpanderVisitor : public DfsHloRewriteVisitor {
  public:
-  Status HandleBatchNormTraining(HloInstruction* batch_norm) override;
+  absl::Status HandleBatchNormTraining(HloInstruction* batch_norm) override;
 
-  Status HandleBatchNormInference(HloInstruction* batch_norm) override;
+  absl::Status HandleBatchNormInference(HloInstruction* batch_norm) override;
 
-  Status HandleBatchNormGrad(HloInstruction* batch_norm) override;
+  absl::Status HandleBatchNormGrad(HloInstruction* batch_norm) override;
 
   // Runs the visitor on a computation.
   static bool Run(HloComputation* computation, bool rewrite_training_op,
@@ -109,7 +108,7 @@ class BatchNormExpanderVisitor : public DfsHloRewriteVisitor {
     auto elements_per_feature_s32 = add_instruction(
         HloInstruction::CreateConstant(LiteralUtil::CreateR0<int32_t>(1)));
 
-    for (int64_t i = 0; i < operand->shape().rank(); ++i) {
+    for (int64_t i = 0; i < operand->shape().dimensions().size(); ++i) {
       if (i == feature_index) {
         continue;
       }
@@ -146,14 +145,14 @@ bool BatchNormExpanderVisitor::Run(HloComputation* computation,
       /*rewrite_training_op=*/rewrite_training_op,
       /*rewrite_inference_op=*/rewrite_inference_op,
       /*rewrite_grad_op=*/rewrite_grad_op);
-  TF_CHECK_OK(computation->Accept(&visitor));
+  CHECK_OK(computation->Accept(&visitor));
   return visitor.changed();
 }
 
-Status BatchNormExpanderVisitor::HandleBatchNormTraining(
+absl::Status BatchNormExpanderVisitor::HandleBatchNormTraining(
     HloInstruction* batch_norm) {
   if (!rewrite_training_op_) {
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   std::vector<HloInstruction*> added_instructions;
@@ -190,7 +189,7 @@ Status BatchNormExpanderVisitor::HandleBatchNormTraining(
       scalar_broadcast_shape,
       add(HloInstruction::CreateConstant(std::move(epsilon_literal))), {}));
   std::vector<int64_t> dimensions_without_feature;
-  const int64_t rank = operand_shape.rank();
+  const int64_t rank = operand_shape.dimensions().size();
   dimensions_without_feature.reserve(rank - 1);
 
   for (int64_t i = 0; i < rank; ++i) {
@@ -294,14 +293,14 @@ Status BatchNormExpanderVisitor::HandleBatchNormTraining(
     }
     tuple->set_sharding(sharding);
   }
-  TF_CHECK_OK(ReplaceWithNewInstruction(batch_norm, std::move(tuple)));
-  return OkStatus();
+  CHECK_OK(ReplaceWithNewInstruction(batch_norm, std::move(tuple)));
+  return absl::OkStatus();
 }
 
-Status BatchNormExpanderVisitor::HandleBatchNormInference(
+absl::Status BatchNormExpanderVisitor::HandleBatchNormInference(
     HloInstruction* batch_norm) {
   if (!rewrite_inference_op_) {
-    return OkStatus();
+    return absl::OkStatus();
   }
   // Expand batch norm inference into smaller HLO ops.
   HloInstruction* operand = batch_norm->mutable_operand(0);
@@ -325,7 +324,7 @@ Status BatchNormExpanderVisitor::HandleBatchNormInference(
       {}));
 
   std::vector<int64_t> dimensions_without_feature;
-  const int64_t rank = operand_shape.rank();
+  const int64_t rank = operand_shape.dimensions().size();
   dimensions_without_feature.reserve(rank - 1);
 
   for (int64_t i = 0; i < rank; ++i) {
@@ -386,11 +385,11 @@ Status BatchNormExpanderVisitor::HandleBatchNormInference(
     }
     shifted_normalized->set_sharding(sharding);
   }
-  TF_CHECK_OK(ReplaceInstruction(batch_norm, shifted_normalized));
-  return OkStatus();
+  CHECK_OK(ReplaceInstruction(batch_norm, shifted_normalized));
+  return absl::OkStatus();
 }
 
-Status BatchNormExpanderVisitor::HandleBatchNormGrad(
+absl::Status BatchNormExpanderVisitor::HandleBatchNormGrad(
     HloInstruction* batch_norm) {
   // Use the following formulas to calculate gradients:
   // scale_grad =
@@ -405,7 +404,7 @@ Status BatchNormExpanderVisitor::HandleBatchNormGrad(
   //   sum(output_grad * (activation - mean(activation))) / (variance +
   //   epsilon))
   if (!rewrite_grad_op_) {
-    return OkStatus();
+    return absl::OkStatus();
   }
   std::vector<HloInstruction*> added_instructions;
   auto add = [&](std::unique_ptr<HloInstruction> inst) {
@@ -448,7 +447,7 @@ Status BatchNormExpanderVisitor::HandleBatchNormGrad(
       ShapeUtil::MakeStaticShape(feature_shape), epsilon_scalar, {}));
 
   std::vector<int64_t> dimensions_without_feature;
-  const int64_t rank = activation_shape.rank();
+  const int64_t rank = activation_shape.dimensions().size();
   dimensions_without_feature.reserve(rank - 1);
 
   for (int64_t i = 0; i < rank; ++i) {
@@ -525,7 +524,8 @@ Status BatchNormExpanderVisitor::HandleBatchNormGrad(
 
   // scale * rsqrt[Var[X] + epsilon] * 1/N
   Shape scale_times_rsqrt_var_add_epsilon_shape = scale_broadcasted->shape();
-  for (int64_t i = 0; i < rsqrt_var_add_epsilon_broadcasted->shape().rank();
+  for (int64_t i = 0;
+       i < rsqrt_var_add_epsilon_broadcasted->shape().dimensions().size();
        ++i) {
     if (rsqrt_var_add_epsilon_broadcasted->shape().is_dynamic_dimension(i)) {
       scale_times_rsqrt_var_add_epsilon_shape.set_dynamic_dimension(i, true);
@@ -575,15 +575,16 @@ Status BatchNormExpanderVisitor::HandleBatchNormGrad(
     tuple->set_sharding(sharding);
   }
 
-  TF_CHECK_OK(ReplaceWithNewInstruction(batch_norm, std::move(tuple)));
+  CHECK_OK(ReplaceWithNewInstruction(batch_norm, std::move(tuple)));
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-StatusOr<bool> BatchNormExpander::Run(
+absl::StatusOr<bool> BatchNormExpander::RunImpl(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
-  XLA_VLOG_LINES(2, "BatchNormExpander::Run(), before:\n" + module->ToString());
+  XLA_VLOG_LINES(
+      2, "BatchNormExpander::RunImpl(), before:\n" + module->ToString());
   bool changed = false;
   for (HloComputation* computation :
        module->MakeNonfusionComputations(execution_threads)) {
@@ -593,7 +594,8 @@ StatusOr<bool> BatchNormExpander::Run(
       changed = true;
     }
   }
-  XLA_VLOG_LINES(2, "BatchNormExpander::Run(), after:\n" + module->ToString());
+  XLA_VLOG_LINES(2,
+                 "BatchNormExpander::RunImpl(), after:\n" + module->ToString());
   return changed;
 }
 

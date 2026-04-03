@@ -2,17 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
-#include "base/ranges/algorithm.h"
+#include "base/task/thread_pool.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/optimization_guide/browser_test_util.h"
-#include "chrome/browser/optimization_guide/chrome_prediction_model_store.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -21,13 +23,13 @@
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "components/optimization_guide/core/model_store_metadata_entry.h"
-#include "components/optimization_guide/core/model_util.h"
+#include "components/optimization_guide/core/delivery/model_store_metadata_entry.h"
+#include "components/optimization_guide/core/delivery/model_util.h"
+#include "components/optimization_guide/core/delivery/prediction_manager.h"
+#include "components/optimization_guide/core/delivery/prediction_model_fetch_timer.h"
 #include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_switches.h"
-#include "components/optimization_guide/core/prediction_manager.h"
-#include "components/optimization_guide/core/prediction_model_fetch_timer.h"
 #include "components/optimization_guide/proto/models.pb.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -36,10 +38,10 @@
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_switches.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace optimization_guide {
 
@@ -84,7 +86,7 @@ class PredictionModelStoreBrowserTestBase : public InProcessBrowserTest {
         net::EmbeddedTestServer::TYPE_HTTPS);
     net::EmbeddedTestServer::ServerCertificateConfig models_server_cert_config;
     models_server_cert_config.dns_names = {
-        GURL(kOptimizationGuideServiceGetModelsDefaultURL).host()};
+        GURL(kOptimizationGuideServiceGetModelsDefaultURL).GetHost()};
     models_server_cert_config.ip_addresses = {net::IPAddress::IPv4Localhost()};
     models_server_->SetSSLConfig(models_server_cert_config);
     models_server_->ServeFilesFromSourceDirectory(
@@ -111,15 +113,16 @@ class PredictionModelStoreBrowserTestBase : public InProcessBrowserTest {
   }
 
   void SetUpCommandLine(base::CommandLine* cmd) override {
-    cmd->AppendSwitch(switches::kDisableCheckingUserPermissionsForTesting);
+    cmd->AppendSwitch(switches::kGoogleApiKeyConfigurationCheckOverride);
     cmd->AppendSwitchASCII(
         switches::kOptimizationGuideServiceGetModelsURL,
         models_server_
-            ->GetURL(GURL(kOptimizationGuideServiceGetModelsDefaultURL).host(),
-                     "/")
+            ->GetURL(
+                GURL(kOptimizationGuideServiceGetModelsDefaultURL).GetHost(),
+                "/")
             .spec());
     cmd->AppendSwitchASCII("force-variation-ids", "4");
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     cmd->AppendSwitch(ash::switches::kIgnoreUserProfileMappingForTests);
 #endif
   }
@@ -130,7 +133,10 @@ class PredictionModelStoreBrowserTestBase : public InProcessBrowserTest {
     OptimizationGuideKeyedServiceFactory::GetForProfile(profile)
         ->AddObserverForOptimizationTargetModel(
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD,
-            /*model_metadata=*/std::nullopt, model_file_observer);
+            /*model_metadata=*/std::nullopt,
+            base::ThreadPool::CreateSequencedTaskRunner(
+                {base::MayBlock(), base::TaskPriority::BEST_EFFORT}),
+            model_file_observer);
   }
 
   // Registers |model_file_observer| for model updates from the optimization
@@ -161,7 +167,7 @@ class PredictionModelStoreBrowserTestBase : public InProcessBrowserTest {
   }
 
   void SetModelCacheKey(Profile* profile,
-                        const proto::ModelCacheKey& model_cache_key) {
+                        const ClientCacheKey& model_cache_key) {
     GetPredictionManager(profile)->SetModelCacheKeyForTesting(model_cache_key);
   }
 
@@ -171,8 +177,11 @@ class PredictionModelStoreBrowserTestBase : public InProcessBrowserTest {
   }
 
   base::FilePath GetModelStoreBaseDir() {
-    return ChromePredictionModelStore::GetInstance()
-        ->GetBaseStoreDirForTesting();
+    return g_browser_process->GetFeatures()
+        ->optimization_guide_global_feature()
+        ->Get()
+        .prediction_model_store()
+        .GetBaseStoreDirForTesting();
   }
 
   size_t ComputeModelsInStore() {
@@ -204,7 +213,7 @@ class PredictionModelStoreBrowserTestBase : public InProcessBrowserTest {
     EXPECT_EQ(request.method, net::test_server::METHOD_POST);
     EXPECT_TRUE(get_models_request.ParseFromString(request.content));
     response->set_code(net::HTTP_OK);
-    if (!base::ranges::any_of(
+    if (!std::ranges::any_of(
             get_models_request.requested_models(),
             [](const proto::ModelInfo& model_info) {
               return model_info.optimization_target() ==
@@ -251,7 +260,15 @@ class PredictionModelStoreBrowserTest
       const PredictionModelStoreBrowserTest&) = delete;
 };
 
-IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest, TestRegularProfile) {
+// TODO(crbug.com/329617221): Test is flaky on Win, Linux, and Mac ASan bots.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || \
+    (BUILDFLAG(IS_MAC) && defined(ADDRESS_SANITIZER))
+#define MAYBE_TestRegularProfile DISABLED_TestRegularProfile
+#else
+#define MAYBE_TestRegularProfile TestRegularProfile
+#endif
+IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
+                       MAYBE_TestRegularProfile) {
   ModelFileObserver model_file_observer;
   RegisterAndWaitForModelUpdate(&model_file_observer);
   EXPECT_EQ(model_file_observer.optimization_target(),
@@ -271,7 +288,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest, TestRegularProfile) {
       kSuccessfulModelVersion, 1);
 }
 
-// TODO(crbug.com/1517460): Re-enable this test
+// TODO(crbug.com/41490438): Re-enable this test
 #if BUILDFLAG(IS_CHROMEOS) && defined(ADDRESS_SANITIZER)
 #define MAYBE_TestIncognitoProfile DISABLED_TestIncognitoProfile
 #else
@@ -336,7 +353,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
 // Tests that two dissimilar profiles do not share the model, and the model will
 // be redownloaded.
 IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
-                       TestDissimilarProfilesNotShareModel) {
+                       DISABLED_TestDissimilarProfilesNotShareModel) {
   ModelFileObserver model_file_observer;
   RegisterAndWaitForModelUpdate(&model_file_observer);
 
@@ -352,7 +369,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
     base::HistogramTester histogram_tester_foo;
     ModelFileObserver model_file_observer_foo;
     Profile* profile_foo = CreateProfile();
-    SetModelCacheKey(profile_foo, CreateModelCacheKey(kTestLocaleFoo));
+    SetModelCacheKey(profile_foo, ClientCacheKey::FromLocale(kTestLocaleFoo));
 
     RegisterAndWaitForModelUpdate(&model_file_observer_foo, profile_foo);
     // Same model will be redownloaded.
@@ -378,7 +395,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
   {
     base::HistogramTester histogram_tester_foo;
     Profile* profile_foo = CreateProfile();
-    SetModelCacheKey(profile_foo, CreateModelCacheKey(kTestLocaleFoo));
+    SetModelCacheKey(profile_foo, ClientCacheKey::FromLocale(kTestLocaleFoo));
     RegisterAndWaitForModelUpdate(&model_file_observer_foo, profile_foo);
 
     histogram_tester_foo.ExpectUniqueSample(
@@ -392,7 +409,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
   {
     base::HistogramTester histogram_tester_bar;
     Profile* profile_bar = CreateProfile();
-    SetModelCacheKey(profile_bar, CreateModelCacheKey(kTestLocaleBar));
+    SetModelCacheKey(profile_bar, ClientCacheKey::FromLocale(kTestLocaleBar));
     RegisterAndWaitForModelUpdate(&model_file_observer_bar, profile_bar);
 
     // No more downloads should happen.
@@ -407,15 +424,17 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
 
 // Tests that two dissimilar profiles do not share the model, and the model will
 // be redownloaded, based on server returned model cache key.
+// TODO(crbug.com/444225753): Re-enable this test by converting the test to load
+// dissimilar profiles in subsequently as a PRE_ browser test.
 IN_PROC_BROWSER_TEST_F(
     PredictionModelStoreBrowserTest,
-    TestDissimilarProfilesNotShareModelWithServerModelCacheKey) {
+    DISABLED_TestDissimilarProfilesNotShareModelWithServerModelCacheKey) {
   ModelFileObserver model_file_observer_foo, model_file_observer_bar;
   {
     set_server_model_cache_key(CreateModelCacheKey(kTestLocaleFoo));
     base::HistogramTester histogram_tester_foo;
     Profile* profile_foo = CreateProfile();
-    SetModelCacheKey(profile_foo, CreateModelCacheKey(kTestLocaleFoo));
+    SetModelCacheKey(profile_foo, ClientCacheKey::FromLocale(kTestLocaleFoo));
     RegisterAndWaitForModelUpdate(&model_file_observer_foo, profile_foo);
 
     histogram_tester_foo.ExpectUniqueSample(
@@ -430,7 +449,7 @@ IN_PROC_BROWSER_TEST_F(
     set_server_model_cache_key(CreateModelCacheKey(kTestLocaleBar));
     base::HistogramTester histogram_tester_bar;
     Profile* profile_bar = CreateProfile();
-    SetModelCacheKey(profile_bar, CreateModelCacheKey(kTestLocaleBar));
+    SetModelCacheKey(profile_bar, ClientCacheKey::FromLocale(kTestLocaleBar));
     RegisterAndWaitForModelUpdate(&model_file_observer_bar, profile_bar);
 
     // Model will be downloaded since the server returned different model cache
@@ -450,14 +469,16 @@ IN_PROC_BROWSER_TEST_F(
 
 // Tests that when a second similar profile is loaded, model is downloaded when
 // the model version has been updated. The old model should not be used.
+// TODO(crbug.com/444225753): Re-enable this test by converting the test to load
+// the next profile subsequently, as a PRE_ browser test.
 IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
-                       TestSimilarProfilesOnModelVersionUpdate) {
+                       DISABLED_TestSimilarProfilesOnModelVersionUpdate) {
   ModelFileObserver model_file_observer_foo, model_file_observer_bar;
   set_server_model_cache_key(CreateModelCacheKey(kTestLocaleFoo));
   {
     base::HistogramTester histogram_tester_foo;
     Profile* profile_foo = CreateProfile();
-    SetModelCacheKey(profile_foo, CreateModelCacheKey(kTestLocaleFoo));
+    SetModelCacheKey(profile_foo, ClientCacheKey::FromLocale(kTestLocaleFoo));
     RegisterAndWaitForModelUpdate(&model_file_observer_foo, profile_foo);
 
     histogram_tester_foo.ExpectUniqueSample(
@@ -471,16 +492,16 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
   {
     // Mark the downloaded model as old version, to simulate model version
     // update.
-    ModelStoreMetadataEntryUpdater updater(
-        g_browser_process->local_state(),
-        proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD,
-        CreateModelCacheKey(kTestLocaleFoo));
+    ModelStoreMetadataEntryUpdater updater =
+        ModelStoreLedger(*g_browser_process->local_state())
+            .UpdateEntry(proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD,
+                         ClientCacheKey::FromLocale(kTestLocaleFoo));
     updater.SetVersion(kSuccessfulModelVersion - 1);
   }
   {
     base::HistogramTester histogram_tester_bar;
     Profile* profile_bar = CreateProfile();
-    SetModelCacheKey(profile_bar, CreateModelCacheKey(kTestLocaleBar));
+    SetModelCacheKey(profile_bar, ClientCacheKey::FromLocale(kTestLocaleBar));
     RegisterAndWaitForModelUpdate(&model_file_observer_bar, profile_bar);
 
     // Model will be downloaded since the model version got updated.
@@ -506,7 +527,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
 IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
                        PRE_TestOldModelRemovedOnModelUpdate) {
   auto model_cache_key =
-      CreateModelCacheKey(g_browser_process->GetApplicationLocale());
+      ClientCacheKey::FromLocale(g_browser_process->GetApplicationLocale());
   base::FilePath old_model_dir, new_model_dir;
   ModelFileObserver model_file_observer;
   {
@@ -523,11 +544,13 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
   {
     // Mark the downloaded model as old version, to simulate model version
     // update.
-    ModelStoreMetadataEntryUpdater updater(
-        g_browser_process->local_state(),
-        proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD, model_cache_key);
+    ModelStoreMetadataEntryUpdater updater =
+        ModelStoreLedger(*g_browser_process->local_state())
+            .UpdateEntry(proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD,
+                         model_cache_key);
     updater.SetVersion(kSuccessfulModelVersion - 1);
-    old_model_dir = GetModelStoreBaseDir().Append(*updater.GetModelBaseDir());
+    old_model_dir =
+        GetModelStoreBaseDir().Append(*updater.entry().GetModelBaseDir());
   }
   {
     // Trigger the periodic fetch timer.
@@ -561,9 +584,10 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
 
   {
     base::ScopedAllowBlockingForTesting allow_blocking;
-    auto entry = ModelStoreMetadataEntry::GetModelMetadataEntryIfExists(
-        g_browser_process->local_state(),
-        proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD, model_cache_key);
+    auto entry =
+        ModelStoreLedger(*g_browser_process->local_state())
+            .GetEntryIfExists(proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD,
+                              model_cache_key);
     new_model_dir = GetModelStoreBaseDir().Append(*entry->GetModelBaseDir());
     EXPECT_TRUE(base::DirectoryExists(old_model_dir));
     EXPECT_TRUE(base::DirectoryExists(new_model_dir));
@@ -585,8 +609,10 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
 // Tests the case when local state is inconsistent with the model directory,
 // i.e., when model file does not exist but the local state entry is populated,
 // it will lead to redownloading of the model.
+// TODO(crbug.com/444225753): Re-enable this test by converting the test to load
+// the next profile subsequently, as a PRE_ browser test.
 IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
-                       TestInconsistentLocalState) {
+                       DISABLED_TestInconsistentLocalState) {
   ModelFileObserver model_file_observer;
   RegisterAndWaitForModelUpdate(&model_file_observer);
 

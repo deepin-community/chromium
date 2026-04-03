@@ -10,16 +10,19 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/strings/to_string.h"
 #include "base/values.h"
 #include "chrome/browser/web_applications/commands/web_app_command.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/locks/noop_lock.h"
 #include "chrome/browser/web_applications/locks/web_app_lock_manager.h"
+#include "chrome/browser/web_applications/scheduler/fetch_installability_for_chrome_management_result.h"
 #include "chrome/browser/web_applications/web_app_command_manager.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
+#include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_contents/web_app_data_retriever.h"
-#include "chrome/browser/web_applications/web_contents/web_app_url_loader.h"
 #include "components/webapps/browser/installable/installable_logging.h"
+#include "components/webapps/browser/web_contents/web_app_url_loader.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/web_contents.h"
 #include "url/gurl.h"
@@ -29,7 +32,7 @@ namespace web_app {
 FetchInstallabilityForChromeManagement::FetchInstallabilityForChromeManagement(
     const GURL& url,
     base::WeakPtr<content::WebContents> web_contents,
-    std::unique_ptr<WebAppUrlLoader> url_loader,
+    std::unique_ptr<webapps::WebAppUrlLoader> url_loader,
     std::unique_ptr<WebAppDataRetriever> data_retriever,
     FetchInstallabilityForChromeManagementCallback callback)
     : WebAppCommand<NoopLock,
@@ -67,15 +70,16 @@ void FetchInstallabilityForChromeManagement::StartWithLock(
     return;
   }
 
-  url_loader_->LoadUrl(url_, web_contents_.get(),
-                       WebAppUrlLoader::UrlComparison::kIgnoreQueryParamsAndRef,
-                       base::BindOnce(&FetchInstallabilityForChromeManagement::
-                                          OnUrlLoadedCheckInstallability,
-                                      weak_factory_.GetWeakPtr()));
+  url_loader_->LoadUrl(
+      url_, web_contents_.get(),
+      webapps::WebAppUrlLoader::UrlComparison::kIgnoreQueryParamsAndRef,
+      base::BindOnce(&FetchInstallabilityForChromeManagement::
+                         OnUrlLoadedCheckInstallability,
+                     weak_factory_.GetWeakPtr()));
 }
 
 void FetchInstallabilityForChromeManagement::OnUrlLoadedCheckInstallability(
-    WebAppUrlLoader::Result result) {
+    webapps::WebAppUrlLoaderResult result) {
   if (IsWebContentsDestroyed()) {
     GetMutableDebugValue().Set("web_contents_destroyed", true);
     CompleteAndSelfDestruct(CommandResult::kSuccess,
@@ -83,24 +87,23 @@ void FetchInstallabilityForChromeManagement::OnUrlLoadedCheckInstallability(
                             std::nullopt);
     return;
   }
-  GetMutableDebugValue().Set("WebAppUrlLoader::Result",
-                             ConvertUrlLoaderResultToString(result));
+  GetMutableDebugValue().Set("WebAppUrlLoader::Result", base::ToString(result));
 
-  if (result == WebAppUrlLoader::Result::kRedirectedUrlLoaded) {
+  if (result == webapps::WebAppUrlLoaderResult::kRedirectedUrlLoaded) {
     CompleteAndSelfDestruct(CommandResult::kSuccess,
                             InstallableCheckResult::kNotInstallable,
                             std::nullopt);
     return;
   }
 
-  if (result == WebAppUrlLoader::Result::kFailedPageTookTooLong) {
+  if (result == webapps::WebAppUrlLoaderResult::kFailedPageTookTooLong) {
     CompleteAndSelfDestruct(CommandResult::kSuccess,
                             InstallableCheckResult::kNotInstallable,
                             std::nullopt);
     return;
   }
 
-  if (result != WebAppUrlLoader::Result::kUrlLoaded) {
+  if (result != webapps::WebAppUrlLoaderResult::kUrlLoaded) {
     CompleteAndSelfDestruct(CommandResult::kFailure,
                             InstallableCheckResult::kNotInstallable,
                             std::nullopt);
@@ -116,7 +119,6 @@ void FetchInstallabilityForChromeManagement::OnUrlLoadedCheckInstallability(
 
 void FetchInstallabilityForChromeManagement::OnWebAppInstallabilityChecked(
     blink::mojom::ManifestPtr opt_manifest,
-    const GURL& manifest_url,
     bool valid_manifest_for_web_app,
     webapps::InstallableStatusCode error_code) {
   if (IsWebContentsDestroyed()) {
@@ -135,15 +137,16 @@ void FetchInstallabilityForChromeManagement::OnWebAppInstallabilityChecked(
   DCHECK(opt_manifest);
   app_id_ = GenerateAppIdFromManifest(*opt_manifest);
   GetMutableDebugValue().Set("app_id", app_id_);
+  app_lock_ = std::make_unique<AppLock>();
   command_manager()->lock_manager().UpgradeAndAcquireLock(
-      std::move(noop_lock_), {app_id_},
+      std::move(noop_lock_), *app_lock_, {app_id_},
       base::BindOnce(&FetchInstallabilityForChromeManagement::OnAppLockGranted,
                      weak_factory_.GetWeakPtr()));
 }
 
-void FetchInstallabilityForChromeManagement::OnAppLockGranted(
-    std::unique_ptr<AppLock> app_lock) {
-  app_lock_ = std::move(app_lock);
+void FetchInstallabilityForChromeManagement::OnAppLockGranted() {
+  CHECK(app_lock_);
+  CHECK(app_lock_->IsGranted());
 
   if (IsWebContentsDestroyed()) {
     GetMutableDebugValue().Set("web_contents_destroyed", true);
@@ -153,12 +156,23 @@ void FetchInstallabilityForChromeManagement::OnAppLockGranted(
     return;
   }
   DCHECK(!app_id_.empty());
+
   InstallableCheckResult result;
-  if (app_lock_->registrar().IsInstalled(app_id_)) {
-    result = InstallableCheckResult::kAlreadyInstalled;
-  } else {
+  if (app_lock_->registrar().GetInstallState(app_id_) == std::nullopt) {
     result = InstallableCheckResult::kInstallable;
+  } else {
+    switch (app_lock_->registrar().GetInstallState(app_id_).value()) {
+      case web_app::proto::SUGGESTED_FROM_ANOTHER_DEVICE:
+      case web_app::proto::SUGGESTED_FROM_MIGRATION:
+        result = InstallableCheckResult::kInstallable;
+        break;
+      case web_app::proto::INSTALLED_WITH_OS_INTEGRATION:
+      case web_app::proto::INSTALLED_WITHOUT_OS_INTEGRATION:
+        result = InstallableCheckResult::kAlreadyInstalled;
+        break;
+    }
   }
+
   CompleteAndSelfDestruct(CommandResult::kSuccess, result, app_id_);
 }
 

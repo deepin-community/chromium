@@ -28,15 +28,19 @@
 #ifndef SRC_DAWN_TESTS_UNITTESTS_VALIDATION_VALIDATIONTEST_H_
 #define SRC_DAWN_TESTS_UNITTESTS_VALIDATION_VALIDATIONTEST_H_
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include <webgpu/webgpu_cpp.h>
+
 #include <memory>
 #include <string>
+#include <tuple>
+#include <vector>
 
 #include "dawn/common/Log.h"
 #include "dawn/native/BindGroupLayout.h"
 #include "dawn/native/DawnNative.h"
-#include "dawn/webgpu_cpp.h"
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
+#include "dawn/utils/ComboLimits.h"
 
 // Argument helpers to allow macro overriding.
 #define UNIMPLEMENTED_MACRO(...) DAWN_UNREACHABLE()
@@ -58,26 +62,46 @@
                   UNIMPLEMENTED_MACRO))                                                  \
     (__VA_ARGS__)
 
-#define ASSERT_DEVICE_ERROR_IMPL_1_(statement)                  \
-    StartExpectDeviceError();                                   \
-    statement;                                                  \
-    device.Tick();                                              \
-    FlushWire();                                                \
-    if (!EndExpectDeviceError()) {                              \
-        FAIL() << "Expected device error in:\n " << #statement; \
-    }                                                           \
-    do {                                                        \
+#define ASSERT_DEVICE_ERROR_IMPL_1_(statement)                         \
+    StartExpectDeviceError();                                          \
+    statement;                                                         \
+    device.Tick();                                                     \
+    FlushWire();                                                       \
+    if (!EndExpectDeviceError()) {                                     \
+        ADD_FAILURE() << "Expected device error in:\n " << #statement; \
+    }                                                                  \
+    do {                                                               \
     } while (0)
 
-#define ASSERT_DEVICE_ERROR_IMPL_2_(statement, matcher)         \
-    StartExpectDeviceError(matcher);                            \
-    statement;                                                  \
-    device.Tick();                                              \
-    FlushWire();                                                \
-    if (!EndExpectDeviceError()) {                              \
-        FAIL() << "Expected device error in:\n " << #statement; \
-    }                                                           \
-    do {                                                        \
+#define ASSERT_DEVICE_ERROR_IMPL_2_(statement, matcher)                \
+    StartExpectDeviceError(matcher);                                   \
+    statement;                                                         \
+    device.Tick();                                                     \
+    FlushWire();                                                       \
+    if (!EndExpectDeviceError()) {                                     \
+        ADD_FAILURE() << "Expected device error in:\n " << #statement; \
+    }                                                                  \
+    do {                                                               \
+    } while (0)
+
+#define ASSERT_DEVICE_LOG(statement, type, messageMatcher)                   \
+    StartExpectDeviceLog(type, messageMatcher);                              \
+    statement;                                                               \
+    device.Tick();                                                           \
+    FlushWire();                                                             \
+    if (!EndExpectDeviceLog()) {                                             \
+        ADD_FAILURE() << "Missing expected device log in:\n " << #statement; \
+    }                                                                        \
+    do {                                                                     \
+    } while (0)
+
+#define ASSERT_NO_DEVICE_LOG(statement) \
+    StartExpectNoDeviceLog();           \
+    statement;                          \
+    device.Tick();                      \
+    FlushWire();                        \
+    EndExpectNoDeviceLog();             \
+    do {                                \
     } while (0)
 
 // Skip a test when the given condition is satisfied.
@@ -90,16 +114,16 @@
         }                                                       \
     } while (0)
 
-#define EXPECT_DEPRECATION_WARNINGS(statement, n)                                                  \
-    do {                                                                                           \
-        FlushWire();                                                                               \
-        size_t warningsBefore = dawn::native::GetDeprecationWarningCountForTesting(backendDevice); \
-        EXPECT_EQ(mLastWarningCount, warningsBefore);                                              \
-        statement;                                                                                 \
-        FlushWire();                                                                               \
-        size_t warningsAfter = dawn::native::GetDeprecationWarningCountForTesting(backendDevice);  \
-        EXPECT_EQ(warningsAfter, warningsBefore + n);                                              \
-        mLastWarningCount = warningsAfter;                                                         \
+#define EXPECT_DEPRECATION_WARNINGS(statement, n)                          \
+    do {                                                                   \
+        FlushWire();                                                       \
+        uint64_t warningsBefore = GetInstanceDeprecationCountForTesting(); \
+        EXPECT_EQ(mLastWarningCount, warningsBefore);                      \
+        statement;                                                         \
+        FlushWire();                                                       \
+        uint64_t warningsAfter = GetInstanceDeprecationCountForTesting();  \
+        EXPECT_EQ(warningsAfter, warningsBefore + n);                      \
+        mLastWarningCount = warningsAfter;                                 \
     } while (0)
 #define EXPECT_DEPRECATION_WARNING(statement) EXPECT_DEPRECATION_WARNINGS(statement, 1)
 
@@ -128,6 +152,8 @@ class ValidationTest : public testing::Test {
     ValidationTest();
     ~ValidationTest() override;
 
+    // The default setup initializes the Instance with AllowUnsafeAPIs enabled and additional
+    // toggles and features via the getters enabled/disabled on the device.
     void SetUp() override;
     void TearDown() override;
 
@@ -136,12 +162,17 @@ class ValidationTest : public testing::Test {
     bool EndExpectDeviceError();
     std::string GetLastDeviceErrorMessage() const;
 
+    void StartExpectDeviceLog(wgpu::LoggingType type, testing::Matcher<std::string> messageMatcher);
+    bool EndExpectDeviceLog();
+    void StartExpectNoDeviceLog();
+    void EndExpectNoDeviceLog();
+
     void ExpectDeviceDestruction();
 
     bool UsesWire() const;
 
     void FlushWire();
-    void WaitForAllOperations(const wgpu::Device& device);
+    void WaitForAllOperations();
 
     // Helper functions to create objects to test validation.
 
@@ -159,36 +190,40 @@ class ValidationTest : public testing::Test {
 
     const dawn::native::ToggleInfo* GetToggleInfo(const char* name) const;
     bool HasToggleEnabled(const char* toggle) const;
-    wgpu::SupportedLimits GetSupportedLimits() const;
+    const dawn::utils::ComboLimits& GetSupportedLimits() const;
     dawn::utils::WireHelper* GetWireHelper() const;
 
   protected:
     dawn::native::Adapter& GetBackendAdapter();
-    // Helper function to create testing adapter and device during SetUp. Override these functions
-    // to change the creation behavior.
-    virtual void CreateTestAdapter(wgpu::RequestAdapterOptions options);
-    virtual WGPUDevice CreateTestDevice(dawn::native::Adapter dawnAdapter,
-                                        wgpu::DeviceDescriptor descriptor);
 
-    // Reinitializes the ValidationTest internal members given the instance descriptors.
-    // Particularly useful when writing tests that may need to pass different toggles to the
-    // instance. Note that this also reinitializes the adapter and device on the new instances via
-    // potentially overriden CreateTest[Adapter|Device] functions above.
-    void ReinitializeInstances(const wgpu::InstanceDescriptor* nativeDesc,
-                               const wgpu::InstanceDescriptor* wireDesc = nullptr);
+    // Called during SetUp() to get the required features and toggles to be enabled for the tests.
+    // Override these appropriately for different tests.
+    virtual bool AllowUnsafeAPIs();
+    virtual std::vector<wgpu::FeatureName> GetRequiredFeatures();
+    // Note implementations of this can assume `required` starts as default-initialized.
+    virtual void GetRequiredLimits(const dawn::utils::ComboLimits& supported,
+                                   dawn::utils::ComboLimits& required);
+    virtual std::vector<const char*> GetEnabledToggles();
+    virtual std::vector<const char*> GetDisabledToggles();
+    virtual std::vector<const char*> GetWGSLBlocklistedFeatures();
 
+    // Sets up the internal members by initializing the instances, adapter, and device.
+    void SetUp(const wgpu::InstanceDescriptor* nativeDesc,
+               const wgpu::InstanceDescriptor* wireDesc = nullptr);
+
+    uint64_t GetInstanceDeprecationCountForTesting();
+    // Request device and handle deprecation warning emitted during creating device.
     wgpu::Device RequestDeviceSync(const wgpu::DeviceDescriptor& deviceDesc);
-    static void OnDeviceError(WGPUErrorType type, const char* message, void* userdata);
-    static void OnDeviceLost(WGPUDeviceLostReason reason, const char* message, void* userdata);
 
     virtual bool UseCompatibilityMode() const;
 
     wgpu::Device device;
+    dawn::utils::ComboLimits deviceLimits;
     wgpu::Adapter adapter;
     WGPUDevice backendDevice;
     wgpu::Instance instance;
 
-    size_t mLastWarningCount = 0;
+    uint64_t mLastWarningCount = 0;
 
   private:
     std::unique_ptr<dawn::native::Instance> mDawnInstance;
@@ -200,7 +235,15 @@ class ValidationTest : public testing::Test {
     bool mExpectError = false;
     bool mError = false;
     testing::Matcher<std::string> mErrorMatcher;
+
+    static constexpr wgpu::LoggingType kExpectNoLog{0};
+    std::optional<std::tuple<wgpu::LoggingType, testing::Matcher<std::string>>> mExpectLog;
+    bool mGotLog = false;
+
     bool mExpectDestruction = false;
 };
+
+template <typename T, typename Base = ValidationTest>
+class ValidationTestWithParam : public Base, public testing::WithParamInterface<T> {};
 
 #endif  // SRC_DAWN_TESTS_UNITTESTS_VALIDATION_VALIDATIONTEST_H_

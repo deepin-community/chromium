@@ -14,15 +14,12 @@ namespace content {
 class WebContents;
 }
 
-namespace segmentation_platform {
-class MockSegmentationPlatformService;
-}  // namespace segmentation_platform
-
 namespace webapps {
 
 // Provides the ability to await the results of the installability check that
 // happens for every page load.
-class TestAppBannerManagerDesktop : public AppBannerManagerDesktop {
+class TestAppBannerManagerDesktop : public AppBannerManagerDesktop,
+                                    private AppBannerManager::Observer {
  public:
   explicit TestAppBannerManagerDesktop(content::WebContents* web_contents);
 
@@ -47,7 +44,10 @@ class TestAppBannerManagerDesktop : public AppBannerManagerDesktop {
   bool WaitForInstallableCheck();
 
   // Configures a callback to be invoked when the app banner flow finishes.
-  void PrepareDone(base::OnceClosure on_done);
+  void SetBannerPromptReplyCallback(base::OnceClosure on_banner_prompt_reply);
+
+  // Configures a callback to be invoked when the app banner flow finishes.
+  void SetCompleteCallback(base::OnceClosure on_complete);
 
   // Returns the internal state of the AppBannerManager.
   AppBannerManager::State state();
@@ -55,40 +55,40 @@ class TestAppBannerManagerDesktop : public AppBannerManagerDesktop {
   // Block until the current app has been installed.
   void AwaitAppInstall();
 
-  segmentation_platform::MockSegmentationPlatformService*
-  GetMockSegmentationPlatformService();
-
-  // AppBannerManager:
-  void OnDidGetManifest(const InstallableData& result) override;
-  void OnDidPerformInstallableWebAppCheck(
-      const InstallableData& result) override;
-  void ResetCurrentPageData() override;
-
   // AppBannerManagerDesktop:
+  void OnWebAppInstallableCheckedNoErrors(
+      const ManifestId& manifest_id) override;
+  void ResetCurrentPageData() override;
   TestAppBannerManagerDesktop* AsTestAppBannerManagerDesktopForTesting()
       override;
 
+  const base::ListValue& debug_log() const { return debug_log_; }
+
  protected:
   // AppBannerManager:
-  void OnInstall(blink::mojom::DisplayMode display) override;
-  void DidFinishCreatingWebApp(const webapps::AppId& app_id,
-                               webapps::InstallResultCode code) override;
+  // TODO(http://crbug.com/322342499): When AppBannerManager is devirtualized,
+  // listen to WebContentsObserver::DidFinishLoad directly instead.
   void DidFinishLoad(content::RenderFrameHost* render_frame_host,
                      const GURL& validated_url) override;
-  void UpdateState(AppBannerManager::State state) override;
-  void RecheckInstallabilityForLoadedPage() override;
 
  private:
-  void SetInstallable(bool installable);
-  void SetPromotable(bool promotable);
-  void OnFinished();
+  void RunInstallableQuitClosureIfNeeded();
 
-  std::optional<bool> installable_;
-  base::Value::List debug_log_;
+  // AppBannerManager::Observer:
+  void OnInstallableWebAppStatusUpdated(
+      InstallableWebAppCheckResult,
+      const std::optional<WebAppBannerData>&) override {}
+  void WillFetchManifest() override;
+  void OnInstall() override;
+  void OnBannerPromptReply() override;
+  void OnComplete() override;
+
+  bool installable_check_in_progress_ = true;
+  base::ListValue debug_log_;
   base::OnceClosure tear_down_quit_closure_;
   base::OnceClosure installable_quit_closure_;
-  base::OnceClosure promotable_quit_closure_;
-  base::OnceClosure on_done_;
+  base::OnceClosure on_banner_prompt_reply_;
+  base::OnceClosure on_complete_;
   base::OnceClosure on_install_;
 };
 

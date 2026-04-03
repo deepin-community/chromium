@@ -4,11 +4,11 @@
 
 #include "chrome/browser/sync_file_system/drive_backend/metadata_database_index_on_disk.h"
 
-#include <unordered_set>
+#include <array>
 
-#include "base/containers/contains.h"
 #include "base/format_macros.h"
 #include "base/logging.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/sync_file_system/drive_backend/drive_backend_constants.h"
@@ -16,6 +16,7 @@
 #include "chrome/browser/sync_file_system/drive_backend/leveldb_wrapper.h"
 #include "chrome/browser/sync_file_system/drive_backend/metadata_database.pb.h"
 #include "chrome/browser/sync_file_system/logger.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "third_party/leveldatabase/src/include/leveldb/status.h"
 
 // LevelDB database schema
@@ -199,7 +200,6 @@ void RemoveUnreachableItemsFromDB(LevelDBWrapper* db,
 
       if (!visited_trackers.insert(tracker_id).second) {
         NOTREACHED();
-        continue;
       }
 
       AppendContents(
@@ -210,7 +210,7 @@ void RemoveUnreachableItemsFromDB(LevelDBWrapper* db,
 
   // Delete all unreachable trackers, and list all |file_id| referred by
   // remained trackers.
-  std::unordered_set<std::string> referred_file_ids;
+  absl::flat_hash_set<std::string> referred_file_ids;
   {
     std::unique_ptr<LevelDBWrapper::Iterator> itr = db->NewIterator();
     for (itr->Seek(kFileTrackerKeyPrefix); itr->Valid(); itr->Next()) {
@@ -224,7 +224,7 @@ void RemoveUnreachableItemsFromDB(LevelDBWrapper* db,
         continue;
       }
 
-      if (base::Contains(visited_trackers, tracker->tracker_id())) {
+      if (visited_trackers.contains(tracker->tracker_id())) {
         referred_file_ids.insert(tracker->file_id());
       } else {
         PutFileTrackerDeletionToDB(tracker->tracker_id(), db);
@@ -246,8 +246,9 @@ void RemoveUnreachableItemsFromDB(LevelDBWrapper* db,
         continue;
       }
 
-      if (!base::Contains(referred_file_ids, metadata->file_id()))
+      if (!referred_file_ids.contains(metadata->file_id())) {
         PutFileMetadataDeletionToDB(metadata->file_id(), db);
+      }
     }
   }
 }
@@ -272,7 +273,7 @@ MetadataDatabaseIndexOnDisk::Create(LevelDBWrapper* db) {
   return index;
 }
 
-MetadataDatabaseIndexOnDisk::~MetadataDatabaseIndexOnDisk() {}
+MetadataDatabaseIndexOnDisk::~MetadataDatabaseIndexOnDisk() = default;
 
 void MetadataDatabaseIndexOnDisk::RemoveUnreachableItems() {
   RemoveUnreachableItemsFromDB(
@@ -378,7 +379,6 @@ void MetadataDatabaseIndexOnDisk::RemoveFileTracker(int64_t tracker_id) {
   FileTracker tracker;
   if (!GetFileTracker(tracker_id, &tracker)) {
     NOTREACHED();
-    return;
   }
 
   DVLOG(1) << "Removing tracker: "
@@ -535,11 +535,6 @@ bool MetadataDatabaseIndexOnDisk::HasDemotedDirtyTracker() const {
                           base::CompareCase::SENSITIVE);
 }
 
-bool MetadataDatabaseIndexOnDisk::IsDemotedDirtyTracker(
-    int64_t tracker_id) const {
-  return DBHasKey(GenerateDemotedDirtyIDKey(tracker_id));
-}
-
 void MetadataDatabaseIndexOnDisk::PromoteDemotedDirtyTracker(
     int64_t tracker_id) {
   std::string demoted_key = GenerateDemotedDirtyIDKey(tracker_id);
@@ -661,35 +656,6 @@ MetadataDatabaseIndexOnDisk::GetRegisteredAppIDs() const {
   return result;
 }
 
-std::vector<int64_t> MetadataDatabaseIndexOnDisk::GetAllTrackerIDs() const {
-  std::vector<int64_t> tracker_ids;
-  std::unique_ptr<LevelDBWrapper::Iterator> itr(db_->NewIterator());
-  for (itr->Seek(kFileTrackerKeyPrefix); itr->Valid(); itr->Next()) {
-    std::string id_str;
-    if (!RemovePrefix(itr->key().ToString(), kFileTrackerKeyPrefix, &id_str))
-      break;
-
-    int64_t tracker_id;
-    if (!base::StringToInt64(id_str, &tracker_id))
-      continue;
-    tracker_ids.push_back(tracker_id);
-  }
-  return tracker_ids;
-}
-
-std::vector<std::string>
-MetadataDatabaseIndexOnDisk::GetAllMetadataIDs() const {
-  std::vector<std::string> file_ids;
-  std::unique_ptr<LevelDBWrapper::Iterator> itr(db_->NewIterator());
-  for (itr->Seek(kFileMetadataKeyPrefix); itr->Valid(); itr->Next()) {
-    std::string file_id;
-    if (!RemovePrefix(itr->key().ToString(), kFileMetadataKeyPrefix, &file_id))
-      break;
-    file_ids.push_back(file_id);
-  }
-  return file_ids;
-}
-
 int64_t MetadataDatabaseIndexOnDisk::BuildTrackerIndexes() {
   int64_t num_puts_before = db_->num_puts();
 
@@ -715,13 +681,17 @@ int64_t MetadataDatabaseIndexOnDisk::BuildTrackerIndexes() {
 }
 
 int64_t MetadataDatabaseIndexOnDisk::DeleteTrackerIndexes() {
-  const char* kIndexPrefixes[] = {
-    kAppRootIDByAppIDKeyPrefix, kActiveTrackerIDByFileIDKeyPrefix,
-    kTrackerIDByFileIDKeyPrefix, kMultiTrackerByFileIDKeyPrefix,
-    kActiveTrackerIDByParentAndTitleKeyPrefix,
-    kTrackerIDByParentAndTitleKeyPrefix, kMultiBackingParentAndTitleKeyPrefix,
-    kDirtyIDKeyPrefix, kDemotedDirtyIDKeyPrefix
-  };
+  auto kIndexPrefixes = std::to_array<const char*>({
+      kAppRootIDByAppIDKeyPrefix,
+      kActiveTrackerIDByFileIDKeyPrefix,
+      kTrackerIDByFileIDKeyPrefix,
+      kMultiTrackerByFileIDKeyPrefix,
+      kActiveTrackerIDByParentAndTitleKeyPrefix,
+      kTrackerIDByParentAndTitleKeyPrefix,
+      kMultiBackingParentAndTitleKeyPrefix,
+      kDirtyIDKeyPrefix,
+      kDemotedDirtyIDKeyPrefix,
+  });
 
   int64_t num_deletes_before = db_->num_deletes();
   for (size_t i = 0; i < std::size(kIndexPrefixes); ++i)
@@ -898,7 +868,6 @@ void MetadataDatabaseIndexOnDisk::AddToPathIndexes(
         continue;
       if (tracker_id == new_tracker.tracker_id()) {
         NOTREACHED();
-        continue;
       }
 
       const std::string multi_key =

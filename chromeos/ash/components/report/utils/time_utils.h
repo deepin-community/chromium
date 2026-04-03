@@ -44,9 +44,10 @@ std::optional<base::Time> GetPreviousYear(base::Time ts);
 // Return if |ts1| and |ts2| have the same month and year.
 bool IsSameYearAndMonth(base::Time ts1, base::Time ts2);
 
-// Checks if first active week is under 4 months before active_ts.
-bool IsFirstActiveUnderFourMonthsAgo(base::Time active_ts,
-                                     base::Time first_active_week);
+// Check if first active week is under num_days before active ts.
+bool IsFirstActiveUnderNDaysAgo(base::Time active_ts,
+                                base::Time first_active_week,
+                                int num_days);
 
 // Formats |ts| as a GMT string in the format "YYYY-MM-DD 00:00:00.000 GMT".
 std::string FormatTimestampToMidnightGMTString(base::Time ts);
@@ -59,19 +60,21 @@ std::string TimeToYYYYMMDDString(base::Time ts);
 // Note: Date is based on UTC timezone, although we adjust ts to PST.
 std::string TimeToYYYYMMString(base::Time ts);
 
-// Get 1st day of the GMT based first active week, similar to ISO8601 date
-// (week) format. Field relies on ActivateDate VPD field, which is set after
-// ash-chrome is restarted following the completion of OOBE for the first time.
+// Get 1st day of the GMT based first active week recorded by VPD. Field relies
+// on ActivateDate VPD field, which is set after ash-chrome is restarted
+// following the completion of OOBE for the first time.
 std::optional<base::Time> GetFirstActiveWeek();
 
 // Calculates the date of the first Monday similar to ISO calendar for a
 // given year.
 std::optional<base::Time> FirstMondayOfISONewYear(int iso_year);
 
-// The ActivateDate is formatted: YYYY-WW and is generated based on GMT date.
-// Return the first day of the ISO8601 week as a timestamp.
-std::optional<base::Time> Iso8601DateWeekAsTime(int activate_year,
-                                                int activate_week_of_year);
+// Returns the first day of the week recorded by VPD as a timestamp.
+// VPD records the activate date with 'date --utc "+%Y-%W"'. "%W" is documented
+// on Linux manual page as "week number of year, with Monday as first day of
+// week(00..53)". This function processes the `activate_week_of_year` as "%W".
+std::optional<base::Time> VpdActivateDateWeekAsTime(int activate_year,
+                                                    int activate_week_of_year);
 
 // Convert base::Time object to YYYY-WW similar to ISO8601.
 // ISO calendar new year may start 1-3 days before the Gregorian new year or

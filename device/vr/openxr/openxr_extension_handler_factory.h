@@ -14,11 +14,13 @@
 
 namespace device {
 
+class OpenXrApiWrapper;
+class OpenXrDepthSensor;
 class OpenXrExtensionEnumeration;
 class OpenXrExtensionHelper;
-class OpenXrAnchorManager;
 class OpenXrHandTracker;
 enum class OpenXrHandednessType;
+class OpenXrLightEstimator;
 class OpenXRSceneUnderstandingManager;
 class OpenXrStageBoundsProvider;
 class OpenXrUnboundedSpaceProvider;
@@ -59,41 +61,61 @@ class OpenXrExtensionHandlerFactory {
   // populate this list, unlike the list of extensions which are expected to
   // essentially be static, as such we do not want to enforce any data types
   // (or const& values) on this function's implementations.
-  virtual std::set<device::mojom::XRSessionFeature> GetSupportedFeatures(
-      const OpenXrExtensionEnumeration* extension_enum) const = 0;
+  virtual std::set<device::mojom::XRSessionFeature> GetSupportedFeatures()
+      const = 0;
 
   // Returns whether or not this factory is enabled (e.g. can return at least
-  // one "ExtensionHandler" type). By default checks if all RequestedExtensions
-  // are supported.
-  virtual bool IsEnabled(
-      const OpenXrExtensionEnumeration* extension_enum) const;
+  // one "ExtensionHandler" type).
+  bool IsEnabled() const;
 
-  virtual std::unique_ptr<OpenXrAnchorManager> CreateAnchorManager(
+  // Checks if the factory should be enabled, and updates its internal state
+  // if it is. By default this checks if all RequestedExtensions are supported.
+  // However, some extensions have additional logic that they need to run, such
+  // as querying xrGetSystemProperties to check for support. Note that the
+  // `xrGetSystemProperties` calls cannot be combined as many of these
+  // extensions require appending their own struct to the default system
+  // properties and that the `next` pointer on their own struct must be null.
+  // This will be called during initialization.
+  virtual void CheckAndUpdateEnabledState(
+      const OpenXrExtensionEnumeration* extension_enum,
+      XrInstance instance,
+      XrSystemId system);
+
+  virtual std::unique_ptr<OpenXrDepthSensor> CreateDepthSensor(
       const OpenXrExtensionHelper& extension_helper,
       XrSession session,
-      XrSpace mojo_space) const;
+      XrSpace mojo_space,
+      const mojom::XRDepthOptions& depth_options) const;
 
   virtual std::unique_ptr<OpenXrHandTracker> CreateHandTracker(
       const OpenXrExtensionHelper& extension_helper,
       XrSession session,
       OpenXrHandednessType type) const;
 
+  virtual std::unique_ptr<OpenXrLightEstimator> CreateLightEstimator(
+      const OpenXrExtensionHelper& extenion_helper,
+      XrSession session,
+      XrSpace local_space) const;
+
   virtual std::unique_ptr<OpenXRSceneUnderstandingManager>
   CreateSceneUnderstandingManager(const OpenXrExtensionHelper& extension_helper,
-                                  XrSession session,
+                                  OpenXrApiWrapper* openxr,
                                   XrSpace mojo_space) const;
 
   virtual std::unique_ptr<OpenXrStageBoundsProvider> CreateStageBoundsProvider(
-      const OpenXrExtensionHelper& extension_helper,
       XrSession session) const;
 
   virtual std::unique_ptr<OpenXrUnboundedSpaceProvider>
-  CreateUnboundedSpaceProvider(
-      const OpenXrExtensionHelper& extension_helper) const;
+  CreateUnboundedSpaceProvider() const;
 
  protected:
   bool AreAllRequestedExtensionsSupported(
       const OpenXrExtensionEnumeration* extension_enum) const;
+
+  void SetEnabled(bool enabled);
+
+ private:
+  bool enabled_ = false;
 };
 }  // namespace device
 

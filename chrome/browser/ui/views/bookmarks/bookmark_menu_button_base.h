@@ -5,6 +5,8 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_MENU_BUTTON_BASE_H_
 #define CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_MENU_BUTTON_BASE_H_
 
+#include <string_view>
+
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/controls/button/menu_button.h"
@@ -14,11 +16,15 @@ class BookmarkMenuButtonBase : public views::MenuButton {
   METADATA_HEADER(BookmarkMenuButtonBase, views::MenuButton)
 
  public:
-  explicit BookmarkMenuButtonBase(
-      PressedCallback callback,
-      const std::u16string& title = std::u16string());
+  // Return true when a bookmark is being dragged.
+  using IsDraggingCallback = base::RepeatingCallback<bool()>;
+
+  explicit BookmarkMenuButtonBase(PressedCallback callback,
+                                  IsDraggingCallback is_dragging_callback,
+                                  std::u16string_view title = {});
   BookmarkMenuButtonBase(const BookmarkMenuButtonBase&) = delete;
   BookmarkMenuButtonBase& operator=(const BookmarkMenuButtonBase&) = delete;
+  ~BookmarkMenuButtonBase() override;
 
   // MenuButton:
   std::unique_ptr<views::LabelButtonBorder> CreateDefaultBorder()

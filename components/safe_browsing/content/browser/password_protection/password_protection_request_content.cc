@@ -12,9 +12,11 @@
 #include "components/safe_browsing/content/browser/client_side_detection_feature_cache.h"
 #include "components/safe_browsing/content/browser/password_protection/password_protection_commit_deferring_condition.h"
 #include "components/safe_browsing/content/browser/password_protection/password_protection_service.h"
-#include "components/safe_browsing/content/browser/web_ui/safe_browsing_ui.h"
+#include "components/safe_browsing/content/browser/web_ui/web_ui_content_info_singleton.h"
 #include "components/safe_browsing/core/browser/password_protection/request_canceler.h"
 #include "components/safe_browsing/core/common/features.h"
+#include "components/safe_browsing/core/common/proto/csd.pb.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
@@ -25,6 +27,7 @@
 #include "components/zoom/zoom_controller.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "mojo/public/cpp/base/proto_wrapper.h"
 #endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 
 #if BUILDFLAG(IS_ANDROID)
@@ -56,6 +59,13 @@ void LogCSDCacheContainsImages(bool contains_images) {
                             contains_images);
 }
 
+void LogCSDCacheContainsDebuggingMetadata(
+    LoginReputationClientRequest::DebuggingMetadata* debugging_metadata) {
+  base::UmaHistogramBoolean(
+      "PasswordProtection.CSDCacheContainsDebuggingMetadata",
+      debugging_metadata != nullptr);
+}
+
 }  // namespace
 
 // static
@@ -73,13 +83,14 @@ PasswordProtectionRequestContent::CreateForTesting(
     LoginReputationClientRequest::TriggerType type,
     bool password_field_exists,
     PasswordProtectionServiceBase* pps,
-    int request_timeout_in_ms) {
+    int request_timeout_in_ms,
+    std::optional<OtpPhishingVerdictCallback> otp_phishing_verdict_callback) {
   scoped_refptr<PasswordProtectionRequest> request(
       new PasswordProtectionRequestContent(
           web_contents, main_frame_url, password_form_action,
           password_form_frame_url, mime_type, username, password_type,
           matching_reused_credentials, type, password_field_exists, pps,
-          request_timeout_in_ms));
+          request_timeout_in_ms, std::move(otp_phishing_verdict_callback)));
   static_cast<PasswordProtectionRequestContent*>(request.get())
       ->prevent_initiating_url_loader_for_testing_ = true;
   return request;
@@ -98,7 +109,8 @@ PasswordProtectionRequestContent::PasswordProtectionRequestContent(
     LoginReputationClientRequest::TriggerType type,
     bool password_field_exists,
     PasswordProtectionServiceBase* pps,
-    int request_timeout_in_ms)
+    int request_timeout_in_ms,
+    std::optional<OtpPhishingVerdictCallback> otp_phishing_verdict_callback)
     : PasswordProtectionRequest(content::GetUIThreadTaskRunner({}),
                                 content::GetIOThreadTaskRunner({}),
                                 main_frame_url,
@@ -111,7 +123,8 @@ PasswordProtectionRequestContent::PasswordProtectionRequestContent(
                                 type,
                                 password_field_exists,
                                 pps,
-                                request_timeout_in_ms),
+                                request_timeout_in_ms,
+                                std::move(otp_phishing_verdict_callback)),
       web_contents_(web_contents) {
   request_canceler_ = RequestCanceler::CreateRequestCanceler(
       weak_factory_.GetWeakPtr(), web_contents);
@@ -159,13 +172,14 @@ void PasswordProtectionRequestContent::MaybeLogPasswordReuseLookupEvent(
 
 void PasswordProtectionRequestContent::MaybeAddPingToWebUI(
     const std::string& oauth_token) {
-  web_ui_token_ = WebUIInfoSingleton::GetInstance()->AddToPGPings(
+  web_ui_token_ = WebUIContentInfoSingleton::GetInstance()->AddToPGPings(
       *request_proto_, oauth_token);
 }
 
 void PasswordProtectionRequestContent::MaybeAddResponseToWebUI(
     const LoginReputationClientResponse& response) {
-  WebUIInfoSingleton::GetInstance()->AddToPGResponses(web_ui_token_, response);
+  WebUIContentInfoSingleton::GetInstance()->AddToPGResponses(web_ui_token_,
+                                                             response);
 }
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
@@ -178,33 +192,53 @@ bool PasswordProtectionRequestContent::IsVisualFeaturesEnabled() {
 }
 
 void PasswordProtectionRequestContent::GetDomFeatures() {
-  if (base::FeatureList::IsEnabled(kClientSideDetectionImagesCache)) {
-    ClientSideDetectionFeatureCache* feature_map =
-        ClientSideDetectionFeatureCache::FromWebContents(web_contents_);
-    if (feature_map) {
-      ClientPhishingRequest* feature =
-          feature_map->GetFeatureMapForURL(main_frame_url());
-      if (feature) {
-        dom_features_collection_complete_ = true;
+  ClientSideDetectionFeatureCache* feature_cache_map =
+      ClientSideDetectionFeatureCache::FromWebContents(web_contents_);
+  if (feature_cache_map) {
+    if (password_protection_service()->IsExtendedReporting() &&
+        trigger_type() == LoginReputationClientRequest::PASSWORD_REUSE_EVENT) {
+      LoginReputationClientRequest::DebuggingMetadata* debugging_metadata =
+          feature_cache_map->GetDebuggingMetadataForURL(main_frame_url());
 
-        LogCSDCacheContainsImages(true);
+      LogCSDCacheContainsDebuggingMetadata(debugging_metadata);
+      if (debugging_metadata) {
+        request_proto_->mutable_csd_debugging_metadata()->Swap(
+            debugging_metadata);
+        feature_cache_map->RemoveDebuggingMetadataForURL(main_frame_url());
+
+        // We expect the debugging metadata size to be non-zero in most cases
+        // because we'd expect that at least the Preclassification checks
+        // would have ran if the tab has loaded the page.
 
         base::UmaHistogramCounts100(
-            "PasswordProtection.CSDCacheSizeAtHit",
-            feature_map->GetTotalFeatureMapEntriesSize());
-
-        ExtractClientPhishingRequestFeatures(*feature);
-
-        if (!request_proto_->mutable_visual_features()->has_image() &&
-            IsVisualFeaturesEnabled()) {
-          MaybeCollectVisualFeatures();
-        } else {
-          SendRequest();
-        }
-        return;
-      } else {
-        LogCSDCacheContainsImages(false);
+            "PasswordProtection.CSDCacheDebuggingMetadataSizeAtHit",
+            feature_cache_map->GetTotalDebuggingMetadataMapEntriesSize());
       }
+    }
+
+    ClientPhishingRequest* verdict =
+        feature_cache_map->GetVerdictForURL(main_frame_url());
+    if (verdict) {
+      dom_features_collection_complete_ = true;
+
+      LogCSDCacheContainsImages(
+          verdict->mutable_visual_features()->has_image());
+
+      base::UmaHistogramCounts100000(
+          "PasswordProtection.CSDCacheSizeAtHit2",
+          feature_cache_map->GetTotalVerdictEntriesSize());
+
+      ExtractClientPhishingRequestFeatures(*verdict);
+
+      if (!request_proto_->mutable_visual_features()->has_image() &&
+          IsVisualFeaturesEnabled()) {
+        MaybeCollectVisualFeatures();
+      } else {
+        SendRequest();
+      }
+      return;
+    } else {
+      LogCSDCacheContainsImages(false);
     }
   }
 
@@ -216,6 +250,7 @@ void PasswordProtectionRequestContent::GetDomFeatures() {
   dom_features_collection_complete_ = false;
   phishing_detector_->StartPhishingDetection(
       main_frame_url(),
+      safe_browsing::mojom::ClientSideDetectionType::kPasswordProtection,
       base::BindRepeating(&PasswordProtectionRequestContent::OnGetDomFeatures,
                           weak_factory_.GetWeakPtr()));
 
@@ -230,7 +265,7 @@ void PasswordProtectionRequestContent::GetDomFeatures() {
 
 void PasswordProtectionRequestContent::OnGetDomFeatures(
     mojom::PhishingDetectorResult result,
-    const std::string& verdict) {
+    std::optional<mojo_base::ProtoWrapper> verdict) {
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
   if (dom_features_collection_complete_)
     return;
@@ -243,9 +278,12 @@ void PasswordProtectionRequestContent::OnGetDomFeatures(
       "PasswordProtection.SuccessfulPhishingDetectionWithinTimeout", true);
 
   dom_features_collection_complete_ = true;
-  ClientPhishingRequest dom_features_request;
-  if (dom_features_request.ParseFromString(verdict)) {
-    ExtractClientPhishingRequestFeatures(dom_features_request);
+  if (verdict.has_value()) {
+    auto dom_features_request = verdict->As<ClientPhishingRequest>();
+    if (dom_features_request.has_value()) {
+      ExtractClientPhishingRequestFeatures(
+          std::move(dom_features_request.value()));
+    }
   }
 
   if (!request_proto_->mutable_visual_features()->has_image() &&
@@ -300,7 +338,7 @@ void PasswordProtectionRequestContent::OnGetDomFeatureTimeout() {
 }
 
 bool PasswordProtectionRequestContent::ShouldCollectVisualFeatures() {
-  // TODO(crbug.com/1471200): Unify this with the code to populate
+  // TODO(crbug.com/40926113): Unify this with the code to populate
   // content_area_width and content_area_height on desktop.
 #if BUILDFLAG(IS_ANDROID)
   if (password_protection_service()->IsExtendedReporting() &&
@@ -339,7 +377,9 @@ bool PasswordProtectionRequestContent::ShouldCollectVisualFeatures() {
   // straight to sending the ping.
   bool trigger_type_supports_visual_features =
       trigger_type() == LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE ||
-      trigger_type() == LoginReputationClientRequest::PASSWORD_REUSE_EVENT;
+      trigger_type() == LoginReputationClientRequest::PASSWORD_REUSE_EVENT ||
+      trigger_type() ==
+          LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED;
 
   return trigger_type_supports_visual_features &&
          can_extract_visual_features_result ==
@@ -367,13 +407,15 @@ void PasswordProtectionRequestContent::CollectVisualFeatures() {
   visual_feature_start_time_ = base::TimeTicks::Now();
 
   view->CopyFromSurface(
-      gfx::Rect(), gfx::Size(),
+      gfx::Rect(), gfx::Size(), base::TimeDelta(),
       base::BindOnce(&PasswordProtectionRequestContent::OnScreenshotTaken,
                      weak_factory_.GetWeakPtr()));
 }
 
 void PasswordProtectionRequestContent::OnScreenshotTaken(
-    const SkBitmap& screenshot) {
+    const content::CopyFromSurfaceResult& result) {
+  // TODO(crbug.com/466199824): Update callsite to handle error case.
+  const SkBitmap& bitmap = result.has_value() ? result->bitmap : SkBitmap();
   // Do the feature extraction on a worker thread, to avoid blocking the UI.
   auto ui_thread_callback = base::BindOnce(
       &PasswordProtectionRequestContent::OnVisualFeatureCollectionDone,
@@ -382,7 +424,7 @@ void PasswordProtectionRequestContent::OnScreenshotTaken(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
        base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
-      base::BindOnce(&ExtractVisualFeaturesAndReplyOnUIThread, screenshot,
+      base::BindOnce(&ExtractVisualFeaturesAndReplyOnUIThread, bitmap,
                      std::move(ui_thread_callback)));
 }
 
@@ -404,13 +446,11 @@ void PasswordProtectionRequestContent::OnVisualFeatureCollectionDone(
 void PasswordProtectionRequestContent::SetReferringAppInfo() {
   PasswordProtectionService* service =
       static_cast<PasswordProtectionService*>(password_protection_service());
-  LoginReputationClientRequest::ReferringAppInfo referring_app_info =
+  ReferringAppInfo referring_app_info =
       service->GetReferringAppInfo(web_contents_);
-  UMA_HISTOGRAM_ENUMERATION(
-      "PasswordProtection.RequestReferringAppSource",
-      referring_app_info.referring_app_source(),
-      LoginReputationClientRequest::ReferringAppInfo::ReferringAppSource_MAX +
-          1);
+  UMA_HISTOGRAM_ENUMERATION("PasswordProtection.RequestReferringAppSource",
+                            referring_app_info.referring_app_source(),
+                            ReferringAppInfo::ReferringAppSource_MAX + 1);
   *request_proto_->mutable_referring_app_info() = std::move(referring_app_info);
 }
 #endif  // BUILDFLAG(IS_ANDROID)

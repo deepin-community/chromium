@@ -1,95 +1,111 @@
-/*
- * Copyright (C) 2011 Google Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// Copyright 2011 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
-import * as Host from '../../core/host/host.js';
+import '../../ui/kit/kit.js';
+
 import * as i18n from '../../core/i18n/i18n.js';
 import type * as Platform from '../../core/platform/platform.js';
+import {Directives, html, render} from '../lit/lit.js';
 import * as VisualLogging from '../visual_logging/visual_logging.js';
 
-import emptyWidgetStyles from './emptyWidget.css.legacy.js';
-import {Infobar, Type} from './Infobar.js';
+import emptyWidgetStyles from './emptyWidget.css.js';
+import inspectorCommonStyles from './inspectorCommon.css.js';
 import {VBox} from './Widget.js';
-import {XLink} from './XLink.js';
 
 const UIStrings = {
   /**
-   *@description Text that is usually a hyperlink to more documentation
+   * @description Text that is usually a hyperlink to more documentation
    */
   learnMore: 'Learn more',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('ui/legacy/EmptyWidget.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
+const {ref} = Directives;
+
+interface EmptyWidgetInput {
+  header: string;
+  text: string;
+  link?: Platform.DevToolsPath.UrlString|undefined|null;
+  extraElements?: Element[];
+}
+
+interface EmptyWidgetOutput {
+  contentElement: Element|undefined;
+}
+
+type View = (input: EmptyWidgetInput, output: EmptyWidgetOutput, target: HTMLElement) => void;
+
+const DEFAULT_VIEW: View = (input, output, target) => {
+  // clang-format off
+  render(html`
+    <style>${inspectorCommonStyles}</style>
+    <style>${emptyWidgetStyles}</style>
+    <div class="empty-state" jslog=${VisualLogging.section('empty-view')}
+         ${ref(e => {output.contentElement = e;})}>
+      <div class="empty-state-header">${input.header}</div>
+      <div class="empty-state-description">
+        <span>${input.text}</span>
+        ${input.link ? html`<devtools-link href=${input.link} jslogContext=${'learn-more'}>${i18nString(UIStrings.learnMore)}</devtools-link>` : ''}
+      </div>
+      ${input.extraElements}
+    </div>`, target);
+  // clang-format on
+};
 
 export class EmptyWidget extends VBox {
-  private textElement: HTMLElement;
+  #header: string;
+  #text: string;
+  #link: Platform.DevToolsPath.UrlString|undefined|null;
+  #view: View;
+  #firstUpdate = true;
+  #extraElements: Element[] = [];
 
-  constructor(text: string) {
-    super();
-    this.registerRequiredCSS(emptyWidgetStyles);
-    this.element.classList.add('empty-view-scroller');
-    this.contentElement = this.element.createChild('div', 'empty-view') as HTMLDivElement;
-    this.contentElement.setAttribute('jslog', `${VisualLogging.section('empty-view')}`);
-    this.textElement = this.contentElement.createChild('div', 'empty-bold-text');
-    this.textElement.textContent = text;
-  }
-
-  appendParagraph(): Element {
-    return this.contentElement.createChild('p');
-  }
-
-  appendLink(link: Platform.DevToolsPath.UrlString): HTMLElement {
-    const learnMoreLink = XLink.create(link, i18nString(UIStrings.learnMore), undefined, undefined, 'learn-more');
-    return this.contentElement.appendChild(learnMoreLink) as HTMLElement;
-  }
-
-  appendWarning(message: string, learnMoreLink: Platform.DevToolsPath.UrlString, jsLogContext?: string): Infobar {
-    function openLink(): void {
-      Host.InspectorFrontendHost.InspectorFrontendHostInstance.openInNewTab(learnMoreLink);
+  constructor(headerOrElement: string|HTMLElement, text = '', element?: HTMLElement, view = DEFAULT_VIEW) {
+    const header = typeof headerOrElement === 'string' ? headerOrElement : '';
+    if (!element && headerOrElement instanceof HTMLElement) {
+      element = headerOrElement;
     }
+    super(element, {classes: ['empty-view-scroller']});
+    this.#header = header;
+    this.#text = text;
+    this.#link = undefined;
+    this.#view = view;
+    this.performUpdate();
+  }
 
-    const actions = learnMoreLink ? [{
-      text: 'Learn More',
-      highlight: true,
-      delegate: openLink,
-      dismiss: false,
-      jsLogContext: 'learn-more',
-    }] :
-                                    undefined;
-
-    const warningBar = new Infobar(Type.Warning, message, actions, undefined, undefined, jsLogContext);
-    warningBar.element.classList.add('warning');
-    this.element.prepend(warningBar.element);
-    return warningBar;
+  set link(link: Platform.DevToolsPath.UrlString|undefined|null) {
+    this.#link = link;
+    this.performUpdate();
   }
 
   set text(text: string) {
-    this.textElement.textContent = text;
+    this.#text = text;
+    this.performUpdate();
+  }
+
+  set header(header: string) {
+    this.#header = header;
+    this.performUpdate();
+  }
+
+  set extraElements(elements: HTMLElement[]) {
+    this.#extraElements = elements;
+    this.#firstUpdate = false;
+    this.requestUpdate();
+  }
+
+  override performUpdate(): void {
+    if (this.#firstUpdate) {
+      this.#extraElements = [...this.element.children];
+      this.#firstUpdate = false;
+    }
+    const output = {contentElement: undefined};
+    this.#view(
+        {header: this.#header, text: this.#text, link: this.#link, extraElements: this.#extraElements}, output,
+        this.element);
+    if (output.contentElement) {
+      this.contentElement = output.contentElement;
+    }
   }
 }

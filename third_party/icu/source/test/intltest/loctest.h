@@ -23,6 +23,7 @@ public:
      * Test methods to set and get data fields
      **/
     void TestBasicGetters();
+    void TestVariantLengthLimit();
     /**
      * Test methods to set and get data fields
      **/
@@ -124,13 +125,16 @@ public:
     void TestBug13554();
     void TestBug20410();
     void TestBug20900();
+    void TestChromiumBug451657601();
     void TestLocaleCanonicalizationFromFile();
     void TestKnownCanonicalizedListCorrect();
     void TestConstructorAcceptsBCP47();
 
+    void TestPseudoLocales();
     void TestAddLikelySubtags();
     void TestMinimizeSubtags();
     void TestAddLikelyAndMinimizeSubtags();
+    void TestDataDrivenLikelySubtags();
 
     void TestForLanguageTag();
     void TestForLanguageTagLegacyTagBug21676();

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/android/scoped_java_ref.h"
+#include "base/compiler_specific.h"
 #include "base/containers/flat_set.h"
 #include "base/logging.h"
 #include "net/android/keystore.h"
@@ -136,8 +137,8 @@ class SSLPlatformKeyAndroid : public ThreadedSSLPrivateKey::Delegate {
       return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
     }
 
-    std::optional<std::vector<uint8_t>> padded =
-        AddPSSPadding(pubkey_.get(), md, base::make_span(digest, digest_len));
+    std::optional<std::vector<uint8_t>> padded = AddPSSPadding(
+        pubkey_.get(), md, UNSAFE_TODO(base::span(digest, digest_len)));
     if (!padded) {
       return ERR_SSL_CLIENT_AUTH_SIGNATURE_FAILED;
     }
@@ -162,9 +163,15 @@ scoped_refptr<SSLPrivateKey> WrapJavaPrivateKey(
     const X509Certificate* certificate,
     const JavaRef<jobject>& key) {
   bssl::UniquePtr<EVP_PKEY> pubkey = GetClientCertPublicKey(certificate);
-  if (!pubkey)
-    return nullptr;
+  return WrapJavaPrivateKey(std::move(pubkey), key);
+}
 
+scoped_refptr<SSLPrivateKey> WrapJavaPrivateKey(
+    bssl::UniquePtr<EVP_PKEY> pubkey,
+    const JavaRef<jobject>& key) {
+   if (!pubkey) {
+    return nullptr;
+  }
   return base::MakeRefCounted<ThreadedSSLPrivateKey>(
       std::make_unique<SSLPlatformKeyAndroid>(std::move(pubkey), key),
       GetSSLPlatformKeyTaskRunner());

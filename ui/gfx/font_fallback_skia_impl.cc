@@ -6,7 +6,9 @@
 
 #include <set>
 #include <string>
+#include <string_view>
 
+#include "base/compiler_specific.h"
 #include "skia/ext/font_utils.h"
 #include "third_party/icu/source/common/unicode/normalizer2.h"
 #include "third_party/icu/source/common/unicode/uchar.h"
@@ -36,12 +38,12 @@ bool UnicodeDecomposeCodepoint(UChar32 codepoint, icu::UnicodeString* output) {
 
 // Extracts every codepoint and its decomposed codepoints from unicode
 // decomposition. Inserts in |codepoints| the set of codepoints in |text|.
-void RetrieveCodepointsAndDecomposedCodepoints(base::StringPiece16 text,
+void RetrieveCodepointsAndDecomposedCodepoints(std::u16string_view text,
                                                std::set<UChar32>* codepoints) {
   size_t offset = 0;
   while (offset < text.length()) {
     UChar32 codepoint;
-    U16_NEXT(text.data(), offset, text.length(), codepoint);
+    UNSAFE_TODO(U16_NEXT(text.data(), offset, text.length(), codepoint));
 
     if (codepoints->insert(codepoint).second) {
       // For each codepoint, add the decomposed codepoints.
@@ -58,14 +60,14 @@ void RetrieveCodepointsAndDecomposedCodepoints(base::StringPiece16 text,
 // Returns the amount of codepoint in |text| without a glyph representation in
 // |typeface|. A codepoint is present if there is a corresponding glyph in
 // typeface, or if there are glyphs for each of its decomposed codepoints.
-size_t ComputeMissingGlyphsForGivenTypeface(base::StringPiece16 text,
+size_t ComputeMissingGlyphsForGivenTypeface(std::u16string_view text,
                                             sk_sp<SkTypeface> typeface) {
   // Validate that every character has a known glyph in the font.
   size_t missing_glyphs = 0;
   size_t i = 0;
   while (i < text.length()) {
     UChar32 codepoint;
-    U16_NEXT(text.data(), i, text.length(), codepoint);
+    UNSAFE_TODO(U16_NEXT(text.data(), i, text.length(), codepoint));
 
     // The glyph is present in the font.
     if (typeface->unicharToGlyph(codepoint) != 0)
@@ -106,7 +108,7 @@ size_t ComputeMissingGlyphsForGivenTypeface(base::StringPiece16 text,
 
 sk_sp<SkTypeface> GetSkiaFallbackTypeface(const Font& template_font,
                                           const std::string& locale,
-                                          base::StringPiece16 text) {
+                                          std::u16string_view text) {
   if (text.empty())
     return nullptr;
 

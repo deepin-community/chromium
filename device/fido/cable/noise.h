@@ -10,6 +10,7 @@
 #include <array>
 #include <optional>
 #include <tuple>
+#include <vector>
 
 #include "base/component_export.h"
 #include "base/containers/span.h"
@@ -19,7 +20,7 @@ namespace device {
 
 // Noise implements a small subset of the Noise Protocol Framework [1].
 //
-// http://www.noiseprotocol.org/noise.html#the-handshakestate-object
+// https://www.noiseprotocol.org/noise.html#the-handshakestate-object
 class COMPONENT_EXPORT(DEVICE_FIDO) Noise {
  public:
   // HandshakeType enumerates the supported handshake patterns.

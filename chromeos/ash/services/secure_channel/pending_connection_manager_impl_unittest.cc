@@ -4,17 +4,16 @@
 
 #include "chromeos/ash/services/secure_channel/pending_connection_manager_impl.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <sstream>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/test/task_environment.h"
-#include "base/test/to_vector.h"
 #include "chromeos/ash/services/secure_channel/ble_initiator_connection_attempt.h"
 #include "chromeos/ash/services/secure_channel/ble_listener_connection_attempt.h"
 #include "chromeos/ash/services/secure_channel/fake_authenticated_channel.h"
@@ -56,8 +55,9 @@ class FakeBleInitiatorConnectionAttemptFactory
     expected_connection_attempt_details_ = expected_connection_attempt_details;
   }
 
-  base::flat_map<ConnectionAttemptDetails,
-                 FakeConnectionAttempt<BleInitiatorFailureType>*>&
+  base::flat_map<
+      ConnectionAttemptDetails,
+      raw_ptr<FakeConnectionAttempt<BleInitiatorFailureType>, CtnExperimental>>&
   details_to_active_attempt_map() {
     return details_to_active_attempt_map_;
   }
@@ -107,8 +107,9 @@ class FakeBleInitiatorConnectionAttemptFactory
   raw_ptr<FakeBleConnectionManager> expected_ble_connection_manager_;
   std::optional<ConnectionAttemptDetails> expected_connection_attempt_details_;
 
-  base::flat_map<ConnectionAttemptDetails,
-                 FakeConnectionAttempt<BleInitiatorFailureType>*>
+  base::flat_map<
+      ConnectionAttemptDetails,
+      raw_ptr<FakeConnectionAttempt<BleInitiatorFailureType>, CtnExperimental>>
       details_to_active_attempt_map_;
 
   size_t num_instances_created_ = 0u;
@@ -136,8 +137,9 @@ class FakeBleListenerConnectionAttemptFactory
     expected_connection_attempt_details_ = expected_connection_attempt_details;
   }
 
-  base::flat_map<ConnectionAttemptDetails,
-                 FakeConnectionAttempt<BleListenerFailureType>*>&
+  base::flat_map<
+      ConnectionAttemptDetails,
+      raw_ptr<FakeConnectionAttempt<BleListenerFailureType>, CtnExperimental>>&
   details_to_active_attempt_map() {
     return details_to_active_attempt_map_;
   }
@@ -187,8 +189,9 @@ class FakeBleListenerConnectionAttemptFactory
   raw_ptr<FakeBleConnectionManager> expected_ble_connection_manager_;
   std::optional<ConnectionAttemptDetails> expected_connection_attempt_details_;
 
-  base::flat_map<ConnectionAttemptDetails,
-                 FakeConnectionAttempt<BleListenerFailureType>*>
+  base::flat_map<
+      ConnectionAttemptDetails,
+      raw_ptr<FakeConnectionAttempt<BleListenerFailureType>, CtnExperimental>>
       details_to_active_attempt_map_;
 
   size_t num_instances_created_ = 0u;
@@ -218,7 +221,8 @@ class FakeNearbyInitiatorConnectionAttemptFactory
   }
 
   base::flat_map<ConnectionAttemptDetails,
-                 FakeConnectionAttempt<NearbyInitiatorFailureType>*>&
+                 raw_ptr<FakeConnectionAttempt<NearbyInitiatorFailureType>,
+                         CtnExperimental>>&
   details_to_active_attempt_map() {
     return details_to_active_attempt_map_;
   }
@@ -269,7 +273,8 @@ class FakeNearbyInitiatorConnectionAttemptFactory
   std::optional<ConnectionAttemptDetails> expected_connection_attempt_details_;
 
   base::flat_map<ConnectionAttemptDetails,
-                 FakeConnectionAttempt<NearbyInitiatorFailureType>*>
+                 raw_ptr<FakeConnectionAttempt<NearbyInitiatorFailureType>,
+                         CtnExperimental>>
       details_to_active_attempt_map_;
 
   size_t num_instances_created_ = 0u;
@@ -455,8 +460,8 @@ GenerateFakeClientParameters(size_t num_to_generate) {
 std::vector<ClientConnectionParameters*> ClientParamsListToRawPtrs(
     const std::vector<std::unique_ptr<ClientConnectionParameters>>&
         unique_ptr_list) {
-  return base::test::ToVector(
-      unique_ptr_list, &std::unique_ptr<ClientConnectionParameters>::get);
+  return base::ToVector(unique_ptr_list,
+                        &std::unique_ptr<ClientConnectionParameters>::get);
 }
 
 }  // namespace
@@ -597,8 +602,8 @@ class SecureChannelPendingConnectionManagerImplTest : public testing::Test {
                 fake_pending_ble_initiator_connection_request_factory_
                     ->last_created_instance()
                     ->GetRequestId();
-            EXPECT_TRUE(base::Contains(active_attempt->id_to_request_map(),
-                                       token_for_last_init_request));
+            EXPECT_TRUE(active_attempt->id_to_request_map().contains(
+                token_for_last_init_request));
             break;
           }
 
@@ -609,8 +614,8 @@ class SecureChannelPendingConnectionManagerImplTest : public testing::Test {
                 fake_pending_ble_listener_connection_request_factory_
                     ->last_created_instance()
                     ->GetRequestId();
-            EXPECT_TRUE(base::Contains(active_attempt->id_to_request_map(),
-                                       token_for_last_listen_request));
+            EXPECT_TRUE(active_attempt->id_to_request_map().contains(
+                token_for_last_listen_request));
             break;
           }
         }
@@ -625,8 +630,8 @@ class SecureChannelPendingConnectionManagerImplTest : public testing::Test {
                 fake_pending_nearby_initiator_connection_request_factory_
                     ->last_created_instance()
                     ->GetRequestId();
-            EXPECT_TRUE(base::Contains(active_attempt->id_to_request_map(),
-                                       token_for_last_init_request));
+            EXPECT_TRUE(active_attempt->id_to_request_map().contains(
+                token_for_last_init_request));
             break;
           }
 
@@ -876,7 +881,6 @@ class SecureChannelPendingConnectionManagerImplTest : public testing::Test {
 
             case ConnectionRole::kListenerRole:
               NOTREACHED();
-              break;
           }
           break;
       }

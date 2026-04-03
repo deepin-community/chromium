@@ -9,11 +9,13 @@
 #include "base/functional/bind.h"
 #include "remoting/protocol/channel_authenticator.h"
 #include "remoting/protocol/channel_multiplexer.h"
+#include "remoting/protocol/jingle_messages.h"
 #include "remoting/protocol/pseudotcp_channel_factory.h"
 #include "remoting/protocol/secure_channel_factory.h"
 #include "remoting/protocol/stream_channel_factory.h"
 #include "remoting/protocol/stream_message_pipe_adapter.h"
 #include "remoting/protocol/transport_context.h"
+#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
 
 namespace remoting::protocol {
 
@@ -27,9 +29,7 @@ static const char kMuxChannelName[] = "mux";
 
 IceTransport::IceTransport(scoped_refptr<TransportContext> transport_context,
                            EventHandler* event_handler)
-    : transport_context_(transport_context), event_handler_(event_handler) {
-  transport_context->Prepare();
-}
+    : transport_context_(transport_context), event_handler_(event_handler) {}
 
 IceTransport::~IceTransport() {
   channel_multiplexer_.reset();
@@ -102,12 +102,27 @@ MessageChannelFactory* IceTransport::GetMultiplexedChannelFactory() {
   return mux_channel_factory_.get();
 }
 
+void IceTransport::ApplyNetworkSettings(const NetworkSettings& settings) {
+  DCHECK(!network_settings_);
+  network_settings_ = std::make_unique<NetworkSettings>(settings);
+  for (auto& [name, callback] : pending_channel_created_callbacks_) {
+    CreateChannel(name, std::move(callback));
+  }
+  pending_channel_created_callbacks_.clear();
+}
+
 void IceTransport::CreateChannel(const std::string& name,
                                  ChannelCreatedCallback callback) {
-  DCHECK(!channels_[name]);
+  DCHECK(!channels_.contains(name));
 
-  std::unique_ptr<IceTransportChannel> channel(
-      new IceTransportChannel(transport_context_));
+  if (!network_settings_) {
+    DCHECK(!pending_channel_created_callbacks_[name]);
+    pending_channel_created_callbacks_[name] = std::move(callback);
+    return;
+  }
+
+  auto channel = std::make_unique<IceTransportChannel>(transport_context_,
+                                                       *network_settings_);
   channel->Connect(name, this, std::move(callback));
   AddPendingRemoteTransportInfo(channel.get());
   channels_[name] = channel.release();
@@ -153,7 +168,7 @@ void IceTransport::OnChannelIceCredentials(IceTransportChannel* channel,
 }
 
 void IceTransport::OnChannelCandidate(IceTransportChannel* channel,
-                                      const cricket::Candidate& candidate) {
+                                      const webrtc::Candidate& candidate) {
   EnsurePendingTransportInfoMessage();
   pending_transport_info_message_->candidates.push_back(
       IceTransportInfo::NamedCandidate(channel->name(), candidate));
@@ -167,7 +182,7 @@ void IceTransport::OnChannelRouteChange(IceTransportChannel* channel,
 }
 
 void IceTransport::OnChannelFailed(IceTransportChannel* channel) {
-  event_handler_->OnIceTransportError(CHANNEL_CONNECTION_ERROR);
+  event_handler_->OnIceTransportError(ErrorCode::CHANNEL_CONNECTION_ERROR);
 }
 
 void IceTransport::OnChannelDeleted(IceTransportChannel* channel) {
@@ -203,7 +218,8 @@ void IceTransport::SendTransportInfo() {
 
 void IceTransport::OnChannelError(int error) {
   LOG(ERROR) << "Data channel failed, error=" << error;
-  event_handler_->OnIceTransportError(error ? CHANNEL_CONNECTION_ERROR : OK);
+  event_handler_->OnIceTransportError(
+      error ? ErrorCode::CHANNEL_CONNECTION_ERROR : ErrorCode::OK);
 }
 
 }  // namespace remoting::protocol

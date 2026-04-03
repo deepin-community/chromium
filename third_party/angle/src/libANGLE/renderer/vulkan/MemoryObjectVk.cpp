@@ -11,7 +11,7 @@
 #include "common/vulkan/vk_headers.h"
 #include "libANGLE/Context.h"
 #include "libANGLE/renderer/vulkan/ContextVk.h"
-#include "libANGLE/renderer/vulkan/RendererVk.h"
+#include "libANGLE/renderer/vulkan/vk_renderer.h"
 #include "vulkan/vulkan_fuchsia_ext.h"
 
 #if !defined(ANGLE_PLATFORM_WINDOWS)
@@ -165,18 +165,20 @@ angle::Result MemoryObjectVk::importZirconVmo(ContextVk *contextVk, GLuint64 siz
     return angle::Result::Continue;
 }
 
-angle::Result MemoryObjectVk::createImage(ContextVk *contextVk,
-                                          gl::TextureType type,
-                                          size_t levels,
-                                          GLenum internalFormat,
-                                          const gl::Extents &size,
-                                          GLuint64 offset,
-                                          vk::ImageHelper *image,
-                                          GLbitfield createFlags,
-                                          GLbitfield usageFlags,
-                                          const void *imageCreateInfoPNext)
+angle::Result MemoryObjectVk::createImage(
+    ContextVk *contextVk,
+    gl::TextureType type,
+    size_t levels,
+    GLenum internalFormat,
+    const gl::Extents &size,
+    GLuint64 offset,
+    vk::ImageHelper *image,
+    GLbitfield createFlags,
+    GLbitfield usageFlags,
+    vk::ImageFormatReinterpretability formatReinterpretability,
+    const void *imageCreateInfoPNext)
 {
-    RendererVk *renderer = contextVk->getRenderer();
+    vk::Renderer *renderer = contextVk->getRenderer();
 
     const vk::Format &vkFormat     = renderer->getFormat(internalFormat);
     angle::FormatID actualFormatID = vkFormat.getActualRenderableImageFormatID();
@@ -198,9 +200,10 @@ angle::Result MemoryObjectVk::createImage(ContextVk *contextVk,
     bool hasProtectedContent = mProtectedMemory;
     ANGLE_TRY(image->initExternal(
         contextVk, type, vkExtents, vkFormat.getIntendedFormatID(), actualFormatID, 1, usageFlags,
-        createFlags, vk::ImageLayout::ExternalPreInitialized, &externalMemoryImageCreateInfo,
+        createFlags, vk::ImageAccess::ExternalPreInitialized, &externalMemoryImageCreateInfo,
         gl::LevelIndex(0), static_cast<uint32_t>(levels), layerCount,
-        contextVk->isRobustResourceInitEnabled(), hasProtectedContent, vk::YcbcrConversionDesc{}));
+        contextVk->isRobustResourceInitEnabled(), hasProtectedContent, vk::TileMemory::Prohibited,
+        vk::YcbcrConversionDesc{}, nullptr, formatReinterpretability));
 
     VkMemoryRequirements externalMemoryRequirements;
     image->getImage().getMemoryRequirements(renderer->getDevice(), &externalMemoryRequirements);
@@ -240,14 +243,14 @@ angle::Result MemoryObjectVk::createImage(ContextVk *contextVk,
             UNREACHABLE();
     }
 
-    // TODO(jmadill, spang): Memory sub-allocation. http://anglebug.com/2162
+    // TODO(jmadill, spang): Memory sub-allocation. http://anglebug.com/40096464
     ASSERT(offset == 0);
     ASSERT(externalMemoryRequirements.size == mSize);
 
     VkMemoryPropertyFlags flags = hasProtectedContent ? VK_MEMORY_PROPERTY_PROTECTED_BIT : 0;
     ANGLE_TRY(image->initExternalMemory(contextVk, renderer->getMemoryProperties(),
                                         externalMemoryRequirements, 1, &importMemoryInfo,
-                                        renderer->getQueueFamilyIndex(), flags));
+                                        contextVk->getDeviceQueueIndex(), flags));
 
     return angle::Result::Continue;
 }

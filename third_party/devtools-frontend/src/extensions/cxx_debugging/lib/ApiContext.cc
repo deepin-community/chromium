@@ -1,4 +1,4 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -552,6 +552,21 @@ static llvm::Expected<DebuggerProxy::WasmValue> readWasmValue(
   if (type == "f64") {
     return DebuggerProxy::WasmValue{llvm::wasm::ValType::F64,
                                     value["value"].as<double>()};
+  }
+  if (type == "reftype") {
+    // Only a scalar value can cross the DWARF interpreter, so we
+    // encode the value into a 64-bit integer.
+    int64_t encodedValue = value["index"].as<uint32_t>();
+    std::string valueClass = value["valueClass"].as<std::string>();
+    if (valueClass == "local") {
+      encodedValue |= (int64_t)1 << 32;
+    } else if (valueClass == "operand") {
+      encodedValue |= (int64_t)2 << 32;
+    } else if (valueClass != "global") {
+      llvm::errs() << "Got value class " << encodedValue << "\n";
+      llvm_unreachable("Unhandled value class");
+    }
+    return DebuggerProxy::WasmValue{llvm::wasm::ValType::I64, encodedValue};
   }
   return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                  "Invalid value type %s", type.c_str());

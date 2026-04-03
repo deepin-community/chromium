@@ -110,14 +110,19 @@ class CORE_EXPORT CompositorAnimations {
     // Cases where the scroll timeline source is not composited.
     kTimelineSourceHasInvalidCompositingState = 1 << 16,
 
-    // Cases where there is an animation of compositor properties but they have
-    // been optimized out so the animation of those properties has no effect.
-    kCompositorPropertyAnimationsHaveNoEffect = 1 << 17,
+    // Cases where there is an animation that has no visible change through the
+    // active phase. This could be due to optimizing out an off-screen
+    // composited animation or due to having only constant valued properties.
+    kAnimationHasNoVisibleChange = 1 << 17,
 
     // Cases where we are animating a property that is marked important.
     kAffectsImportantProperty = 1 << 18,
 
     kSVGTargetHasIndependentTransformProperty = 1 << 19,
+
+    // Currently the compositor does not support any iteration composite mode
+    // other than 'replace'.
+    kEffectHasNonReplaceIterationCompositeMode = 1 << 20,
 
     // When adding new values, update the count below *and* add a description
     // of the value to CompositorAnimationsFailureReason in
@@ -127,7 +132,7 @@ class CORE_EXPORT CompositorAnimations {
     // should increment this number but it should never be decremented because
     // the values are used in UMA histograms. It should also be noted that it
     // excludes the kNoFailure value.
-    kFailureReasonCount = 20,
+    kFailureReasonCount = 21,
   };
 
   static FailureReasons CheckCanStartAnimationOnCompositor(
@@ -138,9 +143,10 @@ class CORE_EXPORT CompositorAnimations {
       const EffectModel&,
       const PaintArtifactCompositor*,
       double animation_playback_rate,
-      PropertyHandleSet* unsupported_properties = nullptr);
+      PropertyHandleSet* unsupported_properties_for_tracing = nullptr);
   static bool CompositorPropertyAnimationsHaveNoEffect(
       const Element& target_element,
+      const Animation* animation,
       const EffectModel& effect,
       const PaintArtifactCompositor*);
   static void CancelIncompatibleAnimationsOnCompositor(const Element&,
@@ -206,7 +212,7 @@ class CORE_EXPORT CompositorAnimations {
   static CompositorElementIdNamespace CompositorElementNamespaceForProperty(
       CSSPropertyID property);
 
-  static bool CheckUsesCompositedScrolling(Node* target);
+  static bool CanStartScrollTimelineOnCompositor(Node* target);
 
   static bool CanStartTransformAnimationOnCompositorForSVG(const SVGElement&);
 
@@ -222,7 +228,7 @@ class CORE_EXPORT CompositorAnimations {
       const EffectModel&,
       const PaintArtifactCompositor*,
       double animation_playback_rate,
-      PropertyHandleSet* unsupported_properties = nullptr);
+      PropertyHandleSet* unsupported_properties_for_tracing = nullptr);
   static FailureReasons CheckCanStartElementOnCompositor(
       const Element& element,
       const EffectModel& model);

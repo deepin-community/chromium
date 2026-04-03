@@ -1,3 +1,5 @@
+// TODO(crbug.com/372866269): Fix ESlint violations and remove exception below.
+/* eslint-disable eqeqeq */
 const lottiejs = (function(window) {
   'use strict';
   const svgNS = 'http://www.w3.org/2000/svg';
@@ -159,6 +161,8 @@ const lottiejs = (function(window) {
         g = p;
         b = q;
         break;
+      default:
+        break;
     }
     return [ r,
         g,
@@ -188,6 +192,8 @@ const lottiejs = (function(window) {
       case b:
         h = (r - g) + d * 4;
         h /= 6 * d;
+        break;
+      default:
         break;
     }
 
@@ -2822,6 +2828,8 @@ const lottiejs = (function(window) {
                   case 1:
                     p = new KeyframedMultidimensionalProperty(elem,data,mult, container);
                     break;
+                  default:
+                    break;
                 }
               }
               if (p.effectsSequence.length) {
@@ -3160,6 +3168,8 @@ const lottiejs = (function(window) {
         break;
       case 'o':
         arr = this.o;
+        break;
+      default:
         break;
     }
     if (!arr[pos] || (arr[pos] && !replace)) {
@@ -5123,6 +5133,8 @@ const lottiejs = (function(window) {
                     (totalLength - documentData.lineWidths[letters[i].line]) /
                     2;
                 break;
+              default:
+                break;
             }
             currentLine = letters[i].line;
           }
@@ -5468,6 +5480,8 @@ const lottiejs = (function(window) {
                        documentData.lineWidths[letters[i].line]) /
                           2,
                   0, 0);
+              break;
+            default:
               break;
           }
           matrixHelper.translate(0, -documentData.ls);
@@ -5857,6 +5871,8 @@ const lottiejs = (function(window) {
         case 'light':
         case 'thin':
           fWeight = '200';
+          break;
+        default:
           break;
       }
     }
@@ -6470,8 +6486,9 @@ const lottiejs = (function(window) {
         return this.createText(layer);
       case 13:
         return this.createCamera(layer);
+      default:
+        return this.createNull(layer);
     }
-    return this.createNull(layer);
   };
 
   BaseRenderer.prototype.createCamera = function() {
@@ -8382,6 +8399,8 @@ const lottiejs = (function(window) {
                 (documentData.boxWidth - documentData.lineWidths[lineNumber]) /
                     2,
             0, 0);
+        break;
+      default:
         break;
     }
     matrixHelper.translate(xPos, yPos, 0);
@@ -10932,6 +10951,8 @@ const lottiejs = (function(window) {
               case b:
                 h = (r - g) / d + 4;
                 break;
+              default:
+                break;
             }
             h /= 6;
           }
@@ -12679,6 +12700,8 @@ const lottiejs = (function(window) {
           case 'effects':
           case 'Effects':
             return _thisLayerFunction.effect;
+          default:
+            break;
         }
       }
       _thisLayerFunction.toWorld = toWorld;
@@ -12805,6 +12828,8 @@ const lottiejs = (function(window) {
               case 'Opacity':
               case 11:
                 return _thisFunction.opacity;
+              default:
+                break;
             }
         }
 
@@ -13314,6 +13339,8 @@ const lottiejs = (function(window) {
           break;
         case 'low':
           defaultCurveSegments = 10;
+          break;
+        default:
           break;
       }
     } else if (!isNaN(value) && value > 1) {

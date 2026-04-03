@@ -1,9 +1,13 @@
-package(default_applicable_licenses = ["//tensorflow:LICENSE"])
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+# copybara:uncomment package(default_applicable_licenses = ["//tensorflow:LICENSE"])
 
 cc_library(
     name = "matchers",
     testonly = True,
     hdrs = ["matchers.h"],
+    tags = ["no_oss"],
     deps = [
         "//tensorflow/lite/experimental/shlo/legacy:debug",
         "@com_google_googletest//:gtest_main",
@@ -17,6 +21,7 @@ cc_library(
     hdrs = [
         "util.h",
     ],
+    tags = ["no_oss"],
     visibility = ["//tensorflow/lite/experimental/shlo/legacy/bench:__subpackages__"],
     deps = [
         "//tensorflow/lite/experimental/shlo/legacy:debug",
@@ -32,6 +37,7 @@ cc_test(
     ],
     data = [
     ],
+    tags = ["no_oss"],
     deps = [
         ":util",
         "//tensorflow/lite/experimental/shlo/legacy:debug",
@@ -48,6 +54,7 @@ cc_test(
     ],
     data = [
     ],
+    tags = ["no_oss"],
     deps = [
         ":util",
         "//tensorflow/lite/experimental/shlo/legacy:debug",
@@ -63,6 +70,7 @@ cc_test(
     ],
     data = [
     ],
+    tags = ["no_oss"],
     deps = [
         ":util",
         "//tensorflow/lite/experimental/shlo/legacy:debug",
@@ -78,10 +86,12 @@ cc_test(
     ],
     data = [
     ],
+    tags = ["no_oss"],
     deps = [
         ":util",
         "//tensorflow/lite/experimental/shlo/legacy:debug",
         "//tensorflow/lite/experimental/shlo/legacy:shlo",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
         "@com_google_googletest//:gtest_main",
     ],
@@ -94,6 +104,7 @@ cc_test(
     ],
     data = [
     ],
+    tags = ["no_oss"],
     deps = [
         ":matchers",
         ":util",
@@ -111,6 +122,7 @@ cc_test(
     ],
     data = [
     ],
+    tags = ["no_oss"],
     deps = [
         ":matchers",
         ":util",
@@ -128,6 +140,7 @@ cc_test(
     ],
     data = [
     ],
+    tags = ["no_oss"],
     deps = [
         ":util",
         "//tensorflow/lite/experimental/shlo/legacy:debug",
@@ -143,6 +156,7 @@ cc_test(
     ],
     data = [
     ],
+    tags = ["no_oss"],
     deps = [
         "//tensorflow/lite/experimental/shlo/legacy:debug",
         "//tensorflow/lite/experimental/shlo/legacy:shlo",
@@ -157,6 +171,7 @@ cc_test(
     ],
     data = [
     ],
+    tags = ["no_oss"],
     deps = [
         ":util",
         "//tensorflow/lite/experimental/shlo/legacy:debug",
@@ -172,6 +187,7 @@ cc_test(
     ],
     data = [
     ],
+    tags = ["no_oss"],
     deps = [
         ":matchers",
         "//tensorflow/lite/experimental/shlo/legacy:debug",

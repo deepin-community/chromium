@@ -28,6 +28,7 @@ base::Time ConvertToBaseTime(uint64_t time) {
 // Trims the notes field in the sync_pb::PasswordSpecificsData proto. If neither
 // the high level notes field nor any of the individual notes contains populated
 // fields, the high level field is cleared.
+// LINT.IfChange(TrimPasswordSpecificsDataNotesForCaching)
 void TrimPasswordSpecificsDataNotesForCaching(
     sync_pb::PasswordSpecificsData& trimmed_password_data) {
   // `notes` field should be cleared if all notes are empty.
@@ -64,6 +65,7 @@ void TrimPasswordSpecificsDataNotesForCaching(
     trimmed_password_data.clear_notes();
   }
 }
+// LINT.ThenChange(//components/sync/protocol/password_specifics.proto:Notes)
 
 }  // namespace
 
@@ -77,11 +79,8 @@ sync_pb::PasswordIssues PasswordIssuesMapToProto(
         insecure_metadata.create_time.ToDeltaSinceWindowsEpoch()
             .InMicroseconds());
     issue.set_is_muted(insecure_metadata.is_muted.value());
-    if (base::FeatureList::IsEnabled(
-            password_manager::features::kPasswordIssuesInSpecificsMetadata)) {
-      issue.set_trigger_notification_from_backend_on_detection(
-          insecure_metadata.trigger_notification_from_backend.value());
-    }
+    issue.set_trigger_notification_from_backend_on_detection(
+        insecure_metadata.trigger_notification_from_backend.value());
     switch (insecure_type) {
       case InsecureType::kLeaked:
         DCHECK(!password_issues.has_leaked_password_issue());
@@ -106,17 +105,11 @@ sync_pb::PasswordIssues PasswordIssuesMapToProto(
 
 InsecurityMetadata InsecurityMetadataFromProto(
     const sync_pb::PasswordIssues::PasswordIssue& issue) {
-  if (base::FeatureList::IsEnabled(
-          password_manager::features::kPasswordIssuesInSpecificsMetadata)) {
     return InsecurityMetadata(
         ConvertToBaseTime(issue.date_first_detection_windows_epoch_micros()),
         IsMuted(issue.is_muted()),
         TriggerBackendNotification(
             issue.trigger_notification_from_backend_on_detection()));
-  }
-  return InsecurityMetadata(
-      ConvertToBaseTime(issue.date_first_detection_windows_epoch_micros()),
-      IsMuted(issue.is_muted()), TriggerBackendNotification(false));
 }
 
 base::flat_map<InsecureType, InsecurityMetadata> PasswordIssuesMapFromProto(
@@ -190,6 +183,7 @@ sync_pb::PasswordSpecificsData_Notes PasswordNotesToProto(
 
 sync_pb::PasswordSpecificsData TrimPasswordSpecificsDataForCaching(
     const sync_pb::PasswordSpecificsData& password_specifics_data) {
+  // LINT.IfChange(TrimPasswordSpecificsDataForCaching)
   sync_pb::PasswordSpecificsData trimmed_password_data =
       sync_pb::PasswordSpecificsData(password_specifics_data);
   trimmed_password_data.clear_scheme();
@@ -208,6 +202,7 @@ sync_pb::PasswordSpecificsData TrimPasswordSpecificsDataForCaching(
   trimmed_password_data.clear_avatar_url();
   trimmed_password_data.clear_federation_url();
   trimmed_password_data.clear_date_last_used();
+  trimmed_password_data.clear_date_last_filled_windows_epoch_micros();
   trimmed_password_data.clear_password_issues();
   trimmed_password_data.clear_date_password_modified_windows_epoch_micros();
   trimmed_password_data.clear_sender_email();
@@ -215,6 +210,7 @@ sync_pb::PasswordSpecificsData TrimPasswordSpecificsDataForCaching(
   trimmed_password_data.clear_date_received_windows_epoch_micros();
   trimmed_password_data.clear_sharing_notification_displayed();
   trimmed_password_data.clear_sender_profile_image_url();
+  // LINT.ThenChange(//components/sync/protocol/password_specifics.proto:PasswordSpecificsData)
 
   TrimPasswordSpecificsDataNotesForCaching(trimmed_password_data);
 
@@ -263,6 +259,9 @@ sync_pb::PasswordSpecificsData SpecificsDataFromPassword(
       base::UTF16ToUTF8(password_form.password_value));
   password_data.set_date_last_used(
       password_form.date_last_used.ToDeltaSinceWindowsEpoch().InMicroseconds());
+  password_data.set_date_last_filled_windows_epoch_micros(
+      password_form.date_last_filled.ToDeltaSinceWindowsEpoch()
+          .InMicroseconds());
   password_data.set_date_password_modified_windows_epoch_micros(
       password_form.date_password_modified.ToDeltaSinceWindowsEpoch()
           .InMicroseconds());
@@ -275,9 +274,9 @@ sync_pb::PasswordSpecificsData SpecificsDataFromPassword(
   password_data.set_avatar_url(
       password_form.icon_url.is_valid() ? password_form.icon_url.spec() : "");
   password_data.set_federation_url(
-      password_form.federation_origin.opaque()
-          ? std::string()
-          : password_form.federation_origin.Serialize());
+      password_form.federation_origin.IsValid()
+          ? password_form.federation_origin.Serialize()
+          : std::string());
   *password_data.mutable_password_issues() =
       PasswordIssuesMapToProto(password_form.password_issues);
   *password_data.mutable_notes() =
@@ -302,11 +301,8 @@ sync_pb::PasswordSpecificsMetadata SpecificsMetadataFromPassword(
   password_metadata.set_blacklisted(password_form.blocked_by_user);
   password_metadata.set_date_last_used_windows_epoch_micros(
       password_form.date_last_used.ToDeltaSinceWindowsEpoch().InMicroseconds());
-  if (base::FeatureList::IsEnabled(
-          password_manager::features::kPasswordIssuesInSpecificsMetadata)) {
-    *password_metadata.mutable_password_issues() =
-        PasswordIssuesMapToProto(password_form.password_issues);
-  }
+  *password_metadata.mutable_password_issues() =
+      PasswordIssuesMapToProto(password_form.password_issues);
   password_metadata.set_type(static_cast<int>(password_form.type));
   return password_metadata;
 }
@@ -333,6 +329,8 @@ PasswordForm PasswordFromSpecifics(
         base::Time::FromDeltaSinceWindowsEpoch(base::Days(1));
   }
 
+  password.date_last_filled =
+      ConvertToBaseTime(password_data.date_last_filled_windows_epoch_micros());
   password.date_password_modified = ConvertToBaseTime(
       password_data.has_date_password_modified_windows_epoch_micros()
           ? password_data.date_password_modified_windows_epoch_micros()
@@ -344,7 +342,7 @@ PasswordForm PasswordFromSpecifics(
   password.display_name = base::UTF8ToUTF16(password_data.display_name());
   password.icon_url = GURL(password_data.avatar_url());
   password.federation_origin =
-      url::Origin::Create(GURL(password_data.federation_url()));
+      url::SchemeHostPort(GURL(password_data.federation_url()));
   password.password_issues = PasswordIssuesMapFromProto(password_data);
   password.notes = PasswordNotesFromProto(password_data.notes());
   password.sender_email = base::UTF8ToUTF16(password_data.sender_email());

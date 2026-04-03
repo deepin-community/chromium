@@ -2,14 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ui/base/ime/win/tsf_input_scope.h"
+
+#include <windows.h>
 
 #include <stddef.h>
 
+#include <algorithm>
+
 #include "base/check.h"
 #include "base/compiler_specific.h"
-#include "base/containers/contains.h"
 #include "base/task/current_thread.h"
+#include "base/trace_event/trace_event.h"
 
 namespace ui::tsf_inputscope {
 namespace {
@@ -21,8 +30,9 @@ void AppendNonTrivialInputScope(std::vector<InputScope>* input_scopes,
   if (input_scope == IS_DEFAULT)
     return;
 
-  if (base::Contains(*input_scopes, input_scope))
+  if (std::ranges::contains(*input_scopes, input_scope)) {
     return;
+  }
 
   input_scopes->push_back(input_scope);
 }
@@ -104,7 +114,7 @@ InputScope ConvertTextInputTypeToInputScope(TextInputType text_input_type) {
   // Following mapping is based in IE10 on Windows 8.
   switch (text_input_type) {
     case TEXT_INPUT_TYPE_PASSWORD:
-      return IS_PASSWORD;
+      return IS_PRIVATE;
     case TEXT_INPUT_TYPE_SEARCH:
       return IS_SEARCH;
     case TEXT_INPUT_TYPE_EMAIL:
@@ -168,6 +178,35 @@ ITfInputScope* CreateInputScope(TextInputType text_input_type,
     input_scopes = GetInputScopes(text_input_type, text_input_mode);
   }
   return new TSFInputScope(input_scopes);
+}
+
+typedef HRESULT(WINAPI* SetInputScopeFunc)(HWND window_handle,
+                                           InputScope input_scope);
+
+SetInputScopeFunc g_set_input_scope = NULL;
+bool g_get_set_input_scope_done = false;
+
+void SetInputScope(HWND window_handle, InputScope input_scope) {
+  CHECK(base::CurrentUIThread::IsSet());
+  // Thread safety is not required because this function is under UI thread.
+  if (!g_get_set_input_scope_done) {
+    g_get_set_input_scope_done = true;
+
+    HMODULE module = NULL;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN, L"msctf.dll",
+                           &module)) {
+      g_set_input_scope = reinterpret_cast<SetInputScopeFunc>(
+          GetProcAddress(module, "SetInputScope"));
+    }
+  }
+
+  if (g_set_input_scope) {
+    HRESULT hr = g_set_input_scope(window_handle, input_scope);
+    if (hr != S_OK) {
+      TRACE_EVENT2("ime", "SetInputScope", "input_scope", input_scope, "hr",
+                   hr);
+    }
+  }
 }
 
 }  // namespace ui::tsf_inputscope

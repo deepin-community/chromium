@@ -1,7 +1,7 @@
 [
     {
       "os": [
-        "chromeos_ash"
+        "chromeos"
       ],
       "policy_pref_mapping_tests": [
         {
@@ -13,7 +13,6 @@
             }
           }
         },
-        // TODO(b/322341636): Add tests to verify that invalid values are not mapped
         {
             "note": "Empty policy.",
             "policies": {

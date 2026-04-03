@@ -2,20 +2,29 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ash/public/cpp/input_device_settings_controller.h"
+
+#include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/events/event_rewriter_controller_impl.h"
+#include "ash/login/login_screen_controller.h"
 #include "ash/public/cpp/ash_prefs.h"
-#include "ash/public/cpp/input_device_settings_controller.h"
+#include "ash/public/cpp/login_types.h"
+#include "ash/public/cpp/peripherals_app_delegate.h"
+#include "ash/public/cpp/test/test_image_downloader.h"
 #include "ash/public/mojom/input_device_settings.mojom.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/system/input_device_settings/input_device_settings_controller_impl.h"
 #include "ash/system/input_device_settings/input_device_settings_defaults.h"
+#include "ash/system/input_device_settings/input_device_settings_metadata.h"
+#include "ash/system/input_device_settings/input_device_settings_metrics_manager.h"
 #include "ash/system/input_device_settings/input_device_settings_pref_names.h"
 #include "ash/system/input_device_settings/input_device_settings_utils.h"
 #include "ash/system/input_device_settings/pref_handlers/graphics_tablet_pref_handler_impl.h"
@@ -28,8 +37,7 @@
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/ranges/algorithm.h"
-#include "base/ranges/functional.h"
+#include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_simple_task_runner.h"
@@ -37,9 +45,16 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/session_manager/session_manager_types.h"
 #include "components/user_manager/known_user.h"
+#include "device/bluetooth/bluetooth_adapter_factory.h"
+#include "device/bluetooth/bluetooth_device.h"
+#include "device/bluetooth/test/mock_bluetooth_adapter.h"
+#include "device/bluetooth/test/mock_bluetooth_device.h"
 #include "device/udev_linux/fake_udev_loader.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "mojo/public/cpp/bindings/clone_traits.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/events/ash/keyboard_capability.h"
@@ -58,6 +73,9 @@ using DeviceId = InputDeviceSettingsController::DeviceId;
 
 namespace {
 
+constexpr char kInternalChromeOSKeyboardName[] =
+    "kSampleKeyboardInternalChromeOS";
+
 const ui::KeyboardDevice kSampleKeyboardInternal(5,
                                                  ui::INPUT_DEVICE_INTERNAL,
                                                  "kSampleKeyboardInternal",
@@ -75,6 +93,16 @@ const ui::KeyboardDevice kSampleKeyboardInternal2(4,
                                                   0x1111,
                                                   0x1111,
                                                   0);
+
+const ui::KeyboardDevice kSampleKeyboardInternalChromeOS(
+    5,
+    ui::INPUT_DEVICE_INTERNAL,
+    kInternalChromeOSKeyboardName,
+    "",
+    base::FilePath("path5"),
+    0x1,
+    0x1,
+    0);
 
 const ui::KeyboardDevice kSampleKeyboardBluetooth(10,
                                                   ui::INPUT_DEVICE_BLUETOOTH,
@@ -169,21 +197,65 @@ const ui::InputDevice kSampleKeyboardMouseCombo(7,
                                                 /*vendor=*/0x046d,
                                                 /*product=*/0xc548,
                                                 /*version=*/0x0009);
+const ui::InputDevice kSampleUnCustomizableGraphicsTablet(
+    27,
+    ui::INPUT_DEVICE_USB,
+    "kSampleGraphicsTablet",
+    /*phys=*/"",
+    /*sys_path=*/base::FilePath(),
+    /*vendor=*/0xeeee,
+    /*product=*/0xeeee,
+    /*version=*/0x0006);
+const ui::InputDevice kSamplekWacomOnePenTabletS(28,
+                                                 ui::INPUT_DEVICE_USB,
+                                                 "kSamplekWacomOnePenTabletS",
+                                                 /*phys=*/"",
+                                                 /*sys_path=*/base::FilePath(),
+                                                 /*vendor=*/0x0531,
+                                                 /*product=*/0x0100,
+                                                 /*version=*/0x0006);
+const ui::KeyboardDevice kSampleKeychronKeyboard(29,
+                                                 ui::INPUT_DEVICE_USB,
+                                                 "kSampleKeychronKeyboard",
+                                                 /*phys=*/"",
+                                                 /*sys_path=*/base::FilePath(),
+                                                 /*vendor=*/0x3434,
+                                                 /*product=*/0x0311,
+                                                 /*version=*/0);
+
+const ui::KeyboardDevice kSampleSplitModifierKeyboard(
+    21,
+    ui::INPUT_DEVICE_INTERNAL,
+    "kSampleSplitModifierKeyboard",
+    /*has_assistant_key=*/true,
+    /*has_function_key=*/true);
+
+const ui::InputDevice kSampleMouseWithCompanionApp(
+    29,
+    ui::INPUT_DEVICE_USB,
+    "kSampleMouseUsb",
+    /*phys=*/"",
+    /*sys_path=*/base::FilePath(),
+    /*vendor=*/0x1038,
+    /*product=*/0x1836,
+    /*version=*/0x0003);
 
 constexpr char kUserEmail1[] = "example1@abc.com";
 constexpr char kUserEmail2[] = "joy@abc.com";
 constexpr char kUserEmail3[] = "joy1@abc.com";
-const AccountId account_id_1 =
-    AccountId::FromUserEmailGaiaId(kUserEmail1, kUserEmail1);
-const AccountId account_id_2 =
-    AccountId::FromUserEmailGaiaId(kUserEmail2, kUserEmail2);
-
-const AccountId account_id_3 =
-    AccountId::FromUserEmailGaiaId(kUserEmail3, kUserEmail3);
+const AccountId kAccountId1 =
+    AccountId::FromUserEmailGaiaId(kUserEmail1, GaiaId("1111"));
+const AccountId kAccountId2 =
+    AccountId::FromUserEmailGaiaId(kUserEmail2, GaiaId("2222"));
+const AccountId kAccountId3 =
+    AccountId::FromUserEmailGaiaId(kUserEmail3, GaiaId("3333"));
 
 constexpr char kKbdTopRowPropertyName[] = "CROS_KEYBOARD_TOP_ROW_LAYOUT";
+constexpr char kKbdTopRowLayoutUnspecified[] = "";
 constexpr char kKbdTopRowLayout1Tag[] = "1";
 constexpr char kKbdTopRowLayout2Tag[] = "2";
+constexpr char kBluetoothDeviceName[] = "Bluetooth Device";
+constexpr char kBluetoothDevicePublicAddress[] = "01:23:45:67:89:AB";
 
 class FakeDeviceManager {
  public:
@@ -249,7 +321,32 @@ mojom::KeyboardSettingsPtr CreateNewKeyboardSettings() {
   return settings;
 }
 
+std::string GetPackageIdForTesting(const std::string& device_key) {
+  return "web:https://example.com/" + device_key;
+}
+
 }  // namespace
+
+class TestPeripheralsAppDelegate : public PeripheralsAppDelegate {
+ public:
+  void set_should_fail(bool should_fail) { should_fail_ = should_fail; }
+
+  void GetCompanionAppInfo(
+      const std::string& device_key,
+      base::OnceCallback<void(const std::optional<mojom::CompanionAppInfo>&)>
+          callback) override {
+    if (should_fail_) {
+      std::move(callback).Run(std::nullopt);
+      return;
+    }
+    auto info = mojom::CompanionAppInfo();
+    info.package_id = GetPackageIdForTesting(device_key);
+    std::move(callback).Run(std::move(info));
+  }
+
+ private:
+  bool should_fail_ = false;
+};
 
 class FakeKeyboardPrefHandler : public KeyboardPrefHandler {
  public:
@@ -258,6 +355,10 @@ class FakeKeyboardPrefHandler : public KeyboardPrefHandler {
       const mojom::KeyboardPolicies& keyboard_policies,
       mojom::Keyboard* keyboard) override {
     keyboard->settings = CreateNewKeyboardSettings();
+    if (keyboard->name == kInternalChromeOSKeyboardName) {
+      keyboard->meta_key = ui::mojom::MetaKey::kSearch;
+    }
+
     num_keyboard_settings_initialized_++;
   }
 
@@ -293,12 +394,30 @@ class FakeKeyboardPrefHandler : public KeyboardPrefHandler {
   void UpdateDefaultChromeOSKeyboardSettings(
       PrefService* pref_service,
       const mojom::KeyboardPolicies& keyboard_policies,
-      const mojom::Keyboard& keyboard) override {}
+      const mojom::Keyboard& keyboard) override {
+    ++num_update_default_chromeos_keyboard_settings_calls_;
+  }
 
   void UpdateDefaultNonChromeOSKeyboardSettings(
       PrefService* pref_service,
       const mojom::KeyboardPolicies& keyboard_policies,
-      const mojom::Keyboard& keyboard) override {}
+      const mojom::Keyboard& keyboard) override {
+    ++num_update_default_non_chromeos_keyboard_settings_calls_;
+  }
+
+  void UpdateDefaultSplitModifierKeyboardSettings(
+      PrefService* pref_service,
+      const mojom::KeyboardPolicies& keyboard_policies,
+      const mojom::Keyboard& keyboard) override {
+    ++num_update_default_split_modifier_keyboard_settings_calls_;
+  }
+
+  void ForceInitializeWithDefaultSettings(
+      PrefService* pref_service,
+      const mojom::KeyboardPolicies& keyboard_policies,
+      mojom::Keyboard* keyboard) override {
+    ++num_force_initialize_with_default_settings_calls_;
+  }
 
   uint32_t num_keyboard_settings_initialized() {
     return num_keyboard_settings_initialized_;
@@ -320,6 +439,22 @@ class FakeKeyboardPrefHandler : public KeyboardPrefHandler {
     return num_initialize_default_keyboard_settings_calls_;
   }
 
+  uint32_t num_force_initialize_with_default_settings_calls() {
+    return num_force_initialize_with_default_settings_calls_;
+  }
+
+  uint32_t num_update_default_chromeos_keyboard_settings_calls() {
+    return num_update_default_chromeos_keyboard_settings_calls_;
+  }
+
+  uint32_t num_update_default_non_chromeos_keyboard_settings_calls() {
+    return num_update_default_non_chromeos_keyboard_settings_calls_;
+  }
+
+  uint32_t num_update_default_split_modifier_keyboard_settings_calls() {
+    return num_update_default_split_modifier_keyboard_settings_calls_;
+  }
+
   void reset_num_keyboard_settings_initialized() {
     num_keyboard_settings_initialized_ = 0;
   }
@@ -327,9 +462,13 @@ class FakeKeyboardPrefHandler : public KeyboardPrefHandler {
  private:
   uint32_t num_keyboard_settings_initialized_ = 0;
   uint32_t num_keyboard_settings_updated_ = 0;
+  uint32_t num_force_initialize_with_default_settings_calls_ = 0;
   uint32_t num_login_screen_keyboard_settings_initialized_ = 0;
   uint32_t num_login_screen_keyboard_settings_updated_ = 0;
   uint32_t num_initialize_default_keyboard_settings_calls_ = 0;
+  uint32_t num_update_default_chromeos_keyboard_settings_calls_ = 0;
+  uint32_t num_update_default_non_chromeos_keyboard_settings_calls_ = 0;
+  uint32_t num_update_default_split_modifier_keyboard_settings_calls_ = 0;
 };
 
 class FakeInputDeviceSettingsControllerObserver
@@ -396,6 +535,36 @@ class FakeInputDeviceSettingsControllerObserver
     num_mouse_observing_stopped_++;
   }
 
+  void OnKeyboardBatteryInfoChanged(const mojom::Keyboard& keyboard) override {
+    num_keyboard_battery_info_updated_++;
+  }
+  void OnGraphicsTabletBatteryInfoChanged(
+      const mojom::GraphicsTablet& graphics_tablet) override {
+    num_graphics_tablets_battery_info_updated_++;
+  }
+  void OnMouseBatteryInfoChanged(const mojom::Mouse& mouse) override {
+    num_mouse_battery_info_updated_++;
+  }
+  void OnTouchpadBatteryInfoChanged(const mojom::Touchpad& touchpad) override {
+    num_touchpad_battery_info_updated_++;
+  }
+
+  void OnMouseCompanionAppInfoChanged(const mojom::Mouse& mouse) override {
+    num_mouse_companion_app_info_updated_++;
+  }
+  void OnKeyboardCompanionAppInfoChanged(
+      const mojom::Keyboard& keyboard) override {
+    num_keyboard_companion_app_info_updated_++;
+  }
+  void OnTouchpadCompanionAppInfoChanged(
+      const mojom::Touchpad& touchpad) override {
+    num_keyboard_companion_app_info_updated_++;
+  }
+  void OnGraphicsTabletCompanionAppInfoChanged(
+      const mojom::GraphicsTablet& graphics_tablet) override {
+    num_keyboard_companion_app_info_updated_++;
+  }
+
   uint32_t num_keyboards_connected() { return num_keyboards_connected_; }
   uint32_t num_graphics_tablets_connected() {
     return num_graphics_tablets_connected_;
@@ -422,6 +591,34 @@ class FakeInputDeviceSettingsControllerObserver
   uint32_t num_mouse_observing_stopped() {
     return num_mouse_observing_stopped_;
   }
+  uint32_t num_keyboard_battery_info_updated() {
+    return num_keyboard_battery_info_updated_;
+  }
+  uint32_t num_graphics_tablets_battery_info_updated() {
+    return num_graphics_tablets_battery_info_updated_;
+  }
+  uint32_t num_mouse_battery_info_updated() {
+    return num_mouse_battery_info_updated_;
+  }
+  uint32_t num_touchpad_battery_info_updated() {
+    return num_touchpad_battery_info_updated_;
+  }
+
+  uint32_t num_mouse_companion_app_info_updated() {
+    return num_mouse_companion_app_info_updated_;
+  }
+
+  uint32_t num_keyboard_companion_app_info_updated() {
+    return num_keyboard_companion_app_info_updated_;
+  }
+
+  uint32_t num_touchpad_companion_app_info_updated() {
+    return num_touchpad_companion_app_info_updated_;
+  }
+
+  uint32_t num_graphics_tablet_companion_app_info_updated() {
+    return num_graphics_tablet_companion_app_info_updated_;
+  }
 
  private:
   uint32_t num_keyboards_connected_ = 0;
@@ -436,6 +633,14 @@ class FakeInputDeviceSettingsControllerObserver
   uint32_t num_pen_buttons_pressed_ = 0;
   uint32_t num_mouse_observing_started_ = 0;
   uint32_t num_mouse_observing_stopped_ = 0;
+  uint32_t num_keyboard_battery_info_updated_ = 0;
+  uint32_t num_graphics_tablets_battery_info_updated_ = 0;
+  uint32_t num_mouse_battery_info_updated_ = 0;
+  uint32_t num_touchpad_battery_info_updated_ = 0;
+  uint32_t num_mouse_companion_app_info_updated_ = 0;
+  uint32_t num_keyboard_companion_app_info_updated_ = 0;
+  uint32_t num_touchpad_companion_app_info_updated_ = 0;
+  uint32_t num_graphics_tablet_companion_app_info_updated_ = 0;
 };
 
 class InputDeviceSettingsControllerTest : public NoSessionAshTestBase {
@@ -449,14 +654,18 @@ class InputDeviceSettingsControllerTest : public NoSessionAshTestBase {
 
   // testing::Test:
   void SetUp() override {
+    mock_adapter_ =
+        base::MakeRefCounted<testing::NiceMock<device::MockBluetoothAdapter>>();
+    device::BluetoothAdapterFactory::SetAdapterForTesting(mock_adapter_);
+    ON_CALL(*mock_adapter_, IsPowered).WillByDefault(testing::Return(true));
+    ON_CALL(*mock_adapter_, IsPresent).WillByDefault(testing::Return(true));
     task_runner_ = base::MakeRefCounted<base::TestSimpleTaskRunner>();
-
+    image_downloader_ = std::make_unique<TestImageDownloader>();
     scoped_feature_list_.InitWithFeatures(
         {features::kPeripheralCustomization,
-         features::kInputDeviceSettingsSplit,
          features::kAltClickAndSixPackCustomization,
-         features::kPeripheralNotification,
-         ::features::kSupportF11AndF12KeyShortcuts},
+         features::kPeripheralNotification, features::kWelcomeExperience,
+         ::features::kSupportF11AndF12KeyShortcuts, features::kModifierSplit},
         {});
     NoSessionAshTestBase::SetUp();
     Shell::Get()->event_rewriter_controller()->Initialize(nullptr, nullptr);
@@ -469,45 +678,23 @@ class InputDeviceSettingsControllerTest : public NoSessionAshTestBase {
     std::unique_ptr<FakeKeyboardPrefHandler> keyboard_pref_handler =
         std::make_unique<FakeKeyboardPrefHandler>();
     keyboard_pref_handler_ = keyboard_pref_handler.get();
+    delegate_ = std::make_unique<TestPeripheralsAppDelegate>();
     controller_ = std::make_unique<InputDeviceSettingsControllerImpl>(
         local_state(), std::move(keyboard_pref_handler),
         std::make_unique<TouchpadPrefHandlerImpl>(),
         std::make_unique<MousePrefHandlerImpl>(),
         std::make_unique<PointingStickPrefHandlerImpl>(),
         std::make_unique<GraphicsTabletPrefHandlerImpl>(), task_runner_);
+    controller_->SetPeripheralsAppDelegate(delegate_.get());
     controller_->AddObserver(observer_.get());
     sample_keyboards_ = {kSampleKeyboardUsb, kSampleKeyboardInternal,
                          kSampleKeyboardBluetooth};
 
-    TestSessionControllerClient* session_controller =
-        GetSessionControllerClient();
-    session_controller->Reset();
-
-    auto user_1_prefs = std::make_unique<TestingPrefServiceSimple>();
-    RegisterUserProfilePrefs(user_1_prefs->registry(), /*country=*/"",
-                             /*for_test=*/true);
-    auto user_2_prefs = std::make_unique<TestingPrefServiceSimple>();
-    RegisterUserProfilePrefs(user_2_prefs->registry(), /*country=*/"",
-                             /*for_test=*/true);
-
+    ClearLogin();
     if (should_sign_in_) {
-      session_controller->AddUserSession(kUserEmail1,
-                                         user_manager::UserType::kRegular,
-                                         /*provide_pref_service=*/false);
-      session_controller->SetUserPrefService(account_id_1,
-                                             std::move(user_1_prefs));
-      session_controller->AddUserSession(kUserEmail2,
-                                         user_manager::UserType::kRegular,
-                                         /*provide_pref_service=*/false);
-      session_controller->SetUserPrefService(account_id_2,
-                                             std::move(user_2_prefs));
-      session_controller->AddUserSession(kUserEmail3,
-                                         user_manager::UserType::kRegular,
-                                         /*provide_pref_service=*/false);
-
-      session_controller->SwitchActiveUser(account_id_1);
-      session_controller->SetSessionState(
-          session_manager::SessionState::ACTIVE);
+      SimulateUserLogin({kUserEmail1});
+      SimulateUserLogin({kUserEmail2});
+      SwitchActiveUser(kAccountId1);
     }
 
     // Reset the `num_keyboard_settings_initialized_` to account for the
@@ -525,19 +712,47 @@ class InputDeviceSettingsControllerTest : public NoSessionAshTestBase {
     // Scoped Resetter must be deleted before the test base is teared down.
     scoped_resetter_.reset();
     NoSessionAshTestBase::TearDown();
-
+    image_downloader_.reset();
     task_runner_.reset();
   }
 
-  void SetActiveUser(const AccountId& account_id) {
-    TestSessionControllerClient* session_controller =
-        GetSessionControllerClient();
-    session_controller->SwitchActiveUser(account_id);
-    session_controller->SetSessionState(session_manager::SessionState::ACTIVE);
+  std::unique_ptr<device::MockBluetoothDevice> SetupMockBluetoothDevice(
+      uint32_t vendor_id,
+      uint32_t product_id,
+      const char* device_name,
+      const char* device_address) {
+    std::unique_ptr<device::MockBluetoothDevice> mock_device =
+        std::make_unique<testing::NiceMock<device::MockBluetoothDevice>>(
+            mock_adapter_.get(), /*bluetooth_class=*/0, device_name,
+            device_address,
+            /*initially_paired=*/true, /*connected=*/true);
+    mock_device->SetBatteryInfo(device::BluetoothDevice::BatteryInfo(
+        device::BluetoothDevice::BatteryType::kDefault, 66));
+    ON_CALL(*mock_device, GetDeviceType)
+        .WillByDefault(testing::Return(device::BluetoothDeviceType::KEYBOARD));
+    ON_CALL(*mock_device, GetVendorID)
+        .WillByDefault(testing::Return(vendor_id));
+    ON_CALL(*mock_device, GetProductID)
+        .WillByDefault(testing::Return(product_id));
+    return mock_device;
+  }
+
+  void SendAppUpdate(const std::string& package_id, apps::Readiness readiness) {
+    auto test_app = std::make_unique<apps::App>(apps::AppType::kWeb, "app_id");
+    test_app->installer_package_id = apps::PackageId::FromString(package_id);
+    test_app->readiness = readiness;
+    apps::AppUpdate test_update(nullptr, /*delta=*/test_app.get(), AccountId());
+    controller_->OnAppUpdate(test_update);
+  }
+
+  void AddFakeMouse(const ui::InputDevice& mouse) {
+    fake_device_manager_->AddFakeMouse(mouse);
+    task_runner_->RunUntilIdle();
   }
 
  protected:
   std::unique_ptr<InputDeviceSettingsControllerImpl> controller_;
+  std::unique_ptr<TestPeripheralsAppDelegate> delegate_;
   std::unique_ptr<FakeDeviceManager> fake_device_manager_;
   std::vector<ui::InputDevice> sample_keyboards_;
   std::unique_ptr<FakeInputDeviceSettingsControllerObserver> observer_;
@@ -552,6 +767,8 @@ class InputDeviceSettingsControllerTest : public NoSessionAshTestBase {
   // whether or not to sign in within the SetUp() function. Configured to sign
   // in by default.
   bool should_sign_in_ = true;
+  scoped_refptr<testing::NiceMock<device::MockBluetoothAdapter>> mock_adapter_;
+  std::unique_ptr<TestImageDownloader> image_downloader_;
 };
 
 TEST_F(InputDeviceSettingsControllerTest, KeyboardAddingOne) {
@@ -599,76 +816,33 @@ TEST_F(InputDeviceSettingsControllerTest, KeyboardAddingAndRemoving) {
 }
 
 TEST_F(InputDeviceSettingsControllerTest,
-       DeletesPrefsWhenInputDeviceSettingsSplitFlagDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(features::kInputDeviceSettingsSplit);
-
-  std::unique_ptr<TestingPrefServiceSimple> pref_service =
-      std::make_unique<TestingPrefServiceSimple>();
-  ash::RegisterUserProfilePrefs(pref_service->registry(), /*country=*/"",
-                                /*for_test=*/true);
-
-  base::Value::Dict test_pref_value;
-  test_pref_value.Set("Fake Key", base::Value::Dict());
-  pref_service->SetDict(prefs::kKeyboardDeviceSettingsDictPref,
-                        test_pref_value.Clone());
-  pref_service->SetDict(prefs::kMouseDeviceSettingsDictPref,
-                        test_pref_value.Clone());
-  pref_service->SetDict(prefs::kPointingStickDeviceSettingsDictPref,
-                        test_pref_value.Clone());
-  pref_service->SetDict(prefs::kTouchpadDeviceSettingsDictPref,
-                        test_pref_value.Clone());
-  GetSessionControllerClient()->SetUserPrefService(account_id_3,
-                                                   std::move(pref_service));
-
-  SetActiveUser(account_id_3);
-
-  PrefService* active_pref_service =
-      Shell::Get()->session_controller()->GetActivePrefService();
-  EXPECT_EQ(base::Value::Dict(), active_pref_service->GetDict(
-                                     prefs::kKeyboardDeviceSettingsDictPref));
-  EXPECT_EQ(base::Value::Dict(),
-            active_pref_service->GetDict(prefs::kMouseDeviceSettingsDictPref));
-  EXPECT_EQ(base::Value::Dict(),
-            active_pref_service->GetDict(
-                prefs::kPointingStickDeviceSettingsDictPref));
-  EXPECT_EQ(base::Value::Dict(), active_pref_service->GetDict(
-                                     prefs::kTouchpadDeviceSettingsDictPref));
-}
-
-TEST_F(InputDeviceSettingsControllerTest,
        DeletesPrefsWhenPeripheralCustomizationFlagDisabled) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndDisableFeature(features::kPeripheralCustomization);
 
-  std::unique_ptr<TestingPrefServiceSimple> pref_service =
-      std::make_unique<TestingPrefServiceSimple>();
-  ash::RegisterUserProfilePrefs(pref_service->registry(), /*country=*/"",
-                                /*for_test=*/true);
+  auto pref_service = TestPrefServiceProvider::CreateUserPrefServiceSimple();
 
-  base::Value::Dict test_pref_value;
-  test_pref_value.Set("Fake Key", base::Value::Dict());
+  base::DictValue test_pref_value;
+  test_pref_value.Set("Fake Key", base::DictValue());
   pref_service->SetDict(prefs::kGraphicsTabletPenButtonRemappingsDictPref,
                         test_pref_value.Clone());
   pref_service->SetDict(prefs::kGraphicsTabletTabletButtonRemappingsDictPref,
                         test_pref_value.Clone());
   pref_service->SetDict(prefs::kMouseButtonRemappingsDictPref,
                         test_pref_value.Clone());
-  GetSessionControllerClient()->SetUserPrefService(account_id_3,
-                                                   std::move(pref_service));
 
-  SetActiveUser(account_id_3);
+  SimulateUserLogin({}, kAccountId3, std::move(pref_service));
 
   PrefService* active_pref_service =
       Shell::Get()->session_controller()->GetActivePrefService();
-  EXPECT_EQ(base::Value::Dict(),
+  EXPECT_EQ(base::DictValue(),
             active_pref_service->GetDict(
                 prefs::kGraphicsTabletPenButtonRemappingsDictPref));
-  EXPECT_EQ(base::Value::Dict(),
+  EXPECT_EQ(base::DictValue(),
             active_pref_service->GetDict(
                 prefs::kGraphicsTabletTabletButtonRemappingsDictPref));
-  EXPECT_EQ(base::Value::Dict(), active_pref_service->GetDict(
-                                     prefs::kMouseButtonRemappingsDictPref));
+  EXPECT_EQ(base::DictValue(), active_pref_service->GetDict(
+                                   prefs::kMouseButtonRemappingsDictPref));
 }
 
 TEST_F(InputDeviceSettingsControllerTest,
@@ -676,29 +850,25 @@ TEST_F(InputDeviceSettingsControllerTest,
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndDisableFeature(
       features::kAltClickAndSixPackCustomization);
-  auto user_prefs = std::make_unique<TestingPrefServiceSimple>();
-  RegisterUserProfilePrefs(user_prefs->registry(), /*country=*/"",
-                           /*for_test=*/true);
+  auto user_prefs = TestPrefServiceProvider::CreateUserPrefServiceSimple();
 
-  base::Value::Dict test_pref_value;
-  base::Value::Dict six_pack_remappings_dict;
+  base::DictValue test_pref_value;
+  base::DictValue six_pack_remappings_dict;
   six_pack_remappings_dict.Set(
       prefs::kTouchpadSettingSimulateRightClick,
       static_cast<int>(ui::mojom::SimulateRightClickModifier::kAlt));
   test_pref_value.Set("key", std::move(six_pack_remappings_dict));
   user_prefs->SetDict(prefs::kTouchpadDeviceSettingsDictPref,
                       test_pref_value.Clone());
-  GetSessionControllerClient()->SetUserPrefService(account_id_3,
-                                                   std::move(user_prefs));
 
-  SetActiveUser(account_id_3);
+  SimulateUserLogin({}, kAccountId3, std::move(user_prefs));
   PrefService* active_pref_service =
       Shell::Get()->session_controller()->GetActivePrefService();
-  base::Value::Dict devices_dict =
+  base::DictValue devices_dict =
       active_pref_service->GetDict(prefs::kTouchpadDeviceSettingsDictPref)
           .Clone();
-  base::Value::Dict* existing_settings_dict = devices_dict.FindDict("key");
-  EXPECT_EQ(base::Value::Dict(), *existing_settings_dict);
+  base::DictValue* existing_settings_dict = devices_dict.FindDict("key");
+  EXPECT_EQ(base::DictValue(), *existing_settings_dict);
 }
 
 TEST_F(InputDeviceSettingsControllerTest,
@@ -706,13 +876,10 @@ TEST_F(InputDeviceSettingsControllerTest,
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndDisableFeature(
       features::kAltClickAndSixPackCustomization);
-  auto user_prefs = std::make_unique<TestingPrefServiceSimple>();
-  RegisterUserProfilePrefs(user_prefs->registry(), /*country=*/"",
-                           /*for_test=*/true);
 
-  base::Value::Dict test_pref_value;
-  base::Value::Dict six_pack_remappings_dict;
-  base::Value::Dict settings_dict;
+  base::DictValue test_pref_value;
+  base::DictValue six_pack_remappings_dict;
+  base::DictValue settings_dict;
 
   six_pack_remappings_dict.Set(
       prefs::kSixPackKeyPageUp,
@@ -722,19 +889,19 @@ TEST_F(InputDeviceSettingsControllerTest,
                     std::move(six_pack_remappings_dict));
 
   test_pref_value.Set("key", std::move(settings_dict));
+
+  auto user_prefs = TestPrefServiceProvider::CreateUserPrefServiceSimple();
   user_prefs->SetDict(prefs::kKeyboardDeviceSettingsDictPref,
                       test_pref_value.Clone());
-  GetSessionControllerClient()->SetUserPrefService(account_id_3,
-                                                   std::move(user_prefs));
 
-  SetActiveUser(account_id_3);
+  SimulateUserLogin({}, kAccountId3, std::move(user_prefs));
   PrefService* active_pref_service =
       Shell::Get()->session_controller()->GetActivePrefService();
-  base::Value::Dict devices_dict =
+  base::DictValue devices_dict =
       active_pref_service->GetDict(prefs::kKeyboardDeviceSettingsDictPref)
           .Clone();
-  base::Value::Dict* existing_settings_dict = devices_dict.FindDict("key");
-  EXPECT_EQ(base::Value::Dict(), *existing_settings_dict);
+  base::DictValue* existing_settings_dict = devices_dict.FindDict("key");
+  EXPECT_EQ(base::DictValue(), *existing_settings_dict);
 }
 
 TEST_F(InputDeviceSettingsControllerTest,
@@ -743,17 +910,19 @@ TEST_F(InputDeviceSettingsControllerTest,
   EXPECT_EQ(observer_->num_keyboards_connected(), 1u);
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_initialized(), 1u);
 
-  SimulateUserLogin(account_id_2);
+  SwitchActiveUser(kAccountId2);
   task_runner_->RunUntilIdle();
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_initialized(), 2u);
-  SimulateUserLogin(account_id_1);
+  SwitchActiveUser(kAccountId1);
   task_runner_->RunUntilIdle();
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_initialized(), 3u);
 }
 
 TEST_F(InputDeviceSettingsControllerTest, KeyboardSettingsUpdated) {
+  base::HistogramTester histogram_tester;
   ui::DeviceDataManagerTestApi().SetKeyboardDevices({kSampleKeyboardUsb});
-
+  auto* kb = controller_->GetKeyboard(kSampleKeyboardUsb.id);
+  controller_->AddWelcomeNotificationDeviceKeyForTesting(kb->device_key);
   EXPECT_EQ(observer_->num_keyboards_connected(), 1u);
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_initialized(), 1u);
 
@@ -763,6 +932,11 @@ TEST_F(InputDeviceSettingsControllerTest, KeyboardSettingsUpdated) {
 
   EXPECT_EQ(observer_->num_keyboards_settings_updated(), 1u);
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_updated(), 1u);
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.WelcomeExperienceNotificationEvent",
+      InputDeviceSettingsMetricsManager::
+          WelcomeExperienceNotificationEventType::kSettingChanged,
+      /*expected_count=*/1u);
 }
 
 TEST_F(InputDeviceSettingsControllerTest, PrefsInitializedBasedOnLoginState) {
@@ -772,18 +946,18 @@ TEST_F(InputDeviceSettingsControllerTest, PrefsInitializedBasedOnLoginState) {
   //  a user logging in.
   controller_->OnActiveUserPrefServiceChanged(
       Shell::Get()->session_controller()->GetPrimaryUserPrefService());
-  controller_->OnLoginScreenFocusedPodChanged(account_id_1);
+  controller_->OnLoginScreenFocusedPodChanged(kAccountId1);
   ui::DeviceDataManagerTestApi().SetKeyboardDevices({kSampleKeyboardUsb});
   EXPECT_EQ(
       keyboard_pref_handler_->num_login_screen_keyboard_settings_initialized(),
       1u);
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_initialized(), 0u);
-  controller_->OnLoginScreenFocusedPodChanged(account_id_2);
+  controller_->OnLoginScreenFocusedPodChanged(kAccountId2);
   EXPECT_EQ(
       keyboard_pref_handler_->num_login_screen_keyboard_settings_initialized(),
       2u);
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_initialized(), 0u);
-  SimulateUserLogin(account_id_1);
+  SimulateUserLogin(kAccountId1);
   task_runner_->RunUntilIdle();
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_initialized(), 1u);
   EXPECT_EQ(
@@ -792,7 +966,10 @@ TEST_F(InputDeviceSettingsControllerTest, PrefsInitializedBasedOnLoginState) {
 }
 
 TEST_F(InputDeviceSettingsControllerTest, UpdateLoginScreenSettings) {
-  controller_->OnLoginScreenFocusedPodChanged(account_id_1);
+  GetSessionControllerClient()->SetSessionState(
+      session_manager::SessionState::LOGIN_PRIMARY);
+
+  controller_->OnLoginScreenFocusedPodChanged(kAccountId1);
   ui::DeviceDataManagerTestApi().SetKeyboardDevices({kSampleKeyboardUsb});
   controller_->SetKeyboardSettings((DeviceId)kSampleKeyboardUsb.id,
                                    CreateNewKeyboardSettings());
@@ -828,6 +1005,17 @@ TEST_F(InputDeviceSettingsControllerTest, KeyboardSettingsAreValid) {
 
   EXPECT_EQ(observer_->num_keyboards_settings_updated(), 0u);
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_updated(), 0u);
+
+  const mojom::KeyboardSettingsPtr new_settings = CreateNewKeyboardSettings();
+  // Function key is not a modifier key so alt key can't be remapped to function
+  // key.
+  new_settings->modifier_remappings[ui::mojom::ModifierKey::kAlt] =
+      ui::mojom::ModifierKey::kFunction;
+  controller_->SetKeyboardSettings((DeviceId)kSampleKeyboardInternal.id,
+                                   new_settings.Clone());
+
+  EXPECT_EQ(observer_->num_keyboards_settings_updated(), 0u);
+  EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_updated(), 0u);
 }
 
 TEST_F(InputDeviceSettingsControllerTest, FkeySettingsAreValid) {
@@ -847,6 +1035,71 @@ TEST_F(InputDeviceSettingsControllerTest, FkeySettingsAreValid) {
                                    usb_kb_settings.Clone());
   EXPECT_EQ(observer_->num_keyboards_settings_updated(), 0u);
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_updated(), 0u);
+}
+
+TEST_F(InputDeviceSettingsControllerTest,
+       UpdateSplitModifierKeyboardDefaultSettings) {
+  fake_device_manager_->AddFakeKeyboard(kSampleSplitModifierKeyboard,
+                                        kKbdTopRowLayout1Tag);
+
+  const mojom::KeyboardSettingsPtr usb_kb_settings =
+      mojom::KeyboardSettings::New();
+  usb_kb_settings->modifier_remappings[ui::mojom::ModifierKey::kFunction] =
+      ui::mojom::ModifierKey::kAlt;
+  controller_->SetKeyboardSettings((DeviceId)kSampleSplitModifierKeyboard.id,
+                                   usb_kb_settings.Clone());
+
+  EXPECT_EQ(observer_->num_keyboards_settings_updated(), 1u);
+  EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_updated(), 1u);
+  fake_device_manager_->RemoveAllDevices();
+}
+
+TEST_F(InputDeviceSettingsControllerTest, UpdateChromeOSDefaultSettings) {
+  fake_device_manager_->AddFakeKeyboard(kSampleKeyboardInternal,
+                                        kKbdTopRowLayout1Tag);
+
+  EXPECT_EQ(1u, keyboard_pref_handler_
+                    ->num_update_default_chromeos_keyboard_settings_calls());
+  EXPECT_EQ(0u,
+            keyboard_pref_handler_
+                ->num_update_default_non_chromeos_keyboard_settings_calls());
+  EXPECT_EQ(0u,
+            keyboard_pref_handler_
+                ->num_update_default_split_modifier_keyboard_settings_calls());
+
+  fake_device_manager_->RemoveAllDevices();
+}
+
+TEST_F(InputDeviceSettingsControllerTest, UpdateNonChromeOSDefaultSettings) {
+  fake_device_manager_->AddFakeKeyboard(kSampleKeyboardBluetooth,
+                                        kKbdTopRowLayoutUnspecified);
+
+  EXPECT_EQ(0u, keyboard_pref_handler_
+                    ->num_update_default_chromeos_keyboard_settings_calls());
+  EXPECT_EQ(1u,
+            keyboard_pref_handler_
+                ->num_update_default_non_chromeos_keyboard_settings_calls());
+  EXPECT_EQ(0u,
+            keyboard_pref_handler_
+                ->num_update_default_split_modifier_keyboard_settings_calls());
+
+  fake_device_manager_->RemoveAllDevices();
+}
+
+TEST_F(InputDeviceSettingsControllerTest, UpdateSplitModifierDefaultSettings) {
+  fake_device_manager_->AddFakeKeyboard(kSampleSplitModifierKeyboard,
+                                        kKbdTopRowLayout1Tag);
+
+  EXPECT_EQ(0u, keyboard_pref_handler_
+                    ->num_update_default_chromeos_keyboard_settings_calls());
+  EXPECT_EQ(0u,
+            keyboard_pref_handler_
+                ->num_update_default_non_chromeos_keyboard_settings_calls());
+  EXPECT_EQ(1u,
+            keyboard_pref_handler_
+                ->num_update_default_split_modifier_keyboard_settings_calls());
+
+  fake_device_manager_->RemoveAllDevices();
 }
 
 TEST_F(InputDeviceSettingsControllerTest, GraphicsTabletSettingsAreValid) {
@@ -1077,7 +1330,7 @@ TEST_F(InputDeviceSettingsControllerTest, RecordsMetricsSettings) {
       "ChromeOS.Settings.Device.Keyboard.ExternalChromeOS.TopRowAreFKeys."
       "Initial",
       /*expected_count=*/4u);
-  SimulateUserLogin(account_id_2);
+  SwitchActiveUser(kAccountId2);
   task_runner_->RunUntilIdle();
 
   histogram_tester.ExpectTotalCount(
@@ -1111,6 +1364,61 @@ TEST_F(InputDeviceSettingsControllerTest, RecordsMetricsSettings) {
       /*expected_count=*/1u);
 }
 
+TEST_F(InputDeviceSettingsControllerTest, RecordsMetadataMetrics) {
+  base::HistogramTester histogram_tester;
+  ui::DeviceDataManagerTestApi().SetKeyboardDevices(
+      {kSampleKeyboardInternal, kSampleKeychronKeyboard});
+  ui::DeviceDataManagerTestApi().SetGraphicsTabletDevices(
+      {kSampleGraphicsTablet, kSampleUnCustomizableGraphicsTablet,
+       kSamplekWacomOnePenTabletS});
+  ui::DeviceDataManagerTestApi().SetMouseDevices(
+      {kSampleMouseUsb, kSampleCustomizableMouse, kSampleUncustomizableMouse});
+  // Two input device settings controllers publish this metric at the same time,
+  // so we expect 2 times the number of metadata tiers for all devices.
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.GraphicsTablet.MetadataTier", MetadataTier::kNoMetadata,
+      /*expected_count=*/2u);
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.GraphicsTablet.MetadataTier", MetadataTier::kNoMetadata,
+      /*expected_count=*/2u);
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.Inputs.GraphicsTablet.MetadataTier",
+      MetadataTier::kHasButtonConfig,
+      /*expected_count=*/2u);
+  histogram_tester.ExpectBucketCount("ChromeOS.Inputs.Mouse.MetadataTier",
+                                     MetadataTier::kNoMetadata,
+                                     /*expected_count=*/2u);
+  histogram_tester.ExpectBucketCount("ChromeOS.Inputs.Mouse.MetadataTier",
+                                     MetadataTier::kNoMetadata,
+                                     /*expected_count=*/2u);
+  histogram_tester.ExpectBucketCount("ChromeOS.Inputs.Mouse.MetadataTier",
+                                     MetadataTier::kHasButtonConfig,
+                                     /*expected_count=*/2u);
+  histogram_tester.ExpectBucketCount("ChromeOS.Inputs.Keyboard.MetadataTier",
+                                     MetadataTier::kNoMetadata,
+                                     /*expected_count=*/2u);
+  histogram_tester.ExpectBucketCount("ChromeOS.Inputs.Keyboard.MetadataTier",
+                                     MetadataTier::kNoMetadata,
+                                     /*expected_count=*/2u);
+}
+
+TEST_F(InputDeviceSettingsControllerTest, GetGeneralizedKeyboard) {
+  // If there are no keyboards, return nullptr.
+  EXPECT_EQ(nullptr, controller_->GetGeneralizedKeyboard());
+
+  // If there is only internal keyboard, return it.
+  ui::DeviceDataManagerTestApi().SetKeyboardDevices({kSampleKeyboardInternal});
+  EXPECT_EQ((DeviceId)kSampleKeyboardInternal.id,
+            controller_->GetGeneralizedKeyboard()->id);
+
+  // If there are multiple external keyboards, return the external keyboard
+  // which has the largest device id.
+  ui::DeviceDataManagerTestApi().SetKeyboardDevices(
+      {kSampleKeyboardInternal, kSampleKeyboardUsb, kSampleKeyboardUsb2});
+  EXPECT_EQ((DeviceId)kSampleKeyboardUsb2.id,
+            controller_->GetGeneralizedKeyboard()->id);
+}
+
 TEST_F(InputDeviceSettingsControllerTest, GetGeneralizedTopRowAreFKeys) {
   // If there no keyboards, return false.
   EXPECT_EQ(false, controller_->GetGeneralizedTopRowAreFKeys());
@@ -1119,7 +1427,7 @@ TEST_F(InputDeviceSettingsControllerTest, GetGeneralizedTopRowAreFKeys) {
   ui::DeviceDataManagerTestApi().SetKeyboardDevices({kSampleKeyboardInternal});
 
   auto internal_keyboard_settings = CreateNewKeyboardSettings();
-  ;
+
   internal_keyboard_settings->top_row_are_fkeys = true;
   controller_->SetKeyboardSettings((DeviceId)kSampleKeyboardInternal.id,
                                    internal_keyboard_settings.Clone());
@@ -1186,29 +1494,88 @@ TEST_F(InputDeviceSettingsControllerTest,
       Shell::Get()->session_controller()->GetActivePrefService());
 }
 
-TEST_F(InputDeviceSettingsControllerTest, RestoreDefaultKeyboardRemappings) {
+TEST_F(InputDeviceSettingsControllerTest,
+       RestoreDefaultKeyboardRemappingsExternalKeyboard) {
   base::HistogramTester histogram_tester;
 
-  ui::DeviceDataManagerTestApi().SetKeyboardDevices({kSampleKeyboardInternal});
+  ui::DeviceDataManagerTestApi().SetKeyboardDevices({kSampleKeyboardUsb});
   const mojom::KeyboardSettingsPtr settings = CreateNewKeyboardSettings();
   settings->top_row_are_fkeys = kDefaultTopRowAreFKeys;
   settings->modifier_remappings[ui::mojom::ModifierKey::kMeta] =
       ui::mojom::ModifierKey::kAlt;
-  controller_->SetKeyboardSettings((DeviceId)kSampleKeyboardInternal.id,
+  controller_->SetKeyboardSettings((DeviceId)kSampleKeyboardUsb.id,
+                                   settings->Clone());
+
+  EXPECT_EQ(observer_->num_keyboards_connected(), 1u);
+  EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_initialized(), 1u);
+  EXPECT_EQ(controller_->GetKeyboardSettings((DeviceId)kSampleKeyboardUsb.id)
+                ->modifier_remappings.size(),
+            1u);
+
+  controller_->RestoreDefaultKeyboardRemappings(
+      (DeviceId)kSampleKeyboardUsb.id);
+
+  EXPECT_EQ(controller_->GetKeyboardSettings((DeviceId)kSampleKeyboardUsb.id)
+                ->modifier_remappings.size(),
+            0u);
+
+  histogram_tester.ExpectUniqueSample(
+      "ChromeOS.Settings.Device.Keyboard.External.Modifiers.NumberOfKeysReset",
+      /*sample=*/1u, /*expected_bucket_count=*/1u);
+}
+
+TEST_F(InputDeviceSettingsControllerTest,
+       RestoreDefaultKeyboardRemappingsInternalKeyboard) {
+  base::HistogramTester histogram_tester;
+
+  ui::DeviceDataManagerTestApi().SetKeyboardDevices(
+      {kSampleKeyboardInternalChromeOS});
+  const mojom::KeyboardSettingsPtr settings = CreateNewKeyboardSettings();
+  settings->top_row_are_fkeys = kDefaultTopRowAreFKeys;
+  settings->modifier_remappings[ui::mojom::ModifierKey::kMeta] =
+      ui::mojom::ModifierKey::kAlt;
+  settings->f11 = ui::mojom::ExtendedFkeysModifier::kAlt;
+  settings->f12 = ui::mojom::ExtendedFkeysModifier::kShift;
+  controller_->SetKeyboardSettings((DeviceId)kSampleKeyboardInternalChromeOS.id,
                                    settings->Clone());
 
   EXPECT_EQ(observer_->num_keyboards_connected(), 1u);
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_initialized(), 1u);
   EXPECT_EQ(
-      controller_->GetKeyboardSettings((DeviceId)kSampleKeyboardInternal.id)
+      controller_
+          ->GetKeyboardSettings((DeviceId)kSampleKeyboardInternalChromeOS.id)
           ->modifier_remappings.size(),
       1u);
-  controller_->RestoreDefaultKeyboardRemappings(
-      (DeviceId)kSampleKeyboardInternal.id);
   EXPECT_EQ(
-      controller_->GetKeyboardSettings((DeviceId)kSampleKeyboardInternal.id)
+      controller_
+          ->GetKeyboardSettings((DeviceId)kSampleKeyboardInternalChromeOS.id)
+          ->f11,
+      ui::mojom::ExtendedFkeysModifier::kAlt);
+  EXPECT_EQ(
+      controller_
+          ->GetKeyboardSettings((DeviceId)kSampleKeyboardInternalChromeOS.id)
+          ->f12,
+      ui::mojom::ExtendedFkeysModifier::kShift);
+
+  controller_->RestoreDefaultKeyboardRemappings(
+      (DeviceId)kSampleKeyboardInternalChromeOS.id);
+
+  EXPECT_EQ(
+      controller_
+          ->GetKeyboardSettings((DeviceId)kSampleKeyboardInternalChromeOS.id)
           ->modifier_remappings.size(),
       0u);
+  EXPECT_EQ(
+      controller_
+          ->GetKeyboardSettings((DeviceId)kSampleKeyboardInternalChromeOS.id)
+          ->f11,
+      ui::mojom::ExtendedFkeysModifier::kDisabled);
+  EXPECT_EQ(
+      controller_
+          ->GetKeyboardSettings((DeviceId)kSampleKeyboardInternalChromeOS.id)
+          ->f12,
+      ui::mojom::ExtendedFkeysModifier::kDisabled);
+
   histogram_tester.ExpectUniqueSample(
       "ChromeOS.Settings.Device.Keyboard.Internal.Modifiers.NumberOfKeysReset",
       /*sample=*/1u, /*expected_bucket_count=*/1u);
@@ -1524,7 +1891,7 @@ TEST_F(InputDeviceSettingsControllerTest, InternalTouchpadUpdatedWithPrefs) {
 
   PrefService* pref_service =
       Shell::Get()->session_controller()->GetActivePrefService();
-  base::Value::Dict updated_dict;
+  base::DictValue updated_dict;
   updated_dict.Set("test_key", 1);
   pref_service->SetDict(prefs::kTouchpadInternalSettings, updated_dict.Clone());
   EXPECT_EQ(2u, observer_->num_touchpad_settings_updated());
@@ -1548,7 +1915,7 @@ TEST_F(InputDeviceSettingsControllerTest,
 
   PrefService* pref_service =
       Shell::Get()->session_controller()->GetActivePrefService();
-  base::Value::Dict updated_dict;
+  base::DictValue updated_dict;
   updated_dict.Set("test_key", 1);
   pref_service->SetDict(prefs::kPointingStickInternalSettings,
                         updated_dict.Clone());
@@ -1623,6 +1990,357 @@ TEST_F(InputDeviceSettingsControllerNoSignInTest,
       controller_->GetGraphicsTablet(kSampleGraphicsTablet.id);
   ASSERT_TRUE(graphics_tablet);
   ASSERT_TRUE(graphics_tablet->settings);
+}
+
+// TODO(crbug.com/349179793): Disabled due to segfaults across platforms.
+TEST_F(InputDeviceSettingsControllerTest,
+       DISABLED_BatteryInfoAddedForBluetoothDevices) {
+  uint32_t test_vendor_id = 0x1111;
+  uint32_t test_product_id = 0x1112;
+  auto mock_device = SetupMockBluetoothDevice(test_vendor_id, test_product_id,
+                                              kBluetoothDeviceName,
+                                              kBluetoothDevicePublicAddress);
+  mock_device->SetBatteryInfo(device::BluetoothDevice::BatteryInfo(
+      device::BluetoothDevice::BatteryType::kDefault, 66,
+      device::BluetoothDevice::BatteryInfo::ChargeState::kDischarging));
+  std::vector<raw_ptr<const device::BluetoothDevice, VectorExperimental>>
+      devices;
+  devices.push_back(mock_device.get());
+  ON_CALL(*mock_adapter_, GetDevices).WillByDefault(testing::Return(devices));
+  ui::KeyboardDevice bluetooth_keyboard = kSampleKeyboardBluetooth;
+  bluetooth_keyboard.product_id = test_product_id;
+  bluetooth_keyboard.vendor_id = test_vendor_id;
+  ui::DeviceDataManagerTestApi().SetKeyboardDevices({bluetooth_keyboard});
+  auto* keyboard = controller_->GetKeyboard(bluetooth_keyboard.id);
+  ASSERT_TRUE(keyboard);
+  ASSERT_TRUE(keyboard->battery_info);
+  ASSERT_EQ(mojom::ChargeState::kDischarging,
+            keyboard->battery_info->charge_state);
+  ASSERT_EQ(66, keyboard->battery_info->battery_percentage);
+}
+
+TEST_F(InputDeviceSettingsControllerTest, BatteryInfoUpdates) {
+  // Create mock BT device for testing.
+  uint32_t test_vendor_id = 0x1111;
+  uint32_t test_product_id = 0x1112;
+  auto mock_device = SetupMockBluetoothDevice(test_vendor_id, test_product_id,
+                                              kBluetoothDeviceName,
+                                              kBluetoothDevicePublicAddress);
+  std::vector<raw_ptr<const device::BluetoothDevice, VectorExperimental>>
+      devices;
+  devices.push_back(mock_device.get());
+  ON_CALL(*mock_adapter_, GetDevices).WillByDefault(testing::Return(devices));
+
+  // Set initial battery info for BT device.
+  mock_device->SetBatteryInfo(device::BluetoothDevice::BatteryInfo(
+      device::BluetoothDevice::BatteryType::kDefault, 66));
+  ui::KeyboardDevice bluetooth_keyboard = kSampleKeyboardBluetooth;
+  bluetooth_keyboard.product_id = test_product_id;
+  bluetooth_keyboard.vendor_id = test_vendor_id;
+  ui::DeviceDataManagerTestApi().SetKeyboardDevices({bluetooth_keyboard});
+
+  // Keyboard populated with initial battery info.
+  auto* keyboard = controller_->GetKeyboard(bluetooth_keyboard.id);
+  ASSERT_EQ(66, keyboard->battery_info->battery_percentage);
+
+  // Battery percentage change should trigger a call to `DeviceBatteryChanged`.
+  mock_device->SetBatteryInfo(device::BluetoothDevice::BatteryInfo(
+      device::BluetoothDevice::BatteryType::kDefault, 65));
+  keyboard = controller_->GetKeyboard(bluetooth_keyboard.id);
+  ASSERT_EQ(65, keyboard->battery_info->battery_percentage);
+  // Ensure pending tasks are cleared.
+  base::RunLoop().RunUntilIdle();
+}
+
+TEST_F(InputDeviceSettingsControllerTest,
+       KeyboardInternalDefaultsUpdatedDuringOobe) {
+  GetSessionControllerClient()->SetSessionState(
+      session_manager::SessionState::OOBE);
+
+  fake_device_manager_->AddFakeKeyboard(kSampleKeyboardInternal,
+                                        kKbdTopRowLayout2Tag);
+  const auto* keyboard = controller_->GetKeyboard(kSampleKeyboardInternal.id);
+  ASSERT_TRUE(keyboard);
+  ASSERT_EQ(kDefaultTopRowAreFKeys, keyboard->settings->top_row_are_fkeys);
+
+  PrefService* active_pref_service =
+      Shell::Get()->session_controller()->GetActivePrefService();
+  base::DictValue updated_defaults;
+  updated_defaults.Set(prefs::kKeyboardSettingTopRowAreFKeys,
+                       !kDefaultTopRowAreFKeys);
+  active_pref_service->SetDict(prefs::kKeyboardDefaultChromeOSSettings,
+                               std::move(updated_defaults));
+
+  ASSERT_EQ(1u, keyboard_pref_handler_
+                    ->num_force_initialize_with_default_settings_calls());
+}
+
+// This tests specifically when a device is already setup and the primary user
+// is added at a later time. This is often seen with ENT use cases.
+TEST_F(InputDeviceSettingsControllerTest,
+       KeyboardInternalDefaultsUpdatedDuringPrimaryUserRegistration) {
+  Shell::Get()
+      ->login_screen_controller()
+      ->data_dispatcher()
+      ->NotifyOobeDialogState(OobeDialogState::ONBOARDING);
+  GetSessionControllerClient()->SetSessionState(
+      session_manager::SessionState::LOGIN_PRIMARY);
+
+  fake_device_manager_->AddFakeKeyboard(kSampleKeyboardInternal,
+                                        kKbdTopRowLayout2Tag);
+  const auto* keyboard = controller_->GetKeyboard(kSampleKeyboardInternal.id);
+  ASSERT_TRUE(keyboard);
+  ASSERT_EQ(kDefaultTopRowAreFKeys, keyboard->settings->top_row_are_fkeys);
+
+  PrefService* active_pref_service =
+      Shell::Get()->session_controller()->GetActivePrefService();
+  base::DictValue updated_defaults;
+  updated_defaults.Set(prefs::kKeyboardSettingTopRowAreFKeys,
+                       !kDefaultTopRowAreFKeys);
+  active_pref_service->SetDict(prefs::kKeyboardDefaultChromeOSSettings,
+                               std::move(updated_defaults));
+
+  ASSERT_EQ(1u, keyboard_pref_handler_
+                    ->num_force_initialize_with_default_settings_calls());
+}
+
+TEST_F(InputDeviceSettingsControllerTest,
+       KeyboardExternalDefaultsUpdatedDuringOobe) {
+  GetSessionControllerClient()->SetSessionState(
+      session_manager::SessionState::OOBE);
+
+  fake_device_manager_->AddFakeKeyboard(kSampleKeyboardUsb, "");
+
+  PrefService* active_pref_service =
+      Shell::Get()->session_controller()->GetActivePrefService();
+  base::DictValue updated_defaults;
+  updated_defaults.Set(prefs::kKeyboardSettingTopRowAreFKeys,
+                       !kDefaultTopRowAreFKeys);
+  active_pref_service->SetDict(prefs::kKeyboardDefaultNonChromeOSSettings,
+                               std::move(updated_defaults));
+
+  ASSERT_EQ(1u, keyboard_pref_handler_
+                    ->num_force_initialize_with_default_settings_calls());
+}
+
+TEST_F(InputDeviceSettingsControllerTest,
+       KeyboardSplitModifierTopRowAreKeysUpdated) {
+  GetSessionControllerClient()->SetSessionState(
+      session_manager::SessionState::OOBE);
+
+  fake_device_manager_->AddFakeKeyboard(kSampleSplitModifierKeyboard,
+                                        kKbdTopRowLayout1Tag);
+
+  PrefService* active_pref_service =
+      Shell::Get()->session_controller()->GetActivePrefService();
+  base::DictValue updated_defaults;
+  updated_defaults.Set(prefs::kKeyboardSettingTopRowAreFKeys,
+                       !kDefaultTopRowAreFKeys);
+  active_pref_service->SetDict(prefs::kKeyboardDefaultChromeOSSettings,
+                               std::move(updated_defaults));
+
+  ASSERT_EQ(controller_->GetKeyboard(kSampleSplitModifierKeyboard.id)
+                ->settings->top_row_are_fkeys,
+            !kDefaultTopRowAreFKeys);
+
+  // Change session from oobe to login primary will update the
+  // kKeyboardHasSplitModifierKeyboard pref value.
+  ASSERT_EQ(
+      active_pref_service->GetBoolean(prefs::kKeyboardHasSplitModifierKeyboard),
+      false);
+  GetSessionControllerClient()->SetSessionState(
+      session_manager::SessionState::LOGIN_PRIMARY);
+  ASSERT_EQ(
+      active_pref_service->GetBoolean(prefs::kKeyboardHasSplitModifierKeyboard),
+      true);
+}
+
+TEST_F(InputDeviceSettingsControllerTest,
+       KeyboardSplitModifierDefaultsUpdatedDuringOobe) {
+  GetSessionControllerClient()->SetSessionState(
+      session_manager::SessionState::OOBE);
+
+  fake_device_manager_->AddFakeKeyboard(kSampleSplitModifierKeyboard,
+                                        kKbdTopRowLayout1Tag);
+
+  PrefService* active_pref_service =
+      Shell::Get()->session_controller()->GetActivePrefService();
+  base::DictValue updated_defaults;
+  updated_defaults.Set(prefs::kKeyboardSettingTopRowAreFKeys,
+                       !kDefaultTopRowAreFKeys);
+  active_pref_service->SetDict(prefs::kKeyboardDefaultSplitModifierSettings,
+                               std::move(updated_defaults));
+
+  ASSERT_EQ(1u, keyboard_pref_handler_
+                    ->num_force_initialize_with_default_settings_calls());
+}
+
+TEST_F(InputDeviceSettingsControllerTest, MouseDefaultsUpdatedDuringOobe) {
+  GetSessionControllerClient()->SetSessionState(
+      session_manager::SessionState::OOBE);
+
+  ui::DeviceDataManagerTestApi().SetMouseDevices({kSampleMouseUsb});
+  const auto* mouse = controller_->GetMouse(kSampleMouseUsb.id);
+  ASSERT_TRUE(mouse);
+  ASSERT_EQ(kDefaultReverseScrolling, mouse->settings->reverse_scrolling);
+
+  PrefService* active_pref_service =
+      Shell::Get()->session_controller()->GetActivePrefService();
+  base::DictValue updated_defaults;
+  updated_defaults.Set(prefs::kMouseSettingReverseScrolling,
+                       !kDefaultReverseScrolling);
+  active_pref_service->SetDict(prefs::kMouseDefaultSettings,
+                               std::move(updated_defaults));
+
+  ASSERT_EQ(!kDefaultReverseScrolling, mouse->settings->reverse_scrolling);
+}
+
+TEST_F(InputDeviceSettingsControllerTest, TouchpadDefaultsUpdatedDuringOobe) {
+  GetSessionControllerClient()->SetSessionState(
+      session_manager::SessionState::OOBE);
+
+  ui::DeviceDataManagerTestApi().SetTouchpadDevices({kSampleTouchpadExternal});
+  const auto* touchpad = controller_->GetTouchpad(kSampleTouchpadExternal.id);
+  ASSERT_TRUE(touchpad);
+  ASSERT_EQ(kDefaultReverseScrolling, touchpad->settings->reverse_scrolling);
+
+  PrefService* active_pref_service =
+      Shell::Get()->session_controller()->GetActivePrefService();
+  base::DictValue updated_defaults;
+  updated_defaults.Set(prefs::kTouchpadSettingReverseScrolling,
+                       !kDefaultReverseScrolling);
+  active_pref_service->SetDict(prefs::kTouchpadDefaultSettings,
+                               std::move(updated_defaults));
+  ASSERT_EQ(!kDefaultReverseScrolling, touchpad->settings->reverse_scrolling);
+}
+
+TEST_F(InputDeviceSettingsControllerNoSignInTest, ModifierKeyRefresh) {
+  ui::KeyboardDevice test_keyboard = kSampleKeyboardInternal;
+  test_keyboard.id = kSampleSplitModifierKeyboard.id;
+
+  fake_device_manager_->AddFakeKeyboard(test_keyboard, kKbdTopRowLayout1Tag);
+  {
+    const auto* keyboard = controller_->GetKeyboard(test_keyboard.id);
+    ASSERT_TRUE(keyboard);
+    ASSERT_EQ(
+        (std::vector<ui::mojom::ModifierKey>{
+            ui::mojom::ModifierKey::kBackspace,
+            ui::mojom::ModifierKey::kControl, ui::mojom::ModifierKey::kMeta,
+            ui::mojom::ModifierKey::kEscape, ui::mojom::ModifierKey::kAlt}),
+        keyboard->modifier_keys);
+  }
+
+  // Update keyboard to now be a split modifier keyboard (this usually happens
+  // in reality due to flags being updated, but hard to simulate in tests).
+  test_keyboard = kSampleSplitModifierKeyboard;
+  ui::DeviceDataManagerTestApi().SetKeyboardDevices(
+      {test_keyboard, kSampleKeyboardInternal});
+
+  SimulateUserLogin(kAccountId1);
+  task_runner_->RunUntilIdle();
+  {
+    const auto* keyboard = controller_->GetKeyboard(test_keyboard.id);
+    ASSERT_TRUE(keyboard);
+    ASSERT_EQ(
+        (std::vector<ui::mojom::ModifierKey>{
+            ui::mojom::ModifierKey::kBackspace,
+            ui::mojom::ModifierKey::kControl, ui::mojom::ModifierKey::kMeta,
+            ui::mojom::ModifierKey::kEscape, ui::mojom::ModifierKey::kAlt,
+            ui::mojom::ModifierKey::kFunction,
+            ui::mojom::ModifierKey::kQuickInsert}),
+        keyboard->modifier_keys);
+  }
+}
+
+TEST_F(InputDeviceSettingsControllerTest, GetCompanionAppInfo) {
+  base::HistogramTester histogram_tester;
+  AddFakeMouse(kSampleMouseWithCompanionApp);
+  auto* mouse = controller_->GetMouse(kSampleMouseWithCompanionApp.id);
+  ASSERT_FALSE(mouse->app_info.is_null());
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.WelcomeExperienceCompanionAppState",
+      InputDeviceSettingsMetricsManager::CompanionAppState::kAvailable,
+      /*expected_count=*/1u);
+  fake_device_manager_->RemoveAllDevices();
+  delegate_->set_should_fail(/*should_fail=*/true);
+  fake_device_manager_->AddFakeMouse(kSampleMouseWithCompanionApp);
+  mouse = controller_->GetMouse(kSampleMouseWithCompanionApp.id);
+  ASSERT_TRUE(mouse->app_info.is_null());
+}
+
+TEST_F(InputDeviceSettingsControllerTest, CompanionAppStateUpdated) {
+  base::HistogramTester histogram_tester;
+  AddFakeMouse(kSampleMouseWithCompanionApp);
+  auto* mouse = controller_->GetMouse(kSampleMouseWithCompanionApp.id);
+  auto expected_package_id = GetPackageIdForTesting(mouse->device_key);
+  ASSERT_FALSE(mouse->app_info.is_null());
+  ASSERT_EQ(mojom::CompanionAppState::kAvailable, mouse->app_info->state);
+  // Simulate installing the companion app.
+  SendAppUpdate(expected_package_id, apps::Readiness::kReady);
+  ASSERT_EQ(mojom::CompanionAppState::kInstalled, mouse->app_info->state);
+  histogram_tester.ExpectBucketCount(
+      "ChromeOS.WelcomeExperienceCompanionAppState",
+      InputDeviceSettingsMetricsManager::CompanionAppState::kInstalled,
+      /*expected_count=*/1u);
+}
+
+TEST_F(InputDeviceSettingsControllerTest, MarketingNameOverridesGeneric) {
+  const ui::InputDevice kMouseWithMarketingName(44, ui::INPUT_DEVICE_USB,
+                                                "kMouseWithMarketingName",
+                                                /*phys=*/"",
+                                                /*sys_path=*/base::FilePath(),
+                                                /*vendor=*/0x046d,
+                                                /*product=*/0x405e,
+                                                /*version=*/0x0003);
+  // Add two mice, one with a known marketing name and one without.
+  fake_device_manager_->AddFakeMouse(kSampleMouseUsb);
+  fake_device_manager_->AddFakeMouse(kMouseWithMarketingName);
+
+  auto* sample_mouse = controller_->GetMouse(kSampleMouseUsb.id);
+  auto* mouse_with_marketing_name =
+      controller_->GetMouse(kMouseWithMarketingName.id);
+
+  ASSERT_EQ(kSampleMouseUsb.name, sample_mouse->name);
+  ASSERT_EQ("M720 Triathlon", mouse_with_marketing_name->name);
+}
+
+TEST_F(InputDeviceSettingsControllerTest, DefaultButtonWithMetadata) {
+  // Use a graphics tablet with default button remappings.
+  ui::InputDevice graphics_tablet_base_device = kSampleGraphicsTablet;
+  graphics_tablet_base_device.vendor_id = 0x056a;
+  graphics_tablet_base_device.product_id = 0x0374;
+
+  // Add two mice, one with a known marketing name and one without.
+  fake_device_manager_->AddFakeGraphicsTablet(graphics_tablet_base_device);
+
+  auto* graphics_tablet =
+      controller_->GetGraphicsTablet(graphics_tablet_base_device.id);
+  auto default_action = graphics_tablet->settings->tablet_button_remappings[0]
+                            ->remapping_action.Clone();
+  ASSERT_FALSE(default_action.is_null());
+
+  // Set the button to something other than the default and verify it its set as
+  // expected.
+  auto modified_settings = graphics_tablet->settings->Clone();
+  modified_settings->tablet_button_remappings[0]->remapping_action =
+      mojom::RemappingAction::NewStaticShortcutAction(
+          mojom::StaticShortcutAction::kCopy);
+  controller_->SetGraphicsTabletSettings(graphics_tablet->id,
+                                         std::move(modified_settings));
+  ASSERT_EQ(
+      mojom::RemappingAction::NewStaticShortcutAction(
+          mojom::StaticShortcutAction::kCopy),
+      graphics_tablet->settings->tablet_button_remappings[0]->remapping_action);
+
+  // When the button is reset back to default (nullptr), it should be replaced
+  // by the OEM default instead.
+  modified_settings = graphics_tablet->settings->Clone();
+  modified_settings->tablet_button_remappings[0]->remapping_action = nullptr;
+  controller_->SetGraphicsTabletSettings(graphics_tablet->id,
+                                         std::move(modified_settings));
+  ASSERT_EQ(
+      default_action,
+      graphics_tablet->settings->tablet_button_remappings[0]->remapping_action);
 }
 
 }  // namespace ash

@@ -4,15 +4,16 @@
 
 #include "chrome/updater/win/installer/string.h"
 
+#include <windows.h>
+
 #include <stddef.h>
 #include <stdlib.h>
-#include <windows.h>
 
 #include <string>
 
 #include "testing/gtest/include/gtest/gtest.h"
 
-using updater::StackString;
+using ::updater::StackString;
 
 namespace {
 class InstallerStringTest : public testing::Test {

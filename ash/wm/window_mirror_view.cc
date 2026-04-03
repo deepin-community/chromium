@@ -7,7 +7,6 @@
 #include <algorithm>
 
 #include "ash/wm/desks/desks_util.h"
-#include "ash/wm/raster_scale/raster_scale_layer_observer.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "ui/aura/client/aura_constants.h"
@@ -67,7 +66,8 @@ void WindowMirrorView::OnWindowDestroying(aura::Window* window) {
   }
 }
 
-gfx::Size WindowMirrorView::CalculatePreferredSize() const {
+gfx::Size WindowMirrorView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return show_non_client_view_ ? source_->bounds().size()
                                : GetClientAreaBounds().size();
 }
@@ -147,14 +147,6 @@ void WindowMirrorView::InitLayerOwner() {
   // offscreen or is on an inactive desk.
   if (window_util::IsMinimizedOrTucked(source_) ||
       !desks_util::BelongsToActiveDesk(source_)) {
-    // If the window is already visible, don't set its raster scale. This means
-    // that, for example, alt-tab window cycling won't update the raster scale
-    // of visible windows.
-    // TODO(crbug.com/1473882): Consider using compositor occlusion information
-    // to determine if raster scale can be set lower, e.g. on alt-tab.
-    raster_scale_observer_lock_.emplace(
-        (new RasterScaleLayerObserver(target_, mirror_layer, source_))->Lock());
-
     EnsureAllChildrenAreVisible(mirror_layer);
   }
 

@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
 
@@ -284,7 +288,7 @@ TEST_P(DrawBuffersTest, BlendWithGaps)
 {
     ANGLE_SKIP_TEST_IF(!setupTest());
 
-    // http://anglebug.com/5154
+    // http://anglebug.com/42263715
     ANGLE_SKIP_TEST_IF(IsMac() && IsIntel() && IsDesktopOpenGL());
 
     glBindTexture(GL_TEXTURE_2D, mTextures[0]);
@@ -601,18 +605,47 @@ TEST_P(DrawBuffersTest, FirstHalfNULL)
     glDeleteProgram(program);
 }
 
-// Test that non-zero draw buffers can be queried on the default framebuffer
+// Test draw buffers query on the default framebuffer
 TEST_P(DrawBuffersTest, DefaultFramebufferDrawBufferQuery)
 {
     ANGLE_SKIP_TEST_IF(!setupTest());
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+    EGLWindow *window  = getEGLWindow();
+    EGLDisplay display = window->getDisplay();
+    EGLSurface surface = window->getSurface();
     GLint drawbuffer = 0;
+
+    if (EGL_NO_SURFACE != surface)
+    {
+        // Check that the draw buffer state is GL_BACK
+        glGetIntegerv(GL_DRAW_BUFFER0, &drawbuffer);
+        EXPECT_GL_NO_ERROR();
+        EXPECT_EQ(GL_BACK, drawbuffer);
+    }
+
+    // Test that non-zero draw buffers can be queried on the default framebuffer
     glGetIntegerv(GL_DRAW_BUFFER1, &drawbuffer);
     EXPECT_GL_NO_ERROR();
-
     EXPECT_EQ(GL_NONE, drawbuffer);
+
+    // Make our context current with no surfaces
+    eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, window->getContext());
+    // Check that the draw buffer state is GL_NONE
+    glGetIntegerv(GL_DRAW_BUFFER0, &drawbuffer);
+    EXPECT_GL_NO_ERROR();
+    EXPECT_EQ(GL_NONE, drawbuffer);
+
+    if (EGL_NO_SURFACE != surface)
+    {
+        // Make our context current with a surface again
+        eglMakeCurrent(display, surface, surface, window->getContext());
+        // Test that the draw buffer state is GL_BACK once again
+        glGetIntegerv(GL_DRAW_BUFFER0, &drawbuffer);
+        EXPECT_GL_NO_ERROR();
+        EXPECT_EQ(GL_BACK, drawbuffer);
+    }
 }
 
 // Test that drawing with all color buffers disabled works.
@@ -830,7 +863,7 @@ TEST_P(DrawBuffersTest, AllRGBA8)
 // Same as above but adds a state change from a program with different masks after a clear.
 TEST_P(DrawBuffersWebGL2Test, TwoProgramsWithDifferentOutputsAndClear)
 {
-    // TODO(http://anglebug.com/2872): Broken on the GL back-end.
+    // TODO(http://anglebug.com/42261569): Broken on the GL back-end.
     ANGLE_SKIP_TEST_IF(IsOpenGL());
 
     ANGLE_SKIP_TEST_IF(!setupTest());
@@ -1056,18 +1089,14 @@ TEST_P(DrawBuffersTest, 3DTexturesOES)
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_texture_3D"));
 
     GLTexture texture;
-    glBindTexture(GL_TEXTURE_3D, texture.get());
+    glBindTexture(GL_TEXTURE_3D, texture);
     glTexImage3DOES(GL_TEXTURE_3D, 0, GL_RGBA, getWindowWidth(), getWindowHeight(),
                     getWindowWidth(), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
-    glFramebufferTexture3DOES(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_3D, texture.get(), 0,
-                              0);
-    glFramebufferTexture3DOES(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_3D, texture.get(), 0,
-                              1);
-    glFramebufferTexture3DOES(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_3D, texture.get(), 0,
-                              2);
-    glFramebufferTexture3DOES(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_3D, texture.get(), 0,
-                              3);
+    glFramebufferTexture3DOES(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_3D, texture, 0, 0);
+    glFramebufferTexture3DOES(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_3D, texture, 0, 1);
+    glFramebufferTexture3DOES(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_3D, texture, 0, 2);
+    glFramebufferTexture3DOES(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_3D, texture, 0, 3);
 
     bool flags[8] = {true, true, true, true, false};
 
@@ -1084,10 +1113,10 @@ TEST_P(DrawBuffersTest, 3DTexturesOES)
     setDrawBuffers(4, bufs);
     drawQuad(program, positionAttrib(), 0.5);
 
-    verifyAttachment3DOES(0, texture.get(), 0, 0);
-    verifyAttachment3DOES(1, texture.get(), 0, 1);
-    verifyAttachment3DOES(2, texture.get(), 0, 2);
-    verifyAttachment3DOES(3, texture.get(), 0, 3);
+    verifyAttachment3DOES(0, texture, 0, 0);
+    verifyAttachment3DOES(1, texture, 0, 1);
+    verifyAttachment3DOES(2, texture, 0, 2);
+    verifyAttachment3DOES(3, texture, 0, 3);
 
     EXPECT_GL_NO_ERROR();
 
@@ -1103,14 +1132,14 @@ TEST_P(DrawBuffersTestES3, 3DTextures)
     ANGLE_SKIP_TEST_IF(!setupTest());
 
     GLTexture texture;
-    glBindTexture(GL_TEXTURE_3D, texture.get());
+    glBindTexture(GL_TEXTURE_3D, texture);
     glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA, getWindowWidth(), getWindowHeight(), getWindowWidth(),
                  0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture.get(), 0, 0);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, texture.get(), 0, 1);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, texture.get(), 0, 2);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, texture.get(), 0, 3);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, 0);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, texture, 0, 1);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, texture, 0, 2);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, texture, 0, 3);
 
     bool flags[8] = {true, true, true, true, false};
 
@@ -1127,10 +1156,10 @@ TEST_P(DrawBuffersTestES3, 3DTextures)
     glDrawBuffers(4, bufs);
     drawQuad(program, positionAttrib(), 0.5);
 
-    verifyAttachmentLayer(0, texture.get(), 0, 0);
-    verifyAttachmentLayer(1, texture.get(), 0, 1);
-    verifyAttachmentLayer(2, texture.get(), 0, 2);
-    verifyAttachmentLayer(3, texture.get(), 0, 3);
+    verifyAttachmentLayer(0, texture, 0, 0);
+    verifyAttachmentLayer(1, texture, 0, 1);
+    verifyAttachmentLayer(2, texture, 0, 2);
+    verifyAttachmentLayer(3, texture, 0, 3);
 
     EXPECT_GL_NO_ERROR();
 
@@ -1143,14 +1172,14 @@ TEST_P(DrawBuffersTestES3, 2DArrayTextures)
     ANGLE_SKIP_TEST_IF(!setupTest());
 
     GLTexture texture;
-    glBindTexture(GL_TEXTURE_2D_ARRAY, texture.get());
+    glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, getWindowWidth(), getWindowHeight(),
                  getWindowWidth(), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture.get(), 0, 0);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, texture.get(), 0, 1);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, texture.get(), 0, 2);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, texture.get(), 0, 3);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, 0);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, texture, 0, 1);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, texture, 0, 2);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, texture, 0, 3);
 
     bool flags[8] = {true, true, true, true, false};
 
@@ -1167,10 +1196,10 @@ TEST_P(DrawBuffersTestES3, 2DArrayTextures)
     glDrawBuffers(4, bufs);
     drawQuad(program, positionAttrib(), 0.5);
 
-    verifyAttachmentLayer(0, texture.get(), 0, 0);
-    verifyAttachmentLayer(1, texture.get(), 0, 1);
-    verifyAttachmentLayer(2, texture.get(), 0, 2);
-    verifyAttachmentLayer(3, texture.get(), 0, 3);
+    verifyAttachmentLayer(0, texture, 0, 0);
+    verifyAttachmentLayer(1, texture, 0, 1);
+    verifyAttachmentLayer(2, texture, 0, 2);
+    verifyAttachmentLayer(3, texture, 0, 3);
 
     EXPECT_GL_NO_ERROR();
 
@@ -1183,14 +1212,14 @@ TEST_P(DrawBuffersTestES3, CubeMapTextures)
     ANGLE_SKIP_TEST_IF(!setupTest());
 
     GLTexture texture;
-    glBindTexture(GL_TEXTURE_CUBE_MAP, texture.get());
+    glBindTexture(GL_TEXTURE_CUBE_MAP, texture);
     glTexStorage2D(GL_TEXTURE_CUBE_MAP, 1, GL_RGBA8, getWindowWidth(), getWindowHeight());
     EXPECT_GL_NO_ERROR();
 
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture.get(), 0, 3);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, texture.get(), 0, 2);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, texture.get(), 0, 1);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, texture.get(), 0, 0);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, 3);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, texture, 0, 2);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, texture, 0, 1);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, texture, 0, 0);
     EXPECT_GL_NO_ERROR();
 
     bool flags[8] = {true, true, true, true, false};
@@ -1208,10 +1237,10 @@ TEST_P(DrawBuffersTestES3, CubeMapTextures)
     glDrawBuffers(4, bufs);
     drawQuad(program, positionAttrib(), 0.5);
 
-    verifyAttachmentLayer(0, texture.get(), 0, 3);
-    verifyAttachmentLayer(1, texture.get(), 0, 2);
-    verifyAttachmentLayer(2, texture.get(), 0, 1);
-    verifyAttachmentLayer(3, texture.get(), 0, 0);
+    verifyAttachmentLayer(0, texture, 0, 3);
+    verifyAttachmentLayer(1, texture, 0, 2);
+    verifyAttachmentLayer(2, texture, 0, 1);
+    verifyAttachmentLayer(3, texture, 0, 0);
 
     EXPECT_GL_NO_ERROR();
 
@@ -1225,15 +1254,15 @@ TEST_P(DrawBuffersTestES3, CubeMapArrayTextures)
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_cube_map_array"));
 
     GLTexture texture;
-    glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, texture.get());
+    glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, texture);
     glTexStorage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 1, GL_RGBA8, getWindowWidth(), getWindowHeight(),
                    static_cast<GLint>(kCubeFaces.size()));
     EXPECT_GL_NO_ERROR();
 
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture.get(), 0, 3);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, texture.get(), 0, 2);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, texture.get(), 0, 1);
-    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, texture.get(), 0, 0);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, 3);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, texture, 0, 2);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, texture, 0, 1);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, texture, 0, 0);
     EXPECT_GL_NO_ERROR();
 
     bool flags[8] = {true, true, true, true, false};
@@ -1251,10 +1280,10 @@ TEST_P(DrawBuffersTestES3, CubeMapArrayTextures)
     glDrawBuffers(4, bufs);
     drawQuad(program, positionAttrib(), 0.5);
 
-    verifyAttachmentLayer(0, texture.get(), 0, 3);
-    verifyAttachmentLayer(1, texture.get(), 0, 2);
-    verifyAttachmentLayer(2, texture.get(), 0, 1);
-    verifyAttachmentLayer(3, texture.get(), 0, 0);
+    verifyAttachmentLayer(0, texture, 0, 3);
+    verifyAttachmentLayer(1, texture, 0, 2);
+    verifyAttachmentLayer(2, texture, 0, 1);
+    verifyAttachmentLayer(3, texture, 0, 0);
 
     EXPECT_GL_NO_ERROR();
 
@@ -1266,7 +1295,7 @@ TEST_P(DrawBuffersTestES3, BlendWithDrawBufferAndFramebufferChanges)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_draw_buffers_indexed"));
 
-    // http://anglebug.com/5154
+    // http://anglebug.com/42263715
     ANGLE_SKIP_TEST_IF(IsMac() && IsIntel() && IsDesktopOpenGL());
 
     // Create two framebuffers, one with 3 attachments (fbo3), one with 4 (fbo4).  The test issues
@@ -1302,20 +1331,20 @@ TEST_P(DrawBuffersTestES3, BlendWithDrawBufferAndFramebufferChanges)
     }
     ASSERT_GL_NO_ERROR();
 
-    glEnablei(GL_BLEND, 0);
-    glEnablei(GL_BLEND, 1);
-    glEnablei(GL_BLEND, 2);
-    glEnablei(GL_BLEND, 3);
+    glEnableiOES(GL_BLEND, 0);
+    glEnableiOES(GL_BLEND, 1);
+    glEnableiOES(GL_BLEND, 2);
+    glEnableiOES(GL_BLEND, 3);
 
-    glBlendEquationi(0, GL_FUNC_REVERSE_SUBTRACT);
-    glBlendEquationi(1, GL_MIN);
-    glBlendEquationi(2, GL_FUNC_REVERSE_SUBTRACT);
-    glBlendEquationi(3, GL_FUNC_REVERSE_SUBTRACT);
+    glBlendEquationiOES(0, GL_FUNC_REVERSE_SUBTRACT);
+    glBlendEquationiOES(1, GL_MIN);
+    glBlendEquationiOES(2, GL_FUNC_REVERSE_SUBTRACT);
+    glBlendEquationiOES(3, GL_FUNC_REVERSE_SUBTRACT);
 
-    glBlendFunci(0, GL_ONE, GL_ONE);
-    glBlendFunci(1, GL_DST_ALPHA, GL_DST_ALPHA);
-    glBlendFunci(2, GL_SRC_ALPHA, GL_SRC_ALPHA);
-    glBlendFunci(3, GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA);
+    glBlendFunciOES(0, GL_ONE, GL_ONE);
+    glBlendFunciOES(1, GL_DST_ALPHA, GL_DST_ALPHA);
+    glBlendFunciOES(2, GL_SRC_ALPHA, GL_SRC_ALPHA);
+    glBlendFunciOES(3, GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA);
 
     bufs[0] = GL_NONE;
     bufs[2] = GL_NONE;
@@ -1756,13 +1785,11 @@ TEST_P(ColorMaskForDrawBuffersTest, StateChangeAffectsBlendState)
     EXPECT_GL_NO_ERROR();
 }
 
-ANGLE_INSTANTIATE_TEST(DrawBuffersTest,
-                       ANGLE_ALL_TEST_PLATFORMS_ES2,
-                       ANGLE_ALL_TEST_PLATFORMS_ES3,
-                       ES2_METAL().enable(Feature::LimitMaxDrawBuffersForTesting),
-                       ES2_VULKAN()
-                           .disable(Feature::SupportsTransformFeedbackExtension)
-                           .disable(Feature::EmulateTransformFeedback));
+ANGLE_INSTANTIATE_TEST_ES2_AND_ES3_AND(DrawBuffersTest,
+                                       ES2_METAL().enable(Feature::LimitMaxDrawBuffersForTesting),
+                                       ES2_VULKAN()
+                                           .disable(Feature::SupportsTransformFeedbackExtension)
+                                           .disable(Feature::EmulateTransformFeedback));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(DrawBuffersWebGL2Test);
 ANGLE_INSTANTIATE_TEST_ES3(DrawBuffersWebGL2Test);

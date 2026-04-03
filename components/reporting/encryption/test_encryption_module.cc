@@ -5,14 +5,12 @@
 #include "components/reporting/encryption/test_encryption_module.h"
 
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/functional/callback.h"
-#include "base/strings/string_piece.h"
 #include "components/reporting/proto/synced/record.pb.h"
 #include "components/reporting/util/statusor.h"
-
-using ::testing::Invoke;
 
 namespace reporting {
 namespace test {
@@ -20,13 +18,13 @@ namespace test {
 TestEncryptionModuleStrict::TestEncryptionModuleStrict() {
   ON_CALL(*this, EncryptRecordImpl)
       .WillByDefault(
-          Invoke([](std::string_view record,
-                    base::OnceCallback<void(StatusOr<EncryptedRecord>)> cb) {
+          [](std::string_view record,
+             base::OnceCallback<void(StatusOr<EncryptedRecord>)> cb) {
             EncryptedRecord encrypted_record;
             encrypted_record.set_encrypted_wrapped_record(std::string(record));
             // encryption_info is not set.
             std::move(cb).Run(encrypted_record);
-          }));
+          });
 }
 
 void TestEncryptionModuleStrict::UpdateAsymmetricKeyImpl(

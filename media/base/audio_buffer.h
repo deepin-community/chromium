@@ -15,11 +15,12 @@
 
 #include "base/containers/span.h"
 #include "base/memory/aligned_memory.h"
+#include "base/memory/raw_span.h"
 #include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
 #include "base/time/time.h"
-#include "media/base/audio_bus.h"
+#include "base/types/pass_key.h"
 #include "media/base/channel_layout.h"
 #include "media/base/media_export.h"
 #include "media/base/sample_format.h"
@@ -33,6 +34,7 @@ class StructPtr;
 
 namespace media {
 class AudioBufferMemoryPool;
+class AudioBus;
 
 namespace mojom {
 class AudioBuffer;
@@ -44,15 +46,20 @@ class AudioBuffer;
 class MEDIA_EXPORT AudioBuffer
     : public base::RefCountedThreadSafe<AudioBuffer> {
  public:
+  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
   struct MEDIA_EXPORT ExternalMemory {
    public:
-    explicit ExternalMemory(base::span<uint8_t> span) : span_(span) {}
-    virtual ~ExternalMemory() = default;
-    base::span<uint8_t>& span() { return span_; }
+    explicit ExternalMemory(base::span<uint8_t> span);
+    virtual ~ExternalMemory();
+    ExternalMemory(const ExternalMemory&);
+    ExternalMemory(ExternalMemory&&);
+
+    base::span<uint8_t> span() { return span_; }
 
    protected:
-    ExternalMemory() = default;
-    base::span<uint8_t> span_;
+    ExternalMemory();
+    base::raw_span<uint8_t, DanglingUntriaged> span_;
   };
 
   // Create an AudioBuffer whose channel data is copied from |data|. For
@@ -162,6 +169,32 @@ class MEDIA_EXPORT AudioBuffer
   // is disallowed.
   static scoped_refptr<AudioBuffer> CreateEOSBuffer();
 
+  // Allocates aligned contiguous buffer to hold all channel data (1 block for
+  // interleaved data, |channel_count| blocks for planar data), copies
+  // [data,data+data_size) to the allocated buffer(s). If |data| is null, no
+  // data is copied. If |create_buffer| is false, no data buffer is created (or
+  // copied to).
+  AudioBuffer(base::PassKey<AudioBuffer>,
+              SampleFormat sample_format,
+              ChannelLayout channel_layout,
+              int channel_count,
+              int sample_rate,
+              int frame_count,
+              bool create_buffer,
+              const uint8_t* const* data,
+              const size_t data_size,
+              const base::TimeDelta timestamp,
+              scoped_refptr<AudioBufferMemoryPool> pool);
+  // Takes ownership over a contiguous buffer to hold all channel data
+  // (1 block for interleaved data, |channel_count| blocks for planar data).
+  AudioBuffer(base::PassKey<AudioBuffer>,
+              SampleFormat sample_format,
+              ChannelLayout channel_layout,
+              int channel_count,
+              int sample_rate,
+              int frame_count,
+              const base::TimeDelta timestamp,
+              std::unique_ptr<ExternalMemory> external_memory);
   AudioBuffer() = delete;
   AudioBuffer(const AudioBuffer&) = delete;
   AudioBuffer& operator=(const AudioBuffer&) = delete;
@@ -222,11 +255,26 @@ class MEDIA_EXPORT AudioBuffer
   // If there's no data in this buffer, it represents end of stream.
   bool end_of_stream() const { return end_of_stream_; }
 
+  // Use `channels()` instead for spanified buffer access.
+  //
   // Access to the raw buffer for ffmpeg and Android MediaCodec decoders to
   // write directly to. For planar formats the vector elements correspond to
   // the channels. For interleaved formats the resulting vector has exactly
   // one element which contains the buffer pointer.
-  const std::vector<uint8_t*>& channel_data() const { return channel_data_; }
+  const std::vector<uint8_t*>& channel_data() const {
+    CHECK_EQ(channel_spans_.size(), channel_data_.size());
+    return channel_data_;
+  }
+
+  // Provides spanified access to the channels buffer for ffmpeg and Android
+  // MediaCodec decoders to write directly to.
+  // For planar formats, each element in the returned span maps to one channel.
+  // For interleaved formats the returned span will contain exactly one
+  // element which is the interleaved data buffer.
+  base::span<const base::raw_span<uint8_t>> channels() const {
+    CHECK_EQ(channel_spans_.size(), channel_data_.size());
+    return channel_spans_;
+  }
 
   // The size of allocated data memory block. For planar formats channels go
   // sequentially in this block.
@@ -240,34 +288,12 @@ class MEDIA_EXPORT AudioBuffer
   friend struct mojo::TypeConverter<mojo::StructPtr<mojom::AudioBuffer>,
                                     AudioBuffer>;
 
-  // Allocates aligned contiguous buffer to hold all channel data (1 block for
-  // interleaved data, |channel_count| blocks for planar data), copies
-  // [data,data+data_size) to the allocated buffer(s). If |data| is null, no
-  // data is copied. If |create_buffer| is false, no data buffer is created (or
-  // copied to).
-  AudioBuffer(SampleFormat sample_format,
-              ChannelLayout channel_layout,
-              int channel_count,
-              int sample_rate,
-              int frame_count,
-              bool create_buffer,
-              const uint8_t* const* data,
-              const size_t data_size,
-              const base::TimeDelta timestamp,
-              scoped_refptr<AudioBufferMemoryPool> pool);
-
-  // Takes ownership over a contiguous buffer to hold all channel data
-  // (1 block for interleaved data, |channel_count| blocks for planar data).
-  AudioBuffer(SampleFormat sample_format,
-              ChannelLayout channel_layout,
-              int channel_count,
-              int sample_rate,
-              int frame_count,
-              const base::TimeDelta timestamp,
-              std::unique_ptr<ExternalMemory> external_memory);
-
   virtual ~AudioBuffer();
-  std::unique_ptr<ExternalMemory> AllocateMemory(size_t size);
+
+  // Copies each `data()` pointer from `channel_spans_` into `channel_data_`.
+  // Called exactly once at the end of construction.
+  // TODO(crbug.com/373960632): Delete this when deleting `channel_data_`.
+  void PopulateChannelData();
 
   const SampleFormat sample_format_;
   const ChannelLayout channel_layout_;
@@ -282,8 +308,13 @@ class MEDIA_EXPORT AudioBuffer
   size_t data_size_ = 0;
   std::unique_ptr<ExternalMemory> data_;
 
-  // For planar data, points to each channels data.
+  // Raw pointers to the beginning of each span in `channel_spans_`.
+  // TODO(crbug.com/373960632): Delete this once `channel_spans_` is used
+  // everywhere instead.
   std::vector<uint8_t*> channel_data_;
+
+  // For planar data, points to each channels data.
+  std::vector<base::raw_span<uint8_t>> channel_spans_;
 
   // Allows recycling of memory data to avoid repeated allocations.
   scoped_refptr<AudioBufferMemoryPool> pool_;
@@ -303,23 +334,27 @@ class MEDIA_EXPORT AudioBuffer
 class MEDIA_EXPORT AudioBufferMemoryPool
     : public base::RefCountedThreadSafe<AudioBufferMemoryPool> {
  public:
-  explicit AudioBufferMemoryPool(int alignment = AudioBus::kChannelAlignment);
+  REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
+
+  AudioBufferMemoryPool();
+  explicit AudioBufferMemoryPool(size_t alignment);
   AudioBufferMemoryPool(const AudioBufferMemoryPool&) = delete;
   AudioBufferMemoryPool& operator=(const AudioBufferMemoryPool&) = delete;
 
   size_t GetPoolSizeForTesting();
-  int GetChannelAlignment() { return alignment_; }
+  size_t GetChannelAlignment() const { return alignment_; }
 
-  struct ExternalMemoryFromPool : public AudioBuffer::ExternalMemory {
+  class ExternalMemoryFromPool : public AudioBuffer::ExternalMemory {
    public:
-    ExternalMemoryFromPool(
-        scoped_refptr<AudioBufferMemoryPool> pool,
-        std::unique_ptr<uint8_t, base::AlignedFreeDeleter> memory,
-        size_t size);
+    ExternalMemoryFromPool(scoped_refptr<AudioBufferMemoryPool> pool,
+                           base::AlignedHeapArray<uint8_t> memory);
     ExternalMemoryFromPool(ExternalMemoryFromPool&&);
     ~ExternalMemoryFromPool() override;
 
-    std::unique_ptr<uint8_t, base::AlignedFreeDeleter> memory_;
+   private:
+    friend class AudioBufferMemoryPool;
+
+    base::AlignedHeapArray<uint8_t> memory_;
     scoped_refptr<AudioBufferMemoryPool> pool_;
   };
 
@@ -332,7 +367,7 @@ class MEDIA_EXPORT AudioBufferMemoryPool
   std::unique_ptr<ExternalMemoryFromPool> CreateBuffer(size_t size);
   void ReturnBuffer(ExternalMemoryFromPool memory);
 
-  const int alignment_;
+  const size_t alignment_;
   base::Lock entry_lock_;
   std::list<ExternalMemoryFromPool> entries_ GUARDED_BY(entry_lock_);
 };

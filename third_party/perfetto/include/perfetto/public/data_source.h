@@ -38,12 +38,14 @@ struct PerfettoDs {
 };
 
 // Initializes a PerfettoDs struct.
-#define PERFETTO_DS_INIT() \
-  { &perfetto_atomic_false, PERFETTO_NULL }
+#define PERFETTO_DS_INIT() {&perfetto_atomic_false, PERFETTO_NULL}
 
 // All the callbacks are optional and can be NULL if not needed.
+//
 struct PerfettoDsParams {
-  // Instance lifecycle callbacks:
+  // Instance lifecycle callbacks.
+  //
+  // Can be called from any thread.
   PerfettoDsOnSetupCb on_setup_cb;
   PerfettoDsOnStartCb on_start_cb;
   PerfettoDsOnStopCb on_stop_cb;
@@ -52,34 +54,52 @@ struct PerfettoDsParams {
 
   // These are called to create/delete custom thread-local instance state, which
   // can be accessed with PerfettoDsTracerImplGetCustomTls().
+  //
+  // Called from inside a trace point. Trace points inside these will be
+  // ignored.
   PerfettoDsOnCreateCustomState on_create_tls_cb;
   PerfettoDsOnDeleteCustomState on_delete_tls_cb;
 
   // These are called to create/delete custom thread-local instance incremental
   // state. Incremental state may be cleared periodically by the tracing service
   // and can be accessed with PerfettoDsTracerImplGetIncrementalState().
+  //
+  // Called from inside a trace point. Trace points inside these will be
+  // ignored.
   PerfettoDsOnCreateCustomState on_create_incr_cb;
   PerfettoDsOnDeleteCustomState on_delete_incr_cb;
+  PerfettoDsOnClearCustomState on_clear_incr_cb;
 
   // Passed to all the callbacks as the `user_arg` param.
   void* user_arg;
 
   // How to behave when running out of shared memory buffer space.
   enum PerfettoDsBufferExhaustedPolicy buffer_exhausted_policy;
+
+  bool buffer_exhausted_policy_configurable;
+
+  // When true the data source is expected to ack the stop request through the
+  // NotifyDataSourceStopped() IPC.
+  bool will_notify_on_stop;
 };
 
 static inline struct PerfettoDsParams PerfettoDsParamsDefault(void) {
-  struct PerfettoDsParams ret = {PERFETTO_NULL,
-                                 PERFETTO_NULL,
-                                 PERFETTO_NULL,
-                                 PERFETTO_NULL,
-                                 PERFETTO_NULL,
-                                 PERFETTO_NULL,
-                                 PERFETTO_NULL,
-                                 PERFETTO_NULL,
-                                 PERFETTO_NULL,
-                                 PERFETTO_NULL,
-                                 PERFETTO_DS_BUFFER_EXHAUSTED_POLICY_DROP};
+  struct PerfettoDsParams ret = {
+      /* .on_setup_cb = */ PERFETTO_NULL,
+      /* .on_start_cb = */ PERFETTO_NULL,
+      /* .on_stop_cb = */ PERFETTO_NULL,
+      /* .on_destroy_cb = */ PERFETTO_NULL,
+      /* .on_flush_cb = */ PERFETTO_NULL,
+      /* .on_create_tls_cb = */ PERFETTO_NULL,
+      /* .on_delete_tls_cb = */ PERFETTO_NULL,
+      /* .on_create_incr_cb = */ PERFETTO_NULL,
+      /* .on_delete_incr_cb = */ PERFETTO_NULL,
+      /* .on_clear_incr_cb = */ PERFETTO_NULL,
+      /* .user_arg = */ PERFETTO_NULL,
+      /* .buffer_exhausted_policy = */
+      PERFETTO_DS_BUFFER_EXHAUSTED_POLICY_DROP,
+      /* .buffer_exhausted_policy_configurable = */ false,
+      /* .will_notify_on_stop = */ true};
   return ret;
 }
 
@@ -103,6 +123,8 @@ static inline bool PerfettoDsRegister(struct PerfettoDs* ds,
     PerfettoPbMsgInit(&desc.msg, &writer);
 
     perfetto_protos_DataSourceDescriptor_set_cstr_name(&desc, data_source_name);
+    perfetto_protos_DataSourceDescriptor_set_will_notify_on_stop(
+        &desc, params.will_notify_on_stop);
 
     desc_size = PerfettoStreamWriterGetWrittenSize(&writer.writer);
     desc_buf = malloc(desc_size);
@@ -142,12 +164,18 @@ static inline bool PerfettoDsRegister(struct PerfettoDs* ds,
   if (params.on_delete_incr_cb) {
     PerfettoDsSetOnDeleteIncr(ds_impl, params.on_delete_incr_cb);
   }
+  if (params.on_clear_incr_cb) {
+    PerfettoDsSetOnClearIncr(ds_impl, params.on_clear_incr_cb);
+  }
   if (params.user_arg) {
     PerfettoDsSetCbUserArg(ds_impl, params.user_arg);
   }
   if (params.buffer_exhausted_policy !=
       PERFETTO_DS_BUFFER_EXHAUSTED_POLICY_DROP) {
     PerfettoDsSetBufferExhaustedPolicy(ds_impl, params.buffer_exhausted_policy);
+  }
+  if (params.buffer_exhausted_policy_configurable) {
+    PerfettoDsSetBufferExhaustedPolicyConfigurable(ds_impl, true);
   }
 
   success = PerfettoDsImplRegister(ds_impl, &ds->enabled, desc_buf, desc_size);

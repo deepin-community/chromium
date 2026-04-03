@@ -75,7 +75,7 @@ class ASH_EXPORT ScreensaverImageDownloader {
   // Updates the list of images to be cached to `image_url_list`. Processing the
   // new list can download new images and delete images that are no longer being
   // referenced in the new list.
-  void UpdateImageUrlList(const base::Value::List& image_url_list);
+  void UpdateImageUrlList(const base::ListValue& image_url_list);
 
   std::vector<base::FilePath> GetScreensaverImages();
 
@@ -86,11 +86,6 @@ class ASH_EXPORT ScreensaverImageDownloader {
 
  private:
   friend class ScreensaverImageDownloaderTest;
-
-  // Deletes all images on disk in the cache directory that are not referenced
-  // by the given `new_image_urls`.
-  std::vector<base::FilePath> DeleteUnreferencedImageFiles(
-      const std::vector<std::string>& new_image_urls);
 
   // Called when unreferenced images have been deleted. Used for removing stale
   // file references from the in-memory `downloaded_images_` cache.

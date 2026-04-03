@@ -4,9 +4,9 @@
 
 #include "chrome/browser/ui/webui/password_manager/promo_cards_handler.h"
 
+#include <algorithm>
 #include <memory>
 
-#include "base/ranges/algorithm.h"
 #include "base/values.h"
 #include "build/branding_buildflags.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate.h"
@@ -18,18 +18,24 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "ui/base/l10n/l10n_util.h"
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 #include "chrome/browser/ui/webui/password_manager/promo_cards/access_on_any_device_promo.h"
-#include "chrome/browser/ui/webui/password_manager/promo_cards/move_passwords_promo.h"
 #include "chrome/browser/ui/webui/password_manager/promo_cards/password_checkup_promo.h"
 #include "chrome/browser/ui/webui/password_manager/promo_cards/password_manager_shortcut_promo.h"
 #include "chrome/browser/ui/webui/password_manager/promo_cards/web_password_manager_promo.h"
-#endif
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#include "chrome/browser/ui/webui/password_manager/promo_cards/move_passwords_promo.h"
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/ui/webui/password_manager/promo_cards/relaunch_chrome_promo.h"
+#include "components/os_crypt/async/browser/os_crypt_async.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #endif
 
 namespace password_manager {
@@ -37,9 +43,8 @@ namespace password_manager {
 namespace {
 
 // Returns the base::Value associated with the promo card.
-base::Value::Dict PromoCardToValueDict(
-    const PasswordPromoCardBase* promo_card) {
-  base::Value::Dict dict;
+base::DictValue PromoCardToValueDict(const PasswordPromoCardBase* promo_card) {
+  base::DictValue dict;
   dict.Set("id", promo_card->GetPromoID());
   dict.Set("title", promo_card->GetTitle());
   dict.Set("description", promo_card->GetDescription());
@@ -49,39 +54,36 @@ base::Value::Dict PromoCardToValueDict(
   return dict;
 }
 
-std::vector<std::unique_ptr<PasswordPromoCardBase>> GetAllPromoCardsForProfile(
-    Profile* profile) {
-  std::vector<std::unique_ptr<PasswordPromoCardBase>> promo_cards;
+}  // namespace
+
+PromoCardsHandler::PromoCardsHandler(Profile* profile) : profile_(profile) {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  promo_cards.push_back(std::make_unique<PasswordCheckupPromo>(
+  promo_cards_.push_back(std::make_unique<PasswordCheckupPromo>(
       profile->GetPrefs(),
       extensions::PasswordsPrivateDelegateFactory::GetForBrowserContext(profile,
                                                                         false)
           .get()));
-  promo_cards.push_back(std::make_unique<WebPasswordManagerPromo>(
+  promo_cards_.push_back(std::make_unique<WebPasswordManagerPromo>(
       profile->GetPrefs(), SyncServiceFactory::GetForProfile(profile)));
-  promo_cards.push_back(
+  promo_cards_.push_back(
       std::make_unique<PasswordManagerShortcutPromo>(profile));
-  promo_cards.push_back(
+  promo_cards_.push_back(
       std::make_unique<AccessOnAnyDevicePromo>(profile->GetPrefs()));
-  promo_cards.push_back(std::make_unique<MovePasswordsPromo>(
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  promo_cards_.push_back(std::make_unique<MovePasswordsPromo>(
       profile,
       extensions::PasswordsPrivateDelegateFactory::GetForBrowserContext(profile,
                                                                         false)
           .get()));
-#endif
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-  promo_cards.push_back(
-      std::make_unique<RelaunchChromePromo>(profile->GetPrefs()));
+  auto relaunch_promo =
+      std::make_unique<RelaunchChromePromo>(profile->GetPrefs());
+  relaunch_chrome_promo_ = relaunch_promo.get();
+  promo_cards_.push_back(std::move(relaunch_promo));
 #endif
-  return promo_cards;
-}
-
-}  // namespace
-
-PromoCardsHandler::PromoCardsHandler(Profile* profile) : profile_(profile) {
-  promo_cards_ = GetAllPromoCardsForProfile(profile_);
 }
 
 PromoCardsHandler::PromoCardsHandler(
@@ -106,16 +108,30 @@ void PromoCardsHandler::RegisterMessages() {
                                             base::Unretained(this)));
 }
 
-void PromoCardsHandler::RestartChrome(const base::Value::List& args) {
+void PromoCardsHandler::RestartChrome(const base::ListValue& args) {
   chrome::AttemptRestart();
 }
 
 void PromoCardsHandler::HandleGetAvailablePromoCard(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   CHECK_EQ(1U, args.size());
   const base::Value& callback_id = args[0];
 
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  if (relaunch_chrome_promo_ &&
+      !relaunch_chrome_promo_->is_encryption_available().has_value()) {
+    g_browser_process->os_crypt_async()->GetInstance(
+        base::BindOnce(&PromoCardsHandler::OnEncryptorReceived,
+                       weak_ptr_factory_.GetWeakPtr(), callback_id.Clone()));
+    return;
+  }
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  FinishGetAvailablePromoCard(callback_id);
+}
+
+void PromoCardsHandler::FinishGetAvailablePromoCard(
+    const base::Value& callback_id) {
   PasswordPromoCardBase* promo_card_to_show = GetPromoToShowAndUpdatePref();
   if (promo_card_to_show) {
     ResolveJavascriptCallback(callback_id,
@@ -126,10 +142,10 @@ void PromoCardsHandler::HandleGetAvailablePromoCard(
 }
 
 void PromoCardsHandler::HandleRecordPromoDismissed(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   CHECK_EQ(1U, args.size());
-  std::string promo_id = args[0].GetString();
+  const std::string& promo_id = args[0].GetString();
 
   for (auto& promo_card : promo_cards_) {
     if (promo_card->GetPromoID() == promo_id) {
@@ -156,7 +172,7 @@ PasswordPromoCardBase* PromoCardsHandler::GetPromoToShowAndUpdatePref() {
     return nullptr;
   }
   // Sort based on last time shown.
-  auto* promo_to_show = *base::ranges::min_element(
+  auto* promo_to_show = *std::ranges::min_element(
       promo_card_to_show_candidates, [](auto* lhs, auto* rhs) {
         return lhs->last_time_shown() < rhs->last_time_shown();
       });
@@ -164,5 +180,15 @@ PasswordPromoCardBase* PromoCardsHandler::GetPromoToShowAndUpdatePref() {
   promo_to_show->OnPromoCardShown();
   return promo_to_show;
 }
+
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+void PromoCardsHandler::OnEncryptorReceived(
+    base::Value callback_id,
+    os_crypt_async::Encryptor encryptor) {
+  relaunch_chrome_promo_->set_is_encryption_available(
+      encryptor.IsEncryptionAvailable());
+  FinishGetAvailablePromoCard(callback_id);
+}
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 }  // namespace password_manager

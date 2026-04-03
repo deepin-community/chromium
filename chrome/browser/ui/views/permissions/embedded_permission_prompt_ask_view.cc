@@ -15,6 +15,8 @@
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(EmbeddedPermissionPromptAskView,
                                       kAllowId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(EmbeddedPermissionPromptAskView,
+                                      kAllowThisTimeId);
 
 EmbeddedPermissionPromptAskView::EmbeddedPermissionPromptAskView(
     Browser* browser,
@@ -49,7 +51,7 @@ std::vector<EmbeddedPermissionPromptAskView::RequestLineConfiguration>
 EmbeddedPermissionPromptAskView::GetRequestLinesConfiguration() const {
   std::vector<RequestLineConfiguration> lines;
 
-  for (permissions::PermissionRequest* request : delegate()->Requests()) {
+  for (const auto& request : delegate()->Requests()) {
     lines.emplace_back(&permissions::GetIconId(request->request_type()),
                        request->GetMessageTextFragment());
   }
@@ -59,13 +61,17 @@ EmbeddedPermissionPromptAskView::GetRequestLinesConfiguration() const {
 std::vector<EmbeddedPermissionPromptAskView::ButtonConfiguration>
 EmbeddedPermissionPromptAskView::GetButtonsConfiguration() const {
   std::vector<ButtonConfiguration> buttons;
-  if (base::FeatureList::IsEnabled(permissions::features::kOneTimePermission)) {
-    buttons.emplace_back(
-        l10n_util::GetStringUTF16(IDS_PERMISSION_ALLOW_THIS_TIME),
-        ButtonType::kAllowThisTime, ui::ButtonStyle::kTonal);
-  }
-  buttons.emplace_back(l10n_util::GetStringUTF16(IDS_PERMISSION_ALLOW),
-                       ButtonType::kAllow, ui::ButtonStyle::kTonal, kAllowId);
+  ButtonConfiguration allow_once = {
+      l10n_util::GetStringUTF16(IDS_PERMISSION_ALLOW_THIS_TIME),
+      ButtonType::kAllowThisTime, ui::ButtonStyle::kTonal, kAllowThisTimeId};
+
+  ButtonConfiguration allow_always = {
+      GetAllowAlwaysText(delegate()->Requests()), ButtonType::kAllow,
+      ui::ButtonStyle::kTonal, kAllowId};
+
+  buttons.push_back(allow_always);
+  buttons.push_back(allow_once);
+
   return buttons;
 }
 

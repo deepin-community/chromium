@@ -13,12 +13,10 @@ import 'chrome://resources/polymer/v3_0/paper-ripple/paper-ripple.js';
 import {isNonEmptyArray} from 'chrome://resources/ash/common/sea_pen/sea_pen_utils.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {mojoString16ToString} from 'chrome://resources/js/mojo_type_util.js';
-import {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
+import type {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
 import {IronA11yAnnouncer} from 'chrome://resources/polymer/v3_0/iron-a11y-announcer/iron-a11y-announcer.js';
 
-import {UserImage, UserInfo} from '../../personalization_app.mojom-webui.js';
-import {isPersonalizationJellyEnabled} from '../load_time_booleans.js';
+import type {UserImage, UserInfo} from '../../personalization_app.mojom-webui.js';
 import {Paths, PersonalizationRouterElement} from '../personalization_router_element.js';
 import {WithPersonalizationStore} from '../personalization_store.js';
 import {isNonEmptyString} from '../utils.js';
@@ -66,12 +64,6 @@ export class UserPreviewElement extends WithPersonalizationStore {
         type: Boolean,
         value: null,
       },
-      isPersonalizationJellyEnabled_: {
-        type: Boolean,
-        value() {
-          return isPersonalizationJellyEnabled();
-        },
-      },
     };
   }
 
@@ -80,7 +72,6 @@ export class UserPreviewElement extends WithPersonalizationStore {
   private image_: UserImage|null;
   private imageUrl_: Url|null;
   private imageIsEnterpriseManaged_: boolean|null;
-  private isPersonalizationJellyEnabled_: boolean;
 
   override ready() {
     super.ready();
@@ -145,7 +136,7 @@ export class UserPreviewElement extends WithPersonalizationStore {
       return '';
     }
     if (image.defaultImage) {
-      return mojoString16ToString(image.defaultImage.title);
+      return image.defaultImage.title;
     }
     if (image.externalImage) {
       return this.i18n('lastExternalImageTitle');
@@ -171,7 +162,8 @@ export class UserPreviewElement extends WithPersonalizationStore {
     }
     assert(
         !url.startsWith('chrome://image/'), 'The url should not be sanitized');
-    return `background-image: url('${getAvatarUrl(url)}&staticEncode=true')`;
+    return `background-image: url('${
+        getAvatarUrl(url, /*staticEncode=*/ true)}')`;
   }
 
   private getAvatarUrl_(url: string): string {
@@ -180,22 +172,22 @@ export class UserPreviewElement extends WithPersonalizationStore {
 
   private shouldShowDeprecatedImageSourceInfo_(image: UserImage|null): boolean {
     return !!image && !!image.defaultImage && !!image.defaultImage.sourceInfo &&
-        isNonEmptyArray(image.defaultImage.sourceInfo.author.data) &&
-        isNonEmptyString(image.defaultImage.sourceInfo.website.url);
+        isNonEmptyString(image.defaultImage.sourceInfo.author) &&
+        isNonEmptyString(image.defaultImage.sourceInfo.website);
   }
 
   private getDeprecatedAuthor_(image: UserImage): string {
     assert(
         image && image.defaultImage && image.defaultImage.sourceInfo,
         'only called for deprecated default images with sourceInfo');
-    return mojoString16ToString(image.defaultImage.sourceInfo.author);
+    return image.defaultImage.sourceInfo.author;
   }
 
   private getDeprecatedWebsite_(image: UserImage): string {
     assert(
         image && image.defaultImage && image.defaultImage.sourceInfo,
         'only called for deprecated default images with sourceInfo');
-    return image.defaultImage.sourceInfo.website.url;
+    return image.defaultImage.sourceInfo.website;
   }
 }
 

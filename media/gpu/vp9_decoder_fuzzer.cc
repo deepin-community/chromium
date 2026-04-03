@@ -2,12 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/gpu/vp9_decoder.h"
+
 #include <stddef.h>
 
+#include "base/compiler_specific.h"
+#include "base/memory/scoped_refptr.h"
 #include "media/base/decoder_buffer.h"
+#include "media/base/test_data_util.h"
 #include "media/base/video_codecs.h"
 #include "media/base/video_types.h"
-#include "media/gpu/vp9_decoder.h"
 #include "media/gpu/vp9_picture.h"
 
 namespace {
@@ -23,7 +27,7 @@ class FakeVP9Accelerator : public media::VP9Decoder::VP9Accelerator {
 
   // media::VP9Decoder::VP9Accelerator
   scoped_refptr<media::VP9Picture> CreateVP9Picture() override {
-    return new media::VP9Picture();
+    return base::MakeRefCounted<media::VP9Picture>();
   }
   Status SubmitDecode(
       scoped_refptr<media::VP9Picture> pic,
@@ -35,7 +39,6 @@ class FakeVP9Accelerator : public media::VP9Decoder::VP9Accelerator {
   bool OutputPicture(scoped_refptr<media::VP9Picture> pic) override {
     return true;
   }
-  bool NeedsCompressedHeaderParsed() const override { return true; }
 };
 
 }  // namespace
@@ -47,11 +50,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   media::VP9Decoder decoder(std::make_unique<FakeVP9Accelerator>(),
                             media::VP9PROFILE_PROFILE0);
-  auto external_memory = std::make_unique<media::DecoderBuffer::ExternalMemory>(
-      base::make_span(data, size));
+  auto external_memory =
+      std::make_unique<media::ExternalMemoryAdapterForTesting>(
+          UNSAFE_TODO(base::span(data, size)));
   scoped_refptr<media::DecoderBuffer> decoder_buffer =
       media::DecoderBuffer::FromExternalMemory(std::move(external_memory));
-  decoder.SetStream(1, *decoder_buffer);
+  decoder.SetStream(1, decoder_buffer);
 
   size_t retry_count = 0;
   while (true) {

@@ -9,7 +9,6 @@
 #include <optional>
 
 #include "base/containers/queue.h"
-#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
@@ -70,7 +69,8 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) CellularConnectionHandler
     kCouldNotFindRelevantESimProfile = 5,
     kEnableProfileFailed = 6,
     kTimeoutWaitingForConnectable = 7,
-    kMaxValue = kTimeoutWaitingForConnectable
+    kSimLocked = 8,
+    kMaxValue = kSimLocked
   };
 
   CellularConnectionHandler();
@@ -116,8 +116,6 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) CellularConnectionHandler
 
  private:
   friend class CellularESimInstallerTest;
-  friend class CellularESimInstallerLegacyTest;
-  friend class CellularPolicyHandlerLegacyTest;
   friend class CellularPolicyHandlerTest;
   friend class ManagedNetworkConfigurationHandlerTest;
   friend class cellular_setup::ESimTestBase;
@@ -171,6 +169,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) CellularConnectionHandler
                                      const std::string& old_guid,
                                      const std::string& new_guid) override;
   void NetworkConnectionStateChanged(const NetworkState* network) override;
+  void DevicePropertiesUpdated(const DeviceState* device) override;
 
   void ProcessRequestQueue();
   void TransitionToConnectionState(ConnectionState state);

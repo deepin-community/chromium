@@ -49,8 +49,9 @@ REGISTER_OP("OpTwoOut")
     .Attr("T: numbertype")
     .SetShapeFn([](InferenceContext* c) { return (*global_fn_ptr)(c); });
 
-string RunInferShapes(const string& op_name, const string& ins,
-                      const string& expected_outs, OpShapeInferenceFn fn) {
+std::string RunInferShapes(const std::string& op_name, const std::string& ins,
+                           const std::string& expected_outs,
+                           OpShapeInferenceFn fn) {
   ShapeInferenceTestOp op(op_name);
   const int num_inputs = 1 + std::count(ins.begin(), ins.end(), ';');
   std::vector<NodeDefBuilder::NodeOut> src_list;
@@ -71,27 +72,27 @@ string RunInferShapes(const string& op_name, const string& ins,
 TEST(ShapeInferenceTestutilTest, Failures) {
   auto fn_copy_input_0 = [](InferenceContext* c) {
     c->set_output(0, c->input(0));
-    return OkStatus();
+    return absl::OkStatus();
   };
   auto fn_copy_input_2 = [](InferenceContext* c) {
     c->set_output(0, c->input(2));
-    return OkStatus();
+    return absl::OkStatus();
   };
   auto fn_output_unknown_shapes = [](InferenceContext* c) {
     for (int i = 0; i < c->num_outputs(); ++i) {
       c->set_output(i, c->UnknownShape());
     }
-    return OkStatus();
+    return absl::OkStatus();
   };
   auto fn_output_1_2 = [](InferenceContext* c) {
     c->set_output(0, c->Matrix(1, 2));
-    return OkStatus();
+    return absl::OkStatus();
   };
   auto fn_output_u_2 = [](InferenceContext* c) {
     c->set_output(0, c->Matrix(InferenceContext::kUnknownDim, 2));
-    return OkStatus();
+    return absl::OkStatus();
   };
-  const string& op = "OpOneOut";
+  const std::string& op = "OpOneOut";
 
   EXPECT_EQ("Shape inference should have returned error",
             RunInferShapes(op, "[1];[2];[1]", "e", fn_copy_input_0));
@@ -141,9 +142,9 @@ TEST(ShapeInferenceTestutilTest, Failures) {
   auto fn = [](InferenceContext* c) {
     c->set_output(0, c->MakeShape({c->Dim(c->input(0), 1), c->MakeDim(2),
                                    c->UnknownDim(), c->Dim(c->input(2), 0)}));
-    return OkStatus();
+    return absl::OkStatus();
   };
-  const string ins = "[0,1,?];[2];[1]";
+  const std::string ins = "[0,1,?];[2];[1]";
   EXPECT_CONTAINS(RunInferShapes(op, ins, "[?,2,?,d2_0]", fn),
                   "Output dim 0,0 expected to be an unknown");
   EXPECT_CONTAINS(RunInferShapes(op, ins, "[0,2,?,d2_0]", fn),

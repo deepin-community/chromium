@@ -135,11 +135,11 @@ void OpsTestBase::set_node_def(const NodeDef& node_def) {
 
 NodeDef* OpsTestBase::node_def() { return &node_def_; }
 
-Status OpsTestBase::InitOp() {
+absl::Status OpsTestBase::InitOp() {
   return InitOpWithGraphVersion(TF_GRAPH_DEF_VERSION);
 }
 
-Status OpsTestBase::InitOpWithGraphVersion(int graph_def_version) {
+absl::Status OpsTestBase::InitOpWithGraphVersion(int graph_def_version) {
   std::shared_ptr<const NodeProperties> props;
   TF_RETURN_IF_ERROR(NodeProperties::CreateFromNodeDef(
       node_def_, OpRegistry::Global(), &props));
@@ -176,7 +176,7 @@ void OpsTestBase::CreateContext() {
   params_->frame_iter = FrameAndIter(0, 0);
   params_->inputs = inputs_;
   params_->op_kernel = kernel_.get();
-  step_container_.reset(new ScopedStepContainer(0, [](const string&) {}));
+  step_container_.reset(new ScopedStepContainer(0, [](const std::string&) {}));
   params_->step_container = step_container_.get();
   test::SetOutputAttrs(params_.get(), &out_alloc_attrs_);
   params_->slice_reader_cache = &slice_reader_cache_wrapper_;
@@ -189,7 +189,7 @@ void OpsTestBase::CreateContext() {
   context_.reset(new OpKernelContext(params_.get()));
 }
 
-Status OpsTestBase::RunOpKernel() {
+absl::Status OpsTestBase::RunOpKernel() {
   CreateContext();
   device_->Compute(kernel_.get(), context_.get());
   return context_->status();

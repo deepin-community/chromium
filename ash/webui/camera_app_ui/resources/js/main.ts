@@ -12,6 +12,7 @@ import {
 import {
   getDefaultWindowSize,
 } from './app_window.js';
+import {setup as setupAspectRatioOrder} from './aspect_ratio_order.js';
 import {
   assert,
   assertEnumVariant,
@@ -25,9 +26,8 @@ import {CameraManager} from './device/index.js';
 import {ModeConstraints} from './device/type.js';
 import * as dom from './dom.js';
 import {reportError} from './error.js';
-import * as expert from './expert.js';
 import {Intent} from './intent.js';
-import * as Comlink from './lib/comlink.js';
+import * as comlink from './lib/comlink.js';
 import {startMeasuringMemoryUsage} from './memory_usage.js';
 import * as metrics from './metrics.js';
 import * as filesystem from './models/file_system.js';
@@ -90,11 +90,15 @@ function setupTooltip() {
           elements.push(target);
         }
       } else if (mutation.type === 'childList') {
-        const {target} = mutation;
-        if (target instanceof HTMLElement) {
-          elements.push(
-              ...dom.getAllFrom(target, tooltipAttributeSelector, HTMLElement),
-          );
+        // Check newly added nodes.
+        for (const node of mutation.addedNodes) {
+          if (node instanceof HTMLElement) {
+            if (node.hasAttribute(tooltipAttribute)) {
+              elements.push(node);
+            }
+            elements.push(
+                ...dom.getAllFrom(node, tooltipAttributeSelector, HTMLElement));
+          }
         }
       }
     }
@@ -212,8 +216,6 @@ function parseSearchParams(): {
   intent: Intent|null,
   facing: Facing|null,
   mode: Mode|null,
-  openFrom: string|null,
-  autoTake: boolean,
 } {
   const url = new URL(window.location.href);
   const params = url.searchParams;
@@ -230,10 +232,7 @@ function parseSearchParams(): {
     return Intent.create(url, mode);
   })();
 
-  const autoTake = params.get('autoTake') === '1';
-  const openFrom = params.get('openFrom');
-
-  return {intent, facing, mode, autoTake, openFrom};
+  return {intent, facing, mode};
 }
 
 /**
@@ -293,7 +292,7 @@ async function setupMultiWindowHandling(
         // CCA must get camera usage for completing its initialization when
         // first launched.
         await cameraManager.initialize(cameraView);
-        await cameraView.initialize();
+        cameraView.initialize();
         cameraResourceInitialized.signal();
       }
     } catch (e) {
@@ -318,7 +317,7 @@ async function setupMultiWindowHandling(
   const multiWindowManagerWorker = new SharedWorker(
       getSanitizedScriptUrl('/js/multi_window_manager.js'), {type: 'module'});
   const windowInstance =
-      Comlink.wrap<WindowInstance>(multiWindowManagerWorker.port);
+      comlink.wrap<WindowInstance>(multiWindowManagerWorker.port);
   addUnloadCallback(() => {
     windowInstance.onWindowClosed().catch((e) => {
       reportError(
@@ -327,7 +326,7 @@ async function setupMultiWindowHandling(
     });
   });
   await windowInstance.init(
-      Comlink.proxy(handleSuspend), Comlink.proxy(handleResume));
+      comlink.proxy(handleSuspend), comlink.proxy(handleResume));
   await ChromeHelper.getInstance().initCameraWindowController();
   windowController.addWindowStateListener((states) => {
     const isMinimizing = states.includes(WindowStateType.kMinimized);
@@ -356,56 +355,6 @@ async function setupMultiWindowHandling(
   });
 }
 
-function createPerfLogger(): PerfLogger {
-  const perfLogger = new PerfLogger();
-
-  // Setup listener for performance events.
-  perfLogger.addListener(async ({event, duration, perfInfo}) => {
-    metrics.sendPerfEvent({event, duration, perfInfo});
-
-    // Setup for console perf logger.
-    if (expert.isEnabled(expert.ExpertOption.PRINT_PERFORMANCE_LOGS)) {
-      // eslint-disable-next-line no-console
-      console.log(
-          '%c%s %s ms %s', 'color: #4E4F97; font-weight: bold;',
-          event.padEnd(40), duration.toFixed(0).padStart(4),
-          JSON.stringify(perfInfo));
-    }
-
-    // Setup for Tast tests logger.
-    await window.appWindow?.reportPerf({event, duration, perfInfo});
-  });
-
-  state.addObserver(state.State.TAKING, (val, extras) => {
-    // 'taking' state indicates either taking photo or video. Skips for
-    // video-taking case since we only want to collect the metrics of
-    // photo-taking.
-    if (state.get(Mode.VIDEO)) {
-      return;
-    }
-    const event = PerfEvent.PHOTO_TAKING;
-
-    if (val) {
-      perfLogger.start(event);
-    } else {
-      perfLogger.stop(event, extras);
-    }
-  });
-
-  const states = Object.values(PerfEvent);
-  for (const event of states) {
-    state.addObserver(event, (val, extras) => {
-      if (val) {
-        perfLogger.start(event);
-      } else {
-        perfLogger.stop(event, extras);
-      }
-    });
-  }
-
-  return perfLogger;
-}
-
 function setupSvgs() {
   for (const el of dom.getAll('[data-svg]', HTMLElement)) {
     const imageName = assertExists(el.dataset['svg']);
@@ -421,7 +370,9 @@ function setupSvgs() {
  * Setup Camera App and starts camera stream.
  */
 async function main() {
-  const {intent, facing, mode, autoTake, openFrom} = parseSearchParams();
+  const setupAspectRatioOrderTask = setupAspectRatioOrder();
+
+  const {intent, facing, mode} = parseSearchParams();
 
   state.set(state.State.INTENT, intent !== null);
 
@@ -441,8 +392,6 @@ async function main() {
     void metrics.setEnabled(false);
   }
 
-  const perfLogger = createPerfLogger();
-
   // toast and splash style depends on dynamic color css being imported.
   await setupDynamicColor();
 
@@ -458,12 +407,20 @@ async function main() {
   // There are three possible cases:
   // 1. Regular instance
   //      (intent === null)
-  // 2. STILL_CAPTURE_CAMERA and VIDEO_CAMERA intents
+  // 2. Intents within [INTENT_ACTION_STILL_IMAGE_CAMERA,
+  //                    INTENT_ACTION_STILL_IMAGE_CAMERA_SECURE,
+  //                    INTENT_ACTION_VIDEO_CAMERA]
   //      (intent !== null && shouldHandleResult === false)
-  // 3. Other intents
+  // 3. Intents within [ACTION_STILL_IMAGE_CAMERA,
+  //                    ACTION_STILL_IMAGE_CAMERA_SECURE,
+  //                    ACTION_VIDEO_CAMERA]
   //      (intent !== null && shouldHandleResult === true)
-  // `shouldHandleIntentResult` will be false in (1) and (2), and gallery
-  // button will be shown on the UI.
+  //
+  // For 1. and 2., CCA is opened in a normal window and there's no need of
+  // handling capture result and passed it back to ARC.
+  //
+  // For 3., CCA is opened in a system dialog, gallery button won't be shown,
+  // and camera folder won't be accessible. (See http://b/374629916#comment16)
   const shouldHandleIntentResult = intent?.shouldHandleResult === true;
   state.set(state.State.SHOULD_HANDLE_INTENT_RESULT, shouldHandleIntentResult);
 
@@ -471,13 +428,19 @@ async function main() {
     kind: shouldHandleIntentResult && mode !== null ? 'exact' : 'default',
     mode: mode ?? Mode.PHOTO,
   };
-  const cameraManager = new CameraManager(perfLogger, facing, modeConstraints);
+
+  PerfLogger.initializeInstance();
+
+  // Wait for aspect ratio order to be setup right before constructing the
+  // camera manager, which needs the aspect ratio order info.
+  await setupAspectRatioOrderTask;
+  const cameraManager = new CameraManager(facing, modeConstraints);
 
   const resultSaver = new DefaultResultSaver();
 
   const cameraView = shouldHandleIntentResult ?
-      new CameraIntent(intent, cameraManager, perfLogger) :
-      new Camera(resultSaver, cameraManager, perfLogger);
+      new CameraIntent(intent, cameraManager) :
+      new Camera(resultSaver, cameraManager);
 
   // Set up views navigation by their DOM z-order.
   nav.setup([
@@ -510,20 +473,7 @@ async function main() {
   preloadSounds();
   setupSvgs();
 
-  const launchType = openFrom === 'assistant' ? metrics.LaunchType.ASSISTANT :
-                                                metrics.LaunchType.DEFAULT;
-
   await DeviceOperator.initializeInstance();
-  try {
-    await filesystem.initialize();
-    const cameraDir = filesystem.getCameraDirectory();
-    if (!shouldHandleIntentResult) {
-      await resultSaver.initialize(cameraDir);
-    }
-  } catch (error) {
-    reportError(ErrorType.FILE_SYSTEM_FAILURE, ErrorLevel.ERROR, error);
-    nav.open(ViewName.WARNING, WarningType.FILESYSTEM_FAILURE);
-  }
 
   // Create a promise to finish the intent, that runs in parallel with starting
   // camera.
@@ -543,15 +493,31 @@ async function main() {
   // initialized by setupMultiWindowHandling.
   document.body.addEventListener('keydown', (event) => onKeyPressed(event));
 
-  metrics.sendLaunchEvent({launchType});
+  metrics.sendLaunchEvent({launchType: metrics.LaunchType.DEFAULT});
 
   await cameraResourceInitialized.wait();
-  const cameraStartSuccessful = await cameraManager.requestResume();
+  const cameraStartSuccessful = await cameraManager.reconfigure();
 
-  if (cameraStartSuccessful) {
+  try {
+    await filesystem.initialize(shouldHandleIntentResult);
+    if (!shouldHandleIntentResult) {
+      const cameraDir = filesystem.getCameraDirectory();
+      await resultSaver.initialize(cameraDir);
+    }
+  } catch (error) {
+    reportError(ErrorType.FILE_SYSTEM_FAILURE, ErrorLevel.ERROR, error);
+    nav.open(ViewName.WARNING, WarningType.FILESYSTEM_FAILURE);
+  }
+
+  // To align window behavior with other apps, defaultWindowSize is only applied
+  // when the camera app is first opened. Later, the window will be opened in
+  // the size that a user prefers.
+  if (cameraStartSuccessful &&
+      localStorage.getBool(LocalStorageKey.FIRST_OPENING, true)) {
     const {aspectRatio} = cameraManager.getPreviewResolution();
     const {width, height} = getDefaultWindowSize(aspectRatio);
     window.resizeTo(width, height);
+    localStorage.set(LocalStorageKey.FIRST_OPENING, false);
   }
 
   // Waits for the intent to finish before switching to main camera view.
@@ -562,6 +528,7 @@ async function main() {
   nav.close(ViewName.SPLASH);
   nav.open(ViewName.CAMERA);
 
+  const perfLogger = PerfLogger.getInstance();
   perfLogger.start(
       PerfEvent.LAUNCHING_FROM_WINDOW_CREATION, window.windowCreationTime);
   perfLogger.stop(
@@ -575,12 +542,6 @@ async function main() {
 
   await window.appWindow?.onAppLaunched();
   metrics.sendOpenCameraEvent(cameraManager.getVidPid());
-
-  if (autoTake) {
-    cameraView.beginTake(
-        openFrom === 'assistant' ? metrics.ShutterType.ASSISTANT :
-                                   metrics.ShutterType.UNKNOWN);
-  }
 }
 
 // This is the entry point of CCA so the returned promise is not awaited.

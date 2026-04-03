@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "base/functional/callback.h"
-#include "base/memory/weak_ptr.h"
 #include "storage/browser/file_system/copy_or_move_hook_delegate.h"
 
 namespace storage {
@@ -22,8 +21,7 @@ namespace storage {
 // of execution) or with File::FILE_OK if no error occurred.
 
 class COMPONENT_EXPORT(STORAGE_BROWSER) CopyOrMoveHookDelegateComposite
-    : public CopyOrMoveHookDelegate,
-      public base::SupportsWeakPtr<CopyOrMoveHookDelegateComposite> {
+    : public CopyOrMoveHookDelegate {
  public:
   // If parent is no CopyOrMoveHookDelegateComposite, a new one is created and
   // parent and child are added. If parent is already a composite, child is

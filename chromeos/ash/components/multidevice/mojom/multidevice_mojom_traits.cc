@@ -200,7 +200,6 @@ EnumTraits<ash::multidevice::mojom::SoftwareFeature,
   }
 
   NOTREACHED();
-  return ash::multidevice::mojom::SoftwareFeature::BETTER_TOGETHER_HOST;
 }
 
 bool EnumTraits<ash::multidevice::mojom::SoftwareFeature,
@@ -259,7 +258,6 @@ bool EnumTraits<ash::multidevice::mojom::SoftwareFeature,
   }
 
   NOTREACHED();
-  return false;
 }
 
 ash::multidevice::mojom::SoftwareFeatureState
@@ -276,7 +274,6 @@ EnumTraits<ash::multidevice::mojom::SoftwareFeatureState,
   }
 
   NOTREACHED();
-  return ash::multidevice::mojom::SoftwareFeatureState::kNotSupported;
 }
 
 bool EnumTraits<ash::multidevice::mojom::SoftwareFeatureState,
@@ -296,7 +293,6 @@ bool EnumTraits<ash::multidevice::mojom::SoftwareFeatureState,
   }
 
   NOTREACHED();
-  return false;
 }
 
 }  // namespace mojo

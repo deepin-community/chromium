@@ -76,8 +76,10 @@ void WebMVideoClient::Reset() {
   display_unit_ = -1;
   alpha_mode_ = -1;
   colour_parsed_ = false;
+  colour_parser_.Reset();
   stereo_mode_ = -1;
   projection_parsed_ = false;
+  projection_parser_.Reset();
 }
 
 bool WebMVideoClient::InitializeConfig(
@@ -92,11 +94,15 @@ bool WebMVideoClient::InitializeConfig(
   if (colour_parsed_) {
     WebMColorMetadata color_metadata = colour_parser_.GetWebMColorMetadata();
     color_space = color_metadata.color_space;
-    if (color_metadata.hdr_metadata.has_value())
-      config->set_hdr_metadata(*color_metadata.hdr_metadata);
+    if (!color_metadata.hdr_metadata.IsEmpty()) {
+      config->set_hdr_metadata(color_metadata.hdr_metadata);
+    }
     is_8bit = color_metadata.BitsPerChannel <= 8;
   }
 
+  VideoTransformation transformation =
+      projection_parsed_ ? projection_parser_.GetVideoTransformation()
+                         : kNoTransformation;
   VideoCodec video_codec = VideoCodec::kUnknown;
   VideoCodecProfile profile = VIDEO_CODEC_PROFILE_UNKNOWN;
   if (codec_id == "V_VP8") {
@@ -106,7 +112,7 @@ bool WebMVideoClient::InitializeConfig(
     video_codec = VideoCodec::kVP9;
     profile = GetVP9CodecProfile(
         codec_private, color_space.GuessGfxColorSpace().IsHDR() ||
-                           config->hdr_metadata().has_value() || !is_8bit);
+                           !config->hdr_metadata().IsEmpty() || !is_8bit);
 #if BUILDFLAG(ENABLE_AV1_DECODER)
   } else if (codec_id == "V_AV1") {
     video_codec = VideoCodec::kAV1;
@@ -163,7 +169,7 @@ bool WebMVideoClient::InitializeConfig(
                      alpha_mode_ == 1
                          ? VideoDecoderConfig::AlphaMode::kHasAlpha
                          : VideoDecoderConfig::AlphaMode::kIsOpaque,
-                     color_space, kNoTransformation, coded_size, visible_rect,
+                     color_space, transformation, coded_size, visible_rect,
                      natural_size, codec_private, encryption_scheme);
 
   return config->IsValidConfig();
@@ -179,7 +185,7 @@ WebMParserClient* WebMVideoClient::OnListStart(int id) {
     if (projection_parsed_ == true) {
       MEDIA_LOG(ERROR, media_log_)
           << "Unexpected multiple Projection elements.";
-      return NULL;
+      return nullptr;
     }
     return &projection_parser_;
   }
@@ -200,7 +206,7 @@ bool WebMVideoClient::OnListEnd(int id) {
 }
 
 bool WebMVideoClient::OnUInt(int id, int64_t val) {
-  int64_t* dst = NULL;
+  int64_t* dst = nullptr;
 
   switch (id) {
     case kWebMIdPixelWidth:

@@ -2,18 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "partition_alloc/shim/allocator_shim.h"
 
 #include <malloc/malloc.h>
 #include <unistd.h>
 
-#include "build/build_config.h"
+#include "partition_alloc/build_config.h"
+#include "partition_alloc/buildflags.h"
 #include "partition_alloc/partition_alloc_base/apple/mach_logging.h"
-#include "partition_alloc/partition_alloc_buildflags.h"
 #include "partition_alloc/partition_alloc_check.h"
 #include "partition_alloc/shim/allocator_interception_apple.h"
 
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 #include "partition_alloc/shim/allocator_shim_default_dispatch_to_partition_alloc.h"
 #endif
 
@@ -27,6 +32,10 @@
 namespace allocator_shim {
 
 void TryFreeDefaultFallbackToFindZoneAndFree(void* ptr) {
+  if (!ptr) [[unlikely]] {
+    return;
+  }
+
   unsigned int zone_count = 0;
   vm_address_t* zones = nullptr;
   kern_return_t result =
@@ -52,14 +61,15 @@ void TryFreeDefaultFallbackToFindZoneAndFree(void* ptr) {
   }
 
   // There must be an owner zone.
-  PA_CHECK(false);
+  PA_CHECK(false) << "Oops! No zone found for "
+                  << reinterpret_cast<uintptr_t>(ptr);
 }
 
 }  // namespace allocator_shim
 
 #include "partition_alloc/shim/shim_alloc_functions.h"
 
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 // Cpp symbols (new / delete) should always be routed through the shim layer
 // except on Windows and macOS (except for PartitionAlloc-Everywhere) where the
 // malloc intercept is deep enough that it also catches the cpp calls.
@@ -72,16 +82,16 @@ void TryFreeDefaultFallbackToFindZoneAndFree(void* ptr) {
 #include "partition_alloc/shim/allocator_shim_override_cpp_symbols.h"
 #endif
 
-#if BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#if PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 #include "partition_alloc/shim/allocator_shim_override_apple_default_zone.h"
-#else  // BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#else  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 #include "partition_alloc/shim/allocator_shim_override_apple_symbols.h"
-#endif  // BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 
 namespace allocator_shim {
 
 void InitializeAllocatorShim() {
-#if !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#if !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
   // Prepares the default dispatch. After the intercepted malloc calls have
   // traversed the shim this will route them to the default malloc zone.
   InitializeDefaultDispatchToMacAllocator();
@@ -91,10 +101,14 @@ void InitializeAllocatorShim() {
   // This replaces the default malloc zone, causing calls to malloc & friends
   // from the codebase to be routed to ShimMalloc() above.
   ReplaceFunctionsForStoredZones(&functions);
-#endif  // !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+#endif  // !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 }
 
 }  // namespace allocator_shim
+
+#if PA_BUILDFLAG(SHIM_SUPPORTS_ALLOC_TOKEN)
+#include "partition_alloc/shim/allocator_shim_alloc_token_symbols_apple.h"
+#endif
 
 // Cross-checks.
 

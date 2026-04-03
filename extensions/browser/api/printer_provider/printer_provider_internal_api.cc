@@ -72,7 +72,7 @@ void PrinterProviderInternalAPI::NotifyGetPrintersResult(
 void PrinterProviderInternalAPI::NotifyGetCapabilityResult(
     const Extension* extension,
     int request_id,
-    const base::Value::Dict& capability) {
+    const base::DictValue& capability) {
   for (auto& observer : observers_)
     observer.OnGetCapabilityResult(extension, request_id, capability.Clone());
 }
@@ -132,7 +132,7 @@ PrinterProviderInternalReportPrinterCapabilityFunction::Run() {
     PrinterProviderInternalAPI::GetFactoryInstance()
         ->Get(browser_context())
         ->NotifyGetCapabilityResult(extension(), params->request_id,
-                                    base::Value::Dict());
+                                    base::DictValue());
   }
   return RespondNow(NoArguments());
 }
@@ -180,18 +180,18 @@ PrinterProviderInternalGetPrintDataFunction::Run() {
       PrinterProviderAPIFactory::GetInstance()
           ->GetForBrowserContext(browser_context())
           ->GetPrintJob(extension(), params->request_id);
-  if (!job)
+  if (!job) {
     return RespondNow(Error("Print request not found."));
+  }
 
-  if (!job->document_bytes)
+  if (!job->document_bytes) {
     return RespondNow(Error("Job data not set"));
+  }
 
   // |job->document_bytes| are passed to the callback to make sure the ref
   // counted memory does not go away before the memory backed blob is created.
   browser_context()->CreateMemoryBackedBlob(
-      base::make_span(job->document_bytes->front(),
-                      job->document_bytes->size()),
-      job->content_type,
+      base::span(*job->document_bytes), job->content_type,
       base::BindOnce(&PrinterProviderInternalGetPrintDataFunction::OnBlob, this,
                      job->document_bytes));
   return RespondLater();

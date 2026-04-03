@@ -69,7 +69,7 @@ class PLATFORM_EXPORT ScopedRasterTimer {
     void AddGpuTimer(std::unique_ptr<AsyncGpuRasterTimer>);
 
    private:
-    WTF::Vector<std::unique_ptr<AsyncGpuRasterTimer>> gpu_timers_;
+    Vector<std::unique_ptr<AsyncGpuRasterTimer>> gpu_timers_;
   };
 
  private:
@@ -83,4 +83,4 @@ class PLATFORM_EXPORT ScopedRasterTimer {
 
 }  // namespace blink
 
-#endif
+#endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_SCOPED_RASTER_TIMER_H_

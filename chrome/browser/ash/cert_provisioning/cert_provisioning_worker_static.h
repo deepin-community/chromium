@@ -23,7 +23,7 @@
 #include "chrome/browser/ash/cert_provisioning/cert_provisioning_invalidator.h"
 #include "chrome/browser/ash/cert_provisioning/cert_provisioning_worker.h"
 #include "chrome/browser/ash/platform_keys/platform_keys_service.h"
-#include "chrome/browser/chromeos/platform_keys/platform_keys.h"
+#include "chromeos/ash/components/platform_keys/platform_keys.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "net/base/backoff_entry.h"
 
@@ -35,6 +35,7 @@ namespace ash::cert_provisioning {
 class CertProvisioningWorkerStatic : public CertProvisioningWorker {
  public:
   CertProvisioningWorkerStatic(
+      std::string cert_provisioning_process_id,
       CertScope cert_scope,
       Profile* profile,
       PrefService* pref_service,
@@ -52,6 +53,7 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
   void MarkWorkerForReset() override;
   bool IsWaiting() const override;
   bool IsWorkerMarkedForReset() const override;
+  const std::string& GetProcessId() const override;
   const CertProfile& GetCertProfile() const override;
   const std::vector<uint8_t>& GetPublicKey() const override;
   CertProvisioningWorkerState GetState() const override;
@@ -59,7 +61,7 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
   base::Time GetLastUpdateTime() const override;
   const std::optional<BackendServerError>& GetLastBackendServerError()
       const override;
-  std::string GetFailureMessage() const override;
+  std::string GetFailureMessageWithPii() const override;
 
  private:
   friend class CertProvisioningSerializer;
@@ -71,14 +73,12 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
                                 chromeos::platform_keys::Status status);
 
   void GenerateKeyForVa();
-  void OnGenerateKeyForVaDone(base::TimeTicks start_time,
-                              const attestation::TpmChallengeKeyResult& result);
+  void OnGenerateKeyForVaDone(const attestation::TpmChallengeKeyResult& result);
 
   void StartCsr();
   void OnStartCsrDone(policy::DeviceManagementStatus status,
                       std::optional<CertProvisioningResponseErrorType> error,
                       std::optional<int64_t> try_later,
-                      const std::string& invalidation_topic,
                       const std::string& va_challenge,
                       enterprise_management::HashingAlgorithm hashing_algorithm,
                       std::vector<uint8_t> data_to_sign);
@@ -87,18 +87,18 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
 
   void BuildVaChallengeResponse();
   void OnBuildVaChallengeResponseDone(
-      base::TimeTicks start_time,
       const attestation::TpmChallengeKeyResult& result);
 
   void RegisterKey();
   void OnRegisterKeyDone(const attestation::TpmChallengeKeyResult& result);
 
   void MarkKey();
+  void MarkKeyAsCorporate();
+  void OnAllowKeyForUsageDone(chromeos::platform_keys::Status status);
   void OnMarkKeyDone(chromeos::platform_keys::Status status);
 
   void SignCsr();
-  void OnSignCsrDone(base::TimeTicks start_time,
-                     std::vector<uint8_t> signature,
+  void OnSignCsrDone(std::vector<uint8_t> signature,
                      chromeos::platform_keys::Status status);
 
   void FinishCsr();
@@ -116,7 +116,12 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
   void ImportCert(const std::string& pem_encoded_certificate);
   void OnImportCertDone(chromeos::platform_keys::Status status);
 
-  void ScheduleNextStep(base::TimeDelta delay);
+  // Schedule the next step after the `delay`. If `try_provisioning_on_timeout`
+  // is true, the worker will automatically try contacting the server-side after
+  // it doesn't receive an invalidation for long enough. If it's false, it will
+  // require an invalidation to continue.
+  void ScheduleNextStep(base::TimeDelta delay,
+                        bool try_provisioning_on_timeout);
   void CancelScheduledTasks();
 
   enum class ContinueReason {
@@ -126,13 +131,13 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
   };
   void OnShouldContinue(ContinueReason reason);
 
-  // Registers for |invalidation_topic_| that allows to receive notification
+  // Registers for invalidations that allows to receive notification
   // when server side is ready to continue provisioning process.
-  void RegisterForInvalidationTopic();
+  void RegisterForInvalidations();
   // Should be called only when provisioning process is finished (successfully
   // or not). Should not be called when the worker is destroyed, but will be
   // deserialized back later.
-  void UnregisterFromInvalidationTopic();
+  void UnregisterFromInvalidations();
 
   // Callback from invalidations system.
   void OnInvalidationEvent(InvalidationEvent invalidation_event);
@@ -158,6 +163,9 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
 
   CertProvisioningClient::ProvisioningProcess GetProvisioningProcessForClient();
 
+  base::TimeDelta GetTryLaterDelay(
+      DeviceManagementServerRequestType request_type);
+
   // Returns true if there are no errors and the flow can be continued.
   // |request_type| is the type of the request to which the DM server has
   // responded with the given |status|.
@@ -167,6 +175,11 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
       std::optional<CertProvisioningResponseErrorType> error,
       std::optional<int64_t> try_later);
 
+  // A convenience method to generate a string that contains some additional
+  // info and should be included in all logs.
+  std::string GetLogInfoBlock();
+
+  std::string process_id_;
   CertScope cert_scope_ = CertScope::kUser;
   raw_ptr<Profile> profile_ = nullptr;
   raw_ptr<PrefService> pref_service_ = nullptr;
@@ -198,11 +211,12 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
   bool is_continued_without_invalidation_for_uma_ = false;
   // Calculates retry timeout for network related failures.
   net::BackoffEntry request_backoff_;
+  // Calculates retry timeout for DownloadCert "try later" cases.
+  net::BackoffEntry download_cert_request_backoff_;
 
   // Public key - represented as DER-encoded X.509 SubjectPublicKeyInfo
   // (binary).
   std::vector<uint8_t> public_key_;
-  std::string invalidation_topic_;
 
   // These variables may not contain valid values after
   // kFinishCsrResponseReceived state because of deserialization (and they don't
@@ -228,7 +242,7 @@ class CertProvisioningWorkerStatic : public CertProvisioningWorker {
   // Increment this when you add/change any member in
   // CertProvisioningWorkerStatic that affects serialization (and update all
   // functions that fail to compile because of it).
-  static constexpr int kVersion = 1;
+  static constexpr int kVersion = 2;
 
   // Unowned PlatformKeysService. Note that the CertProvisioningWorker does not
   // observe the PlatformKeysService for shutdown events. Instead, it relies on

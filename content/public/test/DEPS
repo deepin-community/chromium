@@ -3,8 +3,6 @@ include_rules = [
 
   # These are low-level system APIs on ChromeOS that need to be available
   # everywhere.
-  "+chromeos/crosapi/cpp/crosapi_constants.h",
-  "+chromeos/lacros/lacros_service.h",
   "+chromeos/startup/browser_params_proxy.h",
   "+chromeos/startup/startup_switches.h",
 
@@ -24,6 +22,7 @@ include_rules = [
   "+components/services/storage/privileged",
   "+components/services/storage/public",
   "+components/services/storage/shared_storage",
+  "+components/soda",
   "+components/startup_metric_utils/browser",
   "+components/startup_metric_utils/common",
   "+components/ukm/test_ukm_recorder.h",
@@ -84,10 +83,28 @@ specific_include_rules = {
   "mock_captured_surface_controller.h": [
     "+content/browser/media/captured_surface_controller.h"
   ],
-  "test_shared_storage_header_observer.h": [
-    "+content/browser/shared_storage/shared_storage_header_observer.h"
+  "mock_video_picture_in_picture_window_controller_impl.h": [
+    "+content/browser/picture_in_picture/video_picture_in_picture_window_controller_impl.h"
+  ],
+  "scoped_time_zone.cc": [
+    "+services/device/device_service.h"
+  ],
+  "scoped_time_zone.h": [
+    "+services/device/time_zone_monitor/fake_time_zone_monitor.h"
   ],
   "shared_storage_test_utils.h": [
     "+content/browser/private_aggregation/private_aggregation_host.h"
+  ],
+  "test_image_transport_factory.h": [
+    "+content/browser/compositor/image_transport_factory.h"
+  ],
+  "test_shared_storage_header_observer.h": [
+    "+content/browser/shared_storage/shared_storage_header_observer.h"
+  ],
+  "browser_fuzztest_support.h": [
+    "+third_party/fuzztest/src/fuzztest/fuzztest.h"
+  ],
+  "test_renderer_host.cc": [
+    "+components/dbus/thread_linux/dbus_thread_linux.h"
   ]
 }

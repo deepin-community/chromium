@@ -4,11 +4,14 @@
 
 #include "media/gpu/test/video_encoder/bitstream_file_writer.h"
 
+#include <algorithm>
+
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/ranges/algorithm.h"
+#include "base/numerics/safe_conversions.h"
 #include "media/gpu/test/video_test_helpers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -23,15 +26,14 @@ class BitstreamFileWriter::FrameFileWriter {
   FrameFileWriter(base::File output_file)
       : output_file_(std::move(output_file)) {}
 
-  bool WriteFrame(uint32_t data_size, uint64_t timestamp, const uint8_t* data) {
+  bool WriteFrame(uint64_t timestamp, base::span<const uint8_t> data) {
     if (ivf_writer_) {
-      return ivf_writer_->WriteFrame(data_size, timestamp, data);
+      return ivf_writer_->WriteFrame(base::checked_cast<uint32_t>(data.size()),
+                                     timestamp, data.data());
     }
     // For H.264.
     LOG_ASSERT(output_file_.IsValid());
-    return output_file_.WriteAtCurrentPos(reinterpret_cast<const char*>(data),
-                                          data_size) ==
-           static_cast<int>(data_size);
+    return output_file_.WriteAtCurrentPosAndCheck(data);
   }
 
  private:
@@ -139,6 +141,9 @@ void BitstreamFileWriter::ProcessBitstream(
       temporal_idx = bitstream->metadata.vp8->temporal_idx;
     else if (bitstream->metadata.vp9)
       temporal_idx = bitstream->metadata.vp9->temporal_idx;
+    else if (bitstream->metadata.svc_generic) {
+      temporal_idx = bitstream->metadata.svc_generic->temporal_idx;
+    }
 
     CHECK_NE(temporal_idx, 255) << "No metadata about temporal idx";
 
@@ -163,8 +168,7 @@ void BitstreamFileWriter::WriteBitstreamTask(
   DCHECK_CALLED_ON_VALID_SEQUENCE(writer_thread_sequence_checker_);
   const DecoderBuffer& buffer = *bitstream->buffer.get();
   bool success = frame_file_writer_->WriteFrame(
-      static_cast<uint32_t>(buffer.data_size()),
-      static_cast<uint64_t>(frame_index), buffer.data());
+      static_cast<uint64_t>(frame_index), buffer);
 
   base::AutoLock auto_lock(writer_lock_);
   num_errors_ += !success;

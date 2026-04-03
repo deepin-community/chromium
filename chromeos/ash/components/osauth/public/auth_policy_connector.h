@@ -5,6 +5,8 @@
 #ifndef CHROMEOS_ASH_COMPONENTS_OSAUTH_PUBLIC_AUTH_POLICY_CONNECTOR_H_
 #define CHROMEOS_ASH_COMPONENTS_OSAUTH_PUBLIC_AUTH_POLICY_CONNECTOR_H_
 
+#include <optional>
+
 #include "base/component_export.h"
 #include "chromeos/ash/components/osauth/public/auth_parts.h"
 #include "chromeos/ash/components/osauth/public/common_types.h"
@@ -43,6 +45,18 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_OSAUTH) AuthPolicyConnector {
 
   // Returns non-empty value if the recovery factor is enforced by the policy.
   virtual std::optional<bool> GetRecoveryMandatoryState(
+      const AccountId& account) = 0;
+
+  // Returns the local auth factors complexity policy value.
+  virtual std::optional<LocalAuthFactorsComplexity>
+  GetLocalAuthFactorsComplexity(const AccountId& account) = 0;
+
+  // Returns the set of local auth factors allowed by policy.
+  // - For non-managed users, this will return the default value "ALL".
+  // - For managed users, the default is an empty set, indicating no local auth
+  // factors are available. Otherwise, when the policy is configured, the set
+  // contains the `AshAuthFactors` allowed by policy.
+  virtual std::optional<AuthFactorsSet> AllowedLocalAuthFactors(
       const AccountId& account) = 0;
 
   virtual bool IsAuthFactorManaged(const AccountId& account,

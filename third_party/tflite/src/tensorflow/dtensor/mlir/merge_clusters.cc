@@ -14,6 +14,7 @@ limitations under the License.
 ==============================================================================*/
 
 #include <algorithm>
+#include <cassert>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -22,33 +23,37 @@ limitations under the License.
 #include <vector>
 
 #include "absl/strings/str_cat.h"
+#include "absl/types/optional.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/Diagnostics.h"  // from @llvm-project
+#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
+#include "mlir/IR/OpDefinition.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/Types.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/IR/Visitors.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
-#include "mlir/Support/DebugStringHelper.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
-#include "mlir/Transforms/Passes.h"  // from @llvm-project
 #include "mlir/Transforms/RegionUtils.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_attributes.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_remaining_ops.h"
-#include "tensorflow/compiler/mlir/tensorflow/utils/attribute_utils.h"
 #include "tensorflow/dtensor/cc/constants.h"
+#include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/dtensor_dialect/ir/dialect.h"
-#include "tensorflow/dtensor/mlir/dtensor_mlir_passes.h"
+#include "tensorflow/dtensor/mlir/dtensor_dialect/ir/dtensor_attributes.h"
 #include "tensorflow/dtensor/mlir/ir/tf_dtensor.h"
 #include "tensorflow/dtensor/mlir/layout_parsing.h"
 #include "tensorflow/dtensor/mlir/spmd_expander_common.h"
@@ -278,36 +283,36 @@ void CloneEmptyIfWithPredicate(mlir::TF::IfRegionOp if_region, const Mesh& mesh,
   // DTensorSend op sends the predicate to `mesh` cluster with replicated
   // layout.
   mlir::TensorType predicate_tensor_type =
-      if_region.getCond().getType().cast<mlir::TensorType>();
+      mlir::cast<mlir::TensorType>(if_region.getCond().getType());
   const std::string send_recv_key =
       absl::StrCat(kSendRecvKeyPrefix, *num_send_recvs);
   *num_send_recvs += 1;
 
-  builder.create<mlir::TF::DTensorSend>(
-      if_region.getLoc(), if_region.getCond(),
-      builder.getStringAttr(send_recv_key),
-      mlir::dtensor::MeshAttr::get(context, mesh));
+  mlir::TF::DTensorSend::create(builder, if_region.getLoc(),
+                                if_region.getCond(),
+                                builder.getStringAttr(send_recv_key),
+                                mlir::dtensor::MeshAttr::get(context, mesh));
 
   // Create new cluster op that contains cloned if operation.
-  auto new_cluster = builder.create<mlir::tf_device::ClusterOp>(
-      if_region.getLoc(), llvm::SmallVector<mlir::Type, 4>{});
+  auto new_cluster = mlir::tf_device::ClusterOp::create(
+      builder, if_region.getLoc(), llvm::SmallVector<mlir::Type, 4>{});
   new_cluster.getBody().push_back(new mlir::Block);
   builder.setInsertionPointToEnd(&new_cluster.GetBody());
-  auto return_op = builder.create<mlir::tf_device::ReturnOp>(
-      if_region.getLoc(), llvm::SmallVector<mlir::Value, 4>{});
+  auto return_op = mlir::tf_device::ReturnOp::create(
+      builder, if_region.getLoc(), llvm::SmallVector<mlir::Value, 4>{});
 
   // Add DTensorRecv op inside new cluster that receives the cluster.
   builder.setInsertionPoint(return_op);
-  auto recv_op = builder.create<mlir::TF::DTensorRecv>(
-      if_region.getLoc(), predicate_tensor_type,
+  auto recv_op = mlir::TF::DTensorRecv::create(
+      builder, if_region.getLoc(), predicate_tensor_type,
       builder.getStringAttr(send_recv_key),
       mlir::TF::ShapeAttr::get(context, predicate_tensor_type),
       mlir::dtensor::MeshAttr::get(context, mesh));
 
   // Clone tf.IfRegion op inside newly created cluster and make sure
   // that the predicate tensor is from DTensorRecv op created above.
-  auto host_side_if = builder.create<mlir::TF::IfRegionOp>(
-      if_region.getLoc(), llvm::SmallVector<mlir::Type, 4>{},
+  auto host_side_if = mlir::TF::IfRegionOp::create(
+      builder, if_region.getLoc(), llvm::SmallVector<mlir::Type, 4>{},
       recv_op.getOutput(), if_region.getIsStateless(),
       GetUniqueControlflowFnName("cloned_if_then", builder),
       GetUniqueControlflowFnName("cloned_if_else", builder));
@@ -317,15 +322,15 @@ void CloneEmptyIfWithPredicate(mlir::TF::IfRegionOp if_region, const Mesh& mesh,
   auto& then_branch = host_side_if.getThenBranch();
   then_branch.push_back(new mlir::Block);
   builder.setInsertionPointToEnd(&then_branch.front());
-  builder.create<mlir::TF::YieldOp>(if_region.getLoc(),
-                                    /*operands=*/llvm::ArrayRef<mlir::Value>{});
+  mlir::TF::YieldOp::create(builder, if_region.getLoc(),
+                            /*operands=*/llvm::ArrayRef<mlir::Value>{});
 
   // Create empty else branch region.
   auto& else_branch = host_side_if.getElseBranch();
   else_branch.push_back(new mlir::Block);
   builder.setInsertionPointToEnd(&else_branch.front());
-  builder.create<mlir::TF::YieldOp>(if_region.getLoc(),
-                                    /*operands=*/llvm::ArrayRef<mlir::Value>{});
+  mlir::TF::YieldOp::create(builder, if_region.getLoc(),
+                            /*operands=*/llvm::ArrayRef<mlir::Value>{});
   new_cluster->setAttr(kMeshAttr, builder.getStringAttr(mesh.ToString()));
 }
 
@@ -341,7 +346,7 @@ mlir::LogicalResult VerifyClusterInputOutput(
   mlir::LogicalResult result = mlir::success();
   mlir::visitUsedValuesDefinedAbove(
       cluster.getBody(), cluster.getBody(), [&](mlir::OpOperand* input) {
-        if (!input->get().isa<mlir::BlockArgument>()) {
+        if (!mlir::isa<mlir::BlockArgument>(input->get())) {
           result = cluster.emitOpError(
               "found nested tf_device.Cluster op with inputs. Nested cluster "
               "must use send/recv instead.");
@@ -545,8 +550,8 @@ mlir::LogicalResult MergeClusters(mlir::ModuleOp module) {
 
     // Create a single cluster op contains merged computations for `mesh`.
     builder.setInsertionPoint(&func_block.front());
-    auto new_cluster = builder.create<mlir::tf_device::ClusterOp>(
-        module.getLoc(), merged_return_types);
+    auto new_cluster = mlir::tf_device::ClusterOp::create(
+        builder, module.getLoc(), merged_return_types);
     new_cluster.getBody().push_back(new mlir::Block);
     new_cluster->setAttr(kMeshAttr, builder.getStringAttr(mesh.ToString()));
 
@@ -573,8 +578,8 @@ mlir::LogicalResult MergeClusters(mlir::ModuleOp module) {
     }
 
     builder.setInsertionPointToEnd(&new_cluster.GetBody());
-    builder.create<mlir::tf_device::ReturnOp>(new_cluster.getLoc(),
-                                              merged_return_values);
+    mlir::tf_device::ReturnOp::create(builder, new_cluster.getLoc(),
+                                      merged_return_values);
 
     // Replace return value usages.
     for (auto it :

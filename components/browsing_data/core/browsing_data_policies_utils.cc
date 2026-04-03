@@ -4,15 +4,15 @@
 
 #include "components/browsing_data/core/browsing_data_policies_utils.h"
 
-#include <vector>
+#include <algorithm>
+#include <forward_list>
 
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/span.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/stringprintf.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
-#include "components/browsing_data/core/features.h"
 #include "components/browsing_data/core/pref_names.h"
+#include "components/sync/base/user_selectable_type.h"
 #include "components/sync/service/sync_prefs.h"
 
 namespace browsing_data {
@@ -57,14 +57,15 @@ void AppendSyncTypesIfRequired(const base::Value& browsing_data_type,
             {syncer::UserSelectableType::kAutofill,
              syncer::UserSelectableType::kPayments}},
            {policy_data_types::kDownloadHistoryName, {}},
-           {policy_data_types::kCookiesAndOtherSiteDataName, {}},
+           {policy_data_types::kCookiesAndOtherSiteDataName,
+            {syncer::UserSelectableType::kCookies}},
            {policy_data_types::kCachedImagesAndFilesName, {}},
            {policy_data_types::kHostedAppDataName, {}}});
 
   // When a new sync type or browsing data type is introduced in the code,
   // kDataToSyncTypesMap should be updated if needed to ensure that browsing
   // data that can be cleared by policy is not already synced across devices.
-  static_assert(static_cast<int>(syncer::UserSelectableType::kLastType) == 12,
+  static_assert(static_cast<int>(syncer::UserSelectableType::kLastType) == 13,
                 "It looks like a sync type was added or removed. Please update "
                 "`kDataToSyncTypesMap` value maps above if it affects any of "
                 "the browsing data types.");
@@ -76,7 +77,7 @@ void AppendSyncTypesIfRequired(const base::Value& browsing_data_type,
       "added or removed. Please update `kDataToSyncTypesMap` above to include "
       "the new type and the sync types it maps to if this data is synced.");
 
-  const auto* it = kDataToSyncTypesMap.find(browsing_data_type.GetString());
+  const auto it = kDataToSyncTypesMap.find(browsing_data_type.GetString());
   if (it == kDataToSyncTypesMap.end()) {
     return;
   }
@@ -120,11 +121,42 @@ std::string DisableSyncTypes(const syncer::UserSelectableTypeSet& types_set,
   for (const syncer::UserSelectableType type : types_set) {
     syncer::SyncPrefs::SetTypeDisabledByPolicy(prefs, type);
   }
-  if (types_set.Size() > 0) {
+  if (types_set.size() > 0) {
     return base::StringPrintf(kDisabledSyncTypesLogFormat, policy_name.c_str(),
                               UserSelectableTypeSetToString(types_set).c_str());
   }
   return std::string();
+}
+
+base::flat_set<std::string> GetBrowsingDataLifetimePlatformUnsupportedTypes(
+    const base::Value& policy_value) {
+#if !BUILDFLAG(IS_ANDROID)
+  return base::flat_set<std::string>();
+#else
+  // The use of GetList() and GetDict() without type checking are safe because
+  // this function is only called if the policy schema is valid.
+  // On Android, hosted_app_data and download_history are not supported for the
+  // BrowsingDataLifetime policy, while the ClearBrowsingDataOnExit policy is
+  // not supported at all.
+  static constexpr std::string_view kUnsupportedTypes[] = {
+      policy_data_types::kHostedAppDataName,
+      policy_data_types::kDownloadHistoryName};
+  std::forward_list<std::string> unsupported_types;
+  const auto& items = policy_value.GetList();
+  for (const auto& item : items) {
+    const base::ListValue& data_types =
+        item.GetDict().Find("data_types")->GetList();
+    std::for_each(data_types.begin(), data_types.end(),
+                  [&unsupported_types](const base::Value& type) {
+                    const std::string& type_string = type.GetString();
+                    if (std::ranges::contains(kUnsupportedTypes, type_string)) {
+                      unsupported_types.push_front(type_string);
+                    }
+                  });
+  }
+  return base::flat_set<std::string>(unsupported_types.begin(),
+                                     unsupported_types.end());
+#endif  // !BUILDFLAG(IS_ANDROID)
 }
 
 std::optional<PolicyDataType> NameToPolicyDataType(
@@ -147,7 +179,7 @@ std::optional<PolicyDataType> NameToPolicyDataType(
            PolicyDataType::kCachedImagesAndFiles},
       });
 
-  const auto* it = kNameToDataType.find(type_name);
+  const auto it = kNameToDataType.find(type_name);
   if (it == kNameToDataType.end()) {
     return std::nullopt;
   }

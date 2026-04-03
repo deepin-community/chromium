@@ -9,7 +9,6 @@
 
 #include <memory>
 
-#include "base/files/file_util.h"
 #include "chrome/browser/ash/fileapi/file_system_backend_delegate.h"
 
 namespace storage {
@@ -51,8 +50,6 @@ class BackendDelegate : public FileSystemBackendDelegate {
       storage::FileSystemContext* context) override;
   storage::WatcherManager* GetWatcherManager(
       storage::FileSystemType type) override;
-  void GetRedirectURLForContents(const storage::FileSystemURL& url,
-                                 storage::URLCallback callback) override;
 
  private:
   std::unique_ptr<storage::AsyncFileUtil> async_file_util_;

@@ -4,12 +4,11 @@
 
 #include "content/browser/preloading/prefetch/prefetch_type.h"
 
-#include <tuple>
+#include <optional>
 
 #include "base/check.h"
+#include "content/browser/preloading/prefetch/prefetch_params.h"
 #include "content/browser/preloading/preloading_trigger_type_impl.h"
-#include "content/public/browser/preloading_trigger_type.h"
-#include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom.h"
 
 namespace content {
 
@@ -37,6 +36,10 @@ void PrefetchType::SetProxyBypassedForTest() {
 blink::mojom::SpeculationEagerness PrefetchType::GetEagerness() const {
   CHECK(IsSpeculationRuleType(trigger_type_));
   return eagerness_.value();
+}
+
+bool PrefetchType::IsRendererInitiated() const {
+  return IsSpeculationRuleType(trigger_type_);
 }
 
 }  // namespace content

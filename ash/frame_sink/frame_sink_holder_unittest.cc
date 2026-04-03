@@ -11,6 +11,7 @@
 #include "ash/frame_sink/frame_sink_holder_test_api.h"
 #include "ash/frame_sink/frame_sink_host.h"
 #include "ash/frame_sink/test/test_begin_frame_source.h"
+#include "ash/frame_sink/test/test_frame_factory.h"
 #include "ash/frame_sink/test/test_layer_tree_frame_sink.h"
 #include "ash/frame_sink/ui_resource_manager.h"
 #include "ash/shell.h"
@@ -21,11 +22,13 @@
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
+#include "components/viz/common/frame_sinks/begin_frame_source.h"
 #include "components/viz/common/gpu/context_provider.h"
 #include "components/viz/common/quads/compositor_frame.h"
 #include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/resources/returned_resource.h"
 #include "components/viz/common/resources/transferable_resource.h"
+#include "gpu/command_buffer/client/test_shared_image_interface.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -33,56 +36,14 @@
 namespace ash {
 namespace {
 
-class TestFrameFactory {
+class StubBeginFrameSource : public viz::BeginFrameSource {
  public:
-  TestFrameFactory() = default;
+  StubBeginFrameSource() : viz::BeginFrameSource(0u) {}
 
-  TestFrameFactory(const TestFrameFactory&) = delete;
-  TestFrameFactory& operator=(const TestFrameFactory&) = delete;
-
-  ~TestFrameFactory() = default;
-
-  std::unique_ptr<viz::CompositorFrame> CreateCompositorFrame(
-      const viz::BeginFrameAck& begin_frame_ack,
-      UiResourceManager& resource_manager,
-      bool auto_refresh,
-      const gfx::Size& last_submitted_frame_size,
-      float last_submitted_frame_dsf) {
-    auto frame = std::make_unique<viz::CompositorFrame>();
-
-    frame->metadata.begin_frame_ack = begin_frame_ack;
-    frame->metadata.device_scale_factor = latest_frame_dsf_;
-
-    const viz::CompositorRenderPassId kRenderPassId{1};
-    auto render_pass = viz::CompositorRenderPass::Create();
-    render_pass->SetNew(kRenderPassId, gfx::Rect(latest_frame_size_),
-                        gfx::Rect(), gfx::Transform());
-
-    frame->render_pass_list.push_back(std::move(render_pass));
-
-    for (viz::ResourceId id : latest_frame_resources_) {
-      frame->resource_list.push_back(
-          resource_manager.PrepareResourceForExport(id));
-    }
-
-    return frame;
-  }
-
-  void OnFirstFrameRequested() {}
-
-  void SetFrameResources(std::vector<viz::ResourceId> frame_resource) {
-    latest_frame_resources_ = std::move(frame_resource);
-  }
-
-  void SetFrameMetaData(const gfx::Size frame_size, float dsf) {
-    latest_frame_size_ = frame_size;
-    latest_frame_dsf_ = dsf;
-  }
-
- private:
-  std::vector<viz::ResourceId> latest_frame_resources_;
-  gfx::Size latest_frame_size_;
-  float latest_frame_dsf_ = 1.0;
+  void DidFinishFrame(viz::BeginFrameObserver* obs) override {}
+  void AddObserver(viz::BeginFrameObserver* obs) override {}
+  void RemoveObserver(viz::BeginFrameObserver* obs) override {}
+  void OnGpuNoLongerBusy() override {}
 };
 
 MATCHER_P(IsBeginFrameAckEqual, value, "") {
@@ -115,15 +76,31 @@ class FrameSinkHolderTest : public AshTestBase {
         std::move(layer_tree_frame_sink),
         base::BindRepeating(&TestFrameFactory::CreateCompositorFrame,
                             base::Unretained(frame_factory_.get())),
-        base::BindRepeating(&TestFrameFactory::OnFirstFrameRequested,
-                            base::Unretained(frame_factory_.get())));
+        /*on_first_frame_requested_callback=*/base::DoNothing(),
+        /*on_frame_sink_lost_callback=*/base::DoNothing());
 
     holder_weak_ptr_ = frame_sink_holder_->GetWeakPtr();
+
+    sii_ = base::MakeRefCounted<gpu::TestSharedImageInterface>();
+  }
+
+  std::unique_ptr<UiResource> MakeResource() {
+    const gfx::Size kSize = gfx::Size(20, 20);
+    auto shared_image = sii_->CreateSharedImage(
+        {viz::SinglePlaneFormat::kBGRA_8888, kSize, gfx::ColorSpace(),
+         gpu::SHARED_IMAGE_USAGE_DISPLAY_READ, "FastInkRootViewFrame"},
+        gpu::kNullSurfaceHandle);
+
+    auto resource = std::make_unique<UiResource>(sii_, std::move(shared_image));
+    resource->ui_source_id = 1u;
+    return resource;
   }
 
   UiResourceManager& GetResourceManager() {
     return frame_sink_holder_->resource_manager();
   }
+
+  scoped_refptr<gpu::SharedImageInterface> sii_;
 
   // If `frame_sink_holder_` lifetime has been extended in a unittest and the
   // holder did not schedule a delete task, it will get destroyed once we
@@ -190,6 +167,76 @@ TEST_F(FrameSinkHolderTest, SubmitFrameSynchronouslyBeforeFirstFrameRequested) {
   EXPECT_THAT(
       layer_tree_frame_sink_->GetLatestReceivedFrame().metadata.begin_frame_ack,
       IsBeginFrameAckEqual(viz::BeginFrameAck::CreateManualAckWithDamage()));
+}
+
+TEST_F(FrameSinkHolderTest, ObserveBeginFrameSourceOnDemand) {
+  FrameSinkHolderTestApi test_api(frame_sink_holder_.get());
+
+  StubBeginFrameSource source;
+  frame_sink_holder_->SetBeginFrameSource(&source);
+
+  // FrameSinkHolder should be observing the source when it is set.
+  EXPECT_TRUE(test_api.IsObservingBeginFrameSource());
+
+  // After consecutively not producing frames for a certain number of
+  // BeginFrames, FrameSinkHolder should stop observing the source.
+  for (int i = 0; i < 4; i++) {
+    frame_sink_holder_->OnBeginFrame(CreateValidBeginFrameArgsForTesting());
+  }
+
+  frame_sink_holder_->SubmitCompositorFrame(/*synchronous_draw=*/true);
+  frame_sink_holder_->OnBeginFrame(CreateValidBeginFrameArgsForTesting());
+  EXPECT_TRUE(test_api.IsObservingBeginFrameSource());
+
+  for (int i = 0; i < 5; i++) {
+    frame_sink_holder_->OnBeginFrame(CreateValidBeginFrameArgsForTesting());
+  }
+
+  EXPECT_FALSE(test_api.IsObservingBeginFrameSource());
+
+  // However, if there is request to submit a new frame, FrameSinkHolder should
+  // start observing the source again.
+  frame_sink_holder_->SubmitCompositorFrame(/*synchronous_draw=*/true);
+  EXPECT_TRUE(test_api.IsObservingBeginFrameSource());
+
+  frame_sink_holder_->SetBeginFrameSource(nullptr);
+}
+
+TEST_F(FrameSinkHolderTest, ObserveBeginFrameSourceOnDemand_AutoUpdate) {
+  FrameSinkHolderTestApi test_api(frame_sink_holder_.get());
+
+  frame_sink_holder_->SetAutoUpdateMode(true);
+
+  StubBeginFrameSource source;
+  frame_sink_holder_->SetBeginFrameSource(&source);
+
+  // FrameSinkHolder should be observing BeginFrameSource when it is set.
+  EXPECT_TRUE(test_api.IsObservingBeginFrameSource());
+
+  // When auto update mode is on, we should not stop observation of
+  // BeginFrameSource.
+  for (int i = 0; i < 10; i++) {
+    frame_sink_holder_->OnBeginFrame(CreateValidBeginFrameArgsForTesting());
+  }
+
+  EXPECT_TRUE(test_api.IsObservingBeginFrameSource());
+
+  // However once the auto update mode is turned off, we should stop observing
+  // the BeginFrameSource as needed.
+  frame_sink_holder_->SetAutoUpdateMode(false);
+
+  for (int i = 0; i < 5; i++) {
+    frame_sink_holder_->OnBeginFrame(CreateValidBeginFrameArgsForTesting());
+  }
+
+  EXPECT_FALSE(test_api.IsObservingBeginFrameSource());
+
+  // Renablending the auto update mode should start the observation of
+  // BeginFrameSource.
+  frame_sink_holder_->SetAutoUpdateMode(true);
+  EXPECT_TRUE(test_api.IsObservingBeginFrameSource());
+
+  frame_sink_holder_->SetBeginFrameSource(nullptr);
 }
 
 TEST_F(FrameSinkHolderTest, SubmitFrameSynchronouslyWhilePendingFrameAck) {
@@ -296,10 +343,10 @@ TEST_F(FrameSinkHolderTest, DontSubmitNewFramesWhenWaitingToDeleteSinkHolder) {
   FrameSinkHolderTestApi test_api(frame_sink_holder_.get());
   base::RunLoop loop;
 
-  viz::ResourceId id_1 =
-      GetResourceManager().OfferResource(std::make_unique<UiResource>());
+  viz::TransferableResource resource_1 =
+      GetResourceManager().OfferAndPrepareResourceForExport(MakeResource());
 
-  frame_factory_->SetFrameResources({id_1});
+  frame_factory_->SetFrameResources({resource_1});
   frame_factory_->SetFrameMetaData(gfx::Size(100, 100), 1.0);
 
   // Call OnBeginFrame so that FrameSinkHolder can know that it can submit
@@ -348,14 +395,14 @@ TEST_F(FrameSinkHolderTest,
 TEST_F(FrameSinkHolderTest, ExtendLifeTimeOfHolderToRootWindow) {
   FrameSinkHolderTestApi test_api(frame_sink_holder_.get());
 
-  viz::ResourceId id_1 =
-      GetResourceManager().OfferResource(std::make_unique<UiResource>());
-  viz::ResourceId id_2 =
-      GetResourceManager().OfferResource(std::make_unique<UiResource>());
-  viz::ResourceId id_3 =
-      GetResourceManager().OfferResource(std::make_unique<UiResource>());
+  viz::TransferableResource resource_1 =
+      GetResourceManager().OfferAndPrepareResourceForExport(MakeResource());
+  viz::TransferableResource resource_2 =
+      GetResourceManager().OfferAndPrepareResourceForExport(MakeResource());
+  viz::TransferableResource resource_3 =
+      GetResourceManager().OfferAndPrepareResourceForExport(MakeResource());
 
-  frame_factory_->SetFrameResources({id_1, id_2, id_3});
+  frame_factory_->SetFrameResources({resource_1, resource_2, resource_3});
   frame_factory_->SetFrameMetaData(gfx::Size(100, 100), 1.0);
 
   // Call OnBeginFrame so that FrameSinkHolder can know that it can submit
@@ -421,12 +468,12 @@ TEST_F(FrameSinkHolderTest, DeleteHolderAfterReclaimingAllResources) {
   FrameSinkHolderTestApi test_api(frame_sink_holder_.get());
   base::RunLoop loop;
 
-  viz::ResourceId id_1 =
-      GetResourceManager().OfferResource(std::make_unique<UiResource>());
-  viz::ResourceId id_2 =
-      GetResourceManager().OfferResource(std::make_unique<UiResource>());
+  viz::TransferableResource resource_1 =
+      GetResourceManager().OfferAndPrepareResourceForExport(MakeResource());
+  viz::TransferableResource resource_2 =
+      GetResourceManager().OfferAndPrepareResourceForExport(MakeResource());
 
-  frame_factory_->SetFrameResources({id_1, id_2});
+  frame_factory_->SetFrameResources({resource_1, resource_2});
   frame_factory_->SetFrameMetaData(gfx::Size(100, 100), 1.0);
 
   // Call OnBeginFrame so that FrameSinkHolder can know that it can submit
@@ -456,10 +503,10 @@ TEST_F(FrameSinkHolderTest, DeleteHolderAfterReclaimingAllResources) {
 TEST_F(FrameSinkHolderTest, LayerTreeFrameSinkLost) {
   FrameSinkHolderTestApi test_api(frame_sink_holder_.get());
 
-  viz::ResourceId id_1 =
-      GetResourceManager().OfferResource(std::make_unique<UiResource>());
+  viz::TransferableResource resource_1 =
+      GetResourceManager().OfferAndPrepareResourceForExport(MakeResource());
 
-  frame_factory_->SetFrameResources({id_1});
+  frame_factory_->SetFrameResources({resource_1});
   frame_factory_->SetFrameMetaData(gfx::Size(100, 100), 1.0);
 
   // Call OnBeginFrame so that FrameSinkHolder can know that it can submit
@@ -481,10 +528,10 @@ TEST_F(FrameSinkHolderTest,
   FrameSinkHolderTestApi test_api(frame_sink_holder_.get());
   base::RunLoop loop;
 
-  viz::ResourceId id_1 =
-      GetResourceManager().OfferResource(std::make_unique<UiResource>());
+  viz::TransferableResource resource_1 =
+      GetResourceManager().OfferAndPrepareResourceForExport(MakeResource());
 
-  frame_factory_->SetFrameResources({id_1});
+  frame_factory_->SetFrameResources({resource_1});
   frame_factory_->SetFrameMetaData(gfx::Size(100, 100), 1.0);
 
   // Call OnBeginFrame so that FrameSinkHolder can know that it can submit
@@ -513,10 +560,10 @@ TEST_F(FrameSinkHolderTest,
        DeleteSinkHolderWithExportedResources_DuringShutdown) {
   FrameSinkHolderTestApi test_api(frame_sink_holder_.get());
 
-  viz::ResourceId id_1 =
-      GetResourceManager().OfferResource(std::make_unique<UiResource>());
+  viz::TransferableResource resource_1 =
+      GetResourceManager().OfferAndPrepareResourceForExport(MakeResource());
 
-  frame_factory_->SetFrameResources({id_1});
+  frame_factory_->SetFrameResources({resource_1});
   frame_factory_->SetFrameMetaData(gfx::Size(100, 100), 1.0);
 
   // Call OnBeginFrame so that FrameSinkHolder can know that it can submit
@@ -553,10 +600,10 @@ TEST_F(FrameSinkHolderTest,
        DeleteSinkHolderImmediatelyWhenNoExportedResources) {
   FrameSinkHolderTestApi test_api(frame_sink_holder_.get());
 
-  viz::ResourceId id_1 =
-      GetResourceManager().OfferResource(std::make_unique<UiResource>());
+  viz::TransferableResource resource_1 =
+      GetResourceManager().OfferAndPrepareResourceForExport(MakeResource());
 
-  frame_factory_->SetFrameResources({id_1});
+  frame_factory_->SetFrameResources({resource_1});
   frame_factory_->SetFrameMetaData(gfx::Size(100, 100), 1.0);
 
   // Call OnBeginFrame so that FrameSinkHolder can know that it can submit
@@ -576,6 +623,37 @@ TEST_F(FrameSinkHolderTest,
   // We can delete the holder straight way since we have no exported resources.
   ASSERT_EQ(GetResourceManager().exported_resources_count(), 0u);
 
+  EXPECT_TRUE(FrameSinkHolder::DeleteWhenLastResourceHasBeenReclaimed(
+      std::move(frame_sink_holder_), host_window_));
+
+  // Since FrameSinkHolder is deleted immediately, we expect the weak_ptr to be
+  // not valid.
+  EXPECT_FALSE(holder_weak_ptr_);
+}
+
+TEST_F(FrameSinkHolderTest, DeleteSinkHolderImmediatelyWhenFrameSinkIsLost) {
+  FrameSinkHolderTestApi test_api(frame_sink_holder_.get());
+
+  viz::TransferableResource resource_1 =
+      GetResourceManager().OfferAndPrepareResourceForExport(MakeResource());
+
+  frame_factory_->SetFrameResources({resource_1});
+  frame_factory_->SetFrameMetaData(gfx::Size(100, 100), 1.0);
+
+  // Call OnBeginFrame so that FrameSinkHolder can know that it can submit
+  // frames synchronously.
+  frame_sink_holder_->OnBeginFrame(CreateValidBeginFrameArgsForTesting());
+  frame_sink_holder_->SubmitCompositorFrame(/*synchronous_draw=*/true);
+
+  // Confirms that FrameSinkHolder has submitted a frame.
+  EXPECT_FALSE(test_api.LastSubmittedFrameSize().IsEmpty());
+  EXPECT_EQ(layer_tree_frame_sink_->num_of_frames_received(), 1);
+
+  ASSERT_EQ(GetResourceManager().exported_resources_count(), 1u);
+
+  frame_sink_holder_->DidLoseLayerTreeFrameSink();
+
+  // Since frame sink is lost, the exported resources cannot be reclaimed.
   EXPECT_TRUE(FrameSinkHolder::DeleteWhenLastResourceHasBeenReclaimed(
       std::move(frame_sink_holder_), host_window_));
 

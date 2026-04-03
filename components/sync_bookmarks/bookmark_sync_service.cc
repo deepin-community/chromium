@@ -7,21 +7,18 @@
 #include <utility>
 
 #include "base/feature_list.h"
-#include "components/undo/bookmark_undo_service.h"
 
 namespace sync_bookmarks {
 
 BookmarkSyncService::BookmarkSyncService(
-    BookmarkUndoService* bookmark_undo_service,
     syncer::WipeModelUponSyncDisabledBehavior
         wipe_model_upon_sync_disabled_behavior)
-    : bookmark_model_type_processor_(bookmark_undo_service,
-                                     wipe_model_upon_sync_disabled_behavior) {}
+    : bookmark_data_type_processor_(wipe_model_upon_sync_disabled_behavior) {}
 
 BookmarkSyncService::~BookmarkSyncService() = default;
 
-std::string BookmarkSyncService::EncodeBookmarkSyncMetadata() {
-  return bookmark_model_type_processor_.EncodeSyncMetadata();
+std::string BookmarkSyncService::EncodeBookmarkSyncMetadata() const {
+  return bookmark_data_type_processor_.EncodeSyncMetadata();
 }
 
 void BookmarkSyncService::DecodeBookmarkSyncMetadata(
@@ -29,30 +26,35 @@ void BookmarkSyncService::DecodeBookmarkSyncMetadata(
     const base::RepeatingClosure& schedule_save_closure,
     std::unique_ptr<sync_bookmarks::BookmarkModelView> model) {
   bookmark_model_view_ = std::move(model);
-  bookmark_model_type_processor_.ModelReadyToSync(
+  bookmark_data_type_processor_.ModelReadyToSync(
       metadata_str, schedule_save_closure, bookmark_model_view_.get());
 }
 
-base::WeakPtr<syncer::ModelTypeControllerDelegate>
+base::WeakPtr<syncer::DataTypeControllerDelegate>
 BookmarkSyncService::GetBookmarkSyncControllerDelegate(
     favicon::FaviconService* favicon_service) {
   DCHECK(favicon_service);
-  bookmark_model_type_processor_.SetFaviconService(favicon_service);
-  return bookmark_model_type_processor_.GetWeakPtr();
+  bookmark_data_type_processor_.SetFaviconService(favicon_service);
+  return bookmark_data_type_processor_.GetWeakPtr();
 }
 
 bool BookmarkSyncService::IsTrackingMetadata() const {
-  return bookmark_model_type_processor_.IsTrackingMetadata();
+  return bookmark_data_type_processor_.IsTrackingMetadata() ||
+         is_tracking_metadata_for_testing_;
 }
 
-sync_bookmarks::BookmarkModelView* BookmarkSyncService::bookmark_model_view() {
+sync_bookmarks::BookmarkModelView* BookmarkSyncService::bookmark_model_view()
+    const {
   return bookmark_model_view_.get();
 }
 
-void BookmarkSyncService::SetBookmarksLimitForTesting(size_t limit) {
-  bookmark_model_type_processor_
-      .SetMaxBookmarksTillSyncEnabledForTest(  // IN-TEST
-          limit);
+void BookmarkSyncService::SetIsTrackingMetadataForTesting() {
+  is_tracking_metadata_for_testing_ = true;
+}
+
+void BookmarkSyncService::SetLocalBookmarksLimitForTesting(size_t limit) {
+  bookmark_data_type_processor_.SetLocalBookmarksLimitForTesting(  // IN-TEST
+      limit);
 }
 
 }  // namespace sync_bookmarks

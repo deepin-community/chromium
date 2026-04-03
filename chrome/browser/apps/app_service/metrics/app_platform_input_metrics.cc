@@ -4,7 +4,10 @@
 
 #include "chrome/browser/apps/app_service/metrics/app_platform_input_metrics.h"
 
+#include <string_view>
+
 #include "ash/shell.h"
+#include "base/containers/fixed_flat_map.h"
 #include "base/metrics/histogram_macros.h"
 #include "chrome/browser/apps/app_service/metrics/app_platform_metrics.h"
 #include "chrome/browser/apps/app_service/metrics/app_platform_metrics_utils.h"
@@ -36,19 +39,13 @@ constexpr char kInputEventStylusKey[] = "stylus";
 constexpr char kInputEventTouchKey[] = "touch";
 constexpr char kInputEventKeyboardKey[] = "keyboard";
 
-base::flat_map<std::string, InputEventSource>& GetInputEventSourceMap() {
-  static base::NoDestructor<base::flat_map<std::string, InputEventSource>>
-      input_event_source_map;
-  if (input_event_source_map->empty()) {
-    *input_event_source_map = {
+constexpr auto kInputEventSourceMap =
+    base::MakeFixedFlatMap<std::string_view, InputEventSource>({
         {kInputEventMouseKey, InputEventSource::kMouse},
         {kInputEventStylusKey, InputEventSource::kStylus},
         {kInputEventTouchKey, InputEventSource::kTouch},
         {kInputEventKeyboardKey, InputEventSource::kKeyboard},
-    };
-  }
-  return *input_event_source_map;
-}
+    });
 
 InputEventSource GetInputEventSource(ui::EventPointerType type) {
   switch (type) {
@@ -68,10 +65,9 @@ InputEventSource GetInputEventSource(ui::EventPointerType type) {
 // Returns the input event source for the given `event_source` string.
 InputEventSource GetInputEventSourceFromString(
     const std::string& event_source) {
-  const auto& input_event_source_map = GetInputEventSourceMap();
-  auto it = input_event_source_map.find(event_source);
-  return (it != input_event_source_map.end()) ? it->second
-                                              : InputEventSource::kUnknown;
+  auto it = kInputEventSourceMap.find(event_source);
+  return (it != kInputEventSourceMap.end()) ? it->second
+                                            : InputEventSource::kUnknown;
 }
 
 // Returns the string key for `event_source` to save input events in the user
@@ -91,11 +87,11 @@ std::string GetInputEventSourceKey(InputEventSource event_source) {
   }
 }
 
-base::Value::Dict ConvertEventCountsToValue(
+base::DictValue ConvertEventCountsToValue(
     const AppPlatformInputMetrics::EventSourceToCounts& event_counts) {
-  base::Value::Dict event_counts_dict;
+  base::DictValue event_counts_dict;
   for (const auto& counts : event_counts) {
-    base::Value::Dict count_dict;
+    base::DictValue count_dict;
     for (const auto& it : counts.second) {
       count_dict.Set(GetAppTypeHistogramName(it.first), it.second);
     }
@@ -106,7 +102,7 @@ base::Value::Dict ConvertEventCountsToValue(
 }
 
 AppPlatformInputMetrics::EventSourceToCounts ConvertDictValueToEventCounts(
-    const base::Value::Dict& event_counts) {
+    const base::DictValue& event_counts) {
   AppPlatformInputMetrics::EventSourceToCounts ret;
   for (const auto [app_id, counts] : event_counts) {
     auto event_source = GetInputEventSourceFromString(app_id);
@@ -114,7 +110,7 @@ AppPlatformInputMetrics::EventSourceToCounts ConvertDictValueToEventCounts(
       continue;
     }
 
-    const base::Value::Dict* counts_dict = counts.GetIfDict();
+    const base::DictValue* counts_dict = counts.GetIfDict();
     if (!counts_dict) {
       continue;
     }
@@ -160,20 +156,20 @@ AppPlatformInputMetrics::~AppPlatformInputMetrics() {
 }
 
 void AppPlatformInputMetrics::OnMouseEvent(ui::MouseEvent* event) {
-  if (event->type() == ui::ET_MOUSE_RELEASED) {
+  if (event->type() == ui::EventType::kMouseReleased) {
     RecordEventCount(GetInputEventSource(event->pointer_details().pointer_type),
                      event->target());
   }
 }
 
 void AppPlatformInputMetrics::OnKeyEvent(ui::KeyEvent* event) {
-  if (event->type() == ui::ET_KEY_RELEASED) {
+  if (event->type() == ui::EventType::kKeyReleased) {
     RecordEventCount(InputEventSource::kKeyboard, event->target());
   }
 }
 
 void AppPlatformInputMetrics::OnTouchEvent(ui::TouchEvent* event) {
-  if (event->type() == ui::ET_TOUCH_RELEASED) {
+  if (event->type() == ui::EventType::kTouchReleased) {
     RecordEventCount(GetInputEventSource(event->pointer_details().pointer_type),
                      event->target());
   }
@@ -184,14 +180,14 @@ void AppPlatformInputMetrics::OnFiveMinutes() {
   // been recorded yet, read the input events saved in the user pref, and record
   // the input events UKM, then save the new input events to the user pref.
   if (should_record_ukm_from_pref_) {
-    RecordInputEventsUkmFromPref();
+    RecordInputEventsAppKMFromPref();
     should_record_ukm_from_pref_ = false;
   }
   SaveInputEvents();
 }
 
 void AppPlatformInputMetrics::OnTwoHours() {
-  RecordInputEventsUkm();
+  RecordInputEventsAppKM();
 }
 
 void AppPlatformInputMetrics::OnInstanceUpdate(const InstanceUpdate& update) {
@@ -212,7 +208,7 @@ void AppPlatformInputMetrics::OnInstanceUpdate(const InstanceUpdate& update) {
   // For apps, not opened with browser windows, the app id and app type should
   // not change. So if we have the app info for the window, we don't need to
   // update it.
-  if (base::Contains(window_to_app_info_, window) &&
+  if (window_to_app_info_.contains(window) &&
       !IsAppOpenedWithBrowserWindow(profile_, app_type, app_id)) {
     return;
   }
@@ -231,7 +227,7 @@ void AppPlatformInputMetrics::OnInstanceRegistryWillBeDestroyed(
 
 void AppPlatformInputMetrics::OnStartingShutdown() {
   CHECK(chromeos::IsManagedGuestSession());
-  RecordInputEventsUkm();
+  RecordInputEventsAppKM();
 }
 
 void AppPlatformInputMetrics::SetAppInfoForActivatedWindow(
@@ -255,7 +251,7 @@ void AppPlatformInputMetrics::SetAppInfoForActivatedWindow(
   // For apps opened in browser windows, get the top level window, and modify
   // `browser_to_tab_list_` to save the activated tab app id.
   if (IsAppOpenedWithBrowserWindow(profile_, app_type, app_id)) {
-    window = IsLacrosWindow(window) ? window : window->GetToplevelWindow();
+    window = window->GetToplevelWindow();
     if (IsAppOpenedInTab(app_type_name, app_id)) {
       // When the tab is pulled to a separate browser window, the instance id is
       // not changed, but the parent browser window is changed. So remove the
@@ -288,14 +284,12 @@ void AppPlatformInputMetrics::SetAppInfoForInactivatedWindow(
 
   auto app_id = browser_to_tab_list_.GetActivatedTabAppId(browser_window);
   if (app_id.empty()) {
-    app_id = IsLacrosWindow(browser_window) ? app_constants::kLacrosAppId
-                                            : app_constants::kChromeAppId;
+    app_id = app_constants::kChromeAppId;
   }
 
   window_to_app_info_[browser_window].app_id = app_id;
   window_to_app_info_[browser_window].app_type_name =
-      IsLacrosWindow(browser_window) ? apps::AppTypeName::kStandaloneBrowser
-                                     : apps::AppTypeName::kChromeBrowser;
+      apps::AppTypeName::kChromeBrowser;
 }
 
 void AppPlatformInputMetrics::RecordEventCount(InputEventSource event_source,
@@ -316,7 +310,7 @@ void AppPlatformInputMetrics::RecordEventCount(InputEventSource event_source,
     return;
   }
 
-  if (!ShouldRecordUkmForApp(it->second.app_id)) {
+  if (!ShouldRecordAppKMForApp(it->second.app_id)) {
     return;
   }
 
@@ -324,24 +318,24 @@ void AppPlatformInputMetrics::RecordEventCount(InputEventSource event_source,
                                         [it->second.app_type_name];
 }
 
-void AppPlatformInputMetrics::RecordInputEventsUkm() {
-  if (!ShouldRecordUkm(profile_)) {
+void AppPlatformInputMetrics::RecordInputEventsAppKM() {
+  if (!ShouldRecordAppKM(profile_)) {
     return;
   }
 
   for (const auto& event_counts : app_id_to_event_count_per_two_hours_) {
-    if (!ShouldRecordUkmForApp(event_counts.first)) {
+    if (!ShouldRecordAppKMForApp(event_counts.first)) {
       continue;
     }
     // `event_counts.second` is the map from InputEventSource to the event
     // counts.
-    RecordInputEventsUkmForApp(event_counts.first, event_counts.second);
+    RecordInputEventsAppKMForApp(event_counts.first, event_counts.second);
   }
 
   app_id_to_event_count_per_two_hours_.clear();
 }
 
-void AppPlatformInputMetrics::RecordInputEventsUkmForApp(
+void AppPlatformInputMetrics::RecordInputEventsAppKMForApp(
     const std::string& app_id,
     const EventSourceToCounts& event_counts) {
   for (const auto& counts : event_counts) {
@@ -374,8 +368,8 @@ void AppPlatformInputMetrics::SaveInputEvents() {
   }
 }
 
-void AppPlatformInputMetrics::RecordInputEventsUkmFromPref() {
-  if (!ShouldRecordUkm(profile_)) {
+void AppPlatformInputMetrics::RecordInputEventsAppKMFromPref() {
+  if (!ShouldRecordAppKM(profile_)) {
     return;
   }
 
@@ -383,24 +377,26 @@ void AppPlatformInputMetrics::RecordInputEventsUkmFromPref() {
                                            kAppInputEventsKey);
 
   for (const auto [app_id, events] : *input_events_update) {
-    if (!ShouldRecordUkmForApp(app_id)) {
+    if (!ShouldRecordAppKMForApp(app_id)) {
       continue;
     }
 
-    const base::Value::Dict* events_dict = events.GetIfDict();
+    const base::DictValue* events_dict = events.GetIfDict();
     if (!events_dict) {
       continue;
     }
 
     EventSourceToCounts event_counts =
         ConvertDictValueToEventCounts(*events_dict);
-    RecordInputEventsUkmForApp(app_id, event_counts);
+    RecordInputEventsAppKMForApp(app_id, event_counts);
   }
 }
 
-bool AppPlatformInputMetrics::ShouldRecordUkmForApp(const std::string& app_id) {
-  return ShouldRecordUkmForAppId(app_id, app_registry_cache_.get()) &&
-         ShouldRecordUkmForAppTypeName(GetAppType(profile_, app_id));
+bool AppPlatformInputMetrics::ShouldRecordAppKMForApp(
+    const std::string& app_id) {
+  return ShouldRecordAppKMForAppId(profile_, app_registry_cache_.get(),
+                                   app_id) &&
+         ShouldRecordAppKMForAppTypeName(GetAppType(profile_, app_id));
 }
 
 }  // namespace apps

@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/base/video_codec_string_parsers.h"
+
 #include "base/containers/flat_set.h"
 #include "base/strings/stringprintf.h"
-#include "media/base/video_codec_string_parsers.h"
 #include "media/base/video_color_space.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -629,6 +630,105 @@ TEST(ParseHEVCCodecIdTest, InvalidHEVCCodecIds) {
     EXPECT_EQ(HEVCPROFILE_REXT, result->profile);
   }
 
+  if (base::FeatureList::IsEnabled(kHEVCRextCodecStringParsing)) {
+    // HEVC range extension 8b444
+    for (const auto* codec_id :
+         {"hvc1.4.10.L93.9E.28", "hvc1.4.10.L93.9E.20", "hvc1.4.10.L93.9E.8"}) {
+      auto result = ParseHEVCCodecId(codec_id);
+      ASSERT_TRUE(result);
+      EXPECT_EQ(HEVCPROFILE_REXT, result->profile);
+      EXPECT_TRUE(result->bit_depth.has_value());
+      EXPECT_EQ(8u, result->bit_depth.value());
+      EXPECT_TRUE(result->subsampling.has_value());
+      EXPECT_EQ(VideoChromaSampling::k444, result->subsampling.value());
+    }
+    // HEVC range extension 10b422. For 8-bit 422, the constraint flag is the
+    // same as 10-bit 422, so the bit depth will be 10 here to indicate the
+    // maximum supported value.
+    for (const auto* codec_id :
+         {"hvc1.4.10.L93.9D.28", "hvc1.4.10.L93.9D.20", "hvc1.4.10.L93.9D.8"}) {
+      auto result = ParseHEVCCodecId(codec_id);
+      ASSERT_TRUE(result);
+      EXPECT_EQ(HEVCPROFILE_REXT, result->profile);
+      EXPECT_TRUE(result->bit_depth.has_value());
+      EXPECT_EQ(10u, result->bit_depth.value());
+      EXPECT_TRUE(result->subsampling.has_value());
+      EXPECT_EQ(VideoChromaSampling::k422, result->subsampling.value());
+    }
+    // HEVC range extension 10b444
+    for (const auto* codec_id :
+         {"hvc1.4.10.L93.9C.28", "hvc1.4.10.L93.9C.20", "hvc1.4.10.L93.9C.8"}) {
+      auto result = ParseHEVCCodecId(codec_id);
+      ASSERT_TRUE(result);
+      EXPECT_EQ(HEVCPROFILE_REXT, result->profile);
+      EXPECT_TRUE(result->bit_depth.has_value());
+      EXPECT_EQ(10u, result->bit_depth.value());
+      EXPECT_TRUE(result->subsampling.has_value());
+      EXPECT_EQ(VideoChromaSampling::k444, result->subsampling.value());
+    }
+    // HEVC range extension 12b420
+    for (const auto* codec_id : {"hvc1.4.10.L93.99.A0", "hvc1.4.10.L93.99.A8",
+                                 "hvc1.4.10.L93.99.88"}) {
+      auto result = ParseHEVCCodecId(codec_id);
+      ASSERT_TRUE(result);
+      EXPECT_EQ(HEVCPROFILE_REXT, result->profile);
+      EXPECT_TRUE(result->bit_depth.has_value());
+      EXPECT_EQ(12u, result->bit_depth.value());
+      EXPECT_TRUE(result->subsampling.has_value());
+      EXPECT_EQ(VideoChromaSampling::k420, result->subsampling.value());
+    }
+    // HEVC range extension 12b422
+    for (const auto* codec_id :
+         {"hvc1.4.10.L93.99.20", "hvc1.4.10.L93.99.28", "hvc1.4.0.L93.99.8"}) {
+      auto result = ParseHEVCCodecId(codec_id);
+      ASSERT_TRUE(result);
+      EXPECT_EQ(HEVCPROFILE_REXT, result->profile);
+      EXPECT_TRUE(result->bit_depth.has_value());
+      EXPECT_EQ(12u, result->bit_depth.value());
+      EXPECT_TRUE(result->subsampling.has_value());
+      EXPECT_EQ(VideoChromaSampling::k422, result->subsampling.value());
+    }
+    // HEVC range extension 12b444
+    for (const auto* codec_id :
+         {"hvc1.4.10.L93.98.20", "hvc1.4.10.L93.98.28", "hvc1.4.0.L93.98.8"}) {
+      auto result = ParseHEVCCodecId(codec_id);
+      ASSERT_TRUE(result);
+      EXPECT_EQ(HEVCPROFILE_REXT, result->profile);
+      EXPECT_TRUE(result->bit_depth.has_value());
+      EXPECT_EQ(12u, result->bit_depth.value());
+      EXPECT_TRUE(result->subsampling.has_value());
+      EXPECT_EQ(VideoChromaSampling::k444, result->subsampling.value());
+    }
+    // HEVC range extension 16b monochrome
+    {
+      auto result = ParseHEVCCodecId("hvc1.4.10.L93.91.C8");
+      ASSERT_TRUE(result);
+      EXPECT_EQ(HEVCPROFILE_REXT, result->profile);
+      EXPECT_TRUE(result->bit_depth.has_value());
+      EXPECT_EQ(16u, result->bit_depth.value());
+      EXPECT_TRUE(result->subsampling.has_value());
+      EXPECT_EQ(VideoChromaSampling::k400, result->subsampling.value());
+    }
+
+    // HEVC range extension 16b444
+    for (const auto* codec_id :
+         {"hvc1.4.10.L93.90.20", "hvc1.4.10.L93.90.28"}) {
+      auto result = ParseHEVCCodecId(codec_id);
+      ASSERT_TRUE(result);
+      EXPECT_EQ(HEVCPROFILE_REXT, result->profile);
+      EXPECT_TRUE(result->bit_depth.has_value());
+      EXPECT_EQ(16u, result->bit_depth.value());
+      EXPECT_TRUE(result->subsampling.has_value());
+      EXPECT_EQ(VideoChromaSampling::k444, result->subsampling.value());
+    }
+
+    // max_bits_flag must be valid for range extension.
+    EXPECT_FALSE(ParseHEVCCodecId("hvc1.4.10.L93.90.C8"));
+
+    // max_422_flag/max_444_flag/max_monochrome_flag combination must be valid.
+    EXPECT_FALSE(ParseHEVCCodecId("hvc1.4.10.L93.99.48"));
+  }
+
   // Spec A.3.6
   for (const auto* codec_id :
        {"hvc1.5.20.L93.B0", "hvc1.5.0.L93.B0", "hvc1.0.20.L93.B0"}) {
@@ -757,130 +857,6 @@ TEST(ParseHEVCCodecIdTest, InvalidHEVCCodecIds) {
   EXPECT_FALSE(ParseHEVCCodecId("hvc1.1.6.L0.100"));
   EXPECT_FALSE(ParseHEVCCodecId("hvc1.1.6.L0.1FF"));
   EXPECT_FALSE(ParseHEVCCodecId("hvc1.1.6.L0.-1"));
-}
-
-TEST(ParseVVCCodecIdTest, InvalidVVCCodecIds) {
-  // Both vvc1 and vvi1 should be supported
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L51.CQA.O1+3");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(VVCPROFILE_MAIN10, result->profile);
-    EXPECT_EQ(51u, result->level);
-  }
-  {
-    auto result = ParseVVCCodecId("vvi1.2.L83.CQA.S25+YA.O2+3");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(VVCPROFILE_MAIN12, result->profile);
-    EXPECT_EQ(83u, result->level);
-  }
-
-  // Check that codec id string with insufficient number of dot-separated
-  // elements are rejected. There must be at least 4 elements: vvc1/vvi1 prefix,
-  // profile, level, constraints.
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L51.CQA");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(VVCPROFILE_MAIN10, result->profile);
-    EXPECT_EQ(51u, result->level);
-  }
-  EXPECT_FALSE(ParseVVCCodecId("vvc1"));
-  EXPECT_FALSE(ParseVVCCodecId("vvi1"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1..."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1...."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1..."));
-
-  // Check that codec ids with invalid trailing bytes are rejected.
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83..."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83...."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83....."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83......"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83......."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.......0"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.0."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.0.."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.0..0"));
-
-  // general_profile_idc (the number after the first dot) must be a 5-bit
-  // decimal-encoded number (between 1 and 99)
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L83.CQA"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.99.L83.CQA"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.100.L83.CQA"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.0.L83.CQA"));
-
-  // general_tier_flag is encoded as either character 'L' (general_tier_flag==0)
-  // or character 'H' (general_tier_flag==1) in the 3rd element of the string
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L83.CQA"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.H83.CQA"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.83.CQA"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.A83.CQA"));
-
-  // general_level_idc is 8-bit decimal-encoded number after general_tier_flag.
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L0.CQA");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(0u, result->level);
-  }
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L1.CQA");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(1u, result->level);
-  }
-  // Level 3.1 (51 == 3 * 16 + 1 * 3)
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L51.CQA");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(51u, result->level);
-  }
-  // Level 6.2 (102 == 6 * 16 + 2 * 3)
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L102.CYA");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(102u, result->level);
-  }
-  {
-    auto result = ParseVVCCodecId("vvc1.1.L255.CYA");
-    ASSERT_TRUE(result);
-    EXPECT_EQ(255u, result->level);
-  }
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L256.CYA"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L999.CQA"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L-1.CQA"));
-
-  // constraints string
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.100.L83.C."));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.100.L83.2C"));
-
-  // general_sub_profile_idc placement.
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.SF1.O0+3"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.SF1"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.SF1"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.SF1."));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.SF1+AB.O0+3"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.SF1+AB+2B.O0+3"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.SF1.CQA.O0+3"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.O0+3.SF1"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.O0+3.S"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.O0+3.S."));
-
-  // OlsIdx & MaxTid
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.O0+3"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.O1"));
-  // When MaxTid does not exist, "+" should not be present.
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.O1+"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.O"));
-  EXPECT_TRUE(ParseVVCCodecId("vvc1.1.L0.CQA.O+3"));
-
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.100"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.1FF"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L83.-1"));
-  EXPECT_FALSE(ParseVVCCodecId("vvc1.1.L0.CQA.SF1.O0+3.100"));
 }
 
 TEST(ParseDolbyVisionCodecIdTest, InvalidDolbyVisionCodecIds) {

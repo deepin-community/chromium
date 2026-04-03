@@ -11,19 +11,21 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/property_effects.h"
 
 namespace views {
 
 ImageViewBase::ImageViewBase() {
-  SetAccessibilityProperties(ax::mojom::Role::kImage);
+  GetViewAccessibility().SetRole(ax::mojom::Role::kImage);
 
   // The role of an object should not change over its lifetime. Therefore,
   // rather than changing the role to `kNone` when there is no presentable
   // information, set it to ignored. This will result in the same tree
   // inclusion/exclusion behavior without unexpected platform-specific
   // side effects related to the role changing.
-  if (GetAccessibleName().empty() && tooltip_text_.empty()) {
-    GetViewAccessibility().OverrideIsIgnored(true);
+  if (GetViewAccessibility().GetCachedName().empty() &&
+      GetTooltipText().empty()) {
+    GetViewAccessibility().SetIsIgnored(true);
   }
 }
 
@@ -47,7 +49,7 @@ void ImageViewBase::SetHorizontalAlignment(Alignment alignment) {
   if (alignment != horizontal_alignment_) {
     horizontal_alignment_ = alignment;
     UpdateImageOrigin();
-    OnPropertyChanged(&horizontal_alignment_, kPropertyEffectsPaint);
+    OnPropertyChanged(&horizontal_alignment_, PropertyEffects::kPaint);
   }
 }
 
@@ -59,7 +61,7 @@ void ImageViewBase::SetVerticalAlignment(Alignment alignment) {
   if (alignment != vertical_alignment_) {
     vertical_alignment_ = alignment;
     UpdateImageOrigin();
-    OnPropertyChanged(&horizontal_alignment_, kPropertyEffectsPaint);
+    OnPropertyChanged(&vertical_alignment_, PropertyEffects::kPaint);
   }
 }
 
@@ -67,40 +69,26 @@ ImageViewBase::Alignment ImageViewBase::GetVerticalAlignment() const {
   return vertical_alignment_;
 }
 
-void ImageViewBase::SetTooltipText(const std::u16string& tooltip) {
-  if (tooltip_text_ == tooltip) {
-    return;
+void ImageViewBase::OnTooltipTextChanged(
+    const std::u16string& old_tooltip_text) {
+  View::OnTooltipTextChanged(old_tooltip_text);
+  if (GetViewAccessibility().GetCachedName().empty() ||
+      GetViewAccessibility().GetCachedName() == old_tooltip_text) {
+    GetViewAccessibility().SetName(GetTooltipText());
   }
-
-  std::u16string current_tooltip = tooltip_text_;
-  tooltip_text_ = tooltip;
-
-  if (GetAccessibleName().empty() || GetAccessibleName() == current_tooltip) {
-    SetAccessibleName(tooltip);
-  }
-
-  TooltipTextChanged();
-  OnPropertyChanged(&tooltip_text_, kPropertyEffectsNone);
-}
-
-const std::u16string& ImageViewBase::GetTooltipText() const {
-  return tooltip_text_;
 }
 
 void ImageViewBase::AdjustAccessibleName(std::u16string& new_name,
                                          ax::mojom::NameFrom& name_from) {
   if (new_name.empty()) {
-    new_name = tooltip_text_;
+    new_name = GetTooltipText();
   }
 
-  GetViewAccessibility().OverrideIsIgnored(new_name.empty());
+  GetViewAccessibility().SetIsIgnored(new_name.empty());
 }
 
-std::u16string ImageViewBase::GetTooltipText(const gfx::Point& p) const {
-  return tooltip_text_;
-}
-
-gfx::Size ImageViewBase::CalculatePreferredSize() const {
+gfx::Size ImageViewBase::CalculatePreferredSize(
+    const SizeBounds& /*available_size*/) const {
   gfx::Size size = GetImageSize();
   size.Enlarge(GetInsets().width(), GetInsets().height());
   return size;
@@ -174,7 +162,6 @@ void ImageViewBase::PreferredSizeChanged() {
 BEGIN_METADATA(ImageViewBase)
 ADD_PROPERTY_METADATA(Alignment, HorizontalAlignment)
 ADD_PROPERTY_METADATA(Alignment, VerticalAlignment)
-ADD_PROPERTY_METADATA(std::u16string, TooltipText)
 END_METADATA
 
 }  // namespace views

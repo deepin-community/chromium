@@ -8,12 +8,13 @@
 #include <ostream>
 #include "base/component_export.h"
 
-namespace ash {
-namespace quick_pair {
+namespace ash::quick_pair {
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused. This enum should be kept in sync with
 // the FastPairPairFailure enum in //tools/metrics/histograms/enums.xml.
+//
+// LINT.IfChange(FastPairPairFailure)
 enum class PairFailure {
   // Failed to create a GATT connection to the device.
   kCreateGattConnection = 0,
@@ -93,11 +94,11 @@ enum class PairFailure {
   kAdditionalDataCharacteristicWriteTimeout = 33,
   kMaxValue = kAdditionalDataCharacteristicWriteTimeout,
 };
+// LINT.ThenChange(//tools/metrics/histograms/enums.xml:FastPairPairFailure)
 
 COMPONENT_EXPORT(QUICK_PAIR_COMMON)
 std::ostream& operator<<(std::ostream& stream, PairFailure protocol);
 
-}  // namespace quick_pair
-}  // namespace ash
+}  // namespace ash::quick_pair
 
 #endif  // ASH_QUICK_PAIR_COMMON_PAIR_FAILURE_H_

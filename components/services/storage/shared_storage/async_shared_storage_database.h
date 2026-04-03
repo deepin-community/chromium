@@ -6,14 +6,12 @@
 #define COMPONENTS_SERVICES_STORAGE_SHARED_STORAGE_ASYNC_SHARED_STORAGE_DATABASE_H_
 
 #include <memory>
-#include <queue>
 #include <string>
 #include <vector>
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/sequenced_task_runner.h"
-#include "base/threading/sequence_bound.h"
 #include "components/services/storage/shared_storage/shared_storage_database.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/mojom/shared_storage/shared_storage_worklet_service.mojom.h"
@@ -41,11 +39,13 @@ class AsyncSharedStorageDatabase {
   using InitStatus = SharedStorageDatabase::InitStatus;
   using SetBehavior = SharedStorageDatabase::SetBehavior;
   using OperationResult = SharedStorageDatabase::OperationResult;
+  using BatchUpdateResult = SharedStorageDatabase::BatchUpdateResult;
   using GetResult = SharedStorageDatabase::GetResult;
   using BudgetResult = SharedStorageDatabase::BudgetResult;
   using TimeResult = SharedStorageDatabase::TimeResult;
   using MetadataResult = SharedStorageDatabase::MetadataResult;
   using EntriesResult = SharedStorageDatabase::EntriesResult;
+  using DataClearSource = SharedStorageDatabase::DataClearSource;
 
   // A callback type to check if a given origin matches a storage policy.
   // Can be passed empty/null where used, which means the origin will always
@@ -90,8 +90,8 @@ class AsyncSharedStorageDatabase {
   // transaction was free of database errors.
   //
   // `key` must be of length at most
-  // `SharedStorageDatabaseOptions::max_string_length`, with the burden on the
-  // caller to handle errors for strings that exceed this length.
+  // `SharedStorageDatabase::max_string_length_`, with the burden on the caller
+  // to handle errors for strings that exceed this length.
   virtual void Get(url::Origin context_origin,
                    std::u16string key,
                    base::OnceCallback<void(GetResult)> callback) = 0;
@@ -102,11 +102,12 @@ class AsyncSharedStorageDatabase {
   // The parameter of `callback` reports whether or not any entry is added, the
   // request is ignored, or if there is an error.
   //
-  // `key` and `value` must be each of length at most
-  // `SharedStorageDatabaseOptions::max_string_length`, with the burden on the
-  // caller to handle errors for strings that exceed this length. Moreover, if
-  // the length retrieved by `Length(context_origin, callback)` equals
-  // `SharedStorageDatabaseOptions::max_entries_per_origin_`, `Set()` will fail
+  // `key` and `value` must each be of length at most
+  // `SharedStorageDatabase::max_string_length_`, with the burden on the caller
+  // to handle errors for strings that exceed these lengths. Moreover, if the
+  // bytes used retrieved by `BytesUsed(context_origin, callback)` plus any
+  // additional bytes to be stored by this call would exceed
+  // `SharedStorageDatabaseOptions::max_bytes_per_origin_`, `Set()` will fail
   // and the table will not be modified.
   virtual void Set(url::Origin context_origin,
                    std::u16string key,
@@ -119,15 +120,16 @@ class AsyncSharedStorageDatabase {
   // with value `value`. The parameter of `callback` reports whether or not any
   // entry is added or modified or if there is an error.
   //
-  // `key` and `value` must be each of length at most
-  // `SharedStorageDatabaseOptions::max_string_length`, with the burden on the
-  // caller to handle errors for strings that exceed this length. Moreover, if
-  // the length of the string obtained by concatening the current `script_value`
-  // (if one exists) and `value` exceeds
-  // `SharedStorageDatabaseOptions::max_string_length`, or if the length
-  // retrieved by `Length(context_origin, callback)` equals
-  // `SharedStorageDatabaseOptions::max_entries_per_origin_`, `Append()` will
-  // fail and the database table will not be modified.
+  // `key` and `value` must each be of length at most
+  // `SharedStorageDatabase::max_string_length_`, with the burden on the caller
+  // to handle errors for strings that exceed these lengths. Moreover, if the
+  // length of the string obtained by concatening the current `script_value` (if
+  // one exists) and `value` exceeds
+  // `SharedStorageDatabase::max_string_length_`, or if the bytes used retrieved
+  // by `ByresUsed(context_origin, callback)` plus any additional bytes to be
+  // stored by this call would exceed
+  // `SharedStorageDatabaseOptions::max_bytes_per_origin_`, `Append()` will fail
+  // and the database table will not be modified.
   virtual void Append(url::Origin context_origin,
                       std::u16string key,
                       std::u16string value,
@@ -137,8 +139,8 @@ class AsyncSharedStorageDatabase {
   // `callback` reports whether the deletion is successful.
   //
   // `key` must be of length at most
-  // `SharedStorageDatabaseOptions::max_string_length`, with the burden on the
-  // caller to handle errors for strings that exceed this length.
+  // `SharedStorageDatabase::max_string_length_`, with the burden on the caller
+  // to handle errors for strings that exceed this length.
   virtual void Delete(url::Origin context_origin,
                       std::u16string key,
                       base::OnceCallback<void(OperationResult)> callback) = 0;
@@ -146,7 +148,17 @@ class AsyncSharedStorageDatabase {
   // Clears all entries for `context_origin`. The parameter of `callback`
   // reports whether the operation is successful.
   virtual void Clear(url::Origin context_origin,
-                     base::OnceCallback<void(OperationResult)> callback) = 0;
+                     base::OnceCallback<void(OperationResult)> callback,
+                     DataClearSource source = DataClearSource::kSite) = 0;
+
+  // Executes `methods_with_options` as a transaction. If any method fails, the
+  // entire batch operation is rolled back. The parameter of `callback` reports
+  // whether the operation is successful.
+  virtual void BatchUpdate(
+      url::Origin context_origin,
+      std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+          methods_with_options,
+      base::OnceCallback<void(BatchUpdateResult)> callback) = 0;
 
   // The parameter of `callback` reports the number of entries for
   // `context_origin`, 0 if there are none, or -1 on operation failure.

@@ -23,13 +23,13 @@ PasswordChangeHandler::PasswordChangeHandler(
     : password_change_url_(password_change_url) {}
 PasswordChangeHandler::~PasswordChangeHandler() = default;
 
-void PasswordChangeHandler::HandleInitialize(const base::Value::List& value) {
+void PasswordChangeHandler::HandleInitialize(const base::ListValue& value) {
   Profile* profile = Profile::FromWebUI(web_ui());
   CHECK(profile->GetPrefs()->GetBoolean(
       prefs::kSamlInSessionPasswordChangeEnabled));
 
   AllowJavascript();
-  base::Value::Dict params;
+  base::DictValue params;
   if (password_change_url_.empty()) {
     LOG(ERROR) << "Password change url is empty";
     return;
@@ -37,13 +37,14 @@ void PasswordChangeHandler::HandleInitialize(const base::Value::List& value) {
   params.Set("passwordChangeUrl", password_change_url_);
   const user_manager::User* user =
       ProfileHelper::Get()->GetUserByProfile(profile);
-  if (user)
+  if (user) {
     params.Set("userName", user->GetDisplayEmail());
+  }
   CallJavascriptFunction("$(\'main-element\').loadAuthenticator", params);
 }
 
 void PasswordChangeHandler::HandleChangePassword(
-    const base::Value::List& params) {
+    const base::ListValue& params) {
   const base::Value& old_passwords = params[0];
   const base::Value& new_passwords = params[1];
   VLOG(4) << "Scraped " << old_passwords.GetList().size() << " old passwords";

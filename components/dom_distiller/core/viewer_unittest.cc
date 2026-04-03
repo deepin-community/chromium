@@ -6,15 +6,19 @@
 
 #include <memory>
 
+#include "base/test/scoped_feature_list.h"
 #include "components/dom_distiller/core/distilled_page_prefs.h"
 #include "components/dom_distiller/core/distiller_ui_handle.h"
+#include "components/dom_distiller/core/dom_distiller_features.h"
 #include "components/dom_distiller/core/dom_distiller_service.h"
 #include "components/dom_distiller/core/task_tracker.h"
 #include "components/dom_distiller/core/url_constants.h"
 #include "components/dom_distiller/core/url_utils.h"
+#include "components/strings/grit/components_strings.h"
 #include "net/base/url_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "url/url_util.h"
 
 namespace dom_distiller {
@@ -51,6 +55,13 @@ class TestDomDistillerService : public DomDistillerServiceInterface {
       std::unique_ptr<DistillerPage> distiller_page,
       const GURL&) override {
     return std::unique_ptr<ViewerHandle>(ViewUrlImpl());
+  }
+  MOCK_METHOD0(ViewUrlIgnoreCacheImpl, ViewerHandle*());
+  std::unique_ptr<ViewerHandle> ViewUrlIgnoreCache(
+      ViewRequestDelegate*,
+      std::unique_ptr<DistillerPage> distiller_page,
+      const GURL&) override {
+    return std::unique_ptr<ViewerHandle>(ViewUrlIgnoreCacheImpl());
   }
   std::unique_ptr<DistillerPage> CreateDefaultDistillerPage(
       const gfx::Size& render_view_size) override {
@@ -154,9 +165,61 @@ TEST_F(DomDistillerViewerTest, TestGetDistilledPageFontFamilyJsOutput) {
 }
 
 TEST_F(DomDistillerViewerTest, TestGetDistilledPageFontScalingJsOutput) {
-  std::string kJsFontScaling = "useFontScaling(5);";
-  EXPECT_EQ(kJsFontScaling.compare(viewer::GetDistilledPageFontScalingJs(5)),
-            0);
+  std::string kJsFontScaling = "useFontScaling(5, false);";
+  EXPECT_EQ(
+      kJsFontScaling.compare(viewer::GetDistilledPageFontScalingJs(5, false)),
+      0);
+}
+
+TEST_F(DomDistillerViewerTest, TestGetAddToPageJsEmptyDisplaysDefault) {
+  std::string output = viewer::GetAddToPageJs("");
+  std::string expected_output =
+      "addToPage(\"" +
+      l10n_util::GetStringUTF8(IDS_DOM_DISTILLER_VIEWER_NO_DATA_CONTENT) +
+      "\");";
+  EXPECT_EQ(output, expected_output);
+}
+
+TEST_F(DomDistillerViewerTest, TestGetAddToPageJsDisplaysContent) {
+  std::string output = viewer::GetAddToPageJs("content");
+  EXPECT_EQ(output, "addToPage(\"content\");");
+}
+
+TEST_F(DomDistillerViewerTest, TestGetJavaScriptPinchMinZoom_Default) {
+  base::test::ScopedFeatureList scoped_feature_list;
+#if BUILDFLAG(IS_ANDROID)
+  scoped_feature_list.InitAndDisableFeature(kReaderModeDistillInApp);
+#endif
+  std::string output = viewer::GetJavaScript();
+  EXPECT_THAT(output, testing::ContainsRegex(
+                          "/\\* PINCH_SCALE \\*/ Math.max\\(0\\.5,"));
+}
+
+TEST_F(DomDistillerViewerTest, TestGetJavaScriptPinchMinMaxZoom_DistillInApp) {
+#if BUILDFLAG(IS_ANDROID)
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kReaderModeDistillInApp);
+  std::string output = viewer::GetJavaScript();
+  EXPECT_THAT(output,
+              testing::ContainsRegex(
+                  "/\\* PINCH_SCALE \\*/ Math\\.max\\(1, Math\\.min\\(2\\.5,"));
+#else
+  SUCCEED();
+#endif
+}
+
+TEST_F(DomDistillerViewerTest,
+       TestGetJavaScriptPinchMinMaxZoom_DistillInCustomTab) {
+#if BUILDFLAG(IS_ANDROID)
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(kReaderModeDistillInApp);
+  std::string output = viewer::GetJavaScript();
+  EXPECT_THAT(output,
+              testing::ContainsRegex(
+                  "/\\* PINCH_SCALE \\*/ Math\\.max\\(0\\.5, Math\\.min\\(2,"));
+#else
+  SUCCEED();
+#endif
 }
 
 }  // namespace dom_distiller

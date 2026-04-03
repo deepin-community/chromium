@@ -14,18 +14,12 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/component_updater/cros_component_manager.h"
+#include "components/component_updater/ash/component_manager_ash.h"
 #include "components/component_updater/component_installer.h"
 #include "components/component_updater/component_updater_service.h"
 #include "components/update_client/update_client.h"
 
 namespace component_updater {
-
-// A command-line switch that can also be set from chrome://flags for opting in
-// or out of DCHECK binaries for Lacros (where available).
-extern const char kPreferDcheckSwitch[];
-extern const char kPreferDcheckOptIn[];
-extern const char kPreferDcheckOptOut[];
 
 // The name of the directory under DIR_COMPONENT_USER that cros component
 // installers puts all of the installed components.
@@ -42,7 +36,6 @@ struct ComponentConfig {
   // ComponentInstallerPolicy to use.
   enum class PolicyType {
     kEnvVersion,       // Checks env_version, see below.
-    kLacros,           // Uses special lacros compatibility rules.
     kDemoApp,          // Adds demo-mode-specific install attributes
     kGrowthCampaigns,  // Adds growth campaigns install attributes
   };
@@ -77,14 +70,15 @@ class CrOSComponentInstallerPolicy : public ComponentInstallerPolicy {
   bool SupportsGroupPolicyEnabledComponentUpdates() const override;
   bool RequiresNetworkEncryption() const override;
   update_client::CrxInstaller::Result OnCustomInstall(
-      const base::Value::Dict& manifest,
+      const base::DictValue& manifest,
       const base::FilePath& install_dir) override;
   void OnCustomUninstall() override;
-  bool VerifyInstallation(const base::Value::Dict& manifest,
+  bool VerifyInstallation(const base::DictValue& manifest,
                           const base::FilePath& install_dir) const override;
   base::FilePath GetRelativeInstallDir() const override;
   void GetHash(std::vector<uint8_t>* hash) const override;
   std::string GetName() const override;
+  bool AllowUpdates() const override;
 
  protected:
   const raw_ptr<CrOSComponentInstaller, DanglingUntriaged>
@@ -109,7 +103,7 @@ class EnvVersionInstallerPolicy : public CrOSComponentInstallerPolicy {
   // ComponentInstallerPolicy:
   void ComponentReady(const base::Version& version,
                       const base::FilePath& path,
-                      base::Value::Dict manifest) override;
+                      base::DictValue manifest) override;
   update_client::InstallerAttributes GetInstallerAttributes() const override;
 
  private:
@@ -119,25 +113,6 @@ class EnvVersionInstallerPolicy : public CrOSComponentInstallerPolicy {
                            const std::string& min_env_version_str);
 
   const std::string env_version_;
-};
-
-// An installer policy for Lacros components, which have unusual version
-// compatibility rules. See ComponentReady() implementation.
-class LacrosInstallerPolicy : public CrOSComponentInstallerPolicy {
- public:
-  LacrosInstallerPolicy(const ComponentConfig& config,
-                        CrOSComponentInstaller* cros_component_installer);
-  LacrosInstallerPolicy(const LacrosInstallerPolicy&) = delete;
-  LacrosInstallerPolicy& operator=(const LacrosInstallerPolicy&) = delete;
-  ~LacrosInstallerPolicy() override;
-
-  // ComponentInstallerPolicy:
-  void ComponentReady(const base::Version& version,
-                      const base::FilePath& path,
-                      base::Value::Dict manifest) override;
-  update_client::InstallerAttributes GetInstallerAttributes() const override;
-
-  static void SetAshVersionForTest(const char* version);
 };
 
 // An installer policy for the ChromeOS Demo Mode app, which includes special
@@ -154,7 +129,7 @@ class DemoAppInstallerPolicy : public CrOSComponentInstallerPolicy {
   // ComponentInstallerPolicy:
   void ComponentReady(const base::Version& version,
                       const base::FilePath& path,
-                      base::Value::Dict manifest) override;
+                      base::DictValue manifest) override;
   update_client::InstallerAttributes GetInstallerAttributes() const override;
 };
 
@@ -175,12 +150,12 @@ class GrowthCampaignsInstallerPolicy : public CrOSComponentInstallerPolicy {
   // ComponentInstallerPolicy:
   void ComponentReady(const base::Version& version,
                       const base::FilePath& path,
-                      base::Value::Dict manifest) override;
+                      base::DictValue manifest) override;
   update_client::InstallerAttributes GetInstallerAttributes() const override;
 };
 
 // This class contains functions used to register and install a component.
-class CrOSComponentInstaller : public CrOSComponentManager {
+class CrOSComponentInstaller : public ComponentManagerAsh {
  public:
   CrOSComponentInstaller(std::unique_ptr<MetadataTable> metadata_table,
                          ComponentUpdateService* component_updater);
@@ -188,7 +163,7 @@ class CrOSComponentInstaller : public CrOSComponentManager {
   CrOSComponentInstaller(const CrOSComponentInstaller&) = delete;
   CrOSComponentInstaller& operator=(const CrOSComponentInstaller&) = delete;
 
-  // CrOSComponentManager:
+  // ComponentManagerAsh:
   void SetDelegate(Delegate* delegate) override;
   void Load(const std::string& name,
             MountPolicy mount_policy,

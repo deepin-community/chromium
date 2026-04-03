@@ -4,6 +4,8 @@
 
 #include "services/viz/public/cpp/compositing/shared_image_format_mojom_traits.h"
 
+#include "base/notreached.h"
+
 namespace mojo {
 
 // static
@@ -23,7 +25,6 @@ EnumTraits<viz::mojom::PlaneConfig, viz::SharedImageFormat::PlaneConfig>::
       return viz::mojom::PlaneConfig::kY_U_V_A;
   }
   NOTREACHED();
-  return viz::mojom::PlaneConfig::kY_UV;
 }
 
 // static
@@ -63,7 +64,6 @@ EnumTraits<viz::mojom::Subsampling, viz::SharedImageFormat::Subsampling>::
       return viz::mojom::Subsampling::k444;
   }
   NOTREACHED();
-  return viz::mojom::Subsampling::k420;
 }
 
 // static
@@ -99,7 +99,6 @@ EnumTraits<viz::mojom::ChannelFormat, viz::SharedImageFormat::ChannelFormat>::
       return viz::mojom::ChannelFormat::k16F;
   }
   NOTREACHED();
-  return viz::mojom::ChannelFormat::k8;
 }
 
 // static
@@ -137,7 +136,7 @@ bool StructTraits<
     return false;
   if (!data.ReadChannelFormat(&out->channel_format))
     return false;
-#if BUILDFLAG(IS_OZONE)
+#if BUILDFLAG(IS_OZONE) || BUILDFLAG(IS_ANDROID)
   out->prefers_external_sampler = data.prefers_external_sampler();
 #endif
 

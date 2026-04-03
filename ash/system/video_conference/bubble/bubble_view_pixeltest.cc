@@ -5,7 +5,6 @@
 #include <memory>
 #include <string>
 
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/style/icon_button.h"
@@ -21,12 +20,13 @@
 #include "ash/system/video_conference/video_conference_tray.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/test/pixel/ash_pixel_differ.h"
+#include "ash/test/pixel/ash_pixel_test_helper.h"
 #include "ash/test/pixel/ash_pixel_test_init_params.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
+#include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
 #include "chromeos/constants/chromeos_features.h"
-#include "chromeos/crosapi/mojom/video_conference.mojom-shared.h"
 #include "chromeos/crosapi/mojom/video_conference.mojom.h"
 #include "url/gurl.h"
 
@@ -56,7 +56,8 @@ crosapi::mojom::VideoConferenceMediaAppInfoPtr CreateFakeMediaApp(
 
 class BubbleViewPixelTest
     : public AshTestBase,
-      public testing::WithParamInterface</*IsVcDlcUiEnabled*/ bool> {
+      public testing::WithParamInterface<
+          std::tuple</*IsVcDlcUiEnabled=*/bool, /*IsSystemBlurEnabled=*/bool>> {
  public:
   BubbleViewPixelTest() = default;
   BubbleViewPixelTest(const BubbleViewPixelTest&) = delete;
@@ -66,13 +67,19 @@ class BubbleViewPixelTest
   // AshTestBase:
   void SetUp() override {
     std::vector<base::test::FeatureRef> enabled_features{
-        features::kVideoConference, features::kCameraEffectsSupportedByHardware,
-        chromeos::features::kJelly};
-    std::vector<base::test::FeatureRef> disabled_features{};
+        features::kFeatureManagementVideoConference};
+    std::vector<base::test::FeatureRef> disabled_features{
+        features::kVcBackgroundReplace};
     if (IsVcDlcUiEnabled()) {
       enabled_features.push_back(features::kVcDlcUi);
+    } else {
+      disabled_features.push_back(features::kVcDlcUi);
     }
     scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
+
+    if (IsVcDlcUiEnabled()) {
+      DlcserviceClient::InitializeFake();
+    }
 
     office_bunny_ =
         std::make_unique<fake_video_conference::OfficeBunnyEffect>();
@@ -113,14 +120,25 @@ class BubbleViewPixelTest
     long_text_effect_.reset();
     cat_ears_.reset();
     office_bunny_.reset();
+    if (IsVcDlcUiEnabled()) {
+      DlcserviceClient::Shutdown();
+    }
   }
 
   std::optional<pixel_test::InitParams> CreatePixelTestInitParams()
       const override {
-    return pixel_test::InitParams();
+    pixel_test::InitParams init_params;
+    init_params.system_blur_enabled = IsSystemBlurEnabled();
+    return init_params;
   }
 
-  bool IsVcDlcUiEnabled() { return GetParam(); }
+  bool IsVcDlcUiEnabled() const { return std::get<0>(GetParam()); }
+  bool IsSystemBlurEnabled() const { return std::get<1>(GetParam()); }
+
+  void ModifyDlcDownloadState(bool add_warning, std::u16string warning_label) {
+    static_cast<video_conference::BubbleView*>(bubble_view())
+        ->OnDLCDownloadStateInError(add_warning, warning_label);
+  }
 
   VideoConferenceTray* video_conference_tray() {
     return StatusAreaWidgetTestHelper::GetStatusAreaWidget()
@@ -195,7 +213,7 @@ class BubbleViewPixelTest
 
 INSTANTIATE_TEST_SUITE_P(IsVcDlcUiEnabled,
                          BubbleViewPixelTest,
-                         testing::Bool());
+                         testing::Combine(testing::Bool(), testing::Bool()));
 
 // Captures the basic bubble view with one media app, 2 toggle effects and 1 set
 // value effects.
@@ -217,8 +235,9 @@ TEST_P(BubbleViewPixelTest, Basic) {
   ASSERT_TRUE(bubble_view());
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_bubble_view_basic",
-      /*revision_number=*/8, bubble_view()));
+      GenerateScreenshotName("video_conference_bubble_view_basic"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 17 : 0,
+      bubble_view()));
 }
 
 // Pixel test that tests toggled on/off and focused/not focused for the toggle
@@ -241,27 +260,38 @@ TEST_P(BubbleViewPixelTest, ToggleButton) {
   auto* toggle_effect_button_container = GetToggleEffectsView()->parent();
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_bubble_view_no_focus_not_toggled",
-      /*revision_number=*/11, toggle_effect_button_container));
+      GenerateScreenshotName(
+          "video_conference_bubble_view_no_focus_not_toggled"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 14 : 0,
+      toggle_effect_button_container));
 
   // Toggle the first button, the UI should change.
   LeftClickOn(first_toggle_effect_button);
   ASSERT_EQ(1, office_bunny()->num_activations_for_testing());
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_bubble_view_no_focus_toggled",
-      /*revision_number=*/8, toggle_effect_button_container));
+      GenerateScreenshotName("video_conference_bubble_view_no_focus_toggled"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 11 : 0,
+      toggle_effect_button_container));
 
   // Un-toggle the button, then keyboard focus it.
   LeftClickOn(first_toggle_effect_button);
   ASSERT_EQ(2, office_bunny()->num_activations_for_testing());
   auto* event_generator = GetEventGenerator();
+  // Go to sidetone button
   event_generator->PressAndReleaseKey(ui::KeyboardCode::VKEY_TAB);
+  // Go to settings button
+  event_generator->PressAndReleaseKey(ui::KeyboardCode::VKEY_TAB);
+  // Go to return to app button
+  event_generator->PressAndReleaseKey(ui::KeyboardCode::VKEY_TAB);
+  // Go to toggle effect button
   event_generator->PressAndReleaseKey(ui::KeyboardCode::VKEY_TAB);
   ASSERT_TRUE(first_toggle_effect_button->HasFocus());
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_bubble_view_with_focus_not_toggled",
-      /*revision_number=*/11, toggle_effect_button_container));
+      GenerateScreenshotName(
+          "video_conference_bubble_view_with_focus_not_toggled"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 14 : 0,
+      toggle_effect_button_container));
 
   // Re-toggle the button.
   event_generator->PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
@@ -269,8 +299,9 @@ TEST_P(BubbleViewPixelTest, ToggleButton) {
   ASSERT_TRUE(first_toggle_effect_button->HasFocus());
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_bubble_view_with_focus_toggled",
-      /*revision_number=*/10, toggle_effect_button_container));
+      GenerateScreenshotName("video_conference_bubble_view_with_focus_toggled"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 13 : 0,
+      toggle_effect_button_container));
 }
 
 // Pixel test that tests the expanded/collapsed state of the return to app panel
@@ -290,8 +321,9 @@ TEST_P(BubbleViewPixelTest, ReturnToApp) {
   ASSERT_TRUE(video_conference_tray()->GetBubbleView());
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_tray_return_to_app_one_app",
-      /*revision_number=*/3, GetReturnToAppPanel()));
+      GenerateScreenshotName("video_conference_tray_return_to_app_one_app"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 9 : 0,
+      GetReturnToAppPanel()));
 
   controller()->AddMediaApp(CreateFakeMediaApp(
       /*is_capturing_camera=*/false, /*is_capturing_microphone=*/true,
@@ -306,8 +338,10 @@ TEST_P(BubbleViewPixelTest, ReturnToApp) {
   auto* return_to_app_panel = GetReturnToAppPanel();
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_tray_return_to_app_two_apps_collapsed",
-      /*revision_number=*/3, return_to_app_panel));
+      GenerateScreenshotName(
+          "video_conference_tray_return_to_app_two_apps_collapsed"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 9 : 0,
+      return_to_app_panel));
 
   // Click the summary row to expand the panel.
   auto* summary_row = static_cast<video_conference::ReturnToAppButton*>(
@@ -316,8 +350,10 @@ TEST_P(BubbleViewPixelTest, ReturnToApp) {
   ASSERT_TRUE(summary_row->expanded());
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_tray_return_to_app_two_apps_expanded",
-      /*revision_number=*/3, return_to_app_panel));
+      GenerateScreenshotName(
+          "video_conference_tray_return_to_app_two_apps_expanded"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 9 : 0,
+      return_to_app_panel));
 }
 
 TEST_P(BubbleViewPixelTest, ReturnToAppLinux) {
@@ -336,8 +372,9 @@ TEST_P(BubbleViewPixelTest, ReturnToAppLinux) {
   ASSERT_TRUE(video_conference_tray()->GetBubbleView());
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_tray_linux_bubble_one_app",
-      /*revision_number=*/8, video_conference_tray()->GetBubbleView()));
+      GenerateScreenshotName("video_conference_tray_linux_bubble_one_app"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 10 : 0,
+      video_conference_tray()->GetBubbleView()));
 
   controller()->AddMediaApp(CreateFakeMediaApp(
       /*is_capturing_camera=*/true, /*is_capturing_microphone=*/true,
@@ -351,8 +388,9 @@ TEST_P(BubbleViewPixelTest, ReturnToAppLinux) {
   ASSERT_TRUE(video_conference_tray()->GetBubbleView());
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_tray_linux_bubble_two_app",
-      /*revision_number=*/8, video_conference_tray()->GetBubbleView()));
+      GenerateScreenshotName("video_conference_tray_linux_bubble_two_app"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 10 : 0,
+      video_conference_tray()->GetBubbleView()));
 }
 
 TEST_P(BubbleViewPixelTest, OneToggleEffects) {
@@ -365,8 +403,9 @@ TEST_P(BubbleViewPixelTest, OneToggleEffects) {
   ASSERT_TRUE(GetToggleEffectsView()->GetVisible());
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_bubble_view_one_toggle_effect",
-      /*revision_number=*/5, GetToggleEffectsView()));
+      GenerateScreenshotName("video_conference_bubble_view_one_toggle_effect"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 7 : 0,
+      GetToggleEffectsView()));
 }
 
 TEST_P(BubbleViewPixelTest, TwoToggleEffects) {
@@ -380,8 +419,9 @@ TEST_P(BubbleViewPixelTest, TwoToggleEffects) {
   ASSERT_TRUE(GetToggleEffectsView()->GetVisible());
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_bubble_view_two_toggle_effects",
-      /*revision_number=*/5, GetToggleEffectsView()));
+      GenerateScreenshotName("video_conference_bubble_view_two_toggle_effects"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 7 : 0,
+      GetToggleEffectsView()));
 }
 
 TEST_P(BubbleViewPixelTest, ThreeToggleEffects) {
@@ -400,8 +440,88 @@ TEST_P(BubbleViewPixelTest, ThreeToggleEffects) {
   ASSERT_TRUE(GetToggleEffectsView()->GetVisible());
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "video_conference_bubble_view_three_toggle_effects",
-      /*revision_number=*/5, GetToggleEffectsView()));
+      GenerateScreenshotName(
+          "video_conference_bubble_view_three_toggle_effects"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 7 : 0,
+      GetToggleEffectsView()));
+}
+
+TEST_P(BubbleViewPixelTest, DLCUIInErrorShowsWarningLabelSingleError) {
+  if (!IsVcDlcUiEnabled()) {
+    return;
+  }
+  // Create a toggle effect so the warning label is available.
+  controller()->GetEffectsManager().RegisterDelegate(office_bunny());
+
+  // Click to open the bubble, toggle effect button should be visible.
+  LeftClickOn(video_conference_tray()->GetToggleBubbleButtonForTest());
+  ASSERT_TRUE(bubble_view());
+  ASSERT_TRUE(GetToggleEffectsView()->GetVisible());
+
+  // Add an error, make sure the label shows up.
+  ModifyDlcDownloadState(/*add_warning=*/true, u"test-feature-name1");
+
+  EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
+      GenerateScreenshotName("one-toggle-effects-view"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 5 : 0,
+      bubble_view()));
+
+  // Add one set-value effect.
+  controller()->GetEffectsManager().RegisterDelegate(shaggy_fur());
+
+  // Hide and re-show the bubble so the set-value effect show sup.
+  LeftClickOn(video_conference_tray()->GetToggleBubbleButtonForTest());
+  ASSERT_FALSE(bubble_view());
+
+  LeftClickOn(video_conference_tray()->GetToggleBubbleButtonForTest());
+  ASSERT_TRUE(bubble_view());
+
+  ModifyDlcDownloadState(/*add_warning=*/true, u"test-feature-name1");
+
+  EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
+      GenerateScreenshotName("additional-set-value-view"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 5 : 0,
+      bubble_view()));
+}
+
+TEST_P(BubbleViewPixelTest, DLCUIInErrorShowsWarningLabelMaxErrors) {
+  if (!IsVcDlcUiEnabled()) {
+    return;
+  }
+  // Create a toggle effect so the warning label is available.
+  controller()->GetEffectsManager().RegisterDelegate(office_bunny());
+
+  // Click to open the bubble, toggle effect button should be visible.
+  LeftClickOn(video_conference_tray()->GetToggleBubbleButtonForTest());
+  ASSERT_TRUE(bubble_view());
+  ASSERT_TRUE(GetToggleEffectsView()->GetVisible());
+
+  // Add 2 errors (the max), make sure the label shows up.
+  ModifyDlcDownloadState(/*add_warning=*/true, u"test-feature-name1");
+  ModifyDlcDownloadState(/*add_warning=*/true, u"test-feature-name2");
+
+  EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
+      GenerateScreenshotName("one-toggle-effects-view"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 5 : 0,
+      bubble_view()));
+
+  // Add one set-value effect.
+  controller()->GetEffectsManager().RegisterDelegate(shaggy_fur());
+
+  // Hide and re-show the bubble so the set-value effect show sup.
+  LeftClickOn(video_conference_tray()->GetToggleBubbleButtonForTest());
+  ASSERT_FALSE(bubble_view());
+
+  LeftClickOn(video_conference_tray()->GetToggleBubbleButtonForTest());
+  ASSERT_TRUE(bubble_view());
+
+  ModifyDlcDownloadState(/*add_warning=*/true, u"test-feature-name1");
+  ModifyDlcDownloadState(/*add_warning=*/true, u"test-feature-name2");
+
+  EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
+      GenerateScreenshotName("additional-set-value-view"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 5 : 0,
+      bubble_view()));
 }
 
 }  // namespace ash::video_conference

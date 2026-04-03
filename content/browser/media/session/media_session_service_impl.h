@@ -9,7 +9,6 @@
 #include "content/public/browser/global_routing_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/mojom/mediasession/media_session.mojom.h"
 
@@ -84,6 +83,8 @@ class CONTENT_EXPORT MediaSessionServiceImpl
   void ClearActions();
 
   const GlobalRenderFrameHostId render_frame_host_id_;
+
+  base::WeakPtr<MediaSessionImpl> media_session_;
 
   mojo::Remote<blink::mojom::MediaSessionClient> client_;
   blink::mojom::MediaSessionPlaybackState playback_state_;

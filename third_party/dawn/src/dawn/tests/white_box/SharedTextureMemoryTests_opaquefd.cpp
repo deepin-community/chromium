@@ -25,6 +25,8 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <webgpu/webgpu_cpp.h>
+
 #include <memory>
 #include <string>
 #include <utility>
@@ -36,7 +38,6 @@
 #include "dawn/native/vulkan/ResourceMemoryAllocatorVk.h"
 #include "dawn/native/vulkan/UtilsVulkan.h"
 #include "dawn/tests/white_box/SharedTextureMemoryTests.h"
-#include "dawn/webgpu_cpp.h"
 
 namespace dawn::native::vulkan {
 namespace {
@@ -83,7 +84,7 @@ auto CreateSharedTextureMemoryHelperImpl(native::vulkan::Device* deviceVk,
     deviceVk->fn.GetImageMemoryRequirements(deviceVk->GetVkDevice(), vkImage, &requirements);
 
     int bestType = deviceVk->GetResourceMemoryAllocator()->FindBestTypeIndex(
-        requirements, native::vulkan::MemoryKind::Opaque);
+        requirements, native::vulkan::MemoryKind::DeviceLocal);
     EXPECT_GE(bestType, 0);
 
     VkMemoryDedicatedAllocateInfo dedicatedInfo;
@@ -211,7 +212,7 @@ class Backend : public SharedTextureMemoryTestVulkanBackend {
             case wgpu::FeatureName::SharedFenceVkSemaphoreOpaqueFD:
                 name += ", OpaqueFDFence";
                 break;
-            case wgpu::FeatureName::SharedFenceVkSemaphoreSyncFD:
+            case wgpu::FeatureName::SharedFenceSyncFD:
                 name += ", SyncFDFence";
                 break;
             default:
@@ -245,7 +246,8 @@ class Backend : public SharedTextureMemoryTestVulkanBackend {
     }
 
     // Create one basic shared texture memory. It should support most operations.
-    wgpu::SharedTextureMemory CreateSharedTextureMemory(const wgpu::Device& device) override {
+    wgpu::SharedTextureMemory CreateSharedTextureMemory(const wgpu::Device& device,
+                                                        int layerCount) override {
         return CreateSharedTextureMemoryHelper(
             native::vulkan::ToBackend(native::FromAPI(device.Get())), 16, VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
@@ -257,7 +259,8 @@ class Backend : public SharedTextureMemoryTestVulkanBackend {
     }
 
     std::vector<std::vector<wgpu::SharedTextureMemory>> CreatePerDeviceSharedTextureMemories(
-        const std::vector<wgpu::Device>& devices) override {
+        const std::vector<wgpu::Device>& devices,
+        int layerCount) override {
         DAWN_ASSERT(!devices.empty());
 
         std::vector<std::vector<wgpu::SharedTextureMemory>> memories;
@@ -502,7 +505,8 @@ DAWN_INSTANTIATE_PREFIXED_TEST_P(
     SharedTextureMemoryNoFeatureTests,
     {VulkanBackend()},
     {Backend<wgpu::FeatureName::SharedFenceVkSemaphoreOpaqueFD, false>::GetInstance(),
-     Backend<wgpu::FeatureName::SharedFenceVkSemaphoreSyncFD, false>::GetInstance()});
+     Backend<wgpu::FeatureName::SharedFenceSyncFD, false>::GetInstance()},
+    {1});
 
 // Only test DedicatedAllocation == false because validation never actually creates an allocation.
 // Passing true wouldn't give extra coverage.
@@ -511,16 +515,18 @@ DAWN_INSTANTIATE_PREFIXED_TEST_P(
     SharedTextureMemoryOpaqueFDValidationTest,
     {VulkanBackend()},
     {Backend<wgpu::FeatureName::SharedFenceVkSemaphoreOpaqueFD, false>::GetInstance(),
-     Backend<wgpu::FeatureName::SharedFenceVkSemaphoreSyncFD, false>::GetInstance()});
+     Backend<wgpu::FeatureName::SharedFenceSyncFD, false>::GetInstance()},
+    {1});
 
 DAWN_INSTANTIATE_PREFIXED_TEST_P(
     Vulkan,
     SharedTextureMemoryTests,
     {VulkanBackend()},
     {Backend<wgpu::FeatureName::SharedFenceVkSemaphoreOpaqueFD, false>::GetInstance(),
-     Backend<wgpu::FeatureName::SharedFenceVkSemaphoreSyncFD, false>::GetInstance(),
+     Backend<wgpu::FeatureName::SharedFenceSyncFD, false>::GetInstance(),
      Backend<wgpu::FeatureName::SharedFenceVkSemaphoreOpaqueFD, true>::GetInstance(),
-     Backend<wgpu::FeatureName::SharedFenceVkSemaphoreSyncFD, true>::GetInstance()});
+     Backend<wgpu::FeatureName::SharedFenceSyncFD, true>::GetInstance()},
+    {1});
 
 }  // anonymous namespace
 }  // namespace dawn::native::vulkan

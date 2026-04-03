@@ -30,8 +30,6 @@
 
 #include <type_traits>
 
-#include "src/tint/lang/wgsl/sem/builtin_enum_expression.h"
-
 // Forward declarations
 namespace tint {
 class CastableBase;
@@ -39,9 +37,7 @@ class CastableBase;
 namespace tint::ast {
 class AccessorExpression;
 class BinaryExpression;
-class BitcastExpression;
 class BlockStatement;
-class BuiltinAttribute;
 class CallExpression;
 class Expression;
 class ForLoopStatement;
@@ -61,9 +57,6 @@ class UnaryOpExpression;
 class Variable;
 class WhileStatement;
 }  // namespace tint::ast
-namespace tint::core {
-enum class BuiltinValue : uint8_t;
-}
 namespace tint::sem {
 class BlockStatement;
 class Expression;
@@ -71,7 +64,6 @@ class ForLoopStatement;
 class Function;
 class GlobalVariable;
 class IfStatement;
-class Node;
 class Parameter;
 class Statement;
 class Struct;
@@ -82,7 +74,6 @@ class Variable;
 class WhileStatement;
 }  // namespace tint::sem
 namespace tint::core::type {
-class Array;
 class Type;
 }  // namespace tint::core::type
 
@@ -95,7 +86,6 @@ namespace tint::sem {
 struct TypeMappings {
     //! @cond Doxygen_Suppress
     BlockStatement* operator()(ast::BlockStatement*);
-    BuiltinEnumExpression<core::BuiltinValue>* operator()(ast::BuiltinAttribute*);
     CastableBase* operator()(ast::Node*);
     Expression* operator()(ast::Expression*);
     ForLoopStatement* operator()(ast::ForLoopStatement*);
@@ -110,7 +100,6 @@ struct TypeMappings {
     core::type::Type* operator()(ast::TypeDecl*);
     ValueExpression* operator()(ast::AccessorExpression*);
     ValueExpression* operator()(ast::BinaryExpression*);
-    ValueExpression* operator()(ast::BitcastExpression*);
     ValueExpression* operator()(ast::CallExpression*);
     ValueExpression* operator()(ast::LiteralExpression*);
     ValueExpression* operator()(ast::PhonyExpression*);

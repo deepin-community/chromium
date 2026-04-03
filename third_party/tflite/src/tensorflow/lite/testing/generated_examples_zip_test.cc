@@ -28,14 +28,14 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/strings/match.h"
 #include "re2/re2.h"
+#include "xla/tsl/platform/subprocess.h"
+#include "xla/tsl/util/command_line_flags.h"
 #include "tensorflow/lite/string_type.h"
 #include "tensorflow/lite/testing/parse_testdata.h"
 #include "tensorflow/lite/testing/tflite_driver.h"
 #include "tensorflow/lite/testing/util.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/status.h"
-#include "tsl/platform/subprocess.h"
-#include "tsl/util/command_line_flags.h"
 
 namespace tflite {
 namespace testing {
@@ -72,13 +72,14 @@ using BrokenTestMap =
              std::pair</* bug_number */ string, /* always_ignore */ bool>>;
 // TODO(ahentz): make sure we clean this list up frequently.
 const BrokenTestMap& GetKnownBrokenTests() {
-  static const BrokenTestMap* const kBrokenTests = new BrokenTestMap({
-      // TODO(b/194364155): TF and TFLite have different behaviors when output
-      // nan values in LocalResponseNorm ops.
-      {R"(^\/local_response_norm.*alpha=-3.*beta=2)", {"194364155", true}},
-      {R"(^\/local_response_norm.*alpha=(None|2).*beta=2.*bias=-0\.1.*depth_radius=(0|1).*input_shape=\[3,15,14,3\])",
-       {"194364155", true}},
-  });
+  static const BrokenTestMap* const kBrokenTests = new BrokenTestMap(
+      {// TODO(b/194364155): TF and TFLite have different behaviors when output
+       // nan values in LocalResponseNorm ops.
+       {R"(^\/local_response_norm.*alpha=-3.*beta=2)", {"194364155", true}},
+       {R"(^\/local_response_norm.*alpha=(None|2).*beta=2.*bias=-0\.1.*depth_radius=(0|1).*input_shape=\[3,15,14,3\])",
+        {"194364155", true}},
+       {R"(^\/static_rnn_with_control_flow_v2.*use_sequence_length=True)",
+        {"380064373", true}}});
   return *kBrokenTests;
 }
 
@@ -146,7 +147,8 @@ class ArchiveEnvironment : public ::testing::Environment {
   }
 
   // Unarchive `archive` file into a new temporary directory  `out_dir`.
-  tsl::Status UnArchive(const string& zip, const string& tar, string* out_dir) {
+  absl::Status UnArchive(const string& zip, const string& tar,
+                         string* out_dir) {
     string dir;
     TF_CHECK_OK(MakeTemporaryDirectory(&dir));
     tsl::SubProcess proc;
@@ -167,30 +169,30 @@ class ArchiveEnvironment : public ::testing::Environment {
     proc.SetChannelAction(tsl::CHAN_STDOUT, tsl::ACTION_PIPE);
     proc.SetChannelAction(tsl::CHAN_STDERR, tsl::ACTION_PIPE);
     if (!proc.Start())
-      return tsl::Status(absl::StatusCode::kUnknown, "unzip couldn't start");
+      return absl::Status(absl::StatusCode::kUnknown, "unzip couldn't start");
     string out, err;
     int status = proc.Communicate(nullptr, &out, &err);
     if (WEXITSTATUS(status) == 0) {
       *out_dir = dir;
-      return ::tsl::OkStatus();
+      return absl::OkStatus();
     } else {
-      return tsl::Status(absl::StatusCode::kUnknown,
-                         "unzip failed. "
-                         "stdout:\n" +
-                             out + "\nstderr:\n" + err);
+      return absl::Status(absl::StatusCode::kUnknown,
+                          "unzip failed. "
+                          "stdout:\n" +
+                              out + "\nstderr:\n" + err);
     }
   }
 
  private:
   // Make a temporary directory and return its name in `temporary`.
-  tsl::Status MakeTemporaryDirectory(string* temporary) {
+  absl::Status MakeTemporaryDirectory(string* temporary) {
     if (env->LocalTempFilename(temporary)) {
       TF_CHECK_OK(env->CreateDir(*temporary));
       temporary_directories_.push_back(*temporary);
-      return ::tsl::OkStatus();
+      return absl::OkStatus();
     }
-    return tsl::Status(absl::StatusCode::kUnknown,
-                       "make temporary directory failed");
+    return absl::Status(absl::StatusCode::kUnknown,
+                        "make temporary directory failed");
   }
 
   std::vector<string> temporary_directories_;
@@ -207,8 +209,8 @@ ArchiveEnvironment* archive_environment() {
 // the temporary directory where the archive file has been unarchived and
 // `test_paths` is the list of test prefixes that were in the manifest.
 // Note, it is an error for a manifest to contain no tests.
-tsl::Status ReadManifest(const string& original_file, const string& dir,
-                         std::vector<string>* test_paths) {
+absl::Status ReadManifest(const string& original_file, const string& dir,
+                          std::vector<string>* test_paths) {
   // Read the newline delimited list of entries in the manifest.
   std::ifstream manifest_fp(dir + "/manifest.txt");
   string manifest((std::istreambuf_iterator<char>(manifest_fp)),
@@ -225,17 +227,17 @@ tsl::Status ReadManifest(const string& original_file, const string& dir,
   }
   if (!added) {
     string message = "Test had no examples: " + original_file;
-    return tsl::Status(absl::StatusCode::kUnknown, message);
+    return absl::Status(absl::StatusCode::kUnknown, message);
   }
-  return ::tsl::OkStatus();
+  return absl::OkStatus();
 }
 
 // Get a list of tests from either zip or tar file
 std::vector<string> UnarchiveAndFindTestNames(const string& zip_file,
                                               const string& tar_file) {
   if (zip_file.empty() && tar_file.empty()) {
-    TF_CHECK_OK(tsl::Status(absl::StatusCode::kUnknown,
-                            "Neither zip_file nor tar_file was given"));
+    TF_CHECK_OK(absl::Status(absl::StatusCode::kUnknown,
+                             "Neither zip_file nor tar_file was given"));
   }
   string decompress_tmp_dir;
   TF_CHECK_OK(archive_environment()->UnArchive(zip_file, tar_file,
@@ -290,7 +292,19 @@ TEST_P(OpsTest, RunZipTests) {
   bool result = tflite::testing::ParseAndRunTests(&tflite_stream, &test_driver);
   string message = test_driver.GetErrorMessage();
 
-  if (!fully_quantize) {
+  if (fully_quantize) {
+    if (!result) {
+      string bug_number;
+      // See if the tests are potential quantize failures.
+      for (const auto& p : quantize_broken_tests) {
+        if (RE2::PartialMatch(test_name, p.first)) {
+          bug_number = p.second;
+          break;
+        }
+      }
+      EXPECT_FALSE(bug_number.empty());
+    }
+  } else {
     string bug_number;
     bool always_ignore;
     for (const auto& p : broken_tests) {
@@ -314,18 +328,6 @@ TEST_P(OpsTest, RunZipTests) {
         EXPECT_TRUE(result || always_ignore)
             << message << ": Possibly due to http://b/" << bug_number;
       }
-    }
-  } else {
-    if (!result) {
-      string bug_number;
-      // See if the tests are potential quantize failures.
-      for (const auto& p : quantize_broken_tests) {
-        if (RE2::PartialMatch(test_name, p.first)) {
-          bug_number = p.second;
-          break;
-        }
-      }
-      EXPECT_FALSE(bug_number.empty());
     }
   }
 }

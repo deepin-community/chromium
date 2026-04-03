@@ -2,21 +2,17 @@
 
 ANGLE's Vulkan back-end implementation lives in this folder.
 
-[Vulkan](https://www.khronos.org/vulkan/) is an explicit graphics API. It has a lot in common with
-other explicit APIs such as Microsoft's [D3D12][D3D12 Guide] and Apple's
-[Metal](https://developer.apple.com/metal/). Compared to APIs like OpenGL or D3D11 explicit APIs can
-offer a number of significant benefits:
+[Vulkan](https://www.khronos.org/vulkan/) is an explicit graphics API. Compared to APIs like OpenGL
+or D3D11 explicit APIs can offer a number of significant benefits:
 
  * Lower API call CPU overhead.
  * A smaller API surface with more direct hardware control.
  * Better support for multi-core programming.
  * Vulkan in particular has open-source tooling and tests.
 
-[D3D12 Guide]: https://docs.microsoft.com/en-us/windows/desktop/direct3d12/directx-12-programming-guide
-
 ## Back-end Design
 
-The [`RendererVk`](RendererVk.cpp) class represents an `EGLDisplay`. `RendererVk` owns shared global
+The [`vk::Renderer`](Renderer.cpp) class represents an `EGLDisplay`. `vk::Renderer` owns shared global
 resources like the [VkDevice][VkDevice], [VkQueue][VkQueue], the [Vulkan format tables](vk_format_utils.h)
 and [internal Vulkan shaders](shaders). The [ContextVk](ContextVk.cpp) class implements the back-end
 of a front-end OpenGL Context. ContextVk processes state changes and handles action commands like
@@ -43,7 +39,7 @@ optimization internally.
    command buffer into vulkan's primary command buffer, puts secondary command buffer back to
 unstarted state and then goes into recycler for reuse.
 
-The back-end (mostly) records Image and Buffer barriers through additional `CommandBufferAccess`
+The back-end (mostly) records Image and Buffer barriers through additional `CommandResources`
 APIs, the result of which is passed to `getOutsideRenderPassCommandBuffer`.  Note that the barriers
 are not actually recorded until `getOutsideRenderPassCommandBuffer` is called:
 
@@ -56,7 +52,7 @@ are not actually recorded until `getOutsideRenderPassCommandBuffer` is called:
    started RenderPass.
 
 After the back-end records commands to the primary buffer and we flush (e.g. on swap) or when we call
-`RendererVk::finishQueueSerial`, ANGLE submits the primary command buffer to a `VkQueue`.
+`vk::Renderer::finishQueueSerial`, ANGLE submits the primary command buffer to a `VkQueue`.
 
 See the [code][CommandAPIs] for more details.
 
@@ -66,13 +62,13 @@ In this example we'll be recording a buffer copy command:
 
 ```
     // Ensure that ANGLE sets proper read and write barriers for the Buffers.
-    vk::CommandBufferAccess access;
-    access.onBufferTransferWrite(dstBuffer);
-    access.onBufferTransferRead(srcBuffer);
+    vk::CommandResources resources;
+    resources.onBufferTransferWrite(dstBuffer);
+    resources.onBufferTransferRead(srcBuffer);
 
     // Get a pointer to a secondary command buffer for command recording.
     vk::OutsideRenderPassCommandBuffer *commandBuffer;
-    ANGLE_TRY(contextVk->getOutsideRenderPassCommandBuffer(access, &commandBuffer));
+    ANGLE_TRY(contextVk->getOutsideRenderPassCommandBuffer(resources, &commandBuffer));
 
     // Record the copy command into the secondary buffer. We're done!
     commandBuffer->copyBuffer(srcBuffer->getBuffer(), dstBuffer->getBuffer(), copyCount, copies);
@@ -84,10 +80,10 @@ More implementation details can be found in the `doc` directory:
 
 - [Fast OpenGL State Transitions](doc/FastOpenGLStateTransitions.md)
 - [Shader Module Compilation](doc/ShaderModuleCompilation.md)
-- [OpenGL Line Segment Rasterization](doc/OpenGLLineSegmentRasterization.md)
 - [Format Tables and Emulation](doc/FormatTablesAndEmulation.md)
 - [Deferred Clears](doc/DeferredClears.md)
 - [Queries](doc/Queries.md)
+- [Present Semaphores](doc/PresentSemaphores.md)
 
 [VkDevice]: https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkDevice.html
 [VkQueue]: https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkQueue.html

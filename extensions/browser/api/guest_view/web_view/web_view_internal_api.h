@@ -7,6 +7,9 @@
 
 #include <stdint.h>
 
+#include <optional>
+#include <string>
+
 #include "base/memory/scoped_refptr.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -17,11 +20,13 @@
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "extensions/browser/url_fetcher.h"
 
+class SkBitmap;
+
 namespace base {
 class TaskRunner;
 }
 
-// WARNING: WebViewInternal could be loaded in an unblessed context, thus any
+// WARNING: WebViewInternal could be loaded in an unprivileged context, thus any
 // new APIs must extend WebViewInternalExtensionFunction or
 // WebViewInternalExecuteCodeFunction which do a process ID check to prevent
 // abuse by normal renderer processes.
@@ -60,6 +65,7 @@ class WebViewInternalCaptureVisibleRegionFunction
   // ExtensionFunction:
   ResponseAction Run() override;
   void GetQuotaLimitHeuristics(QuotaLimitHeuristics* heuristics) const override;
+  bool ShouldSkipQuotaLimiting() const override;
 
  private:
   // extensions::WebContentsCaptureClient:
@@ -72,7 +78,7 @@ class WebViewInternalCaptureVisibleRegionFunction
   void EncodeBitmapOnWorkerThread(
       scoped_refptr<base::TaskRunner> reply_task_runner,
       const SkBitmap& bitmap);
-  void OnBitmapEncodedOnUIThread(bool success, std::string base64_result);
+  void OnBitmapEncodedOnUIThread(std::optional<std::string> base64_result);
 
   std::string GetErrorMessage(CaptureResult result);
 
@@ -107,8 +113,7 @@ class WebViewInternalExecuteCodeFunction
   // - If yes, the content of the file.
   // This callback should match the associated LoadFileCallback types
   // specified in WebUIURLFetcher and ControlledFrameEmbedderURLFetcher.
-  using LoadFileCallback =
-      base::OnceCallback<void(bool, std::unique_ptr<std::string>)>;
+  using LoadFileCallback = base::OnceCallback<void(bool, std::string)>;
 
   WebViewInternalExecuteCodeFunction();
 
@@ -120,7 +125,7 @@ class WebViewInternalExecuteCodeFunction
  protected:
   ~WebViewInternalExecuteCodeFunction() override;
 
-  // Initialize |details_| if it hasn't already been.
+  // Initialize `details_` if it hasn't already been.
   InitResult Init() override;
   bool ShouldInsertCSS() const override;
   bool ShouldRemoveCSS() const override;
@@ -128,6 +133,7 @@ class WebViewInternalExecuteCodeFunction
   // Guarded by a process ID check.
   extensions::ScriptExecutor* GetScriptExecutor(std::string* error) final;
   bool IsWebView() const override;
+  int GetRootFrameId() const override;
   const GURL& GetWebViewSrc() const override;
   bool LoadFile(const std::string& file, std::string* error) override;
 
@@ -137,7 +143,7 @@ class WebViewInternalExecuteCodeFunction
                            LoadFileCallback callback);
   void DidLoadFileForEmbedder(const std::string& file,
                               bool success,
-                              std::unique_ptr<std::string> data);
+                              std::string data);
 
   // Contains extension resource built from path of file which is
   // specified in JSON arguments.
@@ -369,7 +375,7 @@ class WebViewInternalFindFunction : public WebViewInternalExtensionFunction {
       delete;
 
   // Used by WebViewInternalFindHelper to Respond().
-  void ForwardResponse(base::Value::Dict results);
+  void ForwardResponse(base::DictValue results);
 
  protected:
   ~WebViewInternalFindFunction() override;

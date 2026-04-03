@@ -31,8 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_SHAPING_HARFBUZZ_SHAPER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_SHAPING_HARFBUZZ_SHAPER_H_
 
-#include "base/functional/callback.h"
-
+#include "third_party/blink/renderer/platform/fonts/font_fallback_iterator.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/run_segmenter.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_options.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result.h"
@@ -52,19 +51,8 @@ struct BufferSlice;
 class PLATFORM_EXPORT HarfBuzzShaper final {
   DISALLOW_NEW();
 
-  using EmojiMetricsCallback =
-      base::RepeatingCallback<void(unsigned, unsigned)>;
-
  public:
-  // The optional emoji_metrics_callback argument is a mock metrics reporting
-  // function used during tests. Otherwise successful and unsuccessful emoji
-  // clusters are reported per Document / WorkerGlobalContext to
-  // FontMatchingMetrics.
-  explicit HarfBuzzShaper(
-      String text,
-      EmojiMetricsCallback emoji_metrics_callback = EmojiMetricsCallback())
-      : text_(std::move(text)),
-        emoji_metrics_reporter_for_testing_(emoji_metrics_callback) {}
+  explicit HarfBuzzShaper(String text) : text_(std::move(text)) {}
 
   // Shape a range, defined by the start and end parameters, of the string
   // supplied to the constructor.
@@ -122,11 +110,28 @@ class PLATFORM_EXPORT HarfBuzzShaper final {
                     const LayoutLocale& locale,
                     UScriptCode script,
                     bool is_horizontal,
+                    TextDirection direction,
                     GlyphDataList& glyphs);
+  enum FallbackFontStage {
+    // There were no unshaped variation sequences found, so we don't need to
+    // perform second fallback fonts list pass.
+    kIntermediate,
+    kLast,
+    // Found unshaped variation sequences and we are on the first fallback pass,
+    // so we are including variation selectors during shaping.
+    kIntermediateWithVS,
+    kLastWithVS,
+    // Found unshaped variation sequences and we are on the second and last
+    // fallback pass, so we are ignoring variation selectors during shaping.
+    kIntermediateIgnoreVS,
+    kLastIgnoreVS
+  };
 
   ~HarfBuzzShaper() = default;
 
  private:
+  using HintCharList = FontFallbackIterator::HintCharList;
+
   // Shapes a single seqment, as identified by the RunSegmenterRange parameter,
   // one or more times taking font fallback into account. The start and end
   // parameters are for the entire text run, not the segment, and are used to
@@ -141,23 +146,25 @@ class PLATFORM_EXPORT HarfBuzzShaper final {
                            const SimpleFontData*,
                            UScriptCode,
                            CanvasRotationInVertical,
-                           bool is_last_font,
+                           FallbackFontStage& fallback_stage,
                            ShapeResult*) const;
 
   bool CollectFallbackHintChars(const Deque<ReshapeQueueItem>&,
                                 bool needs_hint_list,
-                                Vector<UChar32>& hint) const;
+                                HintCharList& hint) const;
 
   void CommitGlyphs(RangeContext*,
                     const SimpleFontData* current_font,
                     UScriptCode current_run_script,
                     CanvasRotationInVertical,
-                    bool is_last_font,
+                    FallbackFontStage fallback_stage,
                     const BufferSlice&,
                     ShapeResult*) const;
 
+  void CheckTextLen(unsigned start, unsigned length) const;
+  void CheckTextEnd(unsigned start, unsigned end) const;
+
   const String text_;
-  EmojiMetricsCallback emoji_metrics_reporter_for_testing_;
 };
 
 }  // namespace blink

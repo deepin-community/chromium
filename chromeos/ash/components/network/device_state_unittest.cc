@@ -31,18 +31,18 @@ const char kTestIpv6Address_2[] = "2600:1700:6900:f000:ab00:8a39:2099:12df";
 // Creates a list of cellular SIM slots with an eSIM and pSIM slot.
 base::Value GenerateTestSimSlotInfos() {
   auto psim_slot_info =
-      base::Value::Dict()
+      base::DictValue()
           .Set(shill::kSIMSlotInfoICCID, kTestCellularPSimIccid)
           .Set(shill::kSIMSlotInfoEID, std::string())
           .Set(shill::kSIMSlotInfoPrimary, true);
 
   auto esim_slot_info =
-      base::Value::Dict()
+      base::DictValue()
           .Set(shill::kSIMSlotInfoICCID, kTestCellularESimIccid)
           .Set(shill::kSIMSlotInfoEID, kTestCellularEid)
           .Set(shill::kSIMSlotInfoPrimary, false);
 
-  auto sim_slot_infos = base::Value::List()
+  auto sim_slot_infos = base::ListValue()
                             .Append(std::move(psim_slot_info))
                             .Append(std::move(esim_slot_info));
 
@@ -78,7 +78,7 @@ class DeviceStateTest : public testing::Test {
 
   void UpdateDeviceIpConfigProperties(const std::string& device_path,
                                       const std::string& ip_config_path,
-                                      base::Value::Dict properties) {
+                                      base::DictValue properties) {
     helper_.network_state_handler()->UpdateIPConfigProperties(
         ManagedState::MANAGED_TYPE_DEVICE, device_path, ip_config_path,
         std::move(properties));
@@ -88,6 +88,13 @@ class DeviceStateTest : public testing::Test {
     helper_.device_test()->SetDeviceProperty(
         kTestCellularDevicePath, shill::kIccidProperty,
         base::Value(kTestCellularPSimIccid), /*notify_changed=*/true);
+    base::RunLoop().RunUntilIdle();
+  }
+
+  void SetFlashing(bool flashing) {
+    helper_.device_test()->SetDeviceProperty(
+        kTestCellularDevicePath, shill::kFlashingProperty,
+        base::Value(flashing), /*notify_changed=*/true);
     base::RunLoop().RunUntilIdle();
   }
 
@@ -127,13 +134,20 @@ TEST_F(DeviceStateTest, SimSlotInfo_Cellular) {
   EXPECT_FALSE(infos[1].primary);
 }
 
+TEST_F(DeviceStateTest, Flashing_Cellular) {
+  SetFlashing(true);
+  EXPECT_TRUE(GetCellularDevice()->flashing());
+  SetFlashing(false);
+  EXPECT_FALSE(GetCellularDevice()->flashing());
+}
+
 TEST_F(DeviceStateTest, SimSlotInfo_Wifi) {
   // Default SIM slots should not be created for non-cellular.
   EXPECT_TRUE(GetWifiDevice()->GetSimSlotInfos().empty());
 }
 
 TEST_F(DeviceStateTest, DeviceIPAddress) {
-  auto dhcp_ip_config = base::Value::Dict()
+  auto dhcp_ip_config = base::DictValue()
                             .Set(shill::kAddressProperty, kTestIpv4Address_1)
                             .Set(shill::kMethodProperty, shill::kTypeDHCP);
   UpdateDeviceIpConfigProperties(kTestWifiDevicePath, kTestIpv4ConfigPath,
@@ -143,7 +157,7 @@ TEST_F(DeviceStateTest, DeviceIPAddress) {
   EXPECT_EQ(std::string(),
             GetWifiDevice()->GetIpAddressByType(shill::kTypeIPv6));
 
-  auto ipv4_ip_config = base::Value::Dict()
+  auto ipv4_ip_config = base::DictValue()
                             .Set(shill::kAddressProperty, kTestIpv4Address_2)
                             .Set(shill::kMethodProperty, shill::kTypeIPv4);
   UpdateDeviceIpConfigProperties(kTestWifiDevicePath, kTestIpv4ConfigPath,
@@ -153,7 +167,7 @@ TEST_F(DeviceStateTest, DeviceIPAddress) {
   EXPECT_EQ(std::string(),
             GetWifiDevice()->GetIpAddressByType(shill::kTypeIPv6));
 
-  auto slaac_ip_config = base::Value::Dict()
+  auto slaac_ip_config = base::DictValue()
                              .Set(shill::kAddressProperty, kTestIpv6Address_1)
                              .Set(shill::kMethodProperty, shill::kTypeSLAAC);
   UpdateDeviceIpConfigProperties(kTestWifiDevicePath, kTestIpv6ConfigPath,
@@ -163,7 +177,7 @@ TEST_F(DeviceStateTest, DeviceIPAddress) {
   EXPECT_EQ(kTestIpv6Address_1,
             GetWifiDevice()->GetIpAddressByType(shill::kTypeIPv6));
 
-  auto ipv6_ip_config = base::Value::Dict()
+  auto ipv6_ip_config = base::DictValue()
                             .Set(shill::kAddressProperty, kTestIpv6Address_2)
                             .Set(shill::kMethodProperty, shill::kTypeIPv6);
   UpdateDeviceIpConfigProperties(kTestWifiDevicePath, kTestIpv6ConfigPath,

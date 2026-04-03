@@ -50,7 +50,6 @@ class TextFragmentAnchorBrowserTest : public ContentBrowserTest {
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ContentBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures,
                                     "TextFragmentIdentifiers");
     // Slow bots are flaky due to slower loading interacting with
@@ -78,7 +77,6 @@ class TextFragmentAnchorBrowserTest : public ContentBrowserTest {
 
     SimulateMouseClickAt(web_contents, 0, blink::WebMouseEvent::Button::kLeft,
                          gfx::Point(x, y));
-    RunUntilInputProcessed(GetWidgetHost());
   }
 
   void WaitForPageLoad(WebContents* contents) {
@@ -882,6 +880,7 @@ IN_PROC_BROWSER_TEST_F(ForceLoadAtTopBrowserTest, SameDocumentNavigation) {
   // Click on a link with a fragment id. Ensure we scroll to the targeted
   // element.
   ClickElementWithId(main_contents, "link");
+  RunUntilInputProcessed(GetWidgetHost());
 
   EXPECT_DID_SCROLL(true);
 }

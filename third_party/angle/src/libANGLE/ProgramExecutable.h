@@ -21,6 +21,7 @@
 namespace rx
 {
 class GLImplFactory;
+class LinkSubTask;
 class ProgramExecutableImpl;
 }  // namespace rx
 
@@ -145,9 +146,12 @@ struct ProgramOutput
 {
     ProgramOutput() = default;
     ProgramOutput(const sh::ShaderVariable &var);
+    GLenum getType() const { return pod.type; }
     bool isBuiltIn() const { return pod.isBuiltIn; }
     bool isArray() const { return pod.isArray; }
+    int getLocation() const { return pod.location; }
     unsigned int getOutermostArraySize() const { return pod.outermostArraySize; }
+    unsigned int getBasicTypeElementCount() const { return pod.basicTypeElementCount; }
     void resetEffectiveLocation()
     {
         if (pod.hasImplicitLocation)
@@ -174,7 +178,9 @@ struct ProgramOutput
         uint32_t isBuiltIn : 1;
         uint32_t isArray : 1;
         uint32_t hasImplicitLocation : 1;
-        uint32_t pad : 27;
+        uint32_t hasShaderAssignedLocation : 1;
+        uint32_t hasApiAssignedLocation : 1;
+        uint32_t pad : 25;
     } pod;
 };
 ANGLE_DISABLE_STRUCT_PADDING_WARNINGS
@@ -318,6 +324,16 @@ class ProgramExecutable final : public angle::Subject
         return mActiveSamplerTypes;
     }
 
+    const ProgramUniformBlockMask &getActiveUniformBufferBlocks() const
+    {
+        return mActiveUniformBufferBlocks;
+    }
+
+    const ProgramStorageBlockMask &getActiveStorageBufferBlocks() const
+    {
+        return mActiveStorageBufferBlocks;
+    }
+
     void setActive(size_t textureUnit,
                    const SamplerBinding &samplerBinding,
                    const gl::LinkedUniform &samplerUniform);
@@ -337,7 +353,9 @@ class ProgramExecutable final : public angle::Subject
     {
         return !getLinkedTransformFeedbackVaryings().empty();
     }
-    bool usesFramebufferFetch() const { return mPod.fragmentInoutIndices.any(); }
+    bool usesColorFramebufferFetch() const { return mPod.fragmentInoutIndices.any(); }
+    bool usesDepthFramebufferFetch() const { return mPod.hasDepthInputAttachment; }
+    bool usesStencilFramebufferFetch() const { return mPod.hasStencilInputAttachment; }
 
     // Count the number of uniform and storage buffer declarations, counting arrays as one.
     size_t getTransformFeedbackBufferCount() const { return mTransformFeedbackStrides.size(); }
@@ -363,6 +381,10 @@ class ProgramExecutable final : public angle::Subject
         return mSamplerBoundTextureUnits;
     }
     const std::vector<ImageBinding> &getImageBindings() const { return mImageBindings; }
+    const std::vector<ShPixelLocalStorageFormat> &getPixelLocalStorageFormats() const
+    {
+        return mPixelLocalStorageFormats;
+    }
     std::vector<ImageBinding> *getImageBindings() { return &mImageBindings; }
     const RangeUI &getDefaultUniformRange() const { return mPod.defaultUniformRange; }
     const RangeUI &getSamplerUniformRange() const { return mPod.samplerUniformRange; }
@@ -371,6 +393,8 @@ class ProgramExecutable final : public angle::Subject
     DrawBufferMask getFragmentInoutIndices() const { return mPod.fragmentInoutIndices; }
     bool hasClipDistance() const { return mPod.hasClipDistance; }
     bool hasDiscard() const { return mPod.hasDiscard; }
+    bool hasDepthInputAttachment() const { return mPod.hasDepthInputAttachment; }
+    bool hasStencilInputAttachment() const { return mPod.hasStencilInputAttachment; }
     bool enablesPerSampleShading() const { return mPod.enablesPerSampleShading; }
     BlendEquationBitSet getAdvancedBlendEquations() const { return mPod.advancedBlendEquations; }
     const std::vector<TransformFeedbackVarying> &getLinkedTransformFeedbackVaryings() const
@@ -710,6 +734,36 @@ class ProgramExecutable final : public angle::Subject
         return mUniformBlockIndexToBufferBinding;
     }
 
+    const ShaderMap<SharedProgramExecutable> &getPPOProgramExecutables() const
+    {
+        return mPPOProgramExecutables;
+    }
+
+    bool IsPPO() const { return mIsPPO; }
+
+    // Post-link task helpers
+    const std::vector<std::shared_ptr<rx::LinkSubTask>> &getPostLinkSubTasks() const
+    {
+        return mPostLinkSubTasks;
+    }
+
+    const std::vector<std::shared_ptr<angle::WaitableEvent>> &getPostLinkSubTaskWaitableEvents()
+        const
+    {
+        return mPostLinkSubTaskWaitableEvents;
+    }
+
+    void onPostLinkTasksComplete() const
+    {
+        mPostLinkSubTasks.clear();
+        mPostLinkSubTaskWaitableEvents.clear();
+    }
+
+    void waitForPostLinkTasks(const Context *context);
+
+    void updateActiveUniformBufferBlocks();
+    void updateActiveStorageBufferBlocks();
+
   private:
     friend class Program;
     friend class ProgramPipeline;
@@ -835,10 +889,11 @@ class ProgramExecutable final : public angle::Subject
         uint8_t hasClipDistance : 1;
         uint8_t hasDiscard : 1;
         uint8_t hasYUVOutput : 1;
+        uint8_t hasDepthInputAttachment : 1;
+        uint8_t hasStencilInputAttachment : 1;
         uint8_t enablesPerSampleShading : 1;
         uint8_t canDrawWith : 1;
         uint8_t isSeparable : 1;
-        uint8_t pad : 2;
 
         // 12 bytes
         sh::WorkGroupSize computeShaderLocalSize;
@@ -860,8 +915,9 @@ class ProgramExecutable final : public angle::Subject
         int32_t geometryShaderMaxVertices;
         GLenum transformFeedbackBufferMode;
 
-        // 4 bytes each. GL_OVR_multiview / GL_OVR_multiview2
+        // GL_OVR_multiview
         int32_t numViews;
+
         // GL_ANGLE_multi_draw
         int32_t drawIDLocation;
 
@@ -895,6 +951,10 @@ class ProgramExecutable final : public angle::Subject
     // Cached mask of active images.
     ActiveTextureMask mActiveImagesMask;
     ActiveTextureArray<ShaderBitSet> mActiveImageShaderBits;
+
+    // Cached mask of active uniform and storage buffer blocks
+    ProgramUniformBlockMask mActiveUniformBufferBlocks;
+    ProgramStorageBlockMask mActiveStorageBufferBlocks;
 
     // Names and mapped names of output variables that are arrays include [0] in the end, similarly
     // to uniforms.
@@ -947,6 +1007,10 @@ class ProgramExecutable final : public angle::Subject
     // An array of the images that are used by the program
     std::vector<ImageBinding> mImageBindings;
 
+    // ANGLE_shader_pixel_local_storage: A mapping from binding index to the PLS uniform format at
+    // that index.
+    std::vector<ShPixelLocalStorageFormat> mPixelLocalStorageFormats;
+
     ShaderMap<std::vector<sh::ShaderVariable>> mLinkedOutputVaryings;
     ShaderMap<std::vector<sh::ShaderVariable>> mLinkedInputVaryings;
     ShaderMap<std::vector<sh::ShaderVariable>> mLinkedUniforms;
@@ -972,8 +1036,23 @@ class ProgramExecutable final : public angle::Subject
     // been modified.
     UniformBufferBindingArray<ProgramUniformBlockMask> mUniformBufferBindingToUniformBlocks;
 
+    // PPO only: installed executables from the programs.  Note that these may be different from the
+    // programs' current executables, because they may have been unsuccessfully relinked.
+    ShaderMap<SharedProgramExecutable> mPPOProgramExecutables;
+    // Flag for an easy check for PPO without inspecting mPPOProgramExecutables
+    bool mIsPPO;
+
+    bool mBinaryRetrieveableHint;
+
     // Cache for sampler validation
     mutable Optional<bool> mCachedValidateSamplersResult;
+
+    // Post-link subtask and wait events
+    // These tasks are not waited on in |resolveLink|, but instead they are free to
+    // run until first usage of the program (or relink).  This is used by the backends (currently
+    // only Vulkan) to run post-link optimization tasks which don't affect the link results.
+    mutable std::vector<std::shared_ptr<rx::LinkSubTask>> mPostLinkSubTasks;
+    mutable std::vector<std::shared_ptr<angle::WaitableEvent>> mPostLinkSubTaskWaitableEvents;
 };
 
 void InstallExecutable(const Context *context,

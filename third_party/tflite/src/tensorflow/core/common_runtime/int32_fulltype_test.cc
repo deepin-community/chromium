@@ -18,6 +18,7 @@ limitations under the License.
 #include <string>
 #include <unordered_map>
 
+#include "xla/tsl/lib/core/status_test_util.h"
 #include "tensorflow/core/common_runtime/graph_def_builder_util.h"
 #include "tensorflow/core/framework/device_attributes.pb.h"
 #include "tensorflow/core/framework/full_type.pb.h"
@@ -30,7 +31,6 @@ limitations under the License.
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/protobuf/config.pb.h"
 #include "tensorflow/core/protobuf/rewriter_config.pb.h"
-#include "tsl/lib/core/status_test_util.h"
 
 namespace tensorflow {
 
@@ -66,7 +66,7 @@ class Int32FulltypeTest : public ::testing::Test {
 
   // Builds the given graph, and (if successful) indexes the node
   // names for use in placement, and later lookup.
-  Status BuildGraph(const GraphDefBuilder& builder, Graph* out_graph) {
+  absl::Status BuildGraph(const GraphDefBuilder& builder, Graph* out_graph) {
     TF_RETURN_IF_ERROR(GraphDefBuilderToGraph(builder, out_graph));
     RebuildNodeNameMap(*out_graph);
     return absl::OkStatus();
@@ -87,7 +87,8 @@ class Int32FulltypeTest : public ::testing::Test {
   // Invokes the automatic annotator on "graph"
   //
   // REQUIRES: "*graph" was produced by the most recent call to BuildGraph.
-  Status Int32FulltypeAnnotate(Graph* graph, bool ints_on_device = false) {
+  absl::Status Int32FulltypeAnnotate(Graph* graph,
+                                     bool ints_on_device = false) {
     Int32FulltypePass int32_fulltype;
     return int32_fulltype.ProcessGraph(graph, ints_on_device);
   }
@@ -95,14 +96,14 @@ class Int32FulltypeTest : public ::testing::Test {
   // Returns the node in "graph" with the given name.
   //
   // REQUIRES: "graph" was produced by the most recent call to BuildGraph.
-  Node* GetNodeByName(const Graph& graph, const string& name) {
+  Node* GetNodeByName(const Graph& graph, const std::string& name) {
     const auto search = nodes_by_name_.find(name);
     CHECK(search != nodes_by_name_.end()) << "Unknown node name: " << name;
     return graph.FindNodeId(search->second);
   }
 
  protected:
-  std::unordered_map<string, int> nodes_by_name_;
+  std::unordered_map<std::string, int> nodes_by_name_;
 
  private:
   void RebuildNodeNameMap(const Graph& graph) {

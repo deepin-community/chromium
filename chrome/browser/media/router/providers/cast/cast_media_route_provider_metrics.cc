@@ -4,7 +4,6 @@
 
 #include "chrome/browser/media/router/providers/cast/cast_media_route_provider_metrics.h"
 
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/time/time.h"
@@ -15,10 +14,11 @@ namespace media_router {
 
 void RecordAppAvailabilityResult(cast_channel::GetAppAvailabilityResult result,
                                  base::TimeDelta duration) {
-  if (result == cast_channel::GetAppAvailabilityResult::kUnknown)
+  if (result == cast_channel::GetAppAvailabilityResult::kUnknown) {
     UMA_HISTOGRAM_TIMES(kHistogramAppAvailabilityFailure, duration);
-  else
+  } else {
     UMA_HISTOGRAM_TIMES(kHistogramAppAvailabilitySuccess, duration);
+  }
 }
 
 void RecordLaunchSessionResponseAppType(const base::Value* app_type) {

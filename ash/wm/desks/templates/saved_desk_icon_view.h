@@ -32,9 +32,6 @@ struct SavedDeskIconIdentifier {
   //   2. A special identifier (like "incognito_window").
   //   3. An app ID - this is used for ARC apps etc.
   std::string url_or_id;
-  // When `url_or_id` is a regular URL, then this should be the profile the URL
-  // came from.
-  uint64_t lacros_profile_id = 0;
 
   // This type is used as a map key.
   auto operator<=>(const SavedDeskIconIdentifier&) const = default;
@@ -58,7 +55,8 @@ class SavedDeskIconView : public views::View {
   ~SavedDeskIconView() override;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
 
   // Sets `count_` to `count` and updates the `count_label_`. Please note,
   // currently it does not support update on regular icon.

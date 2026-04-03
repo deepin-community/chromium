@@ -23,8 +23,7 @@ TreeGenerator::TreeGenerator(int max_node_count, bool permutations)
   }
 }
 
-TreeGenerator::~TreeGenerator() {
-}
+TreeGenerator::~TreeGenerator() = default;
 
 int TreeGenerator::UniqueTreeCount() const {
   return total_unique_tree_count_;
@@ -49,7 +48,6 @@ int TreeGenerator::IgnoredPermutationCountPerUniqueTree(int tree_index) const {
   }
 
   NOTREACHED();
-  return 0;
 }
 
 void TreeGenerator::BuildUniqueTreeWithIgnoredNodes(

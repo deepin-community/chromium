@@ -10,6 +10,7 @@
 #include <iostream>
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
@@ -25,6 +26,7 @@
 // clang-format off
 const char* enum_names[] = {
   COLOR_IDS
+  COMPONENTS_COLOR_IDS
   CHROME_COLOR_IDS
 };
 // clang-format on
@@ -39,8 +41,9 @@ constexpr size_t kColorColumnWidth = 19 + 1;
 std::string SkColorToString(SkColor color) {
   std::string color_string = ui::SkColorName(color);
   // Don't use the rgba() representation here. Just fall back to simple hex.
-  if (color_string.find_first_of("rgb") == 0)
+  if (color_string.find_first_of("rgb") == 0) {
     color_string = base::StringPrintf("#%.8x", color);
+  }
   // Now format it into the necessary space.
   return base::StringPrintf("%-*s", int{kColorColumnWidth},
                             color_string.c_str());
@@ -55,7 +58,6 @@ int main(int argc, const char* argv[]) {
     ui::AddColorMixers(provider, key);
     color::AddComponentsColorMixers(provider, key);
     AddChromeColorMixers(provider, key);
-    provider->GenerateColorMap();
   };
   ui::ColorProvider light_provider, dark_provider, light_high_contrast_provider,
       dark_high_contrast_provider;
@@ -71,8 +73,9 @@ int main(int argc, const char* argv[]) {
              ui::ColorProviderKey::ContrastMode::kHigh);
 
   size_t longest_name = 0;
-  for (const char* name : enum_names)
+  for (const char* name : enum_names) {
     longest_name = std::max(longest_name, strlen(name));
+  }
   ++longest_name;  // For trailing space.
 
   std::cout << std::setfill(' ') << std::left;
@@ -90,7 +93,7 @@ int main(int argc, const char* argv[]) {
 
   for (ui::ColorId id = ui::kUiColorsStart; id < kChromeColorsEnd; ++id) {
     std::cout << std::setfill(' ') << std::left;
-    std::cout << std::setw(longest_name) << enum_names[id];
+    std::cout << std::setw(longest_name) << UNSAFE_TODO(enum_names[id]);
     std::cout << SkColorToString(light_provider.GetColor(id));
     std::cout << SkColorToString(dark_provider.GetColor(id));
     std::cout << SkColorToString(light_high_contrast_provider.GetColor(id));

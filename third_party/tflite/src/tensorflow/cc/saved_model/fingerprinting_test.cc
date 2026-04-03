@@ -18,14 +18,17 @@ limitations under the License.
 #include <string>
 
 #include <gtest/gtest.h>
+#include "absl/numeric/int128.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/string_view.h"
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/versions.pb.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/path.h"
 #include "tensorflow/core/platform/test.h"
+#include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/protobuf/fingerprint.pb.h"
 #include "tensorflow/core/protobuf/saved_model.pb.h"
 #include "tsl/platform/statusor.h"
@@ -60,9 +63,46 @@ TEST(FingerprintingTest, TestCreateFingerprint) {
   EXPECT_EQ(fingerprint_def.graph_def_program_hash(), 10127142238652115842U);
   EXPECT_EQ(fingerprint_def.signature_def_hash(), 15570736222402453744U);
   EXPECT_EQ(fingerprint_def.saved_object_graph_hash(), 3678101440349108924U);
+
+  // The uuid is a random number (as string), but it should be a number > 0.
+  absl::uint128 uuid = 0;
+  EXPECT_TRUE(absl::SimpleAtoi(fingerprint_def.uuid(), &uuid))
+      << "String to Uint128 conversion failed. "
+      << "UUID from proto, and Uint128Max(): \n"
+      << fingerprint_def.uuid() << "\n"
+      << absl::Uint128Max();
+  EXPECT_GT(uuid, 0);
+
   // TODO(b/242348400): The checkpoint hash is non-deterministic, so we cannot
   // check its value here.
   EXPECT_GT(fingerprint_def.checkpoint_hash(), 0);
+}
+
+TEST(FingerprintingTest, TestCreateFingerprintForPbtxtWorks) {
+  // This test ensures that we get a minimal fingerprint with an uuid, even
+  // when the SavedModel cannot be read.
+  const std::string export_dir =
+      io::JoinPath(testing::TensorFlowSrcRoot(), "cc/saved_model/testdata",
+                   "half_plus_two_pbtxt");
+  TF_ASSERT_OK_AND_ASSIGN(FingerprintDef fingerprint_def,
+                          CreateFingerprintDef(export_dir));
+
+  EXPECT_EQ(fingerprint_def.saved_model_checksum(), 0);
+  EXPECT_EQ(fingerprint_def.graph_def_program_hash(), 0);
+  EXPECT_EQ(fingerprint_def.signature_def_hash(), 0);
+  EXPECT_EQ(fingerprint_def.saved_object_graph_hash(), 0);
+  EXPECT_EQ(fingerprint_def.checkpoint_hash(), 0);
+
+  // The uuid is a random number (as string), but it should be a number > 0.
+  absl::uint128 uuid = 0;
+  EXPECT_TRUE(absl::SimpleAtoi(fingerprint_def.uuid(), &uuid))
+      << "String to Uint128 conversion failed. "
+      << "UUID from proto, and Uint128Max(): \n"
+      << fingerprint_def.uuid() << "\n"
+      << absl::Uint128Max();
+  EXPECT_GT(uuid, 0);
+  // version().producer()differs between WIN and non-WIN platforms.
+  EXPECT_GT(fingerprint_def.version().producer(), 3);
 }
 
 // Compare the fingerprints of two models saved by calling
@@ -94,6 +134,7 @@ TEST(FingerprintingTest, TestCompareFingerprintForTwoModelSavedTwice) {
             fingerprint_def2.signature_def_hash());
   EXPECT_EQ(fingerprint_def.saved_object_graph_hash(),
             fingerprint_def2.saved_object_graph_hash());
+  EXPECT_NE(fingerprint_def.uuid(), fingerprint_def2.uuid());
 }
 
 TEST(FingerprintingTest, TestFingerprintComputationDoesNotMutateModel) {
@@ -117,7 +158,7 @@ TEST(FingerprintingTest, TestFingerprintHasVersion) {
                           ReadSavedModel(export_dir));
   TF_ASSERT_OK_AND_ASSIGN(FingerprintDef fingerprint_def,
                           CreateFingerprintDef(export_dir));
-  EXPECT_EQ(fingerprint_def.version().producer(), 1);
+  EXPECT_EQ(fingerprint_def.version().producer(), 4);
 }
 
 TEST(FingerprintingTest, TestHashCheckpointForModelWithNoVariables) {

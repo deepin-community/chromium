@@ -9,6 +9,7 @@
 
 #include "base/functional/bind.h"
 #include "net/base/net_errors.h"
+#include "net/base/request_priority.h"
 #include "net/log/net_log_with_source.h"
 #include "net/proxy_resolution/configured_proxy_resolution_service.h"
 #include "net/proxy_resolution/proxy_resolution_request.h"
@@ -41,15 +42,15 @@ void ProxyLookupRequest::Start(const GURL& url) {
       base::BindOnce(&ProxyLookupRequest::DestroySelf, base::Unretained(this)));
   // TODO(mmenke): The NetLogWithSource() means nothing is logged. Fix that.
   //
-  // TODO(https://crbug.com/1023435): Pass along a NetworkAnonymizationKey.
+  // TODO(crbug.com/40107017): Pass along a NetworkAnonymizationKey.
   int result =
       network_context_->url_request_context()
           ->proxy_resolution_service()
-          ->ResolveProxy(url, std::string(), network_anonymization_key_,
-                         &proxy_info_,
-                         base::BindOnce(&ProxyLookupRequest::OnResolveComplete,
-                                        base::Unretained(this)),
-                         &request_, net::NetLogWithSource());
+          ->ResolveProxy(
+              url, std::string(), network_anonymization_key_, &proxy_info_,
+              base::BindOnce(&ProxyLookupRequest::OnResolveComplete,
+                             base::Unretained(this)),
+              &request_, net::NetLogWithSource(), net::DEFAULT_PRIORITY);
   if (result != net::ERR_IO_PENDING)
     OnResolveComplete(result);
 }

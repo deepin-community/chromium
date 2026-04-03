@@ -5,23 +5,32 @@
 #include "quiche/quic/core/quic_time_wait_list_manager.h"
 
 #include <cerrno>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
-#include <ostream>
+#include <string>
+#include <tuple>
 #include <utility>
+#include <vector>
 
-#include "quiche/quic/core/crypto/crypto_protocol.h"
-#include "quiche/quic/core/crypto/null_encrypter.h"
-#include "quiche/quic/core/crypto/quic_decrypter.h"
-#include "quiche/quic/core/crypto/quic_encrypter.h"
+#include "absl/strings/str_cat.h"
+#include "quiche/quic/core/crypto/quic_random.h"
+#include "quiche/quic/core/quic_alarm.h"
+#include "quiche/quic/core/quic_alarm_factory.h"
+#include "quiche/quic/core/quic_arena_scoped_ptr.h"
 #include "quiche/quic/core/quic_connection_id.h"
-#include "quiche/quic/core/quic_data_reader.h"
 #include "quiche/quic/core/quic_framer.h"
+#include "quiche/quic/core/quic_one_block_arena.h"
 #include "quiche/quic/core/quic_packet_writer.h"
 #include "quiche/quic/core/quic_packets.h"
+#include "quiche/quic/core/quic_time.h"
+#include "quiche/quic/core/quic_types.h"
 #include "quiche/quic/core/quic_utils.h"
-#include "quiche/quic/platform/api/quic_expect_bug.h"
+#include "quiche/quic/core/quic_versions.h"
 #include "quiche/quic/platform/api/quic_flags.h"
+#include "quiche/quic/platform/api/quic_socket_address.h"
 #include "quiche/quic/platform/api/quic_test.h"
+#include "quiche/quic/test_tools/mock_clock.h"
 #include "quiche/quic/test_tools/mock_quic_session_visitor.h"
 #include "quiche/quic/test_tools/quic_test_utils.h"
 #include "quiche/quic/test_tools/quic_time_wait_list_manager_peer.h"
@@ -59,7 +68,7 @@ class FramerVisitorCapturingPublicReset : public NoOpFramerVisitor {
     stateless_reset_packet_ = packet;
   }
 
-  const QuicIetfStatelessResetPacket stateless_reset_packet() {
+  QuicIetfStatelessResetPacket stateless_reset_packet() {
     return stateless_reset_packet_;
   }
 
@@ -162,8 +171,8 @@ class QuicTimeWaitListManagerTest : public QuicTest {
 
   void ProcessPacket(QuicConnectionId connection_id) {
     time_wait_list_manager_.ProcessPacket(
-        self_address_, peer_address_, connection_id, GOOGLE_QUIC_PACKET,
-        kTestPacketSize, std::make_unique<QuicPerPacketContext>());
+        self_address_, peer_address_, connection_id, GOOGLE_QUIC_Q043_PACKET,
+        kTestPacketSize);
   }
 
   QuicEncryptedPacket* ConstructEncryptedPacket(
@@ -216,7 +225,6 @@ Matcher<const std::tuple<const char*, int>> PublicResetPacketEq(
 
 TEST_F(QuicTimeWaitListManagerTest, CheckConnectionIdInTimeWait) {
   EXPECT_FALSE(IsConnectionIdInTimeWait(connection_id_));
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id_));
   AddConnectionId(connection_id_, QuicTimeWaitListManager::DO_NOTHING);
   EXPECT_EQ(1u, time_wait_list_manager_.num_connections());
   EXPECT_TRUE(IsConnectionIdInTimeWait(connection_id_));
@@ -224,7 +232,6 @@ TEST_F(QuicTimeWaitListManagerTest, CheckConnectionIdInTimeWait) {
 
 TEST_F(QuicTimeWaitListManagerTest, CheckStatelessConnectionIdInTimeWait) {
   EXPECT_FALSE(IsConnectionIdInTimeWait(connection_id_));
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id_));
   AddStatelessConnectionId(connection_id_);
   EXPECT_EQ(1u, time_wait_list_manager_.num_connections());
   EXPECT_TRUE(IsConnectionIdInTimeWait(connection_id_));
@@ -242,7 +249,7 @@ TEST_F(QuicTimeWaitListManagerTest, SendVersionNegotiationPacket) {
   time_wait_list_manager_.SendVersionNegotiationPacket(
       connection_id_, EmptyQuicConnectionId(), /*ietf_quic=*/false,
       /*use_length_prefix=*/false, AllSupportedVersions(), self_address_,
-      peer_address_, std::make_unique<QuicPerPacketContext>());
+      peer_address_);
   EXPECT_EQ(0u, time_wait_list_manager_.num_connections());
 }
 
@@ -259,7 +266,7 @@ TEST_F(QuicTimeWaitListManagerTest,
   time_wait_list_manager_.SendVersionNegotiationPacket(
       connection_id_, EmptyQuicConnectionId(), /*ietf_quic=*/true,
       /*use_length_prefix=*/false, AllSupportedVersions(), self_address_,
-      peer_address_, std::make_unique<QuicPerPacketContext>());
+      peer_address_);
   EXPECT_EQ(0u, time_wait_list_manager_.num_connections());
 }
 
@@ -275,7 +282,7 @@ TEST_F(QuicTimeWaitListManagerTest, SendIetfVersionNegotiationPacket) {
   time_wait_list_manager_.SendVersionNegotiationPacket(
       connection_id_, EmptyQuicConnectionId(), /*ietf_quic=*/true,
       /*use_length_prefix=*/true, AllSupportedVersions(), self_address_,
-      peer_address_, std::make_unique<QuicPerPacketContext>());
+      peer_address_);
   EXPECT_EQ(0u, time_wait_list_manager_.num_connections());
 }
 
@@ -292,13 +299,12 @@ TEST_F(QuicTimeWaitListManagerTest,
   time_wait_list_manager_.SendVersionNegotiationPacket(
       connection_id_, TestConnectionId(0x33), /*ietf_quic=*/true,
       /*use_length_prefix=*/true, AllSupportedVersions(), self_address_,
-      peer_address_, std::make_unique<QuicPerPacketContext>());
+      peer_address_);
   EXPECT_EQ(0u, time_wait_list_manager_.num_connections());
 }
 
 TEST_F(QuicTimeWaitListManagerTest, SendConnectionClose) {
   const size_t kConnectionCloseLength = 100;
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id_));
   std::vector<std::unique_ptr<QuicEncryptedPacket>> termination_packets;
   termination_packets.push_back(
       std::unique_ptr<QuicEncryptedPacket>(new QuicEncryptedPacket(
@@ -315,7 +321,6 @@ TEST_F(QuicTimeWaitListManagerTest, SendConnectionClose) {
 
 TEST_F(QuicTimeWaitListManagerTest, SendTwoConnectionCloses) {
   const size_t kConnectionCloseLength = 100;
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id_));
   std::vector<std::unique_ptr<QuicEncryptedPacket>> termination_packets;
   termination_packets.push_back(
       std::unique_ptr<QuicEncryptedPacket>(new QuicEncryptedPacket(
@@ -335,7 +340,6 @@ TEST_F(QuicTimeWaitListManagerTest, SendTwoConnectionCloses) {
 }
 
 TEST_F(QuicTimeWaitListManagerTest, SendPublicReset) {
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id_));
   AddConnectionId(connection_id_,
                   QuicTimeWaitListManager::SEND_STATELESS_RESET);
   EXPECT_CALL(writer_,
@@ -347,7 +351,6 @@ TEST_F(QuicTimeWaitListManagerTest, SendPublicReset) {
 }
 
 TEST_F(QuicTimeWaitListManagerTest, SendPublicResetWithExponentialBackOff) {
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id_));
   AddConnectionId(connection_id_,
                   QuicTimeWaitListManager::SEND_STATELESS_RESET);
   EXPECT_EQ(1u, time_wait_list_manager_.num_connections());
@@ -369,7 +372,6 @@ TEST_F(QuicTimeWaitListManagerTest, SendPublicResetWithExponentialBackOff) {
 }
 
 TEST_F(QuicTimeWaitListManagerTest, NoPublicResetForStatelessConnections) {
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id_));
   AddStatelessConnectionId(connection_id_);
 
   EXPECT_CALL(writer_,
@@ -386,7 +388,6 @@ TEST_F(QuicTimeWaitListManagerTest, CleanUpOldConnectionIds) {
   // Add connection_ids such that their expiry time is time_wait_period_.
   for (uint64_t conn_id = 1; conn_id <= kOldConnectionIdCount; ++conn_id) {
     QuicConnectionId connection_id = TestConnectionId(conn_id);
-    EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id));
     AddConnectionId(connection_id, QuicTimeWaitListManager::DO_NOTHING);
   }
   EXPECT_EQ(kOldConnectionIdCount, time_wait_list_manager_.num_connections());
@@ -399,7 +400,6 @@ TEST_F(QuicTimeWaitListManagerTest, CleanUpOldConnectionIds) {
   for (uint64_t conn_id = kOldConnectionIdCount + 1;
        conn_id <= kConnectionIdCount; ++conn_id) {
     QuicConnectionId connection_id = TestConnectionId(conn_id);
-    EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id));
     AddConnectionId(connection_id, QuicTimeWaitListManager::DO_NOTHING);
   }
   EXPECT_EQ(kConnectionIdCount, time_wait_list_manager_.num_connections());
@@ -428,8 +428,6 @@ TEST_F(QuicTimeWaitListManagerTest,
        CleanUpOldConnectionIdsForMultipleConnectionIdsPerConnection) {
   connection_id_ = TestConnectionId(7);
   const size_t kConnectionCloseLength = 100;
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id_));
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(TestConnectionId(8)));
   std::vector<std::unique_ptr<QuicEncryptedPacket>> termination_packets;
   termination_packets.push_back(
       std::unique_ptr<QuicEncryptedPacket>(new QuicEncryptedPacket(
@@ -462,7 +460,6 @@ TEST_F(QuicTimeWaitListManagerTest,
 
 TEST_F(QuicTimeWaitListManagerTest, SendQueuedPackets) {
   QuicConnectionId connection_id = TestConnectionId(1);
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id));
   AddConnectionId(connection_id, QuicTimeWaitListManager::SEND_STATELESS_RESET);
   std::unique_ptr<QuicEncryptedPacket> packet(ConstructEncryptedPacket(
       connection_id, EmptyQuicConnectionId(), /*packet_number=*/234));
@@ -487,7 +484,6 @@ TEST_F(QuicTimeWaitListManagerTest, SendQueuedPackets) {
   // write packet should not be called since we are write blocked but the
   // should be queued.
   QuicConnectionId other_connection_id = TestConnectionId(2);
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(other_connection_id));
   AddConnectionId(other_connection_id,
                   QuicTimeWaitListManager::SEND_STATELESS_RESET);
   std::unique_ptr<QuicEncryptedPacket> other_packet(ConstructEncryptedPacket(
@@ -512,7 +508,6 @@ TEST_F(QuicTimeWaitListManagerTest, SendQueuedPackets) {
 
 TEST_F(QuicTimeWaitListManagerTest, AddConnectionIdTwice) {
   // Add connection_ids such that their expiry time is time_wait_period_.
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id_));
   AddConnectionId(connection_id_, QuicTimeWaitListManager::DO_NOTHING);
   EXPECT_TRUE(IsConnectionIdInTimeWait(connection_id_));
   const size_t kConnectionCloseLength = 100;
@@ -546,6 +541,24 @@ TEST_F(QuicTimeWaitListManagerTest, AddConnectionIdTwice) {
   EXPECT_EQ(0u, time_wait_list_manager_.num_connections());
 }
 
+TEST_F(QuicTimeWaitListManagerTest, AddOverlappingConnectionIdSet) {
+  QuicConnectionId cid1 = TestConnectionId(1);
+  QuicConnectionId cid2 = TestConnectionId(2);
+  QuicConnectionId cid3 = TestConnectionId(3);
+
+  time_wait_list_manager_.AddConnectionIdToTimeWait(
+      QuicTimeWaitListManager::SEND_STATELESS_RESET,
+      TimeWaitConnectionInfo(false, nullptr, {cid1, cid2}));
+  time_wait_list_manager_.AddConnectionIdToTimeWait(
+      QuicTimeWaitListManager::SEND_STATELESS_RESET,
+      TimeWaitConnectionInfo(false, nullptr, {cid1, cid3}));
+
+  EXPECT_TRUE(time_wait_list_manager_.IsConnectionIdInTimeWait(cid1));
+  EXPECT_TRUE(time_wait_list_manager_.IsConnectionIdInTimeWait(cid2));
+  EXPECT_TRUE(time_wait_list_manager_.IsConnectionIdInTimeWait(cid3));
+  EXPECT_EQ(time_wait_list_manager_.num_connections(), 2u);
+}
+
 TEST_F(QuicTimeWaitListManagerTest, ConnectionIdsOrderedByTime) {
   // Simple randomization: the values of connection_ids are randomly swapped.
   // If the container is broken, the test will be 50% flaky.
@@ -555,10 +568,8 @@ TEST_F(QuicTimeWaitListManagerTest, ConnectionIdsOrderedByTime) {
 
   // 1 will hash lower than 2, but we add it later. They should come out in the
   // add order, not hash order.
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id1));
   AddConnectionId(connection_id1, QuicTimeWaitListManager::DO_NOTHING);
   clock_.AdvanceTime(QuicTime::Delta::FromMicroseconds(10));
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id2));
   AddConnectionId(connection_id2, QuicTimeWaitListManager::DO_NOTHING);
   EXPECT_EQ(2u, time_wait_list_manager_.num_connections());
 
@@ -587,8 +598,6 @@ TEST_F(QuicTimeWaitListManagerTest, MaxConnectionsTest) {
     ++current_conn_id;
     QuicConnectionId current_connection_id = TestConnectionId(current_conn_id);
     EXPECT_FALSE(IsConnectionIdInTimeWait(current_connection_id));
-    EXPECT_CALL(visitor_,
-                OnConnectionAddedToTimeWaitList(current_connection_id));
     AddConnectionId(current_connection_id, QuicTimeWaitListManager::DO_NOTHING);
     EXPECT_EQ(current_conn_id, time_wait_list_manager_.num_connections());
     EXPECT_TRUE(IsConnectionIdInTimeWait(current_connection_id));
@@ -603,8 +612,6 @@ TEST_F(QuicTimeWaitListManagerTest, MaxConnectionsTest) {
         TestConnectionId(current_conn_id - kMaxConnections);
     EXPECT_TRUE(IsConnectionIdInTimeWait(id_to_evict));
     EXPECT_FALSE(IsConnectionIdInTimeWait(current_connection_id));
-    EXPECT_CALL(visitor_,
-                OnConnectionAddedToTimeWaitList(current_connection_id));
     AddConnectionId(current_connection_id, QuicTimeWaitListManager::DO_NOTHING);
     EXPECT_EQ(static_cast<size_t>(kMaxConnections),
               time_wait_list_manager_.num_connections());
@@ -625,8 +632,6 @@ TEST_F(QuicTimeWaitListManagerTest, ZeroMaxConnections) {
     ++current_conn_id;
     QuicConnectionId current_connection_id = TestConnectionId(current_conn_id);
     EXPECT_FALSE(IsConnectionIdInTimeWait(current_connection_id));
-    EXPECT_CALL(visitor_,
-                OnConnectionAddedToTimeWaitList(current_connection_id));
     AddConnectionId(current_connection_id, QuicTimeWaitListManager::DO_NOTHING);
     // Verify time wait list always has 1 connection.
     EXPECT_EQ(1u, time_wait_list_manager_.num_connections());
@@ -641,7 +646,6 @@ TEST_F(QuicTimeWaitListManagerTest,
   // added as termination packet for an IETF connection ID. However, a short
   // header packet is received later.
   const size_t kConnectionCloseLength = 100;
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id_));
   std::vector<std::unique_ptr<QuicEncryptedPacket>> termination_packets;
   termination_packets.push_back(
       std::unique_ptr<QuicEncryptedPacket>(new QuicEncryptedPacket(
@@ -659,14 +663,12 @@ TEST_F(QuicTimeWaitListManagerTest,
   // Processes IETF short header packet.
   time_wait_list_manager_.ProcessPacket(
       self_address_, peer_address_, connection_id_,
-      IETF_QUIC_SHORT_HEADER_PACKET, kTestPacketSize,
-      std::make_unique<QuicPerPacketContext>());
+      IETF_QUIC_SHORT_HEADER_PACKET, kTestPacketSize);
 }
 
 TEST_F(QuicTimeWaitListManagerTest,
        SendConnectionClosePacketsInResponseToShortHeaders) {
   const size_t kConnectionCloseLength = 100;
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id_));
   std::vector<std::unique_ptr<QuicEncryptedPacket>> termination_packets;
   termination_packets.push_back(
       std::unique_ptr<QuicEncryptedPacket>(new QuicEncryptedPacket(
@@ -683,16 +685,13 @@ TEST_F(QuicTimeWaitListManagerTest,
   // Processes IETF short header packet.
   time_wait_list_manager_.ProcessPacket(
       self_address_, peer_address_, connection_id_,
-      IETF_QUIC_SHORT_HEADER_PACKET, kTestPacketSize,
-      std::make_unique<QuicPerPacketContext>());
+      IETF_QUIC_SHORT_HEADER_PACKET, kTestPacketSize);
 }
 
 TEST_F(QuicTimeWaitListManagerTest,
        SendConnectionClosePacketsForMultipleConnectionIds) {
   connection_id_ = TestConnectionId(7);
   const size_t kConnectionCloseLength = 100;
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(connection_id_));
-  EXPECT_CALL(visitor_, OnConnectionAddedToTimeWaitList(TestConnectionId(8)));
   std::vector<std::unique_ptr<QuicEncryptedPacket>> termination_packets;
   termination_packets.push_back(
       std::unique_ptr<QuicEncryptedPacket>(new QuicEncryptedPacket(
@@ -712,9 +711,9 @@ TEST_F(QuicTimeWaitListManagerTest,
       .WillRepeatedly(Return(WriteResult(WRITE_STATUS_OK, 1)));
   // Processes IETF short header packet.
   for (auto const& cid : active_connection_ids) {
-    time_wait_list_manager_.ProcessPacket(
-        self_address_, peer_address_, cid, IETF_QUIC_SHORT_HEADER_PACKET,
-        kTestPacketSize, std::make_unique<QuicPerPacketContext>());
+    time_wait_list_manager_.ProcessPacket(self_address_, peer_address_, cid,
+                                          IETF_QUIC_SHORT_HEADER_PACKET,
+                                          kTestPacketSize);
   }
 }
 
@@ -727,13 +726,12 @@ TEST_F(QuicTimeWaitListManagerTest, DonotCrashOnNullStatelessReset) {
       self_address_, peer_address_, TestConnectionId(1),
       /*ietf_quic=*/true,
       /*received_packet_length=*/
-      QuicFramer::GetMinStatelessResetPacketLength() - 1,
-      /*packet_context=*/nullptr);
+      QuicFramer::GetMinStatelessResetPacketLength() - 1);
 }
 
 TEST_F(QuicTimeWaitListManagerTest, SendOrQueueNullPacket) {
   QuicTimeWaitListManagerPeer::SendOrQueuePacket(&time_wait_list_manager_,
-                                                 nullptr, nullptr);
+                                                 nullptr);
 }
 
 TEST_F(QuicTimeWaitListManagerTest, TooManyPendingPackets) {
@@ -752,12 +750,25 @@ TEST_F(QuicTimeWaitListManagerTest, TooManyPendingPackets) {
         self_address_, peer_address_, TestConnectionId(1),
         /*ietf_quic=*/true,
         /*received_packet_length=*/
-        QuicFramer::GetMinStatelessResetPacketLength() + 1,
-        /*packet_context=*/nullptr);
+        QuicFramer::GetMinStatelessResetPacketLength() + 1);
   }
   // Verify pending packet queue size is limited.
   EXPECT_EQ(5u, QuicTimeWaitListManagerPeer::PendingPacketsQueueSize(
                     &time_wait_list_manager_));
+}
+
+TEST(TimeWaitActionTest, Stringify) {
+  EXPECT_EQ(absl::StrCat(QuicTimeWaitListManager::SEND_TERMINATION_PACKETS),
+            "SEND_TERMINATION_PACKETS");
+  EXPECT_EQ(
+      absl::StrCat(QuicTimeWaitListManager::SEND_CONNECTION_CLOSE_PACKETS),
+      "SEND_CONNECTION_CLOSE_PACKETS");
+  EXPECT_EQ(absl::StrCat(QuicTimeWaitListManager::SEND_STATELESS_RESET),
+            "SEND_STATELESS_RESET");
+  EXPECT_EQ(absl::StrCat(QuicTimeWaitListManager::DO_NOTHING), "DO_NOTHING");
+  EXPECT_EQ(
+      absl::StrCat(static_cast<QuicTimeWaitListManager::TimeWaitAction>(0xff)),
+      "Unknown TimeWaitAction (255)");
 }
 
 }  // namespace

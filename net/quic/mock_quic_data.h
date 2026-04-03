@@ -31,6 +31,8 @@ class MockQuicData {
   // synchronusly or asynchronously based on |mode|.
   void AddConnect(IoMode mode, int rv);
 
+  void AddConnect(MockConnectCompleter* completer);
+
   // Adds a read at the next sequence number which will read |packet|
   // synchronously or asynchronously based on |mode|. The QuicReceivedPacket
   // version includes an ECN codepoint.
@@ -74,6 +76,10 @@ class MockQuicData {
 
   // Returns true if all writes have been consumed.
   bool AllWriteDataConsumed();
+
+  // EXPECTs that all data has been consumed, printing any un-consumed data.
+  void ExpectAllReadDataConsumed();
+  void ExpectAllWriteDataConsumed();
 
   // Resumes I/O after it is paused.
   void Resume();

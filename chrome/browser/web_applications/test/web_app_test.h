@@ -9,6 +9,7 @@
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -17,16 +18,17 @@
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 
-#if BUILDFLAG(IS_WIN)
-#include "base/test/test_reg_util_win.h"
-#endif  // BUILDFLAG(IS_WIN)
-
 namespace web_app {
 class FakeWebAppProvider;
+class WebAppProvider;
+class FakeWebContentsManager;
 }
 
 // Consider to implement web app specific test harness independent of
 // RenderViewHost.
+// When inheriting from this class, the FakeWebAppProvider doesn't automatically
+// start the WebAppProvider system. To do so, try using a helper method like
+// `test::AwaitStartWebAppProviderAndSubsystems`.
 class WebAppTest : public content::RenderViewHostTestHarness {
  public:
   struct WithTestUrlLoaderFactory {};
@@ -67,7 +69,15 @@ class WebAppTest : public content::RenderViewHostTestHarness {
     return test_url_loader_factory_;
   }
 
+  web_app::WebAppProvider& provider() const;
+
   web_app::FakeWebAppProvider& fake_provider() const;
+
+  // If the test sets the web contents manager to be 'real', then this will
+  // check-fail.
+  web_app::FakeWebContentsManager& fake_web_contents_manager() const;
+
+  web_app::OsIntegrationTestOverrideImpl& fake_os_integration() const;
 
  protected:
   // content::RenderViewHostTestHarness.
@@ -79,16 +89,16 @@ class WebAppTest : public content::RenderViewHostTestHarness {
   scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory_ =
       nullptr;
 
+  // std::unique_ptr so it can be reset in the TearDown method for the safest
+  // 'waiting' for os integration to complete, while the task environment is
+  // still around.
+  std::unique_ptr<web_app::OsIntegrationTestOverrideBlockingRegistration>
+      os_integration_test_override_{std::make_unique<
+          web_app::OsIntegrationTestOverrideBlockingRegistration>()};
+
   TestingProfileManager testing_profile_manager_{
       TestingBrowserProcess::GetGlobal()};
-  raw_ptr<TestingProfile, DanglingUntriaged> profile_ = nullptr;
-
-#if BUILDFLAG(IS_WIN)
-  // This is used to ensure that the registry starts in a well known state, and
-  // any registry changes by this test don't affect other parts of the registry
-  // on the machine running the test, and are cleaned up.
-  registry_util::RegistryOverrideManager registry_override_;
-#endif  // BUILDFLAG(IS_WIN)
+  raw_ptr<TestingProfile> profile_ = nullptr;
 };
 
 #endif  // CHROME_BROWSER_WEB_APPLICATIONS_TEST_WEB_APP_TEST_H_

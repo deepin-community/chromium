@@ -5,7 +5,6 @@
 #include "third_party/blink/renderer/core/css/media_values.h"
 
 #include "third_party/blink/public/common/css/scripting.h"
-#include "third_party/blink/public/platform/web_theme_engine.h"
 #include "third_party/blink/renderer/core/css/css_resolution_units.h"
 #include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
 #include "third_party/blink/renderer/core/css/media_feature_overrides.h"
@@ -16,7 +15,6 @@
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
@@ -29,8 +27,8 @@
 #include "third_party/blink/renderer/core/preferences/preference_overrides.h"
 #include "third_party/blink/renderer/platform/graphics/color_space_gamut.h"
 #include "third_party/blink/renderer/platform/network/network_state_notifier.h"
-#include "third_party/blink/renderer/platform/theme/web_theme_engine_helper.h"
 #include "third_party/blink/renderer/platform/widget/frame_widget.h"
+#include "ui/base/mojom/window_show_state.mojom-blink.h"
 #include "ui/display/screen_info.h"
 
 namespace blink {
@@ -43,7 +41,6 @@ ForcedColors CSSValueIDToForcedColors(CSSValueID id) {
       return ForcedColors::kNone;
     default:
       NOTREACHED();
-      return ForcedColors::kNone;
   }
 }
 
@@ -56,7 +53,6 @@ mojom::blink::PreferredColorScheme CSSValueIDToPreferredColorScheme(
       return mojom::blink::PreferredColorScheme::kDark;
     default:
       NOTREACHED();
-      return mojom::blink::PreferredColorScheme::kLight;
   }
 }
 
@@ -72,7 +68,6 @@ mojom::blink::PreferredContrast CSSValueIDToPreferredContrast(CSSValueID id) {
       return mojom::blink::PreferredContrast::kCustom;
     default:
       NOTREACHED();
-      return mojom::blink::PreferredContrast::kNoPreference;
   }
 }
 
@@ -88,6 +83,20 @@ std::optional<double> MediaValues::BlockSize() const {
     return Height();
   }
   return Width();
+}
+
+bool MediaValues::SnappedBlock() const {
+  if (blink::IsHorizontalWritingMode(GetWritingMode())) {
+    return SnappedY();
+  }
+  return SnappedX();
+}
+
+bool MediaValues::SnappedInline() const {
+  if (blink::IsHorizontalWritingMode(GetWritingMode())) {
+    return SnappedX();
+  }
+  return SnappedY();
 }
 
 MediaValues* MediaValues::CreateDynamicIfFrameExists(LocalFrame* frame) {
@@ -296,20 +305,21 @@ mojom::blink::DisplayMode MediaValues::CalculateDisplayMode(LocalFrame* frame) {
   return widget->DisplayMode();
 }
 
-ui::WindowShowState MediaValues::CalculateWindowShowState(LocalFrame* frame) {
+ui::mojom::blink::WindowShowState MediaValues::CalculateWindowShowState(
+    LocalFrame* frame) {
   DCHECK(frame);
 
-  ui::WindowShowState show_state =
+  ui::mojom::blink::WindowShowState show_state =
       frame->GetPage()->GetSettings().GetWindowShowState();
   // Initial state set in /third_party/blink/renderer/core/frame/settings.json5
   // should match with this.
-  if (show_state != ui::WindowShowState::SHOW_STATE_DEFAULT) {
+  if (show_state != ui::mojom::blink::WindowShowState::kDefault) {
     return show_state;
   }
 
   FrameWidget* widget = frame->GetWidgetForLocalRoot();
   if (!widget) {  // Is null in non-ordinary Pages.
-    return ui::SHOW_STATE_DEFAULT;
+    return ui::mojom::blink::WindowShowState::kDefault;
   }
 
   return widget->WindowShowState();
@@ -497,7 +507,7 @@ ForcedColors MediaValues::CalculateForcedColors(LocalFrame* frame) {
   std::optional<ForcedColors> override_value =
       overrides ? overrides->GetForcedColors() : std::nullopt;
   return override_value.value_or(
-      WebThemeEngineHelper::GetNativeThemeEngine()->GetForcedColors());
+      frame->GetDocument()->GetStyleEngine().GetForcedColors());
 }
 
 NavigationControls MediaValues::CalculateNavigationControls(LocalFrame* frame) {
@@ -511,10 +521,10 @@ int MediaValues::CalculateHorizontalViewportSegments(LocalFrame* frame) {
     return 1;
   }
 
-  WebVector<gfx::Rect> window_segments =
-      frame->GetWidgetForLocalRoot()->WindowSegments();
-  WTF::HashSet<int> unique_x;
-  for (const auto& segment : window_segments) {
+  std::vector<gfx::Rect> viewport_segments =
+      frame->GetWidgetForLocalRoot()->ViewportSegments();
+  HashSet<int> unique_x;
+  for (const auto& segment : viewport_segments) {
     // HashSet can't have 0 as a key, so add 1 to all the values we see.
     unique_x.insert(segment.x() + 1);
   }
@@ -527,10 +537,10 @@ int MediaValues::CalculateVerticalViewportSegments(LocalFrame* frame) {
     return 1;
   }
 
-  WebVector<gfx::Rect> window_segments =
-      frame->GetWidgetForLocalRoot()->WindowSegments();
-  WTF::HashSet<int> unique_y;
-  for (const auto& segment : window_segments) {
+  std::vector<gfx::Rect> viewport_segments =
+      frame->GetWidgetForLocalRoot()->ViewportSegments();
+  HashSet<int> unique_y;
+  for (const auto& segment : viewport_segments) {
     // HashSet can't have 0 as a key, so add 1 to all the values we see.
     unique_y.insert(segment.y() + 1);
   }

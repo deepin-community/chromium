@@ -23,7 +23,7 @@ namespace ui {
 // core value and 0 or or more qualifiers.
 //
 // A Java counterpart will be generated for this enum.  This is why the enum
-// uses int32_t and not uint32_t as the underlying type (jint cannot
+// uses int32_t and not uint32_t as the underlying type (int32_t cannot
 // represent uint32_t).
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.ui.base
 enum PageTransition : int32_t {
@@ -150,7 +150,7 @@ enum PageTransition : int32_t {
   // Redirects sent from the server by HTTP headers. It might be nice to
   // break this out into 2 types in the future, permanent or temporary, if we
   // can get that information from WebKit.
-  // TODO(https://crbug.com/1291237): Remove this as it's inaccurate.
+  // TODO(crbug.com/40212666): Remove this as it's inaccurate.
   // NavigationHandle::WasServerRedirect() should be used instead.
   PAGE_TRANSITION_SERVER_REDIRECT = -2147483648,  // 0x80000000
 

@@ -6,7 +6,7 @@
 
 #include "base/base64url.h"
 #include "chromeos/ash/services/device_sync/value_string_encoding.h"
-#include "crypto/sha2.h"
+#include "crypto/hash.h"
 
 namespace ash::device_sync {
 
@@ -21,9 +21,9 @@ const char kPublicKeyDictKey[] = "public_key";
 const char kPrivateKeyDictKey[] = "private_key";
 
 // Returns the base64url-encoded SHA256 hash of the input string.
-std::string CreateHandle(const std::string& string_to_hash) {
+std::string CreateHandle(std::string_view str) {
   std::string handle;
-  base::Base64UrlEncode(crypto::SHA256HashString(string_to_hash),
+  base::Base64UrlEncode(crypto::hash::Sha256(base::as_byte_span(str)),
                         base::Base64UrlEncodePolicy::INCLUDE_PADDING, &handle);
   return handle;
 }
@@ -42,7 +42,7 @@ bool IsAsymmetricKeyType(cryptauthv2::KeyType type) {
 
 // static
 std::optional<CryptAuthKey> CryptAuthKey::FromDictionary(
-    const base::Value::Dict& dict) {
+    const base::DictValue& dict) {
   std::optional<int> opt_status = dict.FindInt(kStatusDictKey);
   if (!opt_status) {
     return std::nullopt;
@@ -123,20 +123,20 @@ bool CryptAuthKey::IsAsymmetricKey() const {
   return IsAsymmetricKeyType(type_);
 }
 
-base::Value::Dict CryptAuthKey::AsSymmetricKeyDictionary() const {
+base::DictValue CryptAuthKey::AsSymmetricKeyDictionary() const {
   DCHECK(IsSymmetricKey());
 
-  return base::Value::Dict()
+  return base::DictValue()
       .Set(kHandleDictKey, handle_)
       .Set(kStatusDictKey, status_)
       .Set(kTypeDictKey, type_)
       .Set(kSymmetricKeyDictKey, util::EncodeAsValueString(symmetric_key_));
 }
 
-base::Value::Dict CryptAuthKey::AsAsymmetricKeyDictionary() const {
+base::DictValue CryptAuthKey::AsAsymmetricKeyDictionary() const {
   DCHECK(IsAsymmetricKey());
 
-  return base::Value::Dict()
+  return base::DictValue()
       .Set(kHandleDictKey, handle_)
       .Set(kStatusDictKey, status_)
       .Set(kTypeDictKey, type_)

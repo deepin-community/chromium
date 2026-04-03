@@ -16,8 +16,8 @@
 #include "base/values.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
+#include "chrome/browser/ash/settings/scoped_test_device_settings_service.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/policy/networking/device_network_configuration_updater_ash.h"
 #include "chrome/browser/policy/networking/user_network_configuration_updater_ash.h"
@@ -27,6 +27,7 @@
 #include "chromeos/ash/components/network/mock_managed_network_configuration_handler.h"
 #include "chromeos/ash/components/network/onc/onc_certificate_importer.h"
 #include "chromeos/ash/components/network/policy_certificate_provider.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
 #include "chromeos/components/onc/certificate_scope.h"
@@ -113,7 +114,7 @@ class FakeCertificateImporter : public ash::onc::CertificateImporter {
   FakeCertificateImporter(const FakeCertificateImporter&) = delete;
   FakeCertificateImporter& operator=(const FakeCertificateImporter&) = delete;
 
-  ~FakeCertificateImporter() override {}
+  ~FakeCertificateImporter() override = default;
 
   void SetExpectedONCClientCertificates(
       const std::vector<OncParsedCertificates::ClientCertificate>&
@@ -125,19 +126,6 @@ class FakeCertificateImporter : public ash::onc::CertificateImporter {
     unsigned int count = call_count_;
     call_count_ = 0;
     return count;
-  }
-
-  void ImportAllCertificatesUserInitiated(
-      const std::vector<OncParsedCertificates::ServerOrAuthorityCertificate>&
-          server_or_authority_certificates,
-      const std::vector<OncParsedCertificates::ClientCertificate>&
-          client_certificates,
-      DoneCallback done_callback) override {
-    // As policy-provided server and authority certificates are not permanently
-    // imported, only ImportClientCertificaates should be called.
-    // ImportAllCertificatesUserInitiated should never be called from
-    // UserNetworkConfigurationUpdater.
-    NOTREACHED();
   }
 
   void ImportClientCertificates(
@@ -254,16 +242,16 @@ std::string ValueToString(const T& value) {
 // certificates contained in |toplevel_onc|. Appends the selected certificate
 // into |out_parsed_client_certificates|.
 void SelectSingleClientCertificateFromOnc(
-    base::Value::Dict& toplevel_onc,
+    base::DictValue& toplevel_onc,
     size_t client_certificate_index,
     std::vector<chromeos::onc::OncParsedCertificates::ClientCertificate>*
         out_parsed_client_certificates) {
-  const base::Value::List* certs =
+  const base::ListValue* certs =
       toplevel_onc.FindList(onc::toplevel_config::kCertificates);
   ASSERT_TRUE(certs);
   ASSERT_TRUE(certs->size() > client_certificate_index);
 
-  base::Value::List selected_certs;
+  base::ListValue selected_certs;
   selected_certs.Append((*certs)[client_certificate_index].Clone());
 
   chromeos::onc::OncParsedCertificates parsed_selected_certs(selected_certs);
@@ -274,7 +262,7 @@ void SelectSingleClientCertificateFromOnc(
 }
 
 // Matcher to match `base::Value` with a compatible type (string, `base::Value`,
-// `base::Value::Dict`, `base::Value::List` etc.). See the `==` operator
+// `base::DictValue`, `base::ListValue` etc.). See the `==` operator
 // overrides in `base/values.h` and the definition of `ValueToString()` for
 // the restrictions on allowed types for `value`.
 MATCHER_P(IsEqualTo,
@@ -312,8 +300,8 @@ class NetworkConfigurationUpdaterAshTest : public testing::Test {
     ash::UserSessionManager::GetInstance()->set_start_session_type_for_testing(
         ash::UserSessionManager::StartSessionType::kPrimary);
 
-    fake_statistics_provider_.SetMachineStatistic(
-        ash::system::kSerialNumberKeyForTest, kFakeSerialNumber);
+    fake_statistics_provider_.SetMachineStatistic(ash::system::kSerialNumberKey,
+                                                  kFakeSerialNumber);
 
     EXPECT_CALL(provider_, IsInitializationComplete(_))
         .WillRepeatedly(Return(false));
@@ -324,15 +312,15 @@ class NetworkConfigurationUpdaterAshTest : public testing::Test {
     providers.push_back(&provider_);
     policy_service_ = std::make_unique<PolicyServiceImpl>(std::move(providers));
 
-    std::optional<base::Value::Dict> fake_toplevel_onc =
+    std::optional<base::DictValue> fake_toplevel_onc =
         chromeos::onc::ReadDictionaryFromJson(kFakeONC);
     ASSERT_TRUE(fake_toplevel_onc.has_value());
 
-    base::Value::Dict* global_config = fake_toplevel_onc->FindDict(
+    base::DictValue* global_config = fake_toplevel_onc->FindDict(
         onc::toplevel_config::kGlobalNetworkConfiguration);
     fake_global_network_config_.Merge(global_config->Clone());
 
-    base::Value::List* certs =
+    base::ListValue* certs =
         fake_toplevel_onc->FindList(onc::toplevel_config::kCertificates);
     ASSERT_TRUE(certs);
 
@@ -346,8 +334,8 @@ class NetworkConfigurationUpdaterAshTest : public testing::Test {
         .Times(AnyNumber());
   }
 
-  base::Value::List* GetExpectedFakeNetworkConfigs(::onc::ONCSource source) {
-    std::optional<base::Value::Dict> fake_toplevel_onc =
+  base::ListValue* GetExpectedFakeNetworkConfigs(::onc::ONCSource source) {
+    std::optional<base::DictValue> fake_toplevel_onc =
         chromeos::onc::ReadDictionaryFromJson(kFakeONC);
     if (!fake_toplevel_onc.has_value()) {
       return nullptr;
@@ -359,7 +347,7 @@ class NetworkConfigurationUpdaterAshTest : public testing::Test {
     return &fake_network_configs_;
   }
 
-  base::Value::Dict* GetExpectedFakeGlobalNetworkConfig() {
+  base::DictValue* GetExpectedFakeGlobalNetworkConfig() {
     return &fake_global_network_config_;
   }
 
@@ -442,8 +430,8 @@ class NetworkConfigurationUpdaterAshTest : public testing::Test {
   std::unique_ptr<NetworkConfigurationUpdater> network_configuration_updater_;
 
  private:
-  base::Value::List fake_network_configs_;
-  base::Value::Dict fake_global_network_config_;
+  base::ListValue fake_network_configs_;
+  base::DictValue fake_global_network_config_;
   ash::ScopedFakeSessionManagerClient scoped_session_manager_client_;
 };
 
@@ -497,15 +485,14 @@ TEST_F(NetworkConfigurationUpdaterAshTest,
 }
 
 TEST_F(NetworkConfigurationUpdaterAshTest, PolicyIsValidatedAndRepaired) {
-  base::Value::Dict onc_repaired =
-      chromeos::onc::test_utils::ReadTestDictionary(
-          "repaired_toplevel_partially_invalid.onc");
+  base::DictValue onc_repaired = chromeos::onc::test_utils::ReadTestDictionary(
+      "repaired_toplevel_partially_invalid.onc");
 
-  base::Value::List* network_configs_repaired =
+  base::ListValue* network_configs_repaired =
       onc_repaired.FindList(onc::toplevel_config::kNetworkConfigurations);
   ASSERT_TRUE(network_configs_repaired);
 
-  base::Value::Dict* global_config_repaired =
+  base::DictValue* global_config_repaired =
       onc_repaired.FindDict(onc::toplevel_config::kGlobalNetworkConfiguration);
   ASSERT_TRUE(global_config_repaired);
 

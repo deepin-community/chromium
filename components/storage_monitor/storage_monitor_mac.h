@@ -11,16 +11,16 @@
 #include <memory>
 
 #include "base/apple/scoped_cftyperef.h"
+#include "base/component_export.h"
 #include "base/memory/weak_ptr.h"
 #include "components/storage_monitor/storage_monitor.h"
 
 namespace storage_monitor {
 
-class ImageCaptureDeviceManager;
-
 // This class posts notifications to listeners when a new disk
 // is attached, removed, or changed.
-class StorageMonitorMac final : public StorageMonitor {
+class COMPONENT_EXPORT(STORAGE_MONITOR) StorageMonitorMac final
+    : public StorageMonitor {
  public:
   enum UpdateType {
     UPDATE_DEVICE_ADDED,
@@ -67,8 +67,6 @@ class StorageMonitorMac final : public StorageMonitor {
   std::map<std::string, StorageInfo> disk_info_map_;
 
   int pending_disk_updates_ = 0;
-
-  std::unique_ptr<ImageCaptureDeviceManager> image_capture_device_manager_;
 
   base::WeakPtrFactory<StorageMonitorMac> weak_ptr_factory_{this};
 };

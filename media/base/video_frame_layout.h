@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "media/base/color_plane_layout.h"
+#include "media/base/limits.h"
 #include "media/base/media_export.h"
 #include "media/base/video_types.h"
 #include "ui/gfx/geometry/size.h"
@@ -32,9 +33,8 @@ namespace media {
 class MEDIA_EXPORT VideoFrameLayout {
  public:
   // Default alignment for buffers.
-  // Note: This value is dependent on what's used by ffmpeg, do not change
-  // without inspecting av_frame_get_buffer() first.
-  static constexpr size_t kBufferAddressAlignment = 32;
+  static constexpr size_t kBufferAddressAlignment =
+      limits::kFFmpegBufferAddressAlignment;
 
   // Factory functions.
   // |format| and |coded_size| must always be specified.
@@ -51,7 +51,7 @@ class MEDIA_EXPORT VideoFrameLayout {
 
   // Create a layout suitable for |format| at |coded_size|. The stride, offsets
   // and size of all planes are set to 0, since that information cannot reliably
-  // be infered from the arguments.
+  // be inferred from the arguments.
   static std::optional<VideoFrameLayout> Create(VideoPixelFormat format,
                                                 const gfx::Size& coded_size);
 
@@ -61,7 +61,7 @@ class MEDIA_EXPORT VideoFrameLayout {
   static std::optional<VideoFrameLayout> CreateWithStrides(
       VideoPixelFormat format,
       const gfx::Size& coded_size,
-      std::vector<int32_t> strides,
+      std::vector<size_t> strides,
       size_t buffer_addr_align = kBufferAddressAlignment,
       uint64_t modifier = gfx::NativePixmapHandle::kNoModifier);
 

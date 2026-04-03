@@ -5,7 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_VIEW_TRANSITION_VIEW_TRANSITION_SUPPLEMENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_VIEW_TRANSITION_VIEW_TRANSITION_SUPPLEMENT_H_
 
-#include "third_party/blink/public/mojom/frame/frame.mojom-blink-forward.h"
+#include "components/viz/common/view_transition_element_resource_id.h"
+#include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
 #include "third_party/blink/public/mojom/navigation/navigation_params.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_view_transition_callback.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_view_transition_options.h"
@@ -20,15 +21,8 @@ class DOMViewTransition;
 
 class CORE_EXPORT ViewTransitionSupplement
     : public GarbageCollected<ViewTransitionSupplement>,
-      public Supplement<Document>,
       public ViewTransition::Delegate {
  public:
-  static const char kSupplementName[];
-
-  // Supplement functionality.
-  static ViewTransitionSupplement* From(Document&);
-  static ViewTransitionSupplement* FromIfExists(const Document&);
-
   // Creates and starts a same-document ViewTransition initiated using the
   // script API.
   // With callback:
@@ -47,12 +41,23 @@ class CORE_EXPORT ViewTransitionSupplement
                                                 Document&,
                                                 ExceptionState&);
 
+  // activeViewTransition idl implementation
+  static DOMViewTransition* activeViewTransition(Document&);
+
+  static DOMViewTransition* StartViewTransitionForElement(
+      ScriptState*,
+      Element*,
+      V8ViewTransitionCallback* callback,
+      const std::optional<Vector<String>>& types,
+      ExceptionState&);
+
   // Creates a ViewTransition to cache the state of a Document before a
   // navigation. The cached state is provided to the caller using the
   // |ViewTransitionStateCallback|.
   static void SnapshotDocumentForNavigation(
       Document&,
-      mojom::blink::PageConcealEventParamsPtr,
+      const blink::ViewTransitionToken& transition_token,
+      mojom::blink::PageSwapEventParamsPtr,
       ViewTransition::ViewTransitionStateCallback);
 
   // Creates a ViewTransition using cached state from the previous Document
@@ -66,29 +71,41 @@ class CORE_EXPORT ViewTransitionSupplement
   static void AbortTransition(Document&);
 
   ViewTransition* GetTransition();
+  ViewTransition* GetTransition(const Element&);
+  void ForEachTransition(base::FunctionRef<void(ViewTransition&)>);
+
+  void WillEnterGetComputedStyleScope();
+  void WillExitGetComputedStyleScope();
+
+  void WillUpdateStyleAndLayoutTree();
 
   explicit ViewTransitionSupplement(Document&);
   ~ViewTransitionSupplement() override;
 
   // GC functionality.
-  void Trace(Visitor* visitor) const override;
+  void Trace(Visitor* visitor) const;
 
   // ViewTransition::Delegate implementation.
   void AddPendingRequest(std::unique_ptr<ViewTransitionRequest>) override;
   VectorOf<std::unique_ptr<ViewTransitionRequest>> TakePendingRequests();
   void OnTransitionFinished(ViewTransition* transition) override;
-
-  // Notifies when the "view-transition" meta tag associated with this Document
-  // has changed.
-  void OnMetaTagChanged(const AtomicString& content_value);
+  void OnSkipTransitionWithPendingCallback(ViewTransition*) override;
+  void OnSkippedTransitionDOMCallback(ViewTransition*) override;
+  void OnTransitionCaptured(ViewTransition*) override;
 
   // TODO(https://crbug.com/1422251): Expand this to receive a the full set of
   // @view-transition options.
-  void OnViewTransitionsStyleUpdated(bool cross_document_enabled);
+  void OnViewTransitionsStyleUpdated(bool cross_document_enabled,
+                                     const Vector<String>& types);
 
   // Notifies that the `body` element has been parsed and will be added to the
   // Document.
   void WillInsertBody();
+
+  // Since outbound transitions are only enabled once the document has been
+  // revealed, we recompute the opt-in status here.
+  void DidChangeRevealState() { SendOptInStatusToHost(); }
+  void DidChangeVisibilityState();
 
   // In the new page of a cross-document transition, this resolves the
   // @view-transition rule to use, sets types, and returns the ViewTransition.
@@ -96,31 +113,77 @@ class CORE_EXPORT ViewTransitionSupplement
   // https://drafts.csswg.org/css-view-transitions-2/#document-resolve-cross-document-view-transition
   DOMViewTransition* ResolveCrossDocumentViewTransition();
 
- private:
-  static DOMViewTransition* StartViewTransitionInternal(
-      ScriptState*,
-      Document&,
-      V8ViewTransitionCallback* callback,
-      const std::optional<Vector<String>>& types,
-      ExceptionState&);
+  // Generates a new ID usable from viz to refer to a snapshot resource.
+  viz::ViewTransitionElementResourceId GenerateResourceId(
+      const blink::ViewTransitionToken& transition_token,
+      bool for_scope_snapshot);
 
-  DOMViewTransition* StartTransition(Document& document,
+  // Initializes the sequence such that the next call to GenerateResourceId()
+  // will return `next_local_id`. Used to ensure a unique and continuous
+  // sequence of ids across documents in a cross-document transition.
+  void InitializeResourceIdSequence(uint32_t next_local_id);
+
+ private:
+  DOMViewTransition* StartTransition(Element& element,
                                      V8ViewTransitionCallback* callback,
                                      const std::optional<Vector<String>>& types,
                                      ExceptionState& exception_state);
   void StartTransition(Document& document,
-                       mojom::blink::PageConcealEventParamsPtr,
+                       const blink::ViewTransitionToken& transition_token,
+                       mojom::blink::PageSwapEventParamsPtr,
                        ViewTransition::ViewTransitionStateCallback callback);
   void StartTransition(Document& document,
                        ViewTransitionState transition_state);
 
   void SetCrossDocumentOptIn(mojom::blink::ViewTransitionSameOriginOptIn);
 
-  Member<ViewTransition> transition_;
+  void SendOptInStatusToHost();
+
+  // The document we belong to.
+  Member<Document> document_;
+
+  // Document-level view transition.
+  // TODO(crbug.com/394052227): Change document transitions to be stored in
+  // element_transitions_ (keyed on the documentElement), and remove
+  // document_transition_.
+  Member<ViewTransition> document_transition_;
+
+  // Element-scoped view transitions.
+  HeapHashMap<WeakMember<const Element>, Member<ViewTransition>>
+      element_transitions_;
+
+  // view-transitions that have been skipped but still have a pending DOM
+  // callback.
+  HeapHashMap<WeakMember<const Element>, Member<ViewTransition>>
+      skipped_with_pending_dom_callback_;
 
   VectorOf<std::unique_ptr<ViewTransitionRequest>> pending_requests_;
 
-  mojom::blink::ViewTransitionSameOriginOptIn cross_document_opt_in_;
+  mojom::blink::ViewTransitionSameOriginOptIn cross_document_opt_in_ =
+      mojom::blink::ViewTransitionSameOriginOptIn::kDisabled;
+
+  uint32_t resource_local_id_sequence_ =
+      viz::ViewTransitionElementResourceId::kInvalidLocalId;
+
+  Vector<String> cross_document_types_;
+
+  bool in_get_computed_style_scope_ = false;
+  bool last_update_had_computed_style_scope_ = false;
+
+  // Track in flight and captured transitions. Advance from the capture phase to
+  // DOM callback is deferred until all in flight captures are complete in order
+  // to trigger the DOM callbacks in creation order.
+  int in_flight_capture_requests_ = 0;
+  HeapVector<Member<ViewTransition>> captured_transitions_;
+
+  // This allow deferring starting a navigation transition until some conditions
+  // are met, such as existing transitions are finished.
+  struct PendingNavigationTransition {
+    blink::ViewTransitionToken navigation_id;
+    mojom::blink::PageSwapEventParamsPtr params;
+    ViewTransition::ViewTransitionStateCallback callback;
+  };
+  std::optional<PendingNavigationTransition> pending_navigation_transition_;
 };
 
 }  // namespace blink

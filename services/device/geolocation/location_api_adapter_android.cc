@@ -10,34 +10,36 @@
 #include "base/location.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "services/device/geolocation/geolocation_jni_headers/LocationProviderAdapter_jni.h"
 #include "services/device/geolocation/location_provider_android.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "services/device/geolocation/geolocation_jni_headers/LocationProviderAdapter_jni.h"
+
 using base::android::AttachCurrentThread;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using device::LocationApiAdapterAndroid;
 
-static void JNI_LocationProviderAdapter_NewLocationAvailable(
-    JNIEnv* env,
-    jdouble latitude,
-    jdouble longitude,
-    jdouble time_stamp,
-    jboolean has_altitude,
-    jdouble altitude,
-    jboolean has_accuracy,
-    jdouble accuracy,
-    jboolean has_heading,
-    jdouble heading,
-    jboolean has_speed,
-    jdouble speed) {
+static void JNI_LocationProviderAdapter_NewLocationAvailable(JNIEnv* env,
+                                                             double latitude,
+                                                             double longitude,
+                                                             double time_stamp,
+                                                             bool has_altitude,
+                                                             double altitude,
+                                                             bool has_accuracy,
+                                                             double accuracy,
+                                                             bool has_heading,
+                                                             double heading,
+                                                             bool has_speed,
+                                                             double speed,
+                                                             bool is_precise) {
   LocationApiAdapterAndroid::OnNewLocationAvailable(
       latitude, longitude, time_stamp, has_altitude, altitude, has_accuracy,
-      accuracy, has_heading, heading, has_speed, speed);
+      accuracy, has_heading, heading, has_speed, speed, is_precise);
 }
 
 static void JNI_LocationProviderAdapter_NewErrorAvailable(
     JNIEnv* env,
-    const JavaParamRef<jstring>& message) {
+    const JavaRef<jstring>& message) {
   LocationApiAdapterAndroid::OnNewErrorAvailable(env, message);
 }
 
@@ -90,7 +92,8 @@ void LocationApiAdapterAndroid::OnNewLocationAvailable(double latitude,
                                                        bool has_heading,
                                                        double heading,
                                                        bool has_speed,
-                                                       double speed) {
+                                                       double speed,
+                                                       bool is_precise) {
   auto position = mojom::Geoposition::New();
   position->latitude = latitude;
   position->longitude = longitude;
@@ -103,6 +106,7 @@ void LocationApiAdapterAndroid::OnNewLocationAvailable(double latitude,
     position->heading = heading;
   if (has_speed)
     position->speed = speed;
+  position->is_precise = is_precise;
 
   LocationApiAdapterAndroid* self = GetInstance();
   self->task_runner_->PostTask(
@@ -114,8 +118,9 @@ void LocationApiAdapterAndroid::OnNewLocationAvailable(double latitude,
 }
 
 // static
-void LocationApiAdapterAndroid::OnNewErrorAvailable(JNIEnv* env,
-                                                    jstring message) {
+void LocationApiAdapterAndroid::OnNewErrorAvailable(
+    JNIEnv* env,
+    const base::android::JavaRef<jstring>& message) {
   LocationApiAdapterAndroid* self = GetInstance();
   self->task_runner_->PostTask(
       FROM_HERE,
@@ -124,7 +129,7 @@ void LocationApiAdapterAndroid::OnNewErrorAvailable(JNIEnv* env,
           base::Unretained(self),
           mojom::GeopositionResult::NewError(mojom::GeopositionError::New(
               mojom::GeopositionErrorCode::kPositionUnavailable,
-              base::android::ConvertJavaStringToUTF8(env, message),
+              base::android::ConvertJavaStringToUTF8(message),
               /*error_technical=*/""))));
 }
 
@@ -148,3 +153,5 @@ void LocationApiAdapterAndroid::NotifyNewGeoposition(
 }
 
 }  // namespace device
+
+DEFINE_JNI(LocationProviderAdapter)

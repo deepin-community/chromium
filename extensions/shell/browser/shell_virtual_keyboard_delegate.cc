@@ -7,14 +7,14 @@
 #include <memory>
 #include <utility>
 
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "base/values.h"
 
 namespace extensions {
 
 void ShellVirtualKeyboardDelegate::GetKeyboardConfig(
     OnKeyboardSettingsCallback on_settings_callback) {
-  base::Value::Dict settings;
+  base::DictValue settings;
   settings.Set("hotrodmode", is_hotrod_keyboard_);
   std::move(on_settings_callback).Run(std::move(settings));
 }

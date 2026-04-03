@@ -8,11 +8,26 @@
 #ifndef ANGLE_TESTS_TESTUTILS_VULKANHELPER_H_
 #define ANGLE_TESTS_TESTUTILS_VULKANHELPER_H_
 
+#include <mutex>
+
+#include "common/angleutils.h"
 #include "common/vulkan/vk_headers.h"
+#include "test_utils/ANGLETest.h"
 #include "vulkan/vulkan_fuchsia_ext.h"
 
 namespace angle
 {
+class VulkanQueueMutex
+{
+  public:
+    void init(EGLDisplay dpy);
+
+    void lock();
+    void unlock();
+
+  private:
+    EGLDisplay display;
+};
 
 class VulkanHelper
 {
@@ -27,6 +42,14 @@ class VulkanHelper
     VkPhysicalDevice getPhysicalDevice() const { return mPhysicalDevice; }
     VkDevice getDevice() const { return mDevice; }
     VkQueue getGraphicsQueue() const { return mGraphicsQueue; }
+    std::unique_lock<VulkanQueueMutex> getGraphicsQueueLock()
+    {
+        if (mInitializedFromANGLE)
+        {
+            return std::unique_lock<VulkanQueueMutex>(mGraphicsQueueMutex);
+        }
+        return std::unique_lock<VulkanQueueMutex>();
+    }
 
     VkResult createImage2D(VkFormat format,
                            VkImageCreateFlags createFlags,
@@ -117,7 +140,7 @@ class VulkanHelper
     // Writes pixels into an image. Currently only VK_FORMAT_R8G8B8A8_UNORM
     // and VK_FORMAT_B8G8R8A8_UNORM formats are supported.
     void writePixels(VkImage dstImage,
-                     VkImageLayout imageLayout,
+                     VkImageLayout srcImageLayout,
                      VkFormat imageFormat,
                      VkOffset3D imageOffset,
                      VkExtent3D imageExtent,
@@ -134,6 +157,8 @@ class VulkanHelper
                     void *pixels,
                     size_t pixelsSize);
 
+    bool useUnifiedImageLayouts() const { return mHasUnifiedImageLayouts; }
+
   private:
     bool mInitializedFromANGLE       = false;
     VkInstance mInstance             = VK_NULL_HANDLE;
@@ -141,6 +166,7 @@ class VulkanHelper
     VkDevice mDevice                 = VK_NULL_HANDLE;
     VkQueue mGraphicsQueue           = VK_NULL_HANDLE;
     VkCommandPool mCommandPool       = VK_NULL_HANDLE;
+    VulkanQueueMutex mGraphicsQueueMutex;
 
     VkPhysicalDeviceMemoryProperties mMemoryProperties = {};
 
@@ -150,11 +176,12 @@ class VulkanHelper
     bool mHasExternalMemoryFuchsia    = false;
     bool mHasExternalSemaphoreFd      = false;
     bool mHasExternalSemaphoreFuchsia = false;
+    bool mHasUnifiedImageLayouts      = false;
     PFN_vkGetPhysicalDeviceImageFormatProperties2 vkGetPhysicalDeviceImageFormatProperties2 =
         nullptr;
     PFN_vkGetMemoryFdKHR vkGetMemoryFdKHR       = nullptr;
     PFN_vkGetSemaphoreFdKHR vkGetSemaphoreFdKHR = nullptr;
-    PFN_vkGetPhysicalDeviceExternalSemaphorePropertiesKHR
+    ANGLE_MAYBE_UNUSED_PRIVATE_FIELD PFN_vkGetPhysicalDeviceExternalSemaphorePropertiesKHR
         vkGetPhysicalDeviceExternalSemaphorePropertiesKHR                   = nullptr;
     PFN_vkGetMemoryZirconHandleFUCHSIA vkGetMemoryZirconHandleFUCHSIA       = nullptr;
     PFN_vkGetSemaphoreZirconHandleFUCHSIA vkGetSemaphoreZirconHandleFUCHSIA = nullptr;

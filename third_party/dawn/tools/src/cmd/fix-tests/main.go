@@ -32,18 +32,19 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
+	"dawn.googlesource.com/dawn/tools/src/oswrapper"
 	"dawn.googlesource.com/dawn/tools/src/substr"
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(oswrapper.GetRealOSWrapper()); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
@@ -66,7 +67,9 @@ Usage:
 	os.Exit(1)
 }
 
-func run() error {
+// TODO(crbug.com/416755658): Add unittest coverage once exec is handled via
+// dependency injection.
+func run(osWrapper oswrapper.OSWrapper) error {
 	flag.Parse()
 	args := flag.Args()
 	if len(args) < 1 {
@@ -77,14 +80,14 @@ func run() error {
 	wd := filepath.Dir(exe) // The directory holding the test exe
 
 	// Create a temporary directory to hold the 'test-results.json' file
-	tmpDir, err := ioutil.TempDir("", "fix-tests")
+	tmpDir, err := osWrapper.MkdirTemp("", "fix-tests")
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(tmpDir, 0666); err != nil {
+	if err := osWrapper.MkdirAll(tmpDir, 0666); err != nil {
 		return fmt.Errorf("Failed to create temporary directory: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer osWrapper.RemoveAll(tmpDir)
 
 	// Full path to the 'test-results.json' in the temporary directory
 	testResultsPath := filepath.Join(tmpDir, "test-results.json")
@@ -103,7 +106,7 @@ func run() error {
 	}
 
 	// Read the 'test-results.json' file
-	testResultsFile, err := os.Open(testResultsPath)
+	testResultsFile, err := osWrapper.Open(testResultsPath)
 	if err != nil {
 		return err
 	}
@@ -126,7 +129,7 @@ func run() error {
 				}
 				seen[test] = true
 
-				if err := processFailure(test, wd, failure.Failure); err != nil {
+				if err := processFailure(test, wd, failure.Failure, osWrapper); err != nil {
 					fmt.Println(fmt.Errorf("%v: %w", test, err))
 					numFailed++
 				} else {
@@ -162,7 +165,70 @@ var (
 	reExpectHasSubstr = regexp.MustCompile(`([./\\\w_\-:]*):(\d+).*\nValue of: .*\nExpected: has substring "((?:.|\n)*?[^\\])"\n  Actual: "((?:.|\n)*?[^\\])"`)
 )
 
-func processFailure(test, wd, failure string) error {
+var reHexCode = regexp.MustCompile(`\\x([0-9A-Z]{2})`)
+
+type MatchRange struct {
+	start int
+	end   int // exclusive
+}
+
+func Size(mr MatchRange) int {
+	return mr.end - mr.start
+}
+
+// longestSubstringMatch finds the longest matching substring of searchStr in docString and
+// returns the start/end indices
+func longestSubstringMatch(searchStr string, docString string) MatchRange {
+	// Brute force algorithm is n*m for string sizes n and m
+	bestIdxStart := 0
+	bestIdxEnd := 0 // exclusive
+	// Scan the document with the search string from the highest offset to the lowest. This will be out of bound for search string but that is because we are looking of a substring.
+	for docOffset := -len(searchStr); docOffset < len(docString)+len(searchStr); docOffset++ {
+		currIdxStart := 0
+		currIdxEnd := 0 // exclusive
+		for searchIdx := 0; searchIdx < len(searchStr); searchIdx++ {
+			docOffset := searchIdx + docOffset
+			isMatch := false
+
+			// basic range checking for the doc
+			if docOffset >= 0 && docOffset < len(docString) {
+				if searchStr[searchIdx] == docString[docOffset] {
+					isMatch = true
+				}
+			}
+
+			if isMatch {
+				if currIdxEnd == 0 {
+					// first time matching
+					currIdxStart = searchIdx
+					currIdxEnd = currIdxStart + 1 // exclusive
+				} else {
+					// continue current matching.
+					currIdxEnd++
+				}
+			}
+
+			// check if our match is the best
+			bestSize := bestIdxEnd - bestIdxStart
+			currSize := currIdxEnd - currIdxStart
+
+			if bestSize < currSize {
+				bestIdxStart = currIdxStart
+				bestIdxEnd = currIdxEnd
+			}
+
+			if !isMatch {
+				// reset
+				currIdxStart = 0
+				currIdxEnd = 0
+			}
+		}
+	}
+
+	return MatchRange{bestIdxStart, bestIdxEnd}
+}
+
+func processFailure(test, wd, failure string, osWrapper oswrapper.OSWrapper) error {
 	// Start by un-escaping newlines in the failure message
 	failure = strings.ReplaceAll(failure, "\\n", "\n")
 	// Matched regex strings will also need to be un-escaped, but do this after
@@ -170,6 +236,13 @@ func processFailure(test, wd, failure string) error {
 	unescape := func(s string) string {
 		s = strings.ReplaceAll(s, `\"`, `"`)
 		s = strings.ReplaceAll(s, `\\`, `\`)
+		s = reHexCode.ReplaceAllStringFunc(s, func(match string) string {
+			i, err := strconv.ParseInt(match[2:], 16, 32)
+			if err != nil {
+				panic(err)
+			}
+			return string([]byte{byte(i)})
+		})
 		return s
 	}
 	escape := func(s string) string {
@@ -182,33 +255,68 @@ func processFailure(test, wd, failure string) error {
 	var file string
 	var fix func(testSource string) (string, error)
 	if parts := reExpectEq.FindStringSubmatch(failure); len(parts) == 5 {
-		// EXPECT_EQ(a, b)
 		a, b := unescape(parts[3]), unescape(parts[4])
 		file = parts[1]
 		fix = func(testSource string) (string, error) {
-			// We don't know if a or b is the expected, so just try flipping the string
-			// to the other form.
+			// This code is written so it can insert changes as fixes for expects that only match a substring.
+			// An example of where this is required is the "glsl/writer/builtin_test.cc" due to the programmatic header (GlslHeader())
+			// We don't know if a or b is the expected. We also don't know if it should be escaped for R"(...)" strings
+			aEsc, bEsc := escape(a), escape(b)
 
-			if len(b) > len(a) { // Go with the longer match, in case both are found
-				a, b = b, a
+			// Find the longest match. We have (unfortunately) 4 options.
+			mrA := longestSubstringMatch(a, testSource)
+			mrB := longestSubstringMatch(b, testSource)
+			mrAEsc := longestSubstringMatch(aEsc, testSource)
+			mrBEsc := longestSubstringMatch(bEsc, testSource)
+
+			// Perfect matches are prioritized for the cases where there may be more than matchable string in test function.
+			// This is common in tint where there is both the 'src' and 'expect' strings of non-failing transform test.
+			var aPerfect = len(a) == Size(mrA)
+			var bPerfect = len(b) == Size(mrB)
+			var aEscPerfect = len(aEsc) == Size(mrAEsc)
+			var bEscPerfect = len(bEsc) == Size(mrBEsc)
+			var hasPerfect = aPerfect || bPerfect || aEscPerfect || bEscPerfect
+
+			useLargest := func(mr MatchRange) bool {
+				return Size(mr) >= Size(mrA) && Size(mr) >= Size(mrB) &&
+					Size(mr) >= Size(mrAEsc) && Size(mr) >= Size(mrBEsc) && !hasPerfect
 			}
-			switch {
-			case strings.Contains(testSource, a):
-				testSource = strings.ReplaceAll(testSource, a, b)
-			case strings.Contains(testSource, b):
-				testSource = strings.ReplaceAll(testSource, b, a)
-			default:
-				// Try escaping for R"(...)" strings
-				a, b = escape(a), escape(b)
-				switch {
-				case strings.Contains(testSource, a):
-					testSource = strings.ReplaceAll(testSource, a, b)
-				case strings.Contains(testSource, b):
-					testSource = strings.ReplaceAll(testSource, b, a)
-				default:
-					return "", fmt.Errorf("Could not fix 'EXPECT_EQ' pattern in '%v'", file)
-				}
+
+			// assumed mr_b_esc is best match
+			expectedStr := bEsc
+			replaceStr := aEsc
+			mrLargest := mrBEsc
+
+			if useLargest(mrA) || aPerfect {
+				expectedStr = a
+				replaceStr = b
+				mrLargest = mrA
+			} else if useLargest(mrB) || bPerfect {
+				expectedStr = b
+				replaceStr = a
+				mrLargest = mrB
+			} else if useLargest(mrAEsc) || aEscPerfect {
+				expectedStr = aEsc
+				replaceStr = bEsc
+				mrLargest = mrAEsc
 			}
+
+			// trim away the number of unmatched characters from the end of expected to the end of the replacement.
+			replaceStrEnd := len(replaceStr) - (len(expectedStr) - mrLargest.end)
+			if replaceStrEnd >= mrLargest.start && replaceStrEnd <= len(replaceStr) {
+				replaceStr = replaceStr[mrLargest.start:replaceStrEnd]
+				expectedStr = expectedStr[mrLargest.start:mrLargest.end]
+			} else {
+				// It is not safe to attempt a replacement if the replacement string would have negative (nonsense) size.
+				expectedStr = ""
+			}
+
+			// Do not try to replace on empty strings.
+			if len(expectedStr) <= 0 {
+				return "", fmt.Errorf("could not fix 'EXPECT_EQ' pattern in '%v'\n\nA: '%v'\n\nB: '%v'", file, a, b)
+			}
+
+			testSource = strings.ReplaceAll(testSource, expectedStr, replaceStr)
 			return testSource, nil
 		}
 	} else if parts := reExpectHasSubstr.FindStringSubmatch(failure); len(parts) == 5 {
@@ -225,13 +333,13 @@ func processFailure(test, wd, failure string) error {
 					testSource = strings.Replace(testSource, b, fix, -1)
 					return testSource, nil
 				}
-				return "", fmt.Errorf("Could apply fix for 'HasSubstr' pattern in '%v'", file)
+				return "", fmt.Errorf("could apply fix for 'HasSubstr' pattern in '%v'", file)
 			}
 
-			return "", fmt.Errorf("Could find fix for 'HasSubstr' pattern in '%v'", file)
+			return "", fmt.Errorf("could find fix for 'HasSubstr' pattern in '%v'", file)
 		}
 	} else {
-		return fmt.Errorf("Cannot fix this type of failure")
+		return fmt.Errorf("cannot fix this type of failure")
 	}
 
 	// Get the absolute source path
@@ -241,7 +349,7 @@ func processFailure(test, wd, failure string) error {
 	}
 
 	// Parse the source file, split into tests
-	sourceFile, err := parseSourceFile(sourcePath)
+	sourceFile, err := parseSourceFile(sourcePath, osWrapper)
 	if err != nil {
 		return fmt.Errorf("Couldn't parse tests from file '%v': %w", file, err)
 	}
@@ -263,13 +371,13 @@ func processFailure(test, wd, failure string) error {
 	sourceFile.parts[testIdx] = testSource
 
 	// Write out the source file
-	return writeSourceFile(sourcePath, sourceFile)
+	return writeSourceFile(sourcePath, sourceFile, osWrapper)
 }
 
 // parseSourceFile() reads the file at path, splitting the content into chunks
 // for each TEST.
-func parseSourceFile(path string) (sourceFile, error) {
-	fileBytes, err := ioutil.ReadFile(path)
+func parseSourceFile(path string, fsReader oswrapper.FilesystemReader) (sourceFile, error) {
+	fileBytes, err := fsReader.ReadFile(path)
 	if err != nil {
 		return sourceFile{}, err
 	}
@@ -296,9 +404,9 @@ func parseSourceFile(path string) (sourceFile, error) {
 
 // writeSourceFile() joins the chunks of the file, and writes the content out to
 // path.
-func writeSourceFile(path string, file sourceFile) error {
+func writeSourceFile(path string, file sourceFile, fsWriter oswrapper.FilesystemWriter) error {
 	body := strings.Join(file.parts, "")
-	return ioutil.WriteFile(path, []byte(body), 0666)
+	return fsWriter.WriteFile(path, []byte(body), 0666)
 }
 
 type sourceFile struct {

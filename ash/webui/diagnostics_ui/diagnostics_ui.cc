@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ash/webui/diagnostics_ui/diagnostics_ui.h"
 
 #include <memory>
@@ -45,8 +46,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/chromeos/strings/network/network_element_localized_strings_provider.h"
-#include "ui/resources/grit/webui_resources.h"
-#include "ui/webui/color_change_listener/color_change_handler.h"
+#include "ui/webui/resources/grit/webui_resources.h"
 
 namespace ash {
 
@@ -63,8 +63,8 @@ diagnostics::metrics::NavigationView GetInitialView(const GURL url) {
   }
 
   // Note: Valid query strings map to strings in the GetUrlForPage located in
-  // chrome/browser/ui/webui/ash/diagnostics_dialog.cc.
-  const std::string& original_query = url.query();  // must outlive |query|.
+  // chrome/browser/ui/webui/ash/diagnostics_dialog/diagnostics_dialog.cc.
+  const std::string& original_query = url.GetQuery();  // must outlive |query|.
   std::string_view query =
       base::TrimString(original_query, " \t", base::TRIM_ALL);
 
@@ -94,8 +94,8 @@ std::u16string GetLinkLabel(int string_id, const char* url) {
   return l10n_util::GetStringFUTF16(string_id, replacements, nullptr);
 }
 
-base::Value::Dict GetDataSourceUpdate() {
-  base::Value::Dict update;
+base::DictValue GetDataSourceUpdate() {
+  base::DictValue update;
   update.Set("settingsLinkText",
              GetLinkLabel(IDS_DIAGNOSTICS_SETTINGS_LINK_TEXT,
                           "chrome://os-settings/"));
@@ -375,7 +375,7 @@ void SetUpWebUIDataSource(content::WebUIDataSource* source,
                           base::span<const webui::ResourcePath> resources,
                           int default_resource) {
   source->AddResourcePaths(resources);
-  source->AddResourcePath("", default_resource);
+  source->SetDefaultResource(default_resource);
   source->AddResourcePath("test_loader.html", IDR_WEBUI_TEST_LOADER_HTML);
   source->AddResourcePath("test_loader.js", IDR_WEBUI_JS_TEST_LOADER_JS);
   source->AddResourcePath("test_loader_util.js",
@@ -385,8 +385,6 @@ void SetUpWebUIDataSource(content::WebUIDataSource* source,
                      features::IsTouchpadInDiagnosticsAppEnabled());
   source->AddBoolean("isTouchscreenEnabled",
                      features::IsTouchscreenInDiagnosticsAppEnabled());
-  source->AddBoolean("isJellyEnabledForDiagnosticsApp",
-                     ash::features::IsJellyEnabledForDiagnosticsApp());
 }
 
 void SetUpPluralStringHandler(content::WebUI* web_ui) {
@@ -413,9 +411,7 @@ DiagnosticsDialogUI::DiagnosticsDialogUI(
       "script-src chrome://resources chrome://webui-test 'self';");
   ash::EnableTrustedTypesCSP(html_source);
 
-  const auto resources = base::make_span(kAshDiagnosticsAppResources,
-                                         kAshDiagnosticsAppResourcesSize);
-  SetUpWebUIDataSource(html_source, resources,
+  SetUpWebUIDataSource(html_source, kAshDiagnosticsAppResources,
                        IDR_ASH_DIAGNOSTICS_APP_INDEX_HTML);
 
   SetUpPluralStringHandler(web_ui);
@@ -490,12 +486,6 @@ void DiagnosticsDialogUI::BindInterface(
   if (input_data_provider) {
     input_data_provider->BindInterface(std::move(receiver));
   }
-}
-
-void DiagnosticsDialogUI::BindInterface(
-    mojo::PendingReceiver<color_change_listener::mojom::PageHandler> receiver) {
-  color_provider_handler_ = std::make_unique<ui::ColorChangeHandler>(
-      web_ui()->GetWebContents(), std::move(receiver));
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(DiagnosticsDialogUI)

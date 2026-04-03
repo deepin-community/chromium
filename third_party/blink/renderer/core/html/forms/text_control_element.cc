@@ -32,7 +32,7 @@
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/focus_params.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
+#include "third_party/blink/renderer/core/dom/form_control_range.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/editing/editing_behavior.h"
@@ -67,6 +67,8 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -85,6 +87,52 @@ Position GetNextSoftBreak(const OffsetMapping& mapping, InlineCursor& cursor) {
       return mapping.GetFirstPosition(break_token->StartTextOffset());
   }
   return Position();
+}
+
+void AppendWrappedNode(const Element& container,
+                       const Node& node,
+                       const OffsetMapping& mapping,
+                       InlineCursor& cursor,
+                       Position& break_position,
+                       StringBuilder& result) {
+  if (IsA<HTMLBRElement>(node)) {
+    if (!TextControlElement::IsPlaceholderBreakElement(&node)) {
+      result.Append(uchar::kLineFeed);
+    } else {
+      DCHECK_EQ(&node, container.lastChild());
+    }
+  } else if (auto* text_node = DynamicTo<Text>(node)) {
+    String data = text_node->data();
+    unsigned length = data.length();
+    unsigned position = 0;
+    while (break_position.AnchorNode() == node &&
+           static_cast<unsigned>(break_position.OffsetInContainerNode()) <=
+               length) {
+      unsigned break_offset = break_position.OffsetInContainerNode();
+      if (break_offset > position) {
+        result.Append(data, position, break_offset - position);
+        position = break_offset;
+        result.Append(uchar::kLineFeed);
+      }
+      break_position = GetNextSoftBreak(mapping, cursor);
+    }
+    result.Append(data, position, length - position);
+  }
+  while (break_position.AnchorNode() == node) {
+    break_position = GetNextSoftBreak(mapping, cursor);
+  }
+}
+
+void AppendText(const String& value,
+                wtf_size_t start,
+                wtf_size_t limit,
+                ContainerNode& container) {
+  Document& doc = container.GetDocument();
+  constexpr wtf_size_t kTextChunkSize = 8192u;
+  for (wtf_size_t i = start; i < limit; i += kTextChunkSize) {
+    container.AppendChild(Text::Create(
+        doc, value.Substring(i, std::min(limit - i, kTextChunkSize))));
+  }
 }
 
 }  // namespace
@@ -129,6 +177,13 @@ void TextControlElement::DispatchBlurEvent(
 }
 
 void TextControlElement::DefaultEventHandler(Event& event) {
+  // FormControlRange snapshots on beforeinput and commits after the value
+  // mutation, ensuring updates are visible before input listeners run.
+  if (RuntimeEnabledFeatures::FormControlRangeEnabled() &&
+      event.type() == event_type_names::kBeforeinput && event.IsInputEvent()) {
+    CaptureFormControlRangePreEdit();
+  }
+
   if (event.type() == event_type_names::kWebkitEditableContentChanged &&
       GetLayoutObject() && GetLayoutObject()->IsTextControl()) {
     last_change_was_user_edit_ = !GetDocument().IsRunningExecCommand();
@@ -170,17 +225,19 @@ String TextControlElement::StrippedPlaceholder() const {
   // the attribute value.
   const AtomicString& attribute_value =
       FastGetAttribute(html_names::kPlaceholderAttr);
-  if (!attribute_value.Contains(kNewlineCharacter) &&
-      !attribute_value.Contains(kCarriageReturnCharacter))
+  if (!attribute_value.Contains(uchar::kLineFeed) &&
+      !attribute_value.Contains(uchar::kCarriageReturn)) {
     return attribute_value;
+  }
 
   StringBuilder stripped;
   unsigned length = attribute_value.length();
   stripped.ReserveCapacity(length);
   for (unsigned i = 0; i < length; ++i) {
     UChar character = attribute_value[i];
-    if (character == kNewlineCharacter || character == kCarriageReturnCharacter)
+    if (character == uchar::kLineFeed || character == uchar::kCarriageReturn) {
       continue;
+    }
     stripped.Append(character);
   }
   return stripped.ToString();
@@ -188,8 +245,8 @@ String TextControlElement::StrippedPlaceholder() const {
 
 bool TextControlElement::PlaceholderShouldBeVisible() const {
   return SuggestedValue().empty() && SupportsPlaceholder() &&
-         InnerEditorValue().empty() &&
-         FastHasAttribute(html_names::kPlaceholderAttr);
+         FastHasAttribute(html_names::kPlaceholderAttr) &&
+         IsInnerEditorValueEmpty();
 }
 
 HTMLElement* TextControlElement::PlaceholderElement() const {
@@ -208,6 +265,12 @@ void TextControlElement::UpdatePlaceholderVisibility() {
   bool place_holder_was_visible = IsPlaceholderVisible();
   HTMLElement* placeholder = PlaceholderElement();
   if (!placeholder) {
+    if (!InnerEditorElement()) {
+      // The place holder visibility needs to be updated as it may be used by
+      // CSS selectors.
+      SetPlaceholderVisibility(PlaceholderShouldBeVisible());
+      return;
+    }
     placeholder = UpdatePlaceholderText();
   }
   SetPlaceholderVisibility(PlaceholderShouldBeVisible());
@@ -232,6 +295,19 @@ void TextControlElement::UpdatePlaceholderVisibility() {
   if (place_holder_was_visible != IsPlaceholderVisible() &&
       SuggestedValue().empty()) {
     PseudoStateChanged(CSSSelector::kPseudoPlaceholderShown);
+  }
+}
+
+void TextControlElement::UpdatePlaceholderShadowPseudoId(
+    HTMLElement& placeholder) {
+  if (suggested_value_.empty()) {
+    // Reset the pseudo-id for placeholders to use the appropriated style
+    placeholder.SetShadowPseudoId(
+        shadow_element_names::kPseudoInputPlaceholder);
+  } else {
+    // Set the pseudo-id for suggested values to use the appropriated style.
+    placeholder.SetShadowPseudoId(
+        shadow_element_names::kPseudoInternalInputSuggested);
   }
 }
 
@@ -290,11 +366,6 @@ void TextControlElement::SetFocused(bool flag,
 }
 
 void TextControlElement::DispatchFormControlChangeEvent() {
-  if (UserHasEditedTheField()) {
-    // If the user has edited the field, then at this point we should also start
-    // matching :user-valid/:user-invalid.
-    SetUserHasEditedTheFieldAndBlurred();
-  }
   if (!value_before_first_user_edit_.IsNull() &&
       !EqualIgnoringNullity(value_before_first_user_edit_, Value())) {
     ClearValueBeforeFirstUserEdit();
@@ -329,9 +400,9 @@ void TextControlElement::setRangeText(const String& replacement,
   if (start > end) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
-        "The provided start value (" + String::Number(start) +
-            ") is larger than the provided end value (" + String::Number(end) +
-            ").");
+        StrCat({"The provided start value (", String::Number(start),
+                ") is larger than the provided end value (",
+                String::Number(end), ")."}));
     return;
   }
   if (OpenShadowRoot())
@@ -351,8 +422,17 @@ void TextControlElement::setRangeText(const String& replacement,
   text.Append(replacement);
   text.Append(StringView(original_text, end));
 
-  SetValue(text.ToString(), TextFieldEventBehavior::kDispatchNoEvent,
-           TextControlSetValueSelection::kDoNotSet);
+  // Suppress SetValue()’s automatic full-value diff within this scope to avoid
+  // emitting a duplicate FormControlRange update; then commit the precise
+  // programmatic edit.
+  {
+    ScopedSkipValueAutoDiff skip_value_auto_diff(*this);
+    SetValue(text.ToString(), TextFieldEventBehavior::kDispatchNoEvent,
+             TextControlSetValueSelection::kDoNotSet);
+    if (RuntimeEnabledFeatures::FormControlRangeEnabled()) {
+      CommitProgrammaticFormControlRangeEdit(original_text, start, end);
+    }
+  }
 
   switch (selection_mode.AsEnum()) {
     case V8SelectionMode::Enum::kSelect:
@@ -465,6 +545,11 @@ unsigned TextControlElement::IndexForPosition(HTMLElement* inner_editor,
   return index;
 }
 
+unsigned TextControlElement::IndexForPosition(
+    const Position& editor_position) const {
+  return IndexForPosition(InnerEditorElement(), editor_position);
+}
+
 bool TextControlElement::ShouldApplySelectionCache() const {
   const auto& doc = GetDocument();
   return doc.FocusedElement() != this || doc.ShouldUpdateSelectionAfterLayout();
@@ -476,6 +561,7 @@ bool TextControlElement::SetSelectionRange(
     TextFieldSelectionDirection direction) {
   if (OpenShadowRoot() || !IsTextControl())
     return false;
+  HTMLElement* inner_editor = EnsureInnerEditorElement();
   const unsigned editor_value_length = InnerEditorValue().length();
   end = std::min(end, editor_value_length);
   start = std::min(start, end);
@@ -487,12 +573,19 @@ bool TextControlElement::SetSelectionRange(
 
   // TODO(crbug.com/927646): The focused element should always be connected, but
   // we fail to ensure so in some cases. Fix it.
-  if (ShouldApplySelectionCache() || !isConnected())
+  if (ShouldApplySelectionCache() || !isConnected()) {
+    if (did_change) {
+      ScheduleSelectionchangeEventOnThisOrDocument();
+    }
     return did_change;
+  }
 
-  HTMLElement* inner_editor = EnsureInnerEditorElement();
-  if (!frame || !inner_editor)
+  if (!frame || !inner_editor) {
+    if (did_change) {
+      ScheduleSelectionchangeEventOnThisOrDocument();
+    }
     return did_change;
+  }
 
   Position start_position = PositionForIndex(inner_editor, start);
   Position end_position =
@@ -589,7 +682,7 @@ void TextControlElement::ComputeSelection(
         InnerEditorElement(), selection.ComputeStartPosition());
   }
   if (flags & kEnd) {
-    if (flags & kStart && (selection.Anchor() == selection.Focus())) {
+    if (flags & kStart && !selection.IsRange()) {
       computed_selection.end = computed_selection.start;
     } else {
       computed_selection.end = IndexForPosition(InnerEditorElement(),
@@ -597,10 +690,9 @@ void TextControlElement::ComputeSelection(
     }
   }
   if (flags & kDirection && frame->Selection().IsDirectional()) {
-    computed_selection.direction =
-        (selection.Anchor() == selection.ComputeStartPosition())
-            ? kSelectionHasForwardDirection
-            : kSelectionHasBackwardDirection;
+    computed_selection.direction = (selection.IsAnchorFirst())
+                                       ? kSelectionHasForwardDirection
+                                       : kSelectionHasBackwardDirection;
   }
 }
 
@@ -630,7 +722,6 @@ static const AtomicString& DirectionString(
   }
 
   NOTREACHED();
-  return none;
 }
 
 const AtomicString& TextControlElement::selectionDirection() const {
@@ -727,10 +818,10 @@ void TextControlElement::setMaxLength(int new_value,
                                       ExceptionState& exception_state) {
   int min = minLength();
   if (new_value < 0) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kIndexSizeError,
-                                      "The value provided (" +
-                                          String::Number(new_value) +
-                                          ") is not positive or 0.");
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kIndexSizeError,
+        StrCat({"The value provided (", String::Number(new_value),
+                ") is not positive or 0."}));
   } else if (min >= 0 && new_value < min) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
@@ -745,10 +836,10 @@ void TextControlElement::setMinLength(int new_value,
                                       ExceptionState& exception_state) {
   int max = maxLength();
   if (new_value < 0) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kIndexSizeError,
-                                      "The value provided (" +
-                                          String::Number(new_value) +
-                                          ") is not positive or 0.");
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kIndexSizeError,
+        StrCat({"The value provided (", String::Number(new_value),
+                ") is not positive or 0."}));
   } else if (max >= 0 && new_value > max) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kIndexSizeError,
@@ -790,6 +881,16 @@ void TextControlElement::ScheduleSelectEvent() {
   Event* event = Event::CreateBubble(event_type_names::kSelect);
   event->SetTarget(this);
   GetDocument().EnqueueAnimationFrameEvent(event);
+}
+
+void TextControlElement::ScheduleSelectionchangeEventOnThisOrDocument() {
+  if (RuntimeEnabledFeatures::DispatchSelectionchangeEventPerElementEnabled()) {
+    if (!IsInShadowTree()) {
+      ScheduleSelectionchangeEvent();
+    } else {
+      GetDocument().ScheduleSelectionchangeEvent();
+    }
+  }
 }
 
 void TextControlElement::ParseAttribute(
@@ -836,16 +937,49 @@ bool TextControlElement::LastChangeWasUserEdit() const {
 }
 
 Node* TextControlElement::CreatePlaceholderBreakElement() const {
-  return MakeGarbageCollected<HTMLBRElement>(GetDocument());
+  auto* element = MakeGarbageCollected<HTMLBRElement>(GetDocument());
+  element->setAttribute(html_names::kIdAttr,
+                        shadow_element_names::kIdPlaceholderBreak);
+  return element;
 }
 
-void TextControlElement::AddPlaceholderBreakElementIfNecessary() {
+bool TextControlElement::IsPlaceholderBreakElement(const Node* node) {
+  return IsA<HTMLBRElement>(node) &&
+         To<Element>(node)->GetIdAttribute() ==
+             shadow_element_names::kIdPlaceholderBreak;
+}
+
+void TextControlElement::AdjustPlaceholderBreakElement() {
   HTMLElement* inner_editor = InnerEditorElement();
   if (inner_editor->GetLayoutObject() &&
       inner_editor->GetLayoutObject()->Style()->ShouldCollapseBreaks()) {
     return;
   }
-  auto* last_child_text_node = DynamicTo<Text>(inner_editor->lastChild());
+  Node* last_child = inner_editor->lastChild();
+
+  // Remove the last empty text.  It prevents from adding the placeholder
+  // break though it produces no height.
+  while (auto* text_last_child = DynamicTo<Text>(last_child)) {
+    if (!text_last_child->data().empty()) {
+      break;
+    }
+    last_child = last_child->previousSibling();
+    text_last_child->remove();
+  }
+
+  if (IsA<HTMLBRElement>(last_child)) {
+    if (!IsPlaceholderBreakElement(last_child)) {
+      inner_editor->AppendChild(CreatePlaceholderBreakElement());
+    } else if (IsPlaceholderBreakElement(last_child->previousSibling())) {
+      // Some editing commands removes the placeholder break, and this removal
+      // operation is recorded to UndoStack. If an undo is executed, the
+      // placeholder break is added back even if another placeholder break
+      // exists.
+      last_child->remove();
+    }
+    return;
+  }
+  auto* last_child_text_node = DynamicTo<Text>(last_child);
   if (!last_child_text_node)
     return;
   if (last_child_text_node->data().EndsWith('\n') ||
@@ -858,25 +992,32 @@ void TextControlElement::SetInnerEditorValue(const String& value) {
   if (!IsTextControl() || OpenShadowRoot())
     return;
 
-  bool text_is_changed = value != InnerEditorValue();
+  bool text_is_changed = value != SerializeInnerEditorValue();
   HTMLElement* inner_editor = EnsureInnerEditorElement();
   if (!text_is_changed && inner_editor->HasChildren())
     return;
 
   // If the last child is a trailing <br> that's appended below, remove it
   // first so as to enable setInnerText() fast path of updating a text node.
-  if (IsA<HTMLBRElement>(inner_editor->lastChild()))
+  if (IsPlaceholderBreakElement(inner_editor->lastChild())) {
     inner_editor->RemoveChild(inner_editor->lastChild(), ASSERT_NO_EXCEPTION);
+  }
 
   // We don't use setTextContent.  It triggers unnecessary paint.
-  if (value.empty())
+  if (value.empty()) {
     inner_editor->RemoveChildren();
-  else
-    ReplaceChildrenWithText(inner_editor, value, ASSERT_NO_EXCEPTION);
+  } else if (IsA<HTMLInputElement>(this)) {
+    inner_editor->RemoveChildren();
+    AppendText(value, 0, value.length(), *inner_editor);
+  } else {
+    inner_editor->RemoveChildren();
+    // For <textarea>, \n is replaced with <br>.
+    AppendTextOrBr(value, *inner_editor);
+  }
 
-  // Add <br> so that we can put the caret at the next line of the last
-  // newline.
-  AddPlaceholderBreakElementIfNecessary();
+  // Add a placeholder <br> so that we can put the caret at the next line of
+  // the last newline.
+  AdjustPlaceholderBreakElement();
 
   if (text_is_changed && GetLayoutObject()) {
     if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache())
@@ -884,7 +1025,27 @@ void TextControlElement::SetInnerEditorValue(const String& value) {
   }
 }
 
-String TextControlElement::InnerEditorValue() const {
+void TextControlElement::AppendTextOrBr(const String& value,
+                                        ContainerNode& container) {
+  Document& doc = container.GetDocument();
+  wtf_size_t start = 0;
+  while (start < value.length()) {
+    wtf_size_t i = value.find('\n', start);
+    if (i == kNotFound) {
+      AppendText(value, start, value.length(), container);
+      break;
+    }
+    if (start != i) {
+      // Append [start, i).
+      AppendText(value, start, i, container);
+    }
+    // Append a BR.
+    container.AppendChild(MakeGarbageCollected<HTMLBRElement>(doc));
+    start = i + 1;
+  }
+}
+
+String TextControlElement::SerializeInnerEditorValue() const {
   DCHECK(!OpenShadowRoot());
   HTMLElement* inner_editor = InnerEditorElement();
   if (!inner_editor || !IsTextControl())
@@ -896,24 +1057,88 @@ String TextControlElement::InnerEditorValue() const {
   Node& first_child = *inner_editor->firstChild();
   if (auto* first_child_text_node = DynamicTo<Text>(first_child)) {
     Node* second_child = first_child.nextSibling();
-    if (!second_child ||
-        (!second_child->nextSibling() && IsA<HTMLBRElement>(*second_child)))
+    if (!second_child || (!second_child->nextSibling() &&
+                          IsPlaceholderBreakElement(second_child))) {
       return first_child_text_node->data();
-  } else if (!first_child.nextSibling() && IsA<HTMLBRElement>(first_child)) {
+    }
+  } else if (!first_child.nextSibling() &&
+             IsPlaceholderBreakElement(&first_child)) {
     return g_empty_string;
   }
 
-  StringBuilder result;
-  for (Node& node : NodeTraversal::InclusiveDescendantsOf(*inner_editor)) {
-    if (IsA<HTMLBRElement>(node)) {
-      DCHECK_EQ(&node, inner_editor->lastChild());
-      if (&node != inner_editor->lastChild())
-        result.Append(kNewlineCharacter);
-    } else if (auto* text_node = DynamicTo<Text>(node)) {
-      result.Append(text_node->data());
+  auto [length, is_8bit] = AnalyzeInnerEditorValue(nullptr);
+  return SerializeInnerEditorValueInternal(length, is_8bit);
+}
+
+std::pair<wtf_size_t, bool> TextControlElement::AnalyzeInnerEditorValue(
+    HeapHashMap<Member<const Text>, unsigned>* offset_map) const {
+  const HTMLElement* inner_editor = InnerEditorElement();
+  if (!inner_editor) {
+    return {0u, true};
+  }
+  wtf_size_t offset = 0;
+  bool is_8bit = true;
+  for (const auto& child : NodeTraversal::ChildrenOf(*inner_editor)) {
+    if (const auto* text = DynamicTo<Text>(child)) {
+      if (offset_map) {
+        offset_map->insert(text, offset);
+      }
+      offset += text->length();
+      is_8bit = is_8bit && text->data().Is8Bit();
+    } else if (!TextControlElement::IsPlaceholderBreakElement(&child)) {
+      DCHECK(IsA<HTMLBRElement>(child));
+      ++offset;
     }
   }
-  return result.ToString();
+  return {offset, is_8bit};
+}
+
+String TextControlElement::SerializeInnerEditorValueInternal(
+    wtf_size_t length,
+    bool is_8bit) const {
+  if (length == 0u) {
+    return g_empty_string;
+  }
+  const HTMLElement* inner_editor = InnerEditorElement();
+  const auto* first_text = DynamicTo<Text>(inner_editor->firstChild());
+  if (first_text && !first_text->nextSibling()) {
+    return first_text->data();
+  }
+  if (is_8bit) {
+    StringBuffer<LChar> buffer(length);
+    base::span<LChar> span = buffer.Span();
+    for (const auto& child : NodeTraversal::ChildrenOf(*inner_editor)) {
+      if (const auto* text = DynamicTo<Text>(child)) {
+        span.take_first(text->data().length()).copy_from(text->data().Span8());
+      } else if (!IsPlaceholderBreakElement(&child)) {
+        DCHECK(IsA<HTMLBRElement>(child));
+        span[0] = uchar::kLineFeed;
+        span = span.subspan(1u);
+      }
+    }
+    return buffer.Release();
+  }
+  StringBuffer<UChar> buffer(length);
+  base::span<UChar> span = buffer.Span();
+  for (const auto& child : NodeTraversal::ChildrenOf(*inner_editor)) {
+    if (const auto* text = DynamicTo<Text>(child)) {
+      base::span<UChar> destination = span.take_first(text->data().length());
+      if (text->data().Is8Bit()) {
+        std::ranges::copy(text->data().Span8(), destination.begin());
+      } else {
+        destination.copy_from(text->data().Span16());
+      }
+    } else if (!IsPlaceholderBreakElement(&child)) {
+      DCHECK(IsA<HTMLBRElement>(child));
+      span[0] = uchar::kLineFeed;
+      span = span.subspan(1u);
+    }
+  }
+  return buffer.Release();
+}
+
+String TextControlElement::InnerEditorValue() const {
+  return SerializeInnerEditorValue();
 }
 
 String TextControlElement::ValueWithHardLineBreaks() const {
@@ -928,42 +1153,30 @@ String TextControlElement::ValueWithHardLineBreaks() const {
   if (!layout_object)
     return Value();
 
-  if (layout_object->IsLayoutNGObject()) {
-    InlineCursor cursor(*layout_object);
-    if (!cursor)
-      return Value();
-    const auto* mapping = InlineNode::GetOffsetMapping(layout_object);
-    if (!mapping)
-      return Value();
-    Position break_position = GetNextSoftBreak(*mapping, cursor);
-    StringBuilder result;
-    for (Node& node : NodeTraversal::DescendantsOf(*inner_text)) {
-      if (IsA<HTMLBRElement>(node)) {
-        DCHECK_EQ(&node, inner_text->lastChild());
-      } else if (auto* text_node = DynamicTo<Text>(node)) {
-        String data = text_node->data();
-        unsigned length = data.length();
-        unsigned position = 0;
-        while (break_position.AnchorNode() == node &&
-               static_cast<unsigned>(break_position.OffsetInContainerNode()) <=
-                   length) {
-          unsigned break_offset = break_position.OffsetInContainerNode();
-          if (break_offset > position) {
-            result.Append(data, position, break_offset - position);
-            position = break_offset;
-            result.Append(kNewlineCharacter);
-          }
-          break_position = GetNextSoftBreak(*mapping, cursor);
-        }
-        result.Append(data, position, length - position);
-      }
-      while (break_position.AnchorNode() == node)
-        break_position = GetNextSoftBreak(*mapping, cursor);
+  StringBuilder result;
+  bool has_valid_ifcs = false;
+  for (auto* anonymous = To<LayoutBlockFlow>(layout_object->FirstChild());
+       anonymous; anonymous = To<LayoutBlockFlow>(anonymous->NextSibling())) {
+    InlineCursor cursor(*anonymous);
+    if (!cursor) {
+      continue;
     }
-    return result.ToString();
+    const auto* mapping = InlineNode::GetOffsetMapping(anonymous);
+    if (!mapping) {
+      continue;
+    }
+    has_valid_ifcs = true;
+    Position break_position = GetNextSoftBreak(*mapping, cursor);
+    const Node* node =
+        anonymous->FirstChild() ? anonymous->FirstChild()->GetNode() : nullptr;
+    for (; node && node->GetLayoutObject() &&
+           node->GetLayoutObject()->Parent() == anonymous;
+         node = node->nextSibling()) {
+      AppendWrappedNode(*inner_text, *node, *mapping, cursor, break_position,
+                        result);
+    }
   }
-
-  return Value();
+  return has_valid_ifcs ? result.ReleaseString() : Value();
 }
 
 TextControlElement* EnclosingTextControl(const Position& position) {
@@ -1055,16 +1268,7 @@ void TextControlElement::SetSuggestedValue(const String& value) {
     return;
 
   UpdatePlaceholderVisibility();
-
-  if (suggested_value_.empty()) {
-    // Reset the pseudo-id for placeholders to use the appropriated style
-    placeholder->SetShadowPseudoId(
-        shadow_element_names::kPseudoInputPlaceholder);
-  } else {
-    // Set the pseudo-id for suggested values to use the appropriated style.
-    placeholder->SetShadowPseudoId(
-        shadow_element_names::kPseudoInternalInputSuggested);
-  }
+  UpdatePlaceholderShadowPseudoId(*placeholder);
 }
 
 HTMLElement* TextControlElement::CreateInnerEditorElement() {
@@ -1078,8 +1282,22 @@ const String& TextControlElement::SuggestedValue() const {
   return suggested_value_;
 }
 
+void TextControlElement::ScheduleSelectionchangeEvent() {
+  if (RuntimeEnabledFeatures::CoalesceSelectionchangeEventEnabled()) {
+    if (has_scheduled_selectionchange_event_)
+      return;
+    has_scheduled_selectionchange_event_ = true;
+    EnqueueEvent(*Event::CreateBubble(event_type_names::kSelectionchange),
+                 TaskType::kMiscPlatformAPI);
+  } else {
+    EnqueueEvent(*Event::CreateBubble(event_type_names::kSelectionchange),
+                 TaskType::kMiscPlatformAPI);
+  }
+}
+
 void TextControlElement::Trace(Visitor* visitor) const {
   visitor->Trace(inner_editor_);
+  visitor->Trace(form_control_ranges_);
   HTMLFormControlElementWithState::Trace(visitor);
 }
 
@@ -1093,10 +1311,135 @@ void TextControlElement::CloneNonAttributePropertiesFrom(
   HTMLFormControlElement::CloneNonAttributePropertiesFrom(source, data);
 }
 
-ETextOverflow TextControlElement::ValueForTextOverflow() const {
-  if (GetDocument().FocusedElement() == this)
-    return ETextOverflow::kClip;
+TextOverflowData TextControlElement::ValueForTextOverflow() const {
+  if (GetDocument().FocusedElement() == this) {
+    return TextOverflowData(TextOverflowData::Type::kClip);
+  }
   return ComputedStyleRef().TextOverflow();
+}
+
+void TextControlElement::RegisterFormControlRange(FormControlRange* range) {
+  form_control_ranges_.push_back(range);
+}
+
+void TextControlElement::UnregisterFormControlRange(FormControlRange* range) {
+  auto iter = std::ranges::find(form_control_ranges_, range);
+  if (iter != form_control_ranges_.end()) {
+    form_control_ranges_.erase(iter);
+  }
+}
+
+void TextControlElement::NotifyFormControlRangesOfTextChange(
+    unsigned change_offset,
+    unsigned deleted_count,
+    unsigned inserted_count) const {
+  DCHECK(RuntimeEnabledFeatures::FormControlRangeEnabled());
+  if (form_control_ranges_.empty()) {
+    return;
+  }
+  for (const auto& range : form_control_ranges_) {
+    range->UpdateOffsetsForTextChange(change_offset, deleted_count,
+                                      inserted_count);
+  }
+}
+
+void TextControlElement::CaptureFormControlRangePreEdit() {
+  DCHECK(RuntimeEnabledFeatures::FormControlRangeEnabled());
+  if (form_control_ranges_.empty()) {
+    return;
+  }
+  const String old_value = InnerEditorValue();
+  const unsigned old_length = old_value.length();
+  pending_user_edit_.emplace(
+      PendingUserEditSnapshot{old_value, std::min(selectionStart(), old_length),
+                              std::min(selectionEnd(), old_length)});
+}
+
+void TextControlElement::CommitFormControlRangeEdit() {
+  DCHECK(RuntimeEnabledFeatures::FormControlRangeEnabled());
+  if (form_control_ranges_.empty() || !pending_user_edit_) {
+    pending_user_edit_.reset();
+    return;
+  }
+
+  // After observable value mutation and before 'input' listeners, compute and
+  // apply a selection-bounded single replace using the pre-edit baseline.
+  ApplyFormControlRangeUpdate(pending_user_edit_->old_value,
+                              pending_user_edit_->selection_start,
+                              pending_user_edit_->selection_end);
+  pending_user_edit_.reset();
+}
+
+void TextControlElement::ApplyFormControlRangeUpdate(const String& old_value,
+                                                     unsigned sel_start,
+                                                     unsigned sel_end) {
+  const String new_value = InnerEditorValue();
+  if (old_value == new_value) {
+    return;
+  }
+
+  const unsigned old_length = old_value.length();
+  const unsigned new_length = new_value.length();
+
+  // Clamp selection to valid range.
+  unsigned selection_start = std::min(sel_start, old_length);
+  unsigned selection_end = std::min(sel_end, old_length);
+  if (selection_start > selection_end) {
+    std::swap(selection_start, selection_end);
+  }
+
+  // Longest common prefix that can't advance past the original selection start.
+  unsigned prefix = 0;
+  while (prefix < old_length && prefix < new_length &&
+         old_value[prefix] == new_value[prefix]) {
+    ++prefix;
+  }
+  prefix = std::min(prefix, selection_start);
+
+  // Longest common suffix that avoids overlapping the prefix and doesn't extend
+  // beyond the original selection end.
+  const unsigned max_old_suffix = old_length - prefix;
+  const unsigned max_new_suffix = new_length - prefix;
+  // Maximum suffix length bounded by the original selection end.
+  const unsigned maximum_suffix_length = old_length - selection_end;
+  const unsigned suffix_limit =
+      std::min(max_old_suffix, std::min(max_new_suffix, maximum_suffix_length));
+
+  unsigned suffix = 0;
+  while (suffix < suffix_limit && old_value[old_length - 1 - suffix] ==
+                                      new_value[new_length - 1 - suffix]) {
+    ++suffix;
+  }
+
+  // Compute net change as a delete + insert at the prefix.
+  const unsigned deleted_count = old_length - prefix - suffix;
+  const unsigned inserted_count = new_length - prefix - suffix;
+  if (deleted_count || inserted_count) {
+    NotifyFormControlRangesOfTextChange(prefix, deleted_count, inserted_count);
+  }
+}
+
+void TextControlElement::CommitProgrammaticFormControlRangeEdit(
+    const String& old_value,
+    unsigned old_sel_start,
+    unsigned old_sel_end) {
+  if (!RuntimeEnabledFeatures::FormControlRangeEnabled() ||
+      form_control_ranges_.empty()) {
+    return;
+  }
+  // Clear any pending user pre-edit snapshot to avoid applying a user-driven
+  // diff after a programmatic value change.
+  pending_user_edit_.reset();
+
+  ApplyFormControlRangeUpdate(old_value, old_sel_start, old_sel_end);
+}
+
+void TextControlElement::SetSkipNextSetValueAutoDiff(bool should_skip) {
+  skip_next_set_value_auto_diff_ = should_skip;
+}
+
+bool TextControlElement::ShouldSkipNextSetValueAutoDiff() const {
+  return skip_next_set_value_auto_diff_;
 }
 
 }  // namespace blink

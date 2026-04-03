@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {Macro, RunMacroResult} from '/common/action_fulfillment/macros/macro.js';
+import type {RunMacroResult} from '/common/action_fulfillment/macros/macro.js';
+import {Macro} from '/common/action_fulfillment/macros/macro.js';
 import {MacroName} from '/common/action_fulfillment/macros/macro_names.js';
 
 /**
@@ -17,9 +18,11 @@ export class ListCommandsMacro extends Macro {
   override run(): RunMacroResult {
     // Note that this will open a new tab, ending the current Dictation session
     // by changing the input focus.
-    globalThis.open(
-        'https://support.google.com/chromebook?p=text_dictation_m100',
-        '_blank');
+    chrome.tabs.create(
+        {
+          url: 'https://support.google.com/chromebook?p=text_dictation_m100',
+        },
+        () => {});
     return this.createRunMacroResult_(/*isSuccess=*/ true);
   }
 }

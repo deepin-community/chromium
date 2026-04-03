@@ -29,6 +29,7 @@
 #include "src/gpu/ganesh/SkGr.h"
 #include "src/gpu/ganesh/effects/GrTextureEffect.h"
 #include "src/gpu/ganesh/glsl/GrGLSLFragmentShaderBuilder.h"
+#include "src/gpu/ganesh/image/GrMippedBitmap.h"
 
 #include <cstdint>
 #include <tuple>
@@ -75,9 +76,8 @@ std::unique_ptr<GrFragmentProcessor::ProgramImpl> ColorTableEffect::onMakeProgra
 std::unique_ptr<GrFragmentProcessor> ColorTableEffect::Make(
         std::unique_ptr<GrFragmentProcessor> inputFP,
         GrRecordingContext* context,
-        const SkBitmap& bitmap) {
+        const GrMippedBitmap& bitmap) {
     SkASSERT(kPremul_SkAlphaType == bitmap.alphaType());
-    SkASSERT(bitmap.isImmutable());
 
     auto view = std::get<0>(GrMakeCachedBitmapProxyView(context,
                                                         bitmap,
@@ -95,7 +95,7 @@ std::unique_ptr<GrFragmentProcessor> ColorTableEffect::Make(
 
 GR_DEFINE_FRAGMENT_PROCESSOR_TEST(ColorTableEffect)
 
-#if defined(GR_TEST_UTILS)
+#if defined(GPU_TEST_UTILS)
 std::unique_ptr<GrFragmentProcessor> ColorTableEffect::TestCreate(GrProcessorTestData* d) {
     int flags = 0;
     uint8_t luts[256][4];
@@ -118,7 +118,7 @@ std::unique_ptr<GrFragmentProcessor> ColorTableEffect::TestCreate(GrProcessorTes
     sk_sp<SkColorSpace> colorSpace = GrTest::TestColorSpace(d->fRandom);
     SkSurfaceProps props;  // default props for testing
     auto [success, fp] = GrFragmentProcessors::Make(
-            d->context(),
+            d->surfaceDrawContext(),
             filter.get(),
             d->inputFP(),
             GrColorInfo(GrColorType::kRGBA_8888, kUnknown_SkAlphaType, std::move(colorSpace)),

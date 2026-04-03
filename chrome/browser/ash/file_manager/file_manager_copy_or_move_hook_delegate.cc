@@ -109,7 +109,6 @@ std::ostream& operator<<(
   }
 
   NOTREACHED();
-  return out << "Unknown type";
 }
 
 }  // namespace file_manager

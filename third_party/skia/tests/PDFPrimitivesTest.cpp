@@ -28,6 +28,7 @@
 #include "include/core/SkString.h"
 #include "include/core/SkTypes.h"
 #include "include/docs/SkPDFDocument.h"
+#include "include/docs/SkPDFJpegHelpers.h"
 #include "include/effects/SkImageFilters.h"
 #include "include/effects/SkPerlinNoiseShader.h"
 #include "include/private/base/SkDebug.h"
@@ -104,7 +105,7 @@ static void assert_emit_eq(skiatest::Reporter* reporter,
 // and there is no assert on input data in Debug mode.
 static void test_issue1083() {
     SkDynamicMemoryWStream outStream;
-    auto doc = SkPDF::MakeDocument(&outStream);
+    auto doc = SkPDF::MakeDocument(&outStream, SkPDF::JPEG::MetadataWithCallbacks());
     SkCanvas* canvas = doc->beginPage(100.0f, 100.0f);
 
     uint16_t glyphID = 65000;
@@ -315,7 +316,7 @@ private:
 DEF_TEST(SkPDF_ImageFilter, reporter) {
     REQUIRE_PDF_DOCUMENT(SkPDF_ImageFilter, reporter);
     SkDynamicMemoryWStream stream;
-    auto doc = SkPDF::MakeDocument(&stream);
+    auto doc = SkPDF::MakeDocument(&stream, SkPDF::JPEG::MetadataWithCallbacks());
     SkCanvas* canvas = doc->beginPage(100.0f, 100.0f);
 
     sk_sp<TestImageFilter> filter(new TestImageFilter());
@@ -341,11 +342,11 @@ DEF_TEST(SkPDF_FontCanEmbedTypeface, reporter) {
     sk_sp<SkTypeface> noEmbedTypeface(ToolUtils::CreateTypefaceFromResource(resource));
     if (noEmbedTypeface) {
         REPORTER_ASSERT(reporter,
-                        !SkPDFFont::CanEmbedTypeface(noEmbedTypeface.get(), &doc));
+                        !SkPDFFont::CanEmbedTypeface(*noEmbedTypeface, &doc));
     }
     sk_sp<SkTypeface> portableTypeface(ToolUtils::DefaultTypeface());
     REPORTER_ASSERT(reporter,
-                    SkPDFFont::CanEmbedTypeface(portableTypeface.get(), &doc));
+                    SkPDFFont::CanEmbedTypeface(*portableTypeface, &doc));
 }
 
 
@@ -370,7 +371,7 @@ static void check_pdf_scalar_serialization(
         ERRORF(reporter, "unscannable result: %s", floatString);
         return;
     }
-    if (std::isfinite(inputFloat) && roundTripFloat != inputFloat) {
+    if (SkIsFinite(inputFloat) && roundTripFloat != inputFloat) {
         ERRORF(reporter, "roundTripFloat (%.9g) != inputFloat (%.9g)",
                roundTripFloat, inputFloat);
     }
@@ -471,7 +472,7 @@ DEF_TEST(SkPDF_Clusterator, reporter) {
 
 DEF_TEST(fuzz875632f0, reporter) {
     SkNullWStream stream;
-    auto doc = SkPDF::MakeDocument(&stream);
+    auto doc = SkPDF::MakeDocument(&stream, SkPDF::JPEG::MetadataWithCallbacks());
     REPORTER_ASSERT(reporter, doc);
     SkCanvas* canvas = doc->beginPage(128, 160);
 

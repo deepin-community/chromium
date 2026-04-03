@@ -241,16 +241,6 @@ void LoginPerformer::LoginAsKioskAccount(const AccountId& app_account_id) {
       user_manager::UserManager::Get()->IsEphemeralAccountId(app_account_id));
 }
 
-void LoginPerformer::LoginAsArcKioskAccount(
-    const AccountId& arc_app_account_id) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  EnsureAuthenticator();
-  authenticator_->LoginAsArcKioskAccount(
-      arc_app_account_id,
-      user_manager::UserManager::Get()->IsEphemeralAccountId(
-          arc_app_account_id));
-}
-
 void LoginPerformer::LoginAsWebKioskAccount(
     const AccountId& web_app_account_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -261,27 +251,29 @@ void LoginPerformer::LoginAsWebKioskAccount(
           web_app_account_id));
 }
 
+void LoginPerformer::LoginAsIwaKioskAccount(const AccountId& iwa_account_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  EnsureAuthenticator();
+  authenticator_->LoginAsIwaKioskAccount(
+      iwa_account_id,
+      user_manager::UserManager::Get()->IsEphemeralAccountId(iwa_account_id));
+}
+
+void LoginPerformer::LoginAsArcvmKioskAccount(
+    const AccountId& arcvm_app_account_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  EnsureAuthenticator();
+  authenticator_->LoginAsArcvmKioskAccount(
+      arcvm_app_account_id,
+      user_manager::UserManager::Get()->IsEphemeralAccountId(
+          arcvm_app_account_id));
+}
+
 void LoginPerformer::LoginAuthenticated(
     std::unique_ptr<UserContext> user_context) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   EnsureAuthenticator();
   authenticator_->LoginAuthenticated(std::move(user_context));
-}
-
-void LoginPerformer::RecoverEncryptedData(const std::string& old_password) {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  authenticator_->RecoverEncryptedData(
-      std::make_unique<UserContext>(user_context_), old_password);
-  user_context_.ClearSecrets();
-}
-
-void LoginPerformer::ResyncEncryptedData() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  authenticator_->ResyncEncryptedData(
-      user_manager::UserManager::Get()->IsEphemeralAccountId(
-          user_context_.GetAccountId()),
-      std::make_unique<UserContext>(user_context_));
-  user_context_.ClearSecrets();
 }
 
 ////////////////////////////////////////////////////////////////////////////////

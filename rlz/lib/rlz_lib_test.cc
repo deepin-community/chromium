@@ -13,6 +13,11 @@
 // The "GGLA" brand is used to test the normal code flow of the code, and the
 // "TEST" brand is used to test the supplementary brand code code flow.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <stddef.h>
 
 #include <algorithm>
@@ -24,7 +29,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "rlz/lib/financial_ping.h"
 #include "rlz/lib/lib_values.h"
 #include "rlz/lib/net_response_check.h"
@@ -48,7 +52,7 @@
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/test/test_url_loader_factory.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "base/files/important_file_writer.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
@@ -166,6 +170,30 @@ TEST_F(RlzLibTest, RecordProductEvent) {
   EXPECT_TRUE(rlz_lib::GetProductEventsAsCgi(rlz_lib::TOOLBAR_NOTIFIER,
                                              cgi_50, 50));
   EXPECT_STREQ("events=I7S,W1I", cgi_50);
+
+  EXPECT_TRUE(rlz_lib::ClearAllProductEvents(rlz_lib::CHROME));
+  EXPECT_TRUE(rlz_lib::RecordProductEvent(
+      rlz_lib::CHROME, rlz_lib::CHROME_OMNIBOX, rlz_lib::ENTERPRISE_ENROLLMENT));
+  EXPECT_TRUE(rlz_lib::GetProductEventsAsCgi(rlz_lib::CHROME, cgi_50, 50));
+  EXPECT_STREQ("events=C1X", cgi_50);
+
+  EXPECT_TRUE(rlz_lib::RecordProductEvent(rlz_lib::CHROME,
+                                          rlz_lib::CHROME_OMNIBOX,
+                                          rlz_lib::ENTERPRISE_UNENROLLMENT));
+  EXPECT_TRUE(rlz_lib::GetProductEventsAsCgi(rlz_lib::CHROME, cgi_50, 50));
+  EXPECT_STREQ("events=C1X,C1Y", cgi_50);
+
+  ASSERT_TRUE(rlz_lib::RecordProductEvent(
+      rlz_lib::CHROME, rlz_lib::CHROME_OMNIBOX,
+      rlz_lib::ENTERPRISE_ENROLLED_ACTIVATE));
+  EXPECT_TRUE(rlz_lib::GetProductEventsAsCgi(rlz_lib::CHROME, cgi_50, 50));
+  EXPECT_STREQ("events=C1X,C1Y,C1Z", cgi_50);
+
+  ASSERT_TRUE(rlz_lib::RecordProductEvent(
+      rlz_lib::CHROME, rlz_lib::CHROME_OMNIBOX,
+      rlz_lib::ENTERPRISE_ENROLLED_FIRST_SEARCH));
+  EXPECT_TRUE(rlz_lib::GetProductEventsAsCgi(rlz_lib::CHROME, cgi_50, 50));
+  EXPECT_STREQ("events=C1X,C1Y,C1Z,C1W", cgi_50);
 }
 
 TEST_F(RlzLibTest, ClearProductEvent) {
@@ -254,7 +282,7 @@ TEST_F(RlzLibTest, SetAccessPointRlz) {
   EXPECT_STREQ("IeTbRlz", rlz_50);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(RlzLibTest, SetAccessPointRlzOnlyOnce) {
   // On Chrome OS, and RLZ string can ne set only once.
   char rlz_50[50];
@@ -518,7 +546,7 @@ TEST_F(RlzLibTest, ParsePingResponse) {
   EXPECT_TRUE(rlz_lib::ParsePingResponse(rlz_lib::TOOLBAR_NOTIFIER,
                                          kPingResponse2));
   EXPECT_TRUE(rlz_lib::GetAccessPointRlz(rlz_lib::IETB_SEARCH_BOX, value, 50));
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // On Chrome OS, the RLZ string is not modified by response once set.
   EXPECT_STREQ("1T4_____en__252", value);
 #else
@@ -529,7 +557,7 @@ TEST_F(RlzLibTest, ParsePingResponse) {
     "crc32: 0\r\n";  // Good RLZ - empty response.
   EXPECT_TRUE(rlz_lib::ParsePingResponse(rlz_lib::TOOLBAR_NOTIFIER,
                                          kPingResponse3));
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // On Chrome OS, the RLZ string is not modified by response once set.
   EXPECT_STREQ("1T4_____en__252", value);
 #else
@@ -1123,7 +1151,7 @@ TEST_F(RlzLibTest, LockAcquistionSucceedsButStoreFileCannotBeCreated) {
 
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 class ScopedTestDebugDaemonClient : public ash::FakeDebugDaemonClient {
  public:
   ScopedTestDebugDaemonClient() {

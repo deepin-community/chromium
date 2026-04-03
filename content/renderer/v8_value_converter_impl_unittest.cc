@@ -10,6 +10,7 @@
 #include <cmath>
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
@@ -54,7 +55,7 @@ class ScopedAvoidIdentityHashForTesting {
   ~ScopedAvoidIdentityHashForTesting();
 
  private:
-  raw_ptr<content::V8ValueConverterImpl, ExperimentalRenderer> converter_;
+  raw_ptr<content::V8ValueConverterImpl> converter_;
 };
 
 ScopedAvoidIdentityHashForTesting::ScopedAvoidIdentityHashForTesting(
@@ -85,7 +86,7 @@ class V8ValueConverterImplTest : public testing::Test {
 
   void TearDown() override { context_.Reset(); }
 
-  std::string GetString(base::Value::Dict* value, const std::string& key) {
+  std::string GetString(base::DictValue* value, const std::string& key) {
     std::string* temp = value->FindString(key);
     if (!temp) {
       ADD_FAILURE();
@@ -109,7 +110,7 @@ class V8ValueConverterImplTest : public testing::Test {
     return std::string(*utf8, utf8.length());
   }
 
-  std::string GetString(const base::Value::List& value_list, uint32_t index) {
+  std::string GetString(const base::ListValue& value_list, uint32_t index) {
     if (index >= value_list.size() || !value_list[index].is_string()) {
       ADD_FAILURE();
       return std::string();
@@ -150,7 +151,7 @@ class V8ValueConverterImplTest : public testing::Test {
     return temp.As<v8::Int32>()->Value();
   }
 
-  bool IsNull(base::Value::Dict* value, const std::string& key) {
+  bool IsNull(base::DictValue* value, const std::string& key) {
     base::Value* child = value->Find(key);
     if (!child) {
       ADD_FAILURE();
@@ -173,7 +174,7 @@ class V8ValueConverterImplTest : public testing::Test {
     return child->IsNull();
   }
 
-  bool IsNull(const base::Value::List& list, uint32_t index) {
+  bool IsNull(const base::ListValue& list, uint32_t index) {
     if (list.size() <= index) {
       ADD_FAILURE();
       return false;
@@ -218,7 +219,7 @@ class V8ValueConverterImplTest : public testing::Test {
         converter.FromV8Value(object, context));
     ASSERT_TRUE(dictionary_val.get());
     ASSERT_TRUE(dictionary_val->is_dict());
-    const base::Value::Dict& dictionary = dictionary_val->GetDict();
+    const base::DictValue& dictionary = dictionary_val->GetDict();
 
     if (expected_value) {
       const base::Value* temp = dictionary.Find("test");
@@ -262,7 +263,7 @@ class V8ValueConverterImplTest : public testing::Test {
   base::test::TaskEnvironment task_environment_;
   gin::IsolateHolder isolate_holder_;
   v8::Isolate::Scope isolate_scope_;
-  raw_ptr<v8::Isolate, ExperimentalRenderer> isolate_ = nullptr;
+  raw_ptr<v8::Isolate> isolate_ = nullptr;
 
   // Context for the JavaScript in the test.
   v8::Persistent<v8::Context> context_;
@@ -451,7 +452,7 @@ TEST_F(V8ValueConverterImplTest, ObjectExceptions) {
   V8ValueConverterImpl converter;
   std::unique_ptr<base::Value> base_value =
       converter.FromV8Value(object, context);
-  base::Value::Dict* converted = base_value->GetIfDict();
+  base::DictValue* converted = base_value->GetIfDict();
   ASSERT_TRUE(converted);
 
   // http://code.google.com/p/v8/issues/detail?id=1342
@@ -564,7 +565,7 @@ TEST_F(V8ValueConverterImplTest, Prototype) {
   V8ValueConverterImpl converter;
   std::unique_ptr<base::Value> base_value =
       converter.FromV8Value(object, context);
-  base::Value::Dict* result = base_value->GetIfDict();
+  base::DictValue* result = base_value->GetIfDict();
   ASSERT_TRUE(result);
   EXPECT_TRUE(result->empty());
 }
@@ -618,7 +619,7 @@ TEST_F(V8ValueConverterImplTest, ObjectPrototypeSetter) {
   EXPECT_EQ(1, GetInt(result, "setters"));
 
   // Repeat the same exercise with a dictionary without the key.
-  base::Value::Dict missing_key_dict;
+  base::DictValue missing_key_dict;
   missing_key_dict.Set("otherkey", "hello");
   v8::Local<v8::Object> converted2 =
       converter.ToV8Value(missing_key_dict, context).As<v8::Object>();
@@ -687,7 +688,7 @@ TEST_F(V8ValueConverterImplTest, ArrayPrototypeSetter) {
   EXPECT_EQ(1, GetInt(result, "setters"));
 
   // Try again, using an array without the index.
-  base::Value::List one_item_list;
+  base::ListValue one_item_list;
   one_item_list.Append(123456);
   v8::Local<v8::Array> converted2 =
       converter.ToV8Value(one_item_list, context).As<v8::Array>();
@@ -725,7 +726,7 @@ TEST_F(V8ValueConverterImplTest, StripNullFromObjects) {
   converter.SetStripNullFromObjects(true);
   std::unique_ptr<base::Value> base_value =
       converter.FromV8Value(object, context);
-  base::Value::Dict* result = base_value->GetIfDict();
+  base::DictValue* result = base_value->GetIfDict();
   ASSERT_TRUE(result);
   EXPECT_TRUE(result->empty());
 }
@@ -759,7 +760,7 @@ TEST_F(V8ValueConverterImplTest, RecursiveObjects) {
 
   std::unique_ptr<base::Value> base_value =
       converter.FromV8Value(object, context);
-  base::Value::Dict* object_result = base_value->GetIfDict();
+  base::DictValue* object_result = base_value->GetIfDict();
   ASSERT_TRUE(object_result);
   EXPECT_EQ(2u, object_result->size());
   EXPECT_TRUE(IsNull(object_result, "obj"));
@@ -769,7 +770,7 @@ TEST_F(V8ValueConverterImplTest, RecursiveObjects) {
   array->Set(context, 0, v8::String::NewFromUtf8Literal(isolate_, "1")).Check();
   array->Set(context, 1, array).Check();
 
-  base::Value::List list_result(
+  base::ListValue list_result(
       std::move(*converter.FromV8Value(array, context)).TakeList());
   EXPECT_EQ(2u, list_result.size());
   EXPECT_TRUE(IsNull(list_result, 1));
@@ -831,7 +832,7 @@ TEST_F(V8ValueConverterImplTest, ArrayGetters) {
   v8::Local<v8::Array> array = CompileRun<v8::Array>(context, source);
 
   V8ValueConverterImpl converter;
-  base::Value::List result(
+  base::ListValue result(
       std::move(*converter.FromV8Value(array, context)).TakeList());
   EXPECT_EQ(2u, result.size());
 }
@@ -937,7 +938,7 @@ TEST_F(V8ValueConverterImplTest, DetectCycles) {
   recursive_array->Set(context, 0, recursive_array).Check();
 
   // The first repetition should be trimmed and replaced by a null value.
-  base::Value::List expected_list;
+  base::ListValue expected_list;
   expected_list.Append(base::Value());
 
   // The actual result.
@@ -960,13 +961,13 @@ TEST_F(V8ValueConverterImplTest, DetectCycles) {
       .Check();
 
   // The first repetition should be trimmed and replaced by a null value.
-  base::Value::Dict expected_dictionary;
+  base::DictValue expected_dictionary;
   expected_dictionary.Set(key, base::Value());
 
   // The actual result.
   std::unique_ptr<base::Value> base_value =
       converter.FromV8Value(recursive_object, context);
-  base::Value::Dict* actual_dictionary = base_value->GetIfDict();
+  base::DictValue* actual_dictionary = base_value->GetIfDict();
   ASSERT_TRUE(actual_dictionary);
   EXPECT_EQ(expected_dictionary, *actual_dictionary);
 }
@@ -994,19 +995,19 @@ TEST_F(V8ValueConverterImplTest, ReuseObjects) {
     // The actual result.
     std::unique_ptr<base::Value> base_value =
         converter.FromV8Value(object, context);
-    base::Value::Dict* result = base_value->GetIfDict();
+    base::DictValue* result = base_value->GetIfDict();
     ASSERT_TRUE(result);
     EXPECT_EQ(2u, result->size());
 
     {
       const char key1[] = "one";
-      base::Value::Dict* one_dict = result->FindDict(key1);
+      base::DictValue* one_dict = result->FindDict(key1);
       ASSERT_TRUE(one_dict);
       EXPECT_EQ("another same value", GetString(one_dict, "key"));
     }
     {
       const char key2[] = "two";
-      base::Value::Dict* two_dict = result->FindDict(key2);
+      base::DictValue* two_dict = result->FindDict(key2);
       ASSERT_TRUE(two_dict);
       EXPECT_EQ("another same value", GetString(two_dict, "key"));
     }
@@ -1023,12 +1024,12 @@ TEST_F(V8ValueConverterImplTest, ReuseObjects) {
     v8::Local<v8::Array> array = CompileRun<v8::Array>(context, source);
 
     // The actual result.
-    base::Value::List list_result(
+    base::ListValue list_result(
         std::move(*converter.FromV8Value(array, context)).TakeList());
     ASSERT_EQ(2u, list_result.size());
     for (size_t i = 0; i < list_result.size(); ++i) {
       ASSERT_FALSE(IsNull(list_result, i));
-      base::Value::Dict* dict_value = list_result[0].GetIfDict();
+      base::DictValue* dict_value = list_result[0].GetIfDict();
       ASSERT_TRUE(dict_value);
       EXPECT_STREQ("same value", dict_value->FindString("key")->c_str());
     }
@@ -1072,13 +1073,13 @@ TEST_F(V8ValueConverterImplTest, MaxRecursionDepth) {
   const base::Value* current = value.get();
   for (int i = 1; i < kExpectedDepth; ++i) {
     ASSERT_TRUE(current->is_dict()) << i;
-    const base::Value::Dict& current_as_object = current->GetDict();
+    const base::DictValue& current_as_object = current->GetDict();
     current = current_as_object.Find(kKey);
     ASSERT_TRUE(current) << i;
   }
 
   // The leaf node shouldn't have any properties.
-  EXPECT_EQ(base::Value(base::Value::Dict()), *current) << *current;
+  EXPECT_EQ(base::Value(base::DictValue()), *current) << *current;
 }
 
 TEST_F(V8ValueConverterImplTest, NegativeZero) {
@@ -1254,13 +1255,12 @@ TEST_F(V8ValueConverterImplTest, StrategyBypass) {
   const char kExampleData[] = {1, 2, 3, 4, 5};
   v8::Local<v8::ArrayBuffer> array_buffer(
       v8::ArrayBuffer::New(isolate_, sizeof(kExampleData)));
-  memcpy(array_buffer->GetBackingStore()->Data(), kExampleData,
-         sizeof(kExampleData));
+  UNSAFE_TODO(memcpy(array_buffer->GetBackingStore()->Data(), kExampleData,
+                     sizeof(kExampleData)));
   std::unique_ptr<base::Value> binary_value(
       converter.FromV8Value(array_buffer, context));
   ASSERT_TRUE(binary_value);
-  base::Value reference_binary_value(
-      base::as_bytes(base::make_span(kExampleData)));
+  base::Value reference_binary_value(base::as_byte_span(kExampleData));
   EXPECT_EQ(reference_binary_value, *binary_value);
 
   v8::Local<v8::ArrayBufferView> array_buffer_view(
@@ -1269,7 +1269,7 @@ TEST_F(V8ValueConverterImplTest, StrategyBypass) {
       converter.FromV8Value(array_buffer_view, context));
   ASSERT_TRUE(binary_view_value);
   base::Value reference_binary_view_value(
-      base::as_bytes(base::make_span(kExampleData).subspan(1, 3)));
+      base::as_byte_span(kExampleData).subspan<1, 3>());
   EXPECT_EQ(reference_binary_view_value, *binary_view_value);
 
   v8::Local<v8::Number> number(v8::Number::New(isolate_, 0.0));

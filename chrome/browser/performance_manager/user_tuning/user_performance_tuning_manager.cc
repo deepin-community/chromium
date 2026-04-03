@@ -7,21 +7,22 @@
 #include <optional>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
 #include "base/notreached.h"
-#include "base/run_loop.h"
+#include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/browser/performance_manager/metrics/page_resource_monitor.h"
+#include "build/build_config.h"
 #include "chrome/browser/performance_manager/policies/memory_saver_mode_policy.h"
 #include "chrome/browser/performance_manager/policies/page_discarding_helper.h"
 #include "chrome/browser/performance_manager/user_tuning/user_performance_tuning_notifier.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom-shared.h"
 #include "chrome/browser/ui/performance_controls/tab_resource_usage_tab_helper.h"
 #include "components/performance_manager/public/features.h"
+#include "components/performance_manager/public/metrics/page_resource_monitor.h"
 #include "components/performance_manager/public/performance_manager.h"
 #include "components/performance_manager/public/user_tuning/prefs.h"
 #include "components/prefs/pref_service.h"
@@ -30,7 +31,7 @@
 #include "content/public/browser/frame_rate_throttling.h"
 #include "content/public/browser/web_contents.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #endif
@@ -48,10 +49,6 @@ class MemorySaverModeDelegateImpl
           MemorySaverModeDelegate {
  public:
   void ToggleMemorySaverMode(MemorySaverModeState state) override {
-    performance_manager::PerformanceManager::CallOnGraph(
-        FROM_HERE,
-        base::BindOnce(
-            [](MemorySaverModeState state) {
               auto* memory_saver_mode_policy =
                   policies::MemorySaverModePolicy::GetInstance();
               CHECK(memory_saver_mode_policy);
@@ -60,29 +57,19 @@ class MemorySaverModeDelegateImpl
                   memory_saver_mode_policy->OnMemorySaverModeChanged(false);
                   return;
                 case MemorySaverModeState::kEnabled:
-                  // TODO(crbug.com/1492508): This setting should enable the
-                  // non-timer Memory Saver policy.
-                  memory_saver_mode_policy->OnMemorySaverModeChanged(false);
-                  return;
-                case MemorySaverModeState::kEnabledOnTimer:
+                // The kDeprecated setting is being migrated to kEnabled so
+                // treat them the same.
+                case MemorySaverModeState::kDeprecated:
                   memory_saver_mode_policy->OnMemorySaverModeChanged(true);
                   return;
               }
-              NOTREACHED_NORETURN();
-            },
-            state));
+              NOTREACHED();
   }
 
-  void SetTimeBeforeDiscard(base::TimeDelta time_before_discard) override {
-    performance_manager::PerformanceManager::CallOnGraph(
-        FROM_HERE, base::BindOnce(
-                       [](base::TimeDelta time_before_discard) {
-                         auto* policy =
-                             policies::MemorySaverModePolicy::GetInstance();
-                         CHECK(policy);
-                         policy->SetTimeBeforeDiscard(time_before_discard);
-                       },
-                       time_before_discard));
+  void SetMode(prefs::MemorySaverModeAggressiveness mode) override {
+    auto* policy = policies::MemorySaverModePolicy::GetInstance();
+    CHECK(policy);
+    policy->SetMode(mode);
   }
 
   ~MemorySaverModeDelegateImpl() override = default;
@@ -95,15 +82,24 @@ WEB_CONTENTS_USER_DATA_KEY_IMPL(
 
 UserPerformanceTuningManager::PreDiscardResourceUsage::PreDiscardResourceUsage(
     content::WebContents* contents,
-    uint64_t memory_footprint_estimate,
+    base::ByteSize memory_footprint_estimate,
     ::mojom::LifecycleUnitDiscardReason discard_reason)
     : content::WebContentsUserData<PreDiscardResourceUsage>(*contents),
       memory_footprint_estimate_(memory_footprint_estimate),
       discard_reason_(discard_reason),
-      discard_liveticks_(base::LiveTicks::Now()) {}
+      discard_live_ticks_(base::LiveTicks::Now()) {}
 
 UserPerformanceTuningManager::PreDiscardResourceUsage::
     ~PreDiscardResourceUsage() = default;
+
+void UserPerformanceTuningManager::PreDiscardResourceUsage::UpdateDiscardInfo(
+    base::ByteSize memory_footprint_estimate,
+    ::mojom::LifecycleUnitDiscardReason discard_reason,
+    base::LiveTicks discard_live_ticks) {
+  memory_footprint_estimate_ = memory_footprint_estimate;
+  discard_reason_ = discard_reason;
+  discard_live_ticks_ = discard_live_ticks;
+}
 
 // static
 bool UserPerformanceTuningManager::HasInstance() {
@@ -149,7 +145,7 @@ bool UserPerformanceTuningManager::IsMemorySaverModeDefault() const {
 }
 
 void UserPerformanceTuningManager::SetMemorySaverModeEnabled(bool enabled) {
-  MemorySaverModeState state = enabled ? MemorySaverModeState::kEnabledOnTimer
+  MemorySaverModeState state = enabled ? MemorySaverModeState::kEnabled
                                        : MemorySaverModeState::kDisabled;
   pref_change_registrar_.prefs()->SetInteger(kMemorySaverModeState,
                                              static_cast<int>(state));
@@ -192,8 +188,7 @@ UserPerformanceTuningManager::UserPerformanceTuningManager(
   g_user_performance_tuning_manager = this;
 
   if (notifier) {
-    performance_manager::PerformanceManager::PassToGraph(FROM_HERE,
-                                                         std::move(notifier));
+    PerformanceManager::GetGraph()->PassToGraph(std::move(notifier));
   }
 
   performance_manager::user_tuning::prefs::MigrateMemorySaverModePref(
@@ -204,36 +199,30 @@ UserPerformanceTuningManager::UserPerformanceTuningManager(
 
 void UserPerformanceTuningManager::Start() {
   pref_change_registrar_.Add(
-      performance_manager::user_tuning::prefs::
-          kMemorySaverModeTimeBeforeDiscardInMinutes,
-      base::BindRepeating(&UserPerformanceTuningManager::
-                              OnMemorySaverModeTimeBeforeDiscardChanged,
-                          base::Unretained(this)));
-  // Make sure the initial state of the discard timer pref is passed on to the
-  // policy before it can be enabled, because the policy initially has a dummy
-  // value for time_before_discard_. This prevents tabs' discard timers from
-  // starting with a value different from the pref.
-  OnMemorySaverModeTimeBeforeDiscardChanged();
-
-  pref_change_registrar_.Add(
       kMemorySaverModeState,
       base::BindRepeating(
           &UserPerformanceTuningManager::OnMemorySaverModePrefChanged,
           base::Unretained(this)));
   // Make sure the initial state of the pref is passed on to the policy.
   UpdateMemorySaverModeState();
+
+  pref_change_registrar_.Add(
+      prefs::kMemorySaverModeAggressiveness,
+      base::BindRepeating(
+          &UserPerformanceTuningManager::OnMemorySaverAggressivenessPrefChanged,
+          base::Unretained(this)));
+  // Make sure the initial state of the pref is passed on to the policy.
+  OnMemorySaverAggressivenessPrefChanged();
 }
 
 void UserPerformanceTuningManager::UpdateMemorySaverModeState() {
   MemorySaverModeState state =
       prefs::GetCurrentMemorySaverModeState(pref_change_registrar_.prefs());
-  if (!base::FeatureList::IsEnabled(features::kMemorySaverMultistateMode)) {
-    if (state != MemorySaverModeState::kDisabled) {
-      // The user has enabled memory saver mode, but without the multistate
-      // UI they didn't choose a policy. The feature controls which policy to
-      // use.
-      state = MemorySaverModeState::kEnabledOnTimer;
-    }
+  if (state != MemorySaverModeState::kDisabled) {
+    // The user has enabled memory saver mode, but without the multistate
+    // UI they didn't choose a policy. The feature controls which policy to
+    // use.
+    state = MemorySaverModeState::kEnabled;
   }
   memory_saver_mode_delegate_->ToggleMemorySaverMode(state);
 }
@@ -245,11 +234,10 @@ void UserPerformanceTuningManager::OnMemorySaverModePrefChanged() {
   }
 }
 
-void UserPerformanceTuningManager::OnMemorySaverModeTimeBeforeDiscardChanged() {
-  base::TimeDelta time_before_discard = performance_manager::user_tuning::
-      prefs::GetCurrentMemorySaverModeTimeBeforeDiscard(
-          pref_change_registrar_.prefs());
-  memory_saver_mode_delegate_->SetTimeBeforeDiscard(time_before_discard);
+void UserPerformanceTuningManager::OnMemorySaverAggressivenessPrefChanged() {
+  prefs::MemorySaverModeAggressiveness mode =
+      prefs::GetCurrentMemorySaverMode(pref_change_registrar_.prefs());
+  memory_saver_mode_delegate_->SetMode(mode);
 }
 
 void UserPerformanceTuningManager::NotifyTabCountThresholdReached() {
@@ -266,28 +254,17 @@ void UserPerformanceTuningManager::NotifyMemoryThresholdReached() {
 
 void UserPerformanceTuningManager::DiscardPageForTesting(
     content::WebContents* web_contents) {
-  base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
-  // The RunLoop is quit after discarding is executed on the main thread, so the
-  // caller can check if discarding succeeded via WebContents::WasDiscarded().
-  performance_manager::PerformanceManager::CallOnGraph(
-      FROM_HERE,
-      base::BindOnce(
-          [](base::ScopedClosureRunner quit_closure,
-             base::WeakPtr<performance_manager::PageNode> page_node,
-             performance_manager::Graph* graph) {
-            if (page_node) {
-              performance_manager::policies::PageDiscardingHelper::GetFromGraph(
-                  graph)
-                  ->ImmediatelyDiscardSpecificPage(
-                      page_node.get(),
-                      ::mojom::LifecycleUnitDiscardReason::PROACTIVE,
-                      base::DoNothingWithBoundArgs(std::move(quit_closure)));
-            }
-          },
-          base::ScopedClosureRunner(run_loop.QuitClosure()),
-          performance_manager::PerformanceManager::
-              GetPrimaryPageNodeForWebContents(web_contents)));
-  run_loop.Run();
+  performance_manager::Graph* graph =
+      performance_manager::PerformanceManager::GetGraph();
+
+  base::WeakPtr<performance_manager::PageNode> page_node =
+      performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(
+          web_contents);
+  CHECK(page_node);
+
+  performance_manager::policies::PageDiscardingHelper::GetFromGraph(graph)
+      ->ImmediatelyDiscardMultiplePages(
+          {page_node.get()}, ::mojom::LifecycleUnitDiscardReason::PROACTIVE);
 }
 
 }  // namespace performance_manager::user_tuning

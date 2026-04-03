@@ -4,7 +4,6 @@
 
 #include "ash/system/network/fake_network_detailed_network_view.h"
 
-#include "ash/system/network/fake_network_list_tether_hosts_header_view.h"
 #include "ash/system/network/network_detailed_network_view.h"
 #include "ash/system/network/network_list_item_view.h"
 #include "ash/system/network/network_list_mobile_header_view.h"
@@ -73,19 +72,6 @@ FakeNetworkDetailedNetworkView::AddMobileSectionHeader() {
           kMobileSectionHeader));
 
   return network_list_->AddChildView(std::move(mobile_header_view));
-}
-
-NetworkListTetherHostsHeaderView*
-FakeNetworkDetailedNetworkView::AddTetherHostsSectionHeader() {
-  std::unique_ptr<FakeNetworkListTetherHostsHeaderView>
-      tether_hosts_header_view =
-          std::make_unique<FakeNetworkListTetherHostsHeaderView>(
-              /*delegate=*/nullptr);
-  tether_hosts_header_view->SetID(static_cast<int>(
-      NetworkListViewControllerImpl::NetworkListViewControllerViewChildId::
-          kTetherHostsSectionHeader));
-
-  return network_list_->AddChildView(std::move(tether_hosts_header_view));
 }
 
 void FakeNetworkDetailedNetworkView::UpdateScanningBarVisibility(bool visible) {

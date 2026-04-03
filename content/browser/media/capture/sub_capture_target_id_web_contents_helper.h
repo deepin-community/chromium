@@ -8,22 +8,20 @@
 #include <string>
 #include <vector>
 
-#include "base/functional/callback.h"
 #include "base/token.h"
 #include "base/uuid.h"
 #include "build/build_config.h"
-#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
+#include "content/public/common/buildflags.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#error Region Capture not supported on Android.
-#endif
+static_assert(BUILDFLAG(ENABLE_SCREEN_CAPTURE),
+              "Region Capture requires enable_screen_capture = true.");
 
 namespace content {
 
@@ -73,7 +71,7 @@ class CONTENT_EXPORT SubCaptureTargetIdWebContentsHelper final
   bool IsAssociatedWith(const base::Token& id, Type type) const;
 
  protected:
-  // TODO(crbug.com/1264849): Remove this local copy of GUIDToToken().
+  // TODO(crbug.com/40203554): Remove this local copy of GUIDToToken().
   // It is copy of a function that is not currently visible from the browser
   // process. It should be made visible to the browser process and reused
   // rather than redefined. It is defined as protected so that unit tests
@@ -87,11 +85,11 @@ class CONTENT_EXPORT SubCaptureTargetIdWebContentsHelper final
   // WebContentsObserver implementation.
   // Cross-document navigation of the top-level document discards all
   // SubCaptureTargetIds associated with the top-level WebContents.
-  // TODO(crbug.com/1264849): Record per RFH and treat its navigation.
+  // TODO(crbug.com/40203554): Record per RFH and treat its navigation.
   void ReadyToCommitNavigation(NavigationHandle* navigation_handle) final;
 
   // Forgets all associations of SubCaptureTargetIds to this WebContents.
-  // TODO(crbug.com/1264849): Clear per-RFH or throughout.
+  // TODO(crbug.com/40203554): Clear per-RFH or throughout.
   void ClearIds();
 
   // Records which SubCaptureTargetIds are associated with this WebContents.

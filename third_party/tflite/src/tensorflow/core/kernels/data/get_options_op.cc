@@ -36,9 +36,9 @@ void GetOptionsOp::Compute(OpKernelContext* ctx) {
   }
 }
 
-string GetOptionsOp::TraceString(const OpKernelContext& ctx,
-                                 bool verbose) const {
-  return profiler::TraceMeOp(name_view(), type_string_view());
+std::string GetOptionsOp::TraceString(const OpKernelContext& ctx,
+                                      bool verbose) const {
+  return tsl::profiler::TraceMeOp(name_view(), type_string_view());
 }
 
 namespace {

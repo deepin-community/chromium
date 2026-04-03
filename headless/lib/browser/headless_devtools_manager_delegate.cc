@@ -4,7 +4,6 @@
 
 #include "headless/lib/browser/headless_devtools_manager_delegate.h"
 
-#include "base/containers/contains.h"
 #include "build/build_config.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/devtools_agent_host_client_channel.h"
@@ -28,14 +27,15 @@ void HeadlessDevToolsManagerDelegate::HandleCommand(
     base::span<const uint8_t> message,
     NotHandledCallback callback) {
   auto it = sessions_.find(channel);
-  DCHECK(it != sessions_.end());
+  CHECK(it != sessions_.end());
   it->second->HandleCommand(message, std::move(callback));
 }
 
 scoped_refptr<content::DevToolsAgentHost>
 HeadlessDevToolsManagerDelegate::CreateNewTarget(
     const GURL& url,
-    content::DevToolsManagerDelegate::TargetType target_type) {
+    content::DevToolsManagerDelegate::TargetType target_type,
+    bool new_window) {
   if (!browser_)
     return nullptr;
 
@@ -43,7 +43,7 @@ HeadlessDevToolsManagerDelegate::CreateNewTarget(
   HeadlessWebContentsImpl* web_contents_impl = HeadlessWebContentsImpl::From(
       context->CreateWebContentsBuilder()
           .SetInitialURL(url)
-          .SetWindowSize(browser_->options()->window_size)
+          .SetWindowBounds(gfx::Rect(browser_->options()->window_size))
           .Build());
   return target_type == content::DevToolsManagerDelegate::kTab
              ? content::DevToolsAgentHost::GetOrCreateForTab(
@@ -58,7 +58,7 @@ bool HeadlessDevToolsManagerDelegate::HasBundledFrontendResources() {
 
 void HeadlessDevToolsManagerDelegate::ClientAttached(
     content::DevToolsAgentHostClientChannel* channel) {
-  DCHECK(!base::Contains(sessions_, channel));
+  DCHECK(!sessions_.contains(channel));
   sessions_.emplace(
       channel,
       std::make_unique<protocol::HeadlessDevToolsSession>(browser_, channel));

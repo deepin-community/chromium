@@ -5,64 +5,67 @@
 #ifndef CONTENT_BROWSER_WEBID_FLAGS_H_
 #define CONTENT_BROWSER_WEBID_FLAGS_H_
 
+#include <optional>
+
 // Flags to control WebID for testing/debugging.
 
-namespace content {
-
-// IDP IdpSigninStatus API modes.
-enum class FedCmIdpSigninStatusMode { DISABLED, METRICS_ONLY, ENABLED };
-
-// Whether the AuthZ is enabled or not.
-bool IsFedCmAuthzEnabled();
-
-// Whether multiple identity providers are enabled.
-bool IsFedCmMultipleIdentityProvidersEnabled();
-
-// Returns the IdpSigninStatus API mode.
-// Most callers should use webid::GetIdpSigninStatusMode() in webid_utils.h
-// instead, as that version takes origin trial status into account.
-FedCmIdpSigninStatusMode GetFedCmIdpSigninStatusFlag();
+namespace content::webid {
 
 // Whether metrics endpoint is enabled.
-bool IsFedCmMetricsEndpointEnabled();
+bool IsMetricsEndpointEnabled();
 
-// Whether the Selective Disclosure API is enabled.
-bool IsFedCmSelectiveDisclosureEnabled();
+// Whether the Delegation API is enabled.
+bool IsDelegationEnabled();
+
+// Whether the Email Verification Protocol is enabled.
+bool IsEmailVerificationProtocolEnabled();
 
 // Whether the IdP Registration API is enabled.
-bool IsFedCmIdPRegistrationEnabled();
+bool IsIdPRegistrationEnabled();
 
 // Whether the well-known enforcement is bypassed.
-bool IsFedCmWithoutWellKnownEnforcementEnabled();
-
-// Whether we should skip well-known enforcement if RP and IDP are in the
-// same site.
-bool IsFedCmSkipWellKnownForSameSiteEnabled();
+bool IsWithoutWellKnownEnforcementEnabled();
 
 // Whether the Web Identity Digital Credentials API is enabled.
-bool IsWebIdentityDigitalCredentialsEnabled();
+bool IsDigitalCredentialsEnabled();
 
-// Whether the AutoSelected feature is enabled.
-bool IsFedCmAutoSelectedFlagEnabled();
+// Whether the Web Identity Digital Credentials Creation API is enabled.
+bool IsDigitalCredentialsCreationEnabled();
 
-// Whether the DomainHint feature is enabled.
-bool IsFedCmDomainHintEnabled();
+// Whether sending of SameSite=Lax cookies is enabled.
+bool IsSameSiteLaxEnabled();
 
-// Whether the Error API is enabled.
-bool IsFedCmErrorEnabled();
+// Whether lightweight FedCM credentials are enabled.
+bool IsLightweightModeEnabled();
 
-// Whether the disconnect API is enabled.
-bool IsFedCmDisconnectEnabled();
+// Whether autofill enhancement with FedCM is enabled.
+bool IsAutofillEnabled();
 
-// Whether "Use Other Account" is enabled.
-bool IsFedCmUseOtherAccountEnabled();
+// Whether nonce usage in params is enabled.
+bool IsNonceInParamsEnabled();
 
-// Whether the ExemptIdpWithThirdPartyCookies feature is enabled.
-bool IsFedCmExemptIdpWithThirdPartyCookiesEnabled();
+// Whether showing the non-string token is enabled.
+bool IsNonStringTokenEnabled();
 
-// Whether the ButtonMode feature is enabled.
-bool IsFedCmButtonModeEnabled();
+// Controls whether FedCM requires explicit accounts_endpoint and
+// login_url in well-known files when using client_metadata.
+bool IsWellKnownEndpointValidationEnabled();
 
-}  // namespace content
+// Whether preserving ports for testing is enabled.
+bool IsPreservePortsForTestingEnabled();
+
+// Whether accessing error attribute is enabled.
+bool IsErrorAttributeEnabled();
+
+// Whether the check for an embedder disabling auto sign-in is enabled.
+bool IsFedCmEmbedderCheckEnabled();
+
+// Whether navigation interception is enabled.
+bool IsNavigationInterceptionEnabled();
+
+// Whether embedder initiated login is enabled.
+bool IsEmbedderInitiatedLoginEnabled();
+
+}  // namespace content::webid
 
 #endif  // CONTENT_BROWSER_WEBID_FLAGS_H_

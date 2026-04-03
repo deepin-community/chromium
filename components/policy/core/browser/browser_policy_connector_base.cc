@@ -40,8 +40,13 @@ BrowserPolicyConnectorBase::BrowserPolicyConnectorBase(
   // of the policy providers in subclasses.
   const Schema& chrome_schema = policy::GetChromeSchema();
   handler_list_ = handler_list_factory.Run(chrome_schema);
-  schema_registry_.RegisterComponent(PolicyNamespace(POLICY_DOMAIN_CHROME, ""),
-                                     chrome_schema);
+  schema_registry_.RegisterComponent(
+      PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()), chrome_schema);
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  schema_registry_.RegisterComponent(
+      PolicyNamespace(POLICY_DOMAIN_EXTENSION_INSTALL, std::string()),
+      extension_install_policy_schema_);
+#endif
 }
 
 BrowserPolicyConnectorBase::~BrowserPolicyConnectorBase() {
@@ -71,6 +76,11 @@ const Schema& BrowserPolicyConnectorBase::GetChromeSchema() const {
   return policy::GetChromeSchema();
 }
 
+const Schema& BrowserPolicyConnectorBase::GetExtensionInstallPolicySchema()
+    const {
+  return extension_install_policy_schema_;
+}
+
 CombinedSchemaRegistry* BrowserPolicyConnectorBase::GetSchemaRegistry() {
   return &schema_registry_;
 }
@@ -96,6 +106,7 @@ PolicyService* BrowserPolicyConnectorBase::GetPolicyService() {
   g_created_policy_service = true;
   policy_service_ = std::make_unique<PolicyServiceImpl>(
       GetProvidersForPolicyService(),
+      PolicyServiceImpl::ScopeForMetrics::kMachine,
       std::vector<std::unique_ptr<PolicyMigrator>>());
   return policy_service_.get();
 }

@@ -7,6 +7,10 @@
 //   dEQP and GoogleTest integration logic. Calls through to the random
 //   order executor.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <stdint.h>
 #include <array>
 #include <fstream>
@@ -59,9 +63,9 @@ void HandlePlatformError(PlatformMethods *platform, const char *errorMessage)
 constexpr char kCTSRootPath[] = "third_party/VK-GL-CTS/src/";
 constexpr char kSupportPath[] = "src/tests/deqp_support/";
 
-#define GLES_CTS_DIR(PATH) "external/openglcts/data/mustpass/gles/" PATH
-#define GL_CTS_DIR(PATH) "external/openglcts/data/mustpass/gl/" PATH
-#define EGL_CTS_DIR(PATH) "external/openglcts/data/mustpass/egl/" PATH
+#define GLES_CTS_DIR(PATH) "external/openglcts/data/gl_cts/data/mustpass/gles/" PATH
+#define GL_CTS_DIR(PATH) "external/openglcts/data/gl_cts/data/mustpass/gl/" PATH
+#define EGL_CTS_DIR(PATH) "external/openglcts/data/gl_cts/data/mustpass/egl/" PATH
 
 const char *gCaseListFiles[] = {
     EGL_CTS_DIR("aosp_mustpass/main/egl-main.txt"),
@@ -72,6 +76,7 @@ const char *gCaseListFiles[] = {
     GLES_CTS_DIR("khronos_mustpass/main/gles3-khr-main.txt"),
     GLES_CTS_DIR("khronos_mustpass/main/gles31-khr-main.txt"),
     GLES_CTS_DIR("khronos_mustpass/main/gles32-khr-main.txt"),
+    GLES_CTS_DIR("khronos_mustpass/main/gles32-khr-glesext.txt"),
     GLES_CTS_DIR("khronos_mustpass_noctx/main/gles2-khr-noctx-main.txt"),
     GLES_CTS_DIR("khronos_mustpass_noctx/main/gles32-khr-noctx-main.txt"),
     GLES_CTS_DIR("khronos_mustpass_single/main/gles32-khr-single.txt"),
@@ -85,7 +90,6 @@ const char *gCaseListFiles[] = {
     GLES_CTS_DIR("aosp_mustpass/main/gles3-565-no-depth-no-stencil.txt"),
     GLES_CTS_DIR("aosp_mustpass/main/gles31-multisample.txt"),
     GLES_CTS_DIR("aosp_mustpass/main/gles31-565-no-depth-no-stencil.txt"),
-    GL_CTS_DIR("khronos_mustpass/main/gl46-main.txt"),
 };
 
 const std::vector<const char *> gTestSuiteConfigParameters[] = {
@@ -97,6 +101,7 @@ const std::vector<const char *> gTestSuiteConfigParameters[] = {
     {"--deqp-gl-config-name=rgba8888d24s8ms0"},  // gles3_khr
     {"--deqp-gl-config-name=rgba8888d24s8ms0"},  // gles31_khr
     {"--deqp-gl-config-name=rgba8888d24s8ms0"},  // gles32_khr
+    {"--deqp-gl-config-name=rgba8888d24s8ms0"},  // glesext_khr
     {"--deqp-gl-config-name=rgba8888d24s8ms0"},  // gles2_khr_noctx
     {"--deqp-gl-config-name=rgba8888d24s8ms0"},  // gles32_khr_noctx
     {"--deqp-gl-config-name=rgba8888d24s8ms0"},  // gles32_khr_single
@@ -110,7 +115,6 @@ const std::vector<const char *> gTestSuiteConfigParameters[] = {
     {"--deqp-gl-config-name=rgb565d0s0ms0"},     // gles3_rgb565_no_depth_no_stencil
     {"--deqp-gl-config-name=rgba8888d24s8ms4"},  // gles31_multisample
     {"--deqp-gl-config-name=rgb565d0s0ms0"},     // gles31_rgb565_no_depth_no_stencil
-    {"--deqp-gl-config-name=rgba8888d24s8ms4"},  // gl46
 };
 
 #undef GLES_CTS_DIR
@@ -125,6 +129,7 @@ const char *gTestExpectationsFiles[] = {
     "deqp_khr_gles3_test_expectations.txt",
     "deqp_khr_gles31_test_expectations.txt",
     "deqp_khr_gles32_test_expectations.txt",
+    "deqp_khr_glesext_test_expectations.txt",
     "deqp_khr_noctx_gles2_test_expectations.txt",
     "deqp_khr_noctx_gles32_test_expectations.txt",
     "deqp_khr_single_gles32_test_expectations.txt",
@@ -138,12 +143,14 @@ const char *gTestExpectationsFiles[] = {
     "deqp_gles3_565_no_depth_no_stencil_test_expectations.txt",
     "deqp_gles31_multisample_test_expectations.txt",
     "deqp_gles31_565_no_depth_no_stencil_test_expectations.txt",
-    "deqp_gl46_test_expectations.txt",
 };
 
 using APIInfo = std::pair<const char *, GPUTestConfig::API>;
 
 constexpr APIInfo kEGLDisplayAPIs[] = {
+#if defined(ANGLE_PLATFORM_ANDROID)
+    {"native-gles", GPUTestConfig::kAPIGLES},
+#endif
     {"angle-d3d9", GPUTestConfig::kAPID3D9},
     {"angle-d3d11", GPUTestConfig::kAPID3D11},
     {"angle-d3d11-ref", GPUTestConfig::kAPID3D11},
@@ -153,8 +160,10 @@ constexpr APIInfo kEGLDisplayAPIs[] = {
     {"angle-null", GPUTestConfig::kAPIUnknown},
     {"angle-swiftshader", GPUTestConfig::kAPISwiftShader},
     {"angle-vulkan", GPUTestConfig::kAPIVulkan},
+    {"angle-webgpu", GPUTestConfig::kAPIWgpu},
     {"win32", GPUTestConfig::kAPIUnknown},
-    {"x11", GPUTestConfig::kAPIUnknown},
+    {"x11", GPUTestConfig::kAPIUnknown}
+
 };
 
 constexpr char kdEQPEGLString[]             = "--deqp-egl-display-type=";
@@ -201,10 +210,13 @@ constexpr bool kEnableRenderDocCapture = true;
 constexpr bool kEnableRenderDocCapture = false;
 #endif
 
+constexpr dEQPDriverOption kDeqpDriverOption = dEQPDriverOption::ANGLE;
+
 const APIInfo *gInitAPI = nullptr;
 dEQPOptions gOptions    = {
     kDefaultPreRotation,      // preRotation
     kEnableRenderDocCapture,  // enableRenderDocCapture
+    kDeqpDriverOption,        // useANGLE
 };
 
 std::vector<const char *> gdEQPForwardFlags;
@@ -313,59 +325,59 @@ size_t GetTestModuleIndex()
     return 7;
 #endif
 
-#ifdef ANGLE_DEQP_KHR_NOCTX_GLES2_TESTS
+#ifdef ANGLE_DEQP_KHR_GLESEXT_TESTS
     return 8;
 #endif
 
-#ifdef ANGLE_DEQP_KHR_NOCTX_GLES32_TESTS
+#ifdef ANGLE_DEQP_KHR_NOCTX_GLES2_TESTS
     return 9;
 #endif
 
-#ifdef ANGLE_DEQP_KHR_SINGLE_GLES32_TESTS
+#ifdef ANGLE_DEQP_KHR_NOCTX_GLES32_TESTS
     return 10;
 #endif
 
-#ifdef ANGLE_DEQP_GLES3_ROTATE90_TESTS
+#ifdef ANGLE_DEQP_KHR_SINGLE_GLES32_TESTS
     return 11;
 #endif
 
-#ifdef ANGLE_DEQP_GLES3_ROTATE180_TESTS
+#ifdef ANGLE_DEQP_GLES3_ROTATE90_TESTS
     return 12;
 #endif
 
-#ifdef ANGLE_DEQP_GLES3_ROTATE270_TESTS
+#ifdef ANGLE_DEQP_GLES3_ROTATE180_TESTS
     return 13;
 #endif
 
-#ifdef ANGLE_DEQP_GLES31_ROTATE90_TESTS
+#ifdef ANGLE_DEQP_GLES3_ROTATE270_TESTS
     return 14;
 #endif
 
-#ifdef ANGLE_DEQP_GLES31_ROTATE180_TESTS
+#ifdef ANGLE_DEQP_GLES31_ROTATE90_TESTS
     return 15;
 #endif
 
-#ifdef ANGLE_DEQP_GLES31_ROTATE270_TESTS
+#ifdef ANGLE_DEQP_GLES31_ROTATE180_TESTS
     return 16;
 #endif
 
-#ifdef ANGLE_DEQP_GLES3_MULTISAMPLE_TESTS
+#ifdef ANGLE_DEQP_GLES31_ROTATE270_TESTS
     return 17;
 #endif
 
-#ifdef ANGLE_DEQP_GLES3_565_NO_DEPTH_NO_STENCIL_TESTS
+#ifdef ANGLE_DEQP_GLES3_MULTISAMPLE_TESTS
     return 18;
 #endif
 
-#ifdef ANGLE_DEQP_GLES31_MULTISAMPLE_TESTS
+#ifdef ANGLE_DEQP_GLES3_565_NO_DEPTH_NO_STENCIL_TESTS
     return 19;
 #endif
 
-#ifdef ANGLE_DEQP_GLES31_565_NO_DEPTH_NO_STENCIL_TESTS
+#ifdef ANGLE_DEQP_GLES31_MULTISAMPLE_TESTS
     return 20;
 #endif
 
-#ifdef ANGLE_DEQP_GL_TESTS
+#ifdef ANGLE_DEQP_GLES31_565_NO_DEPTH_NO_STENCIL_TESTS
     return 21;
 #endif
 }
@@ -479,8 +491,6 @@ void dEQPCaseList::initialize()
         int expectation = testSuite->getTestExpectation(testName);
         mCaseInfoList.push_back(CaseInfo(testName, expectation));
     }
-
-    testSuite->logAnyUnusedTestExpectations();
 }
 
 bool IsPassingResult(dEQPTestResult result)
@@ -690,7 +700,7 @@ void dEQPTest::SetUpTestSuite()
         argv.push_back("--deqp-log-images=disable");
     }
 
-    // Flushing during multi-process execution punishes HDDs. http://anglebug.com/5157
+    // Flushing during multi-process execution punishes HDDs. http://anglebug.com/42263718
     if (testSuite->getBatchId() != -1)
     {
         argv.push_back("--deqp-log-flush=disable");
@@ -790,12 +800,12 @@ void HandleDisplayType(const char *displayTypeString)
         argStream2 << "angle-" << displayTypeString;
         std::string arg2 = argStream2.str();
         gInitAPI         = FindAPIInfo(arg2);
+    }
 
-        if (!gInitAPI)
-        {
-            std::cout << "Unknown API: " << displayTypeString << std::endl;
-            exit(1);
-        }
+    if (!gInitAPI)
+    {
+        std::cout << "Unknown API: " << displayTypeString << std::endl;
+        exit(1);
     }
 }
 
@@ -961,6 +971,14 @@ int RunGLCTSTests(int *argc, char **argv)
     if (gInitAPI)
     {
         api = gInitAPI->second;
+        // On Android, if --deqp-egl-display-type=native-gles, set driverOption to NATIVE
+        // We will load egl libs from native gles driver instead of ANGLE.
+#if defined(ANGLE_PLATFORM_ANDROID)
+        if (strcmp(gInitAPI->first, "native-gles") == 0)
+        {
+            gOptions.driverOption = dEQPDriverOption::NATIVE;
+        }
+#endif
     }
     if (gOptions.preRotation != 0 && api != GPUTestConfig::kAPIVulkan &&
         api != GPUTestConfig::kAPISwiftShader)

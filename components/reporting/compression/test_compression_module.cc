@@ -10,11 +10,8 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/strings/string_piece.h"
 #include "components/reporting/proto/synced/record.pb.h"
 #include "components/reporting/resources/resource_manager.h"
-
-using ::testing::Invoke;
 
 namespace reporting {
 namespace test {
@@ -26,14 +23,14 @@ const CompressionInformation::CompressionAlgorithm kCompressionType =
 TestCompressionModuleStrict::TestCompressionModuleStrict()
     : CompressionModule(kCompressionThreshold, kCompressionType) {
   ON_CALL(*this, CompressRecord)
-      .WillByDefault(Invoke(
+      .WillByDefault(
           [](std::string record,
              scoped_refptr<ResourceManager> resource_manager,
              base::OnceCallback<void(
                  std::string, std::optional<CompressionInformation>)> cb) {
             // compression_info is not set.
             std::move(cb).Run(record, std::nullopt);
-          }));
+          });
 }
 
 TestCompressionModuleStrict::~TestCompressionModuleStrict() = default;

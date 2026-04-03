@@ -12,7 +12,7 @@
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/functional/callback_helpers.h"
+#include "base/functional/is_callback.h"
 #include "base/location.h"
 #include "base/memory/aligned_memory.h"
 #include "base/memory/raw_ptr.h"
@@ -85,7 +85,7 @@ class Storage {
   template <typename... Args>
   NO_SANITIZE("cfi-unrelated-cast")
   void Construct(SequencedTaskRunner& task_runner, Args&&... args) {
-    // TODO(https://crbug.com/1382549): Use universal forwarding and assert that
+    // TODO(crbug.com/40245687): Use universal forwarding and assert that
     // T is constructible from args for better error messages.
     DCHECK(!alloc_);
     DCHECK(!ptr_);
@@ -166,7 +166,7 @@ struct Storage<std::unique_ptr<T>, CrossThreadTraits> {
 
   template <typename U>
   void Construct(SequencedTaskRunner& task_runner, std::unique_ptr<U> arg) {
-    // TODO(https://crbug.com/1382549): Use universal forwarding and assert that
+    // TODO(crbug.com/40245687): Use universal forwarding and assert that
     // there is one arg that is a unique_ptr for better error messages.
     DCHECK(!ptr_);
 

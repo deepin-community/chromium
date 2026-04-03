@@ -45,6 +45,10 @@ class PasswordManagerErrorMessageDelegate {
  private:
   friend class PasswordManagerErrorMessageDelegateTest;
 
+  bool ShouldShowErrorUI(
+      content::WebContents* web_contents,
+      password_manager::PasswordStoreBackendErrorType error_type);
+
   std::unique_ptr<messages::MessageWrapper> CreateMessage(
       content::WebContents* web_contents,
       password_manager::PasswordStoreBackendErrorType error_type,
@@ -54,10 +58,15 @@ class PasswordManagerErrorMessageDelegate {
   void HandleActionButtonClicked(
       content::WebContents* web_contents,
       password_manager::PasswordStoreBackendErrorType error);
-  void HandleMessageDismissed(messages::DismissReason dismiss_reason);
+  void HandleMessageDismissed(
+      content::WebContents* web_contents,
+      password_manager::PasswordStoreBackendErrorType error_type,
+      messages::DismissReason dismiss_reason);
 
   std::unique_ptr<messages::MessageWrapper> message_;
   std::unique_ptr<PasswordManagerErrorMessageHelperBridge> helper_bridge_;
+  password_manager::PasswordStoreBackendErrorType error_type_ =
+      password_manager::PasswordStoreBackendErrorType::kUncategorized;
 
   base::WeakPtrFactory<PasswordManagerErrorMessageDelegate> weak_ptr_factory_{
       this};

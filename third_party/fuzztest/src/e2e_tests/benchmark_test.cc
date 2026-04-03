@@ -17,7 +17,13 @@
 // It runs each micro-benchmark fuzz test in a child process and measures the
 // time and number of iterations it takes to find the exit condition.
 
-#include <filesystem>
+#include <sys/types.h>
+#include <unistd.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>  // NOLINT
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -31,12 +37,12 @@
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
 #include "absl/time/time.h"
-#include "./fuzztest/internal/logging.h"
+#include "./common/logging.h"
 #include "./fuzztest/internal/subprocess.h"
 #include "re2/re2.h"
 
-// Mimic the open source google benchmark flags in order to work with benchmark
-// driver tools.
+// Mimic the open source google benchmark flags in order to work with
+// benchmark driver tools.
 ABSL_FLAG(std::string, benchmark_filter, "", "");
 ABSL_FLAG(bool, benchmark_list_tests, false, "");
 ABSL_FLAG(std::string, benchmark_format, "", "");
@@ -59,7 +65,7 @@ struct TestResult {
 std::string SelfPath() {
   char buf[4096];
   ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf));
-  FUZZTEST_INTERNAL_CHECK(len < sizeof(buf), "Path too long!");
+  FUZZTEST_CHECK(len < sizeof(buf)) << "Path too long!";
   return std::string(buf, len);
 }
 std::string MicrobenchmarksBinaryPath() {
@@ -67,28 +73,30 @@ std::string MicrobenchmarksBinaryPath() {
   const std::size_t dir_path_len = self_path.find_last_of('/');
   std::string binary_path = self_path.substr(0, dir_path_len) +
                             "/testdata/fuzz_tests_for_microbenchmarking";
-  FUZZTEST_INTERNAL_CHECK(std::filesystem::exists(binary_path), "Can't find ",
-                          binary_path);
+  FUZZTEST_CHECK(std::filesystem::exists(binary_path))
+      << "Can't find " << binary_path;
   return binary_path;
 }
 
 uint64_t ExtractTime(absl::string_view output) {
   static constexpr LazyRE2 kElapsedTimeRE = {"\nElapsed time: (.+)\n"};
   std::string duration_str;
-  FUZZTEST_INTERNAL_CHECK(
-      RE2::PartialMatch(output, *kElapsedTimeRE, &duration_str),
-      "\n\nCould not find:\n\nElapsed time:\n\nin:\n\n", output);
+  FUZZTEST_CHECK(RE2::PartialMatch(output, *kElapsedTimeRE, &duration_str))
+      << "\n\nCould not find:\n\nElapsed time:\n\nin:\n\n"
+      << output;
   absl::Duration duration;
-  FUZZTEST_INTERNAL_CHECK(absl::ParseDuration(duration_str, &duration),
-                          "Could not parse duration:", duration_str);
+  FUZZTEST_CHECK(absl::ParseDuration(duration_str, &duration))
+      << "Could not parse duration:" << duration_str;
   return absl::ToInt64Nanoseconds(duration);
 }
 
 uint64_t ExtractNumber(absl::string_view output, absl::string_view name) {
   uint64_t number;
-  FUZZTEST_INTERNAL_CHECK(
-      RE2::PartialMatch(output, absl::StrCat("\n", name, ": (.+)\n"), &number),
-      "\n\nCould not find\n\n", name, ":\n\nin:\n\n", output);
+  FUZZTEST_CHECK(
+      RE2::PartialMatch(output, absl::StrCat("\n", name, ": (.+)\n"), &number))
+      << "\n\nCould not find\n\n"
+      << name << ":\n\nin:\n\n"
+      << output;
   return number;
 }
 
@@ -105,11 +113,11 @@ uint64_t ExtractNumber(absl::string_view output, absl::string_view name) {
 // We might want to pass a richer format later.
 Stats ParseStats(absl::string_view output) {
   return {
-      .nanos = ExtractTime(output),
-      .runs = ExtractNumber(output, "Total runs"),
-      .edges_covered = ExtractNumber(output, "Edges covered"),
-      .total_edges = ExtractNumber(output, "Total edges"),
-      .corpus_size = ExtractNumber(output, "Corpus size"),
+      /*nanos=*/ExtractTime(output),
+      /*runs=*/ExtractNumber(output, "Total runs"),
+      /*edges_covered=*/ExtractNumber(output, "Edges covered"),
+      /*total_edges=*/ExtractNumber(output, "Total edges"),
+      /*corpus_size=*/ExtractNumber(output, "Corpus size"),
   };
 }
 
@@ -135,8 +143,8 @@ std::string AllJsonResults(const std::vector<TestResult>& test_results) {
       // This measures the cost of the framework on processing the edge map.
       // This way we can see if differences in a CL come from edge count
       // change or from implementation changes.
-      FUZZTEST_INTERNAL_CHECK(result.stats.total_edges != 0,
-                              "Total edges cannot be zero!");
+      FUZZTEST_CHECK(result.stats.total_edges != 0)
+          << "Total edges cannot be zero!";
       json_results.push_back(SingleJsonResult(
           "Control.Edges10000(time)",
           10000 * result.stats.nanos / result.stats.total_edges));
@@ -220,8 +228,7 @@ void RunMicrobenchmarks(const bool list_tests, const std::string& filter) {
 int main(int argc, char** argv) {
 #if defined(__has_feature)
 #if !__has_feature(coverage_sanitizer)
-  FUZZTEST_INTERNAL_CHECK(false,
-                          "\n\nPlease compile with --config=fuzztest.\n");
+  FUZZTEST_LOG(FATAL) << "\n\nPlease compile with --config=fuzztest.\n";
 #endif
 #endif
   absl::ParseCommandLine(argc, argv);

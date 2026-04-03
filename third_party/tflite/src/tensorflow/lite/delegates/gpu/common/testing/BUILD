@@ -1,3 +1,5 @@
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = ["//visibility:public"],
@@ -11,7 +13,6 @@ cc_library(
     hdrs = ["interpreter_utils.h"],
     deps = [
         "//tensorflow/lite:framework",
-        "//tensorflow/lite:string",
         "//tensorflow/lite/core:framework",
         "//tensorflow/lite/core/api",
         "//tensorflow/lite/core/c:common",
@@ -19,6 +20,5 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common:status",
         "//tensorflow/lite/delegates/gpu/common:tensor",
         "//tensorflow/lite/schema:schema_fbs",
-        "@com_google_absl//absl/memory",
     ],
 )

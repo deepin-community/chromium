@@ -42,7 +42,6 @@
 
 #include "breakpad_googletest_includes.h"
 #include "common/dwarf_cu_to_module.h"
-#include "common/using_std_string.h"
 
 using std::make_pair;
 using std::vector;
@@ -69,7 +68,7 @@ using ::testing::ValuesIn;
 
 class MockLineToModuleHandler: public DwarfCUToModule::LineToModuleHandler {
  public:
-  MOCK_METHOD1(StartCompilationUnit, void(const string& compilation_dir));
+  MOCK_METHOD1(StartCompilationUnit, void(const std::string& compilation_dir));
   MOCK_METHOD9(ReadProgram, void(const uint8_t* program, uint64_t length,
                                  const uint8_t* string_section,
                                  uint64_t string_section_length,
@@ -81,17 +80,17 @@ class MockLineToModuleHandler: public DwarfCUToModule::LineToModuleHandler {
 
 class MockWarningReporter: public DwarfCUToModule::WarningReporter {
  public:
-  MockWarningReporter(const string& filename, uint64_t cu_offset)
-      : DwarfCUToModule::WarningReporter(filename, cu_offset) { }
-  MOCK_METHOD1(SetCUName, void(const string& name));
+  MockWarningReporter(const std::string& filename, uint64_t cu_offset)
+      : DwarfCUToModule::WarningReporter(filename, cu_offset) {}
+  MOCK_METHOD1(SetCUName, void(const std::string& name));
   MOCK_METHOD2(UnknownSpecification, void(uint64_t offset, uint64_t target));
   MOCK_METHOD2(UnknownAbstractOrigin, void(uint64_t offset, uint64_t target));
-  MOCK_METHOD1(MissingSection, void(const string& section_name));
+  MOCK_METHOD1(MissingSection, void(const std::string& section_name));
   MOCK_METHOD1(BadLineInfoOffset, void(uint64_t offset));
   MOCK_METHOD1(UncoveredFunction, void(const Module::Function& function));
   MOCK_METHOD1(UncoveredLine, void(const Module::Line& line));
   MOCK_METHOD1(UnnamedFunction, void(uint64_t offset));
-  MOCK_METHOD1(DemangleError, void(const string& input));
+  MOCK_METHOD1(DemangleError, void(const std::string& input));
   MOCK_METHOD2(UnhandledInterCUReference, void(uint64_t offset, uint64_t target));
 };
 
@@ -174,7 +173,7 @@ class CUFixtureBase {
   // when it invokes its LineToModuleHandler. Call this before calling
   // StartCU.
   void PushLine(Module::Address address, Module::Address size,
-                const string& filename, int line_number);
+                const std::string& filename, int line_number);
 
   // Use LANGUAGE for the compilation unit. More precisely, arrange
   // for StartCU to pass the compilation unit's root DIE a
@@ -201,7 +200,7 @@ class CUFixtureBase {
   // the handler ready to hear about children: call EndAttributes, but
   // not Finish.
   DIEHandler* StartNamedDIE(DIEHandler* parent, DwarfTag tag,
-                            const string& name);
+                            const std::string& name);
 
   // Start a child DIE of PARENT with the given tag and a
   // DW_AT_specification attribute whose value is SPECIFICATION. Leave
@@ -209,14 +208,15 @@ class CUFixtureBase {
   // not Finish. If NAME is non-zero, use it as the DW_AT_name
   // attribute.
   DIEHandler* StartSpecifiedDIE(DIEHandler* parent, DwarfTag tag,
-                                uint64_t specification, const char* name = NULL);
+                                uint64_t specification,
+                                const char* name = nullptr);
 
   // Define a function as a child of PARENT with the given name, address, and
   // size. If high_pc_form is DW_FORM_addr then the DW_AT_high_pc attribute
   // will be written as an address; otherwise it will be written as the
   // function's size. Call EndAttributes and Finish; one cannot define
   // children of the defined function's DIE.
-  void DefineFunction(DIEHandler* parent, const string& name,
+  void DefineFunction(DIEHandler* parent, const std::string& name,
                       Module::Address address, Module::Address size,
                       const char* mangled_name,
                       DwarfForm high_pc_form = google_breakpad::DW_FORM_addr);
@@ -224,18 +224,17 @@ class CUFixtureBase {
   // Create a declaration DIE as a child of PARENT with the given
   // offset, tag and name. If NAME is the empty string, don't provide
   // a DW_AT_name attribute. Call EndAttributes and Finish.
-  void DeclarationDIE(DIEHandler* parent, uint64_t offset,
-                      DwarfTag tag, const string& name,
-                      const string& mangled_name);
+  void DeclarationDIE(DIEHandler* parent, uint64_t offset, DwarfTag tag,
+                      const std::string& name, const std::string& mangled_name);
 
   // Create a definition DIE as a child of PARENT with the given tag
   // that refers to the declaration DIE at offset SPECIFICATION as its
   // specification. If NAME is non-empty, pass it as the DW_AT_name
   // attribute. If SIZE is non-zero, record ADDRESS and SIZE as
   // low_pc/high_pc attributes.
-  void DefinitionDIE(DIEHandler* parent, DwarfTag tag,
-                     uint64_t specification, const string& name,
-                     Module::Address address = 0, Module::Address size = 0);
+  void DefinitionDIE(DIEHandler* parent, DwarfTag tag, uint64_t specification,
+                     const std::string& name, Module::Address address = 0,
+                     Module::Address size = 0);
 
   // Create an inline DW_TAG_subprogram DIE as a child of PARENT.  If
   // SPECIFICATION is non-zero, then the DIE refers to the declaration DIE at
@@ -243,13 +242,13 @@ class CUFixtureBase {
   // as the DW_AT_name attribute.
   void AbstractInstanceDIE(DIEHandler* parent, uint64_t offset,
                            DwarfInline type, uint64_t specification,
-                           const string& name,
+                           const std::string& name,
                            DwarfForm form = google_breakpad::DW_FORM_data1);
 
   // Create a DW_TAG_subprogram DIE as a child of PARENT that refers to
   // ORIGIN in its DW_AT_abstract_origin attribute.  If NAME is the empty
   // string, don't provide a DW_AT_name attribute.
-  void DefineInlineInstanceDIE(DIEHandler* parent, const string& name,
+  void DefineInlineInstanceDIE(DIEHandler* parent, const std::string& name,
                                uint64_t origin, Module::Address address,
                                Module::Address size);
 
@@ -264,8 +263,8 @@ class CUFixtureBase {
   // Test that the I'th function (ordered by address) in the module
   // this.module_ has the given name, address, and size, and that its
   // parameter size is zero.
-  void TestFunction(int i, const string& name,
-                    Module::Address address, Module::Address size);
+  void TestFunction(int i, const std::string& name, Module::Address address,
+                    Module::Address size);
 
   // Test that the I'th function (ordered by address) in the module
   // this.module_ has the given prefer_extern_name.
@@ -279,7 +278,7 @@ class CUFixtureBase {
   // (again, by address) has the given address, size, filename, and
   // line number.
   void TestLine(int i, int j, Module::Address address, Module::Address size,
-                const string& filename, int number);
+                const std::string& filename, int number);
 
   // Actual objects under test.
   Module module_;
@@ -295,7 +294,7 @@ class CUFixtureBase {
 
   // If this is not empty, we'll give the CU a DW_AT_comp_dir attribute that
   // indicates the path that this compilation unit was compiled in.
-  string compilation_dir_;
+  std::string compilation_dir_;
 
   // If this is not empty, we'll give the CU a DW_AT_stmt_list
   // attribute that, when passed to line_reader_, adds these lines to the
@@ -327,7 +326,7 @@ const size_t CUFixtureBase::dummy_line_size_ =
     sizeof(CUFixtureBase::dummy_line_program_);
 
 void CUFixtureBase::PushLine(Module::Address address, Module::Address size,
-                             const string& filename, int line_number) {
+                             const std::string& filename, int line_number) {
   Module::Line l;
   l.address = address;
   l.size = size;
@@ -404,13 +403,12 @@ void CUFixtureBase::ProcessStrangeAttributes(
                                   "strange string");
 }
 
-DIEHandler* CUFixtureBase::StartNamedDIE(DIEHandler* parent,
-                                         DwarfTag tag,
-                                         const string& name) {
+DIEHandler* CUFixtureBase::StartNamedDIE(DIEHandler* parent, DwarfTag tag,
+                                         const std::string& name) {
   google_breakpad::DIEHandler* handler
     = parent->FindChildHandler(0x8f4c783c0467c989ULL, tag);
   if (!handler)
-    return NULL;
+    return nullptr;
   handler->ProcessAttributeString(google_breakpad::DW_AT_name,
                                   google_breakpad::DW_FORM_strp,
                                   name);
@@ -418,7 +416,7 @@ DIEHandler* CUFixtureBase::StartNamedDIE(DIEHandler* parent,
   if (!handler->EndAttributes()) {
     handler->Finish();
     delete handler;
-    return NULL;
+    return nullptr;
   }
 
   return handler;
@@ -431,7 +429,7 @@ DIEHandler* CUFixtureBase::StartSpecifiedDIE(DIEHandler* parent,
   google_breakpad::DIEHandler* handler
     = parent->FindChildHandler(0x8f4c783c0467c989ULL, tag);
   if (!handler)
-    return NULL;
+    return nullptr;
   if (name)
     handler->ProcessAttributeString(google_breakpad::DW_AT_name,
                                     google_breakpad::DW_FORM_strp,
@@ -442,21 +440,22 @@ DIEHandler* CUFixtureBase::StartSpecifiedDIE(DIEHandler* parent,
   if (!handler->EndAttributes()) {
     handler->Finish();
     delete handler;
-    return NULL;
+    return nullptr;
   }
 
   return handler;
 }
 
 void CUFixtureBase::DefineFunction(google_breakpad::DIEHandler* parent,
-                                   const string& name, Module::Address address,
+                                   const std::string& name,
+                                   Module::Address address,
                                    Module::Address size,
                                    const char* mangled_name,
                                    DwarfForm high_pc_form) {
   google_breakpad::DIEHandler* func
       = parent->FindChildHandler(0xe34797c7e68590a8LL,
                                  google_breakpad::DW_TAG_subprogram);
-  ASSERT_TRUE(func != NULL);
+  ASSERT_TRUE(func != nullptr);
   func->ProcessAttributeString(google_breakpad::DW_AT_name,
                                google_breakpad::DW_FORM_strp,
                                name);
@@ -484,11 +483,10 @@ void CUFixtureBase::DefineFunction(google_breakpad::DIEHandler* parent,
 }
 
 void CUFixtureBase::DeclarationDIE(DIEHandler* parent, uint64_t offset,
-                                   DwarfTag tag,
-                                   const string& name,
-                                   const string& mangled_name) {
+                                   DwarfTag tag, const std::string& name,
+                                   const std::string& mangled_name) {
   google_breakpad::DIEHandler* die = parent->FindChildHandler(offset, tag);
-  ASSERT_TRUE(die != NULL);
+  ASSERT_TRUE(die != nullptr);
   if (!name.empty())
     die->ProcessAttributeString(google_breakpad::DW_AT_name,
                                 google_breakpad::DW_FORM_strp,
@@ -506,15 +504,14 @@ void CUFixtureBase::DeclarationDIE(DIEHandler* parent, uint64_t offset,
   delete die;
 }
 
-void CUFixtureBase::DefinitionDIE(DIEHandler* parent,
-                                  DwarfTag tag,
+void CUFixtureBase::DefinitionDIE(DIEHandler* parent, DwarfTag tag,
                                   uint64_t specification,
-                                  const string& name,
+                                  const std::string& name,
                                   Module::Address address,
                                   Module::Address size) {
   google_breakpad::DIEHandler* die
     = parent->FindChildHandler(0x6ccfea031a9e6cc9ULL, tag);
-  ASSERT_TRUE(die != NULL);
+  ASSERT_TRUE(die != nullptr);
   die->ProcessAttributeReference(google_breakpad::DW_AT_specification,
                                  google_breakpad::DW_FORM_ref4,
                                  specification);
@@ -535,15 +532,14 @@ void CUFixtureBase::DefinitionDIE(DIEHandler* parent,
   delete die;
 }
 
-void CUFixtureBase::AbstractInstanceDIE(DIEHandler* parent,
-                                        uint64_t offset,
+void CUFixtureBase::AbstractInstanceDIE(DIEHandler* parent, uint64_t offset,
                                         DwarfInline type,
                                         uint64_t specification,
-                                        const string& name,
+                                        const std::string& name,
                                         DwarfForm form) {
   google_breakpad::DIEHandler* die
     = parent->FindChildHandler(offset, google_breakpad::DW_TAG_subprogram);
-  ASSERT_TRUE(die != NULL);
+  ASSERT_TRUE(die != nullptr);
   if (specification != 0ULL)
     die->ProcessAttributeReference(google_breakpad::DW_AT_specification,
                                    google_breakpad::DW_FORM_ref4,
@@ -564,14 +560,14 @@ void CUFixtureBase::AbstractInstanceDIE(DIEHandler* parent,
 }
 
 void CUFixtureBase::DefineInlineInstanceDIE(DIEHandler* parent,
-                                            const string& name,
+                                            const std::string& name,
                                             uint64_t origin,
                                             Module::Address address,
                                             Module::Address size) {
   google_breakpad::DIEHandler* func
       = parent->FindChildHandler(0x11c70f94c6e87ccdLL,
                                  google_breakpad::DW_TAG_subprogram);
-  ASSERT_TRUE(func != NULL);
+  ASSERT_TRUE(func != nullptr);
   if (!name.empty()) {
     func->ProcessAttributeString(google_breakpad::DW_AT_name,
                                  google_breakpad::DW_FORM_strp,
@@ -606,7 +602,7 @@ void CUFixtureBase::TestFunctionCount(size_t expected) {
   ASSERT_EQ(expected, functions_.size());
 }
 
-void CUFixtureBase::TestFunction(int i, const string& name,
+void CUFixtureBase::TestFunction(int i, const std::string& name,
                                  Module::Address address,
                                  Module::Address size) {
   FillFunctions();
@@ -635,9 +631,9 @@ void CUFixtureBase::TestLineCount(int i, size_t expected) {
   ASSERT_EQ(expected, functions_[i]->lines.size());
 }
 
-void CUFixtureBase::TestLine(int i, int j,
-                             Module::Address address, Module::Address size,
-                             const string& filename, int number) {
+void CUFixtureBase::TestLine(int i, int j, Module::Address address,
+                             Module::Address size, const std::string& filename,
+                             int number) {
   FillFunctions();
   ASSERT_LT((size_t) i, functions_.size());
   ASSERT_LT((size_t) j, functions_[i]->lines.size());
@@ -681,7 +677,7 @@ TEST_F(SimpleCU, OneFunc) {
 
   StartCU();
   DefineFunction(&root_handler_, "function1",
-                 0x938cf8c07def4d34ULL, 0x55592d727f6cd01fLL, NULL);
+                 0x938cf8c07def4d34ULL, 0x55592d727f6cd01fLL, nullptr);
   root_handler_.Finish();
 
   TestFunctionCount(1);
@@ -697,7 +693,7 @@ TEST_F(SimpleCU, OneFuncHighPcIsLength) {
 
   StartCU();
   DefineFunction6(&root_handler_, "function1",
-                  0x938cf8c07def4d34ULL, 0x55592d727f6cd01fLL, NULL,
+                  0x938cf8c07def4d34ULL, 0x55592d727f6cd01fLL, nullptr,
                   google_breakpad::DW_FORM_udata);
   root_handler_.Finish();
 
@@ -731,7 +727,7 @@ TEST_F(SimpleCU, IrrelevantNamedScopeChildren) {
   StartCU();
   DIEHandler* class_A_handler
     = StartNamedDIE(&root_handler_, google_breakpad::DW_TAG_class_type, "class_A");
-  EXPECT_TRUE(class_A_handler != NULL);
+  EXPECT_TRUE(class_A_handler != nullptr);
   EXPECT_FALSE(class_A_handler
                ->FindChildHandler(0x02e55999b865e4e9ULL,
                                   google_breakpad::DW_TAG_lexical_block));
@@ -816,7 +812,7 @@ TEST_F(SimpleCU, UnnamedFunction) {
 
   StartCU();
   DefineFunction(&root_handler_, "",
-                 0x72b80e41a0ac1d40ULL, 0x537174f231ee181cULL, NULL);
+                 0x72b80e41a0ac1d40ULL, 0x537174f231ee181cULL, nullptr);
   root_handler_.Finish();
 
   TestFunctionCount(1);
@@ -893,10 +889,10 @@ TEST_P(FuncLinePairing, Pairing) {
   StartCU();
   DefineFunction(&root_handler_, "function1",
                  s.functions[0].start,
-                 s.functions[0].end - s.functions[0].start, NULL);
+                 s.functions[0].end - s.functions[0].start, nullptr);
   DefineFunction(&root_handler_, "function2",
                  s.functions[1].start,
-                 s.functions[1].end - s.functions[1].start, NULL);
+                 s.functions[1].end - s.functions[1].start, nullptr);
   root_handler_.Finish();
 
   TestFunctionCount(2);
@@ -940,7 +936,7 @@ TEST_F(FuncLinePairing, FuncsNoLines) {
 
   StartCU();
   DefineFunction(&root_handler_, "function1", 0x127da12ffcf5c51fULL, 0x1000U,
-                 NULL);
+                 nullptr);
   root_handler_.Finish();
 
   TestFunctionCount(1);
@@ -952,8 +948,8 @@ TEST_F(FuncLinePairing, GapThenFunction) {
   PushLine(10, 2, "line-file-1", 263008005);
 
   StartCU();
-  DefineFunction(&root_handler_, "function1", 10, 2, NULL);
-  DefineFunction(&root_handler_, "function2", 20, 2, NULL);
+  DefineFunction(&root_handler_, "function1", 10, 2, nullptr);
+  DefineFunction(&root_handler_, "function2", 20, 2, nullptr);
   root_handler_.Finish();
 
   TestFunctionCount(2);
@@ -978,10 +974,10 @@ TEST_F(FuncLinePairing, GCCAlignmentStretch) {
   PushLine(20, 10, "line-file", 61661044);
 
   StartCU();
-  DefineFunction(&root_handler_, "function1", 10, 5, NULL);
+  DefineFunction(&root_handler_, "function1", 10, 5, nullptr);
   // five-byte gap between functions, covered by line 63351048.
   // This should not elicit a warning.
-  DefineFunction(&root_handler_, "function2", 20, 10, NULL);
+  DefineFunction(&root_handler_, "function2", 20, 10, nullptr);
   root_handler_.Finish();
 
   TestFunctionCount(2);
@@ -1002,8 +998,10 @@ TEST_F(FuncLinePairing, LineAtEndOfAddressSpace) {
   EXPECT_CALL(reporter_, UncoveredLine(_)).WillOnce(Return());
 
   StartCU();
-  DefineFunction(&root_handler_, "function1", 0xfffffffffffffff0ULL, 6, NULL);
-  DefineFunction(&root_handler_, "function2", 0xfffffffffffffffaULL, 5, NULL);
+  DefineFunction(&root_handler_, "function1", 0xfffffffffffffff0ULL, 6,
+                 nullptr);
+  DefineFunction(&root_handler_, "function2", 0xfffffffffffffffaULL, 5,
+                 nullptr);
   root_handler_.Finish();
 
   TestFunctionCount(2);
@@ -1023,7 +1021,7 @@ TEST_F(FuncLinePairing, WarnOnceFunc) {
   EXPECT_CALL(reporter_, UncoveredFunction(_)).WillOnce(Return());
 
   StartCU();
-  DefineFunction(&root_handler_, "function", 10, 11, NULL);
+  DefineFunction(&root_handler_, "function", 10, 11, nullptr);
   root_handler_.Finish();
 
   TestFunctionCount(1);
@@ -1040,8 +1038,8 @@ TEST_F(FuncLinePairing, WarnOnceLine) {
   EXPECT_CALL(reporter_, UncoveredLine(_)).WillOnce(Return());
 
   StartCU();
-  DefineFunction(&root_handler_, "function1", 11, 1, NULL);
-  DefineFunction(&root_handler_, "function2", 13, 1, NULL);
+  DefineFunction(&root_handler_, "function1", 11, 1, nullptr);
+  DefineFunction(&root_handler_, "function2", 13, 1, nullptr);
   root_handler_.Finish();
 
   TestFunctionCount(2);
@@ -1072,9 +1070,9 @@ TEST_P(CXXQualifiedNames, TwoFunctions) {
   StartCU();
   DIEHandler* enclosure_handler = StartNamedDIE(&root_handler_, tag,
                                                 "Enclosure");
-  EXPECT_TRUE(enclosure_handler != NULL);
-  DefineFunction(enclosure_handler, "func_B", 10, 1, NULL);
-  DefineFunction(enclosure_handler, "func_C", 20, 1, NULL);
+  EXPECT_TRUE(enclosure_handler != nullptr);
+  DefineFunction(enclosure_handler, "func_B", 10, 1, nullptr);
+  DefineFunction(enclosure_handler, "func_C", 20, 1, nullptr);
   enclosure_handler->Finish();
   delete enclosure_handler;
   root_handler_.Finish();
@@ -1094,11 +1092,11 @@ TEST_P(CXXQualifiedNames, FuncInEnclosureInNamespace) {
   DIEHandler* namespace_handler
       = StartNamedDIE(&root_handler_, google_breakpad::DW_TAG_namespace,
                       "Namespace");
-  EXPECT_TRUE(namespace_handler != NULL);
+  EXPECT_TRUE(namespace_handler != nullptr);
   DIEHandler* enclosure_handler = StartNamedDIE(namespace_handler, tag,
                                                 "Enclosure");
-  EXPECT_TRUE(enclosure_handler != NULL);
-  DefineFunction(enclosure_handler, "function", 10, 1, NULL);
+  EXPECT_TRUE(enclosure_handler != nullptr);
+  DefineFunction(enclosure_handler, "function", 10, 1, nullptr);
   enclosure_handler->Finish();
   delete enclosure_handler;
   namespace_handler->Finish();
@@ -1117,15 +1115,15 @@ TEST_F(CXXQualifiedNames, FunctionInClassInStructInNamespace) {
   DIEHandler* namespace_handler
       = StartNamedDIE(&root_handler_, google_breakpad::DW_TAG_namespace,
                       "namespace_A");
-  EXPECT_TRUE(namespace_handler != NULL);
+  EXPECT_TRUE(namespace_handler != nullptr);
   DIEHandler* struct_handler
       = StartNamedDIE(namespace_handler, google_breakpad::DW_TAG_structure_type,
                       "struct_B");
-  EXPECT_TRUE(struct_handler != NULL);
+  EXPECT_TRUE(struct_handler != nullptr);
   DIEHandler* class_handler
       = StartNamedDIE(struct_handler, google_breakpad::DW_TAG_class_type,
                       "class_C");
-  DefineFunction(class_handler, "function_D", 10, 1, NULL);
+  DefineFunction(class_handler, "function_D", 10, 1, nullptr);
   class_handler->Finish();
   delete class_handler;
   struct_handler->Finish();
@@ -1151,7 +1149,7 @@ const LanguageAndQualifiedName LanguageAndQualifiedNameCases[] = {
   { google_breakpad::DW_LANG_C_plus_plus,    "class_A::function_B" },
   { google_breakpad::DW_LANG_Java,           "class_A.function_B" },
   { google_breakpad::DW_LANG_Cobol74,        "class_A::function_B" },
-  { google_breakpad::DW_LANG_Mips_Assembler, NULL }
+  { google_breakpad::DW_LANG_Mips_Assembler, nullptr }
 };
 
 class QualifiedForLanguage
@@ -1171,7 +1169,7 @@ TEST_P(QualifiedForLanguage, MemberFunction) {
   DIEHandler* class_handler
       = StartNamedDIE(&root_handler_, google_breakpad::DW_TAG_class_type,
                       "class_A");
-  DefineFunction(class_handler, "function_B", 10, 1, NULL);
+  DefineFunction(class_handler, "function_B", 10, 1, nullptr);
   class_handler->Finish();
   delete class_handler;
   root_handler_.Finish();
@@ -1195,7 +1193,7 @@ TEST_P(QualifiedForLanguage, MemberFunctionSignedLanguage) {
   DIEHandler* class_handler
       = StartNamedDIE(&root_handler_, google_breakpad::DW_TAG_class_type,
                       "class_A");
-  DefineFunction(class_handler, "function_B", 10, 1, NULL);
+  DefineFunction(class_handler, "function_B", 10, 1, nullptr);
   class_handler->Finish();
   delete class_handler;
   root_handler_.Finish();
@@ -1249,7 +1247,7 @@ TEST_F(Specifications, MangledNameSwift) {
   SetLanguage(google_breakpad::DW_LANG_Swift);
   PushLine(0x93cd3dfc1aa10097ULL, 0x0397d47a0b4ca0d4ULL, "line-file", 54883661);
   StartCU();
-  const string kName = "_TFC9swifttest5Shape17simpleDescriptionfS0_FT_Si";
+  const std::string kName = "_TFC9swifttest5Shape17simpleDescriptionfS0_FT_Si";
   DeclarationDIE(&root_handler_, 0xcd3c51b946fb1eeeLL,
                  google_breakpad::DW_TAG_subprogram, "declaration-name",
                  kName);
@@ -1268,7 +1266,7 @@ TEST_F(Specifications, MangledNameRust) {
   PushLine(0x93cd3dfc1aa10097ULL, 0x0397d47a0b4ca0d4ULL, "line-file", 54883661);
 
   StartCU();
-  const string kName = "_ZN14rustc_demangle8demangle17h373defa94bffacdeE";
+  const std::string kName = "_ZN14rustc_demangle8demangle17h373defa94bffacdeE";
   DeclarationDIE(&root_handler_, 0xcd3c51b946fb1eeeLL,
                  google_breakpad::DW_TAG_subprogram, "declaration-name",
                  kName);
@@ -1321,7 +1319,7 @@ TEST_F(Specifications, FunctionDeclarationParent) {
     DIEHandler* class_handler
       = StartNamedDIE(&root_handler_, google_breakpad::DW_TAG_class_type,
                       "class_A");
-    ASSERT_TRUE(class_handler != NULL);
+    ASSERT_TRUE(class_handler != nullptr);
     DeclarationDIE(class_handler, 0x0e0e877c8404544aULL,
                    google_breakpad::DW_TAG_subprogram, "declaration-name", "");
     class_handler->Finish();
@@ -1349,7 +1347,7 @@ TEST_F(Specifications, NamedScopeDeclarationParent) {
     DIEHandler* space_handler
       = StartNamedDIE(&root_handler_, google_breakpad::DW_TAG_namespace,
                       "space_A");
-    ASSERT_TRUE(space_handler != NULL);
+    ASSERT_TRUE(space_handler != nullptr);
     DeclarationDIE(space_handler, 0x419bb1d12f9a73a2ULL,
                    google_breakpad::DW_TAG_class_type, "class-declaration-name",
                    "");
@@ -1361,9 +1359,9 @@ TEST_F(Specifications, NamedScopeDeclarationParent) {
     DIEHandler* class_handler
       = StartSpecifiedDIE(&root_handler_, google_breakpad::DW_TAG_class_type,
                           0x419bb1d12f9a73a2ULL, "class-definition-name");
-    ASSERT_TRUE(class_handler != NULL);
+    ASSERT_TRUE(class_handler != nullptr);
     DefineFunction(class_handler, "function",
-                   0x5d13433d0df13d00ULL, 0x48ebebe5ade2cab4ULL, NULL);
+                   0x5d13433d0df13d00ULL, 0x48ebebe5ade2cab4ULL, nullptr);
     class_handler->Finish();
     delete class_handler;
   }
@@ -1402,7 +1400,7 @@ TEST_F(Specifications, InlineFunctionInNamespace) {
   DIEHandler* space_handler
       = StartNamedDIE(&root_handler_, google_breakpad::DW_TAG_namespace,
                       "Namespace");
-  ASSERT_TRUE(space_handler != NULL);
+  ASSERT_TRUE(space_handler != nullptr);
   AbstractInstanceDIE(space_handler, 0x1e8dac5d507ed7abULL,
                       google_breakpad::DW_INL_inlined, 0LL, "func-name");
   DefineInlineInstanceDIE(space_handler, "", 0x1e8dac5d507ed7abULL,

@@ -4,12 +4,15 @@
 
 #include "ui/color/color_provider_utils.h"
 
-#include "base/containers/contains.h"
+#include <memory>
+#include <string_view>
+
 #include "base/containers/fixed_flat_map.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/color/color_id.mojom.h"
 #include "ui/color/color_provider.h"
 #include "ui/color/color_recipe.h"
 #include "ui/gfx/color_palette.h"
@@ -26,33 +29,33 @@ struct RendererColorIdTable {
   ColorId color_id;
 };
 constexpr RendererColorIdTable kRendererColorIdMap[] = {
+    {RendererColorId::kColorCssSystemActiveText, kColorCssSystemActiveText},
+    {RendererColorId::kColorCssSystemBtnFace, kColorCssSystemBtnFace},
+    {RendererColorId::kColorCssSystemBtnText, kColorCssSystemBtnText},
+    {RendererColorId::kColorCssSystemField, kColorCssSystemField},
+    {RendererColorId::kColorCssSystemFieldText, kColorCssSystemFieldText},
+    {RendererColorId::kColorCssSystemGrayText, kColorCssSystemGrayText},
+    {RendererColorId::kColorCssSystemHighlight, kColorCssSystemHighlight},
+    {RendererColorId::kColorCssSystemHighlightText,
+     kColorCssSystemHighlightText},
+    {RendererColorId::kColorCssSystemHotlight, kColorCssSystemHotlight},
+    {RendererColorId::kColorCssSystemLinkText, kColorCssSystemLinkText},
+    {RendererColorId::kColorCssSystemMenuHilight, kColorCssSystemMenuHilight},
+    {RendererColorId::kColorCssSystemScrollbar, kColorCssSystemScrollbar},
+    {RendererColorId::kColorCssSystemVisitedText, kColorCssSystemVisitedText},
+    {RendererColorId::kColorCssSystemWindow, kColorCssSystemWindow},
+    {RendererColorId::kColorCssSystemWindowText, kColorCssSystemWindowText},
     {RendererColorId::kColorMenuBackground, kColorMenuBackground},
     {RendererColorId::kColorMenuItemBackgroundSelected,
      kColorMenuItemBackgroundSelected},
     {RendererColorId::kColorMenuSeparator, kColorMenuSeparator},
     {RendererColorId::kColorOverlayScrollbarFill, kColorOverlayScrollbarFill},
-    {RendererColorId::kColorOverlayScrollbarFillDark,
-     kColorOverlayScrollbarFillDark},
-    {RendererColorId::kColorOverlayScrollbarFillLight,
-     kColorOverlayScrollbarFillLight},
     {RendererColorId::kColorOverlayScrollbarFillHovered,
      kColorOverlayScrollbarFillHovered},
-    {RendererColorId::kColorOverlayScrollbarFillHoveredDark,
-     kColorOverlayScrollbarFillHoveredDark},
-    {RendererColorId::kColorOverlayScrollbarFillHoveredLight,
-     kColorOverlayScrollbarFillHoveredLight},
     {RendererColorId::kColorOverlayScrollbarStroke,
      kColorOverlayScrollbarStroke},
-    {RendererColorId::kColorOverlayScrollbarStrokeDark,
-     kColorOverlayScrollbarStrokeDark},
-    {RendererColorId::kColorOverlayScrollbarStrokeLight,
-     kColorOverlayScrollbarStrokeLight},
     {RendererColorId::kColorOverlayScrollbarStrokeHovered,
      kColorOverlayScrollbarStrokeHovered},
-    {RendererColorId::kColorOverlayScrollbarStrokeHoveredDark,
-     kColorOverlayScrollbarStrokeHoveredDark},
-    {RendererColorId::kColorOverlayScrollbarStrokeHoveredLight,
-     kColorOverlayScrollbarStrokeHoveredLight},
     {RendererColorId::kColorWebNativeControlAccent,
      kColorWebNativeControlAccent},
     {RendererColorId::kColorWebNativeControlAccentDisabled,
@@ -63,10 +66,10 @@ constexpr RendererColorIdTable kRendererColorIdMap[] = {
      kColorWebNativeControlAccentPressed},
     {RendererColorId::kColorWebNativeControlAutoCompleteBackground,
      kColorWebNativeControlAutoCompleteBackground},
-    {RendererColorId::kColorWebNativeControlBackground,
-     kColorWebNativeControlBackground},
-    {RendererColorId::kColorWebNativeControlBackgroundDisabled,
-     kColorWebNativeControlBackgroundDisabled},
+    {RendererColorId::kColorWebNativeControlCheckboxBackground,
+     kColorWebNativeControlCheckboxBackground},
+    {RendererColorId::kColorWebNativeControlCheckboxBackgroundDisabled,
+     kColorWebNativeControlCheckboxBackgroundDisabled},
     {RendererColorId::kColorWebNativeControlBorder,
      kColorWebNativeControlBorder},
     {RendererColorId::kColorWebNativeControlBorderDisabled,
@@ -102,12 +105,16 @@ constexpr RendererColorIdTable kRendererColorIdMap[] = {
      kColorWebNativeControlLightenLayer},
     {RendererColorId::kColorWebNativeControlProgressValue,
      kColorWebNativeControlProgressValue},
+    {RendererColorId::kColorWebNativeControlScrollbarArrowBackgroundDisabled,
+     kColorWebNativeControlScrollbarArrowBackgroundDisabled},
     {RendererColorId::kColorWebNativeControlScrollbarArrowBackgroundHovered,
      kColorWebNativeControlScrollbarArrowBackgroundHovered},
     {RendererColorId::kColorWebNativeControlScrollbarArrowBackgroundPressed,
      kColorWebNativeControlScrollbarArrowBackgroundPressed},
     {RendererColorId::kColorWebNativeControlScrollbarArrowForeground,
      kColorWebNativeControlScrollbarArrowForeground},
+    {RendererColorId::kColorWebNativeControlScrollbarArrowForegroundDisabled,
+     kColorWebNativeControlScrollbarArrowForegroundDisabled},
     {RendererColorId::kColorWebNativeControlScrollbarArrowForegroundPressed,
      kColorWebNativeControlScrollbarArrowForegroundPressed},
     {RendererColorId::kColorWebNativeControlScrollbarCorner,
@@ -116,8 +123,6 @@ constexpr RendererColorIdTable kRendererColorIdMap[] = {
      kColorWebNativeControlScrollbarThumb},
     {RendererColorId::kColorWebNativeControlScrollbarThumbHovered,
      kColorWebNativeControlScrollbarThumbHovered},
-    {RendererColorId::kColorWebNativeControlScrollbarThumbInactive,
-     kColorWebNativeControlScrollbarThumbInactive},
     {RendererColorId::kColorWebNativeControlScrollbarThumbOverlayMinimalMode,
      kColorWebNativeControlScrollbarThumbOverlayMinimalMode},
     {RendererColorId::kColorWebNativeControlScrollbarThumbPressed,
@@ -126,6 +131,12 @@ constexpr RendererColorIdTable kRendererColorIdMap[] = {
      kColorWebNativeControlScrollbarTrack},
     {RendererColorId::kColorWebNativeControlSlider,
      kColorWebNativeControlSlider},
+    {RendererColorId::kColorWebNativeControlSliderBorder,
+     kColorWebNativeControlSliderBorder},
+    {RendererColorId::kColorWebNativeControlSliderBorderHovered,
+     kColorWebNativeControlSliderBorderHovered},
+    {RendererColorId::kColorWebNativeControlSliderBorderPressed,
+     kColorWebNativeControlSliderBorderPressed},
     {RendererColorId::kColorWebNativeControlSliderDisabled,
      kColorWebNativeControlSliderDisabled},
     {RendererColorId::kColorWebNativeControlSliderHovered,
@@ -140,78 +151,20 @@ ColorProviderUtilsCallbacks* g_color_provider_utils_callbacks = nullptr;
 
 ColorProviderUtilsCallbacks::~ColorProviderUtilsCallbacks() = default;
 
-base::StringPiece ColorModeName(ColorProviderKey::ColorMode color_mode) {
-  switch (color_mode) {
-    case ColorProviderKey::ColorMode::kLight:
-      return "kLight";
-    case ColorProviderKey::ColorMode::kDark:
-      return "kDark";
-    default:
-      return "<invalid>";
-  }
-}
-
-base::StringPiece ContrastModeName(
-    ColorProviderKey::ContrastMode contrast_mode) {
-  switch (contrast_mode) {
-    case ColorProviderKey::ContrastMode::kNormal:
-      return "kNormal";
-    case ColorProviderKey::ContrastMode::kHigh:
-      return "kHigh";
-    default:
-      return "<invalid>";
-  }
-}
-
-base::StringPiece ForcedColorsName(
-    ColorProviderKey::ForcedColors forced_colors) {
-  switch (forced_colors) {
-    case ColorProviderKey::ForcedColors::kNone:
-      return "kNone";
-    case ColorProviderKey::ForcedColors::kEmulated:
-      return "kEmulated";
-    case ColorProviderKey::ForcedColors::kActive:
-      return "kActive";
-    case ColorProviderKey::ForcedColors::kDusk:
-      return "kDusk";
-    case ColorProviderKey::ForcedColors::kDesert:
-      return "kDesert";
-    case ColorProviderKey::ForcedColors::kBlack:
-      return "kBlack";
-    case ColorProviderKey::ForcedColors::kWhite:
-      return "kWhite";
-    default:
-      return "<invalid>";
-  }
-}
-
-base::StringPiece SystemThemeName(ui::SystemTheme system_theme) {
-  switch (system_theme) {
-    case ui::SystemTheme::kDefault:
-      return "kDefault";
-#if BUILDFLAG(IS_LINUX)
-    case ui::SystemTheme::kGtk:
-      return "kGtk";
-    case ui::SystemTheme::kQt:
-      return "kQt";
-#endif
-    default:
-      return "<invalid>";
-  }
-}
-
 #include "ui/color/color_id_map_macros.inc"
 
 std::string ColorIdName(ColorId color_id) {
-  static constexpr const auto color_id_map =
+  static constexpr auto kColorIdMap =
       base::MakeFixedFlatMap<ColorId, const char*>({COLOR_IDS});
-  auto* i = color_id_map.find(color_id);
-  if (i != color_id_map.cend())
-    return {i->second};
-  base::StringPiece color_name;
+  auto it = kColorIdMap.find(color_id);
+  if (it != kColorIdMap.cend()) {
+    return {it->second};
+  }
+  std::string_view color_name;
   if (g_color_provider_utils_callbacks &&
-      g_color_provider_utils_callbacks->ColorIdName(color_id, &color_name))
-    return std::string(color_name.data(), color_name.length());
+      g_color_provider_utils_callbacks->ColorIdName(color_id, &color_name)) {
+    return std::string(color_name);
+  }
   return base::StringPrintf("ColorId(%d)", color_id);
 }
 
@@ -328,22 +281,32 @@ std::string SkColorName(SkColor color) {
   auto color_with_alpha = color;
   SkAlpha color_alpha = SkColorGetA(color_with_alpha);
   color = SkColorSetA(color, color_alpha != 0 ? SK_AlphaOPAQUE : color_alpha);
-  auto* i = color_name_map.find(color);
-  if (i != color_name_map.cend()) {
-    if (SkColorGetA(color_with_alpha) == SkColorGetA(color))
-      return i->second;
-    return base::StringPrintf("rgba(%s, %f)", i->second, 1.0 / color_alpha);
+  auto it = color_name_map.find(color);
+  if (it == color_name_map.cend()) {
+    return color_utils::SkColorToRgbaString(color);
   }
-  return color_utils::SkColorToRgbaString(color);
+  if (SkColorGetA(color_with_alpha) == SkColorGetA(color)) {
+    return it->second;
+  }
+  return base::StringPrintf("rgba(%s, %f)", it->second, 1.0 / color_alpha);
 }
 
-std::string ConvertColorProviderColorIdToCSSColorId(std::string color_id_name) {
-  color_id_name.replace(color_id_name.begin(), color_id_name.begin() + 1, "-");
+std::string ConvertColorProviderColorIdToCSSColorId(
+    std::string_view color_id_name) {
   std::string css_color_id_name;
-  for (char i : color_id_name) {
-    if (base::IsAsciiUpper(i))
-      css_color_id_name += std::string("-");
-    css_color_id_name += base::ToLowerASCII(i);
+  // Based on runtime analysis, the most number of capital letters in
+  // `css_color_id_name` is 11. Reserve slightly more space than that.
+  css_color_id_name.reserve(color_id_name.size() + 15);
+
+  // Preprocess the first character and skip it in the loop.
+  css_color_id_name.push_back('-');
+  for (char c : color_id_name.substr(1)) {
+    if (base::IsAsciiUpper(c)) {
+      css_color_id_name.push_back('-');
+      css_color_id_name.push_back(base::ToLowerASCII(c));
+    } else {
+      css_color_id_name.push_back(c);
+    }
   }
   return css_color_id_name;
 }
@@ -363,52 +326,66 @@ RendererColorMap CreateRendererColorMap(const ColorProvider& color_provider) {
   return map;
 }
 
-ColorProvider CreateColorProviderFromRendererColorMap(
+std::unique_ptr<ColorProvider> CreateColorProviderFromRendererColorMap(
     const RendererColorMap& renderer_color_map) {
-  ColorProvider color_provider;
-  ui::ColorMixer& mixer = color_provider.AddMixer();
+  std::unique_ptr<ColorProvider> color_provider =
+      std::make_unique<ColorProvider>();
+  ui::ColorMixer& mixer = color_provider->AddMixer();
 
-  for (const auto& table : kRendererColorIdMap)
+  for (const auto& table : kRendererColorIdMap) {
     mixer[table.color_id] = {renderer_color_map.at(table.renderer_color_id)};
-  color_provider.GenerateColorMap();
+  }
 
   return color_provider;
 }
 
-ColorProvider CreateEmulatedForcedColorsColorProvider(bool dark_mode) {
-  ColorProvider color_provider;
-  ui::ColorMixer& mixer = color_provider.AddMixer();
+std::unique_ptr<ColorProvider> CreateEmulatedForcedColorsColorProvider(
+    bool dark_mode) {
+  std::unique_ptr<ColorProvider> color_provider =
+      std::make_unique<ColorProvider>();
+  ui::ColorMixer& mixer = color_provider->AddMixer();
+
   // Colors were chosen based on Windows 10 default light and dark high contrast
   // themes.
-  mixer[kColorForcedBtnFace] = {dark_mode ? SK_ColorBLACK : SK_ColorWHITE};
-  mixer[kColorForcedBtnText] = {dark_mode ? SK_ColorWHITE : SK_ColorBLACK};
-  mixer[kColorForcedGrayText] = {dark_mode ? SkColorSetRGB(0x3F, 0xF2, 0x3F)
-                                           : SkColorSetRGB(0x60, 0x00, 0x00)};
-  mixer[kColorForcedHighlight] = {dark_mode ? SkColorSetRGB(0x1A, 0xEB, 0xFF)
-                                            : SkColorSetRGB(0x37, 0x00, 0x6E)};
-  mixer[kColorForcedHighlightText] = {dark_mode ? SK_ColorBLACK
-                                                : SK_ColorWHITE};
-  mixer[kColorForcedHotlight] = {dark_mode ? SkColorSetRGB(0xFF, 0xFF, 0x00)
-                                           : SkColorSetRGB(0x00, 0x00, 0x9F)};
-  mixer[kColorForcedMenuHilight] = {dark_mode ? SkColorSetRGB(0x80, 0x00, 0x80)
-                                              : SK_ColorBLACK};
-  mixer[kColorForcedScrollbar] = {dark_mode ? SK_ColorBLACK : SK_ColorWHITE};
-  mixer[kColorForcedWindow] = {dark_mode ? SK_ColorBLACK : SK_ColorWHITE};
-  mixer[kColorForcedWindowText] = {dark_mode ? SK_ColorWHITE : SK_ColorBLACK};
+  mixer[kColorCssSystemBtnFace] = {dark_mode ? SK_ColorBLACK : SK_ColorWHITE};
+  mixer[kColorCssSystemBtnText] = {dark_mode ? SK_ColorWHITE : SK_ColorBLACK};
+  mixer[kColorCssSystemGrayText] = {dark_mode
+                                        ? SkColorSetRGB(0x3F, 0xF2, 0x3F)
+                                        : SkColorSetRGB(0x60, 0x00, 0x00)};
+  mixer[kColorCssSystemHighlight] = {dark_mode
+                                         ? SkColorSetRGB(0x1A, 0xEB, 0xFF)
+                                         : SkColorSetRGB(0x37, 0x00, 0x6E)};
+  mixer[kColorCssSystemHighlightText] = {dark_mode ? SK_ColorBLACK
+                                                   : SK_ColorWHITE};
+  mixer[kColorCssSystemHotlight] = {dark_mode
+                                        ? SkColorSetRGB(0xFF, 0xFF, 0x00)
+                                        : SkColorSetRGB(0x00, 0x00, 0x9F)};
+  mixer[kColorCssSystemMenuHilight] = {
+      dark_mode ? SkColorSetRGB(0x80, 0x00, 0x80) : SK_ColorBLACK};
+  mixer[kColorCssSystemScrollbar] = {dark_mode ? SK_ColorBLACK : SK_ColorWHITE};
+  mixer[kColorCssSystemWindow] = {dark_mode ? SK_ColorBLACK : SK_ColorWHITE};
+  mixer[kColorCssSystemWindowText] = {dark_mode ? SK_ColorWHITE
+                                                : SK_ColorBLACK};
+  mixer[kColorCssSystemField] = {kColorCssSystemWindow};
+  mixer[kColorCssSystemFieldText] = {kColorCssSystemWindowText};
+  mixer[kColorCssSystemActiveText] = {kColorCssSystemHotlight};
+  mixer[kColorCssSystemLinkText] = {kColorCssSystemHotlight};
+  mixer[kColorCssSystemVisitedText] = {kColorCssSystemHotlight};
 
   // Set the colors for the scrollbar parts based on the emulated definitions
   // above.
-  mixer[kColorWebNativeControlScrollbarArrowForeground] = {kColorForcedBtnText};
+  mixer[kColorWebNativeControlScrollbarArrowForeground] = {
+      kColorCssSystemBtnText};
   mixer[kColorWebNativeControlScrollbarThumbOverlayMinimalMode] = {
       kColorWebNativeControlScrollbarArrowForeground};
   mixer[kColorWebNativeControlScrollbarArrowForegroundPressed] = {
-      kColorForcedHighlight};
-  mixer[kColorWebNativeControlScrollbarCorner] = {kColorForcedBtnFace};
+      kColorCssSystemHighlight};
+  mixer[kColorWebNativeControlScrollbarCorner] = {kColorCssSystemBtnFace};
   CompleteControlsForcedColorsDefinition(mixer);
 
   // Set these color ids as some non web native RendererColorIds depend on their
   // values.
-  mixer[kColorPrimaryBackground] = {kColorForcedWindow};
+  mixer[kColorPrimaryBackground] = {kColorCssSystemWindow};
   mixer[kColorEndpointForeground] =
       GetColorWithMaxContrast(kColorPrimaryBackground);
   mixer[kColorEndpointBackground] =
@@ -416,25 +393,24 @@ ColorProvider CreateEmulatedForcedColorsColorProvider(bool dark_mode) {
   mixer[kColorMenuSelectionBackground] =
       AlphaBlend(kColorEndpointForeground, kColorPrimaryBackground,
                  gfx::kGoogleGreyAlpha200);
-  mixer[kColorMidground] = {kColorForcedWindowText};
+  mixer[kColorMidground] = {kColorCssSystemWindowText};
   mixer[kColorSeparator] = {kColorMidground};
   CompleteDefaultNonWebNativeRendererColorIdsDefinition(mixer);
 
-  color_provider.GenerateColorMap();
   return color_provider;
 }
 
-ColorProvider CreateEmulatedForcedColorsColorProviderForTest() {
-  ColorProvider color_provider;
-  ui::ColorMixer& mixer = color_provider.AddMixer();
+std::unique_ptr<ColorProvider>
+CreateEmulatedForcedColorsColorProviderForTest() {
+  std::unique_ptr<ColorProvider> color_provider =
+      std::make_unique<ColorProvider>();
+  ui::ColorMixer& mixer = color_provider->AddMixer();
 
   mixer[kColorWebNativeControlAccent] = {SK_ColorCYAN};
   mixer[kColorWebNativeControlAccentDisabled] = {SK_ColorGREEN};
   mixer[kColorWebNativeControlAccentHovered] = {SK_ColorCYAN};
   mixer[kColorWebNativeControlAccentPressed] = {SK_ColorCYAN};
   mixer[kColorWebNativeControlAutoCompleteBackground] = {SK_ColorBLACK};
-  mixer[kColorWebNativeControlBackground] = {SK_ColorBLACK};
-  mixer[kColorWebNativeControlBackgroundDisabled] = {SK_ColorBLACK};
   mixer[kColorWebNativeControlBorder] = {SK_ColorWHITE};
   mixer[kColorWebNativeControlBorderDisabled] = {SK_ColorGREEN};
   mixer[kColorWebNativeControlBorderHovered] = {SK_ColorWHITE};
@@ -447,42 +423,50 @@ ColorProvider CreateEmulatedForcedColorsColorProviderForTest() {
   mixer[kColorWebNativeControlButtonFillDisabled] = {SK_ColorBLACK};
   mixer[kColorWebNativeControlButtonFillHovered] = {SK_ColorBLACK};
   mixer[kColorWebNativeControlButtonFillPressed] = {SK_ColorBLACK};
+  mixer[kColorWebNativeControlCheckboxBackground] = {SK_ColorBLACK};
+  mixer[kColorWebNativeControlCheckboxBackgroundDisabled] = {SK_ColorBLACK};
   mixer[kColorWebNativeControlFill] = {SK_ColorBLACK};
   mixer[kColorWebNativeControlFillDisabled] = {SK_ColorBLACK};
   mixer[kColorWebNativeControlFillHovered] = {SK_ColorBLACK};
   mixer[kColorWebNativeControlFillPressed] = {SK_ColorBLACK};
   mixer[kColorWebNativeControlLightenLayer] = {SK_ColorBLACK};
   mixer[kColorWebNativeControlProgressValue] = {SK_ColorCYAN};
+  mixer[kColorWebNativeControlScrollbarArrowBackgroundDisabled] = {
+      SK_ColorWHITE};
   mixer[kColorWebNativeControlScrollbarArrowBackgroundHovered] = {
       SkColorSetRGB(0x1A, 0xEB, 0xFF)};
   mixer[kColorWebNativeControlScrollbarArrowBackgroundPressed] = {
       SkColorSetRGB(0x1A, 0xEB, 0xFF)};
   mixer[kColorWebNativeControlScrollbarArrowForeground] = {SK_ColorBLACK};
+  mixer[kColorWebNativeControlScrollbarArrowForegroundDisabled] = {
+      SK_ColorBLACK};
   mixer[kColorWebNativeControlScrollbarArrowForegroundPressed] = {
       SK_ColorBLACK};
   mixer[kColorWebNativeControlScrollbarCorner] = {SK_ColorBLACK};
   mixer[kColorWebNativeControlScrollbarThumb] = {SK_ColorBLACK};
   mixer[kColorWebNativeControlScrollbarThumbHovered] = {
       SkColorSetRGB(0x1A, 0xEB, 0xFF)};
-  mixer[kColorWebNativeControlScrollbarThumbInactive] = {SK_ColorWHITE};
   mixer[kColorWebNativeControlScrollbarThumbOverlayMinimalMode] = {
       SK_ColorBLACK};
   mixer[kColorWebNativeControlScrollbarThumbPressed] = {
       SkColorSetRGB(0x1A, 0xEB, 0xFF)};
   mixer[kColorWebNativeControlScrollbarTrack] = {SK_ColorWHITE};
   mixer[kColorWebNativeControlSlider] = {SK_ColorCYAN};
+  mixer[kColorWebNativeControlSliderBorder] = {SK_ColorWHITE};
+  mixer[kColorWebNativeControlSliderBorderHovered] = {SK_ColorWHITE};
+  mixer[kColorWebNativeControlSliderBorderPressed] = {SK_ColorWHITE};
   mixer[kColorWebNativeControlSliderDisabled] = {SK_ColorGREEN};
   mixer[kColorWebNativeControlSliderHovered] = {SK_ColorCYAN};
   mixer[kColorWebNativeControlSliderPressed] = {SK_ColorCYAN};
 
-  color_provider.GenerateColorMap();
   return color_provider;
 }
 
-ColorProvider COMPONENT_EXPORT(COLOR)
+std::unique_ptr<ColorProvider> COMPONENT_EXPORT(COLOR)
     CreateDefaultColorProviderForBlink(bool dark_mode) {
-  ColorProvider color_provider;
-  ui::ColorMixer& mixer = color_provider.AddMixer();
+  std::unique_ptr<ColorProvider> color_provider =
+      std::make_unique<ColorProvider>();
+  ui::ColorMixer& mixer = color_provider->AddMixer();
 
   mixer[kColorPrimaryBackground] = {dark_mode ? SkColorSetRGB(0x29, 0x2A, 0x2D)
                                               : SK_ColorWHITE};
@@ -496,8 +480,113 @@ ColorProvider COMPONENT_EXPORT(COLOR)
   mixer[kColorMidground] = {dark_mode ? gfx::kGoogleGrey800
                                       : gfx::kGoogleGrey300};
   mixer[kColorSeparator] = {kColorMidground};
+  CompleteDefaultWebNativeRendererColorIdsDefinition(mixer, dark_mode, false);
   CompleteDefaultNonWebNativeRendererColorIdsDefinition(mixer);
+  CompleteDefaultCssSystemColorDefinition(mixer, dark_mode);
 
+  return color_provider;
+}
+
+void CompleteScrollbarColorsDefinition(ui::ColorMixer& mixer) {
+  mixer[kColorWebNativeControlScrollbarArrowBackgroundHovered] = {
+      kColorWebNativeControlScrollbarCorner};
+  mixer[kColorWebNativeControlScrollbarArrowBackgroundPressed] = {
+      kColorWebNativeControlScrollbarArrowBackgroundHovered};
+  mixer[kColorWebNativeControlScrollbarThumb] = {
+      kColorWebNativeControlScrollbarArrowForeground};
+  mixer[kColorWebNativeControlScrollbarThumbHovered] = {
+      kColorWebNativeControlScrollbarArrowForegroundPressed};
+  mixer[kColorWebNativeControlScrollbarThumbPressed] = {
+      kColorWebNativeControlScrollbarThumbHovered};
+  mixer[kColorWebNativeControlScrollbarTrack] = {
+      kColorWebNativeControlScrollbarCorner};
+}
+
+void CompleteControlsForcedColorsDefinition(ui::ColorMixer& mixer) {
+  mixer[kColorWebNativeControlAccent] = {kColorCssSystemHighlight};
+  mixer[kColorWebNativeControlAccentDisabled] = {kColorCssSystemGrayText};
+  mixer[kColorWebNativeControlAccentHovered] = {kColorCssSystemHighlight};
+  mixer[kColorWebNativeControlAccentPressed] = {kColorCssSystemHighlight};
+  mixer[kColorWebNativeControlAutoCompleteBackground] = {kColorCssSystemWindow};
+  mixer[kColorWebNativeControlBorder] = {kColorCssSystemBtnText};
+  mixer[kColorWebNativeControlBorderDisabled] = {kColorCssSystemGrayText};
+  mixer[kColorWebNativeControlBorderHovered] = {kColorCssSystemBtnText};
+  mixer[kColorWebNativeControlBorderPressed] = {kColorCssSystemBtnText};
+  mixer[kColorWebNativeControlButtonBorder] = {kColorCssSystemBtnText};
+  mixer[kColorWebNativeControlButtonBorderDisabled] = {kColorCssSystemGrayText};
+  mixer[kColorWebNativeControlButtonBorderHovered] = {kColorCssSystemBtnText};
+  mixer[kColorWebNativeControlButtonBorderPressed] = {kColorCssSystemBtnText};
+  mixer[kColorWebNativeControlButtonFill] = {kColorCssSystemWindow};
+  mixer[kColorWebNativeControlButtonFillDisabled] = {kColorCssSystemWindow};
+  mixer[kColorWebNativeControlButtonFillHovered] = {kColorCssSystemWindow};
+  mixer[kColorWebNativeControlButtonFillPressed] = {kColorCssSystemWindow};
+  mixer[kColorWebNativeControlCheckboxBackground] = {kColorCssSystemWindow};
+  mixer[kColorWebNativeControlCheckboxBackgroundDisabled] = {
+      kColorCssSystemWindow};
+  mixer[kColorWebNativeControlFill] = {kColorCssSystemWindow};
+  mixer[kColorWebNativeControlFillDisabled] = {kColorCssSystemWindow};
+  mixer[kColorWebNativeControlFillHovered] = {kColorCssSystemWindow};
+  mixer[kColorWebNativeControlFillPressed] = {kColorCssSystemWindow};
+  mixer[kColorWebNativeControlLightenLayer] = {kColorCssSystemWindow};
+  mixer[kColorWebNativeControlProgressValue] = {kColorCssSystemHighlight};
+  mixer[kColorWebNativeControlScrollbarArrowBackgroundDisabled] = {
+      kColorCssSystemWindow};
+  mixer[kColorWebNativeControlScrollbarArrowForeground] = {
+      kColorCssSystemBtnText};
+  mixer[kColorWebNativeControlScrollbarArrowForegroundDisabled] = {
+      kColorCssSystemGrayText};
+  mixer[kColorWebNativeControlScrollbarArrowForegroundPressed] = {
+      kColorCssSystemHighlight};
+  mixer[kColorWebNativeControlScrollbarThumbOverlayMinimalMode] = {
+      kColorCssSystemBtnText};
+  mixer[kColorWebNativeControlScrollbarCorner] = {kColorCssSystemBtnFace};
+  mixer[kColorWebNativeControlSlider] = {kColorCssSystemHighlight};
+  mixer[kColorWebNativeControlSliderBorder] = {kColorCssSystemBtnText};
+  mixer[kColorWebNativeControlSliderBorderHovered] = {kColorCssSystemBtnText};
+  mixer[kColorWebNativeControlSliderBorderPressed] = {kColorCssSystemBtnText};
+  mixer[kColorWebNativeControlSliderDisabled] = {kColorCssSystemGrayText};
+  mixer[kColorWebNativeControlSliderHovered] = {kColorCssSystemHighlight};
+  mixer[kColorWebNativeControlSliderPressed] = {kColorCssSystemHighlight};
+  CompleteScrollbarColorsDefinition(mixer);
+}
+
+void CompleteDefaultCssSystemColorDefinition(ui::ColorMixer& mixer,
+                                             bool dark_mode) {
+  mixer[kColorCssSystemActiveText] = {SkColorSetRGB(0xFF, 0x00, 0x00)};
+  mixer[kColorCssSystemGrayText] = {SkColorSetRGB(0x80, 0x80, 0x80)};
+  mixer[kColorCssSystemHighlight] = {SkColorSetRGB(0x19, 0x67, 0xD2)};
+  mixer[kColorCssSystemHighlightText] = {SK_ColorWHITE};
+  if (dark_mode) {
+    mixer[kColorCssSystemBtnFace] = {SkColorSetRGB(0x6B, 0x6B, 0x6B)};
+    mixer[kColorCssSystemBtnText] = {SK_ColorWHITE};
+    mixer[kColorCssSystemField] = {SkColorSetRGB(0x3B, 0x3B, 0x3B)};
+    mixer[kColorCssSystemFieldText] = {SK_ColorWHITE};
+    mixer[kColorCssSystemMenuHilight] = {SkColorSetRGB(0x80, 0x00, 0x80)};
+    mixer[kColorCssSystemScrollbar] = {SkColorSetRGB(0x12, 0x12, 0x12)};
+    mixer[kColorCssSystemWindow] = {SkColorSetRGB(0x12, 0x12, 0x12)};
+    mixer[kColorCssSystemWindowText] = {SK_ColorWHITE};
+    mixer[kColorCssSystemHotlight] = {SkColorSetRGB(0x9E, 0x9E, 0xFF)};
+    mixer[kColorCssSystemLinkText] = {SkColorSetRGB(0x9E, 0x9E, 0xFF)};
+    mixer[kColorCssSystemVisitedText] = {SkColorSetRGB(0xD0, 0xAD, 0xF0)};
+  } else {
+    mixer[kColorCssSystemBtnFace] = {SkColorSetRGB(0xEF, 0xEF, 0xEF)};
+    mixer[kColorCssSystemBtnText] = {SK_ColorBLACK};
+    mixer[kColorCssSystemField] = {SK_ColorWHITE};
+    mixer[kColorCssSystemFieldText] = {SK_ColorBLACK};
+    mixer[kColorCssSystemMenuHilight] = {SK_ColorBLACK};
+    mixer[kColorCssSystemScrollbar] = {SK_ColorWHITE};
+    mixer[kColorCssSystemWindow] = {SK_ColorWHITE};
+    mixer[kColorCssSystemWindowText] = {SK_ColorBLACK};
+    mixer[kColorCssSystemHotlight] = {SkColorSetRGB(0x00, 0x00, 0xEE)};
+    mixer[kColorCssSystemLinkText] = {SkColorSetRGB(0x00, 0x00, 0xEE)};
+    mixer[kColorCssSystemVisitedText] = {SkColorSetRGB(0x55, 0x1A, 0x8B)};
+  }
+}
+
+void COMPONENT_EXPORT(COLOR)
+    CompleteDefaultWebNativeRendererColorIdsDefinition(ui::ColorMixer& mixer,
+                                                       bool dark_mode,
+                                                       bool high_contrast) {
   if (dark_mode) {
     mixer[kColorWebNativeControlAccent] = {SkColorSetRGB(0x99, 0xC8, 0xFF)};
     mixer[kColorWebNativeControlAccentDisabled] = {
@@ -508,9 +597,6 @@ ColorProvider COMPONENT_EXPORT(COLOR)
         SkColorSetRGB(0x61, 0xA9, 0xFF)};
     mixer[kColorWebNativeControlAutoCompleteBackground] = {
         SkColorSetARGB(0x66, 0x46, 0x5a, 0x7E)};
-    mixer[kColorWebNativeControlBackground] = {SkColorSetRGB(0x3B, 0x3B, 0x3B)};
-    mixer[kColorWebNativeControlBackgroundDisabled] = {
-        SkColorSetRGB(0x3B, 0x3B, 0x3B)};
     mixer[kColorWebNativeControlBorder] = {SkColorSetRGB(0x85, 0x85, 0x85)};
     mixer[kColorWebNativeControlBorderDisabled] = {
         SkColorSetRGB(0x62, 0x62, 0x62)};
@@ -533,6 +619,10 @@ ColorProvider COMPONENT_EXPORT(COLOR)
         SkColorSetRGB(0x7B, 0x7B, 0x7B)};
     mixer[kColorWebNativeControlButtonFillPressed] = {
         SkColorSetRGB(0x61, 0x61, 0x61)};
+    mixer[kColorWebNativeControlCheckboxBackground] = {
+        SkColorSetRGB(0x3B, 0x3B, 0x3B)};
+    mixer[kColorWebNativeControlCheckboxBackgroundDisabled] = {
+        SkColorSetRGB(0x3B, 0x3B, 0x3B)};
     mixer[kColorWebNativeControlFill] = {SkColorSetRGB(0x3B, 0x3B, 0x3B)};
     mixer[kColorWebNativeControlFillDisabled] = {
         SkColorSetRGB(0x36, 0x36, 0x36)};
@@ -544,11 +634,15 @@ ColorProvider COMPONENT_EXPORT(COLOR)
         SkColorSetRGB(0x3B, 0x3B, 0x3B)};
     mixer[kColorWebNativeControlProgressValue] = {
         SkColorSetRGB(0x63, 0xAD, 0xE5)};
+    mixer[kColorWebNativeControlScrollbarArrowBackgroundDisabled] = {
+        SkColorSetRGB(0x36, 0x36, 0x36)};
     mixer[kColorWebNativeControlScrollbarArrowBackgroundHovered] = {
         SkColorSetRGB(0x4F, 0x4F, 0x4F)};
     mixer[kColorWebNativeControlScrollbarArrowBackgroundPressed] = {
         SkColorSetRGB(0xB1, 0xB1, 0xB1)};
     mixer[kColorWebNativeControlScrollbarArrowForeground] = {SK_ColorWHITE};
+    mixer[kColorWebNativeControlScrollbarArrowForegroundDisabled] = {
+        SkColorSetRGB(0xAF, 0xAF, 0xAF)};
     mixer[kColorWebNativeControlScrollbarArrowForegroundPressed] = {
         SK_ColorBLACK};
     mixer[kColorWebNativeControlScrollbarCorner] = {
@@ -557,7 +651,6 @@ ColorProvider COMPONENT_EXPORT(COLOR)
         SkColorSetA(SK_ColorWHITE, 0x33)};
     mixer[kColorWebNativeControlScrollbarThumbHovered] = {
         SkColorSetA(SK_ColorWHITE, 0x4D)};
-    mixer[kColorWebNativeControlScrollbarThumbInactive] = {SK_ColorWHITE};
     mixer[kColorWebNativeControlScrollbarThumbOverlayMinimalMode] = {
         SkColorSetA(SK_ColorWHITE, 0x8B)};
     mixer[kColorWebNativeControlScrollbarThumbPressed] = {
@@ -565,6 +658,11 @@ ColorProvider COMPONENT_EXPORT(COLOR)
     mixer[kColorWebNativeControlScrollbarTrack] = {
         SkColorSetRGB(0x42, 0x42, 0x42)};
     mixer[kColorWebNativeControlSlider] = {SkColorSetRGB(0x99, 0xC8, 0xFF)};
+    mixer[kColorWebNativeControlSliderBorder] = {kColorWebNativeControlBorder};
+    mixer[kColorWebNativeControlSliderBorderHovered] = {
+        kColorWebNativeControlBorderHovered};
+    mixer[kColorWebNativeControlSliderBorderPressed] = {
+        kColorWebNativeControlBorderPressed};
     mixer[kColorWebNativeControlSliderDisabled] = {
         SkColorSetRGB(0x75, 0x75, 0x75)};
     mixer[kColorWebNativeControlSliderHovered] = {
@@ -581,9 +679,6 @@ ColorProvider COMPONENT_EXPORT(COLOR)
         SkColorSetRGB(0x37, 0x93, 0xFF)};
     mixer[kColorWebNativeControlAutoCompleteBackground] = {
         SkColorSetRGB(0xE8, 0xF0, 0xFE)};
-    mixer[kColorWebNativeControlBackground] = {SK_ColorWHITE};
-    mixer[kColorWebNativeControlBackgroundDisabled] = {
-        SkColorSetA(SK_ColorWHITE, 0x99)};
     mixer[kColorWebNativeControlBorder] = {SkColorSetRGB(0x76, 0x76, 0x76)};
     mixer[kColorWebNativeControlBorderDisabled] = {
         SkColorSetARGB(0x4D, 0x76, 0x76, 0x76)};
@@ -606,6 +701,9 @@ ColorProvider COMPONENT_EXPORT(COLOR)
         SkColorSetRGB(0xE5, 0xE5, 0xE5)};
     mixer[kColorWebNativeControlButtonFillPressed] = {
         SkColorSetRGB(0xF5, 0xF5, 0xF5)};
+    mixer[kColorWebNativeControlCheckboxBackground] = {SK_ColorWHITE};
+    mixer[kColorWebNativeControlCheckboxBackgroundDisabled] = {
+        SkColorSetA(SK_ColorWHITE, 0x99)};
     mixer[kColorWebNativeControlFill] = {SkColorSetRGB(0xEF, 0xEF, 0xEF)};
     mixer[kColorWebNativeControlFillDisabled] = {
         SkColorSetARGB(0x4D, 0xEF, 0xEF, 0xEF)};
@@ -617,12 +715,16 @@ ColorProvider COMPONENT_EXPORT(COLOR)
         SkColorSetARGB(0x33, 0xA9, 0xA9, 0xA9)};
     mixer[kColorWebNativeControlProgressValue] = {
         SkColorSetRGB(0x00, 0x75, 0xFF)};
+    mixer[kColorWebNativeControlScrollbarArrowBackgroundDisabled] = {
+        SkColorSetRGB(0xF1, 0xF1, 0xF1)};
     mixer[kColorWebNativeControlScrollbarArrowBackgroundHovered] = {
         SkColorSetRGB(0xD2, 0xD2, 0xD2)};
     mixer[kColorWebNativeControlScrollbarArrowBackgroundPressed] = {
         SkColorSetRGB(0x78, 0x78, 0x78)};
     mixer[kColorWebNativeControlScrollbarArrowForeground] = {
         SkColorSetRGB(0x50, 0x50, 0x50)};
+    mixer[kColorWebNativeControlScrollbarArrowForegroundDisabled] = {
+        SkColorSetARGB(0x4D, 0x50, 0x50, 0x50)};
     mixer[kColorWebNativeControlScrollbarArrowForegroundPressed] = {
         SK_ColorWHITE};
     mixer[kColorWebNativeControlScrollbarCorner] = {
@@ -631,8 +733,6 @@ ColorProvider COMPONENT_EXPORT(COLOR)
         SkColorSetA(SK_ColorBLACK, 0x33)};
     mixer[kColorWebNativeControlScrollbarThumbHovered] = {
         SkColorSetA(SK_ColorBLACK, 0x4D)};
-    mixer[kColorWebNativeControlScrollbarThumbInactive] = {
-        SkColorSetRGB(0xEA, 0xEA, 0xEA)};
     mixer[kColorWebNativeControlScrollbarThumbOverlayMinimalMode] = {
         SkColorSetA(SK_ColorBLACK, 0x72)};
     mixer[kColorWebNativeControlScrollbarThumbPressed] = {
@@ -640,6 +740,15 @@ ColorProvider COMPONENT_EXPORT(COLOR)
     mixer[kColorWebNativeControlScrollbarTrack] = {
         SkColorSetRGB(0xF1, 0xF1, 0xF1)};
     mixer[kColorWebNativeControlSlider] = {SkColorSetRGB(0x00, 0x75, 0xFF)};
+    mixer[kColorWebNativeControlSliderBorder] =
+        high_contrast ? kColorWebNativeControlBorder
+                      : SetAlpha(kColorWebNativeControlBorder, 0x80);
+    mixer[kColorWebNativeControlSliderBorderHovered] =
+        high_contrast ? kColorWebNativeControlBorderHovered
+                      : SetAlpha(kColorWebNativeControlBorderHovered, 0x80);
+    mixer[kColorWebNativeControlSliderBorderPressed] =
+        high_contrast ? kColorWebNativeControlBorderPressed
+                      : SetAlpha(kColorWebNativeControlBorderPressed, 0x80);
     mixer[kColorWebNativeControlSliderDisabled] = {
         SkColorSetRGB(0xCB, 0xCB, 0xCB)};
     mixer[kColorWebNativeControlSliderHovered] = {
@@ -647,65 +756,6 @@ ColorProvider COMPONENT_EXPORT(COLOR)
     mixer[kColorWebNativeControlSliderPressed] = {
         SkColorSetRGB(0x37, 0x93, 0xFF)};
   }
-
-  color_provider.GenerateColorMap();
-  return color_provider;
-}
-
-void CompleteScrollbarColorsDefinition(ui::ColorMixer& mixer) {
-  mixer[kColorWebNativeControlScrollbarArrowBackgroundHovered] = {
-      kColorWebNativeControlScrollbarCorner};
-  mixer[kColorWebNativeControlScrollbarArrowBackgroundPressed] = {
-      kColorWebNativeControlScrollbarArrowBackgroundHovered};
-  mixer[kColorWebNativeControlScrollbarThumb] = {
-      kColorWebNativeControlScrollbarArrowForeground};
-  mixer[kColorWebNativeControlScrollbarThumbHovered] = {
-      kColorWebNativeControlScrollbarArrowForegroundPressed};
-  mixer[kColorWebNativeControlScrollbarThumbInactive] = {
-      kColorWebNativeControlScrollbarThumb};
-  mixer[kColorWebNativeControlScrollbarThumbPressed] = {
-      kColorWebNativeControlScrollbarThumbHovered};
-  mixer[kColorWebNativeControlScrollbarTrack] = {
-      kColorWebNativeControlScrollbarCorner};
-}
-
-void CompleteControlsForcedColorsDefinition(ui::ColorMixer& mixer) {
-  mixer[kColorWebNativeControlAccent] = {kColorForcedHighlight};
-  mixer[kColorWebNativeControlAccentDisabled] = {kColorForcedGrayText};
-  mixer[kColorWebNativeControlAccentHovered] = {kColorForcedHighlight};
-  mixer[kColorWebNativeControlAccentPressed] = {kColorForcedHighlight};
-  mixer[kColorWebNativeControlAutoCompleteBackground] = {kColorForcedWindow};
-  mixer[kColorWebNativeControlBackground] = {kColorForcedWindow};
-  mixer[kColorWebNativeControlBackgroundDisabled] = {kColorForcedWindow};
-  mixer[kColorWebNativeControlBorder] = {kColorForcedBtnText};
-  mixer[kColorWebNativeControlBorderDisabled] = {kColorForcedGrayText};
-  mixer[kColorWebNativeControlBorderHovered] = {kColorForcedBtnText};
-  mixer[kColorWebNativeControlBorderPressed] = {kColorForcedBtnText};
-  mixer[kColorWebNativeControlButtonBorder] = {kColorForcedBtnText};
-  mixer[kColorWebNativeControlButtonBorderDisabled] = {kColorForcedGrayText};
-  mixer[kColorWebNativeControlButtonBorderHovered] = {kColorForcedBtnText};
-  mixer[kColorWebNativeControlButtonBorderPressed] = {kColorForcedBtnText};
-  mixer[kColorWebNativeControlButtonFill] = {kColorForcedWindow};
-  mixer[kColorWebNativeControlButtonFillDisabled] = {kColorForcedWindow};
-  mixer[kColorWebNativeControlButtonFillHovered] = {kColorForcedWindow};
-  mixer[kColorWebNativeControlButtonFillPressed] = {kColorForcedWindow};
-  mixer[kColorWebNativeControlFill] = {kColorForcedWindow};
-  mixer[kColorWebNativeControlFillDisabled] = {kColorForcedWindow};
-  mixer[kColorWebNativeControlFillHovered] = {kColorForcedWindow};
-  mixer[kColorWebNativeControlFillPressed] = {kColorForcedWindow};
-  mixer[kColorWebNativeControlLightenLayer] = {kColorForcedWindow};
-  mixer[kColorWebNativeControlProgressValue] = {kColorForcedHighlight};
-  mixer[kColorWebNativeControlScrollbarArrowForeground] = {kColorForcedBtnText};
-  mixer[kColorWebNativeControlScrollbarArrowForegroundPressed] = {
-      kColorForcedHighlight};
-  mixer[kColorWebNativeControlScrollbarThumbOverlayMinimalMode] = {
-      kColorForcedBtnText};
-  mixer[kColorWebNativeControlScrollbarCorner] = {kColorForcedBtnFace};
-  mixer[kColorWebNativeControlSlider] = {kColorForcedHighlight};
-  mixer[kColorWebNativeControlSliderDisabled] = {kColorForcedGrayText};
-  mixer[kColorWebNativeControlSliderHovered] = {kColorForcedHighlight};
-  mixer[kColorWebNativeControlSliderPressed] = {kColorForcedHighlight};
-  CompleteScrollbarColorsDefinition(mixer);
 }
 
 void COMPONENT_EXPORT(COLOR)
@@ -716,49 +766,34 @@ void COMPONENT_EXPORT(COLOR)
   mixer[kColorMenuSeparator] = {kColorSeparator};
   mixer[kColorOverlayScrollbarFill] =
       SetAlpha(kColorEndpointForeground, gfx::kGoogleGreyAlpha700);
-  mixer[kColorOverlayScrollbarFillDark] = SetAlpha(
-      GetColorWithMaxContrast(SK_ColorWHITE), gfx::kGoogleGreyAlpha700);
-  mixer[kColorOverlayScrollbarFillLight] = SetAlpha(
-      GetColorWithMaxContrast(SK_ColorBLACK), gfx::kGoogleGreyAlpha700);
   mixer[kColorOverlayScrollbarFillHovered] =
       SetAlpha(kColorEndpointForeground, gfx::kGoogleGreyAlpha800);
-  mixer[kColorOverlayScrollbarFillHoveredDark] = SetAlpha(
-      GetColorWithMaxContrast(SK_ColorWHITE), gfx::kGoogleGreyAlpha800);
-  mixer[kColorOverlayScrollbarFillHoveredLight] = SetAlpha(
-      GetColorWithMaxContrast(SK_ColorBLACK), gfx::kGoogleGreyAlpha800);
   mixer[kColorOverlayScrollbarStroke] =
       SetAlpha(kColorEndpointBackground, gfx::kGoogleGreyAlpha400);
-  mixer[kColorOverlayScrollbarStrokeDark] =
-      SetAlpha(GetColorWithMaxContrast(kColorOverlayScrollbarFillDark),
-               gfx::kGoogleGreyAlpha400);
-  mixer[kColorOverlayScrollbarStrokeLight] =
-      SetAlpha(GetColorWithMaxContrast(kColorOverlayScrollbarFillLight),
-               gfx::kGoogleGreyAlpha400);
   mixer[kColorOverlayScrollbarStrokeHovered] =
       SetAlpha(kColorEndpointBackground, gfx::kGoogleGreyAlpha500);
-  mixer[kColorOverlayScrollbarStrokeHoveredDark] =
-      SetAlpha(GetColorWithMaxContrast(kColorOverlayScrollbarFillHoveredDark),
-               gfx::kGoogleGreyAlpha500);
-  mixer[kColorOverlayScrollbarStrokeHoveredLight] =
-      SetAlpha(GetColorWithMaxContrast(kColorOverlayScrollbarFillHoveredLight),
-               gfx::kGoogleGreyAlpha500);
 }
 
 RendererColorMap COMPONENT_EXPORT(COLOR)
     GetDefaultBlinkColorProviderColorMaps(bool dark_mode,
                                           bool is_forced_colors) {
   return CreateRendererColorMap(
-      is_forced_colors ? CreateEmulatedForcedColorsColorProvider(dark_mode)
-                       : CreateDefaultColorProviderForBlink(dark_mode));
+      is_forced_colors ? *CreateEmulatedForcedColorsColorProvider(dark_mode)
+                       : *CreateDefaultColorProviderForBlink(dark_mode));
 }
 
 bool IsRendererColorMappingEquivalent(
-    const ColorProvider& color_provider,
+    const ColorProvider* color_provider,
     const RendererColorMap& renderer_color_map) {
+  if (!color_provider) {
+    return false;
+  }
+  CHECK(!renderer_color_map.empty());
+
   for (const auto& table : kRendererColorIdMap) {
     // The `renderer_color_map_` should map the full set of renderer color ids.
-    DCHECK(base::Contains(renderer_color_map, table.renderer_color_id));
-    if (color_provider.GetColor(table.color_id) !=
+    DCHECK(renderer_color_map.contains(table.renderer_color_id));
+    if (color_provider->GetColor(table.color_id) !=
         renderer_color_map.at(table.renderer_color_id)) {
       return false;
     }

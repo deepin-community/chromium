@@ -51,6 +51,7 @@ static const AVOption options[] = {
 
 static const AVClass g722_decoder_class = {
     .class_name = "g722 decoder",
+    .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
@@ -62,6 +63,8 @@ static av_cold int g722_decode_init(AVCodecContext * avctx)
     av_channel_layout_uninit(&avctx->ch_layout);
     avctx->ch_layout      = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
     avctx->sample_fmt     = AV_SAMPLE_FMT_S16;
+    if (!avctx->sample_rate)
+        avctx->sample_rate = 16000;
 
     c->band[0].scale_factor = 8;
     c->band[1].scale_factor = 2;

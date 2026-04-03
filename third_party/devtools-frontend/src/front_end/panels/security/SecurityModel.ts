@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,34 +9,34 @@ import * as Protocol from '../../generated/protocol.js';
 
 const UIStrings = {
   /**
-   *@description Text in Security Panel of the Security panel
+   * @description Text in Security Panel of the Security panel
    */
   theSecurityOfThisPageIsUnknown: 'The security of this page is unknown.',
   /**
-   *@description Text in Security Panel of the Security panel
+   * @description Text in Security Panel of the Security panel
    */
   thisPageIsNotSecure: 'This page is not secure.',
   /**
-   *@description Text in Security Panel of the Security panel
+   * @description Text in Security Panel of the Security panel
    */
   thisPageIsSecureValidHttps: 'This page is secure (valid HTTPS).',
   /**
-   *@description Text in Security Panel of the Security panel
+   * @description Text in Security Panel of the Security panel
    */
   thisPageIsNotSecureBrokenHttps: 'This page is not secure (broken HTTPS).',
   /**
-   *@description Description of an SSL cipher that contains a separate (bulk) cipher and MAC.
-   *@example {AES_256_CBC} PH1
-   *@example {HMAC-SHA1} PH2
+   * @description Description of an SSL cipher that contains a separate (bulk) cipher and MAC.
+   * @example {AES_256_CBC} PH1
+   * @example {HMAC-SHA1} PH2
    */
   cipherWithMAC: '{PH1} with {PH2}',
   /**
-   *@description Description of an SSL Key and its Key Exchange Group.
-   *@example {ECDHE_RSA} PH1
-   *@example {X25519} PH2
+   * @description Description of an SSL Key and its Key Exchange Group.
+   * @example {ECDHE_RSA} PH1
+   * @example {X25519} PH2
    */
   keyExchangeWithGroup: '{PH1} with {PH2}',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/security/SecurityModel.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
@@ -59,50 +59,36 @@ export class SecurityModel extends SDK.SDKModel.SDKModel<EventTypes> {
   networkManager(): SDK.NetworkManager.NetworkManager {
     return this.target().model(SDK.NetworkManager.NetworkManager) as SDK.NetworkManager.NetworkManager;
   }
-
-  // eslint-disable-next-line @typescript-eslint/naming-convention
-  static SecurityStateComparator(a: Protocol.Security.SecurityState|null, b: Protocol.Security.SecurityState|null):
-      number {
-    const securityStateMap = getOrCreateSecurityStateOrdinalMap();
-    const aScore = a && securityStateMap.get(a) || 0;
-    const bScore = b && securityStateMap.get(b) || 0;
-
-    return aScore - bScore;
-  }
 }
-let securityStateToOrdinal: Map<Protocol.Security.SecurityState, number>|null = null;
 
-const getOrCreateSecurityStateOrdinalMap = (): Map<Protocol.Security.SecurityState, number> => {
-  if (!securityStateToOrdinal) {
-    securityStateToOrdinal = new Map();
-    const ordering = [
-      Protocol.Security.SecurityState.Info,
-      Protocol.Security.SecurityState.InsecureBroken,
-      Protocol.Security.SecurityState.Insecure,
-      Protocol.Security.SecurityState.Neutral,
-      Protocol.Security.SecurityState.Secure,
-      // Unknown is max so that failed/cancelled requests don't overwrite the origin security state for successful requests,
-      // and so that failed/cancelled requests appear at the bottom of the origins list.
-      Protocol.Security.SecurityState.Unknown,
-    ];
-    for (let i = 0; i < ordering.length; i++) {
-      securityStateToOrdinal.set(ordering[i], i + 1);
-    }
-  }
-  return securityStateToOrdinal;
-};
+export function securityStateCompare(a: Protocol.Security.SecurityState, b: Protocol.Security.SecurityState): number {
+  const SECURITY_STATE_ORDER = [
+    Protocol.Security.SecurityState.Info,
+    Protocol.Security.SecurityState.InsecureBroken,
+    Protocol.Security.SecurityState.Insecure,
+    Protocol.Security.SecurityState.Neutral,
+    Protocol.Security.SecurityState.Secure,
+    // Unknown is max so that failed/cancelled requests don't overwrite the origin security state for successful requests,
+    // and so that failed/cancelled requests appear at the bottom of the origins list.
+    Protocol.Security.SecurityState.Unknown,
+  ];
 
-SDK.SDKModel.SDKModel.register(SecurityModel, {capabilities: SDK.Target.Capability.Security, autostart: false});
+  return SECURITY_STATE_ORDER.indexOf(a) - SECURITY_STATE_ORDER.indexOf(b);
+}
+
+SDK.SDKModel.SDKModel.register(SecurityModel, {capabilities: SDK.Target.Capability.SECURITY, autostart: false});
 
 export enum Events {
+  /* eslint-disable @typescript-eslint/naming-convention -- Used by web_tests. */
   VisibleSecurityStateChanged = 'VisibleSecurityStateChanged',
+  /* eslint-enable @typescript-eslint/naming-convention */
 }
 
-export type EventTypes = {
-  [Events.VisibleSecurityStateChanged]: PageVisibleSecurityState,
-};
+export interface EventTypes {
+  [Events.VisibleSecurityStateChanged]: PageVisibleSecurityState;
+}
 
-export const SummaryMessages: {[x: string]: () => string} = {
+export const SummaryMessages: Record<string, () => string> = {
   [Protocol.Security.SecurityState.Unknown]: i18nLazyString(UIStrings.theSecurityOfThisPageIsUnknown),
   [Protocol.Security.SecurityState.Insecure]: i18nLazyString(UIStrings.thisPageIsNotSecure),
   [Protocol.Security.SecurityState.Neutral]: i18nLazyString(UIStrings.thisPageIsNotSecure),

@@ -15,15 +15,19 @@
 #include "base/message_loop/message_pump_type.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "mojo/public/cpp/bindings/binder_map.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "ui/gfx/buffer_types.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/platform_window/platform_window.h"
 #include "ui/platform_window/platform_window_delegate.h"
 
 namespace display {
 class NativeDisplayDelegate;
 }
+
+namespace mojo {
+class BinderMap;
+}  // namespace mojo
 
 namespace ui {
 enum class DomCode : uint32_t;
@@ -43,6 +47,7 @@ class PlatformGlobalShortcutListenerDelegate;
 class PlatformKeyboardHook;
 class PlatformMenuUtils;
 class PlatformScreen;
+class PlatformSessionManager;
 class PlatformUserInputMonitor;
 class PlatformUtils;
 class SurfaceFactoryOzone;
@@ -101,6 +106,13 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
     PlatformProperties& operator=(const PlatformProperties& other) = delete;
     ~PlatformProperties();
 
+    // Values to override the value of a property in tests.
+    enum class SupportsForTest {
+      kNotSet,  // The property is not overridden.
+      kYes,     // The platform should return true.
+      kNo,      // The platform should return false.
+    };
+
     // Determines whether we should default to native decorations or the custom
     // frame based on the currently-running window manager.
     bool custom_frame_pref_default = false;
@@ -125,54 +137,55 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
     // should be given parents explicitly.
     bool set_parent_for_non_top_level_windows = false;
 
+    // Allows overriding whether `set_parent_for_non_top_level_windows` is
+    // enabled in tests. This value must be reset at the end of each test to
+    // avoid affecting subsequent tests.
+    static SupportsForTest
+        override_set_parent_for_non_top_level_windows_for_test;
+
     // If true, the platform shows and updates the drag image.
     bool platform_shows_drag_image = true;
-
-    // Linux only, but see a TODO in BrowserDesktopWindowTreeHostLinux.
-    // Determines whether the platform supports the global application menu.
-    bool supports_global_application_menus = false;
 
     // Determines if the application modal dialogs should use the event blocker
     // to allow the only browser window receiving UI events.
     bool app_modal_dialogs_use_event_blocker = false;
 
-    // Determines whether buffer formats should be fetched on GPU and passed
-    // back via gpu extra info.
-    bool fetch_buffer_formats_for_gmb_on_gpu = false;
-
     // Indicates that the platform allows client applications to manipulate
     // global screen coordinates. Wayland, for example, disallow it by design.
     bool supports_global_screen_coordinates = true;
+
+    // Whether the platform supports system/shell integrated color picker
+    // dialog. An example is XDG Desktop Portal provided PickColor dialog.
+    bool supports_color_picker_dialog = true;
   };
 
   // Groups platform properties that can only be known at run time.
   struct PlatformRuntimeProperties {
     PlatformRuntimeProperties();
 
-    // Values to override the value of the
-    // supports_server_side_window_decorations property in tests.
-    enum class SupportsSsdForTest {
+    // Values to override the value of a property in tests.
+    enum class SupportsForTest {
       kNotSet,  // The property is not overridden.
       kYes,     // The platform should return true.
-      kNo,      // The plafrorm should return false.
+      kNo,      // The platform should return false.
     };
 
     // Whether the underlying platform supports deferring compositing of buffers
     // via overlays. If overlays are not supported the promotion and validation
     // logic can be skipped.
     bool supports_overlays = false;
+
     // Indicates whether the platform supports server-side window decorations.
     bool supports_server_side_window_decorations = true;
+
+    // Indicates whether the platform supports window controls menus.
+    bool supports_server_window_menus = false;
 
     // For platforms that have optional support for server-side decorations,
     // this parameter allows setting the desired state in tests.  The platform
     // must have the appropriate logic in its GetPlatformRuntimeProperties()
     // method.
-    static SupportsSsdForTest override_supports_ssd_for_test;
-
-    // Wayland only: determines whether solid color overlays can be delegated
-    // without a backing image via a wayland protocol.
-    bool supports_non_backed_solid_color_buffers = false;
+    static SupportsForTest override_supports_ssd_for_test;
 
     // Wayland only: determines whether single pixel buffer protocol is
     // supported.
@@ -185,28 +198,27 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
     // be stacked below an AcceleratedWidget to make a widget opaque.
     bool needs_background_image = false;
 
-    // Wayland only: determines whether clip rects can be delegated via the
-    // wayland protocol when no quad is out of window.
-    bool supports_clip_rect = false;
+    // Wayland only: whether bubble widgets can use platform objects.
+    bool supports_subwindows_as_accelerated_widgets = false;
 
-    // Wayland only: determine whether toplevel surfaces can be activated and
-    // deactivated.
-    bool supports_activation = false;
+    // Indicates whether the platform supports system-controlled per-window
+    // scaling.
+    bool supports_per_window_scaling = false;
 
-    // Wayland only: determines whether non axis-aligned 2d transforms can be
-    // delegated via the wayland protocol.
-    bool supports_affine_transform = false;
+    // Whether status icon windows (with a wm_role_name of
+    // ui::kStatusIconWmRoleName) are supported.
+    bool supports_system_tray_windowing = false;
 
-    // Wayland only: determines whether clip rects can be delegated via the
-    // wayland protocol when some quads are out of window.
-    // TODO(crbug.com/1470024): The flag is currently disabled by default since
-    // there is a bug. Set this flag to enabled in GPU process when the
-    // remaining issues are resolved.
-    bool supports_out_of_window_clip_rect = false;
+    // Allows overriding whether per window scaling is enabled in tests.
+    static SupportsForTest override_supports_per_window_scaling_for_test;
 
-    // Whether wayland server has the fix that applies transformations in the
-    // correct order.
-    bool has_transformation_fix = false;
+    // Whether windowing system level session management is supported. If set,
+    // GetSessionManager method must return a valid object.
+    bool supports_session_management = false;
+
+    // Linux only, but see a TODO in BrowserDesktopWindowTreeHostLinux.
+    // Determines whether the platform supports the global application menu.
+    bool supports_global_application_menus = false;
   };
 
   // Corresponds to chrome_browser_main_extra_parts.h.
@@ -230,6 +242,8 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
   // task_runner suitable for handling user input after the message loop
   // started. It's required to call this so that we can exit cleanly if the
   // server can exit before we do.
+  // Note: This is currently not strongly enforced and so it may not be called
+  // in all content embedders or tests.
   virtual void PostCreateMainMessageLoop(
       base::OnceCallback<void()> shutdown_cb,
       scoped_refptr<base::SingleThreadTaskRunner> user_input_task_runner);
@@ -256,6 +270,7 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
   // Returns the current ozone platform name.
   // Some tests may skip based on the platform name.
   static std::string GetPlatformNameForTest();
+  static bool RunningOnWaylandForTest();
 
   // Factory getters to override in subclasses. The returned objects will be
   // injected into the appropriate layer at startup. Subclasses should not
@@ -298,13 +313,16 @@ class COMPONENT_EXPORT(OZONE) OzonePlatform {
       base::RepeatingCallback<void(KeyEvent* event)> callback,
       std::optional<base::flat_set<DomCode>> dom_codes,
       gfx::AcceleratedWidget accelerated_widget);
+  // Returns the PlatformSessionManager instance, if platform-level session
+  // management is supported, null otherwise.
+  virtual PlatformSessionManager* GetSessionManager();
 
-  // Returns true if the specified buffer format is supported.
-  virtual bool IsNativePixmapConfigSupported(gfx::BufferFormat format,
+  // Returns true if the specified format is supported.
+  virtual bool IsNativePixmapConfigSupported(viz::SharedImageFormat format,
                                              gfx::BufferUsage usage) const;
 
   // Whether the platform supports compositing windows with transparency.
-  virtual bool IsWindowCompositingSupported() const;
+  virtual bool IsWindowCompositingSupported() const = 0;
 
   // Returns whether a custom frame should be used for windows.
   // The default behaviour is returning what is suggested by the

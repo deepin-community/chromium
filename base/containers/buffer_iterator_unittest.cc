@@ -7,10 +7,11 @@
 #include <string.h>
 
 #include <limits>
+#include <optional>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace base {
@@ -18,7 +19,7 @@ namespace {
 
 struct TestStruct {
   uint32_t one;
-  uint8_t two;
+  uint8_t two, three, four, five;
 };
 
 bool operator==(const TestStruct& lhs, const TestStruct& rhs) {
@@ -26,17 +27,14 @@ bool operator==(const TestStruct& lhs, const TestStruct& rhs) {
 }
 
 TestStruct CreateTestStruct() {
-  TestStruct expected;
-  expected.one = 0xabcdef12;
-  expected.two = 0x34;
-  return expected;
+  return {0xabcdef12, 0x34, 0x56, 0x78, 0x90};
 }
 
 TEST(BufferIteratorTest, Object) {
   TestStruct expected = CreateTestStruct();
 
   char buffer[sizeof(TestStruct)];
-  memcpy(buffer, &expected, sizeof(buffer));
+  UNSAFE_TODO(memcpy(buffer, &expected, sizeof(buffer)));
 
   {
     // Read the object.
@@ -46,7 +44,8 @@ TEST(BufferIteratorTest, Object) {
   }
   {
     // Iterator's view of the data is not large enough to read the object.
-    BufferIterator<char> iterator(span(buffer).first<sizeof(buffer) - 1u>());
+    BufferIterator<char> iterator(
+        span<char>(buffer).first<sizeof(buffer) - 1u>());
     const TestStruct* actual = iterator.Object<TestStruct>();
     EXPECT_FALSE(actual);
   }
@@ -61,9 +60,7 @@ TEST(BufferIteratorTest, MutableObject) {
 
   {
     // Write the object.
-    TestStruct* actual = iterator.MutableObject<TestStruct>();
-    actual->one = expected.one;
-    actual->two = expected.two;
+    *iterator.MutableObject<TestStruct>() = expected;
   }
 
   // Rewind the iterator.
@@ -76,9 +73,9 @@ TEST(BufferIteratorTest, MutableObject) {
   }
 }
 
-TEST(BufferIteratorTest, ObjectSizeOverflow) {
+TEST(BufferIteratorTest, ObjectDoesNotFit) {
   char buffer[64];
-  BufferIterator<char> iterator(buffer, std::numeric_limits<size_t>::max());
+  BufferIterator<char> iterator(buffer);
 
   auto* pointer = iterator.Object<uint64_t>();
   EXPECT_TRUE(pointer);
@@ -99,7 +96,7 @@ TEST(BufferIteratorTest, Span) {
     BufferIterator<char> iterator(buffer);
     span<TestStruct> span = iterator.MutableSpan<TestStruct>(3);
     for (auto& ts : span) {
-      memcpy(&ts, &expected, sizeof(expected));
+      UNSAFE_TODO(memcpy(&ts, &expected, sizeof(expected)));
     }
   }
   {
@@ -125,6 +122,44 @@ TEST(BufferIteratorTest, Span) {
   }
 }
 
+TEST(BufferIteratorTest, FixedSpan) {
+  TestStruct expected = CreateTestStruct();
+
+  std::vector<char> buffer(sizeof(TestStruct) * 3);
+
+  {
+    // Load the span with data.
+    BufferIterator<char> iterator(buffer);
+    auto span = iterator.MutableSpan<TestStruct, 3u>();
+    static_assert(std::same_as<std::optional<base::span<TestStruct, 3u>>,
+                               decltype(span)>);
+    for (auto& ts : *span) {
+      UNSAFE_TODO(memcpy(&ts, &expected, sizeof(expected)));
+    }
+  }
+  {
+    // Read the data back out.
+    BufferIterator<char> iterator(buffer);
+
+    const TestStruct* actual = iterator.Object<TestStruct>();
+    EXPECT_EQ(expected, *actual);
+
+    actual = iterator.Object<TestStruct>();
+    EXPECT_EQ(expected, *actual);
+
+    actual = iterator.Object<TestStruct>();
+    EXPECT_EQ(expected, *actual);
+
+    EXPECT_EQ(iterator.total_size(), iterator.position());
+  }
+  {
+    // Cannot create spans larger than there are data for.
+    BufferIterator<char> iterator(buffer);
+    auto maybe_span = iterator.Span<TestStruct, 4u>();
+    EXPECT_FALSE(maybe_span.has_value());
+  }
+}
+
 TEST(BufferIteratorTest, SpanOverflow) {
   char buffer[64];
 
@@ -133,9 +168,11 @@ TEST(BufferIteratorTest, SpanOverflow) {
       // pointer, stored in the BufferIterator is never moved past the start in
       // this test, as that would cause Undefined Behaviour.
       UNSAFE_BUFFERS(span(buffer, std::numeric_limits<size_t>::max())));
+
+  constexpr size_t kInvalidU64Size =
+      (std::numeric_limits<size_t>::max() / sizeof(uint64_t)) + 1u;
   {
-    span<const uint64_t> empty_span = iterator.Span<uint64_t>(
-        (std::numeric_limits<size_t>::max() / sizeof(uint64_t)) + 1);
+    span<const uint64_t> empty_span = iterator.Span<uint64_t>(kInvalidU64Size);
     EXPECT_TRUE(empty_span.empty());
   }
   {
@@ -175,12 +212,11 @@ TEST(BufferIteratorTest, CopyObject) {
   for (int i = 0; i < kNumCopies; i++) {
     as_writable_bytes(span(buffer))
         .subspan(i * sizeof(TestStruct))
-        .first<sizeof(TestStruct)>()
-        .copy_from(byte_span_from_ref(expected));
+        .copy_prefix_from(byte_span_from_ref(expected));
   }
 
   BufferIterator<char> iterator(buffer);
-  absl::optional<TestStruct> actual;
+  std::optional<TestStruct> actual;
   for (int i = 0; i < kNumCopies; i++) {
     actual = iterator.CopyObject<TestStruct>();
     ASSERT_TRUE(actual.has_value());
@@ -192,14 +228,15 @@ TEST(BufferIteratorTest, CopyObject) {
 
 TEST(BufferIteratorTest, SeekWithSizeConfines) {
   const char buffer[] = "vindicate";
-  BufferIterator<const char> iterator(buffer);
+  BufferIterator<const char> iterator(base::span_from_cstring(buffer));
   iterator.Seek(5);
   iterator.TruncateTo(3);
   EXPECT_TRUE(iterator.Span<char>(4).empty());
 
   std::string result;
-  while (const char* c = iterator.Object<char>())
+  while (const char* c = iterator.Object<char>()) {
     result += *c;
+  }
   EXPECT_EQ(result, "cat");
 }
 

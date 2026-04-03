@@ -16,6 +16,8 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
+#include "base/strings/string_view_util.h"
+#include "build/build_config.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/clipboard_constants.h"
 #include "ui/ozone/platform/wayland/common/wayland_object.h"
@@ -31,6 +33,12 @@
 #include "ui/ozone/platform/wayland/host/zwp_primary_selection_device.h"
 #include "ui/ozone/platform/wayland/host/zwp_primary_selection_device_manager.h"
 #include "ui/ozone/public/platform_clipboard.h"
+
+#if BUILDFLAG(IS_LINUX)
+#include "base/strings/string_util.h"
+#include "ui/base/clipboard/clipboard_util_linux.h"
+#include "ui/ozone/platform/wayland/host/wayland_exchange_data_provider.h"
+#endif
 
 namespace wl {
 
@@ -49,8 +57,12 @@ class Clipboard {
   virtual std::vector<std::string> ReadMimeTypes() = 0;
 
   // Synchronously reads and returns clipboard content with |mime_type| format.
-  // TODO(crbug.com/443355): Drop once Clipboard API becomes async.
+  // TODO(crbug.com/40398800): Drop once Clipboard API becomes async.
   virtual ui::PlatformClipboard::Data Read(const std::string& mime_type) = 0;
+
+  // Synchronously reads and returns file transfer portal content.
+  // Returns nullptr if no portal content is available.
+  virtual ui::PlatformClipboard::Data ReadFileTransfer() = 0;
 
   // Synchronously stores and announces |data| as available from this clipboard.
   virtual void Write(const ui::PlatformClipboard::DataMap* data) = 0;
@@ -89,6 +101,30 @@ class ClipboardImpl final : public Clipboard, public DataSource::Delegate {
     return GetDevice()->ReadSelectionData(GetMimeTypeForRequest(mime_type));
   }
 
+  ui::PlatformClipboard::Data ReadFileTransfer() final {
+#if BUILDFLAG(IS_LINUX)
+    // Prefer portal types
+    ui::PlatformClipboard::Data data =
+        GetDevice()->ReadSelectionData(ui::kMimeTypePortalFileTransfer);
+    if (!data) {
+      data = GetDevice()->ReadSelectionData(ui::kMimeTypePortalFiles);
+    }
+    if (data) {
+      std::vector<std::string> paths =
+          ui::clipboard_util::ExtractPathsFromPortalKey(
+              base::as_byte_span(*data));
+      if (paths.empty()) {
+        return nullptr;
+      }
+      // Convert to uri-list for internal clipboard consumption
+      std::string uri_list = ui::clipboard_util::GetUriListFromPaths(paths);
+      return base::MakeRefCounted<base::RefCountedBytes>(
+          base::as_byte_span(uri_list));
+    }
+#endif
+    return nullptr;
+  }
+
   std::vector<std::string> ReadMimeTypes() final {
     return GetDevice()->GetAvailableMimeTypes();
   }
@@ -109,6 +145,25 @@ class ClipboardImpl final : public Clipboard, public DataSource::Delegate {
       source_.reset();
     } else {
       offered_data_ = *data;
+
+#if BUILDFLAG(IS_LINUX)
+      // Check if we need to register files for transfer
+      auto it = offered_data_.find(ui::kMimeTypeUriList);
+      if (it != offered_data_.end()) {
+        std::string unparsed(base::as_string_view(*it->second));
+        std::vector<std::string> paths =
+            ui::clipboard_util::GetPathsFromUriList(unparsed);
+
+        std::string key = ui::clipboard_util::RegisterPathsWithPortal(paths);
+        if (!key.empty()) {
+          auto data_bytes = base::MakeRefCounted<base::RefCountedBytes>(
+              base::as_byte_span(key));
+          offered_data_[ui::kMimeTypePortalFileTransfer] = data_bytes;
+          offered_data_[ui::kMimeTypePortalFiles] = data_bytes;
+        }
+      }
+#endif
+
       source_ = manager_->CreateSource(this);
       source_->Offer(GetOfferedMimeTypes());
 
@@ -147,18 +202,20 @@ class ClipboardImpl final : public Clipboard, public DataSource::Delegate {
     std::vector<std::string> mime_types;
     for (const auto& data : offered_data_) {
       mime_types.push_back(data.first);
-      if (data.first == ui::kMimeTypeText)
-        mime_types.push_back(ui::kMimeTypeTextUtf8);
+      if (data.first == ui::kMimeTypePlainText) {
+        mime_types.push_back(ui::kMimeTypeUtf8PlainText);
+      }
     }
     return mime_types;
   }
 
   std::string GetMimeTypeForRequest(const std::string& mime_type) {
-    if (mime_type != ui::kMimeTypeText)
+    if (mime_type != ui::kMimeTypePlainText) {
       return mime_type;
+    }
     // Prioritize unicode for text data.
     for (const auto& t : GetDevice()->GetAvailableMimeTypes()) {
-      if (t == ui::kMimeTypeTextUtf8 || t == ui::kMimeTypeLinuxString ||
+      if (t == ui::kMimeTypeUtf8PlainText || t == ui::kMimeTypeLinuxString ||
           t == ui::kMimeTypeLinuxUtf8String || t == ui::kMimeTypeLinuxText) {
         return t;
       }
@@ -187,10 +244,12 @@ class ClipboardImpl final : public Clipboard, public DataSource::Delegate {
                         std::string* contents) override {
     DCHECK(contents);
     auto it = offered_data_.find(mime_type);
-    if (it == offered_data_.end() && mime_type == ui::kMimeTypeTextUtf8)
-      it = offered_data_.find(ui::kMimeTypeText);
-    if (it != offered_data_.end())
-      contents->assign(it->second->data().begin(), it->second->data().end());
+    if (it == offered_data_.end() && mime_type == ui::kMimeTypeUtf8PlainText) {
+      it = offered_data_.find(ui::kMimeTypePlainText);
+    }
+    if (it != offered_data_.end()) {
+      *contents = base::as_string_view(*it->second);
+    }
   }
 
   // The device manager used to access data device and create data sources.
@@ -246,8 +305,15 @@ void WaylandClipboard::RequestClipboardData(
     const std::string& mime_type,
     PlatformClipboard::RequestDataClosure callback) {
   PlatformClipboard::Data data;
-  if (auto* clipboard = GetClipboard(buffer))
-    data = clipboard->Read(mime_type);
+  if (auto* clipboard = GetClipboard(buffer)) {
+    if (mime_type == kMimeTypeUriList) {
+      // Try portal first for file lists
+      data = clipboard->ReadFileTransfer();
+    }
+    if (!data) {
+      data = clipboard->Read(mime_type);
+    }
+  }
   std::move(callback).Run(data);
 }
 
@@ -306,7 +372,6 @@ wl::Clipboard* WaylandClipboard::GetClipboard(ClipboardBuffer buffer) {
   }
 
   NOTREACHED() << "Unsupported clipboard buffer: " << static_cast<int>(buffer);
-  return nullptr;
 }
 
 }  // namespace ui

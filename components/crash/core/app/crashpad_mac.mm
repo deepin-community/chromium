@@ -18,7 +18,6 @@
 #include "base/check.h"
 #include "base/files/file_path.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/sys_string_conversions.h"
 #include "build/branding_buildflags.h"
 #include "components/crash/core/app/crash_reporter_client.h"
@@ -135,11 +134,14 @@ bool PlatformCrashpadInitialization(
     const std::string& user_data_dir,
     const base::FilePath& exe_path,
     const std::vector<std::string>& initial_arguments,
+    const std::vector<base::FilePath>& attachments,
     base::FilePath* database_path) {
   base::FilePath metrics_path;  // Only valid in the browser process.
-  DCHECK(!embedded_handler);  // This is not used on Mac.
-  DCHECK(exe_path.empty());   // This is not used on Mac.
+  // These are not used on Mac.
+  DCHECK(!embedded_handler);
+  DCHECK(exe_path.empty());
   DCHECK(initial_arguments.empty());
+  DCHECK(attachments.empty());
 
   if (initial_client) {
     @autoreleasepool {

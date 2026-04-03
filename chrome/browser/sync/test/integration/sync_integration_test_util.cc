@@ -4,6 +4,9 @@
 
 #include "chrome/browser/sync/test/integration/sync_integration_test_util.h"
 
+#include <string>
+
+#include "base/strings/string_util.h"
 #include "chrome/browser/sync/test/integration/themes_helper.h"
 #include "chrome/browser/themes/test/theme_service_changed_waiter.h"
 #include "chrome/browser/themes/theme_service_factory.h"
@@ -18,14 +21,24 @@ void SetCustomTheme(Profile* profile, int theme_index) {
 }
 
 ServerCountMatchStatusChecker::ServerCountMatchStatusChecker(
-    syncer::ModelType type,
+    syncer::DataType type,
     size_t count)
     : type_(type), count_(count) {}
 
 bool ServerCountMatchStatusChecker::IsExitConditionSatisfied(std::ostream* os) {
-  size_t actual_count = fake_server()->GetSyncEntitiesByModelType(type_).size();
+  size_t actual_count = fake_server()->GetSyncEntitiesByDataType(type_).size();
   *os << "Waiting for fake server entity count " << actual_count
       << " to match expected count " << count_ << " for type "
-      << ModelTypeToDebugString(type_);
+      << DataTypeToDebugString(type_);
   return count_ == actual_count;
 }
+
+namespace sync_integration_test_util {
+
+bool IsCurrentTestAllowlistedForE2EMode() {
+  const std::string current_test_name =
+      ::testing::UnitTest::GetInstance()->current_test_info()->name();
+  return current_test_name.contains("E2ETest");
+}
+
+}  // namespace sync_integration_test_util

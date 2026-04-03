@@ -44,13 +44,17 @@ class MdnsQuerier;
 // due to the shared announce + goodbye message queue.
 class MdnsPublisher : public MdnsResponder::RecordHandler {
  public:
-  // |sender|, |ownership_manager|, and  |task_runner| must all persist for the
+  // `sender`, `ownership_manager`, and  `task_runner` must all persist for the
   // duration of this object's lifetime
-  MdnsPublisher(MdnsSender* sender,
-                MdnsProbeManager* ownership_manager,
+  MdnsPublisher(MdnsSender& sender,
+                MdnsProbeManager& ownership_manager,
                 TaskRunner& task_runner,
                 ClockNowFunctionPtr now_function,
                 const Config& config);
+  MdnsPublisher(const MdnsPublisher&) = delete;
+  MdnsPublisher(MdnsPublisher&&) noexcept = delete;
+  MdnsPublisher& operator=(const MdnsPublisher&) = delete;
+  MdnsPublisher& operator=(MdnsPublisher&&) = delete;
   ~MdnsPublisher() override;
 
   // Registers a new mDNS record for advertisement by this service. For A, AAAA,
@@ -58,7 +62,7 @@ class MdnsPublisher : public MdnsResponder::RecordHandler {
   // ClaimExclusiveOwnership() method and for PTR records the name being pointed
   // to must have been claimed in the same fashion, but the domain name in the
   // top-level MdnsRecord entity does not.
-  // NOTE: This call is only valid for |dns_type| values:
+  // NOTE: This call is only valid for `dns_type` values:
   // - DnsType::kA
   // - DnsType::kPTR
   // - DnsType::kTXT
@@ -78,20 +82,18 @@ class MdnsPublisher : public MdnsResponder::RecordHandler {
   // Returns the total number of records currently registered;
   size_t GetRecordCount() const;
 
-  OSP_DISALLOW_COPY_AND_ASSIGN(MdnsPublisher);
-
  private:
   // Class responsible for sending announcement and goodbye messages for
   // MdnsRecord instances when they are published, updated, or unpublished. The
-  // announcement messages will be sent |target_announcement_attempts| times,
+  // announcement messages will be sent `target_announcement_attempts` times,
   // first at an interval of 1 second apart, and then with delay increasing by a
   // factor of 2 with each successive announcement.
-  // NOTE: |publisher| must be the MdnsPublisher instance from which this
+  // NOTE: `publisher` must be the MdnsPublisher instance from which this
   // instance was created.
   class RecordAnnouncer {
    public:
     RecordAnnouncer(MdnsRecord record,
-                    MdnsPublisher* publisher,
+                    MdnsPublisher& publisher,
                     TaskRunner& task_runner,
                     ClockNowFunctionPtr now_function,
                     int max_announcement_attempts);
@@ -121,7 +123,7 @@ class MdnsPublisher : public MdnsResponder::RecordHandler {
     void QueueGoodbye();
     void QueueAnnouncement();
 
-    MdnsPublisher* const publisher_;
+    MdnsPublisher& publisher_;
     TaskRunner& task_runner_;
     const ClockNowFunctionPtr now_function_;
 
@@ -146,24 +148,20 @@ class MdnsPublisher : public MdnsResponder::RecordHandler {
   friend class MdnsPublisherTesting;
 
   // Creates a new published from the provided record.
-  RecordAnnouncerPtr CreateAnnouncer(MdnsRecord record) {
-    return std::make_unique<RecordAnnouncer>(std::move(record), this,
-                                             task_runner_, now_function_,
-                                             max_announcement_attempts_);
-  }
+  RecordAnnouncerPtr CreateAnnouncer(MdnsRecord record);
 
-  // Removes the given record from the |records_| map. A goodbye record is only
-  // sent for this removal if |should_announce_deletion| is true.
+  // Removes the given record from the `records_` map. A goodbye record is only
+  // sent for this removal if `should_announce_deletion` is true.
   Error RemoveRecord(const MdnsRecord& record, bool should_announce_deletion);
 
   // Returns whether the provided record has had its name claimed so far.
   bool IsRecordNameClaimed(const MdnsRecord& record) const;
 
-  // Processes the |records_to_send_| queue, sending out the records together as
+  // Processes the `records_to_send_` queue, sending out the records together as
   // a single MdnsMessage.
   void ProcessRecordQueue();
 
-  // Adds a new record to the |records_to_send_| queue or ensures that the
+  // Adds a new record to the `records_to_send_` queue or ensures that the
   // record with lower ttl is present if it differs from an existing record by
   // only that one field.
   void QueueRecord(MdnsRecord record);
@@ -177,8 +175,8 @@ class MdnsPublisher : public MdnsResponder::RecordHandler {
                                                DnsClass clazz) override;
   std::vector<MdnsRecord::ConstRef> GetPtrRecords(DnsClass clazz) override;
 
-  MdnsSender* const sender_;
-  MdnsProbeManager* const ownership_manager_;
+  MdnsSender& sender_;
+  MdnsProbeManager& ownership_manager_;
   TaskRunner& task_runner_;
   ClockNowFunctionPtr now_function_;
 

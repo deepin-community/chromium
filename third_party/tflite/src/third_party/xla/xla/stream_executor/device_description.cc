@@ -16,77 +16,114 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 
 #include <cstdint>
-#include <memory>
 #include <string>
 
-#include "tsl/lib/math/math_util.h"
-#include "tsl/platform/logging.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "xla/stream_executor/cuda/cuda_compute_capability.h"
+#include "xla/stream_executor/device_description.pb.h"
+#include "xla/stream_executor/launch_dim.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
+#include "xla/stream_executor/sycl/oneapi_compute_capability.h"
+#include "xla/tsl/lib/math/math_util.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace stream_executor {
 
-static const uint64_t kUninitializedUint64 = -1ULL;
-/* static */ const char *DeviceDescription::kUndefinedString = "<undefined>";
-
-DeviceDescription::DeviceDescription()
-    : device_vendor_(kUndefinedString),
-      platform_version_(kUndefinedString),
-      driver_version_(kUndefinedString),
-      runtime_version_(kUndefinedString),
-      pci_bus_id_(kUndefinedString),
-      name_(kUndefinedString),
-      model_str_(kUndefinedString),
-      thread_dim_limit_(kUninitializedUint64, kUninitializedUint64,
-                        kUninitializedUint64),
-      block_dim_limit_(kUninitializedUint64, kUninitializedUint64,
-                       kUninitializedUint64),
-      threads_per_core_limit_(kUninitializedUint64),
-      threads_per_block_limit_(kUninitializedUint64),
-      threads_per_warp_(kUninitializedUint64),
-      registers_per_core_limit_(kUninitializedUint64),
-      registers_per_block_limit_(kUninitializedUint64),
-      device_address_bits_(kUninitializedUint64),
-      device_memory_size_(kUninitializedUint64),
-      memory_bandwidth_(kUninitializedUint64),
-      shared_memory_per_core_(kUninitializedUint64),
-      shared_memory_per_block_(kUninitializedUint64),
-      clock_rate_ghz_(-1.0),
-      numa_node_(-1),
-      core_count_(-1),
-      ecc_enabled_(false) {}
-
-DeviceDescription::DeviceDescription(const GpuDeviceInfoProto &proto) {
-  if (proto.has_cuda_compute_capability()) {
-    gpu_compute_capability_ =
-        stream_executor::CudaComputeCapability(proto.cuda_compute_capability());
-  } else {
-    gpu_compute_capability_ =
-        stream_executor::RocmComputeCapability(proto.rocm_compute_capability());
+ExecutionUnitDescriptionProto ExecutionUnitDescription::ToProto() const {
+  ExecutionUnitDescriptionProto proto;
+  for (const auto& [type, info] : rate_infos_) {
+    auto& entry = (*proto.mutable_rate_infos())[type];
+    entry.set_clock_rate_ghz(info.clock_rate_ghz);
+    entry.set_units_per_core(info.units_per_core);
+    entry.set_ops_per_clock(info.ops_per_clock);
   }
-  threads_per_block_limit_ = proto.threads_per_block_limit();
-  threads_per_warp_ = proto.threads_per_warp();
-  shared_memory_per_block_ = proto.shared_memory_per_block();
-  shared_memory_per_block_optin_ = proto.shared_memory_per_block_optin();
-  shared_memory_per_core_ = proto.shared_memory_per_core();
-  threads_per_core_limit_ = proto.threads_per_core_limit();
-  core_count_ = proto.core_count();
-  fpus_per_core_ = proto.fpus_per_core();
-  block_dim_limit_ =
+  return proto;
+}
+
+absl::StatusOr<ExecutionUnitDescription> ExecutionUnitDescription::FromProto(
+    const ExecutionUnitDescriptionProto& proto) {
+  ExecutionUnitDescription desc;
+  for (const auto& [type_int, info_proto] : proto.rate_infos()) {
+    if (!xla::PrimitiveType_IsValid(type_int)) {
+      VLOG(2) << "Invalid PrimitiveType encountered, ExecutionUnitDescription "
+                 "might be malformed: "
+              << type_int;
+      continue;
+    }
+    desc.SetRateInfo(
+        static_cast<xla::PrimitiveType>(type_int),
+        RateInfo{info_proto.units_per_core(), info_proto.clock_rate_ghz(),
+                 info_proto.ops_per_clock()});
+  }
+  return desc;
+}
+
+absl::StatusOr<DeviceDescription> DeviceDescription::FromProto(
+    const GpuDeviceInfoProto& proto) {
+  DeviceDescription device_description;
+  device_description.block_dim_limit_ =
       BlockDim(proto.block_dim_limit_x(), proto.block_dim_limit_y(),
                proto.block_dim_limit_z());
-  memory_bandwidth_ = proto.memory_bandwidth();
-  l2_cache_size_ = proto.l2_cache_size();
-  clock_rate_ghz_ = proto.clock_rate_ghz();
-  device_memory_size_ = proto.device_memory_size();
+  device_description.threads_per_core_limit_ = proto.threads_per_core_limit();
+  device_description.threads_per_block_limit_ = proto.threads_per_block_limit();
+  device_description.threads_per_warp_ = proto.threads_per_warp();
+  device_description.registers_per_core_limit_ =
+      proto.registers_per_core_limit();
+  device_description.registers_per_block_limit_ =
+      proto.registers_per_block_limit();
+  device_description.device_memory_size_ = proto.device_memory_size();
+  device_description.l2_cache_size_ = proto.l2_cache_size();
+  device_description.memory_bandwidth_ = proto.memory_bandwidth();
+  device_description.shared_memory_per_core_ = proto.shared_memory_per_core();
+  device_description.shared_memory_per_block_ = proto.shared_memory_per_block();
+  device_description.shared_memory_per_block_optin_ =
+      proto.shared_memory_per_block_optin();
+  device_description.clock_rate_ghz_ = proto.clock_rate_ghz();
+
+  if (proto.has_cuda_compute_capability()) {
+    TF_ASSIGN_OR_RETURN(
+        device_description.gpu_compute_capability_,
+        CudaComputeCapability::FromProto(proto.cuda_compute_capability()));
+  }
+  if (proto.has_rocm_compute_capability()) {
+    device_description.gpu_compute_capability_ =
+        RocmComputeCapability(proto.rocm_compute_capability());
+  }
+  if (proto.has_oneapi_compute_capability()) {
+    device_description.gpu_compute_capability_ =
+        OneAPIComputeCapability(proto.oneapi_compute_capability());
+  }
+  device_description.core_count_ = proto.core_count();
+  device_description.fpus_per_core_ = proto.fpus_per_core();
+
+  if (proto.has_scalar_unit_description()) {
+    TF_ASSIGN_OR_RETURN(
+        device_description.scalar_unit_description_,
+        ExecutionUnitDescription::FromProto(proto.scalar_unit_description()));
+  }
+  if (proto.has_matrix_unit_description()) {
+    TF_ASSIGN_OR_RETURN(
+        device_description.matrix_unit_description_,
+        ExecutionUnitDescription::FromProto(proto.matrix_unit_description()));
+  }
+
+  return device_description;
 }
 
 GpuDeviceInfoProto DeviceDescription::ToGpuProto() const {
   stream_executor::GpuDeviceInfoProto proto;
-  if (auto *ptr = std::get_if<stream_executor::CudaComputeCapability>(
-          &gpu_compute_capability_))
+  if (auto* ptr = gpu_compute_capability_.cuda_compute_capability()) {
     *proto.mutable_cuda_compute_capability() = ptr->ToProto();
-  if (auto *ptr = std::get_if<stream_executor::RocmComputeCapability>(
-          &gpu_compute_capability_))
+  }
+  if (auto* ptr = gpu_compute_capability_.rocm_compute_capability()) {
     *proto.mutable_rocm_compute_capability() = ptr->ToProto();
+  }
+  if (auto* ptr = gpu_compute_capability_.oneapi_compute_capability()) {
+    *proto.mutable_oneapi_compute_capability() = ptr->ToProto();
+  }
 
   proto.set_threads_per_block_limit(threads_per_block_limit_);
   proto.set_threads_per_warp(threads_per_warp_);
@@ -103,7 +140,53 @@ GpuDeviceInfoProto DeviceDescription::ToGpuProto() const {
   proto.set_l2_cache_size(l2_cache_size_);
   proto.set_clock_rate_ghz(clock_rate_ghz_);
   proto.set_device_memory_size(device_memory_size_);
+  proto.set_registers_per_core_limit(registers_per_core_limit_);
+  proto.set_registers_per_block_limit(registers_per_block_limit_);
+  if (scalar_unit_description_.has_value()) {
+    *proto.mutable_scalar_unit_description() =
+        scalar_unit_description_->ToProto();
+  }
+  if (matrix_unit_description_.has_value()) {
+    *proto.mutable_matrix_unit_description() =
+        matrix_unit_description_->ToProto();
+  }
   return proto;
+}
+
+std::string DeviceDescription::ToString() const {
+  return ToGpuProto().DebugString();
+}
+
+bool DeviceDescription::operator==(const DeviceDescription& other) const {
+  return name_ == other.name_ && device_vendor_ == other.device_vendor_ &&
+         platform_version_ == other.platform_version_ &&
+         driver_version_ == other.driver_version_ &&
+         runtime_version_ == other.runtime_version_ &&
+         compile_time_toolkit_version_ == other.compile_time_toolkit_version_ &&
+         dnn_version_ == other.dnn_version_ && model_str_ == other.model_str_ &&
+         pci_bus_id_ == other.pci_bus_id_ && numa_node_ == other.numa_node_ &&
+         core_count_ == other.core_count_ &&
+         fpus_per_core_ == other.fpus_per_core_ &&
+         thread_dim_limit_ == other.thread_dim_limit_ &&
+         block_dim_limit_ == other.block_dim_limit_ &&
+         threads_per_block_limit_ == other.threads_per_block_limit_ &&
+         threads_per_core_limit_ == other.threads_per_core_limit_ &&
+         threads_per_warp_ == other.threads_per_warp_ &&
+         registers_per_core_limit_ == other.registers_per_core_limit_ &&
+         registers_per_block_limit_ == other.registers_per_block_limit_ &&
+         device_address_bits_ == other.device_address_bits_ &&
+         device_memory_size_ == other.device_memory_size_ &&
+         l2_cache_size_ == other.l2_cache_size_ &&
+         memory_bandwidth_ == other.memory_bandwidth_ &&
+         pcie_bandwidth_ == other.pcie_bandwidth_ &&
+         clock_rate_ghz_ == other.clock_rate_ghz_ &&
+         ecc_enabled_ == other.ecc_enabled_ &&
+         gpu_compute_capability_ == other.gpu_compute_capability_ &&
+         shared_memory_per_core_ == other.shared_memory_per_core_ &&
+         shared_memory_per_block_ == other.shared_memory_per_block_ &&
+         shared_memory_per_block_optin_ ==
+             other.shared_memory_per_block_optin_ &&
+         interconnect_info_ == other.interconnect_info_;
 }
 
 const GpuComputeCapability &DeviceDescription::gpu_compute_capability() const {
@@ -111,8 +194,7 @@ const GpuComputeCapability &DeviceDescription::gpu_compute_capability() const {
 }
 
 CudaComputeCapability DeviceDescription::cuda_compute_capability() const {
-  if (auto *ptr =
-          std::get_if<CudaComputeCapability>(&gpu_compute_capability_)) {
+  if (auto* ptr = gpu_compute_capability_.cuda_compute_capability()) {
     return *ptr;
   }
   // Fallback for backwards compatibility.
@@ -120,15 +202,21 @@ CudaComputeCapability DeviceDescription::cuda_compute_capability() const {
 }
 
 RocmComputeCapability DeviceDescription::rocm_compute_capability() const {
-  if (auto *ptr =
-          std::get_if<RocmComputeCapability>(&gpu_compute_capability_)) {
+  if (auto* ptr = gpu_compute_capability_.rocm_compute_capability()) {
     return *ptr;
   }
   return RocmComputeCapability{};
 }
 
-bool ThreadDimOk(const DeviceDescription &device_description,
-                 const ThreadDim &thread_dim) {
+OneAPIComputeCapability DeviceDescription::oneapi_compute_capability() const {
+  if (auto* ptr = gpu_compute_capability_.oneapi_compute_capability()) {
+    return *ptr;
+  }
+  return OneAPIComputeCapability{};
+}
+
+bool ThreadDimOk(const DeviceDescription& device_description,
+                 const ThreadDim& thread_dim) {
   const int64_t total_threads = thread_dim.x * thread_dim.y * thread_dim.z;
   const int64_t threads_per_block_limit =
       device_description.threads_per_block_limit();
@@ -138,7 +226,7 @@ bool ThreadDimOk(const DeviceDescription &device_description,
     return false;
   }
 
-  const auto &limit = device_description.thread_dim_limit();
+  const auto& limit = device_description.thread_dim_limit();
   bool ok = thread_dim.x <= limit.x && thread_dim.y <= limit.y &&
             thread_dim.z <= limit.z;
   if (!ok) {
@@ -148,15 +236,67 @@ bool ThreadDimOk(const DeviceDescription &device_description,
   return ok;
 }
 
-void CalculateDimensionality(const DeviceDescription &device_description,
-                             int64_t element_count, int64_t *threads_per_block,
-                             int64_t *block_count) {
+void CalculateDimensionality(const DeviceDescription& device_description,
+                             int64_t element_count, int64_t* threads_per_block,
+                             int64_t* block_count) {
   *threads_per_block = device_description.threads_per_block_limit();
   *block_count = tsl::MathUtil::CeilOfRatio(element_count, *threads_per_block);
   if (*block_count == 1) {
     CHECK_LE(element_count, *threads_per_block);
     *threads_per_block = element_count;
   }
+}
+
+GpuComputeCapabilityProto GpuComputeCapability::ToProto() const {
+  GpuComputeCapabilityProto proto;
+  if (IsCuda()) {
+    *proto.mutable_cuda_compute_capability() =
+        cuda_compute_capability()->ToProto();
+  } else if (IsOneAPI()) {
+    *proto.mutable_oneapi_compute_capability() =
+        oneapi_compute_capability()->ToProto();
+  } else {
+    *proto.mutable_rocm_compute_capability() =
+        rocm_compute_capability()->ToProto();
+  }
+  return proto;
+}
+
+absl::StatusOr<GpuComputeCapability> GpuComputeCapability::FromProto(
+    const GpuComputeCapabilityProto& proto) {
+  if (proto.has_cuda_compute_capability()) {
+    TF_ASSIGN_OR_RETURN(
+        CudaComputeCapability cuda_compute_capability,
+        CudaComputeCapability::FromProto(proto.cuda_compute_capability()));
+    return GpuComputeCapability(cuda_compute_capability);
+  }
+
+  if (proto.has_rocm_compute_capability()) {
+    return GpuComputeCapability(
+        RocmComputeCapability::FromProto(proto.rocm_compute_capability()));
+  }
+
+  if (proto.has_oneapi_compute_capability()) {
+    return GpuComputeCapability(
+        OneAPIComputeCapability::FromProto(proto.oneapi_compute_capability()));
+  }
+
+  return absl::InvalidArgumentError(
+      "The serialized GpuComputeCapability has no compute capability set.");
+}
+
+std::string MakeComputeCapabilityAttributeString(
+    const DeviceDescription& desc) {
+  GpuComputeCapability cc = desc.gpu_compute_capability();
+  if (cc.IsCuda()) {
+    auto* nvcc = cc.cuda_compute_capability();
+    return absl::StrCat(nvcc->major, ".", nvcc->minor);
+  }
+  if (cc.IsRocm()) {
+    auto* rocmcc = cc.rocm_compute_capability();
+    return rocmcc->gfx_version();
+  }
+  return "unknown";
 }
 
 }  // namespace stream_executor

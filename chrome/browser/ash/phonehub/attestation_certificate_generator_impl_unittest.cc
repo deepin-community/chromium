@@ -3,9 +3,10 @@
 // found in the LICENSE file.
 
 #include "attestation_certificate_generator_impl.h"
+
 #include <iterator>
 #include <memory>
-#include "base/functional/callback_forward.h"
+
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/attestation/fake_soft_bind_attestation_flow.h"
@@ -183,6 +184,19 @@ TEST_F(AttestationCertificateGeneratorImplTest, RetryInvalidCerts) {
   Initialize(invalid_certs_);
 
   mock_attestation_flow_->SetCertificates(second_valid_certs_);
+  wait_loop_ = std::make_unique<base::RunLoop>();
+  attestation_certificate_generator_impl_->RetrieveCertificate();
+  wait_loop_->Run();
+  EXPECT_TRUE(is_valid_);
+  EXPECT_EQ(*certs_, second_valid_certs_);
+}
+
+TEST_F(AttestationCertificateGeneratorImplTest, RegenerateAfterExpiration) {
+  Initialize(invalid_certs_);
+
+  mock_attestation_flow_->SetCertificates(second_valid_certs_);
+  attestation_certificate_generator_impl_->last_attestation_completed_time_ =
+      base::Time::NowFromSystemTime() - base::Hours(25);
   wait_loop_ = std::make_unique<base::RunLoop>();
   attestation_certificate_generator_impl_->RetrieveCertificate();
   wait_loop_->Run();

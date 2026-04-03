@@ -19,8 +19,6 @@
 #define REAL    0.5f
 #define BIG     SkIntToScalar(10)
 #define REALBIG 100.5f
-// The value that produces a sigma of just over 2.
-#define CUTOVER 2.6f
 
 static const char* gStyleName[] = {
     "normal",
@@ -41,7 +39,7 @@ public:
         const char* name = rad > 0 ? gStyleName[bs] : "none";
         const char* quality = "high_quality";
         if (SkScalarFraction(rad) != 0) {
-            fName.printf("blur_%.2f_%s_%s", SkScalarToFloat(rad), name, quality);
+            fName.printf("blur_%.2f_%s_%s", rad, name, quality);
         } else {
             fName.printf("blur_%d_%s_%s", SkScalarRoundToInt(rad), name, quality);
         }

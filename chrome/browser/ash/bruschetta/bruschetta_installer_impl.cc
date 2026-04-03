@@ -6,18 +6,23 @@
 
 #include <memory>
 
+#include "ash/constants/ash_features.h"
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/string_util.h"
+#include "base/system/sys_info.h"
 #include "base/task/thread_pool.h"
+#include "bruschetta_installer.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_download.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_installer.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_pref_names.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_service.h"
+#include "chrome/browser/ash/bruschetta/bruschetta_service_factory.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_util.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/guest_os/guest_id.h"
@@ -26,7 +31,9 @@
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
+#include "chromeos/ash/components/dbus/attestation/attestation_client.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
+#include "chromeos/ash/components/system/statistics_provider.h"
 #include "components/prefs/pref_service.h"
 
 namespace bruschetta {
@@ -35,6 +42,12 @@ namespace bruschetta {
 extern const char kInstallResultMetric[] = "Bruschetta.InstallResult";
 
 namespace {
+
+// The vTPM EK key label.
+// Should be synced with the value in the chromiumos repo:
+// src/platform2/vtpm/backends/attested_virtual_endorsement.cc
+constexpr char kVtpmEkLabel[] = "vtpm-ek";
+constexpr base::ByteCount kBruschettaRequiredMemory = base::GiB(12);
 
 std::unique_ptr<BruschettaInstallerImpl::Fds> OpenFdsBlocking(
     base::FilePath boot_disk_path,
@@ -50,8 +63,15 @@ struct BruschettaInstallerImpl::Fds {
 
 BruschettaInstallerImpl::BruschettaInstallerImpl(
     Profile* profile,
+    PrefService& local_state,
     base::OnceClosure close_closure)
-    : profile_(profile), close_closure_(std::move(close_closure)) {}
+    : profile_(profile),
+      download_factory_(base::BindRepeating(
+          [](PrefService& local_state) -> std::unique_ptr<BruschettaDownload> {
+            return std::make_unique<SimpleURLLoaderDownload>(local_state);
+          },
+          std::ref(local_state))),
+      close_closure_(std::move(close_closure)) {}
 
 BruschettaInstallerImpl::~BruschettaInstallerImpl() = default;
 
@@ -75,6 +95,29 @@ void BruschettaInstallerImpl::Cancel() {
 
 void BruschettaInstallerImpl::Install(std::string vm_name,
                                       std::string config_id) {
+  if (!base::FeatureList::IsEnabled(
+          ash::features::kDisableBruschettaInstallChecks)) {
+    base::ByteCount physical_memory = base::SysInfo::AmountOfPhysicalMemory();
+    // Physical memory reporting never lines up with exact GB definitions, allow
+    // for some wiggle room.
+    if (physical_memory.InBytes() <
+        kBruschettaRequiredMemory.InBytes() * 0.85) {
+      Error(BruschettaInstallResult::kNotEnoughMemoryError);
+      LOG(ERROR) << "System memory of " << physical_memory.InBytes()
+                 << " less than required "
+                 << kBruschettaRequiredMemory.InBytes();
+      return;
+    }
+    const std::optional<std::string_view> attested_device_id =
+        ash::system::StatisticsProvider::GetInstance()->GetMachineStatistic(
+            ash::system::kAttestedDeviceIdKey);
+    if (!attested_device_id.has_value()) {
+      Error(BruschettaInstallResult::kNoAdidError);
+      LOG(ERROR) << "No ADID is available";
+      return;
+    }
+  }
+
   if (install_running_) {
     LOG(ERROR) << "Install requested while an install is already running";
     return;
@@ -106,6 +149,9 @@ void BruschettaInstallerImpl::Install(std::string vm_name,
     LOG(ERROR) << "Installation prohibited by policy";
     return;
   }
+
+  // Reset mic permissions, as these should not persist across reinstall.
+  profile_->GetPrefs()->SetBoolean(prefs::kBruschettaMicAllowed, false);
 }
 
 void BruschettaInstallerImpl::InstallToolsDlc() {
@@ -129,7 +175,32 @@ void BruschettaInstallerImpl::OnToolsDlcInstalled(
 
   if (!install_result.has_value()) {
     install_running_ = false;
-    Error(BruschettaInstallResult::kToolsDlcInstallError);
+    BruschettaInstallResult result;
+    switch (install_result.error()) {
+      case guest_os::GuestOsDlcInstallation::Error::Offline:
+        result = BruschettaInstallResult::kToolsDlcOfflineError;
+        break;
+      case guest_os::GuestOsDlcInstallation::Error::NeedUpdate:
+        result = BruschettaInstallResult::kToolsDlcNeedUpdateError;
+        break;
+      case guest_os::GuestOsDlcInstallation::Error::NeedReboot:
+        result = BruschettaInstallResult::kToolsDlcNeedRebootError;
+        break;
+      case guest_os::GuestOsDlcInstallation::Error::DiskFull:
+        result = BruschettaInstallResult::kToolsDlcDiskFullError;
+        break;
+      case guest_os::GuestOsDlcInstallation::Error::Busy:
+        result = BruschettaInstallResult::kToolsDlcBusyError;
+        break;
+      case guest_os::GuestOsDlcInstallation::Error::Internal:
+      case guest_os::GuestOsDlcInstallation::Error::Invalid:
+      case guest_os::GuestOsDlcInstallation::Error::UnknownFailure:
+      case guest_os::GuestOsDlcInstallation::Error::Cancelled:
+      default:
+        result = BruschettaInstallResult::kToolsDlcUnknownError;
+        break;
+    }
+    Error(result);
     LOG(ERROR) << "Failed to install tools dlc: " << install_result.error();
     return;
   }
@@ -156,7 +227,32 @@ void BruschettaInstallerImpl::OnFirmwareDlcInstalled(
 
   if (!install_result.has_value()) {
     install_running_ = false;
-    Error(BruschettaInstallResult::kFirmwareDlcInstallError);
+    BruschettaInstallResult result;
+    switch (install_result.error()) {
+      case guest_os::GuestOsDlcInstallation::Error::Offline:
+        result = BruschettaInstallResult::kFirmwareDlcOfflineError;
+        break;
+      case guest_os::GuestOsDlcInstallation::Error::NeedUpdate:
+        result = BruschettaInstallResult::kFirmwareDlcNeedUpdateError;
+        break;
+      case guest_os::GuestOsDlcInstallation::Error::NeedReboot:
+        result = BruschettaInstallResult::kFirmwareDlcNeedRebootError;
+        break;
+      case guest_os::GuestOsDlcInstallation::Error::DiskFull:
+        result = BruschettaInstallResult::kFirmwareDlcDiskFullError;
+        break;
+      case guest_os::GuestOsDlcInstallation::Error::Busy:
+        result = BruschettaInstallResult::kFirmwareDlcBusyError;
+        break;
+      case guest_os::GuestOsDlcInstallation::Error::Internal:
+      case guest_os::GuestOsDlcInstallation::Error::Invalid:
+      case guest_os::GuestOsDlcInstallation::Error::UnknownFailure:
+      case guest_os::GuestOsDlcInstallation::Error::Cancelled:
+      default:
+        result = BruschettaInstallResult::kFirmwareDlcUnknownError;
+        break;
+    }
+    Error(result);
     LOG(ERROR) << "Failed to install firmware dlc: " << install_result.error();
     return;
   }
@@ -187,10 +283,10 @@ void BruschettaInstallerImpl::OnBootDiskDownloaded(base::FilePath path,
     Error(BruschettaInstallResult::kDownloadError);
     return;
   }
-  const std::string* expected = config_.FindDict(prefs::kPolicyImageKey)
-                                    ->FindString(prefs::kPolicyHashKey);
+  const std::string expected = *(config_.FindDict(prefs::kPolicyImageKey)
+                                     ->FindString(prefs::kPolicyHashKey));
 
-  if (!base::EqualsCaseInsensitiveASCII(hash, *expected)) {
+  if (!base::EqualsCaseInsensitiveASCII(hash, expected)) {
     install_running_ = false;
     Error(BruschettaInstallResult::kInvalidBootDisk);
     LOG(ERROR) << "Downloaded boot disk has incorrect hash";
@@ -207,7 +303,7 @@ void BruschettaInstallerImpl::OnBootDiskDownloaded(base::FilePath path,
 void BruschettaInstallerImpl::DownloadPflash() {
   VLOG(2) << "Downloading pflash";
   NotifyObserver(State::kPflashDownload);
-  const base::Value::Dict* pflash = config_.FindDict(prefs::kPolicyPflashKey);
+  const base::DictValue* pflash = config_.FindDict(prefs::kPolicyPflashKey);
   if (!pflash) {
     VLOG(2) << "No pflash file set, skipping to OpenFds";
 
@@ -310,6 +406,26 @@ void BruschettaInstallerImpl::OnOpenFds(std::unique_ptr<Fds> fds) {
 
   fds_ = std::move(fds);
 
+  EnsureConciergeAvailable();
+}
+
+void BruschettaInstallerImpl::EnsureConciergeAvailable() {
+  auto* client = ash::ConciergeClient::Get();
+  DCHECK(client) << "This code requires a ConciergeClient";
+
+  client->WaitForServiceToBeAvailable(
+      base::BindOnce(&BruschettaInstallerImpl::OnConciergeAvailable,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void BruschettaInstallerImpl::OnConciergeAvailable(bool service_is_available) {
+  if (!service_is_available) {
+    install_running_ = false;
+    Error(BruschettaInstallResult::kConciergeUnavailableError);
+    LOG(ERROR) << "vm_concierge is not available";
+    return;
+  }
+
   CreateVmDisk();
 }
 
@@ -328,6 +444,7 @@ void BruschettaInstallerImpl::CreateVmDisk() {
   request.set_cryptohome_id(std::move(user_hash));
   request.set_vm_name(vm_name_);
   request.set_image_type(vm_tools::concierge::DiskImageType::DISK_IMAGE_AUTO);
+  request.set_storage_ballooning(true);
 
   client->CreateDiskImage(
       request, base::BindOnce(&BruschettaInstallerImpl::OnCreateVmDisk,
@@ -364,7 +481,7 @@ void BruschettaInstallerImpl::InstallPflash() {
 
   if (!fds_->pflash.has_value()) {
     VLOG(2) << "No pflash file expected, skipping to StartVm";
-    StartVm();
+    ClearVek();
     return;
   }
 
@@ -386,7 +503,7 @@ void BruschettaInstallerImpl::InstallPflash() {
 }
 
 void BruschettaInstallerImpl::OnInstallPflash(
-    std::optional<vm_tools::concierge::InstallPflashResponse> result) {
+    std::optional<vm_tools::concierge::SuccessFailureResponse> result) {
   if (MaybeClose()) {
     return;
   }
@@ -399,6 +516,40 @@ void BruschettaInstallerImpl::OnInstallPflash(
     } else {
       LOG(ERROR) << "Install pflash failed, no response";
     }
+    return;
+  }
+
+  ClearVek();
+}
+
+void BruschettaInstallerImpl::ClearVek() {
+  VLOG(2) << "Clearing VEK";
+  NotifyObserver(State::kClearVek);
+
+  attestation::DeleteKeysRequest request;
+  request.set_username("");
+  request.set_key_label_match(kVtpmEkLabel);
+  request.set_match_behavior(
+      attestation::DeleteKeysRequest::MATCH_BEHAVIOR_EXACT);
+
+  auto* client = ash::AttestationClient::Get();
+  DCHECK(client) << "This code requires a AttestationClient";
+
+  client->DeleteKeys(request,
+                     base::BindOnce(&BruschettaInstallerImpl::OnClearVek,
+                                    weak_ptr_factory_.GetWeakPtr()));
+}
+
+void BruschettaInstallerImpl::OnClearVek(
+    const attestation::DeleteKeysReply& result) {
+  if (MaybeClose()) {
+    return;
+  }
+
+  if (result.status() != attestation::STATUS_SUCCESS) {
+    install_running_ = false;
+    Error(BruschettaInstallResult::kClearVekFailed);
+    LOG(ERROR) << "Delete vEK failed: " << result.status();
     return;
   }
 
@@ -478,8 +629,8 @@ void BruschettaInstallerImpl::OnStartVm(
     return;
   }
 
-  BruschettaService::GetForProfile(profile_)->RegisterVmLaunch(vm_name_,
-                                                               launch_policy);
+  BruschettaServiceFactory::GetForProfile(profile_)->RegisterVmLaunch(
+      vm_name_, launch_policy);
   profile_->GetPrefs()->SetBoolean(bruschetta::prefs::kBruschettaInstalled,
                                    true);
 
@@ -493,7 +644,7 @@ void BruschettaInstallerImpl::LaunchTerminal() {
   // TODO(b/231899688): Implement Bruschetta sending an RPC when installation
   // finishes so that we only add to prefs on success.
   auto guest_id = MakeBruschettaId(std::move(vm_name_));
-  BruschettaService::GetForProfile(profile_)->RegisterInPrefs(
+  BruschettaServiceFactory::GetForProfile(profile_)->RegisterInPrefs(
       guest_id, std::move(config_id_));
 
   guest_id.container_name = "";

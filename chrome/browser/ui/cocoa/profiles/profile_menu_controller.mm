@@ -177,8 +177,8 @@ class Observer : public BrowserListObserver, public AvatarMenuObserver {
       header = [[NSMenuItem alloc] initWithTitle:GetProfileMenuTitle()
                                           action:nil
                                    keyEquivalent:@""];
-      header.enabled = NO;
     }
+    header.enabled = NO;
     [menu insertItem:header atIndex:offset++];
   }
 
@@ -231,9 +231,10 @@ class Observer : public BrowserListObserver, public AvatarMenuObserver {
 
   [self.menu addItem:[NSMenuItem separatorItem]];
 
-  NSMenuItem* item = [self createItemWithTitle:
-      l10n_util::GetNSStringWithFixup(IDS_PROFILES_MANAGE_BUTTON_LABEL)
-                                        action:@selector(editProfile:)];
+  NSMenuItem* item =
+      [self createItemWithTitle:l10n_util::GetNSStringWithFixup(
+                                    IDS_PROFILES_MANAGE_BUTTON_LABEL)
+                         action:@selector(editProfile:)];
   [self.menu addItem:item];
 
   if (_avatarMenu->ShouldShowAddNewProfileLink()) {

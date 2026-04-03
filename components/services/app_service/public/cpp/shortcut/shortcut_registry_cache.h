@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "base/component_export.h"
-#include "base/containers/contains.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/sequence_checker.h"
@@ -83,7 +82,8 @@ class COMPONENT_EXPORT(SHORTCUT) ShortcutRegistryCache {
 
   // If currently an update is processing, we do not the notified observer to
   // update the shortcut cache again.
-  // TODO(crbug.com/1412708): Handle observer updates if proved to be necessary.
+  // TODO(crbug.com/40255408): Handle observer updates if proved to be
+  // necessary.
   bool is_updating_ = false;
 
   base::ObserverList<Observer> observers_;

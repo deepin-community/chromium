@@ -51,7 +51,7 @@ const char kProfileShortcutNotFound[] = "profileShortcutNotFound";
 ManageProfileHandler::ManageProfileHandler(Profile* profile)
     : profile_(profile) {}
 
-ManageProfileHandler::~ManageProfileHandler() {}
+ManageProfileHandler::~ManageProfileHandler() = default;
 
 void ManageProfileHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
@@ -100,8 +100,9 @@ void ManageProfileHandler::OnJavascriptDisallowed() {
 
 void ManageProfileHandler::OnProfileHighResAvatarLoaded(
     const base::FilePath& profile_path) {
-  if (profile_path != profile_->GetPath())
+  if (profile_path != profile_->GetPath()) {
     return;
+  }
 
   // GAIA image is loaded asynchronously.
   FireWebUIListener(
@@ -111,8 +112,9 @@ void ManageProfileHandler::OnProfileHighResAvatarLoaded(
 
 void ManageProfileHandler::OnProfileAvatarChanged(
     const base::FilePath& profile_path) {
-  if (profile_path != profile_->GetPath())
+  if (profile_path != profile_->GetPath()) {
     return;
+  }
 
   // This is necessary to send the potentially updated GAIA photo.
   FireWebUIListener(
@@ -127,7 +129,7 @@ void ManageProfileHandler::OnProfileThemeColorsChanged(
 }
 
 void ManageProfileHandler::HandleGetAvailableIcons(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
 
   profiles::UpdateGaiaProfileInfoIfNeeded(profile_);
@@ -141,7 +143,7 @@ void ManageProfileHandler::HandleGetAvailableIcons(
 }
 
 void ManageProfileHandler::HandleSetProfileIconToGaiaAvatar(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   PrefService* pref_service = profile_->GetPrefs();
@@ -159,7 +161,7 @@ void ManageProfileHandler::HandleSetProfileIconToGaiaAvatar(
 }
 
 void ManageProfileHandler::HandleSetProfileIconToDefaultAvatar(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   CHECK_EQ(1u, args.size());
   CHECK(args[0].is_int());
@@ -168,7 +170,7 @@ void ManageProfileHandler::HandleSetProfileIconToDefaultAvatar(
   profiles::SetDefaultProfileAvatarIndex(profile_, avatar_icon_index);
 }
 
-void ManageProfileHandler::HandleSetProfileName(const base::Value::List& args) {
+void ManageProfileHandler::HandleSetProfileName(const base::ListValue& args) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   CHECK_EQ(1u, args.size());
 
@@ -180,7 +182,7 @@ void ManageProfileHandler::HandleSetProfileName(const base::Value::List& args) {
 }
 
 void ManageProfileHandler::HandleRequestProfileShortcutStatus(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(ProfileShortcutManager::IsFeatureEnabled());
@@ -206,8 +208,8 @@ void ManageProfileHandler::HandleRequestProfileShortcutStatus(
                      weak_factory_.GetWeakPtr(), callback_id));
 }
 
-void ManageProfileHandler::OnHasProfileShortcuts(
-    const std::string& callback_id, bool has_shortcuts) {
+void ManageProfileHandler::OnHasProfileShortcuts(const std::string& callback_id,
+                                                 bool has_shortcuts) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   ResolveJavascriptCallback(
       base::Value(callback_id),
@@ -216,7 +218,7 @@ void ManageProfileHandler::OnHasProfileShortcuts(
 }
 
 void ManageProfileHandler::HandleAddProfileShortcut(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(ProfileShortcutManager::IsFeatureEnabled());
   ProfileShortcutManager* shortcut_manager =
       g_browser_process->profile_manager()->profile_shortcut_manager();
@@ -226,10 +228,10 @@ void ManageProfileHandler::HandleAddProfileShortcut(
 }
 
 void ManageProfileHandler::HandleRemoveProfileShortcut(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   DCHECK(ProfileShortcutManager::IsFeatureEnabled());
   ProfileShortcutManager* shortcut_manager =
-    g_browser_process->profile_manager()->profile_shortcut_manager();
+      g_browser_process->profile_manager()->profile_shortcut_manager();
   DCHECK(shortcut_manager);
 
   shortcut_manager->RemoveProfileShortcuts(profile_->GetPath());

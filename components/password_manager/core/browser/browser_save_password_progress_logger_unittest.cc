@@ -3,22 +3,24 @@
 // found in the LICENSE file.
 
 #include "components/password_manager/core/browser/browser_save_password_progress_logger.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
 
 #include "base/containers/flat_map.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/autofill/core/browser/autofill_type.h"
+#include "components/autofill/core/browser/autofill_server_prediction.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/logging/stub_log_manager.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/common/form_data.h"
+#include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/save_password_progress_logger.h"
 #include "components/autofill/core/common/unique_ids.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using autofill::AutofillType;
+using autofill::AutofillServerPrediction;
 using autofill::FieldGlobalId;
 using autofill::FieldType;
 using autofill::StubLogManager;
@@ -54,27 +56,27 @@ class TestLogger : public BrowserSavePasswordProgressLogger {
 class BrowserSavePasswordProgressLoggerTest : public testing::Test {
  public:
   BrowserSavePasswordProgressLoggerTest() {
-    form_.url = GURL("http://myform.com/form.html");
-    form_.action = GURL("http://m.myform.com/submit.html");
-    form_.name = u"form_name";
+    form_.set_url(GURL("http://myform.com/form.html"));
+    form_.set_action(GURL("http://m.myform.com/submit.html"));
+    form_.set_name(u"form_name");
 
     // Add a password field.
     autofill::FormFieldData field;
-    field.name = u"password";
-    field.form_control_type = autofill::FormControlType::kInputPassword;
-    field.is_focusable = true;
-    field.autocomplete_attribute = "new-password";
-    field.renderer_id = autofill::FieldRendererId(10);
-    form_.fields.push_back(field);
+    field.set_name(u"password");
+    field.set_form_control_type(autofill::FormControlType::kInputPassword);
+    field.set_is_focusable(true);
+    field.set_autocomplete_attribute("new-password");
+    field.set_renderer_id(autofill::FieldRendererId(10));
+    test_api(form_).Append(field);
 
     // Add a text field.
-    field.name = u"email";
-    field.form_control_type = autofill::FormControlType::kInputText;
-    field.is_focusable = false;
-    field.renderer_id = autofill::FieldRendererId(42);
-    field.value = u"a@example.com";
-    field.autocomplete_attribute.clear();
-    form_.fields.push_back(field);
+    field.set_name(u"email");
+    field.set_form_control_type(autofill::FormControlType::kInputText);
+    field.set_is_focusable(false);
+    field.set_renderer_id(autofill::FieldRendererId(42));
+    field.set_value(u"a@example.com");
+    field.set_autocomplete_attribute({});
+    test_api(form_).Append(field);
   }
 
  protected:
@@ -105,16 +107,16 @@ TEST_F(BrowserSavePasswordProgressLoggerTest,
        LogFormDataWithServerPredictions) {
   StubLogManager log_manager;
   TestLogger logger(&log_manager);
-  AutofillType::ServerPrediction password_prediction;
+  AutofillServerPrediction password_prediction;
   password_prediction.server_predictions = {
       CreateFieldPrediction(FieldType::NEW_PASSWORD)};
-  base::flat_map<FieldGlobalId, AutofillType::ServerPrediction> predictions = {
-      {form_.fields[0].global_id(), std::move(password_prediction)}};
-  logger.LogFormDataWithServerPredictions(Logger::STRING_SERVER_PREDICTIONS,
-                                          form_, predictions);
+  base::flat_map<FieldGlobalId, AutofillServerPrediction> predictions = {
+      {form_.fields()[0].global_id(), std::move(password_prediction)}};
+  logger.LogFormDataWithServerPredictions(form_, predictions);
 
   SCOPED_TRACE(testing::Message()
                << "Log string = [" << logger.accumulated_log() << "]");
+  EXPECT_TRUE(logger.LogsContainSubstring("Server predictions:"));
   EXPECT_TRUE(logger.LogsContainSubstring(
       "Signature of form: 3370253896397449141 - 503"));
   EXPECT_TRUE(logger.LogsContainSubstring("Origin: http://myform.com"));
@@ -124,6 +126,28 @@ TEST_F(BrowserSavePasswordProgressLoggerTest,
       "password: signature=2051817934, type=password, renderer_id=10, "
       "visible, empty, autocomplete=new-password, Server Type= NEW_PASSWORD, "
       "All Server Predictions= [NEW_PASSWORD]"));
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "email: signature=420638584, type=text, renderer_id=42"));
+}
+
+TEST_F(BrowserSavePasswordProgressLoggerTest, LogFormDataWithModelPredictions) {
+  StubLogManager log_manager;
+  TestLogger logger(&log_manager);
+  base::flat_map<autofill::FieldRendererId, autofill::FieldType> predictions = {
+      {form_.fields()[0].renderer_id(), FieldType::NEW_PASSWORD}};
+  logger.LogFormDataWithModelPredictions(form_, predictions);
+
+  SCOPED_TRACE(testing::Message()
+               << "Log string = [" << logger.accumulated_log() << "]");
+  EXPECT_TRUE(logger.LogsContainSubstring("Model predictions:"));
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "Signature of form: 3370253896397449141 - 503"));
+  EXPECT_TRUE(logger.LogsContainSubstring("Origin: http://myform.com"));
+  EXPECT_TRUE(logger.LogsContainSubstring("Action: http://m.myform.com"));
+  EXPECT_TRUE(logger.LogsContainSubstring("Form fields:"));
+  EXPECT_TRUE(logger.LogsContainSubstring(
+      "password: signature=2051817934, type=password, renderer_id=10, "
+      "visible, empty, autocomplete=new-password, Model Type= NEW_PASSWORD"));
   EXPECT_TRUE(logger.LogsContainSubstring(
       "email: signature=420638584, type=text, renderer_id=42"));
 }

@@ -27,7 +27,7 @@ class EGLSurfacelessContextTest : public ANGLETest<>
     {
         EGLAttrib dispattrs[3] = {EGL_PLATFORM_ANGLE_TYPE_ANGLE, GetParam().getRenderer(),
                                   EGL_NONE};
-        mDisplay               = eglGetPlatformDisplay(EGL_PLATFORM_ANGLE_ANGLE,
+        mDisplay               = eglGetPlatformDisplay(GetEglPlatform(),
                                                        reinterpret_cast<void *>(EGL_DEFAULT_DISPLAY), dispattrs);
         ASSERT_TRUE(mDisplay != EGL_NO_DISPLAY);
 
@@ -231,7 +231,7 @@ TEST_P(EGLSurfacelessContextTest, Switcheroo)
     ANGLE_SKIP_TEST_IF(!checkExtension());
     ANGLE_SKIP_TEST_IF(!mSupportsPbuffers);
 
-    // Fails on NVIDIA Shield TV (http://anglebug.com/4924)
+    // Fails on NVIDIA Shield TV (http://anglebug.com/42263498)
     ANGLE_SKIP_TEST_IF(IsAndroid() && IsNVIDIA());
 
     EGLContext context = createContext();

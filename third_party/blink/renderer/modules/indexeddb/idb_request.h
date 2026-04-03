@@ -35,7 +35,6 @@
 
 #include "base/dcheck_is_on.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
 #include "third_party/blink/public/mojom/indexeddb/indexeddb.mojom-blink-forward.h"
@@ -60,8 +59,9 @@ class DOMException;
 class ExceptionState;
 class IDBCursor;
 class IDBValue;
-class V8UnionIDBCursorOrIDBIndexOrIDBObjectStore;
 class ScriptState;
+class V8IDBRequestReadyState;
+class V8UnionIDBCursorOrIDBIndexOrIDBObjectStore;
 
 class MODULES_EXPORT IDBRequest : public EventTarget,
                                   public ActiveScriptWrappable<IDBRequest>,
@@ -102,6 +102,8 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
     kObjectStoreOpenCursor,
     kObjectStoreOpenKeyCursor,
     kObjectStoreCount,
+    kObjectStoreGetAllRecords,
+    kIndexGetAllRecords,
   };
 
   // Container for async tracing state.
@@ -120,7 +122,7 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
   // to generating unique IDs in a threadsafe manner. The atomic machinery is
   // used when tracing is enabled. The recording problem is solved by having
   // instances of this class store the information needed to record async trace
-  // end events (via TRACE_EVENT_NESTABLE_ASYNC_END).
+  // end events.
   //
   // From a mechanical perspective, creating an AsyncTraceState instance records
   // the beginning event of an async trace. The instance is then moved into an
@@ -175,6 +177,11 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
     // The method results in the completion of the async trace tracked by this
     // instance, so the instance is cleared.
     void RecordAndReset();
+
+    // Records the trace end event and resets the instance, and also emits to
+    // histograms that are relevant to this request type. `success` is true when
+    // the dispatch result is not an error.
+    void WillDispatchResult(bool success);
 
    protected:  // For testing
     std::optional<TypeForMetrics> type() const { return type_; }
@@ -232,7 +239,7 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
   // Defined in the IDL
   enum ReadyState { PENDING = 1, DONE = 2, kEarlyDeath = 3 };
 
-  const String& readyState() const;
+  V8IDBRequestReadyState readyState() const;
 
   DEFINE_ATTRIBUTE_EVENT_LISTENER(success, kSuccess)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(error, kError)
@@ -291,9 +298,10 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
   void OnCount(bool success, uint32_t count);
   void OnPut(mojom::blink::IDBTransactionPutResultPtr result);
   void OnGet(mojom::blink::IDBDatabaseGetResultPtr result);
-  void OnGetAll(bool key_only,
-                mojo::PendingReceiver<mojom::blink::IDBDatabaseGetAllResultSink>
-                    receiver);
+  void OnGetAll(
+      mojom::blink::IDBGetAllResultType result_type,
+      mojo::PendingAssociatedReceiver<mojom::blink::IDBDatabaseGetAllResultSink>
+          receiver);
   void OnOpenCursor(mojom::blink::IDBDatabaseOpenCursorResultPtr result);
   void OnAdvanceCursor(mojom::blink::IDBCursorResultPtr result);
   void OnGotKeyGeneratorCurrentNumber(int64_t number,
@@ -316,21 +324,6 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
 
   IDBCursor* GetResultCursor() const;
 
-  // Used to hang onto Blobs until the browser process handles the request.
-  //
-  // Blobs are ref-counted on the browser side, and BlobDataHandles manage
-  // references from renderers. When a BlobDataHandle gets destroyed, the
-  // browser-side Blob gets derefenced, which might cause it to be destroyed as
-  // well.
-  //
-  // After script uses a Blob in a put() request, the Blink-side Blob object
-  // (which hangs onto the BlobDataHandle) may get garbage-collected. IDBRequest
-  // needs to hang onto the BlobDataHandle as well, to avoid having the
-  // browser-side Blob get destroyed before the IndexedDB request is processed.
-  inline Vector<scoped_refptr<BlobDataHandle>>& transit_blob_handles() {
-    return transit_blob_handles_;
-  }
-
 #if DCHECK_IS_ON()
   inline bool TransactionHasQueuedResults() const {
     return transaction_ && transaction_->HasQueuedResults();
@@ -341,10 +334,7 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
   inline IDBRequestQueueItem* QueueItem() const { return queue_item_; }
 #endif  // DCHECK_IS_ON()
 
-  void AssignNewMetrics(AsyncTraceState metrics) {
-    DCHECK(metrics_.IsEmpty());
-    metrics_ = std::move(metrics);
-  }
+  void AssignNewMetrics(AsyncTraceState metrics);
 
  protected:
   virtual bool CanStillSendResult() const;
@@ -366,7 +356,7 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
                                   // async onsuccess; ignore vs. assert.
   // Maintain the isolate so that all externally allocated memory can be
   // registered against it.
-  raw_ptr<v8::Isolate, ExperimentalRenderer> isolate_;
+  raw_ptr<v8::Isolate> isolate_;
 
   probe::AsyncTaskContext* async_task_context() { return &async_task_context_; }
 
@@ -419,8 +409,6 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
   std::unique_ptr<IDBKey> cursor_primary_key_;
   std::unique_ptr<IDBValue> cursor_value_;
 
-  Vector<scoped_refptr<BlobDataHandle>> transit_blob_handles_;
-
   bool did_fire_upgrade_needed_event_ = false;
   bool prevent_propagation_ = false;
   bool result_dirty_ = true;
@@ -429,7 +417,7 @@ class MODULES_EXPORT IDBRequest : public EventTarget,
   // getting post-processed.
   //
   // The IDBRequestQueueItem is owned by the result queue in IDBTransaction.
-  raw_ptr<IDBRequestQueueItem, ExperimentalRenderer> queue_item_ = nullptr;
+  raw_ptr<IDBRequestQueueItem> queue_item_ = nullptr;
 
   probe::AsyncTaskContext async_task_context_;
 };

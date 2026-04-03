@@ -19,7 +19,6 @@
 #include "platform/api/task_runner_deleter.h"
 #include "platform/base/error.h"
 #include "platform/base/ip_address.h"
-#include "util/serial_delete_ptr.h"
 
 namespace openscreen {
 
@@ -52,6 +51,9 @@ class CastService final : public discovery::ReportingClient {
     // The credentials that the cast service should use for TLS.
     GeneratedCredentials credentials;
 
+    // Device UUID
+    std::string device_uuid;
+
     // The friendly name to be used for broadcasting.
     std::string friendly_name;
 
@@ -60,20 +62,22 @@ class CastService final : public discovery::ReportingClient {
 
     // Whether we should broadcast over mDNS/DNS-SD.
     bool enable_discovery = true;
+
+    // Whether we should enable DSCP packet prioritization for UDP sockets.
+    bool enable_dscp = true;
   };
 
   explicit CastService(Configuration config);
   ~CastService() final;
 
  private:
-  using LazyDeletedDiscoveryService =
-      std::unique_ptr<discovery::DnsSdService, TaskRunnerDeleter>;
   using LazyDeletedDiscoveryPublisher =
-      SerialDeletePtr<discovery::DnsSdServicePublisher<ReceiverInfo>>;
+      std::unique_ptr<discovery::DnsSdServicePublisher<ReceiverInfo>,
+                      TaskRunnerDeleter>;
 
   // discovery::ReportingClient overrides.
-  void OnFatalError(Error error) final;
-  void OnRecoverableError(Error error) final;
+  void OnFatalError(const Error& error) final;
+  void OnRecoverableError(const Error& error) final;
 
   const IPEndpoint local_endpoint_;
   const GeneratedCredentials credentials_;
@@ -83,7 +87,7 @@ class CastService final : public discovery::ReportingClient {
   ReceiverSocketFactory socket_factory_;
   std::unique_ptr<TlsConnectionFactory> connection_factory_;
 
-  LazyDeletedDiscoveryService discovery_service_;
+  discovery::DnsSdServicePtr discovery_service_;
   LazyDeletedDiscoveryPublisher discovery_publisher_;
 };
 

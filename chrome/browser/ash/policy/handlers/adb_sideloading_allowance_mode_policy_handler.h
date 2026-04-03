@@ -12,7 +12,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ash/notifications/adb_sideloading_policy_change_notification.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/dbus/power_manager/idle.pb.h"
 
@@ -56,7 +56,7 @@ class AdbSideloadingAllowanceModePolicyHandler
       ash::CrosSettings* cros_settings,
       PrefService* local_state,
       chromeos::PowerManagerClient* power_manager_client,
-      ash::AdbSideloadingPolicyChangeNotification*
+      std::unique_ptr<ash::AdbSideloadingPolicyChangeNotification>
           adb_sideloading_policy_change_notification);
 
   // Not copyable or movable

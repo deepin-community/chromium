@@ -4,10 +4,6 @@
 
 #include "content/browser/sms/sms_queue.h"
 
-#include <optional>
-
-#include "base/functional/callback.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 
 namespace content {
@@ -26,32 +22,39 @@ SmsQueue::Subscriber* SmsQueue::Pop(const OriginList& origin_list) {
   auto it = subscribers_.find(origin_list);
   if (it == subscribers_.end())
     return nullptr;
-  base::ObserverList<Subscriber>& subscribers = it->second;
 
-  Subscriber& subscriber = *(subscribers.begin());
-  Remove(origin_list, &subscriber);
-  return &subscriber;
+  base::ObserverList<Subscriber>& queue = it->second;
+  Subscriber* subscriber = &*(queue.begin());
+  queue.RemoveObserver(subscriber);
+
+  if (queue.empty()) {
+    subscribers_.erase(it);
+  }
+
+  return subscriber;
 }
 
 void SmsQueue::Remove(const OriginList& origin_list, Subscriber* subscriber) {
   auto it = subscribers_.find(origin_list);
   if (it == subscribers_.end())
     return;
+
   base::ObserverList<Subscriber>& queue = it->second;
   queue.RemoveObserver(subscriber);
 
-  if (queue.begin() == queue.end())
+  if (queue.empty()) {
     subscribers_.erase(it);
+  }
 }
 
-bool SmsQueue::HasSubscribers() {
+bool SmsQueue::HasSubscribers() const {
   return !subscribers_.empty();
 }
 
 bool SmsQueue::HasSubscriber(const OriginList& origin_list,
-                             const Subscriber* subscriber) {
-  return (subscribers_.find(origin_list) != subscribers_.end()) &&
-         subscribers_[origin_list].HasObserver(subscriber);
+                             const Subscriber* subscriber) const {
+  auto it = subscribers_.find(origin_list);
+  return it != subscribers_.end() && it->second.HasObserver(subscriber);
 }
 
 // Currently we cannot extract the origin information upon failure because it's
@@ -63,8 +66,8 @@ bool SmsQueue::HasSubscriber(const OriginList& origin_list,
 // Similar to the success case, we only notify the first subscriber with that
 // origin.
 bool SmsQueue::NotifyFailure(FailureType failure_type) {
-  // TODO(crbug.com/1138454): We should improve the infrastructure to be able to
-  // handle failed requests when there are multiple pending origins
+  // TODO(crbug.com/40153007): We should improve the infrastructure to be able
+  // to handle failed requests when there are multiple pending origins
   // simultaneously.
   if (subscribers_.size() != 1)
     return false;

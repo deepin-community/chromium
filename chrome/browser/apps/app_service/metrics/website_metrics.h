@@ -18,8 +18,9 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_list_observer.h"
 #include "chrome/browser/ui/browser_tab_strip_tracker.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_service_observer.h"
@@ -54,7 +55,7 @@ extern const char kPromotableKey[];
 
 // WebsiteMetrics monitors creation/deletion of Browser and its
 // TabStripModel to record the website usage time metrics.
-class WebsiteMetrics : public BrowserListObserver,
+class WebsiteMetrics : public BrowserCollectionObserver,
                        public TabStripModelObserver,
                        public aura::WindowObserver,
                        public wm::ActivationChangeObserver,
@@ -103,8 +104,8 @@ class WebsiteMetrics : public BrowserListObserver,
 
   ~WebsiteMetrics() override;
 
-  // BrowserListObserver overrides:
-  void OnBrowserAdded(Browser* browser) override;
+  // BrowserCollectionObserver overrides:
+  void OnBrowserCreated(BrowserWindowInterface* browser) override;
 
   // TabStripModelObserver overrides:
   void OnTabStripModelChanged(
@@ -121,8 +122,8 @@ class WebsiteMetrics : public BrowserListObserver,
   void OnWindowDestroying(aura::Window* window) override;
 
   // history::HistoryServiceObserver:
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override;
   void HistoryServiceBeingDeleted(
       history::HistoryService* history_service) override;
 
@@ -186,13 +187,13 @@ class WebsiteMetrics : public BrowserListObserver,
     bool is_activated = false;
     bool promotable = false;
 
-    // Converts the struct UsageTime to base::Value::Dict, e.g.:
+    // Converts the struct UsageTime to base::DictValue, e.g.:
     // {
     //    "time": "3600",
     //    "url_content": "scope",
     //    "promotable": "false",
     // }
-    base::Value::Dict ConvertToDict() const;
+    base::DictValue ConvertToDict() const;
   };
 
   // Observes the root window's activation client for the OnWindowActivated
@@ -262,10 +263,14 @@ class WebsiteMetrics : public BrowserListObserver,
 
   const raw_ptr<Profile> profile_;
 
+  base::ScopedObservation<ProfileBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
+
   BrowserTabStripTracker browser_tab_strip_tracker_;
 
   // The map from the window to the active tab contents.
-  base::flat_map<aura::Window*, content::WebContents*> window_to_web_contents_;
+  base::flat_map<aura::Window*, raw_ptr<content::WebContents, CtnExperimental>>
+      window_to_web_contents_;
 
   // The map from the root window's activation client to windows.
   std::map<wm::ActivationClient*,

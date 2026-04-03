@@ -5,9 +5,9 @@
 #define REMOTING_HOST_IT2ME_IT2ME_NATIVE_MESSAGING_HOST_ASH_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include <optional>
 #include "base/sequence_checker.h"
 #include "base/thread_annotations.h"
 #include "base/values.h"
@@ -76,10 +76,10 @@ class It2MeNativeMessageHostAsh : public extensions::NativeMessageHost::Client {
   // Handlers for messages received from the wrapped native message host.
   void HandleConnectResponse();
   void HandleDisconnectResponse();
-  void HandleHostStateChangeMessage(base::Value::Dict message);
-  void HandleNatPolicyChangedMessage(base::Value::Dict message);
-  void HandlePolicyErrorMessage(base::Value::Dict message);
-  void HandleErrorMessage(base::Value::Dict message);
+  void HandleHostStateChangeMessage(base::DictValue message);
+  void HandleNatPolicyChangedMessage(base::DictValue message);
+  void HandlePolicyErrorMessage(base::DictValue message);
+  void HandleErrorMessage(base::DictValue message);
 
   SEQUENCE_CHECKER(sequence_checker_);
 

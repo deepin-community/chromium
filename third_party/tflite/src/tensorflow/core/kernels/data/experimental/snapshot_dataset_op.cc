@@ -15,6 +15,8 @@ limitations under the License.
 #include "tensorflow/core/kernels/data/experimental/snapshot_dataset_op.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <random>
@@ -22,15 +24,27 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/strings/numbers.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
 #include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "tensorflow/core/data/hash_utils.h"
 #include "tensorflow/core/data/serialization_utils.h"
 #include "tensorflow/core/data/snapshot_utils.h"
+#include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/dataset.h"
+#include "tensorflow/core/framework/dataset_options.pb.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/stats_aggregator.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor.pb.h"  // NOLINT
+#include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/lib/core/coding.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/core/raw_coding.h"
@@ -99,7 +113,7 @@ namespace experimental {
 
 class SnapshotDatasetV2Op::Dataset : public DatasetBase {
  public:
-  Dataset(OpKernelContext* ctx, const DatasetBase* input, uint64 hash,
+  Dataset(OpKernelContext* ctx, const DatasetBase* input, uint64_t hash,
           const std::string& path, const std::string& compression,
           const std::string& reader_prefix, const std::string& writer_prefix,
           std::unique_ptr<CapturedFunction> reader_func,
@@ -119,13 +133,13 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
   ~Dataset() override { input_->Unref(); }
 
   std::unique_ptr<IteratorBase> MakeIteratorInternal(
-      const string& prefix) const override {
+      const std::string& prefix) const override {
     return std::make_unique<Iterator>(
         Iterator::Params{this, absl::StrCat(prefix, "::Snapshot")});
   }
 
-  Status MakeSplitProviders(std::vector<std::unique_ptr<SplitProvider>>*
-                                split_providers) const override {
+  absl::Status MakeSplitProviders(std::vector<std::unique_ptr<SplitProvider>>*
+                                      split_providers) const override {
     return errors::Unimplemented(
         "Splitting is not implemented for snapshot datasets.");
   }
@@ -138,7 +152,7 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
     return input_->output_shapes();
   }
 
-  string DebugString() const override {
+  std::string DebugString() const override {
     return name_utils::DatasetDebugString(kDatasetType);
   }
 
@@ -146,19 +160,20 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
     return input_->Cardinality();
   }
 
-  Status InputDatasets(std::vector<const DatasetBase*>* inputs) const override {
+  absl::Status InputDatasets(
+      std::vector<const DatasetBase*>* inputs) const override {
     inputs->push_back(input_);
     return absl::OkStatus();
   }
 
-  Status CheckExternalState() const override {
+  absl::Status CheckExternalState() const override {
     return input_->CheckExternalState();
   }
 
  protected:
-  Status AsGraphDefInternal(SerializationContext* ctx,
-                            DatasetGraphDefBuilder* b,
-                            Node** output) const override {
+  absl::Status AsGraphDefInternal(SerializationContext* ctx,
+                                  DatasetGraphDefBuilder* b,
+                                  Node** output) const override {
     Node* input_graph_node = nullptr;
     TF_RETURN_IF_ERROR(b->AddInputDataset(ctx, input_, &input_graph_node));
 
@@ -226,7 +241,7 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
 
  private:
   const DatasetBase* input_;
-  const uint64 hash_;
+  const uint64_t hash_;
   const tstring path_;
   const std::string compression_;
   const std::string reader_prefix_;
@@ -242,7 +257,7 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
     Reader(const Params& params, int64_t start_index)
         : DatasetIterator<Dataset>(params), start_index_(start_index) {}
 
-    Status Initialize(IteratorContext* ctx) override {
+    absl::Status Initialize(IteratorContext* ctx) override {
       mutex_lock l(mu_);
 
       TF_RETURN_IF_ERROR(dataset()->reader_func_->Instantiate(
@@ -261,7 +276,7 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
       std::vector<std::string> snapshot_shard_dirs;
       TF_RETURN_IF_ERROR(ctx->env()->GetMatchingPaths(
           io::JoinPath(run_dir,
-                       strings::Printf("%s%s", "*",
+                       absl::StrFormat("%s%s", "*",
                                        snapshot_util::kShardDirectorySuffix)),
           &snapshot_shard_dirs));
       std::sort(snapshot_shard_dirs.begin(), snapshot_shard_dirs.end());
@@ -293,24 +308,24 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
       return input_->MakeIterator(ctx, this, prefix(), &input_impl_);
     }
 
-    Status GetNextInternal(IteratorContext* ctx,
-                           std::vector<Tensor>* out_tensors,
-                           bool* end_of_sequence) override {
+    absl::Status GetNextInternal(IteratorContext* ctx,
+                                 std::vector<Tensor>* out_tensors,
+                                 bool* end_of_sequence) override {
       mutex_lock l(mu_);
       return input_impl_->GetNext(ctx, out_tensors, end_of_sequence);
     }
 
    protected:
-    Status SaveInternal(SerializationContext* ctx,
-                        IteratorStateWriter* writer) override {
+    absl::Status SaveInternal(SerializationContext* ctx,
+                              IteratorStateWriter* writer) override {
       // We do not need to checkpoint the reader as we are rebuilding the
       // reader datasets from information that is already saved by the main
       // iterator.
       return absl::OkStatus();
     }
 
-    Status RestoreInternal(IteratorContext* ctx,
-                           IteratorStateReader* reader) override {
+    absl::Status RestoreInternal(IteratorContext* ctx,
+                                 IteratorStateReader* reader) override {
       return absl::OkStatus();
     }
 
@@ -345,19 +360,18 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
       SignalEOF(true);
     }
 
-    Status Initialize(IteratorContext* ctx) override {
+    absl::Status Initialize(IteratorContext* ctx) override {
       mutex_lock l(mu_);
       TF_RETURN_IF_ERROR(
           dataset()->shard_func_->Instantiate(ctx, &instantiated_shard_func_));
 
       return dataset()->input_->MakeIterator(
-          ctx, this, strings::StrCat(prefix(), "::WriterIterator"),
-          &input_impl_);
+          ctx, this, absl::StrCat(prefix(), "::WriterIterator"), &input_impl_);
     }
 
-    Status GetNextInternal(IteratorContext* ctx,
-                           std::vector<Tensor>* out_tensors,
-                           bool* end_of_sequence) override {
+    absl::Status GetNextInternal(IteratorContext* ctx,
+                                 std::vector<Tensor>* out_tensors,
+                                 bool* end_of_sequence) override {
       *end_of_sequence = false;
       snapshot_util::AsyncWriter* current_writer;
 
@@ -416,7 +430,8 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
           auto writer = std::make_unique<snapshot_util::AsyncWriter>(
               ctx->env(), shard_index, snapshot_shard_directory,
               current_checkpoint_id_, dataset()->compression_,
-              kFileFormatVersion, dataset()->output_dtypes(), [this](Status s) {
+              kFileFormatVersion, dataset()->output_dtypes(),
+              [this](absl::Status s) {
                 if (!s.ok()) {
                   LOG(ERROR) << "AsyncWriter in snapshot writer failed: " << s;
                   mutex_lock l(writer_status_mu_);
@@ -433,8 +448,8 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
     }
 
    protected:
-    Status SaveInternal(SerializationContext* ctx,
-                        IteratorStateWriter* writer) override {
+    absl::Status SaveInternal(SerializationContext* ctx,
+                              IteratorStateWriter* writer) override {
       mutex_lock l(mu_);
       TF_RETURN_IF_ERROR(writer->WriteScalar(full_name(kRunId),
                                              static_cast<int64_t>(run_id_)));
@@ -447,8 +462,8 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
       return SaveInput(ctx, writer, input_impl_);
     }
 
-    Status RestoreInternal(IteratorContext* ctx,
-                           IteratorStateReader* reader) override {
+    absl::Status RestoreInternal(IteratorContext* ctx,
+                                 IteratorStateReader* reader) override {
       mutex_lock l(mu_);
       int64_t run_id_signed;
       int64_t current_checkpoint_id;
@@ -457,21 +472,21 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
       TF_RETURN_IF_ERROR(reader->ReadScalar(full_name(kCurrentCheckpointId),
                                             &current_checkpoint_id));
 
-      run_id_ = static_cast<uint64>(run_id_signed);
+      run_id_ = static_cast<uint64_t>(run_id_signed);
       run_dir_ = snapshot_util::RunDirectory(
           snapshot_util::HashDirectory(
               io::JoinPath(dataset()->writer_prefix_, dataset()->path_),
               dataset()->hash_),
           run_id_);
-      current_checkpoint_id_ = static_cast<uint64>(current_checkpoint_id);
+      current_checkpoint_id_ = static_cast<uint64_t>(current_checkpoint_id);
 
       return RestoreInput(ctx, reader, input_impl_);
     }
 
    private:
-    Status GetShardIndex(IteratorContext* ctx,
-                         const std::vector<Tensor>& tensors,
-                         int64_t* shard_index)
+    absl::Status GetShardIndex(IteratorContext* ctx,
+                               const std::vector<Tensor>& tensors,
+                               int64_t* shard_index)
         TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
       std::vector<Tensor> output_tensors;
 
@@ -491,14 +506,14 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
       return absl::OkStatus();
     }
 
-    Status WriteMetadataFile(Env* env, bool finalized)
+    absl::Status WriteMetadataFile(Env* env, bool finalized)
         TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
       DCHECK(!run_dir_.empty());
 
       experimental::SnapshotMetadataRecord metadata;
       metadata.set_creation_timestamp(EnvTime::NowMicros());
-      metadata.set_graph_hash(strings::StrCat(dataset()->hash_));
-      metadata.set_run_id(strings::StrCat(run_id_));
+      metadata.set_graph_hash(absl::StrCat(dataset()->hash_));
+      metadata.set_run_id(absl::StrCat(run_id_));
       metadata.set_version(kFileFormatVersion);
       for (const auto& output_dtype : dataset()->output_dtypes()) {
         metadata.add_dtype(output_dtype);
@@ -530,15 +545,15 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
 
     absl::flat_hash_map<int64_t, std::unique_ptr<snapshot_util::AsyncWriter>>
         writers_ TF_GUARDED_BY(mu_);
-    Status writer_status_ TF_GUARDED_BY(writer_status_mu_);
+    absl::Status writer_status_ TF_GUARDED_BY(writer_status_mu_);
     bool writers_closed_ TF_GUARDED_BY(mu_);
 
-    uint64 run_id_ TF_GUARDED_BY(mu_);
+    uint64_t run_id_ TF_GUARDED_BY(mu_);
     tstring run_dir_ TF_GUARDED_BY(mu_);
 
     // Stores the ID of the current checkpoint .snapshot file being read. See
     // top of this file for the directory layout.
-    uint64 current_checkpoint_id_ TF_GUARDED_BY(mu_);
+    uint64_t current_checkpoint_id_ TF_GUARDED_BY(mu_);
 
     std::unique_ptr<InstantiatedCapturedFunction> instantiated_shard_func_
         TF_GUARDED_BY(mu_);
@@ -551,24 +566,24 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
     explicit Passthrough(const Params& params)
         : DatasetIterator<Dataset>(params) {}
 
-    Status Initialize(IteratorContext* ctx) override {
+    absl::Status Initialize(IteratorContext* ctx) override {
       return dataset()->input_->MakeIterator(ctx, this, prefix(), &input_impl_);
     }
 
-    Status GetNextInternal(IteratorContext* ctx,
-                           std::vector<Tensor>* out_tensors,
-                           bool* end_of_sequence) override {
+    absl::Status GetNextInternal(IteratorContext* ctx,
+                                 std::vector<Tensor>* out_tensors,
+                                 bool* end_of_sequence) override {
       return input_impl_->GetNext(ctx, out_tensors, end_of_sequence);
     }
 
    protected:
-    Status SaveInternal(SerializationContext* ctx,
-                        IteratorStateWriter* writer) override {
+    absl::Status SaveInternal(SerializationContext* ctx,
+                              IteratorStateWriter* writer) override {
       return SaveInput(ctx, writer, input_impl_);
     }
 
-    Status RestoreInternal(IteratorContext* ctx,
-                           IteratorStateReader* reader) override {
+    absl::Status RestoreInternal(IteratorContext* ctx,
+                                 IteratorStateReader* reader) override {
       return RestoreInput(ctx, reader, input_impl_);
     }
 
@@ -589,17 +604,17 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
           hash_dir_(snapshot_util::HashDirectory(dataset()->path_,
                                                  dataset()->hash_)) {}
 
-    Status Initialize(IteratorContext* ctx) override {
+    absl::Status Initialize(IteratorContext* ctx) override {
       return ctx->env()->RecursivelyCreateDir(
           io::JoinPath(dataset()->writer_prefix_, hash_dir_));
     }
 
-    Status GetNextInternal(IteratorContext* ctx,
-                           std::vector<Tensor>* out_tensors,
-                           bool* end_of_sequence) override {
+    absl::Status GetNextInternal(IteratorContext* ctx,
+                                 std::vector<Tensor>* out_tensors,
+                                 bool* end_of_sequence) override {
       mutex_lock l(mu_);
       if (iterator_ == nullptr) {
-        Status s = InitializeIterator(ctx, /*reader=*/nullptr);
+        absl::Status s = InitializeIterator(ctx, /*reader=*/nullptr);
         if (!s.ok()) {
           iterator_.reset();
           return s;
@@ -610,8 +625,8 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
     }
 
    protected:
-    Status SaveInternal(SerializationContext* ctx,
-                        IteratorStateWriter* writer) override {
+    absl::Status SaveInternal(SerializationContext* ctx,
+                              IteratorStateWriter* writer) override {
       mutex_lock l(mu_);
       if (iterator_ != nullptr) {
         TF_RETURN_IF_ERROR(SaveInput(ctx, writer, iterator_));
@@ -624,8 +639,8 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
       return absl::OkStatus();
     }
 
-    Status RestoreInternal(IteratorContext* ctx,
-                           IteratorStateReader* reader) override {
+    absl::Status RestoreInternal(IteratorContext* ctx,
+                                 IteratorStateReader* reader) override {
       mutex_lock l(mu_);
       if (reader->Contains(full_name(kIteratorMode))) {
         TF_RETURN_IF_ERROR(InitializeIterator(ctx, reader));
@@ -635,7 +650,8 @@ class SnapshotDatasetV2Op::Dataset : public DatasetBase {
     }
 
    private:
-    Status InitializeIterator(IteratorContext* ctx, IteratorStateReader* reader)
+    absl::Status InitializeIterator(IteratorContext* ctx,
+                                    IteratorStateReader* reader)
         TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
       if (reader != nullptr) {
         // Check whether the computed hash directory is the same.
@@ -731,7 +747,7 @@ SnapshotDatasetV2Op::SnapshotDatasetV2Op(OpKernelConstruction* ctx)
   OP_REQUIRES_OK(ctx, ctx->GetAttr(kHashValid, &hash_valid_));
   int64_t hash;
   OP_REQUIRES_OK(ctx, ctx->GetAttr(kHash, &hash));
-  hash_ = static_cast<uint64>(hash);
+  hash_ = static_cast<uint64_t>(hash);
 
   OP_REQUIRES_OK(ctx, FunctionMetadata::Create(ctx, kReaderFunc, reader_params,
                                                &reader_func_metadata_));
@@ -747,14 +763,14 @@ void SnapshotDatasetV2Op::MakeDataset(OpKernelContext* ctx, DatasetBase* input,
   std::string compression = compression_ == kCompressionAuto
                                 ? io::compression::kSnappy
                                 : compression_;
-  uint64 hash;
+  uint64_t hash;
   if (hash_valid_) {
     hash = hash_;
   } else {
     // Computes the hash of the preceding items in the graph.
     GraphDef graph_def;
     SerializationContext::Params params(ctx);
-    std::vector<std::pair<string, Tensor>> input_list;
+    std::vector<std::pair<std::string, Tensor>> input_list;
     params.input_list = &input_list;
     params.external_state_policy = ExternalStatePolicy::POLICY_IGNORE;
     OP_REQUIRES_OK(ctx,
@@ -904,7 +920,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
     OP_REQUIRES_OK(ctx, ParseScalarArgument(ctx, "path", &path));
 
     SerializationContext::Params params(ctx);
-    std::vector<std::pair<string, Tensor>> input_list;
+    std::vector<std::pair<std::string, Tensor>> input_list;
     params.input_list = &input_list;
     params.external_state_policy = ExternalStatePolicy::POLICY_IGNORE;
 
@@ -912,18 +928,17 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
     OP_REQUIRES_OK(ctx,
                    AsGraphDef(input, SerializationContext(params), &graph_def));
 
-    uint64 hash;
+    uint64_t hash;
     OP_REQUIRES_OK(ctx, ComputeDatasetHash(graph_def, path, &hash));
 
-    Status dump_status =
+    absl::Status dump_status =
         snapshot_util::DumpDatasetGraph(ctx->env(), path, hash, &graph_def);
     if (!dump_status.ok()) {
       LOG(WARNING) << "Unable to write graphdef to disk, error: "
-                   << dump_status.ToString();
+                   << dump_status;
     }
 
-    std::string graph_hash =
-        strings::StrCat(strings::Hex(hash, strings::kZeroPad16));
+    std::string graph_hash = absl::StrCat(absl::Hex(hash, absl::kZeroPad16));
     LOG(INFO) << "Graph def serialized to hash: " << graph_hash;
 
     *output = new Dataset(ctx, input, path, graph_hash, reader_path_prefix_,
@@ -937,15 +952,18 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
  private:
   class Dataset : public DatasetBase {
    public:
-    Dataset(OpKernelContext* ctx, const DatasetBase* input, const string& path,
-            const string& graph_hash, const string& reader_path_prefix,
-            const string& writer_path_prefix, const string& compression,
-            const uint64 shard_size_bytes,
-            const uint64 pending_snapshot_expiry_seconds,
-            const uint64 num_reader_threads, const uint64 reader_buffer_size,
-            const uint64 num_writer_threads, const uint64 writer_buffer_size,
-            const bool shuffle_on_read, const uint64 seed, const uint64 seed2,
-            const std::string& mode, const std::string& snapshot_name)
+    Dataset(OpKernelContext* ctx, const DatasetBase* input,
+            const std::string& path, const std::string& graph_hash,
+            const std::string& reader_path_prefix,
+            const std::string& writer_path_prefix,
+            const std::string& compression, const uint64_t shard_size_bytes,
+            const uint64_t pending_snapshot_expiry_seconds,
+            const uint64_t num_reader_threads,
+            const uint64_t reader_buffer_size,
+            const uint64_t num_writer_threads,
+            const uint64_t writer_buffer_size, const bool shuffle_on_read,
+            const uint64_t seed, const uint64_t seed2, const std::string& mode,
+            const std::string& snapshot_name)
         : DatasetBase(DatasetContext(ctx)),
           input_(input),
           dir_(path),
@@ -970,13 +988,13 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
     ~Dataset() override { input_->Unref(); }
 
     std::unique_ptr<IteratorBase> MakeIteratorInternal(
-        const string& prefix) const override {
+        const std::string& prefix) const override {
       return std::make_unique<Iterator>(
           Iterator::Params{this, absl::StrCat(prefix, "::Snapshot")});
     }
 
-    Status MakeSplitProviders(std::vector<std::unique_ptr<SplitProvider>>*
-                                  split_providers) const override {
+    absl::Status MakeSplitProviders(std::vector<std::unique_ptr<SplitProvider>>*
+                                        split_providers) const override {
       return errors::Unimplemented(
           "Splitting is not implemented for snapshot datasets.");
     }
@@ -989,26 +1007,28 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
       return input_->output_shapes();
     }
 
-    string DebugString() const override { return "SnapshotDatasetOp::Dataset"; }
+    std::string DebugString() const override {
+      return "SnapshotDatasetOp::Dataset";
+    }
 
     int64_t CardinalityInternal(CardinalityOptions options) const override {
       return input_->Cardinality(options);
     }
 
-    Status InputDatasets(
+    absl::Status InputDatasets(
         std::vector<const DatasetBase*>* inputs) const override {
       inputs->push_back(input_);
       return absl::OkStatus();
     }
 
-    Status CheckExternalState() const override {
+    absl::Status CheckExternalState() const override {
       return input_->CheckExternalState();
     }
 
    protected:
-    Status AsGraphDefInternal(SerializationContext* ctx,
-                              DatasetGraphDefBuilder* b,
-                              Node** output) const override {
+    absl::Status AsGraphDefInternal(SerializationContext* ctx,
+                                    DatasetGraphDefBuilder* b,
+                                    Node** output) const override {
       Node* input_graph_node = nullptr;
       TF_RETURN_IF_ERROR(b->AddInputDataset(ctx, input_, &input_graph_node));
 
@@ -1092,9 +1112,9 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
         if (dataset()->snapshot_name_.empty()) {
           hash_dir_ = io::JoinPath(dataset()->dir_, dataset()->graph_hash_);
         } else {
-          hash_dir_ = io::JoinPath(
-              dataset()->dir_,
-              strings::StrCat("custom-", dataset()->snapshot_name_));
+          hash_dir_ =
+              io::JoinPath(dataset()->dir_,
+                           absl::StrCat("custom-", dataset()->snapshot_name_));
         }
       }
 
@@ -1106,13 +1126,13 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
       // Initialize at first and at that point we don't know which iterator
       // (Reader / Writer / Passthrough) we need to restore as this info is part
       // of the checkpoint.
-      Status Initialize(IteratorContext* ctx) override {
+      absl::Status Initialize(IteratorContext* ctx) override {
         return absl::OkStatus();
       }
 
-      Status GetNextInternal(IteratorContext* ctx,
-                             std::vector<Tensor>* out_tensors,
-                             bool* end_of_sequence) override {
+      absl::Status GetNextInternal(IteratorContext* ctx,
+                                   std::vector<Tensor>* out_tensors,
+                                   bool* end_of_sequence) override {
         mutex_lock l(mu_);
         if (iterator_ == nullptr) {
           experimental::SnapshotMetadataRecord metadata;
@@ -1129,8 +1149,8 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
       }
 
      protected:
-      Status SaveInternal(SerializationContext* ctx,
-                          IteratorStateWriter* writer) override {
+      absl::Status SaveInternal(SerializationContext* ctx,
+                                IteratorStateWriter* writer) override {
         mutex_lock l(mu_);
         if (iterator_ != nullptr) {
           TF_RETURN_IF_ERROR(SaveInput(ctx, writer, iterator_));
@@ -1142,8 +1162,8 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
         return absl::OkStatus();
       }
 
-      Status RestoreInternal(IteratorContext* ctx,
-                             IteratorStateReader* reader) override {
+      absl::Status RestoreInternal(IteratorContext* ctx,
+                                   IteratorStateReader* reader) override {
         mutex_lock l(mu_);
         tstring hash_dir;
         TF_RETURN_IF_ERROR(reader->ReadScalar(full_name(kHashDir), &hash_dir));
@@ -1167,7 +1187,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
 
       // This method expects that state_ is populated and it will create the
       // correct Reader / Writer / Passthrough iterator and initialize it.
-      Status InitializeIterator(
+      absl::Status InitializeIterator(
           IteratorContext* ctx,
           const experimental::SnapshotMetadataRecord& metadata)
           TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
@@ -1229,8 +1249,9 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
         static constexpr const char* const kParse = "Parse";
 
         explicit SnapshotReaderIterator(const Params& params,
-                                        const string& hash_dir,
-                                        const string& run_id, int64_t version)
+                                        const std::string& hash_dir,
+                                        const std::string& run_id,
+                                        int64_t version)
             : DatasetIterator<Dataset>(params),
               hash_dir_(hash_dir),
               run_id_(run_id),
@@ -1245,7 +1266,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           }
         }
 
-        Status Initialize(IteratorContext* ctx) override {
+        absl::Status Initialize(IteratorContext* ctx) override {
           mutex_lock l(mu_);
           thread_pool_ = ctx->CreateThreadPool(kSnapshotReaderWorkerPool,
                                                dataset()->num_reader_threads_);
@@ -1263,7 +1284,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           }
 
           if (dataset()->shuffle_on_read_) {
-            uint64 seed = dataset()->seed_ + dataset()->seed2_;
+            uint64_t seed = dataset()->seed_ + dataset()->seed2_;
             if (dataset()->seed_ == 0 && dataset()->seed2_ == 0) {
               seed = random::New64();
             }
@@ -1280,9 +1301,9 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           return absl::OkStatus();
         }
 
-        Status GetNextInternal(IteratorContext* ctx,
-                               std::vector<Tensor>* out_tensors,
-                               bool* end_of_sequence) override {
+        absl::Status GetNextInternal(IteratorContext* ctx,
+                                     std::vector<Tensor>* out_tensors,
+                                     bool* end_of_sequence) override {
           absl::Time start = absl::Now();
           mutex_lock l(mu_);
           if (!background_threads_started_) {
@@ -1318,17 +1339,17 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           }
 
           if (!buffer_.empty()) {
-            Status s = buffer_.front().status;
+            absl::Status s = buffer_.front().status;
             if (s.ok()) {
               *end_of_sequence = false;
               *out_tensors = std::move(buffer_.front().value);
 
               {
-                profiler::TraceMe activity(
+                tsl::profiler::TraceMe activity(
                     [&]() {
                       return absl::StrCat(prefix(), kSeparator, kBookkeeping);
                     },
-                    profiler::TraceMeLevel::kInfo);
+                    tsl::profiler::TraceMeLevel::kInfo);
                 // Printing some statistics along the way.
                 int64_t num_bytes = 0;
                 for (int i = 0; i < out_tensors->size(); ++i) {
@@ -1367,8 +1388,8 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
         }
 
        protected:
-        Status SaveInternal(SerializationContext* ctx,
-                            IteratorStateWriter* writer) override {
+        absl::Status SaveInternal(SerializationContext* ctx,
+                                  IteratorStateWriter* writer) override {
           mutex_lock l(mu_);
           TF_RETURN_IF_ERROR(
               writer->WriteScalar(full_name(kHashDir), hash_dir_));
@@ -1377,16 +1398,16 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           TF_RETURN_IF_ERROR(
               writer->WriteScalar(full_name(kVersionStr), version_));
           TF_RETURN_IF_ERROR(writer->WriteScalar(
-              full_name(strings::StrCat(kFilenames, kSizeSuffix)),
+              full_name(absl::StrCat(kFilenames, kSizeSuffix)),
               filenames_.size()));
           for (size_t i = 0; i < filenames_.size(); ++i) {
             TF_RETURN_IF_ERROR(writer->WriteScalar(
-                full_name(strings::StrCat(kFilenames, "[", i, "]")),
+                full_name(absl::StrCat(kFilenames, "[", i, "]")),
                 filenames_[i]));
           }
           for (auto i = 0; i < dataset()->num_reader_threads_; ++i) {
             TF_RETURN_IF_ERROR(writer->WriteScalar(
-                full_name(strings::StrCat(kCurrentFilenames, "[", i, "]")),
+                full_name(absl::StrCat(kCurrentFilenames, "[", i, "]")),
                 curr_filenames_[i]));
           }
           TF_RETURN_IF_ERROR(writer->WriteScalar(full_name(kElementsProduced),
@@ -1402,8 +1423,8 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           return absl::OkStatus();
         }
 
-        Status RestoreInternal(IteratorContext* ctx,
-                               IteratorStateReader* reader) override {
+        absl::Status RestoreInternal(IteratorContext* ctx,
+                                     IteratorStateReader* reader) override {
           mutex_lock l(mu_);
           tstring hash_dir, run_id, run_dir;
           TF_RETURN_IF_ERROR(
@@ -1426,14 +1447,14 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           for (auto i = 0; i < dataset()->num_reader_threads_; ++i) {
             curr_filenames_.emplace_back();
             TF_RETURN_IF_ERROR(reader->ReadScalar(
-                full_name(strings::StrCat(kCurrentFilenames, "[", i, "]")),
+                full_name(absl::StrCat(kCurrentFilenames, "[", i, "]")),
                 &curr_filenames_.back()));
           }
           size_t filenames_size;
           {
             int64_t temp;
             TF_RETURN_IF_ERROR(reader->ReadScalar(
-                full_name(strings::StrCat(kFilenames, kSizeSuffix)), &temp));
+                full_name(absl::StrCat(kFilenames, kSizeSuffix)), &temp));
             filenames_size = static_cast<size_t>(temp);
           }
           if (filenames_.size() != filenames_size) {
@@ -1445,20 +1466,20 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           for (size_t i = 0; i < filenames_size; ++i) {
             filenames_.emplace_back();
             TF_RETURN_IF_ERROR(reader->ReadScalar(
-                full_name(strings::StrCat(kFilenames, "[", i, "]")),
+                full_name(absl::StrCat(kFilenames, "[", i, "]")),
                 &filenames_.back()));
           }
           {
             int64_t temp;
             TF_RETURN_IF_ERROR(
                 reader->ReadScalar(full_name(kElementsProduced), &temp));
-            elements_produced_ = static_cast<uint64>(temp);
+            elements_produced_ = static_cast<uint64_t>(temp);
           }
           {
             int64_t temp;
             TF_RETURN_IF_ERROR(
                 reader->ReadScalar(full_name(kNextFileIndex), &temp));
-            next_file_index_ = static_cast<uint64>(temp);
+            next_file_index_ = static_cast<uint64_t>(temp);
           }
           TF_RETURN_IF_ERROR(
               reader->ReadScalar(full_name(kNumFilesDone), &num_files_done_));
@@ -1471,7 +1492,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
 
        private:
         // Reads one file end to end.
-        Status ReadFile(Env* env, const string& filename) {
+        absl::Status ReadFile(Env* env, const std::string& filename) {
           std::unique_ptr<snapshot_util::Reader> reader;
           TF_RETURN_IF_ERROR(snapshot_util::Reader::Create(
               env, filename, dataset()->compression_, version_,
@@ -1492,11 +1513,11 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
               }
             }
             std::vector<Tensor> read_tensors;
-            Status s = reader->ReadTensors(&read_tensors);
+            absl::Status s = reader->ReadTensors(&read_tensors);
             if (s.ok()) {
-              profiler::TraceMe activity(
+              tsl::profiler::TraceMe activity(
                   [&]() { return absl::StrCat(prefix(), kSeparator, kParse); },
-                  profiler::TraceMeLevel::kInfo);
+                  tsl::profiler::TraceMeLevel::kInfo);
               BufferElement elem;
               elem.value = std::move(read_tensors);
               elem.status = absl::OkStatus();
@@ -1504,7 +1525,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
               buffer_.push_back(std::move(elem));
               num_elements_read_++;
               cond_var_.notify_all();
-            } else if (errors::IsOutOfRange(s)) {
+            } else if (absl::IsOutOfRange(s)) {
               return absl::OkStatus();
             } else {
               return s;
@@ -1513,12 +1534,12 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           return absl::OkStatus();
         }
 
-        string GetNextFilename() TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+        std::string GetNextFilename() TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
           if (next_file_index_ >= filenames_.size()) {
             return "";
           }
-          string filename = io::JoinPath(dataset()->reader_path_prefix_,
-                                         filenames_[next_file_index_]);
+          std::string filename = io::JoinPath(dataset()->reader_path_prefix_,
+                                              filenames_[next_file_index_]);
           next_file_index_++;
           return filename;
         }
@@ -1532,7 +1553,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
             cond_var_.notify_all();
           });
           while (true) {
-            string filename = "";
+            std::string filename = "";
             {
               mutex_lock l(mu_);
               filename = curr_filenames_[i];
@@ -1541,7 +1562,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
               }
               VLOG(2) << "Starting to read: " << filename;
             }
-            Status s = ReadFile(env, filename);
+            absl::Status s = ReadFile(env, filename);
             // If we get to the end of the file, it's a clean termination and
             // we are at the end of the file. If all files have been processed,
             // then we insert an end_of_sequence marker in the buffer and
@@ -1557,7 +1578,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
               }
               curr_filenames_[i] = GetNextFilename();
             } else {
-              LOG(ERROR) << "Encountered an error: " << s.ToString();
+              LOG(ERROR) << "Encountered an error: " << s;
               BufferElement elem;
               elem.status = s;
               mutex_lock l(mu_);
@@ -1568,8 +1589,8 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           }
         }
 
-        Status WriteStatus(IteratorStateWriter* writer, size_t index,
-                           const Status& status)
+        absl::Status WriteStatus(IteratorStateWriter* writer, size_t index,
+                                 const absl::Status& status)
             TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
           TF_RETURN_IF_ERROR(writer->WriteScalar(
               CodeKey(index), static_cast<int64_t>(status.code())));
@@ -1580,8 +1601,9 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           return absl::OkStatus();
         }
 
-        Status ReadStatus(IteratorStateReader* reader, size_t index,
-                          Status* status) TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+        absl::Status ReadStatus(IteratorStateReader* reader, size_t index,
+                                absl::Status* status)
+            TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
           int64_t code_int;
           TF_RETURN_IF_ERROR(reader->ReadScalar(CodeKey(index), &code_int));
           absl::StatusCode code = static_cast<absl::StatusCode>(code_int);
@@ -1590,37 +1612,37 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
             tstring error_message;
             TF_RETURN_IF_ERROR(
                 reader->ReadScalar(ErrorMessageKey(index), &error_message));
-            *status = Status(code, error_message);
+            *status = absl::Status(code, error_message);
           } else {
             *status = absl::OkStatus();
           }
           return absl::OkStatus();
         }
 
-        string CodeKey(size_t index) {
+        std::string CodeKey(size_t index) {
           return full_name(strings::StrCat(kStatus, "[", index, "]", kCode));
         }
 
-        string ErrorMessageKey(size_t index) {
+        std::string ErrorMessageKey(size_t index) {
           return full_name(
               strings::StrCat(kStatus, "[", index, "]", kErrorMessage));
         }
 
         struct BufferElement {
-          Status status;
+          absl::Status status;
           std::vector<Tensor> value;
         };
 
         mutex mu_;
         condition_variable cond_var_;
 
-        const string hash_dir_;
+        const std::string hash_dir_;
         tstring run_id_ TF_GUARDED_BY(mu_);
         tstring run_dir_ TF_GUARDED_BY(mu_);
         int64_t version_;
         std::vector<tstring> filenames_;
 
-        uint64 elements_produced_ TF_GUARDED_BY(mu_) = 0;
+        uint64_t elements_produced_ TF_GUARDED_BY(mu_) = 0;
         int64_t time_spent_micros_ TF_GUARDED_BY(mu_) = 0;
         double kbytes_read_ TF_GUARDED_BY(mu_) = 0;
         size_t next_file_index_ TF_GUARDED_BY(mu_) = 0;
@@ -1643,14 +1665,13 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
             "ProcessOneElement";
 
         explicit SnapshotWriterIterator(const Params& params,
-                                        const string& hash_dir,
-                                        const string& run_id)
+                                        const std::string& hash_dir,
+                                        const std::string& run_id)
             : DatasetIterator<Dataset>(params),
               hash_dir_(hash_dir),
               run_id_(run_id) {
           if (run_id_.empty()) {
-            run_id_ = strings::StrCat(
-                strings::Hex(random::New64(), strings::kZeroPad4));
+            run_id_ = absl::StrCat(absl::Hex(random::New64(), absl::kZeroPad4));
           }
           run_dir_ =
               io::JoinPath(dataset()->writer_path_prefix_, hash_dir_, run_id_);
@@ -1665,16 +1686,16 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           }
         }
 
-        Status Initialize(IteratorContext* ctx) override {
+        absl::Status Initialize(IteratorContext* ctx) override {
           thread_pool_ = ctx->CreateThreadPool(kSnapshotWriterWorkerPool,
                                                dataset()->num_writer_threads_);
           return dataset()->input_->MakeIterator(ctx, this, prefix(),
                                                  &input_impl_);
         }
 
-        Status GetNextInternal(IteratorContext* ctx,
-                               std::vector<Tensor>* out_tensors,
-                               bool* end_of_sequence) override {
+        absl::Status GetNextInternal(IteratorContext* ctx,
+                                     std::vector<Tensor>* out_tensors,
+                                     bool* end_of_sequence) override {
           absl::Time start = absl::Now();
 
           bool first_call;
@@ -1731,11 +1752,11 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           TF_RETURN_IF_ERROR(FillBuffer(ctx));
 
           {
-            profiler::TraceMe activity(
+            tsl::profiler::TraceMe activity(
                 [&]() {
                   return absl::StrCat(prefix(), kSeparator, kBookkeeping);
                 },
-                profiler::TraceMeLevel::kInfo);
+                tsl::profiler::TraceMeLevel::kInfo);
 
             // Book keeping to report some statistics.
             mutex_lock l(mu_);
@@ -1780,8 +1801,8 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
         }
 
        protected:
-        Status SaveInternal(SerializationContext* ctx,
-                            IteratorStateWriter* writer) override {
+        absl::Status SaveInternal(SerializationContext* ctx,
+                                  IteratorStateWriter* writer) override {
           mutex_lock l(mu_);
           TF_RETURN_IF_ERROR(SaveInput(ctx, writer, input_impl_));
           if (end_of_sequence_) {
@@ -1795,8 +1816,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           TF_RETURN_IF_ERROR(writer->WriteScalar(full_name(kElementsProduced),
                                                  elements_produced_));
           TF_RETURN_IF_ERROR(writer->WriteScalar(
-              full_name(strings::StrCat(kBuffer, kSizeSuffix)),
-              buffer_.size()));
+              full_name(absl::StrCat(kBuffer, kSizeSuffix)), buffer_.size()));
           for (size_t i = 0; i < buffer_.size(); ++i) {
             auto& buffer_element = buffer_[i];
             if (buffer_element.end_of_sequence) {
@@ -1818,15 +1838,14 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
                                                  num_elements_written_));
           if (next_elem_.end_of_sequence) {
             TF_RETURN_IF_ERROR(writer->WriteScalar(
-                full_name(strings::StrCat(kNextElem, ".", kEndOfSequence)),
-                ""));
+                full_name(absl::StrCat(kNextElem, ".", kEndOfSequence)), ""));
           }
           TF_RETURN_IF_ERROR(writer->WriteScalar(
-              full_name(strings::StrCat(kNextElem, kSizeSuffix)),
+              full_name(absl::StrCat(kNextElem, kSizeSuffix)),
               next_elem_.value.size()));
           for (size_t i = 0; i < next_elem_.value.size(); i++) {
             TF_RETURN_IF_ERROR(writer->WriteTensor(
-                full_name(strings::StrCat(kNextElem, "[", i, "]")),
+                full_name(absl::StrCat(kNextElem, "[", i, "]")),
                 next_elem_.value[i]));
           }
           VLOG(2) << "Saving SnapshotWriterIterator: " << num_elements_written_
@@ -1834,8 +1853,8 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           return absl::OkStatus();
         }
 
-        Status RestoreInternal(IteratorContext* ctx,
-                               IteratorStateReader* reader) override {
+        absl::Status RestoreInternal(IteratorContext* ctx,
+                                     IteratorStateReader* reader) override {
           mutex_lock l(mu_);
           buffer_.clear();
           TF_RETURN_IF_ERROR(RestoreInput(ctx, reader, input_impl_));
@@ -1860,13 +1879,13 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
             int64_t temp;
             TF_RETURN_IF_ERROR(
                 reader->ReadScalar(full_name(kElementsProduced), &temp));
-            elements_produced_ = static_cast<uint64>(temp);
+            elements_produced_ = static_cast<uint64_t>(temp);
           }
           size_t buffer_size;
           {
             int64_t temp;
             TF_RETURN_IF_ERROR(reader->ReadScalar(
-                full_name(strings::StrCat(kBuffer, kSizeSuffix)), &temp));
+                full_name(absl::StrCat(kBuffer, kSizeSuffix)), &temp));
             buffer_size = static_cast<size_t>(temp);
           }
           for (size_t i = 0; i < buffer_size; i++) {
@@ -1909,8 +1928,8 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           std::vector<std::string> split_snapshot_filename =
               absl::StrSplit(split_filename.back(), '.');
           std::string max_num_str = split_snapshot_filename[0];
-          uint64 max_num;
-          if (!strings::safe_strtou64(max_num_str, &max_num)) {
+          uint64_t max_num;
+          if (!absl::SimpleAtoi(max_num_str, &max_num)) {
             return errors::Internal("Could not parse: ", max_num, " as uint64");
           }
           next_file_index_ = max_num + 1;
@@ -1920,11 +1939,11 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           {
             int64_t temp;
             TF_RETURN_IF_ERROR(reader->ReadScalar(
-                full_name(strings::StrCat(kNextElem, kSizeSuffix)), &temp));
+                full_name(absl::StrCat(kNextElem, kSizeSuffix)), &temp));
             next_elem_size = static_cast<size_t>(temp);
           }
           if (reader->Contains(
-                  full_name(strings::StrCat(kNextElem, ".", kEndOfSequence)))) {
+                  full_name(absl::StrCat(kNextElem, ".", kEndOfSequence)))) {
             next_elem_.end_of_sequence = true;
           } else {
             next_elem_.end_of_sequence = false;
@@ -1933,7 +1952,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           for (size_t i = 0; i < next_elem_size; i++) {
             next_elem_.value.emplace_back();
             TF_RETURN_IF_ERROR(reader->ReadTensor(
-                ctx->flr(), full_name(strings::StrCat(kNextElem, "[", i, "]")),
+                ctx->flr(), full_name(absl::StrCat(kNextElem, "[", i, "]")),
                 &next_elem_.value.back()));
           }
           VLOG(2) << "Restoring SnapshotWriterIterator: "
@@ -1943,17 +1962,17 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
         }
 
        private:
-        string GetSnapshotFilename() {
+        std::string GetSnapshotFilename() {
           mutex_lock l(mu_);
-          string snapshot_data_filename = io::JoinPath(
-              run_dir_, strings::Printf(
+          std::string snapshot_data_filename = io::JoinPath(
+              run_dir_, absl::StrFormat(
                             "%08llu.snapshot",
                             static_cast<unsigned long long>(next_file_index_)));
           next_file_index_++;
           return snapshot_data_filename;
         }
 
-        Status FillBuffer(IteratorContext* ctx) TF_LOCKS_EXCLUDED(mu_) {
+        absl::Status FillBuffer(IteratorContext* ctx) TF_LOCKS_EXCLUDED(mu_) {
           snapshot_util::ElementOrEOF elem;
           TF_RETURN_IF_ERROR(
               input_impl_->GetNext(ctx, &elem.value, &elem.end_of_sequence));
@@ -1994,15 +2013,16 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           return absl::OkStatus();
         }
 
-        Status ProcessOneElement(Env* env, int64_t* bytes_written,
-                                 string* snapshot_data_filename,
-                                 std::unique_ptr<snapshot_util::Writer>* writer,
-                                 bool* end_of_processing) {
-          profiler::TraceMe activity(
+        absl::Status ProcessOneElement(
+            Env* env, int64_t* bytes_written,
+            std::string* snapshot_data_filename,
+            std::unique_ptr<snapshot_util::Writer>* writer,
+            bool* end_of_processing) {
+          tsl::profiler::TraceMe activity(
               [&]() {
                 return absl::StrCat(prefix(), kSeparator, kProcessOneElement);
               },
-              profiler::TraceMeLevel::kInfo);
+              tsl::profiler::TraceMeLevel::kInfo);
           bool cancelled = false;
           *end_of_processing = false;
           bool produced_elem = false;
@@ -2092,14 +2112,14 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           });
 
           int64_t bytes_written = 0;
-          string snapshot_data_filename = GetSnapshotFilename();
+          std::string snapshot_data_filename = GetSnapshotFilename();
           std::unique_ptr<snapshot_util::Writer> writer;
-          Status s = snapshot_util::Writer::Create(
+          absl::Status s = snapshot_util::Writer::Create(
               env, snapshot_data_filename, dataset()->compression_,
               kCurrentVersion, dataset()->output_dtypes(), &writer);
           if (!s.ok()) {
             LOG(ERROR) << "Creating " << snapshot_data_filename
-                       << " failed: " << s.ToString();
+                       << " failed: " << s;
             mutex_lock l(mu_);
             snapshot_failed_ = true;
             cond_var_.notify_all();
@@ -2108,12 +2128,11 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
 
           bool end_of_processing = false;
           while (!end_of_processing) {
-            Status s =
+            absl::Status s =
                 ProcessOneElement(env, &bytes_written, &snapshot_data_filename,
                                   &writer, &end_of_processing);
             if (!s.ok()) {
-              LOG(INFO) << "Error while writing snapshot data to disk: "
-                        << s.ToString();
+              LOG(INFO) << "Error while writing snapshot data to disk: " << s;
               mutex_lock l(mu_);
               snapshot_failed_ = true;
               cond_var_.notify_all();
@@ -2124,10 +2143,10 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           }
         }
 
-        Status ShouldCloseWriter(Env* env, const string& filename,
-                                 uint64 bytes_written,
-                                 snapshot_util::Writer* writer,
-                                 bool* should_close) {
+        absl::Status ShouldCloseWriter(Env* env, const std::string& filename,
+                                       uint64_t bytes_written,
+                                       snapshot_util::Writer* writer,
+                                       bool* should_close) {
           // If the compression ratio has been estimated, use it to decide
           // whether the file should be closed. We avoid estimating the
           // compression ratio repeatedly because it requires syncing the file,
@@ -2149,7 +2168,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
           // Use the actual file size to determine compression ratio.
           // Make sure that all bytes are written out.
           TF_RETURN_IF_ERROR(writer->Sync());
-          uint64 file_size;
+          uint64_t file_size;
           TF_RETURN_IF_ERROR(env->GetFileSize(filename, &file_size));
           mutex_lock l(mu_);
           compression_ratio_ = static_cast<double>(bytes_written) /
@@ -2173,13 +2192,13 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
         snapshot_util::ElementOrEOF next_elem_ TF_GUARDED_BY(mu_);
         std::unique_ptr<IteratorBase> input_impl_;
 
-        const string hash_dir_;
+        const std::string hash_dir_;
         tstring run_id_ TF_GUARDED_BY(mu_);
         tstring run_dir_ TF_GUARDED_BY(mu_);
         double compression_ratio_ TF_GUARDED_BY(mu_) = 0.0;
         bool is_restored_ TF_GUARDED_BY(mu_) = false;
 
-        uint64 elements_produced_ TF_GUARDED_BY(mu_) = 0;
+        uint64_t elements_produced_ TF_GUARDED_BY(mu_) = 0;
         int64_t time_spent_micros_ TF_GUARDED_BY(mu_) = 0;
         int64_t bytes_produced_ TF_GUARDED_BY(mu_) = 0;
 
@@ -2189,7 +2208,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
         bool first_call_ TF_GUARDED_BY(mu_) = true;
         bool end_of_sequence_ TF_GUARDED_BY(mu_) = false;
         bool written_final_metadata_file_ TF_GUARDED_BY(mu_) = false;
-        uint64 next_file_index_ TF_GUARDED_BY(mu_) = 0;
+        uint64_t next_file_index_ TF_GUARDED_BY(mu_) = 0;
         std::unique_ptr<thread::ThreadPool> thread_pool_;
         int64_t num_active_threads_ TF_GUARDED_BY(mu_) = 0;
         int64_t num_elements_written_ = 0;
@@ -2200,25 +2219,25 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
         explicit SnapshotPassthroughIterator(const Params& params)
             : DatasetIterator<Dataset>(params) {}
 
-        Status Initialize(IteratorContext* ctx) override {
+        absl::Status Initialize(IteratorContext* ctx) override {
           return dataset()->input_->MakeIterator(ctx, this, prefix(),
                                                  &input_impl_);
         }
 
-        Status GetNextInternal(IteratorContext* ctx,
-                               std::vector<Tensor>* out_tensors,
-                               bool* end_of_sequence) override {
+        absl::Status GetNextInternal(IteratorContext* ctx,
+                                     std::vector<Tensor>* out_tensors,
+                                     bool* end_of_sequence) override {
           return input_impl_->GetNext(ctx, out_tensors, end_of_sequence);
         }
 
        protected:
-        Status SaveInternal(SerializationContext* ctx,
-                            IteratorStateWriter* writer) override {
+        absl::Status SaveInternal(SerializationContext* ctx,
+                                  IteratorStateWriter* writer) override {
           return SaveInput(ctx, writer, input_impl_);
         }
 
-        Status RestoreInternal(IteratorContext* ctx,
-                               IteratorStateReader* reader) override {
+        absl::Status RestoreInternal(IteratorContext* ctx,
+                                     IteratorStateReader* reader) override {
           return RestoreInput(ctx, reader, input_impl_);
         }
 
@@ -2226,7 +2245,7 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
         std::unique_ptr<IteratorBase> input_impl_;
       };
 
-      string hash_dir_ TF_GUARDED_BY(mu_);
+      std::string hash_dir_ TF_GUARDED_BY(mu_);
       snapshot_util::Mode state_ TF_GUARDED_BY(mu_) =
           snapshot_util::Mode::READER;
       std::unique_ptr<IteratorBase> iterator_ TF_GUARDED_BY(mu_);
@@ -2236,29 +2255,29 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
 
     const DatasetBase* const input_;
     const tstring dir_;
-    const string graph_hash_;
+    const std::string graph_hash_;
 
-    const string reader_path_prefix_;
-    const string writer_path_prefix_;
-    const string compression_;
+    const std::string reader_path_prefix_;
+    const std::string writer_path_prefix_;
+    const std::string compression_;
 
-    const uint64 shard_size_bytes_;
-    const uint64 pending_snapshot_expiry_seconds_;
-    const uint64 num_reader_threads_;
-    const uint64 reader_buffer_size_;
-    const uint64 num_writer_threads_;
-    const uint64 writer_buffer_size_;
+    const uint64_t shard_size_bytes_;
+    const uint64_t pending_snapshot_expiry_seconds_;
+    const uint64_t num_reader_threads_;
+    const uint64_t reader_buffer_size_;
+    const uint64_t num_writer_threads_;
+    const uint64_t writer_buffer_size_;
     const bool shuffle_on_read_;
 
-    const uint64 seed_;
-    const uint64 seed2_;
+    const uint64_t seed_;
+    const uint64_t seed2_;
 
     const std::string mode_;
     const std::string snapshot_name_;
   };
 
-  Status ComputeDatasetHash(const GraphDef& graph_def, const std::string& path,
-                            uint64* hash) {
+  absl::Status ComputeDatasetHash(const GraphDef& graph_def,
+                                  const std::string& path, uint64_t* hash) {
     TF_RETURN_IF_ERROR(HashGraph(graph_def, hash));
     // Adding path, compression, reader / writer path prefix, shard size
     // bytes to the fp as they effect the data written on disk.
@@ -2274,9 +2293,9 @@ class SnapshotDatasetOp : public UnaryDatasetOpKernel {
   DataTypeVector output_types_;
   std::vector<PartialTensorShape> output_shapes_;
 
-  string reader_path_prefix_;
-  string writer_path_prefix_;
-  string compression_;
+  std::string reader_path_prefix_;
+  std::string writer_path_prefix_;
+  std::string compression_;
 
   int64_t shard_size_bytes_;
   int64_t pending_snapshot_expiry_seconds_;

@@ -11,6 +11,8 @@
 #include "components/omnibox/browser/autocomplete_grouper_groups.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/suggestion_group_util.h"
+#include "components/omnibox/common/omnibox_feature_configs.h"
+#include "third_party/omnibox_proto/tool_mode.pb.h"
 
 class Section;
 using Groups = std::vector<Group>;
@@ -24,8 +26,9 @@ class Section {
  public:
   explicit Section(size_t limit,
                    Groups groups,
-                   omnibox::GroupConfigMap& group_configs,
-                   omnibox::GroupConfig_SideType side_type);
+                   const omnibox::GroupConfigMap& group_configs,
+                   omnibox::GroupConfig_SideType side_type =
+                       omnibox::GroupConfig_SideType_DEFAULT_PRIMARY);
   virtual ~Section();
   // Returns `matches` ranked and culled according to `sections`. All `matches`
   // should have `suggestion_group_id` set and be sorted by relevance.
@@ -54,16 +57,31 @@ class Section {
   omnibox::GroupConfig_SideType side_type_;
 };
 
-// Base section for ZPS limits and grouping. Ensures that matches with higher
-// relevance scores do not fill up the section if others with lower scores are
-// expected to be placed earlier based on their `Group`'s position.
+// Base section for ZPS limits and grouping. Asserts that matches are sorted by
+// their `Group`s position.
 class ZpsSection : public Section {
  public:
   ZpsSection(size_t limit,
              Groups groups,
-             omnibox::GroupConfigMap& group_configs,
+             const omnibox::GroupConfigMap& group_configs,
              omnibox::GroupConfig_SideType side_type =
                  omnibox::GroupConfig_SideType_DEFAULT_PRIMARY);
+  // Section:
+  void InitFromMatches(ACMatches& matches) override;
+};
+
+// Base section for ZPS limits and grouping where local history zero-prefix
+// suggestions are enabled. Sorts the matches by their `Group`s position to
+// ensure zero-prefix suggestions from local history backfill remote
+// personalized zero-prefix suggestions.
+// TODO(crbug.com/409810808): Find a more general solution for accommodating
+// local history backfill and remove this class.
+class ZpsSectionWithLocalHistory : public ZpsSection {
+ protected:
+  explicit ZpsSectionWithLocalHistory(
+      size_t limit,
+      Groups groups,
+      const omnibox::GroupConfigMap& group_configs);
   // Section:
   void InitFromMatches(ACMatches& matches) override;
 };
@@ -74,20 +92,72 @@ class ZpsSectionWithMVTiles : public ZpsSection {
  public:
   explicit ZpsSectionWithMVTiles(size_t limit,
                                  Groups groups,
-                                 omnibox::GroupConfigMap& group_configs);
+                                 const omnibox::GroupConfigMap& group_configs);
   // Section:
   void InitFromMatches(ACMatches& matches) override;
+};
+
+// Android prefixed section for Adaptive Suggestions grouping.
+class AndroidNonZPSSection : public Section {
+ public:
+  // Construct a new instance of the grouping class used in non-zero-prefix
+  // context.
+  // When `show_only_search_suggestions` is set to `true`, URLs will not be
+  // offered at any position other than position 0 (the Default Match).
+  explicit AndroidNonZPSSection(bool show_only_search_suggestions,
+                                const omnibox::GroupConfigMap& group_configs);
+
+  // Section:
+  void InitFromMatches(ACMatches& matches) override;
+
+  // Specify number of matches that are at least 50% exposed while the
+  // software keyboard is visible.
+  static void set_num_visible_matches(size_t num_visible_matches) {
+    num_visible_matches_ = num_visible_matches;
+  }
+
+ private:
+  static size_t num_visible_matches_;
+};
+
+// Android section for a single default match suggestion when there is one or
+// more composebox attachment.
+class AndroidComposeboxNonZPSSection : public Section {
+ public:
+  explicit AndroidComposeboxNonZPSSection(
+      const omnibox::GroupConfigMap& group_configs);
+
+  // TODO(crbug.com/464014032): split by mode.
+  // Number of contextual attachments
+  static size_t num_attachments_;
+  static omnibox::ToolMode tool_mode_;
+};
+
+// Android prefix section for Hub search (ZPS).
+class AndroidHubZPSSection : public Section {
+ public:
+  explicit AndroidHubZPSSection(const omnibox::GroupConfigMap& group_configs);
+};
+
+// Android prefix section for Hub search (non-ZPS).
+class AndroidHubNonZPSSection : public Section {
+ public:
+  explicit AndroidHubNonZPSSection(
+      const omnibox::GroupConfigMap& group_configs);
 };
 
 // Section expressing the Android ZPS limits and grouping for the NTP.
 // - up to 15 + `max_related_queries` + `max_trending_queries` suggestions
 //   total.
 //  - up to 1 clipboard suggestion.
-//  - up to 15 personalized suggestions.
+//  - up to 15 MIA or personalized suggestions.
 //  - up to 5 trending search suggestions.
-class AndroidNTPZpsSection : public ZpsSection {
+class AndroidNTPZpsSection : public ZpsSectionWithLocalHistory {
  public:
-  explicit AndroidNTPZpsSection(omnibox::GroupConfigMap& group_configs);
+  AndroidNTPZpsSection(const omnibox::GroupConfigMap& group_configs,
+                       bool mia_enabled);
+
+  void InitFromMatches(ACMatches& matches) override;
 };
 
 // Section expressing the Android ZPS limits and grouping for the SRP.
@@ -99,7 +169,7 @@ class AndroidNTPZpsSection : public ZpsSection {
 //  - up to 15 personalized suggestions.
 class AndroidSRPZpsSection : public ZpsSection {
  public:
-  explicit AndroidSRPZpsSection(omnibox::GroupConfigMap& group_configs);
+  explicit AndroidSRPZpsSection(const omnibox::GroupConfigMap& group_configs);
 };
 
 // Section expressing the Android ZPS limits and grouping for the Web.
@@ -111,16 +181,40 @@ class AndroidSRPZpsSection : public ZpsSection {
 //  - up to 15 personalized suggestions.
 class AndroidWebZpsSection : public ZpsSectionWithMVTiles {
  public:
-  explicit AndroidWebZpsSection(omnibox::GroupConfigMap& group_configs);
+  explicit AndroidWebZpsSection(const omnibox::GroupConfigMap& group_configs);
 };
 
 // Section expressing the Desktop ZPS limits and grouping for the NTP.
-// - up to 8 suggestions total.
-//  - up to 8 personalized suggestions.
+// - up to 8 suggestions total or 7 total if the ZPS IPH is enabled (the 8th
+// suggestion being the IPH).
+//  - up to 8 MIA or personalized suggestions.
 //  - up to 8 trending search suggestions.
-class DesktopNTPZpsSection : public ZpsSection {
+//  - up to 5 contextual search suggestions.
+class DesktopNTPZpsSection : public ZpsSectionWithLocalHistory {
  public:
-  explicit DesktopNTPZpsSection(omnibox::GroupConfigMap& group_configs);
+  DesktopNTPZpsSection(const omnibox::GroupConfigMap& group_configs,
+                       size_t limit,
+                       bool mia_enabled);
+};
+
+// Section expressing the Desktop ZPS limits and grouping for unscoped
+// extensions.
+// - Up to 8 unscoped extension suggestions total.
+//  - Up to 4 from the first extension.
+//  - Up to 4 from the second extension.
+class DesktopZpsUnscopedExtensionSection : public ZpsSection {
+ public:
+  explicit DesktopZpsUnscopedExtensionSection(
+      const omnibox::GroupConfigMap& group_configs);
+};
+
+// Section expressing the Desktop ZPS limits and grouping for the IPH suggestion
+// on the NTP.
+// - Up to 1 IPH suggestion total
+class DesktopNTPZpsIPHSection : public ZpsSection {
+ public:
+  explicit DesktopNTPZpsIPHSection(
+      const omnibox::GroupConfigMap& group_configs);
 };
 
 // Section expressing the Desktop secondary ZPS limits and grouping for the NTP.
@@ -131,25 +225,116 @@ class DesktopNTPZpsSection : public ZpsSection {
 class DesktopSecondaryNTPZpsSection : public ZpsSection {
  public:
   explicit DesktopSecondaryNTPZpsSection(
-      omnibox::GroupConfigMap& group_configs);
+      const omnibox::GroupConfigMap& group_configs);
 };
 
 // Section expressing the Desktop ZPS limits and grouping for the SRP.
-// - up to 8 suggestions total.
-//  - up to 8 previous search related suggestions.
-//  - up to 8 personalized suggestions.
+// - up to `max_suggestions` suggestions total.
+//  - up to `search_limit` previous search related suggestions.
+//  - up to `search_limit` personalized suggestions.
+//  - up to `url_limit` most visited tiles suggestions
 class DesktopSRPZpsSection : public ZpsSection {
  public:
-  explicit DesktopSRPZpsSection(omnibox::GroupConfigMap& group_configs);
+  explicit DesktopSRPZpsSection(const omnibox::GroupConfigMap& group_configs,
+                                size_t max_suggestions,
+                                size_t search_limit,
+                                size_t url_limit,
+                                size_t contextual_action_limit);
 };
 
-// Section expressing the Desktop ZPS limits and grouping for the Web.
+// Section expressing the Desktop URL ZPS limits and grouping for the Web.
+// - up to `limit` most visited tiles suggestions.
+class DesktopWebURLZpsSection : public ZpsSection {
+ public:
+  explicit DesktopWebURLZpsSection(const omnibox::GroupConfigMap& group_configs,
+                                   size_t limit);
+};
+
+// Section expressing the Desktop Search ZPS limits and grouping for the Web.
+// - up to `limit` suggestions total.
+//  - up to `limit` page related or personalized search suggestions.
+//  - up to `contextual_action_limit` contextual search action suggestions.
+//  - up to `contextual_search_limit` contextual search suggestions.
+class DesktopWebSearchZpsSection : public Section {
+ public:
+  explicit DesktopWebSearchZpsSection(
+      const omnibox::GroupConfigMap& group_configs,
+      size_t limit,
+      size_t contextual_action_limit,
+      size_t contextual_search_limit);
+};
+
+// An experimental alternative for `DesktopWebSearchZpsSection` that excludes
+// all but contextual matches. It's intended as a full replacement instead
+// of modifying that section, for simplicity and ease of removal after
+// experimentation.
+// - up to `contextual_action_limit` + `contextual_search_limit` total.
+//  - up to `contextual_action_limit` contextual search action suggestions.
+//  - up to `contextual_search_limit` contextual search suggestions.
+class DesktopWebSearchZpsContextualOnlySection : public Section {
+ public:
+  explicit DesktopWebSearchZpsContextualOnlySection(
+      const omnibox::GroupConfigMap& group_configs,
+      size_t contextual_action_limit,
+      size_t contextual_search_limit);
+};
+
+// Section expressing the Desktop ZPS limits and grouping for the Lens
+// contextual searchbox.
 // - up to 8 suggestions total.
 //  - up to 8 page related suggestions.
-//  - up to 8 personalized suggestions.
-class DesktopWebZpsSection : public ZpsSection {
+class DesktopLensContextualZpsSection : public ZpsSection {
  public:
-  explicit DesktopWebZpsSection(omnibox::GroupConfigMap& group_configs);
+  explicit DesktopLensContextualZpsSection(
+      const omnibox::GroupConfigMap& group_configs);
+};
+
+// Section expressing the Desktop ZPS limits and grouping for the Lens
+// multimodal searchbox.
+// - default to 8 multimodal suggestions.
+class DesktopLensMultimodalZpsSection : public ZpsSection {
+ public:
+  explicit DesktopLensMultimodalZpsSection(
+      const omnibox::GroupConfigMap& group_configs);
+
+  explicit DesktopLensMultimodalZpsSection(
+      const omnibox::GroupConfigMap& group_configs,
+      size_t max_suggestions);
+};
+
+class AndroidComposeboxZpsSection : public ZpsSection {
+ public:
+  explicit AndroidComposeboxZpsSection(
+      const omnibox::GroupConfigMap& group_configs,
+      size_t max_suggestions,
+      size_t max_aim_suggestions,
+      size_t max_contextual_suggestions);
+
+  // Number of contextual attachments
+  static size_t num_attachments_;
+};
+
+class IOSComposeboxZpsSection : public ZpsSection {
+ public:
+  explicit IOSComposeboxZpsSection(const omnibox::GroupConfigMap& group_configs,
+                                   size_t max_suggestions,
+                                   size_t max_aim_suggestions,
+                                   size_t max_contextual_suggestions);
+};
+
+class DesktopComposeboxZpsSection : public ZpsSection {
+ public:
+  explicit DesktopComposeboxZpsSection(
+      const omnibox::GroupConfigMap& group_configs,
+      size_t max_suggestions,
+      size_t max_aim_suggestions,
+      size_t max_contextual_suggestions);
+};
+
+// A ZPS section that includes only the toolbelt match.
+class ToolbeltSection : public ZpsSection {
+ public:
+  explicit ToolbeltSection(const omnibox::GroupConfigMap& group_configs);
 };
 
 // Section expressing the Desktop, non-ZPS limits and grouping.
@@ -163,24 +348,24 @@ class DesktopWebZpsSection : public ZpsSection {
 // - Group defaults 1st, then searches and history clusters, then navs.
 class DesktopNonZpsSection : public Section {
  public:
-  explicit DesktopNonZpsSection(omnibox::GroupConfigMap& group_configs);
+  explicit DesktopNonZpsSection(const omnibox::GroupConfigMap& group_configs);
   // Section:
   void InitFromMatches(ACMatches& matches) override;
 };
 
-// Section expressing the iPhone ZPS limits and grouping for the NTP.
+// Section expressing the iOS ZPS limits and grouping for the NTP.
 // - up to `total_count` suggestions total.
 //  - up to 1 clipboard suggestion.
-//  - up to `psuggest_count` personalized suggestions.
+//  - up to `psuggest_count` MIA or personalized suggestions.
 //  - up to `max_trending_queries` trending suggestions.
-class IOSNTPZpsSection : public ZpsSection {
+class IOSNTPZpsSection : public ZpsSectionWithLocalHistory {
  public:
-  explicit IOSNTPZpsSection(size_t max_trending_queries,
-                            size_t max_psuggest_queries,
-                            omnibox::GroupConfigMap& group_configs);
+  IOSNTPZpsSection(const omnibox::GroupConfigMap& group_configs,
+                   bool mia_enabled);
+  void InitFromMatches(ACMatches& matches) override;
 };
 
-// Section expressing the iPhone ZPS limits and grouping for the SRP.
+// Section expressing the iOS ZPS limits and grouping for the SRP.
 // - up to 20 suggestions total (where all MV Tiles are counted for 1).
 //  - up to 1 verbatim suggestion.
 //  - up to 1 clipboard suggestion.
@@ -189,10 +374,10 @@ class IOSNTPZpsSection : public ZpsSection {
 //  - up to 20 personalized suggestions.
 class IOSSRPZpsSection : public ZpsSectionWithMVTiles {
  public:
-  explicit IOSSRPZpsSection(omnibox::GroupConfigMap& group_configs);
+  explicit IOSSRPZpsSection(const omnibox::GroupConfigMap& group_configs);
 };
 
-// Section expressing the iPhone ZPS limits and grouping for the Web.
+// Section expressing the iOS ZPS limits and grouping for the Web.
 // - up to 20 suggestions total (but all MV Tiles are counted for 1).
 //  - up to 1 verbatim suggestion.
 //  - up to 1 clipboard suggestion.
@@ -201,40 +386,17 @@ class IOSSRPZpsSection : public ZpsSectionWithMVTiles {
 //  - up to 20 personalized suggestions.
 class IOSWebZpsSection : public ZpsSectionWithMVTiles {
  public:
-  explicit IOSWebZpsSection(omnibox::GroupConfigMap& group_configs);
+  explicit IOSWebZpsSection(const omnibox::GroupConfigMap& group_configs);
 };
 
-// Section expressing the iPad ZPS limits and grouping for the NTP.
+// Section expressing the iOS ZPS limits and grouping for the Lens mutimodal
+// searchbox.
 // - up to 10 suggestions total.
-//  - up to 1 clipboard suggestion.
-//  - up to 10 personalized suggestions.
-class IOSIpadNTPZpsSection : public ZpsSection {
+//  - up to 10 search suggestions.
+class IOSLensMultimodalZpsSection : public ZpsSection {
  public:
-  explicit IOSIpadNTPZpsSection(omnibox::GroupConfigMap& group_configs);
-};
-
-// Section expressing the iPad ZPS limits and grouping for the SRP.
-// - up to 10 suggestions total (but all MV Tiles are counted for 1).
-//  - up to 1 verbatim suggestion.
-//  - up to 1 clipboard suggestion.
-//  - up to 10 most visited in a carousel.
-//  - up to 8 previous search related suggestions.
-//  - up to 10 personalized suggestions.
-class IOSIpadSRPZpsSection : public ZpsSectionWithMVTiles {
- public:
-  explicit IOSIpadSRPZpsSection(omnibox::GroupConfigMap& group_configs);
-};
-
-// Section expressing the iPad ZPS limits and grouping for the Web.
-// - up to 10 suggestions total (but all MV Tiles are counted for 1).
-//  - up to 1 verbatim suggestion.
-//  - up to 1 clipboard suggestion.
-//  - up to 10 most visited in a carousel.
-//  - up to 8 page related suggestions.
-//  - up to 10 personalized suggestions.
-class IOSIpadWebZpsSection : public ZpsSectionWithMVTiles {
- public:
-  explicit IOSIpadWebZpsSection(omnibox::GroupConfigMap& group_configs);
+  explicit IOSLensMultimodalZpsSection(
+      const omnibox::GroupConfigMap& group_configs);
 };
 
 #endif  // COMPONENTS_OMNIBOX_BROWSER_AUTOCOMPLETE_GROUPER_SECTIONS_H_

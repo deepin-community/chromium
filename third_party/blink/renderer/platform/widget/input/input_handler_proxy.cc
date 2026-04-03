@@ -17,15 +17,20 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/profiler/sample_metadata.h"
+#include "base/task/common/task_annotator.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/default_tick_clock.h"
 #include "base/trace_event/trace_event.h"
+#include "base/tracing/protos/chrome_track_event.pbzero.h"
+#include "base/types/optional_ref.h"
 #include "build/build_config.h"
 #include "cc/base/features.h"
+#include "cc/input/browser_controls_offset_tag_modifications.h"
+#include "cc/input/input_handler.h"
 #include "cc/input/main_thread_scrolling_reason.h"
 #include "cc/metrics/event_metrics.h"
 #include "cc/trees/latency_info_swap_promise_monitor.h"
-#include "services/tracing/public/cpp/perfetto/flow_event_utils.h"
+#include "components/input/features.h"
 #include "services/tracing/public/cpp/perfetto/macros.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
@@ -40,19 +45,20 @@
 #include "third_party/blink/renderer/platform/widget/input/input_handler_proxy_client.h"
 #include "third_party/blink/renderer/platform/widget/input/input_metrics.h"
 #include "third_party/blink/renderer/platform/widget/input/scroll_predictor.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/events/types/scroll_input_type.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/latency/latency_info.h"
-
-using perfetto::protos::pbzero::ChromeLatencyInfo;
-using perfetto::protos::pbzero::TrackEvent;
 
 using ScrollThread = cc::InputHandler::ScrollThread;
 
 namespace blink {
 namespace {
+using ::perfetto::protos::pbzero::ChromeLatencyInfo2;
+using ::perfetto::protos::pbzero::TrackEvent;
 
-cc::ScrollState CreateScrollStateForGesture(const WebGestureEvent& event) {
+cc::ScrollStateData CreateScrollStateDataForGesture(
+    const WebGestureEvent& event) {
   cc::ScrollStateData scroll_state_data;
   if (event.SourceDevice() == WebGestureDevice::kScrollbar) {
     scroll_state_data.is_scrollbar_interaction = true;
@@ -90,8 +96,6 @@ cc::ScrollState CreateScrollStateForGesture(const WebGestureEvent& event) {
     case WebInputEvent::Type::kGestureScrollUpdate:
       scroll_state_data.delta_x = -event.data.scroll_update.delta_x;
       scroll_state_data.delta_y = -event.data.scroll_update.delta_y;
-      scroll_state_data.velocity_x = event.data.scroll_update.velocity_x;
-      scroll_state_data.velocity_y = event.data.scroll_update.velocity_y;
       scroll_state_data.is_in_inertial_phase =
           event.data.scroll_update.inertial_phase ==
           WebGestureEvent::InertialPhaseState::kMomentum;
@@ -103,11 +107,10 @@ cc::ScrollState CreateScrollStateForGesture(const WebGestureEvent& event) {
       break;
     default:
       NOTREACHED();
-      break;
   }
   scroll_state_data.is_direct_manipulation =
       event.SourceDevice() == WebGestureDevice::kTouchscreen;
-  return cc::ScrollState(scroll_state_data);
+  return scroll_state_data;
 }
 
 cc::ScrollState CreateScrollStateForInertialUpdate(
@@ -131,7 +134,6 @@ ui::ScrollInputType GestureScrollInputType(WebGestureDevice device) {
       return ui::ScrollInputType::kScrollbar;
     case WebGestureDevice::kUninitialized:
       NOTREACHED();
-      return ui::ScrollInputType::kMaxValue;
   }
 }
 
@@ -146,17 +148,18 @@ cc::SnapFlingController::GestureScrollType GestureScrollEventType(
       return cc::SnapFlingController::GestureScrollType::kEnd;
     default:
       NOTREACHED();
-      return cc::SnapFlingController::GestureScrollType::kBegin;
   }
 }
 
 cc::SnapFlingController::GestureScrollUpdateInfo GetGestureScrollUpdateInfo(
-    const WebGestureEvent& event) {
+    const WebGestureEvent& event,
+    bool is_overscroll) {
   cc::SnapFlingController::GestureScrollUpdateInfo info;
   info.delta = gfx::Vector2dF(-event.data.scroll_update.delta_x,
                               -event.data.scroll_update.delta_y);
   info.is_in_inertial_phase = event.data.scroll_update.inertial_phase ==
                               WebGestureEvent::InertialPhaseState::kMomentum;
+  info.is_overscroll = is_overscroll;
   info.event_time = event.TimeStamp();
   return info;
 }
@@ -164,12 +167,19 @@ cc::SnapFlingController::GestureScrollUpdateInfo GetGestureScrollUpdateInfo(
 cc::ScrollBeginThreadState RecordScrollingThread(
     bool scrolling_on_compositor_thread,
     bool blocked_on_main_at_begin,
-    WebGestureDevice device) {
+    WebGestureDevice device,
+    bool raster_inducing) {
   const char* kWheelHistogramName = "Renderer4.ScrollingThread.Wheel";
   const char* kTouchHistogramName = "Renderer4.ScrollingThread.Touch";
 
   auto status = cc::ScrollBeginThreadState::kScrollingOnMain;
-  if (scrolling_on_compositor_thread) {
+  if (raster_inducing) {
+    DCHECK(scrolling_on_compositor_thread);
+    status =
+        blocked_on_main_at_begin
+            ? cc::ScrollBeginThreadState::kRasterInducingScrollBlockedOnMain
+            : cc::ScrollBeginThreadState::kRasterInducingScroll;
+  } else if (scrolling_on_compositor_thread) {
     status =
         blocked_on_main_at_begin
             ? cc::ScrollBeginThreadState::kScrollingOnCompositorBlockedOnMain
@@ -203,6 +213,54 @@ bool IsGestureScrollOrPinch(WebInputEvent::Type type) {
   }
 }
 
+bool ImmediatelyDispatchFirstScrollEventBeforeDeadline(
+    cc::InputHandlerClient::ScrollEventDispatchMode mode) {
+  return mode == cc::InputHandlerClient::ScrollEventDispatchMode::
+                     kDispatchScrollEventsImmediately ||
+         mode == cc::InputHandlerClient::ScrollEventDispatchMode::
+                     kUseScrollPredictorForDeadline ||
+         mode == cc::InputHandlerClient::ScrollEventDispatchMode::
+                     kDispatchScrollEventsUntilDeadline;
+}
+
+// Determines if we have exceeded our internal deadline for dispatching input,
+// when compared to `args`. Returns true when we are in the mode that supports
+// this, and the deadline has been exceeded. With the exception of `args` being
+// more than one VSync in the past. Otherwise returns false.
+bool ShouldNotDispatchLateInputEvent(
+    cc::InputHandlerClient::ScrollEventDispatchMode mode,
+    double scroll_deadline_ratio,
+    const viz::BeginFrameArgs& args,
+    const base::TickClock* tick_clock) {
+  // This will cause us to dispatch immediately. This is okay, as it is the
+  // existing default behaviour. Input will still be processed and displayed.
+  // There is just potentially increased latency for the remainder of the
+  // scroll.
+  if (mode != cc::InputHandlerClient::ScrollEventDispatchMode::
+                  kDispatchScrollEventsUntilDeadline &&
+      mode != cc::InputHandlerClient::ScrollEventDispatchMode::
+                  kUseScrollPredictorForDeadline) {
+    return false;
+  }
+  auto frame_time_delta = tick_clock->NowTicks() - args.frame_time;
+  // If the `frame_time` is more than one VSync in the past, everything is
+  // backed up. We should not throttle input delivery.
+  if (frame_time_delta > args.interval) {
+    return false;
+  }
+  auto deadline_delta = args.interval * scroll_deadline_ratio;
+  // If `frame_time_delta` is beyond the `deadline_delta` then we should not
+  // dispatch input. A late submission can lead to back pressure, causing future
+  // frames to be skipped.
+  //
+  // This can occur when:
+  //   1) Frame production was not properly stopped. Which would lead to us
+  //      submitting an input that was intended for the next VSync
+  //   2) We began subscribing to `OnBeginFrame`, however we receive an initial
+  //      `BeginFrameArgs::MISSED` that is too far in the past.
+  return frame_time_delta > deadline_delta;
+}
+
 }  // namespace
 
 InputHandlerProxy::InputHandlerProxy(cc::InputHandler& input_handler,
@@ -217,7 +275,11 @@ InputHandlerProxy::InputHandlerProxy(cc::InputHandler& input_handler,
       last_injected_gesture_was_begin_(false),
       tick_clock_(base::DefaultTickClock::GetInstance()),
       snap_fling_controller_(std::make_unique<cc::SnapFlingController>(this)),
-      cursor_control_handler_(std::make_unique<CursorControlHandler>()) {
+      cursor_control_handler_(std::make_unique<CursorControlHandler>()),
+      update_scroll_predictor_(base::FeatureList::IsEnabled(
+          input::features::kUpdateScrollPredictorInputMapping)),
+      fling_scheduling_improvements_(base::FeatureList::IsEnabled(
+          ::features::kFlingSchedulingImprovements)) {
   DCHECK(client);
   input_handler_->BindToClient(this);
 
@@ -260,27 +322,38 @@ void InputHandlerProxy::HandleInputEventWithLatencyInfo(
     std::unique_ptr<blink::WebCoalescedInputEvent> event,
     std::unique_ptr<cc::EventMetrics> metrics,
     EventDispositionCallback callback) {
-  DCHECK(input_handler_);
-
-  static bool queue_blocking_gesture_scrolls =
-      base::FeatureList::IsEnabled(features::kQueueBlockingGestureScrolls);
-
-  input_handler_->NotifyInputEvent();
-
   int64_t trace_id = event->latency_info().trace_id();
   TRACE_EVENT("input,benchmark,latencyInfo", "LatencyInfo.Flow",
-              [trace_id](perfetto::EventContext ctx) {
-                ChromeLatencyInfo* info =
-                    ctx.event()->set_chrome_latency_info();
-                info->set_trace_id(trace_id);
-                info->set_step(ChromeLatencyInfo::STEP_HANDLE_INPUT_EVENT_IMPL);
-                tracing::FillFlowEvent(ctx, TrackEvent::LegacyEvent::FLOW_INOUT,
-                                       trace_id);
+              [&](perfetto::EventContext ctx) {
+                base::TaskAnnotator::EmitTaskTimingDetails(ctx);
+                ui::LatencyInfo::FillTraceEvent(
+                    ctx, trace_id,
+                    ChromeLatencyInfo2::Step::STEP_HANDLE_INPUT_EVENT_IMPL);
               });
 
+  bool is_fling =
+      (WebInputEvent::Type::kGestureScrollUpdate == event->Event().GetType() &&
+       static_cast<const WebGestureEvent&>(event->Event())
+               .data.scroll_update.inertial_phase ==
+           WebGestureEvent::InertialPhaseState::kMomentum) ||
+      (WebInputEvent::Type::kGestureScrollEnd == event->Event().GetType() &&
+       static_cast<const WebGestureEvent&>(event->Event())
+               .data.scroll_end.inertial_phase ==
+           WebGestureEvent::InertialPhaseState::kMomentum);
+  DCHECK(input_handler_);
+  input_handler_->NotifyInputEvent(is_fling);
+  if (is_fling && fling_scheduling_improvements_) {
+    handling_fling_ = true;
+  }
+
+  // Prevent the events to be counted into INP metrics if there is an active
+  // scroll.
+  if (handling_gesture_on_impl_thread_) {
+    event->EventPointer()->SetPreventCountingAsInteractionTrue();
+  }
+
   auto event_with_callback = std::make_unique<EventWithCallback>(
-      std::move(event), tick_clock_->NowTicks(), std::move(callback),
-      std::move(metrics));
+      std::move(event), std::move(callback), std::move(metrics));
 
   enum {
     NO_SCROLL_PINCH = 0,
@@ -289,13 +362,20 @@ void InputHandlerProxy::HandleInputEventWithLatencyInfo(
   };
   // Note: Other input can race ahead of gesture input as they don't have to go
   // through the queue, but we believe it's OK to do so.
+  //
+  // TODO(b/329346768): this allows Fling events to be dispatched immediately
+  // rather than during the start of the VSync. Confirm if this is another
+  // source of input events missing submitted frames.
   if (!IsGestureScrollOrPinch(event_with_callback->event().GetType())) {
     base::ScopedSampleMetadata metadata("Input.GestureScrollOrPinch",
                                         NO_SCROLL_PINCH,
                                         base::SampleMetadataScope::kProcess);
-    DispatchSingleInputEvent(std::move(event_with_callback),
-                             tick_clock_->NowTicks());
+    DispatchSingleInputEvent(std::move(event_with_callback));
     return;
+  } else if (event_with_callback->event().IsGestureScroll() &&
+             event_with_callback->metrics()) {
+    event_with_callback->metrics()->AsScroll()->set_begin_frame_args(
+        current_begin_frame_args_);
   }
 
   base::ScopedSampleMetadata metadata(
@@ -305,6 +385,23 @@ void InputHandlerProxy::HandleInputEventWithLatencyInfo(
       base::SampleMetadataScope::kProcess);
   const auto& gesture_event =
       static_cast<const WebGestureEvent&>(event_with_callback->event());
+
+  if (gesture_event.GetType() == WebGestureEvent::Type::kGestureScrollUpdate) {
+    // To estimate the impact of empty GestureScrollUpdates on predictor
+    // output quality, some experiment arms will skip them.
+    const bool should_filter_out_event =
+        (::features::kSendEmptyGestureScrollUpdateFilterOutEmptyUpdates.Get() &&
+         gesture_event.data.scroll_update.delta_x == 0 &&
+         gesture_event.data.scroll_update.delta_y == 0);
+    if (should_filter_out_event) {
+      event_with_callback->RunCallbacks(
+          InputHandlerProxy::DID_HANDLE, event_with_callback->latency_info(),
+          /*did_overscroll_params=*/nullptr,
+          /*attribution=*/WebInputEventAttribution());
+      return;
+    }
+  }
+
   const bool is_first_gesture_scroll_update =
       !has_seen_first_gesture_scroll_update_after_begin_ &&
       gesture_event.GetType() == WebGestureEvent::Type::kGestureScrollUpdate;
@@ -317,23 +414,42 @@ void InputHandlerProxy::HandleInputEventWithLatencyInfo(
   }
 
   if (currently_active_gesture_device_.has_value()) {
-    // Scroll updates should typically be queued and wait until a
-    // BeginImplFrame to dispatch. However, the first scroll update to be
-    // generated from a *blocking* touch sequence will have waited for the
-    // touch event to be ACK'ed by the renderer as unconsumed. Queueing here
-    // again until BeginImplFrame means we'll likely add a whole frame of
-    // latency to so we flush the queue immediately. This happens only for the
-    // first scroll update because once a scroll starts touch events are
-    // dispatched non-blocking so scroll updates don't wait for a touch ACK.
-    // The |is_source_touch_event_set_blocking| bit is set based on the
-    // renderer's reply that a blocking touch stream should be made
-    // non-blocking. Note: unlike wheel events below, the first GSU in a touch
-    // may have come from a non-blocking touch sequence, e.g. if the earlier
-    // touchstart determined we're in a |touch-action: pan-y| region. Because
-    // of this, we can't simply look at the first GSU like wheels do.
-    bool is_from_blocking_touch =
-        gesture_event.SourceDevice() == WebGestureDevice::kTouchscreen &&
-        gesture_event.is_source_touch_event_set_blocking;
+    // While scrolling, if there were no enqueued events during
+    // DeliverInputForBeginFrame we want to dispatch the first event
+    // immediately. We will return to `enqueue_scroll_events_` once frame
+    // production has begun.
+    if (gesture_event.IsScrollEvent() &&
+        ImmediatelyDispatchFirstScrollEventBeforeDeadline(
+            scroll_event_dispatch_mode_) &&
+        !enqueue_scroll_events_) {
+      // TODO(jonross): this will update to a prediction that is -5ms before
+      // `current_begin_frame_args_.frame_time`. We should consider not
+      // dispatching if `event_with_callback` is too old, and if we expect a
+      // newer input event to still arrive in time.
+      enqueue_scroll_events_ = true;
+
+      if (scroll_predictor_) {
+        std::unique_ptr<EventWithCallback> event_to_dispatch =
+            scroll_predictor_->ResampleScrollEvents(
+                std::move(event_with_callback),
+                current_begin_frame_args_.frame_time,
+                current_begin_frame_args_.interval, nullptr /* next_event */);
+        compositor_event_queue_->Queue(std::move(event_to_dispatch));
+      } else {
+        compositor_event_queue_->Queue(std::move(event_with_callback));
+      }
+      if (ShouldNotDispatchLateInputEvent(
+              scroll_event_dispatch_mode_, scroll_deadline_ratio_,
+              current_begin_frame_args_, tick_clock_)) {
+        input_handler_->SetNeedsAnimateInput();
+        return;
+      }
+      // To reach here we should of had no events in the queue. We also should
+      // have only enqueued one event.
+      DCHECK_EQ(compositor_event_queue_->size(), 1u);
+      DispatchQueuedInputEvents(false /* frame_aligned */);
+      return;
+    }
 
     // TODO(bokan): This was added in https://crrev.com/c/557463 before async
     // wheel events. It's not clear to me why flushing on a scroll end would
@@ -352,13 +468,13 @@ void InputHandlerProxy::HandleInputEventWithLatencyInfo(
         is_first_gesture_scroll_update;
 
     bool queue_was_empty = compositor_event_queue_->empty();
-    compositor_event_queue_->Queue(std::move(event_with_callback),
-                                   tick_clock_->NowTicks());
+    compositor_event_queue_->Queue(std::move(event_with_callback));
 
     // |synchronous_input_handler_| is WebView only. WebView has different
-    // mechanisms and we want to forward all events immediately.
-    if ((is_from_blocking_touch && !queue_blocking_gesture_scrolls) ||
-        is_scroll_end_from_wheel || is_first_wheel_scroll_update ||
+    // mechanisms and we want to forward all events immediately. While we
+    // normally end up here when `enqueue_scroll_events_` is true, these edge
+    // cases will cause input to be forwarded immediately, rather than enqueued.
+    if (is_scroll_end_from_wheel || is_first_wheel_scroll_update ||
         synchronous_input_handler_) {
       DispatchQueuedInputEvents(false /* frame_aligned */);
     }
@@ -370,8 +486,7 @@ void InputHandlerProxy::HandleInputEventWithLatencyInfo(
 
   // We have to dispatch the event to know whether the gesture sequence will be
   // handled by the compositor or not.
-  DispatchSingleInputEvent(std::move(event_with_callback),
-                           tick_clock_->NowTicks());
+  DispatchSingleInputEvent(std::move(event_with_callback));
 }
 
 void InputHandlerProxy::ContinueScrollBeginAfterMainThreadHitTest(
@@ -395,6 +510,7 @@ void InputHandlerProxy::ContinueScrollBeginAfterMainThreadHitTest(
   // because of the first ScrollBegin so clear this so we don't spurriously
   // call ScrollEnd. It will be set again in HandleGestureScrollBegin.
   currently_active_gesture_device_ = std::nullopt;
+  currently_active_gesture_scroll_modifiers_ = std::nullopt;
 
   auto* gesture_event =
       static_cast<blink::WebGestureEvent*>(event->EventPointer());
@@ -411,11 +527,9 @@ void InputHandlerProxy::ContinueScrollBeginAfterMainThreadHitTest(
           cc::EventMetrics::DispatchStage::kArrivedInRendererCompositor);
     }
     auto event_with_callback = std::make_unique<EventWithCallback>(
-        std::move(event), tick_clock_->NowTicks(), std::move(callback),
-        std::move(metrics));
+        std::move(event), std::move(callback), std::move(metrics));
 
-    DispatchSingleInputEvent(std::move(event_with_callback),
-                             tick_clock_->NowTicks());
+    DispatchSingleInputEvent(std::move(event_with_callback));
   } else {
     // If the main thread failed to return a scroller for whatever reason,
     // consider the ScrollBegin to be dropped.
@@ -427,6 +541,14 @@ void InputHandlerProxy::ContinueScrollBeginAfterMainThreadHitTest(
                             std::move(metrics));
   }
 
+  // We do not call `SetNeedsAnimateInput` here, as it is set when this event
+  // was enqueued.
+  if (ShouldNotDispatchLateInputEvent(scroll_event_dispatch_mode_,
+                                      scroll_deadline_ratio_,
+                                      current_begin_frame_args_, tick_clock_)) {
+    return;
+  }
+
   // We blocked the compositor gesture event queue while the hit test was
   // pending so scroll updates may be waiting in the queue. Now that we've
   // finished the hit test and performed the scroll begin, flush the queue.
@@ -434,8 +556,7 @@ void InputHandlerProxy::ContinueScrollBeginAfterMainThreadHitTest(
 }
 
 void InputHandlerProxy::DispatchSingleInputEvent(
-    std::unique_ptr<EventWithCallback> event_with_callback,
-    const base::TimeTicks now) {
+    std::unique_ptr<EventWithCallback> event_with_callback) {
   ui::LatencyInfo monitored_latency_info = event_with_callback->latency_info();
   std::unique_ptr<cc::LatencyInfoSwapPromiseMonitor>
       latency_info_swap_promise_monitor =
@@ -444,12 +565,26 @@ void InputHandlerProxy::DispatchSingleInputEvent(
 
   current_overscroll_params_.reset();
 
-  WebInputEventAttribution attribution =
-      PerformEventAttribution(event_with_callback->event());
   InputHandlerProxy::EventDisposition disposition =
-      RouteToTypeSpecificHandler(event_with_callback.get(), attribution);
+      RouteToTypeSpecificHandler(event_with_callback.get());
 
   const WebInputEvent& event = event_with_callback->event();
+  WebInputEventAttribution attribution;
+  switch (disposition) {
+    case DID_NOT_HANDLE:
+    case DID_NOT_HANDLE_NON_BLOCKING:
+    case DID_NOT_HANDLE_NON_BLOCKING_DUE_TO_FLING:
+      attribution = PerformEventAttribution(event);
+      break;
+    default:
+      if (!::features::IsCCSlimmingEnabled()) {
+        // With CC Slimming enabled, we skip attribution since they are not
+        // sent to the main thread.
+        attribution = PerformEventAttribution(event);
+      }
+      break;
+  }
+
   const WebGestureEvent::Type type = event.GetType();
   switch (type) {
     case WebGestureEvent::Type::kGestureScrollBegin:
@@ -470,13 +605,16 @@ void InputHandlerProxy::DispatchSingleInputEvent(
         // gesture was handled but the scroll was not consumed.
         currently_active_gesture_device_ =
             static_cast<const WebGestureEvent&>(event).SourceDevice();
+        currently_active_gesture_scroll_modifiers_ = event.GetModifiers();
       }
       break;
 
     case WebGestureEvent::Type::kGestureScrollEnd:
     case WebGestureEvent::Type::kGesturePinchEnd:
-      if (!handling_gesture_on_impl_thread_)
+      if (!handling_gesture_on_impl_thread_) {
         currently_active_gesture_device_ = std::nullopt;
+        currently_active_gesture_scroll_modifiers_ = std::nullopt;
+      }
       break;
     case WebInputEvent::Type::kTouchStart:
       if (static_cast<const WebTouchEvent&>(event).IsTouchSequenceStart()) {
@@ -499,7 +637,9 @@ void InputHandlerProxy::DispatchSingleInputEvent(
                                     attribution);
 }
 
-bool InputHandlerProxy::HasQueuedEventsReadyForDispatch(bool frame_aligned) {
+bool InputHandlerProxy::HasQueuedEventsReadyForDispatch(
+    bool frame_aligned,
+    base::TimeTicks sample_time) const {
   // Block flushing the compositor gesture event queue while there's an async
   // scroll begin hit test outstanding. We'll flush the queue when the hit test
   // responds.
@@ -517,15 +657,58 @@ bool InputHandlerProxy::HasQueuedEventsReadyForDispatch(bool frame_aligned) {
       input_handler_->CurrentScrollNeedsFrameAlignment() && !frame_aligned) {
     return false;
   }
+
+  // We delegate the check to the queue, which knows if the next event is
+  // forced (backlog) or valid based on time.
+  if (!compositor_event_queue_->IsNextEventReady(sample_time)) {
+    return false;
+  }
+
   return true;
 }
 
 void InputHandlerProxy::DispatchQueuedInputEvents(bool frame_aligned) {
-  // Calling |NowTicks()| is expensive so we only want to do it once.
-  base::TimeTicks now = tick_clock_->NowTicks();
-  while (HasQueuedEventsReadyForDispatch(frame_aligned)) {
-    DispatchSingleInputEvent(compositor_event_queue_->Pop(), now);
+  //  Coalesce all events in the queue before dispatching.
+  auto sample_time = base::TimeTicks::Max();
+
+  compositor_event_queue_->CoalesceEvents(sample_time);
+  while (HasQueuedEventsReadyForDispatch(frame_aligned, sample_time)) {
+    DispatchSingleInputEvent(compositor_event_queue_->Pop());
   }
+}
+
+bool InputHandlerProxy::GenerateAndDispatchSyntheticScrollPrediction(
+    const viz::BeginFrameArgs& args) {
+  // It is possible that a user can move their finger very slowly, or hold it in
+  // place. When this occurs we can stop receiving input events, or they can be
+  // so far apart that we cannot reliably create predictions. When that occurs
+  // we do not create any synthetic events.
+  if (!currently_active_gesture_device_.has_value() || !scroll_predictor_ ||
+      !scroll_predictor_->HasPrediction(args.frame_time) ||
+      scroll_begin_main_thread_hit_test_reasons_) {
+    return false;
+  }
+  std::unique_ptr<EventWithCallback> event_with_callback =
+      scroll_predictor_->GenerateSyntheticScrollUpdate(
+          args.frame_time, args.interval,
+          currently_active_gesture_device_.value(),
+          currently_active_gesture_scroll_modifiers_.value_or(0));
+
+  if (!event_with_callback) {
+    return false;
+  }
+
+  int64_t trace_id = event_with_callback->latency_info().trace_id();
+  TRACE_EVENT("input,benchmark,latencyInfo", "LatencyInfo.Flow",
+              [&](perfetto::EventContext ctx) {
+                base::TaskAnnotator::EmitTaskTimingDetails(ctx);
+                ui::LatencyInfo::FillTraceEvent(
+                    ctx, trace_id,
+                    ChromeLatencyInfo2::Step::STEP_HANDLE_INPUT_EVENT_IMPL);
+              });
+
+  DispatchSingleInputEvent(std::move(event_with_callback));
+  return true;
 }
 
 void InputHandlerProxy::UpdateElasticOverscroll() {
@@ -578,7 +761,6 @@ void InputHandlerProxy::InjectScrollbarGestureScroll(
   // Send in a LatencyInfo with SCROLLBAR type so that the end to end latency
   // is calculated specifically for scrollbars.
   ui::LatencyInfo scrollbar_latency_info(latency_info);
-  scrollbar_latency_info.set_source_event_type(ui::SourceEventType::SCROLLBAR);
 
   // This latency_info should not have already been scheduled for rendering -
   // i.e. it should be the original latency_info that was associated with the
@@ -624,11 +806,10 @@ void InputHandlerProxy::InjectScrollbarGestureScroll(
   auto gesture_event_with_callback_update = std::make_unique<EventWithCallback>(
       std::make_unique<WebCoalescedInputEvent>(
           std::move(synthetic_gesture_event), scrollbar_latency_info),
-      original_timestamp, base::DoNothing(), std::move(metrics));
+      base::DoNothing(), std::move(metrics));
 
   bool needs_animate_input = compositor_event_queue_->empty();
-  compositor_event_queue_->Queue(std::move(gesture_event_with_callback_update),
-                                 original_timestamp);
+  compositor_event_queue_->Queue(std::move(gesture_event_with_callback_update));
 
   if (needs_animate_input)
     input_handler_->SetNeedsAnimateInput();
@@ -645,18 +826,27 @@ bool HasScrollbarJumpKeyModifier(const WebInputEvent& event) {
 
 InputHandlerProxy::EventDisposition
 InputHandlerProxy::RouteToTypeSpecificHandler(
-    EventWithCallback* event_with_callback,
-    const WebInputEventAttribution& original_attribution) {
+    EventWithCallback* event_with_callback) {
   DCHECK(input_handler_);
 
   cc::EventsMetricsManager::ScopedMonitor::DoneCallback done_callback;
   if (event_with_callback->metrics()) {
     event_with_callback->WillStartProcessingForMetrics();
+    if (cc::ScrollEventMetrics* scroll =
+            event_with_callback->metrics()->AsScroll()) {
+      scroll->set_dispatch_args(
+          cc::ScrollUpdateEventMetrics::DispatchBeginFrameArgs::From(
+              current_begin_frame_args_));
+    }
     done_callback = base::BindOnce(
         [](EventWithCallback* event, bool handled) {
           event->DidCompleteProcessingForMetrics();
+          bool keep_metrics =
+              handled ||
+              cc::EventMetrics::ShouldKeepEvenWithoutCausingFrameUpdate(
+                  event->metrics()->type());
           std::unique_ptr<cc::EventMetrics> result =
-              handled ? event->TakeMetrics() : nullptr;
+              keep_metrics ? event->TakeMetrics() : nullptr;
           return result;
         },
         event_with_callback);
@@ -686,7 +876,7 @@ InputHandlerProxy::RouteToTypeSpecificHandler(
 
     case WebInputEvent::Type::kGestureScrollUpdate:
       return HandleGestureScrollUpdate(
-          static_cast<const WebGestureEvent&>(event), original_attribution,
+          static_cast<const WebGestureEvent&>(event),
           event_with_callback->metrics(),
           event_with_callback->latency_info().trace_id());
 
@@ -783,7 +973,6 @@ InputHandlerProxy::RouteToTypeSpecificHandler(
     case WebInputEvent::Type::kGestureFlingStart:
     case WebInputEvent::Type::kGestureFlingCancel:
       NOTREACHED();
-      break;
 
     default:
       break;
@@ -842,7 +1031,8 @@ WebInputEventAttribution InputHandlerProxy::PerformEventAttribution(
 void InputHandlerProxy::RecordScrollBegin(
     WebGestureDevice device,
     uint32_t main_thread_hit_tested_reasons,
-    uint32_t main_thread_repaint_reasons) {
+    uint32_t main_thread_repaint_reasons,
+    bool raster_inducing) {
   DCHECK(cc::MainThreadScrollingReason::AreHitTestReasons(
       main_thread_hit_tested_reasons));
   DCHECK(cc::MainThreadScrollingReason::AreRepaintReasons(
@@ -874,7 +1064,7 @@ void InputHandlerProxy::RecordScrollBegin(
       blocked_on_main_thread_handler || main_thread_hit_tested_reasons;
 
   auto scroll_start_state = RecordScrollingThread(
-      is_compositor_scroll, blocked_on_main_at_begin, device);
+      is_compositor_scroll, blocked_on_main_at_begin, device, raster_inducing);
   input_handler_->RecordScrollBegin(GestureScrollInputType(device),
                                     scroll_start_state);
 
@@ -898,6 +1088,13 @@ void InputHandlerProxy::RecordScrollBegin(
 
 InputHandlerProxy::EventDisposition InputHandlerProxy::HandleMouseWheel(
     const WebMouseWheelEvent& wheel_event) {
+  if (base::FeatureList::IsEnabled(
+          blink::features::kFadeInScrollbarWhenMouseWheelMayBegin) &&
+      wheel_event.phase == WebMouseWheelEvent::kPhaseMayBegin) {
+    mouse_wheel_result_ = DID_NOT_HANDLE_NON_BLOCKING;
+    return *mouse_wheel_result_;
+  }
+
   InputHandlerProxy::EventDisposition result = DROP_EVENT;
 
   if (wheel_event.dispatch_type ==
@@ -947,6 +1144,19 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleMouseWheel(
     }
   }
 
+  if (base::FeatureList::IsEnabled(
+          blink::features::kFadeInScrollbarWhenMouseWheelMayBegin) &&
+      result == DROP_EVENT) {
+    // Do not drop began and cancelled events to ensure that the events are
+    // forwarded to the main thread to start fading out scrollbars after a
+    // MayBegin event.
+    if (wheel_event.phase == WebMouseWheelEvent::kPhaseBegan ||
+        wheel_event.momentum_phase == WebMouseWheelEvent::kPhaseBegan ||
+        wheel_event.phase == WebMouseWheelEvent::kPhaseCancelled) {
+      result = DID_NOT_HANDLE_NON_BLOCKING;
+    }
+  }
+
   mouse_wheel_result_ = result;
   return result;
 }
@@ -954,6 +1164,7 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleMouseWheel(
 InputHandlerProxy::EventDisposition InputHandlerProxy::HandleGestureScrollBegin(
     const WebGestureEvent& gesture_event) {
   TRACE_EVENT0("input", "InputHandlerProxy::HandleGestureScrollBegin");
+  handling_fling_ = false;
 
   if (scroll_predictor_)
     scroll_predictor_->ResetOnGestureScrollBegin(gesture_event);
@@ -969,7 +1180,7 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleGestureScrollBegin(
     InputHandlerScrollEnd();
   }
 
-  cc::ScrollState scroll_state = CreateScrollStateForGesture(gesture_event);
+  cc::ScrollState scroll_state(CreateScrollStateDataForGesture(gesture_event));
   cc::InputHandler::ScrollStatus scroll_status;
   if (gesture_event.data.scroll_begin.target_viewport) {
     scroll_status = input_handler_->RootScrollBegin(
@@ -995,7 +1206,8 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleGestureScrollBegin(
   if (scroll_status.thread != ScrollThread::kScrollIgnored) {
     RecordScrollBegin(gesture_event.SourceDevice(),
                       scroll_state.main_thread_hit_tested_reasons(),
-                      scroll_status.main_thread_repaint_reasons);
+                      scroll_status.main_thread_repaint_reasons,
+                      scroll_status.raster_inducing);
   }
 
   InputHandlerProxy::EventDisposition result = DID_NOT_HANDLE;
@@ -1021,14 +1233,14 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleGestureScrollBegin(
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   // TODO(bokan): Should we really be calling this in cases like DROP_EVENT and
   // DID_NOT_HANDLE_NON_BLOCKING_DUE_TO_FLING? I think probably not.
   if (elastic_overscroll_controller_ && result != DID_NOT_HANDLE) {
-    HandleScrollElasticityOverscroll(gesture_event,
-                                     cc::InputHandlerScrollResult());
+    HandleScrollElasticityOverscroll(
+        gesture_event, cc::InputHandlerScrollResult(),
+        input_handler_->LatchedScrollerElementId());
   }
 
   return result;
@@ -1037,7 +1249,6 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleGestureScrollBegin(
 InputHandlerProxy::EventDisposition
 InputHandlerProxy::HandleGestureScrollUpdate(
     const WebGestureEvent& gesture_event,
-    const WebInputEventAttribution& original_attribution,
     cc::EventMetrics* metrics,
     int64_t trace_id) {
   TRACE_EVENT("input", "InputHandlerProxy::HandleGestureScrollUpdate",
@@ -1057,15 +1268,22 @@ InputHandlerProxy::HandleGestureScrollUpdate(
     return DROP_EVENT;
   }
 
-  cc::ScrollState scroll_state = CreateScrollStateForGesture(gesture_event);
-  in_inertial_scrolling_ = scroll_state.is_in_inertial_phase();
+  const auto scroll_state_data = CreateScrollStateDataForGesture(gesture_event);
+  in_inertial_scrolling_ = scroll_state_data.is_in_inertial_phase;
 
   TRACE_EVENT_INSTANT1(
       "input", "DeltaUnits", TRACE_EVENT_SCOPE_THREAD, "unit",
       static_cast<int>(gesture_event.data.scroll_update.delta_units));
 
+  const cc::ElementId latched_element_id =
+      input_handler_->LatchedScrollerElementId();
+  bool is_overscroll =
+      (elastic_overscroll_controller_ &&
+       elastic_overscroll_controller_->CanOverscroll(latched_element_id) &&
+       !elastic_overscroll_controller_->StretchAmount(latched_element_id)
+            .IsZero());
   if (snap_fling_controller_->HandleGestureScrollUpdate(
-          GetGestureScrollUpdateInfo(gesture_event))) {
+          GetGestureScrollUpdateInfo(gesture_event, is_overscroll))) {
     handling_gesture_on_impl_thread_ = false;
     return DROP_EVENT;
   }
@@ -1074,28 +1292,40 @@ InputHandlerProxy::HandleGestureScrollUpdate(
   base::TimeDelta delay = base::TimeTicks::Now() - event_time;
 
   cc::InputHandlerScrollResult scroll_result =
-      input_handler_->ScrollUpdate(&scroll_state, delay);
+      input_handler_->ScrollUpdate(cc::ScrollState(scroll_state_data), delay);
+
+  if (is_only_empty_gsu_in_queue_) {
+    UMA_HISTOGRAM_BOOLEAN("Event.ScrollJank.EmptyGestureScrollUpdateFrame",
+                          scroll_result.did_scroll);
+  }
+  is_only_empty_gsu_in_queue_ = false;
 
   TRACE_EVENT(
       "input,input.scrolling",
       "InputHandlerProxy::HandleGestureScrollUpdate_Result",
-      [trace_id, provided_delta_x, provided_delta_y,
-       visual_offset_x = scroll_result.current_visual_offset.x(),
-       visual_offset_y = scroll_result.current_visual_offset.y()](
-          perfetto::EventContext& ctx) {
+      [&](perfetto::EventContext& ctx) {
         auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
         auto* scroll_data = event->set_scroll_deltas();
         scroll_data->set_trace_id(trace_id);
         scroll_data->set_provided_to_compositor_delta_x(provided_delta_x);
         scroll_data->set_provided_to_compositor_delta_y(provided_delta_y);
-        scroll_data->set_visual_offset_x(visual_offset_x);
-        scroll_data->set_visual_offset_y(visual_offset_y);
+        scroll_data->set_visual_offset_x(
+            scroll_result.current_visual_offset.x());
+        scroll_data->set_visual_offset_y(
+            scroll_result.current_visual_offset.y());
+        scroll_data->set_did_overscroll_root(scroll_result.did_overscroll_root);
+        scroll_data->set_unused_delta_x(scroll_result.unused_scroll_delta.x());
+        scroll_data->set_unused_delta_y(scroll_result.unused_scroll_delta.y());
       });
 
-  HandleOverscroll(gesture_event.PositionInWidget(), scroll_result);
+  HandleOverscroll(gesture_event.PositionInWidget(), scroll_result,
+                   gesture_event.SourceDevice());
 
-  if (elastic_overscroll_controller_)
-    HandleScrollElasticityOverscroll(gesture_event, scroll_result);
+  if (elastic_overscroll_controller_) {
+    HandleScrollElasticityOverscroll(
+        gesture_event, scroll_result,
+        input_handler_->LatchedScrollerElementId());
+  }
 
   if (metrics && scroll_result.needs_main_thread_repaint)
     metrics->set_requires_main_thread_update();
@@ -1110,6 +1340,9 @@ InputHandlerProxy::HandleGestureScrollUpdate(
 InputHandlerProxy::EventDisposition InputHandlerProxy::HandleGestureScrollEnd(
     const WebGestureEvent& gesture_event) {
   TRACE_EVENT0("input", "InputHandlerProxy::HandleGestureScrollEnd");
+
+  const cc::ElementId latched_element_id =
+      input_handler_->LatchedScrollerElementId();
 
   if (scroll_sequence_ignored_) {
     DCHECK(!currently_active_gesture_device_.has_value());
@@ -1131,8 +1364,8 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleGestureScrollEnd(
 
   InputHandlerScrollEnd();
   if (elastic_overscroll_controller_) {
-    HandleScrollElasticityOverscroll(gesture_event,
-                                     cc::InputHandlerScrollResult());
+    HandleScrollElasticityOverscroll(
+        gesture_event, cc::InputHandlerScrollResult(), latched_element_id);
   }
 
   return DID_HANDLE;
@@ -1144,6 +1377,7 @@ void InputHandlerProxy::InputHandlerScrollEnd() {
 
   DCHECK(!gesture_pinch_in_progress_);
   currently_active_gesture_device_ = std::nullopt;
+  currently_active_gesture_scroll_modifiers_ = std::nullopt;
 }
 
 InputHandlerProxy::EventDisposition InputHandlerProxy::HitTestTouchEvent(
@@ -1155,6 +1389,16 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HitTestTouchEvent(
                static_cast<bool>(allowed_touch_action));
   *is_touching_scrolling_layer = false;
   EventDisposition result = DROP_EVENT;
+
+  // Note that the radius is mostly relevant in stylus handwriting scenarios.
+  // For actions like swipe, we use the center point of the touch and ignore
+  // nearby scrollers.
+  const unsigned int hit_test_radius =
+      (touch_event.touches_length == 1 &&
+       (touch_event.touches[0].pointer_type ==
+        WebPointerProperties::PointerType::kPen))
+          ? handwriting_radius_
+          : 0;
   for (size_t i = 0; i < touch_event.touches_length; ++i) {
     if (touch_event.touch_start_or_first_touch_move)
       DCHECK(allowed_touch_action);
@@ -1167,11 +1411,18 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HitTestTouchEvent(
     }
 
     cc::TouchAction touch_action = cc::TouchAction::kAuto;
+    const gfx::Point point(touch_event.touches[i].PositionInWidget().x(),
+                           touch_event.touches[i].PositionInWidget().y());
+    // TODO(crbug.com/355578906): This is just some rough math for now. The main
+    // thread counterpart is AdjustPointerEvent. The buffer math on the main and
+    // cc thread(s) need to match.
+    const gfx::Rect viewport_touch_rect(
+        point.x() - hit_test_radius, point.y() - hit_test_radius,
+        std::max(unsigned(1), hit_test_radius * 2),
+        std::max(unsigned(1), hit_test_radius * 2));
     cc::InputHandler::TouchStartOrMoveEventListenerType event_listener_type =
         input_handler_->EventListenerTypeForTouchStartOrMoveAt(
-            gfx::Point(touch_event.touches[i].PositionInWidget().x(),
-                       touch_event.touches[i].PositionInWidget().y()),
-            &touch_action);
+            viewport_touch_rect, &touch_action);
     if (allowed_touch_action && touch_action != cc::TouchAction::kAuto) {
       TRACE_EVENT_INSTANT1("input", "Adding TouchAction",
                            TRACE_EVENT_SCOPE_THREAD, "TouchAction",
@@ -1231,8 +1482,6 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HitTestTouchEvent(
         break;
       default:
         NOTREACHED();
-        result = DROP_EVENT;
-        break;
     }
   }
 
@@ -1390,22 +1639,13 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleTouchEnd(
     }
   }
 
-  EventDisposition result = DID_NOT_HANDLE;
-  // If all other touch events in this interaction sequence were dropped, we can
-  // safely drop the touchend too.
-  if (base::FeatureList::IsEnabled(
-          features::kDroppedTouchSequenceIncludesTouchEnd) &&
-      touch_result_.has_value() && touch_result_ == DROP_EVENT) {
-    result = DROP_EVENT;
-  }
-
   if (touch_event.touches_length == 1)
     touch_result_.reset();
 
   if (main_thread_touch_sequence_start_disposition_.has_value())
     main_thread_touch_sequence_start_disposition_.reset();
 
-  return result;
+  return DID_NOT_HANDLE;
 }
 
 void InputHandlerProxy::Animate(base::TimeTicks time) {
@@ -1423,6 +1663,9 @@ void InputHandlerProxy::Animate(base::TimeTicks time) {
 void InputHandlerProxy::ReconcileElasticOverscrollAndRootScroll() {
   if (elastic_overscroll_controller_)
     elastic_overscroll_controller_->ReconcileStretchAndScroll();
+  // This is called as a result of the starting of draw. We should return to
+  // queueing events.
+  enqueue_scroll_events_ = true;
 }
 
 void InputHandlerProxy::SetPrefersReducedMotion(bool prefers_reduced_motion) {
@@ -1449,20 +1692,141 @@ void InputHandlerProxy::UpdateRootLayerStateForSynchronousInputHandler(
 
 void InputHandlerProxy::DeliverInputForBeginFrame(
     const viz::BeginFrameArgs& args) {
-  if (!scroll_predictor_)
-    DispatchQueuedInputEvents(true /* frame_aligned */);
+  if (scroll_event_dispatch_mode_ ==
+      cc::InputHandlerClient::ScrollEventDispatchMode::
+          kUseScrollPredictorForDeadline) {
+    deadline_timer_.Stop();
 
-  // Resampling GSUs and dispatch queued input events.
-  while (HasQueuedEventsReadyForDispatch(true /* frame_aligned */)) {
-    std::unique_ptr<EventWithCallback> event_with_callback =
-        scroll_predictor_->ResampleScrollEvents(compositor_event_queue_->Pop(),
-                                                args.frame_time, args.interval);
+    // Assume that the scheduler might delay the task execution by ~25%.
+    const float slack_coefficient = 0.25;
+    auto deadline = args.frame_time + args.interval * scroll_deadline_ratio_ *
+                                          (1 - slack_coefficient);
 
-    DispatchSingleInputEvent(std::move(event_with_callback), args.frame_time);
+    deadline_timer_.Start(
+        FROM_HERE, deadline,
+        base::BindOnce(&InputHandlerProxy::DeliverInputForDeadline,
+                       base::Unretained(this)),
+        base::subtle::DelayPolicy::kPrecise);
   }
+  current_begin_frame_args_ = args;
+  enqueue_scroll_events_ = !compositor_event_queue_->empty();
+  // TODO(jonross): This occurs for more than just `BeginFrameArgs::MISSED`.
+  // We likely need to cap the number of consecutive times duing which this
+  // occurs. As we could have a slow device that just consistently starts
+  // frame production after the deadline.
+  if (enqueue_scroll_events_ &&
+      args.type == viz::BeginFrameArgs::BeginFrameArgsType::MISSED &&
+      ShouldNotDispatchLateInputEvent(scroll_event_dispatch_mode_,
+                                      scroll_deadline_ratio_,
+                                      current_begin_frame_args_, tick_clock_)) {
+    input_handler_->SetNeedsAnimateInput();
+    return;
+  }
+
+  if (!scroll_predictor_) {
+    DispatchQueuedInputEvents(true /* frame_aligned */);
+  }
+
+  base::TimeTicks sample_time = base::TimeTicks::Max();
+  if (!handling_fling_ && update_scroll_predictor_ && scroll_predictor_) {
+    base::TimeDelta latency = scroll_predictor_->ResampleLatency(args.interval);
+    sample_time = args.frame_time + latency;
+  }
+
+  // Determine if we should attempt to generate a synthetic scroll event. This
+  // is done in two main scenarios:
+  // 1. The queue is empty and kUseScrollPredictorForEmptyQueue mode is enabled.
+  // 2. The kUpdateScrollPredictorInputMapping feature and its
+  // kGenerateSyntheticScrollPrediction param are both enabled.
+  bool should_attempt_synthetic =
+      !handling_fling_ &&
+      (scroll_event_dispatch_mode_ ==
+           cc::InputHandlerClient::ScrollEventDispatchMode::
+               kUseScrollPredictorForEmptyQueue ||
+       (update_scroll_predictor_ &&
+        input::features::kGenerateSyntheticScrollPrediction.Get()));
+
+  if (should_attempt_synthetic) {
+    if (!enqueue_scroll_events_) {
+      // |compositor_event_queue_| is empty, try to generate a Synthetic
+      // GestureScroll event.
+      GenerateAndDispatchSyntheticScrollPrediction(args);
+      enqueue_scroll_events_ = true;
+    } else if (compositor_event_queue_->PeekType() ==
+                   WebGestureEvent::Type::kGestureScrollUpdate &&
+               compositor_event_queue_->PeekTimestamp() > sample_time) {
+      // Queue has events, but the first event is for a future frame, attempt to
+      // generate a synthetic event using the future event.
+      GenerateSyntheticScrollPredictionFromFutureEvent(args);
+    }
+  }
+
+  if (compositor_event_queue_->size() == 1) {
+    const WebInputEvent* event = compositor_event_queue_->FirstOriginalEvent();
+    is_only_empty_gsu_in_queue_ = static_cast<const WebGestureEvent*>(event)
+                                          ->data.scroll_update.delta_x == 0 &&
+                                  static_cast<const WebGestureEvent*>(event)
+                                          ->data.scroll_update.delta_y == 0;
+  }
+  ProcessQueuedEventsUpToSampleTime(args, sample_time);
+
+  compositor_event_queue_->DidFinishDispatch();
 
   if (!queue_flushed_callback_.is_null()) {
     std::move(queue_flushed_callback_).Run();
+  }
+
+  if (compositor_event_queue_->empty()) {
+    handling_fling_ = false;
+  }
+}
+
+void InputHandlerProxy::GenerateSyntheticScrollPredictionFromFutureEvent(
+    const viz::BeginFrameArgs& args) {
+  DCHECK(compositor_event_queue_->PeekType() ==
+         WebGestureEvent::Type::kGestureScrollUpdate);
+  // Don't dispatch any input event while there's an async scroll begin hit test
+  // outstanding.
+  if (scroll_begin_main_thread_hit_test_reasons_) {
+    return;
+  }
+
+  if (compositor_event_queue_->FirstOriginalEvent()) {
+    scroll_predictor_->UpdatePredictionForEventAfterSampleTime(
+        *compositor_event_queue_->FirstOriginalEvent());
+  }
+
+  bool synthetic_event_dispatched =
+      GenerateAndDispatchSyntheticScrollPrediction(args);
+  if (!synthetic_event_dispatched &&
+      base::FeatureList::IsEnabled(
+          input::features::kDispatchSingleEventIfNoPrediction)) {
+    // Dispatch the first input event from the queue without coalescing with
+    // other GSU/GPUs.
+    DispatchSingleInputEvent(compositor_event_queue_->Pop());
+  }
+}
+
+void InputHandlerProxy::ProcessQueuedEventsUpToSampleTime(
+    const viz::BeginFrameArgs& args,
+    base::TimeTicks sample_time) {
+  // Coalesce scroll and pinch events in the |compositor_event_queue_| till
+  // sample_time. It automatically includes the backlog.
+  compositor_event_queue_->CoalesceEvents(sample_time);
+
+  while (HasQueuedEventsReadyForDispatch(/*frame_aligned=*/true, sample_time)) {
+    auto event_with_callback = compositor_event_queue_->Pop();
+    const WebInputEvent* next_event = nullptr;
+    // Provide the next event to the predictor ONLY if it\'s a GSU.
+    if (compositor_event_queue_->PeekType() ==
+        WebGestureEvent::Type::kGestureScrollUpdate) {
+      next_event = compositor_event_queue_->FirstOriginalEvent();
+    }
+
+    auto event_to_dispatch = scroll_predictor_->ResampleScrollEvents(
+        std::move(event_with_callback), args.frame_time, args.interval,
+        next_event);
+    DispatchSingleInputEvent(std::move(event_to_dispatch));
   }
 }
 
@@ -1470,6 +1834,44 @@ void InputHandlerProxy::DeliverInputForHighLatencyMode() {
   // When prediction enabled, do not handle input after commit complete.
   if (!scroll_predictor_)
     DispatchQueuedInputEvents(false /* frame_aligned */);
+}
+
+void InputHandlerProxy::DeliverInputForDeadline() {
+  if (last_deadline_call_for_frame_id_ == current_begin_frame_args_.frame_id) {
+    return;
+  }
+  last_deadline_call_for_frame_id_ = current_begin_frame_args_.frame_id;
+
+  if (ShouldNotDispatchLateInputEvent(scroll_event_dispatch_mode_,
+                                      scroll_deadline_ratio_,
+                                      current_begin_frame_args_, tick_clock_) ||
+      scroll_event_dispatch_mode_ !=
+          cc::InputHandlerClient::ScrollEventDispatchMode::
+              kUseScrollPredictorForDeadline ||
+      enqueue_scroll_events_) {
+    return;
+  }
+  GenerateAndDispatchSyntheticScrollPrediction(current_begin_frame_args_);
+}
+
+void InputHandlerProxy::DidFinishImplFrame() {
+  // While ReconcileElasticOverscrollAndRootScroll is called for the start of
+  // draw. It is possible that there was no non-scrolling updates, which can
+  // result in no draws. Once the frame production as ended we should return to
+  // enqueuing scroll events.
+  enqueue_scroll_events_ = true;
+}
+
+bool InputHandlerProxy::HasQueuedInput() const {
+  return HasQueuedEventsReadyForDispatch(/*frame_aligned=*/true,
+                                         base::TimeTicks::Max());
+}
+
+void InputHandlerProxy::SetScrollEventDispatchMode(
+    ScrollEventDispatchMode mode,
+    double scroll_deadline_ratio) {
+  scroll_event_dispatch_mode_ = mode;
+  scroll_deadline_ratio_ = scroll_deadline_ratio;
 }
 
 void InputHandlerProxy::SetSynchronousInputHandler(
@@ -1504,10 +1906,8 @@ bool InputHandlerProxy::GetSnapFlingInfoAndSetAnimatingSnapTarget(
 
 gfx::PointF InputHandlerProxy::ScrollByForSnapFling(
     const gfx::Vector2dF& delta) {
-  cc::ScrollState scroll_state = CreateScrollStateForInertialUpdate(delta);
-
-  cc::InputHandlerScrollResult scroll_result =
-      input_handler_->ScrollUpdate(&scroll_state, base::TimeDelta());
+  cc::InputHandlerScrollResult scroll_result = input_handler_->ScrollUpdate(
+      CreateScrollStateForInertialUpdate(delta), base::TimeDelta());
   return scroll_result.current_visual_offset;
 }
 
@@ -1522,9 +1922,12 @@ void InputHandlerProxy::RequestAnimationForSnapFling() {
 void InputHandlerProxy::UpdateBrowserControlsState(
     cc::BrowserControlsState constraints,
     cc::BrowserControlsState current,
-    bool animate) {
+    bool animate,
+    base::optional_ref<const cc::BrowserControlsOffsetTagModifications>
+        offset_tag_modifications) {
   DCHECK(input_handler_);
-  input_handler_->UpdateBrowserControlsState(constraints, current, animate);
+  input_handler_->UpdateBrowserControlsState(constraints, current, animate,
+                                             offset_tag_modifications);
 }
 
 void InputHandlerProxy::FlushQueuedEventsForTesting() {
@@ -1535,16 +1938,18 @@ void InputHandlerProxy::FlushQueuedEventsForTesting() {
   CHECK(compositor_event_queue_->empty());
 }
 
+cc::ElementId InputHandlerProxy::LatchedScrollerElementId() const {
+  return input_handler_->LatchedScrollerElementId();
+}
 void InputHandlerProxy::HandleOverscroll(
     const gfx::PointF& causal_event_viewport_point,
-    const cc::InputHandlerScrollResult& scroll_result) {
+    const cc::InputHandlerScrollResult& scroll_result,
+    const blink::WebGestureDevice source_device) {
   DCHECK(client_);
   if (!scroll_result.did_overscroll_root)
     return;
 
-  TRACE_EVENT2("input", "InputHandlerProxy::DidOverscroll", "dx",
-               scroll_result.unused_scroll_delta.x(), "dy",
-               scroll_result.unused_scroll_delta.y());
+  TRACE_EVENT("input", "InputHandlerProxy::DidOverscroll");
 
   // Bundle overscroll message with triggering event response, saving an IPC.
   current_overscroll_params_ = std::make_unique<DidOverscrollParams>();
@@ -1556,6 +1961,7 @@ void InputHandlerProxy::HandleOverscroll(
       causal_event_viewport_point;
   current_overscroll_params_->overscroll_behavior =
       scroll_result.overscroll_behavior;
+  current_overscroll_params_->source_device = source_device;
   return;
 }
 
@@ -1565,10 +1971,15 @@ void InputHandlerProxy::RequestAnimation() {
 
 void InputHandlerProxy::HandleScrollElasticityOverscroll(
     const WebGestureEvent& gesture_event,
-    const cc::InputHandlerScrollResult& scroll_result) {
+    const cc::InputHandlerScrollResult& scroll_result,
+    cc::ElementId latched_element_id) {
   DCHECK(elastic_overscroll_controller_);
-  elastic_overscroll_controller_->ObserveGestureEventAndResult(gesture_event,
-                                                               scroll_result);
+  if (!elastic_overscroll_controller_->CanOverscroll(latched_element_id)) {
+    return;
+  }
+
+  elastic_overscroll_controller_->ObserveGestureEventAndResult(
+      latched_element_id, gesture_event, scroll_result);
 }
 
 void InputHandlerProxy::SetTickClockForTesting(
@@ -1690,6 +2101,13 @@ const cc::InputHandlerPointerResult InputHandlerProxy::HandlePointerUp(
   return pointer_result;
 }
 
+void InputHandlerProxy::SetHandwritingRadiusOnInputThread(
+    int handwriting_radius) {
+  if (handwriting_radius_ != handwriting_radius) {
+    handwriting_radius_ = handwriting_radius;
+  }
+}
+
 void InputHandlerProxy::SetDeferBeginMainFrame(
     bool defer_begin_main_frame) const {
   input_handler_->SetDeferBeginMainFrame(defer_begin_main_frame);
@@ -1698,7 +2116,8 @@ void InputHandlerProxy::SetDeferBeginMainFrame(
 void InputHandlerProxy::RequestCallbackAfterEventQueueFlushed(
     base::OnceClosure callback) {
   CHECK(queue_flushed_callback_.is_null());
-  if (HasQueuedEventsReadyForDispatch(/*frame_aligned*/ true)) {
+  if (HasQueuedEventsReadyForDispatch(
+          /*frame_aligned*/ true, /* sample_time */ base::TimeTicks::Max())) {
     queue_flushed_callback_ = std::move(callback);
   } else {
     std::move(callback).Run();

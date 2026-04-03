@@ -5,6 +5,7 @@
 #include "media/capabilities/webrtc_video_stats_db.h"
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/format_macros.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/strings/string_number_conversions.h"
@@ -101,9 +102,10 @@ std::optional<int> WebrtcVideoStatsDB::VideoDescKey::ParsePixelsFromKey(
       last_separator_index >= kMinimumIndexOfLastSeparator &&
       (last_separator_index + 1) < key.size()) {
     int parsed_pixels;
-    if (base::StringToInt(&key.c_str()[last_separator_index + 1],
-                          &parsed_pixels))
+    if (base::StringToInt(&UNSAFE_TODO(key.c_str()[last_separator_index + 1]),
+                          &parsed_pixels)) {
       return parsed_pixels;
+    }
   }
   return std::nullopt;
 }

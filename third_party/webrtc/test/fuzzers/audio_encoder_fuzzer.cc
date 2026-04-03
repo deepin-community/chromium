@@ -10,8 +10,12 @@
 
 #include "test/fuzzers/audio_encoder_fuzzer.h"
 
+#include <cstdint>
 #include <cstring>
+#include <memory>
 
+#include "api/array_view.h"
+#include "api/audio_codecs/audio_encoder.h"
 #include "rtc_base/buffer.h"
 #include "rtc_base/checks.h"
 #include "test/fuzzers/fuzz_data_helper.h"
@@ -21,7 +25,7 @@ namespace webrtc {
 // This function reads bytes from `data_view`, interprets them as RTP timestamp
 // and input samples, and sends them for encoding. The process continues until
 // no more data is available.
-void FuzzAudioEncoder(rtc::ArrayView<const uint8_t> data_view,
+void FuzzAudioEncoder(ArrayView<const uint8_t> data_view,
                       std::unique_ptr<AudioEncoder> encoder) {
   test::FuzzDataHelper data(data_view);
   const size_t block_size_samples =
@@ -33,8 +37,9 @@ void FuzzAudioEncoder(rtc::ArrayView<const uint8_t> data_view,
     return;
   }
 
-  rtc::BufferT<int16_t> input_aligned(block_size_samples);
-  rtc::Buffer encoded;
+  BufferT<int16_t> input_aligned =
+      BufferT<int16_t>::CreateWithCapacity(block_size_samples);
+  Buffer encoded;
 
   // Each round in the loop below will need one block of samples + a 32-bit
   // timestamp from the fuzzer input.
@@ -43,9 +48,12 @@ void FuzzAudioEncoder(rtc::ArrayView<const uint8_t> data_view,
     const uint32_t timestamp = data.Read<uint32_t>();
     auto byte_array = data.ReadByteArray(block_size_bytes);
     // Align the data by copying to another array.
-    RTC_DCHECK_EQ(input_aligned.size() * sizeof(int16_t),
+    RTC_DCHECK_EQ(block_size_samples * sizeof(int16_t),
                   byte_array.size() * sizeof(uint8_t));
-    memcpy(input_aligned.data(), byte_array.data(), byte_array.size());
+    input_aligned.SetSize(0);
+    input_aligned.AppendData(
+        reinterpret_cast<const int16_t*>(byte_array.data()),
+        byte_array.size() / sizeof(int16_t));
     auto info = encoder->Encode(timestamp, input_aligned, &encoded);
   }
 }

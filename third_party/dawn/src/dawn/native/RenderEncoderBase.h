@@ -40,7 +40,7 @@ namespace dawn::native {
 class RenderEncoderBase : public ProgrammableEncoder {
   public:
     RenderEncoderBase(DeviceBase* device,
-                      const char* label,
+                      StringView label,
                       EncodingContext* encodingContext,
                       Ref<AttachmentState> attachmentState,
                       bool depthReadOnly,
@@ -59,6 +59,18 @@ class RenderEncoderBase : public ProgrammableEncoder {
     void APIDrawIndirect(BufferBase* indirectBuffer, uint64_t indirectOffset);
     void APIDrawIndexedIndirect(BufferBase* indirectBuffer, uint64_t indirectOffset);
 
+    void APIMultiDrawIndirect(BufferBase* indirectBuffer,
+                              uint64_t indirectOffset,
+                              uint32_t maxDrawCount,
+                              BufferBase* drawCountBuffer = nullptr,
+                              uint64_t drawCountBufferOffset = 0);
+
+    void APIMultiDrawIndexedIndirect(BufferBase* indirectBuffer,
+                                     uint64_t indirectOffset,
+                                     uint32_t maxDrawCount,
+                                     BufferBase* drawCountBuffer = nullptr,
+                                     uint64_t drawCountBufferOffset = 0);
+
     void APISetPipeline(RenderPipelineBase* pipeline);
 
     void APISetVertexBuffer(uint32_t slot, BufferBase* buffer, uint64_t offset, uint64_t size);
@@ -72,6 +84,8 @@ class RenderEncoderBase : public ProgrammableEncoder {
                          uint32_t dynamicOffsetCount = 0,
                          const uint32_t* dynamicOffsets = nullptr);
 
+    void APISetImmediates(uint32_t offset, const void* data, size_t size);
+
     const AttachmentState* GetAttachmentState() const;
     bool IsDepthReadOnly() const;
     bool IsStencilReadOnly() const;
@@ -83,9 +97,9 @@ class RenderEncoderBase : public ProgrammableEncoder {
     RenderEncoderBase(DeviceBase* device,
                       EncodingContext* encodingContext,
                       ErrorTag errorTag,
-                      const char* label);
+                      StringView label);
 
-    void DestroyImpl() override;
+    void DestroyImpl(DestroyReason reason) override;
 
     CommandBufferStateTracker mCommandBufferState;
     RenderPassResourceUsageTracker mUsageTracker;

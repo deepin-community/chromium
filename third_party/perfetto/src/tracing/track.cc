@@ -17,7 +17,7 @@
 #include "perfetto/tracing/track.h"
 
 #include "perfetto/ext/base/file_utils.h"
-#include "perfetto/ext/base/hash.h"
+#include "perfetto/ext/base/fnv_hash.h"
 #include "perfetto/ext/base/scoped_file.h"
 #include "perfetto/ext/base/string_splitter.h"
 #include "perfetto/ext/base/string_utils.h"
@@ -49,6 +49,13 @@ void Track::Serialize(protos::pbzero::TrackDescriptor* desc) const {
   desc->AppendRawProtoBytes(bytes.data(), bytes.size());
 }
 
+// static
+Track Track::ThreadScoped(const void* ptr, Track parent) {
+  if (parent.uuid == 0)
+    return Track::FromPointer(ptr, ThreadTrack::Current());
+  return Track::FromPointer(ptr, parent);
+}
+
 protos::gen::TrackDescriptor ProcessTrack::Serialize() const {
   auto desc = Track::Serialize();
   auto pd = desc.mutable_process();
@@ -67,7 +74,7 @@ protos::gen::TrackDescriptor ProcessTrack::Serialize() const {
           std::string(splitter.cur_token(), splitter.cur_token_size()));
     }
   }
-  // TODO(skyostil): Record command line on Windows and Mac.
+  // TODO(skyostil): Record command line on Windows, FreeBSD and Mac.
 #endif
   return desc;
 }
@@ -109,10 +116,39 @@ void ThreadTrack::Serialize(protos::pbzero::TrackDescriptor* desc) const {
   desc->AppendRawProtoBytes(bytes.data(), bytes.size());
 }
 
+protos::gen::TrackDescriptor NamedTrack::Serialize() const {
+  auto desc = Track::Serialize();
+  if (static_name_) {
+    desc.set_static_name(static_name_.value);
+  } else {
+    desc.set_name(dynamic_name_.value);
+  }
+  if (sibling_merge_behavior_ != perfetto::protos::gen::TrackDescriptor::
+                                     SIBLING_MERGE_BEHAVIOR_UNSPECIFIED) {
+    desc.set_sibling_merge_behavior(sibling_merge_behavior_);
+  }
+  if (sibling_merge_key_) {
+    desc.set_sibling_merge_key(sibling_merge_key_);
+  } else if (sibling_merge_key_int_.has_value()) {
+    desc.set_sibling_merge_key_int(*sibling_merge_key_int_);
+  }
+  return desc;
+}
+
+void NamedTrack::Serialize(protos::pbzero::TrackDescriptor* desc) const {
+  auto bytes = Serialize().SerializeAsString();
+  desc->AppendRawProtoBytes(bytes.data(), bytes.size());
+}
+
 protos::gen::TrackDescriptor CounterTrack::Serialize() const {
   auto desc = Track::Serialize();
-  desc.set_name(name_);
   auto* counter = desc.mutable_counter();
+  if (static_name_) {
+    desc.set_static_name(static_name_.value);
+  } else {
+    desc.set_name(dynamic_name_.value);
+  }
+
   if (category_)
     counter->add_categories(category_);
   if (unit_ != perfetto::protos::pbzero::CounterDescriptor::UNIT_UNSPECIFIED)
@@ -177,11 +213,15 @@ TrackRegistry::TrackRegistry() = default;
 TrackRegistry::~TrackRegistry() = default;
 
 // static
-void TrackRegistry::InitializeInstance() {
+void TrackRegistry::InitializeInstance(std::optional<uint64_t> process_uuid) {
   if (instance_)
     return;
   instance_ = new TrackRegistry();
-  Track::process_uuid = ComputeProcessUuid();
+  if (process_uuid) {
+    Track::process_uuid = *process_uuid;
+  } else {
+    Track::process_uuid = ComputeProcessUuid();
+  }
 }
 
 // static
@@ -191,15 +231,15 @@ uint64_t TrackRegistry::ComputeProcessUuid() {
   // in the same process (e.g., one in the app and another in a system
   // framework), events emitted by each will be consistently interleaved on
   // common thread and process tracks.
+  uint64_t random;
   if (uint64_t start_time = GetProcessStartTime()) {
-    base::Hasher hash;
-    hash.Update(start_time);
-    hash.Update(Platform::GetCurrentProcessId());
-    return hash.digest();
+    random = start_time;
+  } else {
+    // Fall back to a randomly generated identifier.
+    static uint64_t random_once = static_cast<uint64_t>(base::Uuidv4().lsb());
+    random = random_once;
   }
-  // Fall back to a randomly generated identifier.
-  static uint64_t random_once = static_cast<uint64_t>(base::Uuidv4().lsb());
-  return random_once;
+  return base::FnvHasher::Combine(random, Platform::GetCurrentProcessId());
 }
 
 void TrackRegistry::ResetForTesting() {
@@ -209,19 +249,7 @@ void TrackRegistry::ResetForTesting() {
 void TrackRegistry::UpdateTrack(Track track,
                                 const std::string& serialized_desc) {
   std::lock_guard<std::mutex> lock(mutex_);
-  tracks_[track.uuid] = std::move(serialized_desc);
-}
-
-void TrackRegistry::UpdateTrackImpl(
-    Track track,
-    std::function<void(protos::pbzero::TrackDescriptor*)> fill_function) {
-  constexpr size_t kInitialSliceSize = 32;
-  constexpr size_t kMaximumSliceSize = 4096;
-  protozero::HeapBuffered<protos::pbzero::TrackDescriptor> new_descriptor(
-      kInitialSliceSize, kMaximumSliceSize);
-  fill_function(new_descriptor.get());
-  auto serialized_desc = new_descriptor.SerializeAsString();
-  UpdateTrack(track, serialized_desc);
+  tracks_[track.uuid] = {serialized_desc, track.parent_uuid};
 }
 
 void TrackRegistry::EraseTrack(Track track) {

@@ -28,7 +28,6 @@
 #include "gmock/gmock.h"
 #include "src/tint/lang/core/type/reference.h"
 #include "src/tint/lang/core/type/texture_dimension.h"
-#include "src/tint/lang/wgsl/ast/bitcast_expression.h"
 #include "src/tint/lang/wgsl/resolver/resolver.h"
 #include "src/tint/lang/wgsl/resolver/resolver_helper_test.h"
 
@@ -62,7 +61,7 @@ TEST_F(ResolverPtrRefValidationTest, AddressOfLet) {
 
     EXPECT_FALSE(r()->Resolve());
 
-    EXPECT_EQ(r()->error(), R"(12:34 error: cannot take the address of let 'l')");
+    EXPECT_EQ(r()->error(), R"(12:34 error: cannot take the address of 'let l')");
 }
 
 TEST_F(ResolverPtrRefValidationTest, AddressOfConst) {
@@ -75,7 +74,7 @@ TEST_F(ResolverPtrRefValidationTest, AddressOfConst) {
 
     EXPECT_FALSE(r()->Resolve());
 
-    EXPECT_EQ(r()->error(), R"(12:34 error: cannot take the address of const 'c')");
+    EXPECT_EQ(r()->error(), R"(12:34 error: cannot take the address of 'const c')");
 }
 
 TEST_F(ResolverPtrRefValidationTest, AddressOfOverride) {
@@ -88,7 +87,7 @@ TEST_F(ResolverPtrRefValidationTest, AddressOfOverride) {
 
     EXPECT_FALSE(r()->Resolve());
 
-    EXPECT_EQ(r()->error(), R"(12:34 error: cannot take the address of override 'o')");
+    EXPECT_EQ(r()->error(), R"(12:34 error: cannot take the address of 'override o')");
 }
 
 TEST_F(ResolverPtrRefValidationTest, AddressOfParameter) {
@@ -113,7 +112,7 @@ TEST_F(ResolverPtrRefValidationTest, AddressOfHandle) {
 
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(),
-              R"(12:34 error: cannot take the address of var 't' in handle address space)");
+              R"(12:34 error: cannot take the address of 'var t' in handle address space)");
 }
 
 TEST_F(ResolverPtrRefValidationTest, AddressOfFunction) {
@@ -171,7 +170,7 @@ TEST_F(ResolverPtrRefValidationTest, AddressOfAccess) {
     WrapInFunction(expr);
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), R"(12:34 error: cannot use access 'read_write' as value)");
+    EXPECT_EQ(r()->error(), R"(12:34 error: cannot use access enumerant 'read_write' as value)");
 }
 
 TEST_F(ResolverPtrRefValidationTest, AddressOfAddressSpace) {
@@ -183,32 +182,13 @@ TEST_F(ResolverPtrRefValidationTest, AddressOfAddressSpace) {
     EXPECT_EQ(r()->error(), R"(12:34 error: cannot use address space 'uniform' as value)");
 }
 
-TEST_F(ResolverPtrRefValidationTest, AddressOfBuiltinValue) {
+TEST_F(ResolverPtrRefValidationTest, AddressOfUnresolvedValue) {
     // &position
     auto* expr = AddressOf(Expr(Source{{12, 34}}, "position"));
     WrapInFunction(expr);
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), R"(12:34 error: cannot use builtin value 'position' as value)");
-}
-
-TEST_F(ResolverPtrRefValidationTest, AddressOfInterpolationSampling) {
-    // &centroid
-    auto* expr = AddressOf(Expr(Source{{12, 34}}, "centroid"));
-    WrapInFunction(expr);
-
-    EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(),
-              R"(12:34 error: cannot use interpolation sampling 'centroid' as value)");
-}
-
-TEST_F(ResolverPtrRefValidationTest, AddressOfInterpolationType) {
-    // &perspective
-    auto* expr = AddressOf(Expr(Source{{12, 34}}, "perspective"));
-    WrapInFunction(expr);
-
-    EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), R"(12:34 error: cannot use interpolation type 'perspective' as value)");
+    EXPECT_EQ(r()->error(), R"(12:34 error: unresolved value 'position')");
 }
 
 TEST_F(ResolverPtrRefValidationTest, AddressOfTexelFormat) {
@@ -246,6 +226,32 @@ TEST_F(ResolverPtrRefValidationTest, AddressOfVectorComponent_IndexAccessor) {
     EXPECT_EQ(r()->error(), R"(12:34 error: cannot take the address of a vector component)");
 }
 
+TEST_F(ResolverPtrRefValidationTest, AddressOfVectorComponent_MemberAccessorOnPointer) {
+    // var v : vec4<i32>;
+    // &((&v).y)
+    auto* v = Var("v", ty.vec4<i32>());
+    auto* expr = AddressOf(MemberAccessor(Source{{12, 34}}, AddressOf("v"), "y"));
+
+    WrapInFunction(v, expr);
+
+    EXPECT_FALSE(r()->Resolve());
+
+    EXPECT_EQ(r()->error(), R"(12:34 error: cannot take the address of a vector component)");
+}
+
+TEST_F(ResolverPtrRefValidationTest, AddressOfVectorComponent_IndexAccessorOnPointer) {
+    // var v : vec4<i32>;
+    // &((&v)[2i])
+    auto* v = Var("v", ty.vec4<i32>());
+    auto* expr = AddressOf(IndexAccessor(Source{{12, 34}}, AddressOf("v"), 2_i));
+
+    WrapInFunction(v, expr);
+
+    EXPECT_FALSE(r()->Resolve());
+
+    EXPECT_EQ(r()->error(), R"(12:34 error: cannot take the address of a vector component)");
+}
+
 TEST_F(ResolverPtrRefValidationTest, IndirectOfAddressOfHandle) {
     // @group(0) @binding(0) var t: texture_3d<f32>;
     // *&t
@@ -256,7 +262,7 @@ TEST_F(ResolverPtrRefValidationTest, IndirectOfAddressOfHandle) {
 
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(),
-              R"(12:34 error: cannot take the address of var 't' in handle address space)");
+              R"(12:34 error: cannot take the address of 'var t' in handle address space)");
 }
 
 TEST_F(ResolverPtrRefValidationTest, DerefOfLiteral) {
@@ -307,7 +313,7 @@ TEST_F(ResolverPtrRefValidationTest, InferredPtrAccessMismatch) {
 
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(r()->error(),
-              "12:34 error: cannot initialize let of type "
+              "12:34 error: cannot initialize 'let' of type "
               "'ptr<storage, i32, read>' with value of type "
               "'ptr<storage, i32, read_write>'");
 }

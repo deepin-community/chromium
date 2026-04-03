@@ -11,6 +11,7 @@
 #include "ash/wm/splitview/split_view_types.h"
 #include "ash/wm/window_state.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 
 namespace gfx {
 class Rect;
@@ -35,7 +36,7 @@ class TabletModeWindowState : public WindowState::State {
   // |creator::WindowStateDestroyed()| to inform that the window mode was
   // reverted to the old window manager.
   TabletModeWindowState(aura::Window* window,
-                        TabletModeWindowManager* creator,
+                        base::WeakPtr<TabletModeWindowManager> creator,
                         bool snap,
                         bool animate_bounds_on_attach,
                         bool entering_tablet_mode);
@@ -49,7 +50,6 @@ class TabletModeWindowState : public WindowState::State {
   // method is not supposed to be called for client-controlled windows (e.g.
   // ARC++) as the bounds change with `SetBoundsDirect` is not ack'ed by the
   // client. (b/264962634)
-  // TODO(sammiequon): Consolidate with `UpdateBounds`.
   static void UpdateWindowPosition(
       WindowState* window_state,
       WindowState::BoundsChangeAnimationType animation_type);
@@ -82,13 +82,11 @@ class TabletModeWindowState : public WindowState::State {
                     chromeos::WindowStateType new_state_type,
                     bool animate);
 
-  // If `target_state` is PRIMARY/SECONDARY_SNAPPED or TRUSTED_PINNED/PINNED,
-  // returns `target_state`. Otherwise depending on the capabilities of the
-  // window either returns `WindowStateType::kMaximized` or
-  // `WindowStateType::kNormal`.
-  chromeos::WindowStateType AdjustStateForTabletMode(
-      WindowState* window_state,
-      chromeos::WindowStateType target_state);
+  // Returns desired state for the tablet mode for the given 'window_state`.
+  // If the window is in `kNormal` state, and can be maximized, returns
+  // maximzied, otherwise it returns the same state (snapped, pinned, or
+  // fullscreen).
+  chromeos::WindowStateType AdjustStateForTabletMode(WindowState* window_state);
 
   // Updates the bounds to the maximum possible bounds according to the current
   // window state. If `animate` is set we animate the change.
@@ -119,8 +117,9 @@ class TabletModeWindowState : public WindowState::State {
   // The window whose WindowState owns this instance.
   raw_ptr<aura::Window> window_;
 
-  // The creator which needs to be informed when this state goes away.
-  raw_ptr<TabletModeWindowManager> creator_;
+  // The creator which needs to be informed when this state goes away. Use a
+  // weak ptr since `creator_` can be destroyed before `this`.
+  base::WeakPtr<TabletModeWindowManager> const creator_;
 
   // The state type to be established in AttachState(), unless
   // previous_state->GetType() is MAXIMIZED, MINIMIZED, FULLSCREEN, PINNED, or

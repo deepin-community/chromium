@@ -18,7 +18,7 @@
 using ScreenDetailsTest = InProcessBrowserTest;
 
 // Tests the basic structure and values of the ScreenDetails API.
-// TODO(crbug.com/1119974): Need content_browsertests permission controls.
+// TODO(crbug.com/40145721): Need content_browsertests permission controls.
 IN_PROC_BROWSER_TEST_F(ScreenDetailsTest, GetScreenDetailsBasic) {
   auto* tab = chrome_test_utils::GetActiveWebContents(this);
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -34,7 +34,7 @@ IN_PROC_BROWSER_TEST_F(ScreenDetailsTest, GetScreenDetailsBasic) {
   ASSERT_TRUE(EvalJs(tab, "'getScreenDetails' in self").ExtractBool());
   content::EvalJsResult result =
       EvalJs(tab, content::test::kGetScreenDetailsScript);
-  EXPECT_EQ(content::test::GetExpectedScreenDetails(), result.value);
+  EXPECT_EQ(content::test::GetExpectedScreenDetails(), result);
 }
 
 // Tests that ScreenDetailed and window.screen both yield display metrics, not
@@ -76,7 +76,7 @@ IN_PROC_BROWSER_TEST_F(ScreenDetailsTest, FullscreenSize) {
   )JS";
   ASSERT_TRUE(EvalJs(tab, kEnterFullscreenAndResizeScript).ExtractBool());
   DevToolsWindowTesting::OpenDevToolsWindowSync(tab, true);
-  ASSERT_TRUE(EvalJs(tab, "window.nextResize").error.empty());
+  ASSERT_TRUE(EvalJs(tab, "window.nextResize").is_ok());
   ASSERT_TRUE(tab->IsFullscreen());
   // `window.screen` dimensions match the display size.
   EXPECT_EQ(display_size, EvalJs(tab, "`${screen.width}x${screen.height}`"));

@@ -6,13 +6,15 @@
 #define COMPONENTS_METRICS_METRICS_SERVICE_CLIENT_H_
 
 #include <stdint.h>
+
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
-#include "base/metrics/field_trial_params.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "components/metrics/metrics_log_store.h"
 #include "components/metrics/metrics_log_uploader.h"
 #include "components/metrics/metrics_reporting_default_state.h"
@@ -23,6 +25,18 @@ namespace ukm {
 class UkmService;
 }
 
+namespace regional_capabilities {
+class CountryIdHolder;
+}
+
+namespace metrics::dwa {
+class DwaService;
+}
+
+namespace metrics::private_metrics {
+class PumaService;
+}
+
 namespace network_time {
 class NetworkTimeTracker;
 }
@@ -30,8 +44,6 @@ class NetworkTimeTracker;
 namespace variations {
 class SyntheticTrialRegistry;
 }
-
-class IdentifiabilityStudyState;
 
 namespace metrics {
 
@@ -66,9 +78,11 @@ class MetricsServiceClient {
   // Returns the UkmService instance that this client is associated with.
   virtual ukm::UkmService* GetUkmService();
 
-  // Returns the IdentifiabilityStudyState instance that this client is
-  // associated with. Might be nullptr.
-  virtual IdentifiabilityStudyState* GetIdentifiabilityStudyState();
+  // Returns the DwaService instance that this client is associated with.
+  virtual metrics::dwa::DwaService* GetDwaService();
+
+  // Returns the PumaService instance that this client is associated with.
+  virtual metrics::private_metrics::PumaService* GetPumaService();
 
   // Returns the StructuredMetricsService instance that this client is
   // associated with.
@@ -133,23 +147,37 @@ class MetricsServiceClient {
   virtual std::unique_ptr<MetricsLogUploader> CreateUploader(
       const GURL& server_url,
       const GURL& insecure_server_url,
-      base::StringPiece mime_type,
+      std::string_view mime_type,
       metrics::MetricsLogUploader::MetricServiceType service_type,
       const MetricsLogUploader::UploadCallback& on_upload_complete) = 0;
 
+#if BUILDFLAG(IS_ANDROID)
+  // Determines whether background tasks can be scheduled with the Android OS
+  // through JobScheduler. Currently, "background tasks" only consist of log
+  // uploads (starting from Android 15, network requests while the app is
+  // backgrounded is only supported when the task is scheduled through
+  // JobScheduler).
+  virtual bool IsJobSchedulerSupported() const;
+#endif  // BUILDFLAG(IS_ANDROID)
+
   // Returns the interval between upload attempts. Checks if debugging flags
-  // have been set, otherwise defaults to GetStandardUploadInterval().
+  // have been set, if there the is a custom interval, otherwise defaults to
+  // GetStandardUploadInterval().
   base::TimeDelta GetUploadInterval();
 
   // Returns the standard interval between upload attempts.
   virtual base::TimeDelta GetStandardUploadInterval() = 0;
 
+  // Returns a custom interval between upload attempts. This interval will be
+  // used instead of the standard interval returned by GetStandardUploadInterval
+  // if it is set.
+  virtual std::optional<base::TimeDelta> GetCustomUploadInterval() const;
+
   // Whether or not the MetricsService should start up quickly and upload the
   // initial report quickly. By default, this work may be delayed by some
-  // amount. Only the default behavior should be used in production, but clients
-  // can override this in tests if tests need to make assertions on the log
-  // data.
-  virtual bool ShouldStartUpFastForTesting() const;
+  // amount. This should be overridden very sparingly in production and the
+  // default behavior should be used in most cases.
+  virtual bool ShouldStartUpFast() const;
 
   // Called when loading state changed, e.g. start/stop loading.
   virtual void LoadingStateChanged(bool is_loading) {}
@@ -167,6 +195,10 @@ class MetricsServiceClient {
   // Returns true iff UKM is allowed for all profiles.
   // See //components/ukm/observers/ukm_consent_state_observer.h for details.
   virtual bool IsUkmAllowedForAllProfiles();
+
+  // Returns true iff DWA is allowed for all profiles.
+  // DWA is allowed if all applicable UKM consents for a platform are given.
+  virtual bool IsDwaAllowedForAllProfiles();
 
   // Returns whether UKM notification listeners were attached to all profiles.
   virtual bool AreNotificationListenersEnabledOnAllProfiles();
@@ -235,6 +267,11 @@ class MetricsServiceClient {
   // Not all platforms support per-user consent. If per-user consent is not
   // supported, this function should return std::nullopt.
   virtual std::optional<std::string> GetCurrentUserId() const;
+
+  // Returns the country ID associated with the profile used for metrics.
+  // Returns std::nullopt if it's not available.
+  virtual std::optional<regional_capabilities::CountryIdHolder>
+  GetProfileCountryIdForPrivateMetricsReporting();
 
  private:
   base::RepeatingClosure update_running_services_;

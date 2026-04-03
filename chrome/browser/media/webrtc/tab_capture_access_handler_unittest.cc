@@ -20,7 +20,6 @@
 #include "content/public/browser/web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -50,7 +49,7 @@ class TabCaptureAccessHandlerTest : public ChromeRenderViewHostTestHarness {
       blink::mojom::StreamDevices* devices_result,
       bool expect_result = true) {
     content::MediaStreamRequest request(
-        web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID(),
+        web_contents()->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID(),
         web_contents()->GetPrimaryMainFrame()->GetRoutingID(),
         /*page_request_id=*/0, url::Origin::Create(GURL(kOrigin)),
         /*user_gesture=*/false, blink::MEDIA_GENERATE_STREAM,
@@ -59,7 +58,8 @@ class TabCaptureAccessHandlerTest : public ChromeRenderViewHostTestHarness {
         blink::mojom::MediaStreamType::NO_SERVICE,
         blink::mojom::MediaStreamType::GUM_TAB_VIDEO_CAPTURE,
         /*disable_local_echo=*/false,
-        /*request_pan_tilt_zoom_permission=*/false);
+        /*request_pan_tilt_zoom_permission=*/false,
+        /*captured_surface_control_active=*/false);
 
     base::RunLoop wait_loop;
     content::MediaResponseCallback callback = base::BindOnce(
@@ -100,7 +100,7 @@ class TabCaptureAccessHandlerTest : public ChromeRenderViewHostTestHarness {
     return web_contents()->GetPrimaryMainFrame();
   }
   int main_frame_id() { return main_frame()->GetRoutingID(); }
-  int process_id() { return main_frame()->GetProcess()->GetID(); }
+  int process_id() { return main_frame()->GetProcess()->GetDeprecatedID(); }
 
  protected:
   std::unique_ptr<TabCaptureAccessHandler> access_handler_;
@@ -111,7 +111,10 @@ TEST_F(TabCaptureAccessHandlerTest, PermissionGiven) {
       content::DesktopMediaID::TYPE_WEB_CONTENTS,
       content::DesktopMediaID::kNullId,
       content::WebContentsMediaCaptureId(
-          web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID(),
+          web_contents()
+              ->GetPrimaryMainFrame()
+              ->GetProcess()
+              ->GetDeprecatedID(),
           web_contents()->GetPrimaryMainFrame()->GetRoutingID()));
 
   extensions::TabCaptureRegistry::Get(profile())->AddRequest(
@@ -135,7 +138,10 @@ TEST_F(TabCaptureAccessHandlerTest, DlpRestricted) {
       content::DesktopMediaID::TYPE_WEB_CONTENTS,
       content::DesktopMediaID::kNullId,
       content::WebContentsMediaCaptureId(
-          web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID(),
+          web_contents()
+              ->GetPrimaryMainFrame()
+              ->GetProcess()
+              ->GetDeprecatedID(),
           web_contents()->GetPrimaryMainFrame()->GetRoutingID()));
 
   // Setup Data Leak Prevention restriction.
@@ -157,7 +163,8 @@ TEST_F(TabCaptureAccessHandlerTest, DlpRestricted) {
   blink::mojom::StreamDevices devices;
   ProcessRequest(source, &result, &devices);
 
-  EXPECT_EQ(blink::mojom::MediaStreamRequestResult::PERMISSION_DENIED, result);
+  EXPECT_EQ(blink::mojom::MediaStreamRequestResult::DLP_PERMISSION_DENIED,
+            result);
   EXPECT_FALSE(devices.video_device.has_value());
   EXPECT_FALSE(devices.audio_device.has_value());
 }
@@ -167,7 +174,10 @@ TEST_F(TabCaptureAccessHandlerTest, DlpNotRestricted) {
       content::DesktopMediaID::TYPE_WEB_CONTENTS,
       content::DesktopMediaID::kNullId,
       content::WebContentsMediaCaptureId(
-          web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID(),
+          web_contents()
+              ->GetPrimaryMainFrame()
+              ->GetProcess()
+              ->GetDeprecatedID(),
           web_contents()->GetPrimaryMainFrame()->GetRoutingID()));
 
   // Setup Data Leak Prevention restriction.
@@ -199,7 +209,10 @@ TEST_F(TabCaptureAccessHandlerTest, DlpWebContentsDestroyed) {
       content::DesktopMediaID::TYPE_WEB_CONTENTS,
       content::DesktopMediaID::kNullId,
       content::WebContentsMediaCaptureId(
-          web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID(),
+          web_contents()
+              ->GetPrimaryMainFrame()
+              ->GetProcess()
+              ->GetDeprecatedID(),
           web_contents()->GetPrimaryMainFrame()->GetRoutingID()));
 
   // Setup Data Leak Prevention restriction.

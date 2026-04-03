@@ -4,12 +4,13 @@
 
 #include "ash/public/cpp/holding_space/holding_space_item.h"
 
+#include <algorithm>
+
 #include "ash/public/cpp/holding_space/holding_space_image.h"
 #include "ash/public/cpp/holding_space/holding_space_util.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "base/json/values_util.h"
 #include "base/memory/ptr_util.h"
-#include "base/ranges/algorithm.h"
 #include "base/unguessable_token.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -101,45 +102,11 @@ std::unique_ptr<HoldingSpaceItem> HoldingSpaceItem::CreateFileBackedItem(
 }
 
 // static
-bool HoldingSpaceItem::IsCameraAppType(HoldingSpaceItem::Type type) {
-  switch (type) {
-    case Type::kCameraAppPhoto:
-    case Type::kCameraAppScanJpg:
-    case Type::kCameraAppScanPdf:
-    case Type::kCameraAppVideoGif:
-    case Type::kCameraAppVideoMp4:
-      return true;
-    case Type::kArcDownload:
-    case Type::kDownload:
-    case Type::kDiagnosticsLog:
-    case Type::kDriveSuggestion:
-    case Type::kLacrosDownload:
-    case Type::kLocalSuggestion:
-    case Type::kNearbyShare:
-    case Type::kPhoneHubCameraRoll:
-    case Type::kPhotoshopWeb:
-    case Type::kPinnedFile:
-    case Type::kPrintedPdf:
-    case Type::kScan:
-    case Type::kScreenRecording:
-    case Type::kScreenRecordingGif:
-    case Type::kScreenshot:
-      return false;
-  }
-}
-
-// static
 bool HoldingSpaceItem::IsDownloadType(HoldingSpaceItem::Type type) {
   switch (type) {
     case Type::kArcDownload:
     case Type::kDownload:
-    case Type::kLacrosDownload:
       return true;
-    case Type::kCameraAppPhoto:
-    case Type::kCameraAppScanJpg:
-    case Type::kCameraAppScanPdf:
-    case Type::kCameraAppVideoGif:
-    case Type::kCameraAppVideoMp4:
     case Type::kDiagnosticsLog:
     case Type::kDriveSuggestion:
     case Type::kLocalSuggestion:
@@ -164,15 +131,9 @@ bool HoldingSpaceItem::IsScreenCaptureType(HoldingSpaceItem::Type type) {
     case Type::kScreenshot:
       return true;
     case Type::kArcDownload:
-    case Type::kCameraAppPhoto:
-    case Type::kCameraAppScanJpg:
-    case Type::kCameraAppScanPdf:
-    case Type::kCameraAppVideoGif:
-    case Type::kCameraAppVideoMp4:
     case Type::kDiagnosticsLog:
     case Type::kDownload:
     case Type::kDriveSuggestion:
-    case Type::kLacrosDownload:
     case Type::kLocalSuggestion:
     case Type::kNearbyShare:
     case Type::kPhoneHubCameraRoll:
@@ -191,14 +152,8 @@ bool HoldingSpaceItem::IsSuggestionType(HoldingSpaceItem::Type type) {
     case Type::kLocalSuggestion:
       return true;
     case Type::kArcDownload:
-    case Type::kCameraAppPhoto:
-    case Type::kCameraAppScanJpg:
-    case Type::kCameraAppScanPdf:
-    case Type::kCameraAppVideoGif:
-    case Type::kCameraAppVideoMp4:
     case Type::kDiagnosticsLog:
     case Type::kDownload:
-    case Type::kLacrosDownload:
     case Type::kNearbyShare:
     case Type::kPhoneHubCameraRoll:
     case Type::kPhotoshopWeb:
@@ -216,7 +171,7 @@ bool HoldingSpaceItem::IsSuggestionType(HoldingSpaceItem::Type type) {
 // NOTE: This method must remain in sync with `Serialize()`. If multiple
 // serialization versions are supported, care must be taken to handle each.
 std::unique_ptr<HoldingSpaceItem> HoldingSpaceItem::Deserialize(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     ImageResolver image_resolver) {
   const std::optional<int> version = dict.FindInt(kVersionPath);
   DCHECK(version.has_value() && version.value() == kVersion);
@@ -236,7 +191,7 @@ std::unique_ptr<HoldingSpaceItem> HoldingSpaceItem::Deserialize(
 // NOTE: This method must remain in sync with `Serialize()`. If multiple
 // serialization versions are supported, care must be taken to handle each.
 const std::string& HoldingSpaceItem::DeserializeId(
-    const base::Value::Dict& dict) {
+    const base::DictValue& dict) {
   const std::optional<int> version = dict.FindInt(kVersionPath);
   DCHECK(version.has_value() && version.value() == kVersion);
 
@@ -250,7 +205,7 @@ const std::string& HoldingSpaceItem::DeserializeId(
 // NOTE: This method must remain in sync with `Serialize()`. If multiple
 // serialization versions are supported, care must be taken to handle each.
 base::FilePath HoldingSpaceItem::DeserializeFilePath(
-    const base::Value::Dict& dict) {
+    const base::DictValue& dict) {
   const std::optional<int> version = dict.FindInt(kVersionPath);
   DCHECK(version.has_value() && version.value() == kVersion);
 
@@ -265,7 +220,7 @@ base::FilePath HoldingSpaceItem::DeserializeFilePath(
 // NOTE: This method must remain in sync with `Serialize()`. If multiple
 // serialization versions are supported, care must be taken to handle each.
 HoldingSpaceItem::Type HoldingSpaceItem::DeserializeType(
-    const base::Value::Dict& dict) {
+    const base::DictValue& dict) {
   const std::optional<int> version = dict.FindInt(kVersionPath);
   DCHECK(version.has_value() && version.value() == kVersion);
 
@@ -275,8 +230,8 @@ HoldingSpaceItem::Type HoldingSpaceItem::DeserializeType(
 // NOTE: This method must remain in sync with `Deserialize()`. The
 // return value will be written to preferences so this implementation must
 // maintain backwards compatibility so long as `kVersion` remains unchanged.
-base::Value::Dict HoldingSpaceItem::Serialize() const {
-  base::Value::Dict dict;
+base::DictValue HoldingSpaceItem::Serialize() const {
+  base::DictValue dict;
   dict.Set(kVersionPath, kVersion);
   dict.Set(kTypePath, static_cast<int>(type_));
   dict.Set(kIdPath, id_);
@@ -400,11 +355,11 @@ std::optional<HoldingSpaceProgress> HoldingSpaceItem::SetProgress(
 std::optional<std::vector<HoldingSpaceItem::InProgressCommand>>
 HoldingSpaceItem::SetInProgressCommands(
     std::vector<InProgressCommand> in_progress_commands) {
-  DCHECK(base::ranges::all_of(in_progress_commands,
-                              [](const InProgressCommand& in_progress_command) {
-                                return holding_space_util::IsInProgressCommand(
-                                    in_progress_command.command_id);
-                              }));
+  DCHECK(std::ranges::all_of(in_progress_commands,
+                             [](const InProgressCommand& in_progress_command) {
+                               return holding_space_util::IsInProgressCommand(
+                                   in_progress_command.command_id);
+                             }));
 
   if (progress_.IsComplete() || in_progress_commands_ == in_progress_commands) {
     return std::nullopt;

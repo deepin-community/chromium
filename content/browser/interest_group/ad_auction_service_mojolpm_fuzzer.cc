@@ -4,11 +4,14 @@
 
 // A MojoLPM fuzzer targeting the public API surfaces of the Protected Audiences
 // API.
+//
+// See documentation in ad_auction_service_mojolpm_fuzzer_docs.md.
 
 #include <stdint.h>
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -19,23 +22,27 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
 #include "base/run_loop.h"
+#include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/scoped_feature_list.h"
-#include "components/aggregation_service/features.h"
+#include "base/thread_annotations.h"
 #include "content/browser/interest_group/ad_auction_service_impl.h"
 #include "content/browser/interest_group/ad_auction_service_mojolpm_fuzzer.pb.h"
+#include "content/browser/interest_group/ad_auction_service_mojolpm_fuzzer_stringifiers.h"
+#include "content/browser/interest_group/ad_auction_service_mojolpm_fuzzer_stringifiers.pb.h"
 #include "content/browser/interest_group/auction_process_manager.h"
 #include "content/browser/interest_group/interest_group_features.h"
 #include "content/browser/interest_group/interest_group_manager_impl.h"
+#include "content/browser/interest_group/test_same_process_auction_process_manager.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/common/features.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/privacy_sandbox_invoking_api.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/site_instance.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/url_loader_interceptor.h"
-#include "content/services/auction_worklet/auction_worklet_service_impl.h"
 #include "content/test/fuzzer/mojolpm_fuzzer_support.h"
 #include "content/test/test_content_browser_client.h"
 #include "content/test/test_render_frame_host.h"
@@ -43,6 +50,7 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
+#include "services/network/public/cpp/features.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/interest_group/ad_auction_service.mojom-mojolpm.h"
 #include "third_party/blink/public/mojom/interest_group/ad_auction_service.mojom.h"
@@ -51,9 +59,7 @@
 #include "url/gurl.h"
 #include "url/origin.h"
 
-namespace content {
-class SiteInstance;
-}  // namespace content
+namespace content::ad_auction_service_mojolpm_fuzzer {
 
 class AllowInterestGroupContentBrowserClient
     : public content::TestContentBrowserClient {
@@ -67,7 +73,8 @@ class AllowInterestGroupContentBrowserClient
       const AllowInterestGroupContentBrowserClient&) = delete;
 
   // ContentBrowserClient overrides:
-  bool IsInterestGroupAPIAllowed(content::RenderFrameHost* render_frame_host,
+  bool IsInterestGroupAPIAllowed(content::BrowserContext* browser_context,
+                                 content::RenderFrameHost* render_frame_host,
                                  InterestGroupApiOperation operation,
                                  const url::Origin& top_frame_origin,
                                  const url::Origin& api_origin) override {
@@ -77,13 +84,7 @@ class AllowInterestGroupContentBrowserClient
   bool IsPrivacySandboxReportingDestinationAttested(
       content::BrowserContext* browser_context,
       const url::Origin& destination_origin,
-      content::PrivacySandboxInvokingAPI invoking_api,
-      bool post_impression_reporting) override {
-    return true;
-  }
-
-  bool IsCookieDeprecationLabelAllowed(
-      content::BrowserContext* browser_context) override {
+      content::PrivacySandboxInvokingAPI invoking_api) override {
     return true;
   }
 };
@@ -111,21 +112,37 @@ function generateBid(interestGroup, auctionSignals, perBuyerSignals,
                 'allowComponentAuction': true};
 }
 
+function reportWin(auctionSignals, perBuyerSignals, sellerSignals,
+    browserSignals, directFromSellerSignals) {
+}
+
 function scoreAd(adMetadata, bid, auctionConfig, trustedScoringSignals,
                  browserSignals) {
   return {desirability: bid,
           allowComponentAuction: true};
+}
+
+function reportResult(auctionConfig, browserSignals) {
+    return {};
 }
 )";
 
 // For handling network requests made by the Protected Audience API -- also
 // prevents those requests from being made to real servers.
 class NetworkResponder {
+ public:
+  void SetScript(content::fuzzing::ad_auction_service::proto::Script script) {
+    base::AutoLock auto_lock(lock_);
+    script_ = Stringify(script);
+  }
+
  private:
   bool RequestHandler(content::URLLoaderInterceptor::RequestParams* params) {
+    base::AutoLock auto_lock(lock_);
     if (params->url_request.url.path().find(".js") != std::string::npos) {
       content::URLLoaderInterceptor::WriteResponse(
-          kFledgeScriptHeaders, kBasicScript, params->client.get());
+          kFledgeScriptHeaders, script_ ? *script_ : kBasicScript,
+          params->client.get());
     } else {
       content::URLLoaderInterceptor::WriteResponse(
           kFledgeUpdateHeaders, kInterestGroupUpdate, params->client.get());
@@ -133,49 +150,14 @@ class NetworkResponder {
     return true;
   }
 
+  mutable base::Lock lock_;
+
   // Handles network requests for interest group updates.
   content::URLLoaderInterceptor network_interceptor_{
       base::BindRepeating(&NetworkResponder::RequestHandler,
                           base::Unretained(this))};
-};
 
-// AuctionProcessManager that allows running auctions in-proc.
-class SameProcessAuctionProcessManager : public content::AuctionProcessManager {
- public:
-  SameProcessAuctionProcessManager() = default;
-  SameProcessAuctionProcessManager(const SameProcessAuctionProcessManager&) =
-      delete;
-  SameProcessAuctionProcessManager& operator=(
-      const SameProcessAuctionProcessManager&) = delete;
-  ~SameProcessAuctionProcessManager() override = default;
-
- private:
-  content::RenderProcessHost* LaunchProcess(
-      mojo::PendingReceiver<auction_worklet::mojom::AuctionWorkletService>
-          auction_worklet_service_receiver,
-      const ProcessHandle* handle,
-      const std::string& display_name) override {
-    // Create one AuctionWorkletServiceImpl per Mojo pipe, just like in
-    // production code. Don't bother to delete the service on pipe close,
-    // though; just keep it in a vector instead.
-    auction_worklet_services_.push_back(
-        auction_worklet::AuctionWorkletServiceImpl::CreateForService(
-            std::move(auction_worklet_service_receiver)));
-    return nullptr;
-  }
-
-  scoped_refptr<content::SiteInstance> MaybeComputeSiteInstance(
-      content::SiteInstance* frame_site_instance,
-      const url::Origin& worklet_origin) override {
-    return nullptr;
-  }
-
-  bool TryUseSharedProcess(ProcessHandle* process_handle) override {
-    return false;
-  }
-
-  std::vector<std::unique_ptr<auction_worklet::AuctionWorkletServiceImpl>>
-      auction_worklet_services_;
+  std::optional<std::string> script_ GUARDED_BY(lock_);
 };
 
 const char* const kCmdline[] = {"ad_auction_service_mojolpm_fuzzer", nullptr};
@@ -264,14 +246,8 @@ AdAuctionServiceTestcase::AdAuctionServiceTestcase(
     : Testcase<ProtoTestcase, ProtoAction>(testcase) {
   feature_list_.InitWithFeatures(
       /*enabled_features=*/
-      {blink::features::kInterestGroupStorage,
-       blink::features::kAdInterestGroupAPI, blink::features::kFledge,
-       blink::features::kFledgeClearOriginJoinedAdInterestGroups,
-       blink::features::kFledgeNegativeTargeting,
-       blink::features::kPrivateAggregationApiMultipleCloudProviders,
-       aggregation_service::kAggregationServiceMultipleCloudProviders,
-       features::kEnableUpdatingUserBiddingSignals,
-       features::kEnableUpdatingExecutionModeToFrozenContext},
+      {network::features::kInterestGroupStorage,
+       blink::features::kAdInterestGroupAPI, blink::features::kFledge},
       /*disabled_features=*/{});
   fenced_frame_feature_list_.InitAndEnableFeatureWithParameters(
       blink::features::kFencedFrames, {{"implementation_type", "mparch"}});
@@ -326,11 +302,14 @@ void AdAuctionServiceTestcase::RunAction(const ProtoAction& action,
                          base::Unretained(this)),
           std::move(run_closure));
       return;
+    case ProtoAction::kNetResponseAction:
+      network_responder_->SetScript(action.net_response_action().script());
+      break;
     case ProtoAction::kAdAuctionServiceRemoteAction:
       // Invoke one of the service methods on AdAuctionService, with parameters
       // specified in the ad_auction_service_remote_action() proto, on the
       // remote given by the id in the proto.
-      mojolpm::HandleRemoteAction(action.ad_auction_service_remote_action());
+      ::mojolpm::HandleRemoteAction(action.ad_auction_service_remote_action());
       break;
     case ProtoAction::ACTION_NOT_SET:
       break;
@@ -365,7 +344,7 @@ void AdAuctionServiceTestcase::SetUpOnUIThread() {
   // Process creation crashes in the Chrome zygote init in unit tests, so run
   // the auction "processes" in-process instead.
   manager_->set_auction_process_manager_for_testing(
-      std::make_unique<SameProcessAuctionProcessManager>());
+      std::make_unique<TestSameProcessAuctionProcessManager>());
 }
 
 void AdAuctionServiceTestcase::TearDown(base::OnceClosure done_closure) {
@@ -388,7 +367,7 @@ void AdAuctionServiceTestcase::AddAdAuctionService(
   DCHECK_CALLED_ON_VALID_SEQUENCE(this->sequence_checker_);
   mojo::Remote<blink::mojom::AdAuctionService> remote;
   auto receiver = remote.BindNewPipeAndPassReceiver();
-  mojolpm::GetContext()->AddInstance(id, std::move(remote));
+  ::mojolpm::GetContext()->AddInstance(id, std::move(remote));
   content::GetUIThreadTaskRunner({})->PostTaskAndReply(
       FROM_HERE,
       base::BindOnce(
@@ -423,8 +402,10 @@ DEFINE_BINARY_PROTO_FUZZER(
   base::RunLoop main_run_loop;
   GetFuzzerTaskRunner()->PostTask(
       FROM_HERE,
-      base::BindOnce(&mojolpm::RunTestcase<AdAuctionServiceTestcase>,
+      base::BindOnce(&::mojolpm::RunTestcase<AdAuctionServiceTestcase>,
                      base::Unretained(&testcase), GetFuzzerTaskRunner(),
                      main_run_loop.QuitClosure()));
   main_run_loop.Run();
 }
+
+}  // namespace content::ad_auction_service_mojolpm_fuzzer

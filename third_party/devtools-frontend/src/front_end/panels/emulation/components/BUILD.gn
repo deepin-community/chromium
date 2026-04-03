@@ -1,17 +1,20 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("../../../../scripts/build/ninja/devtools_entrypoint.gni")
 import("../../../../scripts/build/ninja/devtools_module.gni")
 
-devtools_module("components") {
+devtools_ui_module("components") {
   sources = [ "DeviceSizeInputElement.ts" ]
 
   deps = [
+    "../../../core/platform:bundle",
     "../../../models/emulation:bundle",
     "../../../ui/components/helpers:bundle",
-    "../../../ui/lit-html:bundle",
+    "../../../ui/legacy:bundle",
+    "../../../ui/lit:bundle",
+    "../../../ui/visual_logging:bundle",
   ]
 }
 

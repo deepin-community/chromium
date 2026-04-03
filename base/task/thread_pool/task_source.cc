@@ -12,8 +12,21 @@
 #include "base/task/task_features.h"
 #include "base/task/thread_pool/task_tracker.h"
 
-namespace base {
-namespace internal {
+namespace base::internal {
+namespace {
+
+ThreadType TaskPriorityToThreadType(TaskPriority priority) {
+  switch (priority) {
+    case TaskPriority::BEST_EFFORT:
+      return ThreadType::kBackground;
+    case TaskPriority::USER_VISIBLE:
+      return ThreadType::kUtility;
+    case TaskPriority::USER_BLOCKING:
+      return ThreadType::kDefault;
+  }
+}
+
+}  // namespace
 
 ExecutionEnvironment::~ExecutionEnvironment() = default;
 
@@ -35,8 +48,12 @@ TaskSource::Transaction::~Transaction() {
 
 void TaskSource::Transaction::UpdatePriority(TaskPriority priority) {
   task_source_->traits_.UpdatePriority(priority);
-  task_source_->priority_racy_.store(task_source_->traits_.priority(),
-                                     std::memory_order_relaxed);
+  task_source_->thread_type_racy_.store(TaskPriorityToThreadType(priority),
+                                        std::memory_order_relaxed);
+}
+
+ThreadType TaskSource::Transaction::thread_type() const {
+  return TaskPriorityToThreadType(task_source_->traits_.priority());
 }
 
 void TaskSource::Transaction::Release() NO_THREAD_SAFETY_ANALYSIS {
@@ -65,7 +82,7 @@ void TaskSource::ClearDelayedHeapHandle() {
 TaskSource::TaskSource(const TaskTraits& traits,
                        TaskSourceExecutionMode execution_mode)
     : traits_(traits),
-      priority_racy_(traits.priority()),
+      thread_type_racy_(TaskPriorityToThreadType(traits.priority())),
       execution_mode_(execution_mode) {}
 
 TaskSource::~TaskSource() {
@@ -117,8 +134,9 @@ scoped_refptr<TaskSource> RegisteredTaskSource::Unregister() {
 #if DCHECK_IS_ON()
   DCHECK_EQ(run_step_, State::kInitial);
 #endif  // DCHECK_IS_ON()
-  if (task_source_ && task_tracker_)
+  if (task_source_ && task_tracker_) {
     return task_tracker_->UnregisterTaskSource(std::move(task_source_));
+  }
   return std::move(task_source_);
 }
 
@@ -137,8 +155,9 @@ TaskSource::RunStatus RegisteredTaskSource::WillRunTask() {
   TaskSource::RunStatus run_status = task_source_->WillRunTask();
 #if DCHECK_IS_ON()
   DCHECK_EQ(run_step_, State::kInitial);
-  if (run_status != TaskSource::RunStatus::kDisallowed)
+  if (run_status != TaskSource::RunStatus::kDisallowed) {
     run_step_ = State::kReady;
+  }
 #endif  // DCHECK_IS_ON()
   return run_status;
 }
@@ -151,7 +170,7 @@ Task RegisteredTaskSource::TakeTask(TaskSource::Transaction* transaction) {
   return task_source_->TakeTask(transaction);
 }
 
-absl::optional<Task> RegisteredTaskSource::Clear(
+std::optional<Task> RegisteredTaskSource::Clear(
     TaskSource::Transaction* transaction) {
   DCHECK(!transaction || transaction->task_source() == get());
   return task_source_->Clear(transaction);
@@ -219,5 +238,4 @@ TaskSourceAndTransaction TaskSourceAndTransaction::FromTaskSource(
                                   std::move(transaction));
 }
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

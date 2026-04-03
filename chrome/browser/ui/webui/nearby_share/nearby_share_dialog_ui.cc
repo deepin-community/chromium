@@ -7,7 +7,6 @@
 #include <string>
 
 #include "base/strings/string_split.h"
-#include "chrome/browser/nearby_sharing/common/nearby_share_features.h"
 #include "chrome/browser/nearby_sharing/contacts/nearby_share_contact_manager.h"
 #include "chrome/browser/nearby_sharing/file_attachment.h"
 #include "chrome/browser/nearby_sharing/nearby_per_session_discovery_manager.h"
@@ -17,6 +16,7 @@
 #include "chrome/browser/nearby_sharing/nearby_sharing_service_impl.h"
 #include "chrome/browser/nearby_sharing/text_attachment.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
@@ -24,7 +24,6 @@
 #include "chrome/browser/ui/webui/nearby_share/shared_resources.h"
 #include "chrome/browser/ui/webui/plural_string_handler.h"
 #include "chrome/browser/ui/webui/sanitized_image_source.h"
-#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/nearby_share_dialog_resources.h"
@@ -42,11 +41,12 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/views/controls/webview/webview.h"
-#include "ui/webui/color_change_listener/color_change_handler.h"
+#include "ui/webui/webui_util.h"
 
 namespace nearby_share {
 
-// Keep in sync with //chrome/browser/resources/nearby_share/shared/types.js
+// Keep in sync with
+// chrome/browser/resources/chromeos/nearby_share/shared/types.ts
 enum class CloseReason {
   kUnknown = 0,
   kTransferStarted = 1,
@@ -58,8 +58,9 @@ enum class CloseReason {
 
 bool NearbyShareDialogUIConfig::IsWebUIEnabled(
     content::BrowserContext* browser_context) {
-  if (browser_context->IsOffTheRecord())
+  if (browser_context->IsOffTheRecord()) {
     return false;
+  }
   return NearbySharingServiceFactory::IsNearbyShareSupportedForBrowserContext(
       browser_context);
 }
@@ -79,9 +80,7 @@ NearbyShareDialogUI::NearbyShareDialogUI(content::WebUI* web_ui)
   content::URLDataSource::Add(profile,
                               std::make_unique<SanitizedImageSource>(profile));
 
-  webui::SetupWebUIDataSource(html_source,
-                              base::make_span(kNearbyShareDialogResources,
-                                              kNearbyShareDialogResourcesSize),
+  webui::SetupWebUIDataSource(html_source, kNearbyShareDialogResources,
                               IDR_NEARBY_SHARE_DIALOG_NEARBY_SHARE_DIALOG_HTML);
 
   // To use lottie, the worker-src CSP needs to be updated for the web ui that
@@ -106,12 +105,7 @@ NearbyShareDialogUI::NearbyShareDialogUI(content::WebUI* web_ui)
       // Required by polymer.
       "polymer-html-literal polymer-template-event-attribute-policy;");
 
-  html_source->AddBoolean(
-      "isOnePageOnboardingEnabled",
-      base::FeatureList::IsEnabled(features::kNearbySharingOnePageOnboarding));
   RegisterNearbySharedStrings(html_source);
-  html_source->AddBoolean("isJellyEnabled",
-                          chromeos::features::IsJellyEnabled());
   html_source->UseStringsJs();
 
   // Register callback to handle "cancel-button-event" from nearby_*.html files.
@@ -130,9 +124,8 @@ NearbyShareDialogUI::NearbyShareDialogUI(content::WebUI* web_ui)
   const GURL& url = web_ui->GetWebContents()->GetVisibleURL();
   SetAttachmentFromQueryParameter(url);
 
-  html_source->AddBoolean(
-      "isSelfShareEnabled",
-      base::FeatureList::IsEnabled(features::kNearbySharingSelfShare));
+  html_source->AddBoolean("isQuickShareV2Enabled",
+                          chromeos::features::IsQuickShareV2Enabled());
 }
 
 NearbyShareDialogUI::~NearbyShareDialogUI() = default;
@@ -172,15 +165,9 @@ void NearbyShareDialogUI::BindInterface(
   nearby_sharing_service->GetContactManager()->Bind(std::move(receiver));
 }
 
-void NearbyShareDialogUI::BindInterface(
-    mojo::PendingReceiver<color_change_listener::mojom::PageHandler> receiver) {
-  color_provider_handler_ = std::make_unique<ui::ColorChangeHandler>(
-      web_ui()->GetWebContents(), std::move(receiver));
-}
-
 bool NearbyShareDialogUI::HandleKeyboardEvent(
     content::WebContents* source,
-    const content::NativeWebKeyboardEvent& event) {
+    const input::NativeWebKeyboardEvent& event) {
   if (!web_view_) {
     return false;
   }
@@ -202,9 +189,10 @@ void NearbyShareDialogUI::WebContentsCreated(
   Navigate(&nav_params);
 }
 
-void NearbyShareDialogUI::HandleClose(const base::Value::List& args) {
-  if (!sharesheet_controller_)
+void NearbyShareDialogUI::HandleClose(const base::ListValue& args) {
+  if (!sharesheet_controller_) {
     return;
+  }
 
   CHECK_EQ(1u, args.size());
   CHECK_GE(args[0].GetInt(), 0);

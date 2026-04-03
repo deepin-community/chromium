@@ -10,7 +10,6 @@
 #include "build/build_config.h"
 #include "cc/test/pixel_comparator.h"
 #include "cc/test/pixel_test_utils.h"
-#include "components/viz/common/resources/resource_sizes.h"
 #include "components/viz/common/resources/shared_image_format.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
@@ -26,15 +25,14 @@
 #include "gpu/config/gpu_driver_bug_workarounds.h"
 #include "gpu/config/gpu_feature_info.h"
 #include "gpu/config/gpu_preferences.h"
-#include "gpu/config/gpu_test_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "third_party/skia/include/gpu/GrBackendSemaphore.h"
-#include "third_party/skia/include/gpu/GrBackendSurface.h"
+#include "third_party/skia/include/gpu/ganesh/GrBackendSemaphore.h"
+#include "third_party/skia/include/gpu/ganesh/GrBackendSurface.h"
 #include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
 #include "ui/gfx/color_space.h"
-#include "ui/gfx/gpu_memory_buffer.h"
+#include "ui/gfx/gpu_memory_buffer_handle.h"
 #include "ui/gl/gl_version_info.h"
 #include "ui/gl/progress_reporter.h"
 
@@ -57,7 +55,7 @@ class GLTextureImageBackingFactoryTestBase : public SharedImageTestBase {
   GLTextureImageBackingFactoryTestBase() = default;
   ~GLTextureImageBackingFactoryTestBase() override = default;
 
-  void SetUpBase(bool for_cpu_upload_usage) {
+  void SetUp() override {
     ASSERT_NO_FATAL_FAILURE(InitializeContext(GrContextType::kGL));
     auto* feature_info = context_state_->feature_info();
 
@@ -85,9 +83,13 @@ class GLTextureImageBackingFactoryTestBase : public SharedImageTestBase {
     std::unique_ptr<GLTextureImageBackingFactory> backing_factory =
         std::make_unique<GLTextureImageBackingFactory>(
             gpu_preferences_, gpu_workarounds_, context_state_->feature_info(),
-            &progress_reporter_, for_cpu_upload_usage);
-    backing_factory->EnableSupportForAllMetalUsagesForTesting();
+            &progress_reporter_);
+    backing_factory->EnableSupportForAllMetalUsagesForTesting(true);
     backing_factory_ = std::move(backing_factory);
+  }
+
+  GLTextureImageBackingFactory* backing_factory() {
+    return static_cast<GLTextureImageBackingFactory*>(backing_factory_.get());
   }
 
   bool IsFormatSupport(viz::SharedImageFormat format) const {
@@ -136,10 +138,7 @@ class GLTextureImageBackingFactoryTestBase : public SharedImageTestBase {
 
 // Non-parameterized tests.
 class GLTextureImageBackingFactoryTest
-    : public GLTextureImageBackingFactoryTestBase {
- public:
-  void SetUp() override { SetUpBase(/*for_cpu_upload_usage=*/false); }
-};
+    : public GLTextureImageBackingFactoryTestBase {};
 
 // SharedImageFormat parameterized tests.
 class GLTextureImageBackingFactoryWithFormatTest
@@ -160,7 +159,6 @@ class GLTextureImageBackingFactoryWithUploadTest
     : public GLTextureImageBackingFactoryTestBase,
       public testing::WithParamInterface<viz::SharedImageFormat> {
  public:
-  void SetUp() override { SetUpBase(/*for_cpu_upload_usage=*/true); }
   viz::SharedImageFormat get_format() { return GetParam(); }
 };
 
@@ -168,22 +166,73 @@ using GLTextureImageBackingFactoryWithReadbackTest =
     GLTextureImageBackingFactoryWithUploadTest;
 
 TEST_F(GLTextureImageBackingFactoryTest, InvalidFormat) {
-  auto format = viz::LegacyMultiPlaneFormat::kNV12;
+  auto format = viz::SinglePlaneFormat::kBGR_565;
   gfx::Size size(256, 256);
   // Note: The specific usage doesn't matter here as long as it's supported by
   // GLTextureImageBacking.
-  uint32_t usage = SHARED_IMAGE_USAGE_GLES2_READ;
+  gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_GLES2_READ;
   bool supported = backing_factory_->CanCreateSharedImage(
       usage, format, size, /*thread_safe=*/false, gfx::EMPTY_BUFFER,
       GrContextType::kGL, {});
   EXPECT_FALSE(supported);
 }
 
+TEST_F(GLTextureImageBackingFactoryTest, InvalidUsageWithANGLEMetal) {
+  auto format = viz::SinglePlaneFormat::kRGBA_8888;
+  gfx::Size size(256, 256);
+
+  for (gpu::SharedImageUsageSet metal_invalid_usage :
+       {SHARED_IMAGE_USAGE_DISPLAY_READ, SHARED_IMAGE_USAGE_GLES2_READ,
+        SHARED_IMAGE_USAGE_GLES2_WRITE}) {
+    bool supported = backing_factory_->CanCreateSharedImage(
+        metal_invalid_usage, format, size, /*thread_safe=*/false,
+        gfx::EMPTY_BUFFER, GrContextType::kGL, {});
+    EXPECT_TRUE(supported) << CreateLabelForSharedImageUsage(
+        metal_invalid_usage);
+
+    backing_factory()->ForceSetUsingANGLEMetalForTesting(true);
+    backing_factory()->EnableSupportForAllMetalUsagesForTesting(false);
+
+    supported = backing_factory_->CanCreateSharedImage(
+        metal_invalid_usage, format, size, /*thread_safe=*/false,
+        gfx::EMPTY_BUFFER, GrContextType::kGL, {});
+    EXPECT_FALSE(supported)
+        << CreateLabelForSharedImageUsage(metal_invalid_usage);
+
+    backing_factory()->ForceSetUsingANGLEMetalForTesting(false);
+    backing_factory()->EnableSupportForAllMetalUsagesForTesting(true);
+  }
+}
+
+// Tests that GLTextureImageBackingFactory will not create SharedImages with
+// Skia usages when Skia is using Graphite (as in that case Skia is not
+// necessarily using GL).
+TEST_F(GLTextureImageBackingFactoryTest, InvalidUsageWithGraphite) {
+  auto format = viz::SinglePlaneFormat::kRGBA_8888;
+  gfx::Size size(256, 256);
+
+  for (gpu::SharedImageUsageSet graphite_invalid_usage :
+       {SHARED_IMAGE_USAGE_DISPLAY_READ, SHARED_IMAGE_USAGE_DISPLAY_WRITE,
+        SHARED_IMAGE_USAGE_RASTER_READ, SHARED_IMAGE_USAGE_RASTER_WRITE}) {
+    bool supported = backing_factory_->CanCreateSharedImage(
+        graphite_invalid_usage, format, size, /*thread_safe=*/false,
+        gfx::EMPTY_BUFFER, GrContextType::kGL, {});
+    EXPECT_TRUE(supported) << CreateLabelForSharedImageUsage(
+        graphite_invalid_usage);
+
+    supported = backing_factory_->CanCreateSharedImage(
+        graphite_invalid_usage, format, size, /*thread_safe=*/false,
+        gfx::EMPTY_BUFFER, GrContextType::kGraphiteDawn, {});
+    EXPECT_FALSE(supported)
+        << CreateLabelForSharedImageUsage(graphite_invalid_usage);
+  }
+}
+
 // Ensures that GLTextureImageBacking registers it's estimated size
 // with memory tracker.
 TEST_F(GLTextureImageBackingFactoryTest, EstimatedSize) {
   auto format = viz::SinglePlaneFormat::kRGBA_8888;
-  auto mailbox = Mailbox::GenerateForSharedImage();
+  auto mailbox = Mailbox::Generate();
   gfx::Size size(256, 256);
   auto color_space = gfx::ColorSpace::CreateSRGB();
   GrSurfaceOrigin surface_origin = kTopLeft_GrSurfaceOrigin;
@@ -191,7 +240,7 @@ TEST_F(GLTextureImageBackingFactoryTest, EstimatedSize) {
   gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
   // Note: The specific usage doesn't matter here as long as it's supported by
   // GLTextureImageBacking.
-  uint32_t usage = SHARED_IMAGE_USAGE_GLES2_READ;
+  gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_GLES2_READ;
 
   bool supported = backing_factory_->CanCreateSharedImage(
       usage, format, size, /*thread_safe=*/false, gfx::EMPTY_BUFFER,
@@ -261,12 +310,67 @@ TEST_F(GLTextureImageBackingFactoryTest, TexImageTexStorageEquivalence) {
   }
 }
 
+#if BUILDFLAG(IS_WIN)
+TEST_F(GLTextureImageBackingFactoryTest, ProduceVideo) {
+  auto format = viz::SinglePlaneFormat::kRGBA_8888;
+  auto mailbox = Mailbox::Generate();
+  gfx::Size size(256, 256);
+  auto color_space = gfx::ColorSpace::CreateSRGB();
+  GrSurfaceOrigin surface_origin = kTopLeft_GrSurfaceOrigin;
+  SkAlphaType alpha_type = kPremul_SkAlphaType;
+  gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
+  // Note: The specific usage doesn't matter here as long as it's supported by
+  // GLTextureImageBacking.
+  gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_GLES2_READ;
+
+  bool supported = backing_factory_->CanCreateSharedImage(
+      usage, format, size, /*thread_safe=*/false, gfx::EMPTY_BUFFER,
+      GrContextType::kGL, {});
+  ASSERT_TRUE(supported);
+
+  auto backing = backing_factory_->CreateSharedImage(
+      mailbox, format, surface_handle, size, color_space, surface_origin,
+      alpha_type, usage, "TestLabel", /*is_thread_safe=*/false);
+  ASSERT_TRUE(backing);
+  std::unique_ptr<SharedImageRepresentationFactoryRef> shared_image =
+      shared_image_manager_.Register(std::move(backing), &memory_type_tracker_);
+
+  Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device;
+  UINT creation_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+  static const D3D_FEATURE_LEVEL feature_levels[] = {
+      D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1,
+      D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_9_3,  D3D_FEATURE_LEVEL_9_2,
+      D3D_FEATURE_LEVEL_9_1};
+  HRESULT hr =
+      D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, 0, creation_flags,
+                        feature_levels, std::size(feature_levels),
+                        D3D11_SDK_VERSION, &d3d11_device, nullptr, nullptr);
+  if (FAILED(hr)) {
+    hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, 0, creation_flags,
+                           feature_levels, std::size(feature_levels),
+                           D3D11_SDK_VERSION, &d3d11_device, nullptr, nullptr);
+  }
+  if (FAILED(hr)) {
+    GTEST_SKIP()
+        << " cannot produce a d3d video representation on this platform";
+  }
+
+  auto representation = shared_image_manager_.ProduceVideo(
+      d3d11_device, mailbox, &memory_type_tracker_);
+  EXPECT_NE(representation, nullptr);
+  auto read_access = representation->BeginScopedReadAccess();
+  D3D11TextureAndArrayIndex input_texture = read_access->GetD3D11Texture();
+  EXPECT_NE(input_texture.texture, nullptr);
+  EXPECT_EQ(input_texture.array_index, 0u);
+}
+#endif
+
 TEST_P(GLTextureImageBackingFactoryWithFormatTest, IsSupported) {
   auto format = get_format();
   gfx::Size size(256, 256);
   // Note: The specific usage doesn't matter here as long as it's supported by
   // GLTextureImageBacking.
-  uint32_t usage = SHARED_IMAGE_USAGE_GLES2_READ;
+  gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_GLES2_READ;
 
   bool supported = backing_factory_->CanCreateSharedImage(
       usage, format, size, /*thread_safe=*/false, gfx::EMPTY_BUFFER,
@@ -275,14 +379,6 @@ TEST_P(GLTextureImageBackingFactoryWithFormatTest, IsSupported) {
 }
 
 TEST_P(GLTextureImageBackingFactoryWithFormatTest, Basic) {
-  // TODO(jonahr): Test fails on Mac with ANGLE/passthrough
-  // (crbug.com/1100975)
-  gpu::GPUTestBotConfig bot_config;
-  if (bot_config.LoadCurrentConfig(nullptr) &&
-      bot_config.Matches("mac passthrough")) {
-    GTEST_SKIP();
-  }
-
   viz::SharedImageFormat format = get_format();
   if (!IsFormatSupport(format)) {
     GTEST_SKIP();
@@ -297,12 +393,14 @@ TEST_P(GLTextureImageBackingFactoryWithFormatTest, Basic) {
 #endif  // BUILDFLAG(IS_IOS)
 
   EXPECT_CALL(progress_reporter_, ReportProgress).Times(AtLeast(1));
-  auto mailbox = Mailbox::GenerateForSharedImage();
+  auto mailbox = Mailbox::Generate();
   gfx::Size size(256, 256);
   auto color_space = gfx::ColorSpace::CreateSRGB();
   GrSurfaceOrigin surface_origin = kTopLeft_GrSurfaceOrigin;
   SkAlphaType alpha_type = kPremul_SkAlphaType;
-  uint32_t usage = SHARED_IMAGE_USAGE_GLES2_READ;
+  SharedImageUsageSet usage = {SHARED_IMAGE_USAGE_GLES2_READ,
+                               SHARED_IMAGE_USAGE_RASTER_READ,
+                               SHARED_IMAGE_USAGE_RASTER_WRITE};
   gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
 
   bool supported = backing_factory_->CanCreateSharedImage(
@@ -413,7 +511,7 @@ TEST_P(GLTextureImageBackingFactoryWithFormatTest, InvalidSize) {
   gfx::Size size(0, 0);
   // Note: The specific usage doesn't matter here as long as it's supported by
   // GLTextureImageBacking.
-  uint32_t usage = SHARED_IMAGE_USAGE_GLES2_READ;
+  gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_GLES2_READ;
   bool supported = backing_factory_->CanCreateSharedImage(
       usage, format, size, /*thread_safe=*/false, gfx::EMPTY_BUFFER,
       GrContextType::kGL, {});
@@ -432,14 +530,14 @@ TEST_P(GLTextureImageBackingFactoryInitialDataTest, InitialData) {
     GTEST_SKIP();
   }
 
-  auto mailbox = Mailbox::GenerateForSharedImage();
+  auto mailbox = Mailbox::Generate();
   gfx::Size size(256, 256);
   auto color_space = gfx::ColorSpace::CreateSRGB();
   GrSurfaceOrigin surface_origin = kTopLeft_GrSurfaceOrigin;
   SkAlphaType alpha_type = kPremul_SkAlphaType;
-  uint32_t usage = SHARED_IMAGE_USAGE_GLES2_READ;
-  std::vector<uint8_t> initial_data(
-      viz::ResourceSizes::CheckedSizeInBytes<unsigned int>(size, format));
+  gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_GLES2_READ;
+  size_t required_size = format.MaybeEstimatedSizeInBytes(size).value();
+  std::vector<uint8_t> initial_data(required_size);
 
   bool supported = backing_factory_->CanCreateSharedImage(
       usage, format, size, /*thread_safe=*/false, gfx::EMPTY_BUFFER,
@@ -448,7 +546,7 @@ TEST_P(GLTextureImageBackingFactoryInitialDataTest, InitialData) {
 
   auto backing = backing_factory_->CreateSharedImage(
       mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-      "TestLabel", initial_data);
+      "TestLabel", /*is_thread_safe=*/false, initial_data);
   ASSERT_TRUE(backing);
   EXPECT_TRUE(backing->IsCleared());
 
@@ -493,9 +591,8 @@ TEST_P(GLTextureImageBackingFactoryInitialDataTest, InitialDataWrongSize) {
   gfx::Size size(256, 256);
   // Note: The specific usage doesn't matter here as long as it's supported by
   // GLTextureImageBacking.
-  uint32_t usage = SHARED_IMAGE_USAGE_GLES2_READ;
-  size_t required_size =
-      viz::ResourceSizes::CheckedSizeInBytes<size_t>(size, format);
+  gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_GLES2_READ;
+  size_t required_size = format.MaybeEstimatedSizeInBytes(size).value();
   std::vector<uint8_t> initial_data_small(required_size / 2);
   std::vector<uint8_t> initial_data_large(required_size * 2);
   bool supported = backing_factory_->CanCreateSharedImage(
@@ -510,18 +607,38 @@ TEST_P(GLTextureImageBackingFactoryInitialDataTest, InitialDataWrongSize) {
   EXPECT_FALSE(supported);
 }
 
+TEST_F(GLTextureImageBackingFactoryWithUploadTest, InvalidUsageWithANGLEMetal) {
+  auto format = viz::SinglePlaneFormat::kRGBA_8888;
+  gfx::Size size(256, 256);
+
+  gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_DISPLAY_READ;
+
+  bool supported = backing_factory_->CanCreateSharedImage(
+      usage, format, size, /*thread_safe=*/false, gfx::EMPTY_BUFFER,
+      GrContextType::kGL, {});
+  EXPECT_TRUE(supported);
+
+  backing_factory()->ForceSetUsingANGLEMetalForTesting(true);
+  backing_factory()->EnableSupportForAllMetalUsagesForTesting(false);
+
+  supported = backing_factory_->CanCreateSharedImage(
+      usage, format, size, /*thread_safe=*/false, gfx::EMPTY_BUFFER,
+      GrContextType::kGL, {});
+  EXPECT_FALSE(supported);
+}
+
 TEST_P(GLTextureImageBackingFactoryWithUploadTest, UploadFromMemory) {
   viz::SharedImageFormat format = get_format();
   if (!IsFormatSupport(format)) {
     GTEST_SKIP();
   }
 
-  auto mailbox = Mailbox::GenerateForSharedImage();
+  auto mailbox = Mailbox::Generate();
   gfx::Size size(9, 9);
   auto color_space = gfx::ColorSpace::CreateSRGB();
   GrSurfaceOrigin surface_origin = kTopLeft_GrSurfaceOrigin;
   SkAlphaType alpha_type = kPremul_SkAlphaType;
-  uint32_t usage = SHARED_IMAGE_USAGE_CPU_UPLOAD;
+  gpu::SharedImageUsageSet usage = SHARED_IMAGE_USAGE_CPU_UPLOAD;
   gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
 
   bool supported = backing_factory_->CanCreateSharedImage(
@@ -558,13 +675,13 @@ TEST_P(GLTextureImageBackingFactoryWithReadbackTest, ReadbackToMemory) {
     GTEST_SKIP();
   }
 
-  auto mailbox = Mailbox::GenerateForSharedImage();
+  auto mailbox = Mailbox::Generate();
   gfx::Size size(9, 9);
   auto color_space = gfx::ColorSpace::CreateSRGB();
   GrSurfaceOrigin surface_origin = kTopLeft_GrSurfaceOrigin;
   SkAlphaType alpha_type = kPremul_SkAlphaType;
-  uint32_t usage = SHARED_IMAGE_USAGE_GLES2_READ |
-                   SHARED_IMAGE_USAGE_CPU_UPLOAD;
+  gpu::SharedImageUsageSet usage =
+      SHARED_IMAGE_USAGE_GLES2_READ | SHARED_IMAGE_USAGE_CPU_UPLOAD;
   gpu::SurfaceHandle surface_handle = gpu::kNullSurfaceHandle;
 
   bool supported = backing_factory_->CanCreateSharedImage(

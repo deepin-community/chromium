@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "skia/ext/skia_utils_mac.h"
 
 #import <AppKit/AppKit.h>
@@ -78,7 +83,8 @@ SkBitmap NSImageOrNSImageRepToSkBitmap(NSImage* image,
 #if defined(SK_CPU_LENDIAN) && HAS_ARGB_SHIFTS(24, 16, 8, 0)
   base::apple::ScopedCFTypeRef<CGContextRef> context(CGBitmapContextCreate(
       data, size.width, size.height, 8, size.width * 4, cg_color_space.get(),
-      uint32_t{kCGImageAlphaPremultipliedFirst} | kCGBitmapByteOrder32Host));
+      static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedFirst) |
+          kCGImageByteOrder32Host));
 #else
 #error We require that Skia's and CoreGraphics's recommended \
        image memory layout match.

@@ -77,6 +77,10 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) ConnectionInfoMetricsLogger
 
       // The network is disconnecting.
       kDisconnecting = 3,
+
+      // The network is in failure state which mapped to the corresponding
+      // shill error.
+      kFailure = 4,
     };
 
     explicit ConnectionInfo(const NetworkState* network,
@@ -92,7 +96,8 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) ConnectionInfoMetricsLogger
   };
 
   // NetworkStateHandlerObserver::
-  void ConnectToNetworkRequested(const std::string& service_path) override;
+  ConnectToNetworkRequestVerdict ConnectToNetworkRequested(
+      const std::string& service_path) override;
   void NetworkListChanged() override;
   void NetworkConnectionStateChanged(const NetworkState* network) override;
   void OnShuttingDown() override;

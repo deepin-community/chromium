@@ -37,6 +37,7 @@
 
 #include "processor/cfi_frame_info.h"
 
+#include <assert.h>
 #include <string.h>
 
 #include <sstream>
@@ -104,7 +105,7 @@ template bool CFIFrameInfo::FindCallerRegs<uint64_t>(
     const MemoryRegion& memory,
     RegisterValueMap<uint64_t>* caller_registers) const;
 
-string CFIFrameInfo::Serialize() const {
+std::string CFIFrameInfo::Serialize() const {
   std::ostringstream stream;
 
   if (!cfa_rule_.empty()) {
@@ -126,7 +127,7 @@ string CFIFrameInfo::Serialize() const {
   return stream.str();
 }
 
-bool CFIRuleParser::Parse(const string& rule_set) {
+bool CFIRuleParser::Parse(const std::string& rule_set) {
   size_t rule_set_len = rule_set.size();
   scoped_array<char> working_copy(new char[rule_set_len + 1]);
   memcpy(working_copy.get(), rule_set.data(), rule_set_len);
@@ -161,7 +162,7 @@ bool CFIRuleParser::Parse(const string& rule_set) {
         expression_ += ' ';
       expression_ += token;
     }
-    token = strtok_r(NULL, token_breaks, &cursor);
+    token = strtok_r(nullptr, token_breaks, &cursor);
   }
 }
 
@@ -173,16 +174,16 @@ bool CFIRuleParser::Report() {
   return true;
 }
 
-void CFIFrameInfoParseHandler::CFARule(const string& expression) {
+void CFIFrameInfoParseHandler::CFARule(const std::string& expression) {
   frame_info_->SetCFARule(expression);
 }
 
-void CFIFrameInfoParseHandler::RARule(const string& expression) {
+void CFIFrameInfoParseHandler::RARule(const std::string& expression) {
   frame_info_->SetRARule(expression);
 }
 
-void CFIFrameInfoParseHandler::RegisterRule(const string& name,
-                                            const string& expression) {
+void CFIFrameInfoParseHandler::RegisterRule(const std::string& name,
+                                            const std::string& expression) {
   frame_info_->SetRegisterRule(name, expression);
 }
 

@@ -7,8 +7,9 @@
 #include "base/feature_list.h"
 #include "base/notreached.h"
 #include "build/build_config.h"
+#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "components/omnibox/browser/omnibox_field_trial.h"
+#include "chrome/common/chrome_features.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "ui/base/pointer/touch_ui_controller.h"
 #include "ui/base/ui_base_features.h"
@@ -21,149 +22,149 @@
 int GetLayoutConstant(LayoutConstant constant) {
   const bool touch_ui = ui::TouchUiController::Get()->touch_ui();
   switch (constant) {
-    case APP_MENU_PROFILE_ROW_AVATAR_ICON_SIZE:
+    case LayoutConstant::kAppMenuProfileRowAvatarIconSize:
       return 24;
-    case APP_MENU_MAXIMUM_CHARACTER_LENGTH:
+    case LayoutConstant::kAppMenuMaximumCharacterLength:
       return 30;
-    case BOOKMARK_BAR_HEIGHT: {
+    case LayoutConstant::kBookmarkBarHeight: {
       // The fixed margin ensures the bookmark buttons appear centered relative
       // to the white space above and below.
-      const int bookmark_bar_attached_vertical_margin =
-          features::IsChromeRefresh2023() ? 6 : 4;
-      return GetLayoutConstant(BOOKMARK_BAR_BUTTON_HEIGHT) +
+      const int bookmark_bar_attached_vertical_margin = 6;
+      return GetLayoutConstant(LayoutConstant::kBookmarkBarButtonHeight) +
              bookmark_bar_attached_vertical_margin;
     }
-    case BOOKMARK_BAR_BUTTON_HEIGHT:
+    case LayoutConstant::kBookmarkBarButtonHeight:
       return touch_ui ? 36 : 28;
-    case BOOKMARK_BAR_BUTTON_PADDING:
-      return GetLayoutConstant(TOOLBAR_ELEMENT_PADDING);
-    case BOOKMARK_BAR_BUTTON_IMAGE_LABEL_PADDING:
-      return features::IsChromeRefresh2023() ? 6 : 8;
-    case WEB_APP_MENU_BUTTON_SIZE:
+    case LayoutConstant::kBookmarkBarButtonPadding:
+      return GetLayoutConstant(LayoutConstant::kToolbarElementPadding);
+    case LayoutConstant::kBookmarkBarButtonImageLabelPadding:
+      return 6;
+    case LayoutConstant::kWebAppMenuButtonSize:
       return 24;
-    case WEB_APP_PAGE_ACTION_ICON_SIZE:
+    case LayoutConstant::kWebAppPageActionIconSize:
       // We must limit the size of icons in the title bar to avoid vertically
       // stretching the container view.
       return 16;
-    case LOCATION_BAR_BUBBLE_FONT_VERTICAL_PADDING:
+    case LayoutConstant::kLocationBarBubbleFontVerticalPadding:
       return 2;
-    case LOCATION_BAR_BUBBLE_ANCHOR_VERTICAL_INSET:
+    case LayoutConstant::kLocationBarBubbleAnchorVerticalInset:
       return 1;
-    case LOCATION_BAR_CHILD_INTERIOR_PADDING:
+    case LayoutConstant::kLocationBarChildInteriorPadding:
       return 3;
-    case LOCATION_BAR_CHILD_CORNER_RADIUS:
+    case LayoutConstant::kLocationBarChildCornerRadius:
       return 12;
-    case LOCATION_BAR_CHIP_ICON_SIZE:
+    case LayoutConstant::kLocationBarChipIconSize:
       return 16;
-    case LOCATION_BAR_CHIP_PADDING:
+    case LayoutConstant::kLocationBarChipPadding:
       return 4;
-    case LOCATION_BAR_ELEMENT_PADDING:
+    case LayoutConstant::kLocationBarElementPadding:
       return touch_ui ? 3 : 2;
-    case LOCATION_BAR_PAGE_INFO_ICON_VERTICAL_PADDING:
+    case LayoutConstant::kLocationBarPageInfoIconVerticalPadding:
       return touch_ui ? 3 : 5;
-    case LOCATION_BAR_LEADING_DECORATION_EDGE_PADDING:
+    case LayoutConstant::kLocationBarLeadingDecorationEdgePadding:
       // TODO(manukh): See comment in `LocationBarView::Layout()`. We have too
       //   many feature permutations that would affect this and other layout
       //   constants, so instead of spreading the permutation logic here and
       //   elsewhere, it's consolidated in `Layout()` and will be moved back
       //   here once we decide on a permutation.
-      NOTREACHED_NORETURN();
-    case LOCATION_BAR_TRAILING_DECORATION_EDGE_PADDING:
+      NOTREACHED();
+    case LayoutConstant::kLocationBarTrailingDecorationEdgePadding:
       return touch_ui ? 3 : 12;
-    case LOCATION_BAR_HEIGHT:
-      if (base::FeatureList::IsEnabled(omnibox::kOmniboxSteadyStateHeight) ||
-          features::GetChromeRefresh2023Level() ==
-              features::ChromeRefresh2023Level::kLevel2) {
-        return touch_ui ? 36 : 34;
-      } else {
-        return touch_ui ? 36 : 28;
-      }
-    case LOCATION_BAR_ICON_SIZE:
+    case LayoutConstant::kLocationBarTrailingDecorationInnerPadding:
+      return touch_ui ? 3 : 8;
+    case LayoutConstant::kLocationBarHeight:
+      return touch_ui ? 36 : 34;
+    case LayoutConstant::kLocationBarIconSize:
       return touch_ui ? 20 : 16;
-    case LOCATION_BAR_LEADING_ICON_SIZE:
-      return GetLayoutConstant(LOCATION_BAR_ICON_SIZE);
-    case LOCATION_BAR_TRAILING_ICON_SIZE:
-      return OmniboxFieldTrial::IsChromeRefreshIconsEnabled()
-                 ? 20
-                 : GetLayoutConstant(LOCATION_BAR_ICON_SIZE);
-    case TAB_AFTER_TITLE_PADDING:
+    case LayoutConstant::kLocationBarLeadingIconSize:
+      return GetLayoutConstant(LayoutConstant::kLocationBarIconSize);
+    case LayoutConstant::kLocationBarTrailingIconSize:
+      return 20;
+    case LayoutConstant::kNewTabButtonLeadingMargin:
+      return 0;
+    case LayoutConstant::kStarRatingIconSize:
+      return 14;
+    case LayoutConstant::kTabAfterTitlePadding:
       return touch_ui ? 8 : 4;
-    case TAB_ALERT_INDICATOR_CAPTURE_ICON_WIDTH:
+    case LayoutConstant::kTabAlertIndicatorCaptureIconWidth:
       return 16;
-    case TAB_ALERT_INDICATOR_ICON_WIDTH:
+    case LayoutConstant::kTabAlertIndicatorIconWidth:
       return touch_ui ? 12 : 16;
-    case TAB_CLOSE_BUTTON_SIZE:
+    case LayoutConstant::kTabCloseButtonSize:
       return touch_ui ? 24 : 16;
-    case TAB_HEIGHT: {
-      bool use_touch_padding = touch_ui && !features::IsChromeRefresh2023();
-#if BUILDFLAG(IS_CHROMEOS)
-      use_touch_padding &= !chromeos::features::IsRoundedWindowsEnabled();
-#endif
-      return (use_touch_padding ? 41 : 34) +
-             GetLayoutConstant(TABSTRIP_TOOLBAR_OVERLAP);
-    }
-    case TAB_STRIP_HEIGHT:
-      return GetLayoutConstant(TAB_HEIGHT) +
-             GetLayoutConstant(TAB_STRIP_PADDING);
-    case TAB_STRIP_PADDING:
-      return features::IsChromeRefresh2023() ? 6 : 0;
-    case TAB_SEPARATOR_HEIGHT:
-      // TODO (crbug.com/1451400): ChromeRefresh2023 needs different values for
-      // this constant.
+    case LayoutConstant::kTabHeight:
+      return 34 + GetLayoutConstant(LayoutConstant::kTabstripToolbarOverlap);
+    case LayoutConstant::kTabStripHeight:
+      return GetLayoutConstant(LayoutConstant::kTabHeight) +
+             GetLayoutConstant(LayoutConstant::kTabStripPadding);
+    case LayoutConstant::kTabStripPadding:
+      return 6;
+    case LayoutConstant::kTabSeparatorHeight:
       return touch_ui ? 24 : 20;
-    case TAB_PRE_TITLE_PADDING:
+    case LayoutConstant::kTabPreTitlePadding:
       return 8;
-    case TAB_STACK_DISTANCE:
+    case LayoutConstant::kTabStackDistance:
       return touch_ui ? 4 : 6;
-    case TABSTRIP_REGION_VIEW_CONTROL_PADDING:
-      // TODO (crbug.com/1451400): ChromeRefresh2023 needs different values for
-      // this constant.
-      return 8;
-    case TABSTRIP_TOOLBAR_OVERLAP:
-      // Because tab scrolling puts the tabstrip on a separate layer,
-      // changing paint order, this overlap isn't compatible with scrolling.
-      if (base::FeatureList::IsEnabled(features::kScrollableTabStrip))
-        return 0;
+    case LayoutConstant::kTabstripToolbarOverlap:
       return 1;
-    case TOOLBAR_BUTTON_HEIGHT:
-      if (features::IsChromeRefresh2023()) {
-        return touch_ui ? 48 : 34;
-      } else {
-        return touch_ui ? 48 : 28;
-      }
-    case TOOLBAR_DIVIDER_CORNER_RADIUS:
+    case LayoutConstant::kToolbarButtonHeight:
+      return touch_ui ? 48 : 34;
+    case LayoutConstant::kToolbarDividerCornerRadius:
       return 1;
-    case TOOLBAR_DIVIDER_HEIGHT:
+    case LayoutConstant::kToolbarDividerHeight:
       return touch_ui ? 20 : 16;
-    case TOOLBAR_DIVIDER_SPACING:
+    case LayoutConstant::kToolbarDividerSpacing:
       return 9;
-    case TOOLBAR_DIVIDER_WIDTH:
+    case LayoutConstant::kToolbarDividerWidth:
       return 2;
-    case TOOLBAR_ELEMENT_PADDING:
+    case LayoutConstant::kToolbarElementPadding:
       return touch_ui ? 0 : 4;
-    case TOOLBAR_ICON_DEFAULT_MARGIN:
-      if (features::IsChromeRefresh2023()) {
-        return touch_ui ? 0 : 2;
-      } else {
-        return GetLayoutConstant(TOOLBAR_ELEMENT_PADDING);
-      }
-    case TOOLBAR_STANDARD_SPACING:
-      if (features::IsChromeRefresh2023()) {
-        return touch_ui ? 12 : 9;
-      } else {
-        return touch_ui ? 12 : 8;
-      }
-    case PAGE_INFO_ICON_SIZE:
-      return features::IsChromeRefresh2023() ? 20 : 16;
-    case DOWNLOAD_ICON_SIZE:
-      return features::IsChromeRefresh2023() ? 20 : 16;
-    case TOOLBAR_CORNER_RADIUS:
+    case LayoutConstant::kToolbarIconDefaultMargin:
+      return touch_ui ? 0 : 2;
+    case LayoutConstant::kToolbarStandardSpacing:
+      return touch_ui ? 12 : 9;
+    case LayoutConstant::kToolbarHeightSidePanelInset:
       return 8;
+    case LayoutConstant::kPageInfoIconSize:
+      return 20;
+    case LayoutConstant::kDownloadIconSize:
+      return 20;
+    case LayoutConstant::kMainBackgroundRegionCornerRadius:
+    case LayoutConstant::kToolbarCornerRadius:
+    case LayoutConstant::kVerticalTabCornerRadius:
+      return 8;
+    case LayoutConstant::kVerticalTabHeight:
+      return 30;
+    case LayoutConstant::kVerticalTabPinnedHeight:
+      return 32;
+    case LayoutConstant::kVerticalTabMinWidth:
+      return 32;
+    case LayoutConstant::kVerticalTabStripUncollapsedPadding:
+      return 12;
+    case LayoutConstant::kVerticalTabStripCollapsedPadding:
+      return 8;
+    case LayoutConstant::kVerticalTabStripCollapsedSeparatorWidth:
+      return 24;
+    case LayoutConstant::kVerticalTabStripTopButtonIconSize:
+      return 20;
+    case LayoutConstant::kVerticalTabStripBottomButtonIconSize:
+      return 18;
+    case LayoutConstant::kVerticalTabStripTopButtonPadding:
+      return 4;
+    case LayoutConstant::kVerticalTabStripFlatEdgeButtonPadding:
+      return 2;
+    case LayoutConstant::kVerticalTabStripTopButtonContainerHeight:
+      return 28;
+    case LayoutConstant::kVerticalTabStripNewTabButtonSize:
+      return 32;
+    case LayoutConstant::kVerticalTabStripTopContainerButtonSize:
+      return 28;
+    case LayoutConstant::kVerticalTabPinnedBorderThickness:
+      return 1;
     default:
       break;
   }
   NOTREACHED();
-  return 0;
 }
 
 gfx::Insets GetLayoutInsets(LayoutInset inset) {
@@ -173,12 +174,10 @@ gfx::Insets GetLayoutInsets(LayoutInset inset) {
       return gfx::Insets(4);
 
     case DOWNLOAD_ROW:
-      return gfx::Insets::VH(8, features::IsChromeRefresh2023() ? 20 : 16);
+      return gfx::Insets::VH(8, 20);
+
     case LOCATION_BAR_ICON_INTERIOR_PADDING:
-      if (features::IsChromeRefresh2023()) {
-        return gfx::Insets::VH(2, 2);
-      }
-      return touch_ui ? gfx::Insets::VH(5, 10) : gfx::Insets::VH(4, 8);
+      return gfx::Insets::VH(2, 2);
 
     case LOCATION_BAR_PAGE_INFO_ICON_PADDING:
       return touch_ui ? gfx::Insets::VH(5, 10) : gfx::Insets::VH(4, 4);
@@ -193,33 +192,36 @@ gfx::Insets GetLayoutInsets(LayoutInset inset) {
     }
 
     case TOOLBAR_BUTTON:
-      return gfx::Insets(touch_ui ? 12
-                                  : (features::IsChromeRefresh2023() ? 7 : 6));
+      return gfx::Insets(touch_ui ? 12 : 7);
 
     case BROWSER_APP_MENU_CHIP_PADDING:
-      if (touch_ui || !features::IsChromeRefresh2023()) {
+      if (touch_ui) {
         return GetLayoutInsets(TOOLBAR_BUTTON);
       } else {
         return gfx::Insets::TLBR(7, 4, 7, 6);
       }
 
+    case WEB_APP_APP_MENU_CHIP_PADDING:
+      return gfx::Insets::TLBR(0, 4, 0, 6);
+
     case AVATAR_CHIP_PADDING:
-      if (touch_ui || !features::IsChromeRefresh2023()) {
+      if (touch_ui) {
         return GetLayoutInsets(TOOLBAR_BUTTON);
       } else {
         return gfx::Insets::TLBR(7, 10, 7, 4);
       }
 
     case TOOLBAR_INTERIOR_MARGIN:
-      if (features::IsChromeRefresh2023()) {
-        return touch_ui ? gfx::Insets() : gfx::Insets::VH(6, 5);
-      } else {
-        return touch_ui ? gfx::Insets() : gfx::Insets::VH(4, 8);
-      }
+      return touch_ui ? gfx::Insets::VH(4, 0) : gfx::Insets::VH(6, 5);
 
     case WEBUI_TAB_STRIP_TOOLBAR_INTERIOR_MARGIN:
       return gfx::Insets::VH(4, 0);
+
+    case VERTICAL_TAB_STRIP_BOTTOM_BUTTON_UNCOLLAPSED:
+      return gfx::Insets::VH(5, 14);
+
+    case VERTICAL_TAB_STRIP_BOTTOM_BUTTON_COLLAPSED:
+      return gfx::Insets::VH(5, 6);
   }
   NOTREACHED();
-  return gfx::Insets();
 }

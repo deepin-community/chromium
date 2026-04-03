@@ -15,6 +15,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
+#include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -95,7 +96,7 @@ bool IsProcessBackgrounded(const base::Process& process) {
 
 class ChromeRenderProcessHostTest : public extensions::ExtensionBrowserTest {
  public:
-  ChromeRenderProcessHostTest() {}
+  ChromeRenderProcessHostTest() = default;
 
   ChromeRenderProcessHostTest(const ChromeRenderProcessHostTest&) = delete;
   ChromeRenderProcessHostTest& operator=(const ChromeRenderProcessHostTest&) =
@@ -152,7 +153,7 @@ class ChromeRenderProcessHostTest : public extensions::ExtensionBrowserTest {
   // in a process of that type, even if that means creating a new process.
   void TestProcessOverflow() {
     int tab_count = 1;
-    int host_count = 1;
+    int host_count = RenderProcessHostCount();
     WebContents* tab1 = nullptr;
     WebContents* tab2 = nullptr;
     content::RenderProcessHost* rph1 = nullptr;
@@ -249,6 +250,12 @@ class ChromeRenderProcessHostTest : public extensions::ExtensionBrowserTest {
     EXPECT_NE(rph1, rph3);
     EXPECT_NE(rph2, rph3);
   }
+
+ private:
+  // TODO(https://crbug.com/423465927): Explore a better approach to make the
+  // existing tests run with the prewarm feature enabled.
+  test::ScopedPrewarmFeatureList prewarm_feature_list_{
+      test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
 };
 
 class ChromeRenderProcessHostTestWithCommandLine
@@ -279,7 +286,7 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest, ProcessPerTab) {
   parsed_command_line.AppendSwitch(switches::kProcessPerTab);
 
   int tab_count = 1;
-  int host_count = 1;
+  int host_count = RenderProcessHostCount();
 
   content::RenderFrameDeletedObserver before_webui_obs(
       content::ConvertToRenderFrameHost(
@@ -383,7 +390,8 @@ class ChromeRenderProcessHostBackgroundingTest
   void VerifyProcessPriority(content::RenderProcessHost* process,
                              bool expected_is_backgrounded) {
     EXPECT_TRUE(process->IsInitializedAndNotDead());
-    EXPECT_EQ(expected_is_backgrounded, process->IsProcessBackgrounded());
+    EXPECT_EQ(expected_is_backgrounded,
+              process->GetPriority() == base::Process::Priority::kBestEffort);
 
     if (base::Process::CanSetPriority()) {
       base::Process p = ProcessFromHandle(process->GetProcess().Handle());
@@ -495,7 +503,7 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
   parsed_command_line.AppendSwitch(switches::kProcessPerTab);
 
   int tab_count = 1;
-  int host_count = 1;
+  int host_count = RenderProcessHostCount();
 
   GURL page1("data:text/html,hello world1");
   ui_test_utils::TabAddedWaiter add_tab(browser());
@@ -536,7 +544,7 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
 IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
                        DevToolsOnSelfInOwnProcess) {
   int tab_count = 1;
-  int host_count = 1;
+  int host_count = RenderProcessHostCount();
 
   GURL page1("data:text/html,hello world1");
   ui_test_utils::TabAddedWaiter add_tab1(browser());
@@ -576,14 +584,17 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
 // closing the passed in TabStripModel. This is used in the following test case.
 class WindowDestroyer : public content::WebContentsObserver {
  public:
-  WindowDestroyer(content::WebContents* web_contents, TabStripModel* model)
-      : content::WebContentsObserver(web_contents), tab_strip_model_(model) {}
+  WindowDestroyer(BrowserWindowInterface* browser,
+                  content::WebContents* web_contents)
+      : content::WebContentsObserver(web_contents),
+        tab_strip_model_(browser->GetTabStripModel()),
+        observer_(browser) {}
 
   WindowDestroyer(const WindowDestroyer&) = delete;
   WindowDestroyer& operator=(const WindowDestroyer&) = delete;
 
   // Wait for the browser window to be destroyed.
-  void Wait() { ui_test_utils::WaitForBrowserToClose(); }
+  void Wait() { observer_.Wait(); }
 
   void PrimaryMainFrameRenderProcessGone(
       base::TerminationStatus status) override {
@@ -592,6 +603,7 @@ class WindowDestroyer : public content::WebContentsObserver {
 
  private:
   raw_ptr<TabStripModel> tab_strip_model_;
+  ui_test_utils::BrowserDestroyedObserver observer_;
 };
 
 // Test to ensure that while iterating through all listeners in
@@ -619,7 +631,7 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
             wc2->GetPrimaryMainFrame()->GetProcess());
 
   // Create an object that will close the window on a process crash.
-  WindowDestroyer destroyer(wc1, browser()->tab_strip_model());
+  WindowDestroyer destroyer(browser(), wc1);
 
   // Kill the renderer process, simulating a crash. This should the ProcessDied
   // method to be called. Alternatively, RenderProcessHost::OnChannelError can

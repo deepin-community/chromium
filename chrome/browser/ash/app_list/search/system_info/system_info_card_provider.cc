@@ -9,27 +9,31 @@
 #include <optional>
 #include <string>
 
+#include "ash/app_list/vector_icons/vector_icons.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/webui/settings/public/constants/routes.mojom-forward.h"
+#include "base/byte_size.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/ash/app_list/search/common/icon_constants.h"
 #include "chrome/browser/ash/app_list/search/system_info/battery_answer_result.h"
 #include "chrome/browser/ash/app_list/search/system_info/cpu_answer_result.h"
-#include "chrome/browser/ash/app_list/search/system_info/cpu_data.h"
-#include "chrome/browser/ash/app_list/search/system_info/cpu_usage_data.h"
 #include "chrome/browser/ash/app_list/search/system_info/memory_answer_result.h"
 #include "chrome/browser/ash/app_list/search/system_info/system_info_answer_result.h"
-#include "chrome/browser/ash/app_list/search/system_info/system_info_util.h"
-#include "chrome/browser/ash/app_list/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/webui/ash/settings/calculator/size_calculator.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/storage/device_storage_util.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/launcher_search/system_info/launcher_util.h"
 #include "chromeos/ash/components/string_matching/fuzzy_tokenized_string_match.h"
+#include "chromeos/ash/components/system_info/cpu_data.h"
+#include "chromeos/ash/components/system_info/cpu_usage_data.h"
+#include "chromeos/ash/components/system_info/system_info_util.h"
 #include "chromeos/ash/services/cros_healthd/public/cpp/service_connection.h"
-#include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom-shared.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_probe.mojom.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/version_info/version_info.h"
@@ -58,9 +62,14 @@ constexpr double kMinimumRelevance = 0.0;
 constexpr double kRelevanceThreshold = 0.79;
 constexpr double kMinimumQueryLength = 3;
 
-double ConvertKBtoBytes(uint32_t amount) {
-  return static_cast<double>(amount) * 1024;
-}
+constexpr char kHistogramMemoryCrosHealthdProbeErrorPrefix[] =
+    "Apps.AppList.SystemInfoProvider.CrosHealthdProbeError.MemoryInfo";
+constexpr char kHistogramCpuCrosHealthdProbeErrorPrefix[] =
+    "Apps.AppList.SystemInfoProvider.CrosHealthdProbeError.CpuInfo";
+constexpr char kHistogramBatteryCrosHealthdProbeErrorPrefix[] =
+    "Apps.AppList.SystemInfoProvider.CrosHealthdProbeError.BatteryInfo";
+constexpr char kHistogramBatteryErrorPrefix[] =
+    "Apps.AppList.SystemInfoProvider.Error.Battery";
 
 }  // namespace
 
@@ -71,10 +80,9 @@ SystemInfoCardProvider::SystemInfoCardProvider(Profile* profile)
       my_files_size_calculator_(profile),
       drive_offline_size_calculator_(profile),
       browsing_data_size_calculator_(profile),
-      apps_size_calculator_(profile),
       crostini_size_calculator_(profile),
       profile_(profile),
-      keywords_(GetSystemInfoKeywordVector()) {
+      keywords_(launcher_search::GetSystemInfoKeywordVector()) {
   DCHECK(profile_);
   ash::cros_healthd::ServiceConnection::GetInstance()->BindProbeService(
       probe_service_.BindNewPipeAndPassReceiver());
@@ -104,8 +112,8 @@ void SystemInfoCardProvider::Start(const std::u16string& query) {
   }
 
   double max_relevance = 0;
-  SystemInfoKeywordInput* most_relevant_keyword_input;
-  for (SystemInfoKeywordInput& keyword_input : keywords_) {
+  launcher_search::SystemInfoKeywordInput* most_relevant_keyword_input;
+  for (launcher_search::SystemInfoKeywordInput& keyword_input : keywords_) {
     double relevance = CalculateRelevance(query, keyword_input.GetKeyword());
     if (relevance > kRelevanceThreshold && relevance > max_relevance) {
       max_relevance = relevance;
@@ -116,26 +124,26 @@ void SystemInfoCardProvider::Start(const std::u16string& query) {
   if (max_relevance > kRelevanceThreshold) {
     relevance_ = max_relevance;
     switch (most_relevant_keyword_input->GetInputType()) {
-      case SystemInfoInputType::kMemory:
+      case launcher_search::SystemInfoInputType::kMemory:
         UpdateMemoryUsage(/*create_result=*/true);
         break;
-      case SystemInfoInputType::kCPU:
+      case launcher_search::SystemInfoInputType::kCPU:
         UpdateCpuUsage(/*create_result=*/true);
         break;
-      case SystemInfoInputType::kVersion:
+      case launcher_search::SystemInfoInputType::kVersion:
         UpdateChromeOsVersion();
         break;
       // Do not calculate the storage size again if already
       // calculated recently.
       // TODO(b/263994165): Add in a refresh period here.
-      case SystemInfoInputType::kStorage:
+      case launcher_search::SystemInfoInputType::kStorage:
         if (!calculation_state_.all()) {
           UpdateStorageInfo();
         } else {
           CreateStorageAnswerCard();
         }
         break;
-      case SystemInfoInputType::kBattery:
+      case launcher_search::SystemInfoInputType::kBattery:
         UpdateBatteryInfo();
         break;
     }
@@ -185,16 +193,17 @@ void SystemInfoCardProvider::OnMemoryUsageUpdated(bool create_result,
     return;
   }
 
-  memory_info_ = GetMemoryInfo(*info_ptr);
+  memory_info_ = system_info::GetMemoryInfo(
+      *info_ptr, kHistogramMemoryCrosHealthdProbeErrorPrefix);
   if (!memory_info_) {
     LOG(ERROR) << "Memory information not provided by croshealthd";
     return;
   }
 
-  std::u16string available_memory_gb =
-      ui::FormatBytes(ConvertKBtoBytes(memory_info_->available_memory_kib));
-  std::u16string total_memory_gb =
-      ui::FormatBytes(ConvertKBtoBytes(memory_info_->total_memory_kib));
+  std::u16string available_memory_gb = ui::FormatBytes(base::KiBU(
+      base::checked_cast<uint64_t>(memory_info_->available_memory_kib)));
+  std::u16string total_memory_gb = ui::FormatBytes(
+      base::KiBU(base::checked_cast<uint64_t>(memory_info_->total_memory_kib)));
 
   double used_memory_kb =
       memory_info_->total_memory_kib - memory_info_->available_memory_kib;
@@ -251,7 +260,8 @@ void SystemInfoCardProvider::OnCpuUsageUpdated(bool create_result,
     return;
   }
 
-  const CpuInfo* cpu_info = GetCpuInfo(*info_ptr);
+  const CpuInfo* cpu_info = system_info::GetCpuInfo(
+      *info_ptr, kHistogramCpuCrosHealthdProbeErrorPrefix);
   if (cpu_info == nullptr) {
     LOG(ERROR) << "No CpuInfo in response from cros_healthd.";
     return;
@@ -275,14 +285,15 @@ void SystemInfoCardProvider::OnCpuUsageUpdated(bool create_result,
 
   const PhysicalCpuInfoPtr& physical_cpu_ptr = cpu_info->physical_cpus[0];
 
-  CpuUsageData new_cpu_usage_data =
-      CalculateCpuUsage(physical_cpu_ptr->logical_cpus);
-  std::unique_ptr<CpuData> new_cpu_usage = std::make_unique<CpuData>();
+  system_info::CpuUsageData new_cpu_usage_data =
+      system_info::CalculateCpuUsage(physical_cpu_ptr->logical_cpus);
+  std::unique_ptr<system_info::CpuData> new_cpu_usage =
+      std::make_unique<system_info::CpuData>();
 
-  PopulateCpuUsage(new_cpu_usage_data, previous_cpu_usage_data_,
-                   *new_cpu_usage.get());
-  PopulateAverageCpuTemperature(*cpu_info, *new_cpu_usage.get());
-  PopulateAverageScaledClockSpeed(*cpu_info, *new_cpu_usage.get());
+  system_info::PopulateCpuUsage(new_cpu_usage_data, previous_cpu_usage_data_,
+                                *new_cpu_usage.get());
+  system_info::PopulateAverageCpuTemperature(*cpu_info, *new_cpu_usage.get());
+  system_info::PopulateAverageScaledClockSpeed(*cpu_info, *new_cpu_usage.get());
 
   previous_cpu_usage_data_ = new_cpu_usage_data;
   std::u16string cpu_temp =
@@ -349,25 +360,30 @@ void SystemInfoCardProvider::OnBatteryInfoUpdated(
     return;
   }
 
-  const BatteryInfo* battery_info_ptr = GetBatteryInfo(*info_ptr);
+  const BatteryInfo* battery_info_ptr = system_info::GetBatteryInfo(
+      *info_ptr, kHistogramBatteryCrosHealthdProbeErrorPrefix,
+      kHistogramBatteryErrorPrefix);
   if (!battery_info_ptr) {
     LOG(ERROR) << "BatteryInfo requested by device does not have a battery.";
     return;
   }
 
-  std::unique_ptr<BatteryHealth> new_battery_health =
-      std::make_unique<BatteryHealth>();
+  std::unique_ptr<system_info::BatteryHealth> new_battery_health =
+      std::make_unique<system_info::BatteryHealth>();
 
-  PopulateBatteryHealth(*battery_info_ptr, *new_battery_health.get());
+  system_info::PopulateBatteryHealth(*battery_info_ptr,
+                                     *new_battery_health.get());
 
   const std::optional<power_manager::PowerSupplyProperties>& proto =
       chromeos::PowerManagerClient::Get()->GetLastStatus();
   if (!proto) {
-    EmitBatteryDataError(BatteryDataError::kNoData);
+    system_info::EmitBatteryDataError(system_info::BatteryDataError::kNoData,
+                                      kHistogramBatteryErrorPrefix);
     return;
   }
 
-  PopulatePowerStatus(proto.value(), *new_battery_health.get());
+  launcher_search::PopulatePowerStatus(proto.value(),
+                                       *new_battery_health.get());
 
   std::u16string battery_health_info = l10n_util::GetStringFUTF16(
       IDS_ASH_BATTERY_STATUS_IN_LAUNCHER_DESCRIPTION_RIGHT,
@@ -439,7 +455,6 @@ void SystemInfoCardProvider::UpdateStorageInfo() {
   my_files_size_calculator_.StartCalculation();
   drive_offline_size_calculator_.StartCalculation();
   browsing_data_size_calculator_.StartCalculation();
-  apps_size_calculator_.StartCalculation();
   crostini_size_calculator_.StartCalculation();
   other_users_size_calculator_.StartCalculation();
 }
@@ -450,7 +465,14 @@ void SystemInfoCardProvider::StartObservingCalculators() {
   my_files_size_calculator_.AddObserver(this);
   drive_offline_size_calculator_.AddObserver(this);
   browsing_data_size_calculator_.AddObserver(this);
-  apps_size_calculator_.AddObserver(this);
+  // TODO(b/324478253): Currently, observing `apps_size_calculator_` at
+  // construction causes deterministic failure of ArcIntegrationTest on
+  // betty-pi-arc (b/329337572) . As apps size is not currently in use, we
+  // remove it from the code. If we are interested in the apps size at some
+  // point, consider delaying the observing to the first time launcher search is
+  // used.
+  calculation_state_.set(
+      static_cast<int>(SizeCalculator::CalculationType::kAppsExtensions));
   crostini_size_calculator_.AddObserver(this);
   other_users_size_calculator_.AddObserver(this);
 }
@@ -461,7 +483,6 @@ void SystemInfoCardProvider::StopObservingCalculators() {
   my_files_size_calculator_.RemoveObserver(this);
   drive_offline_size_calculator_.RemoveObserver(this);
   browsing_data_size_calculator_.RemoveObserver(this);
-  apps_size_calculator_.RemoveObserver(this);
   crostini_size_calculator_.RemoveObserver(this);
   other_users_size_calculator_.RemoveObserver(this);
 }
@@ -476,7 +497,7 @@ void SystemInfoCardProvider::OnSizeCalculated(
 
   // Store calculated item's size.
   const int item_index = static_cast<int>(calculation_type);
-  storage_items_total_bytes_[item_index] = total_bytes;
+  UNSAFE_TODO(storage_items_total_bytes_[item_index]) = total_bytes;
 
   // Mark item as calculated.
   calculation_state_.set(item_index);
@@ -502,7 +523,6 @@ void SystemInfoCardProvider::OnStorageInfoUpdated() {
     // We can't get useful information from the storage page if total_bytes <=
     // 0 or available_bytes is less than 0. This is not expected to happen.
     NOTREACHED() << "Unable to retrieve total or available disk space";
-    return;
   }
   CreateStorageAnswerCard();
 }
@@ -515,8 +535,10 @@ void SystemInfoCardProvider::CreateStorageAnswerCard() {
   int64_t total_bytes = storage_items_total_bytes_[total_space_index];
   int64_t available_bytes = storage_items_total_bytes_[free_disk_space_index];
   int64_t in_use_bytes = total_bytes - available_bytes;
-  std::u16string in_use_size = ui::FormatBytes(in_use_bytes);
-  std::u16string total_size = ui::FormatBytes(total_bytes);
+  std::u16string in_use_size = ui::FormatBytes(
+      base::ByteSize(base::checked_cast<uint64_t>(in_use_bytes)));
+  std::u16string total_size = ui::FormatBytes(
+      base::ByteSize(base::checked_cast<uint64_t>(total_bytes)));
   std::u16string description = l10n_util::GetStringFUTF16(
       IDS_ASH_STORAGE_STATUS_IN_LAUNCHER_DESCRIPTION, in_use_size, total_size);
 

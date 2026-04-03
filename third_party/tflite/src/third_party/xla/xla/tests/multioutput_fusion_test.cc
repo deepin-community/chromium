@@ -13,47 +13,48 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <math.h>
-
-#include <algorithm>
+#include <cstdint>
 #include <memory>
-#include <new>
+#include <string>
 #include <utility>
+#include <variant>
 
+#include "xla/tests/xla_test_backend_predicates.h"
+#include "absl/log/check.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/substitute.h"
 #include "absl/types/span.h"
-#include "xla/client/local_client.h"
+#include "google/protobuf/text_format.h"
+#include "xla/error_spec.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/literal.h"
-#include "xla/primitive_util.h"
-#include "xla/service/hlo_runner.h"
+#include "xla/literal_util.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/tests/client_library_test_base.h"
-#include "xla/tests/hlo_test_base.h"
+#include "xla/stream_executor/device_description.pb.h"
+#include "xla/tests/hlo_pjrt_interpreter_reference_mixin.h"
+#include "xla/tests/hlo_pjrt_test_base.h"
 #include "xla/tests/literal_test_util.h"
-#include "xla/tests/test_macros.h"
-#include "xla/tests/test_utils.h"
+#include "xla/tests/pjrt_client_registry.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/protobuf.h"
-#include "tsl/platform/test.h"
-#include "tsl/platform/test_benchmark.h"
 
 namespace xla {
 namespace {
 
-class MultiOutputFusionTest : public HloTestBase {
- protected:
-  MultiOutputFusionTest() { error_spec_ = ErrorSpec{0.0001, 1e-2}; }
+constexpr ErrorSpec kErrorSpec{0.0001, 1e-2};
 
+class MultiOutputFusionTest
+    : public HloPjRtInterpreterReferenceMixin<HloPjRtTestBase> {
+ protected:
   // Layout assignment assumes that there are no fusions in the input graph.
   // Since the purpose of this test is to send pre-fused graphs to XLA, we have
   // to do layout assignment ourselves.
-  DebugOptions GetDebugOptionsForTest() override {
-    auto opts = HloTestBase::GetDebugOptionsForTest();
+  DebugOptions GetDebugOptionsForTest() const override {
+    auto opts = HloPjRtTestBase::GetDebugOptionsForTest();
     opts.add_xla_disable_hlo_passes("layout-assignment");
     return opts;
   }
@@ -98,8 +99,8 @@ class MultiOutputFusionTest : public HloTestBase {
           HloInstruction::CreateGetTupleElement(elem_shape2, tuple, 0));
       auto gte1 = computation->AddInstruction(
           HloInstruction::CreateGetTupleElement(elem_shape2, tuple, 1));
-      TF_CHECK_OK(dot->ReplaceOperandWith(0, gte0));
-      TF_CHECK_OK(dot->ReplaceOperandWith(1, gte1));
+      CHECK_OK(dot->ReplaceOperandWith(0, gte0));
+      CHECK_OK(dot->ReplaceOperandWith(1, gte1));
 
       CHECK_NE(
           computation->CreateFusionInstruction(
@@ -113,9 +114,9 @@ class MultiOutputFusionTest : public HloTestBase {
     Literal expect(ShapeUtil::MakeShapeWithDescendingLayout(F32, {size, size}));
     expect.PopulateWithValue<float>(size * 1.5f * 3.5f);
     Literal literal_r0 = LiteralUtil::CreateR0<float>(-9.0f);
-    auto actual =
-        ExecuteAndTransfer(std::move(hlo_module), {&literal_r0, &arg1});
-    EXPECT_TRUE(LiteralTestUtil::Near(expect, actual, error_spec_));
+    TF_ASSERT_OK_AND_ASSIGN(
+        Literal actual, Execute(std::move(hlo_module), {&literal_r0, &arg1}));
+    EXPECT_TRUE(LiteralTestUtil::Near(expect, actual, kErrorSpec));
   }
 
   void RunTest1D(bool manual_fusion, int size) {
@@ -162,8 +163,8 @@ class MultiOutputFusionTest : public HloTestBase {
           HloInstruction::CreateGetTupleElement(elem_shape_U8, tuple, 0));
       auto gte1 = computation->AddInstruction(
           HloInstruction::CreateGetTupleElement(elem_shape_F32, tuple, 1));
-      TF_CHECK_OK(sub->ReplaceOperandWith(0, gte0));
-      TF_CHECK_OK(reshape->ReplaceOperandWith(0, gte1));
+      CHECK_OK(sub->ReplaceOperandWith(0, gte0));
+      CHECK_OK(reshape->ReplaceOperandWith(0, gte1));
 
       CHECK_NE(computation->CreateFusionInstruction(
                    {tuple, sub_U8, add, param0_U8, param1_F32},
@@ -177,20 +178,19 @@ class MultiOutputFusionTest : public HloTestBase {
     input1.PopulateWithValue(1.);
 
     Literal expect = LiteralUtil::CreateR1<float>({size * 1.5f * 3.5f});
-    auto actual = ExecuteAndTransfer(std::move(hlo_module), {&input0, &input1});
-    EXPECT_TRUE(LiteralTestUtil::Near(expect, actual, error_spec_));
+    TF_ASSERT_OK_AND_ASSIGN(Literal actual,
+                            Execute(std::move(hlo_module), {&input0, &input1}));
+    EXPECT_TRUE(LiteralTestUtil::Near(expect, actual, kErrorSpec));
   }
 };
 
-XLA_TEST_F(MultiOutputFusionTest, 2DNofusion) { RunTest2D(false, 5); }
-XLA_TEST_F(MultiOutputFusionTest, 2DFusion) { RunTest2D(true, 5); }
-XLA_TEST_F(MultiOutputFusionTest, 2DFusionSize129) { RunTest2D(true, 129); }
-XLA_TEST_F(MultiOutputFusionTest, DifferentTypesNoFusion) {
-  RunTest1D(false, 8);
-}
-XLA_TEST_F(MultiOutputFusionTest, DifferentTypesFusion) { RunTest1D(true, 8); }
+TEST_F(MultiOutputFusionTest, 2DNofusion) { RunTest2D(false, 5); }
+TEST_F(MultiOutputFusionTest, 2DFusion) { RunTest2D(true, 5); }
+TEST_F(MultiOutputFusionTest, 2DFusionSize129) { RunTest2D(true, 129); }
+TEST_F(MultiOutputFusionTest, DifferentTypesNoFusion) { RunTest1D(false, 8); }
+TEST_F(MultiOutputFusionTest, DifferentTypesFusion) { RunTest1D(true, 8); }
 
-XLA_TEST_F(MultiOutputFusionTest, MultiOutputLoopFusion) {
+TEST_F(MultiOutputFusionTest, MultiOutputLoopFusion) {
   const char* testcase = R"(
     HloModule m, is_scheduled=true
 
@@ -211,12 +211,12 @@ XLA_TEST_F(MultiOutputFusionTest, MultiOutputLoopFusion) {
     })";
   auto module = ParseAndReturnVerifiedModule(testcase).value();
   auto param = LiteralUtil::CreateR1<float>({1.0, 2.0, 3.0, -1.0});
-  Literal result = ExecuteNoHloPasses(std::move(module), {&param});
+  TF_ASSERT_OK_AND_ASSIGN(Literal result, Execute(std::move(module), {&param},
+                                                  /*run_hlo_passes=*/false));
   LiteralTestUtil::ExpectR1Equal<float>({0.0, 4.0, 9.0, 1.0}, result);
 }
 
-XLA_TEST_F(MultiOutputFusionTest,
-           MultiOutputLoopFusionBitcastCompatibleShapes) {
+TEST_F(MultiOutputFusionTest, MultiOutputLoopFusionBitcastCompatibleShapes) {
   const char* testcase = R"(
     HloModule m, is_scheduled=true
 
@@ -239,11 +239,15 @@ XLA_TEST_F(MultiOutputFusionTest,
     })";
   auto module = ParseAndReturnVerifiedModule(testcase).value();
   auto param = LiteralUtil::CreateR1<float>({1.0, 2.0, 3.0, -1.0});
-  Literal result = ExecuteNoHloPasses(std::move(module), {&param});
+  TF_ASSERT_OK_AND_ASSIGN(Literal result, Execute(std::move(module), {&param},
+                                                  /*run_hlo_passes=*/false));
   LiteralTestUtil::ExpectR1Equal<float>({0.0, 4.0, 9.0, 1.0}, result);
 }
 
-XLA_TEST_F(MultiOutputFusionTest, MultiOutputLoopFeedingMap) {
+TEST_F(MultiOutputFusionTest, MultiOutputLoopFeedingMap) {
+  if (test::DeviceTypeIs(test::kGpu)) {
+    GTEST_SKIP() << "Nested fusions not supported on GPU with MLIR emitters.";
+  }
   const char* testcase = R"(
     HloModule m, is_scheduled=true
 
@@ -269,7 +273,8 @@ XLA_TEST_F(MultiOutputFusionTest, MultiOutputLoopFeedingMap) {
     })";
   auto module = ParseAndReturnVerifiedModule(testcase).value();
   auto param = LiteralUtil::CreateR1<float>({1.0, 2.0, 3.0});
-  Literal result = ExecuteNoHloPasses(std::move(module), {&param});
+  TF_ASSERT_OK_AND_ASSIGN(Literal result, Execute(std::move(module), {&param},
+                                                  /*run_hlo_passes=*/false));
   LiteralTestUtil::ExpectR1Equal<float>({0.0, 4.0, 9.0}, result);
 }
 
@@ -289,7 +294,7 @@ const char* const kScalarOps = R"(
     }
 )";
 
-XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionMinor) {
+TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionMinor) {
   const std::string testcase = absl::StrCat(kScalarOps, R"(
     fused_reduce {
       p0 = f32[32,32,32]{2,1,0} parameter(0)
@@ -310,7 +315,7 @@ XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionMinor) {
   EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), ErrorSpec(1e-5)));
 }
 
-XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionMajor) {
+TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionMajor) {
   const std::string testcase = absl::StrCat(kScalarOps, R"(
     fused_reduce {
       p0 = f32[32,32,32]{2,1,0} parameter(0)
@@ -331,7 +336,7 @@ XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionMajor) {
   EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), ErrorSpec(1e-5)));
 }
 
-XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionScalar) {
+TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionScalar) {
   const std::string testcase = absl::StrCat(kScalarOps, R"(
     fused_reduce {
       p0 = f32[2,32,32]{2,1,0} parameter(0)
@@ -353,7 +358,7 @@ XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionScalar) {
   EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), ErrorSpec(1e-5)));
 }
 
-XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionMinorWithExtraOutput) {
+TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionMinorWithExtraOutput) {
   const std::string testcase = absl::StrCat(kScalarOps, R"(
     fused_reduce {
       p0 = f32[2,32,32]{2,1,0} parameter(0)
@@ -375,30 +380,45 @@ XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionMinorWithExtraOutput) {
   EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), ErrorSpec(1e-5)));
 }
 
-XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionMajorWithExtraOutput) {
+TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionMajorWithExtraOutput) {
   const std::string testcase = absl::StrCat(kScalarOps, R"(
     fused_reduce {
-      p0 = f32[32,32,2]{2,1,0} parameter(0)
+      p0 = f32[$0,$0,2]{2,1,0} parameter(0)
       c0 = f32[] constant(0)
-      r1 = f32[32,2]{1,0} reduce(p0, c0), dimensions={0}, to_apply=Add
-      mul = f32[32,32,2]{2,1,0} multiply(p0, p0)
+      r1 = f32[$0,2]{1,0} reduce(p0, c0), dimensions={0}, to_apply=Add
+      mul = f32[$0,$0,2]{2,1,0} multiply(p0, p0)
       c1 = f32[] constant(5)
-      r2 = f32[32,2]{1,0} reduce(mul, c1), dimensions={0}, to_apply=Max
-      ROOT tuple = (f32[32,2]{1,0}, f32[32,32,2]{2,1,0}, f32[32,2]{1,0})
+      r2 = f32[$0,2]{1,0} reduce(mul, c1), dimensions={0}, to_apply=Max
+      ROOT tuple = (f32[$0,2]{1,0}, f32[$0,$0,2]{2,1,0}, f32[$0,2]{1,0})
                      tuple(r1, mul, r2)
     }
 
     ENTRY reduce {
-      p = f32[32,32,2]{2,1,0} parameter(0)
-      ROOT fusion = (f32[32,2]{1,0}, f32[32,32,2]{2,1,0}, f32[32,2]{1,0})
+      p = f32[$0,$0,2]{2,1,0} parameter(0)
+      ROOT fusion = (f32[$0,2]{1,0}, f32[$0,$0,2]{2,1,0}, f32[$0,2]{1,0})
         fusion(p), kind=kInput, calls=fused_reduce
     })");
-  auto module = ParseAndReturnVerifiedModule(testcase).value();
+
+  // This test requires the input tensor's dimensions to match the warp size of
+  // a target architecture (which could be different on ROCM). This is because
+  // the decision on whether to Elemental IR Emitter for reductions
+  // (IsUnnestedReductionFasterThanElemental) is based on the warp size.
+  ASSERT_OK_AND_ASSIGN(auto client, GetGlobalPjRtClientTestFactory().Get()());
+  ASSERT_OK_AND_ASSIGN(auto topology, client->GetTopologyDescription());
+  auto it = topology->Attributes().find("target_config");
+  CHECK(it != topology->Attributes().end());
+  CHECK(std::holds_alternative<std::string>(it->second));
+  stream_executor::GpuTargetConfigProto target_config;
+  std::string proto_text = std::get<std::string>(it->second);
+  CHECK(tsl::protobuf::TextFormat::ParseFromString(proto_text, &target_config));
+  int warp_size = target_config.gpu_device_info().threads_per_warp();
+
+  std::string hlo = absl::Substitute(testcase, warp_size);
+  auto module = ParseAndReturnVerifiedModule(hlo).value();
   EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), ErrorSpec(1e-5)));
 }
 
-XLA_TEST_F(MultiOutputFusionTest,
-           MultiOutputReduceFusionScalarWithExtraOutput) {
+TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionScalarWithExtraOutput) {
   const std::string testcase = R"(
     HloModule m, is_scheduled=true
 
@@ -428,7 +448,7 @@ XLA_TEST_F(MultiOutputFusionTest,
   EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), ErrorSpec(1e-5)));
 }
 
-XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionNonConstInit) {
+TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionNonConstInit) {
   const std::string testcase = absl::StrCat(kScalarOps, R"(
     fused_reduce {
       p0 = f32[2,32,32]{2,1,0} parameter(0)
@@ -450,8 +470,7 @@ XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionNonConstInit) {
   EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), ErrorSpec(1e-5)));
 }
 
-XLA_TEST_F(MultiOutputFusionTest,
-           MultiOutputReduceFusionDifferentElementTypes) {
+TEST_F(MultiOutputFusionTest, MultiOutputReduceFusionDifferentElementTypes) {
   const std::string testcase = absl::StrCat(kScalarOps, R"(
     fused_reduce (p0: f16[2,32,32]) -> (f32[2,32], f32[2,32], f16[2,32,32]) {
       p0 = f16[2,32,32]{2,1,0} parameter(0)
@@ -474,7 +493,7 @@ XLA_TEST_F(MultiOutputFusionTest,
   EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), ErrorSpec(1e-5)));
 }
 
-XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceCanonicalizationIsSame) {
+TEST_F(MultiOutputFusionTest, MultiOutputReduceCanonicalizationIsSame) {
   const std::string testcase = absl::StrCat(kScalarOps, R"(
 fused_computation {
   param_0 = f32[64,128]{1,0} parameter(0)
@@ -494,7 +513,7 @@ ENTRY main {
   EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), ErrorSpec(1e-5)));
 }
 
-XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceGeneralBitcastCompatible) {
+TEST_F(MultiOutputFusionTest, MultiOutputReduceGeneralBitcastCompatible) {
   const std::string testcase = absl::StrCat(kScalarOps, R"(
 fused_computation {
   param_0 = f32[64,128]{1,0} parameter(0)
@@ -514,7 +533,7 @@ ENTRY main {
   EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), ErrorSpec(1e-5)));
 }
 
-XLA_TEST_F(MultiOutputFusionTest, MultiOutputReduceWithEpilogue) {
+TEST_F(MultiOutputFusionTest, MultiOutputReduceWithEpilogue) {
   const std::string testcase = absl::StrCat(kScalarOps, R"(
 fused_computation {
   param_0 = f32[4,2]{1,0} parameter(0)
@@ -534,8 +553,8 @@ ENTRY main.7749 {
   EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), ErrorSpec(1e-5)));
 }
 
-XLA_TEST_F(MultiOutputFusionTest,
-           MultiOutputReduceWithEpilogueHeroAlsoUsedAsNonHero) {
+TEST_F(MultiOutputFusionTest,
+       MultiOutputReduceWithEpilogueHeroAlsoUsedAsNonHero) {
   // reduce.8 is used by bitcast as reduce hero and by broadcast as non-hero.
   const std::string testcase = absl::StrCat(kScalarOps, R"(
 fused_computation {
@@ -558,8 +577,8 @@ ENTRY main {
   EXPECT_TRUE(RunAndCompareNoHloPasses(std::move(module), ErrorSpec(1e-5)));
 }
 
-XLA_TEST_F(MultiOutputFusionTest,
-           MultiOutputTransposeFusionHeroWithMultipleRootUsers) {
+TEST_F(MultiOutputFusionTest,
+       MultiOutputTransposeFusionHeroWithMultipleRootUsers) {
   const std::string testcase = R"(
     HloModule test
     fused_transpose {

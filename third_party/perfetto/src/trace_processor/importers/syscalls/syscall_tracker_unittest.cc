@@ -16,6 +16,8 @@
 
 #include "src/trace_processor/importers/syscalls/syscall_tracker.h"
 
+#include "src/trace_processor/importers/common/global_args_tracker.h"
+#include "src/trace_processor/importers/common/machine_tracker.h"
 #include "src/trace_processor/importers/common/slice_tracker.h"
 #include "test/gtest_and_gmock.h"
 
@@ -49,12 +51,25 @@ class MockSliceTracker : public SliceTracker {
                StringId name,
                SetArgsCallback args_callback),
               (override));
+  MOCK_METHOD(std::optional<SliceId>,
+              Scoped,
+              (int64_t timestamp,
+               TrackId track_id,
+               StringId cat,
+               StringId name,
+               int64_t duration,
+               SetArgsCallback args_callback),
+              (override));
 };
 
 class SyscallTrackerTest : public ::testing::Test {
  public:
   SyscallTrackerTest() {
     context.storage.reset(new TraceStorage());
+    context.machine_tracker.reset(
+        new MachineTracker(&context, kDefaultMachineId));
+    context.global_args_tracker.reset(
+        new GlobalArgsTracker(context.storage.get()));
     track_tracker = new TrackTracker(&context);
     context.track_tracker.reset(track_tracker);
     slice_tracker = new MockSliceTracker(&context);
@@ -81,6 +96,14 @@ TEST_F(SyscallTrackerTest, ReportUnknownSyscalls) {
   syscall_tracker->Exit(110 /*ts*/, 42 /*utid*/, 57 /*sys_read*/);
   EXPECT_EQ(context.storage->GetString(begin_name), "sys_57");
   EXPECT_EQ(context.storage->GetString(end_name), "sys_57");
+}
+
+TEST_F(SyscallTrackerTest, ReportSysreturn) {
+  EXPECT_CALL(*slice_tracker, Scoped(_, _, _, _, _, _)).Times(1);
+
+  SyscallTracker* syscall_tracker = SyscallTracker::GetOrCreate(&context);
+  syscall_tracker->SetArchitecture(Architecture::kArm64);
+  syscall_tracker->Enter(100 /*ts*/, 42 /*utid*/, 139);
 }
 
 TEST_F(SyscallTrackerTest, Arm64) {

@@ -35,7 +35,6 @@ using ::testing::_;
 using ::testing::AllOf;
 using ::testing::EndsWith;
 using ::testing::Eq;
-using ::testing::Invoke;
 using ::testing::MockFunction;
 using ::testing::NiceMock;
 using ::testing::Not;
@@ -110,7 +109,7 @@ class ReportQueueImplTest : public testing::Test {
 
   TestStorageModule* test_storage_module() const {
     TestStorageModule* const test_storage_module =
-        google::protobuf::down_cast<TestStorageModule*>(storage_module_.get());
+        static_cast<TestStorageModule*>(storage_module_.get());
     EXPECT_THAT(test_storage_module, NotNull());
     return test_storage_module;
   }
@@ -139,6 +138,7 @@ TEST_F(ReportQueueImplTest, SuccessfulStringRecord) {
   const auto a_result = a.result();
   EXPECT_OK(a_result) << a_result;
   EXPECT_THAT(test_storage_module()->priority(), Eq(priority_));
+  EXPECT_THAT(test_storage_module()->record().has_timestamp_us(), Eq(true));
   EXPECT_THAT(test_storage_module()->record().data(), StrEq(kTestMessage));
 }
 
@@ -147,7 +147,7 @@ TEST_F(ReportQueueImplTest, SuccessfulStringRecord) {
 TEST_F(ReportQueueImplTest, SuccessfulBaseValueRecord) {
   static constexpr char kTestKey[] = "TEST_KEY";
   static constexpr char kTestValue[] = "TEST_VALUE";
-  base::Value::Dict test_dict;
+  base::DictValue test_dict;
   test_dict.Set(kTestKey, kTestValue);
   test::TestEvent<Status> a;
   report_queue_->Enqueue(test_dict.Clone(), priority_, a.cb());
@@ -155,9 +155,11 @@ TEST_F(ReportQueueImplTest, SuccessfulBaseValueRecord) {
   EXPECT_OK(a_result) << a_result;
 
   EXPECT_THAT(test_storage_module()->priority(), Eq(priority_));
+  EXPECT_THAT(test_storage_module()->record().has_timestamp_us(), Eq(true));
 
   std::optional<base::Value> value_result =
-      base::JSONReader::Read(test_storage_module()->record().data());
+      base::JSONReader::Read(test_storage_module()->record().data(),
+                             base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   ASSERT_TRUE(value_result.has_value());
   EXPECT_EQ(value_result.value().GetDict(), test_dict);
 }
@@ -174,6 +176,7 @@ TEST_F(ReportQueueImplTest, SuccessfulProtoRecord) {
   EXPECT_OK(a_result) << a_result;
 
   EXPECT_THAT(test_storage_module()->priority(), Eq(priority_));
+  EXPECT_THAT(test_storage_module()->record().has_timestamp_us(), Eq(true));
 
   test::TestMessage result_message;
   ASSERT_TRUE(
@@ -274,6 +277,7 @@ TEST_F(ReportQueueImplTest, SuccessfulProtoRecordWithRateLimiter) {
   EXPECT_OK(b_result) << b_result;
 
   EXPECT_THAT(test_storage_module()->priority(), Eq(priority_));
+  EXPECT_THAT(test_storage_module()->record().has_timestamp_us(), Eq(true));
 
   test::TestMessage result_message;
   ASSERT_TRUE(
@@ -299,6 +303,7 @@ TEST_F(ReportQueueImplTest, SuccessfulProtoRecordWithReservedSpace) {
   EXPECT_OK(a_result) << a_result;
 
   EXPECT_THAT(test_storage_module()->priority(), Eq(priority_));
+  EXPECT_THAT(test_storage_module()->record().has_timestamp_us(), Eq(true));
   EXPECT_THAT(test_storage_module()->record().reserved_space(),
               Eq(kReservedSpace));
 
@@ -326,6 +331,7 @@ TEST_F(ReportQueueImplTest, SuccessfulProtoRecordWithSource) {
   EXPECT_OK(a_result) << a_result;
 
   EXPECT_THAT(test_storage_module()->priority(), Eq(priority_));
+  EXPECT_THAT(test_storage_module()->record().has_timestamp_us(), Eq(true));
   EXPECT_THAT(test_storage_module()->record().reserved_space(), Eq(0L));
   EXPECT_THAT(test_storage_module()->record().source_info().source(),
               Eq(source_info.source()));
@@ -355,6 +361,7 @@ TEST_F(ReportQueueImplTest, SuccessfulProtoRecordWithSourceVersion) {
   EXPECT_OK(a_result) << a_result;
 
   EXPECT_THAT(test_storage_module()->priority(), Eq(priority_));
+  EXPECT_THAT(test_storage_module()->record().has_timestamp_us(), Eq(true));
   EXPECT_THAT(test_storage_module()->record().reserved_space(), Eq(0L));
   EXPECT_THAT(test_storage_module()->record().source_info().source(),
               Eq(source_info.source()));
@@ -372,10 +379,9 @@ TEST_F(ReportQueueImplTest, SuccessfulProtoRecordWithSourceVersion) {
 // unsuccessful.
 TEST_F(ReportQueueImplTest, CallSuccessCallbackFailure) {
   EXPECT_CALL(*test_storage_module(), AddRecord(Eq(priority_), _, _))
-      .WillOnce(
-          WithArg<2>(Invoke([](base::OnceCallback<void(Status)> callback) {
-            std::move(callback).Run(Status(error::UNKNOWN, "Failing for Test"));
-          })));
+      .WillOnce(WithArg<2>([](base::OnceCallback<void(Status)> callback) {
+        std::move(callback).Run(Status(error::UNKNOWN, "Failing for Test"));
+      }));
 
   test::TestMessage test_message;
   test_message.set_test(kTestMessage);
@@ -415,7 +421,7 @@ TEST_F(ReportQueueImplTest, EnqueueValueFailsOnPolicy) {
       .WillOnce(Return(Status(error::UNAUTHENTICATED, "Failing for tests")));
   static constexpr char kTestKey[] = "TEST_KEY";
   static constexpr char kTestValue[] = "TEST_VALUE";
-  base::Value::Dict test_dict;
+  base::DictValue test_dict;
   test_dict.Set(kTestKey, kTestValue);
   test::TestEvent<Status> a;
   report_queue_->Enqueue(test_dict.Clone(), priority_, a.cb());
@@ -448,10 +454,9 @@ TEST_F(ReportQueueImplTest, EnqueueSuccessFlushFailure) {
   EXPECT_OK(a_result) << a_result;
 
   EXPECT_CALL(*test_storage_module(), Flush(Eq(priority_), _))
-      .WillOnce(
-          WithArg<1>(Invoke([](base::OnceCallback<void(Status)> callback) {
-            std::move(callback).Run(Status(error::UNKNOWN, "Failing for Test"));
-          })));
+      .WillOnce(WithArg<1>([](base::OnceCallback<void(Status)> callback) {
+        std::move(callback).Run(Status(error::UNKNOWN, "Failing for Test"));
+      }));
   test::TestEvent<Status> f;
   report_queue_->Flush(priority_, f.cb());
   const auto result = f.result();
@@ -479,6 +484,7 @@ TEST_F(ReportQueueImplTest, SuccessfulSpeculativeStringRecord) {
   task_environment_.RunUntilIdle();
 
   EXPECT_THAT(test_storage_module()->priority(), Eq(priority_));
+  EXPECT_THAT(test_storage_module()->record().has_timestamp_us(), Eq(true));
   EXPECT_THAT(test_storage_module()->record().data(), StrEq(kTestMessage));
 }
 
@@ -532,6 +538,7 @@ TEST_F(ReportQueueImplTest, SuccessfulSpeculativeStringRecordWithRateLimiter) {
   task_environment_.RunUntilIdle();
 
   EXPECT_THAT(test_storage_module()->priority(), Eq(priority_));
+  EXPECT_THAT(test_storage_module()->record().has_timestamp_us(), Eq(true));
   EXPECT_THAT(test_storage_module()->record().data(), StrEq(kTestMessage));
 }
 
@@ -570,6 +577,7 @@ TEST_F(ReportQueueImplTest,
   task_environment_.RunUntilIdle();
 
   EXPECT_THAT(test_storage_module()->priority(), Eq(priority_));
+  EXPECT_THAT(test_storage_module()->record().has_timestamp_us(), Eq(true));
   EXPECT_THAT(test_storage_module()->record().data(), StrEq(kTestMessage));
   EXPECT_THAT(test_storage_module()->record().reserved_space(),
               Eq(kReservedSpace));
@@ -608,6 +616,7 @@ TEST_F(ReportQueueImplTest, SuccessfulSpeculativeStringRecordWithSource) {
   // Let everything ongoing to finish.
   task_environment_.RunUntilIdle();
   EXPECT_THAT(test_storage_module()->priority(), Eq(priority_));
+  EXPECT_THAT(test_storage_module()->record().has_timestamp_us(), Eq(true));
   EXPECT_THAT(test_storage_module()->record().data(), StrEq(kTestMessage));
   EXPECT_THAT(test_storage_module()->record().reserved_space(), Eq(0L));
   EXPECT_THAT(test_storage_module()->record().source_info().source(),
@@ -649,6 +658,7 @@ TEST_F(ReportQueueImplTest,
   // Let everything ongoing to finish.
   task_environment_.RunUntilIdle();
   EXPECT_THAT(test_storage_module()->priority(), Eq(priority_));
+  EXPECT_THAT(test_storage_module()->record().has_timestamp_us(), Eq(true));
   EXPECT_THAT(test_storage_module()->record().data(), StrEq(kTestMessage));
   EXPECT_THAT(test_storage_module()->record().reserved_space(), Eq(0L));
   EXPECT_THAT(test_storage_module()->record().source_info().source(),
@@ -748,10 +758,9 @@ TEST_F(ReportQueueImplTest, FlushSpeculativeReportQueue) {
   task_environment_.RunUntilIdle();
 
   EXPECT_CALL(*test_storage_module(), Flush(Eq(priority_), _))
-      .WillOnce(
-          WithArg<1>(Invoke([](base::OnceCallback<void(Status)> callback) {
-            std::move(callback).Run(Status::StatusOK());
-          })));
+      .WillOnce(WithArg<1>([](base::OnceCallback<void(Status)> callback) {
+        std::move(callback).Run(Status::StatusOK());
+      }));
 
   speculative_report_queue->Flush(priority_, event.cb());
   const auto result = event.result();
@@ -811,7 +820,7 @@ TEST_F(ReportQueueImplTest, AsyncProcessingReportQueue) {
   test::TestEvent<Status> a_json;
   static constexpr char kTestKey[] = "TEST_KEY";
   static constexpr char kTestValue[] = "TEST_VALUE";
-  base::Value::Dict test_dict;
+  base::DictValue test_dict;
   test_dict.Set(kTestKey, kTestValue);
   mock_queue->Enqueue(std::move(test_dict), priority_, a_json.cb());
 
@@ -841,7 +850,7 @@ TEST_F(ReportQueueImplTest, AsyncProcessingSpeculativeReportQueue) {
   test::TestEvent<Status> a_json;
   static constexpr char kTestKey[] = "TEST_KEY";
   static constexpr char kTestValue[] = "TEST_VALUE";
-  base::Value::Dict test_dict;
+  base::DictValue test_dict;
   test_dict.Set(kTestKey, kTestValue);
   speculative_report_queue->Enqueue(std::move(test_dict), priority_,
                                     a_json.cb());

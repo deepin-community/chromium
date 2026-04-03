@@ -43,7 +43,7 @@ const char kSpacesSequenceTooLarge[] =
 
 const char kMismatchedBufferSizes[] = "Buffer sizes must be equal";
 
-std::optional<uint64_t> GetPlaneId(
+std::optional<device::PlaneId> GetPlaneId(
     const device::mojom::blink::XRNativeOriginInformation& native_origin) {
   if (native_origin.is_plane_id()) {
     return native_origin.get_plane_id();
@@ -209,7 +209,7 @@ XRCPUDepthInformation* XRFrame::getDepthInformation(
     return nullptr;
   }
 
-  return session_->GetCpuDepthInformation(this, exception_state);
+  return view->GetCpuDepthInformation(exception_state);
 }
 
 XRPose* XRFrame::getPose(XRSpace* space,
@@ -235,6 +235,11 @@ XRPose* XRFrame::getPose(XRSpace* space,
 
   if (!session_->CanReportPoses()) {
     exception_state.ThrowSecurityError(XRSession::kCannotReportPoses);
+    return nullptr;
+  }
+
+  if ((space->IsInputSpace() || basespace->IsInputSpace()) &&
+      !session_->CanReportInputPoses()) {
     return nullptr;
   }
 
@@ -301,10 +306,11 @@ XRFrame::getHitTestResultsForTransientInput(
       hit_test_source->Results());
 }
 
-ScriptPromise XRFrame::createAnchor(ScriptState* script_state,
-                                    XRRigidTransform* offset_space_from_anchor,
-                                    XRSpace* space,
-                                    ExceptionState& exception_state) {
+ScriptPromise<XRAnchor> XRFrame::createAnchor(
+    ScriptState* script_state,
+    XRRigidTransform* offset_space_from_anchor,
+    XRSpace* space,
+    ExceptionState& exception_state) {
   DVLOG(2) << __func__;
 
   if (!session_->IsFeatureEnabled(device::mojom::XRSessionFeature::ANCHORS)) {
@@ -375,11 +381,11 @@ ScriptPromise XRFrame::createAnchor(ScriptState* script_state,
                                             maybe_plane_id, exception_state);
 }
 
-ScriptPromise XRFrame::CreateAnchorFromNonStationarySpace(
+ScriptPromise<XRAnchor> XRFrame::CreateAnchorFromNonStationarySpace(
     ScriptState* script_state,
     const gfx::Transform& native_origin_from_anchor,
     XRSpace* space,
-    std::optional<uint64_t> maybe_plane_id,
+    std::optional<device::PlaneId> maybe_plane_id,
     ExceptionState& exception_state) {
   DVLOG(2) << __func__;
 
@@ -455,6 +461,11 @@ XRJointPose* XRFrame::getJointPose(XRJointSpace* joint,
     return nullptr;
   }
 
+  // JointSpaces are input spaces, so no need to check if the baseSpace is one.
+  if (!session_->CanReportInputPoses()) {
+    return nullptr;
+  }
+
   const XRPose* pose = joint->getPose(baseSpace);
   if (!pose) {
     return nullptr;
@@ -466,9 +477,10 @@ XRJointPose* XRFrame::getJointPose(XRJointSpace* joint,
                                            radius);
 }
 
-bool XRFrame::fillJointRadii(HeapVector<Member<XRJointSpace>>& jointSpaces,
-                             NotShared<DOMFloat32Array> radii,
-                             ExceptionState& exception_state) const {
+bool XRFrame::fillJointRadii(
+    const HeapVector<Member<XRJointSpace>>& jointSpaces,
+    NotShared<DOMFloat32Array> radii,
+    ExceptionState& exception_state) const {
   if (!is_active_) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       kInactiveFrame);
@@ -488,24 +500,26 @@ bool XRFrame::fillJointRadii(HeapVector<Member<XRJointSpace>>& jointSpaces,
 
   bool all_valid = true;
 
+  auto radii_data = radii->AsSpan();
   for (unsigned offset = 0; offset < jointSpaces.size(); offset++) {
     const XRJointSpace* joint_space = jointSpaces[offset];
-    if (joint_space->handHasMissingPoses()) {
-      radii->Data()[offset] = NAN;
+    if (!session_->CanReportInputPoses() ||
+        joint_space->handHasMissingPoses()) {
+      radii_data[offset] = NAN;
       all_valid = false;
     } else {
-      radii->Data()[offset] = joint_space->radius();
+      radii_data[offset] = joint_space->radius();
     }
   }
 
   return all_valid;
 }
 
-bool XRFrame::fillPoses(HeapVector<Member<XRSpace>>& spaces,
-                        XRSpace* baseSpace,
+bool XRFrame::fillPoses(const HeapVector<Member<XRSpace>>& spaces,
+                        XRSpace* base_space,
                         NotShared<DOMFloat32Array> transforms,
                         ExceptionState& exception_state) const {
-  const unsigned floats_per_transform = 16;
+  constexpr unsigned kFloatsPerTransform = 16;
 
   if (!is_active_) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
@@ -513,17 +527,19 @@ bool XRFrame::fillPoses(HeapVector<Member<XRSpace>>& spaces,
     return false;
   }
 
+  bool using_input_space = base_space->IsInputSpace();
   for (const auto& space : spaces) {
     if (!IsSameSession(space->session(), exception_state)) {
       return false;
     }
+    using_input_space |= space->IsInputSpace();
   }
 
-  if (!IsSameSession(baseSpace->session(), exception_state)) {
+  if (!IsSameSession(base_space->session(), exception_state)) {
     return false;
   }
 
-  if (spaces.size() * floats_per_transform > transforms->length()) {
+  if (spaces.size() * kFloatsPerTransform > transforms->length()) {
     exception_state.ThrowTypeError(kSpacesSequenceTooLarge);
     return false;
   }
@@ -533,26 +549,23 @@ bool XRFrame::fillPoses(HeapVector<Member<XRSpace>>& spaces,
     return false;
   }
 
-  bool allValid = true;
-  unsigned offset = 0;
-  for (const auto& space : spaces) {
-    const XRPose* pose = space->getPose(baseSpace);
-    if (!pose) {
-      for (unsigned i = 0; i < floats_per_transform; i++) {
-        transforms->Data()[offset + i] = NAN;
-      }
-      allValid = false;
-    } else {
-      const float* const poseMatrix = pose->transform()->matrix()->Data();
-      for (unsigned i = 0; i < floats_per_transform; i++) {
-        transforms->Data()[offset + i] = poseMatrix[i];
-      }
-    }
-
-    offset += floats_per_transform;
+  if (using_input_space && !session_->CanReportInputPoses()) {
+    return false;
   }
 
-  return allValid;
+  bool all_valid = true;
+  auto transforms_data = transforms->AsSpan();
+  for (const auto& space : spaces) {
+    auto current_transform = transforms_data.take_first<kFloatsPerTransform>();
+    if (const XRPose* pose = space->getPose(base_space)) {
+      current_transform.copy_from(pose->transform()->matrix()->AsSpan());
+    } else {
+      std::ranges::fill(current_transform, NAN);
+      all_valid = false;
+    }
+  }
+
+  return all_valid;
 }
 
 void XRFrame::Trace(Visitor* visitor) const {

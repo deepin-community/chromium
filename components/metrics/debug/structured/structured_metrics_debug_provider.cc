@@ -5,11 +5,13 @@
 #include "components/metrics/debug/structured/structured_metrics_debug_provider.h"
 
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "base/i18n/number_formatting.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "components/metrics/structured/event_validator.h"
 #include "components/metrics/structured/project_validator.h"
@@ -23,8 +25,8 @@ namespace metrics::structured {
 namespace {
 
 struct EventInfo {
-  base::StringPiece project_name;
-  base::StringPiece event_name;
+  std::string_view project_name;
+  std::string_view event_name;
   raw_ptr<const EventValidator> event_validator;
 
   // Normalizes the name into an easier to read format as defined in the
@@ -33,7 +35,7 @@ struct EventInfo {
   std::string NormalizeEventName() const;
 };
 
-std::string Normalize(base::StringPiece value) {
+std::string Normalize(std::string_view value) {
   std::string result;
   base::ReplaceChars(value, "_", ".", &result);
   return result;
@@ -57,7 +59,8 @@ std::optional<EventInfo> GetEventInfo(const StructuredEventProto& proto) {
 
   // This will not fail.
   const auto* project_validator =
-      *validators->GetProjectValidator(*project_name);
+      validators->GetProjectValidator(*project_name);
+  CHECK(project_validator);
 
   const auto event_name =
       project_validator->GetEventName(proto.event_name_hash());
@@ -67,7 +70,7 @@ std::optional<EventInfo> GetEventInfo(const StructuredEventProto& proto) {
 
   // This will not fail.
   const auto* event_validator =
-      *project_validator->GetEventValidator(*event_name);
+      project_validator->GetEventValidator(*event_name);
   CHECK(event_validator);
 
   return EventInfo{.project_name = *project_name,
@@ -76,8 +79,8 @@ std::optional<EventInfo> GetEventInfo(const StructuredEventProto& proto) {
 }
 
 // Creates a dictionary that represents a key-value pair.
-base::Value::Dict CreateKeyValue(base::StringPiece key, base::Value value) {
-  base::Value::Dict result;
+base::DictValue CreateKeyValue(std::string_view key, base::Value value) {
+  base::DictValue result;
   result.Set("key", key);
   result.Set("value", std::move(value));
   return result;
@@ -96,7 +99,7 @@ std::optional<base::Value> MetricToValue(
     case Metric::kValueDouble:
       return base::Value(metric.value_double());
     case Metric::kValueRepeatedInt64: {
-      base::Value::List list;
+      base::ListValue list;
       for (int value : metric.value_repeated_int64().values()) {
         list.Append(value);
       }
@@ -109,10 +112,10 @@ std::optional<base::Value> MetricToValue(
 
 // Creates a list of metrics represented by a key-value pair from the metrics of
 // an event.
-base::Value::List CreateMetricsList(const google::protobuf::RepeatedPtrField<
-                                        StructuredEventProto::Metric>& metrics,
-                                    const EventValidator* event_validator) {
-  base::Value::List result;
+base::ListValue CreateMetricsList(const google::protobuf::RepeatedPtrField<
+                                      StructuredEventProto::Metric>& metrics,
+                                  const EventValidator* event_validator) {
+  base::ListValue result;
   for (const auto& metric : metrics) {
     std::string metric_name =
         event_validator
@@ -129,9 +132,9 @@ base::Value::List CreateMetricsList(const google::protobuf::RepeatedPtrField<
 }
 
 // Creates an event metadata dictionary from an event.
-base::Value::Dict CreateEventMetadataDict(
+base::DictValue CreateEventMetadataDict(
     const StructuredEventProto::EventSequenceMetadata& sequence_metadata) {
-  base::Value::Dict metadata;
+  base::DictValue metadata;
   metadata.Set("systemUptimeMs",
                base::FormatNumber(sequence_metadata.system_uptime()));
   metadata.Set("id", base::NumberToString(sequence_metadata.event_unique_id()));
@@ -141,8 +144,8 @@ base::Value::Dict CreateEventMetadataDict(
 }
 
 // Creates a dictionary from an event.
-base::Value::Dict CreateEventDict(const StructuredEventProto& proto) {
-  base::Value::Dict result;
+base::DictValue CreateEventDict(const StructuredEventProto& proto) {
+  base::DictValue result;
 
   auto event_info = GetEventInfo(proto);
   const EventValidator* event_validator = nullptr;
@@ -191,7 +194,7 @@ void StructuredMetricsDebugProvider::OnEventRecorded(
 void StructuredMetricsDebugProvider::LoadRecordedEvents() {
   EventsProto proto;
   service_->recorder()->event_storage()->CopyEvents(&proto);
-  for (const auto& event : proto.non_uma_events()) {
+  for (const auto& event : proto.events()) {
     events_.Append(CreateEventDict(event));
   }
 }

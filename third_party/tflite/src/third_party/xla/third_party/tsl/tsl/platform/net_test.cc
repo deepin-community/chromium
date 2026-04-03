@@ -15,11 +15,11 @@ limitations under the License.
 
 #include "tsl/platform/net.h"
 
-#include "tsl/platform/logging.h"
-#include "tsl/platform/test.h"
+#include "xla/tsl/platform/logging.h"
+#include "xla/tsl/platform/test.h"
 
 namespace tsl {
-namespace internal {
+namespace net {
 
 TEST(Net, PickUnusedPortOrDie) {
   int port0 = PickUnusedPortOrDie();
@@ -31,5 +31,23 @@ TEST(Net, PickUnusedPortOrDie) {
   CHECK_NE(port0, port1);
 }
 
-}  // namespace internal
+TEST(Net, RecycleUnusedPort) {
+  for (int i = 0; i < 1000; ++i) {
+    int port0 = PickUnusedPortOrDie();
+    CHECK_GE(port0, 0);
+    CHECK_LT(port0, 65536);
+    RecycleUnusedPort(port0);
+  }
+}
+
+TEST(Net, RecycleUnusedPortTwiceShallFail) {
+  int port0 = PickUnusedPortOrDie();
+  CHECK_GE(port0, 0);
+  CHECK_LT(port0, 65536);
+  RecycleUnusedPort(port0);
+
+  EXPECT_DEATH(RecycleUnusedPort(port0), "");
+}
+
+}  // namespace net
 }  // namespace tsl

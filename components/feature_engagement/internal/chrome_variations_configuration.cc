@@ -10,10 +10,12 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
+#include "base/check_op.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
+#include "build/build_config.h"
 #include "components/feature_engagement/public/configuration.h"
+#include "components/feature_engagement/public/configuration_provider.h"
 #include "components/feature_engagement/public/feature_list.h"
 #include "components/feature_engagement/public/group_constants.h"
 #include "components/feature_engagement/public/stats.h"
@@ -81,6 +83,9 @@ void ChromeVariationsConfiguration::LoadConfigs(
 
   for (auto* feature : features) {
     LoadFeatureConfig(*feature, configuration_providers, features, groups);
+#if BUILDFLAG(IS_CHROMEOS)
+    LoadAllowedEventPrefixes(*feature, configuration_providers);
+#endif
   }
 
   ExpandGroupNamesInFeatures(groups);
@@ -90,12 +95,29 @@ void ChromeVariationsConfiguration::LoadConfigs(
   }
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
+void ChromeVariationsConfiguration::UpdateConfig(
+    const base::Feature& feature,
+    const ConfigurationProvider* provider) {
+  FeatureConfig& config = configs_[feature.name];
+
+  // Clear existing configs.
+  config = FeatureConfig();
+  provider->MaybeProvideFeatureConfiguration(feature, config, {}, {});
+}
+
+const Configuration::EventPrefixSet&
+ChromeVariationsConfiguration::GetRegisteredAllowedEventPrefixes() const {
+  return event_prefixes_;
+}
+#endif
+
 void ChromeVariationsConfiguration::LoadFeatureConfig(
     const base::Feature& feature,
     const ConfigurationProviderList& configuration_providers,
     const FeatureVector& all_features,
     const GroupVector& all_groups) {
-  DCHECK(!base::Contains(configs_, feature.name));
+  DCHECK(!configs_.contains(feature.name));
 
   DVLOG(3) << "Loading feature config for " << feature.name;
   bool loaded = false;
@@ -121,7 +143,7 @@ void ChromeVariationsConfiguration::LoadFeatureConfig(
 void ChromeVariationsConfiguration::LoadGroupConfig(
     const base::Feature& group,
     const ConfigurationProviderList& configuration_providers) {
-  DCHECK(!base::Contains(group_configs_, group.name));
+  DCHECK(!group_configs_.contains(group.name));
 
   DVLOG(3) << "Parsing group config for " << group.name;
 
@@ -143,6 +165,29 @@ void ChromeVariationsConfiguration::LoadGroupConfig(
     DVLOG(3) << "No field trial or checked in config for " << group.name;
   }
 }
+
+#if BUILDFLAG(IS_CHROMEOS)
+void ChromeVariationsConfiguration::LoadAllowedEventPrefixes(
+    const base::Feature& feature,
+    const ConfigurationProviderList& configuration_providers) {
+  // Allowed prefixes from different providers are inserted in a set, therefore,
+  // it could potential affect other features.
+  for (const auto& provider : configuration_providers) {
+    const auto prefixes = provider->MaybeProvideAllowedEventPrefixes(feature);
+    for (auto it = prefixes.begin(); it != prefixes.end(); ++it) {
+      // Do not insert empty prefix.
+      if (it->empty()) {
+        continue;
+      }
+
+      // Check if there are duplicate prefixes.
+      const auto inserted = event_prefixes_.insert(*it);
+      CHECK(inserted.second)
+          << "Configuration has duplicate event prefixes: " << *it;
+    }
+  }
+}
+#endif
 
 void ChromeVariationsConfiguration::ExpandGroupNamesInFeatures(
     const GroupVector& all_groups) {
@@ -174,14 +219,14 @@ void ChromeVariationsConfiguration::ExpandGroupNamesInFeatures(
 const FeatureConfig& ChromeVariationsConfiguration::GetFeatureConfig(
     const base::Feature& feature) const {
   auto it = configs_.find(feature.name);
-  DCHECK(it != configs_.end());
+  CHECK(it != configs_.end());
   return it->second;
 }
 
 const FeatureConfig& ChromeVariationsConfiguration::GetFeatureConfigByName(
     const std::string& feature_name) const {
   auto it = configs_.find(feature_name);
-  DCHECK(it != configs_.end());
+  CHECK(it != configs_.end());
   return it->second;
 }
 
@@ -193,22 +238,23 @@ ChromeVariationsConfiguration::GetRegisteredFeatureConfigs() const {
 const std::vector<std::string>
 ChromeVariationsConfiguration::GetRegisteredFeatures() const {
   std::vector<std::string> features;
-  for (const auto& element : configs_)
+  for (const auto& element : configs_) {
     features.push_back(element.first);
+  }
   return features;
 }
 
 const GroupConfig& ChromeVariationsConfiguration::GetGroupConfig(
     const base::Feature& group) const {
   auto it = group_configs_.find(group.name);
-  DCHECK(it != group_configs_.end());
+  CHECK(it != group_configs_.end());
   return it->second;
 }
 
 const GroupConfig& ChromeVariationsConfiguration::GetGroupConfigByName(
     const std::string& group_name) const {
   auto it = group_configs_.find(group_name);
-  DCHECK(it != group_configs_.end());
+  CHECK(it != group_configs_.end());
   return it->second;
 }
 
@@ -220,8 +266,9 @@ ChromeVariationsConfiguration::GetRegisteredGroupConfigs() const {
 const std::vector<std::string>
 ChromeVariationsConfiguration::GetRegisteredGroups() const {
   std::vector<std::string> groups;
-  for (const auto& element : group_configs_)
+  for (const auto& element : group_configs_) {
     groups.push_back(element.first);
+  }
   return groups;
 }
 

@@ -9,13 +9,13 @@
 
 #include "base/test/metrics/histogram_tester.h"
 #include "base/values.h"
-#include "chrome/browser/ash/file_manager/app_id.h"
 #include "chrome/browser/ash/file_manager/file_tasks.h"
 #include "chrome/browser/ash/file_manager/office_file_tasks.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_open_metrics.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_util.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/components/file_manager/app_id.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -31,12 +31,12 @@ class FileManagerOfficeFileTasksTest : public testing::Test {
 
   TestingProfile* profile() { return profile_.get(); }
 
-  const base::Value::Dict& tasks_by_mime_type() {
+  const base::DictValue& tasks_by_mime_type() {
     return profile()->GetTestingPrefService()->GetDict(
         prefs::kDefaultTasksByMimeType);
   }
 
-  const base::Value::Dict& tasks_by_suffix() {
+  const base::DictValue& tasks_by_suffix() {
     return profile()->GetTestingPrefService()->GetDict(
         prefs::kDefaultTasksBySuffix);
   }
@@ -305,6 +305,23 @@ TEST_F(FileManagerOfficeFileTasksTest,
 }
 
 TEST_F(FileManagerOfficeFileTasksTest,
+       LogOneDriveMetricsAfterFallback_kAndroidOneDriveUnsupportedLocation) {
+  LogOneDriveMetricsAfterFallback(
+      ash::office_fallback::FallbackReason::kAndroidOneDriveUnsupportedLocation,
+      ash::cloud_upload::OfficeTaskResult::kCannotGetFallbackChoiceAfterOpen,
+      std::move(cloud_open_metrics_for_one_drive_));
+
+  histogram_.ExpectUniqueSample(ash::cloud_upload::kOneDriveErrorMetricName,
+                                ash::cloud_upload::OfficeOneDriveOpenErrors::
+                                    kAndroidOneDriveUnsupportedLocation,
+                                1);
+  histogram_.ExpectUniqueSample(
+      ash::cloud_upload::kOneDriveTaskResultMetricName,
+      ash::cloud_upload::OfficeTaskResult::kCannotGetFallbackChoiceAfterOpen,
+      1);
+}
+
+TEST_F(FileManagerOfficeFileTasksTest,
        LogGoogleDriveMetricsAfterFallback_kOffline) {
   LogGoogleDriveMetricsAfterFallback(
       ash::office_fallback::FallbackReason::kOffline,
@@ -406,6 +423,28 @@ TEST_F(FileManagerOfficeFileTasksTest,
       ash::cloud_upload::kDriveErrorMetricName,
       ash::cloud_upload::OfficeDriveOpenErrors::kDriveDisabledForAccountType,
       1);
+}
+
+TEST_F(FileManagerOfficeFileTasksTest, IsOfficeFileMimeType) {
+  // Powerpoint.
+  EXPECT_TRUE(IsOfficeFileMimeType("application/vnd.ms-powerpoint"));
+  EXPECT_TRUE(IsOfficeFileMimeType(
+      "application/"
+      "vnd.openxmlformats-officedocument.presentationml.presentation"));
+  // Excel.
+  EXPECT_TRUE(IsOfficeFileMimeType("application/vnd.ms-excel"));
+  EXPECT_TRUE(IsOfficeFileMimeType(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+  // Word.
+  EXPECT_TRUE(IsOfficeFileMimeType("application/msword"));
+  EXPECT_TRUE(IsOfficeFileMimeType(
+      "application/"
+      "vnd.openxmlformats-officedocument.wordprocessingml.document"));
+
+  EXPECT_FALSE(IsOfficeFileMimeType("text/plain"));
+  EXPECT_FALSE(IsOfficeFileMimeType("video/webm"));
+  EXPECT_FALSE(IsOfficeFileMimeType("image/png'"));
+  EXPECT_FALSE(IsOfficeFileMimeType("image/png"));
 }
 
 }  // namespace file_manager::file_tasks

@@ -28,26 +28,30 @@
 #ifndef SRC_TINT_LANG_MSL_WRITER_RAISE_BUILTIN_POLYFILL_H_
 #define SRC_TINT_LANG_MSL_WRITER_RAISE_BUILTIN_POLYFILL_H_
 
-#include <string>
-
-#include "src/tint/lang/core/ir/constant.h"
-#include "src/tint/lang/core/type/type.h"
-#include "src/tint/utils/diagnostic/diagnostic.h"
-#include "src/tint/utils/result/result.h"
+#include "src/tint/utils/result.h"
 
 // Forward declarations.
 namespace tint::core::ir {
 class Module;
-class Texture;
 }  // namespace tint::core::ir
 
 namespace tint::msl::writer::raise {
 
+/// BuiltinPolyfillConfig describes the set of configuration options for the msl BuiltinPolyfill
+/// transform.
+struct BuiltinPolyfillConfig {
+    /// Set to `true` to polyfill `unpack2x16snorm()`.
+    bool polyfill_unpack_2x16_snorm = false;
+    /// Set to `true` to polyfill `unpack2x16unorm()`.
+    bool polyfill_unpack_2x16_unorm = false;
+};
+
 /// BuiltinPolyfill is a transform that replaces calls to builtins with polyfills and calls to
 /// MSL backend intrinsic functions.
 /// @param module the module to transform
+/// @param config the config to use in the transform
 /// @returns success or failure
-Result<SuccessType> BuiltinPolyfill(core::ir::Module& module);
+Result<SuccessType> BuiltinPolyfill(core::ir::Module& module, const BuiltinPolyfillConfig& config);
 
 }  // namespace tint::msl::writer::raise
 

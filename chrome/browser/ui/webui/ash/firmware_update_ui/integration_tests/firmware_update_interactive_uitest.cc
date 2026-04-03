@@ -3,11 +3,12 @@
 // found in the LICENSE file.
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_switches.h"
 #include "ash/webui/firmware_update_ui/url_constants.h"
 #include "base/test/scoped_feature_list.h"
-#include "chrome/test/base/chromeos/crosier/interactive_ash_test.h"
+#include "chrome/test/base/ash/interactive/interactive_ash_test.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
-#include "chromeos/ash/components/dbus/fwupd/fwupd_client.h"
+#include "chromeos/ash/components/dbus/fwupd/fake_fwupd_client.h"
 #include "chromeos/ash/components/fwupd/firmware_update_manager.h"
 
 namespace ash {
@@ -38,14 +39,9 @@ class FirmwareUpdateInteractiveUiTest : public InteractiveAshTest {
     // Ensure the OS Settings system web app (SWA) is installed.
     InstallSystemApps();
 
-    fwupd_client_ = FwupdClient::Get();
-    CHECK(fwupd_client_);
-  }
-
-  void TearDownOnMainThread() override {
-    fwupd_client_ = nullptr;
-
-    InteractiveAshTest::TearDownOnMainThread();
+    // Ensure that the Fake FwupdClient is running.
+    CHECK(FwupdClient::GetFake());
+    FwupdClient::GetFake()->set_defer_install_update_callback(true);
   }
 
   auto TriggerFwupdPropertiesChange(uint32_t percentage, FwupdStatus status) {
@@ -72,14 +68,11 @@ class FirmwareUpdateInteractiveUiTest : public InteractiveAshTest {
     }));
   }
 
-  FwupdClient* fwupd_client() const { return fwupd_client_; }
+  FakeFwupdClient* fwupd_client() const { return FwupdClient::GetFake(); }
 
  protected:
   ui::ElementIdentifier webcontents_id_;
   base::test::ScopedFeatureList feature_list_;
-
- private:
-  raw_ptr<FwupdClient> fwupd_client_ = nullptr;
 };
 
 DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(ui::test::PollingStateObserver<bool>,
@@ -129,7 +122,7 @@ IN_PROC_BROWSER_TEST_F(FirmwareUpdateInteractiveUiTest,
       LaunchFirmwareUpdatesApp(),
       WaitForWebContentsReady(webcontents_id_,
                               GURL("chrome://accessory-update")),
-      InAnyContext(Steps(
+      InAnyContext(
           Log("Verifying that the update-card element is present."),
           EnsurePresent(webcontents_id_, kUpdateCardQuery),
           Log("Clicking on the update button."),
@@ -140,9 +133,7 @@ IN_PROC_BROWSER_TEST_F(FirmwareUpdateInteractiveUiTest,
           ClickElement(webcontents_id_, kConfirmationDialogNextButtonQuery),
           Log("Waiting for FwupdClient to register the update..."),
           PollState(kFwupdClientUpdateState,
-                    [this]() {
-                      return fwupd_client()->HasUpdateStartedForTesting();
-                    }),
+                    [this]() { return fwupd_client()->has_update_started(); }),
           WaitForState(kFwupdClientUpdateState, true),
           Log("Triggering Fwupd properties change."),
           TriggerFwupdPropertiesChange(/*percentage=*/50,
@@ -161,14 +152,105 @@ IN_PROC_BROWSER_TEST_F(FirmwareUpdateInteractiveUiTest,
                                      kUpdateDialogProgressQuery,
                                      "Paused (60% complete)"),
           Log("Waiting for update dialog body to match expected value..."),
-          WaitForElementTextContains(
-              webcontents_id_, kUpdateDialogBodyQuery,
-              "Unplug and replug the device to continue the update process."),
+          WaitForElementTextContains(webcontents_id_, kUpdateDialogBodyQuery,
+                                     "Unplug and replug the fake_device to "
+                                     "continue the update process"),
           Log("Triggering successful update."), TriggerSuccessfulUpdate(),
           Log("Verifying existence of update done button."),
-          WaitForElementExists(webcontents_id_,
-                               kUpdateDialogDoneButtonQuery))));
+          WaitForElementExists(webcontents_id_, kUpdateDialogDoneButtonQuery)));
 }
 
+class FirmwareUpdateInteractiveUiTestWithReboot
+    : public FirmwareUpdateInteractiveUiTest {
+ public:
+  FirmwareUpdateInteractiveUiTestWithReboot() {
+    DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kFirmwareUpdatesAppWebContentsId);
+    webcontents_id_ = kFirmwareUpdatesAppWebContentsId;
+
+    base::CommandLine& command_line = *base::CommandLine::ForCurrentProcess();
+    command_line.AppendSwitch(switches::kRevenBranding);
+    feature_list_.Reset();
+    feature_list_.InitWithFeatures(
+        {features::kFirmwareUpdateUIV2, features::kFlexFirmwareUpdate}, {});
+  }
+
+  auto SetUpdateToRequireReboot() {
+    return Steps(Do([this]() {
+      DCHECK(fwupd_client());
+      fwupd_client()->set_update_with_reboot(true);
+    }));
+  }
+};
+
+IN_PROC_BROWSER_TEST_F(FirmwareUpdateInteractiveUiTestWithReboot,
+                       TestFirmwareUpdateWithReboot) {
+  const DeepQuery kUpdateCardQuery{
+      "firmware-update-app",
+      "peripheral-updates-list",
+      "update-card",
+  };
+
+  const DeepQuery kUpdateButtonQuery{
+      "firmware-update-app",
+      "peripheral-updates-list",
+      "update-card",
+      "#updateButton",
+  };
+
+  const DeepQuery kConfirmationDialogNextButtonQuery{
+      "firmware-update-app",
+      "firmware-confirmation-dialog",
+      "#nextButton",
+  };
+
+  const DeepQuery kUpdateDialogRestartLaterButtonQuery{
+      "firmware-update-app",
+      "firmware-update-dialog",
+      "#restartLaterButton",
+  };
+
+  const DeepQuery kUpdateDialogProgressQuery{
+      "firmware-update-app",
+      "firmware-update-dialog",
+      "#progress",
+  };
+
+  const DeepQuery kUpdateDialogBodyQuery{
+      "firmware-update-app",
+      "firmware-update-dialog",
+      "#updateDialogBody",
+  };
+
+  RunTestSequence(
+      SetUpdateToRequireReboot(),
+      InstrumentNextTab(webcontents_id_, AnyBrowser()),
+      LaunchFirmwareUpdatesApp(),
+      WaitForWebContentsReady(webcontents_id_,
+                              GURL("chrome://accessory-update")),
+      InAnyContext(
+          Log("Verifying that the update-card element is present."),
+          EnsurePresent(webcontents_id_, kUpdateCardQuery),
+          Log("Clicking on the update button."),
+          ClickElement(webcontents_id_, kUpdateButtonQuery),
+          WaitForElementExists(webcontents_id_,
+                               kConfirmationDialogNextButtonQuery),
+          Log("Clicking on the start update button."),
+          ClickElement(webcontents_id_, kConfirmationDialogNextButtonQuery),
+          Log("Waiting for FwupdClient to register the update..."),
+          PollState(kFwupdClientUpdateState,
+                    [this]() { return fwupd_client()->has_update_started(); }),
+          WaitForState(kFwupdClientUpdateState, true),
+          Log("Triggering Fwupd properties change."),
+          TriggerFwupdPropertiesChange(/*percentage=*/50,
+                                       /*status=*/FwupdStatus::kDeviceWrite),
+          Log("Waiting for update dialog progress to match expected value..."),
+          WaitForElementTextContains(webcontents_id_,
+                                     kUpdateDialogProgressQuery,
+                                     "Updating (50% complete)"),
+          Log("Triggering successful update."), TriggerSuccessfulUpdate(),
+          Log("Verifying existence of restart later button."),
+          WaitForElementExists(webcontents_id_,
+                               kUpdateDialogRestartLaterButtonQuery)));
+}
 }  // namespace
 }  // namespace ash

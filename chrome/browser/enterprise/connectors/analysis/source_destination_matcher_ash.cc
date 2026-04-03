@@ -23,14 +23,13 @@ namespace {
 // Checks if the key of the sources or destinations list is known.
 // This should only be extended when a key is properly supported.
 bool AllowedFSInfoKey(const std::string& key) {
-  // TODO(crbug.com/1340553): Also allow settings for app ids and smb.
   return key == "file_system_type";
 }
 
 // This function checks whether there are no unknown keys in the passed dict.
 // The function returns true if there are no such unknown keys and false if an
 // unknown key is found.
-bool SourceOrDestinationEntryIsValid(const base::Value::Dict* dict) {
+bool SourceOrDestinationEntryIsValid(const base::DictValue* dict) {
   DCHECK(dict);
   for (auto&& [key, _] : *dict) {
     if (!AllowedFSInfoKey(key)) {
@@ -67,6 +66,8 @@ SourceDestinationMatcherAsh::FsType SourceDestinationMatcherAsh::VolumeToFsType(
         return SourceDestinationMatcherAsh::FsType::kUnknownVm;
       case guest_os::VmType::ARCVM:
         return SourceDestinationMatcherAsh::FsType::kArc;
+      case guest_os::VmType::BAGUETTE:
+        return SourceDestinationMatcherAsh::FsType::kUnknownVm;
       case guest_os::VmType::VmType_INT_MIN_SENTINEL_DO_NOT_USE_:
       case guest_os::VmType::VmType_INT_MAX_SENTINEL_DO_NOT_USE_:
         NOTREACHED();
@@ -106,7 +107,6 @@ SourceDestinationMatcherAsh::FsType SourceDestinationMatcherAsh::VolumeToFsType(
       NOTREACHED();
   }
   NOTREACHED();
-  return SourceDestinationMatcherAsh::FsType::kUnknown;
 }
 
 // static
@@ -189,7 +189,7 @@ SourceDestinationMatcherAsh::StringToFsType(const std::string& s) {
 
 std::set<SourceDestinationMatcherAsh::FsType>
 SourceDestinationMatcherAsh::ValueListToFsTypes(
-    const base::Value::List* source_or_destination_list) {
+    const base::ListValue* source_or_destination_list) {
   std::set<SourceDestinationMatcherAsh::FsType> fs_types;
   for (const auto& entry : *source_or_destination_list) {
     const auto* dict = entry.GetIfDict();
@@ -252,7 +252,6 @@ std::string SourceDestinationMatcherAsh::FsTypeToString(
       return "UNKNOWN_VM";
   }
   NOTREACHED();
-  return "";
 }
 
 SourceDestinationMatcherAsh::SourceDestinationMatcherAsh() = default;
@@ -261,9 +260,8 @@ SourceDestinationMatcherAsh::~SourceDestinationMatcherAsh() = default;
 
 void SourceDestinationMatcherAsh::AddFilters(
     ID* id,
-    const base::Value::List* settings_list) {
+    const base::ListValue* settings_list) {
   DCHECK(id);
-  // TODO(crbug.com/1340553): Adapt for app ids and smb settings
   if (!settings_list) {
     LOG(ERROR) << "No settings list found.";
     return;

@@ -4,11 +4,12 @@
 
 #include "chrome/browser/ui/views/desktop_capture/share_this_tab_source_view.h"
 
+#include "base/compiler_specific.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/favicon/favicon_utils.h"
 #include "chrome/browser/media/webrtc/desktop_media_picker_utils.h"
-#include "chrome/browser/ui/views/desktop_capture/rounded_corner_image_view.h"
+#include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -19,6 +20,7 @@
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/layout_provider.h"
 
 namespace {
 
@@ -34,7 +36,7 @@ constexpr gfx::Rect kPreviewRect(kPadding,
                                  kPadding,
                                  kPreviewWidth,
                                  kPreviewHeight);
-// TODO(crbug.com/1447461): Align favicon height properly with label.
+// TODO(crbug.com/40268977): Align favicon height properly with label.
 constexpr gfx::Rect kFaviconRect(kPadding,
                                  kPreviewRect.bottom() + kPadding,
                                  kFaviconWidth,
@@ -51,14 +53,16 @@ void HandleCapturedBitmap(
         reply,
     std::optional<uint32_t> last_hash,
     gfx::Size thumbnail_size,
-    const SkBitmap& bitmap) {
+    const content::CopyFromSurfaceResult& result) {
   CHECK(!thumbnail_size.IsEmpty());
 
+  // TODO(crbug.com/466199824): Update callsite to handle error case.
+  const SkBitmap& bitmap = result.has_value() ? result->bitmap : SkBitmap();
   std::optional<gfx::ImageSkia> image;
 
   // Only scale and update if the frame appears to be new.
-  const uint32_t hash = base::FastHash(base::make_span(
-      static_cast<uint8_t*>(bitmap.getPixels()), bitmap.computeByteSize()));
+  const uint32_t hash = base::FastHash(UNSAFE_TODO(base::span(
+      static_cast<uint8_t*>(bitmap.getPixels()), bitmap.computeByteSize())));
   if (!last_hash.has_value() || hash != last_hash.value()) {
     image = ScaleBitmap(bitmap, thumbnail_size);
   }
@@ -86,7 +90,11 @@ ShareThisTabSourceView::ShareThisTabSourceView(
   throbber_->SetBoundsRect(kThrobberRect);
   throbber_->Start();
 
-  image_view_ = AddChildView(std::make_unique<RoundedCornerImageView>());
+  image_view_ = AddChildView(std::make_unique<views::ImageView>());
+  image_view_->SetCanProcessEventsWithinSubtree(false);
+  image_view_->SetCornerRadius(
+      views::LayoutProvider::Get()->GetCornerRadiusMetric(
+          views::Emphasis::kMedium));
   image_view_->SetVisible(false);
   image_view_->SetBoundsRect(kPreviewRect);
 
@@ -119,9 +127,10 @@ void ShareThisTabSourceView::StopRefreshing() {
   refreshing_ = false;
 }
 
-gfx::Size ShareThisTabSourceView::CalculatePreferredSize() const {
+gfx::Size ShareThisTabSourceView::CalculatePreferredSize(
+    const views::SizeBounds& /*available_size*/) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  // TODO(crbug.com/1428878): Use distances from LayoutProvider
+  // TODO(crbug.com/40262420): Use distances from LayoutProvider
   return gfx::Size(kPreviewWidth + 2 * kPadding,
                    kTabTitleMaxRect.bottom() + kPadding);
 }
@@ -147,6 +156,10 @@ void ShareThisTabSourceView::Refresh() {
     return;  // No further refreshes scheduled.
   }
 
+  if (!web_contents_) {
+    return;
+  }
+
   content::RenderFrameHost* const host = web_contents_->GetPrimaryMainFrame();
   if (!host) {
     return;
@@ -161,7 +174,7 @@ void ShareThisTabSourceView::Refresh() {
                               weak_factory_.GetWeakPtr());
 
   view->CopyFromSurface(
-      gfx::Rect(), gfx::Size(),
+      gfx::Rect(), gfx::Size(), base::TimeDelta(),
       base::BindPostTask(thumbnail_task_runner_,
                          base::BindOnce(&HandleCapturedBitmap, std::move(reply),
                                         last_hash_, kPreviewRect.size())));

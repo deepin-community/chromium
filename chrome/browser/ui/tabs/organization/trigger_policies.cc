@@ -32,6 +32,10 @@ UsageTickClock::~UsageTickClock() {
 }
 
 base::TimeTicks UsageTickClock::NowTicks() const {
+  if (!metrics::DesktopSessionDurationTracker::IsInitialized()) {
+    return base_clock_->NowTicks();
+  }
+
   const base::TimeTicks completed_session_time =
       start_time_ + usage_time_in_completed_sessions_;
   if (current_usage_session_start_time_.has_value()) {
@@ -101,8 +105,6 @@ bool TargetFrequencyTriggerPolicy::ShouldTrigger(float score) {
   if (current_time > cycle_start_time_ + period) {
     cycle_start_time_ += period;
     best_score = std::nullopt;
-    base::UmaHistogramBoolean("Tab.Organization.Trigger.TriggeredInPeriod",
-                              has_triggered_);
     has_triggered_ = false;
   }
 
@@ -130,6 +132,10 @@ void TargetFrequencyTriggerPolicy::OnTriggerSucceeded() {
 
 void TargetFrequencyTriggerPolicy::OnTriggerFailed() {
   backoff_level_provider_->Increment();
+}
+
+bool NeverTriggerPolicy::ShouldTrigger(float score) {
+  return false;
 }
 
 bool DemoTriggerPolicy::ShouldTrigger(float score) {

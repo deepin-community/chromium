@@ -134,7 +134,6 @@ TEST_F(ScoreLineBreakerTest, LastLines) {
 }
 
 TEST_F(ScoreLineBreakerTest, BalanceMaxLinesExceeded) {
-  ScopedCSSTextWrapBalanceByScoreForTest balance_by_score(true);
   LoadAhem();
   SetBodyInnerHTML(R"HTML(
     <!DOCTYPE html>
@@ -175,7 +174,7 @@ TEST_P(BlockInInlineTest, BeforeAfter) {
   const int test_index = GetParam();
   const bool has_before = test_index & 1;
   const bool has_after = test_index & 2;
-  SetBodyInnerHTML(String::Format(
+  SetBodyInnerHTML(UNSAFE_TODO(String::Format(
       R"HTML(
     <!DOCTYPE html>
     <style>
@@ -192,7 +191,7 @@ TEST_P(BlockInInlineTest, BeforeAfter) {
     </div>
   )HTML",
       has_before ? "Before 89 1234 6789 1234 6789 1234 6789 12" : "",
-      has_after ? "After 789 1234 6789 1234 6789 1234 6789 12" : ""));
+      has_after ? "After 789 1234 6789 1234 6789 1234 6789 12" : "")));
   const InlineNode node = GetInlineNodeByElementId("target");
   const LayoutUnit width = FragmentWidth(node);
   ConstraintSpace space = ConstraintSpaceForAvailableSize(width);
@@ -367,7 +366,6 @@ INSTANTIATE_TEST_SUITE_P(ScoreLineBreakerTest,
                          testing::ValuesIn(disabled_by_line_breaker_data));
 
 TEST_P(DisabledByLineBreakerTest, Data) {
-  ScopedCSSTextWrapPrettyForTest enable(true);
   const auto& data = GetParam();
   LoadAhem();
   SetBodyInnerHTML(String(R"HTML(
@@ -406,7 +404,6 @@ TEST_P(DisabledByLineBreakerTest, Data) {
 // Test when `InlineLayoutAlgorithm::Layout` runs `LineBreaker` twice for
 // the same line, to retry line breaking due to float placements.
 TEST_F(ScoreLineBreakerTest, FloatRetry) {
-  ScopedCSSTextWrapPrettyForTest enable(true);
   SetBodyInnerHTML(R"HTML(
     <!DOCTYPE html>
     <style>
@@ -431,6 +428,26 @@ TEST_F(ScoreLineBreakerTest, FloatRetry) {
   // Test pass if it doesn't crash.
 }
 
+TEST_F(ScoreLineBreakerTest, Ruby) {
+  SetBodyInnerHTML(R"HTML(
+    <!DOCTYPE html>
+    <style>
+    #container {
+      font-size: 16px;
+      text-wrap: balance;
+      width: 110px;
+    }
+    </style>
+    <div id="container">
+      <ruby>ruby<ruby>
+    </div>
+  )HTML");
+  const LayoutBlockFlow* container = GetLayoutBlockFlowByElementId("container");
+  const InlineNodeData* inline_node_data = container->GetInlineNodeData();
+  ASSERT_TRUE(inline_node_data);
+  EXPECT_TRUE(inline_node_data->IsScoreLineBreakDisabled());
+}
+
 TEST_F(ScoreLineBreakerTest, Zoom) {
   LoadAhem();
   SetBodyInnerHTML(R"HTML(
@@ -453,7 +470,7 @@ TEST_F(ScoreLineBreakerTest, Zoom) {
   Vector<float> scores = ComputeScores(target);
 
   constexpr float zoom = 2;
-  GetFrame().SetPageZoomFactor(zoom);
+  GetFrame().SetLayoutZoomFactor(zoom);
   UpdateAllLifecyclePhasesForTest();
   const Vector<float> scores2 = ComputeScores(target);
 
@@ -469,7 +486,6 @@ TEST_F(ScoreLineBreakerTest, Zoom) {
 }
 
 TEST_F(ScoreLineBreakerTest, UseCountNotCountedForWrap) {
-  ScopedCSSTextWrapPrettyForTest enable(true);
   SetBodyInnerHTML(R"HTML(
     <div>012</div>
   )HTML");
@@ -478,7 +494,6 @@ TEST_F(ScoreLineBreakerTest, UseCountNotCountedForWrap) {
 }
 
 TEST_F(ScoreLineBreakerTest, UseCountNotCountedForBalance) {
-  ScopedCSSTextWrapPrettyForTest enable(true);
   SetBodyInnerHTML(R"HTML(
     <div style="text-wrap: balance">012</div>
   )HTML");

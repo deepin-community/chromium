@@ -64,12 +64,12 @@ void FileManagerPrivateInternalGetContentMimeTypeFunction::ReadBlobBytes(
 
 void FileManagerPrivateInternalGetContentMimeTypeFunction::SniffMimeType(
     const std::string& blob_uuid,
-    std::unique_ptr<std::string> sniff_bytes,
-    int64_t length) {
+    std::string sniff_bytes,
+    int64_t /*length*/) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   std::string mime_type;
-  if (!net::SniffMimeTypeFromLocalData(*sniff_bytes, &mime_type)) {
+  if (!net::SniffMimeTypeFromLocalData(sniff_bytes, &mime_type)) {
     Respond(Error("Could not deduce the content mime type."));
     return;
   }
@@ -120,7 +120,7 @@ void FileManagerPrivateInternalGetContentMetadataFunction::CanParseBlob(
     const std::string& blob_uuid,
     const std::string& mime_type,
     bool include_images,
-    std::unique_ptr<std::string> sniff_bytes,
+    std::string /*sniff_bytes*/,
     int64_t length) {  // The length of the original input blob.
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
@@ -169,7 +169,7 @@ void FileManagerPrivateInternalGetContentMetadataFunction::ParserDone(
   }
 
   DCHECK(metadata);
-  base::Value::Dict dictionary =
+  base::DictValue dictionary =
       extensions::api::file_manager_private::MojoMediaMetadataToValue(
           std::move(metadata));
 
@@ -189,11 +189,11 @@ void FileManagerPrivateInternalGetContentMetadataFunction::ParserDone(
         base::Base64Encode(std::string_view(image->data.data(), size));
     url.insert(0, base::StrCat({"data:", image->type, ";base64,"}));
 
-    base::Value::Dict media_thumbnail_image;
+    base::DictValue media_thumbnail_image;
     media_thumbnail_image.Set("data", std::move(url));
     media_thumbnail_image.Set("type", std::move(image->type));
 
-    base::Value::List* attached_images_list =
+    base::ListValue* attached_images_list =
         dictionary.FindList("attachedImages");
     attached_images_list->Append(std::move(media_thumbnail_image));
   }

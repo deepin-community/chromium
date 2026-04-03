@@ -22,14 +22,16 @@ Or on the command line as:
 $ gn gen --args="is_debug=true have_ffmpeg=true have_libsdl2=true have_libopus=true have_libvpx=true" out/Default
 ```
 
+## Linux
+
 On some versions of Debian, the following apt-get command will install all of
 the necessary external libraries for Open Screen:
 
 ```sh
-sudo apt-get install libsdl2-2.0 libsdl2-dev libavcodec libavcodec-dev
-                     libavformat libavformat-dev libavutil libavutil-dev
-                     libswresample libswresample-dev libopus0 libopus-dev
-                     libvpx5 libvpx-dev
+sudo apt-get install libsdl2-2.0 libsdl2-dev libavcodec libavcodec-dev \
+                     libavformat libavformat-dev libavutil libavutil-dev \
+                     libswresample libswresample-dev libopus0 libopus-dev \
+                     libvpx5 libvpx-dev \
 ```
 
 Similarly, on some versions of Raspian, the following command will install the
@@ -37,9 +39,9 @@ necessary external libraries, at least for the standalone receiver. Note that
 this command is based off of the packages linked in the [sysroot](../../build/config/sysroot.gni):
 
 ```sh
-sudo apt-get install libavcodec58=7:4.1.4* libavcodec-dev=7:4.1.4*
-                     libsdl2-2.0-0=2.0.9* libsdl2-dev=2.0.9*
-                     libavformat-dev=7:4.1.4*
+sudo apt-get install libavcodec58=7:4.1.4* libavcodec-dev=7:4.1.4* \
+                     libsdl2-2.0-0=2.0.9* libsdl2-dev=2.0.9* \
+                     libavformat-dev=7:4.1.4* \
 ```
 
 Note: release of these operating systems may require slightly different
@@ -49,6 +51,50 @@ Finally, note that generally the headers for packages must also be installed.
 In Debian Linux flavors, this usually means that the `*-dev` version of each
 package must also be installed. In the example above, this looks like having
 both `libavcodec` and `libavcodec-dev`.
+
+## MacOS (Homebrew)
+
+You can use [Homebrew](https://brew.sh/) to install the libraries needed to compile the
+standalone sender and receiver applications.
+
+```sh
+brew install ffmpeg sdl2 opus libvpx aom
+```
+
+To compile and link against these libraries, set the path arguments as follows
+in your `gn args`.
+
+**Important**: Using Homebrew's top-level include directory
+(`/opt/homebrew/include`) can cause header conflicts with the project's internal
+BoringSSL. You must use the specific include paths for each library from
+Homebrew's `Cellar` directory.
+
+Homebrew libraries are often built for the latest version of macOS. You may need
+to set the `mac_deployment_target` to match the version of macOS you are running
+to avoid linker errors. For example, on macOS Sonoma (version 14):
+
+You will need to replace the `<version>` placeholders with the actual versions
+installed on your system. You can find these in `/opt/homebrew/Cellar/`.
+
+```python
+mac_deployment_target="14.0"
+
+have_ffmpeg=true
+have_libsdl2=true
+have_libopus=true
+have_libvpx=true
+have_libaom=true
+
+# Homebrew on Apple Silicon installs to /opt/homebrew.
+# On Intel macs, it's /usr/local.
+external_lib_dirs=["/opt/homebrew/lib"]
+
+ffmpeg_include_dirs=["/opt/homebrew/Cellar/ffmpeg/<version>/include"]
+libsdl2_include_dirs=["/opt/homebrew/Cellar/sdl2/<version>/include"]
+libopus_include_dirs=["/opt/homebrew/Cellar/opus/<version>/include"]
+libvpx_include_dirs=["/opt/homebrew/Cellar/libvpx/<version>/include"]
+libaom_include_dirs=["/opt/homebrew/Cellar/aom/<version>/include"]
+```
 
 ## libaom
 

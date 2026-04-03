@@ -7,11 +7,13 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <memory>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
+#include "base/memory/ref_counted.h"
 #include "base/time/time.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 #include "ui/ozone/platform/drm/common/drm_wrapper.h"
@@ -73,12 +75,13 @@ class DrmDevice : public DrmWrapper,
 
   virtual int modeset_sequence_id() const;
   HardwareDisplayPlaneManager* plane_manager() { return plane_manager_.get(); }
+  const HardwareDisplayPlaneManager* plane_manager() const {
+    return plane_manager_.get();
+  }
   GbmDevice* gbm_device() const { return gbm_.get(); }
 
  protected:
   friend class base::RefCountedThreadSafe<DrmDevice>;
-
-  friend class DrmDisplayTest;
 
   ~DrmDevice() override;
 

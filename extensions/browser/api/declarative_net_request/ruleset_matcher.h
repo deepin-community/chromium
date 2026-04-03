@@ -55,9 +55,10 @@ class RulesetMatcher {
                                          RulesetMatchingStage stage) const;
 
   // Returns a list of actions corresponding to all matched
-  // modifyHeaders rules with priority greater than |min_priority| if specified.
+  // modifyHeaders rules with priority greater than `min_priority` if specified.
   std::vector<RequestAction> GetModifyHeadersActions(
       const RequestParams& params,
+      RulesetMatchingStage stage,
       std::optional<uint64_t> min_priority) const;
 
   bool IsExtraHeadersMatcher() const;
@@ -84,7 +85,7 @@ class RulesetMatcher {
   RulesetID id() const { return id_; }
 
   // Returns the tracked highest priority matching allowsAllRequests action, if
-  // any, for |host|.
+  // any, for `host`.
   std::optional<RequestAction> GetAllowlistedFrameActionForTesting(
       content::RenderFrameHost* host) const;
 
@@ -94,11 +95,11 @@ class RulesetMatcher {
   // Returns the disabled rule ids for testing.
   const base::flat_set<int>& GetDisabledRuleIdsForTesting() const;
 
- private:
   // Returns the total rule count for rules within this ruleset to be matched
   // for the given request matching `stage`.
   size_t GetRulesCount(RulesetMatchingStage stage) const;
 
+ private:
   // Returns the regex rule count for rules within this ruleset to be matched
   // for the given request matching `stage`.
   size_t GetRegexRulesCount(RulesetMatchingStage stage) const;
@@ -115,7 +116,7 @@ class RulesetMatcher {
   std::optional<size_t> unsafe_rule_count_ = std::nullopt;
 
   // Underlying matcher for filter-list style rules supported using the
-  // |url_pattern_index| component.
+  // `url_pattern_index` component.
   ExtensionUrlPatternIndexMatcher url_matcher_;
 
   // Underlying matcher for regex rules.

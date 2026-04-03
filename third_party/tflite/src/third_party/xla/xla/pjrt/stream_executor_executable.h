@@ -16,27 +16,46 @@ limitations under the License.
 #ifndef XLA_PJRT_STREAM_EXECUTOR_EXECUTABLE_H_
 #define XLA_PJRT_STREAM_EXECUTOR_EXECUTABLE_H_
 
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "xla/client/local_client.h"
 #include "xla/hlo/ir/hlo_module.h"
+#include "xla/pjrt/pjrt_common.h"
 #include "xla/pjrt/pjrt_executable.h"
+#include "xla/service/buffer_assignment.h"
 #include "xla/service/compiler.h"
+#include "xla/service/hlo.pb.h"
+#include "xla/service/hlo_proto_util.h"
 
 namespace xla {
+
 class StreamExecutorExecutable : public PjRtExecutable {
  public:
   StreamExecutorExecutable(
       const CompileOptions& compile_options,
-      std::vector<std::unique_ptr<xla::AotCompilationResult>> executables,
+      std::vector<std::unique_ptr<CompiledModule>> executables,
       int num_replicas, int num_partitions, absl::string_view name,
-      absl::string_view fingerprint)
-      : compile_options_(compile_options),
-        aot_executables_(std::move(executables)),
-        num_replicas_(num_replicas),
-        num_partitions_(num_partitions),
-        name_(name),
-        fingerprint_(fingerprint) {}
+      absl::string_view fingerprint, absl::string_view default_memory_kind);
 
-  StatusOr<std::string> SerializeExecutable() const override;
+  StreamExecutorExecutable(
+      const CompileOptions& compile_options,
+      std::optional<HloModuleProto> unoptimized_hlo_module_proto,
+      std::vector<std::unique_ptr<LocalExecutable>> local_executables,
+      LocalClient* local_client, int num_replicas, int num_partitions,
+      absl::string_view name, absl::string_view fingerprint,
+      absl::string_view default_memory_kind);
+
+  absl::StatusOr<std::string> SerializeExecutable() const override;
 
   absl::string_view name() const override { return name_; }
   int num_replicas() const override { return num_replicas_; }
@@ -46,36 +65,52 @@ class StreamExecutorExecutable : public PjRtExecutable {
   }
   absl::StatusOr<std::vector<std::shared_ptr<HloModule>>> GetHloModules()
       const override {
-    return absl::UnimplementedError("GetHloModules is not supported.");
+    if (!hlo_modules_.has_value()) {
+      return absl::UnimplementedError("GetHloModules is not supported.");
+    }
+    return *hlo_modules_;
   }
 
+  absl::StatusOr<CompiledMemoryStats> GetCompiledMemoryStats() const override;
+
   absl::StatusOr<std::vector<std::vector<absl::string_view>>>
-  GetOutputMemoryKinds() const override {
-    return absl::UnimplementedError("GetOutputMemoryKinds is not supported.");
-  }
-  StatusOr<absl::flat_hash_map<std::string, PjRtValueType>> GetCostAnalysis()
-      const override {
+  GetOutputMemoryKinds() const override;
+
+  absl::StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
+  GetCostAnalysis() const override {
     return absl::UnimplementedError("GetCostAnalysis is not supported.");
   }
 
-  int64_t SizeOfGeneratedCodeInBytes() const override { return 0; }
+  int64_t SizeOfGeneratedCodeInBytes() const override;
 
   const CompileOptions& compile_options() const { return compile_options_; }
-  std::vector<std::unique_ptr<xla::AotCompilationResult>>& aot_executables() {
-    return aot_executables_;
+
+  absl::StatusOr<std::unique_ptr<LocalExecutable>> ConsumeExecutable(
+      LocalClient* client, const CompileOptions& compile_options);
+
+  absl::StatusOr<std::string> FingerprintExecutable() const override {
+    return fingerprint_;
   }
 
-  StatusOr<std::string> FingerprintExecutable() const override {
-    return fingerprint_;
+  const std::optional<HloModuleProto>& unoptimized_hlo_module_proto() const {
+    return unoptimized_hlo_module_proto_;
   }
 
  private:
   CompileOptions compile_options_;
-  std::vector<std::unique_ptr<xla::AotCompilationResult>> aot_executables_;
+  // The unoptimized HLO module proto is necessary for HLO debug dumping. It is
+  // not available for deserialized executables.
+  std::optional<HloModuleProto> unoptimized_hlo_module_proto_;
+  std::variant<std::vector<std::unique_ptr<CompiledModule>>,
+               std::vector<std::unique_ptr<LocalExecutable>>>
+      executables_;
+  LocalClient* local_client_ = nullptr;
+  std::optional<std::vector<std::shared_ptr<HloModule>>> hlo_modules_;
   int num_replicas_;
   int num_partitions_;
   std::string name_;
   std::string fingerprint_;
+  absl::string_view default_memory_kind_;
 };
 }  // namespace xla
 

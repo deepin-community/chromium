@@ -136,7 +136,6 @@ void HeartbeatRegistrationHelper::OnRegisterAttemptComplete(
     const std::string& registration_id,
     gcm::GCMClient::Result result) {
   DVLOG(1) << "Received Register() response: " << result;
-  // TODO(atwilson): Track GCM errors via UMA (http://crbug.com/459238).
   switch (result) {
     case gcm::GCMClient::SUCCESS:
       std::move(callback_).Run(registration_id);
@@ -167,7 +166,6 @@ void HeartbeatRegistrationHelper::OnRegisterAttemptComplete(
     case gcm::GCMClient::TTL_EXCEEDED:
     default:
       NOTREACHED() << "Unexpected GCMDriver::Register() result: " << result;
-      break;
   }
 }
 
@@ -422,7 +420,7 @@ void HeartbeatScheduler::ShutdownHandler() {
 }
 
 void HeartbeatScheduler::OnStoreReset() {
-  // TODO(crbug.com/661660): Tell server that |registration_id_| is no longer
+  // TODO(crbug.com/40491756): Tell server that |registration_id_| is no longer
   // valid. See also crbug.com/516375.
   if (!registration_helper_) {
     ShutdownGCM();

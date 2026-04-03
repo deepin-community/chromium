@@ -4,6 +4,8 @@
 
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_origin_text.h"
 
+#include <string_view>
+
 #include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
 #include "base/strings/utf_string_conversions.h"
@@ -22,6 +24,7 @@
 #include "ui/compositor/layer_animation_element.h"
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/style/typography.h"
@@ -57,12 +60,20 @@ WebAppOriginText::WebAppOriginText(Browser* browser) {
   label_->layer()->GetAnimator()->AddObserver(this);
   label_->layer()->GetAnimator()->set_preemption_strategy(
       ui::LayerAnimator::IMMEDIATELY_ANIMATE_TO_NEW_TARGET);
-  AddChildView(label_.get());
+  AddChildViewRaw(label_.get());
 
   // Clip child views to this view.
   SetPaintToLayer();
   layer()->SetFillsBoundsOpaquely(false);
   layer()->SetMasksToBounds(true);
+
+  GetViewAccessibility().SetRole(ax::mojom::Role::kApplication);
+  UpdateAccessibleName();
+
+  // This owns label_ which owns the callback.
+  label_text_changed_callback_ =
+      label_->AddTextChangedCallback(base::BindRepeating(
+          &WebAppOriginText::UpdateAccessibleName, base::Unretained(this)));
 }
 
 WebAppOriginText::~WebAppOriginText() = default;
@@ -112,7 +123,7 @@ void WebAppOriginText::StartFadeAnimation() {
 
   label_layer->GetAnimator()->StartAnimation(opacity_sequence.release());
 
-  NotifyAccessibilityEvent(ax::mojom::Event::kValueChanged, true);
+  NotifyAccessibilityEventDeprecated(ax::mojom::Event::kValueChanged, true);
 }
 
 void WebAppOriginText::OnLayerAnimationEnded(
@@ -120,15 +131,8 @@ void WebAppOriginText::OnLayerAnimationEnded(
   SetVisible(false);
 }
 
-void WebAppOriginText::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  node_data->role = ax::mojom::Role::kApplication;
-  if (!label_->GetText().empty()) {
-    node_data->SetNameChecked(label_->GetText());
-  }
-}
-
-const std::u16string& WebAppOriginText::GetLabelTextForTesting() {
-  CHECK(label_ != nullptr);
+std::u16string_view WebAppOriginText::GetLabelTextForTesting() const {
+  CHECK(label_);
   return label_->GetText();
 }
 
@@ -165,7 +169,7 @@ void WebAppOriginText::DidFinishNavigation(content::NavigationHandle* handle) {
   label_->SetText(origin_text_);
   // CCT UI already displays origin information so there is no need to animate
   // origin text.
-  // TODO(crbug.com/1485373): Instead of DidFinishNavigation, we can use
+  // TODO(crbug.com/40282543): Instead of DidFinishNavigation, we can use
   // ReadyToCommitNavigation if this logic does not consider
   // ShouldShowCustomTabBar or if ShouldShowCustomTabBar can take pre-commit URL
   // as input. ShouldShowCustomTabBar is currently implemented to be used after
@@ -175,6 +179,14 @@ void WebAppOriginText::DidFinishNavigation(content::NavigationHandle* handle) {
     return;
   }
   StartFadeAnimation();
+}
+
+void WebAppOriginText::UpdateAccessibleName() {
+  if (!label_->GetText().empty()) {
+    GetViewAccessibility().SetName(std::u16string(label_->GetText()));
+  } else {
+    GetViewAccessibility().RemoveName();
+  }
 }
 
 BEGIN_METADATA(WebAppOriginText)

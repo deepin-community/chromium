@@ -29,7 +29,7 @@
 
 #include <utility>
 
-#include "src/tint/lang/wgsl/program/clone_context.h"
+#include "src/tint/lang/wgsl/program/program_builder.h"
 #include "src/tint/lang/wgsl/sem/type_expression.h"
 #include "src/tint/lang/wgsl/sem/value_expression.h"
 #include "src/tint/utils/rtti/switch.h"
@@ -48,9 +48,7 @@ Program::Printer Program::printer = DefaultPrinter;
 Program::Program() = default;
 
 Program::Program(Program&& program)
-    : id_(std::move(program.id_)),
-      highest_node_id_(std::move(program.highest_node_id_)),
-      constants_(std::move(program.constants_)),
+    : constants_(std::move(program.constants_)),
       ast_nodes_(std::move(program.ast_nodes_)),
       sem_nodes_(std::move(program.sem_nodes_)),
       ast_(std::move(program.ast_)),
@@ -63,8 +61,6 @@ Program::Program(Program&& program)
 }
 
 Program::Program(ProgramBuilder&& builder) {
-    id_ = builder.ID();
-    highest_node_id_ = builder.LastAllocatedNodeID();
     is_valid_ = builder.IsValid();
 
     // The above must be called *before* the calls to std::move() below
@@ -81,7 +77,7 @@ Program::Program(ProgramBuilder&& builder) {
         // If the builder claims to be invalid, then we really should have an error
         // message generated. If we find a situation where the program is not valid
         // and there are no errors reported, add one here.
-        diagnostics_.AddError(diag::System::Program, "invalid program generated");
+        diagnostics_.AddError(Source{}) << "invalid program generated";
     }
 }
 
@@ -91,8 +87,6 @@ Program& Program::operator=(Program&& program) {
     program.AssertNotMoved();
     program.moved_ = true;
     moved_ = false;
-    id_ = std::move(program.id_);
-    highest_node_id_ = std::move(program.highest_node_id_);
     constants_ = std::move(program.constants_);
     ast_nodes_ = std::move(program.ast_nodes_);
     sem_nodes_ = std::move(program.sem_nodes_);
@@ -102,18 +96,6 @@ Program& Program::operator=(Program&& program) {
     diagnostics_ = std::move(program.diagnostics_);
     is_valid_ = program.is_valid_;
     return *this;
-}
-
-Program Program::Clone() const {
-    AssertNotMoved();
-    return Program(CloneAsBuilder());
-}
-
-ProgramBuilder Program::CloneAsBuilder() const {
-    AssertNotMoved();
-    ProgramBuilder out;
-    program::CloneContext(&out, this).Clone();
-    return out;
 }
 
 bool Program::IsValid() const {

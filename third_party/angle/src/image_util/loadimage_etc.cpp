@@ -6,6 +6,10 @@
 
 // loadimage_etc.cpp: Decodes ETC and EAC encoded textures.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "image_util/loadimage.h"
 
 #include <type_traits>
@@ -1141,7 +1145,7 @@ struct ETC2Block
             // From the eigenvalue and eigenvector, choose the axis to project
             // colors on. When projecting colors we want to do integer computations
             // for speed, so we normalize the eigenvector to the [0, 512] range.
-            float magn = std::max(std::max(std::abs(vfr), std::abs(vfg)), std::abs(vfb));
+            float magn = std::max({std::abs(vfr), std::abs(vfg), std::abs(vfb)});
             magn       = kQuantizeRange / magn;
             vr         = static_cast<int>(vfr * magn);
             vg         = static_cast<int>(vfg * magn);

@@ -24,7 +24,7 @@ DEF_GRAPHITE_TEST_FOR_METAL_CONTEXT(MtlBackendTextureTest, reporter, context, te
     auto recorder = context->makeRecorder();
 
     MtlTextureInfo textureInfo;
-    textureInfo.fSampleCount = 1;
+    textureInfo.fSampleCount = SampleCount::k1;
     textureInfo.fMipmapped = skgpu::Mipmapped::kNo;
     textureInfo.fFormat = MTLPixelFormatRGBA8Unorm;
     textureInfo.fStorageMode = MTLStorageModePrivate;
@@ -35,26 +35,26 @@ DEF_GRAPHITE_TEST_FOR_METAL_CONTEXT(MtlBackendTextureTest, reporter, context, te
     // formats this test should iterate over a large set of combinations. See the Ganesh
     // MtlBackendAllocationTest for example of doing this.
 
-    auto beTexture = recorder->createBackendTexture(kSize, textureInfo);
+    auto beTexture = recorder->createBackendTexture(kSize, TextureInfos::MakeMetal(textureInfo));
     REPORTER_ASSERT(reporter, beTexture.isValid());
     recorder->deleteBackendTexture(beTexture);
 
     // It should also pass if we set the usage to be a render target
     textureInfo.fUsage |= MTLTextureUsageRenderTarget;
-    beTexture = recorder->createBackendTexture(kSize, textureInfo);
+    beTexture = recorder->createBackendTexture(kSize, TextureInfos::MakeMetal(textureInfo));
     REPORTER_ASSERT(reporter, beTexture.isValid());
     recorder->deleteBackendTexture(beTexture);
 
     // It should fail with a format that isn't one of our supported formats
     textureInfo.fFormat = MTLPixelFormatRGB9E5Float;
-    beTexture = recorder->createBackendTexture(kSize, textureInfo);
+    beTexture = recorder->createBackendTexture(kSize, TextureInfos::MakeMetal(textureInfo));
     REPORTER_ASSERT(reporter, !beTexture.isValid());
     recorder->deleteBackendTexture(beTexture);
 
     // It should fail with a sample count greater than 1
     textureInfo.fFormat = MTLPixelFormatRGBA8Unorm;
-    textureInfo.fSampleCount = 4;
-    beTexture = recorder->createBackendTexture(kSize, textureInfo);
+    textureInfo.fSampleCount = SampleCount::k4;
+    beTexture = recorder->createBackendTexture(kSize, TextureInfos::MakeMetal(textureInfo));
     REPORTER_ASSERT(reporter, !beTexture.isValid());
     recorder->deleteBackendTexture(beTexture);
 }

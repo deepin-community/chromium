@@ -10,9 +10,9 @@
 #include "base/scoped_environment_variable_override.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/signin/signin_features.h"
 #include "chrome/common/chrome_features.h"
 #include "components/signin/public/base/signin_buildflags.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
@@ -23,32 +23,29 @@
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_unittest_util.h"
 
-namespace {
 AccountInfo FillAccountInfo(
     const CoreAccountInfo& core_info,
     AccountManagementStatus management_status,
     signin::Tribool
         can_show_history_sync_opt_ins_without_minor_mode_restrictions) {
   const char kHostedDomain[] = "example.com";
-  AccountInfo account_info;
-
-  account_info.email = core_info.email;
-  account_info.gaia = core_info.gaia;
-  account_info.account_id = core_info.account_id;
-  account_info.is_under_advanced_protection =
-      core_info.is_under_advanced_protection;
-  account_info.full_name = "Test Full Name";
-  account_info.given_name = "Joe";
-  account_info.hosted_domain =
-      management_status == AccountManagementStatus::kManaged
-          ? kHostedDomain
-          : kNoHostedDomainFound;
-  account_info.locale = "en";
-  account_info.picture_url = "https://example.com";
+  AccountInfo account_info =
+      AccountInfo::Builder(core_info)
+          .SetFullName("Test Full Name")
+          .SetGivenName("Joe")
+          .SetHostedDomain(management_status ==
+                                   AccountManagementStatus::kManaged
+                               ? kHostedDomain
+                               : std::string())
+          .SetLocale("en")
+          .SetAvatarUrl("https://example.com")
+          .Build();
+  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  mutator.set_is_subject_to_enterprise_features(
+      management_status == AccountManagementStatus::kManaged);
 
   if (can_show_history_sync_opt_ins_without_minor_mode_restrictions !=
       signin::Tribool::kUnknown) {
-    AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
     mutator.set_can_show_history_sync_opt_ins_without_minor_mode_restrictions(
         signin::TriboolToBoolOrDie(
             can_show_history_sync_opt_ins_without_minor_mode_restrictions));
@@ -56,7 +53,6 @@ AccountInfo FillAccountInfo(
 
   return account_info;
 }
-}  // namespace
 
 AccountInfo SignInWithAccount(
     signin::IdentityTestEnvironment& identity_test_env,
@@ -103,7 +99,7 @@ void SetUpPixelTestCommandLine(
     const std::string language = "ar-XB";
     command_line->AppendSwitchASCII(switches::kLang, language);
 
-    // On Linux & Lacros the command line switch has no effect, we need to use
+    // On Linux the command line switch has no effect, we need to use
     // environment variables to change the language.
     env_variables = std::make_unique<base::ScopedEnvironmentVariableOverride>(
         "LANGUAGE", language);
@@ -114,16 +110,6 @@ void InitPixelTestFeatures(const PixelTestParam& params,
                            base::test::ScopedFeatureList& feature_list) {
   std::vector<base::test::FeatureRef> enabled_features;
   std::vector<base::test::FeatureRef> disabled_features;
-
-  if (params.use_chrome_refresh_2023_style) {
-    enabled_features.push_back(features::kChromeRefresh2023);
-    enabled_features.push_back(features::kChromeWebuiRefresh2023);
-  }
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  if (params.use_fre_style) {
-    enabled_features.push_back(kForYouFre);
-  }
-#endif
 
   feature_list.InitWithFeatures(enabled_features, disabled_features);
 }

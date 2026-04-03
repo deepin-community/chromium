@@ -28,9 +28,9 @@ bool HasValidPrefix(const std::string& pref_name,
   return false;
 }
 
-base::Value::List GetPrefsMetadata(
+base::ListValue GetPrefsMetadata(
     PrefValueStore::PrefStoreType pref_value_store_type) {
-  base::Value::List metadata;
+  base::ListValue metadata;
   switch (pref_value_store_type) {
     case PrefValueStore::PrefStoreType::MANAGED_STORE:
       metadata.Append("managed");
@@ -42,24 +42,14 @@ base::Value::List GetPrefsMetadata(
 #if BUILDFLAG(ENABLE_EXTENSIONS)
       metadata.Append("extension_controlled");
       metadata.Append("extension_modifiable");
+      break;
 #else
       NOTREACHED();
 #endif
-      break;
-    case PrefValueStore::PrefStoreType::STANDALONE_BROWSER_STORE:
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-      metadata.Append("standalone_browser_controlled");
-      metadata.Append("standalone_browser_modifiable");
-#endif
-      metadata.Append("extension_modifiable");
-      break;
     case PrefValueStore::PrefStoreType::COMMAND_LINE_STORE:
       metadata.Append("command_line_controlled");
 #if BUILDFLAG(ENABLE_EXTENSIONS)
       metadata.Append("extension_modifiable");
-#endif
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-      metadata.Append("standalone_browser_modifiable");
 #endif
       break;
     case PrefValueStore::PrefStoreType::USER_STORE:
@@ -68,18 +58,12 @@ base::Value::List GetPrefsMetadata(
 #if BUILDFLAG(ENABLE_EXTENSIONS)
       metadata.Append("extension_modifiable");
 #endif
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-      metadata.Append("standalone_browser_modifiable");
-#endif
       break;
     case PrefValueStore::PrefStoreType::RECOMMENDED_STORE:
       metadata.Append("recommended");
       metadata.Append("user_modifiable");
 #if BUILDFLAG(ENABLE_EXTENSIONS)
       metadata.Append("extension_modifiable");
-#endif
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-      metadata.Append("standalone_browser_modifiable");
 #endif
       break;
     case PrefValueStore::PrefStoreType::DEFAULT_STORE:
@@ -88,17 +72,11 @@ base::Value::List GetPrefsMetadata(
 #if BUILDFLAG(ENABLE_EXTENSIONS)
       metadata.Append("extension_modifiable");
 #endif
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-      metadata.Append("standalone_browser_modifiable");
-#endif
       break;
     case PrefValueStore::PrefStoreType::INVALID_STORE:
       metadata.Append("user_modifiable");
 #if BUILDFLAG(ENABLE_EXTENSIONS)
       metadata.Append("extension_modifiable");
-#endif
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-      metadata.Append("standalone_browser_modifiable");
 #endif
       break;
   }
@@ -113,7 +91,7 @@ std::optional<std::string> GetPrefsAsJson(
   std::vector<PrefService::PreferenceValueAndStore> values =
       pref_service->GetPreferencesValueAndStore();
 
-  base::Value::Dict local_state_values;
+  base::DictValue local_state_values;
   for (const auto& [name, value, pref_value_store_type] : values) {
     // Filter out the prefs to only include variations and UMA related fields,
     // which don't contain PII.
@@ -122,7 +100,7 @@ std::optional<std::string> GetPrefsAsJson(
       continue;
     }
 
-    base::Value::Dict pref_details;
+    base::DictValue pref_details;
     pref_details.Set("value", value.Clone());
     pref_details.Set("metadata", GetPrefsMetadata(pref_value_store_type));
     local_state_values.SetByDottedPath(name, std::move(pref_details));

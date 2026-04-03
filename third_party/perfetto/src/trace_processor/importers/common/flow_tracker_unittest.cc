@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
-#include <vector>
-
-#include "src/trace_processor/importers/common/args_translation_table.h"
 #include "src/trace_processor/importers/common/flow_tracker.h"
+#include "src/trace_processor/importers/common/args_translation_table.h"
+#include "src/trace_processor/importers/common/machine_tracker.h"
 #include "src/trace_processor/importers/common/slice_tracker.h"
 #include "src/trace_processor/importers/common/slice_translation_table.h"
 #include "src/trace_processor/storage/trace_storage.h"
@@ -34,6 +33,8 @@ class FlowTrackerTest : public ::testing::Test {
  public:
   FlowTrackerTest() {
     context_.storage = std::make_unique<TraceStorage>();
+    context_.machine_tracker =
+        std::make_unique<MachineTracker>(&context_, kDefaultMachineId);
     context_.args_translation_table =
         std::make_unique<ArgsTranslationTable>(context_.storage.get());
     context_.slice_translation_table =
@@ -70,8 +71,10 @@ TEST_F(FlowTrackerTest, SingleFlowEventExplicitInSliceBinding) {
 
   const auto& flows = context_.storage->flow_table();
   EXPECT_EQ(flows.row_count(), 1u);
-  EXPECT_EQ(flows.slice_out()[0], out_slice_id);
-  EXPECT_EQ(flows.slice_in()[0], in_slice_id);
+
+  auto f = flows[0];
+  EXPECT_EQ(f.slice_out(), out_slice_id);
+  EXPECT_EQ(f.slice_in(), in_slice_id);
 }
 
 TEST_F(FlowTrackerTest, SingleFlowEventWaitForNextSlice) {
@@ -103,8 +106,10 @@ TEST_F(FlowTrackerTest, SingleFlowEventWaitForNextSlice) {
   slice_tracker->End(160, track_2, StringId::Raw(2), StringId::Raw(2));
 
   EXPECT_EQ(flows.row_count(), 1u);
-  EXPECT_EQ(flows.slice_out()[0], out_slice_id);
-  EXPECT_EQ(flows.slice_in()[0], in_slice_id);
+
+  auto f = flows[0];
+  EXPECT_EQ(f.slice_out(), out_slice_id);
+  EXPECT_EQ(f.slice_in(), in_slice_id);
 }
 
 TEST_F(FlowTrackerTest, SingleFlowEventWaitForNextSliceScoped) {
@@ -135,8 +140,10 @@ TEST_F(FlowTrackerTest, SingleFlowEventWaitForNextSliceScoped) {
   SliceId in_slice_id = slice_tracker->GetTopmostSliceOnTrack(track_2).value();
 
   EXPECT_EQ(flows.row_count(), 1u);
-  EXPECT_EQ(flows.slice_out()[0], out_slice_id);
-  EXPECT_EQ(flows.slice_in()[0], in_slice_id);
+
+  auto f = flows[0];
+  EXPECT_EQ(f.slice_out(), out_slice_id);
+  EXPECT_EQ(f.slice_in(), in_slice_id);
 }
 
 TEST_F(FlowTrackerTest, TwoFlowEventsWaitForNextSlice) {
@@ -180,10 +187,14 @@ TEST_F(FlowTrackerTest, TwoFlowEventsWaitForNextSlice) {
   slice_tracker->End(170, track_2, StringId::Raw(3), StringId::Raw(3));
 
   EXPECT_EQ(flows.row_count(), 2u);
-  EXPECT_EQ(flows.slice_out()[0], out_slice1_id);
-  EXPECT_EQ(flows.slice_in()[0], in_slice_id);
-  EXPECT_EQ(flows.slice_out()[1], out_slice2_id);
-  EXPECT_EQ(flows.slice_in()[1], in_slice_id);
+
+  auto f = flows[0];
+  EXPECT_EQ(f.slice_out(), out_slice1_id);
+  EXPECT_EQ(f.slice_in(), in_slice_id);
+
+  f = flows[1];
+  EXPECT_EQ(f.slice_out(), out_slice2_id);
+  EXPECT_EQ(f.slice_in(), in_slice_id);
 }
 
 TEST_F(FlowTrackerTest, TwoFlowEventsSliceInSlice) {
@@ -227,10 +238,14 @@ TEST_F(FlowTrackerTest, TwoFlowEventsSliceInSlice) {
 
   const auto& flows = context_.storage->flow_table();
   EXPECT_EQ(flows.row_count(), 2u);
-  EXPECT_EQ(flows.slice_out()[0], out_slice2_id);
-  EXPECT_EQ(flows.slice_in()[0], in_slice_id);
-  EXPECT_EQ(flows.slice_out()[1], out_slice1_id);
-  EXPECT_EQ(flows.slice_in()[1], in_slice_id);
+
+  auto f = flows[0];
+  EXPECT_EQ(f.slice_out(), out_slice2_id);
+  EXPECT_EQ(f.slice_in(), in_slice_id);
+
+  f = flows[1];
+  EXPECT_EQ(f.slice_out(), out_slice1_id);
+  EXPECT_EQ(f.slice_in(), in_slice_id);
 }
 
 TEST_F(FlowTrackerTest, FlowEventsWithStep) {
@@ -268,10 +283,64 @@ TEST_F(FlowTrackerTest, FlowEventsWithStep) {
 
   const auto& flows = context_.storage->flow_table();
   EXPECT_EQ(flows.row_count(), 2u);
-  EXPECT_EQ(flows.slice_out()[0], out_slice1_id);
-  EXPECT_EQ(flows.slice_in()[0], inout_slice2_id);
-  EXPECT_EQ(flows.slice_out()[1], inout_slice2_id);
-  EXPECT_EQ(flows.slice_in()[1], in_slice_id);
+
+  auto f = flows[0];
+  EXPECT_EQ(f.slice_out(), out_slice1_id);
+  EXPECT_EQ(f.slice_in(), inout_slice2_id);
+
+  f = flows[1];
+  EXPECT_EQ(f.slice_out(), inout_slice2_id);
+  EXPECT_EQ(f.slice_in(), in_slice_id);
+}
+
+TEST_F(FlowTrackerTest, FlowDirectionCorrectedByTimestamp) {
+  auto& slice_tracker = context_.slice_tracker;
+  FlowTracker tracker(&context_);
+  slice_tracker->SetOnSliceBeginCallback(
+      [&tracker](TrackId track_id, SliceId slice_id) {
+        tracker.ClosePendingEventsOnTrack(track_id, slice_id);
+      });
+
+  FlowId flow_id = 1;
+  TrackId track_1(1);
+  TrackId track_2(2);
+
+  // Create first slice (ts=200) and begin flow from it
+  slice_tracker->Begin(200, track_1, StringId::Raw(1), StringId::Raw(1));
+  SliceId first_slice_id =
+      slice_tracker->GetTopmostSliceOnTrack(track_1).value();
+  tracker.Begin(track_1, flow_id);
+  slice_tracker->End(220, track_1, StringId::Raw(1), StringId::Raw(1));
+
+  // Create second slice (ts=100) and step flow to it
+  // This tests the scenario where Step() gets called with earlier timestamp
+  slice_tracker->Begin(100, track_2, StringId::Raw(2), StringId::Raw(2));
+  SliceId second_slice_id =
+      slice_tracker->GetTopmostSliceOnTrack(track_2).value();
+  tracker.Step(track_2, flow_id);
+  slice_tracker->End(120, track_2, StringId::Raw(2), StringId::Raw(2));
+
+  // End flow in another slice (ts=300)
+  slice_tracker->Begin(300, track_1, StringId::Raw(3), StringId::Raw(3));
+  SliceId third_slice_id =
+      slice_tracker->GetTopmostSliceOnTrack(track_1).value();
+  tracker.End(track_1, flow_id, /* bind_enclosing = */ true,
+              /* close_flow = */ true);
+  slice_tracker->End(320, track_1, StringId::Raw(3), StringId::Raw(3));
+
+  const auto& flows = context_.storage->flow_table();
+  EXPECT_EQ(flows.row_count(), 2u);
+
+  // First flow should go from second_slice (ts=100) to first_slice (ts=200)
+  // because flow direction is corrected by timestamp (100 -> 200)
+  auto f = flows[0];
+  EXPECT_EQ(f.slice_out(), second_slice_id);  // Earlier timestamp (100)
+  EXPECT_EQ(f.slice_in(), first_slice_id);    // Later timestamp (200)
+
+  // Second flow should go from second_slice (ts=100) to third_slice (ts=300)
+  f = flows[1];
+  EXPECT_EQ(f.slice_out(), second_slice_id);  // Earlier timestamp (100)
+  EXPECT_EQ(f.slice_in(), third_slice_id);    // Later timestamp (300)
 }
 
 }  // namespace

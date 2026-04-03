@@ -478,7 +478,66 @@
     "translit": {
       "filterType": "language",
       "includelist": [
-         "root"
+// Need to explicitly add "root"
+        "root",
+// List of all Chrome UI Languages
+        "af",
+        "am",
+        "ar",
+        "bg",
+        "bn",
+        "ca",
+        "cs",
+        "da",
+        "de",
+        "el",
+        "en",
+        "es",
+        "et",
+        "fa",
+        "fi",
+        "fil",
+        "fr",
+        "gu",
+        "he",
+        "hi",
+        "hr",
+        "hu",
+        "id",
+        "in",
+        "it",
+        "iw",
+        "ja",
+        "kn",
+        "ko",
+        "lt",
+        "lv",
+        "ml",
+        "mo",
+        "mr",
+        "ms",
+        "nb",
+        "nl",
+        "no",
+        "pl",
+        "pt",
+        "ro",
+        "ru",
+        "sh",
+        "sk",
+        "sl",
+        "sr",
+        "sv",
+        "sw",
+        "ta",
+        "te",
+        "th",
+        "tl",
+        "tr",
+        "uk",
+        "ur",
+        "vi",
+        "zh"
       ]
     },
 // Based on the ICU63 version of
@@ -1724,25 +1783,7 @@
 	]
       },
       "rules": [
-        "-/calendar/*",
-        "+/calendar/default",
-        "+/calendar/gregorian",
-        "+/calendar/generic",
-        "+/calendar/buddhist",
-        "+/calendar/chinese",
-        "+/calendar/roc",
-        "+/calendar/dangi",
-        "+/calendar/ethiopic",
-        "+/calendar/ethiopic-amete-alem",
-        "+/calendar/japanese",
-        "+/calendar/hebrew",
-        "+/calendar/islamic",
-        "+/calendar/islamic-umalqura",
-        "+/calendar/islamic-civil",
-        "+/calendar/islamic-tbla",
-        "+/calendar/islamic-rgsa",
-        "+/calendar/persian",
-        "+/calendar/indian",
+// Change root to include all thing except the following
 // # Delete Japanese era display names in root. 'ja' has Japanese era names
 // # so that root does not need them.
 // # The same is true of eras and monthNames for Islamic calendar.
@@ -2061,7 +2102,11 @@
       ],
       "rules": [
         "-/*",
-        "+/RuleBasedTransliteratorIDs/Latin-ASCII"
+        "+/RuleBasedTransliteratorIDs/Latin-ASCII",
+        "+/RuleBasedTransliteratorIDs/Katakana-Hiragana",
+        "+/RuleBasedTransliteratorIDs/Hiragana-Katakana",
+        "+/RuleBasedTransliteratorIDs/Hira-Kana",
+        "+/RuleBasedTransliteratorIDs/Kana-Hira"
       ]
     },
 // Remove all the Version

@@ -10,8 +10,11 @@
 
 #include "base/command_line.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ref.h"
+#include "base/notreached.h"
 #include "base/process/process_metrics.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "content/browser/gpu/compositor_util.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
@@ -70,14 +73,14 @@ static constexpr int kGPUInfoWatchdogTimeoutMs =
 
 class AuxGPUInfoEnumerator : public gpu::GPUInfo::Enumerator {
  public:
-  explicit AuxGPUInfoEnumerator(base::Value::Dict* dictionary)
+  explicit AuxGPUInfoEnumerator(base::DictValue* dictionary)
       : dictionary_(*dictionary) {}
 
  private:
   template <typename T>
   void MaybeSetAuxAttribute(const char* name, T value) {
     if (in_aux_attributes_)
-      dictionary_.Set(name, value);
+      dictionary_->Set(name, value);
   }
 
   void AddInt64(const char* name, int64_t value) override {
@@ -114,10 +117,6 @@ class AuxGPUInfoEnumerator : public gpu::GPUInfo::Enumerator {
 
   void EndVideoEncodeAcceleratorSupportedProfile() override {}
 
-  void BeginImageDecodeAcceleratorSupportedProfile() override {}
-
-  void EndImageDecodeAcceleratorSupportedProfile() override {}
-
   void BeginOverlayInfo() override {}
 
   void EndOverlayInfo() override {}
@@ -130,7 +129,7 @@ class AuxGPUInfoEnumerator : public gpu::GPUInfo::Enumerator {
     in_aux_attributes_ = false;
   }
 
-  protocol::DictionaryValue& dictionary_;
+  const raw_ref<protocol::DictionaryValue, DanglingUntriaged> dictionary_;
   bool in_aux_attributes_ = false;
 };
 
@@ -173,45 +172,6 @@ VideoEncodeAcceleratorSupportedProfileToProtocol(
       .Build();
 }
 
-std::unique_ptr<SystemInfo::ImageDecodeAcceleratorCapability>
-ImageDecodeAcceleratorSupportedProfileToProtocol(
-    const gpu::ImageDecodeAcceleratorSupportedProfile& profile) {
-  auto subsamplings = std::make_unique<protocol::Array<std::string>>();
-  for (const auto subsampling : profile.subsamplings) {
-    switch (subsampling) {
-      case gpu::ImageDecodeAcceleratorSubsampling::k420:
-        subsamplings->emplace_back(SystemInfo::SubsamplingFormatEnum::Yuv420);
-        break;
-      case gpu::ImageDecodeAcceleratorSubsampling::k422:
-        subsamplings->emplace_back(SystemInfo::SubsamplingFormatEnum::Yuv422);
-        break;
-      case gpu::ImageDecodeAcceleratorSubsampling::k444:
-        subsamplings->emplace_back(SystemInfo::SubsamplingFormatEnum::Yuv444);
-        break;
-    }
-  }
-
-  SystemInfo::ImageType image_type;
-  switch (profile.image_type) {
-    case gpu::ImageDecodeAcceleratorType::kJpeg:
-      image_type = SystemInfo::ImageTypeEnum::Jpeg;
-      break;
-    case gpu::ImageDecodeAcceleratorType::kWebP:
-      image_type = SystemInfo::ImageTypeEnum::Webp;
-      break;
-    case gpu::ImageDecodeAcceleratorType::kUnknown:
-      image_type = SystemInfo::ImageTypeEnum::Unknown;
-      break;
-  }
-
-  return SystemInfo::ImageDecodeAcceleratorCapability::Create()
-      .SetImageType(image_type)
-      .SetMaxDimensions(GfxSizeToSystemInfoSize(profile.max_encoded_dimensions))
-      .SetMinDimensions(GfxSizeToSystemInfoSize(profile.min_encoded_dimensions))
-      .SetSubsamplings(std::move(subsamplings))
-      .Build();
-}
-
 void SendGetInfoResponse(std::unique_ptr<GetInfoCallback> callback) {
   gpu::GPUInfo gpu_info = GpuDataManagerImpl::GetInstance()->GetGPUInfo();
   auto devices = std::make_unique<protocol::Array<GPUDevice>>();
@@ -226,7 +186,7 @@ void SendGetInfoResponse(std::unique_ptr<GetInfoCallback> callback) {
       continue;
     devices->emplace_back(GPUDeviceToProtocol(gpu_info.secondary_gpus[i]));
   }
-  auto aux_attributes = std::make_unique<base::Value::Dict>();
+  auto aux_attributes = std::make_unique<base::DictValue>();
   AuxGPUInfoEnumerator enumerator(aux_attributes.get());
   gpu_info.EnumerateFields(&enumerator);
   aux_attributes->Set("processCrashCount", GpuProcessHost::GetGpuCrashCount());
@@ -234,7 +194,7 @@ void SendGetInfoResponse(std::unique_ptr<GetInfoCallback> callback) {
       "visibilityCallbackCallCount",
       static_cast<int>(gpu_info.visibility_callback_call_count));
 
-  auto feature_status = std::make_unique<base::Value::Dict>(
+  auto feature_status = std::make_unique<base::DictValue>(
       std::move(GetFeatureStatus().GetDict()));
   auto driver_bug_workarounds =
       std::make_unique<protocol::Array<std::string>>(GetDriverBugWorkarounds());
@@ -255,14 +215,6 @@ void SendGetInfoResponse(std::unique_ptr<GetInfoCallback> callback) {
         VideoEncodeAcceleratorSupportedProfileToProtocol(profile));
   }
 
-  auto image_profiles = std::make_unique<
-      protocol::Array<SystemInfo::ImageDecodeAcceleratorCapability>>();
-  for (const auto& profile :
-       gpu_info.image_decode_accelerator_supported_profiles) {
-    image_profiles->emplace_back(
-        ImageDecodeAcceleratorSupportedProfileToProtocol(profile));
-  }
-
   std::unique_ptr<GPUInfo> gpu =
       GPUInfo::Create()
           .SetDevices(std::move(devices))
@@ -271,7 +223,6 @@ void SendGetInfoResponse(std::unique_ptr<GetInfoCallback> callback) {
           .SetDriverBugWorkarounds(std::move(driver_bug_workarounds))
           .SetVideoDecoding(std::move(decoding_profiles))
           .SetVideoEncoding(std::move(encoding_profiles))
-          .SetImageDecoding(std::move(image_profiles))
           .Build();
 
   base::CommandLine* command = base::CommandLine::ForCurrentProcess();
@@ -320,7 +271,7 @@ class SystemInfoHandlerGpuObserver : public content::GpuDataManagerObserver {
 
   void ObserverWatchdogCallback() {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
-    CHECK(false) << "Gathering system GPU info took more than "
+    NOTREACHED() << "Gathering system GPU info took more than "
                  << (kGPUInfoWatchdogTimeoutMs / 1000) << " seconds.";
   }
 
@@ -375,7 +326,8 @@ std::unique_ptr<protocol::SystemInfo::ProcessInfo> MakeProcessInfo(
     const String& process_type) {
   std::unique_ptr<base::ProcessMetrics> pm =
       CreateProcessMetrics(process.Handle());
-  base::TimeDelta cpu_usage = pm->GetCumulativeCPUUsage();
+  const base::TimeDelta cpu_usage =
+      pm->GetCumulativeCPUUsage().value_or(base::TimeDelta());
 
   return SystemInfo::ProcessInfo::Create()
       .SetId(process.Pid())

@@ -18,7 +18,6 @@
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/values.h"
-#include "chrome/browser/ash/login/session/chrome_session_manager.h"
 #include "chrome/browser/ash/login/smart_lock/smart_lock_feature_usage_metrics.h"
 #include "chrome/browser/ash/login/smart_lock/smart_lock_notification_controller.h"
 #include "chrome/browser/ash/login/smart_lock/smart_lock_service_factory.h"
@@ -41,9 +40,12 @@
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "components/account_id/account_id.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/user_manager/scoped_user_manager.h"
+#include "components/user_manager/test_helper.h"
 #include "content/public/test/browser_task_environment.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
@@ -137,7 +139,7 @@ class MockSmartLockNotificationController
   MockSmartLockNotificationController& operator=(
       const MockSmartLockNotificationController&) = delete;
 
-  ~MockSmartLockNotificationController() override {}
+  ~MockSmartLockNotificationController() override = default;
 
   // SmartLockNotificationController:
   MOCK_METHOD0(ShowChromebookAddedNotification, void());
@@ -194,8 +196,6 @@ class SmartLockServiceTest : public testing::Test {
     mock_adapter_ = new testing::NiceMock<MockBluetoothAdapter>();
     device::BluetoothAdapterFactory::SetAdapterForTesting(mock_adapter_);
 
-    TestingBrowserProcess::GetGlobal()->SetLocalState(&local_pref_service_);
-    RegisterLocalState(local_pref_service_.registry());
     fake_user_manager_.Reset(std::make_unique<ash::FakeChromeUserManager>());
 
     auto test_other_remote_device =
@@ -230,7 +230,6 @@ class SmartLockServiceTest : public testing::Test {
     SetScreenLockState(false /* is_locked */);
     smart_lock_service_->Shutdown();
     chromeos::PowerManagerClient::Shutdown();
-    TestingBrowserProcess::GetGlobal()->SetLocalState(nullptr);
     display::Screen::SetScreenInstance(nullptr);
   }
 
@@ -323,10 +322,6 @@ class SmartLockServiceTest : public testing::Test {
   // Must outlive TestingProfiles.
   content::BrowserTaskEnvironment task_environment_;
 
-  // PrefService which contains the browser process' local storage. It should be
-  // destructed after TestingProfile.
-  TestingPrefServiceSimple local_pref_service_;
-
   user_manager::TypedScopedUserManager<ash::FakeChromeUserManager>
       fake_user_manager_;
   std::unique_ptr<TestingProfile> profile_;
@@ -359,11 +354,10 @@ class SmartLockServiceTest : public testing::Test {
 
  private:
   void SetPrimaryUserLoggedIn() {
-    const user_manager::User* user =
-        fake_user_manager_->AddPublicAccountUser(account_id_);
-    fake_user_manager_->UserLoggedIn(account_id_, user->username_hash(),
-                                     false /* browser_restart */,
-                                     false /* is_child */);
+    fake_user_manager_->AddPublicAccountUser(account_id_);
+    fake_user_manager_->UserLoggedIn(
+        account_id_,
+        user_manager::TestHelper::GetFakeUsernameHash(account_id_));
   }
 };
 
@@ -423,7 +417,9 @@ TEST_F(
     GetRemoteDevices_InitiallyNoSyncedDevices_MultiDeviceSetupDialogVisible) {
   SetDisplaySize(gfx::Size(1920, 1200));
 
-  ChromeSessionManager manager;
+  session_manager::SessionManager manager{
+      std::make_unique<session_manager::FakeSessionManagerDelegate>()};
+  manager.OnUserManagerCreated(fake_user_manager_.Get());
 
   auto dialog = std::make_unique<FakeMultiDeviceSetupDialog>();
   multidevice_setup::MultiDeviceSetupDialog::SetInstanceForTesting(

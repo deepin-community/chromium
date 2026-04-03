@@ -6,6 +6,7 @@
 #define UI_EVENTS_OZONE_LAYOUT_KEYBOARD_LAYOUT_ENGINE_H_
 
 #include <string>
+#include <string_view>
 
 #include "base/component_export.h"
 #include "base/functional/callback.h"
@@ -30,6 +31,9 @@ class COMPONENT_EXPORT(EVENTS_OZONE_LAYOUT) KeyboardLayoutEngine {
   KeyboardLayoutEngine() {}
   virtual ~KeyboardLayoutEngine() {}
 
+  // Returns the current layout name.
+  virtual std::string_view GetLayoutName() const = 0;
+
   // Returns true if it is possible to change the current layout.
   virtual bool CanSetCurrentLayout() const = 0;
 
@@ -39,7 +43,7 @@ class COMPONENT_EXPORT(EVENTS_OZONE_LAYOUT) KeyboardLayoutEngine {
   // Calls the callback once the layout is initialized after being set.
   virtual void SetCurrentLayoutByName(
       const std::string& layout_name,
-      base::OnceCallback<void(bool)> callback) = 0;
+      base::OnceCallback<void(bool success)> callback) = 0;
 
   // Sets the current layout given a memory location and the buffer size in
   // bytes, that represent keyboard mapping description; returns true on

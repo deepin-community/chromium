@@ -14,7 +14,6 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/platform_util.h"
@@ -25,6 +24,7 @@
 #include "components/prefs/pref_member.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/download_manager.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -73,8 +73,9 @@ void AddSingleFileFileTypeInfo(
           FILE_PATH_LITERAL("mhtml")});
 }
 
-// Chrome OS doesn't support HTML-Complete. crbug.com/154823
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+// Chrome OS intentionally does not support "Webpage, Complete" type.
+// See https://crbug.com/40951429
+#if !BUILDFLAG(IS_CHROMEOS)
 // Adds "Webpage, Complete" type to FileTypeInfo.
 void AddCompleteFileTypeInfo(
     ui::SelectFileDialog::FileTypeInfo* file_type_info,
@@ -89,7 +90,7 @@ void AddCompleteFileTypeInfo(
     extensions.push_back(extra_extension);
   file_type_info->extensions.push_back(extensions);
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // Checks whether this is a blocked page (e.g., when a child user is accessing
 // a mature site).
@@ -109,7 +110,7 @@ bool IsErrorPage(content::WebContents* web_contents) {
 
 }  // anonymous namespace
 
-// TODO(crbug/928323): REMOVE DIRTY HACK
+// TODO(crbug.com/41439108): REMOVE DIRTY HACK
 // To prevent access to blocked websites, we are temporarily disabling the
 // HTML-only download of error pages for child users only.
 // Note that MHTML is still available, so the save functionality is preserved.
@@ -120,8 +121,8 @@ bool SavePackageFilePicker::ShouldSaveAsOnlyHTML(
   return !profile->IsChild() || !IsErrorPage(web_contents);
 }
 
-bool SavePackageFilePicker::ShouldSaveAsMHTML() const {
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+bool SavePackageFilePicker::ShouldSaveAsMHTMLByDefault() const {
+#if !BUILDFLAG(IS_CHROMEOS)
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kSavePageAsMHTML))
     return false;
@@ -137,7 +138,7 @@ SavePackageFilePicker::SavePackageFilePicker(
     DownloadPrefs* download_prefs,
     content::SavePackagePathPickedCallback callback)
     : render_process_id_(
-          web_contents->GetPrimaryMainFrame()->GetProcess()->GetID()),
+          web_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID()),
       can_save_as_complete_(can_save_as_complete),
       download_prefs_(download_prefs),
       callback_(std::move(callback)) {
@@ -154,7 +155,8 @@ SavePackageFilePicker::SavePackageFilePicker(
     save_types_.push_back(content::SAVE_PAGE_TYPE_UNKNOWN);
 
     base::FilePath::StringType extra_extension;
-    if (!ShouldSaveAsMHTML() && !suggested_path_copy.FinalExtension().empty() &&
+    if (!ShouldSaveAsMHTMLByDefault() &&
+        !suggested_path_copy.FinalExtension().empty() &&
         !suggested_path_copy.MatchesExtension(FILE_PATH_LITERAL(".htm")) &&
         !suggested_path_copy.MatchesExtension(FILE_PATH_LITERAL(".html"))) {
       extra_extension = suggested_path_copy.FinalExtension().substr(1);
@@ -165,22 +167,20 @@ SavePackageFilePicker::SavePackageFilePicker(
       save_types_.push_back(content::SAVE_PAGE_TYPE_AS_ONLY_HTML);
     }
 
-    if (can_save_as_complete_) {
-      AddSingleFileFileTypeInfo(&file_type_info);
-      save_types_.push_back(content::SAVE_PAGE_TYPE_AS_MHTML);
-    }
+    AddSingleFileFileTypeInfo(&file_type_info);
+    save_types_.push_back(content::SAVE_PAGE_TYPE_AS_MHTML);
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
     AddCompleteFileTypeInfo(&file_type_info, extra_extension);
     save_types_.push_back(content::SAVE_PAGE_TYPE_AS_COMPLETE_HTML);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
     file_type_info.include_all_files = false;
 
-    content::SavePageType preferred_save_type =
-        static_cast<content::SavePageType>(download_prefs_->save_file_type());
-    if (ShouldSaveAsMHTML())
-      preferred_save_type = content::SAVE_PAGE_TYPE_AS_MHTML;
+    const content::SavePageType preferred_save_type =
+        ShouldSaveAsMHTMLByDefault() ? content::SAVE_PAGE_TYPE_AS_MHTML
+                                     : static_cast<content::SavePageType>(
+                                           download_prefs_->save_file_type());
 
     // Select the item saved in the pref.
     for (size_t i = 0; i < save_types_.size(); ++i) {
@@ -191,8 +191,9 @@ SavePackageFilePicker::SavePackageFilePicker(
     }
 
     // If the item saved in the pref was not found, use the last item.
-    if (!file_type_index)
+    if (!file_type_index) {
       file_type_index = save_types_.size() - 1;
+    }
   } else {
     // The contents can not be saved as complete-HTML, so do not show the file
     // filters.
@@ -224,7 +225,7 @@ SavePackageFilePicker::SavePackageFilePicker(
         suggested_path_copy, &file_type_info, file_type_index,
         default_extension_copy,
         platform_util::GetTopLevel(web_contents->GetNativeView()),
-        /*params=*/nullptr, /*caller=*/
+        /*caller=*/
         web_contents
             ? &web_contents->GetPrimaryMainFrame()->GetLastCommittedURL()
             : nullptr);
@@ -234,8 +235,7 @@ SavePackageFilePicker::SavePackageFilePicker(
   // If |g_should_prompt_for_filename| is unset or |select_file_dialog_| could
   // not be instantiated for some reason, just use 'suggested_path_copy' instead
   // of opening the dialog prompt. Go through FileSelected() for consistency.
-  FileSelected(ui::SelectedFileInfo(suggested_path_copy), file_type_index,
-               nullptr);
+  FileSelected(ui::SelectedFileInfo(suggested_path_copy), file_type_index);
 }
 
 SavePackageFilePicker::~SavePackageFilePicker() {
@@ -249,8 +249,7 @@ void SavePackageFilePicker::SetShouldPromptUser(bool should_prompt) {
 }
 
 void SavePackageFilePicker::FileSelected(const ui::SelectedFileInfo& file,
-                                         int index,
-                                         void* unused_params) {
+                                         int index) {
   std::unique_ptr<SavePackageFilePicker> delete_this(this);
   RenderProcessHost* process = RenderProcessHost::FromID(render_process_id_);
   if (!process)
@@ -284,6 +283,6 @@ void SavePackageFilePicker::FileSelected(const ui::SelectedFileInfo& file,
                            base::BindOnce(&OnSavePackageDownloadCreated));
 }
 
-void SavePackageFilePicker::FileSelectionCanceled(void* unused_params) {
+void SavePackageFilePicker::FileSelectionCanceled() {
   delete this;
 }

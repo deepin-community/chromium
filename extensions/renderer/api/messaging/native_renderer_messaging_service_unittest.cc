@@ -107,7 +107,7 @@ class NativeRendererMessagingServiceTest
   const Extension* extension() { return extension_.get(); }
 
  private:
-  raw_ptr<ScriptContext, ExperimentalRenderer> script_context_ = nullptr;
+  raw_ptr<ScriptContext> script_context_ = nullptr;
   scoped_refptr<const Extension> extension_;
 };
 
@@ -130,7 +130,7 @@ TEST_F(NativeRendererMessagingServiceTest, OpenMessagePort) {
   tab_connection_info.frame_id = 0;
   const int tab_id = 10;
   GURL source_url("http://example.com");
-  tab_connection_info.tab = base::Value::Dict().Set("tabId", tab_id);
+  tab_connection_info.tab = base::DictValue().Set("tabId", tab_id);
   external_connection_info.target_id = extension()->id();
   external_connection_info.source_endpoint =
       MessagingEndpoint::ForExtension(extension()->id());
@@ -174,10 +174,10 @@ TEST_F(NativeRendererMessagingServiceTest, OpenMessagePort) {
 
   EXPECT_EQ("true", GetStringPropertyFromObject(context->Global(), context,
                                                 "eventFired"));
-  base::Value::Dict expected_sender =
-      base::Value::Dict()
+  base::DictValue expected_sender =
+      base::DictValue()
           .Set("frameId", 0)
-          .Set("tab", base::Value::Dict().Set("tabId", tab_id))
+          .Set("tab", base::DictValue().Set("tabId", tab_id))
           .Set("url", source_url.spec())
           .Set("id", extension()->id());
   EXPECT_EQ(ValueToString(base::Value(std::move(expected_sender))),
@@ -201,17 +201,16 @@ TEST_F(NativeRendererMessagingServiceTest, DeliverMessageToPort) {
   mojo::PendingAssociatedReceiver<mojom::MessagePortHost>
       message_port_host_receiver2;
 
-  gin::Handle<GinPort> port1 = messaging_service()->CreatePortForTesting(
-      script_context(), "channel1", port_id1, message_port_remote1,
-      message_port_host_receiver1);
-  gin::Handle<GinPort> port2 = messaging_service()->CreatePortForTesting(
-      script_context(), "channel2", port_id2, message_port_remote2,
-      message_port_host_receiver2);
+  GinPort* port1 = messaging_service()->CreatePortForTesting(
+      script_context(), "channel1", mojom::ChannelType::kSendMessage, port_id1,
+      message_port_remote1, message_port_host_receiver1);
+  GinPort* port2 = messaging_service()->CreatePortForTesting(
+      script_context(), "channel2", mojom::ChannelType::kSendMessage, port_id2,
+      message_port_remote2, message_port_host_receiver2);
   message_port_remote1.EnableUnassociatedUsage();
   message_port_host_receiver1.EnableUnassociatedUsage();
   message_port_remote2.EnableUnassociatedUsage();
   message_port_host_receiver2.EnableUnassociatedUsage();
-  ASSERT_FALSE(port1.IsEmpty());
 
   const char kOnMessageListenerTemplate[] =
       "(function(port) {\n"
@@ -224,14 +223,16 @@ TEST_F(NativeRendererMessagingServiceTest, DeliverMessageToPort) {
   {
     v8::Local<v8::Function> add_on_message_listener = FunctionFromString(
         context, base::StringPrintf(kOnMessageListenerTemplate, kPort1Message));
-    v8::Local<v8::Value> args[] = {port1.ToV8()};
+    v8::Local<v8::Value> args[] = {
+        port1->GetWrapper(isolate()).ToLocalChecked()};
     RunFunctionOnGlobal(add_on_message_listener, context, std::size(args),
                         args);
   }
   {
     v8::Local<v8::Function> add_on_message_listener = FunctionFromString(
         context, base::StringPrintf(kOnMessageListenerTemplate, kPort2Message));
-    v8::Local<v8::Value> args[] = {port2.ToV8()};
+    v8::Local<v8::Value> args[] = {
+        port2->GetWrapper(isolate()).ToLocalChecked()};
     RunFunctionOnGlobal(add_on_message_listener, context, std::size(args),
                         args);
   }
@@ -274,12 +275,12 @@ TEST_F(NativeRendererMessagingServiceTest, DisconnectMessagePort) {
   mojo::PendingAssociatedRemote<mojom::MessagePort> message_port_remote2;
   mojo::PendingAssociatedReceiver<mojom::MessagePortHost>
       message_port_host_receiver2;
-  gin::Handle<GinPort> port1 = messaging_service()->CreatePortForTesting(
-      script_context(), "channel1", port_id1, message_port_remote1,
-      message_port_host_receiver1);
-  gin::Handle<GinPort> port2 = messaging_service()->CreatePortForTesting(
-      script_context(), "channel2", port_id2, message_port_remote2,
-      message_port_host_receiver2);
+  GinPort* port1 = messaging_service()->CreatePortForTesting(
+      script_context(), "channel1", mojom::ChannelType::kSendMessage, port_id1,
+      message_port_remote1, message_port_host_receiver1);
+  GinPort* port2 = messaging_service()->CreatePortForTesting(
+      script_context(), "channel2", mojom::ChannelType::kSendMessage, port_id2,
+      message_port_remote2, message_port_host_receiver2);
   message_port_remote1.EnableUnassociatedUsage();
   message_port_host_receiver1.EnableUnassociatedUsage();
   message_port_remote2.EnableUnassociatedUsage();
@@ -297,7 +298,7 @@ TEST_F(NativeRendererMessagingServiceTest, DisconnectMessagePort) {
     v8::Local<v8::Function> add_on_disconnect_listener = FunctionFromString(
         context,
         base::StringPrintf(kOnDisconnectListenerTemplate, kPort1Disconnect));
-    v8::Local<v8::Value> args[] = {port1.ToV8()};
+    v8::Local<v8::Value> args[] = {port1->GetWrapper(isolate()).ToLocalChecked()};
     RunFunctionOnGlobal(add_on_disconnect_listener, context, std::size(args),
                         args);
   }
@@ -305,7 +306,7 @@ TEST_F(NativeRendererMessagingServiceTest, DisconnectMessagePort) {
     v8::Local<v8::Function> add_on_disconnect_listener = FunctionFromString(
         context,
         base::StringPrintf(kOnDisconnectListenerTemplate, kPort2Disconnect));
-    v8::Local<v8::Value> args[] = {port2.ToV8()};
+    v8::Local<v8::Value> args[] = {port2->GetWrapper(isolate()).ToLocalChecked()};
     RunFunctionOnGlobal(add_on_disconnect_listener, context, std::size(args),
                         args);
   }
@@ -337,13 +338,13 @@ TEST_F(NativeRendererMessagingServiceTest, PostMessageFromJS) {
   mojo::PendingAssociatedRemote<mojom::MessagePort> message_port_remote;
   mojo::PendingAssociatedReceiver<mojom::MessagePortHost>
       message_port_host_receiver;
-  gin::Handle<GinPort> port = messaging_service()->CreatePortForTesting(
-      script_context(), "channel", port_id, message_port_remote,
-      message_port_host_receiver);
+  GinPort* port = messaging_service()->CreatePortForTesting(
+      script_context(), "channel", mojom::ChannelType::kSendMessage, port_id,
+      message_port_remote, message_port_host_receiver);
   message_port_remote.EnableUnassociatedUsage();
   message_port_host_receiver.EnableUnassociatedUsage();
   mock_message_port_host.BindReceiver(std::move(message_port_host_receiver));
-  v8::Local<v8::Object> port_object = port.ToV8().As<v8::Object>();
+  v8::Local<v8::Object> port_object = port->GetWrapper(isolate()).ToLocalChecked();
 
   const char kDispatchMessage[] =
       "(function(port) {\n"
@@ -376,13 +377,13 @@ TEST_F(NativeRendererMessagingServiceTest, DisconnectFromJS) {
   mojo::PendingAssociatedRemote<mojom::MessagePort> message_port_remote;
   mojo::PendingAssociatedReceiver<mojom::MessagePortHost>
       message_port_host_receiver;
-  gin::Handle<GinPort> port = messaging_service()->CreatePortForTesting(
-      script_context(), "channel", port_id, message_port_remote,
-      message_port_host_receiver);
+  GinPort* port = messaging_service()->CreatePortForTesting(
+      script_context(), "channel", mojom::ChannelType::kSendMessage, port_id,
+      message_port_remote, message_port_host_receiver);
   message_port_remote.EnableUnassociatedUsage();
   message_port_host_receiver.EnableUnassociatedUsage();
   mock_message_port_host.BindReceiver(std::move(message_port_host_receiver));
-  v8::Local<v8::Object> port_object = port.ToV8().As<v8::Object>();
+  v8::Local<v8::Object> port_object = port->GetWrapper(isolate()).ToLocalChecked();
 
   const char kDispatchMessage[] =
       "(function(port) {\n"
@@ -393,7 +394,10 @@ TEST_F(NativeRendererMessagingServiceTest, DisconnectFromJS) {
   v8::Local<v8::Value> args[] = {port_object};
 
   base::RunLoop run_loop;
-  EXPECT_CALL(mock_message_port_host, ClosePort(true))
+  EXPECT_CALL(mock_message_port_host,
+              ClosePort(
+                  /*close_channel=*/true,
+                  /*error_message=*/testing::Eq(std::nullopt)))
       .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
   RunFunctionOnGlobal(post_message, context, std::size(args), args);
   run_loop.Run();
@@ -412,10 +416,10 @@ TEST_F(NativeRendererMessagingServiceTest, Connect) {
               SendOpenMessageChannel(script_context(), expected_port_id, target,
                                      mojom::ChannelType::kConnect, kChannel,
                                      testing::_, testing::_));
-  gin::Handle<GinPort> new_port = messaging_service()->Connect(
+  GinPort* new_port = messaging_service()->Connect(
       script_context(), target, "channel", mojom::SerializationFormat::kJson);
   ::testing::Mock::VerifyAndClearExpectations(ipc_message_sender());
-  ASSERT_FALSE(new_port.IsEmpty());
+  ASSERT_TRUE(new_port);
 
   EXPECT_EQ(expected_port_id, new_port->port_id());
   EXPECT_EQ(kChannel, new_port->name());
@@ -478,7 +482,10 @@ TEST_F(NativeRendererMessagingServiceTest, SendOneTimeMessageWithCallback) {
   run_loop = std::make_unique<base::RunLoop>();
   // Respond to the message. The response callback should be triggered, and the
   // port should be closed.
-  EXPECT_CALL(mock_message_port_host, ClosePort(true))
+  EXPECT_CALL(mock_message_port_host,
+              ClosePort(
+                  /*close_channel=*/true,
+                  /*error_message=*/testing::Eq(std::nullopt)))
       .WillOnce(base::test::RunClosure(run_loop->QuitClosure()));
   messaging_service()->DeliverMessage(
       script_context_set(), port_id,
@@ -540,7 +547,10 @@ TEST_F(NativeRendererMessagingServiceTest, SendOneTimeMessageWithPromise) {
   run_loop = std::make_unique<base::RunLoop>();
   // Respond to the message. The response callback should be triggered, and the
   // port should be closed.
-  EXPECT_CALL(mock_message_port_host, ClosePort(true))
+  EXPECT_CALL(mock_message_port_host,
+              ClosePort(
+                  /*close_channel=*/true,
+                  /*error_message=*/testing::Eq(std::nullopt)))
       .WillOnce(base::test::RunClosure(run_loop->QuitClosure()));
   messaging_service()->DeliverMessage(
       script_context_set(), port_id,
@@ -586,7 +596,7 @@ TEST_F(NativeRendererMessagingServiceTest, ReceiveOneTimeMessage) {
   tab_connection_info.frame_id = 0;
   const int tab_id = 10;
   GURL source_url("http://example.com");
-  tab_connection_info.tab = base::Value::Dict().Set("tabId", tab_id);
+  tab_connection_info.tab = base::DictValue().Set("tabId", tab_id);
   external_connection_info.target_id = extension()->id();
   external_connection_info.source_endpoint =
       MessagingEndpoint::ForExtension(extension()->id());
@@ -625,7 +635,10 @@ TEST_F(NativeRendererMessagingServiceTest, ReceiveOneTimeMessage) {
   EXPECT_CALL(mock_message_port_host,
               PostMessage(Message(R"({"data":"hi"})",
                                   mojom::SerializationFormat::kJson, false)));
-  EXPECT_CALL(mock_message_port_host, ClosePort(true))
+  EXPECT_CALL(mock_message_port_host,
+              ClosePort(
+                  /*close_channel=*/true,
+                  /*error_message=*/testing::Eq(std::nullopt)))
       .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
   messaging_service()->DeliverMessage(
       script_context_set(), port_id,
@@ -681,7 +694,7 @@ TEST_F(NativeRendererMessagingServiceTest, TestExternalOneTimeMessages) {
         tab_connection_info.frame_id = 0;
         const int tab_id = 10;
         GURL source_url("http://example.com");
-        tab_connection_info.tab = base::Value::Dict().Set("tabId", tab_id);
+        tab_connection_info.tab = base::DictValue().Set("tabId", tab_id);
 
         external_connection_info.target_id = extension()->id();
         external_connection_info.source_endpoint =
@@ -755,6 +768,94 @@ TEST_F(NativeRendererMessagingServiceTest, TestExternalOneTimeMessages) {
   EXPECT_EQ("\"onMessageExternal\"",
             GetStringPropertyFromObject(context->Global(), context,
                                         "onMessageExternalReceived"));
+}
+
+TEST_F(NativeRendererMessagingServiceTest, DestroyContext) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> context = MainContext();
+
+  base::UnguessableToken other_context_id = base::UnguessableToken::Create();
+  const PortId port_id(other_context_id, 0, false,
+                       mojom::SerializationFormat::kJson);
+
+  mojo::PendingAssociatedRemote<mojom::MessagePort> message_port_remote;
+  mojo::PendingAssociatedReceiver<mojom::MessagePortHost>
+      message_port_host_receiver;
+  GinPort* port = messaging_service()->CreatePortForTesting(
+      script_context(), "channel", mojom::ChannelType::kSendMessage, port_id,
+      message_port_remote, message_port_host_receiver);
+  message_port_remote.EnableUnassociatedUsage();
+  message_port_host_receiver.EnableUnassociatedUsage();
+
+  // Initially, the port should be active.
+  EXPECT_FALSE(port->is_closed_for_testing());
+
+  // Invalidate the ports, simulating worker termination.
+  messaging_service()->InvalidatePorts(script_context());
+
+  // The port should now be aware of the destruction.
+  v8::Local<v8::Object> port_object =
+      port->GetWrapper(isolate()).ToLocalChecked();
+  const char kDispatchMessage[] =
+      "(function(port) {\n"
+      "  port.postMessage({data: 'hello'});\n"
+      "})";
+  v8::Local<v8::Function> post_message =
+      FunctionFromString(context, kDispatchMessage);
+  v8::Local<v8::Value> args[] = {port_object};
+
+  // This should not crash.
+  RunFunctionOnGlobal(post_message, context, std::size(args), args);
+
+  // We also verify that trying to access `onMessage` throws an error,
+  // consistent with the behavior when the worker data is destroyed.
+  const char kGetOnMessage[] = "(function(port) { return port.onMessage; })";
+  v8::Local<v8::Function> get_on_message =
+      FunctionFromString(context, kGetOnMessage);
+  RunFunctionAndExpectError(get_on_message, context, std::size(args), args,
+                            "Uncaught Error: Extension context invalidated.");
+}
+
+// Tests that a disconnected port doesn't crash when the messaging service is
+// destroyed before the port is garbage collected. Regression test for
+// https://crbug.com/476266939.
+TEST_F(NativeRendererMessagingServiceTest, DisconnectAndDestroy) {
+  {
+    v8::HandleScope handle_scope(isolate());
+    v8::Local<v8::Context> context = MainContext();
+
+    base::UnguessableToken other_context_id = base::UnguessableToken::Create();
+    const PortId port_id(other_context_id, 0, false,
+                         mojom::SerializationFormat::kJson);
+
+    mojo::PendingAssociatedRemote<mojom::MessagePort> message_port_remote;
+    mojo::PendingAssociatedReceiver<mojom::MessagePortHost>
+        message_port_host_receiver;
+    GinPort* port = messaging_service()->CreatePortForTesting(
+        script_context(), "channel", mojom::ChannelType::kSendMessage, port_id,
+        message_port_remote, message_port_host_receiver);
+    message_port_remote.EnableUnassociatedUsage();
+    message_port_host_receiver.EnableUnassociatedUsage();
+
+    v8::Local<v8::Object> port_object =
+        port->GetWrapper(isolate()).ToLocalChecked();
+
+    // Disconnect the port.
+    port->DispatchOnDisconnect(context);
+
+    // Release references.
+    port = nullptr;
+    port_object.Clear();
+
+    // Destroy the bindings system (and the messaging service).
+    DestroyBindingsSystem();
+  }
+
+  // Dispose all contexts. This will release the `ScriptContext` (which holds
+  // a strong reference to the `v8::Context`) and trigger garbage collection.
+  // This verifies that the `GinPort` (which is collected during this GC)
+  // doesn't crash when it finds the messaging service destroyed.
+  DisposeAllContexts();
 }
 
 }  // namespace extensions

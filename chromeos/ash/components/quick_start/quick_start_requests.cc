@@ -5,9 +5,12 @@
 #include "chromeos/ash/components/quick_start/quick_start_requests.h"
 
 #include "base/base64.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/values.h"
 #include "chromeos/ash/components/quick_start/quick_start_message.h"
 #include "chromeos/ash/components/quick_start/quick_start_message_type.h"
 #include "chromeos/ash/components/quick_start/types.h"
+#include "chromeos/constants/devicetype.h"
 #include "components/cbor/values.h"
 #include "components/cbor/writer.h"
 #include "crypto/sha2.h"
@@ -24,6 +27,21 @@ constexpr char kFlowTypeKey[] = "flowType";
 // bootstrapOptions key telling the phone the number of
 // accounts are expected to transfer account to the target device.
 constexpr char kAccountRequirementKey[] = "accountRequirement";
+// bootstrapOptions key telling the deviceName of target device.
+constexpr char kDeviceNameKey[] = "deviceName";
+// bootstrapOptions key containing object with phone actions after transfer.
+constexpr char kPostTransferActionKey[] = "PostTransferAction";
+// bootstrapOptions URI key inside the PostTransferAction object.
+constexpr char kPostTransferActionURIKey[] = "uri";
+// bootstrapOptions PostTransferAction uri value.
+constexpr char kPostTransferActionURIValue[] =
+    "intent:#Intent;action=com.google.android.gms.quickstart.LANDING_SCREEN;"
+    "package=com.google.android.gms;end";
+
+// Device names
+constexpr char kChromebook[] = "Chromebook";
+constexpr char kChromebase[] = "Chromebase";
+constexpr char kChromebox[] = "Chromebox";
 
 // Base64 encoded CBOR bytes containing the Fido command. This will be used
 // for GetInfo and GetAssertion.
@@ -82,6 +100,19 @@ constexpr int kBootstrapStateComplete = 2;
 // Key in BootstrapState message.
 constexpr char kBootstrapStateKey[] = "bootstrapState";
 
+std::string GetDeviceName() {
+  switch (chromeos::GetDeviceType()) {
+    case chromeos::DeviceType::kChromebook:
+      return kChromebook;
+    case chromeos::DeviceType::kChromebase:
+      return kChromebase;
+    case chromeos::DeviceType::kChromebox:
+      return kChromebox;
+    default:
+      return kChromebook;
+  }
+}
+
 }  // namespace
 
 std::unique_ptr<QuickStartMessage> BuildBootstrapOptionsRequest() {
@@ -91,18 +122,27 @@ std::unique_ptr<QuickStartMessage> BuildBootstrapOptionsRequest() {
   message->GetPayload()->Set(kAccountRequirementKey, kAccountRequirementSingle);
   message->GetPayload()->Set(kFlowTypeKey, kFlowTypeTargetChallenge);
   message->GetPayload()->Set(kDeviceTypeKey, kDeviceTypeChrome);
+  message->GetPayload()->Set(kDeviceNameKey, GetDeviceName());
+
+  // TODO(b/332603236): Remove postTransferAction payload when new device info
+  // exchange is implemented.
+  base::DictValue post_transfer_action;
+  post_transfer_action.Set(kPostTransferActionURIKey,
+                           kPostTransferActionURIValue);
+
+  message->GetPayload()->Set(kPostTransferActionKey,
+                             std::move(post_transfer_action));
   return message;
 }
 
 std::unique_ptr<QuickStartMessage> BuildAssertionRequestMessage(
-    std::array<uint8_t, crypto::kSHA256Length> client_data_hash) {
+    base::span<const uint8_t, crypto::hash::kSha256Size> client_data_hash) {
   cbor::Value request = GenerateGetAssertionRequest(client_data_hash);
   std::vector<uint8_t> ctap_request_command =
       CBOREncodeGetAssertionRequest(std::move(request));
 
-  std::unique_ptr<QuickStartMessage> message =
-      std::make_unique<QuickStartMessage>(
-          QuickStartMessageType::kSecondDeviceAuthPayload);
+  auto message = std::make_unique<QuickStartMessage>(
+      QuickStartMessageType::kSecondDeviceAuthPayload);
 
   message->GetPayload()->Set(FIDO_MESSAGE_KEY,
                              base::Base64Encode(ctap_request_command));
@@ -111,9 +151,8 @@ std::unique_ptr<QuickStartMessage> BuildAssertionRequestMessage(
 
 std::unique_ptr<QuickStartMessage> BuildGetInfoRequestMessage() {
   std::vector<uint8_t> ctap_request_command({kAuthenticatorGetInfoCommand});
-  std::unique_ptr<QuickStartMessage> message =
-      std::make_unique<QuickStartMessage>(
-          QuickStartMessageType::kSecondDeviceAuthPayload);
+  auto message = std::make_unique<QuickStartMessage>(
+      QuickStartMessageType::kSecondDeviceAuthPayload);
   message->GetPayload()->Set(FIDO_MESSAGE_KEY,
                              base::Base64Encode(ctap_request_command));
   return message;
@@ -122,20 +161,18 @@ std::unique_ptr<QuickStartMessage> BuildGetInfoRequestMessage() {
 std::unique_ptr<QuickStartMessage> BuildRequestWifiCredentialsMessage(
     uint64_t session_id,
     std::string& shared_secret) {
-  std::unique_ptr<QuickStartMessage> message =
-      std::make_unique<QuickStartMessage>(
-          QuickStartMessageType::kQuickStartPayload);
+  auto message = std::make_unique<QuickStartMessage>(
+      QuickStartMessageType::kQuickStartPayload);
   message->GetPayload()->Set(kRequestWifiKey, true);
   std::string shared_secret_str(shared_secret.begin(), shared_secret.end());
   std::string shared_secret_base64 = base::Base64Encode(shared_secret_str);
   message->GetPayload()->Set(kSharedSecretKey, shared_secret_base64);
-  message->GetPayload()->Set(kSessionIdKey, static_cast<int>(session_id));
-
+  message->GetPayload()->Set(kSessionIdKey, base::NumberToString(session_id));
   return message;
 }
 
 cbor::Value GenerateGetAssertionRequest(
-    std::array<uint8_t, crypto::kSHA256Length> client_data_hash) {
+    base::span<const uint8_t, crypto::hash::kSha256Size> client_data_hash) {
   url::Origin origin = url::Origin::Create(GURL(kOrigin));
   cbor::Value::MapValue cbor_map;
   cbor_map.insert_or_assign(cbor::Value(0x01), cbor::Value(kRelyingPartyId));
@@ -164,33 +201,37 @@ std::vector<uint8_t> CBOREncodeGetAssertionRequest(const cbor::Value& request) {
 
 std::unique_ptr<QuickStartMessage> BuildNotifySourceOfUpdateMessage(
     uint64_t session_id,
-    const base::span<uint8_t, 32> shared_secret) {
-  std::unique_ptr<QuickStartMessage> message =
-      std::make_unique<QuickStartMessage>(
-          QuickStartMessageType::kQuickStartPayload);
+    base::span<const uint8_t, 32> shared_secret) {
+  auto message = std::make_unique<QuickStartMessage>(
+      QuickStartMessageType::kQuickStartPayload);
   message->GetPayload()->Set(kNotifySourceOfUpdateMessageKey, true);
 
-  std::string shared_secret_str(shared_secret.begin(), shared_secret.end());
-  std::string shared_secret_base64 = base::Base64Encode(shared_secret_str);
-  message->GetPayload()->Set(kSharedSecretKey, shared_secret_base64);
-  message->GetPayload()->Set(kSessionIdKey, static_cast<int>(session_id));
+  message->GetPayload()->Set(kSharedSecretKey,
+                             base::Base64Encode(shared_secret));
+  message->GetPayload()->Set(kSessionIdKey, base::NumberToString(session_id));
 
   return message;
 }
 
 std::unique_ptr<QuickStartMessage> BuildBootstrapStateCancelMessage() {
-  std::unique_ptr<QuickStartMessage> message =
-      std::make_unique<QuickStartMessage>(
-          QuickStartMessageType::kBootstrapState);
+  auto message = std::make_unique<QuickStartMessage>(
+      QuickStartMessageType::kBootstrapState);
   message->GetPayload()->Set(kBootstrapStateKey, kBootstrapStateCancel);
   return message;
 }
 
 std::unique_ptr<QuickStartMessage> BuildBootstrapStateCompleteMessage() {
-  std::unique_ptr<QuickStartMessage> message =
-      std::make_unique<QuickStartMessage>(
-          QuickStartMessageType::kBootstrapState);
+  auto message = std::make_unique<QuickStartMessage>(
+      QuickStartMessageType::kBootstrapState);
   message->GetPayload()->Set(kBootstrapStateKey, kBootstrapStateComplete);
+
+  // TODO(b/332603236): Remove postTransferAction payload when new device info
+  // exchange is implemented.
+  base::DictValue post_transfer_action;
+  post_transfer_action.Set(kPostTransferActionURIKey,
+                           kPostTransferActionURIValue);
+  message->GetPayload()->Set(kPostTransferActionKey,
+                             std::move(post_transfer_action));
   return message;
 }
 

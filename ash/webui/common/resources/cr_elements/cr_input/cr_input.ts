@@ -4,7 +4,6 @@
 
 // Forked from ui/webui/resources/cr_elements/cr_input/cr_input.ts
 
-import '//resources/polymer/v3_0/paper-styles/color.js';
 import '../cr_hidden_style.css.js';
 import '../cr_shared_style.css.js';
 import '../cr_shared_vars.css.js';
@@ -20,6 +19,7 @@ import {getTemplate} from './cr_input.html.js';
  * Input types supported by cr-input.
  */
 const SUPPORTED_INPUT_TYPES: Set<string> = new Set([
+  'email',
   'number',
   'password',
   'search',
@@ -200,8 +200,9 @@ export class CrInputElement extends PolymerElement {
     };
   }
 
-  ariaDescription: string|undefined;
-  autoFocus: boolean;
+  override ariaDescription: string|null;
+  override ariaLabel: string;
+  override autofocus: boolean;
   autoValidate: boolean;
   disabled: boolean;
   errorMessage: string;
@@ -299,8 +300,8 @@ export class CrInputElement extends PolymerElement {
 
   /**
    * Focuses the input element.
-   * TODO(crbug.com/882612): Replace this with focus() after resolving the text
-   * selection issue described in onFocus_().
+   * TODO(crbug.com/40593040): Replace this with focus() after resolving the
+   * text selection issue described in onFocus_().
    * @return Whether the <input> element was focused.
    */
   focusInput(): boolean {

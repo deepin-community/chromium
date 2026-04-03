@@ -117,7 +117,7 @@ class TopK : public OpKernel {
 
     auto values = values_out->flat_inner_dims<T>();
     auto indices = indices_out->flat_inner_dims<Tidx>();
-    Status s = functor::TopKFunctor<Device, T, Tidx>::Compute(
+    absl::Status s = functor::TopKFunctor<Device, T, Tidx>::Compute(
         context, sorted_, k, input, num_rows, num_cols, values, indices);
     OP_REQUIRES_OK(context, s);
   }
@@ -131,7 +131,7 @@ namespace functor {
 
 template <typename T, typename Tidx>
 struct TopKFunctor<CPUDevice, T, Tidx> {
-  static EIGEN_ALWAYS_INLINE Status Compute(
+  static EIGEN_ALWAYS_INLINE absl::Status Compute(
       OpKernelContext* context, bool sorted, int k,
       const typename TTypes<T, 2>::ConstTensor& input, const int64_t num_rows,
       const int64_t num_cols, typename TTypes<T, 2>::Tensor values,
@@ -158,7 +158,7 @@ struct TopKFunctor<CPUDevice, T, Tidx> {
         values(r, 0) = input(r, indices(r, 0));
       }
 
-      return OkStatus();
+      return absl::OkStatus();
     }
 
     auto SortIndices = [&](int64_t start_batch, int64_t limit_batch) {
@@ -244,14 +244,15 @@ struct TopKFunctor<CPUDevice, T, Tidx> {
     const double sort_cost = (k == num_cols) ? base_cost : 4 * base_cost;
     const double copy_cost = 2 * k * Eigen::TensorOpCost::AddCost<T>();
     const double total_cost = sort_cost + copy_cost;
-    const int64_t final_cost = (total_cost >= static_cast<double>(kint64max))
-                                   ? kint64max
-                                   : static_cast<int64_t>(total_cost);
+    const int64_t final_cost =
+        (total_cost >= static_cast<double>(std::numeric_limits<int64_t>::max()))
+            ? std::numeric_limits<int64_t>::max()
+            : static_cast<int64_t>(total_cost);
     auto worker_threads = *(context->device()->tensorflow_cpu_worker_threads());
     Shard(worker_threads.num_threads, worker_threads.workers, num_rows,
           final_cost, SortIndices);
 
-    return OkStatus();
+    return absl::OkStatus();
   }
 };
 

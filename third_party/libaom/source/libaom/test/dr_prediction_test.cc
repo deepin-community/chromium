@@ -1,5 +1,5 @@
 ﻿/*
- * Copyright (c) 2018, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2018, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -12,7 +12,7 @@
 #include <tuple>
 #include <vector>
 
-#include "third_party/googletest/src/googletest/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 
 #include "config/aom_config.h"
 #include "config/aom_dsp_rtcd.h"
@@ -28,6 +28,9 @@
 #include "test/util.h"
 
 namespace {
+
+const int kNumIntraNeighbourPixels = MAX_TX_SIZE * 2 + 32;
+const int kIntraPredInputPadding = 16;
 
 const int kZ1Start = 0;
 const int kZ2Start = 90;
@@ -47,19 +50,19 @@ const char *const kTxSizeStrings[] = {
 
 using libaom_test::ACMRandom;
 
-typedef void (*DrPred_Hbd)(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
-                           const uint16_t *above, const uint16_t *left,
-                           int upsample_above, int upsample_left, int dx,
-                           int dy, int bd);
+using DrPred_Hbd = void (*)(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
+                            const uint16_t *above, const uint16_t *left,
+                            int upsample_above, int upsample_left, int dx,
+                            int dy, int bd);
 
-typedef void (*DrPred)(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
-                       const uint8_t *above, const uint8_t *left,
-                       int upsample_above, int upsample_left, int dx, int dy,
-                       int bd);
+using DrPred = void (*)(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
+                        const uint8_t *above, const uint8_t *left,
+                        int upsample_above, int upsample_left, int dx, int dy,
+                        int bd);
 
-typedef void (*Z1_Lbd)(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
-                       const uint8_t *above, const uint8_t *left,
-                       int upsample_above, int dx, int dy);
+using Z1_Lbd = void (*)(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
+                        const uint8_t *above, const uint8_t *left,
+                        int upsample_above, int dx, int dy);
 template <Z1_Lbd fn>
 void z1_wrapper(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
                 const uint8_t *above, const uint8_t *left, int upsample_above,
@@ -69,9 +72,9 @@ void z1_wrapper(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
   fn(dst, stride, bw, bh, above, left, upsample_above, dx, dy);
 }
 
-typedef void (*Z2_Lbd)(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
-                       const uint8_t *above, const uint8_t *left,
-                       int upsample_above, int upsample_left, int dx, int dy);
+using Z2_Lbd = void (*)(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
+                        const uint8_t *above, const uint8_t *left,
+                        int upsample_above, int upsample_left, int dx, int dy);
 template <Z2_Lbd fn>
 void z2_wrapper(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
                 const uint8_t *above, const uint8_t *left, int upsample_above,
@@ -81,9 +84,9 @@ void z2_wrapper(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
   fn(dst, stride, bw, bh, above, left, upsample_above, upsample_left, dx, dy);
 }
 
-typedef void (*Z3_Lbd)(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
-                       const uint8_t *above, const uint8_t *left,
-                       int upsample_left, int dx, int dy);
+using Z3_Lbd = void (*)(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
+                        const uint8_t *above, const uint8_t *left,
+                        int upsample_left, int dx, int dy);
 template <Z3_Lbd fn>
 void z3_wrapper(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
                 const uint8_t *above, const uint8_t *left, int upsample_above,
@@ -93,9 +96,9 @@ void z3_wrapper(uint8_t *dst, ptrdiff_t stride, int bw, int bh,
   fn(dst, stride, bw, bh, above, left, upsample_left, dx, dy);
 }
 
-typedef void (*Z1_Hbd)(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
-                       const uint16_t *above, const uint16_t *left,
-                       int upsample_above, int dx, int dy, int bd);
+using Z1_Hbd = void (*)(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
+                        const uint16_t *above, const uint16_t *left,
+                        int upsample_above, int dx, int dy, int bd);
 template <Z1_Hbd fn>
 void z1_wrapper_hbd(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
                     const uint16_t *above, const uint16_t *left,
@@ -106,10 +109,10 @@ void z1_wrapper_hbd(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
   fn(dst, stride, bw, bh, above, left, upsample_above, dx, dy, bd);
 }
 
-typedef void (*Z2_Hbd)(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
-                       const uint16_t *above, const uint16_t *left,
-                       int upsample_above, int upsample_left, int dx, int dy,
-                       int bd);
+using Z2_Hbd = void (*)(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
+                        const uint16_t *above, const uint16_t *left,
+                        int upsample_above, int upsample_left, int dx, int dy,
+                        int bd);
 template <Z2_Hbd fn>
 void z2_wrapper_hbd(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
                     const uint16_t *above, const uint16_t *left,
@@ -120,9 +123,9 @@ void z2_wrapper_hbd(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
      bd);
 }
 
-typedef void (*Z3_Hbd)(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
-                       const uint16_t *above, const uint16_t *left,
-                       int upsample_left, int dx, int dy, int bd);
+using Z3_Hbd = void (*)(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
+                        const uint16_t *above, const uint16_t *left,
+                        int upsample_left, int dx, int dy, int bd);
 template <Z3_Hbd fn>
 void z3_wrapper_hbd(uint16_t *dst, ptrdiff_t stride, int bw, int bh,
                     const uint16_t *above, const uint16_t *left,
@@ -151,8 +154,6 @@ class DrPredTest : public ::testing::TestWithParam<DrPredFunc<FuncType> > {
  protected:
   static const int kMaxNumTests = 10000;
   static const int kIterations = 10;
-  static const int kOffset = 16;
-  static const int kBufSize = ((2 * MAX_TX_SIZE) << 1) + 16;
 
   DrPredTest()
       : enable_upsample_(0), upsample_above_(0), upsample_left_(0), bw_(0),
@@ -160,20 +161,12 @@ class DrPredTest : public ::testing::TestWithParam<DrPredFunc<FuncType> > {
     params_ = this->GetParam();
     start_angle_ = params_.start_angle;
     stop_angle_ = start_angle_ + 90;
-
-    above_ = &above_data_[kOffset];
-    left_ = &left_data_[kOffset];
-
-    for (int i = 0; i < kBufSize; ++i) {
-      above_data_[i] = rng_.Rand8();
-      left_data_[i] = rng_.Rand8();
-    }
   }
 
   ~DrPredTest() override = default;
 
-  void Predict(bool speedtest, int tx, Pixel *dst_ref, Pixel *dst_tst,
-               int dst_stride) {
+  void Predict(bool speedtest, int tx, const Pixel *above, const Pixel *left,
+               Pixel *dst_ref, Pixel *dst_tst, int dst_stride) {
     const int kNumTests = speedtest ? kMaxNumTests : 1;
     aom_usec_timer timer;
     int tst_time = 0;
@@ -182,7 +175,7 @@ class DrPredTest : public ::testing::TestWithParam<DrPredFunc<FuncType> > {
 
     aom_usec_timer_start(&timer);
     for (int k = 0; k < kNumTests; ++k) {
-      params_.ref_fn(dst_ref, dst_stride, bw_, bh_, above_, left_,
+      params_.ref_fn(dst_ref, dst_stride, bw_, bh_, above, left,
                      upsample_above_, upsample_left_, dx_, dy_, bd_);
     }
     aom_usec_timer_mark(&timer);
@@ -192,7 +185,7 @@ class DrPredTest : public ::testing::TestWithParam<DrPredFunc<FuncType> > {
       aom_usec_timer_start(&timer);
       for (int k = 0; k < kNumTests; ++k) {
         API_REGISTER_STATE_CHECK(params_.tst_fn(dst_tst, dst_stride, bw_, bh_,
-                                                above_, left_, upsample_above_,
+                                                above, left, upsample_above_,
                                                 upsample_left_, dx_, dy_, bd_));
       }
       aom_usec_timer_mark(&timer);
@@ -211,11 +204,6 @@ class DrPredTest : public ::testing::TestWithParam<DrPredFunc<FuncType> > {
   void RunTest(bool speedtest, bool needsaturation, int p_angle) {
     bd_ = params_.bit_depth;
 
-    if (needsaturation) {
-      for (int i = 0; i < kBufSize; ++i) {
-        above_data_[i] = left_data_[i] = (1 << bd_) - 1;
-      }
-    }
     for (int tx = 0; tx < TX_SIZES_ALL; ++tx) {
       bw_ = tx_size_wide[kTxSize[tx]];
       bh_ = tx_size_high[kTxSize[tx]];
@@ -227,6 +215,28 @@ class DrPredTest : public ::testing::TestWithParam<DrPredFunc<FuncType> > {
             av1_use_intra_edge_upsample(bw_, bh_, p_angle - 180, 0);
       } else {
         upsample_above_ = upsample_left_ = 0;
+      }
+
+      // Declare input buffers as local arrays to allow checking for
+      // over-reads.
+      DECLARE_ALIGNED(16, Pixel, left_data[kNumIntraNeighbourPixels]);
+      DECLARE_ALIGNED(16, Pixel, above_data[kNumIntraNeighbourPixels]);
+
+      // We need to allow reading some previous bytes from the input pointers.
+      const Pixel *above = &above_data[kIntraPredInputPadding];
+      const Pixel *left = &left_data[kIntraPredInputPadding];
+
+      if (needsaturation) {
+        const Pixel sat = (1 << bd_) - 1;
+        for (int i = 0; i < kNumIntraNeighbourPixels; ++i) {
+          left_data[i] = sat;
+          above_data[i] = sat;
+        }
+      } else {
+        for (int i = 0; i < kNumIntraNeighbourPixels; ++i) {
+          left_data[i] = rng_.Rand8();
+          above_data[i] = rng_.Rand8();
+        }
       }
 
       // Add additional padding to allow detection of over reads/writes when
@@ -242,7 +252,8 @@ class DrPredTest : public ::testing::TestWithParam<DrPredFunc<FuncType> > {
                                   (dst_stride - bw_) * sizeof(Pixel));
       }
 
-      Predict(speedtest, tx, dst_ref.data(), dst_tst.data(), dst_stride);
+      Predict(speedtest, tx, above, left, dst_ref.data(), dst_tst.data(),
+              dst_stride);
 
       for (int r = 0; r < bh_; ++r) {
         ASAN_UNPOISON_MEMORY_REGION(&dst_ref[r * dst_stride + bw_],
@@ -293,13 +304,6 @@ class DrPredTest : public ::testing::TestWithParam<DrPredFunc<FuncType> > {
       }
     }
   }
-
-  Pixel left_data_[kBufSize];
-  Pixel dummy_data_[kBufSize];
-  Pixel above_data_[kBufSize];
-
-  Pixel *above_;
-  Pixel *left_;
 
   int enable_upsample_;
   int upsample_above_;

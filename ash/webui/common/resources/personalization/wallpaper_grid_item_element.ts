@@ -6,12 +6,14 @@
  * @fileoverview Polymer element that displays a single grid item.
  */
 
-import 'chrome://resources/ash/common/cr_elements/cr_auto_img/cr_auto_img.js';
+import '//resources/ash/common/cr_elements/cr_auto_img/cr_auto_img.js';
 import './personalization_shared_icons.html.js';
+import './common.css.js';
+import './wallpaper.css.js';
 
-import {assert} from 'chrome://resources/js/assert.js';
-import {Url} from 'chrome://resources/mojo/url/mojom/url.mojom-webui.js';
-import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {assert} from '//resources/js/assert.js';
+import type {Url} from '//resources/mojo/url/mojom/url.mojom-webui.js';
+import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {getTemplate} from './wallpaper_grid_item_element.html.js';
 
@@ -116,6 +118,11 @@ export class WallpaperGridItemElement extends PolymerElement {
         value: false,
       },
 
+      dataSeaPenImage: {
+        type: Boolean,
+        value: false,
+      },
+
       selected: {
         type: Boolean,
         observer: 'onSelectedChanged_',
@@ -172,6 +179,12 @@ export class WallpaperGridItemElement extends PolymerElement {
   isGooglePhotos: boolean;
 
   /**
+   * Whether the wallpaper grid image is sea pen image. It's used to determine
+   * the check mark icon type.
+   */
+  dataSeaPenImage: boolean;
+
+  /**
    * Whether the grid item is currently selected. Controls the aria-selected
    * html attribute. When undefined, aria-selected will be removed.
    */
@@ -218,8 +231,8 @@ export class WallpaperGridItemElement extends PolymerElement {
   private onImageSrcChanged_(src: Url|Url[]|null, old: Url|Url[]|null) {
     // Set loading status if src has just changed while we wait for new images.
     const oldSrcArray = this.getSrcArray_(old, this.collage);
-    this.imageStatus_ = this.getSrcArray_(src, this.collage).map(({url}, i) => {
-      if (oldSrcArray.length > i && oldSrcArray[i].url === url) {
+    this.imageStatus_ = this.getSrcArray_(src, this.collage).map((url, i) => {
+      if (oldSrcArray.length > i && oldSrcArray[i] === url) {
         // If the underlying url has not changed, keep the prior image status.
         // If we have a new |Url| object but the underlying url is the same, the
         // img onload event will not fire and reset the status to ready.
@@ -329,6 +342,12 @@ export class WallpaperGridItemElement extends PolymerElement {
   private shouldShowInfoText_(): boolean {
     return typeof this.infoText === 'string' && this.infoText.length > 0 &&
         !shouldShowPlaceholder(this.imageStatus_);
+  }
+
+  private getCheckMarkIcon_(): string {
+    return this.dataSeaPenImage ?
+        'personalization-shared:sea-pen-circle-checkmark' :
+        'personalization-shared:circle-checkmark';
   }
 }
 

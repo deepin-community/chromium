@@ -13,14 +13,14 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/sharing/proto/sharing_message.pb.h"
-#include "chrome/browser/sharing/sharing_app.h"
-#include "chrome/browser/sharing/sharing_constants.h"
-#include "chrome/browser/sharing/sharing_dialog_data.h"
-#include "chrome/browser/sharing/sharing_metrics.h"
-#include "chrome/browser/sharing/sharing_service.h"
-#include "chrome/browser/sharing/sharing_target_device_info.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
+#include "components/sharing_message/proto/sharing_message.pb.h"
+#include "components/sharing_message/sharing_app.h"
+#include "components/sharing_message/sharing_constants.h"
+#include "components/sharing_message/sharing_dialog_data.h"
+#include "components/sharing_message/sharing_metrics.h"
+#include "components/sharing_message/sharing_service.h"
+#include "components/sharing_message/sharing_target_device_info.h"
 #include "components/sync/protocol/device_info_specifics.pb.h"
 #include "url/origin.h"
 
@@ -49,7 +49,6 @@ class SharingUiController {
   virtual void OnDeviceChosen(const SharingTargetDeviceInfo& device) = 0;
   // Called when user chooses a local app to complete the task.
   virtual void OnAppChosen(const SharingApp& app) = 0;
-  virtual PageActionIconType GetIconType() = 0;
   virtual sync_pb::SharingSpecificFields::EnabledFeatures GetRequiredFeature()
       const = 0;
   virtual const gfx::VectorIcon& GetVectorIcon() const = 0;
@@ -115,11 +114,8 @@ class SharingUiController {
   base::OnceClosure SendMessageToDevice(
       const SharingTargetDeviceInfo& device,
       std::optional<base::TimeDelta> response_timeout,
-      chrome_browser_sharing::SharingMessage sharing_message,
+      components_sharing_message::SharingMessage sharing_message,
       std::optional<SharingMessageSender::ResponseCallback> callback);
-
-  // Updates the omnibox icon if available.
-  void UpdateIcon();
 
  private:
   // Closes the current dialog if there is one.
@@ -136,7 +132,7 @@ class SharingUiController {
       int dialog_id,
       std::optional<SharingMessageSender::ResponseCallback> custom_callback,
       SharingSendMessageResult result,
-      std::unique_ptr<chrome_browser_sharing::ResponseMessage> response);
+      std::unique_ptr<components_sharing_message::ResponseMessage> response);
 
   void OnAppsReceived(int dialog_id,
                       const std::optional<url::Origin>& initiating_origin,

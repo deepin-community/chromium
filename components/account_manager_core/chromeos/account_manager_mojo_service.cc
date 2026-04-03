@@ -8,11 +8,10 @@
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/functional/callback_forward.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
@@ -163,7 +162,7 @@ void AccountManagerMojoService::CreateAccessTokenFetcher(
     mojom::AccountKeyPtr mojo_account_key,
     const std::string& oauth_consumer_name,
     CreateAccessTokenFetcherCallback callback) {
-  // TODO(https://crbug.com/1175741): Add metrics.
+  // TODO(crbug.com/40747515): Add metrics.
   VLOG(1) << "Received a request for access token from: "
           << oauth_consumer_name;
 
@@ -269,7 +268,7 @@ void AccountManagerMojoService::FinishUpsertAccount(
 
 void AccountManagerMojoService::DeletePendingAccessTokenFetchRequest(
     AccessTokenFetcher* request) {
-  base::EraseIf(
+  std::erase_if(
       pending_access_token_requests_,
       [&request](const std::unique_ptr<AccessTokenFetcher>& pending_request)
           -> bool { return pending_request.get() == request; });
@@ -279,10 +278,10 @@ void AccountManagerMojoService::MaybeNotifyAuthErrorObservers(
     const account_manager::AccountKey& account_key,
     const GoogleServiceAuthError& error,
     const std::vector<account_manager::Account>& known_accounts) {
-  if (!base::Contains(known_accounts, account_key,
-                      [](const account_manager::Account& account) {
-                        return account.key;
-                      })) {
+  if (!std::ranges::contains(known_accounts, account_key,
+                             [](const account_manager::Account& account) {
+                               return account.key;
+                             })) {
     // Ignore if the account is not known.
     return;
   }

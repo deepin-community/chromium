@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 // loadimage_paletted.cpp: Decodes GL_PALETTE_* textures.
 
 #include "image_util/loadimage.h"
@@ -134,7 +138,8 @@ void LoadPalettedToRGBA8Impl(const ImageLoadContext &context,
 
     const uint8_t *palette = input;
 
-    const uint8_t *texels = input + paletteBytes;  // + TODO(http://anglebug.com/7688): mip levels
+    const uint8_t *texels =
+        input + paletteBytes;  // + TODO(http://anglebug.com/42266155): mip levels
 
     for (size_t z = 0; z < depth; z++)
     {

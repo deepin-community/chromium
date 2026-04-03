@@ -7,10 +7,12 @@
 #include "chrome/browser/password_manager/account_password_store_factory.h"
 #include "chrome/browser/password_manager/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/sync/sync_service_factory.h"
 #include "components/password_manager/core/browser/features/password_features.h"
-#include "components/password_manager/core/browser/features/password_manager_features_util.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/sync/base/user_selectable_type.h"
+#include "components/sync/test/test_sync_service.h"
 
 using password_manager::TestPasswordStore;
 
@@ -28,10 +30,6 @@ scoped_refptr<TestPasswordStore> CreateAndUseTestPasswordStore(
 
 scoped_refptr<TestPasswordStore> CreateAndUseTestAccountPasswordStore(
     content::BrowserContext* context) {
-  if (!password_manager::features_util::CanCreateAccountStore(
-          Profile::FromBrowserContext(context)->GetPrefs())) {
-    return nullptr;
-  }
   TestPasswordStore* store = static_cast<TestPasswordStore*>(
       AccountPasswordStoreFactory::GetInstance()
           ->SetTestingFactoryAndUse(
@@ -44,4 +42,24 @@ scoped_refptr<TestPasswordStore> CreateAndUseTestAccountPasswordStore(
           .get());
 
   return base::WrapRefCounted(store);
+}
+
+password_manager::TestPasswordStore* GetDefaultPasswordStore(Profile* profile) {
+  syncer::TestSyncService* sync_service = static_cast<syncer::TestSyncService*>(
+      SyncServiceFactory::GetForProfile(profile));
+
+  bool is_using_account_storage =
+      sync_service &&
+      sync_service->GetUserSettings()->GetSelectedTypes().Has(
+          syncer::UserSelectableType::kPasswords) &&
+      !sync_service->HasSyncConsent();
+
+  return static_cast<TestPasswordStore*>(
+      is_using_account_storage
+          ? AccountPasswordStoreFactory::GetForProfile(
+                profile, ServiceAccessType::IMPLICIT_ACCESS)
+                .get()
+          : ProfilePasswordStoreFactory::GetForProfile(
+                profile, ServiceAccessType::IMPLICIT_ACCESS)
+                .get());
 }

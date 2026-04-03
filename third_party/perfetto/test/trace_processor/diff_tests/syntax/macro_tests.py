@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -61,4 +61,24 @@ class PerfettoMacro(TestSuite):
         out=Csv("""
         "res"
         2
+        """))
+
+  def test_stringify(self):
+    return DiffTestBlueprint(
+        trace=TextProto(''),
+        query='''
+        SELECT __intrinsic_stringify!(foo)
+        UNION ALL
+        SELECT __intrinsic_stringify!(foo bar baz)
+        UNION ALL
+        SELECT __intrinsic_stringify!(foo'')
+        UNION ALL
+        SELECT __intrinsic_stringify!(bar())
+        ''',
+        out=Csv("""
+        "'foo'"
+        "foo"
+        "foo bar baz"
+        "foo'"
+        "bar()"
         """))

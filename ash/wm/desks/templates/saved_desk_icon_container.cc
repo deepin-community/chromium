@@ -13,25 +13,19 @@
 #include "ash/public/cpp/window_properties.h"
 #include "ash/shell.h"
 #include "ash/wm/desks/templates/saved_desk_constants.h"
+#include "ash/wm/window_restore/window_restore_util.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
-#include "components/app_constants/constants.h"
 #include "components/app_restore/app_restore_utils.h"
 #include "ui/accessibility/ax_enums.mojom-shared.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_provider.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
 
 namespace {
-
-bool IsBrowserAppId(const std::string& app_id) {
-  return app_id == app_constants::kChromeAppId ||
-         app_id == app_constants::kLacrosAppId;
-}
 
 // Given a map of unique icon identifiers to icon info, returns a vector of the
 // same key, value pair ordered by icons' activation index.
@@ -50,7 +44,7 @@ SortIconIdentifierToIconInfo(
   }
 
   // Sort by activation index.
-  base::ranges::sort(
+  std::ranges::sort(
       sorted_icon_identifier_to_icon_info, {},
       [](const SavedDeskIconContainer::IconIdentifierAndIconInfo& a) {
         return a.second.activation_index;
@@ -71,7 +65,7 @@ void InsertIconIdentifierToIconInfo(
         out_icon_identifier_to_icon_info) {
   // A single app/site can have multiple windows so count their occurrences and
   // use the smallest activation index for sorting purposes.
-  if (!base::Contains(out_icon_identifier_to_icon_info, identifier)) {
+  if (!out_icon_identifier_to_icon_info.contains(identifier)) {
     out_icon_identifier_to_icon_info[identifier] = {
         app_id, base::UTF16ToUTF8(app_title), activation_index,
         /*count=*/1};
@@ -125,10 +119,7 @@ void InsertIconIdentifierToIconInfoFromLaunchList(
         const GURL& url = urls[it->second];
 
         InsertIconIdentifierToIconInfo(
-            app_id, app_title,
-            {.url_or_id = url.spec(),
-             .lacros_profile_id =
-                 browser_extra_info.lacros_profile_id.value_or(0)},
+            app_id, app_title, {.url_or_id = url.spec()},
             active_tab_index == i ? activation_index
                                   : kInactiveTabOffset + activation_index,
             out_icon_identifier_to_icon_info);
@@ -228,7 +219,7 @@ void SavedDeskIconContainer::PopulateIconContainerFromWindows(
 std::vector<SavedDeskIconView*> SavedDeskIconContainer::GetIconViews() const {
   std::vector<SavedDeskIconView*> icon_views;
   icon_views.reserve(children().size());
-  base::ranges::for_each(children(), [&icon_views](views::View* view) {
+  std::ranges::for_each(children(), [&icon_views](views::View* view) {
     icon_views.emplace_back(static_cast<SavedDeskIconView*>(view));
   });
 
@@ -240,7 +231,7 @@ std::vector<SavedDeskIconView*> SavedDeskIconContainer::GetIconViews() const {
 }
 
 void SavedDeskIconContainer::OnViewLoaded(views::View* view_loaded) {
-  auto it = base::ranges::find(children(), view_loaded);
+  auto it = std::ranges::find(children(), view_loaded);
   DCHECK(it != children().end());
 
   SortIconsAndUpdateOverflowIcon();
@@ -257,7 +248,7 @@ void SavedDeskIconContainer::SortIcons() {
   // Make a cope of child icon views and sort them using
   // `SavedDeskIconView::key`.
   std::vector<SavedDeskIconView*> icon_views = GetIconViews();
-  base::ranges::sort(icon_views, {}, &SavedDeskIconView::GetSortingKey);
+  std::ranges::sort(icon_views, {}, &SavedDeskIconView::GetSortingKey);
 
   // Update child views to their expected index.
   for (size_t i = 0; i < icon_views.size(); i++)
@@ -265,7 +256,7 @@ void SavedDeskIconContainer::SortIcons() {
 
   // Notify the a11y API so that the spoken feedback order matches the view
   // order.
-  NotifyAccessibilityEvent(ax::mojom::Event::kTreeChanged, true);
+  NotifyAccessibilityEventDeprecated(ax::mojom::Event::kTreeChanged, true);
 }
 
 void SavedDeskIconContainer::UpdateOverflowIcon() {
@@ -277,7 +268,7 @@ void SavedDeskIconContainer::UpdateOverflowIcon() {
       static_cast<SavedDeskIconView*>(overflow_icon_view_);
   const int available_width = bounds().width();
   int used_width = -kSaveDeskSpacingDp;
-  base::ranges::for_each(
+  std::ranges::for_each(
       icon_views, [&used_width](SavedDeskIconView* icon_view) {
         if (!icon_view->IsOverflowIcon()) {
           used_width +=

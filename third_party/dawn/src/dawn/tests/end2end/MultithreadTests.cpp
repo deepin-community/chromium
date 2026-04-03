@@ -62,7 +62,7 @@ class LockStep {
 
     void Wait(Step step) {
         std::unique_lock<std::mutex> lg(mMutex);
-        mCv.wait(lg, [=] { return mStep == step; });
+        mCv.wait(lg, [this, step] { return mStep == step; });
     }
 
   private:
@@ -86,9 +86,6 @@ class MultithreadTests : public DawnTest {
         DawnTest::SetUp();
         // TODO(crbug.com/dawn/1678): DawnWire doesn't support thread safe API yet.
         DAWN_TEST_UNSUPPORTED_IF(UsesWire());
-
-        // TODO(crbug.com/dawn/1679): OpenGL backend doesn't support thread safe API yet.
-        DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     }
 
     wgpu::Buffer CreateBuffer(uint32_t size, wgpu::BufferUsage usage) {
@@ -116,11 +113,12 @@ class MultithreadTests : public DawnTest {
 
 // Test that dropping a device's last ref on another thread won't crash Instance::ProcessEvents.
 TEST_P(MultithreadTests, Device_DroppedOnAnotherThread) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     // TODO(crbug.com/dawn/1779): This test seems to cause flakiness in other sampling tests on
     // NVIDIA.
     DAWN_SUPPRESS_TEST_IF(IsD3D12() && IsNvidia());
-
-    // TODO(crbug.com/dawn/1922): Flaky on Linux TSAN Release
+    // TODO(crbug.com/42240870): Flaky on Linux TSAN Release
     DAWN_SUPPRESS_TEST_IF(IsLinux() && IsVulkan() && IsTsan());
 
     std::vector<wgpu::Device> devices(5);
@@ -154,9 +152,13 @@ TEST_P(MultithreadTests, Device_DroppedOnAnotherThread) {
 // Test that dropping a device's last ref inside a callback on another thread won't crash
 // Instance::ProcessEvents.
 TEST_P(MultithreadTests, Device_DroppedInCallback_OnAnotherThread) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     // TODO(crbug.com/dawn/1779): This test seems to cause flakiness in other sampling tests on
     // NVIDIA.
     DAWN_SUPPRESS_TEST_IF(IsD3D12() && IsNvidia());
+    // TODO(crbug.com/407567233): Seeing a lot of timeouts on this test on TSAN bots.
+    DAWN_SUPPRESS_TEST_IF(IsLinux() && IsTsan());
 
     std::vector<wgpu::Device> devices(10);
 
@@ -168,64 +170,95 @@ TEST_P(MultithreadTests, Device_DroppedInCallback_OnAnotherThread) {
     // Create threads
     utils::RunInParallel(static_cast<uint32_t>(devices.size()), [&devices, this](uint32_t index) {
         auto additionalDevice = std::move(devices[index]);
-        struct UserData {
-            wgpu::Device device2ndRef;
-            std::atomic_bool isCompleted{false};
-        } userData;
-
-        userData.device2ndRef = additionalDevice;
+        wgpu::Device device2ndRef = additionalDevice;
+        std::atomic_bool isCompleted{false};
 
         // Drop the last ref inside a callback.
         additionalDevice.PushErrorScope(wgpu::ErrorFilter::Validation);
         additionalDevice.PopErrorScope(
-            [](WGPUErrorType type, const char*, void* userdataPtr) {
-                auto userdata = static_cast<UserData*>(userdataPtr);
-                userdata->device2ndRef = nullptr;
-                userdata->isCompleted = true;
-            },
-            &userData);
+            wgpu::CallbackMode::AllowProcessEvents,
+            [&device2ndRef, &isCompleted](wgpu::PopErrorScopeStatus, wgpu::ErrorType,
+                                          wgpu::StringView) {
+                device2ndRef = nullptr;
+                isCompleted = true;
+            });
         // main ref dropped.
         additionalDevice = nullptr;
 
         do {
             WaitABit();
-        } while (!userData.isCompleted.load());
+        } while (!isCompleted.load());
 
-        EXPECT_EQ(userData.device2ndRef, nullptr);
+        EXPECT_EQ(device2ndRef, nullptr);
     });
+}
+
+// Test that waiting for a device lost after it's lost does not block.
+TEST_P(MultithreadTests, Device_WaitForDroppedAfterDropped) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+    auto future = device.GetLostFuture();
+
+    LoseDeviceForTesting();
+    EXPECT_EQ(GetInstance().WaitAny(future, 0), wgpu::WaitStatus::Success);
+
+    EXPECT_EQ(future.id, device.GetLostFuture().id);
+}
+
+// Test that we can wait for a device lost on another thread.
+TEST_P(MultithreadTests, Device_WaitForDroppedInAnotherThread) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+    // TODO(crbug.com/dawn/1779): This test seems to cause flakiness in other sampling tests on
+    // NVIDIA.
+    DAWN_SUPPRESS_TEST_IF(IsD3D12() && IsNvidia());
+
+    enum class Step {
+        Begin,
+        Waiting,
+    };
+
+    LockStep<Step> lockStep(Step::Begin);
+    std::thread waitThread([&] {
+        auto future = device.GetLostFuture();
+        EXPECT_EQ(GetInstance().WaitAny(future, 0), wgpu::WaitStatus::TimedOut);
+        lockStep.Signal(Step::Waiting);
+        EXPECT_EQ(GetInstance().WaitAny(future, UINT64_MAX), wgpu::WaitStatus::Success);
+    });
+
+    lockStep.Wait(Step::Waiting);
+    LoseDeviceForTesting();
+    waitThread.join();
 }
 
 // Test that multiple buffers being created and mapped on multiple threads won't interfere with
 // each other.
 TEST_P(MultithreadTests, Buffers_MapInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     constexpr uint32_t kDataSize = 1000;
     std::vector<uint32_t> myData;
+    myData.reserve(kDataSize);
     for (uint32_t i = 0; i < kDataSize; ++i) {
         myData.push_back(i);
     }
 
     constexpr uint32_t kSize = static_cast<uint32_t>(kDataSize * sizeof(uint32_t));
 
-    utils::RunInParallel(10, [=, &myData = std::as_const(myData)](uint32_t) {
-        wgpu::Buffer buffer;
-        std::atomic<bool> mapCompleted(false);
-
+    utils::RunInParallel(10, [this, &myData = std::as_const(myData)](uint32_t) {
         // Create buffer and request mapping.
-        buffer = CreateBuffer(kSize, wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc);
-
-        buffer.MapAsync(
-            wgpu::MapMode::Write, 0, kSize,
-            [](WGPUBufferMapAsyncStatus status, void* userdata) {
-                EXPECT_EQ(WGPUBufferMapAsyncStatus_Success, status);
-                (*static_cast<std::atomic<bool>*>(userdata)) = true;
-            },
-            &mapCompleted);
+        wgpu::Buffer buffer =
+            CreateBuffer(kSize, wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc);
 
         // Wait for the mapping to complete
-        while (!mapCompleted.load()) {
-            device.Tick();
-            FlushWire();
-        }
+        ASSERT_EQ(
+            instance.WaitAny(buffer.MapAsync(wgpu::MapMode::Write, 0, kSize,
+                                             wgpu::CallbackMode::AllowProcessEvents,
+                                             [](wgpu::MapAsyncStatus status, wgpu::StringView) {
+                                                 ASSERT_EQ(status, wgpu::MapAsyncStatus::Success);
+                                             }),
+                             UINT64_MAX),
+            wgpu::WaitStatus::Success);
 
         // Buffer is mapped, write into it and unmap .
         memcpy(buffer.GetMappedRange(0, kSize), myData.data(), kSize);
@@ -236,8 +269,455 @@ TEST_P(MultithreadTests, Buffers_MapInParallel) {
     });
 }
 
+// Test that mapping, unmapping, and destroying buffers in parallel works.
+TEST_P(MultithreadTests, MapUnmapDestroyInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+    constexpr uint32_t kDataSize = 1000;
+    std::vector<uint32_t> myData;
+    for (uint32_t i = 0; i < kDataSize; ++i) {
+        myData.push_back(i);
+    }
+
+    constexpr uint32_t kSize = static_cast<uint32_t>(kDataSize * sizeof(uint32_t));
+
+    utils::RunInParallel(10, [this, &myData = std::as_const(myData)](uint32_t) {
+        // Create buffer and request mapping
+        wgpu::Buffer buffer =
+            CreateBuffer(kSize, wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc);
+
+        // Wait for the mapping to complete
+        ASSERT_EQ(
+            instance.WaitAny(buffer.MapAsync(wgpu::MapMode::Write, 0, kSize,
+                                             wgpu::CallbackMode::AllowProcessEvents,
+                                             [](wgpu::MapAsyncStatus status, wgpu::StringView) {
+                                                 ASSERT_EQ(status, wgpu::MapAsyncStatus::Success);
+                                             }),
+                             UINT64_MAX),
+            wgpu::WaitStatus::Success);
+
+        // Buffer is mapped, write into it
+        memcpy(buffer.GetMappedRange(0, kSize), myData.data(), kSize);
+
+        // Unmap the buffer
+        buffer.Unmap();
+
+        // Destroy the buffer immediately after unmapping
+        buffer.Destroy();
+    });
+}
+
+// Test that multiple map/unmap cycles with partial writes in parallel works.
+TEST_P(MultithreadTests, MapUnmapMultipleCyclesInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+    constexpr uint32_t kDataSize = 1000;
+    std::vector<uint32_t> myData;
+    for (uint32_t i = 0; i < kDataSize; ++i) {
+        myData.push_back(i);
+    }
+
+    constexpr uint32_t kSize = static_cast<uint32_t>(kDataSize * sizeof(uint32_t));
+    constexpr uint32_t kHalfSize = kSize / 2;
+
+    utils::RunInParallel(10, [this, &myData = std::as_const(myData)](uint32_t) {
+        // Create buffer
+        wgpu::Buffer buffer =
+            CreateBuffer(kSize, wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc);
+
+        // First map: write first half
+        ASSERT_EQ(
+            instance.WaitAny(buffer.MapAsync(wgpu::MapMode::Write, 0, kSize,
+                                             wgpu::CallbackMode::AllowProcessEvents,
+                                             [](wgpu::MapAsyncStatus status, wgpu::StringView) {
+                                                 ASSERT_EQ(status, wgpu::MapAsyncStatus::Success);
+                                             }),
+                             UINT64_MAX),
+            wgpu::WaitStatus::Success);
+
+        memcpy(buffer.GetMappedRange(0, kHalfSize), myData.data(), kHalfSize);
+        buffer.Unmap();
+
+        // Second map: write second half
+        ASSERT_EQ(
+            instance.WaitAny(buffer.MapAsync(wgpu::MapMode::Write, 0, kSize,
+                                             wgpu::CallbackMode::AllowProcessEvents,
+                                             [](wgpu::MapAsyncStatus status, wgpu::StringView) {
+                                                 ASSERT_EQ(status, wgpu::MapAsyncStatus::Success);
+                                             }),
+                             UINT64_MAX),
+            wgpu::WaitStatus::Success);
+
+        memcpy(static_cast<uint8_t*>(buffer.GetMappedRange(0, kSize)) + kHalfSize,
+               reinterpret_cast<const uint8_t*>(myData.data()) + kHalfSize, kHalfSize);
+        buffer.Unmap();
+
+        // Check the content of the buffer
+        EXPECT_BUFFER_U32_RANGE_EQ(myData.data(), buffer, 0, kDataSize);
+    });
+}
+
+// Test that creating buffers with mappedAtCreation in parallel works.
+// Tests both buffers with MapWrite usage and without.
+TEST_P(MultithreadTests, MapAtCreationInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+    constexpr uint32_t kDataSize = 1000;
+    std::vector<uint32_t> myData;
+    myData.reserve(kDataSize);
+    for (uint32_t i = 0; i < kDataSize; ++i) {
+        myData.push_back(i);
+    }
+
+    constexpr uint32_t kSize = static_cast<uint32_t>(kDataSize * sizeof(uint32_t));
+
+    utils::RunInParallel(10, [this, &myData = std::as_const(myData)](uint32_t index) {
+        wgpu::BufferDescriptor descriptor;
+        descriptor.size = kSize;
+        descriptor.mappedAtCreation = true;
+
+        // Alternate between buffers with MapWrite and without
+        if (index % 2 == 0) {
+            // Buffer with MapWrite usage
+            descriptor.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
+        } else {
+            // Buffer without MapWrite usage
+            descriptor.usage = wgpu::BufferUsage::CopySrc;
+        }
+
+        wgpu::Buffer buffer = device.CreateBuffer(&descriptor);
+
+        // Buffer is mapped at creation, write into it and unmap
+        memcpy(buffer.GetMappedRange(0, kSize), myData.data(), kSize);
+        buffer.Unmap();
+
+        // Check the content of the buffer
+        EXPECT_BUFFER_U32_RANGE_EQ(myData.data(), buffer, 0, kDataSize);
+    });
+}
+
+// Test map at creation, copy to uniform buffer, draw, then map again, copy and draw in parallel.
+TEST_P(MultithreadTests, MapAtCreationThenMapAgainWithRenderPassInParallel) {
+    // TODO(crbug.com/451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+
+    constexpr uint32_t kNumThreads = 4;
+    const float kRed[] = {1.0f, 0.0f, 0.0f, 1.0f};
+    const float kBlue[] = {0.0f, 0.0f, 1.0f, 1.0f};
+
+    // Create render pipeline
+    wgpu::ShaderModule vsModule = utils::CreateShaderModule(device, R"(
+        struct VertexOut {
+            @location(0) color : vec4f,
+            @builtin(position) position : vec4f,
+        }
+
+        struct Uniforms {
+            color : vec4f,
+        }
+        @binding(0) @group(0) var<uniform> uniforms : Uniforms;
+
+        const vertexPos = array(
+            vec2f(-1.0, -1.0),
+            vec2f( 3.0, -1.0),
+            vec2f(-1.0,  3.0));
+
+        @vertex
+        fn main(@builtin(vertex_index) vertexIndex : u32) -> VertexOut {
+            var output : VertexOut;
+            output.position = vec4f(vertexPos[vertexIndex], 0.0, 1.0);
+            output.color = uniforms.color;
+            return output;
+        })");
+
+    wgpu::ShaderModule fsModule = utils::CreateShaderModule(device, R"(
+        @fragment
+        fn main(@location(0) color : vec4f) -> @location(0) vec4f {
+            return color;
+        })");
+
+    utils::ComboRenderPipelineDescriptor pipelineDescriptor;
+    pipelineDescriptor.vertex.module = vsModule;
+    pipelineDescriptor.cFragment.module = fsModule;
+    pipelineDescriptor.cTargets[0].format = wgpu::TextureFormat::RGBA8Unorm;
+    wgpu::RenderPipeline renderPipeline = device.CreateRenderPipeline(&pipelineDescriptor);
+
+    utils::RunInParallel(kNumThreads, [&](uint32_t index) {
+        // Step 1: Create MapWrite | CopySrc buffer mapped at creation
+        wgpu::BufferDescriptor mapBufferDesc;
+        mapBufferDesc.size = sizeof(kRed);
+        mapBufferDesc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
+        mapBufferDesc.mappedAtCreation = true;
+        wgpu::Buffer mapBuffer = device.CreateBuffer(&mapBufferDesc);
+
+        // Step 2: Write red color
+        memcpy(mapBuffer.GetMappedRange(), kRed, sizeof(kRed));
+        mapBuffer.Unmap();
+
+        // Create uniform buffer for rendering
+        wgpu::BufferDescriptor uniformBufferDesc;
+        uniformBufferDesc.size = sizeof(kRed);
+        uniformBufferDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+        wgpu::Buffer uniformBuffer = device.CreateBuffer(&uniformBufferDesc);
+
+        // Step 3: Copy from map buffer to uniform buffer
+        wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+        encoder.CopyBufferToBuffer(mapBuffer, 0, uniformBuffer, 0, sizeof(kRed));
+        wgpu::CommandBuffer commands = encoder.Finish();
+        queue.Submit(1, &commands);
+
+        // Step 4: Verify with render pass (should be red)
+        wgpu::BindGroup uniformsBindGroup = utils::MakeBindGroup(
+            device, renderPipeline.GetBindGroupLayout(0), {{0, uniformBuffer, 0, sizeof(kRed)}});
+
+        auto redRenderPass = utils::CreateBasicRenderPass(device, 1, 1);
+        encoder = device.CreateCommandEncoder();
+        wgpu::RenderPassEncoder renderPassEncoder =
+            encoder.BeginRenderPass(&redRenderPass.renderPassInfo);
+        renderPassEncoder.SetPipeline(renderPipeline);
+        renderPassEncoder.SetBindGroup(0, uniformsBindGroup);
+        renderPassEncoder.Draw(3);
+        renderPassEncoder.End();
+        commands = encoder.Finish();
+        queue.Submit(1, &commands);
+
+        EXPECT_PIXEL_RGBA8_EQ(utils::RGBA8::kRed, redRenderPass.color, 0, 0);
+
+        // Step 5: Map buffer again
+        std::atomic_bool done = false;
+        mapBuffer.MapAsync(wgpu::MapMode::Write, 0, sizeof(kBlue),
+                           wgpu::CallbackMode::AllowProcessEvents,
+                           [&done](wgpu::MapAsyncStatus status, wgpu::StringView) {
+                               EXPECT_EQ(wgpu::MapAsyncStatus::Success, status);
+                               done = true;
+                           });
+
+        while (!done) {
+            WaitABit();
+        }
+
+        // Step 6: Write blue color
+        memcpy(mapBuffer.GetMappedRange(), kBlue, sizeof(kBlue));
+        mapBuffer.Unmap();
+
+        // Step 7: Copy from map buffer to uniform buffer
+        encoder = device.CreateCommandEncoder();
+        encoder.CopyBufferToBuffer(mapBuffer, 0, uniformBuffer, 0, sizeof(kBlue));
+        commands = encoder.Finish();
+        queue.Submit(1, &commands);
+
+        // Step 8: Verify with another render pass (should be blue)
+        auto blueRenderPass = utils::CreateBasicRenderPass(device, 1, 1);
+        encoder = device.CreateCommandEncoder();
+        renderPassEncoder = encoder.BeginRenderPass(&blueRenderPass.renderPassInfo);
+        renderPassEncoder.SetPipeline(renderPipeline);
+        renderPassEncoder.SetBindGroup(0, uniformsBindGroup);
+        renderPassEncoder.Draw(3);
+        renderPassEncoder.End();
+        commands = encoder.Finish();
+        queue.Submit(1, &commands);
+
+        EXPECT_PIXEL_RGBA8_EQ(utils::RGBA8::kBlue, blueRenderPass.color, 0, 0);
+    });
+}
+
+// Test MapAsync followed by Unmap without waiting for the map to complete.
+TEST_P(MultithreadTests, MapAsyncThenCancelInParallel) {
+    // TODO(crbug.com/451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+
+    constexpr uint32_t kNumThreads = 8;
+    utils::RunInParallel(kNumThreads, [&](uint32_t) {
+        wgpu::BufferDescriptor desc = {};
+        desc.size = 256;
+        desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
+        wgpu::Buffer buffer = device.CreateBuffer(&desc);
+
+        // Use the buffer in a queue operation
+        wgpu::BufferDescriptor dstDesc = {};
+        dstDesc.size = desc.size;
+        dstDesc.usage = wgpu::BufferUsage::CopyDst;
+        wgpu::Buffer dst = device.CreateBuffer(&dstDesc);
+
+        wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+        encoder.CopyBufferToBuffer(buffer, 0, dst, 0, desc.size);
+        wgpu::CommandBuffer commands = encoder.Finish();
+        queue.Submit(1, &commands);
+
+        // MapAsync then immediately Unmap without waiting
+        buffer.MapAsync(wgpu::MapMode::Write, 0, desc.size, wgpu::CallbackMode::AllowProcessEvents,
+                        [](wgpu::MapAsyncStatus, wgpu::StringView) {});
+        buffer.Unmap();
+    });
+}
+
+// Test that Destroy() doesn't race with remap scheduling when using auto map.
+TEST_P(MultithreadTests, MapThenSubmitThenDestroy) {
+    // TODO(crbug.com/451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+
+    constexpr uint32_t kNumThreads = 8;
+    utils::RunInParallel(kNumThreads, [&](uint32_t) {
+        wgpu::BufferDescriptor desc = {};
+        desc.size = 16;
+        desc.usage = wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc;
+        wgpu::Buffer buffer = device.CreateBuffer(&desc);
+
+        // MapAsync, write red color data, and unmap
+        std::atomic_bool mapped = false;
+        buffer.MapAsync(wgpu::MapMode::Write, 0, desc.size, wgpu::CallbackMode::AllowProcessEvents,
+                        [&mapped](wgpu::MapAsyncStatus status, wgpu::StringView) {
+                            EXPECT_EQ(status, wgpu::MapAsyncStatus::Success);
+                            mapped = true;
+                        });
+
+        while (!mapped) {
+            WaitABit();
+        }
+
+        uint32_t* data = static_cast<uint32_t*>(buffer.GetMappedRange(0, desc.size));
+        ASSERT_NE(data, nullptr);
+        // Write red color (RGBA)
+        data[0] = 0xFF0000FF;  // R
+        data[1] = 0xFF0000FF;  // G
+        data[2] = 0xFF0000FF;  // B
+        data[3] = 0xFF0000FF;  // A
+        buffer.Unmap();
+
+        // Use the buffer in a queue operation
+        wgpu::BufferDescriptor copyDesc = {};
+        copyDesc.size = desc.size;
+        copyDesc.usage = wgpu::BufferUsage::CopyDst;
+        wgpu::Buffer dst = device.CreateBuffer(&copyDesc);
+
+        wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+        encoder.CopyBufferToBuffer(buffer, 0, dst, 0, desc.size);
+        wgpu::CommandBuffer commands = encoder.Finish();
+        queue.Submit(1, &commands);
+
+        // This tests that buffer Destroy() doesn't race with remap scheduling that happens
+        // with auto map after queue submission.
+        buffer.Destroy();
+    });
+}
+
+// Test that copy a texture to a buffer then map that buffer in parallel works.
+TEST_P(MultithreadTests, T2BThenMapInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+
+    // TODO(crbug.com/459848483): Flaky on Win/Snapdragon X Elite.
+    DAWN_SUPPRESS_TEST_IF(IsWindows() && IsQualcomm());
+
+    constexpr uint32_t kTextureSize = 512;
+    constexpr wgpu::TextureFormat kTextureFormat = wgpu::TextureFormat::RGBA8Unorm;
+    constexpr uint32_t kBytesPerPixel = 4;
+    constexpr uint64_t kBufferSize = kTextureSize * kTextureSize * kBytesPerPixel;
+
+    std::vector<utils::RGBA8> textureData(kTextureSize * kTextureSize);
+    for (uint32_t y = 0; y < kTextureSize; ++y) {
+        for (uint32_t x = 0; x < kTextureSize; ++x) {
+            textureData[y * kTextureSize + x] =
+                utils::RGBA8(static_cast<uint8_t>(x % 256), static_cast<uint8_t>(y % 256),
+                             static_cast<uint8_t>((x + y) % 256), 255);
+        }
+    }
+
+    // Create and initialize the source texture.
+    wgpu::Texture texture =
+        CreateTexture(kTextureSize, kTextureSize, kTextureFormat,
+                      wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::CopyDst);
+
+    wgpu::TexelCopyTextureInfo textureCopyView = utils::CreateTexelCopyTextureInfo(texture);
+    wgpu::TexelCopyBufferLayout dataLayout =
+        utils::CreateTexelCopyBufferLayout(0, kTextureSize * kBytesPerPixel);
+    wgpu::Extent3D writeSize = {kTextureSize, kTextureSize, 1};
+    queue.WriteTexture(&textureCopyView, textureData.data(),
+                       textureData.size() * sizeof(utils::RGBA8), &dataLayout, &writeSize);
+
+    for (int i = 0; i < 50; ++i) {
+        utils::RunInParallel(20, [this, texture, &textureData = std::as_const(textureData),
+                                  &textureCopyView = std::as_const(textureCopyView),
+                                  &writeSize = std::as_const(writeSize)](uint32_t) {
+            // Create a buffer for copying texture data to
+            wgpu::Buffer buffer =
+                CreateBuffer(kBufferSize, wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst);
+
+            // Copy texture to buffer.
+            wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+            wgpu::TexelCopyBufferInfo bufferCopyView =
+                utils::CreateTexelCopyBufferInfo(buffer, 0, kTextureSize * kBytesPerPixel);
+            encoder.CopyTextureToBuffer(&textureCopyView, &bufferCopyView, &writeSize);
+            wgpu::CommandBuffer commands = encoder.Finish();
+            queue.Submit(1, &commands);
+
+            // Wait for the mapping to complete
+            ASSERT_EQ(instance.WaitAny(
+                          buffer.MapAsync(wgpu::MapMode::Read, 0, kBufferSize,
+                                          wgpu::CallbackMode::WaitAnyOnly,
+                                          [](wgpu::MapAsyncStatus status, wgpu::StringView) {
+                                              ASSERT_EQ(status, wgpu::MapAsyncStatus::Success);
+                                          }),
+                          UINT64_MAX),
+                      wgpu::WaitStatus::Success);
+
+            // Buffer is mapped, check its content.
+            const uint32_t* mappedData =
+                static_cast<const uint32_t*>(buffer.GetConstMappedRange(0, kBufferSize));
+            ASSERT_NE(mappedData, nullptr);
+            EXPECT_EQ(0, memcmp(mappedData, textureData.data(), kBufferSize));
+            buffer.Unmap();
+        });
+    }
+}
+
+// Test CreateShaderModule on multiple threads. Cache hits should share compilation warnings.
+TEST_P(MultithreadTests, CreateShaderModuleInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+    constexpr uint32_t kCacheHitFactor = 4;  // 4 threads will create the same shader module.
+
+    std::vector<std::string> shaderSources(10);
+    std::vector<wgpu::ShaderModule> shaderModules(shaderSources.size() * kCacheHitFactor);
+
+    std::string shader = R"(@fragment
+    fn main(@location(0) x : f32) {
+        return;
+        return;
+    };)";
+    for (uint32_t i = 0; i < shaderSources.size(); ++i) {
+        // Insert newlines to make the shaders unique.
+        shader = "\n" + shader;
+        shaderSources[i] = shader;
+    }
+
+    // Create shader modules in parallel.
+    utils::RunInParallel(static_cast<uint32_t>(shaderModules.size()), [&](uint32_t index) {
+        uint32_t sourceIndex = index / kCacheHitFactor;
+        shaderModules[index] =
+            utils::CreateShaderModule(device, shaderSources[sourceIndex].c_str());
+    });
+
+    // Check that the compilation info is correct for every shader module.
+    for (uint32_t index = 0; index < shaderModules.size(); ++index) {
+        uint32_t sourceIndex = index / kCacheHitFactor;
+        shaderModules[index].GetCompilationInfo(
+            wgpu::CallbackMode::AllowProcessEvents,
+            [sourceIndex](wgpu::CompilationInfoRequestStatus status,
+                          const wgpu::CompilationInfo* info) {
+                ASSERT_EQ(wgpu::CompilationInfoRequestStatus::Success, status);
+                for (size_t i = 0; i < info->messageCount; ++i) {
+                    EXPECT_THAT(info->messages[i].message, testing::HasSubstr("unreachable"));
+                    EXPECT_EQ(info->messages[i].lineNum, 5u + sourceIndex);
+                }
+            });
+    }
+}
+
 // Test CreateComputePipelineAsync on multiple threads.
 TEST_P(MultithreadTests, CreateComputePipelineAsyncInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     // TODO(crbug.com/dawn/1766): TSAN reported race conditions in NVIDIA's vk driver.
     DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsNvidia() && IsTsan());
 
@@ -274,17 +754,14 @@ TEST_P(MultithreadTests, CreateComputePipelineAsyncInParallel) {
             std::atomic<bool> isCompleted{false};
         } task;
         device.CreateComputePipelineAsync(
-            &csDesc,
-            [](WGPUCreatePipelineAsyncStatus status, WGPUComputePipeline returnPipeline,
-               const char* message, void* userdata) {
-                EXPECT_EQ(WGPUCreatePipelineAsyncStatus::WGPUCreatePipelineAsyncStatus_Success,
-                          status);
+            &csDesc, wgpu::CallbackMode::AllowProcessEvents,
+            [&task](wgpu::CreatePipelineAsyncStatus status, wgpu::ComputePipeline pipeline,
+                    wgpu::StringView) {
+                EXPECT_EQ(wgpu::CreatePipelineAsyncStatus::Success, status);
 
-                auto task = static_cast<Task*>(userdata);
-                task->computePipeline = wgpu::ComputePipeline::Acquire(returnPipeline);
-                task->isCompleted = true;
-            },
-            &task);
+                task.computePipeline = std::move(pipeline);
+                task.isCompleted = true;
+            });
 
         while (!task.isCompleted.load()) {
             WaitABit();
@@ -324,8 +801,78 @@ TEST_P(MultithreadTests, CreateComputePipelineAsyncInParallel) {
     }
 }
 
+// Test CreateComputePipeline on multiple threads.
+TEST_P(MultithreadTests, CreateComputePipelineInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+    // TODO(crbug.com/dawn/1766): TSAN reported race conditions in NVIDIA's vk driver.
+    DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsNvidia() && IsTsan());
+
+    std::vector<wgpu::ComputePipeline> pipelines(10);
+    std::vector<std::string> shaderSources(pipelines.size());
+    std::vector<uint32_t> expectedValues(shaderSources.size());
+
+    for (uint32_t i = 0; i < pipelines.size(); ++i) {
+        expectedValues[i] = i + 1;
+
+        std::ostringstream ss;
+        ss << R"(
+        struct SSBO {
+            value : u32
+        }
+        @group(0) @binding(0) var<storage, read_write> ssbo : SSBO;
+
+        @compute @workgroup_size(1) fn main() {
+            ssbo.value =
+        )";
+        ss << expectedValues[i];
+        ss << ";}";
+
+        shaderSources[i] = ss.str();
+    }
+
+    // Create pipelines in parallel
+    utils::RunInParallel(static_cast<uint32_t>(pipelines.size()), [&](uint32_t index) {
+        wgpu::ComputePipelineDescriptor csDesc;
+        csDesc.compute.module = utils::CreateShaderModule(device, shaderSources[index].c_str());
+        pipelines[index] = device.CreateComputePipeline(&csDesc);
+    });
+
+    // Verify pipelines' executions
+    for (uint32_t i = 0; i < pipelines.size(); ++i) {
+        wgpu::Buffer ssbo =
+            CreateBuffer(sizeof(uint32_t), wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc);
+
+        wgpu::CommandBuffer commands;
+        {
+            wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+            wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
+
+            ASSERT_NE(nullptr, pipelines[i].Get());
+            wgpu::BindGroup bindGroup =
+                utils::MakeBindGroup(device, pipelines[i].GetBindGroupLayout(0),
+                                     {
+                                         {0, ssbo, 0, sizeof(uint32_t)},
+                                     });
+            pass.SetBindGroup(0, bindGroup);
+            pass.SetPipeline(pipelines[i]);
+
+            pass.DispatchWorkgroups(1);
+            pass.End();
+
+            commands = encoder.Finish();
+        }
+
+        queue.Submit(1, &commands);
+
+        EXPECT_BUFFER_U32_EQ(expectedValues[i], ssbo, 0);
+    }
+}
+
 // Test CreateRenderPipelineAsync on multiple threads.
 TEST_P(MultithreadTests, CreateRenderPipelineAsyncInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     // TODO(crbug.com/dawn/1766): TSAN reported race conditions in NVIDIA's vk driver.
     DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsNvidia() && IsTsan());
 
@@ -377,17 +924,14 @@ TEST_P(MultithreadTests, CreateRenderPipelineAsyncInParallel) {
             std::atomic<bool> isCompleted{false};
         } task;
         device.CreateRenderPipelineAsync(
-            &renderPipelineDescriptor,
-            [](WGPUCreatePipelineAsyncStatus status, WGPURenderPipeline returnPipeline,
-               const char* message, void* userdata) {
-                EXPECT_EQ(WGPUCreatePipelineAsyncStatus::WGPUCreatePipelineAsyncStatus_Success,
-                          status);
+            &renderPipelineDescriptor, wgpu::CallbackMode::AllowProcessEvents,
+            [&task](wgpu::CreatePipelineAsyncStatus status, wgpu::RenderPipeline pipeline,
+                    wgpu::StringView) {
+                EXPECT_EQ(wgpu::CreatePipelineAsyncStatus::Success, status);
 
-                auto* task = static_cast<Task*>(userdata);
-                task->renderPipeline = wgpu::RenderPipeline::Acquire(returnPipeline);
-                task->isCompleted = true;
-            },
-            &task);
+                task.renderPipeline = std::move(pipeline);
+                task.isCompleted = true;
+            });
 
         while (!task.isCompleted) {
             WaitABit();
@@ -426,6 +970,176 @@ TEST_P(MultithreadTests, CreateRenderPipelineAsyncInParallel) {
     }
 }
 
+// Test CreateRenderPipeline on multiple threads.
+TEST_P(MultithreadTests, CreateRenderPipelineInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+    // TODO(crbug.com/dawn/1766): TSAN reported race conditions in NVIDIA's vk driver.
+    DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsNvidia() && IsTsan());
+
+    constexpr uint32_t kNumThreads = 10;
+    constexpr wgpu::TextureFormat kRenderAttachmentFormat = wgpu::TextureFormat::RGBA8Unorm;
+    constexpr uint8_t kColorStep = 250 / kNumThreads;
+
+    std::vector<wgpu::RenderPipeline> pipelines(kNumThreads);
+    std::vector<std::string> fragmentShaderSources(kNumThreads);
+    std::vector<utils::RGBA8> minExpectedValues(kNumThreads);
+    std::vector<utils::RGBA8> maxExpectedValues(kNumThreads);
+
+    for (uint32_t i = 0; i < kNumThreads; ++i) {
+        // Due to floating point precision, we need to use min & max values to compare the
+        // expectations.
+        auto expectedGreen = kColorStep * i;
+        minExpectedValues[i] =
+            utils::RGBA8(0, expectedGreen == 0 ? 0 : (expectedGreen - 2), 0, 255);
+        maxExpectedValues[i] =
+            utils::RGBA8(0, expectedGreen == 255 ? 255 : (expectedGreen + 2), 0, 255);
+
+        std::ostringstream ss;
+        ss << R"(
+        @fragment fn main() -> @location(0) vec4f {
+            return vec4f(0.0,
+        )";
+        ss << expectedGreen / 255.0;
+        ss << ", 0.0, 1.0);}";
+
+        fragmentShaderSources[i] = ss.str();
+    }
+
+    // Create pipelines in parallel
+    utils::RunInParallel(kNumThreads, [&](uint32_t index) {
+        utils::ComboRenderPipelineDescriptor renderPipelineDescriptor;
+        wgpu::ShaderModule vsModule = utils::CreateShaderModule(device, R"(
+        @vertex fn main() -> @builtin(position) vec4f {
+            return vec4f(0.0, 0.0, 0.0, 1.0);
+        })");
+        wgpu::ShaderModule fsModule =
+            utils::CreateShaderModule(device, fragmentShaderSources[index].c_str());
+        renderPipelineDescriptor.vertex.module = vsModule;
+        renderPipelineDescriptor.cFragment.module = fsModule;
+        renderPipelineDescriptor.cTargets[0].format = kRenderAttachmentFormat;
+        renderPipelineDescriptor.primitive.topology = wgpu::PrimitiveTopology::PointList;
+
+        pipelines[index] = device.CreateRenderPipeline(&renderPipelineDescriptor);
+    });
+
+    // Verify pipelines' executions
+    for (uint32_t i = 0; i < pipelines.size(); ++i) {
+        wgpu::Texture outputTexture =
+            CreateTexture(1, 1, kRenderAttachmentFormat,
+                          wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc);
+
+        utils::ComboRenderPassDescriptor renderPassDescriptor({outputTexture.CreateView()});
+        renderPassDescriptor.cColorAttachments[0].loadOp = wgpu::LoadOp::Clear;
+        renderPassDescriptor.cColorAttachments[0].clearValue = {1.f, 0.f, 0.f, 1.f};
+
+        wgpu::CommandBuffer commands;
+        {
+            wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+            wgpu::RenderPassEncoder renderPassEncoder =
+                encoder.BeginRenderPass(&renderPassDescriptor);
+
+            ASSERT_NE(nullptr, pipelines[i].Get());
+
+            renderPassEncoder.SetPipeline(pipelines[i]);
+            renderPassEncoder.Draw(1);
+            renderPassEncoder.End();
+            commands = encoder.Finish();
+        }
+
+        queue.Submit(1, &commands);
+
+        EXPECT_PIXEL_RGBA8_BETWEEN(minExpectedValues[i], maxExpectedValues[i], outputTexture, 0, 0);
+    }
+}
+
+// Test that creating and destroying bind groups from the same bind group layout on multiple threads
+// won't race. The bind groups will all be allocated by same SlabAllocator.
+TEST_P(MultithreadTests, CreateAndDestroyBindGroupsInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+    wgpu::BindGroupLayout layout = utils::MakeBindGroupLayout(
+        device, {
+                    {0, wgpu::ShaderStage::Fragment, wgpu::BufferBindingType::Storage},
+                });
+    wgpu::Buffer ssbo =
+        CreateBuffer(sizeof(uint32_t), wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc |
+                                           wgpu::BufferUsage::CopyDst);
+    utils::RunInParallel(100, [&, this](uint32_t) {
+        for (int i = 0; i < 10; ++i) {
+            wgpu::BindGroup bindGroup = utils::MakeBindGroup(device, layout,
+                                                             {
+                                                                 {0, ssbo, 0, sizeof(uint32_t)},
+                                                             });
+            EXPECT_NE(nullptr, bindGroup.Get());
+        }
+    });
+}
+
+// Test that destroying Texture and associated TextureViews simultaneously on different threads
+// works. These was a data race here previously, see https://crbug.com/396294899 for more details.
+TEST_P(MultithreadTests, DestroyTextureAndViewsAtSameTime) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+    constexpr uint32_t kNumViews = 10;
+    constexpr uint32_t kNumThreads = kNumViews + 1;
+    constexpr wgpu::TextureFormat kTextureFormat = wgpu::TextureFormat::R8Unorm;
+    constexpr wgpu::TextureUsage kTextureUsage = wgpu::TextureUsage::CopySrc |
+                                                 wgpu::TextureUsage::CopyDst |
+                                                 wgpu::TextureUsage::RenderAttachment;
+
+    for (uint32_t j = 0; j < 50; ++j) {
+        wgpu::TextureDescriptor texDescriptor = {};
+        texDescriptor.size = {1, 1, kNumViews};
+        texDescriptor.format = kTextureFormat;
+        texDescriptor.usage = kTextureUsage;
+        texDescriptor.mipLevelCount = 1;
+        texDescriptor.sampleCount = 1;
+
+        wgpu::Texture texture = device.CreateTexture(&texDescriptor);
+        wgpu::TextureView textureViews[kNumViews];
+
+        for (uint32_t i = 0; i < kNumViews; ++i) {
+            wgpu::TextureViewDescriptor viewDescriptor = {};
+            viewDescriptor.format = kTextureFormat;
+            viewDescriptor.usage = kTextureUsage;
+            viewDescriptor.mipLevelCount = 1;
+            viewDescriptor.baseArrayLayer = i;
+            viewDescriptor.arrayLayerCount = 1;
+            textureViews[i] = texture.CreateView(&viewDescriptor);
+        }
+
+        // Wait for all threads to be ready to destroy the Texture or TextureViews at the same time.
+        // TODO(kylechar): std::latch would be much simpler here but MSVC bots fail to run
+        // dawn_end2end_tests when it's used.
+        std::mutex mutex;
+        std::condition_variable cv;
+        uint32_t waiting = kNumThreads;
+
+        utils::RunInParallel(kNumThreads, [&](uint32_t id) {
+            bool notify = false;
+            {
+                std::lock_guard lock(mutex);
+                if (--waiting == 0) {
+                    notify = true;
+                }
+            }
+            if (notify) {
+                cv.notify_all();
+            } else {
+                std::unique_lock lock(mutex);
+                cv.wait(lock, [&waiting]() { return waiting == 0; });
+            }
+
+            if (id == 0) {
+                texture.Destroy();
+            } else {
+                textureViews[id - 1] = {};
+            }
+        });
+    }
+}
+
 class MultithreadCachingTests : public MultithreadTests {
   protected:
     wgpu::ShaderModule CreateComputeShaderModule() const {
@@ -451,6 +1165,8 @@ class MultithreadCachingTests : public MultithreadTests {
 // Test that creating a same shader module (which will return the cached shader module) and release
 // it on multiple threads won't race.
 TEST_P(MultithreadCachingTests, RefAndReleaseCachedShaderModulesInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     utils::RunInParallel(100, [this](uint32_t) {
         wgpu::ShaderModule csModule = CreateComputeShaderModule();
         EXPECT_NE(nullptr, csModule.Get());
@@ -460,6 +1176,8 @@ TEST_P(MultithreadCachingTests, RefAndReleaseCachedShaderModulesInParallel) {
 // Test that creating a same compute pipeline (which will return the cached pipeline) and release it
 // on multiple threads won't race.
 TEST_P(MultithreadCachingTests, RefAndReleaseCachedComputePipelinesInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     wgpu::ShaderModule csModule = CreateComputeShaderModule();
     wgpu::BindGroupLayout bglayout = CreateComputeBindGroupLayout();
     wgpu::PipelineLayout pipelineLayout = utils::MakePipelineLayout(device, {bglayout});
@@ -477,6 +1195,8 @@ TEST_P(MultithreadCachingTests, RefAndReleaseCachedComputePipelinesInParallel) {
 // Test that creating a same bind group layout (which will return the cached layout) and
 // release it on multiple threads won't race.
 TEST_P(MultithreadCachingTests, RefAndReleaseCachedBindGroupLayoutsInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     utils::RunInParallel(100, [&, this](uint32_t) {
         wgpu::BindGroupLayout layout = CreateComputeBindGroupLayout();
         EXPECT_NE(nullptr, layout.Get());
@@ -486,6 +1206,8 @@ TEST_P(MultithreadCachingTests, RefAndReleaseCachedBindGroupLayoutsInParallel) {
 // Test that creating a same pipeline layout (which will return the cached layout) and
 // release it on multiple threads won't race.
 TEST_P(MultithreadCachingTests, RefAndReleaseCachedPipelineLayoutsInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     wgpu::BindGroupLayout bglayout = CreateComputeBindGroupLayout();
 
     utils::RunInParallel(100, [&, this](uint32_t) {
@@ -497,6 +1219,8 @@ TEST_P(MultithreadCachingTests, RefAndReleaseCachedPipelineLayoutsInParallel) {
 // Test that creating a same render pipeline (which will return the cached pipeline) and release it
 // on multiple threads won't race.
 TEST_P(MultithreadCachingTests, RefAndReleaseCachedRenderPipelinesInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     utils::ComboRenderPipelineDescriptor renderPipelineDescriptor;
     wgpu::ShaderModule vsModule = utils::CreateShaderModule(device, R"(
         @vertex fn main() -> @builtin(position) vec4f {
@@ -520,6 +1244,8 @@ TEST_P(MultithreadCachingTests, RefAndReleaseCachedRenderPipelinesInParallel) {
 // Test that creating a same sampler pipeline (which will return the cached sampler) and release it
 // on multiple threads won't race.
 TEST_P(MultithreadCachingTests, RefAndReleaseCachedSamplersInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     wgpu::SamplerDescriptor desc = {};
     utils::RunInParallel(100, [&, this](uint32_t) {
         wgpu::Sampler sampler = device.CreateSampler(&desc);
@@ -531,6 +1257,15 @@ class MultithreadEncodingTests : public MultithreadTests {};
 
 // Test that encoding render passes in parallel should work
 TEST_P(MultithreadEncodingTests, RenderPassEncodersInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+
+    // TODO(crbug.com/468047550): Fails on Win11/NVIDIA GTX 1660.
+    DAWN_SUPPRESS_TEST_IF(IsWindows11() && IsNvidia() && IsD3D12() && IsBackendValidationEnabled());
+
+    // TODO(crbug.com/473899151): [Capture] multisampled.
+    DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
+
     constexpr uint32_t kRTSize = 16;
     constexpr uint32_t kNumThreads = 10;
 
@@ -547,7 +1282,8 @@ TEST_P(MultithreadEncodingTests, RenderPassEncodersInParallel) {
 
     std::vector<wgpu::CommandBuffer> commandBuffers(kNumThreads);
 
-    utils::RunInParallel(kNumThreads, [=, &commandBuffers](uint32_t index) {
+    utils::RunInParallel(kNumThreads, [this, msaaRenderTargetView, resolveTargetView,
+                                       &commandBuffers](uint32_t index) {
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
 
         // Clear the renderTarget to red.
@@ -572,8 +1308,14 @@ TEST_P(MultithreadEncodingTests, RenderPassEncodersInParallel) {
 
 // Test that encoding render passes that resolve to a mip level in parallel should work
 TEST_P(MultithreadEncodingTests, RenderPassEncoders_ResolveToMipLevelOne_InParallel) {
-    // TODO(dawn:462): Issue in the D3D12 validation layers.
-    DAWN_SUPPRESS_TEST_IF(IsD3D12() && IsBackendValidationEnabled());
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+
+    // TODO(crbug.com/468047550): Fails on Win11/NVIDIA GTX 1660.
+    DAWN_SUPPRESS_TEST_IF(IsWindows11() && IsNvidia() && IsD3D12() && IsBackendValidationEnabled());
+
+    // TODO(crbug.com/473899151): [Capture] multisampled.
+    DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
 
     constexpr uint32_t kRTSize = 16;
     constexpr uint32_t kNumThreads = 10;
@@ -597,7 +1339,8 @@ TEST_P(MultithreadEncodingTests, RenderPassEncoders_ResolveToMipLevelOne_InParal
 
     std::vector<wgpu::CommandBuffer> commandBuffers(kNumThreads);
 
-    utils::RunInParallel(kNumThreads, [=, &commandBuffers](uint32_t index) {
+    utils::RunInParallel(kNumThreads, [this, msaaRenderTargetView, resolveTargetView,
+                                       &commandBuffers](uint32_t index) {
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
 
         // Clear the renderTarget to red.
@@ -622,6 +1365,8 @@ TEST_P(MultithreadEncodingTests, RenderPassEncoders_ResolveToMipLevelOne_InParal
 
 // Test that encoding compute passes in parallel should work
 TEST_P(MultithreadEncodingTests, ComputePassEncodersInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     constexpr uint32_t kNumThreads = 10;
     constexpr uint32_t kExpected = 0xFFFFFFFFu;
 
@@ -646,7 +1391,7 @@ TEST_P(MultithreadEncodingTests, ComputePassEncodersInParallel) {
 
     std::vector<wgpu::CommandBuffer> commandBuffers(kNumThreads);
 
-    utils::RunInParallel(kNumThreads, [=, &commandBuffers](uint32_t index) {
+    utils::RunInParallel(kNumThreads, [this, pipeline, bindGroup, &commandBuffers](uint32_t index) {
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
         wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
         pass.SetPipeline(pipeline);
@@ -669,13 +1414,7 @@ TEST_P(MultithreadEncodingTests, ComputePassEncodersInParallel) {
 
 class MultithreadTextureCopyTests : public MultithreadTests {
   protected:
-    void SetUp() override {
-        MultithreadTests::SetUp();
-
-        // TODO(crbug.com/dawn/1291): These tests are failing on GLES (both native and ANGLE)
-        // when using Tint/GLSL.
-        DAWN_TEST_UNSUPPORTED_IF(IsOpenGLES());
-    }
+    void SetUp() override { MultithreadTests::SetUp(); }
 
     wgpu::Texture CreateAndWriteTexture(uint32_t width,
                                         uint32_t height,
@@ -687,12 +1426,13 @@ class MultithreadTextureCopyTests : public MultithreadTests {
 
         wgpu::Extent3D textureSize = {width, height, 1};
 
-        wgpu::ImageCopyTexture imageCopyTexture =
-            utils::CreateImageCopyTexture(texture, 0, {0, 0, 0}, wgpu::TextureAspect::All);
-        wgpu::TextureDataLayout textureDataLayout =
-            utils::CreateTextureDataLayout(0, dataSize / height);
+        wgpu::TexelCopyTextureInfo texelCopyTextureInfo =
+            utils::CreateTexelCopyTextureInfo(texture, 0, {0, 0, 0}, wgpu::TextureAspect::All);
+        wgpu::TexelCopyBufferLayout texelCopyBufferLayout =
+            utils::CreateTexelCopyBufferLayout(0, dataSize / height);
 
-        queue.WriteTexture(&imageCopyTexture, data, dataSize, &textureDataLayout, &textureSize);
+        queue.WriteTexture(&texelCopyTextureInfo, data, dataSize, &texelCopyBufferLayout,
+                           &textureSize);
 
         return texture;
     }
@@ -704,12 +1444,12 @@ class MultithreadTextureCopyTests : public MultithreadTests {
 
     void CopyTextureToTextureHelper(
         const wgpu::Texture& srcTexture,
-        const wgpu::ImageCopyTexture& dst,
+        const wgpu::TexelCopyTextureInfo& dst,
         const wgpu::Extent3D& dstSize,
         const wgpu::CommandEncoder& encoder,
         const wgpu::CopyTextureForBrowserOptions* copyForBrowerOptions = nullptr) {
-        wgpu::ImageCopyTexture srcView =
-            utils::CreateImageCopyTexture(srcTexture, 0, {0, 0, 0}, wgpu::TextureAspect::All);
+        wgpu::TexelCopyTextureInfo srcView =
+            utils::CreateTexelCopyTextureInfo(srcTexture, 0, {0, 0, 0}, wgpu::TextureAspect::All);
 
         if (copyForBrowerOptions == nullptr) {
             encoder.CopyTextureToTexture(&srcView, &dst, &dstSize);
@@ -725,11 +1465,11 @@ class MultithreadTextureCopyTests : public MultithreadTests {
 
     void CopyBufferToTextureHelper(const wgpu::Buffer& srcBuffer,
                                    uint32_t srcBytesPerRow,
-                                   const wgpu::ImageCopyTexture& dst,
+                                   const wgpu::TexelCopyTextureInfo& dst,
                                    const wgpu::Extent3D& dstSize,
                                    const wgpu::CommandEncoder& encoder) {
-        wgpu::ImageCopyBuffer srcView =
-            utils::CreateImageCopyBuffer(srcBuffer, 0, srcBytesPerRow, dstSize.height);
+        wgpu::TexelCopyBufferInfo srcView =
+            utils::CreateTexelCopyBufferInfo(srcBuffer, 0, srcBytesPerRow, dstSize.height);
 
         encoder.CopyBufferToTexture(&srcView, &dst, &dstSize);
 
@@ -744,6 +1484,11 @@ class MultithreadTextureCopyTests : public MultithreadTests {
 // CopyTextureToTexture() command might internally allocate resources and we need to make sure that
 // it won't race with other threads' works.
 TEST_P(MultithreadTextureCopyTests, CopyDepthToDepthNoRace) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+    // TODO(crbug.com/dawn/1766): TSAN reported race conditions in NVIDIA's vk driver.
+    DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsNvidia() && IsTsan());
+
     enum class Step {
         Begin,
         WriteTexture,
@@ -791,7 +1536,7 @@ TEST_P(MultithreadTextureCopyTests, CopyDepthToDepthNoRace) {
 
         // Copy from depthTexture to destTexture.
         const wgpu::Extent3D dstSize = {kWidth, kHeight, 1};
-        wgpu::ImageCopyTexture dest = utils::CreateImageCopyTexture(
+        wgpu::TexelCopyTextureInfo dest = utils::CreateTexelCopyTextureInfo(
             destTexture, /*dstMipLevel=*/1, {0, 0, 0}, wgpu::TextureAspect::All);
         auto encoder = device.CreateCommandEncoder();
         lockStep.Wait(Step::WriteTexture);
@@ -812,6 +1557,8 @@ TEST_P(MultithreadTextureCopyTests, CopyDepthToDepthNoRace) {
 // CopyBufferToTexture() command might internally allocate resources and we need to make sure that
 // it won't race with other threads' works.
 TEST_P(MultithreadTextureCopyTests, CopyBufferToDepthNoRace) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     enum class Step {
         Begin,
         WriteBuffer,
@@ -859,7 +1606,7 @@ TEST_P(MultithreadTextureCopyTests, CopyBufferToDepthNoRace) {
 
         auto encoder = device.CreateCommandEncoder();
 
-        wgpu::ImageCopyTexture dest = utils::CreateImageCopyTexture(
+        wgpu::TexelCopyTextureInfo dest = utils::CreateTexelCopyTextureInfo(
             destTexture, /*dstMipLevel=*/0, {0, 0, 0}, wgpu::TextureAspect::All);
 
         // Wait until src buffer is written.
@@ -881,16 +1628,17 @@ TEST_P(MultithreadTextureCopyTests, CopyBufferToDepthNoRace) {
 // CopyTextureToTexture() command might internally allocate resources and we need to make sure that
 // it won't race with other threads' works.
 TEST_P(MultithreadTextureCopyTests, CopyStencilToStencilNoRace) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     // TODO(crbug.com/dawn/1497): glReadPixels: GL error: HIGH: Invalid format and type
     // combination.
     DAWN_SUPPRESS_TEST_IF(IsANGLE());
 
-    // TODO(crbug.com/dawn/667): Work around the fact that some platforms are unable to read
-    // stencil.
-    DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("disable_depth_stencil_read"));
-
     // TODO(dawn:1924): Intel Gen9 specific.
     DAWN_SUPPRESS_TEST_IF(IsD3D11() && IsIntelGen9());
+
+    // TODO(crbug.com/dawn/1766): TSAN reported race conditions in NVIDIA's vk driver.
+    DAWN_SUPPRESS_TEST_IF(IsVulkan() && IsNvidia() && IsTsan());
 
     enum class Step {
         Begin,
@@ -928,7 +1676,7 @@ TEST_P(MultithreadTextureCopyTests, CopyStencilToStencilNoRace) {
 
         // Copy from stencilTexture to destTexture.
         const wgpu::Extent3D dstSize = {kWidth, kHeight, 1};
-        wgpu::ImageCopyTexture dest = utils::CreateImageCopyTexture(
+        wgpu::TexelCopyTextureInfo dest = utils::CreateTexelCopyTextureInfo(
             destTexture, /*dstMipLevel=*/1, {0, 0, 0}, wgpu::TextureAspect::All);
         auto encoder = device.CreateCommandEncoder();
         lockStep.Wait(Step::WriteTexture);
@@ -950,6 +1698,8 @@ TEST_P(MultithreadTextureCopyTests, CopyStencilToStencilNoRace) {
 // CopyBufferToTexture() command might internally allocate resources and we need to make sure that
 // it won't race with other threads' works.
 TEST_P(MultithreadTextureCopyTests, CopyBufferToStencilNoRace) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     enum class Step {
         Begin,
         WriteBuffer,
@@ -987,7 +1737,7 @@ TEST_P(MultithreadTextureCopyTests, CopyBufferToStencilNoRace) {
 
         auto encoder = device.CreateCommandEncoder();
 
-        wgpu::ImageCopyTexture dest = utils::CreateImageCopyTexture(
+        wgpu::TexelCopyTextureInfo dest = utils::CreateTexelCopyTextureInfo(
             destTexture, /*dstMipLevel=*/0, {0, 0, 0}, wgpu::TextureAspect::All);
 
         // Wait until src buffer is written.
@@ -1008,8 +1758,7 @@ TEST_P(MultithreadTextureCopyTests, CopyBufferToStencilNoRace) {
 // This test is needed since CopyTextureForBrowser() command might internally allocate resources and
 // we need to make sure that it won't race with other threads' works.
 TEST_P(MultithreadTextureCopyTests, CopyTextureForBrowserNoRace) {
-    // TODO(crbug.com/dawn/1232): Program link error on OpenGLES backend
-    DAWN_SUPPRESS_TEST_IF(IsOpenGLES());
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     DAWN_SUPPRESS_TEST_IF(IsOpenGL() && IsLinux());
 
     enum class Step {
@@ -1059,7 +1808,7 @@ TEST_P(MultithreadTextureCopyTests, CopyTextureForBrowserNoRace) {
 
         // Copy from srcTexture to destTexture.
         const wgpu::Extent3D dstSize = {kWidth, kHeight, 1};
-        wgpu::ImageCopyTexture dest = utils::CreateImageCopyTexture(
+        wgpu::TexelCopyTextureInfo dest = utils::CreateTexelCopyTextureInfo(
             destTexture, /*dstMipLevel=*/0, {0, 0, 0}, wgpu::TextureAspect::All);
         wgpu::CopyTextureForBrowserOptions options;
         options.flipY = true;
@@ -1077,8 +1826,8 @@ TEST_P(MultithreadTextureCopyTests, CopyTextureForBrowserNoRace) {
 
 // Test that error from CopyTextureForBrowser() won't cause deadlock.
 TEST_P(MultithreadTextureCopyTests, CopyTextureForBrowserErrorNoDeadLock) {
-    // TODO(crbug.com/dawn/1232): Program link error on OpenGLES backend
-    DAWN_SUPPRESS_TEST_IF(IsOpenGLES());
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     DAWN_SUPPRESS_TEST_IF(IsOpenGL() && IsLinux());
 
     DAWN_TEST_UNSUPPORTED_IF(HasToggleEnabled("skip_validation"));
@@ -1126,7 +1875,7 @@ TEST_P(MultithreadTextureCopyTests, CopyTextureForBrowserErrorNoDeadLock) {
 
         // Copy from srcTexture to destTexture.
         const wgpu::Extent3D dstSize = {kWidth, kHeight, 1};
-        wgpu::ImageCopyTexture dest = utils::CreateImageCopyTexture(
+        wgpu::TexelCopyTextureInfo dest = utils::CreateTexelCopyTextureInfo(
             destTexture, /*dstMipLevel=*/0, {0, 0, 0}, wgpu::TextureAspect::All);
         wgpu::CopyTextureForBrowserOptions options = {};
 
@@ -1137,13 +1886,13 @@ TEST_P(MultithreadTextureCopyTests, CopyTextureForBrowserErrorNoDeadLock) {
         CopyTextureToTextureHelper(invalidSrcTexture, dest, dstSize, nullptr, &options);
 
         std::atomic<bool> errorThrown(false);
-        device.PopErrorScope(
-            [](WGPUErrorType type, char const* message, void* userdata) {
-                EXPECT_EQ(type, WGPUErrorType_Validation);
-                auto error = static_cast<std::atomic<bool>*>(userdata);
-                *error = true;
-            },
-            &errorThrown);
+        device.PopErrorScope(wgpu::CallbackMode::AllowProcessEvents,
+                             [&errorThrown](wgpu::PopErrorScopeStatus status, wgpu::ErrorType type,
+                                            wgpu::StringView) {
+                                 EXPECT_EQ(status, wgpu::PopErrorScopeStatus::Success);
+                                 EXPECT_EQ(type, wgpu::ErrorType::Validation);
+                                 errorThrown = true;
+                             });
         instance.ProcessEvents();
         EXPECT_TRUE(errorThrown.load());
 
@@ -1261,17 +2010,15 @@ class MultithreadDrawIndexedIndirectTests : public MultithreadTests {
 
 // Test indirect draws with offsets on multiple threads.
 TEST_P(MultithreadDrawIndexedIndirectTests, IndirectOffsetInParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
     // TODO(crbug.com/dawn/789): Test is failing after a roll on SwANGLE on Windows only.
     DAWN_SUPPRESS_TEST_IF(IsANGLE() && IsWindows());
-
-    // TODO(crbug.com/dawn/1292): Some Intel OpenGL drivers don't seem to like
-    // the offsets that Tint/GLSL produces.
-    DAWN_SUPPRESS_TEST_IF(IsIntel() && IsOpenGL() && IsLinux());
 
     utils::RGBA8 filled(0, 255, 0, 255);
     utils::RGBA8 notFilled(0, 0, 0, 0);
 
-    utils::RunInParallel(10, [=](uint32_t) {
+    utils::RunInParallel(10, [this, filled, notFilled](uint32_t) {
         // Test an offset draw call, with indirect buffer containing 2 calls:
         // 1) first 3 indices of the second quad (top right triangle)
         // 2) last 3 indices of the second quad
@@ -1295,7 +2042,7 @@ class TimestampExpectation : public detail::Expectation {
         for (size_t i = 0; i < size / sizeof(uint64_t); i++) {
             if (timestamps[i] == 0) {
                 return testing::AssertionFailure()
-                       << "Expected data[" << i << "] to be greater than 0." << std::endl;
+                       << "Expected data[" << i << "] to be greater than 0.\n";
             }
         }
 
@@ -1336,6 +2083,13 @@ class MultithreadTimestampQueryTests : public MultithreadTests {
 // Test resolving timestamp queries on multiple threads. ResolveQuerySet() will create temp
 // resources internally so we need to make sure they are thread safe.
 TEST_P(MultithreadTimestampQueryTests, ResolveQuerySets_InParallel) {
+    // TODO(451928481): multithread support in GL is incomplete
+    DAWN_TEST_UNSUPPORTED_IF(IsOpenGL() || IsOpenGLES());
+    DAWN_SUPPRESS_TEST_IF(IsWARP());  // Flaky on WARP
+
+    // TODO(crbug.com/451389800): [Capture] implement query set.
+    DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
+
     constexpr uint32_t kQueryCount = 2;
     constexpr uint32_t kNumThreads = 10;
 
@@ -1363,22 +2117,32 @@ TEST_P(MultithreadTimestampQueryTests, ResolveQuerySets_InParallel) {
 
 DAWN_INSTANTIATE_TEST(MultithreadTests,
                       D3D11Backend(),
+                      D3D11Backend({"d3d11_use_unmonitored_fence"}),
+                      D3D11Backend({"d3d11_delay_flush_to_gpu"}),
+                      D3D11Backend({"d3d11_disable_cpu_buffers"}),
+                      D3D11Backend({"auto_map_backend_buffer", "d3d11_disable_cpu_buffers"}),
                       D3D12Backend(),
                       MetalBackend(),
                       OpenGLBackend(),
                       OpenGLESBackend(),
-                      VulkanBackend());
+                      VulkanBackend(),
+                      WebGPUBackend());
 
 DAWN_INSTANTIATE_TEST(MultithreadCachingTests,
                       D3D11Backend(),
+                      D3D11Backend({"d3d11_use_unmonitored_fence"}),
+                      D3D11Backend({"d3d11_delay_flush_to_gpu"}),
                       D3D12Backend(),
                       MetalBackend(),
                       OpenGLBackend(),
                       OpenGLESBackend(),
-                      VulkanBackend());
+                      VulkanBackend(),
+                      WebGPUBackend());
 
 DAWN_INSTANTIATE_TEST(MultithreadEncodingTests,
                       D3D11Backend(),
+                      D3D11Backend({"d3d11_use_unmonitored_fence"}),
+                      D3D11Backend({"d3d11_delay_flush_to_gpu"}),
                       D3D12Backend(),
                       D3D12Backend({"always_resolve_into_zero_level_and_layer"}),
                       MetalBackend(),
@@ -1386,7 +2150,8 @@ DAWN_INSTANTIATE_TEST(MultithreadEncodingTests,
                       OpenGLBackend(),
                       OpenGLESBackend(),
                       VulkanBackend(),
-                      VulkanBackend({"always_resolve_into_zero_level_and_layer"}));
+                      VulkanBackend({"always_resolve_into_zero_level_and_layer"}),
+                      WebGPUBackend());
 
 DAWN_INSTANTIATE_TEST(
     MultithreadTextureCopyTests,
@@ -1398,7 +2163,8 @@ DAWN_INSTANTIATE_TEST(
     MetalBackend({"use_blit_for_buffer_to_stencil_texture_copy"}),
     OpenGLBackend(),
     OpenGLESBackend(),
-    VulkanBackend());
+    VulkanBackend(),
+    WebGPUBackend());
 
 DAWN_INSTANTIATE_TEST(MultithreadDrawIndexedIndirectTests,
                       D3D11Backend(),
@@ -1406,7 +2172,8 @@ DAWN_INSTANTIATE_TEST(MultithreadDrawIndexedIndirectTests,
                       MetalBackend(),
                       OpenGLBackend(),
                       OpenGLESBackend(),
-                      VulkanBackend());
+                      VulkanBackend(),
+                      WebGPUBackend());
 
 DAWN_INSTANTIATE_TEST(MultithreadTimestampQueryTests,
                       D3D11Backend(),
@@ -1414,7 +2181,8 @@ DAWN_INSTANTIATE_TEST(MultithreadTimestampQueryTests,
                       MetalBackend(),
                       OpenGLBackend(),
                       OpenGLESBackend(),
-                      VulkanBackend());
+                      VulkanBackend(),
+                      WebGPUBackend());
 
 }  // anonymous namespace
 }  // namespace dawn

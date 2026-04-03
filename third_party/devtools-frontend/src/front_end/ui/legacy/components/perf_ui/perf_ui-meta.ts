@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,17 +11,19 @@ import type * as PerfUI from './perf_ui.js';
 
 const UIStrings = {
   /**
-   *@description Title of a setting under the Performance category in Settings
+   * @description Title of a setting under the Performance category in Settings.
+   * Selected navigation allows switching between 2 different sets of shortcuts
+   * and actions (like zoom on scroll or crtl/cmd + scroll) for navigating the performance panel.
    */
-  flamechartMouseWheelAction: 'Flamechart mouse wheel action:',
+  flamechartSelectedNavigation: 'Flamechart navigation:',
   /**
-   *@description The action to scroll
+   * @description Modern navigation option in the Performance Panel.
    */
-  scroll: 'Scroll',
+  modern: 'Modern',
   /**
-   *@description Text for zooming in
+   * @description Classic navigation option in the Performance Panel.
    */
-  zoom: 'Zoom',
+  classic: 'Classic',
   /**
    * @description Title of a setting under the Memory category in Settings. Live memory is memory
    * that is still in-use by the program (not dead). Allocation of live memory is when the program
@@ -30,18 +32,18 @@ const UIStrings = {
    */
   liveMemoryAllocationAnnotations: 'Live memory allocation annotations',
   /**
-   *@description Title of a setting under the Memory category that can be invoked through the Command Menu
+   * @description Title of a setting under the Memory category that can be invoked through the Command Menu
    */
   showLiveMemoryAllocation: 'Show live memory allocation annotations',
   /**
-   *@description Title of a setting under the Memory category that can be invoked through the Command Menu
+   * @description Title of a setting under the Memory category that can be invoked through the Command Menu
    */
   hideLiveMemoryAllocation: 'Hide live memory allocation annotations',
   /**
-   *@description Title of an action in the components tool to collect garbage
+   * @description Title of an action in the components tool to collect garbage
    */
   collectGarbage: 'Collect garbage',
-};
+} as const;
 
 const str_ = i18n.i18n.registerUIStrings('ui/legacy/components/perf_ui/perf_ui-meta.ts', UIStrings);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
@@ -68,28 +70,28 @@ UI.ActionRegistration.registerActionExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.PERFORMANCE,
-  storageType: Common.Settings.SettingStorageType.Synced,
-  title: i18nLazyString(UIStrings.flamechartMouseWheelAction),
-  settingName: 'flamechart-mouse-wheel-action',
+  storageType: Common.Settings.SettingStorageType.SYNCED,
+  title: i18nLazyString(UIStrings.flamechartSelectedNavigation),
+  settingName: 'flamechart-selected-navigation',
   settingType: Common.Settings.SettingType.ENUM,
-  defaultValue: 'zoom',
+  defaultValue: 'classic',
   options: [
     {
-      title: i18nLazyString(UIStrings.scroll),
-      text: i18nLazyString(UIStrings.scroll),
-      value: 'scroll',
+      title: i18nLazyString(UIStrings.modern),
+      text: i18nLazyString(UIStrings.modern),
+      value: 'modern',
     },
     {
-      title: i18nLazyString(UIStrings.zoom),
-      text: i18nLazyString(UIStrings.zoom),
-      value: 'zoom',
+      title: i18nLazyString(UIStrings.classic),
+      text: i18nLazyString(UIStrings.classic),
+      value: 'classic',
     },
   ],
 });
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.MEMORY,
-  experiment: Root.Runtime.ExperimentName.LIVE_HEAP_PROFILE,
+  experiment: Root.ExperimentNames.ExperimentName.LIVE_HEAP_PROFILE,
   title: i18nLazyString(UIStrings.liveMemoryAllocationAnnotations),
   settingName: 'memory-live-heap-profile',
   settingType: Common.Settings.SettingType.BOOLEAN,

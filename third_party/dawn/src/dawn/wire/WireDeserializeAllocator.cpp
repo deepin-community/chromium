@@ -25,6 +25,11 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/439062058): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "dawn/wire/WireDeserializeAllocator.h"
 
 #include <algorithm>
@@ -61,13 +66,13 @@ void* WireDeserializeAllocator::GetSpace(size_t size) {
 }
 
 void WireDeserializeAllocator::Reset() {
-    for (auto* allocation : mAllocations) {
-        free(allocation);
-    }
-    mAllocations.clear();
-
     // The initial buffer is the inline buffer so that some allocations can be skipped
     mCurrentBuffer = mStaticBuffer;
     mRemainingSize = sizeof(mStaticBuffer);
+
+    for (auto& allocation : mAllocations) {
+        free(allocation.ExtractAsDangling());
+    }
+    mAllocations.clear();
 }
 }  // namespace dawn::wire

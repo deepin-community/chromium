@@ -1,5 +1,5 @@
-load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 load("//tensorflow:tensorflow.bzl", "tf_cc_test")
+load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 
 licenses(["notice"])
 
@@ -28,9 +28,9 @@ cc_library(
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
         "//tensorflow/tools/optimization:optimization_pass_runner_lib",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
-        "@local_xla//xla:status_macros",
-        "@local_xla//xla:statusor",
+        "@xla//xla:status_macros",
     ],
 )
 
@@ -49,6 +49,8 @@ tf_cc_test(
     deps = [
         ":auto_clustering_test_helper",
         "//tensorflow/core:test",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
     ],
 )
@@ -79,7 +81,7 @@ cc_library(
         "//tensorflow/core/platform:path",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
-        "@local_xla//xla/service:hlo_proto_cc",
+        "@xla//xla/service:hlo_proto_cc",
     ],
 )
 
@@ -118,5 +120,8 @@ tf_cc_test(
         "//tensorflow/compiler/jit:compilation_passes",
         "//tensorflow/compiler/jit:flags",
         "//tensorflow/core:test",
+        "//tensorflow/core/framework:graph_proto_cc",
+        "@com_google_absl//absl/strings",
+        "@com_google_googletest//:gtest",
     ],
 )

@@ -31,14 +31,6 @@ const char kPrefersReducedMotionReduce[] = "reduce";
 const char kPrefersReducedTransparencyNoPreference[] = "no-preference";
 const char kPrefersReducedTransparencyReduce[] = "reduce";
 
-const char* const kWebEffectiveConnectionTypeMapping[] = {
-    "4g" /* Unknown */, "4g" /* Offline */, "slow-2g" /* Slow 2G */,
-    "2g" /* 2G */,      "3g" /* 3G */,      "4g" /* 4G */
-};
-
-const size_t kWebEffectiveConnectionTypeMappingCount =
-    std::size(kWebEffectiveConnectionTypeMapping);
-
 ClientHintToNameMap MakeClientHintToNameMap() {
   return {
       {network::mojom::WebClientHintsType::kDeviceMemory_DEPRECATED,
@@ -76,8 +68,8 @@ ClientHintToNameMap MakeClientHintToNameMap() {
       {network::mojom::WebClientHintsType::kSaveData, "save-data"},
       {network::mojom::WebClientHintsType::kPrefersReducedMotion,
        "sec-ch-prefers-reduced-motion"},
-      {network::mojom::WebClientHintsType::kUAFormFactor,
-       "sec-ch-ua-form-factor"},
+      {network::mojom::WebClientHintsType::kUAFormFactors,
+       "sec-ch-ua-form-factors"},
       {network::mojom::WebClientHintsType::kPrefersReducedTransparency,
        "sec-ch-prefers-reduced-transparency"},
   };
@@ -169,7 +161,6 @@ ParseClientHintToDelegatedThirdPartiesHeader(const std::string& header,
     case MetaCHType::HttpEquivAcceptCH: {
       // ParseClientHintsHeader should have been called instead.
       NOTREACHED();
-      return ClientHintToDelegatedThirdPartiesHeader();
     }
     case MetaCHType::HttpEquivDelegateCH: {
       // We're building a scoped down version of

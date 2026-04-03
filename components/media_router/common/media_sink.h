@@ -5,7 +5,6 @@
 #ifndef COMPONENTS_MEDIA_ROUTER_COMMON_MEDIA_SINK_H_
 #define COMPONENTS_MEDIA_ROUTER_COMMON_MEDIA_SINK_H_
 
-#include <optional>
 #include <string>
 
 #include "components/media_router/common/media_route_provider_helper.h"
@@ -67,8 +66,7 @@ class MediaSink {
   }
   mojom::MediaRouteProviderId provider_id() const { return provider_id_; }
 
-  bool operator==(const MediaSink& other) const;
-  bool operator!=(const MediaSink& other) const;
+  friend bool operator==(const MediaSink&, const MediaSink&) = default;
 
   // Compares |this| to |other| first by their icon types, then their names
   // using |collator|, and finally their IDs.

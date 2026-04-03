@@ -10,19 +10,22 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/display/privacy_screen_controller.h"
+#include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/system/input_device_settings/input_device_settings_controller_impl.h"
+#include "ash/system/input_device_settings/input_device_settings_utils.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/notreached.h"
 #include "chromeos/constants/devicetype.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/events/ash/keyboard_capability.h"
 #include "ui/events/ash/keyboard_layout_util.h"
+#include "ui/events/ash/mojom/modifier_key.mojom-shared.h"
 #include "ui/events/ash/mojom/six_pack_shortcut_modifier.mojom-shared.h"
+#include "ui/events/ash/top_row_action_keys.h"
 #include "ui/events/devices/device_data_manager.h"
 #include "ui/events/devices/input_device.h"
 #include "ui/events/devices/keyboard_device.h"
@@ -50,8 +53,7 @@ std::optional<ui::KeyboardDevice> GetPriorityExternalKeyboard() {
        ui::DeviceDataManager::GetInstance()->GetKeyboardDevices()) {
     // If the input device settings controlled does not recognize the device as
     // a keyboard, skip it.
-    if (features::IsInputDeviceSettingsSplitEnabled() &&
-        Shell::Get()->input_device_settings_controller()->GetKeyboardSettings(
+    if (Shell::Get()->input_device_settings_controller()->GetKeyboardSettings(
             keyboard.id) == nullptr) {
       continue;
     }
@@ -85,8 +87,7 @@ std::optional<ui::KeyboardDevice> GetInternalKeyboard() {
        ui::DeviceDataManager::GetInstance()->GetKeyboardDevices()) {
     // If the input device settings controlled does not recognize the device as
     // a keyboard, skip it.
-    if (features::IsInputDeviceSettingsSplitEnabled() &&
-        Shell::Get()->input_device_settings_controller()->GetKeyboardSettings(
+    if (Shell::Get()->input_device_settings_controller()->GetKeyboardSettings(
             keyboard.id) == nullptr) {
       continue;
     }
@@ -137,6 +138,8 @@ bool ShouldAlwaysShowWithExternalKeyboard(ui::TopRowActionKey action_key) {
     case ui::TopRowActionKey::kKeyboardBacklightToggle:
     case ui::TopRowActionKey::kPrivacyScreenToggle:
     case ui::TopRowActionKey::kAllApplications:
+    case ui::TopRowActionKey::kAccessibility:
+    case ui::TopRowActionKey::kDoNotDisturb:
       return false;
     case ui::TopRowActionKey::kDictation:
     case ui::TopRowActionKey::kFullscreen:
@@ -159,10 +162,6 @@ bool ShouldAlwaysShowWithExternalKeyboard(ui::TopRowActionKey action_key) {
 }
 
 bool MetaFKeyRewritesAreSuppressed(const ui::InputDevice& keyboard) {
-  if (!features::IsInputDeviceSettingsSplitEnabled()) {
-    return false;
-  }
-
   const auto* settings =
       Shell::Get()->input_device_settings_controller()->GetKeyboardSettings(
           keyboard.id);
@@ -170,12 +169,6 @@ bool MetaFKeyRewritesAreSuppressed(const ui::InputDevice& keyboard) {
 }
 
 bool AreTopRowFKeys(const ui::InputDevice& keyboard) {
-  if (!features::IsInputDeviceSettingsSplitEnabled()) {
-    PrefService* pref_service =
-        Shell::Get()->session_controller()->GetActivePrefService();
-    return pref_service && pref_service->GetBoolean(prefs::kSendFunctionKeys);
-  }
-
   const auto* settings =
       Shell::Get()->input_device_settings_controller()->GetKeyboardSettings(
           keyboard.id);
@@ -211,7 +204,7 @@ ui::mojom::SixPackShortcutModifier GetSixPackShortcutModifier(
   const auto* settings =
       Shell::Get()->input_device_settings_controller()->GetKeyboardSettings(
           device_id.value());
-  if (!settings) {
+  if (!settings || !settings->six_pack_key_remappings) {
     return ui::mojom::SixPackShortcutModifier::kSearch;
   }
 
@@ -229,15 +222,14 @@ ui::mojom::SixPackShortcutModifier GetSixPackShortcutModifier(
     case ui::VKEY_NEXT:
       return settings->six_pack_key_remappings->page_down;
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 
 ui::mojom::ExtendedFkeysModifier GetExtendedFkeysModifier(
     ui::KeyboardCode key_code,
     std::optional<int> device_id) {
-  if (!features::IsInputDeviceSettingsSplitEnabled() ||
-      !::features::AreF11AndF12ShortcutsEnabled() || !device_id.has_value() ||
+  if (!::features::AreF11AndF12ShortcutsEnabled() || !device_id.has_value() ||
       !ui::KeyboardCapability::IsF11OrF12(key_code)) {
     return ui::mojom::ExtendedFkeysModifier::kDisabled;
   }
@@ -256,6 +248,24 @@ ui::mojom::ExtendedFkeysModifier GetExtendedFkeysModifier(
   }
 
   return settings->f12.value();
+}
+
+bool HasQuickInsertKeyViaModifierRemapping(const ui::KeyboardDevice& keyboard) {
+  auto* settings =
+      Shell::Get()->input_device_settings_controller()->GetKeyboardSettings(
+          keyboard.id);
+  if (!settings) {
+    return false;
+  }
+
+  bool has_quick_insert_key = false;
+  for (const auto& [_, to] : settings->modifier_remappings) {
+    if (to == ui::mojom::ModifierKey::kQuickInsert) {
+      has_quick_insert_key = true;
+      break;
+    }
+  }
+  return has_quick_insert_key;
 }
 
 }  // namespace
@@ -300,6 +310,30 @@ std::vector<ui::Accelerator> AcceleratorAliasConverter::CreateAcceleratorAlias(
     if (const auto alias = CreateTopRowAliases(*internal_keyboard, accelerator);
         alias) {
       aliases_set.insert(*alias);
+    }
+  }
+  if (!aliases_set.empty()) {
+    return FilterAliasBySupportedKeys(std::move(aliases_set).extract());
+  }
+
+  // Generate aliases for both the priority external keyboard + the internal
+  // keyboard for CapsLock key.
+  if (priority_external_keyboard) {
+    if (const auto alias =
+            CreateCapsLockAliases(*priority_external_keyboard, accelerator);
+        alias) {
+      aliases_set.insert(*alias);
+      // Always add the original accelerator if an external keyboard is present.
+      aliases_set.insert(accelerator);
+    }
+  }
+  if (internal_keyboard) {
+    if (const auto alias =
+            CreateCapsLockAliases(*internal_keyboard, accelerator);
+        alias) {
+      aliases_set.insert(*alias);
+      // Always add the original accelerator if an internal keyboard is present.
+      aliases_set.insert(accelerator);
     }
   }
   if (!aliases_set.empty()) {
@@ -382,7 +416,19 @@ AcceleratorAliasConverter::CreateFunctionKeyAliases(
   }
 
   const bool top_row_are_fkeys = AreTopRowFKeys(keyboard);
-  if (IsChromeOSKeyboard(keyboard)) {
+  if (IsSplitModifierKeyboard(keyboard.id)) {
+    // If its a split modifier Keyboard, the UI should show the Action Key
+    // glyph. If `top_row_are_fkeys` is false, function key must be added so
+    // convert the "F-Key" into the action key.
+    if (top_row_are_fkeys) {
+      return {ui::Accelerator(*action_vkey, accelerator.modifiers(),
+                              accelerator.key_state())};
+    } else {
+      return {ui::Accelerator(*action_vkey,
+                              accelerator.modifiers() | ui::EF_FUNCTION_DOWN,
+                              accelerator.key_state())};
+    }
+  } else if (IsChromeOSKeyboard(keyboard)) {
     // If `priority_keyboard` is a ChromeOS keyboard, the UI should show the
     // corresponding action key, the the F-Key glyph.
     if (top_row_are_fkeys) {
@@ -461,6 +507,20 @@ AcceleratorAliasConverter::CreateExtendedFKeysAliases(
   return ui::Accelerator(key_code, modifiers);
 }
 
+std::optional<ui::Accelerator> AcceleratorAliasConverter::CreateCapsLockAliases(
+    const ui::KeyboardDevice& keyboard,
+    const ui::Accelerator& accelerator) const {
+  if (accelerator.key_code() != ui::VKEY_CAPITAL) {
+    return std::nullopt;
+  }
+
+  if (Shell::Get()->keyboard_capability()->HasFunctionKey(keyboard)) {
+    return {ui::Accelerator(ui::VKEY_QUICK_INSERT, ui::EF_FUNCTION_DOWN)};
+  }
+
+  return accelerator;
+}
+
 std::optional<ui::Accelerator> AcceleratorAliasConverter::CreateTopRowAliases(
     const ui::KeyboardDevice& keyboard,
     const ui::Accelerator& accelerator) const {
@@ -484,7 +544,20 @@ std::optional<ui::Accelerator> AcceleratorAliasConverter::CreateTopRowAliases(
   }
 
   const bool top_row_are_fkeys = AreTopRowFKeys(keyboard);
-  if (IsChromeOSKeyboard(keyboard)) {
+  if (IsSplitModifierKeyboard(keyboard.id)) {
+    // If its a split modifier Keyboard, the UI should show the Action Key
+    // glyph. If `top_row_are_fkeys` is true, function key must be added so
+    // convert the "F-Key" into the action key.
+    if (top_row_are_fkeys) {
+      return {ui::Accelerator(accelerator.key_code(),
+                              accelerator.modifiers() | ui::EF_FUNCTION_DOWN,
+                              accelerator.key_state())};
+    } else {
+      // Otherwise if `top_row_are_fkeys` is false, the identity accelerator
+      // should be returned.
+      return {accelerator};
+    }
+  } else if (IsChromeOSKeyboard(keyboard)) {
     // If its a ChromeOS Keyboard, the UI should show the Action Key glyph. If
     // `top_row_are_fkeys` is true, Search must be added so convert the "F-Key"
     // into the action key.
@@ -523,6 +596,19 @@ std::vector<ui::Accelerator> AcceleratorAliasConverter::CreateSixPackAliases(
   if (features::IsAltClickAndSixPackCustomizationEnabled() &&
       !device_id.has_value()) {
     return std::vector<ui::Accelerator>();
+  }
+
+  if (device_id.has_value() && IsSplitModifierKeyboard(device_id.value())) {
+    const auto iter = ui::kSixPackKeyToFnKeyMap.find(accelerator.key_code());
+    // [Insert] is technically a six pack key but has no Fn based rewrite. Need
+    // to make sure we return no aliased accelerator for this case.
+    if (iter == ui::kSixPackKeyToFnKeyMap.end()) {
+      return std::vector<ui::Accelerator>();
+    }
+
+    return {ui::Accelerator(iter->second,
+                            accelerator.modifiers() | ui::EF_FUNCTION_DOWN,
+                            accelerator.key_state())};
   }
 
   // Edge cases:
@@ -631,6 +717,13 @@ AcceleratorAliasConverter::FilterAliasBySupportedKeys(
       continue;
     }
 
+    // The Gemini launch app shortcut should not be disabled in the shortcut app
+    // and instead functions as a hidden shortcut.
+    if (accelerator.key_code() == ui::VKEY_F23 &&
+        accelerator.modifiers() == (ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN)) {
+      continue;
+    }
+
     // If the accelerator is for an FKey + Search, make sure it is only shown if
     // Meta + F-Key rewrites are allowed.
     if (accelerator.key_code() > ui::VKEY_F1 &&
@@ -719,6 +812,47 @@ AcceleratorAliasConverter::FilterAliasBySupportedKeys(
     // Search should be shown in the shortcuts app.
     if (accelerator.key_code() == ui::VKEY_MENU &&
         accelerator.modifiers() == ui::EF_COMMAND_DOWN) {
+      continue;
+    }
+
+    // Add [CapsLock] to the accelerators list if keyboard has CapsLock.
+    if (accelerator.key_code() == ui::VKEY_CAPITAL) {
+      if ((priority_keyboard &&
+           keyboard_capability->HasCapsLockKey(*priority_keyboard)) ||
+          (internal_keyboard &&
+           keyboard_capability->HasCapsLockKey(*internal_keyboard))) {
+        filtered_accelerators.push_back(accelerator);
+      }
+      continue;
+    }
+
+    // Add Alt + Search to the accelerators list.
+    if (accelerator.key_code() == ui::VKEY_LWIN &&
+        accelerator.modifiers() == ui::EF_ALT_DOWN) {
+      if ((internal_keyboard &&
+           !IsSplitModifierKeyboard(internal_keyboard->id)) ||
+          priority_keyboard) {
+        filtered_accelerators.push_back(accelerator);
+      }
+      continue;
+    }
+
+    if (accelerator.key_code() == ui::VKEY_QUICK_INSERT) {
+      if (internal_keyboard && IsSplitModifierKeyboard(internal_keyboard->id)) {
+        filtered_accelerators.push_back(accelerator);
+      } else if ((internal_keyboard &&
+                  HasQuickInsertKeyViaModifierRemapping(*internal_keyboard)) ||
+                 (priority_keyboard &&
+                  HasQuickInsertKeyViaModifierRemapping(*priority_keyboard))) {
+        filtered_accelerators.push_back(accelerator);
+      }
+      continue;
+    }
+
+    if (accelerator.key_code() == ui::VKEY_CAMERA_ACCESS_TOGGLE) {
+      if (keyboard_capability->HasCameraAccessKeyOnAnyKeyboard()) {
+        filtered_accelerators.push_back(accelerator);
+      }
       continue;
     }
 

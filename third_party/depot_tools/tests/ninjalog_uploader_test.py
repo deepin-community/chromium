@@ -3,11 +3,13 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import http
 import json
 import os
 import sys
 import unittest
 import unittest.mock
+import urllib.error
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT_DIR)
@@ -16,77 +18,97 @@ import ninjalog_uploader
 
 
 class NinjalogUploaderTest(unittest.TestCase):
-    def test_IsGoogler(self):
-        with unittest.mock.patch('subprocess.run') as run_mock:
-            run_mock.return_value.returncode = 0
-            run_mock.return_value.stdout = 'Logged in as foo@google.com.\n'
-            self.assertTrue(ninjalog_uploader.IsGoogler())
-
-        with unittest.mock.patch('subprocess.run') as run_mock:
-            run_mock.return_value.returncode = 1
-            self.assertFalse(ninjalog_uploader.IsGoogler())
-
-        with unittest.mock.patch('subprocess.run') as run_mock:
-            run_mock.return_value.returncode = 0
-            run_mock.return_value.stdout = ''
-            self.assertFalse(ninjalog_uploader.IsGoogler())
-
-        with unittest.mock.patch('subprocess.run') as run_mock:
-            run_mock.return_value.returncode = 0
-            run_mock.return_value.stdout = 'Logged in as foo@example.com.\n'
-            self.assertFalse(ninjalog_uploader.IsGoogler())
 
     def test_parse_gn_args(self):
-        self.assertEqual(ninjalog_uploader.ParseGNArgs(json.dumps([])), {})
+        gn_args, explicit_keys = ninjalog_uploader.ParseGNArgs(json.dumps([]))
+        self.assertEqual(gn_args, {})
+        self.assertEqual(explicit_keys, [])
 
         # Extract current configs from GN's output json.
-        self.assertEqual(
-            ninjalog_uploader.ParseGNArgs(
-                json.dumps([
-                    {
-                        'current': {
-                            'value': 'true'
-                        },
-                        'default': {
-                            'value': 'false'
-                        },
-                        'name': 'is_component_build'
+        gn_args, explicit_keys = ninjalog_uploader.ParseGNArgs(
+            json.dumps([
+                {
+                    'current': {
+                        'value': 'true',
+                        'file': '//path/to/args.gn',
                     },
-                    {
-                        'default': {
-                            'value': '"x64"'
-                        },
-                        'name': 'host_cpu'
+                    'default': {
+                        'value': 'false'
                     },
-                ])), {
-                    'is_component_build': 'true',
-                    'host_cpu': '"x64"',
-                })
+                    'name': 'is_component_build'
+                },
+                {
+                    'default': {
+                        'value': '"x64"'
+                    },
+                    'name': 'host_cpu'
+                },
+            ]))
 
-        self.assertEqual(
-            ninjalog_uploader.ParseGNArgs(
+        self.assertEqual(gn_args, {
+            'is_component_build': 'true',
+            'host_cpu': 'x64',
+        })
+        self.assertEqual(explicit_keys, ['is_component_build'])
+
+        gn_args, explicit_keys = ninjalog_uploader.ParseGNArgs(
+            json.dumps([
+                {
+                    'current': {
+                        'value': 'true',
+                        'file': '//.gn',
+                    },
+                    'default': {
+                        'value': 'false'
+                    },
+                    'name': 'is_component_build'
+                },
+                {
+                    'current': {
+                        'value': 'false',
+                        'file': '//path/to/args.gn',
+                    },
+                    'default': {
+                        'value': 'false'
+                    },
+                    'name': 'use_remoteexec'
+                },
+            ]))
+        self.assertEqual(gn_args, {
+            'is_component_build': 'true',
+            'use_remoteexec': 'false'
+        })
+        self.assertEqual(explicit_keys, ['use_remoteexec'])
+
+        # Do not include sensitive information.
+        with unittest.mock.patch('getpass.getuser', return_value='bob'):
+            gn_args, explicit_keys = ninjalog_uploader.ParseGNArgs(
                 json.dumps([
                     {
                         'current': {
-                            'value': 'true'
+                            'value': 'xyz',
+                            'file': '//path/to/args.gn',
                         },
                         'default': {
-                            'value': 'false'
+                            'value': ''
                         },
-                        'name': 'is_component_build'
+                        'name': 'google_api_key'
                     },
                     {
                         'current': {
-                            'value': 'false'
+                            'value': '/home/bob/bobo',
+                            'file': '//path/to/args.gn',
                         },
                         'default': {
-                            'value': 'false'
+                            'value': ''
                         },
-                        'name': 'use_goma'
+                        'name': 'path_with_homedir'
                     },
-                ])), {
-                    'is_component_build': 'true',
-                    'use_goma': 'false'
+                ]))
+            self.assertEqual(
+                gn_args, {
+                    'google_api_key': '<omitted>',
+                    'path_with_homedir': '/home/$USER/bobo',
                 })
 
     def test_get_ninjalog(self):
@@ -175,6 +197,43 @@ class NinjalogUploaderTest(unittest.TestCase):
 
         self.assertEqual(ninjalog_uploader.GetJflag(['ninja', '-j']), None)
 
+    def test_get_gce_metadata(self):
+        with unittest.mock.patch('urllib.request.urlopen') as urlopen_mock:
+            urlopen_mock.side_effect = urllib.error.HTTPError(
+                'http://test/not-found', http.HTTPStatus.NOT_FOUND, 'not found',
+                None, None)
+            self.assertEqual(ninjalog_uploader.GetGCEMetadata(), {})
+
+        with unittest.mock.patch(
+                'ninjalog_uploader._getGCEInfo') as getGCEInfo_mock:
+            getGCEInfo_mock.return_value = {
+                "instance": {
+                    "machineType":
+                    "projects/12345/machineTypes/n2d-standard-128",
+                },
+                "project": {
+                    "projectId": "cloudtop-test"
+                }
+            }
+            self.assertEqual(ninjalog_uploader.GetGCEMetadata(), {
+                'gce_machine_type': 'n2d-standard-128',
+                'is_cloudtop': True,
+            })
+
+        with unittest.mock.patch(
+                'ninjalog_uploader._getGCEInfo') as getGCEInfo_mock:
+            getGCEInfo_mock.return_value = {
+                "instance": {
+                    "machineType":
+                    "projects/12345/machineTypes/n2d-standard-128",
+                },
+                "project": {
+                    "projectId": "gce-project"
+                }
+            }
+            self.assertEqual(ninjalog_uploader.GetGCEMetadata(), {
+                'gce_machine_type': 'n2d-standard-128',
+            })
 
 if __name__ == '__main__':
     unittest.main()

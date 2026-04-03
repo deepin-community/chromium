@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -30,7 +30,7 @@ class Camera(TestSuite):
           gc_rss_and_dma {
             min: 47779840.0
             max: 2536079360.0
-            avg: 1464706457.7348418
+            avg: 1464706457.734843
           }
         }
         """))

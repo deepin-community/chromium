@@ -51,6 +51,7 @@ class DeviceImpl : public mojom::UsbDevice, public device::UsbDevice::Observer {
 
   // Checks interface permissions for control transfers.
   bool HasControlTransferPermission(
+      mojom::UsbControlTransferType type,
       mojom::UsbControlTransferRecipient recipient,
       uint16_t index);
 
@@ -108,6 +109,9 @@ class DeviceImpl : public mojom::UsbDevice, public device::UsbDevice::Observer {
 
   void OnInterfaceClaimed(ClaimInterfaceCallback callback, bool success);
   void OnClientConnectionError();
+
+  // Reject and report bad mojo messaage if `length` exceeds limit.
+  bool ShouldRejectUsbTransferLengthAndReportBadMessage(size_t length);
 
   const scoped_refptr<device::UsbDevice> device_;
   base::ScopedObservation<device::UsbDevice, device::UsbDevice::Observer>

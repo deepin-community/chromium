@@ -22,9 +22,10 @@
  * @todo switch to dualinput
  */
 
-#include "libavutil/imgutils.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
-#include "internal.h"
+
+#include "filters.h"
 #include "video.h"
 
 #include "lavfutils.h"
@@ -79,8 +80,10 @@ static AVFrame *downscale(AVFrame *in)
     src = in   ->data[0];
     dst = frame->data[0];
 
-    for(y = 0; y < frame->height; y++) {
-        for(x = 0; x < frame->width; x++) {
+    int w2 = in->width/2;
+    int h2 = in->height/2;
+    for(y = 0; y < h2; y++) {
+        for(x = 0; x < w2; x++) {
             dst[x] = (  src[2*x+0]
                       + src[2*x+1]
                       + src[2*x+0 + in->linesize[0]]
@@ -90,6 +93,22 @@ static AVFrame *downscale(AVFrame *in)
         src += 2*in->linesize[0];
         dst += frame->linesize[0];
     }
+    src = in   ->data[0];
+    dst = frame->data[0];
+    for(y = 0; y < frame->height; y++) {
+        int yd = y < h2 ? in->linesize[0] : 0;
+        x = yd ? w2 : 0;
+        for(; x < frame->width; x++) {
+            dst[x] = (  src[2*x+0]
+                      + src[FFMIN(2*x+1, w2)]
+                      + src[2*x+0            + yd]
+                      + src[FFMIN(2*x+1, w2) + yd]
+                      + 2) >> 2;
+        }
+        src += 2*in->linesize[0];
+        dst += frame->linesize[0];
+    }
+
     return frame;
 }
 
@@ -172,6 +191,7 @@ static float search(FOCContext *foc, int pass, int maxpass, int xmin, int xmax, 
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
+    FilterLink *inl = ff_filter_link(inlink);
     AVFilterContext *ctx = inlink->dst;
     FOCContext *foc = ctx->priv;
     float best_score;
@@ -208,7 +228,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
     }
 
     av_log(ctx, AV_LOG_INFO, "Found at n=%"PRId64" pts_time=%f x=%d y=%d with score=%f\n",
-           inlink->frame_count_out, TS2D(in->pts) * av_q2d(inlink->time_base),
+           inl->frame_count_out, TS2D(in->pts) * av_q2d(inlink->time_base),
            best_x, best_y, best_score);
     foc->last_x = best_x;
     foc->last_y = best_y;
@@ -282,15 +302,15 @@ static const AVFilterPad foc_inputs[] = {
     },
 };
 
-const AVFilter ff_vf_find_rect = {
-    .name            = "find_rect",
-    .description     = NULL_IF_CONFIG_SMALL("Find a user specified object."),
+const FFFilter ff_vf_find_rect = {
+    .p.name          = "find_rect",
+    .p.description   = NULL_IF_CONFIG_SMALL("Find a user specified object."),
+    .p.flags         = AVFILTER_FLAG_METADATA_ONLY,
+    .p.priv_class    = &find_rect_class,
     .priv_size       = sizeof(FOCContext),
     .init            = init,
     .uninit          = uninit,
-    .flags           = AVFILTER_FLAG_METADATA_ONLY,
     FILTER_INPUTS(foc_inputs),
     FILTER_OUTPUTS(ff_video_default_filterpad),
     FILTER_PIXFMTS(AV_PIX_FMT_YUV420P, AV_PIX_FMT_YUVJ420P),
-    .priv_class      = &find_rect_class,
 };

@@ -6,13 +6,13 @@
 
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/task_environment.h"
 #include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
 #include "chrome/browser/performance_manager/test_support/fake_frame_throttling_delegate.h"
 #include "chrome/browser/performance_manager/test_support/test_user_performance_tuning_manager_environment.h"
 #include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/user_tuning/prefs.h"
 #include "components/prefs/testing_pref_service.h"
+#include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 class PerformanceManagerMetricsProviderDesktopTest : public testing::Test {
@@ -23,18 +23,22 @@ class PerformanceManagerMetricsProviderDesktopTest : public testing::Test {
     local_state()->SetInteger(
         performance_manager::user_tuning::prefs::kMemorySaverModeState,
         static_cast<int>(enabled ? performance_manager::user_tuning::prefs::
-                                       MemorySaverModeState::kEnabledOnTimer
+                                       MemorySaverModeState::kEnabled
                                  : performance_manager::user_tuning::prefs::
                                        MemorySaverModeState::kDisabled));
   }
 
+  void SetDiskMetricsForTesting(int64_t free_bytes, int64_t total_bytes) {
+    provider()->SetDiskMetricsForTesting(
+        performance_manager::MetricsProviderDesktop::DiskMetrics{
+            .free_bytes = base::ByteCount(0),
+            .total_bytes = base::ByteCount(0)});
+  }
+
   void SetBatterySaverEnabled(bool enabled) {
-    local_state()->SetInteger(
-        performance_manager::user_tuning::prefs::kBatterySaverModeState,
-        static_cast<int>(enabled ? performance_manager::user_tuning::prefs::
-                                       BatterySaverModeState::kEnabled
-                                 : performance_manager::user_tuning::prefs::
-                                       BatterySaverModeState::kDisabled));
+    performance_manager::user_tuning::
+        TestUserPerformanceTuningManagerEnvironment::SetBatterySaverMode(
+            &local_state_, enabled);
   }
 
   void ExpectSingleUniqueSample(
@@ -67,6 +71,8 @@ class PerformanceManagerMetricsProviderDesktopTest : public testing::Test {
     task_environment_.FastForwardBy(delta);
   }
 
+  void RunUntilIdle() { task_environment_.RunUntilIdle(); }
+
  private:
   void SetUp() override {
     performance_manager::user_tuning::prefs::RegisterLocalStatePrefs(
@@ -82,6 +88,7 @@ class PerformanceManagerMetricsProviderDesktopTest : public testing::Test {
   }
 
   void TearDown() override {
+    provider()->SetDiskMetricsForTesting(std::nullopt);
     // Tests may teardown the environment before this is called to make some
     // assertions.
     if (user_performance_tuning_env_) {
@@ -89,7 +96,7 @@ class PerformanceManagerMetricsProviderDesktopTest : public testing::Test {
     }
   }
 
-  base::test::TaskEnvironment task_environment_{
+  content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
   TestingPrefServiceSimple local_state_;
@@ -273,4 +280,48 @@ TEST_F(PerformanceManagerMetricsProviderDesktopTest,
                              /*battery_saver_percent=*/100,
                              /*memory_saver_percent=*/0);
   }
+}
+
+TEST_F(PerformanceManagerMetricsProviderDesktopTest,
+       TestCpuThrottlingMetricRecordedWhereAvailable) {
+  InitProvider();
+  base::HistogramTester tester;
+
+  FastForwardBy(base::Minutes(5));
+  tester.ExpectTotalCount(
+      "CPU.Experimental.EstimatedFrequencyAsPercentOfMax.Performance",
+      SHOULD_COLLECT_CPU_FREQUENCY_METRICS() ? 1 : 0);
+
+  tester.ExpectTotalCount(
+      "CPU.Experimental.EstimatedFrequencyAsPercentOfLimit.Performance",
+      SHOULD_COLLECT_CPU_FREQUENCY_METRICS() ? 1 : 0);
+
+  tester.ExpectTotalCount(
+      "CPU.Experimental.CpuEstimationTaskQueuedTime.Performance",
+      SHOULD_COLLECT_CPU_FREQUENCY_METRICS() ? 1 : 0);
+  tester.ExpectTotalCount(
+      "CPU.Experimental.CpuEstimationTaskTotalTime.Performance",
+      SHOULD_COLLECT_CPU_FREQUENCY_METRICS() ? 1 : 0);
+  tester.ExpectTotalCount(
+      "CPU.Experimental.CpuEstimationTaskThreadTime.Performance",
+      SHOULD_COLLECT_CPU_FREQUENCY_METRICS() ? 1 : 0);
+  tester.ExpectTotalCount(
+      "CPU.Experimental.CpuEstimationTaskWallTime.Performance",
+      SHOULD_COLLECT_CPU_FREQUENCY_METRICS() ? 1 : 0);
+}
+
+TEST_F(PerformanceManagerMetricsProviderDesktopTest,
+       RecordDiskMetricsWithZeroTotal) {
+  InitProvider();
+  SetDiskMetricsForTesting(0, 0);
+  // The disk metrics task is posted during InitProvider. Run until it's done.
+  RunUntilIdle();
+
+  base::HistogramTester tester;
+  provider()->ProvideCurrentSessionData(nullptr);
+
+  tester.ExpectTotalCount("PerformanceManager.DiskStats.UserDataDirFreeSpaceMb",
+                          0);
+  tester.ExpectTotalCount(
+      "PerformanceManager.DiskStats.UserDataDirFreeSpacePercent", 0);
 }

@@ -1,6 +1,8 @@
 # This package is a shim layer over TF and TFLite op kernels.
 
-load("//tensorflow:tensorflow.bzl", "if_mobile", "if_not_mobile", "tf_cc_test", "tf_copts")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("//tensorflow:tensorflow.bzl", "if_android", "if_mobile", "if_not_mobile", "tf_cc_test", "tf_copts")
 load("//tensorflow:tensorflow.default.bzl", "get_compatible_with_portable")
 
 package(
@@ -46,7 +48,6 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
-        "@com_google_absl//absl/types:variant",
     ],
 )
 
@@ -75,6 +76,7 @@ cc_library(
     srcs = ["tf_tensor_view.cc"],
     hdrs = ["tf_tensor_view.h"],
     copts = tf_copts(),
+    features = if_android(["-layering_check"]),
     deps = [
         ":tensor_view",
         "@com_google_absl//absl/status",
@@ -142,7 +144,6 @@ cc_library(
         ":shape",
         ":status_macros",
         ":tensor_view",
-        "//tensorflow/core:protos_all_cc",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -155,6 +156,7 @@ cc_library(
     srcs = ["tf_op_shim.cc"],
     hdrs = ["tf_op_shim.h"],
     copts = tf_copts(),
+    features = if_android(["-layering_check"]),
     visibility = ["//visibility:public"],
     deps = [
         ":op_kernel",
@@ -165,6 +167,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@tsl//tsl/platform:macros",
     ] + if_mobile([
         "//tensorflow/core:portable_tensorflow_lib_lite",
     ]) + if_not_mobile([
@@ -227,7 +230,10 @@ cc_library(
     name = "status_macros",
     hdrs = ["status_macros.h"],
     visibility = ["//visibility:public"],
-    deps = ["@com_google_absl//absl/status"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+    ],
 )
 
 cc_library(

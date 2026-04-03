@@ -1,6 +1,14 @@
 """Helper rules for writing LIT tests."""
 
 load("@bazel_skylib//lib:paths.bzl", "paths")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
+load("@rules_python//python:defs.bzl", "py_binary")
+load("//xla/tsl:package_groups.bzl", "DEFAULT_LOAD_VISIBILITY")
+load("//xla/tsl:tsl.bzl", "if_google", "if_nccl", "if_oss")
+load("//xla/tsl:tsl.default.bzl", "if_cuda_tools")
+load("//xla/tsl/platform/default:cuda_build_defs.bzl", "if_cuda_is_configured")
+
+visibility(DEFAULT_LOAD_VISIBILITY)
 
 def enforce_glob(files, **kwargs):
     """A utility to enforce that a list matches a glob expression.
@@ -49,6 +57,10 @@ def lit_test_suite(
         timeout = None,
         default_tags = None,
         tags_override = None,
+        hermetic_cuda_data_dir = None,
+        exec_properties = {},
+        tags = [],
+        gpu_suffix = "",
         **kwargs):
     """Creates one lit test per source file and a test suite that bundles them.
 
@@ -60,7 +72,9 @@ def lit_test_suite(
         of `srcs`.
       tools: label list. Tools invoked in the lit RUN lines. These binaries will
         be symlinked into a directory which is on the path. They must therefore
-        have unique basenames.
+        have unique basenames. Note that tools that are xla_cc_binary targets
+        will also need to have linkopts = ["-Wl,-rpath,$$ORIGIN/../lit_lib"],
+        otherwise they will not work properly with hermetic cuda.
       args: string list. Additional arguments to pass to lit. Note that the test
         file, `-v`, and a `--path` argument for the directory to which `tools`
         are symlinked are added automatically.
@@ -73,6 +87,13 @@ def lit_test_suite(
       timeout: timeout argument passed to the individual tests.
       default_tags: string list. Tags applied to all tests.
       tags_override: string_dict. Tags applied in addition to only select tests.
+      hermetic_cuda_data_dir: string. If set, the tests will be run with a
+        `--xla_gpu_cuda_data_dir` flag set to the hermetic CUDA data directory.
+      tags: string list. Tags applied to all tests and the test suite.
+      exec_properties: string_dict. Properties to pass to the test rule, e.g.
+        requirement to run on a GPU.
+      gpu_suffix: string. A suffix derived from the gpu name that can be added
+        to make (file) names unique.
       **kwargs: additional keyword arguments to pass to all generated rules.
 
     See https://llvm.org/docs/CommandGuide/lit.html for details on lit
@@ -91,7 +112,7 @@ def lit_test_suite(
         # It's generally good practice to prefix any generated names with the
         # macro name, but it's also nice to have the test name just match the
         # file name.
-        test_name = "%s.test" % (test_file)
+        test_name = "%s.test%s" % (test_file, gpu_suffix)
         tests.append(test_name)
         lit_test(
             name = test_name,
@@ -103,14 +124,127 @@ def lit_test_suite(
             visibility = visibility,
             env = env,
             timeout = timeout,
-            tags = default_tags + tags_override.get(test_file, []),
+            tags = tags + default_tags + tags_override.get(test_file, []),
+            hermetic_cuda_data_dir = hermetic_cuda_data_dir,
+            exec_properties = exec_properties,
+            gpu_suffix = gpu_suffix,
             **kwargs
         )
 
     native.test_suite(
         name = name,
         tests = tests,
+        tags = tags,
         **kwargs
+    )
+
+def lit_test_suite_for_gpus(
+        name,
+        srcs,
+        cfg,
+        tools = None,
+        args = [],
+        data = [],
+        visibility = None,
+        env = None,
+        timeout = None,
+        default_tags = None,
+        tags_override = None,
+        hermetic_cuda_data_dir = None,
+        exec_properties = {},
+        tags = [],
+        gpus = ["a6000"],
+        disabled_on_gpus = {},
+        **kwargs):
+    """Creates one lit test suite per gpu.
+
+    Args:
+      name: string. the name prefix of the generated test suite. Each test suite
+        will get the gpu name as suffix.
+      srcs: label_list. The files which contain the lit tests.
+      cfg: label. The lit config file. It must list the file extension of
+        the files in `srcs` in config.suffixes and must be in a parent directory
+        of `srcs`.
+      tools: label list. Tools invoked in the lit RUN lines. These binaries will
+        be symlinked into a directory which is on the path. They must therefore
+        have unique basenames. Note that tools that are xla_cc_binary targets
+        will also need to have linkopts = ["-Wl,-rpath,$$ORIGIN/../lit_lib"],
+        otherwise they will not work properly with hermetic cuda.
+      args: string list. Additional arguments to pass to lit. Note that the test
+        file, `-v`, and a `--path` argument for the directory to which `tools`
+        are symlinked are added automatically.
+      data: label list. Additional data dependencies of the test. Note that
+        targets in `cfg` and `tools`, as well as their data dependencies, are
+        added automatically.
+      visibility: visibility of the generated test targets and test suite.
+      env: string_dict. Environment variables available during test execution.
+        See the common Bazel test attribute.
+      timeout: timeout argument passed to the individual tests.
+      default_tags: string list. Tags applied to all tests.
+      tags_override: string_dict. Tags applied in addition to only select tests.
+      hermetic_cuda_data_dir: string. If set, the tests will be run with a
+        `--xla_gpu_cuda_data_dir` flag set to the hermetic CUDA data directory.
+      tags: string list. Tags applied to all tests and the test suite.
+      exec_properties: string_dict. Properties to pass to the test rule, e.g.
+        requirement to run on a GPU.
+      gpus: string list. GPU names for which a lit test suite should be
+        generated. Supported GPU names are: p100, v100, a100_pcie, a6000, h100,
+        b200, mi200.
+      disabled_on_gpus: string_dict. For a gpu name (key) contains a list of
+        test files that should be skipped.
+      **kwargs: additional keyword arguments to pass to all generated rules.
+
+    See https://llvm.org/docs/CommandGuide/lit.html for details on lit
+    """
+    # If there are kwargs that need to be passed to only some of the generated
+    # rules, they should be extracted into separate named arguments.
+
+    for gpu in gpus:
+        filtered_srcs = [src for src in srcs if src not in disabled_on_gpus.get(gpu, [])]
+        gpu_args = args + [
+            "--param=PTX=%s" % ("GCN" if gpu == "mi200" else "PTX"),
+            "--param=GPU=%s" % (gpu),
+        ]
+        gpu_data = data + [
+            "//xla/backends/gpu/target_config:all_gpu_specs",
+        ]
+        lit_test_suite(
+            "%s_%s" % (name, gpu),
+            filtered_srcs,
+            cfg,
+            tools,
+            gpu_args,
+            gpu_data,
+            visibility,
+            env,
+            timeout,
+            default_tags,
+            tags_override,
+            hermetic_cuda_data_dir,
+            exec_properties,
+            # We add the tag xla_h100 to avoid that the test suite is scheduled
+            # on different GPU architectures. Technically these tests don't
+            # need a GPU, but a build with GPU configured.
+            tags + ["rocm-only"] if gpu == "mi200" else ["cuda-only", "xla_h100"],
+            "_%s" % (gpu),
+            **kwargs
+        )
+
+def lit_script_with_xla_gpu_cuda_data_dir(
+        name,
+        input_file,
+        output_file,
+        xla_gpu_cuda_data_dir):
+    """Adds a line to the LIT script to set the XLA_FLAGS environment variable."""
+    return native.genrule(
+        name = name,
+        srcs = [input_file],
+        outs = [output_file],
+        cmd = if_cuda_tools(
+            """echo -e '// RUN: export XLA_FLAGS=\"--xla_gpu_cuda_data_dir={}\"' > $@;
+cat $< >> $@;""".format(xla_gpu_cuda_data_dir),
+            "cat $< >> $@;",
+        ),
     )
 
 def lit_test(
@@ -123,6 +257,9 @@ def lit_test(
         visibility = None,
         env = None,
         timeout = None,
+        hermetic_cuda_data_dir = None,
+        exec_properties = {},
+        gpu_suffix = "",
         **kwargs):
     """Runs a single test file with LLVM's lit tool.
 
@@ -134,7 +271,9 @@ def lit_test(
         `test_file`.
       tools: label list. Tools invoked in the lit RUN lines. These binaries will
         be symlinked into a directory which is on the path. They must therefore
-        have unique basenames.
+        have unique basenames. Note that tools that are xla_cc_binary targets
+        will also need to have linkopts = ["-Wl,-rpath,$$ORIGIN/../lit_lib"],
+        otherwise they will not work properly with hermetic cuda.
       args: string list. Additional arguments to pass to lit. Note that the test
         file, `-v`, and a `--path` argument for the directory to which `tools`
         are symlinked are added automatically.
@@ -145,12 +284,18 @@ def lit_test(
       env: string_dict. Environment variables available during test execution.
         See the common Bazel test attribute.
       timeout: bazel test timeout string, as per common bazel definitions.
+      hermetic_cuda_data_dir: string. If set, the tests will be run with a
+        `--xla_gpu_cuda_data_dir` flag set to the hermetic CUDA data directory.
+      exec_properties: string_dict. Properties to pass to the test rule, e.g.
+        requirement to run on a GPU.
+      gpu_suffix: string. A suffix derived from the gpu name that can be added
+        to make (file) names unique.
       **kwargs: additional keyword arguments to pass to all generated rules.
 
     See https://llvm.org/docs/CommandGuide/lit.html for details on lit
     """
     args = args or []
-    data = data or []
+    data = (data or []) + ["//xla:sh_test_with_runfiles.py"]
     tools = tools or []
     env = env or {}
 
@@ -169,19 +314,62 @@ def lit_test(
         tools_on_path_target_name,
         "lit_bin",
     )
+    lib_dir = paths.join(
+        native.package_name(),
+        tools_on_path_target_name,
+        "lit_lib",
+    )
 
     _tools_on_path(
         name = tools_on_path_target_name,
         testonly = True,
         srcs = tools,
         bin_dir = bin_dir,
+        lib_dir = lib_dir,
+        deps = if_cuda_is_configured([
+            "//xla/stream_executor/cuda:all_runtime",
+            "//xla/tsl/cuda:nvshmem_stub",
+        ]) + if_nccl([
+            "//xla/tsl/cuda:nccl",
+        ]),
         visibility = ["//visibility:private"],
         **kwargs
     )
+    lit_name = "//third_party/py/lit:lit"
+
+    _ = py_binary  # @unused
+
+    # copybara:comment_begin(oss-only)
+    # Prevents creation of the files with identical names located in different
+    # directories on Windows platform.
+    lit_name = "lit_custom_" + name.replace("/", "_")
+    py_binary(
+        name = lit_name,
+        main = "@llvm-project//llvm:utils/lit/lit.py",
+        srcs = ["@llvm-project//llvm:utils/lit/lit.py"],
+        testonly = True,
+        deps = [
+            "@llvm-project//llvm:lit_lib",
+            "@pypi//lit",
+        ],
+    )
+
+    # copybara:comment_end
+
+    if hermetic_cuda_data_dir:
+        output_file = "with_xla_gpu_cuda_data_dir%s_%s" % (gpu_suffix, test_file)
+        rule_name = "script%s_%s" % (gpu_suffix, output_file)
+        lit_script_with_xla_gpu_cuda_data_dir(
+            rule_name,
+            test_file,
+            output_file,
+            hermetic_cuda_data_dir,
+        )
+        test_file = output_file
 
     native_test(
         name = name,
-        src = "@llvm-project//llvm:lit",
+        src = lit_name,
         args = [
             "-a",
             "--path",
@@ -189,17 +377,21 @@ def lit_test(
             "$(location {})".format(test_file),
         ] + args,
         data = [
-            "@llvm-project//llvm:lit",
-            test_file,
+                   lit_name,
+                   test_file,
 
-            # TODO(cheshire): Config is not passed properly when it's not
-            # called lit.cfg.py
-            cfg,
-            tools_on_path_target_name,
-        ] + data,
+                   # TODO(cheshire): Config is not passed properly when it's not
+                   # called lit.cfg.py
+                   cfg,
+                   tools_on_path_target_name,
+               ] + data + if_oss(["@pypi//lit"]) +
+               if_google([
+                   "//xla:lit_google_cfg.py",
+               ]),
         visibility = visibility,
         env = env,
         timeout = timeout,
+        exec_properties = exec_properties,
         **kwargs
     )
 
@@ -259,6 +451,24 @@ def _tools_on_path_impl(ctx):
                  " {} and {} conflict".format(runfiles_symlinks[bin_path], exe))
         runfiles_symlinks[bin_path] = exe
 
+    # The loop below symlinks the libraries that are used by the tools.
+    for dep in ctx.attr.deps:
+        linker_inputs = dep[CcInfo].linking_context.linker_inputs.to_list()
+        for linker_input in linker_inputs:
+            if len(linker_input.libraries) == 0:
+                continue
+            lib = linker_input.libraries[0].dynamic_library
+            if not lib:
+                continue
+            lib_path = paths.join(ctx.attr.lib_dir, lib.basename)
+            if lib_path in runfiles_symlinks:
+                if runfiles_symlinks[lib_path] == lib:
+                    continue
+                fail("All libs used by lit tests must have unique basenames, as" +
+                     " they are added to the path." +
+                     " {} and {} conflict".format(runfiles_symlinks[lib_path], lib))
+            runfiles_symlinks[lib_path] = lib
+
     return [
         DefaultInfo(runfiles = ctx.runfiles(
             symlinks = runfiles_symlinks,
@@ -270,6 +480,8 @@ _tools_on_path = rule(
     attrs = {
         "srcs": attr.label_list(allow_files = True, mandatory = True),
         "bin_dir": attr.string(mandatory = True),
+        "lib_dir": attr.string(mandatory = True),
+        "deps": attr.label_list(),
     },
     doc = "Symlinks srcs into a single lit_bin directory. All basenames must be unique.",
 )

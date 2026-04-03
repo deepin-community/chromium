@@ -27,6 +27,7 @@ void HLSLBlockEncoder::enterAggregateType(const ShaderVariable &structVar)
 void HLSLBlockEncoder::exitAggregateType(const ShaderVariable &structVar) {}
 
 void HLSLBlockEncoder::getBlockLayoutInfo(GLenum typeIn,
+                                          const size_t bytesPerComponent,
                                           const std::vector<unsigned int> &arraySizes,
                                           bool isRowMajorMatrix,
                                           int *arrayStrideOut,
@@ -76,6 +77,7 @@ void HLSLBlockEncoder::getBlockLayoutInfo(GLenum typeIn,
 }
 
 void HLSLBlockEncoder::advanceOffset(GLenum typeIn,
+                                     const size_t bytesPerComponent,
                                      const std::vector<unsigned int> &arraySizes,
                                      bool isRowMajorMatrix,
                                      int arrayStride,
@@ -123,7 +125,6 @@ HLSLBlockEncoder::HLSLBlockEncoderStrategy HLSLBlockEncoder::GetStrategyFor(
         case SH_HLSL_3_0_OUTPUT:
             return ENCODE_LOOSE;
         case SH_HLSL_4_1_OUTPUT:
-        case SH_HLSL_4_0_FL9_3_OUTPUT:
             return ENCODE_PACKED;
         default:
             UNREACHABLE();
@@ -151,7 +152,8 @@ void HLSLVariableRegisterCount(const ShaderVarType &variable, HLSLBlockEncoder *
     else
     {
         // We operate only on varyings and uniforms, which do not have matrix layout qualifiers
-        encoder->encodeType(variable.type, variable.arraySizes, false);
+        encoder->encodeType(variable.type, BlockLayoutEncoder::kBytesPerComponent,
+                            variable.arraySizes, false);
     }
 }
 

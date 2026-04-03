@@ -32,22 +32,26 @@ class MEDIA_EXPORT Mp4Muxer : public Muxer {
   bool PutFrame(EncodedFrame frame,
                 base::TimeDelta relative_timestamp) override;
   bool Flush() override;
+  void OnVideoEnded() override;
 
  private:
-  void MaybeForceFlush();
+  void MaybeForceFragmentFlush(base::TimeDelta media_relative_timestamp);
   void Reset();
 
   const std::unique_ptr<Mp4MuxerDelegateInterface> mp4_muxer_delegate_;
 
-  // TODO(crbug.com/1381323): consider if output should be based on media
-  // timestamps.
   base::TimeDelta max_data_output_interval_;
-  base::TimeTicks start_or_last_flushed_timestamp_;
+
+  // Tracks the start time of the current fragment to enforce periodic fragment
+  // flushes. It's updated after each fragment flush or on the first frame.
+  std::optional<base::TimeDelta> flush_origin_;
   bool seen_audio_ = false;
+  bool video_ended_ = false;
 
   const bool has_video_;
   const bool has_audio_;
 
+  AudioCodec audio_codec_;
   SEQUENCE_CHECKER(sequence_checker_);
 };
 

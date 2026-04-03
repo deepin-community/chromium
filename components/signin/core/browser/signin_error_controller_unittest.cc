@@ -11,7 +11,6 @@
 
 #include "base/scoped_observation.h"
 #include "base/test/task_environment.h"
-#include "build/chromeos_buildflags.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/signin/public/identity_manager/primary_account_mutator.h"
 #include "google_apis/gaia/google_service_auth_error.h"
@@ -67,7 +66,7 @@ TEST(SigninErrorControllerTest, SingleAccount) {
   ::testing::Mock::VerifyAndClearExpectations(&observer);
 
   GoogleServiceAuthError error2 =
-      GoogleServiceAuthError(GoogleServiceAuthError::USER_NOT_SIGNED_UP);
+      GoogleServiceAuthError(GoogleServiceAuthError::ACCOUNT_NOT_FOUND);
   EXPECT_CALL(observer, OnErrorChanged()).Times(1);
   identity_test_env.UpdatePersistentErrorOfRefreshTokenForAccount(
       test_account_id, error2);
@@ -153,7 +152,7 @@ TEST(SigninErrorControllerTest, AuthStatusEnumerateAllErrors) {
   GoogleServiceAuthError::State table[] = {
       GoogleServiceAuthError::NONE,
       GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS,
-      GoogleServiceAuthError::USER_NOT_SIGNED_UP,
+      GoogleServiceAuthError::ACCOUNT_NOT_FOUND,
       GoogleServiceAuthError::CONNECTION_FAILED,
       GoogleServiceAuthError::SERVICE_UNAVAILABLE,
       GoogleServiceAuthError::REQUEST_CANCELED,
@@ -168,10 +167,18 @@ TEST(SigninErrorControllerTest, AuthStatusEnumerateAllErrors) {
       "table array does not match the number of auth error types");
 
   for (GoogleServiceAuthError::State state : table) {
-    GoogleServiceAuthError error(state);
+    GoogleServiceAuthError error;
+    if (state == GoogleServiceAuthError::SCOPE_LIMITED_UNRECOVERABLE_ERROR) {
+      error = GoogleServiceAuthError::FromScopeLimitedUnrecoverableErrorReason(
+          GoogleServiceAuthError::ScopeLimitedUnrecoverableErrorReason::
+              kInvalidScope);
+    } else {
+      error = GoogleServiceAuthError(state);
+    }
 
-    if (error.IsTransientError() || error.IsScopePersistentError())
+    if (error.IsTransientError() || error.IsScopePersistentError()) {
       continue;  // Only non scope persistent errors or non-errors are reported.
+    }
 
     identity_test_env.UpdatePersistentErrorOfRefreshTokenForAccount(
         test_account_id, error);

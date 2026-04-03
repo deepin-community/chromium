@@ -333,7 +333,7 @@ const WELL_KNOWN_SIDS: {[sid: string]: string} = {
  */
 function mapCapabilitySid(sid: string): string {
   if (WELL_KNOWN_SIDS[sid]) {
-    return WELL_KNOWN_SIDS[sid]!;
+    return WELL_KNOWN_SIDS[sid];
   }
   return sid;
 }
@@ -387,6 +387,7 @@ function makeExpandableEntry(mainEntry: string, expandable: Expandable): Node {
   });
   const fixed = document.createElement('div');
   fixed.classList.add('mitigations');
+  expand.classList.add('mitigations');
   fixed.innerText = mainEntry;
 
   const col = document.createElement('td');

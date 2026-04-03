@@ -4,6 +4,7 @@
 
 #include "chrome/updater/crash_reporter.h"
 
+#include <algorithm>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -13,20 +14,22 @@
 
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/updater/constants.h"
+#include "chrome/updater/event_history.h"
 #include "chrome/updater/external_constants.h"
 #include "chrome/updater/updater_branding.h"
 #include "chrome/updater/updater_scope.h"
 #include "chrome/updater/util/util.h"
+#include "components/update_client/utils.h"
 #include "third_party/crashpad/crashpad/client/crashpad_client.h"
 #include "third_party/crashpad/crashpad/client/crashpad_info.h"
 #include "third_party/crashpad/crashpad/handler/handler_main.h"
@@ -44,21 +47,24 @@ crashpad::CrashpadClient& GetCrashpadClient() {
 std::vector<std::string> MakeCrashHandlerArgs(UpdaterScope updater_scope) {
   base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
   command_line.AppendSwitch(kCrashHandlerSwitch);
-  command_line.AppendSwitch(kEnableLoggingSwitch);
-  command_line.AppendSwitchASCII(kLoggingModuleSwitch,
-                                 kLoggingModuleSwitchValue);
   if (IsSystemInstall(updater_scope)) {
     command_line.AppendSwitch(kSystemSwitch);
+  }
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(kMonitorSelfSwitch)) {
+    command_line.AppendSwitch(kMonitorSelfSwitch);
+    if (updater_scope == UpdaterScope::kSystem) {
+      command_line.AppendSwitchUTF8(kMonitorSelfSwitchArgument,
+                                    base::StrCat({"--", kSystemSwitch}));
+    }
   }
 
   // The first element in the command line arguments is the program name,
   // which must be skipped.
 #if BUILDFLAG(IS_WIN)
   std::vector<std::string> args;
-  base::ranges::transform(
-      ++command_line.argv().begin(), command_line.argv().end(),
-      std::back_inserter(args),
-      [](const auto& arg) { return base::WideToUTF8(arg); });
+  std::ranges::transform(++command_line.argv().begin(),
+                         command_line.argv().end(), std::back_inserter(args),
+                         [](const auto& arg) { return base::WideToUTF8(arg); });
 
   return args;
 #else
@@ -91,7 +97,7 @@ void StartCrashReporter(UpdaterScope updater_scope,
   // Save dereferenced memory from all registers on the crashing thread.
   // Crashpad saves up to 512 bytes per CPU register, and in the worst case,
   // ARM64 has 32 registers.
-  constexpr uint32_t kIndirectMemoryLimit = 32 * 512;
+  static constexpr uint32_t kIndirectMemoryLimit = 32 * 512;
   crashpad::CrashpadInfo::GetCrashpadInfo()
       ->set_gather_indirectly_referenced_memory(crashpad::TriState::kEnabled,
                                                 kIndirectMemoryLimit);
@@ -102,6 +108,12 @@ void StartCrashReporter(UpdaterScope updater_scope,
   if (log_file) {
     attachments.push_back(*log_file);
   }
+  std::optional<base::FilePath> history_log_path =
+      GetHistoryLogFilePath(updater_scope);
+  if (history_log_path) {
+    attachments.push_back(*history_log_path);
+  }
+
 #endif
   if (!client.StartHandler(
           handler_path, *database_path,
@@ -121,10 +133,6 @@ int CrashReporterMain() {
   base::CommandLine command_line = *base::CommandLine::ForCurrentProcess();
   CHECK(command_line.HasSwitch(kCrashHandlerSwitch));
 
-  // Disable rate-limiting until this is fixed:
-  //   https://bugs.chromium.org/p/crashpad/issues/detail?id=23
-  command_line.AppendSwitch(kNoRateLimitSwitch);
-
   // Because of https://bugs.chromium.org/p/crashpad/issues/detail?id=82,
   // Crashpad fails on the presence of flags it doesn't handle.
   command_line.RemoveSwitch(kCrashHandlerSwitch);
@@ -140,14 +148,10 @@ int CrashReporterMain() {
   auto argv_as_utf8 = std::make_unique<char*[]>(argv.size() + 1);
   storage.reserve(argv.size());
   for (size_t i = 0; i < argv.size(); ++i) {
-#if BUILDFLAG(IS_WIN)
-    storage.push_back(base::WideToUTF8(argv[i]));
-#else
-    storage.push_back(argv[i]);
-#endif
-    argv_as_utf8[i] = &storage[i][0];
+    storage.push_back(update_client::StringTypeToUTF8(argv[i]));
+    UNSAFE_TODO(argv_as_utf8[i]) = &storage[i][0];
   }
-  argv_as_utf8[argv.size()] = nullptr;
+  UNSAFE_TODO(argv_as_utf8[argv.size()]) = nullptr;
 
   return crashpad::HandlerMain(argv.size(), argv_as_utf8.get(),
                                /*user_stream_sources=*/nullptr);

@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/files/file_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -17,7 +16,6 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/web_contents.h"
@@ -315,7 +313,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionResourceRequestPolicyTest,
       "web_accessible/accessible_link_resource.html"));
   ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(
       browser(), accessible_linked_resource, 1);
-  GURL accessible_url = extension->GetResourceURL("/test.png");
+  GURL accessible_url = extension->GetResourceURL("test.png");
   EXPECT_EQ(accessible_url, content::EvalJs(web_contents, "document.URL"));
   EXPECT_EQ(content::PAGE_TYPE_NORMAL,
             controller.GetLastCommittedEntry()->GetPageType());
@@ -337,8 +335,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionResourceRequestPolicyTest,
 
   // Redirects can sometimes occur before the load event, so use a
   // UrlLoadObserver instead of blocking waiting for two load events.
-  ui_test_utils::UrlLoadObserver accessible_observer(
-      accessible_url, content::NotificationService::AllSources());
+  ui_test_utils::UrlLoadObserver accessible_observer(accessible_url);
   GURL accessible_client_redirect_resource(embedded_test_server()->GetURL(
       "/extensions/api_test/extension_resource_request_policy/"
       "web_accessible/accessible_redirect_resource.html"));
@@ -349,8 +346,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionResourceRequestPolicyTest,
             controller.GetLastCommittedEntry()->GetPageType());
   EXPECT_EQ(accessible_url, web_contents->GetLastCommittedURL());
 
-  ui_test_utils::UrlLoadObserver nonaccessible_observer(
-      invalid_url, content::NotificationService::AllSources());
+  ui_test_utils::UrlLoadObserver nonaccessible_observer(invalid_url);
   GURL nonaccessible_client_redirect_resource(embedded_test_server()->GetURL(
       "/extensions/api_test/extension_resource_request_policy/"
       "web_accessible/nonaccessible_redirect_resource.html"));
@@ -788,10 +784,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionResourceRequestPolicyTest,
   expected_error = "This page has been blocked by Chromium";
 #endif
 
-  EXPECT_TRUE(base::Contains(body, expected_error));
-  EXPECT_FALSE(
-      base::Contains(body, "This page has been blocked by an extension"));
-  EXPECT_FALSE(base::Contains(body, "Try disabling your extensions."));
+  EXPECT_TRUE(body.contains(expected_error));
+  EXPECT_FALSE(body.contains("This page has been blocked by an extension"));
+  EXPECT_FALSE(body.contains("Try disabling your extensions."));
 }
 
 }  // namespace extensions

@@ -19,6 +19,8 @@ limitations under the License.
 
 #include "tensorflow/core/kernels/depthtospace_op.h"
 
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -44,15 +46,19 @@ template <typename Device, typename T>
 class DepthToSpaceOp : public OpKernel {
  public:
   explicit DepthToSpaceOp(OpKernelConstruction* context) : OpKernel(context) {
-    string data_format_str;
+    std::string data_format_str;
     OP_REQUIRES_OK(context, context->GetAttr("data_format", &data_format_str));
     OP_REQUIRES(context, FormatFromString(data_format_str, &data_format_),
                 errors::InvalidArgument("Invalid data format"));
 
     OP_REQUIRES_OK(context, context->GetAttr("block_size", &block_size_));
-    OP_REQUIRES(context, block_size_ > 1,
-                errors::InvalidArgument("Block size should be > 1, but was: ",
-                                        block_size_));
+    // This upper bound is needed to avoid an overflow when the block size value
+    // is squared in the output computation.
+    int block_size_limit = sqrt(std::numeric_limits<int>::max());
+    OP_REQUIRES(context, block_size_ > 1 && block_size_ <= block_size_limit,
+                errors::InvalidArgument(
+                    "Block size should be > 1 and <= ", block_size_limit,
+                    " but was: ", block_size_));
 
     if (std::is_same<Device, CPUDevice>::value) {
       OP_REQUIRES(
@@ -116,9 +122,10 @@ class DepthToSpaceOp : public OpKernel {
     if (std::is_same<Device, GPUDevice>::value) {
       if (is_int8x4) {
         // NCHW_VECT_C with 4 x qint8 can be treated as NCHW int32.
-        auto Tinput_v = input.template reinterpret_last_dimension<int32, 4>();
-        auto Toutput_v = outputs_tensor->reinterpret_last_dimension<int32, 4>();
-        functor::DepthToSpaceOpFunctor<Device, int32, FORMAT_NCHW> functor;
+        auto Tinput_v = input.template reinterpret_last_dimension<int32_t, 4>();
+        auto Toutput_v =
+            outputs_tensor->reinterpret_last_dimension<int32_t, 4>();
+        functor::DepthToSpaceOpFunctor<Device, int32_t, FORMAT_NCHW> functor;
         functor(context->eigen_device<Device>(), Tinput_v, block_size_,
                 Toutput_v);
         return;

@@ -18,6 +18,7 @@ limitations under the License.
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -26,6 +27,7 @@ limitations under the License.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/strings/string_view.h"
 #include "tensorflow/lite/builtin_ops.h"
 #include "tensorflow/lite/c/c_api_types.h"
 #include "tensorflow/lite/core/c/c_api.h"
@@ -50,10 +52,10 @@ const TfLiteRegistration* GetNoOpRegistration() {
   return &registration;
 }
 
-const TfLiteRegistrationExternal* GetNoOpRegistrationExternal() {
-  static TfLiteRegistrationExternal* registration =
-      TfLiteRegistrationExternalCreate(kTfLiteBuiltinCustom, "NoOp", 1);
-  TfLiteRegistrationExternalSetInvoke(
+const TfLiteOperator* GetNoOpOperator() {
+  static TfLiteOperator* registration = TfLiteOperatorCreate(
+      kTfLiteBuiltinCustom, "NoOp", 1, /* user_data */ nullptr);
+  TfLiteOperatorSetInvoke(
       registration,
       /*invoke=*/[](TfLiteOpaqueContext*, TfLiteOpaqueNode*) {
         return kTfLiteOk;
@@ -188,21 +190,20 @@ TEST(CApiExperimentalTest, SetOpResolver) {
   TfLiteModelDelete(model);
 }
 
-const TfLiteRegistrationExternal* MyFindBuiltinOpExternal(void* user_data,
-                                                          int op, int version) {
+const TfLiteOperator* MyFindBuiltinOpExternal(void* user_data, int op,
+                                              int version) {
   OpResolverData* my_data = static_cast<OpResolverData*>(user_data);
   if (op == kTfLiteBuiltinAdd && version == 1) {
     my_data->called_for_add = true;
-    return GetNoOpRegistrationExternal();
+    return GetNoOpOperator();
   }
   return nullptr;
 }
 
-const TfLiteRegistrationExternal* MyFindCustomOpExternal(void*,
-                                                         const char* custom_op,
-                                                         int version) {
+const TfLiteOperator* MyFindCustomOpExternal(void*, const char* custom_op,
+                                             int version) {
   if (absl::string_view(custom_op) == "foo" && version == 1) {
-    return GetNoOpRegistrationExternal();
+    return GetNoOpOperator();
   }
   return nullptr;
 }
@@ -244,14 +245,14 @@ TfLiteStatus SinhEval(TfLiteContext* context, TfLiteNode* node) {
   return kTfLiteOk;
 }
 
-const TfLiteRegistrationExternal* SinhFindCustomOpExternal(
-    void*, const char* custom_op, int version) {
+const TfLiteOperator* SinhFindCustomOpExternal(void*, const char* custom_op,
+                                               int version) {
   if (absl::string_view(custom_op) == "Sinh" && version == 1) {
-    static TfLiteRegistrationExternal* registration = []() {
-      TfLiteRegistrationExternal* reg =
-          TfLiteRegistrationExternalCreate(kTfLiteBuiltinCustom, "Sinh", 1);
-      TfLiteRegistrationExternalSetPrepare(reg, &SinhPrepareOpaque);
-      TfLiteRegistrationExternalSetInvoke(reg, &SinhEvalOpaque);
+    static TfLiteOperator* registration = []() {
+      TfLiteOperator* reg = TfLiteOperatorCreate(kTfLiteBuiltinCustom, "Sinh",
+                                                 1, /* user_data */ nullptr);
+      TfLiteOperatorSetPrepare(reg, &SinhPrepareOpaque);
+      TfLiteOperatorSetInvoke(reg, &SinhEvalOpaque);
       return reg;
     }();
     return registration;
@@ -301,7 +302,7 @@ TEST(CApiExperimentalTest, SetOpResolverExternal) {
 // Test using TfLiteInterpreterOptionsSetOpResolverExternalWithFallback and
 // TfLiteInterpreterCreateWithSelectedOps, for a builtin op, for the normal
 // case where the op is found with the primary op resolver callback that returns
-// a TfLiteRegistrationExternal pointer.
+// a TfLiteOperator pointer.
 TEST(CApiExperimentalTest,
      SetOpResolverExternalWithFallback_BuiltinOp_NormalCase) {
   TfLiteModel* model =
@@ -348,10 +349,11 @@ TEST(CApiExperimentalTest,
   OpResolverData my_data;
   TfLiteInterpreterOptionsSetOpResolverExternalWithFallback(
       options,
-      [](void* user_data, int op,
-         int version) -> const TfLiteRegistrationExternal* { return nullptr; },
+      [](void* user_data, int op, int version) -> const TfLiteOperator* {
+        return nullptr;
+      },
       [](void* user_data, const char* custom_op,
-         int version) -> const TfLiteRegistrationExternal* { return nullptr; },
+         int version) -> const TfLiteOperator* { return nullptr; },
       MyFindBuiltinOp, MyFindCustomOp, &my_data);
   EXPECT_FALSE(my_data.called_for_add);
 
@@ -371,7 +373,7 @@ TEST(CApiExperimentalTest,
 // Test using TfLiteInterpreterOptionsSetOpResolverExternalWithFallback and
 // TfLiteInterpreterCreateWithSelectedOps, for a custom op, for the normal
 // case where the op is found with the primary op resolver callback that returns
-// a TfLiteRegistrationExternal pointer.
+// a TfLiteOperator pointer.
 TEST(CApiExperimentalTest,
      SetOpResolverExternalWithFallback_CustomOp_NormalCase) {
   TfLiteModel* model = TfLiteModelCreateFromFile(
@@ -427,10 +429,11 @@ TEST(CApiExperimentalTest,
   OpResolverData my_data;
   TfLiteInterpreterOptionsSetOpResolverExternalWithFallback(
       options,
-      [](void* user_data, int op,
-         int version) -> const TfLiteRegistrationExternal* { return nullptr; },
+      [](void* user_data, int op, int version) -> const TfLiteOperator* {
+        return nullptr;
+      },
       [](void* user_data, const char* custom_op,
-         int version) -> const TfLiteRegistrationExternal* { return nullptr; },
+         int version) -> const TfLiteOperator* { return nullptr; },
       MyFindBuiltinOp, SinhFindCustomOp, &my_data);
   EXPECT_FALSE(my_data.called_for_add);
 
@@ -579,10 +582,7 @@ TEST(CApiExperimentalTest, SetAndGetBufferHandleSuccess) {
       // op nodes in the TfLiteModel.
       /*nodes=*/std::vector<int>({0, 1}),
       /*delegate_flags=*/kTfLiteDelegateFlagsNone,
-      /*fail_node_prepare=*/false, /*min_ops_per_subset=*/0,
-      /*fail_node_invoke=*/false,
-      /* automatic_shape_propagation=*/false, /*custom_op=*/false,
-      /* set_output_tensor_dynamic =*/false);
+      SimpleDelegate::Options::kNoCustomOp);
   TfLiteDelegate* delegate = simple_delegate->get_tf_lite_delegate();
 
   TfLiteInterpreterOptions* options = TfLiteInterpreterOptionsCreate();
@@ -654,16 +654,16 @@ struct OpaqueTestDelegate {
     delegate_state->buffer_handle++;
 
     TfLiteRegistration registration{};
-    registration.registration_external = TfLiteRegistrationExternalCreate(
+    registration.registration_external = TfLiteOperatorCreate(
         kTfLiteBuiltinDelegate, "OpaqueTestDelegate delegate kernel",
-        /* version = */ 1);
+        /* version = */ 1, /* user_data = */ nullptr);
 
-    TfLiteRegistrationExternalSetPrepare(
+    TfLiteOperatorSetPrepare(
         registration.registration_external,
         [](TfLiteOpaqueContext* context,
            TfLiteOpaqueNode* node) -> TfLiteStatus { return kTfLiteOk; });
 
-    TfLiteRegistrationExternalSetInvoke(
+    TfLiteOperatorSetInvoke(
         registration.registration_external,
         [](TfLiteOpaqueContext*, TfLiteOpaqueNode*) -> TfLiteStatus {
           return kTfLiteOk;
@@ -871,10 +871,7 @@ TEST(CApiExperimentalTest, SetInvalidHandleToTensor) {
       // op nodes in the TfLiteModel.
       /*nodes=*/std::vector<int>({0, 1}),
       /*delegate_flags=*/kTfLiteDelegateFlagsNone,
-      /*fail_node_prepare=*/false, /*min_ops_per_subset=*/0,
-      /*fail_node_invoke=*/false,
-      /* automatic_shape_propagation=*/false, /*custom_op=*/false,
-      /* set_output_tensor_dynamic =*/false);
+      SimpleDelegate::Options::kNoCustomOp);
   TfLiteDelegate* delegate = simple_delegate->get_tf_lite_delegate();
 
   TfLiteInterpreterOptions* options = TfLiteInterpreterOptionsCreate();
@@ -890,9 +887,7 @@ TEST(CApiExperimentalTest, SetInvalidHandleToTensor) {
       // the TfLiteModel.
       /*nodes=*/std::vector<int>({0, 1, 2}),
       /*delegate_flags=*/kTfLiteDelegateFlagsNone,
-      /*fail_node_prepare=*/false, /*min_ops_per_subset=*/0,
-      /*fail_node_invoke=*/false, /* automatic_shape_propagation=*/false,
-      /*custom_op=*/false, /*set_output_tensor_dynamic=*/false);
+      SimpleDelegate::Options::kNoCustomOp);
 
   // Tensor index is set to the output tensor (index 2) of the TfLite model.
   int tensor_index = 2;
@@ -979,10 +974,10 @@ TEST_F(TestDelegate, NoDelegate) {
 
 TEST_F(TestDelegate, DelegateNodeInvokeFailure) {
   // Initialize a delegate that will fail when invoked.
-  delegate_ = std::unique_ptr<SimpleDelegate>(new SimpleDelegate(
-      {0, 1}, kTfLiteDelegateFlagsNone, false /**fail_node_prepare**/,
-      0 /**min_ops_per_subset**/, true /**fail_node_invoke**/,
-      false /**automatic_shape_propagation**/, false /**custom_op**/));
+  delegate_ = std::make_unique<SimpleDelegate>(
+      std::vector<int>{0, 1}, kTfLiteDelegateFlagsNone,
+      SimpleDelegate::Options::kFailOnInvoke |
+          SimpleDelegate::Options::kNoCustomOp);
   // Create another interpreter with the delegate, without fallback.
   TfLiteInterpreterOptions* options = TfLiteInterpreterOptionsCreate();
   TfLiteInterpreterOptionsAddDelegate(options,
@@ -994,10 +989,10 @@ TEST_F(TestDelegate, DelegateNodeInvokeFailure) {
 
 TEST_F(TestDelegate, DelegateNodeInvokeFailureFallback) {
   // Initialize a delegate that will fail when invoked.
-  delegate_ = std::unique_ptr<SimpleDelegate>(new SimpleDelegate(
-      {0, 1}, kTfLiteDelegateFlagsNone, false /**fail_node_prepare**/,
-      0 /**min_ops_per_subset**/, true /**fail_node_invoke**/,
-      false /**automatic_shape_propagation**/, false /**custom_op**/));
+  delegate_ = std::make_unique<SimpleDelegate>(
+      std::vector<int>{0, 1}, kTfLiteDelegateFlagsNone,
+      SimpleDelegate::Options::kFailOnInvoke |
+          SimpleDelegate::Options::kNoCustomOp);
   // Create another interpreter with the delegate, with fallback enabled.
   TfLiteInterpreterOptions* options = TfLiteInterpreterOptionsCreate();
   TfLiteInterpreterOptionsAddDelegate(options,
@@ -1017,16 +1012,15 @@ TEST_F(TestDelegate, TestFallbackWithMultipleDelegates) {
   // First delegate only supports node 0.
   // This delegate should support dynamic tensors, otherwise the second won't be
   // applied.
-  delegate_ = std::unique_ptr<SimpleDelegate>(new SimpleDelegate(
-      {0}, kTfLiteDelegateFlagsAllowDynamicTensors,
-      false /**fail_node_prepare**/, 0 /**min_ops_per_subset**/,
-      true /**fail_node_invoke**/, false /**automatic_shape_propagation**/,
-      false /**custom_op**/));
+  delegate_ = std::make_unique<SimpleDelegate>(
+      std::vector<int>{0}, kTfLiteDelegateFlagsAllowDynamicTensors,
+      SimpleDelegate::Options::kFailOnInvoke |
+          SimpleDelegate::Options::kNoCustomOp);
   // Second delegate supports node 1, and makes the graph immutable.
-  delegate2_ = std::unique_ptr<SimpleDelegate>(new SimpleDelegate(
-      {1}, kTfLiteDelegateFlagsNone, false /**fail_node_prepare**/,
-      0 /**min_ops_per_subset**/, true /**fail_node_invoke**/,
-      false /**automatic_shape_propagation**/, false /**custom_op**/));
+  delegate2_ = std::make_unique<SimpleDelegate>(
+      std::vector<int>{1}, kTfLiteDelegateFlagsNone,
+      SimpleDelegate::Options::kFailOnInvoke |
+          SimpleDelegate::Options::kNoCustomOp);
   TfLiteInterpreterOptions* options = TfLiteInterpreterOptionsCreate();
   TfLiteInterpreterOptionsAddDelegate(options,
                                       delegate_->get_tf_lite_delegate());

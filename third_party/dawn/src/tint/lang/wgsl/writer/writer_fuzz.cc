@@ -35,7 +35,8 @@ namespace tint::wgsl::writer {
 namespace {
 
 void WriterFuzzer(const tint::Program& program) {
-    [[maybe_unused]] auto res = tint::wgsl::writer::Generate(program, {});
+    auto output = tint::wgsl::writer::Generate(program);
+    TINT_ASSERT(output == Success) << "Generate() failed: " << output.Failure().reason;
 }
 
 }  // namespace

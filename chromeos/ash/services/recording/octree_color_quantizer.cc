@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/notreached.h"
 #include "chromeos/ash/services/recording/gif_encoding_types.h"
 #include "chromeos/ash/services/recording/rgb_video_frame.h"
@@ -30,7 +31,7 @@ constexpr uint8_t kLevelMasks[kNumBitsPerColorChannel] = {
 // given `level`. See comment above.
 ColorIndex GetColorIndexAtLevel(const RgbColor& color, int level) {
   ColorIndex index = 0;
-  const auto mask = kLevelMasks[level];
+  const auto mask = UNSAFE_TODO(kLevelMasks[level]);
 
   if (color.r & mask) {
     //         RGB.
@@ -53,8 +54,8 @@ ColorIndex GetColorIndexAtLevel(const RgbColor& color, int level) {
 template <class Functor>
 void ForEachPixelColor(RgbVideoFrame& rgb_video_frame, Functor f) {
   auto* pixel = &rgb_video_frame.pixel_color(0, 0);
-  const auto* const end = &pixel[rgb_video_frame.num_pixels()];
-  for (; pixel < end; ++pixel) {
+  const auto* const end = &UNSAFE_TODO(pixel[rgb_video_frame.num_pixels()]);
+  for (; pixel < end; UNSAFE_TODO(++pixel)) {
     f(*pixel);
   }
 }
@@ -372,7 +373,7 @@ size_t OctreeColorQuantizer::FindColorIndexInternal(
     }
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 void OctreeColorQuantizer::InsertLeafNode(Node* node) {

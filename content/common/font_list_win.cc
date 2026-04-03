@@ -4,8 +4,9 @@
 
 #include "content/common/font_list.h"
 
-#include <dwrite.h>
 #include <windows.h>
+
+#include <dwrite.h>
 #include <wrl/client.h>
 
 #include <string>
@@ -18,10 +19,10 @@
 
 namespace content {
 
-base::Value::List GetFontList_SlowBlocking() {
+base::ListValue GetFontList_SlowBlocking() {
   TRACE_EVENT0("fonts", "GetFontList_SlowBlocking");
 
-  base::Value::List font_list;
+  base::ListValue font_list;
 
   Microsoft::WRL::ComPtr<IDWriteFactory> factory;
   gfx::win::CreateDWriteFactory(&factory);
@@ -60,7 +61,7 @@ base::Value::List GetFontList_SlowBlocking() {
     if (!localized_name)
       localized_name = native_name;
 
-    base::Value::List font_item;
+    base::ListValue font_item;
     font_item.Append(native_name.value());
     font_item.Append(localized_name.value());
     font_list.Append(std::move(font_item));

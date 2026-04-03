@@ -8,12 +8,12 @@
 
 #include "base/check.h"
 #include "base/path_service.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_select_file_policy.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/chromeos/strings/grit/ui_chromeos_strings.h"
 #include "ui/shell_dialogs/selected_file_info.h"
 
 namespace {
@@ -77,23 +77,22 @@ void UserImageFileSelector::SelectFile(
 
   select_file_dialog_->SelectFile(
       ui::SelectFileDialog::SELECT_OPEN_FILE,
-      l10n_util::GetStringUTF16(IDS_DOWNLOAD_TITLE), downloads_path,
-      &file_type_info, 0, FILE_PATH_LITERAL(""), GetBrowserWindow(), nullptr);
+      l10n_util::GetStringUTF16(IDS_FILE_BROWSER_DOWNLOADS_DIRECTORY_LABEL),
+      downloads_path, &file_type_info, 0, FILE_PATH_LITERAL(""),
+      GetBrowserWindow());
 }
 
 gfx::NativeWindow UserImageFileSelector::GetBrowserWindow() {
-  Browser* browser = chrome::FindBrowserWithTab(web_ui_->GetWebContents());
-  return browser ? browser->window()->GetNativeWindow() : gfx::NativeWindow();
+  return web_ui_->GetWebContents()->GetTopLevelNativeWindow();
 }
 
 void UserImageFileSelector::FileSelected(const ui::SelectedFileInfo& file,
-                                         int index,
-                                         void* params) {
+                                         int index) {
   std::move(selected_cb_).Run(file.path());
   select_file_dialog_.reset();
 }
 
-void UserImageFileSelector::FileSelectionCanceled(void* params) {
+void UserImageFileSelector::FileSelectionCanceled() {
   if (!canceled_cb_.is_null()) {
     std::move(canceled_cb_).Run();
   }

@@ -23,6 +23,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/perf/perf_result_reporter.h"
 #include "url/gurl.h"
+#include "base/test/allow_check_is_test_for_testing.h"
 
 namespace net {
 
@@ -63,7 +64,9 @@ perf_test::PerfResultReporter SetUpCookieMonsterReporter(
 
 class CookieMonsterTest : public testing::Test {
  public:
-  CookieMonsterTest() = default;
+  CookieMonsterTest(){
+    base::test::AllowCheckIsTestForTesting();
+  }
 
  private:
   base::test::SingleThreadTaskEnvironment task_environment_{
@@ -96,9 +99,8 @@ class SetCookieCallback : public CookieTestCallback {
   void SetCookie(CookieMonster* cm,
                  const GURL& gurl,
                  const std::string& cookie_line) {
-    auto cookie = CanonicalCookie::Create(
-        gurl, cookie_line, base::Time::Now(), std::nullopt /* server_time */,
-        std::nullopt /* cookie_partition_key */);
+    auto cookie =
+        CanonicalCookie::CreateForTesting(gurl, cookie_line, base::Time::Now());
     cm->SetCanonicalCookieAsync(
         std::move(cookie), gurl, options_,
         base::BindOnce(&SetCookieCallback::Run, base::Unretained(this)));

@@ -6,9 +6,6 @@
 
 #include <utility>
 
-#include "ash/components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/connection_holder.h"
 #include "ash/game_dashboard/game_dashboard_main_menu_view.h"
 #include "ash/public/cpp/app_types_util.h"
 #include "ash/public/cpp/window_properties.h"
@@ -28,6 +25,9 @@
 #include "chrome/browser/ash/arc/input_overlay/ui/delete_edit_shortcut.h"
 #include "chrome/browser/ash/arc/input_overlay/util.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/connection_holder.h"
 #include "components/app_restore/window_properties.h"
 #include "components/exo/shell_surface_base.h"
 #include "components/exo/shell_surface_util.h"
@@ -93,7 +93,9 @@ aura::Window* GetGameBubbleDialogAnchorWindow(aura::Window* window) {
   DCHECK(window);
 
   auto* widget = views::Widget::GetWidgetForNativeWindow(window);
-  DCHECK(widget);
+  if (!widget) {
+    return nullptr;
+  }
 
   // Check whether `window` has `BubbleDialogDelegateView` or its sub-class
   // instance as its contents view.
@@ -192,7 +194,7 @@ void ArcInputOverlayManager::EnsureFactoryBuilt() {
 }
 
 void ArcInputOverlayManager::OnWindowInitialized(aura::Window* new_window) {
-  // `aura::client::kAppType` property is set in
+  // `chromeos::kAppTypeKey` property is set in
   // `AppServiceAppWindowShelfController::OnWindowInitialized()`.
   // `AppServiceAppWindowShelfController::OnWindowInitialized()` is called
   // before `ArcInputOverlayManager::OnWindowInitialized()`, so we can filter
@@ -292,7 +294,10 @@ void ArcInputOverlayManager::Shutdown() {
 
 void ArcInputOverlayManager::OnWindowFocused(aura::Window* gained_focus,
                                              aura::Window* lost_focus) {
-  if (display::Screen::GetScreen()->InTabletMode()) {
+  // No need to register window if it is tablet mode and there is no game
+  // window.
+  if (display::Screen::Get()->InTabletMode() ||
+      input_overlay_enabled_windows_.empty()) {
     return;
   }
 
@@ -372,14 +377,15 @@ std::unique_ptr<TouchInjector> ArcInputOverlayManager::ReadDefaultData(
     return touch_injector;
   }
 
-  const auto json_file =
-      ui::ResourceBundle::GetSharedInstance().GetRawDataResource(
+  std::string json_file =
+      ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
           resource_id.value());
   if (json_file.empty()) {
     LOG(WARNING) << "No content for: " << package_name;
     return touch_injector;
   }
-  const auto result = base::JSONReader::ReadAndReturnValueWithError(json_file);
+  const auto result = base::JSONReader::ReadAndReturnValueWithError(
+      json_file, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   DCHECK(result.has_value())
       << "Could not load input overlay data file: " << result.error().message;
   if (!result.has_value() || !result->is_dict()) {
@@ -393,11 +399,6 @@ std::unique_ptr<TouchInjector> ArcInputOverlayManager::ReadDefaultData(
 void ArcInputOverlayManager::OnFinishReadDefaultData(
     std::unique_ptr<TouchInjector> touch_injector) {
   DCHECK(touch_injector);
-
-  if (!IsBeta() && touch_injector->actions().empty()) {
-    ResetForPendingTouchInjector(std::move(touch_injector));
-    return;
-  }
 
   // Null for unit test.
   if (!data_controller_) {
@@ -421,14 +422,6 @@ void ArcInputOverlayManager::OnProtoDataAvailable(
   DCHECK(touch_injector);
   if (proto) {
     touch_injector->OnProtoDataAvailable(*proto);
-  } else {
-    touch_injector->NotifyFirstTimeLaunch();
-  }
-
-  if (!IsBeta()) {
-    DCHECK(!touch_injector->actions().empty());
-    OnLoadingFinished(std::move(touch_injector));
-    return;
   }
 
   // Steps to check whether enablings Game Controls for `package_name`.
@@ -597,12 +590,6 @@ void ArcInputOverlayManager::RegisterWindow(aura::Window* window) {
   // It should always unregister the window first, then register another window.
   DCHECK(!registered_top_level_window_);
 
-  // For Beta version, it may focus on its transient sibling window.
-  if (!IsBeta()) {
-    DCHECK_EQ(ash::window_util::GetFocusedWindow()->GetToplevelWindow(),
-              window);
-  }
-
   const auto it = input_overlay_enabled_windows_.find(window);
   if (it == input_overlay_enabled_windows_.end()) {
     return;
@@ -644,7 +631,7 @@ void ArcInputOverlayManager::UnRegisterWindow(aura::Window* window) {
 void ArcInputOverlayManager::RegisterFocusedWindow() {
   // Register window if it is not in tablet mode.
   if (auto* focused_window = ash::window_util::GetFocusedWindow();
-      focused_window && !display::Screen::GetScreen()->InTabletMode()) {
+      focused_window && !display::Screen::Get()->InTabletMode()) {
     RegisterWindow(GetAnchorWindow(focused_window->GetToplevelWindow()));
   }
 }
@@ -658,23 +645,14 @@ void ArcInputOverlayManager::AddDisplayOverlayController(
   }
   DCHECK(!display_overlay_controller_);
 
-  display_overlay_controller_ = std::make_unique<DisplayOverlayController>(
-      touch_injector, touch_injector->first_launch());
+  display_overlay_controller_ =
+      std::make_unique<DisplayOverlayController>(touch_injector);
 }
 
 void ArcInputOverlayManager::RemoveDisplayOverlayController() {
   if (!registered_top_level_window_) {
     return;
   }
-
-  // There is only one `display_overlay_controller_` active at a time. When
-  // window is destroyed, the attached sibling window is destroyed first, which
-  // triggers the window focus change. And then it also triggers the window
-  // unregister and gets `display_overlay_controller_` reset before here.
-  if (!IsBeta()) {
-    DCHECK(display_overlay_controller_);
-  }
-
   if (display_overlay_controller_) {
     display_overlay_controller_.reset();
   }
@@ -687,8 +665,7 @@ void ArcInputOverlayManager::ResetForPendingTouchInjector(
   // If `window` is destroyed, it will be removed from `loading_data_window_` by
   // OnWindowDestroying(). So it is safe to call Window class functions after
   // checking `loading_data_window_`.
-  if ((IsGameDashboardFlagOn() || IsBeta()) &&
-      loading_data_windows_.contains(window) && !window->is_destroying()) {
+  if (loading_data_windows_.contains(window) && !window->is_destroying()) {
     // GIO status is known here and GIO is not available.
     window->SetProperty(ash::kArcGameControlsFlagsKey,
                         ash::ArcGameControlsFlag::kKnown);
@@ -738,18 +715,36 @@ ArcAppListPrefs* ArcInputOverlayManager::GetArcAppListPrefs() {
 
 aura::Window* ArcInputOverlayManager::GetAnchorWindow(aura::Window* window) {
   // TODO(b/314687082): It still needs to find a way to reproduce the crash.
-  // Right now, return `window` directly for pre-beta version to stabilize
-  // ChromeOS.
-  if (!IsBeta() || !window) {
-    return window;
+  if (!window) {
+    return nullptr;
   }
 
+  // Check whether `window` is a bubble dialog window.
   auto* bubble_anchor_window = GetGameBubbleDialogAnchorWindow(window);
   auto* pending_window = bubble_anchor_window ? bubble_anchor_window : window;
 
-  // Check whether `pending_window` is a transient sibling window.
+  // There are two types of the transient sibling window:
+  // - window A: the transient sibling window of the main game window, such as
+  // input mapping.
+  // - window B: the transient sibling window of the window A, such as editing
+  // list and button options menu.
+
+  // Check whether `pending_window` is a transient sibling window (window A or
+  // window B) if `transient_parent` is not nullptr.
   auto* transient_parent = wm::GetTransientParent(pending_window);
-  return transient_parent ? transient_parent : window;
+
+  if (transient_parent) {
+    // `pending_window` is window A or B. Check whether `pending_window` is the
+    // transient window (window B) of window A (such as input mapping) if
+    // `transient_parent_parent` is not nullptr.
+    if (auto* transient_parent_parent =
+            wm::GetTransientParent(transient_parent)) {
+      // `pending_window` is window B.
+      return transient_parent_parent;
+    }
+    return transient_parent;
+  }
+  return window;
 }
 
 }  // namespace arc::input_overlay

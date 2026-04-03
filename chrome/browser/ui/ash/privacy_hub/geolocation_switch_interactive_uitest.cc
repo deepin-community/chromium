@@ -17,6 +17,7 @@
 #include "net/dns/mock_host_resolver.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/message_center/message_center.h"
+#include "ui/views/views_switches.h"
 
 namespace {
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsElementId);
@@ -27,8 +28,7 @@ class GeolocationSwitchInteractiveTest : public InteractiveBrowserTest {
   GeolocationSwitchInteractiveTest()
       : https_server_(std::make_unique<net::EmbeddedTestServer>(
             net::EmbeddedTestServer::TYPE_HTTPS)) {
-    scoped_features_.InitWithFeatures(
-        {ash::features::kCrosPrivacyHubV0, ash::features::kCrosPrivacyHub}, {});
+    scoped_features_.InitWithFeatures({ash::features::kCrosPrivacyHub}, {});
   }
 
   GeolocationSwitchInteractiveTest(const GeolocationSwitchInteractiveTest&) =
@@ -51,6 +51,13 @@ class GeolocationSwitchInteractiveTest : public InteractiveBrowserTest {
     host_resolver()->AddRule("*", "127.0.0.1");
     content::SetupCrossSiteRedirector(https_server());
     https_server()->StartAcceptingConnections();
+  }
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    InteractiveBrowserTestMixin::SetUpCommandLine(command_line);
+    // Disables the disregarding of potentially unintended input events.
+    command_line->AppendSwitch(
+        views::switches::kDisableInputEventActivationProtectionForTesting);
   }
 
   void TearDownOnMainThread() override {
@@ -85,12 +92,8 @@ class GeolocationSwitchInteractiveTest : public InteractiveBrowserTest {
           CheckJsResult(kWebContentsElementId, "geoStartWithSyncResponse",
                         "requested"),
           WaitForShow(PermissionPromptBubbleBaseView::kMainViewId),
-          WaitForShow(PermissionPromptBubbleBaseView::kAllowButtonElementId)
-          // We need to call `FlushEvents` here before `PressButton` because a
-          // `view_` variable in PermissionRequestManager is not yet
-          // initialized.
-          ,
-          FlushEvents(),
+          WaitForShow(PermissionPromptBubbleBaseView::kAllowButtonElementId),
+
           PressButton(PermissionPromptBubbleBaseView::kAllowButtonElementId),
           WaitForHide(PermissionPromptBubbleBaseView::kMainViewId));
     } else {
@@ -138,8 +141,6 @@ IN_PROC_BROWSER_TEST_F(GeolocationSwitchInteractiveTest,
   ExpectAndApproveBrowserPrompt(false);
   ExpectOSNotification(false);
 }
-
-// TODO(b/312485657): Enable the testcase.
 IN_PROC_BROWSER_TEST_F(GeolocationSwitchInteractiveTest,
                        BrowserBlockSystemBlock) {
   SetBrowserPermission(CONTENT_SETTING_BLOCK);

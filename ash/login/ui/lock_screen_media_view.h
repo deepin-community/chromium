@@ -48,8 +48,8 @@ class ASH_EXPORT LockScreenMediaView
   ~LockScreenMediaView() override;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
 
   // media_session::mojom::MediaControllerObserver:
   void MediaSessionInfoChanged(
@@ -68,6 +68,8 @@ class ASH_EXPORT LockScreenMediaView
   void MediaControllerImageChanged(
       media_session::mojom::MediaSessionImageType type,
       const SkBitmap& bitmap) override;
+  void MediaControllerChapterImageChanged(int chapter_index,
+                                          const SkBitmap& bitmap) override;
 
   // media_message_center::MediaNotificationContainer:
   void OnExpanded(bool expanded) override {}

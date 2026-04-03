@@ -6,6 +6,7 @@
 
 #include "components/performance_manager/graph/frame_node_impl.h"
 #include "components/performance_manager/public/execution_context/execution_context.h"
+#include "components/performance_manager/test_support/graph/mock_frame_node_observer.h"
 #include "components/performance_manager/test_support/graph_test_harness.h"
 #include "components/performance_manager/test_support/mock_graphs.h"
 #include "components/performance_manager/test_support/voting.h"
@@ -21,33 +22,7 @@ using testing::_;
 
 static const char kReason[] = "test reason";
 
-class LenientMockFrameNodeObserver : public FrameNode::ObserverDefaultImpl {
- public:
-  LenientMockFrameNodeObserver() = default;
-  LenientMockFrameNodeObserver(const LenientMockFrameNodeObserver&) = delete;
-  LenientMockFrameNodeObserver& operator=(const LenientMockFrameNodeObserver&) =
-      delete;
-  ~LenientMockFrameNodeObserver() override = default;
-
-  MOCK_METHOD2(OnPriorityAndReasonChanged,
-               void(const FrameNode*, const PriorityAndReason&));
-};
-
-using MockFrameNodeObserver =
-    ::testing::StrictMock<LenientMockFrameNodeObserver>;
-
-class RootVoteObserverTest : public GraphTestHarness {
- public:
-  using Super = GraphTestHarness;
-
-  RootVoteObserverTest() = default;
-  ~RootVoteObserverTest() override = default;
-
-  void SetUp() override {
-    GetGraphFeatures().EnableExecutionContextRegistry();
-    Super::SetUp();
-  }
-};
+using RootVoteObserverTest = GraphTestHarness;
 
 }  // namespace
 
@@ -67,7 +42,8 @@ TEST_F(RootVoteObserverTest, VotesForwardedToGraph) {
 
   // The priority and reason starts with a default value.
   static const PriorityAndReason kDefaultPriorityAndReason(
-      base::TaskPriority::LOWEST, FrameNodeImpl::kDefaultPriorityReason);
+      base::Process::Priority::kMinValue,
+      FrameNodeImpl::kDefaultPriorityReason);
   EXPECT_EQ(frame->GetPriorityAndReason(), kDefaultPriorityAndReason);
 
   // Do not expect a notification when an identical vote is submitted.
@@ -78,11 +54,11 @@ TEST_F(RootVoteObserverTest, VotesForwardedToGraph) {
   // Update the vote with a new priority and expect that to propagate.
   EXPECT_CALL(obs, OnPriorityAndReasonChanged(frame.get(), _));
   voter.ChangeVote(execution_context,
-                   Vote(base::TaskPriority::HIGHEST, kReason));
+                   Vote(base::Process::Priority::kMaxValue, kReason));
 
   testing::Mock::VerifyAndClear(&obs);
   EXPECT_EQ(frame->GetPriorityAndReason().priority(),
-            base::TaskPriority::HIGHEST);
+            base::Process::Priority::kMaxValue);
   EXPECT_EQ(frame->GetPriorityAndReason().reason(), kReason);
 
   // Cancel the existing vote and expect it to go back to the default.

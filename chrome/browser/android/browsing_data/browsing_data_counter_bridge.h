@@ -7,6 +7,7 @@
 
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/memory/raw_ptr.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
 #include "components/browsing_data/core/counters/browsing_data_counter.h"
 
@@ -18,12 +19,12 @@ class BrowsingDataCounterBridge {
  public:
   // Creates a BrowsingDataCounterBridge for a certain browsing data type.
   // The |data_type| is a value of the enum BrowsingDataType.
-  BrowsingDataCounterBridge(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& jprofile,
-      jint data_type,
-      jint clear_browsing_data_tab);
+  BrowsingDataCounterBridge(JNIEnv* env,
+                            const base::android::JavaRef<jobject>& obj,
+
+                            Profile* profile,
+                            int32_t selected_time_period,
+                            int32_t data_type);
 
   BrowsingDataCounterBridge(const BrowsingDataCounterBridge&) = delete;
   BrowsingDataCounterBridge& operator=(const BrowsingDataCounterBridge&) =
@@ -31,8 +32,11 @@ class BrowsingDataCounterBridge {
 
   ~BrowsingDataCounterBridge();
 
-  // Called by the Java counterpart when it is getting garbage collected.
-  void Destroy(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  void SetSelectedTimePeriod(JNIEnv* env, int32_t selected_time_period);
+
+  // Destroys the BrowsingDataCounterBridge object. This needs to be called
+  // on the java side when the object is not in use anymore.
+  void Destroy(JNIEnv* env);
 
  private:
   void onCounterFinished(
@@ -41,7 +45,6 @@ class BrowsingDataCounterBridge {
   base::android::ScopedJavaGlobalRef<jobject> jobject_;
   raw_ptr<Profile> profile_;
   std::unique_ptr<browsing_data::BrowsingDataCounter> counter_;
-  browsing_data::ClearBrowsingDataTab clear_browsing_data_tab_;
 };
 
-#endif // CHROME_BROWSER_ANDROID_BROWSING_DATA_BROWSING_DATA_COUNTER_BRIDGE_H_
+#endif  // CHROME_BROWSER_ANDROID_BROWSING_DATA_BROWSING_DATA_COUNTER_BRIDGE_H_

@@ -30,7 +30,8 @@
 #include <memory>
 #include <utility>
 
-#include "dawn/native/CreatePipelineAsyncTask.h"
+#include "dawn/native/CreatePipelineAsyncEvent.h"
+#include "dawn/native/Instance.h"
 #include "dawn/native/d3d/BlobD3D.h"
 #include "dawn/native/d3d/D3DError.h"
 #include "dawn/native/d3d12/DeviceD3D12.h"
@@ -61,6 +62,10 @@ MaybeError ComputePipeline::InitializeImpl() {
         compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
     }
 
+    if (device->IsToggleEnabled(Toggle::D3DSkipShaderOptimizations)) {
+        compileFlags |= D3DCOMPILE_SKIP_OPTIMIZATION;
+    }
+
     if (device->IsToggleEnabled(Toggle::UseDXC) &&
         ((compileFlags & D3DCOMPILE_OPTIMIZATION_LEVEL2) == 0)) {
         // DXC's default opt level is /O3, unlike FXC's /O1. Set explicitly, otherwise there's no
@@ -71,26 +76,21 @@ MaybeError ComputePipeline::InitializeImpl() {
     // Tint does matrix multiplication expecting row major matrices
     compileFlags |= D3DCOMPILE_PACK_MATRIX_ROW_MAJOR;
 
-    if (!device->IsToggleEnabled(Toggle::D3DDisableIEEEStrictness)) {
-        compileFlags |= D3DCOMPILE_IEEE_STRICTNESS;
-    }
-
     const ProgrammableStage& computeStage = GetStage(SingleShaderStage::Compute);
     ShaderModule* module = ToBackend(computeStage.module.Get());
+
+    if (module->GetStrictMath().value_or(
+            !device->IsToggleEnabled(Toggle::D3DDisableIEEEStrictness))) {
+        compileFlags |= D3DCOMPILE_IEEE_STRICTNESS;
+    }
 
     D3D12_COMPUTE_PIPELINE_STATE_DESC d3dDesc = {};
     d3dDesc.pRootSignature = ToBackend(GetLayout())->GetRootSignature();
 
     d3d::CompiledShader compiledShader;
-    DAWN_TRY_ASSIGN(
-        compiledShader,
-        module->Compile(
-            computeStage, SingleShaderStage::Compute, ToBackend(GetLayout()), compileFlags,
-            /* usedInterstageVariables */ {},
-            /* maxSubgroupSizeForFullSubgroups */
-            IsFullSubgroupsRequired()
-                ? std::make_optional(device->GetLimits().experimentalSubgroupLimits.maxSubgroupSize)
-                : std::nullopt));
+    DAWN_TRY_ASSIGN(compiledShader, module->Compile(computeStage, SingleShaderStage::Compute,
+                                                    ToBackend(GetLayout()), compileFlags,
+                                                    /* usedInterstageVariables */ {}));
     d3dDesc.CS = {compiledShader.shaderBlob.Data(), compiledShader.shaderBlob.Size()};
 
     StreamIn(&mCacheKey, d3dDesc, ToBackend(GetLayout())->GetRootSignatureBlob());
@@ -124,9 +124,11 @@ MaybeError ComputePipeline::InitializeImpl() {
         // Cache misses, need to get pipeline cached blob and store.
         cacheTimer.RecordMicroseconds("D3D12.CreateComputePipelineState.CacheMiss");
         ComPtr<ID3DBlob> d3dBlob;
-        DAWN_TRY(CheckHRESULT(GetPipelineState()->GetCachedBlob(&d3dBlob),
-                              "D3D12 compute pipeline state get cached blob"));
-        device->StoreCachedBlob(GetCacheKey(), CreateBlob(std::move(d3dBlob)));
+        if (!device->GetInstance()->ConsumedError(
+                CheckHRESULT(GetPipelineState()->GetCachedBlob(&d3dBlob),
+                             "D3D12 compute pipeline state get cached blob"))) {
+            device->StoreCachedBlob(GetCacheKey(), CreateBlob(std::move(d3dBlob)));
+        }
     } else {
         cacheTimer.RecordMicroseconds("D3D12.CreateComputePipelineState.CacheHit");
     }
@@ -138,8 +140,8 @@ MaybeError ComputePipeline::InitializeImpl() {
 
 ComputePipeline::~ComputePipeline() = default;
 
-void ComputePipeline::DestroyImpl() {
-    ComputePipelineBase::DestroyImpl();
+void ComputePipeline::DestroyImpl(DestroyReason reason) {
+    ComputePipelineBase::DestroyImpl(reason);
     ToBackend(GetDevice())->ReferenceUntilUnused(mPipelineState);
 }
 
@@ -149,15 +151,6 @@ ID3D12PipelineState* ComputePipeline::GetPipelineState() const {
 
 void ComputePipeline::SetLabelImpl() {
     SetDebugName(ToBackend(GetDevice()), GetPipelineState(), "Dawn_ComputePipeline", GetLabel());
-}
-
-void ComputePipeline::InitializeAsync(Ref<ComputePipelineBase> computePipeline,
-                                      WGPUCreateComputePipelineAsyncCallback callback,
-                                      void* userdata) {
-    std::unique_ptr<CreateComputePipelineAsyncTask> asyncTask =
-        std::make_unique<CreateComputePipelineAsyncTask>(std::move(computePipeline), callback,
-                                                         userdata);
-    CreateComputePipelineAsyncTask::RunAsync(std::move(asyncTask));
 }
 
 bool ComputePipeline::UsesNumWorkgroups() const {

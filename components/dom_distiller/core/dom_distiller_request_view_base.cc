@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "components/dom_distiller/core/distilled_page_prefs.h"
+#include "components/dom_distiller/core/dom_distiller_features.h"
 #include "components/dom_distiller/core/dom_distiller_service.h"
 #include "components/dom_distiller/core/experiments.h"
 #include "components/dom_distiller/core/task_tracker.h"
@@ -18,6 +19,20 @@
 #include "ui/base/l10n/l10n_util.h"
 
 namespace dom_distiller {
+
+namespace {
+float GetBaseFontSize() {
+  float base_font_size = 16.0f;
+#if BUILDFLAG(IS_ANDROID)
+  if (base::FeatureList::IsEnabled(dom_distiller::kReaderModeDistillInApp)) {
+    base_font_size = 16.0f;
+  } else {
+    base_font_size = 14.0f;
+  }
+#endif
+  return base_font_size;
+}
+}  // namespace
 
 DomDistillerRequestViewBase::DomDistillerRequestViewBase(
     DistilledPagePrefs* distilled_page_prefs)
@@ -54,7 +69,9 @@ void DomDistillerRequestViewBase::OnArticleReady(
     SendJavaScript(viewer::GetSetTextDirectionJs(text_direction));
     SendJavaScript(viewer::GetUnsafeArticleContentJs(article_proto));
     SendJavaScript(viewer::GetDistilledPageFontScalingJs(
-        distilled_page_prefs_->GetFontScaling()));
+        distilled_page_prefs_->GetFontScaling(), /* restoreCenter= */ false));
+    SendJavaScript(viewer::GetDistilledPageLinksEnabledJs(
+        distilled_page_prefs_->GetLinksEnabled()));
   } else {
     // It's possible that we didn't get some incremental updates from the
     // distiller. Ensure all remaining pages are flushed to the viewer.
@@ -87,12 +104,16 @@ void DomDistillerRequestViewBase::OnArticleUpdated(
       SendJavaScript(viewer::GetSetTitleJs(page.title()));
       SendJavaScript(viewer::GetSetTextDirectionJs(page.text_direction()));
       SendJavaScript(viewer::GetDistilledPageFontScalingJs(
-          distilled_page_prefs_->GetFontScaling()));
+          distilled_page_prefs_->GetFontScaling(), /* restoreCenter= */ false));
+      SendJavaScript(viewer::GetDistilledPageLinksEnabledJs(
+          distilled_page_prefs_->GetLinksEnabled()));
     }
   }
 }
 
-void DomDistillerRequestViewBase::OnChangeTheme(mojom::Theme new_theme) {
+void DomDistillerRequestViewBase::OnChangeTheme(
+    mojom::Theme new_theme,
+    ThemeSettingsUpdateSource source) {
   SendJavaScript(viewer::GetDistilledPageThemeJs(new_theme));
 }
 
@@ -102,7 +123,12 @@ void DomDistillerRequestViewBase::OnChangeFontFamily(
 }
 
 void DomDistillerRequestViewBase::OnChangeFontScaling(float scaling) {
-  SendJavaScript(viewer::GetDistilledPageFontScalingJs(scaling));
+  SendJavaScript(viewer::GetDistilledPageFontScalingJs(
+      scaling, /* restoreCenter= */ true));
+}
+
+void DomDistillerRequestViewBase::OnChangeLinksEnabled(bool enabled) {
+  SendJavaScript(viewer::GetDistilledPageLinksEnabledJs(enabled));
 }
 
 void DomDistillerRequestViewBase::TakeViewerHandle(
@@ -116,7 +142,10 @@ void DomDistillerRequestViewBase::TakeViewerHandle(
 void DomDistillerRequestViewBase::SendCommonJavaScript() {
   SendJavaScript(viewer::GetJavaScript());
   SendJavaScript(viewer::GetDistilledPageFontScalingJs(
-      distilled_page_prefs_->GetFontScaling()));
+      distilled_page_prefs_->GetFontScaling(), /* restoreCenter= */ false));
+  SendJavaScript(viewer::SetDistilledPageBaseFontSize(GetBaseFontSize()));
+  SendJavaScript(viewer::GetDistilledPageLinksEnabledJs(
+      distilled_page_prefs_->GetLinksEnabled()));
 }
 
 }  // namespace dom_distiller

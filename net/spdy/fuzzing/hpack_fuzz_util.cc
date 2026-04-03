@@ -8,14 +8,18 @@
 #include <cmath>
 #include <memory>
 
-#include "base/big_endian.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/rand_util.h"
-#include "net/third_party/quiche/src/quiche/spdy/core/hpack/hpack_constants.h"
-#include "net/third_party/quiche/src/quiche/spdy/core/recording_headers_handler.h"
+#include "net/third_party/quiche/src/quiche/common/http/http_header_block.h"
+#include "net/third_party/quiche/src/quiche/http2/hpack/hpack_constants.h"
 
 namespace spdy {
 
 namespace {
+
+using quiche::HttpHeaderBlock;
 
 // Sampled exponential distribution parameters:
 // Number of headers in each header set.
@@ -72,9 +76,9 @@ void HpackFuzzUtil::InitializeGeneratorContext(GeneratorContext* context) {
 }
 
 // static
-Http2HeaderBlock HpackFuzzUtil::NextGeneratedHeaderSet(
+HttpHeaderBlock HpackFuzzUtil::NextGeneratedHeaderSet(
     GeneratorContext* context) {
-  Http2HeaderBlock headers;
+  HttpHeaderBlock headers;
 
   size_t header_count =
       1 + SampleExponential(kHeaderCountMean, kHeaderCountMax);
@@ -112,28 +116,25 @@ size_t HpackFuzzUtil::SampleExponential(size_t mean, size_t sanity_bound) {
 bool HpackFuzzUtil::NextHeaderBlock(Input* input, std::string_view* out) {
   // ClusterFuzz may truncate input files if the fuzzer ran out of allocated
   // disk space. Be tolerant of these.
-  CHECK_LE(input->offset, input->input.size());
-  if (input->remaining() < sizeof(uint32_t)) {
+  if (input->RemainingBytes().size() < sizeof(uint32_t)) {
     return false;
   }
+  uint32_t length = base::U32FromBigEndian(input->ReadSpan<sizeof(uint32_t)>());
 
-  uint32_t length;
-  base::ReadBigEndian(reinterpret_cast<const uint8_t*>(input->ptr()), &length);
-  input->offset += sizeof(uint32_t);
-
-  if (input->remaining() < length) {
+  if (input->RemainingBytes().size() < length) {
     return false;
   }
-  *out = std::string_view(input->ptr(), length);
-  input->offset += length;
+  auto block = base::as_chars(input->ReadSpan(length));
+  *out = std::string_view(block.begin(), block.end());
+
   return true;
 }
 
 // static
 std::string HpackFuzzUtil::HeaderBlockPrefix(size_t block_size) {
-  char buf[4];
-  base::WriteBigEndian(buf, static_cast<uint32_t>(block_size));
-  return std::string(buf, sizeof(buf));
+  std::array<uint8_t, 4u> buf =
+      base::U32ToBigEndian(base::checked_cast<uint32_t>(block_size));
+  return std::string(buf.begin(), buf.end());
 }
 
 // static
@@ -176,20 +177,6 @@ bool HpackFuzzUtil::RunHeaderBlockThroughFuzzerStages(
     return false;
   }
   return true;
-}
-
-// static
-void HpackFuzzUtil::FlipBits(uint8_t* buffer,
-                             size_t buffer_length,
-                             size_t flip_per_thousand) {
-  uint64_t buffer_bit_length = buffer_length * 8u;
-  uint64_t bits_to_flip = flip_per_thousand * (1 + buffer_bit_length / 1024);
-
-  // Iteratively identify & flip offsets in the buffer bit-sequence.
-  for (uint64_t i = 0; i != bits_to_flip; ++i) {
-    uint64_t bit_offset = base::RandUint64() % buffer_bit_length;
-    buffer[bit_offset / 8u] ^= (1 << (bit_offset % 8u));
-  }
 }
 
 }  // namespace spdy

@@ -12,12 +12,11 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/sharing/sharing_metrics.h"
-#include "chrome/browser/sharing/sharing_service.h"
 #include "chrome/browser/sharing/sharing_ui_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
+#include "components/sharing_message/sharing_metrics.h"
+#include "components/sharing_message/sharing_service.h"
 #include "content/public/browser/web_contents_user_data.h"
-#include "url/gurl.h"
 #include "url/origin.h"
 
 namespace content {
@@ -44,7 +43,6 @@ class SmsRemoteFetcherUiController
   ~SmsRemoteFetcherUiController() override;
 
   // Overridden from SharingUiController:
-  PageActionIconType GetIconType() override;
   sync_pb::SharingSpecificFields::EnabledFeatures GetRequiredFeature()
       const override;
   void OnDeviceChosen(const SharingTargetDeviceInfo& device) override;
@@ -59,7 +57,7 @@ class SmsRemoteFetcherUiController
   void OnSmsRemoteFetchResponse(
       OnRemoteCallback callback,
       SharingSendMessageResult result,
-      std::unique_ptr<chrome_browser_sharing::ResponseMessage> response);
+      std::unique_ptr<components_sharing_message::ResponseMessage> response);
 
   base::OnceClosure FetchRemoteSms(const std::vector<url::Origin>& origin_list,
                                    OnRemoteCallback callback);

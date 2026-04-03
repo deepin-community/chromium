@@ -25,6 +25,8 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <vector>
+
 #include "dawn/common/Assert.h"
 #include "dawn/common/Constants.h"
 #include "dawn/common/Math.h"
@@ -78,8 +80,9 @@ wgpu::ExternalTexture CreateExternalTexture(wgpu::Device device, uint32_t width,
 
     externalDesc.plane0 = view;
 
-    externalDesc.visibleOrigin = {0, 0};
-    externalDesc.visibleSize = {width, height};
+    externalDesc.cropOrigin = {0, 0};
+    externalDesc.cropSize = {width, height};
+    externalDesc.apparentSize = {width, height};
 
     // Import the external texture
     return device.CreateExternalTexture(&externalDesc);
@@ -97,29 +100,25 @@ class CopyTextureForBrowserTest : public ValidationTest {
                                    wgpu::Extent3D extent3D,
                                    wgpu::TextureAspect aspect = wgpu::TextureAspect::All,
                                    wgpu::CopyTextureForBrowserOptions options = {}) {
-        wgpu::ImageCopyTexture srcImageCopyTexture =
-            utils::CreateImageCopyTexture(srcTexture, srcLevel, srcOrigin, aspect);
-        wgpu::ImageCopyTexture dstImageCopyTexture =
-            utils::CreateImageCopyTexture(dstTexture, dstLevel, dstOrigin, aspect);
+        wgpu::TexelCopyTextureInfo srcTexelCopyTextureInfo =
+            utils::CreateTexelCopyTextureInfo(srcTexture, srcLevel, srcOrigin, aspect);
+        wgpu::TexelCopyTextureInfo dstTexelCopyTextureInfo =
+            utils::CreateTexelCopyTextureInfo(dstTexture, dstLevel, dstOrigin, aspect);
 
         if (expectation == utils::Expectation::Success) {
-            device.GetQueue().CopyTextureForBrowser(&srcImageCopyTexture, &dstImageCopyTexture,
-                                                    &extent3D, &options);
+            device.GetQueue().CopyTextureForBrowser(&srcTexelCopyTextureInfo,
+                                                    &dstTexelCopyTextureInfo, &extent3D, &options);
         } else {
             ASSERT_DEVICE_ERROR(device.GetQueue().CopyTextureForBrowser(
-                &srcImageCopyTexture, &dstImageCopyTexture, &extent3D, &options));
+                &srcTexelCopyTextureInfo, &dstTexelCopyTextureInfo, &extent3D, &options));
         }
     }
 };
 
 class CopyTextureForBrowserInternalUsageTest : public CopyTextureForBrowserTest {
   protected:
-    WGPUDevice CreateTestDevice(native::Adapter dawnAdapter,
-                                wgpu::DeviceDescriptor descriptor) override {
-        wgpu::FeatureName feature = wgpu::FeatureName::DawnInternalUsages;
-        descriptor.requiredFeatures = &feature;
-        descriptor.requiredFeatureCount = 1;
-        return dawnAdapter.CreateDevice(&descriptor);
+    std::vector<wgpu::FeatureName> GetRequiredFeatures() override {
+        return {wgpu::FeatureName::DawnInternalUsages};
     }
 };
 
@@ -140,27 +139,23 @@ class CopyExternalTextureForBrowserTest : public ValidationTest {
         srcImageCopyExternalTexture.origin = srcOrigin;
         srcImageCopyExternalTexture.naturalSize = srcNaturalSize;
 
-        wgpu::ImageCopyTexture dstImageCopyTexture =
-            utils::CreateImageCopyTexture(dstTexture, dstLevel, dstOrigin, aspect);
+        wgpu::TexelCopyTextureInfo dstTexelCopyTextureInfo =
+            utils::CreateTexelCopyTextureInfo(dstTexture, dstLevel, dstOrigin, aspect);
 
         if (expectation == utils::Expectation::Success) {
             device.GetQueue().CopyExternalTextureForBrowser(
-                &srcImageCopyExternalTexture, &dstImageCopyTexture, &extent3D, &options);
+                &srcImageCopyExternalTexture, &dstTexelCopyTextureInfo, &extent3D, &options);
         } else {
             ASSERT_DEVICE_ERROR(device.GetQueue().CopyExternalTextureForBrowser(
-                &srcImageCopyExternalTexture, &dstImageCopyTexture, &extent3D, &options));
+                &srcImageCopyExternalTexture, &dstTexelCopyTextureInfo, &extent3D, &options));
         }
     }
 };
 
 class CopyExternalTextureForBrowserInternalUsageTest : public CopyExternalTextureForBrowserTest {
   protected:
-    WGPUDevice CreateTestDevice(native::Adapter dawnAdapter,
-                                wgpu::DeviceDescriptor descriptor) override {
-        wgpu::FeatureName feature = wgpu::FeatureName::DawnInternalUsages;
-        descriptor.requiredFeatures = &feature;
-        descriptor.requiredFeatureCount = 1;
-        return dawnAdapter.CreateDevice(&descriptor);
+    std::vector<wgpu::FeatureName> GetRequiredFeatures() override {
+        return {wgpu::FeatureName::DawnInternalUsages};
     }
 };
 

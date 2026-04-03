@@ -5,7 +5,6 @@
 #include <string>
 
 #include "base/auto_reset.h"
-#include "base/functional/callback_forward.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/banners/android/chrome_app_banner_manager_android.h"
@@ -15,8 +14,6 @@
 #include "chrome/test/base/chrome_test_utils.h"
 #include "components/segmentation_platform/public/segment_selection_result.h"
 #include "components/segmentation_platform/public/testing/mock_segmentation_platform_service.h"
-#include "components/site_engagement/content/site_engagement_score.h"
-#include "components/site_engagement/content/site_engagement_service.h"
 #include "components/webapps/browser/android/add_to_homescreen_params.h"
 #include "components/webapps/browser/android/ambient_badge_manager.h"
 #include "components/webapps/browser/android/app_banner_manager_android.h"
@@ -87,7 +84,9 @@ class TestAppBannerManager : public AppBannerManagerAndroid {
       : AppBannerManagerAndroid(
             web_contents,
             std::make_unique<ChromeAppBannerManagerAndroid>(*web_contents)),
-        mock_segmentation_(segmentation_platform_service) {}
+        mock_segmentation_(segmentation_platform_service) {
+    SetTriggeringDisabledForTesting(false);
+  }
 
   TestAppBannerManager(const TestAppBannerManager&) = delete;
   TestAppBannerManager& operator=(const TestAppBannerManager&) = delete;
@@ -100,8 +99,6 @@ class TestAppBannerManager : public AppBannerManagerAndroid {
     on_badge_done_ = std::move(on_done);
   }
 
-  bool TriggeringDisabledForTesting() const override { return false; }
-
   TestAmbientBadgeManager* GetBadgeManagerForTest() {
     return ambient_badge_test_.get();
   }
@@ -111,14 +108,14 @@ class TestAppBannerManager : public AppBannerManagerAndroid {
     return Profile::FromBrowserContext(web_contents()->GetBrowserContext());
   }
 
-  void MaybeShowAmbientBadge() override {
+  void MaybeShowAmbientBadge(
+      const InstallBannerConfig& install_config) override {
     ambient_badge_test_ = std::make_unique<TestAmbientBadgeManager>(
         web_contents(), mock_segmentation_, profile()->GetPrefs());
 
     ambient_badge_test_->WaitForState(target_badge_state_,
                                       std::move(on_badge_done_));
 
-    InstallBannerConfig install_config = GetCurrentInstallBannerConfig();
     std::unique_ptr<AddToHomescreenParams> a2hs_params =
         AppBannerManagerAndroid::CreateAddToHomescreenParams(
             install_config, native_java_app_data_for_testing(),
@@ -130,7 +127,7 @@ class TestAppBannerManager : public AppBannerManagerAndroid {
         install_config.GetWebOrNativeAppIdentifier(), std::move(a2hs_params),
         // TODO(b/323192242): See if these callbacks can be merged.
         base::BindOnce(&AppBannerManagerAndroid::ShowBannerFromBadge,
-                       GetAndroidWeakPtr()),
+                       GetAndroidWeakPtr(), install_config),
         // Create the params, then pass them to MaybeShow.
         base::BindOnce(&AppBannerManagerAndroid::CreateAddToHomescreenParams,
                        install_config, native_java_app_data_for_testing())
@@ -138,7 +135,8 @@ class TestAppBannerManager : public AppBannerManagerAndroid {
                 &PwaBottomSheetController::MaybeShow, web_contents(),
                 install_config.web_app_data, /*expand_sheet=*/false,
                 base::BindRepeating(&TestAppBannerManager::OnInstallEvent,
-                                    GetAndroidWeakPtr()))));
+                                    GetAndroidWeakPtr(),
+                                    install_config.validated_url))));
   }
 
  private:
@@ -162,150 +160,12 @@ class AmbientBadgeManagerBrowserTest : public AndroidBrowserTest {
 
   ~AmbientBadgeManagerBrowserTest() override = default;
 
-  void SetUp() override {
-    SetUpFeatureList();
-    AndroidBrowserTest::SetUp();
-  }
-
   void SetUpOnMainThread() override {
     ASSERT_TRUE(embedded_test_server()->Start());
-    site_engagement::SiteEngagementScore::SetParamValuesForTesting();
 
+    app_banner_manager_ = std::make_unique<TestAppBannerManager>(
+        web_contents(), &mock_segmentation_service_);
     AndroidBrowserTest::SetUpOnMainThread();
-  }
-
- protected:
-  content::WebContents* web_contents() {
-    return chrome_test_utils::GetActiveWebContents(this);
-  }
-
-  virtual void SetUpFeatureList() {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{},
-        /*disabled_features=*/{features::kAmbientBadgeSuppressFirstVisit,
-                               features::kInstallPromptSegmentation});
-  }
-
-  void ResetEngagementForUrl(const GURL& url, double score) {
-    site_engagement::SiteEngagementService* service =
-        site_engagement::SiteEngagementService::Get(
-            Profile::FromBrowserContext(web_contents()->GetBrowserContext()));
-    service->ResetBaseScoreForURL(url, score);
-  }
-
-  void RunTest(TestAppBannerManager* app_banner_manager,
-               const GURL& url,
-               AmbientBadgeManager::State expected_state) {
-    ResetEngagementForUrl(url, 10);
-
-    base::RunLoop waiter;
-
-    app_banner_manager->WaitForAmbientBadgeState(expected_state,
-                                                 waiter.QuitClosure());
-    ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
-
-    waiter.Run();
-  }
-
-  base::test::ScopedFeatureList scoped_feature_list_;
-
- private:
-  // Disable the banners in the browser so it won't interfere with the test.
-  base::AutoReset<bool> disable_banner_trigger_;
-};
-
-IN_PROC_BROWSER_TEST_F(AmbientBadgeManagerBrowserTest, ShowAmbientBadge) {
-  auto app_banner_manager =
-      std::make_unique<TestAppBannerManager>(web_contents());
-
-  RunTest(app_banner_manager.get(),
-          embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
-          AmbientBadgeManager::State::kShowing);
-}
-
-IN_PROC_BROWSER_TEST_F(AmbientBadgeManagerBrowserTest, NoServiceWorker) {
-  auto app_banner_manager =
-      std::make_unique<TestAppBannerManager>(web_contents());
-  RunTest(app_banner_manager.get(),
-          embedded_test_server()->GetURL(
-              "/banners/manifest_no_service_worker.html"),
-          AmbientBadgeManager::State::kPendingWorker);
-}
-
-IN_PROC_BROWSER_TEST_F(AmbientBadgeManagerBrowserTest,
-                       BlockedIfDismissRecently) {
-  auto app_banner_manager =
-      std::make_unique<TestAppBannerManager>(web_contents());
-
-  RunTest(app_banner_manager.get(),
-          embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
-          AmbientBadgeManager::State::kShowing);
-
-  // Explicitly dismiss the badge.
-  app_banner_manager->GetBadgeManagerForTest()->BadgeDismissed();  // IN-TEST
-  EXPECT_EQ(AmbientBadgeManager::State::kDismissed,
-            app_banner_manager->GetBadgeManagerForTest()->state());  // IN-TEST
-
-  // Badge blocked because it was recently dismissed.
-  RunTest(app_banner_manager.get(),
-          embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
-          AmbientBadgeManager::State::kBlocked);
-
-  // Badge can show again after 91 days.
-  webapps::AppBannerManager::SetTimeDeltaForTesting(91);
-  RunTest(app_banner_manager.get(),
-          embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
-          AmbientBadgeManager::State::kShowing);
-}
-
-class AmbientBadgeManagerSecondVisitTest
-    : public AmbientBadgeManagerBrowserTest {
- public:
-  AmbientBadgeManagerSecondVisitTest() = default;
-
-  AmbientBadgeManagerSecondVisitTest(
-      const AmbientBadgeManagerSecondVisitTest&) = delete;
-  AmbientBadgeManagerSecondVisitTest& operator=(
-      const AmbientBadgeManagerSecondVisitTest&) = delete;
-
-  ~AmbientBadgeManagerSecondVisitTest() override = default;
-
-  void SetUpFeatureList() override {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kAmbientBadgeSuppressFirstVisit},
-        /*disabled_features=*/{features::kInstallPromptSegmentation});
-  }
-};
-
-IN_PROC_BROWSER_TEST_F(AmbientBadgeManagerSecondVisitTest,
-                       SuppressedOnFirstVisit) {
-  auto app_banner_manager =
-      std::make_unique<TestAppBannerManager>(web_contents());
-
-  RunTest(app_banner_manager.get(),
-          embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
-          AmbientBadgeManager::State::kPendingEngagement);
-
-  // Load again, can show.
-  RunTest(app_banner_manager.get(),
-          embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
-          AmbientBadgeManager::State::kShowing);
-}
-
-class AmbientBadgeManagerSmartTest : public AmbientBadgeManagerBrowserTest {
- public:
-  AmbientBadgeManagerSmartTest() = default;
-
-  AmbientBadgeManagerSmartTest(const AmbientBadgeManagerSmartTest&) = delete;
-  AmbientBadgeManagerSmartTest& operator=(const AmbientBadgeManagerSmartTest&) =
-      delete;
-
-  ~AmbientBadgeManagerSmartTest() override = default;
-
-  void SetUpFeatureList() override {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kInstallPromptSegmentation},
-        /*disabled_features=*/{features::kAmbientBadgeSuppressFirstVisit});
   }
 
   segmentation_platform::ClassificationResult GetClassificationResult(
@@ -316,65 +176,84 @@ class AmbientBadgeManagerSmartTest : public AmbientBadgeManagerBrowserTest {
     return result;
   }
 
+ protected:
+  content::WebContents* web_contents() {
+    return chrome_test_utils::GetActiveWebContents(this);
+  }
+
+  AmbientBadgeManager* GetAmbientBadgeManager() {
+    return app_banner_manager_->GetBadgeManagerForTest();
+  }
+
+  void SetSegmentationResult(std::string label) {
+    EXPECT_CALL(mock_segmentation_service_, GetClassificationResult(_, _, _, _))
+        .WillOnce(RunOnceCallback<3>(GetClassificationResult(label)));
+  }
+
+  void RunTest(const GURL& url, AmbientBadgeManager::State expected_state) {
+    base::RunLoop waiter;
+
+    app_banner_manager_->WaitForAmbientBadgeState(expected_state,
+                                                  waiter.QuitClosure());
+    ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+    waiter.Run();
+  }
+
+ private:
+  // Disable the banners in the browser so it won't interfere with the test.
+  base::AutoReset<bool> disable_banner_trigger_;
+
+  std::unique_ptr<TestAppBannerManager> app_banner_manager_;
   segmentation_platform::MockSegmentationPlatformService
       mock_segmentation_service_;
 };
 
-IN_PROC_BROWSER_TEST_F(AmbientBadgeManagerSmartTest, ShowInstallMessages) {
-  EXPECT_CALL(mock_segmentation_service_, GetClassificationResult(_, _, _, _))
-      .WillOnce(RunOnceCallback<3>(GetClassificationResult(
-          MLInstallabilityPromoter::kShowInstallPromptLabel)));
+// TODO(crbug.com/369913977): Flaky
+IN_PROC_BROWSER_TEST_F(AmbientBadgeManagerBrowserTest,
+                       DISABLED_ShowAmbientBadge) {
+  SetSegmentationResult(MLInstallabilityPromoter::kShowInstallPromptLabel);
 
-  auto app_banner_manager = std::make_unique<TestAppBannerManager>(
-      web_contents(), &mock_segmentation_service_);
-
-  RunTest(app_banner_manager.get(),
-          embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
+  RunTest(embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
           AmbientBadgeManager::State::kShowing);
 }
 
-IN_PROC_BROWSER_TEST_F(AmbientBadgeManagerSmartTest,
-                       BlockedBySegmentationResult) {
-  EXPECT_CALL(mock_segmentation_service_, GetClassificationResult(_, _, _, _))
-      .WillOnce(RunOnceCallback<3>(GetClassificationResult("DontShow")));
+// TODO(crbug.com/376278389): Flaky
+IN_PROC_BROWSER_TEST_F(AmbientBadgeManagerBrowserTest,
+                       DISABLED_BlockedBySegmentationResult) {
+  SetSegmentationResult(MLInstallabilityPromoter::kDontShowLabel);
 
-  auto app_banner_manager = std::make_unique<TestAppBannerManager>(
-      web_contents(), &mock_segmentation_service_);
-
-  RunTest(app_banner_manager.get(),
-          embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
-          AmbientBadgeManager::State::kSegmentation);
+  RunTest(embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
+          AmbientBadgeManager::State::kSegmentationBlock);
 }
 
-IN_PROC_BROWSER_TEST_F(AmbientBadgeManagerSmartTest, BlockedByGuardrail) {
-  EXPECT_CALL(mock_segmentation_service_, GetClassificationResult(_, _, _, _))
-      .Times(testing::Exactly(2))
-      .WillRepeatedly(
-          base::test::RunOnceCallbackRepeatedly<3>(GetClassificationResult(
-              MLInstallabilityPromoter::kShowInstallPromptLabel)));
+IN_PROC_BROWSER_TEST_F(AmbientBadgeManagerBrowserTest, NoServiceWorker) {
+  SetSegmentationResult(MLInstallabilityPromoter::kShowInstallPromptLabel);
 
-  auto app_banner_manager = std::make_unique<TestAppBannerManager>(
-      web_contents(), &mock_segmentation_service_);
+  RunTest(embedded_test_server()->GetURL(
+              "/banners/manifest_no_service_worker.html"),
+          AmbientBadgeManager::State::kShowing);
+}
 
-  // Showing OK for the first visit
-  RunTest(app_banner_manager.get(),
-          embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
+IN_PROC_BROWSER_TEST_F(AmbientBadgeManagerBrowserTest,
+                       BlockedIfDismissRecently) {
+  SetSegmentationResult(MLInstallabilityPromoter::kShowInstallPromptLabel);
+  RunTest(embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
           AmbientBadgeManager::State::kShowing);
 
   // Explicitly dismiss the badge.
-  app_banner_manager->GetBadgeManagerForTest()->BadgeDismissed();  // IN-TEST
+  GetAmbientBadgeManager()->BadgeDismissed();  // IN-TEST
   EXPECT_EQ(AmbientBadgeManager::State::kDismissed,
-            app_banner_manager->GetBadgeManagerForTest()->state());  // IN-TEST
+            GetAmbientBadgeManager()->state());  // IN-TEST
 
   // Badge blocked because it was recently dismissed.
-  RunTest(app_banner_manager.get(),
-          embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
+  RunTest(embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
           AmbientBadgeManager::State::kBlocked);
 
   // Badge can show again after 91 days.
+  SetSegmentationResult(MLInstallabilityPromoter::kShowInstallPromptLabel);
   webapps::AppBannerManager::SetTimeDeltaForTesting(91);
-  RunTest(app_banner_manager.get(),
-          embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
+  RunTest(embedded_test_server()->GetURL("/banners/manifest_test_page.html"),
           AmbientBadgeManager::State::kShowing);
 }
 

@@ -4,6 +4,7 @@
 
 #include "components/services/app_service/public/cpp/intent_util.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <utility>
@@ -14,10 +15,10 @@
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/strings/to_string.h"
 #include "base/values.h"
 #include "third_party/blink/public/common/mime_util/mime_util.h"
 
@@ -194,7 +195,6 @@ bool PatternMatchValue(std::string_view test_value,
     case apps::PatternMatchType::kIsDirectory: {
       // Handled in FileMatchesConditionValue.
       NOTREACHED();
-      return false;
     }
   }
 }
@@ -237,7 +237,12 @@ bool IsGenericFileHandler(const apps::IntentPtr& intent,
 }
 
 bool MatchGlob(std::string_view value, std::string_view pattern) {
-#define GET_CHAR(s, i) ((UNLIKELY(i >= s.length())) ? '\0' : s[i])
+  static constexpr auto get_char = [](std::string_view s, size_t i) {
+    if (i >= s.length()) [[unlikely]] {
+      return '\0';
+    }
+    return s[i];
+  };
 
   const size_t NP = pattern.length();
   const size_t NS = value.length();
@@ -245,16 +250,16 @@ bool MatchGlob(std::string_view value, std::string_view pattern) {
     return NS == 0;
   }
   size_t ip = 0, is = 0;
-  char nextChar = GET_CHAR(pattern, 0);
+  char nextChar = get_char(pattern, 0);
   while (ip < NP && is < NS) {
     char c = nextChar;
     ++ip;
-    nextChar = GET_CHAR(pattern, ip);
+    nextChar = get_char(pattern, ip);
     const bool escaped = (c == '\\');
     if (escaped) {
       c = nextChar;
       ++ip;
-      nextChar = GET_CHAR(pattern, ip);
+      nextChar = get_char(pattern, ip);
     }
     if (nextChar == '*') {
       if (!escaped && c == '.') {
@@ -263,14 +268,14 @@ bool MatchGlob(std::string_view value, std::string_view pattern) {
           return true;
         }
         ++ip;
-        nextChar = GET_CHAR(pattern, ip);
+        nextChar = get_char(pattern, ip);
         // Consume everything until the next char in the pattern is found.
         if (nextChar == '\\') {
           ++ip;
-          nextChar = GET_CHAR(pattern, ip);
+          nextChar = get_char(pattern, ip);
         }
         do {
-          if (GET_CHAR(value, is) == nextChar) {
+          if (get_char(value, is) == nextChar) {
             break;
           }
           ++is;
@@ -280,22 +285,23 @@ bool MatchGlob(std::string_view value, std::string_view pattern) {
           return false;
         }
         ++ip;
-        nextChar = GET_CHAR(pattern, ip);
+        nextChar = get_char(pattern, ip);
         ++is;
       } else {
         // Consume only characters matching the one before '*'.
         do {
-          if (GET_CHAR(value, is) != c) {
+          if (get_char(value, is) != c) {
             break;
           }
           ++is;
         } while (is < NS);
         ++ip;
-        nextChar = GET_CHAR(pattern, ip);
+        nextChar = get_char(pattern, ip);
       }
     } else {
-      if (c != '.' && GET_CHAR(value, is) != c)
+      if (c != '.' && get_char(value, is) != c) {
         return false;
+      }
       ++is;
     }
   }
@@ -307,14 +313,12 @@ bool MatchGlob(std::string_view value, std::string_view pattern) {
 
   // One last check: we may have finished the match string, but still have a
   // '.*' at the end of the pattern, which is still a match.
-  if (ip == NP - 2 && GET_CHAR(pattern, ip) == '.' &&
-      GET_CHAR(pattern, ip + 1) == '*') {
+  if (ip == NP - 2 && get_char(pattern, ip) == '.' &&
+      get_char(pattern, ip + 1) == '*') {
     return true;
   }
 
   return false;
-
-#undef GET_CHAR
 }
 
 bool MimeTypeMatched(std::string_view intent_mime_type,
@@ -378,7 +382,7 @@ bool ExtensionMatched(const std::string& file_name,
 }
 
 base::Value ConvertIntentToValue(const apps::IntentPtr& intent) {
-  base::Value::Dict intent_value;
+  base::DictValue intent_value;
   intent_value.Set(kActionKey, intent->action);
 
   if (intent->url.has_value()) {
@@ -390,7 +394,7 @@ base::Value ConvertIntentToValue(const apps::IntentPtr& intent) {
     intent_value.Set(kMimeTypeKey, intent->mime_type.value());
 
   if (!intent->files.empty()) {
-    base::Value::List file_urls_list;
+    base::ListValue file_urls_list;
     for (const auto& file : intent->files) {
       DCHECK(file->url.is_valid());
       file_urls_list.Append(base::Value(file->url.spec()));
@@ -418,7 +422,7 @@ base::Value ConvertIntentToValue(const apps::IntentPtr& intent) {
     intent_value.Set(kStartTypeKey, intent->start_type.value());
 
   if (!intent->categories.empty()) {
-    base::Value::List categories;
+    base::ListValue categories;
     for (const auto& category : intent->categories) {
       categories.Append(category);
     }
@@ -433,7 +437,7 @@ base::Value ConvertIntentToValue(const apps::IntentPtr& intent) {
   }
 
   if (!intent->extras.empty()) {
-    base::Value::Dict extras;
+    base::DictValue extras;
     for (const auto& extra : intent->extras) {
       extras.Set(extra.first, extra.second);
     }
@@ -443,7 +447,7 @@ base::Value ConvertIntentToValue(const apps::IntentPtr& intent) {
   return base::Value(std::move(intent_value));
 }
 
-std::optional<std::string> GetStringValueFromDict(const base::Value::Dict& dict,
+std::optional<std::string> GetStringValueFromDict(const base::DictValue& dict,
                                                   const std::string& key_name) {
   const base::Value* value = dict.Find(key_name);
   if (!value)
@@ -456,12 +460,12 @@ std::optional<std::string> GetStringValueFromDict(const base::Value::Dict& dict,
   return *string_value;
 }
 
-std::optional<bool> GetBoolValueFromDict(const base::Value::Dict& dict,
+std::optional<bool> GetBoolValueFromDict(const base::DictValue& dict,
                                          const std::string& key_name) {
   return dict.FindBool(key_name);
 }
 
-std::optional<GURL> GetGurlValueFromDict(const base::Value::Dict& dict,
+std::optional<GURL> GetGurlValueFromDict(const base::DictValue& dict,
                                          const std::string& key_name) {
   const std::string* url_spec = dict.FindString(key_name);
   if (!url_spec)
@@ -474,9 +478,9 @@ std::optional<GURL> GetGurlValueFromDict(const base::Value::Dict& dict,
   return url;
 }
 
-std::vector<apps::IntentFilePtr> GetFilesFromDict(const base::Value::Dict& dict,
+std::vector<apps::IntentFilePtr> GetFilesFromDict(const base::DictValue& dict,
                                                   const std::string& key_name) {
-  const base::Value::List* value = dict.FindList(key_name);
+  const base::ListValue* value = dict.FindList(key_name);
   if (!value || value->empty())
     return std::vector<apps::IntentFilePtr>();
 
@@ -490,9 +494,9 @@ std::vector<apps::IntentFilePtr> GetFilesFromDict(const base::Value::Dict& dict,
   return files;
 }
 
-std::vector<std::string> GetCategoriesFromDict(const base::Value::Dict& dict,
+std::vector<std::string> GetCategoriesFromDict(const base::DictValue& dict,
                                                const std::string& key_name) {
-  const base::Value::List* value = dict.FindList(key_name);
+  const base::ListValue* value = dict.FindList(key_name);
   if (!value || value->empty())
     return std::vector<std::string>();
 
@@ -504,9 +508,9 @@ std::vector<std::string> GetCategoriesFromDict(const base::Value::Dict& dict,
 }
 
 base::flat_map<std::string, std::string> GetExtrasFromDict(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     const std::string& key_name) {
-  const base::Value::Dict* value = dict.FindDict(key_name);
+  const base::DictValue* value = dict.FindDict(key_name);
   if (!value)
     return base::flat_map<std::string, std::string>();
 
@@ -520,14 +524,14 @@ base::flat_map<std::string, std::string> GetExtrasFromDict(
 }
 
 apps::IntentPtr ConvertValueToIntent(base::Value&& value) {
-  base::Value::Dict* dict = value.GetIfDict();
+  base::DictValue* dict = value.GetIfDict();
   if (!dict)
     return nullptr;
 
   return ConvertDictToIntent(*dict);
 }
 
-apps::IntentPtr ConvertDictToIntent(const base::Value::Dict& dict) {
+apps::IntentPtr ConvertDictToIntent(const base::DictValue& dict) {
   auto action = GetStringValueFromDict(dict, kActionKey);
   if (!action.has_value())
     return nullptr;
@@ -642,7 +646,8 @@ AuthorityView AuthorityView::Decode(std::string_view encoded_string) {
 // static
 std::string AuthorityView::Encode(const GURL& url) {
   CHECK(url.is_valid());
-  return AuthorityView{.host = url.host(), .port = PortToString(url)}.Encode();
+  return AuthorityView{.host = url.GetHost(), .port = PortToString(url)}
+      .Encode();
 }
 
 // static

@@ -4,44 +4,46 @@
 
 from __future__ import annotations
 
-import pathlib
 import shlex
-from typing import TYPE_CHECKING, Dict, Iterable, Tuple
-from crossbench import cli_helper, plt
-from crossbench.browsers.browser import Browser
-from crossbench.browsers.chromium import chromium
+from typing import TYPE_CHECKING, ClassVar, Final, Iterable, Self, Type
 
-from crossbench.probes.probe import (Probe, ProbeConfigParser, ProbeContext,
-                                     ProbeValidationError, ResultLocation)
-from crossbench.probes.results import EmptyProbeResult, ProbeResult
+from typing_extensions import override
+
+from crossbench import plt
+from crossbench.browsers.attributes import BrowserAttributes
+from crossbench.probes.probe import Probe, ProbeConfigParser, ProbeContext, \
+    ProbeKeyT
+from crossbench.probes.probe_error import ProbeValidationError
+from crossbench.probes.result_location import ResultLocation
 
 if TYPE_CHECKING:
   from crossbench.browsers.browser import Browser
-  from crossbench.runner.run import Run
-  from crossbench.env import HostEnvironment
+  from crossbench.env.runner_env import RunnerEnv
+  from crossbench.path import LocalPath
+  from crossbench.probes.results import ProbeResult
 
-_DEBUGGER_LOOKUP: Dict[str, str] = {
+_DEBUGGER_LOOKUP: Final[dict[str, str]] = {
     "macos": "lldb",
     "linux": "gdb",
 }
 
-DEFAULT_GEOMETRY = "80x70"
+DEFAULT_GEOMETRY: Final = "80x70"
 
 
 class DebuggerProbe(Probe):
   """
   Probe debugging chrome's renderer process.
   """
-  NAME = "debugger"
-  RESULT_LOCATION = ResultLocation.BROWSER
-  IS_GENERAL_PURPOSE = True
+  NAME: ClassVar = "debugger"
+  RESULT_LOCATION: ClassVar = ResultLocation.BROWSER
 
   @classmethod
-  def config_parser(cls) -> ProbeConfigParser:
+  @override
+  def config_parser(cls) -> ProbeConfigParser[Self]:
     parser = super().config_parser()
     parser.add_argument(
         "debugger",
-        type=cli_helper.parse_binary_path,
+        type=plt.PLATFORM.parse_local_binary_path,
         default=_DEBUGGER_LOOKUP.get(plt.PLATFORM.name,
                                      "debugger probe not supported"),
         help="Set a custom debugger binary. "
@@ -67,14 +69,14 @@ class DebuggerProbe(Probe):
     parser.add_argument(
         "args",
         type=str,
-        default=tuple(),
+        default=(),
         is_list=True,
         help="Additional args that are passed to the debugger.")
     return parser
 
   def __init__(
       self,
-      debugger: pathlib.Path,
+      debugger: LocalPath,
       auto_run: bool = True,
       spare_renderer_process: bool = False,
       geometry: str = DEFAULT_GEOMETRY,
@@ -87,7 +89,8 @@ class DebuggerProbe(Probe):
     self._spare_renderer_process = spare_renderer_process
 
   @property
-  def key(self) -> Tuple[Tuple, ...]:
+  @override
+  def key(self) -> ProbeKeyT:
     return super().key + (
         ("debugger", str(self._debugger_bin)),
         ("debugger_args", tuple(self._debugger_args)),
@@ -96,9 +99,10 @@ class DebuggerProbe(Probe):
         ("spare_renderer_process", self._spare_renderer_process),
     )
 
-  def validate_browser(self, env: HostEnvironment, browser: Browser) -> None:
+  @override
+  def validate_browser(self, env: RunnerEnv, browser: Browser) -> None:
     super().validate_browser(env, browser)
-    self.expect_browser(browser, chromium.Chromium)
+    self.expect_browser(browser, BrowserAttributes.CHROMIUM_BASED)
     # TODO: support more platforms
     if not (browser.platform.is_macos or browser.platform.is_linux):
       raise ValueError(f"Only supported on linux and macOS, but got {browser}")
@@ -108,9 +112,10 @@ class DebuggerProbe(Probe):
     if not browser.platform.which("xterm"):
       raise ProbeValidationError(self, "Please install xterm on your system.")
 
+  @override
   def attach(self, browser: Browser) -> None:
     super().attach(browser)
-    assert isinstance(browser, chromium.Chromium)
+    assert browser.attributes().is_chromium_based
     flags = browser.flags
     flags.set("--no-sandbox")
     flags.set("--disable-hang-monitor")
@@ -145,8 +150,9 @@ class DebuggerProbe(Probe):
       debugger_cmd += ["--args"]
     return shlex.join(debugger_cmd)
 
-  def get_context(self, run: Run) -> DebuggerContext:
-    return DebuggerContext(self, run)
+  @override
+  def get_context_cls(self) -> Type[DebuggerContext]:
+    return DebuggerContext
 
 
 class DebuggerContext(ProbeContext[DebuggerProbe]):
@@ -157,5 +163,5 @@ class DebuggerContext(ProbeContext[DebuggerProbe]):
   def stop(self) -> None:
     pass
 
-  def tear_down(self) -> ProbeResult:
-    return EmptyProbeResult()
+  def teardown(self) -> ProbeResult:
+    return self.empty_result()

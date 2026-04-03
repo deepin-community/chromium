@@ -1130,37 +1130,6 @@ error::Error GLES2DecoderPassthroughImpl::HandleGetBooleanv(
   return error::kNoError;
 }
 
-error::Error GLES2DecoderPassthroughImpl::HandleGetBooleani_v(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  if (!feature_info_->IsWebGL2OrES3OrHigherContext())
-    return error::kUnknownCommand;
-  const volatile gles2::cmds::GetBooleani_v& c =
-      *static_cast<const volatile gles2::cmds::GetBooleani_v*>(cmd_data);
-  GLenum pname = static_cast<GLenum>(c.pname);
-  GLuint index = static_cast<GLuint>(c.index);
-  unsigned int buffer_size = 0;
-  typedef cmds::GetBooleani_v::Result Result;
-  Result* result = GetSharedMemoryAndSizeAs<Result*>(
-      c.data_shm_id, c.data_shm_offset, sizeof(Result), &buffer_size);
-  GLboolean* data = result ? result->GetData() : nullptr;
-  if (data == nullptr) {
-    return error::kOutOfBounds;
-  }
-  GLsizei bufsize = Result::ComputeMaxResults(buffer_size);
-  GLsizei written_values = 0;
-  GLsizei* length = &written_values;
-  error::Error error = DoGetBooleani_v(pname, index, bufsize, length, data);
-  if (error != error::kNoError) {
-    return error;
-  }
-  if (written_values > bufsize) {
-    return error::kOutOfBounds;
-  }
-  result->SetNumResults(written_values);
-  return error::kNoError;
-}
-
 error::Error GLES2DecoderPassthroughImpl::HandleGetBufferParameteri64v(
     uint32_t immediate_data_size,
     const volatile void* cmd_data) {
@@ -4011,141 +3980,6 @@ error::Error GLES2DecoderPassthroughImpl::HandleFramebufferParameteri(
   return error::kNoError;
 }
 
-error::Error GLES2DecoderPassthroughImpl::HandleBindImageTexture(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  if (!feature_info_->IsES31ForTestingContext())
-    return error::kUnknownCommand;
-  const volatile gles2::cmds::BindImageTexture& c =
-      *static_cast<const volatile gles2::cmds::BindImageTexture*>(cmd_data);
-  GLuint unit = static_cast<GLuint>(c.unit);
-  GLuint texture = static_cast<GLuint>(c.texture);
-  GLint level = static_cast<GLint>(c.level);
-  GLboolean layered = static_cast<GLboolean>(c.layered);
-  GLint layer = static_cast<GLint>(c.layer);
-  GLenum access = static_cast<GLenum>(c.access);
-  GLenum format = static_cast<GLenum>(c.format);
-  error::Error error =
-      DoBindImageTexture(unit, texture, level, layered, layer, access, format);
-  if (error != error::kNoError) {
-    return error;
-  }
-  return error::kNoError;
-}
-
-error::Error GLES2DecoderPassthroughImpl::HandleDispatchCompute(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  if (!feature_info_->IsES31ForTestingContext())
-    return error::kUnknownCommand;
-  const volatile gles2::cmds::DispatchCompute& c =
-      *static_cast<const volatile gles2::cmds::DispatchCompute*>(cmd_data);
-  GLuint num_groups_x = static_cast<GLuint>(c.num_groups_x);
-  GLuint num_groups_y = static_cast<GLuint>(c.num_groups_y);
-  GLuint num_groups_z = static_cast<GLuint>(c.num_groups_z);
-  error::Error error =
-      DoDispatchCompute(num_groups_x, num_groups_y, num_groups_z);
-  if (error != error::kNoError) {
-    return error;
-  }
-  return error::kNoError;
-}
-
-error::Error GLES2DecoderPassthroughImpl::HandleDispatchComputeIndirect(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  if (!feature_info_->IsES31ForTestingContext())
-    return error::kUnknownCommand;
-  const volatile gles2::cmds::DispatchComputeIndirect& c =
-      *static_cast<const volatile gles2::cmds::DispatchComputeIndirect*>(
-          cmd_data);
-  GLintptr offset = static_cast<GLintptr>(c.offset);
-  error::Error error = DoDispatchComputeIndirect(offset);
-  if (error != error::kNoError) {
-    return error;
-  }
-  return error::kNoError;
-}
-
-error::Error GLES2DecoderPassthroughImpl::HandleGetProgramInterfaceiv(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  if (!feature_info_->IsES31ForTestingContext())
-    return error::kUnknownCommand;
-  const volatile gles2::cmds::GetProgramInterfaceiv& c =
-      *static_cast<const volatile gles2::cmds::GetProgramInterfaceiv*>(
-          cmd_data);
-  GLuint program = c.program;
-  GLenum program_interface = static_cast<GLenum>(c.program_interface);
-  GLenum pname = static_cast<GLenum>(c.pname);
-  unsigned int buffer_size = 0;
-  typedef cmds::GetProgramInterfaceiv::Result Result;
-  Result* result = GetSharedMemoryAndSizeAs<Result*>(
-      c.params_shm_id, c.params_shm_offset, sizeof(Result), &buffer_size);
-  GLint* params = result ? result->GetData() : nullptr;
-  if (params == nullptr) {
-    return error::kOutOfBounds;
-  }
-  GLsizei bufsize = Result::ComputeMaxResults(buffer_size);
-  GLsizei written_values = 0;
-  GLsizei* length = &written_values;
-  error::Error error = DoGetProgramInterfaceiv(program, program_interface,
-                                               pname, bufsize, length, params);
-  if (error != error::kNoError) {
-    return error;
-  }
-  if (written_values > bufsize) {
-    return error::kOutOfBounds;
-  }
-  result->SetNumResults(written_values);
-  return error::kNoError;
-}
-
-error::Error GLES2DecoderPassthroughImpl::HandleMemoryBarrierEXT(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  if (!feature_info_->IsES31ForTestingContext())
-    return error::kUnknownCommand;
-  const volatile gles2::cmds::MemoryBarrierEXT& c =
-      *static_cast<const volatile gles2::cmds::MemoryBarrierEXT*>(cmd_data);
-  GLbitfield barriers = static_cast<GLbitfield>(c.barriers);
-  error::Error error = DoMemoryBarrierEXT(barriers);
-  if (error != error::kNoError) {
-    return error;
-  }
-  return error::kNoError;
-}
-
-error::Error GLES2DecoderPassthroughImpl::HandleMemoryBarrierByRegion(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  if (!feature_info_->IsES31ForTestingContext())
-    return error::kUnknownCommand;
-  const volatile gles2::cmds::MemoryBarrierByRegion& c =
-      *static_cast<const volatile gles2::cmds::MemoryBarrierByRegion*>(
-          cmd_data);
-  GLbitfield barriers = static_cast<GLbitfield>(c.barriers);
-  error::Error error = DoMemoryBarrierByRegion(barriers);
-  if (error != error::kNoError) {
-    return error;
-  }
-  return error::kNoError;
-}
-
-error::Error GLES2DecoderPassthroughImpl::HandleSwapBuffers(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  const volatile gles2::cmds::SwapBuffers& c =
-      *static_cast<const volatile gles2::cmds::SwapBuffers*>(cmd_data);
-  GLuint64 swap_id = c.swap_id();
-  GLbitfield flags = static_cast<GLbitfield>(c.flags);
-  error::Error error = DoSwapBuffers(swap_id, flags);
-  if (error != error::kNoError) {
-    return error;
-  }
-  return error::kNoError;
-}
-
 error::Error GLES2DecoderPassthroughImpl::HandleGetMaxValueInBufferCHROMIUM(
     uint32_t immediate_data_size,
     const volatile void* cmd_data) {
@@ -4241,61 +4075,6 @@ error::Error GLES2DecoderPassthroughImpl::HandleCopySubTextureCHROMIUM(
       source_id, source_level, dest_target, dest_id, dest_level, xoffset,
       yoffset, x, y, width, height, unpack_flip_y, unpack_premultiply_alpha,
       unpack_unmultiply_alpha);
-  if (error != error::kNoError) {
-    return error;
-  }
-  return error::kNoError;
-}
-
-error::Error
-GLES2DecoderPassthroughImpl::HandleProduceTextureDirectCHROMIUMImmediate(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  const volatile gles2::cmds::ProduceTextureDirectCHROMIUMImmediate& c =
-      *static_cast<
-          const volatile gles2::cmds::ProduceTextureDirectCHROMIUMImmediate*>(
-          cmd_data);
-  GLuint texture = c.texture;
-  uint32_t mailbox_size;
-  if (!GLES2Util::ComputeDataSize<GLbyte, 16>(1, &mailbox_size)) {
-    return error::kOutOfBounds;
-  }
-  if (mailbox_size > immediate_data_size) {
-    return error::kOutOfBounds;
-  }
-  volatile GLbyte* mailbox = GetImmediateDataAs<volatile GLbyte*>(
-      c, mailbox_size, immediate_data_size);
-  if (mailbox == nullptr) {
-    return error::kOutOfBounds;
-  }
-  error::Error error = DoProduceTextureDirectCHROMIUM(texture, mailbox);
-  if (error != error::kNoError) {
-    return error;
-  }
-  return error::kNoError;
-}
-
-error::Error
-GLES2DecoderPassthroughImpl::HandleCreateAndConsumeTextureINTERNALImmediate(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  const volatile gles2::cmds::CreateAndConsumeTextureINTERNALImmediate& c =
-      *static_cast<const volatile gles2::cmds::
-                       CreateAndConsumeTextureINTERNALImmediate*>(cmd_data);
-  GLuint texture = static_cast<GLuint>(c.texture);
-  uint32_t mailbox_size;
-  if (!GLES2Util::ComputeDataSize<GLbyte, 16>(1, &mailbox_size)) {
-    return error::kOutOfBounds;
-  }
-  if (mailbox_size > immediate_data_size) {
-    return error::kOutOfBounds;
-  }
-  volatile const GLbyte* mailbox = GetImmediateDataAs<volatile const GLbyte*>(
-      c, mailbox_size, immediate_data_size);
-  if (mailbox == nullptr) {
-    return error::kOutOfBounds;
-  }
-  error::Error error = DoCreateAndConsumeTextureINTERNAL(texture, mailbox);
   if (error != error::kNoError) {
     return error;
   }
@@ -4584,112 +4363,6 @@ GLES2DecoderPassthroughImpl::HandleEndSharedImageAccessDirectCHROMIUM(
 }
 
 error::Error
-GLES2DecoderPassthroughImpl::HandleConvertRGBAToYUVAMailboxesINTERNALImmediate(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  const volatile gles2::cmds::ConvertRGBAToYUVAMailboxesINTERNALImmediate& c =
-      *static_cast<const volatile gles2::cmds::
-                       ConvertRGBAToYUVAMailboxesINTERNALImmediate*>(cmd_data);
-  GLenum planes_yuv_color_space = static_cast<GLenum>(c.planes_yuv_color_space);
-  GLenum plane_config = static_cast<GLenum>(c.plane_config);
-  GLenum subsampling = static_cast<GLenum>(c.subsampling);
-  uint32_t mailboxes_size;
-  if (!GLES2Util::ComputeDataSize<GLbyte, 80>(1, &mailboxes_size)) {
-    return error::kOutOfBounds;
-  }
-  if (mailboxes_size > immediate_data_size) {
-    return error::kOutOfBounds;
-  }
-  volatile const GLbyte* mailboxes = GetImmediateDataAs<volatile const GLbyte*>(
-      c, mailboxes_size, immediate_data_size);
-  if (mailboxes == nullptr) {
-    return error::kOutOfBounds;
-  }
-  error::Error error = DoConvertRGBAToYUVAMailboxesINTERNAL(
-      planes_yuv_color_space, plane_config, subsampling, mailboxes);
-  if (error != error::kNoError) {
-    return error;
-  }
-  return error::kNoError;
-}
-
-error::Error
-GLES2DecoderPassthroughImpl::HandleConvertYUVAMailboxesToRGBINTERNALImmediate(
-    uint32_t immediate_data_size,
-    const volatile void* cmd_data) {
-  const volatile gles2::cmds::ConvertYUVAMailboxesToRGBINTERNALImmediate& c =
-      *static_cast<const volatile gles2::cmds::
-                       ConvertYUVAMailboxesToRGBINTERNALImmediate*>(cmd_data);
-  GLint src_x = static_cast<GLint>(c.src_x);
-  GLint src_y = static_cast<GLint>(c.src_y);
-  GLsizei width = static_cast<GLsizei>(c.width);
-  GLsizei height = static_cast<GLsizei>(c.height);
-  GLenum planes_yuv_color_space = static_cast<GLenum>(c.planes_yuv_color_space);
-  GLenum plane_config = static_cast<GLenum>(c.plane_config);
-  GLenum subsampling = static_cast<GLenum>(c.subsampling);
-  uint32_t mailboxes_size;
-  if (!GLES2Util::ComputeDataSize<GLbyte, 144>(1, &mailboxes_size)) {
-    return error::kOutOfBounds;
-  }
-  if (mailboxes_size > immediate_data_size) {
-    return error::kOutOfBounds;
-  }
-  volatile const GLbyte* mailboxes = GetImmediateDataAs<volatile const GLbyte*>(
-      c, mailboxes_size, immediate_data_size);
-  if (mailboxes == nullptr) {
-    return error::kOutOfBounds;
-  }
-  error::Error error = DoConvertYUVAMailboxesToRGBINTERNAL(
-      src_x, src_y, width, height, planes_yuv_color_space, plane_config,
-      subsampling, mailboxes);
-  if (error != error::kNoError) {
-    return error;
-  }
-  return error::kNoError;
-}
-
-error::Error GLES2DecoderPassthroughImpl::
-    HandleConvertYUVAMailboxesToTextureINTERNALImmediate(
-        uint32_t immediate_data_size,
-        const volatile void* cmd_data) {
-  const volatile gles2::cmds::ConvertYUVAMailboxesToTextureINTERNALImmediate&
-      c = *static_cast<const volatile gles2::cmds::
-                           ConvertYUVAMailboxesToTextureINTERNALImmediate*>(
-          cmd_data);
-  GLuint texture = static_cast<GLuint>(c.texture);
-  GLenum target = static_cast<GLenum>(c.target);
-  GLuint internal_format = static_cast<GLuint>(c.internal_format);
-  GLenum type = static_cast<GLenum>(c.type);
-  GLint src_x = static_cast<GLint>(c.src_x);
-  GLint src_y = static_cast<GLint>(c.src_y);
-  GLsizei width = static_cast<GLsizei>(c.width);
-  GLsizei height = static_cast<GLsizei>(c.height);
-  GLboolean flip_y = static_cast<GLboolean>(c.flip_y);
-  GLenum planes_yuv_color_space = static_cast<GLenum>(c.planes_yuv_color_space);
-  GLenum plane_config = static_cast<GLenum>(c.plane_config);
-  GLenum subsampling = static_cast<GLenum>(c.subsampling);
-  uint32_t mailboxes_size;
-  if (!GLES2Util::ComputeDataSize<GLbyte, 64>(1, &mailboxes_size)) {
-    return error::kOutOfBounds;
-  }
-  if (mailboxes_size > immediate_data_size) {
-    return error::kOutOfBounds;
-  }
-  volatile const GLbyte* mailboxes = GetImmediateDataAs<volatile const GLbyte*>(
-      c, mailboxes_size, immediate_data_size);
-  if (mailboxes == nullptr) {
-    return error::kOutOfBounds;
-  }
-  error::Error error = DoConvertYUVAMailboxesToTextureINTERNAL(
-      texture, target, internal_format, type, src_x, src_y, width, height,
-      flip_y, planes_yuv_color_space, plane_config, subsampling, mailboxes);
-  if (error != error::kNoError) {
-    return error;
-  }
-  return error::kNoError;
-}
-
-error::Error
 GLES2DecoderPassthroughImpl::HandleCopySharedImageINTERNALImmediate(
     uint32_t immediate_data_size,
     const volatile void* cmd_data) {
@@ -4703,7 +4376,6 @@ GLES2DecoderPassthroughImpl::HandleCopySharedImageINTERNALImmediate(
   GLint y = static_cast<GLint>(c.y);
   GLsizei width = static_cast<GLsizei>(c.width);
   GLsizei height = static_cast<GLsizei>(c.height);
-  GLboolean unpack_flip_y = static_cast<GLboolean>(c.unpack_flip_y);
   uint32_t mailboxes_size;
   if (!GLES2Util::ComputeDataSize<GLbyte, 32>(1, &mailboxes_size)) {
     return error::kOutOfBounds;
@@ -4716,8 +4388,8 @@ GLES2DecoderPassthroughImpl::HandleCopySharedImageINTERNALImmediate(
   if (mailboxes == nullptr) {
     return error::kOutOfBounds;
   }
-  error::Error error = DoCopySharedImageINTERNAL(
-      xoffset, yoffset, x, y, width, height, unpack_flip_y, mailboxes);
+  error::Error error = DoCopySharedImageINTERNAL(xoffset, yoffset, x, y, width,
+                                                 height, mailboxes);
   if (error != error::kNoError) {
     return error;
   }
@@ -4739,7 +4411,8 @@ GLES2DecoderPassthroughImpl::HandleCopySharedImageToTextureINTERNALImmediate(
   GLint src_y = static_cast<GLint>(c.src_y);
   GLsizei width = static_cast<GLsizei>(c.width);
   GLsizei height = static_cast<GLsizei>(c.height);
-  GLboolean flip_y = static_cast<GLboolean>(c.flip_y);
+  GLboolean is_dst_origin_top_left =
+      static_cast<GLboolean>(c.is_dst_origin_top_left);
   uint32_t src_mailbox_size;
   if (!GLES2Util::ComputeDataSize<GLbyte, 16>(1, &src_mailbox_size)) {
     return error::kOutOfBounds;
@@ -4755,7 +4428,7 @@ GLES2DecoderPassthroughImpl::HandleCopySharedImageToTextureINTERNALImmediate(
   }
   error::Error error = DoCopySharedImageToTextureINTERNAL(
       texture, target, internal_format, type, src_x, src_y, width, height,
-      flip_y, src_mailbox);
+      is_dst_origin_top_left, src_mailbox);
   if (error != error::kNoError) {
     return error;
   }

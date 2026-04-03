@@ -15,10 +15,7 @@ namespace blink {
 
 CSSAtRuleID CssAtRuleID(StringView name) {
   if (EqualIgnoringASCIICase(name, "view-transition")) {
-    if (RuntimeEnabledFeatures::ViewTransitionOnNavigationEnabled()) {
-      return CSSAtRuleID::kCSSAtRuleViewTransition;
-    }
-    return CSSAtRuleID::kCSSAtRuleInvalid;
+    return CSSAtRuleID::kCSSAtRuleViewTransition;
   }
   if (EqualIgnoringASCIICase(name, "charset")) {
     return CSSAtRuleID::kCSSAtRuleCharset;
@@ -68,14 +65,19 @@ CSSAtRuleID CssAtRuleID(StringView name) {
   if (EqualIgnoringASCIICase(name, "page")) {
     return CSSAtRuleID::kCSSAtRulePage;
   }
-  if (EqualIgnoringASCIICase(name, "position-fallback")) {
-    if (RuntimeEnabledFeatures::CSSAnchorPositioningEnabled()) {
-      return CSSAtRuleID::kCSSAtRulePositionFallback;
-    }
-    return CSSAtRuleID::kCSSAtRuleInvalid;
+  if (EqualIgnoringASCIICase(name, "position-try")) {
+    return CSSAtRuleID::kCSSAtRulePositionTry;
   }
   if (EqualIgnoringASCIICase(name, "property")) {
     return CSSAtRuleID::kCSSAtRuleProperty;
+  }
+  if (RuntimeEnabledFeatures::RouteMatchingEnabled()) {
+    if (EqualIgnoringASCIICase(name, "route")) {
+      return CSSAtRuleID::kCSSAtRuleRoute;
+    }
+    if (EqualIgnoringASCIICase(name, "navigation")) {
+      return CSSAtRuleID::kCSSAtRuleNavigation;
+    }
   }
   if (EqualIgnoringASCIICase(name, "container")) {
     return CSSAtRuleID::kCSSAtRuleContainer;
@@ -84,19 +86,10 @@ CSSAtRuleID CssAtRuleID(StringView name) {
     return CSSAtRuleID::kCSSAtRuleCounterStyle;
   }
   if (EqualIgnoringASCIICase(name, "scope")) {
-    if (RuntimeEnabledFeatures::CSSScopeEnabled()) {
-      return CSSAtRuleID::kCSSAtRuleScope;
-    }
-    return CSSAtRuleID::kCSSAtRuleInvalid;
+    return CSSAtRuleID::kCSSAtRuleScope;
   }
   if (EqualIgnoringASCIICase(name, "supports")) {
     return CSSAtRuleID::kCSSAtRuleSupports;
-  }
-  if (EqualIgnoringASCIICase(name, "try")) {
-    if (RuntimeEnabledFeatures::CSSAnchorPositioningEnabled()) {
-      return CSSAtRuleID::kCSSAtRuleTry;
-    }
-    return CSSAtRuleID::kCSSAtRuleInvalid;
   }
   if (EqualIgnoringASCIICase(name, "starting-style")) {
     return CSSAtRuleID::kCSSAtRuleStartingStyle;
@@ -154,8 +147,27 @@ CSSAtRuleID CssAtRuleID(StringView name) {
   if (EqualIgnoringASCIICase(name, "right-bottom")) {
     return CSSAtRuleID::kCSSAtRuleRightBottom;
   }
-  if (EqualIgnoringASCIICase(name, "function")) {
+
+  if (RuntimeEnabledFeatures::CSSFunctionsEnabled() &&
+      EqualIgnoringASCIICase(name, "function")) {
     return CSSAtRuleID::kCSSAtRuleFunction;
+  }
+  if (RuntimeEnabledFeatures::CSSMixinsEnabled()) {
+    if (EqualIgnoringASCIICase(name, "mixin")) {
+      return CSSAtRuleID::kCSSAtRuleMixin;
+    }
+    if (EqualIgnoringASCIICase(name, "apply")) {
+      return CSSAtRuleID::kCSSAtRuleApplyMixin;
+    }
+    if (EqualIgnoringASCIICase(name, "contents")) {
+      return CSSAtRuleID::kCSSAtRuleContents;
+    }
+  }
+
+  if (RuntimeEnabledFeatures::CSSCustomMediaEnabled()) {
+    if (EqualIgnoringASCIICase(name, "custom-media")) {
+      return CSSAtRuleID::kCSSAtRuleCustomMedia;
+    }
   }
 
   return CSSAtRuleID::kCSSAtRuleInvalid;
@@ -183,10 +195,14 @@ StringView CssAtRuleIDToString(CSSAtRuleID id) {
       return "@namespace";
     case CSSAtRuleID::kCSSAtRulePage:
       return "@page";
-    case CSSAtRuleID::kCSSAtRulePositionFallback:
-      return "@position-fallback";
+    case CSSAtRuleID::kCSSAtRulePositionTry:
+      return "@position-try";
     case CSSAtRuleID::kCSSAtRuleProperty:
       return "@property";
+    case CSSAtRuleID::kCSSAtRuleRoute:
+      return "@route";
+    case CSSAtRuleID::kCSSAtRuleNavigation:
+      return "@navigation";
     case CSSAtRuleID::kCSSAtRuleContainer:
       return "@container";
     case CSSAtRuleID::kCSSAtRuleCounterStyle:
@@ -197,8 +213,6 @@ StringView CssAtRuleIDToString(CSSAtRuleID id) {
       return "@starting-style";
     case CSSAtRuleID::kCSSAtRuleSupports:
       return "@supports";
-    case CSSAtRuleID::kCSSAtRuleTry:
-      return "@try";
     case CSSAtRuleID::kCSSAtRuleWebkitKeyframes:
       return "@-webkit-keyframes";
     case CSSAtRuleID::kCSSAtRuleAnnotation:
@@ -249,9 +263,17 @@ StringView CssAtRuleIDToString(CSSAtRuleID id) {
       return "@right-bottom";
     case CSSAtRuleID::kCSSAtRuleFunction:
       return "@function";
+    case CSSAtRuleID::kCSSAtRuleMixin:
+      return "@mixin";
+    case CSSAtRuleID::kCSSAtRuleApplyMixin:
+      return "@apply";
+    case CSSAtRuleID::kCSSAtRuleContents:
+      return "@contents";
+    case CSSAtRuleID::kCSSAtRuleCustomMedia:
+      return "@custom-media";
     case CSSAtRuleID::kCSSAtRuleInvalid:
+    case CSSAtRuleID::kCount:
       NOTREACHED();
-      return "";
   };
 }
 
@@ -304,6 +326,9 @@ std::optional<WebFeature> AtRuleFeature(CSSAtRuleID rule_id) {
       return WebFeature::kCSSAtRulePageMargin;
     case CSSAtRuleID::kCSSAtRuleProperty:
       return WebFeature::kCSSAtRuleProperty;
+    case CSSAtRuleID::kCSSAtRuleRoute:
+    case CSSAtRuleID::kCSSAtRuleNavigation:
+      return WebFeature::kCSSAtRuleRoute;
     case CSSAtRuleID::kCSSAtRuleContainer:
       return WebFeature::kCSSAtRuleContainer;
     case CSSAtRuleID::kCSSAtRuleCounterStyle:
@@ -322,16 +347,21 @@ std::optional<WebFeature> AtRuleFeature(CSSAtRuleID rule_id) {
       return WebFeature::kCSSAtRuleSwash;
     case CSSAtRuleID::kCSSAtRuleSupports:
       return WebFeature::kCSSAtRuleSupports;
-    case CSSAtRuleID::kCSSAtRulePositionFallback:
-    case CSSAtRuleID::kCSSAtRuleTry:
+    case CSSAtRuleID::kCSSAtRulePositionTry:
       return WebFeature::kCSSAnchorPositioning;
     case CSSAtRuleID::kCSSAtRuleWebkitKeyframes:
       return WebFeature::kCSSAtRuleWebkitKeyframes;
     case CSSAtRuleID::kCSSAtRuleFunction:
       return WebFeature::kCSSFunctions;
+    case CSSAtRuleID::kCSSAtRuleMixin:
+    case CSSAtRuleID::kCSSAtRuleApplyMixin:
+    case CSSAtRuleID::kCSSAtRuleContents:
+      return WebFeature::kCSSMixins;
+    case CSSAtRuleID::kCSSAtRuleCustomMedia:
+      return WebFeature::kCSSCustomMedia;
     case CSSAtRuleID::kCSSAtRuleInvalid:
+    case CSSAtRuleID::kCount:
       NOTREACHED();
-      return std::nullopt;
   }
 }
 

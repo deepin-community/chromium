@@ -31,10 +31,16 @@ class MockUkmDatabase : public UkmDatabase {
 
   MOCK_METHOD2(RemoveUrls, void(const std::vector<GURL>& urls, bool));
 
-  MOCK_METHOD2(RunReadonlyQueries,
+  MOCK_METHOD2(AddUmaMetric, void(const std::string&, const UmaMetricEntry&));
+
+  MOCK_METHOD2(RunReadOnlyQueries,
                void(QueryList&& queries, QueryCallback callback));
 
-  MOCK_METHOD1(DeleteEntriesOlderThan, void(base::Time time));
+  MOCK_METHOD2(CleanupOldEntries,
+               void(base::Time ukm_time_limit, base::Time uma_time_limit));
+  MOCK_METHOD2(CleanupItems,
+               void(const std::string& profile_id,
+                    std::vector<CleanupItem> cleanup_items));
 
   MOCK_METHOD0(CommitTransactionForTesting, void());
 };

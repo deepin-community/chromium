@@ -13,7 +13,6 @@
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/policy/reporting/install_event_log_util.h"
-#include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -25,8 +24,7 @@
 namespace policy {
 
 BASE_FEATURE(kUseEncryptedReportingPipelineToReportArcAppInstallEvents,
-             "UseEncryptedReportingPipelineToReportArcAppInstallEvents",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 AppInstallEventLogManagerWrapper::~AppInstallEventLogManagerWrapper() = default;
 
@@ -54,15 +52,14 @@ AppInstallEventLogManagerWrapper::AppInstallEventLogManagerWrapper(
   log_task_runner_ =
       std::make_unique<ArcAppInstallEventLogManager::LogTaskRunnerWrapper>();
 
+  session_termination_observation_.Observe(
+      ash::SessionTerminationManager::Get());
+
   pref_change_registrar_.Init(profile->GetPrefs());
   pref_change_registrar_.Add(
       prefs::kArcAppInstallEventLoggingEnabled,
       base::BindRepeating(&AppInstallEventLogManagerWrapper::EvaluatePref,
                           base::Unretained(this)));
-  on_app_terminating_subscription_ =
-      browser_shutdown::AddAppTerminatingCallback(
-          base::BindOnce(&AppInstallEventLogManagerWrapper::OnAppTerminating,
-                         base::Unretained(this)));
 }
 
 void AppInstallEventLogManagerWrapper::Init() {
@@ -90,7 +87,7 @@ void AppInstallEventLogManagerWrapper::CreateEncryptedReporter() {
               {.event_type = ::reporting::EventType::kUser,
                .destination = ::reporting::Destination::ARC_INSTALL})
               .SetSourceInfo(std::move(source_info)));
-  encrypted_reporter_ = std::make_unique<ArcAppInstallEventEncryptedReporter>(
+  encrypted_reporter_ = std::make_unique<ArcAppInstallEncryptedEventReporter>(
       std::move(report_queue), profile_);
 }
 
@@ -126,6 +123,7 @@ void AppInstallEventLogManagerWrapper::EvaluatePref() {
 }
 
 void AppInstallEventLogManagerWrapper::OnAppTerminating() {
+  session_termination_observation_.Reset();
   base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE,
                                                                 this);
 }

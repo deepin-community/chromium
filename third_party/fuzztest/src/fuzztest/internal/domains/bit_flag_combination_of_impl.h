@@ -21,6 +21,7 @@
 #include "absl/random/bit_gen_ref.h"
 #include "absl/status/status.h"
 #include "absl/types/span.h"
+#include "./common/logging.h"
 #include "./fuzztest/internal/domains/domain_base.h"
 #include "./fuzztest/internal/logging.h"
 #include "./fuzztest/internal/type_support.h"
@@ -29,24 +30,24 @@ namespace fuzztest::internal {
 
 template <typename T>
 class BitFlagCombinationOfImpl
-    : public DomainBase<BitFlagCombinationOfImpl<T>> {
+    : public domain_implementor::DomainBase<BitFlagCombinationOfImpl<T>> {
  public:
   using typename BitFlagCombinationOfImpl::DomainBase::value_type;
 
   explicit BitFlagCombinationOfImpl(absl::Span<const T> flags)
       : flags_(flags.begin(), flags.end()), all_flags_combo_{} {
-    FUZZTEST_INTERNAL_CHECK_PRECONDITION(
-        !flags.empty(), "BitFlagCombinationOf requires a non empty list.");
-    // Make sure they are mutually exclusive options, and none are empty.
+    FUZZTEST_PRECONDITION(!flags.empty())
+        << "BitFlagCombinationOf requires a non empty list.";
+    // Make sure they are mutually exclusive metadata, only_shrink and none are
+    // empty.
     for (int i = 0; i < flags.size(); ++i) {
       T v1 = flags[i];
-      FUZZTEST_INTERNAL_CHECK_PRECONDITION(
-          v1 != T{}, "BitFlagCombinationOf requires non zero flags.");
+      FUZZTEST_PRECONDITION(v1 != T{})
+          << "BitFlagCombinationOf requires non zero flags.";
       for (int j = i + 1; j < flags.size(); ++j) {
         T v2 = flags[j];
-        FUZZTEST_INTERNAL_CHECK_PRECONDITION(
-            BitAnd(v1, v2) == T{},
-            "BitFlagCombinationOf requires flags to be mutually exclusive.");
+        FUZZTEST_PRECONDITION(BitAnd(v1, v2) == T{})
+            << "BitFlagCombinationOf requires flags to be mutually exclusive.";
       }
       all_flags_combo_ = BitOr(all_flags_combo_, v1);
     }
@@ -57,7 +58,8 @@ class BitFlagCombinationOfImpl
     return value_type{};
   }
 
-  void Mutate(value_type& val, absl::BitGenRef prng, bool only_shrink) {
+  void Mutate(value_type& val, absl::BitGenRef prng,
+              const domain_implementor::MutationMetadata&, bool only_shrink) {
     T to_switch = flags_[ChooseOffset(flags_.size(), prng)];
 
     if (!only_shrink || BitAnd(val, to_switch) != T{}) {

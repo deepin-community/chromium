@@ -1,17 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import type * as Common from '../../core/common/common.js';
 
 import {NativeFunctions} from './NativeFunctions.js';
-import * as DOMPinnedProperties from './DOMPinnedProperties.js';
 
 let javaScriptMetadataInstance: JavaScriptMetadataImpl;
 
 export class JavaScriptMetadataImpl implements Common.JavaScriptMetaData.JavaScriptMetaData {
-  static readonly domPinnedProperties = DOMPinnedProperties;
-
   private readonly uniqueFunctions: Map<string, string[][]>;
   private readonly receiverMethods: Map<string, Map<string, string[][]>>;
   static instance(opts: {

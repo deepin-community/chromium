@@ -29,10 +29,10 @@ class UsbChooserDialogAndroid : public permissions::ChooserController::View {
       base::OnceCallback<base::android::ScopedJavaLocalRef<jobject>(
           JNIEnv*,
           const base::android::JavaRef<jobject>&,
-          const base::android::JavaRef<jstring>&,
+          const std::u16string&,
           JniIntWrapper,
           const base::android::JavaRef<jobject>&,
-          jlong)>;
+          int64_t)>;
 
   // Creates and shows the dialog. Will return nullptr if the dialog was not
   // displayed. Otherwise |on_close| will be called when the user closes the
@@ -67,8 +67,7 @@ class UsbChooserDialogAndroid : public permissions::ChooserController::View {
   void OnRefreshStateChanged(bool refreshing) override;
 
   // Report the dialog's result.
-  void OnItemSelected(JNIEnv* env,
-                      const base::android::JavaParamRef<jstring>& item_id);
+  void OnItemSelected(JNIEnv* env, std::string& item_id);
   void OnDialogCancelled(JNIEnv* env);
   void LoadUsbHelpPage(JNIEnv* env);
 

@@ -36,7 +36,7 @@ namespace apps {
 namespace {
 void IncrementIgnoreCount(webapps::AppId app_id,
                           web_app::AppLock& app_lock,
-                          base::Value::Dict& debug_result) {
+                          base::DictValue& debug_result) {
   web_app::ScopedRegistryUpdate update = app_lock.sync_bridge().BeginUpdate();
   web_app::WebApp* app = update->UpdateApp(app_id);
 
@@ -54,7 +54,7 @@ void IncrementIgnoreCount(webapps::AppId app_id,
 
 void IncrementDismissCount(webapps::AppId app_id,
                            web_app::AppLock& app_lock,
-                           base::Value::Dict& debug_result) {
+                           base::DictValue& debug_result) {
   web_app::ScopedRegistryUpdate update = app_lock.sync_bridge().BeginUpdate();
   web_app::WebApp* app = update->UpdateApp(app_id);
 
@@ -79,7 +79,7 @@ infobars::InfoBar* EnableLinkCapturingInfoBarDelegate::FindInfoBar(
   auto* infobar_manager =
       infobars::ContentInfoBarManager::FromWebContents(web_contents);
   CHECK(infobar_manager);
-  const auto it = base::ranges::find(
+  const auto it = std::ranges::find(
       infobar_manager->infobars(),
       infobars::InfoBarDelegate::ENABLE_LINK_CAPTURING_INFOBAR_DELEGATE,
       &infobars::InfoBar::GetIdentifier);

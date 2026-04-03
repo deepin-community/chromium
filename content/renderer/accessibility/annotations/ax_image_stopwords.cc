@@ -5,14 +5,13 @@
 #include "content/renderer/accessibility/annotations/ax_image_stopwords.h"
 
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/i18n/case_conversion.h"
 #include "base/i18n/char_iterator.h"
 #include "base/no_destructor.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
 #include "third_party/icu/source/common/unicode/uchar.h"
@@ -503,11 +502,11 @@ AXImageStopwords& AXImageStopwords::GetInstance() {
 
 AXImageStopwords::AXImageStopwords() {
   // Parse the newline-delimited stopwords from kImageStopwordsUtf8 and store
-  // them as a flat_set of type StringPiece. This is very memory-efficient
-  // because it avoids ever needing to copy any of the strings; each StringPiece
-  // is just a pointer into kImageStopwordsUtf8 and flat_set acts like a set but
-  // basically just does a binary search.
-  std::vector<base::StringPiece> stopwords =
+  // them as a flat_set of type string_view. This is very memory-efficient
+  // because it avoids ever needing to copy any of the strings; each
+  // string_view is just a pointer into kImageStopwordsUtf8 and flat_set
+  // acts like a set but basically just does a binary search.
+  std::vector<std::string_view> stopwords =
       base::SplitStringPiece(kImageStopwordsUtf8, "\n", base::TRIM_WHITESPACE,
                              base::SPLIT_WANT_NONEMPTY);
 
@@ -523,8 +522,9 @@ bool AXImageStopwords::IsImageStopword(const char* word_utf8) const {
 
   // It's not really meaningful, but since short words are stopwords, for
   // simplicity we define the empty string to be a stopword too.
-  if (word_utf16.empty())
+  if (word_utf16.empty()) {
     return true;
+  }
 
   // Canonicalize case, this is like "ToLower" for many languages but
   // works independently of the current locale.
@@ -564,10 +564,11 @@ bool AXImageStopwords::IsImageStopword(const char* word_utf8) const {
   // actually two or more unicode codepoints (consonants and vowels that are
   // joined together), which is why this heuristic still works. Anything with
   // two or fewer unicode codepoints is an extremely short word.
-  if (supported_count == iter.char_offset() && iter.char_offset() <= 2)
+  if (supported_count == iter.char_offset() && iter.char_offset() <= 2) {
     return true;
+  }
 
-  return base::Contains(stopword_set_, base::UTF16ToUTF8(word_utf16));
+  return stopword_set_.contains(base::UTF16ToUTF8(word_utf16));
 }
 
 }  // namespace content

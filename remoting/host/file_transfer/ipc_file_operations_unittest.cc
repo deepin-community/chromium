@@ -19,6 +19,7 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_path_override.h"
 #include "base/test/task_environment.h"
+#include "mojo/public/cpp/bindings/associated_remote.h"
 #include "remoting/host/file_transfer/directory_helpers.h"
 #include "remoting/host/file_transfer/ensure_user.h"
 #include "remoting/host/file_transfer/fake_file_chooser.h"
@@ -136,8 +137,8 @@ class FakeDesktopSessionAgent : public mojom::DesktopSessionControl {
   ~FakeDesktopSessionAgent() override = default;
 
   // mojom::DesktopSessionControl implementation.
-  void CaptureFrame() override;
-  void SelectSource(int id) override;
+  void CreateVideoCapturer(int64_t desktop_display_id,
+                           CreateVideoCapturerCallback callback) override;
   void SetScreenResolution(const ScreenResolution& resolution) override;
   void LockWorkstation() override;
   void InjectSendAttentionSequence() override;
@@ -151,6 +152,7 @@ class FakeDesktopSessionAgent : public mojom::DesktopSessionControl {
   void BeginFileRead(BeginFileReadCallback callback) override;
   void BeginFileWrite(const base::FilePath& file_path,
                       BeginFileWriteCallback callback) override;
+  void SetHostCursorRenderedByClient() override;
 
   // Binds the pending DesktopSessionControl receiver to |receiver_|.
   void Bind(
@@ -185,9 +187,9 @@ FakeDesktopSessionAgent::FakeDesktopSessionAgent(
     : session_file_operations_handler_(
           std::make_unique<LocalFileOperations>(std::move(ui_task_runner))) {}
 
-void FakeDesktopSessionAgent::CaptureFrame() {}
-
-void FakeDesktopSessionAgent::SelectSource(int id) {}
+void FakeDesktopSessionAgent::CreateVideoCapturer(
+    int64_t desktop_display_id,
+    CreateVideoCapturerCallback callback) {}
 
 void FakeDesktopSessionAgent::SetScreenResolution(
     const ScreenResolution& resolution) {}
@@ -243,6 +245,8 @@ void FakeDesktopSessionAgent::BeginFileWrite(const base::FilePath& file_path,
   session_file_operations_handler_.BeginFileWrite(file_path,
                                                   std::move(callback));
 }
+
+void FakeDesktopSessionAgent::SetHostCursorRenderedByClient() {}
 
 void FakeDesktopSessionAgent::Bind(
     mojo::PendingAssociatedReceiver<mojom::DesktopSessionControl> receiver) {

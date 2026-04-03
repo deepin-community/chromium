@@ -9,12 +9,13 @@
 
 #include "include/gpu/graphite/Context.h"
 #include "include/gpu/graphite/ContextOptions.h"
-#include "include/gpu/graphite/dawn/DawnTypes.h"
-#include "include/gpu/graphite/dawn/DawnUtils.h"
+#include "include/gpu/graphite/dawn/DawnBackendContext.h"
+#include "include/gpu/graphite/dawn/DawnGraphiteTypes.h"
 #include "include/private/base/SkOnce.h"
-#include "include/private/gpu/graphite/ContextOptionsPriv.h"
+#include "src/gpu/graphite/ContextOptionsPriv.h"
 #include "tools/gpu/ContextType.h"
 #include "tools/graphite/TestOptions.h"
+#include "tools/graphite/dawn/GraphiteDawnToggles.h"
 
 #include "dawn/dawn_proc.h"
 
@@ -22,49 +23,63 @@
 
 namespace skiatest::graphite {
 
+// TODO: http://crbug.com/dawn/2450 - Currently manually setting the device to null and calling
+//       tick/process events one last time to ensure that the device is lost accordingly at
+//       destruction. Once device lost is, by default, a spontaneous event, remove this.
+DawnTestContext::~DawnTestContext() {
+    fBackendContext.fDevice = nullptr;
+    tick();
+}
+
 std::unique_ptr<GraphiteTestContext> DawnTestContext::Make(wgpu::BackendType backend) {
     static std::unique_ptr<dawn::native::Instance> sInstance;
     static SkOnce sOnce;
 
-    static constexpr const char* kToggles[] = {
-        "allow_unsafe_apis",  // Needed for dual-source blending.
-        "use_user_defined_labels_in_backend",
-    };
-    wgpu::DawnTogglesDescriptor togglesDesc;
-    togglesDesc.enabledToggleCount  = std::size(kToggles);
-    togglesDesc.enabledToggles      = kToggles;
-
     // Creation of Instance is cheap but calling EnumerateAdapters can be expensive the first time,
     // but then the results are cached on the Instance object. So save the Instance here so we can
     // avoid the overhead of EnumerateAdapters on every test.
-    sOnce([&]{
+    sOnce([&] {
         DawnProcTable backendProcs = dawn::native::GetProcs();
         dawnProcSetProcs(&backendProcs);
-        sInstance = std::make_unique<dawn::native::Instance>();
+        wgpu::InstanceDescriptor desc{};
+        // need for WaitAny with timeout > 0
+        static const auto kTimedWaitAny = wgpu::InstanceFeatureName::TimedWaitAny;
+        desc.requiredFeatureCount = 1;
+        desc.requiredFeatures = &kTimedWaitAny;
+        wgpu::DawnTogglesDescriptor togglesDesc = GetInstanceToggles();
+        desc.nextInChain = &togglesDesc;
+        sInstance = std::make_unique<dawn::native::Instance>(&desc);
     });
 
     dawn::native::Adapter matchedAdaptor;
 
     wgpu::RequestAdapterOptions options;
+    options.featureLevel =
+            backend == wgpu::BackendType::OpenGL || backend == wgpu::BackendType::OpenGLES
+                    ? wgpu::FeatureLevel::Compatibility
+                    : wgpu::FeatureLevel::Core;
+    wgpu::DawnTogglesDescriptor togglesDesc = GetAdapterToggles();
     options.nextInChain = &togglesDesc;
     std::vector<dawn::native::Adapter> adapters = sInstance->EnumerateAdapters(&options);
     SkASSERT(!adapters.empty());
     // Sort adapters by adapterType(DiscreteGPU, IntegratedGPU, CPU) and
     // backendType(WebGPU, D3D11, D3D12, Metal, Vulkan, OpenGL, OpenGLES).
-    std::sort(adapters.begin(),
-              adapters.end(),
-              [](dawn::native::Adapter a, dawn::native::Adapter b) {
-                  wgpu::AdapterProperties propA;
-                  wgpu::AdapterProperties propB;
-                  a.GetProperties(&propA);
-                  b.GetProperties(&propB);
-                  return std::tuple(propA.adapterType, propA.backendType) <
-                         std::tuple(propB.adapterType, propB.backendType);
-              });
+    std::sort(
+            adapters.begin(), adapters.end(), [](dawn::native::Adapter a, dawn::native::Adapter b) {
+                wgpu::Adapter wgpuA = a.Get();
+                wgpu::Adapter wgpuB = b.Get();
+                wgpu::AdapterInfo infoA;
+                wgpu::AdapterInfo infoB;
+                wgpuA.GetInfo(&infoA);
+                wgpuB.GetInfo(&infoB);
+                return std::tuple(infoA.adapterType, infoA.backendType) <
+                       std::tuple(infoB.adapterType, infoB.backendType);
+            });
 
     for (const auto& adapter : adapters) {
-        wgpu::AdapterProperties props;
-        adapter.GetProperties(&props);
+        wgpu::Adapter wgpuAdapter = adapter.Get();
+        wgpu::AdapterInfo props;
+        wgpuAdapter.GetInfo(&props);
         if (backend == props.backendType) {
             matchedAdaptor = adapter;
             break;
@@ -76,51 +91,41 @@ std::unique_ptr<GraphiteTestContext> DawnTestContext::Make(wgpu::BackendType bac
     }
 
 #if LOG_ADAPTER
-    wgpu::AdapterProperties properties;
-    sAdapter.GetProperties(&properties);
-    SkDebugf("GPU: %s\nDriver: %s\n", properties.name, properties.driverDescription);
+{
+    wgpu::AdapterInfo debugInfo;
+    wgpu::Adapter debugAdapter = matchedAdaptor.Get();
+    debugAdapter.GetInfo(&debugInfo);
+    SkDebugf("GPU: %s\nDriver: %s\n", debugInfo.device.data, debugInfo.description.data);
+}
 #endif
 
     std::vector<wgpu::FeatureName> features;
     wgpu::Adapter adapter = matchedAdaptor.Get();
-    if (adapter.HasFeature(wgpu::FeatureName::MSAARenderToSingleSampled)) {
-        features.push_back(wgpu::FeatureName::MSAARenderToSingleSampled);
-    }
-    if (adapter.HasFeature(wgpu::FeatureName::TransientAttachments)) {
-        features.push_back(wgpu::FeatureName::TransientAttachments);
-    }
-    if (adapter.HasFeature(wgpu::FeatureName::Norm16TextureFormats)) {
-        features.push_back(wgpu::FeatureName::Norm16TextureFormats);
-    }
-    if (adapter.HasFeature(wgpu::FeatureName::DualSourceBlending)) {
-        features.push_back(wgpu::FeatureName::DualSourceBlending);
-    }
-    if (adapter.HasFeature(wgpu::FeatureName::FramebufferFetch)) {
-        features.push_back(wgpu::FeatureName::FramebufferFetch);
-    }
-    if (adapter.HasFeature(wgpu::FeatureName::BufferMapExtendedUsages)) {
-        features.push_back(wgpu::FeatureName::BufferMapExtendedUsages);
-    }
+    skiatest::graphite::AddPreferredFeatures(adapter, features);
 
     wgpu::DeviceDescriptor desc;
     desc.requiredFeatureCount  = features.size();
     desc.requiredFeatures      = features.data();
     desc.nextInChain           = &togglesDesc;
 
-    wgpu::Device device = wgpu::Device::Acquire(matchedAdaptor.CreateDevice(&desc));
-    SkASSERT(device);
-    device.SetUncapturedErrorCallback(
-            [](WGPUErrorType type, const char* message, void*) {
-                SkDebugf("Device error: %s\n", message);
-            },
-            /*userdata=*/nullptr);
-    device.SetDeviceLostCallback(
-            [](WGPUDeviceLostReason reason, const char* message, void*) {
-                if (reason != WGPUDeviceLostReason_Destroyed) {
-                    SK_ABORT("Device lost: %s\n", message);
+    wgpu::Limits limits = {};
+    adapter.GetLimits(&limits);
+    desc.requiredLimits = &limits;
+
+    desc.SetDeviceLostCallback(
+            wgpu::CallbackMode::AllowSpontaneous,
+            [](const wgpu::Device&, wgpu::DeviceLostReason reason, wgpu::StringView message) {
+                if (reason != wgpu::DeviceLostReason::Destroyed) {
+                    SK_ABORT("Device lost: %.*s\n", static_cast<int>(message.length), message.data);
                 }
-            },
-            /*userdata=*/nullptr);
+            });
+    desc.SetUncapturedErrorCallback([](const wgpu::Device&, wgpu::ErrorType,
+                                       wgpu::StringView message) {
+        SkDebugf("Device error: %.*s\n", static_cast<int>(message.length), message.data);
+    });
+
+    wgpu::Device device = adapter.CreateDevice(&desc);
+    SkASSERT(device);
 
     skgpu::graphite::DawnBackendContext backendContext;
     backendContext.fInstance = wgpu::Instance(sInstance->Get());
@@ -130,9 +135,9 @@ std::unique_ptr<GraphiteTestContext> DawnTestContext::Make(wgpu::BackendType bac
 }
 
 skgpu::ContextType DawnTestContext::contextType() {
-    wgpu::AdapterProperties props;
-    fBackendContext.fDevice.GetAdapter().GetProperties(&props);
-    switch (props.backendType) {
+    wgpu::AdapterInfo info;
+    fBackendContext.fDevice.GetAdapter().GetInfo(&info);
+    switch (info.backendType) {
         case wgpu::BackendType::D3D11:
             return skgpu::ContextType::kDawn_D3D11;
 

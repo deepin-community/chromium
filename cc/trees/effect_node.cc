@@ -68,11 +68,10 @@ const char* RenderSurfaceReasonToString(RenderSurfaceReason reason) {
       return "subtree being captured";
     case RenderSurfaceReason::kViewTransitionParticipant:
       return "view transition participant";
+    case RenderSurfaceReason::k2DScaleTransformWithCompositedDescendants:
+      return "2D scale transform with composited descendants";
     case RenderSurfaceReason::kTest:
       return "test";
-    default:
-      NOTREACHED() << static_cast<int>(reason);
-      return "";
   }
 }
 
@@ -88,8 +87,10 @@ void EffectNode::AsValueInto(base::trace_event::TracedValue* value) const {
   if (!backdrop_filters.IsEmpty())
     value->SetString("backdrop_filters", backdrop_filters.ToString());
   value->SetDouble("backdrop_filter_quality", backdrop_filter_quality);
-  value->SetBoolean("node_or_ancestor_has_filters",
-                    node_or_ancestor_has_filters);
+  value->SetBoolean("lcd_text_disallowed_by_filter",
+                    lcd_text_disallowed_by_filter);
+  value->SetBoolean("lcd_text_disallowed_by_backdrop_filter",
+                    lcd_text_disallowed_by_backdrop_filter);
   if (!mask_filter_info.IsEmpty()) {
     MathUtil::AddToTracedValue("mask_filter_bounds", mask_filter_info.bounds(),
                                value);
@@ -104,6 +105,10 @@ void EffectNode::AsValueInto(base::trace_event::TracedValue* value) const {
       MathUtil::AddToTracedValue("mask_filter_gradient_mask",
                                  mask_filter_info.gradient_mask().value(),
                                  value);
+    }
+    if (mask_filter_info.clip_id()) {
+      value->SetInteger("mask_filter_clip_id",
+                        mask_filter_info.clip_id().value());
     }
   }
   value->SetString("blend_mode", SkBlendMode_Name(blend_mode));
@@ -127,7 +132,6 @@ void EffectNode::AsValueInto(base::trace_event::TracedValue* value) const {
   value->SetBoolean("has_masking_child", has_masking_child);
   value->SetBoolean("effect_changed", effect_changed);
   value->SetBoolean("subtree_has_copy_request", subtree_has_copy_request);
-  value->SetBoolean("affected_by_backdrop_filter", affected_by_backdrop_filter);
   value->SetString("render_surface_reason",
                    RenderSurfaceReasonToString(render_surface_reason));
   value->SetInteger("transform_id", transform_id);
@@ -139,13 +143,9 @@ void EffectNode::AsValueInto(base::trace_event::TracedValue* value) const {
                     closest_ancestor_with_copy_request_id);
   value->SetInteger("closest_ancestor_being_captured_id",
                     closest_ancestor_being_captured_id);
-  if (view_transition_shared_element_id.valid()) {
-    value->SetString("view_transition_shared_element_id",
-                     view_transition_shared_element_id.ToString());
-  }
   if (view_transition_element_resource_id.IsValid()) {
-    value->SetInteger("view_transition_element_resource_id",
-                      view_transition_element_resource_id.id());
+    value->SetString("view_transition_element_resource_id",
+                     view_transition_element_resource_id.ToString());
   }
 }
 

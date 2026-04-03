@@ -4,25 +4,30 @@
 
 #include "chrome/browser/media/router/discovery/discovery_network_list_win.h"
 
+#include <windows.h>
 #include <winsock2.h>
-#include <wrl/client.h>
 
-#include <windot11.h>  // NOLINT
-#include <wlanapi.h>   // NOLINT
+#include <windot11.h>
+#include <wlanapi.h>
+#include <wrl/client.h>
 
 #include <algorithm>
 #include <cstring>
-
 #include <utility>
 #include <vector>
 
 #include "base/check.h"
-
+#include "base/compiler_specific.h"
+#include "base/containers/heap_array.h"
+#include "base/containers/span.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/threading/scoped_thread_priority.h"
 #include "base/win/hstring_reference.h"
 #include "base/win/scoped_hstring.h"
+#include "base/win/win_util.h"
 #include "base/win/windows_version.h"
 #include "chrome/browser/media/router/discovery/discovery_network_list.h"
 
@@ -51,7 +56,10 @@ void IfTable2Deleter(PMIB_IF_TABLE2 interface_table) {
 }  // namespace
 
 bool GuidOperatorLess::operator()(const GUID& guid1, const GUID& guid2) const {
-  return memcmp(&guid1, &guid2, sizeof(GUID)) < 0;
+  return std::lexicographical_compare(base::byte_span_from_ref(guid1).begin(),
+                                      base::byte_span_from_ref(guid1).end(),
+                                      base::byte_span_from_ref(guid2).begin(),
+                                      base::byte_span_from_ref(guid2).end());
 }
 
 typedef DWORD(WINAPI* WlanOpenHandleFunction)(DWORD dwClientVersion,
@@ -83,14 +91,19 @@ class WlanApi {
   const WlanFreeMemoryFunction wlan_free_memory;
 
   static std::unique_ptr<WlanApi> Create() {
-    static const wchar_t* kWlanDllPath = L"%WINDIR%\\system32\\wlanapi.dll";
-    wchar_t path[MAX_PATH] = {0};
-    ExpandEnvironmentStrings(kWlanDllPath, path, std::size(path));
+    static constexpr wchar_t kWlanDllPath[] =
+        L"%WINDIR%\\system32\\wlanapi.dll";
+    auto path = base::win::ExpandEnvironmentVariables(kWlanDllPath);
+    if (!path) {
+      return nullptr;
+    }
+
     HINSTANCE library =
-        LoadLibraryEx(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        LoadLibraryEx(path->c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!library) {
       return nullptr;
     }
+
     return base::WrapUnique(new WlanApi(library));
   }
 
@@ -159,7 +172,7 @@ GetInterfaceGuidMacMap() {
 
   base::small_map<std::map<GUID, std::string, GuidOperatorLess>> guid_mac_map;
   for (ULONG i = 0; i < interface_table->NumEntries; ++i) {
-    const auto* interface_row = &interface_table->Table[i];
+    const auto* interface_row = &UNSAFE_TODO(interface_table->Table[i]);
     guid_mac_map.emplace(interface_row->InterfaceGuid,
                          std::string{reinterpret_cast<const char*>(
                                          interface_row->PhysicalAddress),
@@ -211,6 +224,8 @@ base::small_map<std::map<std::string, std::string>> GetMacSsidMap() {
                                            &wlan_current_version,
                                            &wlan_client_handle.handle);
   if (result != ERROR_SUCCESS) {
+    ::SetLastError(result);
+    PLOG(WARNING) << "Failed to open WLAN handle";
     return {};
   }
 
@@ -218,6 +233,8 @@ base::small_map<std::map<std::string, std::string>> GetMacSsidMap() {
   result = wlan_api->wlan_enum_interfaces(wlan_client_handle.handle, nullptr,
                                           &wlan_interface_list_raw);
   if (result != ERROR_SUCCESS) {
+    ::SetLastError(result);
+    PLOG(WARNING) << "Failed to enumerate WLAN interfaces";
     return {};
   }
 
@@ -231,7 +248,8 @@ base::small_map<std::map<std::string, std::string>> GetMacSsidMap() {
   // GUID which we can use to get its MAC address via |guid_mac_map| and its
   // associated SSID via WlanQueryInterface.
   for (DWORD i = 0; i < wlan_interface_list->dwNumberOfItems; ++i) {
-    const auto* interface_info = &wlan_interface_list->InterfaceInfo[i];
+    const auto* interface_info =
+        &UNSAFE_TODO(wlan_interface_list->InterfaceInfo[i]);
     const auto mac_entry = guid_mac_map.find(interface_info->InterfaceGuid);
     if (mac_entry == guid_mac_map.end()) {
       continue;
@@ -289,9 +307,17 @@ HRESULT GetProfileNetworkAdapterId(
     WinrtConnectivity::IConnectionProfile* connection_profile,
     GUID* network_adapter_id) {
   ComPtr<WinrtConnectivity::INetworkAdapter> network_adapter;
-  HRESULT hr = connection_profile->get_NetworkAdapter(&network_adapter);
-  if (hr != S_OK) {
-    return hr;
+  {
+    // INetworkAdapter::get_NetworkAdapter() may load the module
+    // Windows.Networking.HostName.dll. Temporarily boost the priority of this
+    // background thread to avoid causing jank by blocking the UI thread from
+    // loading modules. For more details, see https://crbug.com/973868.
+    SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY_REPEATEDLY();
+
+    HRESULT hr = connection_profile->get_NetworkAdapter(&network_adapter);
+    if (hr != S_OK) {
+      return hr;
+    }
   }
   return network_adapter->get_NetworkAdapterId(network_adapter_id);
 }
@@ -330,19 +356,28 @@ HRESULT GetAllConnectionProfiles(
     uint32_t* out_connection_profiles_size) {
   ComPtr<WinrtConnectivity::INetworkInformationStatics>
       network_information_statics;
-  HRESULT hr =
-      GetWindowsOsApi().winrt_api.ro_get_activation_factory_callback.Run(
-          base::win::HStringReference(
-              RuntimeClass_Windows_Networking_Connectivity_NetworkInformation)
-              .Get(),
-          IID_PPV_ARGS(&network_information_statics));
-  if (hr != S_OK) {
-    return hr;
+  {
+    // RoGetActivationFactory() may load the Windows.Networking.Connectivity.dll
+    // module. Temporarily boost the priority of this background thread to avoid
+    // causing jank by blocking the UI thread from loading modules. For more
+    // details, see https://crbug.com/973868.
+    SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY_REPEATEDLY();
+
+    HRESULT hr =
+        GetWindowsOsApi().winrt_api.ro_get_activation_factory_callback.Run(
+            base::win::HStringReference(
+                RuntimeClass_Windows_Networking_Connectivity_NetworkInformation)
+                .Get(),
+            IID_PPV_ARGS(&network_information_statics));
+    if (hr != S_OK) {
+      return hr;
+    }
   }
 
   ComPtr<WinrtCollections::IVectorView<WinrtConnectivity::ConnectionProfile*>>
       connection_profiles;
-  hr = network_information_statics->GetConnectionProfiles(&connection_profiles);
+  HRESULT hr =
+      network_information_statics->GetConnectionProfiles(&connection_profiles);
   if (hr != S_OK) {
     return hr;
   }
@@ -435,15 +470,15 @@ std::vector<DiscoveryNetworkInfo> GetDiscoveryNetworkInfoList() {
   // will both require increasing the buffer size, there's no guarantee that
   // this won't happen; this is what the maximum retry count guards against.
   ULONG addresses_buffer_size = kGetAdaptersAddressesInitialBufferSize;
-  std::unique_ptr<char[]> addresses_buffer;
+  base::HeapArray<char> addresses_buffer;
   PIP_ADAPTER_ADDRESSES adapter_addresses = nullptr;
   ULONG result = ERROR_BUFFER_OVERFLOW;
   for (int i = 0;
        result == ERROR_BUFFER_OVERFLOW && i < kMaxGetAdaptersAddressTries;
        ++i) {
-    addresses_buffer.reset(new char[addresses_buffer_size]);
+    addresses_buffer = base::HeapArray<char>::Uninit(addresses_buffer_size);
     adapter_addresses =
-        reinterpret_cast<PIP_ADAPTER_ADDRESSES>(addresses_buffer.get());
+        reinterpret_cast<PIP_ADAPTER_ADDRESSES>(addresses_buffer.data());
     result =
         GetWindowsOsApi().ip_helper_api.get_adapters_addresses_callback.Run(
             AF_UNSPEC, kAddressFlags, nullptr, adapter_addresses,

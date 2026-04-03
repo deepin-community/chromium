@@ -4,8 +4,10 @@
 
 #include "base/profiler/stack_sampling_profiler_java_test_util.h"
 
-#include "base/base_profiler_test_support_jni/TestSupport_jni.h"
 #include "base/location.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "base/base_profiler_test_support_jni/TestSupport_jni.h"
 
 namespace base {
 
@@ -18,7 +20,8 @@ struct UnwinderJavaTestSupportParams {
 
 }  // namespace
 
-void JNI_TestSupport_InvokeCallbackFunction(JNIEnv* env, jlong context) {
+static void JNI_TestSupport_InvokeCallbackFunction(JNIEnv* env,
+                                                   int64_t context) {
   const void* start_program_counter = GetProgramCounter();
 
   UnwinderJavaTestSupportParams* params =
@@ -42,3 +45,5 @@ FunctionAddressRange callWithJavaFunction(OnceClosure closure) {
 }
 
 }  // namespace base
+
+DEFINE_JNI(TestSupport)

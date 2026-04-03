@@ -27,15 +27,21 @@
 
 import("../../../scripts/dawn_overrides_with_defaults.gni")
 
+import("${dawn_root}/scripts/dawn_features.gni")
+
 group("samples") {
   deps = [
     ":Animometer",
-    ":CHelloTriangle",
     ":ComputeBoids",
-    ":CppHelloTriangle",
-    ":DawnInfo",
-    ":ManualSwapChainTest",
+    ":HelloTriangle",
   ]
+
+  if (dawn_supports_glfw_for_windowing) {
+    deps += [
+      ":DawnInfo",
+      ":ManualSurfaceTest",
+    ]
+  }
 }
 
 # Static library to contain code and dependencies common to all samples
@@ -47,15 +53,18 @@ static_library("utils") {
 
   # Export all of these as public deps so that `gn check` allows includes
   public_deps = [
-    "${dawn_root}/src/dawn:cpp",
-    "${dawn_root}/src/dawn:proc_shared",
+    "${dawn_root}/include/dawn:cpp_headers",
     "${dawn_root}/src/dawn/common",
-    "${dawn_root}/src/dawn/glfw",
-    "${dawn_root}/src/dawn/native",
-    "${dawn_root}/src/dawn/utils",
-    "${dawn_root}/src/dawn/wire",
+    "${dawn_root}/src/dawn/utils:system_utils",
+    "${dawn_root}/src/dawn/utils:wgpu_utils",
   ]
-  public_configs = [ "${dawn_root}/src/dawn/common:internal_config" ]
+
+  if (dawn_supports_glfw_for_windowing) {
+    public_deps += [
+      "${dawn_root}/src/dawn/glfw",
+      "${dawn_root}/src/dawn/native",
+    ]
+  }
 }
 
 # Template for samples to avoid listing utils as a dep every time
@@ -67,15 +76,19 @@ template("sample") {
     if (defined(invoker.deps)) {
       deps += invoker.deps
     }
+
+    if (is_wasm) {
+      # The Dawn samples require either JSPI or Asyncify to run.
+      ldflags = [
+        "-Wno-experimental",  # -sJSPI is experimental.
+        "-sJSPI",
+      ]
+    }
   }
 }
 
-sample("CppHelloTriangle") {
-  sources = [ "CppHelloTriangle.cpp" ]
-}
-
-sample("CHelloTriangle") {
-  sources = [ "CHelloTriangle.cpp" ]
+sample("HelloTriangle") {
+  sources = [ "HelloTriangle.cpp" ]
 }
 
 sample("ComputeBoids") {
@@ -86,10 +99,12 @@ sample("Animometer") {
   sources = [ "Animometer.cpp" ]
 }
 
-sample("ManualSwapChainTest") {
-  sources = [ "ManualSwapChainTest.cpp" ]
-}
+if (dawn_supports_glfw_for_windowing) {
+  sample("ManualSurfaceTest") {
+    sources = [ "ManualSurfaceTest.cpp" ]
+  }
 
-sample("DawnInfo") {
-  sources = [ "DawnInfo.cpp" ]
+  sample("DawnInfo") {
+    sources = [ "DawnInfo.cpp" ]
+  }
 }

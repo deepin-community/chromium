@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -104,7 +105,7 @@ WebMParserClient* WebMTracksParser::OnListStart(int id) {
   if (id == kWebMIdContentEncodings) {
     if (track_content_encodings_client_) {
       MEDIA_LOG(ERROR, media_log_) << "Multiple ContentEncodings lists";
-      return NULL;
+      return nullptr;
     }
 
     track_content_encodings_client_ =
@@ -181,7 +182,7 @@ bool WebMTracksParser::OnListEnd(int id) {
           return false;
         }
         media_tracks_->AddAudioTrack(
-            audio_decoder_config_,
+            audio_decoder_config_, true,
             static_cast<StreamParser::TrackId>(track_num_),
             MediaTrack::Kind("main"), MediaTrack::Label(track_name_),
             MediaTrack::Language(track_language_));
@@ -209,7 +210,7 @@ bool WebMTracksParser::OnListEnd(int id) {
           return false;
         }
         media_tracks_->AddVideoTrack(
-            video_decoder_config_,
+            video_decoder_config_, true,
             static_cast<StreamParser::TrackId>(track_num_),
             MediaTrack::Kind("main"), MediaTrack::Label(track_name_),
             MediaTrack::Language(track_language_));
@@ -244,7 +245,7 @@ bool WebMTracksParser::OnListEnd(int id) {
 }
 
 bool WebMTracksParser::OnUInt(int id, int64_t val) {
-  int64_t* dst = NULL;
+  int64_t* dst = nullptr;
 
   switch (id) {
     case kWebMIdTrackNumber:
@@ -287,7 +288,7 @@ bool WebMTracksParser::OnBinary(int id, const uint8_t* data, int size) {
           << "Multiple CodecPrivate fields in a track.";
       return false;
     }
-    codec_private_.assign(data, data + size);
+    codec_private_.assign(data, UNSAFE_TODO(data + size));
     return true;
   }
   return true;

@@ -94,7 +94,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) PreflightResult final {
   // Returns true when `headers` has "authorization" which is covered by the
   // wildcard symbol (and not covered by "authorization") in the preflight
   // result.
-  // TODO(crbug.com/1176753): Remove this once the investigation is done.
+  // TODO(crbug.com/40168475): Remove this once the investigation is done.
   bool HasAuthorizationCoveredByWildcard(
       const net::HttpRequestHeaders& headers) const;
 
@@ -103,7 +103,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) PreflightResult final {
 
   // Returns params for the `CORS_PREFLIGHT_RESULT` and
   // `CORS_PREFLIGHT_CACHED_RESULT` net log events.
-  base::Value::Dict NetLogParams() const;
+  base::DictValue NetLogParams() const;
 
  protected:
   explicit PreflightResult(const mojom::CredentialsMode credentials_mode);

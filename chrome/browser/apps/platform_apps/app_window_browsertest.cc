@@ -5,14 +5,12 @@
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/apps/app_service/browser_app_launcher.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
@@ -22,6 +20,7 @@
 #include "extensions/common/extension_id.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
+#include "ui/display/display_switches.h"
 
 using extensions::AppWindowGeometryCache;
 using extensions::ResultCatcher;
@@ -142,7 +141,7 @@ class AppWindowAPITest : public extensions::PlatformAppBrowserTest {
 };
 
 // These tests are flaky after https://codereview.chromium.org/57433010/.
-// See http://crbug.com/319613.
+// See http://crbug.com/40341463.
 
 IN_PROC_BROWSER_TEST_F(AppWindowAPITest, TestCreate) {
   ASSERT_TRUE(RunAppWindowAPITest("testCreate")) << message_;
@@ -160,10 +159,8 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest, DISABLED_TestMaximize) {
   ASSERT_TRUE(RunAppWindowAPITest("testMaximize")) << message_;
 }
 
-// Flaky on Linux. http://crbug.com/424399.
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
-// of lacros-chrome is complete.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+// Flaky on Linux. http://crbug.com/40389643.
+#if BUILDFLAG(IS_LINUX)
 #define MAYBE_TestMinimize DISABLED_TestMinimize
 #else
 #define MAYBE_TestMinimize TestMinimize
@@ -193,7 +190,7 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest, DISABLED_TestRestoreAfterClose) {
 #define MAYBE_TestInitialBounds TestInitialBounds
 #define MAYBE_TestInitialConstraints TestInitialConstraints
 #define MAYBE_TestSetBounds TestSetBounds
-// Disabled as flakey, see http://crbug.com/434532 for details.
+// Disabled as flakey, see http://crbug.com/41143711 for details.
 #define MAYBE_TestSetSizeConstraints DISABLED_TestSetSizeConstraints
 #endif
 
@@ -217,7 +214,7 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest, MAYBE_TestSetSizeConstraints) {
   ASSERT_TRUE(RunAppWindowAPITest("testSetSizeConstraints")) << message_;
 }
 
-// Flaky failures on mac_rel and WinXP, see http://crbug.com/324915.
+// Flaky failures on mac_rel and WinXP, see http://crbug.com/40343413.
 IN_PROC_BROWSER_TEST_F(AppWindowAPITest,
                        DISABLED_TestRestoreGeometryCacheChange) {
   // This test is similar to the other AppWindowAPI tests except that at some
@@ -233,8 +230,7 @@ IN_PROC_BROWSER_TEST_F(AppWindowAPITest,
   EXPECT_TRUE(extension);
 
   apps::AppServiceProxyFactory::GetForProfile(browser()->profile())
-      ->BrowserAppLauncher()
-      ->LaunchAppWithParamsForTesting(apps::AppLaunchParams(
+      ->LaunchAppWithParams(apps::AppLaunchParams(
           extension->id(), apps::LaunchContainer::kLaunchContainerNone,
           WindowOpenDisposition::NEW_WINDOW, apps::LaunchSource::kFromTest));
 

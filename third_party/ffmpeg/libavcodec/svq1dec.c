@@ -32,7 +32,9 @@
  *   http://www.pcisys.net/~melanson/codecs/
  */
 
+#include "libavutil/attributes.h"
 #include "libavutil/crc.h"
+#include "libavutil/mem.h"
 #include "libavutil/thread.h"
 
 #include "avcodec.h"
@@ -845,7 +847,7 @@ static av_cold int svq1_decode_end(AVCodecContext *avctx)
     return 0;
 }
 
-static void svq1_flush(AVCodecContext *avctx)
+static av_cold void svq1_flush(AVCodecContext *avctx)
 {
     SVQ1Context *s = avctx->priv_data;
 
@@ -863,6 +865,4 @@ const FFCodec ff_svq1_decoder = {
     FF_CODEC_DECODE_CB(svq1_decode_frame),
     .p.capabilities = AV_CODEC_CAP_DR1,
     .flush          = svq1_flush,
-    .p.pix_fmts     = (const enum AVPixelFormat[]) { AV_PIX_FMT_YUV410P,
-                                                     AV_PIX_FMT_NONE },
 };

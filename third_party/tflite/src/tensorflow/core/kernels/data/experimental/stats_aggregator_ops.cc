@@ -12,8 +12,15 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
+#include <cstdint>
 #include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
 
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "absl/types/span.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/op_requires.h"
 #include "tensorflow/core/framework/resource_op_kernel.h"
@@ -39,9 +46,11 @@ static mutex* get_counters_map_lock() {
   return &counters_map_lock;
 }
 
-static std::unordered_map<string, monitoring::Counter<1>*>* get_counters_map() {
-  static std::unordered_map<string, monitoring::Counter<1>*>* counters_map =
-      new std::unordered_map<string, monitoring::Counter<1>*>;
+static std::unordered_map<std::string, monitoring::Counter<1>*>*
+get_counters_map() {
+  static std::unordered_map<std::string, monitoring::Counter<1>*>*
+      counters_map =
+          new std::unordered_map<std::string, monitoring::Counter<1>*>;
   return counters_map;
 }
 
@@ -49,7 +58,7 @@ class StatsAggregatorImpl : public StatsAggregator {
  public:
   StatsAggregatorImpl() {}
 
-  void AddToHistogram(const string& name, gtl::ArraySlice<double> values,
+  void AddToHistogram(const std::string& name, absl::Span<const double> values,
                       const int64_t steps) override {
     mutex_lock l(mu_);
     histogram::Histogram& histogram = histograms_[name];
@@ -58,7 +67,7 @@ class StatsAggregatorImpl : public StatsAggregator {
     }
   }
 
-  void AddScalar(const string& name, float value,
+  void AddScalar(const std::string& name, float value,
                  const int64_t steps) override {
     mutex_lock l(mu_);
     scalars_[name] = value;
@@ -67,7 +76,7 @@ class StatsAggregatorImpl : public StatsAggregator {
   void EncodeToProto(Summary* out_summary) override {
     mutex_lock l(mu_);
     for (const auto& pair : histograms_) {
-      const string& name = pair.first;
+      const std::string& name = pair.first;
       const histogram::Histogram& histogram = pair.second;
 
       Summary::Value* value = out_summary->add_value();
@@ -84,12 +93,12 @@ class StatsAggregatorImpl : public StatsAggregator {
 
   // StatsAggregator implementation for V2 is based on push-based summary, no-op
   // in V1.
-  Status SetSummaryWriter(
+  absl::Status SetSummaryWriter(
       SummaryWriterInterface* summary_writer_interface) override {
     return absl::OkStatus();
   }
 
-  void IncrementCounter(const string& name, const string& label,
+  void IncrementCounter(const std::string& name, const std::string& label,
                         int64_t val) override {
     mutex_lock l(*get_counters_map_lock());
     auto counters_map = get_counters_map();
@@ -99,7 +108,7 @@ class StatsAggregatorImpl : public StatsAggregator {
           monitoring::Counter<1>::New(
               /*streamz name*/ name,
               /*streamz description*/
-              strings::StrCat(name, " generated or consumed by the component."),
+              absl::StrCat(name, " generated or consumed by the component."),
               /*streamz label name*/ "component_descriptor"));
     }
     counters_map->at(name)->GetCell(label)->IncrementBy(val);
@@ -107,9 +116,9 @@ class StatsAggregatorImpl : public StatsAggregator {
 
  private:
   mutex mu_;
-  std::unordered_map<string, histogram::Histogram> histograms_
+  std::unordered_map<std::string, histogram::Histogram> histograms_
       TF_GUARDED_BY(mu_);
-  std::unordered_map<string, float> scalars_ TF_GUARDED_BY(mu_);
+  std::unordered_map<std::string, float> scalars_ TF_GUARDED_BY(mu_);
   StatsAggregatorImpl(const StatsAggregatorImpl&) = delete;
   void operator=(const StatsAggregatorImpl&) = delete;
 };
@@ -121,7 +130,7 @@ class StatsAggregatorHandleOp
       : ResourceOpKernel<StatsAggregatorResource>(ctx) {}
 
  private:
-  Status CreateResource(StatsAggregatorResource** ret) override
+  absl::Status CreateResource(StatsAggregatorResource** ret) override
       TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     *ret = new StatsAggregatorResource(std::make_unique<StatsAggregatorImpl>());
     return absl::OkStatus();
@@ -138,7 +147,7 @@ class StatsAggregatorImplV2 : public StatsAggregator {
     }
   }
 
-  void AddToHistogram(const string& name, gtl::ArraySlice<double> values,
+  void AddToHistogram(const std::string& name, absl::Span<const double> values,
                       const int64_t steps) override {
     mutex_lock l(mu_);
     histogram::Histogram& histogram = histograms_[name];
@@ -148,21 +157,21 @@ class StatsAggregatorImplV2 : public StatsAggregator {
     AddToEvents(name, steps, histogram);
   }
 
-  void AddScalar(const string& name, float value,
+  void AddScalar(const std::string& name, float value,
                  const int64_t steps) override {
     mutex_lock l(mu_);
     AddToEvents(name, steps, value);
   }
 
   // TODO(b/116314787): expose this is public API to manually flush summary.
-  Status Flush() {
+  absl::Status Flush() {
     mutex_lock l(mu_);
     if (summary_writer_interface_)
       TF_RETURN_IF_ERROR(summary_writer_interface_->Flush());
     return absl::OkStatus();
   }
 
-  void IncrementCounter(const string& name, const string& label,
+  void IncrementCounter(const std::string& name, const std::string& label,
                         int64_t val) override {
     mutex_lock l(*get_counters_map_lock());
     auto counters_map = get_counters_map();
@@ -181,7 +190,7 @@ class StatsAggregatorImplV2 : public StatsAggregator {
   // in V2.
   void EncodeToProto(Summary* out_summary) override {}
 
-  Status SetSummaryWriter(
+  absl::Status SetSummaryWriter(
       SummaryWriterInterface* summary_writer_interface) override {
     mutex_lock l(mu_);
     if (summary_writer_interface_) {
@@ -198,7 +207,7 @@ class StatsAggregatorImplV2 : public StatsAggregator {
   }
 
  private:
-  void AddToEvents(const string& name, const int64_t steps,
+  void AddToEvents(const std::string& name, const int64_t steps,
                    const float scalar_value) TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     if (summary_writer_interface_ == nullptr) {
       return;
@@ -213,7 +222,7 @@ class StatsAggregatorImplV2 : public StatsAggregator {
     TF_CHECK_OK(summary_writer_interface_->WriteEvent(std::move(e)));
   }
 
-  void AddToEvents(const string& name, const int64_t steps,
+  void AddToEvents(const std::string& name, const int64_t steps,
                    const histogram::Histogram& histogram)
       TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     if (summary_writer_interface_ == nullptr) {
@@ -233,7 +242,7 @@ class StatsAggregatorImplV2 : public StatsAggregator {
       nullptr;
   // not owned, we might be associating the default summary_writer from the
   // context
-  std::unordered_map<string, histogram::Histogram> histograms_
+  std::unordered_map<std::string, histogram::Histogram> histograms_
       TF_GUARDED_BY(mu_);
   StatsAggregatorImplV2(const StatsAggregatorImplV2&) = delete;
   void operator=(const StatsAggregatorImplV2&) = delete;
@@ -246,7 +255,7 @@ class StatsAggregatorHandleOpV2
       : ResourceOpKernel<StatsAggregatorResource>(ctx) {}
 
  private:
-  Status CreateResource(StatsAggregatorResource** ret) override
+  absl::Status CreateResource(StatsAggregatorResource** ret) override
       TF_EXCLUSIVE_LOCKS_REQUIRED(mu_) {
     *ret =
         new StatsAggregatorResource(std::make_unique<StatsAggregatorImplV2>());

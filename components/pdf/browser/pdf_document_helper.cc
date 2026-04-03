@@ -6,26 +6,26 @@
 
 #include <utility>
 
-#include "base/feature_list.h"
-#include "base/memory/ptr_util.h"
 #include "base/notreached.h"
 #include "components/pdf/browser/pdf_document_helper_client.h"
+#include "components/pdf/browser/pdf_frame_util.h"
 #include "content/public/browser/document_user_data.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer_type_converters.h"
+#include "pdf/mojom/pdf.mojom.h"
 #include "pdf/pdf_features.h"
-#include "ui/base/pointer/touch_editing_controller.h"
-#include "ui/base/ui_base_types.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/point_f.h"
+#include "ui/touch_selection/touch_editing_controller.h"
 
 namespace pdf {
 
 // static
-void PDFDocumentHelper::BindPdfService(
-    mojo::PendingAssociatedReceiver<mojom::PdfService> pdf_service,
+void PDFDocumentHelper::BindPdfHost(
+    mojo::PendingAssociatedReceiver<mojom::PdfHost> pdf_host,
     content::RenderFrameHost* rfh,
     std::unique_ptr<PDFDocumentHelperClient> client) {
   auto* pdf_helper = PDFDocumentHelper::GetForCurrentDocument(rfh);
@@ -33,15 +33,38 @@ void PDFDocumentHelper::BindPdfService(
     PDFDocumentHelper::CreateForCurrentDocument(rfh, std::move(client));
     pdf_helper = PDFDocumentHelper::GetForCurrentDocument(rfh);
   }
-  pdf_helper->pdf_service_receivers_.Bind(rfh, std::move(pdf_service));
+  pdf_helper->pdf_host_receivers_.Bind(rfh, std::move(pdf_host));
+}
+
+// static
+PDFDocumentHelper* PDFDocumentHelper::MaybeGetForWebContents(
+    content::WebContents* contents) {
+  PDFDocumentHelper* pdf_helper = nullptr;
+
+  // Iterate through each of the render frame hosts, because the frame
+  // associated to a PDFDocumentHelper is not guaranteed to be a specific frame.
+  // For example, if kPdfOopif feature is enabled, the frame is the top frame.
+  // If kPdfOopif is disabled, it is a child frame.
+  contents->ForEachRenderFrameHostWithAction(
+      [&pdf_helper](content::RenderFrameHost* rfh) {
+        auto* possible_pdf_helper =
+            PDFDocumentHelper::GetForCurrentDocument(rfh);
+        if (possible_pdf_helper) {
+          pdf_helper = possible_pdf_helper;
+          return content::RenderFrameHost::FrameIterationAction::kStop;
+        }
+
+        return content::RenderFrameHost::FrameIterationAction::kContinue;
+      });
+
+  return pdf_helper;
 }
 
 PDFDocumentHelper::PDFDocumentHelper(
     content::RenderFrameHost* rfh,
     std::unique_ptr<PDFDocumentHelperClient> client)
     : content::DocumentUserData<PDFDocumentHelper>(rfh),
-      pdf_service_receivers_(content::WebContents::FromRenderFrameHost(rfh),
-                             this),
+      pdf_host_receivers_(content::WebContents::FromRenderFrameHost(rfh), this),
       client_(std::move(client)) {}
 
 PDFDocumentHelper::~PDFDocumentHelper() {
@@ -69,34 +92,46 @@ void PDFDocumentHelper::SetListener(
   if (pdf_rwh_) {
     pdf_rwh_->RemoveObserver(this);
   }
-  pdf_rwh_ = client_->FindPdfFrame(&GetWebContents())->GetRenderWidgetHost();
+
+  content::RenderFrameHost* pdf_host;
+  if (chrome_pdf::features::IsOopifPdfEnabled()) {
+    pdf_host = &render_frame_host();
+  } else {
+    content::RenderFrameHost* main_frame =
+        GetWebContents().GetPrimaryMainFrame();
+    content::RenderFrameHost* pdf_frame =
+        pdf_frame_util::FindPdfChildFrame(main_frame);
+    pdf_host = pdf_frame ? pdf_frame : main_frame;
+  }
+
+  pdf_rwh_ = pdf_host->GetRenderWidgetHost();
   pdf_rwh_->AddObserver(this);
 }
 
-gfx::PointF PDFDocumentHelper::ConvertHelper(const gfx::PointF& point_f,
+gfx::PointF PDFDocumentHelper::ConvertHelper(const gfx::PointF& point,
                                              float scale) {
   if (!pdf_rwh_) {
-    return point_f;
+    return point;
   }
 
   content::RenderWidgetHostView* view = pdf_rwh_->GetView();
   if (!view) {
-    return point_f;
+    return point;
   }
 
   gfx::Vector2dF offset =
       view->TransformPointToRootCoordSpaceF(gfx::PointF()).OffsetFromOrigin();
   offset.Scale(scale);
 
-  return point_f + offset;
+  return point + offset;
 }
 
-gfx::PointF PDFDocumentHelper::ConvertFromRoot(const gfx::PointF& point_f) {
-  return ConvertHelper(point_f, -1.f);
+gfx::PointF PDFDocumentHelper::ConvertFromRoot(const gfx::PointF& point) {
+  return ConvertHelper(point, -1.f);
 }
 
-gfx::PointF PDFDocumentHelper::ConvertToRoot(const gfx::PointF& point_f) {
-  return ConvertHelper(point_f, +1.f);
+gfx::PointF PDFDocumentHelper::ConvertToRoot(const gfx::PointF& point) {
+  return ConvertHelper(point, +1.f);
 }
 
 void PDFDocumentHelper::SelectionChanged(const gfx::PointF& left,
@@ -112,17 +147,25 @@ void PDFDocumentHelper::SelectionChanged(const gfx::PointF& left,
 }
 
 void PDFDocumentHelper::SetPluginCanSave(bool can_save) {
-  client_->SetPluginCanSave(pdf_service_receivers_.GetCurrentTargetFrame(),
+  client_->SetPluginCanSave(pdf_host_receivers_.GetCurrentTargetFrame(),
                             can_save);
 }
+
+#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+void PDFDocumentHelper::OnSearchifyStarted() {
+  if (!searchify_started_) {
+    searchify_started_ = true;
+    client_->OnSearchifyStarted(&render_frame_host());
+  }
+}
+#endif
 
 void PDFDocumentHelper::DidScroll() {
   if (!touch_selection_controller_client_manager_) {
     InitTouchSelectionClientManager();
-  }
-
-  if (!touch_selection_controller_client_manager_) {
-    return;
+    if (!touch_selection_controller_client_manager_) {
+      return;
+    }
   }
 
   gfx::SelectionBound start;
@@ -167,6 +210,8 @@ bool PDFDocumentHelper::SupportsAnimation() const {
   return false;
 }
 
+void PDFDocumentHelper::SetNeedsAnimate() {}
+
 void PDFDocumentHelper::MoveCaret(const gfx::PointF& position) {
   if (!remote_pdf_client_) {
     return;
@@ -188,6 +233,59 @@ void PDFDocumentHelper::SelectBetweenCoordinates(const gfx::PointF& base,
   }
   remote_pdf_client_->SetSelectionBounds(ConvertFromRoot(base),
                                          ConvertFromRoot(extent));
+}
+
+void PDFDocumentHelper::GetPdfBytes(
+    uint32_t size_limit,
+    pdf::mojom::PdfListener::GetPdfBytesCallback callback) {
+  if (!remote_pdf_client_ || !is_document_load_complete_) {
+    std::move(callback).Run(pdf::mojom::PdfListener::GetPdfBytesStatus::kFailed,
+                            /*bytes=*/{}, /*page_count=*/0);
+    return;
+  }
+  remote_pdf_client_->GetPdfBytes(size_limit, std::move(callback));
+}
+
+#if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+void PDFDocumentHelper::GetSaveDataBufferHandlerForDrive(
+    pdf::mojom::SaveRequestType request_type,
+    pdf::mojom::PdfListener::GetSaveDataBufferHandlerForDriveCallback
+        callback) {
+  if (!remote_pdf_client_ || !is_document_load_complete_) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+  remote_pdf_client_->GetSaveDataBufferHandlerForDrive(request_type,
+                                                       std::move(callback));
+}
+#endif  // BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+
+void PDFDocumentHelper::GetPageText(
+    int32_t page_index,
+    pdf::mojom::PdfListener::GetPageTextCallback callback) {
+  if (!remote_pdf_client_ || !is_document_load_complete_) {
+    std::move(callback).Run(std::u16string());
+    return;
+  }
+  remote_pdf_client_->GetPageText(page_index, std::move(callback));
+}
+
+void PDFDocumentHelper::GetMostVisiblePageIndex(
+    pdf::mojom::PdfListener::GetMostVisiblePageIndexCallback callback) {
+  if (!remote_pdf_client_) {
+    std::move(callback).Run(std::nullopt);
+    return;
+  }
+  remote_pdf_client_->GetMostVisiblePageIndex(std::move(callback));
+}
+
+void PDFDocumentHelper::RegisterForDocumentLoadComplete(
+    base::OnceClosure callback) {
+  if (is_document_load_complete_) {
+    std::move(callback).Run();
+    return;
+  }
+  document_load_complete_callbacks_.push_back(std::move(callback));
 }
 
 void PDFDocumentHelper::OnSelectionEvent(ui::SelectionEventType event) {
@@ -220,7 +318,7 @@ bool PDFDocumentHelper::IsCommandIdEnabled(int command_id) const {
   bool readable = true;
 
   switch (command_id) {
-    case ui::TouchEditable::kCopy:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kCopy):
       return readable && has_selection_;
       // TODO(wjmaclean): add logic for cut/paste as the information required
       // from PDFium becomes available.
@@ -232,7 +330,7 @@ void PDFDocumentHelper::ExecuteCommand(int command_id, int event_flags) {
   // TODO(wjmaclean, dsinclair): Need to communicate to PDFium to accept
   // cut/paste commands.
   switch (command_id) {
-    case ui::TouchEditable::kCopy:
+    case std::to_underlying(ui::TouchEditable::MenuCommands::kCopy):
       GetWebContents().Copy();
       break;
   }
@@ -240,7 +338,7 @@ void PDFDocumentHelper::ExecuteCommand(int command_id, int event_flags) {
 
 void PDFDocumentHelper::RunContextMenu() {
   content::RenderFrameHost* focused_frame;
-  if (base::FeatureList::IsEnabled(chrome_pdf::features::kPdfOopif)) {
+  if (chrome_pdf::features::IsOopifPdfEnabled()) {
     focused_frame = &render_frame_host();
   } else {
     focused_frame = GetWebContents().GetFocusedFrame();
@@ -273,7 +371,7 @@ void PDFDocumentHelper::RunContextMenu() {
       widget->GetView()->TransformPointToRootCoordSpaceF(gfx::PointF());
   anchor_point.Offset(-origin.x(), -origin.y());
   widget->ShowContextMenuAtPoint(gfx::ToRoundedPoint(anchor_point),
-                                 ui::MENU_SOURCE_TOUCH_EDIT_MENU);
+                                 ui::mojom::MenuSourceType::kTouchEditMenu);
 
   // Hide selection handles after getting rect-between-bounds from touch
   // selection controller; otherwise, rect would be empty and the above
@@ -309,22 +407,31 @@ void PDFDocumentHelper::InitTouchSelectionClientManager() {
   touch_selection_controller_client_manager_->AddObserver(this);
 }
 
-void PDFDocumentHelper::HasUnsupportedFeature() {
-  client_->OnPDFHasUnsupportedFeature(&GetWebContents());
+void PDFDocumentHelper::OnDocumentLoadComplete() {
+  // Only notify the consumers on first load complete.
+  if (is_document_load_complete_) {
+    return;
+  }
+  is_document_load_complete_ = true;
+  for (auto& callback : document_load_complete_callbacks_) {
+    std::move(callback).Run();
+  }
+  document_load_complete_callbacks_.clear();
+
+  client_->OnDocumentLoadComplete(&render_frame_host());
 }
 
 void PDFDocumentHelper::SaveUrlAs(const GURL& url,
                                   network::mojom::ReferrerPolicy policy) {
-  client_->OnSaveURL(&GetWebContents());
+  client_->OnSaveURL();
 
-  content::RenderFrameHost* rfh;
-  if (base::FeatureList::IsEnabled(chrome_pdf::features::kPdfOopif)) {
-    rfh = &render_frame_host();
-  } else {
-    rfh = GetWebContents().GetOuterWebContentsFrame();
-    if (!rfh) {
-      return;
-    }
+  // Save using the PDF embedder host.
+  content::RenderFrameHost* rfh =
+      chrome_pdf::features::IsOopifPdfEnabled()
+          ? pdf_frame_util::GetEmbedderHost(&render_frame_host())
+          : GetWebContents().GetOuterWebContentsFrame();
+  if (!rfh) {
+    return;
   }
 
   content::Referrer referrer(url, policy);
@@ -335,7 +442,7 @@ void PDFDocumentHelper::SaveUrlAs(const GURL& url,
 void PDFDocumentHelper::UpdateContentRestrictions(
     int32_t content_restrictions) {
   client_->UpdateContentRestrictions(
-      pdf_service_receivers_.GetCurrentTargetFrame(), content_restrictions);
+      pdf_host_receivers_.GetCurrentTargetFrame(), content_restrictions);
 }
 
 DOCUMENT_USER_DATA_KEY_IMPL(PDFDocumentHelper);

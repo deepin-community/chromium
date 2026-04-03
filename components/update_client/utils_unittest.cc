@@ -8,9 +8,17 @@
 #include <utility>
 #include <vector>
 
+#include "base/base_paths.h"
+#include "base/containers/to_vector.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/path_service.h"
+#include "base/process/launch.h"
+#include "base/process/process.h"
+#include "base/strings/strcat.h"
+#include "base/time/time.h"
+#include "build/build_config.h"
 #include "components/update_client/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -18,6 +26,10 @@
 #if BUILDFLAG(IS_WIN)
 #include <shlobj.h>
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+#include "base/test/scoped_locale.h"
+#endif
 
 namespace update_client {
 
@@ -70,25 +82,25 @@ TEST(UpdateClientUtils, IsValidBrand) {
 }
 
 TEST(UpdateClientUtils, GetCrxComponentId) {
-  static const uint8_t kHash[16] = {
+  static constexpr uint8_t kHash[16] = {
       0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
       0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
   };
   CrxComponent component;
-  component.pk_hash.assign(kHash, kHash + sizeof(kHash));
+  component.pk_hash = base::ToVector(kHash);
 
   EXPECT_EQ(std::string("abcdefghijklmnopabcdefghijklmnop"),
             GetCrxComponentID(component));
 }
 
 TEST(UpdateClientUtils, GetCrxIdFromPublicKeyHash) {
-  static const uint8_t kHash[16] = {
+  static constexpr uint8_t kHash[16] = {
       0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
       0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
   };
 
   EXPECT_EQ(std::string("abcdefghijklmnopabcdefghijklmnop"),
-            GetCrxIdFromPublicKeyHash({std::cbegin(kHash), std::cend(kHash)}));
+            GetCrxIdFromPublicKeyHash(kHash));
 }
 
 // Tests that the name of an InstallerAttribute matches ^[-_=a-zA-Z0-9]{1,256}$
@@ -146,62 +158,29 @@ TEST(UpdateClientUtils, IsValidInstallerAttributeValue) {
 }
 
 TEST(UpdateClientUtils, RemoveUnsecureUrls) {
-  const GURL test1[] = {GURL("http://foo"), GURL("https://foo")};
-  std::vector<GURL> urls(std::begin(test1), std::end(test1));
+  std::vector<GURL> urls = {GURL("http://foo"), GURL("https://foo")};
   RemoveUnsecureUrls(&urls);
   EXPECT_EQ(1u, urls.size());
   EXPECT_EQ(urls[0], GURL("https://foo"));
 
-  const GURL test2[] = {GURL("https://foo"), GURL("http://foo")};
-  urls.assign(std::begin(test2), std::end(test2));
+  urls = {GURL("https://foo"), GURL("http://foo")};
   RemoveUnsecureUrls(&urls);
   EXPECT_EQ(1u, urls.size());
   EXPECT_EQ(urls[0], GURL("https://foo"));
 
-  const GURL test3[] = {GURL("https://foo"), GURL("https://bar")};
-  urls.assign(std::begin(test3), std::end(test3));
+  urls = {GURL("https://foo"), GURL("https://bar")};
   RemoveUnsecureUrls(&urls);
   EXPECT_EQ(2u, urls.size());
   EXPECT_EQ(urls[0], GURL("https://foo"));
   EXPECT_EQ(urls[1], GURL("https://bar"));
 
-  const GURL test4[] = {GURL("http://foo")};
-  urls.assign(std::begin(test4), std::end(test4));
+  urls = {GURL("http://foo")};
   RemoveUnsecureUrls(&urls);
   EXPECT_EQ(0u, urls.size());
 
-  const GURL test5[] = {GURL("http://foo"), GURL("http://bar")};
-  urls.assign(std::begin(test5), std::end(test5));
+  urls = {GURL("http://foo"), GURL("http://bar")};
   RemoveUnsecureUrls(&urls);
   EXPECT_EQ(0u, urls.size());
-}
-
-TEST(UpdateClientUtils, ToInstallerResult) {
-  enum EnumA {
-    ENTRY0 = 10,
-    ENTRY1 = 20,
-  };
-
-  enum class EnumB {
-    ENTRY0 = 0,
-    ENTRY1,
-  };
-
-  const auto result1 = ToInstallerResult(EnumA::ENTRY0);
-  EXPECT_EQ(110, result1.error);
-  EXPECT_EQ(0, result1.extended_error);
-
-  const auto result2 = ToInstallerResult(ENTRY1, 10000);
-  EXPECT_EQ(120, result2.error);
-  EXPECT_EQ(10000, result2.extended_error);
-
-  const auto result3 = ToInstallerResult(EnumB::ENTRY0);
-  EXPECT_EQ(100, result3.error);
-  EXPECT_EQ(0, result3.extended_error);
-
-  const auto result4 = ToInstallerResult(EnumB::ENTRY1, 20000);
-  EXPECT_EQ(101, result4.error);
-  EXPECT_EQ(20000, result4.extended_error);
 }
 
 TEST(UpdateClientUtils, GetArchitecture) {
@@ -211,6 +190,80 @@ TEST(UpdateClientUtils, GetArchitecture) {
   EXPECT_TRUE(arch == kArchIntel || arch == kArchAmd64 || arch == kArchArm64)
       << arch;
 #endif  // BUILDFLAG(IS_WIN)
+}
+
+namespace {
+#if BUILDFLAG(IS_WIN)
+base::FilePath CopyCmdExe(const base::FilePath& under_dir) {
+  static constexpr wchar_t kCmdExe[] = L"cmd.exe";
+
+  base::FilePath system_path;
+  EXPECT_TRUE(base::PathService::Get(base::DIR_SYSTEM, &system_path));
+
+  const base::FilePath cmd_exe_path = under_dir.Append(kCmdExe);
+  EXPECT_TRUE(base::CopyFile(system_path.Append(kCmdExe), cmd_exe_path));
+  return cmd_exe_path;
+}
+#endif  // BUILDFLAG(IS_WIN)
+}  // namespace
+
+TEST(UpdateClientUtils, RetryFileOperation) {
+  base::FilePath tempdir;
+  ASSERT_TRUE(base::CreateNewTempDirectory(
+      FILE_PATH_LITERAL("Test_RetryFileOperation"), &tempdir));
+
+#if BUILDFLAG(IS_WIN)
+  // Launch a process that runs for 3 seconds.
+  ASSERT_TRUE(
+      base::LaunchProcess(
+          base::StrCat({CopyCmdExe(tempdir).value(), L" /c \"timeout 3\""}), {})
+          .IsValid());
+
+  // Trying to delete once fails, because the process is running within
+  // `tempdir`.
+  ASSERT_FALSE(RetryFileOperation(&base::DeletePathRecursively, tempdir, 1,
+                                  base::Seconds(1)));
+#endif  // BUILDFLAG(IS_WIN)
+
+  // Deleting with retries works.
+  ASSERT_TRUE(RetryFileOperation(&base::DeletePathRecursively, tempdir));
+}
+
+struct UpdateClientUtilsUTF8StringTypeTestCase {
+  const base::FilePath::StringType stringtype;
+  const std::string utf8;
+};
+
+class UpdateClientUtilsUTF8StringTypeTest
+    : public ::testing::TestWithParam<UpdateClientUtilsUTF8StringTypeTestCase> {
+#if !defined(SYSTEM_NATIVE_UTF8) && \
+    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+ protected:
+  base::ScopedLocale locale_{"en_US.UTF-8"};
+#endif
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    UpdateClientUtilsUTF8StringTypeTestCases,
+    UpdateClientUtilsUTF8StringTypeTest,
+    ::testing::ValuesIn(std::vector<UpdateClientUtilsUTF8StringTypeTestCase>{
+        {FILE_PATH_LITERAL("foo.txt"), "foo.txt"},
+
+        // "aeo" with accents. Use http://0xcc.net/jsescape/ to decode them.
+        {FILE_PATH_LITERAL("\u00E0\u00E8\u00F2.txt"),
+         "\xC3\xA0\xC3\xA8\xC3\xB2.txt"},
+
+        // Full-width "ABC".
+        {FILE_PATH_LITERAL("\uFF21\uFF22\uFF23.txt"),
+         "\xEF\xBC\xA1\xEF\xBC\xA2\xEF\xBC\xA3.txt"},
+    }));
+
+TEST_P(UpdateClientUtilsUTF8StringTypeTest, UTF8ToStringType) {
+  EXPECT_EQ(UTF8ToStringType(GetParam().utf8), GetParam().stringtype);
+}
+
+TEST_P(UpdateClientUtilsUTF8StringTypeTest, StringTypeToUTF8) {
+  EXPECT_EQ(StringTypeToUTF8(GetParam().stringtype), GetParam().utf8);
 }
 
 }  // namespace update_client

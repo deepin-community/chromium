@@ -5,7 +5,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PARKABLE_IMAGE_MANAGER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_PARKABLE_IMAGE_MANAGER_H_
 
-#include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
@@ -15,7 +14,6 @@
 #include "third_party/blink/renderer/platform/graphics/parkable_image.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 
 namespace blink {
 
@@ -37,10 +35,6 @@ class PLATFORM_EXPORT ParkableImageManager
 
   // Number of parked and unparked images.
   size_t Size() const LOCKS_EXCLUDED(lock_);
-
-  static bool IsParkableImagesToDiskEnabled() {
-    return base::FeatureList::IsEnabled(features::kParkableImagesToDisk);
-  }
 
   void MaybeParkImagesForTesting() { MaybeParkImages(); }
 
@@ -81,8 +75,8 @@ class PLATFORM_EXPORT ParkableImageManager
   void RecordStatisticsAfter5Minutes() const LOCKS_EXCLUDED(lock_);
 
   void MoveImage(ParkableImageImpl* image,
-                 WTF::HashSet<ParkableImageImpl*>* from,
-                 WTF::HashSet<ParkableImageImpl*>* to)
+                 HashSet<ParkableImageImpl*>* from,
+                 HashSet<ParkableImageImpl*>* to)
       EXCLUSIVE_LOCKS_REQUIRED(lock_);
 
   void RecordDiskWriteTime(base::TimeDelta write_time) LOCKS_EXCLUDED(lock_) {
@@ -128,8 +122,8 @@ class PLATFORM_EXPORT ParkableImageManager
   // |on_disk_images_| keeps track of all images that do not have an in-memory
   // representation. Accessing the data for any image in |on_disk_images_|
   // involves a read from disk.
-  WTF::HashSet<ParkableImageImpl*> unparked_images_ GUARDED_BY(lock_);
-  WTF::HashSet<ParkableImageImpl*> on_disk_images_ GUARDED_BY(lock_);
+  HashSet<ParkableImageImpl*> unparked_images_ GUARDED_BY(lock_);
+  HashSet<ParkableImageImpl*> on_disk_images_ GUARDED_BY(lock_);
 
   bool has_pending_parking_task_ GUARDED_BY(lock_) = false;
   bool has_posted_accounting_task_ GUARDED_BY(lock_) = false;

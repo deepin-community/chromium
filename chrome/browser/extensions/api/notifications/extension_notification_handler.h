@@ -42,7 +42,11 @@ class ExtensionNotificationHandler : public NotificationHandler {
                const std::optional<int>& action_index,
                const std::optional<std::u16string>& reply,
                base::OnceClosure completed_closure) override;
-  void DisableNotifications(Profile* profile, const GURL& origin) override;
+  void DisableNotifications(Profile* profile,
+                            const GURL& origin,
+                            const std::optional<std::string>& notification_id,
+                            const std::optional<bool>& is_suspicious) override;
+  void OpenSettings(Profile* profile, const GURL& origin) override;
 
  protected:
   // Overriden in unit tests.
@@ -51,7 +55,7 @@ class ExtensionNotificationHandler : public NotificationHandler {
                          events::HistogramValue histogram_value,
                          const std::string& name,
                          EventRouter::UserGestureState user_gesture,
-                         base::Value::List args);
+                         base::ListValue args);
 };
 
 }  // namespace extensions

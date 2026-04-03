@@ -1,8 +1,8 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
 
-import * as Root from '../../../core/root/root.js';
 import * as SDK from '../../../core/sdk/sdk.js';
 import * as Bindings from '../../../models/bindings/bindings.js';
 import * as JavaScriptMetaData from '../../../models/javascript_metadata/javascript_metadata.js';
@@ -19,7 +19,7 @@ export function completion(): CodeMirror.Extension {
 }
 
 export async function completeInContext(
-    textBefore: string, query: string, force: boolean = false): Promise<UI.SuggestBox.Suggestions> {
+    textBefore: string, query: string, force = false): Promise<UI.SuggestBox.Suggestions> {
   const state = CodeMirror.EditorState.create({
     doc: textBefore + query,
     selection: {anchor: textBefore.length},
@@ -103,10 +103,10 @@ const dontCompleteIn = new Set([
 ]);
 
 export const enum QueryType {
-  Expression = 0,
-  PropertyName = 1,
-  PropertyExpression = 2,
-  PotentiallyRetrievingFromMap = 3,
+  EXPRESSION = 0,
+  PROPERTY_NAME = 1,
+  PROPERTY_EXPRESSION = 2,
+  POTENTIALLY_RETRIEVING_FROM_MAP = 3,
 }
 
 export function getQueryType(tree: CodeMirror.Tree, pos: number, doc: CodeMirror.Text): {
@@ -122,17 +122,17 @@ export function getQueryType(tree: CodeMirror.Tree, pos: number, doc: CodeMirror
 
   if (node.name === 'PropertyName' || node.name === 'PrivatePropertyName') {
     return parent?.name !== 'MemberExpression' ? null :
-                                                 {type: QueryType.PropertyName, from: node.from, relatedNode: parent};
+                                                 {type: QueryType.PROPERTY_NAME, from: node.from, relatedNode: parent};
   }
   if (node.name === 'VariableName' ||
       // Treat alphabetic keywords as variables
       !node.firstChild && node.to - node.from < 20 && !/[^a-z]/.test(doc.sliceString(node.from, node.to))) {
-    return {type: QueryType.Expression, from: node.from};
+    return {type: QueryType.EXPRESSION, from: node.from};
   }
   if (node.name === 'String') {
     const parent = node.parent;
     return parent?.name === 'MemberExpression' && parent.childBefore(node.from)?.name === '[' ?
-        {type: QueryType.PropertyExpression, from: node.from, relatedNode: parent} :
+        {type: QueryType.PROPERTY_EXPRESSION, from: node.from, relatedNode: parent} :
         null;
   }
   // Enter unfinished nodes before the position.
@@ -144,10 +144,10 @@ export function getQueryType(tree: CodeMirror.Tree, pos: number, doc: CodeMirror
   if (node.name === 'MemberExpression') {
     const before = node.childBefore(Math.min(pos, node.to));
     if (before?.name === '[') {
-      return {type: QueryType.PropertyExpression, relatedNode: node};
+      return {type: QueryType.PROPERTY_EXPRESSION, relatedNode: node};
     }
     if (before?.name === '.' || before?.name === '?.') {
-      return {type: QueryType.PropertyName, relatedNode: node};
+      return {type: QueryType.PROPERTY_NAME, relatedNode: node};
     }
   }
   if (node.name === '(') {
@@ -161,18 +161,18 @@ export function getQueryType(tree: CodeMirror.Tree, pos: number, doc: CodeMirror
         if (propertyExpression && doc.sliceString(propertyExpression.from, propertyExpression.to) === 'get') {
           // map
           const potentiallyMapObject = callReceiver?.firstChild;
-          return {type: QueryType.PotentiallyRetrievingFromMap, relatedNode: potentiallyMapObject || undefined};
+          return {type: QueryType.POTENTIALLY_RETRIEVING_FROM_MAP, relatedNode: potentiallyMapObject || undefined};
         }
       }
     }
   }
-  return {type: QueryType.Expression};
+  return {type: QueryType.EXPRESSION};
 }
 
 export async function javascriptCompletionSource(cx: CodeMirror.CompletionContext):
     Promise<CodeMirror.CompletionResult|null> {
   const query = getQueryType(CodeMirror.syntaxTree(cx.state), cx.pos, cx.state.doc);
-  if (!query || query.from === undefined && !cx.explicit && query.type === QueryType.Expression) {
+  if (!query || query.from === undefined && !cx.explicit && query.type === QueryType.EXPRESSION) {
     return null;
   }
 
@@ -184,7 +184,7 @@ export async function javascriptCompletionSource(cx: CodeMirror.CompletionContex
 
   let result: CompletionSet;
   let quote: string|undefined = undefined;
-  if (query.type === QueryType.Expression) {
+  if (query.type === QueryType.EXPRESSION) {
     const [scope, global] = await Promise.all([
       completeExpressionInScope(),
       completeExpressionGlobal(),
@@ -197,9 +197,9 @@ export async function javascriptCompletionSource(cx: CodeMirror.CompletionContex
     } else {
       result = global;
     }
-  } else if (query.type === QueryType.PropertyName || query.type === QueryType.PropertyExpression) {
+  } else if (query.type === QueryType.PROPERTY_NAME || query.type === QueryType.PROPERTY_EXPRESSION) {
     const objectExpr = (query.relatedNode as CodeMirror.SyntaxNode).getChild('Expression');
-    if (query.type === QueryType.PropertyExpression) {
+    if (query.type === QueryType.PROPERTY_EXPRESSION) {
       quote = query.from === undefined ? '\'' : cx.state.sliceDoc(query.from, query.from + 1);
     }
     if (!objectExpr) {
@@ -207,7 +207,7 @@ export async function javascriptCompletionSource(cx: CodeMirror.CompletionContex
     }
     result = await completeProperties(
         cx.state.sliceDoc(objectExpr.from, objectExpr.to), quote, cx.state.sliceDoc(cx.pos, cx.pos + 1) === ']');
-  } else if (query.type === QueryType.PotentiallyRetrievingFromMap) {
+  } else if (query.type === QueryType.POTENTIALLY_RETRIEVING_FROM_MAP) {
     const potentialMapObject = query.relatedNode;
     if (!potentialMapObject) {
       return null;
@@ -268,10 +268,12 @@ const maxCacheAge = 30_000;
 
 let cacheInstance: PropertyCache|null = null;
 
-// Store recent collections of property completions. The empty string
-// is used to store the set of global bindings.
+/**
+ * Store recent collections of property completions. The empty string
+ * is used to store the set of global bindings.
+ **/
 class PropertyCache {
-  readonly #cache: Map<string, Promise<CompletionSet>> = new Map();
+  readonly #cache = new Map<string, Promise<CompletionSet>>();
 
   constructor() {
     const clear = (): void => this.#cache.clear();
@@ -331,13 +333,13 @@ async function maybeCompleteKeysFromMap(objectVariable: string): Promise<Complet
 async function completeProperties(
     expression: string,
     quoted?: string,
-    hasBracket: boolean = false,
+    hasBracket = false,
     ): Promise<CompletionSet> {
   const cache = PropertyCache.instance();
   if (!quoted) {
     const cached = cache.get(expression);
     if (cached) {
-      return cached;
+      return await cached;
     }
   }
   const context = getExecutionContext();
@@ -348,14 +350,14 @@ async function completeProperties(
   if (!quoted) {
     cache.set(expression, result);
   }
-  return result;
+  return await result;
 }
 
 async function completePropertiesInner(
     expression: string,
     context: SDK.RuntimeModel.ExecutionContext,
     quoted?: string,
-    hasBracket: boolean = false,
+    hasBracket = false,
     ): Promise<CompletionSet> {
   const result = new CompletionSet();
   if (!context) {
@@ -409,14 +411,8 @@ async function completeExpressionInScope(): Promise<CompletionSet> {
     return result;
   }
 
-  const scopeObjectForScope = (scope: SDK.DebuggerModel.Scope): SDK.RemoteObject.RemoteObject =>
-      // TODO(crbug.com/1444349): Inline into `map` call below when experiment is removed.
-      Root.Runtime.experiments.isEnabled('evaluateExpressionsWithSourceMaps') ?
-      SourceMapScopes.NamesResolver.resolveScopeInObject(scope) :
-      scope.object();
-
-  const scopes = await Promise.all(
-      selectedFrame.scopeChain().map(scope => scopeObjectForScope(scope).getAllProperties(false, false)));
+  const scopes = await Promise.all(selectedFrame.scopeChain().map(
+      scope => SourceMapScopes.NamesResolver.resolveScopeInObject(scope).getAllProperties(false, false)));
   for (const scope of scopes) {
     for (const property of scope.properties || []) {
       result.add({
@@ -432,7 +428,7 @@ async function completeExpressionGlobal(): Promise<CompletionSet> {
   const cache = PropertyCache.instance();
   const cached = cache.get('');
   if (cached) {
-    return cached;
+    return await cached;
   }
 
   const context = getExecutionContext();
@@ -453,7 +449,7 @@ async function completeExpressionGlobal(): Promise<CompletionSet> {
     });
   });
   cache.set('', fetchNames);
-  return fetchNames;
+  return await fetchNames;
 }
 
 export async function isExpressionComplete(expression: string): Promise<boolean> {
@@ -463,7 +459,7 @@ export async function isExpressionComplete(expression: string): Promise<boolean>
   }
   const result =
       await currentExecutionContext.runtimeModel.compileScript(expression, '', false, currentExecutionContext.id);
-  if (!result || !result.exceptionDetails || !result.exceptionDetails.exception) {
+  if (!result?.exceptionDetails?.exception) {
     return true;
   }
   const description = result.exceptionDetails.exception.description;
@@ -527,7 +523,7 @@ async function getArgumentsForExpression(
   }
   const expression = doc.sliceString(callee.from, callee.to);
   const result = await evaluateExpression(context, expression, 'argumentsHint');
-  if (!result || result.type !== 'function') {
+  if (result?.type !== 'function') {
     return null;
   }
   const objGetter = async(): Promise<SDK.RemoteObject.RemoteObject|null> => {
@@ -535,15 +531,16 @@ async function getArgumentsForExpression(
     if (!first || callee.name !== 'MemberExpression') {
       return null;
     }
-    return evaluateExpression(context, doc.sliceString(first.from, first.to), 'argumentsHint');
+    return await evaluateExpression(context, doc.sliceString(first.from, first.to), 'argumentsHint');
   };
-  return getArgumentsForFunctionValue(result, objGetter, expression)
+  return await getArgumentsForFunctionValue(result, objGetter, expression)
       .finally(() => context.runtimeModel.releaseObjectGroup('argumentsHint'));
 }
 
 export function argumentsList(input: string): string[] {
   function parseParamList(cursor: CodeMirror.TreeCursor): string[] {
-    while (cursor.name !== 'ParamList' && cursor.nextSibling()) {
+    while (cursor.name !== 'ParamList') {
+      cursor.nextSibling();
     }
     const parameters = [];
     if (cursor.name === 'ParamList' && cursor.firstChild()) {
@@ -598,8 +595,9 @@ export function argumentsList(input: string): string[] {
           if (!cursor.firstChild()) {
             throw new Error(`${cursor.name} rule is expected to have children`);
           }
-          while (cursor.nextSibling() && cursor.name as string !== 'ClassBody') {
-          }
+          do {
+            cursor.nextSibling();
+          } while (cursor.name as string !== 'ClassBody');
           if (cursor.name as string === 'ClassBody' && cursor.firstChild()) {
             do {
               if (cursor.name as string === 'MethodDeclaration' && cursor.firstChild()) {
@@ -645,7 +643,7 @@ async function getArgumentsForFunctionValue(
   const javaScriptMetadata = JavaScriptMetaData.JavaScriptMetadata.JavaScriptMetadataImpl.instance();
 
   const descriptionRegexResult = /^function ([^(]*)\(/.exec(description);
-  const name = descriptionRegexResult && descriptionRegexResult[1] || functionName;
+  const name = descriptionRegexResult?.[1] || functionName;
   if (!name) {
     return null;
   }
@@ -709,16 +707,18 @@ async function prototypesFromObject(object: SDK.RemoteObject.RemoteObject): Prom
   return await object.callFunctionJSON(function(this: Object) {
     const result = [];
     for (let object = this; object; object = Object.getPrototypeOf(object)) {
-      if (typeof object === 'object' && object.constructor && object.constructor.name) {
+      if (typeof object === 'object' && object.constructor?.name) {
         result[result.length] = object.constructor.name;
       }
     }
     return result;
-  }, []);
+  }, []) ?? [];
 }
 
-// Given a function object that is probably a bound function, try to
-// retrieve the argument list from its target function.
+/**
+ * Given a function object that is probably a bound function, try to
+ * retrieve the argument list from its target function.
+ **/
 async function getArgumentsForBoundFunction(object: SDK.RemoteObject.RemoteObject): Promise<string[][]|null> {
   const {internalProperties} = await object.getOwnProperties(false);
   if (!internalProperties) {

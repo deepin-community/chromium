@@ -16,6 +16,7 @@ class Time;
 
 namespace web_app {
 class WebApp;
+class WebAppScope;
 
 class WebAppRegistrarObserver : public base::CheckedObserver {
  public:
@@ -25,13 +26,11 @@ class WebAppRegistrarObserver : public base::CheckedObserver {
   virtual void OnWebAppsWillBeUpdatedFromSync(
       const std::vector<const WebApp*>& new_apps_state) {}
 
-  virtual void OnWebAppProfileWillBeDeleted(const webapps::AppId& app_id) {}
-
   virtual void OnAppRegistrarDestroyed() = 0;
 
   // Called after remembering the user choice to always launch an app via
   // a given protocol.
-  virtual void OnWebAppProtocolSettingsChanged() {}
+  virtual void OnWebAppProtocolSettingsChanged(const webapps::AppId& app_id) {}
 
   // Called after the app's access to the File Handling API has changed, e.g. by
   // a user selecting "always allow" in the prompt or after a policy update.
@@ -52,6 +51,8 @@ class WebAppRegistrarObserver : public base::CheckedObserver {
   virtual void OnWebAppUserDisplayModeChanged(
       const webapps::AppId& app_id,
       mojom::UserDisplayMode user_display_mode) {}
+  virtual void OnWebAppEffectiveScopeChanged(const webapps::AppId& app_id,
+                                             const WebAppScope& new_scope) {}
   virtual void OnWebAppRunOnOsLoginModeChanged(
       const webapps::AppId& app_id,
       RunOnOsLoginMode run_on_os_login_mode) {}
@@ -70,6 +71,15 @@ class WebAppRegistrarObserver : public base::CheckedObserver {
   virtual void OnWebAppUserLinkCapturingPreferencesChanged(
       const webapps::AppId& app_id,
       bool is_preferred) {}
+
+  // Called when a pending update is available.
+  virtual void OnWebAppPendingUpdateChanged(const webapps::AppId& app_id,
+                                            bool has_pending_update) {}
+
+  // Called when the pending migration info for an app has changed.
+  virtual void OnWebAppPendingMigrationInfoChanged(const webapps::AppId& app_id,
+                                                   bool has_pending_migration) {
+  }
 };
 
 }  // namespace web_app

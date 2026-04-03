@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -15,7 +15,7 @@
 
 from python.generators.diff_tests.testing import Path, DataPath, Metric
 from python.generators.diff_tests.testing import Csv, Json, TextProto
-from python.generators.diff_tests.testing import DiffTestBlueprint
+from python.generators.diff_tests.testing import DiffTestBlueprint, TraceInjector
 from python.generators.diff_tests.testing import TestSuite
 
 
@@ -338,7 +338,7 @@ class Parsing(TestSuite):
         SELECT ts, cpu, dur, ts_end, utid, end_state, priority, upid, name, tid
         FROM sched
         JOIN thread USING(utid)
-        ORDER BY ts;
+        ORDER BY ts, sched.id;
         """,
         out=Path('systrace_html.out'))
 
@@ -417,7 +417,13 @@ class Parsing(TestSuite):
   def test_android_log_counts(self):
     return DiffTestBlueprint(
         trace=DataPath('android_log.pb'),
-        query=Path('android_log_counts_test.sql'),
+        query="""SELECT count(*) AS cnt FROM android_logs UNION ALL
+          SELECT count(*) AS cnt FROM android_logs WHERE prio = 3 UNION ALL
+          SELECT count(*) AS cnt FROM android_logs WHERE prio > 4 UNION ALL
+          SELECT count(*) AS cnt FROM android_logs WHERE tag = 'screen_toggled' UNION ALL
+          SELECT count(*) AS cnt FROM android_logs WHERE tag GLOB '*_pss' UNION ALL
+          SELECT count(*) AS cnt FROM android_logs WHERE msg GLOB '*i2c?write*' OR msg GLOB '*I2C?Write*' UNION ALL
+          SELECT count(*) AS cnt FROM android_logs WHERE ts >= 1510113924391 AND ts < 1512610021879;""",
         out=Csv("""
         "cnt"
         2249
@@ -476,6 +482,54 @@ class Parsing(TestSuite):
         FROM stats WHERE name GLOB 'ftrace_cpu_*' OR name GLOB 'traced_buf_*';
         """,
         out=Path('android_sched_and_ps_stats.out'))
+
+  def test_shadow_buf_stats(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+          packet {
+            trusted_uid: 158158
+            trusted_packet_sequence_id: 1
+            trace_stats {
+              buffer_stats {
+                buffer_size: 131072
+                bytes_written: 55459840
+                bytes_overwritten: 55328768
+                bytes_read: 131072
+                padding_bytes_cleared: 0
+                chunks_written: 13540
+                chunks_overwritten: 13508
+                chunks_read: 32
+                write_wrap_count: 423
+                patches_succeeded: 1861
+                patches_failed: 12349
+                readaheads_succeeded: 11
+                shadow_buffer_stats {
+                  packets_seen: 57
+                  packets_in_both: 55
+                  packets_only_v1: 0
+                  packets_only_v2: 0
+                  patches_attempted: 13499
+                  v1_patches_succeeded: 1150
+                  v2_patches_succeeded: 1150
+                }
+              }
+            }
+          }
+        """),
+        query="""
+        SELECT name, source, value
+        FROM stats WHERE name GLOB 'traced_buf_v2s*';
+        """,
+        out=Csv("""
+        "name","source","value"
+        "traced_buf_v2s_packets_seen","trace",57
+        "traced_buf_v2s_packets_in_both","trace",55
+        "traced_buf_v2s_packets_only_v1","trace",0
+        "traced_buf_v2s_packets_only_v2","trace",0
+        "traced_buf_v2s_patches_attempted","trace",13499
+        "traced_buf_v2s_v1_patches_succeeded","trace",1150
+        "traced_buf_v2s_v2_patches_succeeded","trace",1150
+        """))
 
   # Syscalls
   def test_sys_syscall(self):
@@ -575,20 +629,24 @@ class Parsing(TestSuite):
         }
         packet {
           system_info {
-            android_build_fingerprint: "the fingerprint"
+            android_build_fingerprint: "google/coral/coral:12/SP1A.210812.015/7679548:userdebug/dev-keys"
           }
         }
         """),
         query="""
-        SELECT name, str_value FROM metadata WHERE str_value IS NOT NULL ORDER BY name;
+        SELECT name, str_value, int_value FROM metadata WHERE str_value IS NOT NULL OR int_value IS NOT NULL ORDER BY name;
         """,
         out=Csv("""
-        "name","str_value"
-        "android_build_fingerprint","the fingerprint"
+        "name","str_value","int_value"
+        "android_build_fingerprint","google/coral/coral:12/SP1A.210812.015/7679548:userdebug/dev-keys","[NULL]"
+        "android_incremental_build","7679548","[NULL]"
+        "android_sdk_version","[NULL]",31
         "trace_config_pbtxt","trace_uuid_msb: 1314564453825188563
-        trace_uuid_lsb: -6605018796207623390"
-        "trace_type","proto"
-        "trace_uuid","123e4567-e89b-12d3-a456-426655443322"
+        trace_uuid_lsb: -6605018796207623390","[NULL]"
+        "trace_size_bytes","[NULL]",124
+        "trace_time_clock_id","[NULL]",6
+        "trace_type","proto","[NULL]"
+        "trace_uuid","123e4567-e89b-12d3-a456-426655443322","[NULL]"
         """))
 
   def test_triggers_packets_trigger_packet_trace(self):
@@ -618,6 +676,102 @@ class Parsing(TestSuite):
         101000004,"test2","producer2",4
         """))
 
+  def test_triggers_packets_clone_snapshot_trigger_packet(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+      packet {
+        clone_snapshot_trigger {
+          trigger_name: "test1"
+          trusted_producer_uid: 3
+          producer_name: "producer1"
+        }
+        timestamp: 101000002
+      }
+      """),
+        query=Path('triggers_packets_test.sql'),
+        out=Csv("""
+      "ts","name","string_value","int_value"
+      101000002,"test1","producer1",3
+      """))
+
+  def test_trigger_metadata_test_clone_snapshot_trigger_packet(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+    packet {
+      clone_snapshot_trigger {
+        trigger_name: "test1"
+        trusted_producer_uid: 3
+        producer_name: "producer1"
+      }
+      timestamp: 101000002
+    }
+    """),
+        query=Path('trigger_metadata_test.sql'),
+        out=Csv("""
+      "str_value"
+      "test1"
+      """))
+
+  def test_trigger_metadata_trigger_packet(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          trigger {
+            trigger_name: "test1"
+            trusted_producer_uid: 1
+            producer_name: "producer1"
+          }
+          timestamp: 101000002
+        }
+        packet {
+          trigger {
+            trigger_name: "test2"
+            trusted_producer_uid: 2
+            producer_name: "producer2"
+          }
+          timestamp: 101000001
+        }
+        """),
+        query=Path('trigger_metadata_test.sql'),
+        out=Csv("""
+      "str_value"
+      "test2"
+      """))
+
+  def test_trigger_metadata_trigger_packet_and_clone_snapshot_packet(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+      packet {
+        trigger {
+          trigger_name: "test1"
+          trusted_producer_uid: 1
+          producer_name: "producer1"
+        }
+        timestamp: 101000004
+      }
+      packet {
+        trigger {
+          trigger_name: "test2"
+          trusted_producer_uid: 2
+          producer_name: "producer2"
+        }
+        timestamp: 101000002
+      }
+      packet {
+        clone_snapshot_trigger {
+          trigger_name: "testClone"
+          trusted_producer_uid: 3
+          producer_name: "producer3"
+        }
+        timestamp: 101000003
+      }
+      """),
+        query=Path('trigger_metadata_test.sql'),
+        out=Csv("""
+    "str_value"
+    "testClone"
+    """))
+
   def test_chrome_metadata(self):
     return DiffTestBlueprint(
         trace=TextProto(r"""
@@ -627,6 +781,13 @@ class Parsing(TestSuite):
               clock_id: 6
               timestamp: 101000002
             }
+          }
+          trusted_packet_sequence_id: 1
+          timestamp: 101000002
+        }
+        packet {
+          chrome_trigger {
+            trigger_name_hash: 1595654158
           }
           trusted_packet_sequence_id: 1
           timestamp: 101000002
@@ -655,9 +816,23 @@ class Parsing(TestSuite):
         }
         """),
         query="""
-        SELECT * FROM metadata;
+        SELECT name, key_type, int_value, str_value
+        FROM metadata
+        ORDER BY name;
         """,
-        out=Path('chrome_metadata.out'))
+        out=Csv('''
+          "name","key_type","int_value","str_value"
+          "cr-a-enabled_categories","single","[NULL]","cat1,cat2,cat3"
+          "cr-a-field_trial_hashes","single","[NULL]","{ name: 123, group: 456 } { name: 789, group: 120 } "
+          "cr-a-playstore_version_code","single",101,"[NULL]"
+          "cr-background_tracing_metadata","single","[NULL]","CgUlDsAbXx2RziSz"
+          "cr-scenario_name_hash","single",3005533841,"[NULL]"
+          "cr-triggered_rule_name_hash","single",1595654158,"[NULL]"
+          "trace_size_bytes","single",95,"[NULL]"
+          "trace_time_clock_id","single",6,"[NULL]"
+          "trace_type","single","[NULL]","proto"
+          "trace_uuid","single","[NULL]","00000000-0000-0000-7f42-b235fa358661"
+        '''))
 
   def test_chrome_metadata_multiple(self):
     return DiffTestBlueprint(
@@ -706,20 +881,22 @@ class Parsing(TestSuite):
         }
         """),
         query="""
-        SELECT * FROM metadata;
+        SELECT name, key_type, int_value, str_value
+        FROM metadata
+        ORDER BY name;
         """,
         out=Csv("""
-        "id","type","name","key_type","int_value","str_value"
-        0,"metadata","trace_uuid","single","[NULL]","00000000-0000-0000-0de8-df55233147f0"
-        1,"metadata","trace_time_clock_id","single",6,"[NULL]"
-        2,"metadata","cr-a-playstore_version_code","single",101,"[NULL]"
-        3,"metadata","cr-a-enabled_categories","single","[NULL]","cat1,cat2,cat3"
-        4,"metadata","cr-a-field_trial_hashes","single","[NULL]","{ name: 123, group: 456 } { name: 789, group: 120 } "
-        5,"metadata","cr-b-playstore_version_code","single",102,"[NULL]"
-        6,"metadata","cr-b-enabled_categories","single","[NULL]","cat3,cat4,cat5"
-        7,"metadata","cr-b-field_trial_hashes","single","[NULL]","{ name: 1234, group: 5678 } { name: 9012, group: 3456 } "
-        8,"metadata","trace_size_bytes","single",110,"[NULL]"
-        9,"metadata","trace_type","single","[NULL]","proto"
+          "name","key_type","int_value","str_value"
+          "cr-a-enabled_categories","single","[NULL]","cat1,cat2,cat3"
+          "cr-a-field_trial_hashes","single","[NULL]","{ name: 123, group: 456 } { name: 789, group: 120 } "
+          "cr-a-playstore_version_code","single",101,"[NULL]"
+          "cr-b-enabled_categories","single","[NULL]","cat3,cat4,cat5"
+          "cr-b-field_trial_hashes","single","[NULL]","{ name: 1234, group: 5678 } { name: 9012, group: 3456 } "
+          "cr-b-playstore_version_code","single",102,"[NULL]"
+          "trace_size_bytes","single",110,"[NULL]"
+          "trace_time_clock_id","single",6,"[NULL]"
+          "trace_type","single","[NULL]","proto"
+          "trace_uuid","single","[NULL]","00000000-0000-0000-0de8-df55233147f0"
         """))
 
   # CPU info
@@ -728,13 +905,13 @@ class Parsing(TestSuite):
         trace=Path('cpu_info.textproto'),
         query="""
         SELECT
-          id,
+          cpu,
           cluster_id,
           processor
         FROM cpu;
         """,
         out=Csv("""
-        "id","cluster_id","processor"
+        "cpu","cluster_id","processor"
         0,0,"AArch64 Processor rev 13 (aarch64)"
         1,0,"AArch64 Processor rev 13 (aarch64)"
         2,0,"AArch64 Processor rev 13 (aarch64)"
@@ -751,8 +928,8 @@ class Parsing(TestSuite):
         query="""
         SELECT
           freq,
-          GROUP_CONCAT(cpu_id) AS cpus
-        FROM cpu_freq
+          GROUP_CONCAT(cpu) AS cpus
+        FROM cpu_available_frequencies
         GROUP BY freq
         ORDER BY freq;
         """,
@@ -839,19 +1016,51 @@ class Parsing(TestSuite):
         }
         """),
         query="""
-        SELECT RUN_METRIC('android/process_metadata.sql');
+        INCLUDE PERFETTO MODULE android.process_metadata;
 
-        SELECT upid, process_name, uid, shared_uid, package_name, version_code
-        FROM process_metadata_table
+        SELECT upid, process_name, uid, shared_uid, package_name, version_code, is_kernel_task
+        FROM android_process_metadata
         WHERE upid != 0;
         """,
         out=Csv("""
-        "upid","process_name","uid","shared_uid","package_name","version_code"
-        1,"init",0,"[NULL]","[NULL]","[NULL]"
-        2,"system_server",1000,"[NULL]","[NULL]","[NULL]"
-        3,"com.google.android.gms",10100,1,"com.google.android.gms",1234
-        4,"com.google.android.gms.persistent",10100,1,"com.google.android.gms",1234
-        5,"com.google.android.gms",10100,1,"com.google.android.gms",1234
+        "upid","process_name","uid","shared_uid","package_name","version_code","is_kernel_task"
+        1,"init",0,"[NULL]","[NULL]","[NULL]",1
+        2,"system_server",1000,"[NULL]","[NULL]","[NULL]",0
+        3,"com.google.android.gms",10100,1,"com.google.android.gms",1234,0
+        4,"com.google.android.gms.persistent",10100,1,"com.google.android.gms",1234,0
+        5,"com.google.android.gms",10100,1,"com.google.android.gms",1234,0
+        """))
+
+  # package metadata with user type
+  def test_package_metadata_user_type(self):
+    return DiffTestBlueprint(
+        trace=DataPath('user_package_metadata.pftrace'),
+        query="""
+        INCLUDE PERFETTO MODULE android.process_metadata;
+
+        SELECT
+          package_name,
+          process_name,
+          uid,
+          user_id,
+          user_type
+        FROM
+          android_process_metadata
+        WHERE package_name IS NOT NULL
+        LIMIT 10;
+        """,
+        out=Csv("""
+        "package_name","process_name","uid","user_id","user_type"
+        "com.google.android.bluetooth","/vendor/bin/hw/android.hardware.bluetooth@1.1-service.synabtlinux",1002,0,"android.os.usertype.system.HEADLESS"
+        "com.google.android.googlequicksearchbox","com.google.android.googlequicksearchbox:search",10180,0,"android.os.usertype.system.HEADLESS"
+        "com.google.android.apps.turbo","com.google.android.apps.turbo:aab",10164,11,"android.os.usertype.full.SECONDARY"
+        "com.google.android.apps.messaging","com.google.android.apps.messaging",10171,11,"android.os.usertype.full.SECONDARY"
+        "com.google.android.googlequicksearchbox","com.google.android.googlequicksearchbox:googleapp",10180,0,"android.os.usertype.system.HEADLESS"
+        "com.google.android.googlequicksearchbox","com.google.android.googlequicksearchbox:interactor",10180,11,"android.os.usertype.full.SECONDARY"
+        "com.android.systemui","com.android.systemui",10252,0,"android.os.usertype.system.HEADLESS"
+        "com.google.android.apps.nest.dockmanager.app","com.google.android.apps.nest.dockmanager.app",10187,0,"android.os.usertype.system.HEADLESS"
+        "com.google.android.flipendo","com.google.android.flipendo",10268,0,"android.os.usertype.system.HEADLESS"
+        "com.google.android.pixelsystemservice","com.google.android.pixelsystemservice",10269,0,"android.os.usertype.system.HEADLESS"
         """))
 
   # Flow events importing from json
@@ -1134,18 +1343,6 @@ class Parsing(TestSuite):
         9
         """))
 
-  def test_otheruuids_android_other_traces(self):
-    return DiffTestBlueprint(
-        trace=Path('otheruuids.textproto'),
-        query=Metric('android_other_traces'),
-        out=TextProto(r"""
-        android_other_traces {
-          finalized_traces_uuid: "75e4c6d0-d8f6-4f82-fa4b-9e09c5512288"
-          finalized_traces_uuid: "ad836701-3113-3fb1-be4f-f7731e23fbbf"
-          finalized_traces_uuid: "0de1a010-efa1-a081-2345-969b1186a6ab"
-        }
-        """))
-
   # Per-process Binder transaction metrics
   def test_android_binder(self):
     return DiffTestBlueprint(
@@ -1318,3 +1515,485 @@ class Parsing(TestSuite):
         "all_data_source_flushed_ns",12344
         "all_data_source_flushed_ns",12345
         """))
+
+  def test_slow_starting_data_sources(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          timestamp: 108227060089867
+          trusted_uid: 679634
+          trusted_packet_sequence_id: 1
+          service_event {
+            slow_starting_data_sources {
+              data_source {
+                producer_name: "producer2"
+                data_source_name: "track_event"
+              }
+              data_source {
+                producer_name: "producer3"
+                data_source_name: "track_event"
+              }
+            }
+          }
+        }
+        """),
+        query="""
+        SELECT str_value FROM metadata WHERE name = 'slow_start_data_source'""",
+        out=Csv("""
+        "str_value"
+        "producer2 track_event"
+        "producer3 track_event"
+        """))
+
+  def test_ftrace_abi_errors_skipped_zero_data_length(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          ftrace_stats {
+            phase: END_OF_TRACE
+            cpu_stats {
+              cpu: 0
+              entries: 14
+              overrun: 0
+              commit_overrun: 0
+              bytes_read: 840
+              oldest_event_ts: 86557.552705
+              now_ts: 86557.574310
+              dropped_events: 0
+              read_events: 199966062
+            }
+            kernel_symbols_parsed: 128611
+            kernel_symbols_mem_kb: 1322
+            ftrace_parse_errors: FTRACE_STATUS_ABI_ZERO_DATA_LENGTH
+          }
+          trusted_uid: 9999
+          trusted_packet_sequence_id: 2
+          trusted_pid: 1069
+        }
+        """),
+        query="""
+        select name, severity, value
+        from stats
+        where name = "ftrace_abi_errors_skipped_zero_data_length"
+        """,
+        out=Csv("""
+        "name","severity","value"
+        "ftrace_abi_errors_skipped_zero_data_length","info",1
+        """))
+
+  # CPU info
+  def test_cpu_machine_id(self):
+    return DiffTestBlueprint(
+        trace=Path('cpu_info.textproto'),
+        trace_modifier=TraceInjector(['cpu_info'], {'machine_id': 1001}),
+        query="""
+        SELECT
+          cpu,
+          cluster_id,
+          processor
+        FROM cpu
+        WHERE machine_id is not NULL;
+        """,
+        out=Csv("""
+        "cpu","cluster_id","processor"
+        0,0,"AArch64 Processor rev 13 (aarch64)"
+        1,0,"AArch64 Processor rev 13 (aarch64)"
+        2,0,"AArch64 Processor rev 13 (aarch64)"
+        3,0,"AArch64 Processor rev 13 (aarch64)"
+        4,0,"AArch64 Processor rev 13 (aarch64)"
+        5,0,"AArch64 Processor rev 13 (aarch64)"
+        6,1,"AArch64 Processor rev 13 (aarch64)"
+        7,1,"AArch64 Processor rev 13 (aarch64)"
+        """))
+
+  def test_cpu_freq_machine_id(self):
+    return DiffTestBlueprint(
+        trace=Path('cpu_info.textproto'),
+        trace_modifier=TraceInjector(['cpu_info'], {'machine_id': 1001}),
+        query="""
+        SELECT
+          freq,
+          GROUP_CONCAT(cpu.cpu) AS cpus
+        FROM cpu_available_frequencies
+        JOIN cpu using (ucpu)
+        WHERE machine_id is not NULL
+        GROUP BY freq
+        ORDER BY freq;
+        """,
+        out=Path('cpu_freq.out'))
+
+  def test_sched_waking_instants_compact_sched_machine_id(self):
+    return DiffTestBlueprint(
+        trace=DataPath('compact_sched.pb'),
+        trace_modifier=TraceInjector(
+            ['ftrace_events', 'ftrace_stats', 'system_info'],
+            {'machine_id': 1001}),
+        query="""
+        SELECT ts, thread.name, thread.tid
+        FROM thread_state
+        JOIN thread USING (utid)
+        WHERE state = 'R' AND thread.machine_id is not NULL
+        ORDER BY ts;
+        """,
+        out=Path('sched_waking_instants_compact_sched.out'))
+
+  def test_cpu_capacity_present(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+      packet {
+        cpu_info {
+          cpus {
+            processor: "AArch64 Processor rev 13 (aarch64)"
+            frequencies: 150000
+            frequencies: 300000
+            capacity: 256
+          }
+          cpus {
+            processor: "AArch64 Processor rev 13 (aarch64)"
+            frequencies: 300000
+            frequencies: 576000
+            capacity: 1024
+          }
+        }
+      }
+      """),
+        query="""
+      SELECT
+        cpu,
+        cluster_id,
+        capacity,
+        processor
+      FROM cpu
+      ORDER BY cpu
+      """,
+        out=Csv("""
+      "cpu","cluster_id","capacity","processor"
+      0,0,256,"AArch64 Processor rev 13 (aarch64)"
+      1,1,1024,"AArch64 Processor rev 13 (aarch64)"
+      """))
+
+  def test_cpu_capacity_not_present(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+      packet {
+        cpu_info {
+          cpus {
+            processor: "AArch64 Processor rev 13 (aarch64)"
+            frequencies: 150000
+            frequencies: 300000
+          }
+          cpus {
+            processor: "AArch64 Processor rev 13 (aarch64)"
+            frequencies: 300000
+            frequencies: 576000
+          }
+        }
+      }
+      """),
+        query="""
+      SELECT
+        cpu,
+        cluster_id,
+        capacity,
+        processor
+      FROM cpu
+      ORDER BY cpu
+      """,
+        out=Csv("""
+      "cpu","cluster_id","capacity","processor"
+      0,0,"[NULL]","AArch64 Processor rev 13 (aarch64)"
+      1,1,"[NULL]","AArch64 Processor rev 13 (aarch64)"
+      """))
+
+  # Test that the sched slices of a VM guest is ingested and not filtered
+  # because timestamp is far before the tracing session.
+  def test_sched_remote_clock_sync(self):
+    return DiffTestBlueprint(
+        trace=DataPath('multi_machine_trace.pb'),
+        query="""
+        SELECT ts, cpu.cpu, thread.name, thread.tid
+        FROM sched JOIN cpu USING(ucpu) JOIN thread USING(utid)
+        WHERE cpu.machine_id IS NOT NULL LIMIT 10
+        """,
+        out=Csv("""
+        "ts","cpu","name","tid"
+        5230310112669,5,"kworker/5:7",32536
+        5230310132355,5,"swapper",0
+        5230310284063,4,"traced_probes",550
+        5230310421518,1,"swapper",0
+        5230310428373,3,"swapper",0
+        5230310587630,1,"rcuog/4",49
+        5230310590258,3,"logd.klogd",246
+        5230310592868,1,"swapper",0
+        5230310659357,3,"swapper",0
+        5230310671279,5,"traced_relay",25171
+        """))
+
+  # A query that selects the sched slices of a host vcpu thread and the guest
+  # sched slices. If remote clock sync works, guest sched slices should not be
+  # far off from host vcpu slices, and the query should return both host and
+  # guest slices.
+  def test_sched_remote_clock_sync_vcpu0(self):
+    return DiffTestBlueprint(
+        trace=DataPath('multi_machine_trace.pb'),
+        query="""
+        SELECT ts, cpu.cpu, utid, machine_id
+        FROM sched JOIN cpu USING (ucpu)
+        WHERE ucpu = 4096
+        UNION
+        SELECT ts, cpu.cpu, utid, machine_id
+        FROM sched JOIN cpu USING (ucpu)
+        WHERE utid = (
+          SELECT utid
+          FROM thread
+          WHERE name = 'crosvm_vcpu0')
+        LIMIT 20
+        """,
+        out=Csv("""
+        "ts","cpu","utid","machine_id"
+        5230311628979,0,1,1
+        5230315517287,0,50,1
+        5230315524649,0,1,1
+        5230315676788,0,49,1
+        5230315684911,0,1,1
+        5230319663217,0,49,1
+        5230319684310,0,1,1
+        5230323692459,0,49,1
+        5230323726976,0,50,1
+        5230323764556,0,1,1
+        5230327702466,0,49,1
+        5230327736100,0,1,1
+        5230331761483,0,49,1
+        5230331800905,0,50,1
+        5230331837332,0,1,1
+        5230421799455,0,49,1
+        5230421810047,0,1,1
+        5230422048874,0,1305,0
+        5230422153284,0,1305,0
+        5230425693562,0,49,1
+        """))
+
+  # Kernel idle tasks created by /sbin/init should be filtered.
+  def test_task_newtask_swapper_by_init(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          first_packet_on_sequence: true
+          ftrace_events {
+            cpu: 1
+            event {
+              timestamp: 1000000
+              pid: 0
+              task_newtask {
+                pid: 1
+                comm: "swapper/0"
+                clone_flags: 8389376
+                oom_score_adj: 0
+              }
+            }
+            event {
+              timestamp: 1000000
+              pid: 0
+              task_newtask {
+                pid: 2
+                comm: "swapper/0"
+                clone_flags: 8390400
+                oom_score_adj: 0
+              }
+            }
+            event {
+              timestamp: 17000000
+              pid: 1
+              task_newtask {
+                pid: 0
+                comm: "swapper/0"
+                clone_flags: 256
+                oom_score_adj: 0
+              }
+            }
+            event {
+              timestamp: 17000000
+              pid: 1
+              task_newtask {
+                pid: 0
+                comm: "swapper/0"
+                clone_flags: 256
+                oom_score_adj: 0
+              }
+            }
+            event {
+              timestamp: 17000000
+              pid: 1
+              task_newtask {
+                pid: 0
+                comm: "swapper/0"
+                clone_flags: 256
+                oom_score_adj: 0
+              }
+            }
+          }
+          trusted_uid: 9999
+          trusted_packet_sequence_id: 2
+          trusted_pid: 521
+          previous_packet_dropped: true
+        }
+        """),
+        query="""
+        SELECT utid, tid, name from thread where tid = 0
+        """,
+        out=Csv("""
+        "utid","tid","name"
+        0,0,"swapper"
+        """))
+
+  # Slice nesting with same timestamps and zero duration.
+  def test_same_ts_two_zero_duration_slice_nesting(self):
+    return DiffTestBlueprint(
+        trace=Json('''[
+          {
+            "name": "Slice 1",
+            "ph": "X",
+            "ts": 1000,
+            "dur": 0,
+            "pid": 1,
+            "tid": 1
+          },
+          {
+            "name": "Slice 2",
+            "ph": "X",
+            "ts": 1000,
+            "dur": 0,
+            "pid": 1,
+            "tid": 1
+          }
+        ]'''),
+        query="SELECT name, depth FROM slice ORDER BY name",
+        out=Csv('''
+        "name","depth"
+        "Slice 1",0
+        "Slice 2",1
+        '''))
+
+  # Slice unnesting with same timestamps and non-zero duration.
+  def test_same_ts_two_duration_slice_unnesting(self):
+    return DiffTestBlueprint(
+        trace=Json('''[
+          {
+            "name": "Slice 1",
+            "ph": "X",
+            "ts": 1000,
+            "dur": 100,
+            "pid": 1,
+            "tid": 1
+          },
+          {
+            "name": "Slice 2",
+            "ph": "X",
+            "ts": 1100,
+            "dur": 100,
+            "pid": 1,
+            "tid": 1
+          }
+        ]'''),
+        query="SELECT name, depth FROM slice ORDER BY name",
+        out=Csv('''
+        "name","depth"
+        "Slice 1",0
+        "Slice 2",0
+        '''))
+
+  # Slice unnesting with same timestamps and first zero then non-zero duration.
+  #
+  # X events are special here: they are ordered by duration desc and so
+  # "Slice 1" will be stacked under "Slice 2".
+  def test_same_ts_zero_duration_slice_then_duration_slice_unnesting(self):
+    return DiffTestBlueprint(
+        trace=Json('''[
+          {
+            "name": "Slice 1",
+            "ph": "X",
+            "ts": 1000,
+            "dur": 0,
+            "pid": 1,
+            "tid": 1
+          },
+          {
+            "name": "Slice 2",
+            "ph": "X",
+            "ts": 1000,
+            "dur": 100,
+            "pid": 1,
+            "tid": 1
+          }
+        ]'''),
+        query="SELECT name, depth FROM slice ORDER BY name",
+        out=Csv('''
+        "name","depth"
+        "Slice 1",1
+        "Slice 2",0
+        '''))
+
+  # Slice unnesting with same timestamps and first zero then begin/end pair
+  #
+  # like `test_same_ts_zero_duration_slice_then_duration_slice_unnesting` but
+  # works around the janky 'X' duration sorting.
+  def test_same_ts_zero_duration_slice_then_begin_end_slice_unnesting(self):
+    return DiffTestBlueprint(
+        trace=Json('''[
+          {
+            "name": "Slice 1",
+            "ph": "X",
+            "ts": 1000,
+            "dur": 0,
+            "pid": 1,
+            "tid": 1
+          },
+          {
+            "name": "Slice 2",
+            "ph": "B",
+            "ts": 1000,
+            "pid": 1,
+            "tid": 1
+          },
+          {
+            "name": "Slice 2",
+            "ph": "E",
+            "ts": 1100,
+            "pid": 1,
+            "tid": 1
+          }
+        ]'''),
+        query="SELECT name, depth FROM slice ORDER BY name",
+        out=Csv('''
+        "name","depth"
+        "Slice 1",0
+        "Slice 2",0
+        '''))
+
+  # Slice unnesting with same timestamps and first non-zero then zero duration.
+  def test_same_ts_duration_slice_then_zero_duration_slice_unnesting(self):
+    return DiffTestBlueprint(
+        trace=Json('''[
+          {
+            "name": "Slice 1",
+            "ph": "X",
+            "ts": 1000,
+            "dur": 100,
+            "pid": 1,
+            "tid": 1
+          },
+          {
+            "name": "Slice 2",
+            "ph": "X",
+            "ts": 1100,
+            "dur": 0,
+            "pid": 1,
+            "tid": 1
+          }
+        ]'''),
+        query="SELECT name, depth FROM slice ORDER BY name",
+        out=Csv('''
+        "name","depth"
+        "Slice 1",0
+        "Slice 2",0
+        '''))

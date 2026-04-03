@@ -7,10 +7,15 @@
 //   Common code for the ANGLE trace replays.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "trace_fixture.h"
 
 #include "angle_trace_gl.h"
 
+#include <filesystem>
 #include <string>
 
 namespace
@@ -22,7 +27,19 @@ void UpdateResourceMap(GLuint *resourceMap, GLuint id, GLsizei readBufferOffset)
     resourceMap[id] = returnedID;
 }
 
+void UpdateResourceMapPerContext(GLuint **resourceArray,
+                                 GLuint contextId,
+                                 GLuint id,
+                                 GLsizei readBufferOffset)
+{
+    GLuint returnedID;
+    memcpy(&returnedID, &gReadBuffer[readBufferOffset], sizeof(GLuint));
+    resourceArray[contextId][id] = returnedID;
+}
+
+uint32_t gMaxContexts                  = 1;
 angle::TraceCallbacks *gTraceCallbacks = nullptr;
+std::vector<std::string> *gRequestedExtensions = nullptr;
 
 EGLClientBuffer GetClientBuffer(EGLenum target, uintptr_t key)
 {
@@ -57,12 +74,39 @@ ValidateSerializedStateCallback gValidateSerializedStateCallback;
 std::unordered_map<GLuint, std::vector<GLint>> gInternalUniformLocationsMap;
 
 constexpr size_t kMaxClientArrays = 16;
+
+std::vector<std::string> *LoadRequestedExtensions()
+{
+    // Read in requested extensions if the file exists
+    constexpr const char *REQUESTED_EXTENSIONS_FILENAME = "angle_trace_requested_extensions";
+
+    std::filesystem::path tempDir     = std::filesystem::temp_directory_path();
+    std::filesystem::path extFilePath = tempDir / REQUESTED_EXTENSIONS_FILENAME;
+    std::ifstream extFile(extFilePath);
+    std::vector<std::string> *requestedExtensions = nullptr;
+
+    if (extFile.is_open())
+    {
+        requestedExtensions = new std::vector<std::string>();
+        std::string ext;
+        while (std::getline(extFile, ext))
+        {
+            requestedExtensions->push_back(ext);
+        }
+        extFile.close();
+        // Delete the file to prevent unexpected results in future runs
+        std::filesystem::remove(extFilePath);
+    }
+    return requestedExtensions;
+}
 }  // namespace
 
 GLint **gUniformLocations;
 GLuint gCurrentProgram = 0;
+GLuint gCurrentContext = 0;
+GLuint *gCurrentProgramPerContext;
 
-// TODO(jmadill): Hide from the traces. http://anglebug.com/7753
+// TODO(jmadill): Hide from the traces. http://anglebug.com/42266223
 BlockIndexesMap gUniformBlockIndexes;
 
 void UpdateUniformLocation(GLuint program, const char *name, GLint location, GLint count)
@@ -101,19 +145,32 @@ void UniformBlockBinding(GLuint program, GLuint uniformblockIndex, GLuint bindin
 void UpdateCurrentProgram(GLuint program)
 {
     gCurrentProgram = program;
+    // gCurrentContext will be zero for legacy traces
+    gCurrentProgramPerContext[0] = program;
+}
+
+void UpdateCurrentContext(GLuint context)
+{
+    gCurrentContext = context;
+}
+
+void UpdateCurrentProgramPerContext(GLuint program)
+{
+    gCurrentProgramPerContext[gCurrentContext] = program;
 }
 
 uint8_t *gBinaryData;
+angle::FrameCaptureBinaryData *gFrameCaptureBinaryData;
 uint8_t *gReadBuffer;
 uint8_t *gClientArrays[kMaxClientArrays];
 GLuint *gResourceIDBuffer;
 SyncResourceMap gSyncMap;
 ContextMap gContextMap;
 GLuint gShareContextId;
-
 GLuint *gBufferMap;
 GLuint *gFenceNVMap;
 GLuint *gFramebufferMap;
+GLuint **gFramebufferMapPerContext;
 GLuint *gMemoryObjectMap;
 GLuint *gProgramPipelineMap;
 GLuint *gQueryMap;
@@ -125,12 +182,13 @@ GLuint *gTextureMap;
 GLuint *gTransformFeedbackMap;
 GLuint *gVertexArrayMap;
 
-// TODO(jmadill): Consolidate. http://anglebug.com/7753
+// TODO(jmadill): Consolidate. http://anglebug.com/42266223
 ClientBufferMap gClientBufferMap;
 EGLImageMap gEGLImageMap;
 SurfaceMap gSurfaceMap;
 
 GLeglImageOES *gEGLImageMap2;
+GLuint *gEGLImageMap2Resources;
 EGLSurface *gSurfaceMap2;
 EGLContext *gContextMap2;
 GLsync *gSyncMap2;
@@ -152,6 +210,39 @@ T *AllocateZeroedValues(size_t count)
 GLuint *AllocateZeroedUints(size_t count)
 {
     return AllocateZeroedValues<GLuint>(count);
+}
+
+void InitializeReplay5(const char *binaryDataFileName,
+                       size_t maxClientArraySize,
+                       size_t readBufferSize,
+                       size_t resourceIDBufferSize,
+                       GLuint contextId,
+                       uint32_t maxBuffer,
+                       uint32_t maxContext,
+                       uint32_t maxFenceNV,
+                       uint32_t maxFramebuffer,
+                       uint32_t maxImage,
+                       uint32_t maxMemoryObject,
+                       uint32_t maxProgramPipeline,
+                       uint32_t maxQuery,
+                       uint32_t maxRenderbuffer,
+                       uint32_t maxSampler,
+                       uint32_t maxSemaphore,
+                       uint32_t maxShaderProgram,
+                       uint32_t maxSurface,
+                       uint32_t maxSync,
+                       uint32_t maxTexture,
+                       uint32_t maxTransformFeedback,
+                       uint32_t maxVertexArray,
+                       GLuint maxEGLSyncID)
+{
+    gFrameCaptureBinaryData = gTraceCallbacks->ConfigureBinaryDataLoader(binaryDataFileName);
+
+    InitializeReplay4(binaryDataFileName, maxClientArraySize, readBufferSize, resourceIDBufferSize,
+                      contextId, maxBuffer, maxContext, maxFenceNV, maxFramebuffer, maxImage,
+                      maxMemoryObject, maxProgramPipeline, maxQuery, maxRenderbuffer, maxSampler,
+                      maxSemaphore, maxShaderProgram, maxSurface, maxSync, maxTexture,
+                      maxTransformFeedback, maxVertexArray, maxEGLSyncID);
 }
 
 void InitializeReplay4(const char *binaryDataFileName,
@@ -241,14 +332,16 @@ void InitializeReplay2(const char *binaryDataFileName,
                        uint32_t maxTransformFeedback,
                        uint32_t maxVertexArray)
 {
+    gMaxContexts = maxContext + 1;
     InitializeReplay(binaryDataFileName, maxClientArraySize, readBufferSize, maxBuffer, maxFenceNV,
                      maxFramebuffer, maxMemoryObject, maxProgramPipeline, maxQuery, maxRenderbuffer,
                      maxSampler, maxSemaphore, maxShaderProgram, maxTexture, maxTransformFeedback,
                      maxVertexArray);
 
-    gContextMap2  = AllocateZeroedValues<EGLContext>(maxContext);
-    gEGLImageMap2 = AllocateZeroedValues<EGLImage>(maxImage);
-    gSurfaceMap2  = AllocateZeroedValues<EGLSurface>(maxSurface);
+    gContextMap2           = AllocateZeroedValues<EGLContext>(maxContext);
+    gEGLImageMap2          = AllocateZeroedValues<EGLImage>(maxImage);
+    gEGLImageMap2Resources = AllocateZeroedValues<GLuint>(maxImage);
+    gSurfaceMap2           = AllocateZeroedValues<EGLSurface>(maxSurface);
 
     gContextMap2[0]         = EGL_NO_CONTEXT;
     gShareContextId         = contextId;
@@ -272,7 +365,10 @@ void InitializeReplay(const char *binaryDataFileName,
                       uint32_t maxTransformFeedback,
                       uint32_t maxVertexArray)
 {
-    gBinaryData = gTraceCallbacks->LoadBinaryData(binaryDataFileName);
+    if (!gFrameCaptureBinaryData)
+    {
+        gBinaryData = gTraceCallbacks->LoadBinaryData(binaryDataFileName);
+    }
 
     for (uint8_t *&clientArray : gClientArrays)
     {
@@ -299,17 +395,27 @@ void InitializeReplay(const char *binaryDataFileName,
     memset(gUniformLocations, 0, sizeof(GLint *) * (maxShaderProgram + 1));
 
     gContextMap[0] = EGL_NO_CONTEXT;
+
+    gCurrentProgramPerContext = new GLuint[gMaxContexts];
+    gFramebufferMapPerContext = new GLuint *[gMaxContexts];
+    memset(gFramebufferMapPerContext, 0, sizeof(GLuint *) * (gMaxContexts));
+    for (uint8_t i = 0; i < gMaxContexts; i++)
+    {
+        gFramebufferMapPerContext[i] = AllocateZeroedValues<GLuint>(maxFramebuffer);
+    }
+
+    // Pull in requested extension list from file created by ANGLEPerfTest
+    gRequestedExtensions = LoadRequestedExtensions();
 }
 
 void FinishReplay()
 {
+    delete[] gReadBuffer;
     for (uint8_t *&clientArray : gClientArrays)
     {
         delete[] clientArray;
     }
-    delete[] gReadBuffer;
     delete[] gResourceIDBuffer;
-
     delete[] gBufferMap;
     delete[] gContextMap2;
     delete[] gEGLImageMap2;
@@ -328,6 +434,22 @@ void FinishReplay()
     delete[] gSyncMap2;
     delete[] gTransformFeedbackMap;
     delete[] gVertexArrayMap;
+
+    delete gRequestedExtensions;
+
+    for (uint8_t i = 0; i < gMaxContexts; i++)
+    {
+        delete[] gFramebufferMapPerContext[i];
+    }
+    delete[] gFramebufferMapPerContext;
+    delete[] gCurrentProgramPerContext;
+
+    if (gFrameCaptureBinaryData)
+    {
+        gFrameCaptureBinaryData->closeBinaryDataLoader();
+        delete gFrameCaptureBinaryData;
+        gFrameCaptureBinaryData = nullptr;
+    }
 }
 
 void SetValidateSerializedStateCallback(ValidateSerializedStateCallback callback)
@@ -345,6 +467,8 @@ struct TraceFunctionsImpl : angle::TraceFunctions
     void ReplayFrame(uint32_t frameIndex) override { ::ReplayFrame(frameIndex); }
 
     void ResetReplay() override { ::ResetReplay(); }
+
+    void SetupFirstFrame() override {}
 
     void FinishReplay() override { ::FinishReplay(); }
 
@@ -408,6 +532,11 @@ void UpdateFramebufferID(GLuint id, GLsizei readBufferOffset)
     UpdateResourceMap(gFramebufferMap, id, readBufferOffset);
 }
 
+void UpdateFramebufferID2(GLuint contextId, GLuint id, GLsizei readBufferOffset)
+{
+    UpdateResourceMapPerContext(gFramebufferMapPerContext, contextId, id, readBufferOffset);
+}
+
 void UpdateMemoryObjectID(GLuint id, GLsizei readBufferOffset)
 {
     UpdateResourceMap(gMemoryObjectMap, id, readBufferOffset);
@@ -461,6 +590,11 @@ void UpdateVertexArrayID(GLuint id, GLsizei readBufferOffset)
 void SetFramebufferID(GLuint id)
 {
     glGenFramebuffers(1, &gFramebufferMap[id]);
+}
+
+void SetFramebufferID2(GLuint contextID, GLuint id)
+{
+    glGenFramebuffers(1, &gFramebufferMapPerContext[contextID][id]);
 }
 
 void SetBufferID(GLuint id)
@@ -537,15 +671,61 @@ void FenceSync2(GLenum condition, GLbitfield flags, uintptr_t fenceSync)
     gSyncMap2[fenceSync] = glFenceSync(condition, flags);
 }
 
+GLuint CreateEGLImageResource(GLsizei width, GLsizei height)
+{
+    GLint previousTexId;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexId);
+    GLint previousAlignment;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &previousAlignment);
+
+    // Create a texture and fill with a placeholder green value
+    GLuint stagingTexId;
+    glGenTextures(1, &stagingTexId);
+    glBindTexture(GL_TEXTURE_2D, stagingTexId);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    std::vector<GLubyte> pixels;
+    pixels.reserve(width * height * 3);
+    for (int i = 0; i < width * height; i++)
+    {
+        pixels.push_back(61);
+        pixels.push_back(220);
+        pixels.push_back(132);
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE,
+                 pixels.data());
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, previousAlignment);
+    glBindTexture(GL_TEXTURE_2D, previousTexId);
+    return stagingTexId;
+}
+
 void CreateEGLImage(EGLDisplay dpy,
                     EGLContext ctx,
                     EGLenum target,
                     uintptr_t buffer,
                     const EGLAttrib *attrib_list,
+                    GLsizei width,
+                    GLsizei height,
                     GLuint imageID)
 {
-    EGLClientBuffer clientBuffer = GetClientBuffer(target, buffer);
-    gEGLImageMap2[imageID]       = eglCreateImage(dpy, ctx, target, clientBuffer, attrib_list);
+    if (target == EGL_NATIVE_BUFFER_ANDROID || buffer == 0)
+    {
+        // If this image was created from an AHB or the backing resource was not
+        // captured, create a new GL texture during replay to use instead.
+        // Substituting a GL texture for an AHB allows the trace to run on
+        // non-Android systems.
+        gEGLImageMap2Resources[imageID] = CreateEGLImageResource(width, height);
+        gEGLImageMap2[imageID]          = eglCreateImage(
+            dpy, eglGetCurrentContext(), EGL_GL_TEXTURE_2D,
+            reinterpret_cast<EGLClientBuffer>(gEGLImageMap2Resources[imageID]), attrib_list);
+    }
+    else
+    {
+        EGLClientBuffer clientBuffer = GetClientBuffer(target, buffer);
+        gEGLImageMap2[imageID]       = eglCreateImage(dpy, ctx, target, clientBuffer, attrib_list);
+    }
 }
 
 void CreateEGLImageKHR(EGLDisplay dpy,
@@ -553,10 +733,42 @@ void CreateEGLImageKHR(EGLDisplay dpy,
                        EGLenum target,
                        uintptr_t buffer,
                        const EGLint *attrib_list,
+                       GLsizei width,
+                       GLsizei height,
                        GLuint imageID)
 {
-    EGLClientBuffer clientBuffer = GetClientBuffer(target, buffer);
-    gEGLImageMap2[imageID]       = eglCreateImageKHR(dpy, ctx, target, clientBuffer, attrib_list);
+    if (target == EGL_NATIVE_BUFFER_ANDROID || buffer == 0)
+    {
+        gEGLImageMap2Resources[imageID] = CreateEGLImageResource(width, height);
+        gEGLImageMap2[imageID]          = eglCreateImageKHR(
+            dpy, eglGetCurrentContext(), EGL_GL_TEXTURE_2D,
+            reinterpret_cast<EGLClientBuffer>(gEGLImageMap2Resources[imageID]), attrib_list);
+    }
+    else
+    {
+        EGLClientBuffer clientBuffer = GetClientBuffer(target, buffer);
+        gEGLImageMap2[imageID] = eglCreateImageKHR(dpy, ctx, target, clientBuffer, attrib_list);
+    }
+}
+
+void DestroyEGLImage(EGLDisplay dpy, EGLImage image, GLuint imageID)
+{
+    if (gEGLImageMap2Resources[imageID])
+    {
+        glDeleteTextures(1, &gEGLImageMap2Resources[imageID]);
+        gEGLImageMap2Resources[imageID] = 0;
+    }
+    eglDestroyImage(dpy, image);
+}
+
+void DestroyEGLImageKHR(EGLDisplay dpy, EGLImageKHR image, GLuint imageID)
+{
+    if (gEGLImageMap2Resources[imageID])
+    {
+        glDeleteTextures(1, &gEGLImageMap2Resources[imageID]);
+        gEGLImageMap2Resources[imageID] = 0;
+    }
+    eglDestroyImageKHR(dpy, image);
 }
 
 void CreateEGLSyncKHR(EGLDisplay dpy, EGLenum type, const EGLint *attrib_list, GLuint syncID)
@@ -582,16 +794,49 @@ void CreateNativeClientBufferANDROID(const EGLint *attrib_list, uintptr_t client
     gClientBufferMap[clientBuffer] = eglCreateNativeClientBufferANDROID(attrib_list);
 }
 
+// The test harness can set specific extensions, but only for the main context
+// so enable the same set of extensions for each side-context.
+void EnableSideContextExtensions(GLuint contextID)
+{
+    if (gRequestedExtensions)
+    {
+        // Change to newly-created side-context
+        eglMakeCurrent(NULL, NULL, NULL, gContextMap2[contextID]);
+        for (auto &ext : *gRequestedExtensions)
+        {
+            glRequestExtensionANGLE(ext.c_str());
+        }
+        // Switch back to main context
+        eglMakeCurrent(NULL, NULL, NULL, gContextMap2[gShareContextId]);
+    }
+}
+
 void CreateContext(GLuint contextID)
 {
     EGLContext shareContext = gContextMap2[gShareContextId];
     EGLContext context      = eglCreateContext(nullptr, nullptr, shareContext, nullptr);
     gContextMap2[contextID] = context;
+
+    // Extensions set using --request-extensions must be propagated to side-contexts
+    if (gRequestedExtensions)
+    {
+        EnableSideContextExtensions(contextID);
+    }
 }
 
 void SetCurrentContextID(GLuint id)
 {
     gContextMap2[id] = eglGetCurrentContext();
+}
+
+const uint8_t *GetBinaryData(const size_t offset)
+{
+    return gFrameCaptureBinaryData->getData(offset);
+}
+
+void InitializeBinaryDataLoader()
+{
+    gFrameCaptureBinaryData->initializeBinaryDataLoader();
 }
 
 ANGLE_REPLAY_EXPORT PFNEGLCREATEIMAGEPROC r_eglCreateImage;

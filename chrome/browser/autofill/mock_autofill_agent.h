@@ -33,20 +33,22 @@ class MockAutofillAgent : public mojom::AutofillAgent {
               (override));
   MOCK_METHOD(
       void,
-      ExtractForm,
-      (FormRendererId form,
+      ExtractFormWithField,
+      (FieldRendererId field_id,
        base::OnceCallback<void(const std::optional<FormData>&)> callback),
       (override));
   MOCK_METHOD(void,
-              ApplyFormAction,
-              (mojom::ActionType action_type,
+              ApplyFieldsAction,
+              (mojom::FormActionType action_type,
                mojom::ActionPersistence action_persistence,
-               const FormData::FillData& form),
+               const std::vector<FormFieldData::FillData>& fields,
+               const FillId& fill_id,
+               bool supports_refill),
               (override));
   MOCK_METHOD(void,
               ApplyFieldAction,
-              (mojom::ActionPersistence action_persistence,
-               mojom::TextReplacement text_replacement,
+              (mojom::FieldActionType action_type,
+               mojom::ActionPersistence action_persistence,
                FieldRendererId field,
                const std::u16string& value),
               (override));
@@ -54,8 +56,12 @@ class MockAutofillAgent : public mojom::AutofillAgent {
               FieldTypePredictionsAvailable,
               (const std::vector<FormDataPredictions>& forms),
               (override));
-  MOCK_METHOD(void, ClearSection, (), (override));
+  MOCK_METHOD(void, ExposeDomNodeIds, (), (override));
   MOCK_METHOD(void, ClearPreviewedForm, (), (override));
+  MOCK_METHOD(void,
+              FindPotentialSiwgButtons,
+              (FindPotentialSiwgButtonsCallback),
+              (override));
   MOCK_METHOD(void,
               TriggerSuggestions,
               (FieldRendererId field_id,
@@ -79,10 +85,20 @@ class MockAutofillAgent : public mojom::AutofillAgent {
               PreviewPasswordGenerationSuggestion,
               (const ::std::u16string& password),
               (override));
-  MOCK_METHOD(void, EnableHeavyFormDataScraping, (), (override));
   MOCK_METHOD(void,
               GetPotentialLastFourCombinationsForStandaloneCvc,
               (base::OnceCallback<void(const std::vector<std::string>&)>),
+              (override));
+  MOCK_METHOD(void,
+              ExtractLabeledTextNodeValue,
+              (const std::u16string& value_regex,
+               const std::u16string& label_regex,
+               uint32_t number_of_ancestor_levels_to_search,
+               base::OnceCallback<void(const std::string&)>),
+              (override));
+  MOCK_METHOD(void,
+              DispatchEmailVerifiedEvent,
+              (::autofill::FieldRendererId, const std::string&),
               (override));
 
  private:

@@ -8,9 +8,9 @@
 
 #include "base/command_line.h"
 #include "base/debug/crash_logging.h"
-#include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
@@ -58,7 +58,7 @@
 //
 //   Note: This has changed from `GURL origin` to StorageKey but the name will
 //   be updated in the future to avoid a migration.
-//   TODO(crbug.com/1199077): Update name during a migration to Version 3.
+//   TODO(crbug.com/40177656): Update name during a migration to Version 3.
 //   See StorageKey::Deserialize() for more information on the format.
 //   key: "INITDATA_UNIQUE_ORIGIN:" + <StorageKey>
 //   value: <empty>
@@ -68,7 +68,7 @@
 //
 //   Note: This has changed from `GURL origin` to StorageKey but the name will
 //   be updated in the future to avoid a migration.
-//   TODO(crbug.com/1199077): Update name during a migration to Version 3.
+//   TODO(crbug.com/40177656): Update name during a migration to Version 3.
 //   See StorageKey::Deserialize() for more information on the format.
 //   key: "REG:" + <StorageKey> + '\x00' + <int64_t 'registration_id'>
 //    (ex. "REG:https://example.com/\x00123456")
@@ -95,7 +95,7 @@
 //
 //   Note: This has changed from `GURL origin` to StorageKey but the name will
 //   be updated in the future to avoid a migration.
-//   TODO(crbug.com/1199077): Update name during a migration to Version 3.
+//   TODO(crbug.com/40177656): Update name during a migration to Version 3.
 //   See StorageKey::Deserialize() for more information on the format.
 //   key: "REGID_TO_ORIGIN:" + <int64_t 'registration_id'>
 //   value: <StorageKey>
@@ -140,6 +140,19 @@ const int64_t kCurrentSchemaVersion = 2;
 
 const int kRouterRuleVersion = 1;
 
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(ServiceWorkerIPAddressSpace)
+enum class ServiceWorkerIPAddressSpaceHistogram {
+  kLoopback = 0,
+  kLocal = 1,
+  kPublic = 2,
+  kUnknown = 3,
+  kMaxValue = kUnknown,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:ServiceWorkerIPAddressSpace)
+
 }  // namespace service_worker_internals
 
 namespace {
@@ -148,11 +161,11 @@ namespace {
 // set a low write buffer size to trigger compaction more often.
 constexpr size_t kWriteBufferSize = 512 * 1024;
 
+using RouterSourceType = network::mojom::ServiceWorkerRouterSourceType;
+
 class ServiceWorkerEnv : public leveldb_env::ChromiumEnv {
  public:
-  ServiceWorkerEnv()
-      : ChromiumEnv("LevelDBEnv.ServiceWorker",
-                    storage::CreateFilesystemProxy()) {}
+  ServiceWorkerEnv() : ChromiumEnv(storage::CreateFilesystemProxy()) {}
 
   // Returns a shared instance of ServiceWorkerEnv. This is thread-safe.
   static ServiceWorkerEnv* GetInstance() {
@@ -380,7 +393,7 @@ void ConvertToProtoParts(
         break;
       }
       case liburlpattern::PartType::kRegex:
-        NOTREACHED_NORETURN() << "should not see regexp URLPattern";
+        NOTREACHED() << "should not see regexp URLPattern";
       case liburlpattern::PartType::kSegmentWildcard: {
         ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
             URLPattern::Part::WildcardPattern* ptn =
@@ -410,8 +423,8 @@ bool WriteToBlinkCondition(
     const ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition&
         condition,
     blink::ServiceWorkerRouterCondition& out) {
-  auto&& [out_url_pattern, out_request, out_running_status, out_or_condition] =
-      out.get();
+  auto&& [out_url_pattern, out_request, out_running_status, out_or_condition,
+          out_not_condition] = out.get();
   switch (condition.condition_case()) {
     case ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
         CONDITION_NOT_SET:
@@ -661,6 +674,11 @@ bool WriteToBlinkCondition(
                 network::mojom::RequestDestination::kWebIdentity;
             break;
           case ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
+              Request::kEmailVerificationDestination:
+            request.destination =
+                network::mojom::RequestDestination::kEmailVerification;
+            break;
+          case ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
               Request::kDictionaryDestination:
             request.destination =
                 network::mojom::RequestDestination::kDictionary;
@@ -673,6 +691,11 @@ bool WriteToBlinkCondition(
           case ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
               Request::kJsonDestination:
             request.destination = network::mojom::RequestDestination::kJson;
+            break;
+          case ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
+              Request::kSharedStorageWorkletDestination:
+            request.destination =
+                network::mojom::RequestDestination::kSharedStorageWorklet;
             break;
         }
       }
@@ -735,9 +758,37 @@ bool WriteToBlinkCondition(
       out_or_condition = std::move(or_condition);
       break;
     }
+    case ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
+        kNotCondition: {
+      if (out_not_condition) {
+        // Duplicated `not` condition found
+        return false;
+      }
+      if (!condition.has_not_condition()) {
+        return false;
+      }
+      blink::ServiceWorkerRouterNotCondition not_condition;
+      const auto& pb_o = condition.not_condition().object();
+      blink::ServiceWorkerRouterCondition blink_condition;
+      for (const auto& pb_c : pb_o.conditions()) {
+        if (!WriteToBlinkCondition(pb_c, blink_condition)) {
+          return false;
+        }
+      }
+      if (blink_condition.IsEmpty()) {
+        return false;
+      }
+      not_condition.condition =
+          std::make_unique<blink::ServiceWorkerRouterCondition>(
+              std::move(blink_condition));
+
+      out_not_condition = std::move(not_condition);
+      break;
+    }
   }
 
   if (!out.IsValid()) {
+    DLOG(ERROR) << "out is not valid";
     return false;
   }
 
@@ -783,8 +834,8 @@ class AddConditionHelper {
 void WriteConditionToProtoWithHelper(
     const blink::ServiceWorkerRouterCondition& condition,
     AddConditionHelper& out) {
-  const auto& [url_pattern, request, running_status, or_condition] =
-      condition.get();
+  const auto& [url_pattern, request, running_status, or_condition,
+               not_condition] = condition.get();
   if (url_pattern) {
     auto* out_c = out.add_condition();
     ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::URLPattern*
@@ -985,6 +1036,11 @@ void WriteConditionToProtoWithHelper(
               ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
                   Request::kWebIdentityDestination);
           break;
+        case network::mojom::RequestDestination::kEmailVerification:
+          mutable_request->set_destination(
+              ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
+                  Request::kEmailVerificationDestination);
+          break;
         case network::mojom::RequestDestination::kDictionary:
           mutable_request->set_destination(
               ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
@@ -999,6 +1055,11 @@ void WriteConditionToProtoWithHelper(
           mutable_request->set_destination(
               ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
                   Request::kJsonDestination);
+          break;
+        case network::mojom::RequestDestination::kSharedStorageWorklet:
+          mutable_request->set_destination(
+              ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
+                  Request::kSharedStorageWorkletDestination);
           break;
       }
     }
@@ -1032,6 +1093,12 @@ void WriteConditionToProtoWithHelper(
       WriteConditionToProtoWithHelper(c, pb_o);
     }
   }
+  if (not_condition) {
+    auto* out_c = out.add_condition();
+    AddConditionHelper pb_o(out_c->mutable_not_condition()->mutable_object());
+    CHECK(not_condition->condition);
+    WriteConditionToProtoWithHelper(*not_condition->condition, pb_o);
+  }
 }
 
 void WriteConditionToProto(
@@ -1064,7 +1131,6 @@ const char* ServiceWorkerDatabase::StatusToString(
       return "Storage is disconnected";
   }
   NOTREACHED();
-  return "Database unknown error";
 }
 
 ServiceWorkerDatabase::ServiceWorkerDatabase(const base::FilePath& path)
@@ -1213,6 +1279,8 @@ ServiceWorkerDatabase::GetRegistrationsForStorageKey(
           opt_resources_list->clear();
         break;
       }
+      // TODO(crbug.com/372879072): remove this CHECK
+      CHECK_EQ(key.origin(), url::Origin::Create(registration->scope));
       registrations->push_back(std::move(registration));
     }
   }
@@ -2271,9 +2339,8 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::DeleteAllDataForOrigins(
       }
 
       auto match = key.origin() == requested_origin;
-      match = match ||
-              (key.IsThirdPartyContext() &&
-               key.top_level_site() == net::SchemefulSite(requested_origin));
+      match = match || (key.IsThirdPartyContext() &&
+                        key.top_level_site().IsSameSiteWith(requested_origin));
       if (!match) {
         continue;
       }
@@ -2372,7 +2439,6 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::LazyOpen(
     default:
       // Other cases should be handled in ReadDatabaseVersion.
       NOTREACHED();
-      return Status::kErrorCorrupted;
   }
 }
 
@@ -2461,10 +2527,10 @@ network::mojom::ReferrerPolicy ConvertReferrerPolicyFromProtocolBufferToMojom(
 network::mojom::IPAddressSpace ConvertIPAddressSpaceFromProtocolBufferToMojom(
     ServiceWorkerRegistrationData::IPAddressSpace value) {
   switch (value) {
+    case ServiceWorkerRegistrationData::LOOPBACK:
+      return network::mojom::IPAddressSpace::kLoopback;
     case ServiceWorkerRegistrationData::LOCAL:
       return network::mojom::IPAddressSpace::kLocal;
-    case ServiceWorkerRegistrationData::PRIVATE:
-      return network::mojom::IPAddressSpace::kPrivate;
     case ServiceWorkerRegistrationData::PUBLIC:
       return network::mojom::IPAddressSpace::kPublic;
     case ServiceWorkerRegistrationData::UNKNOWN:
@@ -2479,8 +2545,10 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::ParseRegistrationData(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(out);
   ServiceWorkerRegistrationData data;
-  if (!data.ParseFromString(serialized))
+  if (!data.ParseFromString(serialized)) {
+    DLOG(ERROR) << "Failed to parse serialized data.";
     return Status::kErrorCorrupted;
+  }
 
   GURL scope_url(data.scope_url());
   GURL script_url(data.script_url());
@@ -2682,38 +2750,83 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::ParseRegistrationData(
     }
   }
 
-  if (data.has_policy_container_policies()) {
+  // There was a bug fixed in M141 where extension service workers had the wrong
+  // IP address space assigned (crbug.com/435246545). However, extensions that
+  // had service workers previously installed before the fix were persisted to
+  // the service worker database with the wrong IP address space. To fix this,
+  // when reading the service worker registration data, if the service worker is
+  // part of a chrome extension, we change the IP address space to kLoopback.
+  //
+  // This was discovered in M142(crbug.com/456078996), hopefully we can remove
+  // this patch after some time has passed to allow all service worker
+  // registrations to get persisted with the correct IP address space.
+  bool is_chrome_extension_scope = scope_url.SchemeIs("chrome-extension");
+
+  if (data.has_policy_container_policies() || is_chrome_extension_scope) {
     if (!(*out)->policy_container_policies) {
       (*out)->policy_container_policies =
           blink::mojom::PolicyContainerPolicies::New();
     }
-    auto& policies = data.policy_container_policies();
-    if (policies.has_referrer_policy()) {
-      if (!ServiceWorkerRegistrationData::ReferrerPolicyValue_IsValid(
-              policies.referrer_policy())) {
-        DLOG(ERROR) << "Referrer policy in policy container policies '"
-                    << policies.referrer_policy() << "' is not valid.";
-        return Status::kErrorCorrupted;
+    if (data.has_policy_container_policies()) {
+      auto& policies = data.policy_container_policies();
+      if (policies.has_referrer_policy()) {
+        if (!ServiceWorkerRegistrationData::ReferrerPolicyValue_IsValid(
+                policies.referrer_policy())) {
+          DLOG(ERROR) << "Referrer policy in policy container policies '"
+                      << policies.referrer_policy() << "' is not valid.";
+          return Status::kErrorCorrupted;
+        }
+        (*out)->policy_container_policies->referrer_policy =
+            ConvertReferrerPolicyFromProtocolBufferToMojom(
+                policies.referrer_policy());
       }
-      (*out)->policy_container_policies->referrer_policy =
-          ConvertReferrerPolicyFromProtocolBufferToMojom(
-              policies.referrer_policy());
-    }
-    if (policies.has_sandbox_flags()) {
-      (*out)->policy_container_policies->sandbox_flags =
-          static_cast<network::mojom::WebSandboxFlags>(
-              policies.sandbox_flags());
-    }
-    if (policies.has_ip_address_space()) {
-      if (!ServiceWorkerRegistrationData_IPAddressSpace_IsValid(
-              policies.ip_address_space())) {
-        DLOG(ERROR) << "IP address space in policy container policies '"
-                    << policies.ip_address_space() << "' is not valid.";
-        return Status::kErrorCorrupted;
+      if (policies.has_sandbox_flags()) {
+        (*out)->policy_container_policies->sandbox_flags =
+            static_cast<network::mojom::WebSandboxFlags>(
+                policies.sandbox_flags());
       }
-      (*out)->policy_container_policies->ip_address_space =
-          ConvertIPAddressSpaceFromProtocolBufferToMojom(
-              policies.ip_address_space());
+      if (policies.has_ip_address_space()) {
+        if (!ServiceWorkerRegistrationData_IPAddressSpace_IsValid(
+                policies.ip_address_space())) {
+          DLOG(ERROR) << "IP address space in policy container policies '"
+                      << policies.ip_address_space() << "' is not valid.";
+          return Status::kErrorCorrupted;
+        }
+        (*out)->policy_container_policies->ip_address_space =
+            ConvertIPAddressSpaceFromProtocolBufferToMojom(
+                policies.ip_address_space());
+      }
+    }
+    if (is_chrome_extension_scope) {
+      if ((*out)->policy_container_policies->ip_address_space !=
+          network::mojom::IPAddressSpace::kLoopback) {
+        service_worker_internals::ServiceWorkerIPAddressSpaceHistogram
+            histogram_value;
+        switch ((*out)->policy_container_policies->ip_address_space) {
+          case network::mojom::IPAddressSpace::kLoopback:
+            histogram_value = service_worker_internals::
+                ServiceWorkerIPAddressSpaceHistogram::kLoopback;
+            break;
+          case network::mojom::IPAddressSpace::kLocal:
+            histogram_value = service_worker_internals::
+                ServiceWorkerIPAddressSpaceHistogram::kLocal;
+            break;
+          case network::mojom::IPAddressSpace::kPublic:
+            histogram_value = service_worker_internals::
+                ServiceWorkerIPAddressSpaceHistogram::kPublic;
+            break;
+          case network::mojom::IPAddressSpace::kUnknown:
+            histogram_value = service_worker_internals::
+                ServiceWorkerIPAddressSpaceHistogram::kUnknown;
+            break;
+        }
+
+        base::UmaHistogramEnumeration(
+            "ServiceWorker.ChromeExtensionUpdateIPAddressSpace",
+            histogram_value);
+        (*out)->policy_container_policies->ip_address_space =
+            network::mojom::IPAddressSpace::kLoopback;
+      }
     }
   }
 
@@ -2721,6 +2834,8 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::ParseRegistrationData(
     if (data.router_rules().version() !=
         service_worker_internals::kRouterRuleVersion) {
       // Unknown route version.
+      DLOG(ERROR) << "Router version '" << data.router_rules().version()
+                  << "' is not valid.";
       return Status::kErrorCorrupted;
     }
     blink::ServiceWorkerRouterRules router_rules;
@@ -2729,6 +2844,7 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::ParseRegistrationData(
       blink::ServiceWorkerRouterCondition condition;
       for (const auto& c : r.condition()) {
         if (!WriteToBlinkCondition(c, condition)) {
+          DLOG(ERROR) << "Failed to write to blink condition.";
           return Status::kErrorCorrupted;
         }
       }
@@ -2738,33 +2854,48 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::ParseRegistrationData(
         switch (s.source_case()) {
           case ServiceWorkerRegistrationData::RouterRules::RuleV1::Source::
               SOURCE_NOT_SET:
+            DLOG(ERROR) << "Source not set.";
             return Status::kErrorCorrupted;
           case ServiceWorkerRegistrationData::RouterRules::RuleV1::Source::
               kNetworkSource:
-            source.type =
-                network::mojom::ServiceWorkerRouterSourceType::kNetwork;
+            source.type = RouterSourceType::kNetwork;
             source.network_source.emplace();
             break;
           case ServiceWorkerRegistrationData::RouterRules::RuleV1::Source::
-              kRaceSource:
-            source.type = network::mojom::ServiceWorkerRouterSourceType::kRace;
-            source.race_source.emplace();
+              kRaceNetworkAndFetchEventSource:
+            source.type = RouterSourceType::kRaceNetworkAndFetchEvent;
+            source.race_network_and_fetch_event_source.emplace();
             break;
           case ServiceWorkerRegistrationData::RouterRules::RuleV1::Source::
               kFetchEventSource:
-            source.type =
-                network::mojom::ServiceWorkerRouterSourceType::kFetchEvent;
+            source.type = RouterSourceType::kFetchEvent;
             source.fetch_event_source.emplace();
             break;
           case ServiceWorkerRegistrationData::RouterRules::RuleV1::Source::
-              kCacheSource:
-            source.type = network::mojom::ServiceWorkerRouterSourceType::kCache;
+              kCacheSource: {
+            source.type = RouterSourceType::kCache;
             blink::ServiceWorkerRouterCacheSource cache_source;
             if (s.cache_source().has_cache_name()) {
               cache_source.cache_name = s.cache_source().cache_name();
             }
             source.cache_source = cache_source;
             break;
+          }
+          case ServiceWorkerRegistrationData::RouterRules::RuleV1::Source::
+              kRaceNetworkAndCacheSource: {
+            source.type = RouterSourceType::kRaceNetworkAndCache;
+            source.race_network_and_cache_source.emplace();
+
+            const auto& cache_source =
+                s.race_network_and_cache_source().cache_source();
+            blink::ServiceWorkerRouterCacheSource cache_source_data;
+            if (cache_source.has_cache_name()) {
+              cache_source_data.cache_name = cache_source.cache_name();
+            }
+            source.race_network_and_cache_source->cache_source =
+                cache_source_data;
+            break;
+          }
         }
         router_rule.sources.emplace_back(source);
       }
@@ -2826,10 +2957,10 @@ ServiceWorkerRegistrationData::IPAddressSpace
 ConvertIPAddressSpaceFromMojomToProtocolBuffer(
     network::mojom::IPAddressSpace value) {
   switch (value) {
+    case network::mojom::IPAddressSpace::kLoopback:
+      return ServiceWorkerRegistrationData::LOOPBACK;
     case network::mojom::IPAddressSpace::kLocal:
       return ServiceWorkerRegistrationData::LOCAL;
-    case network::mojom::IPAddressSpace::kPrivate:
-      return ServiceWorkerRegistrationData::PRIVATE;
     case network::mojom::IPAddressSpace::kPublic:
       return ServiceWorkerRegistrationData::PUBLIC;
     case network::mojom::IPAddressSpace::kUnknown:
@@ -2964,21 +3095,33 @@ void ServiceWorkerDatabase::WriteRegistrationDataInBatch(
         ServiceWorkerRegistrationData::RouterRules::RuleV1::Source* source =
             v1->add_source();
         switch (s.type) {
-          case network::mojom::ServiceWorkerRouterSourceType::kNetwork:
+          case RouterSourceType::kNetwork:
             source->mutable_network_source();
             break;
-          case network::mojom::ServiceWorkerRouterSourceType::kRace:
-            source->mutable_race_source();
+          case RouterSourceType::kRaceNetworkAndFetchEvent:
+            source->mutable_race_network_and_fetch_event_source();
             break;
-          case network::mojom::ServiceWorkerRouterSourceType::kFetchEvent:
+          case RouterSourceType::kFetchEvent:
             source->mutable_fetch_event_source();
             break;
-          case network::mojom::ServiceWorkerRouterSourceType::kCache:
+          case RouterSourceType::kCache: {
             auto* cache_source = source->mutable_cache_source();
             if (s.cache_source->cache_name) {
               cache_source->set_cache_name(*s.cache_source->cache_name);
             }
             break;
+          }
+          case RouterSourceType::kRaceNetworkAndCache: {
+            auto* race_network_and_cache_source =
+                source->mutable_race_network_and_cache_source();
+            auto* cache_source =
+                race_network_and_cache_source->mutable_cache_source();
+            if (s.race_network_and_cache_source->cache_source.cache_name) {
+              cache_source->set_cache_name(
+                  *s.race_network_and_cache_source->cache_source.cache_name);
+            }
+            break;
+          }
         }
       }
     }

@@ -33,7 +33,7 @@ void WriteTestNativeHostManifest(const base::FilePath& target_dir,
                                  const base::FilePath& host_path,
                                  bool user_level,
                                  bool supports_native_initiated_connections) {
-  auto manifest = base::Value::Dict()
+  auto manifest = base::DictValue()
                       .Set("name", host_name)
                       .Set("description", "Native Messaging Echo Test")
                       .Set("type", "stdio")
@@ -42,7 +42,7 @@ void WriteTestNativeHostManifest(const base::FilePath& target_dir,
                            supports_native_initiated_connections);
 
   manifest.Set("allowed_origins",
-               base::Value::List().Append(base::StringPrintf(
+               base::ListValue().Append(base::StringPrintf(
                    "chrome-extension://%s/",
                    ScopedTestNativeMessagingHost::kExtensionId)));
 
@@ -78,7 +78,7 @@ const char ScopedTestNativeMessagingHost::kHostExeName[] =
     "com.google.chrome.test.exe.echo";
 #endif
 
-ScopedTestNativeMessagingHost::ScopedTestNativeMessagingHost() {}
+ScopedTestNativeMessagingHost::ScopedTestNativeMessagingHost() = default;
 
 void ScopedTestNativeMessagingHost::RegisterTestHost(bool user_level) {
   base::ScopedAllowBlockingForTesting allow_blocking;

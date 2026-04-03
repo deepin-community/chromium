@@ -13,33 +13,32 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+namespace autofill {
+namespace {
+
 using ::testing::_;
 using ::testing::Eq;
 using ::testing::Property;
-
-namespace autofill {
-
-namespace {
 
 const char kTestText[] = "abcd1234";
 
 auto JsonHasText(std::string_view text) {
   return testing::ResultOf(
-      [](const base::Value::Dict& dict) {
+      [](const base::DictValue& dict) {
         const std::string* value = dict.FindString("value");
         return value ? *value : "";
       },
       Eq(text));
 }
 
-class MockLogReceiver : public autofill::LogReceiver {
+class MockLogReceiver : public LogReceiver {
  public:
   MockLogReceiver() = default;
 
   MockLogReceiver(const MockLogReceiver&) = delete;
   MockLogReceiver& operator=(const MockLogReceiver&) = delete;
 
-  MOCK_METHOD(void, LogEntry, (const base::Value::Dict&), (override));
+  MOCK_METHOD(void, LogEntry, (const base::DictValue&), (override));
 };
 
 class MockNotifiedObject {
@@ -51,8 +50,6 @@ class MockNotifiedObject {
 
   MOCK_METHOD(void, NotifyAboutLoggingActivity, (), ());
 };
-
-}  // namespace
 
 class LogManagerTest : public testing::Test {
  protected:
@@ -205,4 +202,5 @@ TEST_F(LogManagerTest, InterleaveSuspendAndLoggingActivation_ActiveFirst) {
   EXPECT_FALSE(manager_->IsLoggingActive());
 }
 
+}  // namespace
 }  // namespace autofill

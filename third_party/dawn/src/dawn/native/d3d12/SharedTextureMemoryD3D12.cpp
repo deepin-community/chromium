@@ -30,7 +30,9 @@
 #include <utility>
 
 #include "dawn/native/ChainUtils.h"
+#include "dawn/native/D3D12Backend.h"
 #include "dawn/native/d3d/D3DError.h"
+#include "dawn/native/d3d/KeyedMutex.h"
 #include "dawn/native/d3d/UtilsD3D.h"
 #include "dawn/native/d3d12/DeviceD3D12.h"
 #include "dawn/native/d3d12/TextureD3D12.h"
@@ -40,15 +42,43 @@ namespace dawn::native::d3d12 {
 // static
 ResultOrError<Ref<SharedTextureMemory>> SharedTextureMemory::Create(
     Device* device,
-    const char* label,
+    StringView label,
     const SharedTextureMemoryDXGISharedHandleDescriptor* descriptor) {
     DAWN_INVALID_IF(descriptor->handle == nullptr, "shared HANDLE is missing.");
 
     ComPtr<ID3D12Resource> d3d12Resource;
-    DAWN_TRY(CheckHRESULT(device->GetD3D12Device()->OpenSharedHandle(descriptor->handle,
-                                                                     IID_PPV_ARGS(&d3d12Resource)),
-                          "D3D12 open shared handle"));
+    Ref<d3d::KeyedMutex> keyedMutex;
+    DAWN_TRY(device->ImportSharedHandleResource(descriptor->handle, descriptor->useKeyedMutex,
+                                                d3d12Resource, keyedMutex));
+    return CreateSharedTextureMemoryFromD3D12Resource(device, label, d3d12Resource, keyedMutex);
+}
 
+// static
+ResultOrError<Ref<SharedTextureMemory>> SharedTextureMemory::Create(
+    Device* device,
+    StringView label,
+    const SharedTextureMemoryD3D12ResourceDescriptor* descriptor) {
+    DAWN_INVALID_IF(descriptor->resource == nullptr, "D3D12Resource is missing.");
+    ComPtr<ID3D12Resource> d3d12Resource = descriptor->resource;
+    return CreateSharedTextureMemoryFromD3D12Resource(device, label, d3d12Resource, nullptr);
+}
+
+SharedTextureMemory::SharedTextureMemory(Device* device,
+                                         StringView label,
+                                         SharedTextureMemoryProperties properties,
+                                         ComPtr<ID3D12Resource> resource,
+                                         Ref<d3d::KeyedMutex> keyedMutex)
+    : d3d::SharedTextureMemory(device, label, properties),
+      mResource(std::move(resource)),
+      mKeyedMutex(std::move(keyedMutex)) {}
+
+// static
+ResultOrError<Ref<SharedTextureMemory>>
+SharedTextureMemory::CreateSharedTextureMemoryFromD3D12Resource(
+    Device* device,
+    StringView label,
+    ComPtr<ID3D12Resource> d3d12Resource,
+    Ref<d3d::KeyedMutex> keyedMutex) {
     D3D12_RESOURCE_DESC desc = d3d12Resource->GetDesc();
     DAWN_INVALID_IF(desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D,
                     "Resource dimension (%d) was not Texture2D", desc.Dimension);
@@ -91,25 +121,23 @@ ResultOrError<Ref<SharedTextureMemory>> SharedTextureMemory::Create(
                        wgpu::TextureUsage::TextureBinding | storageBindingUsage |
                        renderAttachmentUsage;
 
-    auto result =
-        AcquireRef(new SharedTextureMemory(device, label, properties, std::move(d3d12Resource)));
+    auto result = AcquireRef(new SharedTextureMemory(
+        device, label, properties, std::move(d3d12Resource), std::move(keyedMutex)));
     result->Initialize();
     return result;
 }
 
-SharedTextureMemory::SharedTextureMemory(Device* device,
-                                         const char* label,
-                                         SharedTextureMemoryProperties properties,
-                                         ComPtr<ID3D12Resource> resource)
-    : d3d::SharedTextureMemory(device, label, properties), mResource(std::move(resource)) {}
-
-void SharedTextureMemory::DestroyImpl() {
+void SharedTextureMemory::DestroyImpl(DestroyReason reason) {
     ToBackend(GetDevice())->ReferenceUntilUnused(std::move(mResource));
-    mResource = nullptr;
+    mKeyedMutex = nullptr;
 }
 
 ID3D12Resource* SharedTextureMemory::GetD3DResource() const {
     return mResource.Get();
+}
+
+d3d::KeyedMutex* SharedTextureMemory::GetKeyedMutex() const {
+    return mKeyedMutex.Get();
 }
 
 ResultOrError<Ref<TextureBase>> SharedTextureMemory::CreateTextureImpl(
@@ -120,10 +148,12 @@ ResultOrError<Ref<TextureBase>> SharedTextureMemory::CreateTextureImpl(
 MaybeError SharedTextureMemory::BeginAccessImpl(
     TextureBase* texture,
     const UnpackedPtr<BeginAccessDescriptor>& descriptor) {
-    // TODO(dawn/2276): support concurrent read access.
-    DAWN_INVALID_IF(descriptor->concurrentRead, "D3D12 backend doesn't support concurrent read.");
-
     DAWN_TRY(d3d::SharedTextureMemory::BeginAccessImpl(texture, descriptor));
+
+    if (auto* beginState = descriptor.Get<SharedTextureMemoryD3DSwapchainBeginState>()) {
+        ToBackend(texture)->SetIsExternalSwapchainTexture(beginState->isSwapchain);
+    }
+
     // Reset state to COMMON. BeginAccess contains a list of fences to wait on after
     // which the texture's usage will complete on the GPU.
     // All textures created from SharedTextureMemory must have
@@ -136,9 +166,10 @@ MaybeError SharedTextureMemory::BeginAccessImpl(
 
 ResultOrError<FenceAndSignalValue> SharedTextureMemory::EndAccessImpl(
     TextureBase* texture,
+    ExecutionSerial lastUsageSerial,
     UnpackedPtr<EndAccessState>& state) {
-    ToBackend(texture)->NotifySwapChainPresentToPIX();
-    return d3d::SharedTextureMemory::EndAccessImpl(texture, state);
+    ToBackend(texture)->NotifySwapChainPresent();
+    return d3d::SharedTextureMemory::EndAccessImpl(texture, lastUsageSerial, state);
 }
 
 }  // namespace dawn::native::d3d12

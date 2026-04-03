@@ -35,13 +35,13 @@ limitations under the License.
 namespace tensorflow {
 
 /* static */
-Status ClusterFunctionLibraryRuntime::ConstructFunctionGraph(
+absl::Status ClusterFunctionLibraryRuntime::ConstructFunctionGraph(
     const OpDef& sig, AttrSlice attrs,
     const FunctionLibraryRuntime::InstantiateOptions& options,
     const FunctionLibraryDefinition& flib_def, GraphDef* gdef,
-    std::vector<string>* send_keys, std::vector<string>* recv_keys) {
-  const string& target = options.target;
-  const string& func_name = sig.name();
+    std::vector<std::string>* send_keys, std::vector<std::string>* recv_keys) {
+  const std::string& target = options.target;
+  const std::string& func_name = sig.name();
   const FunctionDef* func_def = flib_def.Find(sig.name());
   if (func_def == nullptr) {
     return errors::InvalidArgument("Function ", func_name,
@@ -74,7 +74,7 @@ Status ClusterFunctionLibraryRuntime::ConstructFunctionGraph(
     }
 
     auto input_node_builder =
-        NodeDefBuilder(strings::StrCat("_recv_", in.name(), "_", i), "_Recv")
+        NodeDefBuilder(absl::StrCat("_recv_", in.name(), "_", i), "_Recv")
             .Attr("tensor_type", dtypes[0])
             .Attr("tensor_name", in.name())
             .Attr("send_device", target)
@@ -90,7 +90,7 @@ Status ClusterFunctionLibraryRuntime::ConstructFunctionGraph(
 
     // src_incarnation = 1 works because the transfer is across the same device.
     // TODO(rohanj): Find the src_incarnation for the remote device and set it.
-    const string& key = Rendezvous::CreateKey(
+    const std::string& key = Rendezvous::CreateKey(
         target, 1 /* src_incarnation */, target, in.name(), FrameAndIter(0, 0));
     send_keys->push_back(key);
     ++i;
@@ -125,7 +125,7 @@ Status ClusterFunctionLibraryRuntime::ConstructFunctionGraph(
     }
 
     auto output_node_builder =
-        NodeDefBuilder(strings::StrCat("_send_", out.name(), "_", i), "_Send")
+        NodeDefBuilder(absl::StrCat("_send_", out.name(), "_", i), "_Send")
             .Input(func_name, i, dtypes[0])
             .Attr("tensor_name", out.name())
             .Attr("send_device", target)
@@ -140,7 +140,7 @@ Status ClusterFunctionLibraryRuntime::ConstructFunctionGraph(
 
     g.AddEdge(function_node, i, output_node, 0);
 
-    const string& key =
+    const std::string& key =
         Rendezvous::CreateKey(target, 1 /* src_incarnation */, target,
                               out.name(), FrameAndIter(0, 0));
     recv_keys->push_back(key);
@@ -180,7 +180,7 @@ ClusterFunctionLibraryRuntime::~ClusterFunctionLibraryRuntime() {
 }
 
 void ClusterFunctionLibraryRuntime::Instantiate(
-    const string& function_name, const FunctionLibraryDefinition& lib_def,
+    const std::string& function_name, const FunctionLibraryDefinition& lib_def,
     AttrSlice attrs, const FunctionLibraryRuntime::InstantiateOptions& options,
     FunctionLibraryRuntime::LocalHandle* handle,
     FunctionLibraryRuntime::DoneCallback done) {
@@ -192,7 +192,7 @@ void ClusterFunctionLibraryRuntime::Instantiate(
   WorkerInterface* wi = worker_cache->GetOrCreateWorker(target);
 
   if (wi == nullptr) {
-    std::vector<string> workers;
+    std::vector<std::string> workers;
     worker_session_->worker_cache()->ListWorkers(&workers);
     done(errors::InvalidArgument(
         "Could not find worker with target: ", target,
@@ -202,8 +202,8 @@ void ClusterFunctionLibraryRuntime::Instantiate(
 
   // Make RPC and obtain a graph handle.
   GraphDef gdef;
-  auto* send_keys = new std::vector<string>;
-  auto* recv_keys = new std::vector<string>;
+  auto* send_keys = new std::vector<std::string>;
+  auto* recv_keys = new std::vector<std::string>;
   auto construct_graph_fn = [&](const FunctionLibraryDefinition* lib_def) {
     const FunctionDef* fdef = lib_def->Find(function_name);
     const OpDef& sig = fdef->signature();
@@ -211,7 +211,7 @@ void ClusterFunctionLibraryRuntime::Instantiate(
                                               &gdef, send_keys, recv_keys));
     return absl::OkStatus();
   };
-  Status s;
+  absl::Status s;
   if (options.lib_def) {
     s = construct_graph_fn(options.lib_def);
   } else {
@@ -236,7 +236,7 @@ void ClusterFunctionLibraryRuntime::Instantiate(
   wi->RegisterGraphAsync(
       req, resp,
       [this, handle, req, resp, worker_cache, wi, function_name, target,
-       send_keys, recv_keys, done](const Status& status) {
+       send_keys, recv_keys, done](const absl::Status& status) {
         if (status.ok()) {
           mutex_lock l(mu_);
           *handle = function_data_.size();
@@ -257,7 +257,7 @@ void ClusterFunctionLibraryRuntime::Instantiate(
 
 void ClusterFunctionLibraryRuntime::Run(
     const FunctionLibraryRuntime::Options& opts,
-    FunctionLibraryRuntime::LocalHandle handle, gtl::ArraySlice<Tensor> args,
+    FunctionLibraryRuntime::LocalHandle handle, absl::Span<const Tensor> args,
     std::vector<Tensor>* rets, FunctionLibraryRuntime::DoneCallback done) {
   FunctionData* function_data = nullptr;
   {
@@ -285,7 +285,7 @@ void ClusterFunctionLibraryRuntime::Run(
     args[i].AsProtoTensorContent(send->mutable_tensor());
     i++;
   }
-  const std::vector<string>& recv_keys = function_data->recv_keys;
+  const std::vector<std::string>& recv_keys = function_data->recv_keys;
   for (const auto& recv_key : recv_keys) {
     req->add_recv_key(recv_key);
   }
@@ -294,8 +294,9 @@ void ClusterFunctionLibraryRuntime::Run(
   CallOptions* call_options = new CallOptions();
   wi->RunGraphAsync(
       call_options, req, resp,
-      [call_options, req, resp, rets, recv_keys, done](const Status& status) {
-        Status* local_status = new Status(status);
+      [call_options, req, resp, rets, recv_keys,
+       done](const absl::Status& status) {
+        absl::Status* local_status = new absl::Status(status);
         auto cleanup =
             gtl::MakeCleanup([call_options, req, resp, local_status, done] {
               done(*local_status);
@@ -307,7 +308,7 @@ void ClusterFunctionLibraryRuntime::Run(
         if (!local_status->ok()) {
           return;
         }
-        std::map<string, TensorProto*> mapped_recvs;
+        std::map<std::string, TensorProto*> mapped_recvs;
         for (auto& recv : *resp->mutable_recv()) {
           mapped_recvs[recv.name()] = recv.mutable_tensor();
         }
@@ -334,7 +335,7 @@ void ClusterFunctionLibraryRuntime::Run(
 void ClusterFunctionLibraryRuntime::Run(
     const FunctionLibraryRuntime::Options& opts,
     FunctionLibraryRuntime::LocalHandle handle,
-    gtl::ArraySlice<FunctionArg> args, std::vector<FunctionRet>* rets,
+    absl::Span<const FunctionArg> args, std::vector<FunctionRet>* rets,
     FunctionLibraryRuntime::DoneCallback done) {
   std::vector<Tensor> tensors;
   for (const auto& arg : args) {
@@ -348,20 +349,21 @@ void ClusterFunctionLibraryRuntime::Run(
     }
   }
   std::vector<Tensor>* ret_tensors = new std::vector<Tensor>;
-  return Run(opts, handle, tensors, ret_tensors,
-             [rets, ret_tensors, done = std::move(done)](const Status& s) {
-               if (s.ok()) {
-                 for (const auto& t : *ret_tensors) {
-                   rets->push_back(t);
-                 }
-               }
-               delete ret_tensors;
-               done(s);
-             });
+  return Run(
+      opts, handle, tensors, ret_tensors,
+      [rets, ret_tensors, done = std::move(done)](const absl::Status& s) {
+        if (s.ok()) {
+          for (const auto& t : *ret_tensors) {
+            rets->push_back(t);
+          }
+        }
+        delete ret_tensors;
+        done(s);
+      });
 }
 
 void ClusterFunctionLibraryRuntime::CleanUp(
-    uint64 step_id, FunctionLibraryRuntime::LocalHandle handle,
+    uint64_t step_id, FunctionLibraryRuntime::LocalHandle handle,
     FunctionLibraryRuntime::DoneCallback done) {
   FunctionData* function_data = nullptr;
   {
@@ -381,7 +383,7 @@ void ClusterFunctionLibraryRuntime::CleanUp(
   CleanupGraphResponse* cleanup_resp = new CleanupGraphResponse;
   wi->CleanupGraphAsync(
       cleanup_req, cleanup_resp,
-      [cleanup_req, cleanup_resp, done](const Status& cleanup_status) {
+      [cleanup_req, cleanup_resp, done](const absl::Status& cleanup_status) {
         done(cleanup_status);
         delete cleanup_req;
         delete cleanup_resp;

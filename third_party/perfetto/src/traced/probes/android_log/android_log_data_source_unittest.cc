@@ -27,7 +27,6 @@
 
 using ::perfetto::protos::gen::AndroidLogConfig;
 using ::perfetto::protos::gen::AndroidLogId;
-using ::testing::Invoke;
 using ::testing::Return;
 
 namespace perfetto {
@@ -68,8 +67,9 @@ class AndroidLogDataSourceTest : public ::testing::Test {
     ASSERT_TRUE(send_sock);
     ASSERT_TRUE(recv_sock);
 
-    EXPECT_CALL(*data_source_, ConnectLogdrSocket())
-        .WillOnce(Invoke([&recv_sock] { return std::move(recv_sock); }));
+    EXPECT_CALL(*data_source_, ConnectLogdrSocket()).WillOnce([&recv_sock] {
+      return std::move(recv_sock);
+    });
 
     data_source_->Start();
 
@@ -381,7 +381,7 @@ TEST_F(AndroidLogDataSourceTest, BinaryEvents) {
 TEST_F(AndroidLogDataSourceTest, BinaryEventsWithTagFiltering) {
   DataSourceConfig cfg;
   AndroidLogConfig acfg;
-  acfg.add_filter_tags("not mached");
+  acfg.add_filter_tags("not matched");
   acfg.add_filter_tags("am_uid_stopped");
   cfg.set_android_log_config_raw(acfg.SerializeAsString());
   CreateInstance(cfg);

@@ -4,7 +4,6 @@
 
 #include "base/functional/callback_helpers.h"
 
-#include <functional>
 #include <type_traits>
 
 #include "base/functional/bind.h"
@@ -102,39 +101,16 @@ NON_VOID_RETURN_CALLBACK_TAG_TEST(base::RepeatingCallback,
 #undef VOID_RETURN_CALLBACK_TAG_TEST
 #undef NON_VOID_RETURN_CALLBACK_TAG_TEST
 
-TEST(CallbackHelpersTest, IsBaseCallback) {
-  // Check that base::{Once,Repeating}Closures and references to them are
-  // considered base::{Once,Repeating}Callbacks.
-  static_assert(base::IsBaseCallback<base::OnceClosure>);
-  static_assert(base::IsBaseCallback<base::RepeatingClosure>);
-  static_assert(base::IsBaseCallback<base::OnceClosure&&>);
-  static_assert(base::IsBaseCallback<const base::RepeatingClosure&>);
-
-  // Check that base::{Once, Repeating}Callbacks with a given RunType and
-  // references to them are considered base::{Once, Repeating}Callbacks.
-  static_assert(base::IsBaseCallback<base::OnceCallback<int(int)>>);
-  static_assert(base::IsBaseCallback<base::RepeatingCallback<int(int)>>);
-  static_assert(base::IsBaseCallback<base::OnceCallback<int(int)>&&>);
-  static_assert(base::IsBaseCallback<const base::RepeatingCallback<int(int)>&>);
-
-  // Check that POD types are not considered base::{Once, Repeating}Callbacks.
-  static_assert(!base::IsBaseCallback<bool>);
-  static_assert(!base::IsBaseCallback<int>);
-  static_assert(!base::IsBaseCallback<double>);
-
-  // Check that the closely related std::function is not considered a
-  // base::{Once, Repeating}Callback.
-  static_assert(!base::IsBaseCallback<std::function<void()>>);
-  static_assert(!base::IsBaseCallback<const std::function<void()>&>);
-  static_assert(!base::IsBaseCallback<std::function<void()>&&>);
-}
-
 void Increment(int* value) {
   (*value)++;
 }
 
 void IncrementWithRef(int& value) {
   value++;
+}
+
+int IncrementAndReturn(int* value) {
+  return ++(*value);
 }
 
 TEST(CallbackHelpersTest, ScopedClosureRunnerHasClosure) {
@@ -360,6 +336,41 @@ TEST(CallbackHelpersTest, IgnoreArgs_EmptyCallback) {
   base::OnceCallback<void(int)> once_int_cb =
       base::IgnoreArgs<int>(base::OnceClosure());
   EXPECT_FALSE(once_int_cb);
+}
+
+TEST(CallbackHelpersTest, IgnoreArgs_NonVoidReturn) {
+  int count = 0;
+  base::RepeatingCallback<int(void)> repeating_no_param_cb =
+      base::BindRepeating(&IncrementAndReturn, &count);
+  base::OnceCallback<int(void)> once_no_param_cb =
+      base::BindOnce(&IncrementAndReturn, &count);
+
+  base::RepeatingCallback<int(int)> repeating_int_cb =
+      base::IgnoreArgs<int>(repeating_no_param_cb);
+  EXPECT_EQ(0, count);
+  EXPECT_EQ(1, repeating_int_cb.Run(42));
+  EXPECT_EQ(1, count);
+  EXPECT_EQ(2, repeating_int_cb.Run(42));
+  EXPECT_EQ(2, count);
+
+  base::OnceCallback<int(int)> once_int_cb =
+      base::IgnoreArgs<int>(std::move(once_no_param_cb));
+  EXPECT_EQ(2, count);
+  EXPECT_EQ(3, std::move(once_int_cb).Run(42));
+  EXPECT_EQ(3, count);
+
+  // Ignore only some (one) argument and forward the rest.
+  auto repeating_cb = base::BindRepeating(&IncrementAndReturn);
+  auto repeating_cb_with_extra_arg = base::IgnoreArgs<bool>(repeating_cb);
+  EXPECT_EQ(4, repeating_cb_with_extra_arg.Run(false, &count));
+  EXPECT_EQ(4, count);
+
+  // Ignore two arguments and forward the rest.
+  auto once_cb = base::BindOnce(&IncrementAndReturn);
+  auto once_cb_with_extra_arg =
+      base::IgnoreArgs<char, bool>(std::move(once_cb));
+  EXPECT_EQ(5, std::move(once_cb_with_extra_arg).Run('d', false, &count));
+  EXPECT_EQ(5, count);
 }
 
 TEST(CallbackHelpersTest, ForwardRepeatingCallbacks) {

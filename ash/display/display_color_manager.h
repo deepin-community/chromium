@@ -63,6 +63,10 @@ class ASH_EXPORT DisplayColorManager
     return displays_ctm_support_;
   }
 
+  // Returns whether |display_id| has color correction matrix according to
+  // |configurator_|
+  bool HasColorCorrectionMatrix(int64_t display_id);
+
   // Sets the color temperature adjustment for |display_id|. Returns true if the
   // hardware supports this operation.
   bool SetDisplayColorTemperatureAdjustment(
@@ -70,14 +74,14 @@ class ASH_EXPORT DisplayColorManager
       const display::ColorTemperatureAdjustment& cta);
 
   // display::DisplayConfigurator::Observer
-  void OnDisplayModeChanged(
+  void OnDisplayConfigurationChanged(
       const display::DisplayConfigurator::DisplayStateList& outputs) override;
-  void OnDisplayModeChangeFailed(
+  void OnDisplayConfigurationChangeFailed(
       const display::DisplayConfigurator::DisplayStateList& displays,
       display::MultipleDisplayState failed_new_state) override {}
 
   // display::DisplayObserver:
-  void OnDisplayRemoved(const display::Display& old_display) override;
+  void OnDisplaysRemoved(const display::Displays& removed_displays) override;
 
  protected:
   virtual void FinishLoadCalibrationForDisplay(

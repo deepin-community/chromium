@@ -12,7 +12,6 @@
 #include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/path_service.h"
-#include "base/strings/string_piece.h"
 #include "base/values.h"
 #include "base/version.h"
 #include "chrome/browser/browser_process.h"
@@ -20,8 +19,7 @@
 #include "components/subresource_filter/content/browser/ruleset_service.h"
 #include "components/subresource_filter/core/browser/subresource_filter_constants.h"
 #include "components/subresource_filter/core/browser/subresource_filter_features.h"
-
-using component_updater::ComponentUpdateService;
+#include "components/subresource_filter/core/common/constants.h"
 
 namespace component_updater {
 
@@ -61,7 +59,7 @@ bool SubresourceFilterComponentInstallerPolicy::RequiresNetworkEncryption()
 
 update_client::CrxInstaller::Result
 SubresourceFilterComponentInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -71,7 +69,7 @@ void SubresourceFilterComponentInstallerPolicy::OnCustomUninstall() {}
 void SubresourceFilterComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   DCHECK(!install_dir.empty());
   DVLOG(1) << "Subresource Filter Version Ready: " << install_dir.value();
   std::optional<int> ruleset_format =
@@ -97,14 +95,15 @@ void SubresourceFilterComponentInstallerPolicy::ComponentReady(
 
 // Called during startup and installation before ComponentReady().
 bool SubresourceFilterComponentInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   return base::PathExists(install_dir);
 }
 
 base::FilePath
 SubresourceFilterComponentInstallerPolicy::GetRelativeInstallDir() const {
-  return base::FilePath(subresource_filter::kTopLevelDirectoryName)
+  return base::FilePath(
+             subresource_filter::kSafeBrowsingRulesetConfig.top_level_directory)
       .Append(subresource_filter::kUnindexedRulesetBaseDirectoryName);
 }
 

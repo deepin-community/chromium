@@ -1,25 +1,23 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 /**
- * @fileoverview Functions and state to tie error reporting and console output of
+ * @file Functions and state to tie error reporting and console output of
  * the browser process and frontend pages together.
  */
 
 /* eslint-disable no-console */
 
-// use require here due to
-// https://github.com/evanw/esbuild/issues/587#issuecomment-901397213
-import puppeteer = require('puppeteer-core');
-const path = require('path');
+import * as path from 'node:path';
+import type * as puppeteer from 'puppeteer-core';
 
 const ALLOWED_ASSERTION_FAILURES = [
   // Failure during shutdown. crbug.com/1145969
   'Session is unregistering, can\'t dispatch pending call to Debugger.setBlackboxPatterns',
   // Failure during shutdown. crbug.com/1199322
   'Session is unregistering, can\'t dispatch pending call to DOM.getDocument',
-  // Expected failures in assertion_test.ts
+  // Expected failures in assertion.test.ts
   'expected failure 1',
   'expected failure 2',
   // A failing fetch isn't itself a real error.
@@ -32,11 +30,21 @@ const ALLOWED_ASSERTION_FAILURES = [
   // that all assertions and success criteria are met (e.g. autocompletions etc).
   // See: https://crbug.com/1192052
   'Request Runtime.evaluate failed. {"code":-32602,"message":"uniqueContextId not found"}',
+  'Session is unregistering, can\'t dispatch pending call to Runtime.evaluate',  // same as above
   'uniqueContextId not found',
-  'Request Storage.getStorageKeyForFrame failed. {"code":-32602,"message":"Frame tree node for given frame not found"}',
+  'Request Storage.getStorageKey failed. {"code":-32602,"message":"Frame tree node for given frame not found"}',
+  // Some left-over a11y calls show up in the logs.
+  'Request Accessibility.getChildAXNodes failed. {"code":-32602,"message":"Invalid ID"}',
   'Unable to create texture',
   'Not allowed to load local resource: devtools://theme/colors.css',
+  // neterror.js started serving sourcemaps and we're requesting it unnecessarily.
+  'Request Network.loadNetworkResource failed. {"code":-32602,"message":"Unsupported URL scheme"}',
+  'Fetch API cannot load chrome-error://chromewebdata/neterror.rollup.js.map. URL scheme "chrome-error" is not supported.',
+  'Request Storage.getAffectedUrlsForThirdPartyCookieMetadata failed.',
+  'Hash of blocked script',
 ];
+
+const FILTERED_LOGS = ['Autofocus processing was blocked because a document already has a focused element'];
 
 const logLevels = {
   log: 'I',
@@ -90,14 +98,26 @@ export function installPageErrorHandlers(page: puppeteer.Page): void {
   });
 
   page.on('pageerror', error => {
+    if (!(error instanceof Error)) {
+      throw new Error(`Page error in Frontend: ${error}`);
+    }
+
     if (error.message.includes(path.join('ui', 'components', 'docs'))) {
       uiComponentDocErrors.push(error);
+    }
+    const message = error.stack ?? error.message;
+    if (isExpectedError(error)) {
+      expectedErrors.push(message);
+      console.log('(expected) ' + message);
+    } else {
+      fatalErrors.push(message);
+      console.error(message);
     }
     throw new Error(`Page error in Frontend: ${error}`);
   });
 
   page.on('console', async msg => {
-    const logLevel = logLevels[msg.type() as keyof typeof logLevels] as string;
+    const logLevel = logLevels[msg.type() as keyof typeof logLevels];
     if (logLevel) {
       if (logLevel === 'E') {
         let message = `${logLevel}> `;
@@ -120,15 +140,16 @@ export function installPageErrorHandlers(page: puppeteer.Page): void {
           fatalErrors.push(message);
           console.error(message);
         }
-      } else {
+      } else if (!FILTERED_LOGS.some(log => msg.text().includes(log))) {
         console.log(`${logLevel}> ${formatStackFrame(msg.location())}: ${msg.text()}`);
       }
     }
   });
 }
 
-function isExpectedError(consoleMessage: puppeteer.ConsoleMessage) {
-  if (ALLOWED_ASSERTION_FAILURES.some(f => consoleMessage.text().includes(f))) {
+function isExpectedError(consoleMessage: puppeteer.ConsoleMessage|Error) {
+  if (ALLOWED_ASSERTION_FAILURES.some(
+          f => (consoleMessage instanceof Error ? consoleMessage.message : consoleMessage.text()).includes(f))) {
     return true;
   }
   for (const expectation of pendingErrorExpectations) {
@@ -141,7 +162,7 @@ function isExpectedError(consoleMessage: puppeteer.ConsoleMessage) {
 }
 
 export class ErrorExpectation {
-  #caught: puppeteer.ConsoleMessage|undefined;
+  #caught: puppeteer.ConsoleMessage|Error|undefined;
   readonly #msg: string|RegExp;
   constructor(msg: string|RegExp) {
     this.#msg = msg;
@@ -157,9 +178,17 @@ export class ErrorExpectation {
     return this.#caught;
   }
 
-  check(consoleMessage: puppeteer.ConsoleMessage) {
-    const text = consoleMessage.text();
-    const match = (this.#msg instanceof RegExp) ? Boolean(text.match(this.#msg)) : text.includes(this.#msg);
+  check(consoleMessage: puppeteer.ConsoleMessage|Error) {
+    const text = consoleMessage instanceof Error ? consoleMessage.message : consoleMessage.text();
+    let match = (this.#msg instanceof RegExp) ? Boolean(text.match(this.#msg)) : text.includes(this.#msg);
+    // When console.assert(condition) fails (no second arg), the only message is
+    // "console.assert". Check the stack trace for those cases. Don't do this
+    // generally as checking the stack trace should be discouraged.
+    if (!match && text === 'console.assert') {
+      const stack = consoleMessage instanceof Error ? consoleMessage.stack ?? '' :
+                                                      consoleMessage.stackTrace().map(l => l.url ?? '').join('\n');
+      match = (this.#msg instanceof RegExp) ? Boolean(stack.match(this.#msg)) : stack.includes(this.#msg);
+    }
     if (match) {
       this.#caught = consoleMessage;
     }
@@ -172,7 +201,7 @@ export function expectError(msg: string|RegExp) {
 }
 
 function formatStackFrame(stackFrame: puppeteer.ConsoleMessageLocation): string {
-  if (!stackFrame || !stackFrame.url) {
+  if (!stackFrame?.url) {
     return '<unknown>';
   }
   const filename = stackFrame.url.replace(/^.*\//, '');
@@ -180,21 +209,33 @@ function formatStackFrame(stackFrame: puppeteer.ConsoleMessageLocation): string 
 }
 
 export function dumpCollectedErrors(): void {
+  if (!(expectedErrors.length + fatalErrors.length)) {
+    return;
+  }
   console.log('Expected errors: ' + expectedErrors.length);
   console.log('   Fatal errors: ' + fatalErrors.length);
-  if (fatalErrors.length) {
-    throw new Error('Fatal errors logged:\n' + fatalErrors.join('\n'));
-  }
+
   if (uiComponentDocErrors.length) {
     console.log(
         '\nErrors from component examples during test run:\n', uiComponentDocErrors.map(e => e.message).join('\n  '));
   }
+
+  const allFatalErrors = fatalErrors.join('\n');
+
+  expectedErrors = [];
+  fatalErrors = [];
+
+  if (allFatalErrors) {
+    throw new Error('Fatal errors logged:\n' + allFatalErrors);
+  }
 }
 
 const pendingErrorExpectations = new Set<ErrorExpectation>();
-export const fatalErrors: string[] = [];
-export const expectedErrors: string[] = [];
-// Gathered separately so we can surface them during screenshot tests to help
-// give an idea of failures, rather than having to guess purely based on the
-// screenshot.
+export let fatalErrors: string[] = [];
+export let expectedErrors: string[] = [];
+/**
+ * Gathered separately so we can surface them during screenshot tests to help
+ * give an idea of failures, rather than having to guess purely based on the
+ * screenshot.
+ **/
 export const uiComponentDocErrors: Error[] = [];

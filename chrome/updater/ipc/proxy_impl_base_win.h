@@ -16,7 +16,6 @@
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string_util.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -42,18 +41,15 @@ class ProxyImplBase {
  public:
   // Releases `impl` on `task_runner_`.
   static void Destroy(scoped_refptr<Derived> impl) {
-    scoped_refptr<base::SequencedTaskRunner> task_runner = impl->task_runner_;
-    task_runner->PostTask(FROM_HERE,
-                          base::BindOnce([](scoped_refptr<Derived> /*impl*/) {},
-                                         std::move(impl)));
+    impl->task_runner_->ReleaseSoon(FROM_HERE, std::move(impl));
   }
 
  protected:
   explicit ProxyImplBase(UpdaterScope scope) : scope_(scope) {
     DETACH_FROM_SEQUENCE(sequence_checker_);
     VLOG(3) << __func__ << ": Interface: " << typeid(Interface).name()
-            << ": iid_user: " << base::win::WStringFromGUID(iid_user)
-            << ": iid_system: " << base::win::WStringFromGUID(iid_system)
+            << ": iid_user: " << StringFromGuid(iid_user)
+            << ": iid_system: " << StringFromGuid(iid_system)
             << ": scope: " << scope;
   }
 
@@ -74,7 +70,7 @@ class ProxyImplBase {
     // normal operation and retrying on registration issues does not help.
     const auto create_server =
         [](REFCLSID clsid) -> HResultOr<Microsoft::WRL::ComPtr<IUnknown>> {
-      constexpr int kNumTries = 2;
+      static constexpr int kNumTries = 2;
       HRESULT hr = E_FAIL;
       for (int i = 0; i != kNumTries; ++i) {
         Microsoft::WRL::ComPtr<IUnknown> server;
@@ -83,8 +79,8 @@ class ProxyImplBase {
         if (SUCCEEDED(hr)) {
           return server;
         }
-        VLOG(2) << "::CoCreateInstance failed: "
-                << base::win::WStringFromGUID(clsid) << ": " << std::hex << hr;
+        VLOG(2) << "::CoCreateInstance failed: " << StringFromGuid(clsid)
+                << ": " << std::hex << hr;
         if (hr == REGDB_E_CLASSNOTREG) {
           return base::unexpected(hr);
         }
@@ -104,8 +100,8 @@ class ProxyImplBase {
     if (SUCCEEDED(hr)) {
       return server_interface;
     }
-    VLOG(2) << "Failed to query the interface: "
-            << base::win::WStringFromGUID(iid) << ": " << std::hex << hr;
+    VLOG(2) << "Failed to query the interface: " << StringFromGuid(iid) << ": "
+            << std::hex << hr;
     return base::unexpected(hr);
   }
 
@@ -120,6 +116,8 @@ class ProxyImplBase {
     CHECK(interface_.has_value());
     return interface_.value();
   }
+
+  UpdaterScope scope() const { return scope_; }
 
   HRESULT ConnectToServer() {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

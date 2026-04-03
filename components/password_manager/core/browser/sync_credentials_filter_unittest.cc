@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -14,8 +15,8 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/scoped_feature_list.h"
-#include "components/autofill/core/browser/ui/suggestion.h"
+#include "base/types/expected.h"
+#include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/password_manager/core/browser/fake_form_fetcher.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/mock_webauthn_credentials_delegate.h"
@@ -29,7 +30,6 @@
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/browser/stub_password_manager_driver.h"
 #include "components/password_manager/core/browser/sync_username_test_base.h"
-#include "components/password_manager/core/common/password_manager_features.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
@@ -63,14 +63,9 @@ class FakePasswordManagerClient : public StubPasswordManagerClient {
   FakePasswordManagerClient(signin::IdentityManager* identity_manager,
                             const syncer::SyncService* sync_service)
       : identity_manager_(identity_manager), sync_service_(sync_service) {
-    if (!base::FeatureList::IsEnabled(
-            features::kPasswordReuseDetectionEnabled)) {
-      return;
-    }
     ON_CALL(webauthn_credentials_delegate_, GetPasskeys)
-        .WillByDefault(testing::ReturnRef(passkeys_));
-    ON_CALL(webauthn_credentials_delegate_,
-            OfferPasskeysFromAnotherDeviceOption)
+        .WillByDefault(testing::Return(base::ok(&passkeys_)));
+    ON_CALL(webauthn_credentials_delegate_, IsSecurityKeyOrHybridFlowAvailable)
         .WillByDefault(testing::Return(true));
 
     // Initializes and configures prefs.
@@ -110,7 +105,7 @@ class FakePasswordManagerClient : public StubPasswordManagerClient {
   TestingPrefServiceSimple* GetPrefs() const override { return prefs_.get(); }
   bool IsOffTheRecord() const override { return is_incognito_; }
 
-  void set_last_committed_entry_url(base::StringPiece url_spec) {
+  void set_last_committed_entry_url(std::string_view url_spec) {
     last_committed_origin_ = url::Origin::Create(GURL(url_spec));
   }
 
@@ -121,7 +116,7 @@ class FakePasswordManagerClient : public StubPasswordManagerClient {
   scoped_refptr<testing::NiceMock<MockPasswordStoreInterface>> password_store_ =
       new testing::NiceMock<MockPasswordStoreInterface>;
   MockWebAuthnCredentialsDelegate webauthn_credentials_delegate_;
-  std::optional<std::vector<PasskeyCredential>> passkeys_;
+  std::vector<PasskeyCredential> passkeys_;
   bool is_incognito_ = false;
   const raw_ptr<signin::IdentityManager> identity_manager_;
   const raw_ptr<const syncer::SyncService> sync_service_;
@@ -155,19 +150,21 @@ class CredentialsFilterTest : public SyncUsernameTestBase {
   // |login_state| being NEW or EXISTING, prepares |form_manager_| in a state in
   // which |pending_| looks like a new or existing credential, respectively.
   void SavePending(LoginState login_state) {
-    std::vector<raw_ptr<const PasswordForm, VectorExperimental>> matches;
+    std::vector<PasswordForm> matches;
     if (login_state == LoginState::EXISTING) {
-      matches.push_back(&pending_);
+      matches.push_back(pending_);
     }
     fetcher_.SetNonFederated(matches);
+    fetcher_.SetBestMatches(matches);
     fetcher_.NotifyFetchCompleted();
 
-    form_manager_->ProvisionallySave(pending_.form_data, &driver_, nullptr);
+    form_manager_->ProvisionallySave(
+        pending_.form_data, &driver_,
+        base::LRUCache<PossibleUsernameFieldIdentifier, PossibleUsernameData>(
+            /*max_size=*/2));
   }
 
  protected:
-  base::test::ScopedFeatureList feature_list_;
-
   std::unique_ptr<FakePasswordManagerClient> client_;
   StubPasswordManagerDriver driver_;
   PasswordForm pending_ = SimpleGaiaForm("user@gmail.com");
@@ -291,7 +288,7 @@ TEST_F(CredentialsFilterTest, ShouldSave_SignedInWithSyncFeatureOff) {
 
 TEST_F(CredentialsFilterTest, ShouldSave_SignIn_Form) {
   PasswordForm form = SimpleGaiaForm("user@example.org");
-  form.form_data.is_gaia_with_skip_save_password_form = true;
+  form.form_data.set_is_gaia_with_skip_save_password_form(true);
 
   SetSyncingPasswords(false);
   EXPECT_FALSE(filter_->ShouldSave(form));

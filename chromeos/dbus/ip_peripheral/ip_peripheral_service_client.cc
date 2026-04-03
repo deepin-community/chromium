@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -14,7 +16,6 @@
 #include "dbus/bus.h"
 #include "dbus/message.h"
 #include "dbus/object_proxy.h"
-
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace chromeos {
@@ -78,18 +79,15 @@ void OnGetControlMethod(IpPeripheralServiceClient::GetControlCallback callback,
   }
 
   dbus::MessageReader reader(response);
-  const uint8_t* output_bytes = nullptr;
-  size_t length = 0;
+  base::span<const uint8_t> output_bytes;
 
-  if (!reader.PopArrayOfBytes(&output_bytes, &length)) {
+  if (!reader.PopArrayOfBytes(&output_bytes)) {
     LOG(ERROR) << "Unable to read get-XU-control response value.";
     std::move(callback).Run(false, std::move(control_response));
     return;
   }
 
-  while (length-- != 0) {
-    control_response.push_back(*output_bytes++);
-  }
+  control_response = base::ToVector(output_bytes);
 
   std::move(callback).Run(true, std::move(control_response));
 }

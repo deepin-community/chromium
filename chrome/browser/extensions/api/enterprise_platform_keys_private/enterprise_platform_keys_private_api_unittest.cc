@@ -37,7 +37,7 @@ class EPKPChallengeKeyTestBase : public BrowserWithTestWindowTest {
 
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
-    prefs_ = browser()->profile()->GetPrefs();
+    prefs_ = profile()->GetPrefs();
     SetAuthenticatedUser();
   }
 
@@ -50,22 +50,18 @@ class EPKPChallengeKeyTestBase : public BrowserWithTestWindowTest {
   }
 
   // This will be called by BrowserWithTestWindowTest::SetUp();
-  void LogIn(const std::string& email) override {
-    const AccountId account_id = AccountId::FromUserEmail(email);
-    user_manager()->AddUserWithAffiliation(account_id,
-                                           /*is_affiliated=*/true);
-    user_manager()->UserLoggedIn(
-        account_id,
-        user_manager::FakeUserManager::GetFakeUsernameHash(account_id),
-        /*browser_restart=*/false,
-        /*is_child=*/false);
+  void LogIn(std::string_view email, const GaiaId& gaia_id) override {
+    BrowserWithTestWindowTest::LogIn(email, gaia_id);
+    user_manager()->SetUserPolicyStatus(
+        AccountId::FromUserEmailGaiaId(email, gaia_id),
+        /*is_managed=*/true,
+        /*is_affiliated=*/true);
   }
 
   // Derived classes can override this method to set the required authenticated
   // user in the IdentityManager class.
   virtual void SetAuthenticatedUser() {
-    auto* identity_manager =
-        IdentityManagerFactory::GetForProfile(browser()->profile());
+    auto* identity_manager = IdentityManagerFactory::GetForProfile(profile());
     signin::MakePrimaryAccountAvailable(identity_manager, kUserEmail,
                                         signin::ConsentLevel::kSync);
   }
@@ -90,25 +86,24 @@ class EPKPChallengeMachineKeyTest : public EPKPChallengeKeyTestBase {
 const char EPKPChallengeMachineKeyTest::kFuncArgs[] = "[\"Y2hhbGxlbmdl\"]";
 
 TEST_F(EPKPChallengeMachineKeyTest, ExtensionNotAllowlisted) {
-  base::Value::List empty_allowlist;
+  base::ListValue empty_allowlist;
   prefs_->SetList(prefs::kAttestationExtensionAllowlist,
                   std::move(empty_allowlist));
 
   EXPECT_EQ(
       ash::attestation::TpmChallengeKeyResult::kExtensionNotAllowedErrorMsg,
-      utils::RunFunctionAndReturnError(func_.get(), kFuncArgs,
-                                       browser()->profile()));
+      utils::RunFunctionAndReturnError(func_.get(), kFuncArgs, profile()));
 }
 
 TEST_F(EPKPChallengeMachineKeyTest, Success) {
   SetMockTpmChallenger();
 
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   allowlist.Append(extension_->id());
   prefs_->SetList(prefs::kAttestationExtensionAllowlist, std::move(allowlist));
 
   std::optional<base::Value> value = utils::RunFunctionAndReturnSingleResult(
-      func_.get(), kFuncArgs, browser()->profile(),
+      func_.get(), kFuncArgs, profile(),
       extensions::api_test_utils::FunctionMode::kNone);
 
   ASSERT_TRUE(value->is_string());
@@ -132,25 +127,24 @@ class EPKPChallengeUserKeyTest : public EPKPChallengeKeyTestBase {
 const char EPKPChallengeUserKeyTest::kFuncArgs[] = "[\"Y2hhbGxlbmdl\", true]";
 
 TEST_F(EPKPChallengeUserKeyTest, ExtensionNotAllowlisted) {
-  base::Value::List empty_allowlist;
+  base::ListValue empty_allowlist;
   prefs_->SetList(prefs::kAttestationExtensionAllowlist,
                   std::move(empty_allowlist));
 
   EXPECT_EQ(
       ash::attestation::TpmChallengeKeyResult::kExtensionNotAllowedErrorMsg,
-      utils::RunFunctionAndReturnError(func_.get(), kFuncArgs,
-                                       browser()->profile()));
+      utils::RunFunctionAndReturnError(func_.get(), kFuncArgs, profile()));
 }
 
 TEST_F(EPKPChallengeUserKeyTest, Success) {
   SetMockTpmChallenger();
 
-  base::Value::List allowlist;
+  base::ListValue allowlist;
   allowlist.Append(extension_->id());
   prefs_->SetList(prefs::kAttestationExtensionAllowlist, std::move(allowlist));
 
   std::optional<base::Value> value = utils::RunFunctionAndReturnSingleResult(
-      func_.get(), kFuncArgs, browser()->profile(),
+      func_.get(), kFuncArgs, profile(),
       extensions::api_test_utils::FunctionMode::kNone);
 
   ASSERT_TRUE(value->is_string());

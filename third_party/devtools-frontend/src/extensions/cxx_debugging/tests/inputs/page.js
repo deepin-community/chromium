@@ -1,4 +1,4 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,7 @@ try {
 
   window.go = function() {
     if (isReady()) {
+      // eslint-disable-next-line no-console
       console.trace('go()');
       return wasmModule._main();
     }
@@ -23,11 +24,12 @@ try {
 
   window.load = async function() {
     wasmModule = await moduleImport.default();
+    // eslint-disable-next-line no-console
     console.trace('loaded');
     return true;
   };
 } catch (e) {
   window.load = () => {
     throw e;
-  }
+  };
 }

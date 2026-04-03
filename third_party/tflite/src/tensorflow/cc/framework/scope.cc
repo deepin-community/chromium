@@ -41,7 +41,7 @@ const char kScopeSeparator[] = "/";
 const char kSuffixSeparator[] = "_";
 }  // namespace
 
-Scope::Impl::Impl(Graph* graph, Status* status, NameMap* name_map,
+Scope::Impl::Impl(Graph* graph, absl::Status* status, NameMap* name_map,
                   ShapeRefiner* refiner, bool disable_shape_inference)
     : graph_(graph),
       status_(status),
@@ -52,7 +52,7 @@ Scope::Impl::Impl(Graph* graph, Status* status, NameMap* name_map,
       disable_shape_inference_(disable_shape_inference) {}
 
 Scope::Impl::Impl(const std::shared_ptr<Graph>& graph,
-                  const std::shared_ptr<Status>& status,
+                  const std::shared_ptr<absl::Status>& status,
                   const std::shared_ptr<NameMap>& name_map,
                   const std::shared_ptr<ShapeRefiner>& refiner)
     : graph_(graph),
@@ -67,7 +67,7 @@ Scope Scope::NewRootScope() {
   Graph* graph = new Graph(OpRegistry::Global());
   ShapeRefiner* refiner =
       new ShapeRefiner(graph->versions(), graph->op_registry());
-  return Scope(new Impl(graph, new Status, new Impl::NameMap, refiner,
+  return Scope(new Impl(graph, new absl::Status, new Impl::NameMap, refiner,
                         /* disable_shape_inference */ false));
 }
 
@@ -75,11 +75,11 @@ Scope Scope::DisabledShapeInferenceScope() {
   Graph* graph = new Graph(OpRegistry::Global());
   ShapeRefiner* refiner =
       new ShapeRefiner(graph->versions(), graph->op_registry());
-  return Scope(new Impl(graph, new Status, new Impl::NameMap, refiner,
+  return Scope(new Impl(graph, new absl::Status, new Impl::NameMap, refiner,
                         /* disable_shape_inference */ true));
 }
 
-Scope::Impl::Impl(const Scope& other, Tags::ScopeName, const string& name,
+Scope::Impl::Impl(const Scope& other, Tags::ScopeName, const std::string& name,
                   bool copy_names)
     : graph_(other.impl()->graph_),
       status_(other.impl()->status_),
@@ -98,8 +98,8 @@ Scope::Impl::Impl(const Scope& other, Tags::ScopeName, const string& name,
       colocation_constraints_(other.impl()->colocation_constraints_),
       disable_shape_inference_(other.impl()->disable_shape_inference_) {}
 
-Scope::Impl::Impl(const Scope& other, Tags::OpName, const string& name,
-                  const string& op_name)
+Scope::Impl::Impl(const Scope& other, Tags::OpName, const std::string& name,
+                  const std::string& op_name)
     : graph_(other.impl()->graph_),
       status_(other.impl()->status_),
       name_map_(other.impl()->name_map_),
@@ -140,7 +140,7 @@ Scope::Impl::Impl(const Scope& other, Tags::ControlDeps,
       colocation_constraints_(other.impl()->colocation_constraints_),
       disable_shape_inference_(other.impl()->disable_shape_inference_) {}
 
-Scope::Impl::Impl(const Scope& other, Tags::Device, const string& device)
+Scope::Impl::Impl(const Scope& other, Tags::Device, const std::string& device)
     : graph_(other.impl()->graph_),
       status_(other.impl()->status_),
       name_map_(other.impl()->name_map_),
@@ -158,7 +158,7 @@ Scope::Impl::Impl(const Scope& other, Tags::Device, const string& device)
       disable_shape_inference_(other.impl()->disable_shape_inference_) {}
 
 Scope::Impl::Impl(const Scope& other, Tags::SingleUseScope,
-                  const string& op_name)
+                  const std::string& op_name)
     : graph_(other.impl()->graph_),
       status_(other.impl()->status_),
       name_map_(other.impl()->name_map_),
@@ -193,7 +193,7 @@ Scope::Impl::Impl(const Scope& other, Tags::ExitOnError)
       disable_shape_inference_(other.impl()->disable_shape_inference_) {}
 
 Scope::Impl::Impl(const Scope& other, Tags::KernelLabel,
-                  const string& kernel_label)
+                  const std::string& kernel_label)
     : graph_(other.impl()->graph_),
       status_(other.impl()->status_),
       name_map_(other.impl()->name_map_),
@@ -227,12 +227,12 @@ Scope::Impl::Impl(const Scope& other, Tags::Colocate,
       xla_cluster_(other.impl()->xla_cluster_),
       colocation_constraints_(
           clear_colocations
-              ? std::unordered_set<string>()
+              ? std::unordered_set<std::string>()
               : other.impl()->GetColocationConstraints(colocate_with_op)),
       disable_shape_inference_(other.impl()->disable_shape_inference_) {}
 
 Scope::Impl::Impl(const Scope& other, Tags::AssignedDevice,
-                  const string& assigned_device)
+                  const std::string& assigned_device)
     : graph_(other.impl()->graph_),
       status_(other.impl()->status_),
       name_map_(other.impl()->name_map_),
@@ -250,7 +250,7 @@ Scope::Impl::Impl(const Scope& other, Tags::AssignedDevice,
       disable_shape_inference_(other.impl()->disable_shape_inference_) {}
 
 Scope::Impl::Impl(const Scope& other, Tags::XlaCluster,
-                  const string& xla_cluster)
+                  const std::string& xla_cluster)
     : graph_(other.impl()->graph_),
       status_(other.impl()->status_),
       name_map_(other.impl()->name_map_),
@@ -267,14 +267,14 @@ Scope::Impl::Impl(const Scope& other, Tags::XlaCluster,
       colocation_constraints_(other.impl()->colocation_constraints_),
       disable_shape_inference_(other.impl()->disable_shape_inference_) {}
 
-std::unordered_set<string> Scope::Impl::GetColocationConstraints(
+std::unordered_set<std::string> Scope::Impl::GetColocationConstraints(
     const Operation& colocate_with_op) const {
-  std::unordered_set<string> current_constraints(colocation_constraints_);
+  std::unordered_set<std::string> current_constraints(colocation_constraints_);
   const AttrSlice attrs = colocate_with_op.node()->attrs();
-  std::vector<string> node_constraints;
+  std::vector<std::string> node_constraints;
   if (TryGetNodeAttr(attrs, kColocationAttrName, &node_constraints)) {
-    for (const string& entry : node_constraints) {
-      StringPiece s(entry);
+    for (const std::string& entry : node_constraints) {
+      absl::string_view s(entry);
       if (absl::ConsumePrefix(&s, kColocationGroupPrefix)) {
         current_constraints.emplace(s);
       }
@@ -293,28 +293,28 @@ std::shared_ptr<Graph> Scope::graph_as_shared_ptr() const {
   return impl()->graph_;
 }
 
-Status Scope::status() const { return *impl()->status_; }
+absl::Status Scope::status() const { return *impl()->status_; }
 
 const std::vector<Operation>& Scope::control_deps() const {
   return impl()->control_deps_;
 }
 
-void Scope::UpdateStatus(const Status& s) const {
+void Scope::UpdateStatus(const absl::Status& s) const {
   impl()->status_->Update(s);
   if (impl()->exit_on_error_ && !ok()) {
     LOG(FATAL) << *impl()->status_;
   }
 }
 
-Status Scope::ToGraphDef(GraphDef* gdef, bool include_debug_info) const {
+absl::Status Scope::ToGraphDef(GraphDef* gdef, bool include_debug_info) const {
   if (!ok()) {
     return *impl()->status_;
   }
   graph()->ToGraphDef(gdef, /*include_flib_def=*/true, include_debug_info);
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-Status Scope::ToGraph(Graph* g, GraphConstructorOptions opts) const {
+absl::Status Scope::ToGraph(Graph* g, GraphConstructorOptions opts) const {
   if (ok()) {
     GraphDef graph_def;
     graph()->ToGraphDef(&graph_def);
@@ -335,14 +335,15 @@ void Scope::UpdateBuilder(NodeBuilder* builder) const {
   }
 
   if (!impl()->colocation_constraints_.empty()) {
-    std::vector<string> constraints(impl()->colocation_constraints_.begin(),
-                                    impl()->colocation_constraints_.end());
+    std::vector<std::string> constraints(
+        impl()->colocation_constraints_.begin(),
+        impl()->colocation_constraints_.end());
     // Sort the set.
     std::sort(constraints.begin(), constraints.end());
     // Add loc:@ prefix
     std::transform(constraints.begin(), constraints.end(), constraints.begin(),
-                   [](const string& s) {
-                     return strings::StrCat(kColocationGroupPrefix, s);
+                   [](const std::string& s) {
+                     return absl::StrCat(kColocationGroupPrefix, s);
                    });
     builder->Attr(kColocationAttrName, constraints);
   }
@@ -357,8 +358,8 @@ void Scope::UpdateBuilder(NodeBuilder* builder) const {
   }
 }
 
-string Scope::Impl::GetUniqueName(const string& prefix,
-                                  bool check_single_use) const {
+std::string Scope::Impl::GetUniqueName(const std::string& prefix,
+                                       bool check_single_use) const {
   if (check_single_use && single_use_scope()) {
     if (*scope_used_) {
       *status_ =
@@ -373,23 +374,23 @@ string Scope::Impl::GetUniqueName(const string& prefix,
     name_map_->insert({prefix, 0});
     return prefix;
   }
-  string unique_name;
+  std::string unique_name;
   do {
-    unique_name = strings::StrCat(prefix, kSuffixSeparator, ++entry->second);
+    unique_name = absl::StrCat(prefix, kSuffixSeparator, ++entry->second);
   } while (name_map_->find(unique_name) != name_map_->end());
   name_map_->insert({unique_name, 0});
   return unique_name;
 }
 
-string Scope::Impl::GetNameForOp(const string& default_name) const {
-  const string unique_name =
+std::string Scope::Impl::GetNameForOp(const std::string& default_name) const {
+  const std::string unique_name =
       GetUniqueName(default_name, true /* check_single_use */);
-  const string sep =
+  const std::string sep =
       name_.empty() || unique_name.empty() ? "" : kScopeSeparator;
-  return strings::StrCat(name_, sep, unique_name);
+  return absl::StrCat(name_, sep, unique_name);
 }
 
-string Scope::GetUniqueNameForOp(const string& default_name) const {
+std::string Scope::GetUniqueNameForOp(const std::string& default_name) const {
   if (impl()->single_use_scope()) {
     if (impl()->op_name_.empty() || *impl()->scope_used_) {
       *impl()->status_ =
@@ -403,21 +404,21 @@ string Scope::GetUniqueNameForOp(const string& default_name) const {
                                   : impl()->GetNameForOp(impl()->op_name_);
 }
 
-Scope Scope::NewSubScope(const string& child_scope_name) const {
+Scope Scope::NewSubScope(const std::string& child_scope_name) const {
   if (child_scope_name.empty()) {
     return Scope(new Impl(*this, Impl::Tags::ScopeName(), impl()->name_,
                           true /* copy_names */));
   }
-  const string unique_name =
+  const std::string unique_name =
       impl()->GetUniqueName(child_scope_name, false /* check_single_use */);
-  const string sep =
+  const std::string sep =
       impl()->name_.empty() || unique_name.empty() ? "" : kScopeSeparator;
   return Scope(new Impl(*this, Impl::Tags::ScopeName(),
-                        strings::StrCat(impl()->name_, sep, unique_name),
+                        absl::StrCat(impl()->name_, sep, unique_name),
                         false /* copy_names */));
 }
 
-Scope Scope::WithOpNameImpl(const string& op_name) const {
+Scope Scope::WithOpNameImpl(const std::string& op_name) const {
   if (impl()->single_use_scope()) {
     UpdateStatus(errors::InvalidArgument("Cannot set op name ", op_name,
                                          " on this scope"));
@@ -427,7 +428,7 @@ Scope Scope::WithOpNameImpl(const string& op_name) const {
 }
 
 Scope Scope::WithControlDependencies(
-    const gtl::ArraySlice<Operation> control_deps) const {
+    const absl::Span<const Operation> control_deps) const {
   return Scope(
       new Impl(*this, Impl::Tags::ControlDeps(),
                std::vector<Operation>(control_deps.begin(), control_deps.end()),
@@ -446,15 +447,15 @@ Scope Scope::WithNoControlDependencies() const {
                         /* clear_control_deps */ true));
 }
 
-Scope Scope::WithDevice(const string& device) const {
+Scope Scope::WithDevice(const std::string& device) const {
   return Scope(new Impl(*this, Impl::Tags::Device(), device));
 }
 
-Scope Scope::WithAssignedDevice(const string& assigned_device) const {
+Scope Scope::WithAssignedDevice(const std::string& assigned_device) const {
   return Scope(new Impl(*this, Impl::Tags::AssignedDevice(), assigned_device));
 }
 
-Scope Scope::WithXlaCluster(const string& xla_cluster) const {
+Scope Scope::WithXlaCluster(const std::string& xla_cluster) const {
   return Scope(new Impl(*this, Impl::Tags::XlaCluster(), xla_cluster));
 }
 
@@ -472,12 +473,12 @@ Scope Scope::ExitOnError() const {
   return Scope(new Impl(*this, Impl::Tags::ExitOnError()));
 }
 
-Scope Scope::WithKernelLabel(const string& kernel_label) const {
+Scope Scope::WithKernelLabel(const std::string& kernel_label) const {
   return Scope(new Impl(*this, Impl::Tags::KernelLabel(), kernel_label));
 }
 
 CompositeOpScopes Scope::GetCompositeOpScopes(
-    const string& composite_op_name) const {
+    const std::string& composite_op_name) const {
   if (impl()->op_name_.empty() && composite_op_name.empty()) {
     UpdateStatus(errors::InvalidArgument(
         "Cannot create composite op scopes with empty name"));
@@ -486,9 +487,10 @@ CompositeOpScopes Scope::GetCompositeOpScopes(
   if (!impl()->single_use_scope()) {
     Scope child = NewSubScope(impl()->op_name_.empty() ? composite_op_name
                                                        : impl()->op_name_);
-    const string child_op_sep = impl()->name_.empty() ? "" : kSuffixSeparator;
-    const string child_name =
-        strings::StrCat(impl()->name_, child_op_sep, child.impl()->name_);
+    const std::string child_op_sep =
+        impl()->name_.empty() ? "" : kSuffixSeparator;
+    const std::string child_name =
+        absl::StrCat(impl()->name_, child_op_sep, child.impl()->name_);
     return {child,
             Scope(new Impl(child, Impl::Tags::SingleUseScope(), child_name))};
   } else {
@@ -498,22 +500,23 @@ CompositeOpScopes Scope::GetCompositeOpScopes(
   }
 }
 
-Status Scope::DoShapeInference(Node* node) const {
-  if (impl_->disable_shape_inference_) return OkStatus();
+absl::Status Scope::DoShapeInference(Node* node) const {
+  if (impl_->disable_shape_inference_) return absl::OkStatus();
   return impl_->refiner_->AddNode(node);
 }
 
 class InternalScope {
  public:
   // NewScope doesn't take ownership of the inputs.
-  static Scope NewScope(Graph* graph, Status* status, ShapeRefiner* refiner) {
+  static Scope NewScope(Graph* graph, absl::Status* status,
+                        ShapeRefiner* refiner) {
     Scope::Impl::NameMap* name_map = new Scope::Impl::NameMap;
     for (const Node* node : graph->nodes()) {
-      const string& name = node->name();
+      const std::string& name = node->name();
       (*name_map)[name] = 0;
       // Add all name prefixes ('/' separated).
       size_t idx = -1;
-      while ((idx = name.find(kScopeSeparator, idx + 1)) != string::npos) {
+      while ((idx = name.find(kScopeSeparator, idx + 1)) != std::string::npos) {
         (*name_map)[name.substr(0, idx)] = 0;
       }
     }
@@ -521,19 +524,20 @@ class InternalScope {
     // since the caller owns them and doesn't want the scope to destroy them.
     return Scope(new Scope::Impl(
         std::shared_ptr<Graph>(graph, [](Graph*) {}),
-        std::shared_ptr<Status>(status, [](Status*) {}),
+        std::shared_ptr<absl::Status>(status, [](absl::Status*) {}),
         std::shared_ptr<Scope::Impl::NameMap>(name_map),
         std::shared_ptr<ShapeRefiner>(refiner, [](ShapeRefiner*) {})));
   }
 };
 
-Scope NewInternalScope(Graph* graph, Status* status, ShapeRefiner* refiner) {
+Scope NewInternalScope(Graph* graph, absl::Status* status,
+                       ShapeRefiner* refiner) {
   return InternalScope::NewScope(graph, status, refiner);
 }
 
-Status CreateOutputWithScope(string op_name,
-                             absl::Span<const ::tensorflow::Input> inputs,
-                             const Scope& scope, Output* output) {
+absl::Status CreateOutputWithScope(std::string op_name,
+                                   absl::Span<const ::tensorflow::Input> inputs,
+                                   const Scope& scope, Output* output) {
   TF_RETURN_IF_ERROR(scope.status());
   const auto unique_name = scope.GetUniqueNameForOp(op_name);
   auto builder = ::tensorflow::NodeBuilder(unique_name, op_name);
@@ -547,7 +551,7 @@ Status CreateOutputWithScope(string op_name,
   scope.UpdateStatus(builder.Finalize(scope.graph(), &ret));
   TF_RETURN_IF_ERROR(scope.status());
   *output = Output(ret, 0);
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace tensorflow

@@ -14,14 +14,17 @@
 #include "base/apple/mach_logging.h"
 #include "base/base_switches.h"
 #include "base/command_line.h"
+#include "base/debug/leak_annotations.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
-#include "base/hash/md5.h"
+#include "base/functional/callback_helpers.h"
 #include "base/mac/launch_application.h"
 #include "base/mac/mac_util.h"
+#include "base/mac/scoped_mach_msg_destroy.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_param_associator.h"
+#include "base/metrics/histogram_macros_local.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -45,12 +48,15 @@
 #include "chrome/grit/generated_resources.h"
 #import "chrome/services/mac_notifications/mac_notification_service_ns.h"
 #import "chrome/services/mac_notifications/mac_notification_service_un.h"
+#include "components/metrics/child_histogram_fetcher_impl.h"
 #include "components/remote_cocoa/app_shim/application_bridge.h"
 #include "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #include "components/remote_cocoa/common/application.mojom.h"
 #include "components/variations/field_trial_config/field_trial_util.h"
+#include "components/variations/variations_crash_keys.h"
 #include "components/variations/variations_switches.h"
 #include "content/public/browser/remote_cocoa.h"
+#include "crypto/hash.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/platform/named_platform_channel.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
@@ -167,7 +173,13 @@ class ScopedSynchronizeThreads {
   raw_ptr<base::WaitableEvent> operation_finished_;
 };
 
+AppShimController::TestDelegate* g_test_delegate = nullptr;
+
 }  // namespace
+
+void AppShimController::SetDelegateForTesting(TestDelegate* delegate) {
+  g_test_delegate = delegate;
+}
 
 AppShimController::Params::Params() = default;
 AppShimController::Params::Params(const Params& other) = default;
@@ -193,13 +205,16 @@ AppShimController::AppShimController(const Params& params)
   // need it is that we might miss some notification actions, which again is
   // harmless.
   if (base::FeatureList::IsEnabled(features::kAppShimNotificationAttribution) &&
-      app_mode::UseAdHocSigningForWebAppShims()) {
+      WebAppIsAdHocSigned()) {
     // `notification_service_` needs to be created early during start up to make
     // sure it is able to install its delegate before the OS attempts to inform
     // it of any notification actions that might have happened.
     notification_service_ =
         std::make_unique<mac_notifications::MacNotificationServiceUN>(
             std::move(notification_action_handler_remote_),
+            base::BindRepeating(
+                &AppShimController::NotificationPermissionStatusChanged,
+                base::Unretained(this)),
             UNUserNotificationCenter.currentNotificationCenter);
   }
 }
@@ -214,6 +229,10 @@ AppShimController::~AppShimController() {
 // static
 void AppShimController::PreInitFeatureState(
     const base::CommandLine& command_line) {
+  // Create a FieldTrialList, although unlike other places where this is done,
+  // we don't have to mark this one as being leaked since it will be deleted and
+  // replaced by a new list by the call to FieldTrialList::ResetInstance in
+  // FinalizeFeatureState below.
   new base::FieldTrialList();
 
   auto feature_list = std::make_unique<base::FeatureList>();
@@ -274,11 +293,13 @@ void AppShimController::PreInitFeatureState(
   base::FeatureList::SetEarlyAccessInstance(
       std::move(feature_list),
       {"AppShimLaunchChromeSilently", "AppShimNotificationAttribution",
-       "DcheckIsFatal", "MojoBindingsInlineSLS", "MojoInlineMessagePayloads",
-       "MojoIpcz", "MojoTaskPerMessage", "StandardCompliantHostCharacters",
-       "StandardCompliantNonSpecialSchemeURLParsing",
-       "UseAdHocSigningForWebAppShims", "UseIDNA2008NonTransitional",
-       "SonomaAccessibilityActivationRefinements"});
+       "DcheckIsFatal", "DisallowSpaceCharacterInURLHostParsing",
+       "NonSpecialLeadingSlashHandling", "PreservePercentEncodedDotInPath",
+       "UseIDNAContextJRules", "MojoBindingsInlineSLS", "MojoIpcz",
+       "MojoIpczMemV2", "MojoFixGeometricBufferGrowth",
+       "UseAdHocSigningForWebAppShims", "UseNSURLDataForGURLConversion",
+       "SonomaAccessibilityActivationRefinements", "FeatureParamWithCache",
+       "UseMachVouchers"});
 }
 
 // static
@@ -311,6 +332,8 @@ void AppShimController::FinalizeFeatureState(
   feature_state.ApplyToFeatureAndFieldTrialList(feature_list.get());
 
   base::FeatureList::SetInstance(std::move(feature_list));
+
+  variations::RecreateCrashKeys();
 }
 
 void AppShimController::OnAppFinishedLaunching(
@@ -363,6 +386,10 @@ bool AppShimController::FindOrLaunchChrome() {
         LOG(FATAL) << "Failed to open process with PID: " << chrome_pid;
       }
     }
+    if (chrome_to_connect_to_.terminated) {
+      LOG(FATAL) << "Process with PID " << chrome_pid
+                 << " has already terminated.";
+    }
 
     return true;
   }
@@ -404,6 +431,10 @@ bool AppShimController::FindOrLaunchChrome() {
       base::FeatureList::IsEnabled(features::kAppShimLaunchChromeSilently);
   if (silent_chrome_launch) {
     browser_command_line.AppendSwitch(switches::kNoStartupWindow);
+  }
+
+  if (g_test_delegate) {
+    g_test_delegate->PopulateChromeCommandLine(browser_command_line);
   }
 
   base::mac::LaunchApplication(
@@ -450,6 +481,10 @@ NSRunningApplication* AppShimController::FindChromeFromSingletonLock(
     LOG(WARNING) << "Singleton lock pid " << pid << " invalid.";
     return nil;
   }
+  if (process_from_lock.terminated) {
+    LOG(WARNING) << "Singleton lock pid " << pid << " already terminated.";
+    return nil;
+  }
 
   // Check the process' bundle id. As above, the specified pid could have been
   // reused by some other process.
@@ -469,7 +504,12 @@ void AppShimController::PollForChromeReady(
   // If the Chrome process we planned to connect to is not running anymore,
   // quit.
   if (chrome_to_connect_to_ && chrome_to_connect_to_.terminated) {
-    LOG(FATAL) << "Running chrome instance terminated before connecting.";
+    if (chrome_launched_by_app_) {
+      LOG(FATAL) << "Running chrome instance launched by shim terminated "
+                    "before connecting.";
+    } else {
+      LOG(FATAL) << "Running chrome instance terminated before connecting.";
+    }
   }
 
   // If we launched a Chrome process and it has terminated, then that most
@@ -493,13 +533,14 @@ void AppShimController::PollForChromeReady(
   {
     mojo::PlatformChannelEndpoint endpoint;
     NSString* browser_bundle_id =
-        base::apple::ObjCCast<NSString>([NSBundle.mainBundle
+        base::apple::ObjCCast<NSString>([base::apple::MainBundle()
             objectForInfoDictionaryKey:app_mode::kBrowserBundleIDKey]);
     CHECK(browser_bundle_id);
     const std::string server_name = base::StringPrintf(
         "%s.%s.%s", base::SysNSStringToUTF8(browser_bundle_id).c_str(),
         app_mode::kAppShimBootstrapNameFragment,
-        base::MD5String(params_.user_data_dir.value()).c_str());
+        base::HexEncode(crypto::hash::Sha256(params_.user_data_dir.value()))
+            .c_str());
     endpoint = ConnectToBrowser(server_name);
     if (endpoint.is_valid()) {
       LOG(INFO) << "Connected to " << server_name;
@@ -538,6 +579,7 @@ mojo::PlatformChannelEndpoint AppShimController::ConnectToBrowser(
 
   mojo::PlatformChannel channel;
   mach_msg_base_t message{};
+  base::ScopedMachMsgDestroy scoped_message(&message.header);
   message.header.msgh_id = app_mode::kBootstrapMsgId;
   message.header.msgh_bits =
       MACH_MSGH_BITS(MACH_MSG_TYPE_MOVE_SEND, MACH_MSG_TYPE_MOVE_SEND);
@@ -547,7 +589,9 @@ mojo::PlatformChannelEndpoint AppShimController::ConnectToBrowser(
   message.header.msgh_remote_port =
       server_endpoint.TakePlatformHandle().ReleaseMachSendRight();
   kern_return_t kr = mach_msg_send(&message.header);
-  if (kr != KERN_SUCCESS) {
+  if (kr == KERN_SUCCESS) {
+    scoped_message.Disarm();
+  } else {
     MACH_LOG(ERROR, kr) << "mach_msg_send";
     return mojo::PlatformChannelEndpoint();
   }
@@ -579,11 +623,12 @@ void AppShimController::SendBootstrapOnShimConnected(
   // automatically launch the app as well. So do a kRegisterOnly launch
   // instead.
   app_shim_info->launch_type =
-      (launched_by_notification_action_ ||
-       (base::CommandLine::ForCurrentProcess()->HasSwitch(
-            app_mode::kLaunchedByChromeProcessId) &&
-        !base::CommandLine::ForCurrentProcess()->HasSwitch(
-            app_mode::kIsNormalLaunch)))
+      launched_by_notification_action_
+          ? chrome::mojom::AppShimLaunchType::kNotificationAction
+      : (base::CommandLine::ForCurrentProcess()->HasSwitch(
+             app_mode::kLaunchedByChromeProcessId) &&
+         !base::CommandLine::ForCurrentProcess()->HasSwitch(
+             app_mode::kIsNormalLaunch))
           ? chrome::mojom::AppShimLaunchType::kRegisterOnly
           : chrome::mojom::AppShimLaunchType::kNormal;
   app_shim_info->files = launch_files_;
@@ -611,7 +656,8 @@ void AppShimController::SendBootstrapOnShimConnected(
 }
 
 void AppShimController::SetUpMenu() {
-  chrome::BuildMainMenu(NSApp, delegate_, params_.app_name, true);
+  chrome::BuildMainMenu(NSApp, delegate_, params_.app_name, /*is_pwa=*/true,
+                        /*is_rtl=*/false);
   UpdateProfileMenu(std::vector<chrome::mojom::ProfileMenuItemPtr>());
 }
 
@@ -787,11 +833,11 @@ void AppShimController::BindNotificationService(
         handler) {
   CHECK(
       base::FeatureList::IsEnabled(features::kAppShimNotificationAttribution));
-  // TODO(https://crbug.com/938661): Once ad-hoc signed app shims become the
+  // TODO(crbug.com/40616749): Once ad-hoc signed app shims become the
   // default on supported platforms, change this to always use the
   // UNUserNotification API (and not support notification attribution on other
   // platforms at all).
-  if (app_mode::UseAdHocSigningForWebAppShims()) {
+  if (WebAppIsAdHocSigned()) {
     // While the constructor should have created the `notification_service_`
     // instance already, it is possible that the base::FeatureList state at the
     // time did not match the current Chrome state, so make sure to create the
@@ -801,6 +847,9 @@ void AppShimController::BindNotificationService(
       notification_service_ =
           std::make_unique<mac_notifications::MacNotificationServiceUN>(
               std::move(notification_action_handler_remote_),
+              base::BindRepeating(
+                  &AppShimController::NotificationPermissionStatusChanged,
+                  base::Unretained(this)),
               UNUserNotificationCenter.currentNotificationCenter);
     }
     // Note that `handler` as passed in to this method is ignored. Notification
@@ -809,23 +858,33 @@ void AppShimController::BindNotificationService(
     // be triggered before the browser process tries to connect to the
     // notification service.
     notification_service_un()->Bind(std::move(service));
-    // TODO(crbug.com/938661): Determine when to ask for permissions.
+    // TODO(crbug.com/40616749): Determine when to ask for permissions.
     notification_service_un()->RequestPermission(base::DoNothing());
   } else {
+    // NSUserNotificationCenter is in the process of being replaced, and
+    // warnings about its deprecation are not helpful. https://crbug.com/1127306
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     notification_service_ =
         std::make_unique<mac_notifications::MacNotificationServiceNS>(
             std::move(service), std::move(handler),
             [NSUserNotificationCenter defaultUserNotificationCenter]);
+#pragma clang diagnostic pop
   }
 }
 
 mac_notifications::MacNotificationServiceUN*
 AppShimController::notification_service_un() {
-  if (!app_mode::UseAdHocSigningForWebAppShims()) {
+  if (!WebAppIsAdHocSigned()) {
     return nullptr;
   }
   return static_cast<mac_notifications::MacNotificationServiceUN*>(
       notification_service_.get());
+}
+
+void AppShimController::NotificationPermissionStatusChanged(
+    mac_notifications::mojom::PermissionStatus status) {
+  host_->NotificationPermissionStatusChanged(status);
 }
 
 void AppShimController::SetUserAttention(
@@ -910,5 +969,20 @@ NSMenu* AppShimController::GetApplicationDockMenu() {
 }
 
 void AppShimController::ApplicationWillTerminate() {
+  // Local histogram to let tests verify that histograms are emitted properly.
+  LOCAL_HISTOGRAM_BOOLEAN("AppShim.WillTerminate", true);
   host_->ApplicationWillTerminate();
+}
+
+void AppShimController::BindChildHistogramFetcherFactory(
+    mojo::PendingReceiver<metrics::mojom::ChildHistogramFetcherFactory>
+        receiver) {
+  metrics::ChildHistogramFetcherFactoryImpl::Create(std::move(receiver));
+}
+
+bool AppShimController::WebAppIsAdHocSigned() const {
+  NSNumber* isAdHocSigned =
+      base::apple::MainBundle()
+          .infoDictionary[app_mode::kCrAppModeIsAdHocSignedKey];
+  return isAdHocSigned.boolValue;
 }

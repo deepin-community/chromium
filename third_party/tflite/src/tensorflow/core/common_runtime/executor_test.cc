@@ -46,7 +46,6 @@ limitations under the License.
 #include "tensorflow/core/platform/strcat.h"
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/platform/test_benchmark.h"
-#include "tensorflow/core/platform/tracing.h"
 #include "tensorflow/core/public/session_options.h"
 
 namespace tensorflow {
@@ -97,12 +96,17 @@ class ExecutorTest : public ::testing::Test {
     runner_ = [this](std::function<void()> fn) { thread_pool_->Schedule(fn); };
   }
 
-  Status Run(Rendezvous* rendez) {
+  absl::Status Run(Rendezvous* rendez) {
     Executor::Args args;
     args.rendezvous = rendez;
     args.stats_collector = &step_stats_collector_;
     args.runner = runner_;
     return exec_->Run(args);
+  }
+
+  const StepStats& GetStepStats() {
+    step_stats_collector_.Finalize();
+    return step_stats_;
   }
 
   thread::ThreadPool* thread_pool_ = nullptr;
@@ -124,7 +128,7 @@ Tensor V(const float val) {
 // A int32 val -> Tensor<int32>
 Tensor VI(const int32_t val) {
   Tensor tensor(DT_INT32, TensorShape({}));
-  tensor.scalar<int32>()() = val;
+  tensor.scalar<int32_t>()() = val;
   return tensor;
 }
 
@@ -149,10 +153,11 @@ float V(const Tensor& tensor) {
   return tensor.scalar<float>()();
 }
 
-static uint64 kIncarnation = 1;  // Uses in following tests.
+static uint64_t kIncarnation = 1;  // Uses in following tests.
 
-Rendezvous::ParsedKey Key(const string& sender, const uint64 incarnation,
-                          const string& receiver, const string& name) {
+Rendezvous::ParsedKey Key(const std::string& sender, const uint64_t incarnation,
+                          const std::string& receiver,
+                          const std::string& name) {
   Rendezvous::ParsedKey result;
   CHECK(
       Rendezvous::ParseKey(Rendezvous::CreateKey(sender, incarnation, receiver,
@@ -184,6 +189,60 @@ TEST_F(ExecutorTest, SimpleAdd) {
   TF_ASSERT_OK(
       rendez_->Recv(Key(BOB, kIncarnation, ALICE, "c"), args, &out, &is_dead));
   EXPECT_EQ(2.0, V(out));  // out = 1.0 + 1.0 = 2.0
+}
+
+TEST_F(ExecutorTest, StepStatsNumerical) {
+  // Similar to SimpleAdd, but tests numerical values in StepStats
+
+  // c = a + b
+  auto g = std::make_unique<Graph>(OpRegistry::Global());
+  auto in0 = test::graph::Recv(g.get(), "a", "float", ALICE, 1, BOB);
+  auto in1 = test::graph::Recv(g.get(), "b", "float", ALICE, 1, BOB);
+  auto tmp = test::graph::Add(g.get(), in0, in1);
+  test::graph::Send(g.get(), tmp, "c", BOB, 1, ALICE);
+  Create(std::move(g));
+  Rendezvous::Args args;
+  TF_ASSERT_OK(rendez_->Send(Key(ALICE, kIncarnation, BOB, "a"), args, V(1.0),
+                             false));  // in0 = 1.0
+  TF_ASSERT_OK(rendez_->Send(Key(ALICE, kIncarnation, BOB, "b"), args, V(1.0),
+                             false));  // in1 = 1.0
+  TF_ASSERT_OK(Run(rendez_));
+  Tensor out = V(-1);
+  bool is_dead = false;
+  TF_ASSERT_OK(
+      rendez_->Recv(Key(BOB, kIncarnation, ALICE, "c"), args, &out, &is_dead));
+  EXPECT_EQ(2.0, V(out));  // out = 1.0 + 1.0 = 2.0
+
+  auto& step_stats = GetStepStats();
+  EXPECT_EQ(1, step_stats.dev_stats_size());
+  for (const auto& dev_stat : step_stats.dev_stats()) {
+    EXPECT_EQ(2, dev_stat.node_stats_size());
+    for (const auto& node_stat : dev_stat.node_stats()) {
+      // scheduled_nanos <= all_start_nanos <= op_start_nanos <= op_end_nanos <=
+      // all_end_nanos
+      auto scheduled_nanos = node_stat.scheduled_nanos();
+      auto all_start_nanos = node_stat.all_start_nanos();
+      auto op_start_nanos = all_start_nanos + node_stat.op_start_rel_nanos();
+      auto op_end_nanos = all_start_nanos + node_stat.op_end_rel_nanos();
+      auto all_end_nanos = all_start_nanos + node_stat.all_end_rel_nanos();
+      EXPECT_LE(scheduled_nanos, all_start_nanos);
+      EXPECT_LE(all_start_nanos, op_start_nanos);
+      EXPECT_LE(op_start_nanos, op_end_nanos);
+      EXPECT_LE(op_end_nanos, all_end_nanos);
+
+      auto scheduled_micros = node_stat.scheduled_micros();
+      auto all_start_micros = node_stat.all_start_micros();
+      auto op_start_micros = all_start_micros + node_stat.op_start_rel_micros();
+      auto op_end_micros = all_start_micros + node_stat.op_end_rel_micros();
+      auto all_end_micros = all_start_micros + node_stat.all_end_rel_micros();
+      const int64_t kMicrosToNanos = 1000;
+      EXPECT_EQ(scheduled_nanos / kMicrosToNanos, scheduled_micros);
+      EXPECT_EQ(all_start_nanos / kMicrosToNanos, all_start_micros);
+      EXPECT_EQ(op_start_nanos / kMicrosToNanos, op_start_micros);
+      EXPECT_EQ(op_end_nanos / kMicrosToNanos, op_end_micros);
+      EXPECT_EQ(all_end_nanos / kMicrosToNanos, all_end_micros);
+    }
+  }
 }
 
 TEST_F(ExecutorTest, SelfAdd) {
@@ -357,22 +416,22 @@ TEST_F(ExecutorTest, Abort) {
   rendez_->Ref();
   SchedClosure([this]() {
     Env::Default()->SleepForMicroseconds(100 * 1000);
-    Status s = rendez_->Send(Key(ALICE, kIncarnation, BOB, "a"),
-                             Rendezvous::Args(), V(1.0), false);
+    absl::Status s = rendez_->Send(Key(ALICE, kIncarnation, BOB, "a"),
+                                   Rendezvous::Args(), V(1.0), false);
     rendez_->Unref();
   });
   rendez_->Ref();
   SchedClosure([this]() {
     Env::Default()->SleepForMicroseconds(100 * 1000);
-    Status s = rendez_->Send(Key(ALICE, kIncarnation, BOB, "b"),
-                             Rendezvous::Args(), V(1.0), false);
+    absl::Status s = rendez_->Send(Key(ALICE, kIncarnation, BOB, "b"),
+                                   Rendezvous::Args(), V(1.0), false);
     rendez_->Unref();
   });
   rendez_->Ref();
   SchedClosure([this]() {
     Env::Default()->SleepForMicroseconds(100 * 1000);
-    Status s = rendez_->Send(Key(ALICE, kIncarnation, BOB, "c"),
-                             Rendezvous::Args(), V(1.0), false);
+    absl::Status s = rendez_->Send(Key(ALICE, kIncarnation, BOB, "c"),
+                                   Rendezvous::Args(), V(1.0), false);
     rendez_->Unref();
   });
   rendez_->Ref();
@@ -381,10 +440,10 @@ TEST_F(ExecutorTest, Abort) {
     rendez_->StartAbort(errors::Aborted(""));
     rendez_->Unref();
   });
-  EXPECT_TRUE(errors::IsAborted(Run(rendez_)));
+  EXPECT_TRUE(absl::IsAborted(Run(rendez_)));
   Tensor out = V(-1);
   bool is_dead = false;
-  EXPECT_TRUE(errors::IsAborted(rendez_->Recv(
+  EXPECT_TRUE(absl::IsAborted(rendez_->Recv(
       Key(BOB, kIncarnation, ALICE, "c"), Rendezvous::Args(), &out, &is_dead)));
   // At this point there can still be pending (albeit Aborted) Send
   // closures holding Refs on rendez_.  We need to wait for them, or
@@ -409,10 +468,10 @@ TEST_F(ExecutorTest, RecvInvalidDtype) {
   TF_ASSERT_OK(rendez->Send(Key(ALICE, 1, BOB, "one"), Rendezvous::Args(),
                             VD(1.0), false));
   // Fails due to invalid dtype.
-  EXPECT_TRUE(errors::IsInternal(Run(rendez)));
+  EXPECT_TRUE(absl::IsInternal(Run(rendez)));
   Tensor output;
   bool is_dead;
-  EXPECT_TRUE(errors::IsInternal(rendez->Recv(
+  EXPECT_TRUE(absl::IsInternal(rendez->Recv(
       Key(BOB, 1, ALICE, "two"), Rendezvous::Args(), &output, &is_dead)));
   rendez->Unref();
 }
@@ -424,10 +483,10 @@ TEST_F(ExecutorTest, RecvInvalidRefDtype) {
   test::graph::Send(g.get(), var, "out", BOB, 1, ALICE);
   Create(std::move(g));
   Rendezvous* rendez = NewLocalRendezvous();
-  EXPECT_TRUE(errors::IsInternal(Run(rendez)));
+  EXPECT_TRUE(absl::IsInternal(Run(rendez)));
   Tensor output;
   bool is_dead;
-  EXPECT_TRUE(errors::IsInternal(rendez->Recv(
+  EXPECT_TRUE(absl::IsInternal(rendez->Recv(
       Key(BOB, 1, ALICE, "out"), Rendezvous::Args(), &output, &is_dead)));
   rendez->Unref();
 }
@@ -450,8 +509,8 @@ static void BM_executor(::testing::benchmark::State& state) {
   Graph* g = new Graph(OpRegistry::Global());
   random::PhiloxRandom philox(1729, 17);
   random::SimplePhilox rand(&philox);
-  uint64 cur = 0;
-  uint32 r = 1 + rand.Rand32() % width;
+  uint64_t cur = 0;
+  uint32_t r = 1 + rand.Rand32() % width;
   std::vector<Node*> ready_nodes;
   for (int i = 0; i < r; ++i) {
     ready_nodes.push_back(test::graph::NoOp(g, {}));
@@ -479,7 +538,7 @@ static void BM_executor(::testing::benchmark::State& state) {
   FixupSourceAndSinkEdges(g);
   test::Benchmark("cpu", g, /*old_benchmark_api=*/false).Run(state);
 
-  state.SetLabel(strings::StrCat("Nodes = ", cur));
+  state.SetLabel(absl::StrCat("Nodes = ", cur));
   state.SetItemsProcessed(cur * static_cast<int64_t>(state.iterations()));
 }
 
@@ -508,7 +567,7 @@ static void BM_const_identity(::testing::benchmark::State& state) {
   }
   FixupSourceAndSinkEdges(g);
   test::Benchmark("cpu", g, /*old_benchmark_api=*/false).Run(state);
-  state.SetLabel(strings::StrCat("Nodes = ", (1 + outputs_per_const) * width));
+  state.SetLabel(absl::StrCat("Nodes = ", (1 + outputs_per_const) * width));
   state.SetItemsProcessed((1 + outputs_per_const) * width *
                           static_cast<int64_t>(state.iterations()));
 }
@@ -531,9 +590,9 @@ static void BM_FeedInputFetchOutput(::testing::benchmark::State& state) {
   Node* sum = test::graph::Add(g, x, y);
   Node* z = test::graph::Send(g, sum, "z", BOB, 1, ALICE);
 
-  string x_key = test::GetRendezvousKey(x);
-  string y_key = test::GetRendezvousKey(y);
-  string z_key = test::GetRendezvousKey(z);
+  std::string x_key = test::GetRendezvousKey(x);
+  std::string y_key = test::GetRendezvousKey(y);
+  std::string z_key = test::GetRendezvousKey(z);
 
   Tensor val(DT_FLOAT, TensorShape({}));
   val.scalar<float>()() = 3.14;
@@ -544,10 +603,11 @@ static void BM_FeedInputFetchOutput(::testing::benchmark::State& state) {
 }
 BENCHMARK(BM_FeedInputFetchOutput);
 
-Status ReplaceEdgeWithSendRecv(Graph* g, const Edge* edge, const string& tensor,
-                               const string& sender,
-                               const uint64 sender_incarnation,
-                               const string& receiver) {
+absl::Status ReplaceEdgeWithSendRecv(Graph* g, const Edge* edge,
+                                     const std::string& tensor,
+                                     const std::string& sender,
+                                     const uint64_t sender_incarnation,
+                                     const std::string& receiver) {
   Node* send;
   NodeDef send_def;
   TF_CHECK_OK(NodeDefBuilder(g->NewName("n"), "_Send")
@@ -604,20 +664,20 @@ static void BM_WhileLoopHelper(::testing::benchmark::State& state,
   FunctionDefLibrary f_lib_proto;
 
   // Define the loop body as a function: `x = x + 1`.
-  const Tensor one_t = test::AsScalar<int32>(1);
+  const Tensor one_t = test::AsScalar<int32_t>(1);
 
-  std::vector<string> args;
+  std::vector<std::string> args;
   args.reserve(loop_vars);
   args.push_back("x: int32");
   for (int i = 1; i < loop_vars; ++i) {
-    args.push_back(strings::StrCat("x", i, ": int32"));
+    args.push_back(absl::StrCat("x", i, ": int32"));
   }
 
-  std::vector<string> body_rets;
+  std::vector<std::string> body_rets;
   body_rets.reserve(loop_vars);
   body_rets.push_back("y: int32");
   for (int i = 1; i < loop_vars; ++i) {
-    body_rets.push_back(strings::StrCat("y", i, ": int32"));
+    body_rets.push_back(absl::StrCat("y", i, ": int32"));
   }
 
   std::vector<FunctionDefHelper::Node> body_nodes;
@@ -626,9 +686,9 @@ static void BM_WhileLoopHelper(::testing::benchmark::State& state,
       {{"one"}, "Const", {}, {{"value", one_t}, {"dtype", DT_INT32}}});
   body_nodes.push_back({{"y"}, "Add", {"x", "one"}, {{"T", DT_INT32}}});
   for (int i = 1; i < loop_vars; ++i) {
-    body_nodes.push_back({{strings::StrCat("y", i)},
+    body_nodes.push_back({{absl::StrCat("y", i)},
                           "Relu",
-                          {strings::StrCat("x", i)},
+                          {absl::StrCat("x", i)},
                           {{"T", DT_INT32}}});
   }
 
@@ -645,7 +705,7 @@ static void BM_WhileLoopHelper(::testing::benchmark::State& state,
       body_nodes);
 
   // Define the loop condition as a function: `x < loop_iters`.
-  const Tensor loop_iters_t = test::AsScalar<int32>(loop_iters);
+  const Tensor loop_iters_t = test::AsScalar<int32_t>(loop_iters);
   *f_lib_proto.add_function() = FunctionDefHelper::Define(
       // Name
       "LessThanOrEqualToN",
@@ -717,7 +777,7 @@ static void BM_WhileLoopHelper(::testing::benchmark::State& state,
           if (edge->dst()->type_string() != "Switch") {
             continue;
           }
-          string tensor_name = strings::StrCat("c", edge->id());
+          std::string tensor_name = absl::StrCat("c", edge->id());
           TF_ASSERT_OK(ReplaceEdgeWithSendRecv(graph.get(), edge, tensor_name,
                                                BOB, 1, ALICE));
         }

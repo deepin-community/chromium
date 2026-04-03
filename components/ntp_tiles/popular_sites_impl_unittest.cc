@@ -116,11 +116,10 @@ class PopularSitesTest : public ::testing::Test {
     prefs_->SetString(prefs::kPopularSitesOverrideVersion, version);
   }
 
-  base::Value::List CreateListFromTestSites(
-      const TestPopularSiteVector& sites) {
-    base::Value::List sites_value;
+  base::ListValue CreateListFromTestSites(const TestPopularSiteVector& sites) {
+    base::ListValue sites_value;
     for (const TestPopularSite& site : sites) {
-      base::Value::Dict site_value;
+      base::DictValue site_value;
       for (const std::pair<const std::string, std::string>& kv : site) {
         if (kv.first == kTitleSource) {
           int source;
@@ -138,23 +137,22 @@ class PopularSitesTest : public ::testing::Test {
 
   void RespondWithV5JSON(const std::string& url,
                          const TestPopularSiteVector& sites) {
-    std::string sites_string;
-    base::JSONWriter::Write(CreateListFromTestSites(sites), &sites_string);
+    std::string sites_string =
+        base::WriteJson(CreateListFromTestSites(sites)).value_or("");
     test_url_loader_factory_.AddResponse(url, sites_string);
   }
 
   void RespondWithV6JSON(const std::string& url,
                          const TestPopularSectionVector& sections) {
-    base::Value::List sections_value;
+    base::ListValue sections_value;
     sections_value.reserve(sections.size());
     for (const TestPopularSection& section : sections) {
-      base::Value::Dict section_value;
+      base::DictValue section_value;
       section_value.Set(kSection, static_cast<int>(section.first));
       section_value.Set(kSites, CreateListFromTestSites(section.second));
       sections_value.Append(std::move(section_value));
     }
-    std::string sites_string;
-    base::JSONWriter::Write(sections_value, &sites_string);
+    std::string sites_string = base::WriteJson(sections_value).value_or("");
     test_url_loader_factory_.AddResponse(url, sites_string);
   }
 
@@ -433,6 +431,20 @@ TEST_F(PopularSitesTest, DoesntUseCachedFileIfDownloadForced) {
   EXPECT_THAT(FetchPopularSites(/*force_download=*/true, &sites),
               Eq(std::optional<bool>(true)));
   EXPECT_THAT(sites[0].url, URLEq("https://www.chromium.org/"));
+}
+
+// V7 uses the V5 format. ParseSites() should be detect this, and fall back to
+// to ParseSimple().
+TEST_F(PopularSitesTest, ParsesV7AsV5) {
+  SetCountryAndVersion("ZZ", "7");
+  RespondWithV5JSON(
+      "https://www.gstatic.com/chrome/ntp/suggested_sites_ZZ_7.json",
+      {kChromium});
+  PopularSites::SitesVector sites;
+  EXPECT_THAT(FetchPopularSites(/*force_download=*/false, &sites),
+              Eq(std::optional<bool>(true)));
+  EXPECT_THAT(sites[0].url, URLEq("https://www.chromium.org/"));
+  EXPECT_THAT(prefs_->GetInteger(prefs::kPopularSitesVersionPref), Eq(7));
 }
 
 TEST_F(PopularSitesTest, DoesntUseCacheWithDeprecatedVersion) {

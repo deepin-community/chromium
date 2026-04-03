@@ -22,6 +22,9 @@ limitations under the License.
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/test.h"
+#include "xla/tsl/protobuf/error_codes.pb.h"
 #include "tensorflow/core/data/service/common.pb.h"
 #include "tensorflow/core/data/service/data_transfer.h"
 #include "tensorflow/core/data/service/dataset_store.h"
@@ -38,10 +41,7 @@ limitations under the License.
 #include "tensorflow/core/protobuf/error_codes.pb.h"
 #include "tensorflow/core/protobuf/snapshot.pb.h"
 #include "tensorflow/core/protobuf/struct.pb.h"
-#include "tsl/platform/env.h"
 #include "tsl/platform/path.h"
-#include "tsl/platform/test.h"
-#include "tsl/protobuf/error_codes.pb.h"
 
 namespace tensorflow {
 namespace data {
@@ -89,7 +89,7 @@ class DispatcherClientTest : public ::testing::Test {
   }
 
   // Creates a dataset and returns the dataset ID.
-  StatusOr<std::string> RegisterDataset(
+  absl::StatusOr<std::string> RegisterDataset(
       const DatasetDef& dataset, const DataServiceMetadata& metadata,
       const std::optional<std::string>& requested_dataset_id = std::nullopt) {
     std::string dataset_id;
@@ -99,7 +99,7 @@ class DispatcherClientTest : public ::testing::Test {
   }
 
   // Starts snapshots and returns the directories.
-  StatusOr<absl::flat_hash_set<std::string>> StartDummySnapshots(
+  absl::StatusOr<absl::flat_hash_set<std::string>> StartDummySnapshots(
       int64_t num_snapshots) {
     DistributedSnapshotMetadata metadata =
         CreateDummyDistributedSnapshotMetadata();
@@ -137,7 +137,8 @@ TEST_F(DispatcherClientTest, DatasetDoesNotExist) {
   EXPECT_THAT(
       dispatcher_client_->GetDataServiceMetadata(
           /*dataset_id=*/"not-found", metadata),
-      StatusIs(error::NOT_FOUND, HasSubstr("Dataset id not-found not found")));
+      absl_testing::StatusIs(error::NOT_FOUND,
+                             HasSubstr("Dataset id not-found not found")));
 }
 
 TEST_F(DispatcherClientTest, SnapshotAlreadyStarted) {
@@ -149,7 +150,8 @@ TEST_F(DispatcherClientTest, SnapshotAlreadyStarted) {
       dispatcher_client_->Snapshot(RangeDataset(10), directory, metadata));
   EXPECT_THAT(
       dispatcher_client_->Snapshot(RangeDataset(10), directory, metadata),
-      StatusIs(error::ALREADY_EXISTS, HasSubstr("already started")));
+      absl_testing::StatusIs(error::ALREADY_EXISTS,
+                             HasSubstr("already started")));
 }
 
 TEST_F(DispatcherClientTest, GetDataServiceConfig) {
@@ -298,7 +300,7 @@ TEST_F(DispatcherClientTest, DatasetsDoNotMatch) {
   EXPECT_THAT(
       RegisterDataset(InfiniteDataset(), metadata,
                       /*requested_dataset_id=*/"dataset_id"),
-      StatusIs(
+      absl_testing::StatusIs(
           error::INVALID_ARGUMENT,
           HasSubstr(
               "Datasets with the same ID should have the same structure")));
@@ -380,11 +382,12 @@ TEST_F(DispatcherClientTest, NamedJobsDoNotMatch) {
                                          /*num_consumers=*/std::nullopt,
                                          /*use_cross_trainer_cache=*/true,
                                          TARGET_WORKERS_AUTO, job_id),
-      StatusIs(error::INVALID_ARGUMENT,
-               AllOf(HasSubstr("but found an existing job with different "
-                               "parameters: "),
-                     HasSubstr("Existing processing mode: <>"),
-                     HasSubstr("Existing cross-trainer cache: <disabled>"))));
+      absl_testing::StatusIs(
+          error::INVALID_ARGUMENT,
+          AllOf(HasSubstr("but found an existing job with different "
+                          "parameters: "),
+                HasSubstr("Existing processing mode: <"),
+                HasSubstr("Existing cross-trainer cache: <disabled>"))));
 }
 
 class DispatcherClientTest_DatasetId

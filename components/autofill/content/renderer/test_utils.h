@@ -54,7 +54,7 @@ blink::WebFormControlElement GetFormControlElementById(
   blink::WebFormControlElement e =
       GetElementById(t, id, allow_null)
           .template DynamicTo<blink::WebFormControlElement>();
-  CHECK(allow_null || !e.IsNull());
+  CHECK(allow_null || e);
   return e;
 }
 
@@ -68,7 +68,7 @@ blink::WebFormElement GetFormElementById(
     AllowNull allow_null = AllowNull(false)) {
   blink::WebFormElement e = GetElementById(t, id, allow_null)
                                 .template DynamicTo<blink::WebFormElement>();
-  CHECK(allow_null || !e.IsNull());
+  CHECK(allow_null || e);
   return e;
 }
 
@@ -77,6 +77,12 @@ blink::WebFormElement GetFormElementById(
 content::RenderFrame* GetIframeById(const blink::WebDocument& doc,
                                     std::string_view id,
                                     AllowNull allow_null = AllowNull(false));
+
+// Returns the WebDocument of the iframe with the given `id`.
+blink::WebDocument GetIframeDocumentById(
+    const blink::WebDocument& doc,
+    std::string_view id,
+    AllowNull allow_null = AllowNull(false));
 
 // Returns the FrameToken of the iframe element with the given |id|.
 FrameToken GetFrameToken(const blink::WebDocument& doc,

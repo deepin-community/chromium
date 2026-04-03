@@ -10,6 +10,7 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/types/optional_ref.h"
 #include "content/browser/first_party_sets/first_party_sets_handler_impl.h"
 #include "content/public/browser/first_party_sets_handler.h"
 #include "net/first_party_sets/first_party_sets_cache_filter.h"
@@ -17,9 +18,9 @@
 #include "net/first_party_sets/global_first_party_sets.h"
 
 namespace base {
-class Version;
+class DictValue;
 class File;
-class Value;
+class Version;
 }  // namespace base
 
 namespace content {
@@ -45,7 +46,7 @@ class ScopedMockFirstPartySetsHandler
       const net::SchemefulSite& site,
       const net::FirstPartySetsContextConfig& config) const override;
   void GetContextConfigForPolicy(
-      const base::Value::Dict* policy,
+      base::optional_ref<const base::DictValue> policy,
       base::OnceCallback<void(net::FirstPartySetsContextConfig)> callback)
       override;
   void ClearSiteDataOnChangedSetsForContext(
@@ -58,7 +59,7 @@ class ScopedMockFirstPartySetsHandler
       override;
   void ComputeFirstPartySetMetadata(
       const net::SchemefulSite& site,
-      const net::SchemefulSite* top_frame_site,
+      base::optional_ref<const net::SchemefulSite> top_frame_site,
       const net::FirstPartySetsContextConfig& config,
       base::OnceCallback<void(net::FirstPartySetMetadata)> callback) override;
   bool ForEachEffectiveSetEntry(

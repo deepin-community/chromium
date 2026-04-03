@@ -17,18 +17,19 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <istream>
 #include <mutex>  //NOLINT
+#include <ostream>
 #include <string_view>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
-#include "absl/log/check.h"
-#include "./centipede/defs.h"
-#include "./centipede/logging.h"
 #include "./centipede/pc_info.h"
+#include "./common/defs.h"
+#include "./common/logging.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
 class SymbolTable;  // To avoid mutual inclusion with symbol_table.h.
 
@@ -55,7 +56,13 @@ using PCIndexVec = std::vector<PCIndex>;
 using CFTable = std::vector<intptr_t>;
 
 // Reads a CFTable from `file_path`, returns it. Returns empty table on error.
-CFTable ReadCfTableFromFile(std::string_view file_path);
+CFTable ReadCfTable(std::string_view file_path);
+
+// Same as above but reads from a stream.
+CFTable ReadCfTable(std::istream &in);
+
+// Writes the `cf_table` to `out`.
+void WriteCfTable(const CFTable &cf_table, std::ostream &out);
 
 // Reads a DsoTable from `file_path`, returns it. Returns empty table on error.
 DsoTable ReadDsoTableFromFile(std::string_view file_path);
@@ -78,26 +85,27 @@ class ControlFlowGraph {
     return graph_.contains(basic_block);
   }
 
-  // Returns cyclomatic complexity of function PC. CHECK-fails if it is not a
-  // valid function PC.
+  // Returns cyclomatic complexity of function PC. FUZZTEST_CHECK-fails if it is
+  // not a valid function PC.
   uint32_t GetCyclomaticComplexity(uintptr_t pc) const {
     auto it = function_complexities_.find(pc);
-    CHECK(it != function_complexities_.end());
+    FUZZTEST_CHECK(it != function_complexities_.end());
     return it->second;
   }
 
   // Returns true if the given basic block is function entry.
   bool BlockIsFunctionEntry(PCIndex pc_index) const {
-    // TODO(ussuri): Change the following to use CHECK_LE(pc_index,
+    // TODO(ussuri): Change the following to use FUZZTEST_CHECK_LE(pc_index,
     // func_entries_.size()) and have a death test.
     return pc_index < func_entries_.size() ? func_entries_[pc_index] : false;
   }
 
-  // Returns the idx in pc_table associated with the PC, CHECK-fails if the PC
-  // is not in the pc_table.
+  // Returns the idx in pc_table associated with the PC, FUZZTEST_CHECK-fails if
+  // the PC is not in the pc_table.
   PCIndex GetPcIndex(uintptr_t pc) const {
     auto it = pc_index_map_.find(pc);
-    CHECK(it != pc_index_map_.end()) << VV(pc) << " is not in pc_table.";
+    FUZZTEST_CHECK(it != pc_index_map_.end())
+        << VV(pc) << " is not in pc_table.";
     return it->second;
   }
 
@@ -109,7 +117,7 @@ class ControlFlowGraph {
   // The method is const, under the hood it uses a mutable data member.
   // Thread-safe: can be called concurrently from multiple threads
   const std::vector<uintptr_t> &LazyGetReachabilityForPc(uintptr_t pc) const {
-    CHECK_EQ(reachability_.size(), pc_index_map_.size());
+    FUZZTEST_CHECK_EQ(reachability_.size(), pc_index_map_.size());
     auto pc_index = GetPcIndex(pc);
     std::call_once(*(reachability_[pc_index].once), [this, &pc, &pc_index]() {
       reachability_[pc_index].reach = ComputeReachabilityForPc(pc);
@@ -154,5 +162,5 @@ class ControlFlowGraph {
 uint32_t ComputeFunctionCyclomaticComplexity(uintptr_t pc,
                                              const ControlFlowGraph &cfg);
 
-}  // namespace centipede
+}  // namespace fuzztest::internal
 #endif  // THIRD_PARTY_CENTIPEDE_CONTROL_FLOW_H_

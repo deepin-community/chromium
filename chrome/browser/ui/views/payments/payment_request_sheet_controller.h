@@ -19,7 +19,7 @@ class Event;
 namespace views {
 class MdTextButton;
 class View;
-}
+}  // namespace views
 
 namespace payments {
 
@@ -76,7 +76,7 @@ class PaymentRequestSheetController {
 
   // Stops the controller from controlling the UI. Used when the UI is being
   // destroyed.
-  void Stop() { is_active_ = false; }
+  virtual void Stop();
 
   // Called when the back button is pressed on the dialog.
   void BackButtonPressed();
@@ -151,23 +151,6 @@ class PaymentRequestSheetController {
   // +---------------------------+
   virtual void PopulateSheetHeaderView(views::View* view);
 
-  // Creates and returns the view to be inserted in the header, next to the
-  // close/back button. This is typically the sheet's title but it can be
-  // overriden to return a different kind of view as long as it fits inside the
-  // header.
-  //
-  // TODO(crbug.com/1385136): Remove once minimal PaymentHandler UX rolls out
-  // and this override is no longer needed.
-  virtual std::unique_ptr<views::View> CreateHeaderContentView(
-      views::View* header_view);
-
-  // Returns the background to use for the header section of the sheet.
-  //
-  // TODO(crbug.com/1385136): Remove once minimal PaymentHandler UX rolls out
-  // and this override is no longer needed.
-  virtual std::unique_ptr<views::Background> GetHeaderBackground(
-      views::View* header_view);
-
   // Creates the row of button containing the Pay, cancel, and extra buttons.
   // |controller| is installed as the listener for button events.
   std::unique_ptr<views::View> CreateFooterView();
@@ -217,6 +200,9 @@ class PaymentRequestSheetController {
   // concrete (aka leaf) class in order to avoid subtle use-after-destroy
   // issues.
   virtual base::WeakPtr<PaymentRequestSheetController> GetWeakPtr() = 0;
+
+ protected:
+  views::View* header_view() { return header_view_; }
 
  private:
   // Add the primary/secondary buttons to |container|.

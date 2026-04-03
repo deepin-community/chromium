@@ -5,9 +5,11 @@
 #include "chrome/browser/web_applications/web_app_helpers.h"
 
 #include "base/check_op.h"
+#include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -54,7 +56,7 @@ std::string MaybeConcatenateParentAppManifestId(
 const char kCrxAppPrefix[] = "_crx_";
 
 std::string GenerateApplicationNameFromURL(const GURL& url) {
-  return base::StrCat({url.host_piece(), "_", url.path_piece()});
+  return base::StrCat({url.host(), "_", url.path()});
 }
 
 std::string GenerateApplicationNameFromAppId(const webapps::AppId& app_id) {
@@ -105,7 +107,7 @@ webapps::AppId GenerateAppIdFromManifestId(
 
 webapps::ManifestId GenerateManifestIdFromStartUrlOnly(const GURL& start_url) {
   CHECK(start_url.is_valid()) << start_url.spec();
-  return start_url.GetWithoutRef();
+  return webapps::ManifestId(start_url.GetWithoutRef());
 }
 
 webapps::ManifestId GenerateManifestId(const std::string& manifest_id_path,
@@ -126,7 +128,7 @@ webapps::ManifestId GenerateManifestIdUnsafe(
   // with slash.
   const GURL manifest_id(start_url.DeprecatedGetOriginAsURL().spec() +
                          manifest_id_path);
-  return manifest_id.GetWithoutRef();
+  return webapps::ManifestId(manifest_id.GetWithoutRef());
 }
 
 namespace {
@@ -142,13 +144,21 @@ bool IsValidWebAppUrl(const GURL& app_url) {
   if (app_url.is_empty() || app_url.inner_url())
     return false;
 
-  // TODO(crbug.com/1253234): Remove chrome-extension scheme.
+  bool allow_extension_apps = true;
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  // Stop allowing apps to be extension urls when the shortcuts are separated -
+  // they can be extension urls instead.
+  allow_extension_apps = false;
+#endif
+
+  // TODO(crbug.com/40793595): Remove chrome-extension scheme.
   return app_url.SchemeIs(url::kHttpScheme) ||
          app_url.SchemeIs(url::kHttpsScheme) ||
-         app_url.SchemeIs("chrome-extension") ||
+         (allow_extension_apps && app_url.SchemeIs("chrome-extension")) ||
          (app_url.SchemeIs(content::kChromeUIScheme) &&
-          ((app_url.host() == password_manager::kChromeUIPasswordManagerHost) ||
-           ValidChromeUrlHosts().contains(app_url.host())));
+          ((app_url.GetHost() ==
+            password_manager::kChromeUIPasswordManagerHost) ||
+           ValidChromeUrlHosts().contains(app_url.GetHost())));
 }
 
 base::ScopedClosureRunner AddValidWebAppChromeUrlHostForTesting(  // IN-TEST
@@ -166,16 +176,23 @@ std::optional<webapps::AppId> FindInstalledAppWithUrlInScope(Profile* profile,
                                                              const GURL& url,
                                                              bool window_only) {
   auto* provider = WebAppProvider::GetForLocalAppsUnchecked(profile);
-  return provider ? provider->registrar_unsafe().FindInstalledAppWithUrlInScope(
-                        url, window_only)
-                  : std::nullopt;
+  return provider
+             ? provider->registrar_unsafe().FindBestAppWithUrlInScope(
+                   url, window_only
+                            ? web_app::WebAppFilter::OpensInDedicatedWindow()
+                            : web_app::WebAppFilter::InstalledInChrome())
+             : std::nullopt;
 }
 
 bool IsNonLocallyInstalledAppWithUrlInScope(Profile* profile, const GURL& url) {
-  auto* provider = WebAppProvider::GetForWebApps(profile);
-  return provider ? provider->registrar_unsafe()
-                        .IsNonLocallyInstalledAppWithUrlInScope(url)
-                  : false;
+  if (auto* provider = WebAppProvider::GetForWebApps(profile)) {
+    FindBestAppInScopeOptions options(WebAppFilter::IsSuggestedApp());
+    options.eligibility_filter = WebAppFilter::IsAppSurfaceableToUser();
+    return provider->registrar_unsafe()
+        .FindBestAppWithUrlInScope(url, options)
+        .has_value();
+  }
+  return false;
 }
 
 bool LooksLikePlaceholder(const WebApp& app) {

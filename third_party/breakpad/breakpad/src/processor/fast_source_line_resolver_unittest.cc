@@ -43,11 +43,11 @@
 #include <assert.h>
 #include <stdio.h>
 
+#include <memory>
 #include <sstream>
 #include <string>
 
 #include "breakpad_googletest_includes.h"
-#include "common/using_std_string.h"
 #include "google_breakpad/processor/code_module.h"
 #include "google_breakpad/processor/stack_frame.h"
 #include "google_breakpad/processor/memory_region.h"
@@ -67,20 +67,20 @@ using google_breakpad::CodeModule;
 using google_breakpad::MemoryRegion;
 using google_breakpad::StackFrame;
 using google_breakpad::WindowsFrameInfo;
-using google_breakpad::scoped_ptr;
 
 class TestCodeModule : public CodeModule {
  public:
-  explicit TestCodeModule(string code_file) : code_file_(code_file) {}
+  explicit TestCodeModule(const std::string& code_file)
+      : code_file_(code_file) {}
   virtual ~TestCodeModule() {}
 
   virtual uint64_t base_address() const { return 0; }
   virtual uint64_t size() const { return 0xb000; }
-  virtual string code_file() const { return code_file_; }
-  virtual string code_identifier() const { return ""; }
-  virtual string debug_file() const { return ""; }
-  virtual string debug_identifier() const { return ""; }
-  virtual string version() const { return ""; }
+  virtual std::string code_file() const { return code_file_; }
+  virtual std::string code_identifier() const { return ""; }
+  virtual std::string debug_file() const { return ""; }
+  virtual std::string debug_identifier() const { return ""; }
+  virtual std::string version() const { return ""; }
   virtual CodeModule* Copy() const {
     return new TestCodeModule(code_file_);
   }
@@ -89,7 +89,7 @@ class TestCodeModule : public CodeModule {
   virtual void SetShrinkDownDelta(uint64_t shrink_down_delta) {}
 
  private:
-  string code_file_;
+  std::string code_file_;
 };
 
 // A mock memory region object, for use by the STACK CFI tests.
@@ -170,7 +170,7 @@ static bool VerifyEmpty(const StackFrame& frame) {
 
 static void ClearSourceLineInfo(StackFrame* frame) {
   frame->function_name.clear();
-  frame->module = NULL;
+  frame->module = nullptr;
   frame->source_file_name.clear();
   frame->source_line = 0;
 }
@@ -178,11 +178,11 @@ static void ClearSourceLineInfo(StackFrame* frame) {
 class TestFastSourceLineResolver : public ::testing::Test {
  public:
   void SetUp() {
-    testdata_dir = string(getenv("srcdir") ? getenv("srcdir") : ".") +
-                         "/src/processor/testdata";
+    testdata_dir = std::string(getenv("srcdir") ? getenv("srcdir") : ".") +
+                   "/src/processor/testdata";
   }
 
-  string symbol_file(int file_index) {
+  std::string symbol_file(int file_index) {
     std::stringstream ss;
     ss << testdata_dir << "/module" << file_index << ".out";
     return ss.str();
@@ -193,7 +193,7 @@ class TestFastSourceLineResolver : public ::testing::Test {
   FastSourceLineResolver fast_resolver;
   ModuleComparer module_comparer;
 
-  string testdata_dir;
+  std::string testdata_dir;
 };
 
 // Test adapted from basic_source_line_resolver_unittest.
@@ -215,10 +215,10 @@ TEST_F(TestFastSourceLineResolver, TestLoadAndResolve) {
   ASSERT_TRUE(fast_resolver.HasModule(&module2));
 
   StackFrame frame;
-  scoped_ptr<WindowsFrameInfo> windows_frame_info;
-  scoped_ptr<CFIFrameInfo> cfi_frame_info;
+  std::unique_ptr<WindowsFrameInfo> windows_frame_info;
+  std::unique_ptr<CFIFrameInfo> cfi_frame_info;
   frame.instruction = 0x1000;
-  frame.module = NULL;
+  frame.module = nullptr;
   fast_resolver.FillSourceLineInfo(&frame, nullptr);
   ASSERT_FALSE(frame.module);
   ASSERT_TRUE(frame.function_name.empty());
@@ -374,13 +374,13 @@ TEST_F(TestFastSourceLineResolver, TestLoadAndResolve) {
   frame.instruction = 0x2900;
   frame.module = &module1;
   fast_resolver.FillSourceLineInfo(&frame, nullptr);
-  ASSERT_EQ(frame.function_name, string("PublicSymbol"));
+  ASSERT_EQ(frame.function_name, std::string("PublicSymbol"));
   EXPECT_EQ(frame.is_multiple, true);
 
   frame.instruction = 0x4000;
   frame.module = &module1;
   fast_resolver.FillSourceLineInfo(&frame, nullptr);
-  ASSERT_EQ(frame.function_name, string("LargeFunction"));
+  ASSERT_EQ(frame.function_name, std::string("LargeFunction"));
 
   frame.instruction = 0x2181;
   frame.module = &module2;
@@ -580,8 +580,8 @@ TEST_F(TestFastSourceLineResolver, TestUnload) {
 TEST_F(TestFastSourceLineResolver, CompareModule) {
   char* symbol_data;
   size_t symbol_data_size;
-  string symbol_data_string;
-  string filename;
+  std::string symbol_data_string;
+  std::string filename;
 
   for (int module_index = 0; module_index < 3; ++module_index) {
     std::stringstream ss;

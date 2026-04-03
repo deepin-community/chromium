@@ -5,9 +5,10 @@
 #ifndef COMPONENTS_METRICS_CONTENT_SUBPROCESS_METRICS_PROVIDER_H_
 #define COMPONENTS_METRICS_CONTENT_SUBPROCESS_METRICS_PROVIDER_H_
 
-#include <map>
 #include <memory>
 
+#include "base/containers/variant_map.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
@@ -15,6 +16,7 @@
 #include "base/scoped_multi_source_observation.h"
 #include "base/task/task_runner.h"
 #include "base/threading/thread_checker.h"
+#include "base/types/pass_key.h"
 #include "components/metrics/metrics_provider.h"
 #include "content/public/browser/browser_child_process_observer.h"
 #include "content/public/browser/render_process_host.h"
@@ -31,7 +33,7 @@ namespace metrics {
 // memory segments between processes. Merging occurs when a process exits,
 // when metrics are being collected for upload, or when something else needs
 // combined metrics (such as the chrome://histograms page).
-// TODO(crbug/1293026): Do not inherit MetricsProvider.
+// TODO(crbug.com/40213327): Do not inherit MetricsProvider.
 class SubprocessMetricsProvider
     : public MetricsProvider,
       public base::StatisticsRecorder::HistogramProvider,
@@ -39,6 +41,8 @@ class SubprocessMetricsProvider
       public content::RenderProcessHostCreationObserver,
       public content::RenderProcessHostObserver {
  public:
+  using PassKey = base::PassKey<SubprocessMetricsProvider>;
+
   SubprocessMetricsProvider(const SubprocessMetricsProvider&) = delete;
   SubprocessMetricsProvider& operator=(const SubprocessMetricsProvider&) =
       delete;
@@ -54,6 +58,16 @@ class SubprocessMetricsProvider
   static void MergeHistogramDeltasForTesting(
       bool async = false,
       base::OnceClosure done_callback = base::DoNothing());
+
+  // Indicates subprocess to be monitored with unique id for later reference.
+  // Metrics reporting will read histograms from it and upload them to UMA.
+  void RegisterSubprocessAllocator(
+      int id,
+      std::unique_ptr<base::PersistentHistogramAllocator> allocator);
+
+  // Indicates that a subprocess has exited and is thus finished with the
+  // allocator it was using.
+  void DeregisterSubprocessAllocator(int id);
 
  private:
   friend class SubprocessMetricsProviderTest;
@@ -86,16 +100,6 @@ class SubprocessMetricsProvider
   // This should never be deleted, as it handles subprocess metrics for the
   // whole lifetime of the browser process.
   ~SubprocessMetricsProvider() override;
-
-  // Indicates subprocess to be monitored with unique id for later reference.
-  // Metrics reporting will read histograms from it and upload them to UMA.
-  void RegisterSubprocessAllocator(
-      int id,
-      std::unique_ptr<base::PersistentHistogramAllocator> allocator);
-
-  // Indicates that a subprocess has exited and is thus finished with the
-  // allocator it was using.
-  void DeregisterSubprocessAllocator(int id);
 
   // base::StatisticsRecorder::HistogramProvider:
   void MergeHistogramDeltas(bool async,
@@ -136,7 +140,8 @@ class SubprocessMetricsProvider
   // Merges all histograms of the |allocators| to the global StatisticsRecorder.
   // Does not have any form of ownership on the allocators. May be called on a
   // background thread.
-  using AllocatorByIdMap = std::map<int, scoped_refptr<RefCountedAllocator>>;
+  using AllocatorByIdMap =
+      base::VariantMap<int, scoped_refptr<RefCountedAllocator>>;
   static void MergeHistogramDeltasFromAllocators(AllocatorByIdMap* allocators);
 
   // Callback for when MergeHistogramDeltasFromAllocator() is called in a
@@ -156,7 +161,7 @@ class SubprocessMetricsProvider
   AllocatorByIdMap allocators_by_id_;
 
   // Track all observed render processes to un-observe them on exit.
-  // TODO(crbug/1293026): Since this class should be leaky, it is not
+  // TODO(crbug.com/40213327): Since this class should be leaky, it is not
   // semantically correct to have a "scoped" member field here. Replace this
   // with something like a set.
   base::ScopedMultiSourceObservation<content::RenderProcessHost,

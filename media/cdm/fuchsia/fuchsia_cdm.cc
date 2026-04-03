@@ -5,11 +5,15 @@
 #include "media/cdm/fuchsia/fuchsia_cdm.h"
 
 #include <optional>
+#include <string_view>
 
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/mem_buffer_util.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
+#include "base/not_fatal_until.h"
 #include "media/base/callback_registry.h"
+#include "media/base/cdm_factory.h"
 #include "media/base/cdm_promise.h"
 
 #define REJECT_PROMISE_AND_RETURN_IF_BAD_CDM(promise, cdm)         \
@@ -49,8 +53,8 @@ fuchsia::media::drm::LicenseServerMessage CreateLicenseServerMessage(
     const std::vector<uint8_t>& response) {
   fuchsia::media::drm::LicenseServerMessage message;
   message.message = base::MemBufferFromString(
-      base::StringPiece(reinterpret_cast<const char*>(response.data()),
-                        response.size()),
+      std::string_view(reinterpret_cast<const char*>(response.data()),
+                       response.size()),
       "cr-drm-license-server-message");
   return message;
 }
@@ -109,7 +113,7 @@ CdmPromise::Exception ToCdmPromiseException(fuchsia::media::drm::Error error) {
 
     case fuchsia::media::drm::Error::NOT_PROVISIONED:
       // FuchsiaCdmManager is supposed to provision CDM.
-      NOTREACHED_NORETURN();
+      NOTREACHED();
 
     case fuchsia::media::drm::Error::INTERNAL:
       DLOG(ERROR) << "CDM failed due to an internal error.";
@@ -159,7 +163,7 @@ class FuchsiaCdm::CdmSession {
   void GenerateLicenseRequest(EmeInitDataType init_data_type,
                               const std::vector<uint8_t>& init_data,
                               ResultCB generate_license_request_cb) {
-    DCHECK(!result_cb_);
+    CHECK(!result_cb_);
     result_cb_ = std::move(generate_license_request_cb);
     session_->GenerateLicenseRequest(
         CreateLicenseInitData(init_data_type, init_data),
@@ -168,7 +172,7 @@ class FuchsiaCdm::CdmSession {
   }
 
   void GenerateLicenseRelease(ResultCB generate_license_release_cb) {
-    DCHECK(!result_cb_);
+    CHECK(!result_cb_);
     result_cb_ = std::move(generate_license_release_cb);
     pending_release_ = true;
     session_->GenerateLicenseRelease(
@@ -178,7 +182,7 @@ class FuchsiaCdm::CdmSession {
 
   void ProcessLicenseResponse(const std::vector<uint8_t>& response,
                               ResultCB process_license_response_cb) {
-    DCHECK(!result_cb_);
+    CHECK(!result_cb_);
     result_cb_ = std::move(process_license_response_cb);
     session_->ProcessLicenseResponse(
         CreateLicenseServerMessage(response),
@@ -201,12 +205,12 @@ class FuchsiaCdm::CdmSession {
 
  private:
   void OnSessionReady() {
-    DCHECK(session_ready_cb_);
+    CHECK(session_ready_cb_);
     std::move(session_ready_cb_).Run(true);
   }
 
   void OnLicenseMessageGenerated(fuchsia::media::drm::LicenseMessage message) {
-    DCHECK(!session_id_.empty());
+    CHECK(!session_id_.empty());
     std::optional<std::string> session_msg =
         base::StringFromMemBuffer(message.message);
 
@@ -256,14 +260,14 @@ class FuchsiaCdm::CdmSession {
 
   template <typename T>
   void ProcessResult(const T& result) {
-    DCHECK(result_cb_);
+    CHECK(result_cb_);
     std::move(result_cb_)
         .Run(result.is_err()
                  ? std::make_optional(ToCdmPromiseException(result.err()))
                  : std::nullopt);
   }
 
-  const SessionCallbacks* const session_callbacks_;
+  const raw_ptr<const SessionCallbacks> session_callbacks_;
   base::RepeatingClosure on_new_key_;
 
   fuchsia::media::drm::LicenseSessionPtr session_;
@@ -293,7 +297,7 @@ FuchsiaCdm::FuchsiaCdm(fuchsia::media::drm::ContentDecryptionModulePtr cdm,
       ready_cb_(std::move(ready_cb)),
       session_callbacks_(std::move(callbacks)),
       decryptor_(this) {
-  DCHECK(cdm_);
+  CHECK(cdm_);
   cdm_.events().OnProvisioned =
       fit::bind_member(this, &FuchsiaCdm::OnProvisioned);
   cdm_.set_error_handler([this](zx_status_t status) {
@@ -306,8 +310,7 @@ FuchsiaCdm::FuchsiaCdm(fuchsia::media::drm::ContentDecryptionModulePtr cdm,
     // If the channel closed prior to invoking the ready_cb_, we should invoke
     // it here with failure.
     if (ready_cb_) {
-      std::move(ready_cb_).Run(
-          false, "ContentDecryptionModule closed prior to being ready");
+      std::move(ready_cb_).Run(false, CreateCdmStatus::kDisconnectionError);
     }
   });
 }
@@ -405,7 +408,7 @@ void FuchsiaCdm::CreateSessionAndGenerateRequest(
 
 void FuchsiaCdm::OnProvisioned() {
   if (ready_cb_) {
-    std::move(ready_cb_).Run(true, "");
+    std::move(ready_cb_).Run(true, CreateCdmStatus::kSuccess);
   }
 }
 
@@ -420,7 +423,7 @@ void FuchsiaCdm::OnCreateSession(std::unique_ptr<CdmSession> session,
   }
 
   session->set_session_id(session_id);
-  DCHECK(!session_map_.contains(session_id))
+  CHECK(!session_map_.contains(session_id))
       << "Duplicated session id " << session_id;
   session_map_[session_id] = std::move(session);
 }
@@ -429,7 +432,7 @@ void FuchsiaCdm::OnGenerateLicenseRequestStatus(
     CdmSession* session,
     uint32_t promise_id,
     std::optional<CdmPromise::Exception> exception) {
-  DCHECK(session);
+  CHECK(session);
   std::string session_id = session->session_id();
 
   if (exception.has_value()) {
@@ -439,7 +442,7 @@ void FuchsiaCdm::OnGenerateLicenseRequestStatus(
     return;
   }
 
-  DCHECK(!session_id.empty());
+  CHECK(!session_id.empty());
   promises_.ResolvePromise(promise_id, session_id);
 }
 
@@ -447,7 +450,7 @@ void FuchsiaCdm::LoadSession(CdmSessionType session_type,
                              const std::string& session_id,
                              std::unique_ptr<NewSessionCdmPromise> promise) {
   DCHECK_NE(session_type, CdmSessionType::kTemporary);
-  DCHECK(!session_id.empty());
+  CHECK(!session_id.empty());
   REJECT_PROMISE_AND_RETURN_IF_BAD_CDM(promise, cdm_);
 
   if (session_map_.contains(session_id)) {
@@ -480,7 +483,7 @@ void FuchsiaCdm::OnSessionLoaded(std::unique_ptr<CdmSession> session,
   }
 
   std::string session_id = session->session_id();
-  DCHECK(!session_map_.contains(session_id))
+  CHECK(!session_map_.contains(session_id))
       << "Duplicated session id " << session_id;
 
   session_map_.emplace(session_id, std::move(session));
@@ -501,12 +504,12 @@ void FuchsiaCdm::UpdateSession(const std::string& session_id,
   REJECT_PROMISE_AND_RETURN_IF_BAD_CDM(promise, cdm_);
 
   // Caller should NOT pass in an empty response.
-  DCHECK(!response.empty());
+  CHECK(!response.empty());
 
   uint32_t promise_id = promises_.SavePromise(std::move(promise));
 
   CdmSession* session = it->second.get();
-  DCHECK(session);
+  CHECK(session);
 
   session->ProcessLicenseResponse(
       response, base::BindOnce(&FuchsiaCdm::OnProcessLicenseServerMessageStatus,
@@ -532,7 +535,7 @@ void FuchsiaCdm::OnProcessLicenseServerMessageStatus(
 
   // Close the session if the session is waiting for license release ack.
   CdmSession* session = it->second.get();
-  DCHECK(session);
+  CHECK(session);
 
   if (!session->pending_release()) {
     return;
@@ -564,7 +567,7 @@ void FuchsiaCdm::RemoveSession(const std::string& session_id,
   uint32_t promise_id = promises_.SavePromise(std::move(promise));
 
   CdmSession* session = it->second.get();
-  DCHECK(session);
+  CHECK(session);
 
   // For a temporary session, the API will remove the keys and close the
   // session. For a persistent license session, the API will invalidate the keys
@@ -585,7 +588,7 @@ void FuchsiaCdm::OnGenerateLicenseReleaseStatus(
     return;
   }
 
-  DCHECK(!session_id.empty());
+  CHECK(!session_id.empty());
   promises_.ResolvePromise(promise_id);
 }
 

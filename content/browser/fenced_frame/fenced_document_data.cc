@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "content/browser/fenced_frame/fenced_document_data.h"
+
+#include "base/functional/callback.h"
 #include "content/public/browser/document_user_data.h"
 
 namespace content {
@@ -40,6 +42,15 @@ void FencedDocumentData::MaybeResetAutomaticBeaconData(
   if (it != automatic_beacon_info_.end() && it->second.once == true) {
     automatic_beacon_info_.erase(it);
   }
+}
+
+void FencedDocumentData::RunDisabledUntrustedNetworkCallbacks() {
+  for (auto& callback : on_disabled_untrusted_network_callbacks_) {
+    if (!callback.is_null()) {
+      std::move(callback).Run();
+    }
+  }
+  on_disabled_untrusted_network_callbacks_.clear();
 }
 
 }  // namespace content

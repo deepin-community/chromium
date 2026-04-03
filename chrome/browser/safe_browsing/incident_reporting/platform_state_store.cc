@@ -42,7 +42,7 @@ using google::protobuf::RepeatedPtrField;
 // Copies the (key, digest) pairs from |keys_and_digests| (a dict of string
 // values) to the |key_digest_pairs| protobuf.
 void KeysAndDigestsToProtobuf(
-    const base::Value::Dict& keys_and_digests,
+    const base::DictValue& keys_and_digests,
     RepeatedPtrField<StateStoreData::Incidents::KeyDigestMapFieldEntry>*
         key_digest_pairs) {
   for (const auto item : keys_and_digests) {
@@ -50,7 +50,6 @@ void KeysAndDigestsToProtobuf(
     if (!item.second.is_string() ||
         !base::StringToUint(item.second.GetString(), &digest)) {
       NOTREACHED();
-      continue;
     }
     StateStoreData::Incidents::KeyDigestMapFieldEntry* key_digest =
         key_digest_pairs->Add();
@@ -62,21 +61,19 @@ void KeysAndDigestsToProtobuf(
 // Copies the (type, dict) pairs from |incidents_sent| (a dict of dict values)
 // to the |typed_incidents| protobuf.
 void IncidentsSentToProtobuf(
-    const base::Value::Dict& incidents_sent,
+    const base::DictValue& incidents_sent,
     RepeatedPtrField<StateStoreData::TypeIncidentsMapFieldEntry>*
         type_incidents_pairs) {
   for (const auto item : incidents_sent) {
-    const base::Value::Dict* keys_and_digests = item.second.GetIfDict();
+    const base::DictValue* keys_and_digests = item.second.GetIfDict();
     if (!keys_and_digests) {
       NOTREACHED();
-      continue;
     }
     if (keys_and_digests->empty())
       continue;
     int incident_type = 0;
     if (!base::StringToInt(item.first, &incident_type)) {
       NOTREACHED();
-      continue;
     }
     StateStoreData::TypeIncidentsMapFieldEntry* entry =
         type_incidents_pairs->Add();
@@ -91,7 +88,7 @@ void IncidentsSentToProtobuf(
 void RestoreOfTypeFromProtobuf(
     const RepeatedPtrField<StateStoreData::Incidents::KeyDigestMapFieldEntry>&
         key_digest_pairs,
-    base::Value::Dict& type_dict) {
+    base::DictValue& type_dict) {
   for (const auto& key_digest : key_digest_pairs) {
     if (!key_digest.has_key() || !key_digest.has_digest())
       continue;
@@ -103,14 +100,14 @@ void RestoreOfTypeFromProtobuf(
 void RestoreFromProtobuf(
     const RepeatedPtrField<StateStoreData::TypeIncidentsMapFieldEntry>&
         type_incidents_pairs,
-    base::Value::Dict& value_dict) {
+    base::DictValue& value_dict) {
   for (const auto& type_incidents : type_incidents_pairs) {
     if (!type_incidents.has_type() || !type_incidents.has_incidents() ||
         type_incidents.incidents().key_to_digest_size() == 0) {
       continue;
     }
     std::string type_string(base::NumberToString(type_incidents.type()));
-    base::Value::Dict* type_dict = value_dict.EnsureDict(type_string);
+    base::DictValue* type_dict = value_dict.EnsureDict(type_string);
     RestoreOfTypeFromProtobuf(type_incidents.incidents().key_to_digest(),
                               *type_dict);
   }
@@ -120,9 +117,9 @@ void RestoreFromProtobuf(
 
 #endif  // USE_PLATFORM_STATE_STORE
 
-std::optional<base::Value::Dict> Load(Profile* profile) {
+std::optional<base::DictValue> Load(Profile* profile) {
 #if defined(USE_PLATFORM_STATE_STORE)
-  base::Value::Dict value_dict;
+  base::DictValue value_dict;
   std::string data;
   PlatformStateStoreLoadResult result = ReadStoreData(profile, &data);
   if (result == PlatformStateStoreLoadResult::SUCCESS)
@@ -141,7 +138,6 @@ std::optional<base::Value::Dict> Load(Profile* profile) {
       return std::nullopt;
     case PlatformStateStoreLoadResult::NUM_RESULTS:
       NOTREACHED();
-      break;
   }
   return value_dict;
 #else
@@ -149,7 +145,7 @@ std::optional<base::Value::Dict> Load(Profile* profile) {
 #endif
 }
 
-void Store(Profile* profile, const base::Value::Dict& incidents_sent) {
+void Store(Profile* profile, const base::DictValue& incidents_sent) {
 #if defined(USE_PLATFORM_STATE_STORE)
   std::string data;
   SerializeIncidentsSent(incidents_sent, &data);
@@ -159,7 +155,7 @@ void Store(Profile* profile, const base::Value::Dict& incidents_sent) {
 
 #if defined(USE_PLATFORM_STATE_STORE)
 
-void SerializeIncidentsSent(const base::Value::Dict& incidents_sent,
+void SerializeIncidentsSent(const base::DictValue& incidents_sent,
                             std::string* data) {
   StateStoreData store_data;
 
@@ -170,7 +166,7 @@ void SerializeIncidentsSent(const base::Value::Dict& incidents_sent,
 
 PlatformStateStoreLoadResult DeserializeIncidentsSent(
     const std::string& data,
-    base::Value::Dict& value_dict) {
+    base::DictValue& value_dict) {
   StateStoreData store_data;
   if (data.empty()) {
     value_dict.clear();

@@ -22,22 +22,18 @@
  */
 
 #include <float.h>
-#include <stdlib.h>
 
 #include <xeve.h>
 
 #include "libavutil/internal.h"
 #include "libavutil/common.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
 #include "libavutil/pixfmt.h"
-#include "libavutil/time.h"
 #include "libavutil/cpu.h"
-#include "libavutil/avstring.h"
 
 #include "avcodec.h"
-#include "internal.h"
-#include "packet_internal.h"
 #include "codec_internal.h"
 #include "profiles.h"
 #include "encode.h"
@@ -196,7 +192,8 @@ static int get_conf(AVCodecContext *avctx, XEVE_CDSC *cdsc)
 
     if (avctx->framerate.num > 0) {
         // fps can be float number, but xeve API doesn't support it
-        cdsc->param.fps = lrintf(av_q2d(avctx->framerate));
+        cdsc->param.fps.num = avctx->framerate.num;
+        cdsc->param.fps.den = avctx->framerate.den;
     }
 
     // GOP size (key-frame interval, I-picture period)
@@ -354,8 +351,8 @@ static av_cold int libxeve_init(AVCodecContext *avctx)
     }
 
     {
-        AVDictionaryEntry *en = NULL;
-        while (en = av_dict_get(xectx->xeve_params, "", en, AV_DICT_IGNORE_SUFFIX)) {
+        const AVDictionaryEntry *en = NULL;
+        while (en = av_dict_iterate(xectx->xeve_params, en)) {
             if ((ret = xeve_param_parse(&cdsc->param, en->key, en->value)) < 0) {
                 av_log(avctx, AV_LOG_WARNING,
                        "Error parsing option '%s = %s'.\n",
@@ -470,8 +467,6 @@ static int libxeve_encode(AVCodecContext *avctx, AVPacket *avpkt,
             *got_packet = 0;
             return 0;
         } else if (ret == XEVE_OK) {
-            int av_pic_type;
-
             if (xectx->stat.write > 0) {
 
                 ret = ff_get_encode_buffer(avctx, avpkt, xectx->stat.write, 0);
@@ -480,12 +475,13 @@ static int libxeve_encode(AVCodecContext *avctx, AVPacket *avpkt,
 
                 memcpy(avpkt->data, xectx->bitb.addr, xectx->stat.write);
 
-                avpkt->time_base.num = 1;
-                avpkt->time_base.den = xectx->cdsc.param.fps;
+                avpkt->time_base.num = xectx->cdsc.param.fps.den;
+                avpkt->time_base.den = xectx->cdsc.param.fps.num;
 
                 avpkt->pts = xectx->bitb.ts[XEVE_TS_PTS];
                 avpkt->dts = xectx->bitb.ts[XEVE_TS_DTS];
 
+                enum AVPictureType av_pic_type;
                 switch(xectx->stat.stype) {
                 case XEVE_ST_I:
                     av_pic_type = AV_PICTURE_TYPE_I;
@@ -502,7 +498,7 @@ static int libxeve_encode(AVCodecContext *avctx, AVPacket *avpkt,
                     return AVERROR_INVALIDDATA;
                 }
 
-                ff_side_data_set_encoder_stats(avpkt, xectx->stat.qp * FF_QP2LAMBDA, NULL, 0, av_pic_type);
+                ff_encode_add_stats_side_data(avpkt, xectx->stat.qp * FF_QP2LAMBDA, NULL, 0, av_pic_type);
 
                 *got_packet = 1;
             }
@@ -553,23 +549,23 @@ static const enum AVPixelFormat supported_pixel_formats[] = {
 // Consider using following options (./ffmpeg --help encoder=libxeve)
 //
 static const AVOption libxeve_options[] = {
-    { "preset", "Encoding preset for setting encoding speed", OFFSET(preset_id), AV_OPT_TYPE_INT, { .i64 = XEVE_PRESET_MEDIUM }, XEVE_PRESET_DEFAULT,  XEVE_PRESET_PLACEBO, VE, "preset" },
-    { "default", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PRESET_DEFAULT }, INT_MIN, INT_MAX, VE, "preset" },
-    { "fast",    NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PRESET_FAST },    INT_MIN, INT_MAX, VE, "preset" },
-    { "medium",  NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PRESET_MEDIUM },  INT_MIN, INT_MAX, VE, "preset" },
-    { "slow",    NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PRESET_SLOW },    INT_MIN, INT_MAX, VE, "preset" },
-    { "placebo", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PRESET_PLACEBO }, INT_MIN, INT_MAX, VE, "preset" },
-    { "tune", "Tuning parameter for special purpose operation", OFFSET(tune_id), AV_OPT_TYPE_INT, { .i64 = XEVE_TUNE_NONE }, XEVE_TUNE_NONE, XEVE_TUNE_PSNR, VE, "tune"},
-    { "none",        NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_TUNE_NONE },        INT_MIN, INT_MAX, VE, "tune" },
-    { "zerolatency", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_TUNE_ZEROLATENCY }, INT_MIN, INT_MAX, VE, "tune" },
-    { "psnr",        NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_TUNE_PSNR },        INT_MIN, INT_MAX, VE, "tune" },
-    { "profile", "Encoding profile", OFFSET(profile_id), AV_OPT_TYPE_INT, { .i64 = XEVE_PROFILE_BASELINE }, XEVE_PROFILE_BASELINE,  XEVE_PROFILE_MAIN, VE, "profile" },
-    { "baseline", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PROFILE_BASELINE }, INT_MIN, INT_MAX, VE, "profile" },
-    { "main",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PROFILE_MAIN },     INT_MIN, INT_MAX, VE, "profile" },
-    { "rc_mode", "Rate control mode", OFFSET(rc_mode), AV_OPT_TYPE_INT, { .i64 = XEVE_RC_CQP }, XEVE_RC_CQP,  XEVE_RC_CRF, VE, "rc_mode" },
-    { "CQP", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_RC_CQP }, INT_MIN, INT_MAX, VE, "rc_mode" },
-    { "ABR", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_RC_ABR }, INT_MIN, INT_MAX, VE, "rc_mode" },
-    { "CRF", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_RC_CRF }, INT_MIN, INT_MAX, VE, "rc_mode" },
+    { "preset", "Encoding preset for setting encoding speed", OFFSET(preset_id), AV_OPT_TYPE_INT, { .i64 = XEVE_PRESET_MEDIUM }, XEVE_PRESET_DEFAULT,  XEVE_PRESET_PLACEBO, VE, .unit = "preset" },
+    { "default", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PRESET_DEFAULT }, INT_MIN, INT_MAX, VE, .unit = "preset" },
+    { "fast",    NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PRESET_FAST },    INT_MIN, INT_MAX, VE, .unit = "preset" },
+    { "medium",  NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PRESET_MEDIUM },  INT_MIN, INT_MAX, VE, .unit = "preset" },
+    { "slow",    NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PRESET_SLOW },    INT_MIN, INT_MAX, VE, .unit = "preset" },
+    { "placebo", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PRESET_PLACEBO }, INT_MIN, INT_MAX, VE, .unit = "preset" },
+    { "tune", "Tuning parameter for special purpose operation", OFFSET(tune_id), AV_OPT_TYPE_INT, { .i64 = XEVE_TUNE_NONE }, XEVE_TUNE_NONE, XEVE_TUNE_PSNR, VE, .unit = "tune"},
+    { "none",        NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_TUNE_NONE },        INT_MIN, INT_MAX, VE, .unit = "tune" },
+    { "zerolatency", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_TUNE_ZEROLATENCY }, INT_MIN, INT_MAX, VE, .unit = "tune" },
+    { "psnr",        NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_TUNE_PSNR },        INT_MIN, INT_MAX, VE, .unit = "tune" },
+    { "profile", "Encoding profile", OFFSET(profile_id), AV_OPT_TYPE_INT, { .i64 = XEVE_PROFILE_BASELINE }, XEVE_PROFILE_BASELINE,  XEVE_PROFILE_MAIN, VE, .unit = "profile" },
+    { "baseline", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PROFILE_BASELINE }, INT_MIN, INT_MAX, VE, .unit = "profile" },
+    { "main",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_PROFILE_MAIN },     INT_MIN, INT_MAX, VE, .unit = "profile" },
+    { "rc_mode", "Rate control mode", OFFSET(rc_mode), AV_OPT_TYPE_INT, { .i64 = XEVE_RC_CQP }, XEVE_RC_CQP,  XEVE_RC_CRF, VE, .unit = "rc_mode" },
+    { "CQP", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_RC_CQP }, INT_MIN, INT_MAX, VE, .unit = "rc_mode" },
+    { "ABR", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_RC_ABR }, INT_MIN, INT_MAX, VE, .unit = "rc_mode" },
+    { "CRF", NULL, 0, AV_OPT_TYPE_CONST, { .i64 = XEVE_RC_CRF }, INT_MIN, INT_MAX, VE, .unit = "rc_mode" },
     { "qp", "Quantization parameter value for CQP rate control mode", OFFSET(qp), AV_OPT_TYPE_INT, { .i64 = 32 }, 0, 51, VE },
     { "crf", "Constant rate factor value for CRF rate control mode", OFFSET(crf), AV_OPT_TYPE_INT, { .i64 = 32 }, 10, 49, VE },
     { "hash", "Embed picture signature (HASH) for conformance checking in decoding", OFFSET(hash), AV_OPT_TYPE_INT, { .i64 = 0 }, 0, 1, VE },
@@ -580,6 +576,7 @@ static const AVOption libxeve_options[] = {
 
 static const AVClass libxeve_class = {
     .class_name = "libxeve",
+    .item_name  = av_default_item_name,
     .option     = libxeve_options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
@@ -610,6 +607,7 @@ const FFCodec ff_libxeve_encoder = {
     .p.capabilities     = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_OTHER_THREADS | AV_CODEC_CAP_DR1,
     .p.profiles         = NULL_IF_CONFIG_SMALL(ff_evc_profiles),
     .p.wrapper_name     = "libxeve",
-    .p.pix_fmts         = supported_pixel_formats,
+    CODEC_PIXFMTS_ARRAY(supported_pixel_formats),
+    .color_ranges       = AVCOL_RANGE_MPEG, /* FIXME: implement tagging */
     .caps_internal      = FF_CODEC_CAP_INIT_CLEANUP | FF_CODEC_CAP_NOT_INIT_THREADSAFE,
 };

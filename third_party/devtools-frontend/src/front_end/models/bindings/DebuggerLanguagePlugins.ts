@@ -1,72 +1,64 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {type Chrome} from '../../../extension-api/ExtensionAPI.js';  // eslint-disable-line rulesdir/es_modules_import
+import type {Chrome} from '../../../extension-api/ExtensionAPI.js';
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import type * as Platform from '../../core/platform/platform.js';
 import {assertNotNullOrUndefined} from '../../core/platform/platform.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import * as Protocol from '../../generated/protocol.js';
+import * as StackTrace from '../stack_trace/stack_trace.js';
+import type * as StackTraceImpl from '../stack_trace/stack_trace_impl.js';
 import * as TextUtils from '../text_utils/text_utils.js';
 import * as Workspace from '../workspace/workspace.js';
 
 import {ContentProviderBasedProject} from './ContentProviderBasedProject.js';
-import {type DebuggerWorkspaceBinding} from './DebuggerWorkspaceBinding.js';
+import type {DebuggerWorkspaceBinding} from './DebuggerWorkspaceBinding.js';
 import {NetworkProject} from './NetworkProject.js';
 
 const UIStrings = {
   /**
-   *@description Error message that is displayed in the Console when language #plugins report errors
-   *@example {File not found} PH1
+   * @description Error message that is displayed in the Console when language #plugins report errors
+   * @example {File not found} PH1
    */
   errorInDebuggerLanguagePlugin: 'Error in debugger language plugin: {PH1}',
   /**
-   *@description Status message that is shown in the Console when debugging information is being
+   * @description Status message that is shown in the Console when debugging information is being
    *loaded. The 2nd and 3rd placeholders are URLs.
-   *@example {C/C++ DevTools Support (DWARF)} PH1
-   *@example {http://web.dev/file.wasm} PH2
-   *@example {http://web.dev/file.wasm.debug.wasm} PH3
+   * @example {C/C++ DevTools Support (DWARF)} PH1
+   * @example {http://web.dev/file.wasm} PH2
+   * @example {http://web.dev/file.wasm.debug.wasm} PH3
    */
-  loadingDebugSymbolsForVia: '[{PH1}] Loading debug symbols for {PH2} (via {PH3})...',
+  loadingDebugSymbolsForVia: '[{PH1}] Loading debug symbols for {PH2} (via {PH3})…',
   /**
-   *@description Status message that is shown in the Console when debugging information is being loaded
-   *@example {C/C++ DevTools Support (DWARF)} PH1
-   *@example {http://web.dev/file.wasm} PH2
+   * @description Status message that is shown in the Console when debugging information is being loaded
+   * @example {C/C++ DevTools Support (DWARF)} PH1
+   * @example {http://web.dev/file.wasm} PH2
    */
-  loadingDebugSymbolsFor: '[{PH1}] Loading debug symbols for {PH2}...',
+  loadingDebugSymbolsFor: '[{PH1}] Loading debug symbols for {PH2}…',
   /**
-   *@description Warning message that is displayed in the Console when debugging information was loaded, but no source files were found
-   *@example {C/C++ DevTools Support (DWARF)} PH1
-   *@example {http://web.dev/file.wasm} PH2
+   * @description Warning message that is displayed in the Console when debugging information was loaded, but no source files were found
+   * @example {C/C++ DevTools Support (DWARF)} PH1
+   * @example {http://web.dev/file.wasm} PH2
    */
   loadedDebugSymbolsForButDidnt: '[{PH1}] Loaded debug symbols for {PH2}, but didn\'t find any source files',
   /**
-   *@description Status message that is shown in the Console when debugging information is successfully loaded
-   *@example {C/C++ DevTools Support (DWARF)} PH1
-   *@example {http://web.dev/file.wasm} PH2
-   *@example {42} PH3
+   * @description Status message that is shown in the Console when debugging information is successfully loaded
+   * @example {C/C++ DevTools Support (DWARF)} PH1
+   * @example {http://web.dev/file.wasm} PH2
+   * @example {42} PH3
    */
   loadedDebugSymbolsForFound: '[{PH1}] Loaded debug symbols for {PH2}, found {PH3} source file(s)',
   /**
-   *@description Error message that is displayed in the Console when debugging information cannot be loaded
-   *@example {C/C++ DevTools Support (DWARF)} PH1
-   *@example {http://web.dev/file.wasm} PH2
-   *@example {File not found} PH3
+   * @description Error message that is displayed in the Console when debugging information cannot be loaded
+   * @example {C/C++ DevTools Support (DWARF)} PH1
+   * @example {http://web.dev/file.wasm} PH2
+   * @example {File not found} PH3
    */
   failedToLoadDebugSymbolsFor: '[{PH1}] Failed to load debug symbols for {PH2} ({PH3})',
-  /**
-   *@description Error message that is displayed in UI debugging information cannot be found for a call frame
-   *@example {main} PH1
-   */
-  failedToLoadDebugSymbolsForFunction: 'No debug information for function "{PH1}"',
-  /**
-   *@description Error message that is displayed in UI when a file needed for debugging information for a call frame is missing
-   *@example {mainp.debug.wasm.dwp} PH1
-   */
-  debugSymbolsIncomplete: 'The debug information for function {PH1} is incomplete',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('models/bindings/DebuggerLanguagePlugins.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
@@ -114,12 +106,6 @@ class FormattingError extends Error {
 }
 
 class NamespaceObject extends SDK.RemoteObject.LocalJSONObject {
-  // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  constructor(value: any) {
-    super(value);
-  }
-
   override get description(): string {
     return this.type;
   }
@@ -127,6 +113,36 @@ class NamespaceObject extends SDK.RemoteObject.LocalJSONObject {
   override get type(): string {
     return 'namespace';
   }
+}
+
+async function getRemoteObject(callFrame: SDK.DebuggerModel.CallFrame, object: Chrome.DevTools.ForeignObject):
+    Promise<Protocol.Runtime.RemoteObject> {
+  if (!/^(local|global|operand)$/.test(object.valueClass)) {
+    return {type: Protocol.Runtime.RemoteObjectType.Undefined};
+  }
+  const index = Number(object.index);
+  const expression = `${object.valueClass}s[${index}]`;
+  const response = await callFrame.debuggerModel.agent.invoke_evaluateOnCallFrame({
+    callFrameId: callFrame.id,
+    expression,
+    silent: true,
+    generatePreview: true,
+    throwOnSideEffect: true,
+  });
+  if (response.getError() || response.exceptionDetails) {
+    return {type: Protocol.Runtime.RemoteObjectType.Undefined};
+  }
+  return response.result;
+}
+
+async function wrapRemoteObject(
+    callFrame: SDK.DebuggerModel.CallFrame, object: Chrome.DevTools.RemoteObject|Chrome.DevTools.ForeignObject,
+    plugin: DebuggerLanguagePlugin): Promise<SDK.RemoteObject.RemoteObject> {
+  if (object.type === 'reftype') {
+    const obj = await getRemoteObject(callFrame, object);
+    return callFrame.debuggerModel.runtimeModel().createRemoteObject(obj);
+  }
+  return new ExtensionRemoteObject(callFrame, object, plugin);
 }
 
 class SourceScopeRemoteObject extends SDK.RemoteObject.RemoteObjectImpl {
@@ -143,16 +159,14 @@ class SourceScopeRemoteObject extends SDK.RemoteObject.RemoteObjectImpl {
     this.stopId = stopId;
   }
 
-  override async doGetProperties(ownProperties: boolean, accessorPropertiesOnly: boolean, _generatePreview: boolean):
+  override async doGetProperties(_ownProperties: boolean, accessorPropertiesOnly: boolean, _generatePreview: boolean):
       Promise<SDK.RemoteObject.GetPropertiesResult> {
     if (accessorPropertiesOnly) {
       return {properties: [], internalProperties: []} as SDK.RemoteObject.GetPropertiesResult;
     }
 
     const properties = [];
-    const namespaces: {
-      [x: string]: SDK.RemoteObject.RemoteObject,
-    } = {};
+    const namespaces: Record<string, SDK.RemoteObject.RemoteObject> = {};
 
     function makeProperty(name: string, obj: SDK.RemoteObject.RemoteObject): SDK.RemoteObject.RemoteObjectProperty {
       return new SDK.RemoteObject.RemoteObjectProperty(
@@ -164,16 +178,14 @@ class SourceScopeRemoteObject extends SDK.RemoteObject.RemoteObjectImpl {
       let sourceVar: SDK.RemoteObject.RemoteObject|undefined;
       try {
         const evalResult = await this.#plugin.evaluate(variable.name, getRawLocation(this.#callFrame), this.stopId);
-        sourceVar = evalResult ? new ExtensionRemoteObject(this.#callFrame, evalResult, this.#plugin) :
+        sourceVar = evalResult ? await wrapRemoteObject(this.#callFrame, evalResult, this.#plugin) :
                                  new SDK.RemoteObject.LocalJSONObject(undefined);
       } catch (e) {
         console.warn(e);
         sourceVar = new SDK.RemoteObject.LocalJSONObject(undefined);
       }
       if (variable.nestedName && variable.nestedName.length > 1) {
-        let parent: {
-          [x: string]: SDK.RemoteObject.RemoteObject,
-        } = namespaces;
+        let parent: Record<string, SDK.RemoteObject.RemoteObject> = namespaces;
         for (let index = 0; index < variable.nestedName.length - 1; index++) {
           const nestedName = variable.nestedName[index];
           let child: NamespaceObject|SDK.RemoteObject.RemoteObject = parent[nestedName];
@@ -191,38 +203,38 @@ class SourceScopeRemoteObject extends SDK.RemoteObject.RemoteObjectImpl {
     }
 
     for (const namespace in namespaces) {
-      properties.push(makeProperty(namespace, (namespaces[namespace] as SDK.RemoteObject.RemoteObject)));
+      properties.push(makeProperty(namespace, (namespaces[namespace])));
     }
 
-    return {properties: properties, internalProperties: []};
+    return {properties, internalProperties: []};
   }
 }
 
 export class SourceScope implements SDK.DebuggerModel.ScopeChainEntry {
-  readonly #callFrameInternal: SDK.DebuggerModel.CallFrame;
-  readonly #typeInternal: string;
-  readonly #typeNameInternal: string;
-  readonly #iconInternal: string|undefined;
-  readonly #objectInternal: SourceScopeRemoteObject;
+  readonly #callFrame: SDK.DebuggerModel.CallFrame;
+  readonly #type: string;
+  readonly #typeName: string;
+  readonly #icon: string|undefined;
+  readonly #object: SourceScopeRemoteObject;
   constructor(
       callFrame: SDK.DebuggerModel.CallFrame, stopId: StopId, type: string, typeName: string, icon: string|undefined,
       plugin: DebuggerLanguagePlugin) {
     if (icon && new URL(icon).protocol !== 'data:') {
       throw new Error('The icon must be a data:-URL');
     }
-    this.#callFrameInternal = callFrame;
-    this.#typeInternal = type;
-    this.#typeNameInternal = typeName;
-    this.#iconInternal = icon;
-    this.#objectInternal = new SourceScopeRemoteObject(callFrame, stopId, plugin);
+    this.#callFrame = callFrame;
+    this.#type = type;
+    this.#typeName = typeName;
+    this.#icon = icon;
+    this.#object = new SourceScopeRemoteObject(callFrame, stopId, plugin);
   }
 
   async getVariableValue(name: string): Promise<SDK.RemoteObject.RemoteObject|null> {
-    for (let v = 0; v < this.#objectInternal.variables.length; ++v) {
-      if (this.#objectInternal.variables[v].name !== name) {
+    for (let v = 0; v < this.#object.variables.length; ++v) {
+      if (this.#object.variables[v].name !== name) {
         continue;
       }
-      const properties = await this.#objectInternal.getAllProperties(false, false);
+      const properties = await this.#object.getAllProperties(false, false);
       if (!properties.properties) {
         continue;
       }
@@ -235,15 +247,15 @@ export class SourceScope implements SDK.DebuggerModel.ScopeChainEntry {
   }
 
   callFrame(): SDK.DebuggerModel.CallFrame {
-    return this.#callFrameInternal;
+    return this.#callFrame;
   }
 
   type(): string {
-    return this.#typeInternal;
+    return this.#type;
   }
 
   typeName(): string {
-    return this.#typeNameInternal;
+    return this.#typeName;
   }
 
   name(): string|undefined {
@@ -255,7 +267,7 @@ export class SourceScope implements SDK.DebuggerModel.ScopeChainEntry {
   }
 
   object(): SourceScopeRemoteObject {
-    return this.#objectInternal;
+    return this.#object;
   }
 
   description(): string {
@@ -263,7 +275,11 @@ export class SourceScope implements SDK.DebuggerModel.ScopeChainEntry {
   }
 
   icon(): string|undefined {
-    return this.#iconInternal;
+    return this.#icon;
+  }
+
+  extraProperties(): SDK.RemoteObject.RemoteObjectProperty[] {
+    return [];
   }
 }
 
@@ -318,7 +334,7 @@ export class ExtensionRemoteObject extends SDK.RemoteObject.RemoteObject {
     return this.extensionObject.description;
   }
 
-  override set description(description: string|undefined) {
+  override set description(_description: string|undefined) {
   }
 
   override get hasChildren(): boolean {
@@ -353,9 +369,9 @@ export class ExtensionRemoteObject extends SDK.RemoteObject.RemoteObject {
     if (objectId) {
       assertNotNullOrUndefined(this.plugin.getProperties);
       const extensionObjectProperties = await this.plugin.getProperties(objectId);
-      const properties = extensionObjectProperties.map(
-          p => new SDK.RemoteObject.RemoteObjectProperty(
-              p.name, new ExtensionRemoteObject(this.callFrame, p.value, this.plugin)));
+      const properties = await Promise.all(extensionObjectProperties.map(
+          async p => new SDK.RemoteObject.RemoteObjectProperty(
+              p.name, await wrapRemoteObject(this.callFrame, p.value, this.plugin))));
       return {properties, internalProperties: null};
     }
 
@@ -393,11 +409,12 @@ export class DebuggerLanguagePluginManager implements
   readonly #rawModuleHandles: Map<string, {
     rawModuleId: string,
     plugin: DebuggerLanguagePlugin,
-    scripts: Array<SDK.Script.Script>,
-    addRawModulePromise: Promise<Array<Platform.DevToolsPath.UrlString>|{missingSymbolFiles: string[]}>,
+    scripts: SDK.Script.Script[],
+    addRawModulePromise:
+        Promise<Platform.DevToolsPath.UrlString[]|{missingSymbolFiles: SDK.DebuggerModel.MissingDebugFiles[]}>,
   }>;
-  private readonly callFrameByStopId: Map<StopId, SDK.DebuggerModel.CallFrame> = new Map();
-  private readonly stopIdByCallFrame: Map<SDK.DebuggerModel.CallFrame, StopId> = new Map();
+  private readonly callFrameByStopId = new Map<StopId, SDK.DebuggerModel.CallFrame>();
+  private readonly stopIdByCallFrame = new Map<SDK.DebuggerModel.CallFrame, StopId>();
   private nextStopId: StopId = 0n;
 
   constructor(
@@ -443,7 +460,7 @@ export class DebuggerLanguagePluginManager implements
     try {
       const object = await plugin.evaluate(expression, location, this.stopIdForCallFrame(callFrame));
       if (object) {
-        return {object: new ExtensionRemoteObject(callFrame, object, plugin), exceptionDetails: undefined};
+        return {object: await wrapRemoteObject(callFrame, object, plugin), exceptionDetails: undefined};
       }
       return {object: new SDK.RemoteObject.LocalJSONObject(undefined), exceptionDetails: undefined};
     } catch (error) {
@@ -472,37 +489,12 @@ export class DebuggerLanguagePluginManager implements
     return this.callFrameByStopId.get(stopId);
   }
 
-  private expandCallFrames(callFrames: SDK.DebuggerModel.CallFrame[]): Promise<SDK.DebuggerModel.CallFrame[]> {
-    return Promise
-        .all(callFrames.map(async callFrame => {
-          const functionInfo = await this.getFunctionInfo(callFrame.script, callFrame.location());
-          if (functionInfo) {
-            if ('frames' in functionInfo && functionInfo.frames.length) {
-              return functionInfo.frames.map(({name}, index) => callFrame.createVirtualCallFrame(index, name));
-            }
-            if ('missingSymbolFiles' in functionInfo && functionInfo.missingSymbolFiles.length) {
-              const resources = functionInfo.missingSymbolFiles;
-              const details = i18nString(UIStrings.debugSymbolsIncomplete, {PH1: callFrame.functionName});
-              callFrame.missingDebugInfoDetails = {details, resources};
-            } else {
-              callFrame.missingDebugInfoDetails = {
-                details: i18nString(UIStrings.failedToLoadDebugSymbolsForFunction, {PH1: callFrame.functionName}),
-                resources: [],
-              };
-            }
-          }
-          return callFrame;
-        }))
-        .then(callFrames => callFrames.flat());
-  }
-
   modelAdded(debuggerModel: SDK.DebuggerModel.DebuggerModel): void {
     this.#debuggerModelToData.set(debuggerModel, new ModelData(debuggerModel, this.#workspace));
     debuggerModel.addEventListener(SDK.DebuggerModel.Events.GlobalObjectCleared, this.globalObjectCleared, this);
     debuggerModel.addEventListener(SDK.DebuggerModel.Events.ParsedScriptSource, this.parsedScriptSource, this);
     debuggerModel.addEventListener(SDK.DebuggerModel.Events.DebuggerResumed, this.debuggerResumed, this);
     debuggerModel.setEvaluateOnCallFrameCallback(this.evaluateOnCallFrame.bind(this));
-    debuggerModel.setExpandCallFramesCallback(this.expandCallFrames.bind(this));
   }
 
   modelRemoved(debuggerModel: SDK.DebuggerModel.DebuggerModel): void {
@@ -510,7 +502,6 @@ export class DebuggerLanguagePluginManager implements
     debuggerModel.removeEventListener(SDK.DebuggerModel.Events.ParsedScriptSource, this.parsedScriptSource, this);
     debuggerModel.removeEventListener(SDK.DebuggerModel.Events.DebuggerResumed, this.debuggerResumed, this);
     debuggerModel.setEvaluateOnCallFrameCallback(null);
-    debuggerModel.setExpandCallFramesCallback(null);
     const modelData = this.#debuggerModelToData.get(debuggerModel);
     if (modelData) {
       modelData.dispose();
@@ -521,7 +512,7 @@ export class DebuggerLanguagePluginManager implements
       if (scripts.length === 0) {
         rawModuleHandle.plugin.removeRawModule(rawModuleId).catch(error => {
           Common.Console.Console.instance().error(
-              i18nString(UIStrings.errorInDebuggerLanguagePlugin, {PH1: error.message}));
+              i18nString(UIStrings.errorInDebuggerLanguagePlugin, {PH1: error.message}), /* show=*/ false);
         });
         this.#rawModuleHandles.delete(rawModuleId);
       } else {
@@ -575,7 +566,7 @@ export class DebuggerLanguagePluginManager implements
   hasPluginForScript(script: SDK.Script.Script): boolean {
     const rawModuleId = rawModuleIdForScript(script);
     const rawModuleHandle = this.#rawModuleHandles.get(rawModuleId);
-    return rawModuleHandle !== undefined && rawModuleHandle.scripts.includes(script);
+    return rawModuleHandle?.scripts.includes(script) ?? false;
   }
 
   /**
@@ -643,21 +634,21 @@ export class DebuggerLanguagePluginManager implements
       }
     } catch (error) {
       Common.Console.Console.instance().error(
-          i18nString(UIStrings.errorInDebuggerLanguagePlugin, {PH1: error.message}));
+          i18nString(UIStrings.errorInDebuggerLanguagePlugin, {PH1: error.message}), /* show=*/ false);
     }
     return null;
   }
 
   uiLocationToRawLocationRanges(
       uiSourceCode: Workspace.UISourceCode.UISourceCode, lineNumber: number,
-      columnNumber: number|undefined = -1): Promise<{
+      columnNumber: number|undefined = -1): Promise<Array<{
     start: SDK.DebuggerModel.Location,
     end: SDK.DebuggerModel.Location,
-  }[]|null> {
-    const locationPromises: Promise<{
+  }>|null> {
+    const locationPromises: Array<Promise<Array<{
       start: SDK.DebuggerModel.Location,
       end: SDK.DebuggerModel.Location,
-    }[]>[] = [];
+    }>>> = [];
     this.scriptsForUISourceCode(uiSourceCode).forEach(script => {
       const rawModuleId = rawModuleIdForScript(script);
       const rawModuleHandle = this.#rawModuleHandles.get(rawModuleId);
@@ -673,15 +664,15 @@ export class DebuggerLanguagePluginManager implements
 
     return Promise.all(locationPromises).then(locations => locations.flat()).catch(error => {
       Common.Console.Console.instance().error(
-          i18nString(UIStrings.errorInDebuggerLanguagePlugin, {PH1: error.message}));
+          i18nString(UIStrings.errorInDebuggerLanguagePlugin, {PH1: error.message}), /* show=*/ false);
       return null;
     });
 
     async function getLocations(
-        rawModuleId: string, plugin: DebuggerLanguagePlugin, script: SDK.Script.Script): Promise<{
+        rawModuleId: string, plugin: DebuggerLanguagePlugin, script: SDK.Script.Script): Promise<Array<{
       start: SDK.DebuggerModel.Location,
       end: SDK.DebuggerModel.Location,
-    }[]> {
+    }>> {
       const pluginLocation = {rawModuleId, sourceFileURL: uiSourceCode.url(), lineNumber, columnNumber};
 
       const rawLocations = await plugin.sourceLocationToRawLocation(pluginLocation);
@@ -741,6 +732,84 @@ export class DebuggerLanguagePluginManager implements
     return ranges;
   }
 
+  async translateRawFramesStep(
+      rawFrames: StackTraceImpl.Trie.RawFrame[],
+      translatedFrames: Awaited<ReturnType<StackTraceImpl.StackTraceModel.TranslateRawFrames>>,
+      target: SDK.Target.Target): Promise<boolean> {
+    const frame = rawFrames[0];
+    const script = target.model(SDK.DebuggerModel.DebuggerModel)?.scriptForId(frame.scriptId ?? '');
+    if (!script) {
+      return false;
+    }
+
+    const functionInfo = await this.getFunctionInfo(script, frame);
+    if (!functionInfo) {
+      return false;
+    }
+
+    // The plugin is responsible for translating this frame. The only question is whether it was successful,
+    // or if we identity map the raw frame and attach the "missing debug info details".
+    rawFrames.shift();
+
+    if ('frames' in functionInfo && functionInfo.frames.length) {
+      const framePromises = functionInfo.frames.map(async ({name}, index) => {
+        const rawLocation = new SDK.DebuggerModel.Location(
+            script.debuggerModel, script.scriptId, frame.lineNumber, frame.columnNumber, index);
+        const uiLocation = await this.rawLocationToUILocation(rawLocation);
+        return translatedFromUILocation(uiLocation, name, frame);
+      });
+
+      translatedFrames.push(await Promise.all(framePromises));
+      return true;
+    }
+
+    // Translate the location only. We go through via "DebuggerWorkspaceBinding". It'll still try the plugin
+    // first, but this way, we'll get a UISourceCode for the raw script if the plugin fails to translate.
+    const uiLocation = await this.#debuggerWorkspaceBinding.rawLocationToUILocation(
+        new SDK.DebuggerModel.Location(script.debuggerModel, script.scriptId, frame.lineNumber, frame.columnNumber));
+    const mappedFrame = translatedFromUILocation(uiLocation, frame.functionName, frame);
+
+    if ('missingSymbolFiles' in functionInfo && functionInfo.missingSymbolFiles.length) {
+      translatedFrames.push([{
+        ...mappedFrame,
+        missingDebugInfo: {
+          type: StackTrace.StackTrace.MissingDebugInfoType.PARTIAL_INFO,
+          missingDebugFiles: functionInfo.missingSymbolFiles,
+        },
+      }]);
+    } else {
+      translatedFrames.push([{
+        ...mappedFrame,
+        missingDebugInfo: {
+          type: StackTrace.StackTrace.MissingDebugInfoType.NO_INFO,
+        },
+      }]);
+    }
+
+    return true;
+
+    function translatedFromUILocation(
+        uiLocation: Workspace.UISourceCode.UILocation|null, name: string|undefined,
+        fallback: StackTraceImpl.Trie.RawFrame): (typeof translatedFrames)[number][number] {
+      if (uiLocation) {
+        return {
+          uiSourceCode: uiLocation.uiSourceCode,
+          url: undefined,
+          name,
+          line: uiLocation.lineNumber,
+          column: uiLocation.columnNumber ?? -1,
+        };
+      }
+      return {
+        uiSourceCode: undefined,
+        url: fallback.url,
+        name: fallback.functionName,
+        line: fallback.lineNumber,
+        column: fallback.columnNumber,
+      };
+    }
+  }
+
   scriptsForUISourceCode(uiSourceCode: Workspace.UISourceCode.UISourceCode): SDK.Script.Script[] {
     for (const modelData of this.#debuggerModelToData.values()) {
       const scripts = modelData.uiSourceCodeToScripts.get(uiSourceCode);
@@ -773,46 +842,50 @@ export class DebuggerLanguagePluginManager implements
       const rawModuleId = rawModuleIdForScript(script);
       let rawModuleHandle = this.#rawModuleHandles.get(rawModuleId);
       if (!rawModuleHandle) {
-        const sourceFileURLsPromise =
-            (async () => {
-              const console = Common.Console.Console.instance();
-              const url = script.sourceURL;
-              const symbolsUrl = (script.debugSymbols && script.debugSymbols.externalURL) || '';
-              if (symbolsUrl) {
-                console.log(
-                    i18nString(UIStrings.loadingDebugSymbolsForVia, {PH1: plugin.name, PH2: url, PH3: symbolsUrl}));
-              } else {
-                console.log(i18nString(UIStrings.loadingDebugSymbolsFor, {PH1: plugin.name, PH2: url}));
-              }
-              try {
-                const code = (!symbolsUrl && Common.ParsedURL.schemeIs(url, 'wasm:')) ? await script.getWasmBytecode() :
-                                                                                        undefined;
-                const addModuleResult = await plugin.addRawModule(rawModuleId, symbolsUrl, {url, code});
-                // Check that the handle isn't stale by now. This works because the code that assigns to
-                // `rawModuleHandle` below will run before this code because of the `await` in the preceding
-                // line. This is primarily to avoid logging the message below, which would give the developer
-                // the misleading information that we're done, while in reality it was a stale call that finished.
-                if (rawModuleHandle !== this.#rawModuleHandles.get(rawModuleId)) {
-                  return [];
-                }
-                if ('missingSymbolFiles' in addModuleResult) {
-                  return {missingSymbolFiles: addModuleResult.missingSymbolFiles};
-                }
-                const sourceFileURLs = addModuleResult as Platform.DevToolsPath.UrlString[];
-                if (sourceFileURLs.length === 0) {
-                  console.warn(i18nString(UIStrings.loadedDebugSymbolsForButDidnt, {PH1: plugin.name, PH2: url}));
-                } else {
-                  console.log(i18nString(
-                      UIStrings.loadedDebugSymbolsForFound, {PH1: plugin.name, PH2: url, PH3: sourceFileURLs.length}));
-                }
-                return sourceFileURLs;
-              } catch (error) {
-                console.error(i18nString(
-                    UIStrings.failedToLoadDebugSymbolsFor, {PH1: plugin.name, PH2: url, PH3: error.message}));
-                this.#rawModuleHandles.delete(rawModuleId);
-                return [];
-              }
-            })();
+        const sourceFileURLsPromise = (async () => {
+          const console = Common.Console.Console.instance();
+          const url = script.sourceURL;
+          const symbolsUrl = (script.debugSymbols?.externalURL) || '';
+          if (symbolsUrl) {
+            console.log(i18nString(UIStrings.loadingDebugSymbolsForVia, {PH1: plugin.name, PH2: url, PH3: symbolsUrl}));
+          } else {
+            console.log(i18nString(UIStrings.loadingDebugSymbolsFor, {PH1: plugin.name, PH2: url}));
+          }
+          try {
+            const code =
+                (!symbolsUrl && Common.ParsedURL.schemeIs(url, 'wasm:')) ? await script.getWasmBytecode() : undefined;
+            const addModuleResult = await plugin.addRawModule(rawModuleId, symbolsUrl, {url, code});
+            // Check that the handle isn't stale by now. This works because the code that assigns to
+            // `rawModuleHandle` below will run before this code because of the `await` in the preceding
+            // line. This is primarily to avoid logging the message below, which would give the developer
+            // the misleading information that we're done, while in reality it was a stale call that finished.
+            if (rawModuleHandle !== this.#rawModuleHandles.get(rawModuleId)) {
+              return [];
+            }
+            if ('missingSymbolFiles' in addModuleResult) {
+              const initiator = plugin.createPageResourceLoadInitiator();
+              const missingSymbolFiles = addModuleResult.missingSymbolFiles.map(resource => {
+                const resourceUrl = resource as Platform.DevToolsPath.UrlString;
+                return {resourceUrl, initiator};
+              });
+              return {missingSymbolFiles};
+            }
+            const sourceFileURLs = addModuleResult as Platform.DevToolsPath.UrlString[];
+            if (sourceFileURLs.length === 0) {
+              console.warn(i18nString(UIStrings.loadedDebugSymbolsForButDidnt, {PH1: plugin.name, PH2: url}));
+            } else {
+              console.log(i18nString(
+                  UIStrings.loadedDebugSymbolsForFound, {PH1: plugin.name, PH2: url, PH3: sourceFileURLs.length}));
+            }
+            return sourceFileURLs;
+          } catch (error) {
+            console.error(
+                i18nString(UIStrings.failedToLoadDebugSymbolsFor, {PH1: plugin.name, PH2: url, PH3: error.message}),
+                /* show=*/ false);
+            this.#rawModuleHandles.delete(rawModuleId);
+            return [];
+          }
+        })();
         rawModuleHandle = {rawModuleId, plugin, scripts: [script], addRawModulePromise: sourceFileURLsPromise};
         this.#rawModuleHandles.set(rawModuleId, rawModuleHandle);
       } else {
@@ -824,15 +897,13 @@ export class DebuggerLanguagePluginManager implements
       // for the DebuggerModel again, which may disappear
       // in the meantime...
       void rawModuleHandle.addRawModulePromise.then(sourceFileURLs => {
-        if (!('missingSymbolFiles' in sourceFileURLs)) {
-          // The script might have disappeared meanwhile...
-          if (script.debuggerModel.scriptForId(script.scriptId) === script) {
-            const modelData = this.#debuggerModelToData.get(script.debuggerModel);
-            if (modelData) {  // The DebuggerModel could have disappeared meanwhile...
-              modelData.addSourceFiles(script, sourceFileURLs);
-              void this.#debuggerWorkspaceBinding.updateLocations(script);
-            }
+        // The script might have disappeared meanwhile...
+        if (script.debuggerModel.scriptForId(script.scriptId) === script) {
+          const modelData = this.#debuggerModelToData.get(script.debuggerModel);
+          if (modelData && Array.isArray(sourceFileURLs)) {  // The DebuggerModel could have disappeared meanwhile...
+            modelData.addSourceFiles(script, sourceFileURLs);
           }
+          void this.#debuggerWorkspaceBinding.updateLocations(script);
         }
       });
       return;
@@ -851,7 +922,7 @@ export class DebuggerLanguagePluginManager implements
   }
 
   getSourcesForScript(script: SDK.Script.Script):
-      Promise<Array<Platform.DevToolsPath.UrlString>|{missingSymbolFiles: string[]}|undefined> {
+      Promise<Platform.DevToolsPath.UrlString[]|{missingSymbolFiles: SDK.DebuggerModel.MissingDebugFiles[]}|undefined> {
     const rawModuleId = rawModuleIdForScript(script);
     const rawModuleHandle = this.#rawModuleHandles.get(rawModuleId);
     if (rawModuleHandle) {
@@ -894,13 +965,15 @@ export class DebuggerLanguagePluginManager implements
       return Array.from(scopes.values());
     } catch (error) {
       Common.Console.Console.instance().error(
-          i18nString(UIStrings.errorInDebuggerLanguagePlugin, {PH1: error.message}));
+          i18nString(UIStrings.errorInDebuggerLanguagePlugin, {PH1: error.message}), /* show=*/ false);
       return null;
     }
   }
 
-  async getFunctionInfo(script: SDK.Script.Script, location: SDK.DebuggerModel.Location):
-      Promise<{frames: Array<Chrome.DevTools.FunctionInfo>}|{missingSymbolFiles: string[]}|null> {
+  async getFunctionInfo(script: SDK.Script.Script, location: Pick<SDK.DebuggerModel.Location, 'columnNumber'>):
+      Promise<{frames: Chrome.DevTools.FunctionInfo[], missingSymbolFiles: SDK.DebuggerModel.MissingDebugFiles[]}|
+              {frames: Chrome.DevTools.FunctionInfo[]}|{missingSymbolFiles: SDK.DebuggerModel.MissingDebugFiles[]}|
+              null> {
     const {rawModuleId, plugin} = await this.rawModuleIdAndPluginForScript(script);
     if (!plugin) {
       return null;
@@ -914,6 +987,14 @@ export class DebuggerLanguagePluginManager implements
 
     try {
       const functionInfo = await plugin.getFunctionInfo(rawLocation);
+      if ('missingSymbolFiles' in functionInfo) {
+        const initiator = plugin.createPageResourceLoadInitiator();
+        const missingSymbolFiles = functionInfo.missingSymbolFiles.map(resource => {
+          const resourceUrl = resource as Platform.DevToolsPath.UrlString;
+          return {resourceUrl, initiator};
+        });
+        return {missingSymbolFiles, ...('frames' in functionInfo && {frames: functionInfo.frames})};
+      }
       return functionInfo;
     } catch (error) {
       Common.Console.Console.instance().warn(i18nString(UIStrings.errorInDebuggerLanguagePlugin, {PH1: error.message}));
@@ -921,10 +1002,10 @@ export class DebuggerLanguagePluginManager implements
     }
   }
 
-  async getInlinedFunctionRanges(rawLocation: SDK.DebuggerModel.Location): Promise<{
+  async getInlinedFunctionRanges(rawLocation: SDK.DebuggerModel.Location): Promise<Array<{
     start: SDK.DebuggerModel.Location,
     end: SDK.DebuggerModel.Location,
-  }[]> {
+  }>> {
     const script = rawLocation.script();
     if (!script) {
       return [];
@@ -943,7 +1024,7 @@ export class DebuggerLanguagePluginManager implements
 
     try {
       // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration)
-      // @ts-ignore
+      // @ts-expect-error
       const locations = await plugin.getInlinedFunctionRanges(pluginLocation);
       return locations.map(
           m => ({
@@ -958,10 +1039,10 @@ export class DebuggerLanguagePluginManager implements
     }
   }
 
-  async getInlinedCalleesRanges(rawLocation: SDK.DebuggerModel.Location): Promise<{
+  async getInlinedCalleesRanges(rawLocation: SDK.DebuggerModel.Location): Promise<Array<{
     start: SDK.DebuggerModel.Location,
     end: SDK.DebuggerModel.Location,
-  }[]> {
+  }>> {
     const script = rawLocation.script();
     if (!script) {
       return [];
@@ -980,7 +1061,7 @@ export class DebuggerLanguagePluginManager implements
 
     try {
       // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration)
-      // @ts-ignore
+      // @ts-expect-error
       const locations = await plugin.getInlinedCalleesRanges(pluginLocation);
       return locations.map(
           m => ({
@@ -1087,4 +1168,5 @@ class ModelData {
 export interface DebuggerLanguagePlugin extends Chrome.DevTools.LanguageExtensionPlugin {
   name: string;
   handleScript(script: SDK.Script.Script): boolean;
+  createPageResourceLoadInitiator(): SDK.PageResourceLoader.PageResourceLoadInitiator;
 }

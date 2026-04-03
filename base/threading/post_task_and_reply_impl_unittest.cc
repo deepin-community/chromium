@@ -47,8 +47,8 @@ class MockObject {
   MockObject(const MockObject&) = delete;
   MockObject& operator=(const MockObject&) = delete;
 
-  MOCK_METHOD1(Task, void(scoped_refptr<ObjectToDelete>));
-  MOCK_METHOD1(Reply, void(scoped_refptr<ObjectToDelete>));
+  MOCK_METHOD(void, Task, (scoped_refptr<ObjectToDelete>));
+  MOCK_METHOD(void, Reply, (scoped_refptr<ObjectToDelete>));
 
   WeakPtr<MockObject> GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
 
@@ -60,7 +60,7 @@ class MockObject {
 
 class MockRunsTasksInCurrentSequenceTaskRunner : public TestMockTimeTaskRunner {
  public:
-  MockRunsTasksInCurrentSequenceTaskRunner(
+  explicit MockRunsTasksInCurrentSequenceTaskRunner(
       TestMockTimeTaskRunner::Type type =
           TestMockTimeTaskRunner::Type::kStandalone)
       : TestMockTimeTaskRunner(type) {}
@@ -90,8 +90,9 @@ class MockRunsTasksInCurrentSequenceTaskRunner : public TestMockTimeTaskRunner {
   bool PostDelayedTask(const Location& from_here,
                        OnceClosure task,
                        TimeDelta delay) override {
-    if (!accepts_tasks_)
+    if (!accepts_tasks_) {
       return false;
+    }
 
     return TestMockTimeTaskRunner::PostDelayedTask(from_here, std::move(task),
                                                    delay);

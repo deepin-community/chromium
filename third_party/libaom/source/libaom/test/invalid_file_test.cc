@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2016, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -13,7 +13,8 @@
 #include <ostream>
 #include <string>
 
-#include "third_party/googletest/src/googletest/include/gtest/gtest.h"
+#include "config/aom_config.h"
+#include "gtest/gtest.h"
 #include "test/codec_factory.h"
 #include "test/ivf_video_source.h"
 #include "test/util.h"
@@ -131,8 +132,8 @@ const DecodeParam kAV1InvalidFileTests[] = {
   { 1, "invalid-google-142530197-1.ivf", nullptr },
   { 4, "invalid-oss-fuzz-9463.ivf", "invalid-oss-fuzz-9463.ivf.res.2" },
   { 1, "invalid-oss-fuzz-9720.ivf", nullptr },
-  { 1, "invalid-oss-fuzz-10389.ivf", "invalid-oss-fuzz-10389.ivf.res.4" },
-#if !CHROMIUM && !CONFIG_SIZE_LIMIT ||                  \
+  { 1, "invalid-oss-fuzz-10389.ivf", "invalid-oss-fuzz-10389.ivf.res.5" },
+#if !defined(CHROMIUM) && !CONFIG_SIZE_LIMIT ||         \
     (CONFIG_SIZE_LIMIT && DECODE_WIDTH_LIMIT >= 5120 && \
      DECODE_HEIGHT_LIMIT >= 180)
   { 1, "invalid-oss-fuzz-11523.ivf", "invalid-oss-fuzz-11523.ivf.res.2" },
@@ -151,11 +152,7 @@ const DecodeParam kAV1InvalidFileTests[] = {
   { 1, "invalid-oss-fuzz-10227.ivf", nullptr },
   { 4, "invalid-oss-fuzz-10555.ivf", nullptr },
   { 1, "invalid-oss-fuzz-10705.ivf", nullptr },
-#if CONFIG_CWG_C013
   { 1, "invalid-oss-fuzz-10723.ivf", "invalid-oss-fuzz-10723.ivf.res.3" },
-#else
-  { 1, "invalid-oss-fuzz-10723.ivf", "invalid-oss-fuzz-10723.ivf.res.2" },
-#endif
   { 1, "invalid-oss-fuzz-10779.ivf", nullptr },
   { 1, "invalid-oss-fuzz-11477.ivf", nullptr },
   { 1, "invalid-oss-fuzz-11479.ivf", "invalid-oss-fuzz-11479.ivf.res.2" },

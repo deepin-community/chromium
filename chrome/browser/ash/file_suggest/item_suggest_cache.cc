@@ -5,6 +5,7 @@
 #include "chrome/browser/ash/file_suggest/item_suggest_cache.h"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 
 #include "ash/constants/ash_pref_names.h"
@@ -14,6 +15,7 @@
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
@@ -24,7 +26,6 @@
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
-#include "components/signin/public/identity_manager/scope_set.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
@@ -104,7 +105,7 @@ void LogLatency(base::TimeDelta latency) {
 // JSON response parsing
 //----------------------
 
-std::optional<std::string> GetString(const base::Value::Dict& value,
+std::optional<std::string> GetString(const base::DictValue& value,
                                      const std::string& key) {
   const auto* field = value.FindString(key);
   if (!field) {
@@ -200,9 +201,7 @@ std::optional<ItemSuggestCache::Results> ConvertResults(
 
 }  // namespace
 
-BASE_FEATURE(kLauncherItemSuggest,
-             "LauncherItemSuggest",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kLauncherItemSuggest, base::FEATURE_DISABLED_BY_DEFAULT);
 
 constexpr base::FeatureParam<bool> ItemSuggestCache::kEnabled;
 constexpr base::FeatureParam<std::string> ItemSuggestCache::kServerUrl;
@@ -328,8 +327,7 @@ void ItemSuggestCache::MaybeUpdateCache() {
 
   // Fetch an OAuth2 access token.
   token_fetcher_ = std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
-      "launcher_item_suggest", identity_manager,
-      signin::ScopeSet({GaiaConstants::kDriveReadOnlyOAuth2Scope}),
+      signin::OAuthConsumerId::kLauncherItemSuggest, identity_manager,
       base::BindOnce(&ItemSuggestCache::OnTokenReceived,
                      weak_factory_.GetWeakPtr()),
       signin::PrimaryAccountAccessTokenFetcher::Mode::kImmediate,
@@ -337,7 +335,7 @@ void ItemSuggestCache::MaybeUpdateCache() {
 }
 
 void ItemSuggestCache::UpdateCacheWithJsonForTest(
-    const std::string json_response) {
+    const std::string& json_response) {
   data_decoder::DataDecoder::ParseJsonIsolated(
       json_response, base::BindOnce(&ItemSuggestCache::OnJsonParsed,
                                     weak_factory_.GetWeakPtr()));
@@ -370,7 +368,7 @@ void ItemSuggestCache::OnTokenReceived(GoogleServiceAuthError error,
 }
 
 void ItemSuggestCache::OnSuggestionsReceived(
-    const std::unique_ptr<std::string> json_response) {
+    std::optional<std::string> json_response) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   const int net_error = url_loader_->NetError();

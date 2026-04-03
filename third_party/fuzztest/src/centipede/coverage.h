@@ -26,13 +26,12 @@
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_set.h"
-#include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
 #include "./centipede/control_flow.h"
 #include "./centipede/feature.h"
 #include "./centipede/pc_info.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
 class SymbolTable;  // To avoid mutual inclusion with symbol_table.h.
 
@@ -47,13 +46,15 @@ class Coverage {
   Coverage(const PCTable &pc_table,
            const PCIndexVec &pci_vec);
 
-  // Prints in human-readable form to `out` using `symbols`.
-  void Print(const SymbolTable &symbols, std::ostream &out);
+  // Saves the by-function coverage in human-readable form to the `filepath`
+  // file, using `symbols` to translate PCs to function names.
+  void DumpReportToFile(const SymbolTable &symbols, std::string_view filepath,
+                        std::string_view description = "");
 
   // Returns true if the function is fully covered. pc_index is for a function
   // entry.
   bool FunctionIsFullyCovered(PCIndex pc_index) const {
-    CHECK(func_entries_[pc_index]);
+    FUZZTEST_CHECK(func_entries_[pc_index]);
     return fully_covered_funcs_vec_[pc_index];
   }
   // Returns true if the given basic block is covered. pc_index is for any BB.
@@ -178,6 +179,6 @@ uint32_t ComputeFrontierWeight(const Coverage &coverage,
                                const ControlFlowGraph &cfg,
                                const std::vector<uintptr_t> &callees);
 
-}  // namespace centipede
+}  // namespace fuzztest::internal
 
 #endif  // THIRD_PARTY_CENTIPEDE_COVERAGE_H_

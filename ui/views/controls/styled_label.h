@@ -13,12 +13,13 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/lru_cache.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/class_property.h"
 #include "ui/color/color_id.h"
+#include "ui/color/color_variant.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/range/range.h"
@@ -105,8 +106,6 @@ class VIEWS_EXPORT StyledLabel : public View {
     std::vector<gfx::Size> line_sizes;
   };
 
-  using ColorVariant = absl::variant<absl::monostate, SkColor, ui::ColorId>;
-
   StyledLabel();
 
   StyledLabel(const StyledLabel&) = delete;
@@ -154,8 +153,8 @@ class VIEWS_EXPORT StyledLabel : public View {
   // Gets/Sets the color or color id of the background on which the label is
   // drawn. This won't be explicitly drawn, but the label will force the text
   // color to be readable over it.
-  ColorVariant GetDisplayedOnBackgroundColor() const;
-  void SetDisplayedOnBackgroundColor(ColorVariant color);
+  std::optional<ui::ColorVariant> GetDisplayedOnBackgroundColor() const;
+  void SetDisplayedOnBackgroundColor(ui::ColorVariant color);
 
   bool GetAutoColorReadabilityEnabled() const;
   void SetAutoColorReadabilityEnabled(bool auto_color_readability);
@@ -177,17 +176,14 @@ class VIEWS_EXPORT StyledLabel : public View {
   // wrapped).  If 0, no fixed width is enforced.
   void SizeToFit(int fixed_width);
 
-  // If true, the preferred size is dependent on the last set width.
-  // See the comment on `use_legacy_preferred_size_`.
-  void set_use_legacy_preferred_size(bool use_legacy_preferred_size) {
-    use_legacy_preferred_size_ = use_legacy_preferred_size;
-  }
+  [[nodiscard]] base::CallbackListSubscription AddTextChangedCallback(
+      views::PropertyChangedCallback callback);
 
   // View:
-  gfx::Size CalculatePreferredSize() const final;
+  gfx::Size GetMinimumSize() const override;
   gfx::Size CalculatePreferredSize(
       const SizeBounds& available_size) const override;
-  int GetHeightForWidth(int w) const override;
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   void Layout(PassKey) override;
   void PreferredSizeChanged() override;
 
@@ -210,7 +206,7 @@ class VIEWS_EXPORT StyledLabel : public View {
         : range(range), style_info(style_info) {}
     ~StyleRange() = default;
 
-    bool operator<(const StyleRange& other) const;
+    auto operator<=>(const StyleRange& other) const;
 
     gfx::Range range;
     RangeStyleInfo style_info;
@@ -247,6 +243,8 @@ class VIEWS_EXPORT StyledLabel : public View {
   // delete the rest.
   void RemoveOrDeleteAllChildViews();
 
+  void RecreateChildViews();
+
   // The text to display.
   std::u16string text_;
 
@@ -256,17 +254,16 @@ class VIEWS_EXPORT StyledLabel : public View {
 
   std::optional<int> line_height_;
   int fixed_width_ = 0;
-  // If true, the preferred size is dependent on the last set width.
-  // This is a deprecated behavior because we want the preferred size
-  // to be "stateless", meaning that the previous layout result
-  // shouldn't affect future layouts.
-  // TODO(322715559): remove this after fixing the ChromeOS tast failure.
-  bool use_legacy_preferred_size_ = false;
 
   // Temporarily owns the custom views until they've been been placed into the
   // StyledLabel's child list. This list also holds the custom views during
   // layout.
   std::list<std::unique_ptr<View>> custom_views_;
+
+  // Temporarily owns the views to be deleted during layout. These views might
+  // still be referenced on the stack. If we delete them immediately, UaFs
+  // could happen when the stack unwinds.
+  std::vector<std::unique_ptr<View>> pending_delete_views_;
 
   // The ranges that should be linkified, sorted by start position.
   StyleRanges style_ranges_;
@@ -276,9 +273,14 @@ class VIEWS_EXPORT StyledLabel : public View {
   // recalculation, while |layout_views_| only exists until the next Layout().
   mutable LayoutSizeInfo layout_size_info_{0};
   mutable std::unique_ptr<LayoutViews> layout_views_;
+  // Saves the LayoutSizeInfo for additional CalculateLayout() calls. Layout
+  // managers sometimes repeatedly ask for size information for the same (small)
+  // number of widths. Caching multiple LayoutSideInfos helps avoid doing many
+  // unnecessary calculations.
+  mutable base::LRUCache<int, LayoutSizeInfo> layout_size_info_cache_{16};
 
   // Background color on which the label is drawn, for auto color readability.
-  ColorVariant displayed_on_background_color_;
+  std::optional<ui::ColorVariant> displayed_on_background_color_;
 
   // Controls whether the text is automatically re-colored to be readable on the
   // background.
@@ -286,6 +288,12 @@ class VIEWS_EXPORT StyledLabel : public View {
 
   // Controls whether subpixel rendering is enabled.
   bool subpixel_rendering_enabled_ = true;
+
+  // Controls whether subviews need to be recreated. Recreating subviews can
+  // cause some functionality to break under certain circumstances.
+  // eg: If re-creating the subview occurs after OnMousePressed() and before
+  // OnMouseRelease(), the link will not be clickable.
+  bool need_recreate_child_ = true;
 
   // The horizontal alignment. This value is flipped for RTL. The default
   // behavior is to align left in LTR UI and right in RTL UI.
@@ -298,7 +306,7 @@ VIEW_BUILDER_PROPERTY(const std::u16string&, Text)
 VIEW_BUILDER_PROPERTY(int, TextContext)
 VIEW_BUILDER_PROPERTY(int, DefaultTextStyle)
 VIEW_BUILDER_PROPERTY(int, LineHeight)
-VIEW_BUILDER_PROPERTY(StyledLabel::ColorVariant, DisplayedOnBackgroundColor)
+VIEW_BUILDER_PROPERTY(ui::ColorVariant, DisplayedOnBackgroundColor)
 VIEW_BUILDER_PROPERTY(bool, AutoColorReadabilityEnabled)
 VIEW_BUILDER_PROPERTY(gfx::HorizontalAlignment, HorizontalAlignment)
 VIEW_BUILDER_PROPERTY(std::optional<ui::ColorId>, DefaultEnabledColorId)

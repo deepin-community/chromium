@@ -1,25 +1,29 @@
 # Copyright 2022 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
+from __future__ import annotations
 
 import abc
-from typing import List, Sequence, Type
+from typing import Sequence, Type
+
+from typing_extensions import override
 
 from crossbench.benchmarks import base as benchmark
-from tests.crossbench.mock_helper import BaseCrossbenchTestCase
+from tests.crossbench.base import BaseCrossbenchTestCase
 
 
 class BaseBenchmarkTestCase(BaseCrossbenchTestCase, metaclass=abc.ABCMeta):
 
   @property
   @abc.abstractmethod
-  def benchmark_cls(self):
+  def benchmark_cls(self) -> Type[benchmark.Benchmark]:
     pass
 
   @property
   def story_cls(self):
     return self.benchmark_cls.DEFAULT_STORY_CLS
 
+  @override
   def setUp(self):
     super().setUp()
     self.assertTrue(
@@ -28,6 +32,9 @@ class BaseBenchmarkTestCase(BaseCrossbenchTestCase, metaclass=abc.ABCMeta):
 
   def test_describe(self):
     self.assertIsInstance(self.benchmark_cls.describe(), dict)
+
+  def test_aliases(self):
+    self.assertNotIn(self.benchmark_cls.NAME, self.benchmark_cls.aliases())
 
 
 class SubStoryTestCase(BaseBenchmarkTestCase, metaclass=abc.ABCMeta):
@@ -38,10 +45,8 @@ class SubStoryTestCase(BaseBenchmarkTestCase, metaclass=abc.ABCMeta):
 
   def story_filter(self, patterns: Sequence[str],
                    **kwargs) -> benchmark.StoryFilter:
-    return self.story_filter_cls(  # pytype: disable=not-instantiable
-        story_cls=self.story_cls,
-        patterns=patterns,
-        **kwargs)
+    return self.story_filter_cls(
+        story_cls=self.story_cls, patterns=patterns, **kwargs)
 
   def test_instantiate_no_stories(self):
     with self.assertRaises(AssertionError):
@@ -64,7 +69,7 @@ class SubStoryTestCase(BaseBenchmarkTestCase, metaclass=abc.ABCMeta):
     any_story_name = self.story_cls.all_story_names()[0]
     any_story = self.story_filter([any_story_name]).stories[0]
     # Instantiate with single story,
-    with self.assertRaises(Exception):
+    with self.assertRaises(TypeError):
       self.benchmark_cls(any_story)
     # with single story array
     self.benchmark_cls([any_story])
@@ -81,13 +86,13 @@ class PressBaseBenchmarkTestCase(SubStoryTestCase, metaclass=abc.ABCMeta):
 
   def test_invalid_story_names(self):
     # Only StoryFilter can filter stories by regexp
-    with self.assertRaises(Exception):
+    with self.assertRaises(ValueError):
       self.story_cls.from_names(".*", separate=True)
-    with self.assertRaises(Exception):
+    with self.assertRaises(ValueError):
       self.story_cls.from_names([".*"], separate=True)
-    with self.assertRaises(Exception):
+    with self.assertRaises(ValueError):
       self.story_cls.from_names([".*", "name does not exist"], separate=True)
-    with self.assertRaises(Exception):
+    with self.assertRaises(ValueError):
       self.story_cls.from_names([""], separate=True)
 
   def test_all(self):

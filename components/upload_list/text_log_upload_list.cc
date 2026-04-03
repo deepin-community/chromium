@@ -78,7 +78,7 @@ bool CheckFieldOutOfRange(const std::string* time_string,
   return true;
 }
 
-bool CheckJsonUploadListOutOfRange(const base::Value::Dict& dict,
+bool CheckJsonUploadListOutOfRange(const base::DictValue& dict,
                                    const base::Time& begin,
                                    const base::Time& end) {
   const std::string* upload_time_string =
@@ -129,7 +129,8 @@ void TextLogUploadList::ClearUploadList(const base::Time& begin,
 
   std::ostringstream new_contents_stream;
   for (const std::string& line : log_entries) {
-    std::optional<base::Value> json = base::JSONReader::Read(line);
+    std::optional<base::Value> json =
+        base::JSONReader::Read(line, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
     bool should_copy = false;
 
     if (json.has_value()) {
@@ -192,7 +193,7 @@ std::unique_ptr<UploadList::UploadInfo> TextLogUploadList::TryParseCsvLogEntry(
 }
 
 std::unique_ptr<UploadList::UploadInfo> TextLogUploadList::TryParseJsonLogEntry(
-    const base::Value::Dict& dict) {
+    const base::DictValue& dict) {
   // Parse upload_id.
   const base::Value* upload_id_value = dict.Find(kJsonLogKeyUploadId);
   if (upload_id_value && !upload_id_value->is_string())
@@ -248,7 +249,8 @@ void TextLogUploadList::ParseLogEntries(
     std::vector<std::unique_ptr<UploadList::UploadInfo>>* uploads) {
   for (const std::string& line : base::Reversed(log_entries)) {
     std::unique_ptr<UploadList::UploadInfo> info;
-    std::optional<base::Value> json = base::JSONReader::Read(line);
+    std::optional<base::Value> json =
+        base::JSONReader::Read(line, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
 
     if (json.has_value() && json->is_dict())
       info = TryParseJsonLogEntry(json.value().GetDict());

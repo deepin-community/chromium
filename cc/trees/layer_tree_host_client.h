@@ -15,11 +15,8 @@
 #include "cc/trees/paint_holding_commit_trigger.h"
 #include "cc/trees/paint_holding_reason.h"
 #include "cc/trees/property_tree.h"
+#include "components/viz/common/frame_timing_details.h"
 #include "ui/gfx/geometry/vector2d_f.h"
-
-namespace gfx {
-struct PresentationFeedback;
-}
 
 namespace viz {
 struct BeginFrameArgs;
@@ -28,7 +25,6 @@ struct BeginFrameArgs;
 namespace cc {
 struct BeginMainFrameMetrics;
 struct CommitState;
-struct WebVitalMetrics;
 
 struct ApplyViewportChangesArgs {
   // Scroll offset delta of the inner (visual) viewport.
@@ -80,6 +76,12 @@ struct PaintBenchmarkResult {
   size_t painter_memory_usage = 0;
 };
 
+// Under certain circumstances, the client may request BeginMainFrame to be
+// scheduled whenever a relevant property change happens in the compositor.
+// This mechanism covers changes to *any* layer; in the future it might be
+// useful to add a filter mechanism to limit the effect to specific layers.
+enum class PropertyChangeForcesCommitCriteria { kNone, kTransform, kAny };
+
 // A LayerTreeHost is bound to a LayerTreeHostClient. The main rendering
 // loop (in ProxyMain or SingleThreadProxy) calls methods on the
 // LayerTreeHost, which then handles them and also calls into the equivalent
@@ -116,9 +118,8 @@ class CC_EXPORT LayerTreeHostClient {
   virtual void BeginMainFrameNotExpectedSoon() = 0;
   virtual void BeginMainFrameNotExpectedUntil(base::TimeTicks time) = 0;
   // This is called immediately after notifying the impl thread that it should
-  // do a commit, possibly before the commit has finished (depending on whether
-  // features::kNonBlockingCommit is enabled). It is meant for work that must
-  // happen prior to returning control to the main thread event loop.
+  // do a commit, possibly before the commit has finished. It is meant for work
+  // that must happen prior to returning control to the main thread event loop.
   virtual void DidBeginMainFrame() = 0;
   virtual void WillUpdateLayers() = 0;
   virtual void DidUpdateLayers() = 0;
@@ -180,19 +181,17 @@ class CC_EXPORT LayerTreeHostClient {
                          base::TimeTicks commit_start_time,
                          base::TimeTicks commit_finish_time) = 0;
   virtual void DidCommitAndDrawFrame(int source_frame_number) = 0;
-  virtual void DidReceiveCompositorFrameAck() = 0;
   virtual void DidCompletePageScaleAnimation(int source_frame_number) = 0;
   virtual void DidPresentCompositorFrame(
       uint32_t frame_token,
-      const gfx::PresentationFeedback& feedback) = 0;
+      const viz::FrameTimingDetails& frame_timing_details) = 0;
   // Mark the frame start and end time for UMA and UKM metrics that require
   // the time from the start of BeginMainFrame to the Commit, or early out.
   virtual void RecordStartOfFrameMetrics() = 0;
   // This is called immediately after notifying the impl thread that it should
-  // do a commit, possibly before the commit has finished (depending on whether
-  // features::kNonBlockingCommit is enabled). It is meant to record the time
-  // when the main thread is finished with its part of a main frame, and will
-  // return control to the main thread event loop.
+  // do a commit, possibly before the commit has finished. It is meant to record
+  // the time when the main thread is finished with its part of a main frame,
+  // and will return control to the main thread event loop.
   virtual void RecordEndOfFrameMetrics(
       base::TimeTicks frame_begin_time,
       ActiveFrameSequenceTrackers trackers) = 0;
@@ -203,10 +202,8 @@ class CC_EXPORT LayerTreeHostClient {
   // committed to the compositor, which is before the call to
   // RecordEndOfFrameMetrics.
   virtual std::unique_ptr<BeginMainFrameMetrics> GetBeginMainFrameMetrics() = 0;
-  virtual void NotifyThroughputTrackerResults(CustomTrackerResults results) = 0;
-
-  // Should only be implemented by Blink.
-  virtual std::unique_ptr<WebVitalMetrics> GetWebVitalMetrics() = 0;
+  virtual void NotifyCompositorMetricsTrackerResults(
+      CustomTrackerResults results) = 0;
 
   virtual void RunPaintBenchmark(int repeat_count,
                                  PaintBenchmarkResult& result) {}
@@ -214,6 +211,15 @@ class CC_EXPORT LayerTreeHostClient {
   // Return a string that is the paused debugger message for the heads-up
   // display overlay.
   virtual std::string GetPausedDebuggerLocalizedMessage();
+
+  // This is an inaccurate signal that has been used to represent that content
+  // was displayed. This actually maps to the removal of backpressure by the
+  // GPU. This can be signalled when the GPU attempts to Draw; when a submitted
+  // frame, that has not drawn, is being replaced by a newer one; or merged with
+  // future OnBeginFrames.
+  //
+  // To determine when presentation occurred see `DidPresentCompositorFrame`.
+  virtual void DidReceiveCompositorFrameAckDeprecatedForCompositor() {}
 
  protected:
   virtual ~LayerTreeHostClient() = default;

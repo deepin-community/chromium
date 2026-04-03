@@ -3,7 +3,7 @@
  * Copyright 2024 Google Inc.
  * SPDX-License-Identifier: Apache-2.0
  */
-import type * as Bidi from 'chromium-bidi/lib/cjs/protocol/protocol.js';
+import type * as Bidi from 'webdriver-bidi-protocol';
 import { EventEmitter } from '../../common/EventEmitter.js';
 import { disposeSymbol } from '../../util/disposable.js';
 import { Browser } from './Browser.js';
@@ -40,7 +40,8 @@ export declare class Session extends EventEmitter<BidiEvents & {
     send<T extends keyof Commands>(method: T, params: Commands[T]['params']): Promise<{
         result: Commands[T]['returnType'];
     }>;
-    subscribe(events: string[]): Promise<void>;
+    subscribe(events: [string, ...string[]], contexts?: [string, ...string[]]): Promise<void>;
+    addIntercepts(events: [string, ...string[]], contexts?: [string, ...string[]]): Promise<void>;
     end(): Promise<void>;
     [disposeSymbol](): void;
 }

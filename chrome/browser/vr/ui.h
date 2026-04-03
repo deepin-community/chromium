@@ -6,7 +6,6 @@
 #define CHROME_BROWSER_VR_UI_H_
 
 #include <memory>
-#include <queue>
 #include <utility>
 #include <vector>
 
@@ -24,7 +23,6 @@
 
 namespace vr {
 
-class SkiaSurfaceProvider;
 class UiRenderer;
 struct Model;
 
@@ -41,7 +39,7 @@ class VR_UI_EXPORT Ui : public UiInterface,
 
   ~Ui() override;
 
-  // TODO(crbug.com/767957): Refactor to hide these behind the UI interface.
+  // TODO(crbug.com/41346156): Refactor to hide these behind the UI interface.
   UiScene* scene() { return scene_.get(); }
   Model* model_for_test() { return model_.get(); }
 
@@ -91,7 +89,6 @@ class VR_UI_EXPORT Ui : public UiInterface,
   std::unique_ptr<Model> model_;
   std::unique_ptr<UiElementRenderer> ui_element_renderer_;
   std::unique_ptr<UiRenderer> ui_renderer_;
-  std::unique_ptr<SkiaSurfaceProvider> provider_;
 
   base::WeakPtrFactory<Ui> weak_ptr_factory_{this};
 };

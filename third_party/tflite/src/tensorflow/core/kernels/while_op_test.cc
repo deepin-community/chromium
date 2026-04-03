@@ -19,7 +19,7 @@ limitations under the License.
 #include "tensorflow/cc/framework/scope.h"
 #include "tensorflow/cc/ops/standard_ops.h"
 #include "xla/stream_executor/event.h"
-#include "xla/stream_executor/multi_platform_manager.h"
+#include "xla/stream_executor/platform_manager.h"
 #include "tensorflow/core/common_runtime/pluggable_device/pluggable_device_factory.h"
 #include "tensorflow/core/framework/function_testlib.h"
 #include "tensorflow/core/graph/node_builder.h"
@@ -123,7 +123,8 @@ TEST_F(WhileOpTest, WhileOpCPUBuildWithPluggableDevice) {
 #if EIGEN_MAX_ALIGN_BYTES == 0
     return malloc(size);
 #else
-    return tensorflow::port::AlignedMalloc(size, EIGEN_MAX_ALIGN_BYTES);
+    return tsl::port::AlignedMalloc(
+        size, static_cast<std::align_val_t>(EIGEN_MAX_ALIGN_BYTES));
 #endif
   };
   se_.host_memory_deallocate = [](const SP_Device* const device, void* mem) {
@@ -136,7 +137,8 @@ TEST_F(WhileOpTest, WhileOpCPUBuildWithPluggableDevice) {
 #if EIGEN_MAX_ALIGN_BYTES == 0
     mem->opaque = malloc(size);
 #else
-    mem->opaque = tensorflow::port::AlignedMalloc(size, EIGEN_MAX_ALIGN_BYTES);
+    mem->opaque = tsl::port::AlignedMalloc(
+        size, static_cast<std::align_val_t>(EIGEN_MAX_ALIGN_BYTES));
 #endif
     mem->size = size;
   };
@@ -166,8 +168,8 @@ TEST_F(WhileOpTest, WhileOpCPUBuildWithPluggableDevice) {
           std::move(platform_fns_),
           stream_executor::test_util::DestroyPlatformFns,
           std::move(device_fns_), std::move(se_), std::move(timer_fns_)));
-  TF_CHECK_OK(stream_executor::MultiPlatformManager::RegisterPlatform(
-      std::move(cplatform)));
+  TF_CHECK_OK(
+      stream_executor::PlatformManager::RegisterPlatform(std::move(cplatform)));
 
   DeviceFactory::Register(
       platform_type, new PluggableDeviceFactory(platform_type, platform_name),

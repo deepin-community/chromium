@@ -6,7 +6,6 @@
 #define COMPONENTS_LIVE_CAPTION_CAPTION_BUBBLE_CONTEXT_H_
 
 #include <memory>
-#include <optional>
 #include <string>
 
 #include "base/functional/callback.h"
@@ -59,6 +58,11 @@ class CaptionBubbleContext {
   // Whether or not the context is activatable. When Activate() is implemented
   // in child classes, the child classes must set this to be true.
   virtual bool IsActivatable() const = 0;
+
+  // Whether the caption bubble should be positioned to avoid covering too much
+  // of the context area. For Live Caption, this should only be true for
+  // non-browser web contents.
+  virtual bool ShouldAvoidOverlap() const = 0;
 
   // Gets a session observer for the caption bubble context. On Chrome
   // browser, a caption bubble session is per-tab and resets when a user

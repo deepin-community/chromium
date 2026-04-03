@@ -1,6 +1,7 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-imperative-dom-api */
 
 /*
  * Copyright (C) 2009 Joseph Pecoraro
@@ -64,7 +65,7 @@ export class ConsolePanel extends UI.Panel.Panel {
   override wasShown(): void {
     super.wasShown();
     const wrapper = wrapperViewInstance;
-    if (wrapper && wrapper.isShowing()) {
+    if (wrapper?.isShowing()) {
       UI.InspectorView.InspectorView.instance().setDrawerMinimized(true);
     }
     this.view.show(this.element);
@@ -93,9 +94,8 @@ export class WrapperView extends UI.Widget.VBox {
   private readonly view: ConsoleView;
 
   private constructor() {
-    super();
+    super({jslog: `${VisualLogging.panel('console').track({resize: true})}`});
     this.view = ConsoleView.instance();
-    this.element.setAttribute('jslog', `${VisualLogging.panel('console').track({resize: true})}`);
   }
 
   static instance(): WrapperView {
@@ -106,6 +106,7 @@ export class WrapperView extends UI.Widget.VBox {
   }
 
   override wasShown(): void {
+    super.wasShown();
     if (!ConsolePanel.instance().isShowing()) {
       this.showViewInWrapper();
     } else {
@@ -115,6 +116,7 @@ export class WrapperView extends UI.Widget.VBox {
   }
 
   override willHide(): void {
+    super.willHide();
     UI.InspectorView.InspectorView.instance().setDrawerMinimized(false);
     ConsolePanel.updateContextFlavor();
   }

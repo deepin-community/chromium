@@ -13,7 +13,6 @@
 #include <string>
 #include <vector>
 
-#include "base/functional/callback.h"
 #include "dbus/bus.h"
 #include "dbus/object_path.h"
 #include "device/bluetooth/bluetooth_export.h"
@@ -65,6 +64,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothLEAdvertisementServiceProvider {
       dbus::Bus* bus,
       const dbus::ObjectPath& object_path,
       Delegate* delegate,
+      bool adapter_support_ext_adv,
       AdvertisementType type,
       std::optional<UUIDList> service_uuids,
       std::optional<ManufacturerData> manufacturer_data,

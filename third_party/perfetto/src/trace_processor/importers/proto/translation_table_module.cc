@@ -15,20 +15,29 @@
  */
 #include "src/trace_processor/importers/proto/translation_table_module.h"
 
+#include <cstdint>
+
+#include "perfetto/protozero/field.h"
+#include "perfetto/trace_processor/ref_counted.h"
+#include "perfetto/trace_processor/trace_blob_view.h"
 #include "src/trace_processor/importers/common/args_translation_table.h"
+#include "src/trace_processor/importers/common/process_track_translation_table.h"
 #include "src/trace_processor/importers/common/slice_translation_table.h"
+#include "src/trace_processor/importers/proto/packet_sequence_state_generation.h"
+#include "src/trace_processor/importers/proto/proto_importer_module.h"
 
 #include "protos/perfetto/trace/trace_packet.pbzero.h"
 #include "protos/perfetto/trace/translation/translation_table.pbzero.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
 using perfetto::protos::pbzero::TracePacket;
 
-TranslationTableModule::TranslationTableModule(TraceProcessorContext* context)
-    : context_(context) {
-  RegisterForField(TracePacket::kTranslationTableFieldNumber, context);
+TranslationTableModule::TranslationTableModule(
+    ProtoImporterModuleContext* module_context,
+    TraceProcessorContext* context)
+    : ProtoImporterModule(module_context), context_(context) {
+  RegisterForField(TracePacket::kTranslationTableFieldNumber);
 }
 
 TranslationTableModule::~TranslationTableModule() = default;
@@ -37,7 +46,7 @@ ModuleResult TranslationTableModule::TokenizePacket(
     const protos::pbzero::TracePacket_Decoder& decoder,
     TraceBlobView* /*packet*/,
     int64_t /*packet_timestamp*/,
-    PacketSequenceState* /*state*/,
+    RefPtr<PacketSequenceStateGeneration> /*state*/,
     uint32_t field_id) {
   if (field_id != TracePacket::kTranslationTableFieldNumber) {
     return ModuleResult::Ignored();
@@ -53,6 +62,10 @@ ModuleResult TranslationTableModule::TokenizePacket(
         translation_table.chrome_performance_mark());
   } else if (translation_table.has_slice_name()) {
     ParseSliceNameRules(translation_table.slice_name());
+  } else if (translation_table.has_process_track_name()) {
+    ParseProcessTrackNameRules(translation_table.process_track_name());
+  } else if (translation_table.has_chrome_study()) {
+    ParseChromeStudyRules(translation_table.chrome_study());
   }
   return ModuleResult::Handled();
 }
@@ -112,5 +125,28 @@ void TranslationTableModule::ParseSliceNameRules(protozero::ConstBytes bytes) {
   }
 }
 
-}  // namespace trace_processor
-}  // namespace perfetto
+void TranslationTableModule::ParseProcessTrackNameRules(
+    protozero::ConstBytes bytes) {
+  const auto process_track_name =
+      protos::pbzero::ProcessTrackNameTranslationTable::Decoder(bytes);
+  for (auto it = process_track_name.raw_to_deobfuscated_name(); it; ++it) {
+    protos::pbzero::ProcessTrackNameTranslationTable::
+        RawToDeobfuscatedNameEntry::Decoder entry(*it);
+    context_->process_track_translation_table->AddNameTranslationRule(
+        entry.key(), entry.value());
+  }
+}
+
+void TranslationTableModule::ParseChromeStudyRules(
+    protozero::ConstBytes bytes) {
+  const auto chrome_study =
+      protos::pbzero::ChromeStudyTranslationTable::Decoder(bytes);
+  for (auto it = chrome_study.hash_to_name(); it; ++it) {
+    protos::pbzero::ChromeStudyTranslationTable::HashToNameEntry::Decoder entry(
+        *it);
+    context_->args_translation_table->AddChromeStudyTranslationRule(
+        entry.key(), entry.value());
+  }
+}
+
+}  // namespace perfetto::trace_processor

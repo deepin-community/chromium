@@ -4,11 +4,12 @@
 
 #include "third_party/blink/renderer/modules/webcodecs/audio_encoder.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <limits>
 
-#include "base/containers/contains.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/to_string.h"
 #include "base/trace_event/common/trace_event_common.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
@@ -29,8 +30,9 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_encoder_config.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_encoder_support.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_encoded_audio_chunk_metadata.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_opus_application.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_opus_encoder_config.h"
-#include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_opus_signal.h"
 #include "third_party/blink/renderer/modules/webcodecs/array_buffer_util.h"
 #include "third_party/blink/renderer/modules/webcodecs/encoded_audio_chunk.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
@@ -53,21 +55,38 @@ constexpr uint32_t kDefaultOpusComplexity = 9;
 template <typename T>
 bool VerifyParameterValues(const T& value,
                            String error_message_base_base,
-                           WTF::Vector<T> supported_values,
+                           Vector<T> supported_values,
                            String* js_error_message) {
-  if (base::Contains(supported_values, value)) {
+  if (std::ranges::contains(supported_values, value)) {
     return true;
   }
 
-  WTF::StringBuilder error_builder;
+  Vector<String> supported_values_str;
+  for (const T& val : supported_values) {
+    supported_values_str.push_back(base::ToString(val));
+  }
+
+  StringBuilder error_builder;
   error_builder.Append(error_message_base_base);
   error_builder.Append(" Supported values: ");
-  for (auto i = 0u; i < supported_values.size(); i++) {
-    if (i != 0) {
-      error_builder.Append(", ");
-    }
-    error_builder.AppendNumber(supported_values[i]);
+  error_builder.AppendRange(std::move(supported_values_str), ", ");
+  *js_error_message = error_builder.ReleaseString();
+  return false;
+}
+
+bool VerifyDurationValues(int64_t microseconds,
+                          String error_message_base_base,
+                          String* js_error_message) {
+  if (microseconds >= 2500 && microseconds <= 120000 &&
+      microseconds % 2500 == 0) {
+    return true;
   }
+
+  StringBuilder error_builder;
+  error_builder.Append(error_message_base_base);
+  error_builder.Append(
+      " Needs to be a multiple of 2500 and in the range of [2500, 120000] "
+      "microseconds.");
   *js_error_message = error_builder.ToString();
   return false;
 }
@@ -144,8 +163,36 @@ AudioEncoderTraits::ParsedConfig* ParseOpusConfigStatic(
     return nullptr;
   }
 
+  media::AudioEncoder::OpusSignal opus_signal;
+  switch (opus_config->signal().AsEnum()) {
+    case blink::V8OpusSignal::Enum::kAuto:
+      opus_signal = media::AudioEncoder::OpusSignal::kAuto;
+      break;
+    case blink::V8OpusSignal::Enum::kMusic:
+      opus_signal = media::AudioEncoder::OpusSignal::kMusic;
+      break;
+    case blink::V8OpusSignal::Enum::kVoice:
+      opus_signal = media::AudioEncoder::OpusSignal::kVoice;
+      break;
+  }
+
+  media::AudioEncoder::OpusApplication opus_application;
+  switch (opus_config->application().AsEnum()) {
+    case blink::V8OpusApplication::Enum::kVoip:
+      opus_application = media::AudioEncoder::OpusApplication::kVoip;
+      break;
+    case blink::V8OpusApplication::Enum::kAudio:
+      opus_application = media::AudioEncoder::OpusApplication::kAudio;
+      break;
+    case blink::V8OpusApplication::Enum::kLowdelay:
+      opus_application = media::AudioEncoder::OpusApplication::kLowDelay;
+      break;
+  }
+
   result->options.opus = {
       .frame_duration = base::Microseconds(frame_duration),
+      .signal = opus_signal,
+      .application = opus_application,
       .complexity = complexity,
       .packet_loss_perc = packet_loss_perc,
       .use_in_band_fec = opus_config->useinbandfec(),
@@ -170,16 +217,17 @@ AudioEncoderTraits::ParsedConfig* ParseConfigStatic(
 
   auto* result = MakeGarbageCollected<AudioEncoderTraits::ParsedConfig>();
 
-  result->options.codec = media::AudioCodec::kUnknown;
-  bool is_codec_ambiguous = true;
-  bool parse_succeeded = ParseAudioCodecString(
-      "", config->codec().Utf8(), &is_codec_ambiguous, &result->options.codec);
-
-  if (!parse_succeeded || is_codec_ambiguous) {
+  std::optional<media::AudioType> audio_type =
+      media::ParseAudioCodecString("", config->codec().Utf8());
+  if (!audio_type) {
     result->options.codec = media::AudioCodec::kUnknown;
     return result;
   }
 
+  // AudioCodecProfile isn't supported by any of Chromium's encoders. It's not
+  // likely in the future either since the existing profiles are for multi-pass
+  // type encodings that this API is not designed for.
+  result->options.codec = audio_type->codec;
   result->options.channels = config->numberOfChannels();
   if (result->options.channels == 0) {
     exception_state.ThrowTypeError(String::Format(
@@ -252,12 +300,9 @@ bool VerifyCodecSupportStatic(AudioEncoderTraits::ParsedConfig* config,
 
   switch (config->options.codec) {
     case media::AudioCodec::kOpus: {
-      // TODO(crbug.com/1378399): Support all multiples of basic frame
-      // durations.
-      if (!VerifyParameterValues(
+      if (!VerifyDurationValues(
               config->options.opus->frame_duration.InMicroseconds(),
-              "Unsupported Opus frameDuration.",
-              {2500, 5000, 10000, 20000, 40000, 60000}, js_error_message)) {
+              "Unsupported Opus frameDuration.", js_error_message)) {
         return false;
       }
       if (config->options.channels > 2) {
@@ -317,6 +362,8 @@ AacEncoderConfig* CopyAacConfig(const AacEncoderConfig& config) {
 OpusEncoderConfig* CopyOpusConfig(const OpusEncoderConfig& config) {
   auto* opus_result = OpusEncoderConfig::Create();
   opus_result->setFormat(config.format());
+  opus_result->setSignal(config.signal());
+  opus_result->setApplication(config.application());
   opus_result->setFrameDuration(config.frameDuration());
   opus_result->setComplexity(config.getComplexityOr(kDefaultOpusComplexity));
   opus_result->setPacketlossperc(config.packetlossperc());
@@ -476,6 +523,14 @@ void AudioEncoder::ProcessConfigure(Request* request) {
           MakeUnwrappingCrossThreadHandle(request))));
 }
 
+bool AudioEncoder::ReadyToProcessNextRequest() {
+  if (active_encodes_ >= kMaxActiveEncodes) {
+    return false;
+  }
+
+  return Base::ReadyToProcessNextRequest();
+}
+
 void AudioEncoder::ProcessEncode(Request* request) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK_EQ(state_, V8CodecState::Enum::kConfigured);
@@ -504,6 +559,7 @@ void AudioEncoder::ProcessEncode(Request* request) {
           self->MakeEncodingError("Encoding error.", std::move(status)));
     }
 
+    --self->active_encodes_;
     req->EndTracing();
     self->ProcessRequests();
   };
@@ -531,6 +587,8 @@ void AudioEncoder::ProcessEncode(Request* request) {
 
   --requested_encodes_;
   ScheduleDequeueEvent();
+  ++active_encodes_;
+
   media_encoder_->Encode(
       std::move(audio_bus), timestamp,
       ConvertToBaseOnceCallback(CrossThreadBindOnce(
@@ -544,7 +602,7 @@ void AudioEncoder::ProcessReconfigure(Request* request) {
   // Audio decoders don't currently support any meaningful reconfiguring
 }
 
-AudioEncoder::ParsedConfig* AudioEncoder::ParseConfig(
+AudioEncoder::ParsedConfig* AudioEncoder::OnNewConfigure(
     const AudioEncoderConfig* opts,
     ExceptionState& exception_state) {
   return ParseConfigStatic(opts, exception_state);
@@ -563,6 +621,14 @@ bool AudioEncoder::VerifyCodecSupport(ParsedConfig* config,
   return VerifyCodecSupportStatic(config, js_error_message);
 }
 
+void AudioEncoder::ResetInternal(DOMException* ex) {
+  Base::ResetInternal(ex);
+  active_encodes_ = 0;
+}
+
+void AudioEncoder::OnNewEncode(InputType* input,
+                               ExceptionState& exception_state) {}
+
 void AudioEncoder::CallOutputCallback(
     ParsedConfig* active_config,
     uint32_t reset_count,
@@ -579,8 +645,8 @@ void AudioEncoder::CallOutputCallback(
 
   MarkCodecActive();
 
-  auto buffer = media::DecoderBuffer::FromArray(
-      std::move(encoded_buffer.encoded_data), encoded_buffer.encoded_data_size);
+  auto buffer =
+      media::DecoderBuffer::FromArray(std::move(encoded_buffer.encoded_data));
   buffer->set_timestamp(encoded_buffer.timestamp - base::TimeTicks());
   buffer->set_is_key_frame(true);
   buffer->set_duration(encoded_buffer.duration);
@@ -594,8 +660,7 @@ void AudioEncoder::CallOutputCallback(
     decoder_config->setSampleRate(encoded_buffer.params.sample_rate());
     decoder_config->setNumberOfChannels(active_config->options.channels);
     if (codec_desc.has_value()) {
-      auto* desc_array_buf = DOMArrayBuffer::Create(codec_desc.value().data(),
-                                                    codec_desc.value().size());
+      auto* desc_array_buf = DOMArrayBuffer::Create(codec_desc.value());
       decoder_config->setDescription(
           MakeGarbageCollected<AllowSharedBufferSource>(desc_array_buf));
     }
@@ -612,13 +677,14 @@ void AudioEncoder::CallOutputCallback(
 }
 
 // static
-ScriptPromise AudioEncoder::isConfigSupported(ScriptState* script_state,
-                                              const AudioEncoderConfig* config,
-                                              ExceptionState& exception_state) {
+ScriptPromise<AudioEncoderSupport> AudioEncoder::isConfigSupported(
+    ScriptState* script_state,
+    const AudioEncoderConfig* config,
+    ExceptionState& exception_state) {
   auto* parsed_config = ParseConfigStatic(config, exception_state);
   if (!parsed_config) {
     DCHECK(exception_state.HadException());
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   String unused_js_error_message;
@@ -626,14 +692,15 @@ ScriptPromise AudioEncoder::isConfigSupported(ScriptState* script_state,
   support->setSupported(
       VerifyCodecSupportStatic(parsed_config, &unused_js_error_message));
   support->setConfig(CopyConfig(*config));
-
-  return ScriptPromise::Cast(
-      script_state,
-      ToV8Traits<AudioEncoderSupport>::ToV8(script_state, support));
+  return ToResolvedPromise<AudioEncoderSupport>(script_state, support);
 }
 
 const AtomicString& AudioEncoder::InterfaceName() const {
   return event_target_names::kAudioEncoder;
+}
+
+bool AudioEncoder::HasPendingActivity() const {
+  return (active_encodes_ > 0) || Base::HasPendingActivity();
 }
 
 DOMException* AudioEncoder::MakeOperationError(std::string error_msg,

@@ -8,12 +8,12 @@
 #include <string>
 
 #include "base/component_export.h"
-#include "base/functional/callback.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chromeos/ash/components/login/auth/auth_status_consumer.h"
 #include "chromeos/ash/components/login/auth/authenticator.h"
 #include "chromeos/ash/components/login/auth/public/auth_failure.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
+#include "components/user_manager/user_type.h"
 
 class AccountId;
 
@@ -42,17 +42,15 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_LOGIN_AUTH) StubAuthenticator
                             std::unique_ptr<UserContext> user_context) override;
   void LoginAsKioskAccount(const AccountId& app_account_id,
                            bool ephemeral) override;
-  void LoginAsArcKioskAccount(const AccountId& app_account_id,
-                              bool ephemeral) override;
   void LoginAsWebKioskAccount(const AccountId& app_account_id,
                               bool ephemeral) override;
+  void LoginAsIwaKioskAccount(const AccountId& app_account_id,
+                              bool ephemeral) override;
+  void LoginAsArcvmKioskAccount(const AccountId& app_account_id,
+                                bool ephemeral) override;
   void LoginAuthenticated(std::unique_ptr<UserContext> user_context) override;
   void OnAuthSuccess() override;
   void OnAuthFailure(const AuthFailure& failure) override;
-  void RecoverEncryptedData(std::unique_ptr<UserContext> user_context,
-                            const std::string& old_password) override;
-  void ResyncEncryptedData(bool ephemeral,
-                           std::unique_ptr<UserContext> user_context) override;
 
   void SetExpectedCredentials(const UserContext& user_context);
 
@@ -69,6 +67,8 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_LOGIN_AUTH) StubAuthenticator
 
   void OnPasswordChangeDetected();
   void OnOldEncryptionDetected();
+
+  void LoginAsKioskAccountStub(user_manager::UserType kiosk_type);
 
   UserContext expected_user_context_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;

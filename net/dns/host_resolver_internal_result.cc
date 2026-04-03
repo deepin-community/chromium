@@ -9,13 +9,13 @@
 #include <optional>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/check_op.h"
 #include "base/json/values_util.h"
 #include "base/memory/ptr_util.h"
-#include "base/strings/string_piece.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "net/base/connection_endpoint_metadata.h"
@@ -32,19 +32,19 @@ namespace net {
 namespace {
 
 // base::Value keys
-constexpr base::StringPiece kValueDomainNameKey = "domain_name";
-constexpr base::StringPiece kValueQueryTypeKey = "query_type";
-constexpr base::StringPiece kValueTypeKey = "type";
-constexpr base::StringPiece kValueSourceKey = "source";
-constexpr base::StringPiece kValueTimedExpirationKey = "timed_expiration";
-constexpr base::StringPiece kValueEndpointsKey = "endpoints";
-constexpr base::StringPiece kValueStringsKey = "strings";
-constexpr base::StringPiece kValueHostsKey = "hosts";
-constexpr base::StringPiece kValueMetadatasKey = "metadatas";
-constexpr base::StringPiece kValueMetadataWeightKey = "metadata_weight";
-constexpr base::StringPiece kValueMetadataValueKey = "metadata_value";
-constexpr base::StringPiece kValueErrorKey = "error";
-constexpr base::StringPiece kValueAliasTargetKey = "alias_target";
+constexpr std::string_view kValueDomainNameKey = "domain_name";
+constexpr std::string_view kValueQueryTypeKey = "query_type";
+constexpr std::string_view kValueTypeKey = "type";
+constexpr std::string_view kValueSourceKey = "source";
+constexpr std::string_view kValueTimedExpirationKey = "timed_expiration";
+constexpr std::string_view kValueEndpointsKey = "endpoints";
+constexpr std::string_view kValueStringsKey = "strings";
+constexpr std::string_view kValueHostsKey = "hosts";
+constexpr std::string_view kValueMetadatasKey = "metadatas";
+constexpr std::string_view kValueMetadataWeightKey = "metadata_weight";
+constexpr std::string_view kValueMetadataValueKey = "metadata_value";
+constexpr std::string_view kValueErrorKey = "error";
+constexpr std::string_view kValueAliasTargetKey = "alias_target";
 
 // Returns `domain_name` as-is if it could not be canonicalized.
 std::string MaybeCanonicalizeName(std::string domain_name) {
@@ -52,9 +52,8 @@ std::string MaybeCanonicalizeName(std::string domain_name) {
   url::StdStringCanonOutput output(&canonicalized);
   url::CanonHostInfo host_info;
 
-  url::CanonicalizeHostVerbose(domain_name.data(),
-                               url::Component(0, domain_name.size()), &output,
-                               &host_info);
+  url::CanonicalizeHostVerbose(
+      domain_name, url::Component(0, domain_name.size()), &output, &host_info);
 
   if (host_info.family == url::CanonHostInfo::Family::NEUTRAL) {
     output.Complete();
@@ -66,7 +65,7 @@ std::string MaybeCanonicalizeName(std::string domain_name) {
 
 base::Value EndpointMetadataPairToValue(
     const std::pair<HttpsRecordPriority, ConnectionEndpointMetadata>& pair) {
-  base::Value::Dict dictionary;
+  base::DictValue dictionary;
   dictionary.Set(kValueMetadataWeightKey, pair.first);
   dictionary.Set(kValueMetadataValueKey, pair.second.ToValue());
   return base::Value(std::move(dictionary));
@@ -74,7 +73,7 @@ base::Value EndpointMetadataPairToValue(
 
 std::optional<std::pair<HttpsRecordPriority, ConnectionEndpointMetadata>>
 EndpointMetadataPairFromValue(const base::Value& value) {
-  const base::Value::Dict* dict = value.GetIfDict();
+  const base::DictValue* dict = value.GetIfDict();
   if (!dict)
     return std::nullopt;
 
@@ -100,9 +99,9 @@ std::optional<DnsQueryType> QueryTypeFromValue(const base::Value& value) {
   const std::string* query_type_string = value.GetIfString();
   if (!query_type_string)
     return std::nullopt;
-  const auto* query_type_it =
-      base::ranges::find(kDnsQueryTypes, *query_type_string,
-                         &decltype(kDnsQueryTypes)::value_type::second);
+  const auto query_type_it =
+      std::ranges::find(kDnsQueryTypes, *query_type_string,
+                        &decltype(kDnsQueryTypes)::value_type::second);
   if (query_type_it == kDnsQueryTypes.end())
     return std::nullopt;
 
@@ -174,7 +173,7 @@ std::optional<HostResolverInternalResult::Source> SourceFromValue(
 // static
 std::unique_ptr<HostResolverInternalResult>
 HostResolverInternalResult::FromValue(const base::Value& value) {
-  const base::Value::Dict* dict = value.GetIfDict();
+  const base::DictValue* dict = value.GetIfDict();
   if (!dict)
     return nullptr;
 
@@ -260,7 +259,7 @@ HostResolverInternalResult::HostResolverInternalResult(
 }
 
 HostResolverInternalResult::HostResolverInternalResult(
-    const base::Value::Dict& dict)
+    const base::DictValue& dict)
     : domain_name_(*dict.FindString(kValueDomainNameKey)),
       query_type_(QueryTypeFromValue(*dict.Find(kValueQueryTypeKey)).value()),
       type_(TypeFromValue(*dict.Find(kValueTypeKey)).value()),
@@ -272,7 +271,7 @@ HostResolverInternalResult::HostResolverInternalResult(
 
 // static
 bool HostResolverInternalResult::ValidateValueBaseDict(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     bool require_timed_expiration) {
   const std::string* domain_name = dict.FindString(kValueDomainNameKey);
   if (!domain_name)
@@ -281,9 +280,9 @@ bool HostResolverInternalResult::ValidateValueBaseDict(
   const std::string* query_type_string = dict.FindString(kValueQueryTypeKey);
   if (!query_type_string)
     return false;
-  const auto* query_type_it =
-      base::ranges::find(kDnsQueryTypes, *query_type_string,
-                         &decltype(kDnsQueryTypes)::value_type::second);
+  const auto query_type_it =
+      std::ranges::find(kDnsQueryTypes, *query_type_string,
+                        &decltype(kDnsQueryTypes)::value_type::second);
   if (query_type_it == kDnsQueryTypes.end())
     return false;
 
@@ -315,8 +314,8 @@ bool HostResolverInternalResult::ValidateValueBaseDict(
   return true;
 }
 
-base::Value::Dict HostResolverInternalResult::ToValueBaseDict() const {
-  base::Value::Dict dict;
+base::DictValue HostResolverInternalResult::ToValueBaseDict() const {
+  base::DictValue dict;
 
   dict.Set(kValueDomainNameKey, domain_name_);
   dict.Set(kValueQueryTypeKey, kDnsQueryTypes.at(query_type_));
@@ -336,11 +335,11 @@ base::Value::Dict HostResolverInternalResult::ToValueBaseDict() const {
 // static
 std::unique_ptr<HostResolverInternalDataResult>
 HostResolverInternalDataResult::FromValue(const base::Value& value) {
-  const base::Value::Dict* dict = value.GetIfDict();
+  const base::DictValue* dict = value.GetIfDict();
   if (!dict || !ValidateValueBaseDict(*dict, /*require_timed_expiration=*/true))
     return nullptr;
 
-  const base::Value::List* endpoint_values = dict->FindList(kValueEndpointsKey);
+  const base::ListValue* endpoint_values = dict->FindList(kValueEndpointsKey);
   if (!endpoint_values)
     return nullptr;
 
@@ -354,7 +353,7 @@ HostResolverInternalDataResult::FromValue(const base::Value& value) {
     endpoints.push_back(std::move(endpoint).value());
   }
 
-  const base::Value::List* string_values = dict->FindList(kValueStringsKey);
+  const base::ListValue* string_values = dict->FindList(kValueStringsKey);
   if (!string_values)
     return nullptr;
 
@@ -368,7 +367,7 @@ HostResolverInternalDataResult::FromValue(const base::Value& value) {
     strings.push_back(*string);
   }
 
-  const base::Value::List* host_values = dict->FindList(kValueHostsKey);
+  const base::ListValue* host_values = dict->FindList(kValueHostsKey);
   if (!host_values)
     return nullptr;
 
@@ -419,23 +418,23 @@ HostResolverInternalDataResult::Clone() const {
 }
 
 base::Value HostResolverInternalDataResult::ToValue() const {
-  base::Value::Dict dict = ToValueBaseDict();
+  base::DictValue dict = ToValueBaseDict();
 
-  base::Value::List endpoints_list;
+  base::ListValue endpoints_list;
   endpoints_list.reserve(endpoints_.size());
-  for (IPEndPoint endpoint : endpoints_) {
+  for (const IPEndPoint& endpoint : endpoints_) {
     endpoints_list.Append(endpoint.ToValue());
   }
   dict.Set(kValueEndpointsKey, std::move(endpoints_list));
 
-  base::Value::List strings_list;
+  base::ListValue strings_list;
   strings_list.reserve(strings_.size());
   for (const std::string& string : strings_) {
     strings_list.Append(string);
   }
   dict.Set(kValueStringsKey, std::move(strings_list));
 
-  base::Value::List hosts_list;
+  base::ListValue hosts_list;
   hosts_list.reserve(hosts_.size());
   for (const HostPortPair& host : hosts_) {
     hosts_list.Append(host.ToValue());
@@ -446,7 +445,7 @@ base::Value HostResolverInternalDataResult::ToValue() const {
 }
 
 HostResolverInternalDataResult::HostResolverInternalDataResult(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     std::vector<IPEndPoint> endpoints,
     std::vector<std::string> strings,
     std::vector<HostPortPair> hosts)
@@ -458,11 +457,11 @@ HostResolverInternalDataResult::HostResolverInternalDataResult(
 // static
 std::unique_ptr<HostResolverInternalMetadataResult>
 HostResolverInternalMetadataResult::FromValue(const base::Value& value) {
-  const base::Value::Dict* dict = value.GetIfDict();
+  const base::DictValue* dict = value.GetIfDict();
   if (!dict || !ValidateValueBaseDict(*dict, /*require_timed_expiration=*/true))
     return nullptr;
 
-  const base::Value::List* metadata_values = dict->FindList(kValueMetadatasKey);
+  const base::ListValue* metadata_values = dict->FindList(kValueMetadatasKey);
   if (!metadata_values)
     return nullptr;
 
@@ -507,9 +506,9 @@ HostResolverInternalMetadataResult::Clone() const {
 }
 
 base::Value HostResolverInternalMetadataResult::ToValue() const {
-  base::Value::Dict dict = ToValueBaseDict();
+  base::DictValue dict = ToValueBaseDict();
 
-  base::Value::List metadatas_list;
+  base::ListValue metadatas_list;
   metadatas_list.reserve(metadatas_.size());
   for (const std::pair<const HttpsRecordPriority, ConnectionEndpointMetadata>&
            metadata_pair : metadatas_) {
@@ -521,14 +520,14 @@ base::Value HostResolverInternalMetadataResult::ToValue() const {
 }
 
 HostResolverInternalMetadataResult::HostResolverInternalMetadataResult(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     std::multimap<HttpsRecordPriority, ConnectionEndpointMetadata> metadatas)
     : HostResolverInternalResult(dict), metadatas_(std::move(metadatas)) {}
 
 // static
 std::unique_ptr<HostResolverInternalErrorResult>
 HostResolverInternalErrorResult::FromValue(const base::Value& value) {
-  const base::Value::Dict* dict = value.GetIfDict();
+  const base::DictValue* dict = value.GetIfDict();
   if (!dict ||
       !ValidateValueBaseDict(*dict, /*require_timed_expiration=*/false)) {
     return nullptr;
@@ -566,7 +565,7 @@ HostResolverInternalErrorResult::Clone() const {
 }
 
 base::Value HostResolverInternalErrorResult::ToValue() const {
-  base::Value::Dict dict = ToValueBaseDict();
+  base::DictValue dict = ToValueBaseDict();
 
   dict.Set(kValueErrorKey, error_);
 
@@ -574,7 +573,7 @@ base::Value HostResolverInternalErrorResult::ToValue() const {
 }
 
 HostResolverInternalErrorResult::HostResolverInternalErrorResult(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     int error)
     : HostResolverInternalResult(dict), error_(error) {
   DCHECK_NE(error_, OK);
@@ -583,7 +582,7 @@ HostResolverInternalErrorResult::HostResolverInternalErrorResult(
 // static
 std::unique_ptr<HostResolverInternalAliasResult>
 HostResolverInternalAliasResult::FromValue(const base::Value& value) {
-  const base::Value::Dict* dict = value.GetIfDict();
+  const base::DictValue* dict = value.GetIfDict();
   if (!dict || !ValidateValueBaseDict(*dict, /*require_timed_expiration=*/true))
     return nullptr;
 
@@ -621,7 +620,7 @@ HostResolverInternalAliasResult::Clone() const {
 }
 
 base::Value HostResolverInternalAliasResult::ToValue() const {
-  base::Value::Dict dict = ToValueBaseDict();
+  base::DictValue dict = ToValueBaseDict();
 
   dict.Set(kValueAliasTargetKey, alias_target_);
 
@@ -629,7 +628,7 @@ base::Value HostResolverInternalAliasResult::ToValue() const {
 }
 
 HostResolverInternalAliasResult::HostResolverInternalAliasResult(
-    const base::Value::Dict& dict,
+    const base::DictValue& dict,
     std::string alias_target)
     : HostResolverInternalResult(dict),
       alias_target_(MaybeCanonicalizeName(std::move(alias_target))) {}

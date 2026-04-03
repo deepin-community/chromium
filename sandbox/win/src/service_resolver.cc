@@ -11,16 +11,6 @@
 
 namespace sandbox {
 
-NTSTATUS ServiceResolverThunk::ResolveInterceptor(
-    const void* interceptor_module,
-    const char* interceptor_name,
-    const void** address) {
-  // After all, we are using a locally mapped version of the exe, so the
-  // action is the same as for a target function.
-  return ResolveTarget(interceptor_module, interceptor_name,
-                       const_cast<void**>(address));
-}
-
 // In this case all the work is done from the parent, so resolve is
 // just a simple GetProcAddress.
 NTSTATUS ServiceResolverThunk::ResolveTarget(const void* module,
@@ -35,7 +25,6 @@ NTSTATUS ServiceResolverThunk::ResolveTarget(const void* module,
 
   if (!*address) {
     NOTREACHED();
-    return STATUS_UNSUCCESSFUL;
   }
 
   return STATUS_SUCCESS;

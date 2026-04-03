@@ -42,11 +42,6 @@ class ClearMultiviewGL;
 class ContextGL;
 class FunctionsGL;
 class StateManagerGL;
-enum class MultiviewImplementationTypeGL
-{
-    NV_VIEWPORT_ARRAY2,
-    UNSPECIFIED
-};
 
 // State-tracking data for the swap control to allow DisplayGL to remember per
 // drawable information for swap control.
@@ -63,7 +58,7 @@ struct SwapControlData
 };
 
 VendorID GetVendorID(const FunctionsGL *functions);
-ShShaderOutput GetShaderOutputType(const FunctionsGL *functions);
+ShShaderOutput GetShaderOutputType(const angle::FeaturesGL &features, const FunctionsGL *functions);
 
 // Helpers for extracting the GL helper objects out of a context
 const FunctionsGL *GetFunctionsGL(const gl::Context *context);
@@ -74,6 +69,10 @@ const angle::FeaturesGL &GetFeaturesGL(const gl::Context *context);
 
 // Clear all errors on the stored context, emits console warnings
 void ClearErrors(const gl::Context *context,
+                 const char *file,
+                 const char *function,
+                 unsigned int line);
+void ClearErrors(const FunctionsGL *functions,
                  const char *file,
                  const char *function,
                  unsigned int line);
@@ -96,6 +95,8 @@ angle::Result HandleError(const gl::Context *context,
     (ClearErrors(context, __FILE__, __FUNCTION__, __LINE__), (call)); \
     ANGLE_TRY(CheckError(context, #call, __FILE__, __FUNCTION__, __LINE__))
 
+#define ANGLE_GL_CLEAR_ERRORS(functions) ClearErrors(functions, __FILE__, __FUNCTION__, __LINE__)
+
 #if defined(ANGLE_ENABLE_ASSERTS)
 #    define ANGLE_GL_TRY(context, call) ANGLE_GL_TRY_ALWAYS_CHECK(context, call)
 #else
@@ -112,7 +113,6 @@ void GenerateCaps(const FunctionsGL *functions,
                   gl::Extensions *extensions,
                   gl::Limitations *limitations,
                   gl::Version *maxSupportedESVersion,
-                  MultiviewImplementationTypeGL *multiviewImplementationType,
                   ShPixelLocalStorageOptions *);
 
 void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *features);
@@ -124,8 +124,8 @@ namespace nativegl
 {
 bool SupportsVertexArrayObjects(const FunctionsGL *functions);
 bool CanUseDefaultVertexArrayObject(const FunctionsGL *functions);
+bool CanUseClientSideArrays(const FunctionsGL *functions, GLuint vao);
 bool SupportsCompute(const FunctionsGL *functions);
-bool SupportsFenceSync(const FunctionsGL *functions);
 bool SupportsOcclusionQueries(const FunctionsGL *functions);
 bool SupportsNativeRendering(const FunctionsGL *functions,
                              gl::TextureType type,

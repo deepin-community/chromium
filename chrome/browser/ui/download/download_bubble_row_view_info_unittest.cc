@@ -5,7 +5,7 @@
 #include "chrome/browser/ui/download/download_bubble_row_view_info.h"
 
 #include "base/test/bind.h"
-#include "chrome/browser/download/bubble/download_bubble_prefs.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_ui_model.h"
 #include "chrome/browser/download/offline_item_utils.h"
@@ -13,10 +13,13 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/download/public/common/download_danger_type.h"
 #include "components/download/public/common/mock_download_item.h"
 #include "components/offline_items_collection/core/offline_item.h"
+#include "components/prefs/pref_service.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/vector_icons/vector_icons.h"
@@ -24,7 +27,6 @@
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/views/vector_icons.h"
 
 namespace {
@@ -40,7 +42,7 @@ using ::testing::Return;
 using ::testing::ReturnRefOfCopy;
 using ::testing::UnorderedElementsAre;
 
-#if BUILDFLAG(FULL_SAFE_BROWSING)
+#if BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
 using TailoredVerdict = safe_browsing::ClientDownloadResponse::TailoredVerdict;
 #endif
 
@@ -50,9 +52,6 @@ class DownloadBubbleRowViewInfoTest : public testing::Test,
   DownloadBubbleRowViewInfoTest() = default;
 
   void SetUp() override {
-    if (!download::IsDownloadBubbleEnabled()) {
-      GTEST_SKIP();
-    }
     item_ = std::make_unique<NiceMock<download::MockDownloadItem>>();
     ON_CALL(*item_, GetGuid())
         .WillByDefault(ReturnRefOfCopy(std::string("id")));
@@ -303,41 +302,28 @@ TEST_F(DownloadBubbleRowViewInfoTest, InterruptedInfo) {
   } kTestCases[] = {
       {{download::DOWNLOAD_INTERRUPT_REASON_FILE_BLOCKED},
        false,
-       features::IsChromeRefresh2023() ? &views::kInfoChromeRefreshIcon
-                                       : &views::kInfoIcon,
+       &views::kInfoChromeRefreshIcon,
        std::optional<DownloadCommands::Command>()},
       {{download::DOWNLOAD_INTERRUPT_REASON_FILE_NAME_TOO_LONG},
        false,
-       features::IsChromeRefresh2023()
-           ? &vector_icons::kFileDownloadOffChromeRefreshIcon
-           : &vector_icons::kFileDownloadOffIcon,
+       &vector_icons::kFileDownloadOffChromeRefreshIcon,
        std::optional<DownloadCommands::Command>()},
       {{download::DOWNLOAD_INTERRUPT_REASON_FILE_NO_SPACE},
        false,
-       features::IsChromeRefresh2023()
-           ? &vector_icons::kFileDownloadOffChromeRefreshIcon
-           : &vector_icons::kFileDownloadOffIcon,
+       &vector_icons::kFileDownloadOffChromeRefreshIcon,
        std::optional<DownloadCommands::Command>()},
       {{download::DOWNLOAD_INTERRUPT_REASON_SERVER_UNAUTHORIZED},
        false,
-       features::IsChromeRefresh2023()
-           ? &vector_icons::kFileDownloadOffChromeRefreshIcon
-           : &vector_icons::kFileDownloadOffIcon,
+       &vector_icons::kFileDownloadOffChromeRefreshIcon,
        std::optional<DownloadCommands::Command>()},
       {no_retry_interrupt_reasons, false,
-       features::IsChromeRefresh2023()
-           ? &vector_icons::kFileDownloadOffChromeRefreshIcon
-           : &vector_icons::kFileDownloadOffIcon,
+       &vector_icons::kFileDownloadOffChromeRefreshIcon,
        std::optional<DownloadCommands::Command>()},
       {retry_interrupt_reasons, false,
-       features::IsChromeRefresh2023()
-           ? &vector_icons::kFileDownloadOffChromeRefreshIcon
-           : &vector_icons::kFileDownloadOffIcon,
+       &vector_icons::kFileDownloadOffChromeRefreshIcon,
        DownloadCommands::Command::RETRY},
       {retry_interrupt_reasons, true,
-       features::IsChromeRefresh2023()
-           ? &vector_icons::kFileDownloadOffChromeRefreshIcon
-           : &vector_icons::kFileDownloadOffIcon,
+       &vector_icons::kFileDownloadOffChromeRefreshIcon,
        DownloadCommands::Command::RESUME},
   };
 

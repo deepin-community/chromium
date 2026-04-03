@@ -33,7 +33,9 @@ namespace dawn::native {
 
 TextureMock::TextureMock(DeviceMock* device, const UnpackedPtr<TextureDescriptor>& descriptor)
     : TextureBase(device, descriptor) {
-    ON_CALL(*this, DestroyImpl).WillByDefault([this] { this->TextureBase::DestroyImpl(); });
+    ON_CALL(*this, DestroyImpl).WillByDefault([this](DestroyReason reason) {
+        this->TextureBase::DestroyImpl(reason);
+    });
 }
 
 TextureMock::TextureMock(DeviceMock* device, const TextureDescriptor* descriptor)
@@ -41,9 +43,12 @@ TextureMock::TextureMock(DeviceMock* device, const TextureDescriptor* descriptor
 
 TextureMock::~TextureMock() = default;
 
-TextureViewMock::TextureViewMock(TextureBase* texture, const TextureViewDescriptor* descriptor)
+TextureViewMock::TextureViewMock(TextureBase* texture,
+                                 const UnpackedPtr<TextureViewDescriptor>& descriptor)
     : TextureViewBase(texture, descriptor) {
-    ON_CALL(*this, DestroyImpl).WillByDefault([this] { this->TextureViewBase::DestroyImpl(); });
+    ON_CALL(*this, DestroyImpl).WillByDefault([this](DestroyReason reason) {
+        this->TextureViewBase::DestroyImpl(reason);
+    });
 }
 
 TextureViewMock::~TextureViewMock() = default;

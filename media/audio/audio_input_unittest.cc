@@ -29,11 +29,6 @@
 #include "media/base/media_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#include "media/audio/android/aaudio_stream_wrapper.h"
-#include "media/audio/android/audio_manager_android.h"
-#endif
-
 #if BUILDFLAG(IS_FUCHSIA)
 #include <fuchsia/media/cpp/fidl_test_base.h>
 
@@ -72,10 +67,8 @@ class FakeAudio : public fuchsia::media::testing::Audio_TestBase {
 // expected and if any error has been reported.
 class TestInputCallback : public AudioInputStream::AudioInputCallback {
  public:
-  TestInputCallback(base::OnceClosure quit_closure)
-      : quit_closure_(std::move(quit_closure)),
-        callback_count_(0),
-        had_error_(0) {}
+  explicit TestInputCallback(base::OnceClosure quit_closure)
+      : quit_closure_(std::move(quit_closure)) {}
   void OnData(const AudioBus* source,
               base::TimeTicks capture_time,
               double volume,
@@ -108,8 +101,8 @@ class TestInputCallback : public AudioInputStream::AudioInputCallback {
 
  private:
   base::OnceClosure quit_closure_;
-  int callback_count_;
-  int had_error_;
+  int callback_count_ = 0;
+  int had_error_ = 0;
 };
 
 class AudioInputTest : public testing::TestWithParam<bool> {
@@ -121,14 +114,7 @@ class AudioInputTest : public testing::TestWithParam<bool> {
         audio_input_stream_(nullptr) {
 #if BUILDFLAG(IS_ANDROID)
     // The only parameter is used to enable/disable AAudio.
-    should_use_aaudio_ = GetParam();
-    if (should_use_aaudio_) {
-      features_.InitAndEnableFeature(features::kUseAAudioInput);
-
-      if (__builtin_available(android AAUDIO_MIN_API, *)) {
-        aaudio_is_supported_ = true;
-      }
-    }
+    features_.InitWithFeatureState(features::kUseAAudioInput, GetParam());
 #endif
     base::RunLoop().RunUntilIdle();
   }
@@ -151,7 +137,7 @@ class AudioInputTest : public testing::TestWithParam<bool> {
     }
     return true;
 #elif BUILDFLAG(IS_MAC) && defined(ARCH_CPU_ARM64)
-    // TODO(crbug.com/1128458): macOS on ARM64 says it has devices, but won't
+    // TODO(crbug.com/40719640): macOS on ARM64 says it has devices, but won't
     // let any of them be opened or listed.
     return false;
 #else
@@ -160,15 +146,17 @@ class AudioInputTest : public testing::TestWithParam<bool> {
 #endif
   }
 
-  void MakeAudioInputStreamOnAudioThread() {
+  void MakeAudioInputStreamOnAudioThread(
+      std::optional<bool> echo_cancellation = std::nullopt) {
     RunOnAudioThread(base::BindOnce(&AudioInputTest::MakeAudioInputStream,
-                                    base::Unretained(this)));
+                                    base::Unretained(this), echo_cancellation));
   }
 
   void CloseAudioInputStreamOnAudioThread() {
-    RunOnAudioThread(base::BindOnce(&AudioInputStream::Close,
-                                    base::Unretained(audio_input_stream_)));
+    AudioInputStream* stream_to_close = audio_input_stream_;
     audio_input_stream_ = nullptr;
+    RunOnAudioThread(base::BindOnce(&AudioInputStream::Close,
+                                    base::Unretained(stream_to_close)));
   }
 
   void OpenAndCloseAudioInputStreamOnAudioThread() {
@@ -192,11 +180,33 @@ class AudioInputTest : public testing::TestWithParam<bool> {
         base::BindOnce(&AudioInputTest::StopAndClose, base::Unretained(this)));
   }
 
-  void MakeAudioInputStream() {
+  AudioParameters MaybeAdjustEchoCancellation(
+      AudioParameters params,
+      std::optional<bool> echo_cancellation) {
+    if (!echo_cancellation.has_value()) {
+      return params;
+    }
+
+    int effects = params.effects();
+
+    if (*echo_cancellation) {
+      effects &= ~AudioParameters::PlatformEffectsMask::ECHO_CANCELLER;
+    } else {
+      effects |= AudioParameters::PlatformEffectsMask::ECHO_CANCELLER;
+    }
+
+    params.set_effects(effects);
+    return params;
+  }
+
+  void MakeAudioInputStream(std::optional<bool> echo_cancellation) {
     DCHECK(audio_manager_->GetTaskRunner()->BelongsToCurrentThread());
     AudioParameters params =
         AudioDeviceInfoAccessorForTests(audio_manager_.get())
             .GetInputStreamParameters(AudioDeviceDescription::kDefaultDeviceId);
+
+    params = MaybeAdjustEchoCancellation(params, echo_cancellation);
+
     audio_input_stream_ = audio_manager_->MakeAudioInputStream(
         params, AudioDeviceDescription::kDefaultDeviceId,
         base::BindRepeating(&AudioInputTest::OnLogMessage,
@@ -209,8 +219,9 @@ class AudioInputTest : public testing::TestWithParam<bool> {
     ASSERT_TRUE(audio_input_stream_);
     EXPECT_EQ(audio_input_stream_->Open(),
               AudioInputStream::OpenOutcome::kSuccess);
-    audio_input_stream_->Close();
+    AudioInputStream* stream_to_close = audio_input_stream_;
     audio_input_stream_ = nullptr;
+    stream_to_close->Close();
   }
 
   void OpenAndStart(AudioInputStream::AudioInputCallback* sink) {
@@ -227,22 +238,38 @@ class AudioInputTest : public testing::TestWithParam<bool> {
     EXPECT_EQ(audio_input_stream_->Open(),
               AudioInputStream::OpenOutcome::kSuccess);
     audio_input_stream_->Stop();
-    audio_input_stream_->Close();
+    AudioInputStream* stream_to_close = audio_input_stream_;
     audio_input_stream_ = nullptr;
+    stream_to_close->Close();
   }
 
   void StopAndClose() {
     DCHECK(audio_manager_->GetTaskRunner()->BelongsToCurrentThread());
     ASSERT_TRUE(audio_input_stream_);
     audio_input_stream_->Stop();
-    audio_input_stream_->Close();
+    AudioInputStream* stream_to_close = audio_input_stream_;
     audio_input_stream_ = nullptr;
+    stream_to_close->Close();
   }
 
   // Synchronously runs the provided callback/closure on the audio thread.
   void RunOnAudioThread(base::OnceClosure closure) {
     DCHECK(audio_manager_->GetTaskRunner()->BelongsToCurrentThread());
     std::move(closure).Run();
+  }
+
+  void RunRecordingTest(std::optional<bool> echo_cancellation) {
+    MakeAudioInputStreamOnAudioThread(echo_cancellation);
+
+    base::RunLoop run_loop;
+    TestInputCallback test_callback(run_loop.QuitClosure());
+    OpenAndStartAudioInputStreamOnAudioThread(&test_callback);
+
+    run_loop.Run();
+    EXPECT_GE(test_callback.callback_count(), 2);
+    EXPECT_FALSE(test_callback.had_error());
+
+    StopAndCloseAudioInputStreamOnAudioThread();
   }
 
   void OnLogMessage(const std::string& message) {}
@@ -253,9 +280,6 @@ class AudioInputTest : public testing::TestWithParam<bool> {
 #endif  // BUILDFLAG(IS_FUCHSIA)
   std::unique_ptr<AudioManager> audio_manager_;
   raw_ptr<AudioInputStream> audio_input_stream_;
-
-  bool should_use_aaudio_ = false;
-  bool aaudio_is_supported_ = false;
 #if BUILDFLAG(IS_ANDROID)
   base::test::ScopedFeatureList features_;
 #endif
@@ -263,44 +287,32 @@ class AudioInputTest : public testing::TestWithParam<bool> {
 
 // Test create and close of an AudioInputStream without recording audio.
 TEST_P(AudioInputTest, CreateAndClose) {
-  if (should_use_aaudio_ && !aaudio_is_supported_) {
-    return;
-  }
-
   ABORT_AUDIO_TEST_IF_NOT(InputDevicesAvailable());
   MakeAudioInputStreamOnAudioThread();
   CloseAudioInputStreamOnAudioThread();
 }
 
 // Test create, open and close of an AudioInputStream without recording audio.
-// TODO(crbug.com/1429490): This test is failing on ios-blink-dbg-fyi bot.
+// TODO(crbug.com/40262701): This test is failing on ios-blink-rel-fyi bot.
 #if BUILDFLAG(IS_IOS)
 #define MAYBE_OpenAndClose DISABLED_OpenAndClose
 #else
 #define MAYBE_OpenAndClose OpenAndClose
 #endif
 TEST_P(AudioInputTest, MAYBE_OpenAndClose) {
-  if (should_use_aaudio_ && !aaudio_is_supported_) {
-    return;
-  }
-
   ABORT_AUDIO_TEST_IF_NOT(InputDevicesAvailable());
   MakeAudioInputStreamOnAudioThread();
   OpenAndCloseAudioInputStreamOnAudioThread();
 }
 
 // Test create, open, stop and close of an AudioInputStream without recording.
-// TODO(crbug.com/1429490): This test is failing on ios-blink-dbg-fyi bot.
+// TODO(crbug.com/40262701): This test is failing on ios-blink-rel-fyi bot.
 #if BUILDFLAG(IS_IOS)
 #define MAYBE_OpenStopAndClose DISABLED_OpenStopAndClose
 #else
 #define MAYBE_OpenStopAndClose OpenStopAndClose
 #endif
 TEST_P(AudioInputTest, MAYBE_OpenStopAndClose) {
-  if (should_use_aaudio_ && !aaudio_is_supported_) {
-    return;
-  }
-
   ABORT_AUDIO_TEST_IF_NOT(InputDevicesAvailable());
   MakeAudioInputStreamOnAudioThread();
   OpenStopAndCloseAudioInputStreamOnAudioThread();
@@ -308,29 +320,43 @@ TEST_P(AudioInputTest, MAYBE_OpenStopAndClose) {
 
 // Test a normal recording sequence using an AudioInputStream.
 // Very simple test which starts capturing and verifies that recording starts.
-// TODO(crbug.com/1429490): This test is failing on ios-blink-dbg-fyi bot.
+// TODO(crbug.com/40262701): This test is failing on ios-blink-rel-fyi bot.
 #if BUILDFLAG(IS_IOS)
 #define MAYBE_Record DISABLED_Record
 #else
 #define MAYBE_Record Record
 #endif
 TEST_P(AudioInputTest, MAYBE_Record) {
-  if (should_use_aaudio_ && !aaudio_is_supported_) {
-    return;
-  }
-
   ABORT_AUDIO_TEST_IF_NOT(InputDevicesAvailable());
-  MakeAudioInputStreamOnAudioThread();
+  RunRecordingTest(/*echo_cancellation=*/std::nullopt);
+}
 
-  base::RunLoop run_loop;
-  TestInputCallback test_callback(run_loop.QuitClosure());
-  OpenAndStartAudioInputStreamOnAudioThread(&test_callback);
+// Test a normal recording sequence using an AudioInputStream.
+// Very simple test which starts capturing and verifies that recording starts.
+// TODO(crbug.com/40262701): This test is failing on ios-blink-rel-fyi bot.
+#if BUILDFLAG(IS_IOS)
+#define MAYBE_Record_EchoCancellationDisabled \
+  DISABLED_Record_EchoCancellationDisabled
+#else
+#define MAYBE_Record_EchoCancellationDisabled Record_EchoCancellationDisabled
+#endif
+TEST_P(AudioInputTest, MAYBE_Record_EchoCancellationDisabled) {
+  ABORT_AUDIO_TEST_IF_NOT(InputDevicesAvailable());
+  RunRecordingTest(/*echo_cancellation=*/false);
+}
 
-  run_loop.Run();
-  EXPECT_GE(test_callback.callback_count(), 2);
-  EXPECT_FALSE(test_callback.had_error());
-
-  StopAndCloseAudioInputStreamOnAudioThread();
+// Test a normal recording sequence using an AudioInputStream.
+// Very simple test which starts capturing and verifies that recording starts.
+// TODO(crbug.com/40262701): This test is failing on ios-blink-rel-fyi bot.
+#if BUILDFLAG(IS_IOS)
+#define MAYBE_Record_EchoCancellationEnabled \
+  DISABLED_Record_EchoCancellationEnabled
+#else
+#define MAYBE_Record_EchoCancellationEnabled Record_EchoCancellationEnabled
+#endif
+TEST_P(AudioInputTest, MAYBE_Record_EchoCancellationEnabled) {
+  ABORT_AUDIO_TEST_IF_NOT(InputDevicesAvailable());
+  RunRecordingTest(/*echo_cancellation=*/true);
 }
 
 // The test parameter is only relevant on Android. It controls whether or not we
@@ -338,8 +364,7 @@ TEST_P(AudioInputTest, MAYBE_Record) {
 INSTANTIATE_TEST_SUITE_P(Base, AudioInputTest, testing::Values(false));
 
 #if BUILDFLAG(IS_ANDROID)
-// Run tests with AAudio enabled. On Android P and below, these tests should not
-// run, as we only use AAudio on Q+.
+// Run tests with AAudio enabled.
 INSTANTIATE_TEST_SUITE_P(AAudio, AudioInputTest, testing::Values(true));
 #endif
 

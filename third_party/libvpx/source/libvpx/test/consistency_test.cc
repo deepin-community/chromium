@@ -13,7 +13,7 @@
 #include <string.h>
 #include <tuple>
 
-#include "third_party/googletest/src/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 
 #include "./vpx_config.h"
 #if CONFIG_VP9_ENCODER
@@ -128,7 +128,7 @@ class ConsistencyTestBase : public ::testing::Test {
 };
 
 #if CONFIG_VP9_ENCODER
-typedef std::tuple<int, int> ConsistencyParam;
+using ConsistencyParam = std::tuple<int, int>;
 class ConsistencyVP9Test
     : public ConsistencyTestBase,
       public ::testing::WithParamInterface<ConsistencyParam> {

@@ -5,16 +5,19 @@
 #include <string>
 
 #include "ash/constants/ash_features.h"
-#include "ash/public/cpp/system/toast_data.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/system/toast/system_toast_view.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/test/pixel/ash_pixel_differ.h"
+#include "ash/test/pixel/ash_pixel_test_helper.h"
 #include "ash/test/pixel/ash_pixel_test_init_params.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/paint_vector_icon.h"
+#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/background.h"
 #include "ui/views/layout/flex_layout_view.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
@@ -22,23 +25,19 @@ namespace ash {
 
 namespace {
 
-// Creates a `ToastData` object with only the required elements.
-ToastData CreateBaseToastData() {
-  const std::string id = "id";
-  const std::u16string text = u"text";
-  auto catalog_name = ToastCatalogName::kTestCatalogName;
-  return ToastData(id, catalog_name, text);
-}
-
-// Body text constants
-const std::u16string button_text = u"Button";
-const std::u16string long_body_text =
+// Test constants
+const std::u16string kTestText = u"text";
+const std::u16string kTestLongText =
     u"Nudge body text should be clear, short and succint (80 characters "
     u"recommended)";
+const std::u16string kTestButtonText = u"Button";
+const gfx::VectorIcon* kTestIcon = &kSystemMenuBusinessIcon;
 
 }  // namespace
 
-class SystemToastViewPixelTest : public AshTestBase {
+class SystemToastViewPixelTest
+    : public AshTestBase,
+      public testing::WithParamInterface</*enable_system_blur=*/bool> {
  public:
   void SetUp() override {
     AshTestBase::SetUp();
@@ -50,8 +49,8 @@ class SystemToastViewPixelTest : public AshTestBase {
         views::Builder<views::FlexLayoutView>()
             .SetMainAxisAlignment(views::LayoutAlignment::kCenter)
             .SetCrossAxisAlignment(views::LayoutAlignment::kCenter)
-            .SetBackground(views::CreateThemedSolidBackground(
-                cros_tokens::kCrosSysSystemBaseElevated))
+            .SetBackground(views::CreateSolidBackground(
+                cros_tokens::kCrosSysSystemBaseElevatedOpaque))
             .Build());
   }
 
@@ -65,111 +64,126 @@ class SystemToastViewPixelTest : public AshTestBase {
   // AshTestBase:
   std::optional<pixel_test::InitParams> CreatePixelTestInitParams()
       const override {
-    return pixel_test::InitParams();
+    pixel_test::InitParams init_params;
+    init_params.system_blur_enabled = GetParam();
+    return init_params;
   }
 
  private:
   std::unique_ptr<views::Widget> test_widget_;
 };
 
-TEST_F(SystemToastViewPixelTest, TextOnly) {
-  // Set up base toast data, which has an id, a catalog name and a body text.
-  auto toast_data = CreateBaseToastData();
+INSTANTIATE_TEST_SUITE_P(
+    /* no prefix */,
+    SystemToastViewPixelTest,
+    testing::Bool());
 
-  GetContentsView()->AddChildView(
-      std::make_unique<SystemToastView>(toast_data));
+TEST_P(SystemToastViewPixelTest, TextOnly) {
+  GetContentsView()->AddChildView(std::make_unique<SystemToastView>(kTestText));
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "screenshot", /*revision_number=*/4, GetContentsView()));
+      "screenshot",
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 7 : 1,
+      GetContentsView()));
 }
 
-TEST_F(SystemToastViewPixelTest, WithLeadingIcon) {
-  // Set up base toast data and add a leading icon.
-  auto toast_data = CreateBaseToastData();
-  toast_data.leading_icon = &kSystemMenuBusinessIcon;
-
-  GetContentsView()->AddChildView(
-      std::make_unique<SystemToastView>(toast_data));
+TEST_P(SystemToastViewPixelTest, WithLeadingIcon) {
+  GetContentsView()->AddChildView(std::make_unique<SystemToastView>(
+      /*text=*/kTestText, SystemToastView::ButtonType::kNone,
+      /*button_text=*/std::u16string(),
+      /*button_icon=*/&gfx::VectorIcon::EmptyIcon(),
+      /*button_callback=*/base::DoNothing(),
+      /*leading_icon=*/kTestIcon));
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "screenshot", /*revision_number=*/4, GetContentsView()));
+      GenerateScreenshotName("screenshot"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 8 : 1,
+      GetContentsView()));
 }
 
-TEST_F(SystemToastViewPixelTest, WithButton) {
-  // Set up base toast data and add a button.
-  auto toast_data = CreateBaseToastData();
-  toast_data.dismiss_text = button_text;
-
-  GetContentsView()->AddChildView(
-      std::make_unique<SystemToastView>(toast_data));
+TEST_P(SystemToastViewPixelTest, WithTextButton) {
+  GetContentsView()->AddChildView(std::make_unique<SystemToastView>(
+      /*text=*/kTestText, SystemToastView::ButtonType::kTextButton,
+      /*button_text=*/kTestButtonText));
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "screenshot", /*revision_number=*/4, GetContentsView()));
+      GenerateScreenshotName("screenshot"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 3 : 1,
+      GetContentsView()));
 }
 
-TEST_F(SystemToastViewPixelTest, WithLeadingIconAndButton) {
-  // Set up base toast data and add a leading icon and a button.
-  auto toast_data = CreateBaseToastData();
-  toast_data.leading_icon = &kSystemMenuBusinessIcon;
-  toast_data.dismiss_text = button_text;
-
-  GetContentsView()->AddChildView(
-      std::make_unique<SystemToastView>(toast_data));
+TEST_P(SystemToastViewPixelTest, WithIconButton) {
+  GetContentsView()->AddChildView(std::make_unique<SystemToastView>(
+      /*text=*/kTestText, SystemToastView::ButtonType::kIconButton,
+      /*button_text=*/kTestButtonText, /*button_icon=*/kTestIcon));
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "screenshot", /*revision_number=*/4, GetContentsView()));
+      GenerateScreenshotName("screenshot"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 3 : 1,
+      GetContentsView()));
 }
 
-TEST_F(SystemToastViewPixelTest, Multiline_TextOnly) {
-  // Set up a multiline text toast.
-  auto toast_data = CreateBaseToastData();
-  toast_data.text = long_body_text;
-
-  GetContentsView()->AddChildView(
-      std::make_unique<SystemToastView>(toast_data));
+TEST_P(SystemToastViewPixelTest, WithLeadingIconAndTextButton) {
+  GetContentsView()->AddChildView(std::make_unique<SystemToastView>(
+      /*text=*/kTestText, SystemToastView::ButtonType::kTextButton,
+      /*button_text=*/kTestButtonText,
+      /*button_icon=*/&gfx::VectorIcon::EmptyIcon(),
+      /*button_callback=*/base::DoNothing(),
+      /*leading_icon=*/kTestIcon));
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "screenshot", /*revision_number=*/4, GetContentsView()));
+      GenerateScreenshotName("screenshot"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 3 : 1,
+      GetContentsView()));
 }
 
-TEST_F(SystemToastViewPixelTest, Multiline_WithLeadingIcon) {
-  // Set up a multiline text toast.
-  auto toast_data = CreateBaseToastData();
-  toast_data.text = long_body_text;
-  toast_data.leading_icon = &kSystemMenuBusinessIcon;
-
+TEST_P(SystemToastViewPixelTest, Multiline_TextOnly) {
   GetContentsView()->AddChildView(
-      std::make_unique<SystemToastView>(toast_data));
+      std::make_unique<SystemToastView>(kTestLongText));
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "screenshot", /*revision_number=*/4, GetContentsView()));
+      GenerateScreenshotName("screenshot"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 7 : 1,
+      GetContentsView()));
 }
 
-TEST_F(SystemToastViewPixelTest, Multiline_WithButton) {
-  // Set up a multiline text toast and add a button.
-  auto toast_data = CreateBaseToastData();
-  toast_data.text = long_body_text;
-  toast_data.dismiss_text = button_text;
-
-  GetContentsView()->AddChildView(
-      std::make_unique<SystemToastView>(toast_data));
+TEST_P(SystemToastViewPixelTest, Multiline_WithLeadingIcon) {
+  GetContentsView()->AddChildView(std::make_unique<SystemToastView>(
+      /*text=*/kTestLongText, SystemToastView::ButtonType::kNone,
+      /*button_text=*/std::u16string(),
+      /*button_icon=*/&gfx::VectorIcon::EmptyIcon(),
+      /*button_callback=*/base::DoNothing(),
+      /*leading_icon=*/kTestIcon));
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "screenshot", /*revision_number=*/4, GetContentsView()));
+      GenerateScreenshotName("screenshot"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 7 : 1,
+      GetContentsView()));
 }
 
-TEST_F(SystemToastViewPixelTest, Multiline_WithLeadingIconAndButton) {
-  // Set up a multiline text toast and add a leading icon and a button.
-  auto toast_data = CreateBaseToastData();
-  toast_data.text = long_body_text;
-  toast_data.leading_icon = &kSystemMenuBusinessIcon;
-  toast_data.dismiss_text = button_text;
-
-  GetContentsView()->AddChildView(
-      std::make_unique<SystemToastView>(toast_data));
+TEST_P(SystemToastViewPixelTest, Multiline_WithTextButton) {
+  GetContentsView()->AddChildView(std::make_unique<SystemToastView>(
+      /*text=*/kTestLongText, SystemToastView::ButtonType::kTextButton,
+      /*button_text=*/kTestButtonText));
 
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
-      "screenshot", /*revision_number=*/4, GetContentsView()));
+      GenerateScreenshotName("screenshot"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 3 : 1,
+      GetContentsView()));
+}
+
+TEST_P(SystemToastViewPixelTest, Multiline_WithLeadingIconAndTextButton) {
+  GetContentsView()->AddChildView(std::make_unique<SystemToastView>(
+      /*text=*/kTestLongText, SystemToastView::ButtonType::kTextButton,
+      /*button_text=*/kTestButtonText,
+      /*button_icon=*/&gfx::VectorIcon::EmptyIcon(),
+      /*button_callback=*/base::DoNothing(),
+      /*leading_icon=*/kTestIcon));
+
+  EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
+      GenerateScreenshotName("screenshot"),
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 3 : 1,
+      GetContentsView()));
 }
 
 }  // namespace ash

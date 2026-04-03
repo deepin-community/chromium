@@ -11,7 +11,6 @@
 #include "base/debug/allocation_trace.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "base/strings/string_piece.h"
 #include "base/types/expected.h"
 
 namespace crashpad {
@@ -32,6 +31,8 @@ using Result =
 class AllocationRecorderHolder
     : public base::RefCounted<AllocationRecorderHolder> {
  public:
+  AllocationRecorderHolder();
+
   // Load an AllocationStackTraceRecorder from the passed process snapshot and
   // provide access via the result.
   virtual Result Initialize(const crashpad::ProcessSnapshot& process_snapshot);

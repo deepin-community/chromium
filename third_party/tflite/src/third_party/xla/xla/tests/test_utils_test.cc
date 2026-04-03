@@ -15,16 +15,16 @@ limitations under the License.
 
 #include "xla/tests/test_utils.h"
 
+#include <cstdint>
 #include <vector>
 
 #include "absl/base/casts.h"
 #include "absl/container/flat_hash_set.h"
-#include "xla/client/xla_builder.h"
-#include "xla/service/hlo_parser.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/hlo/parser/hlo_parser.h"
 #include "xla/shape_util.h"
 #include "xla/tests/local_client_test_base.h"
-#include "xla/tests/test_macros.h"
-#include "tsl/lib/core/status_test_util.h"
+#include "xla/tsl/lib/core/status_test_util.h"
 
 namespace xla {
 namespace {
@@ -32,7 +32,7 @@ namespace {
 // A test fixture is used because we need a client for our computation builder.
 class TestUtilsTest : public LocalClientTestBase {};
 
-XLA_TEST_F(TestUtilsTest, UnusedParam) {
+TEST_F(TestUtilsTest, UnusedParam) {
   XlaBuilder builder(TestName());
   // Make the reduction lambda.
   Shape single_float = ShapeUtil::MakeShape(F32, {});
@@ -58,7 +58,7 @@ XLA_TEST_F(TestUtilsTest, UnusedParam) {
   TF_ASSERT_OK(MakeFakeArguments(&module).status());
 }
 
-XLA_TEST_F(TestUtilsTest, MultipleIndexSpacesForDynamicSlices) {
+TEST_F(TestUtilsTest, MultipleIndexSpacesForDynamicSlices) {
   auto module = ParseAndReturnVerifiedModule(
                     R"(HloModule index_space_module
 
@@ -86,7 +86,7 @@ XLA_TEST_F(TestUtilsTest, MultipleIndexSpacesForDynamicSlices) {
   EXPECT_LE(args[2].Get<int32_t>({}), 3);
 }
 
-XLA_TEST_F(TestUtilsTest, MultipleIndexSpacesForDynamicUpdateSlices) {
+TEST_F(TestUtilsTest, MultipleIndexSpacesForDynamicUpdateSlices) {
   auto module = ParseAndReturnVerifiedModule(
                     R"(HloModule index_space_module
 
@@ -117,38 +117,7 @@ XLA_TEST_F(TestUtilsTest, MultipleIndexSpacesForDynamicUpdateSlices) {
   EXPECT_LE(args[2].Get<int32_t>({}), 3);
 }
 
-XLA_TEST_F(TestUtilsTest, NoDuplicatesFloats) {
-  // Inputs which are sort keys in key/value sorts should have no duplicates.
-  auto module = ParseAndReturnVerifiedModule(R"(
-HloModule sort.148.1589
-
-compare {
-  p.0.lhs = f32[] parameter(0)
-  p.0.rhs = f32[] parameter(1)
-  p.1.lhs = s32[] parameter(2)
-  p.1.rhs = s32[] parameter(3)
-  ROOT lt = pred[] compare(p.0.lhs, p.0.rhs), direction=LT
-}
-
-ENTRY %sort.148.1589 (parameter.0: f32[1048576], parameter.1: s32[1048576]) -> (f32[1048576], s32[1048576]) {
-  %parameter.0 = f32[1048576]{0} parameter(0)
-  %parameter.1 = s32[1048576]{0} parameter(1)
-  ROOT %sort.148.1589 = (f32[1048576]{0}, s32[1048576]{0}) sort(f32[1048576]{0} %parameter.0, s32[1048576]{0} %parameter.1), dimensions={0}, to_apply=compare
-}
-)")
-                    .value();
-  TF_ASSERT_OK_AND_ASSIGN(std::vector<Literal> args,
-                          MakeFakeArguments(module.get()));
-  ASSERT_EQ(args.size(), 2);
-  const Literal& key_arg = args[0];
-
-  absl::flat_hash_set<uint32_t> key_set;
-  for (const float& value : key_arg.data<float>()) {
-    EXPECT_TRUE(key_set.insert(absl::bit_cast<uint32_t>(value)).second);
-  }
-}
-
-XLA_TEST_F(TestUtilsTest, NoDuplicatesInt32) {
+TEST_F(TestUtilsTest, NoDuplicatesInt32) {
   // Inputs which are sort keys in key/value sorts should have no duplicates.
   auto module = ParseAndReturnVerifiedModule(R"(
 HloModule sort.148.1589
@@ -179,38 +148,7 @@ ENTRY %sort.148.1589 (parameter.0: s32[1048576], parameter.1: s32[1048576]) -> (
   }
 }
 
-XLA_TEST_F(TestUtilsTest, NoDuplicatesBfloat16) {
-  // Inputs which are sort keys in key/value sorts should have no duplicates.
-  auto module = ParseAndReturnVerifiedModule(R"(
-HloModule sort, is_scheduled=true
-
-compare {
-  p.0.lhs = bf16[] parameter(0)
-  p.0.rhs = bf16[] parameter(1)
-  p.1.lhs = s32[] parameter(2)
-  p.1.rhs = s32[] parameter(3)
-  ROOT lt = pred[] compare(p.0.lhs, p.0.rhs), direction=LT
-}
-
-ENTRY %sort. (parameter.0: bf16[2,1452], parameter.1: s32[2,1452]) -> (bf16[2,1452], s32[2,1452]) {
-  %parameter.0 = bf16[2,1452]{1,0} parameter(0)
-  %parameter.1 = s32[2,1452]{1,0} parameter(1)
-  ROOT %sort = (bf16[2,1452]{1,0}, s32[2,1452]{1,0}) sort(bf16[2,1452]{1,0} %parameter.0, s32[2,1452]{1,0} %parameter.1), dimensions={1}, to_apply=compare
-}
-)")
-                    .value();
-  TF_ASSERT_OK_AND_ASSIGN(std::vector<Literal> args,
-                          MakeFakeArguments(module.get()));
-  ASSERT_EQ(args.size(), 2);
-  const Literal& key_arg = args[0];
-
-  absl::flat_hash_set<uint16_t> key_set;
-  for (const bfloat16& value : key_arg.data<bfloat16>()) {
-    EXPECT_TRUE(key_set.insert(absl::bit_cast<uint16_t>(value)).second);
-  }
-}
-
-XLA_TEST_F(TestUtilsTest, MakeFakeArgumentsR0InputToDynamicSlice) {
+TEST_F(TestUtilsTest, MakeFakeArgumentsR0InputToDynamicSlice) {
   auto module = ParseAndReturnVerifiedModule(R"(
 HloModule Test
 
@@ -238,7 +176,7 @@ ENTRY %module (parameter.0: s32[], parameter.1: f32[20,20]) -> f32[] {
       << ShapeUtil::HumanString(args[1].shape());
 }
 
-XLA_TEST_F(TestUtilsTest, MakeFakeArgumentsForGather) {
+TEST_F(TestUtilsTest, MakeFakeArgumentsForGather) {
   auto module = ParseAndReturnVerifiedModule(R"(
   HloModule Test
 
@@ -272,7 +210,7 @@ ENTRY %module(parameter.0: f32[200,100,300], parameter.1: s32[10,2]) ->
   }
 }
 
-XLA_TEST_F(TestUtilsTest, MakeFakeArgumentsForGatherTupleParam) {
+TEST_F(TestUtilsTest, MakeFakeArgumentsForGatherTupleParam) {
   auto module = ParseAndReturnVerifiedModule(R"(
 HloModule cluster_13361217111314620287__.11, entry_computation_layout={((s32[10]{0:T(1024)}, bf16[100,256]{1,0:T(8,128)(2,1)}))->(bf16[10,256]{1,0:T(8,128)(2,1)})}
 
@@ -309,7 +247,7 @@ ENTRY cluster_13361217111314620287__.11 {
   }
 }
 
-XLA_TEST_F(TestUtilsTest, MakeFakeArgumentsForScatter) {
+TEST_F(TestUtilsTest, MakeFakeArgumentsForScatter) {
   auto module = ParseAndReturnVerifiedModule(R"(
   HloModule Test
 
@@ -345,6 +283,96 @@ ENTRY main {
     EXPECT_GE(index, -1);
     EXPECT_LE(index, 100);
   }
+}
+
+TEST_F(TestUtilsTest, MakeFakeArgumentsForFusionWithDynamicSlice) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+HloModule fusion.14451
+
+%copy_fusion.605.clone (input.626: bf16[64,128,512,1]) -> bf16[64,128,512,1] {
+  %input.626 = bf16[64,128,512,1]{2,1,0,3} parameter(0)
+  ROOT %copy.55330 = bf16[64,128,512,1]{2,1,0,3} copy(%input.626)
+}
+
+%fused_computation.145.clone.clone.clone (param_0.99237: u32[], param_1.115419: bf16[64,128,512,1], param_2.79387: u32[], param_3.55185: u32[], param_4.37665: u32[]) -> (bf16[4,128,512,2], bf16[4,128,512,2]) {
+  %param_1.115419 = bf16[64,128,512,1]{2,1,0,3} parameter(1)
+  %fusion.16278 = bf16[64,128,512,1]{2,1,0,3} fusion(%param_1.115419), kind=kLoop, calls=%copy_fusion.605.clone
+  %constant.93695 = f32[] constant(-inf)
+  %pad.8833 = bf16[64,128,512,2]{2,1,0,3} pad(%fusion.16278, %constant.93695), padding=0_0x0_0x0_0x0_1
+  %param_0.99237 = u32[] parameter(0)
+  %zero.83 = u32[] constant(0)
+  %dynamic-slice.10062 = bf16[4,128,512,2]{2,1,0,3} dynamic-slice(%pad.8833, %param_0.99237, %zero.83, %zero.83, %zero.83), dynamic_slice_sizes={4,128,512,2}
+  %pad.8834 = bf16[64,128,512,2]{2,1,0,3} pad(%fusion.16278, %constant.93695), padding=0_0x0_0x0_0x1_0
+  %param_2.79387 = u32[] parameter(2)
+  %dynamic-slice.10063 = bf16[4,128,512,2]{2,1,0,3} dynamic-slice(%pad.8834, %param_2.79387, %zero.83, %zero.83, %zero.83), dynamic_slice_sizes={4,128,512,2}
+  %maximum.1334 = bf16[4,128,512,2]{2,1,0,3} maximum(%dynamic-slice.10062, %dynamic-slice.10063)
+  %copy.55331 = bf16[4,128,512,2]{2,1,0,3} copy(%maximum.1334)
+  %param_4.37665 = u32[] parameter(4)
+  %dynamic-slice.7328.clone.3 = bf16[4,128,512,2]{2,1,0,3} dynamic-slice(%pad.8833, %param_4.37665, %zero.83, %zero.83, %zero.83), dynamic_slice_sizes={4,128,512,2}
+  %param_3.55185 = u32[] parameter(3)
+  %dynamic-slice.7332.clone.3 = bf16[4,128,512,2]{2,1,0,3} dynamic-slice(%pad.8834, %param_3.55185, %zero.83, %zero.83, %zero.83), dynamic_slice_sizes={4,128,512,2}
+  %maximum.415.clone.3 = bf16[4,128,512,2]{2,1,0,3} maximum(%dynamic-slice.7328.clone.3, %dynamic-slice.7332.clone.3)
+  %copy.55332 = bf16[4,128,512,2]{2,1,0,3} copy(%maximum.415.clone.3)
+  ROOT %tuple.22033 = (bf16[4,128,512,2]{2,1,0,3}, bf16[4,128,512,2]{2,1,0,3}) tuple(%copy.55331, %copy.55332)
+}
+
+ENTRY %fusion.14451 (parameter.0: u32[], parameter.1: bf16[64,128,512,1], parameter.2: u32[], parameter.3: u32[], parameter.4: u32[]) -> (bf16[4,128,512,2], bf16[4,128,512,2]) {
+  %parameter.0 = u32[] parameter(0)
+  %parameter.1 = bf16[64,128,512,1]{2,1,0,3} parameter(1)
+  %parameter.2 = u32[] parameter(2)
+  %parameter.3 = u32[] parameter(3)
+  %parameter.4 = u32[] parameter(4)
+  ROOT %fusion.14451 = (bf16[4,128,512,2]{2,1,0,3}, bf16[4,128,512,2]{2,1,0,3}) fusion(%parameter.0, %parameter.1, %parameter.2, %parameter.3, %parameter.4), kind=kLoop, calls=%fused_computation.145.clone.clone.clone
+}
+)")
+                    .value();
+
+  TF_ASSERT_OK_AND_ASSIGN(std::vector<Literal> args,
+                          MakeFakeArguments(module.get()));
+  ASSERT_EQ(args.size(), 5);
+
+  // args[0], [2], [3], [4] are indices for dim 0.
+  // Input shape dim 0 is 64. Output shape dim 0 is 4.
+  // Index must be <= 64 - 4 = 60.
+  int64_t bound = 60;
+
+  for (int i : {0, 2, 3, 4}) {
+    EXPECT_GE(args[i].Get<uint32_t>({}), 0);
+    EXPECT_LE(args[i].Get<uint32_t>({}), bound);
+  }
+}
+
+TEST_F(TestUtilsTest, MakeFakeArgumentsForFusionWithMultipleDimsDynamicSlices) {
+  auto module = ParseAndReturnVerifiedModule(R"(
+HloModule MultipleDimsDynamicSlices
+
+%fused_computation (p0: u32[], p1: u32[], data: f32[100,200]) -> f32[10,20] {
+  %p0 = u32[] parameter(0)
+  %p1 = u32[] parameter(1)
+  %data = f32[100,200]{1,0} parameter(2)
+  ROOT %dynamic-slice = f32[10,20]{1,0} dynamic-slice(%data, %p0, %p1), dynamic_slice_sizes={10,20}
+}
+
+ENTRY %main (p0: u32[], p1: u32[], data: f32[100,200]) -> f32[10,20] {
+  %p0 = u32[] parameter(0)
+  %p1 = u32[] parameter(1)
+  %data = f32[100,200]{1,0} parameter(2)
+  ROOT %fusion = f32[10,20]{1,0} fusion(%p0, %p1, %data), kind=kLoop, calls=%fused_computation
+}
+)")
+                    .value();
+
+  TF_ASSERT_OK_AND_ASSIGN(std::vector<Literal> args,
+                          MakeFakeArguments(module.get()));
+  ASSERT_EQ(args.size(), 3);
+
+  // Dim 0: 100 - 10 = 90
+  EXPECT_GE(args[0].Get<uint32_t>({}), 0);
+  EXPECT_LE(args[0].Get<uint32_t>({}), 90);
+
+  // Dim 1: 200 - 20 = 180
+  EXPECT_GE(args[1].Get<uint32_t>({}), 0);
+  EXPECT_LE(args[1].Get<uint32_t>({}), 180);
 }
 
 }  // namespace

@@ -28,11 +28,9 @@ const int kDownstreamEnrollBillableServiceNumber =
 }  // namespace
 
 GetDetailsForEnrollmentRequest::GetDetailsForEnrollmentRequest(
-    const PaymentsNetworkInterface::GetDetailsForEnrollmentRequestDetails&
-        request_details,
-    base::OnceCallback<void(AutofillClient::PaymentsRpcResult,
-                            const PaymentsNetworkInterface::
-                                GetDetailsForEnrollmentResponseDetails&)>
+    const GetDetailsForEnrollmentRequestDetails& request_details,
+    base::OnceCallback<void(PaymentsAutofillClient::PaymentsRpcResult,
+                            const GetDetailsForEnrollmentResponseDetails&)>
         callback)
     : request_details_(request_details), callback_(std::move(callback)) {}
 
@@ -47,9 +45,9 @@ std::string GetDetailsForEnrollmentRequest::GetRequestContentType() {
 }
 
 std::string GetDetailsForEnrollmentRequest::GetRequestContent() {
-  base::Value::Dict request_dict;
+  base::DictValue request_dict;
 
-  base::Value::Dict context;
+  base::DictValue context;
   context.Set("language_code", request_details_.app_locale);
   int billable_service_number = 0;
   switch (request_details_.source) {
@@ -62,7 +60,6 @@ std::string GetDetailsForEnrollmentRequest::GetRequestContent() {
       break;
     case VirtualCardEnrollmentSource::kNone:
       NOTREACHED();
-      break;
   }
   context.Set("billable_service", billable_service_number);
   if (request_details_.billing_customer_number != 0) {
@@ -90,18 +87,17 @@ std::string GetDetailsForEnrollmentRequest::GetRequestContent() {
       break;
     case VirtualCardEnrollmentSource::kNone:
       NOTREACHED();
-      break;
   }
 
-  std::string request_content;
-  base::JSONWriter::Write(request_dict, &request_content);
-  VLOG(3) << "GetDetailsForEnrollmentRequest request body: " << request_content;
+  std::string request_content = base::WriteJson(request_dict).value_or("");
+  DVLOG(3) << "GetDetailsForEnrollmentRequest request body: "
+           << request_content;
   return request_content;
 }
 
 void GetDetailsForEnrollmentRequest::ParseResponse(
-    const base::Value::Dict& response) {
-  const base::Value::Dict* google_legal_message =
+    const base::DictValue& response) {
+  const base::DictValue* google_legal_message =
       response.FindDict("google_legal_message");
   if (google_legal_message) {
     LegalMessageLine::Parse(*google_legal_message,
@@ -109,7 +105,7 @@ void GetDetailsForEnrollmentRequest::ParseResponse(
                             /*escape_apostrophes=*/true);
   }
 
-  const base::Value::Dict* external_legal_message =
+  const base::DictValue* external_legal_message =
       response.FindDict("external_legal_message");
   if (external_legal_message) {
     LegalMessageLine::Parse(*external_legal_message,
@@ -128,7 +124,7 @@ bool GetDetailsForEnrollmentRequest::IsResponseComplete() {
 }
 
 void GetDetailsForEnrollmentRequest::RespondToDelegate(
-    AutofillClient::PaymentsRpcResult result) {
+    PaymentsAutofillClient::PaymentsRpcResult result) {
   std::move(callback_).Run(result, response_details_);
 }
 

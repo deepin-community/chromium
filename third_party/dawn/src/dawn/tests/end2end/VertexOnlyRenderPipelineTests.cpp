@@ -90,32 +90,32 @@ class VertexOnlyRenderPipelineTest : public DawnTest {
         // ignore the stencil component
         depthPipelineNoFragment =
             CreateRenderPipeline(wgpu::CompareFunction::Always, wgpu::StencilOperation::Keep,
-                                 wgpu::CompareFunction::Always, true, false);
+                                 wgpu::CompareFunction::Always, wgpu::OptionalBool::True, false);
         depthPipelineWithFragment =
             CreateRenderPipeline(wgpu::CompareFunction::Always, wgpu::StencilOperation::Keep,
-                                 wgpu::CompareFunction::Always, true, true);
+                                 wgpu::CompareFunction::Always, wgpu::OptionalBool::True, true);
 
         // Create a vertex-only render pipeline that only modify the stencil in DepthStencilView,
         // and ignore the depth component
         stencilPipelineNoFragment =
             CreateRenderPipeline(wgpu::CompareFunction::Always, wgpu::StencilOperation::Replace,
-                                 wgpu::CompareFunction::Always, false, false);
+                                 wgpu::CompareFunction::Always, wgpu::OptionalBool::False, false);
         stencilPipelineWithFragment =
             CreateRenderPipeline(wgpu::CompareFunction::Always, wgpu::StencilOperation::Replace,
-                                 wgpu::CompareFunction::Always, false, true);
+                                 wgpu::CompareFunction::Always, wgpu::OptionalBool::False, true);
 
         // Create a complete render pipeline that do both depth and stencil tests, and draw to color
         // attachment
-        fullPipeline =
-            CreateRenderPipeline(wgpu::CompareFunction::Equal, wgpu::StencilOperation::Keep,
-                                 wgpu::CompareFunction::GreaterEqual, false, true);
+        fullPipeline = CreateRenderPipeline(
+            wgpu::CompareFunction::Equal, wgpu::StencilOperation::Keep,
+            wgpu::CompareFunction::GreaterEqual, wgpu::OptionalBool::False, true);
     }
 
     wgpu::RenderPipeline CreateRenderPipeline(
         wgpu::CompareFunction stencilCompare = wgpu::CompareFunction::Always,
         wgpu::StencilOperation stencilPassOp = wgpu::StencilOperation::Keep,
         wgpu::CompareFunction depthCompare = wgpu::CompareFunction::Always,
-        bool writeDepth = false,
+        wgpu::OptionalBool writeDepth = wgpu::OptionalBool::False,
         bool useFragment = true) {
         wgpu::ShaderModule vsModule = utils::CreateShaderModule(device, R"(
             @vertex
@@ -232,6 +232,8 @@ TEST_P(VertexOnlyRenderPipelineTest, Stencil) {
 // Test that a vertex-only render pipeline modify the depth attachment as same as a complete render
 // pipeline do.
 TEST_P(VertexOnlyRenderPipelineTest, Depth) {
+    // TODO(crbug.com/40238674): Fails on Pixel 10.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec());
     // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 4 OpenGLES
     DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsQualcomm());
 
@@ -278,6 +280,9 @@ TEST_P(VertexOnlyRenderPipelineTest, Depth) {
 // draw, and make sure that it correctly use the stencil and depth result set in previous
 // vertex-only pipelines.
 TEST_P(VertexOnlyRenderPipelineTest, MultiplePass) {
+    // TODO(crbug.com/40238674): Fails on Pixel 10 vulkan.
+    DAWN_SUPPRESS_TEST_IF(IsImgTec() && (IsOpenGLES() || IsVulkan()));
+
     wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
 
     ClearAttachment(encoder);

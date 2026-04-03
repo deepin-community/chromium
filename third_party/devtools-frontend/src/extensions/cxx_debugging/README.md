@@ -45,9 +45,6 @@ This creates two output directories in the `out` folder:
 - `DevTools_CXX_Debugging.stage1` that contains some native binaries required for the second build stage.
 - `DevTools_CXX_Debugging.stage2` that contains the built extension.
 
-The bootstrap tool tries to autodetect `gomacc` to speed up the build.
-If `gomacc` is not detected, you can specify it with `-goma`.
-
 To get an overview of all available build options, run `./tools/bootstrap.py -help`.
 
 ## Run the extension
@@ -55,15 +52,30 @@ To get an overview of all available build options, run `./tools/bootstrap.py -he
 You can load the extension to Chrome directly from the DevTools repository root with the following command:
 
 ```bash
-third_party/chrome/chrome-linux/chrome --load-extension=$PWD/out/DevTools_CXX_Debugging.stage2/src
+third_party/chrome/chrome-linux/chrome-linux64/chrome --load-extension=$PWD/out/DevTools_CXX_Debugging.stage2/src
 ```
 
-## Test front-end
+## Unittests
 
 The extension contains TypeScript and general front-end components, which are tested via
-`karma`-based tests located in the `tests/` folder. They follow the `foo_test.ts` naming convention used in DevTools front-end.
+`karma`-based tests located in the `tests/` folder. They follow the `foo.test.ts` naming convention used in DevTools front-end.
 
 These tests are automatically run by default by `tools/bootstrap.py` unless you pass the `-no-check`
 argument there.
 
 To explicitly execute them, run the `ninja check-extension` in the `stage2` output directory.
+
+## E2e tests
+
+There are e2e tests, found in the `e2e/` directory, which test the entire flow, from compiling a project with debug
+symbols to running it in chrome and debugging it with devtools with the extension.
+
+Running the e2e tests requires a special build which includes also building devtools-frontend and compiling the test
+projects with emscripten. To do that, use:
+
+```bash
+./e2e/runner.py run --build-root ../../out/e2e --v -C
+```
+
+The -C argument is only necessary on the first run in order to fully compile everything once. Subsequently it can be
+left out to run a little bit faster.

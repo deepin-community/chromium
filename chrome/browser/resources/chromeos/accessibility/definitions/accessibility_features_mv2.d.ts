@@ -3,13 +3,13 @@
 // found in the LICENSE file.
 
 /** @fileoverview Definitions for chrome.accessibilityFeatures API. */
-// TODO(crbug.com/1203307): Auto-generate this file
+// TODO(crbug.com/40179454): Auto-generate this file
 // from chrome/common/extensions/api/accessibility_features.json.
 
 // This file exists because MV3 supports promises and MV2 does not.
 // TODO(b/260590502): Delete this after MV3 migration.
 
-import {ChromeEvent} from '../../../../../../tools/typescript/definitions/chrome_event.js';
+import type {ChromeEvent} from '../../../../../../tools/typescript/definitions/chrome_event.js';
 
 declare global {
   export namespace chrome {

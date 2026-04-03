@@ -7,9 +7,9 @@
 #include "base/command_line.h"
 #include "base/task/single_thread_task_runner.h"
 #include "media/base/media_switches.h"
-#include "services/video_capture/public/cpp/features.h"
 #include "services/video_capture/public/cpp/mock_producer.h"
 #include "services/video_capture/public/mojom/constants.mojom.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
 const media::VideoCaptureFormat kDefaultSupportedFormat{
@@ -36,10 +36,6 @@ void VideoCaptureServiceTest::SetUp() {
       switches::kUseFakeMjpegDecodeAccelerator);
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
       switches::kUseFakeDeviceForMediaStream, "device-count=3");
-#if BUILDFLAG(IS_MAC)
-  scoped_feature_list_.InitWithFeatures(
-      {video_capture::features::kCameraMonitoringInVideoCaptureService}, {});
-#endif
 
   service_impl_ = std::make_unique<VideoCaptureServiceImpl>(
       service_remote_.BindNewPipeAndPassReceiver(),
@@ -58,6 +54,20 @@ void VideoCaptureServiceTest::SetUp() {
       media::ResolutionChangePolicy::FIXED_RESOLUTION;
   requestable_settings_.power_line_frequency =
       media::PowerLineFrequency::kDefault;
+}
+
+void VideoCaptureServiceTest::TearDown() {
+  service_impl_.reset();
+
+  // Some parts of video capture stack submit tasks to the current sequence
+  // in their destructors. Make sure those tasks run before we start tearing
+  // down the rest of the test harness - otherwise, we may end up with LSAN
+  // warnings.
+  task_environment_.GetMainThreadTaskRunner()->PostTask(
+      FROM_HERE, task_environment_.QuitClosure());
+  task_environment_.RunUntilQuit();
+
+  testing::Test::TearDown();
 }
 
 std::unique_ptr<VideoCaptureServiceTest::SharedMemoryVirtualDeviceContext>

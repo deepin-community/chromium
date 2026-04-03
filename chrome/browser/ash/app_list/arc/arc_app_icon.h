@@ -52,7 +52,7 @@ class ArcAppIcon {
     virtual void OnIconFailed(ArcAppIcon* icon) {}
 
    protected:
-    virtual ~Observer() {}
+    virtual ~Observer() = default;
   };
 
   enum IconType {
@@ -209,7 +209,7 @@ class ArcAppIcon {
   // implementation, and at the same time, sending the request to the ARC side
   // to request the new foreground and background images.
   //
-  // TODO(crbug.com/1083331): Remove the migration handling code, which reads
+  // TODO(crbug.com/40131344): Remove the migration handling code, which reads
   // the old icon_png_data, when the adaptive icon feature is enabled in the
   // stable release, and the adaptive icon flag is removed.
   static std::unique_ptr<ArcAppIcon::ReadResult> ReadAdaptiveIconFiles(
@@ -244,7 +244,8 @@ class ArcAppIcon {
       gfx::ImageSkia& image_skia,
       std::map<ui::ResourceScaleFactor, base::Time>& incomplete_scale_factors);
   void UpdateCompressed(ui::ResourceScaleFactor scale_factor, std::string data);
-  void DiscardDecodeRequest(DecodeRequest* request, bool is_decode_success);
+
+  void OnImageDecoded(DecodeRequest* request, const SkBitmap& bitmap);
 
   const raw_ptr<content::BrowserContext> context_;
   const std::string app_id_;

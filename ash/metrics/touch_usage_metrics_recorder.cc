@@ -124,15 +124,15 @@ TouchUsageMetricsRecorder::~TouchUsageMetricsRecorder() {
 }
 
 void TouchUsageMetricsRecorder::OnTouchEvent(ui::TouchEvent* event) {
-  if (event->type() == ui::ET_TOUCH_PRESSED) {
+  if (event->type() == ui::EventType::kTouchPressed) {
     NotifyTouchscreenUsageRecorders();
   }
 }
 
 void TouchUsageMetricsRecorder::NotifyTouchscreenUsageRecorders() {
   std::array<TouchscreenUsageRecorder, 7>& recorders =
-      display::Screen::GetScreen()->InTabletMode() ? tablet_recorders_
-                                                   : clamshell_recorders_;
+      display::Screen::Get()->InTabletMode() ? tablet_recorders_
+                                             : clamshell_recorders_;
 
   for (TouchscreenUsageRecorder& recorder : recorders) {
     recorder.RecordTouch();

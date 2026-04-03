@@ -6,11 +6,11 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_MOJO_SECURITY_ORIGIN_MOJOM_TRAITS_H_
 
 #include <optional>
+#include <string_view>
 
 #include "mojo/public/cpp/base/unguessable_token_mojom_traits.h"
 #include "mojo/public/cpp/bindings/optional_as_pointer.h"
 #include "mojo/public/cpp/bindings/string_traits_wtf.h"
-#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "url/mojom/origin.mojom-shared.h"
@@ -29,8 +29,8 @@ struct UrlOriginAdapter {
     scoped_refptr<blink::SecurityOrigin> tuple_origin;
     if (tuple.IsValid()) {
       tuple_origin = blink::SecurityOrigin::CreateFromValidTuple(
-          String::FromUTF8(tuple.scheme()), String::FromUTF8(tuple.host()),
-          tuple.port());
+          blink::String::FromUTF8(tuple.scheme()),
+          blink::String::FromUTF8(tuple.host()), tuple.port());
     }
 
     if (nonce_if_opaque) {
@@ -48,12 +48,12 @@ struct UrlOriginAdapter {
 template <>
 struct StructTraits<url::mojom::OriginDataView,
                     scoped_refptr<const ::blink::SecurityOrigin>> {
-  static WTF::String scheme(
+  static blink::String scheme(
       const scoped_refptr<const ::blink::SecurityOrigin>& origin) {
     return UrlOriginAdapter::GetOriginOrPrecursorOriginIfOpaque(origin)
         ->Protocol();
   }
-  static WTF::String host(
+  static blink::String host(
       const scoped_refptr<const ::blink::SecurityOrigin>& origin) {
     return UrlOriginAdapter::GetOriginOrPrecursorOriginIfOpaque(origin)->Host();
   }
@@ -70,8 +70,8 @@ struct StructTraits<url::mojom::OriginDataView,
     // This implementation is very close to
     // SecurityOrigin::CreateFromUrlOrigin, so keep in sync if modifications
     // are made in that method.
-    base::StringPiece scheme;
-    base::StringPiece host;
+    std::string_view scheme;
+    std::string_view host;
     std::optional<base::UnguessableToken> nonce_if_opaque;
     if (!data.ReadScheme(&scheme) || !data.ReadHost(&host) ||
         !data.ReadNonceIfOpaque(&nonce_if_opaque))

@@ -10,12 +10,12 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequence_checker.h"
 #include "media/base/scoped_async_trace.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
-#include "mojo/public/cpp/bindings/remote.h"
 #include "services/video_capture/broadcasting_receiver.h"
 #include "services/video_capture/device_factory_impl.h"
 #include "services/video_capture/public/mojom/device.mojom.h"
@@ -47,9 +47,6 @@ class VideoSourceImpl : public mojom::VideoSource {
       bool force_reopen_with_new_settings,
       mojo::PendingReceiver<mojom::PushVideoStreamSubscription> subscription,
       CreatePushSubscriptionCallback callback) override;
-
-  void RegisterVideoEffectsManager(
-      mojo::PendingRemote<mojom::VideoEffectsManager> remote) override;
 
  private:
   enum class DeviceStatus {
@@ -87,9 +84,8 @@ class VideoSourceImpl : public mojom::VideoSource {
   DeviceStatus device_status_;
   raw_ptr<Device, AcrossTasksDanglingUntriaged> device_{nullptr};
   media::VideoCaptureParams device_start_settings_;
-  bool restart_device_once_when_stop_complete_;
-  mojo::PendingRemote<mojom::VideoEffectsManager>
-      pending_video_effects_manager_;
+  bool restart_device_once_when_stop_complete_ = false;
+
   base::TimeTicks device_startup_start_time_;
 
   SEQUENCE_CHECKER(sequence_checker_);

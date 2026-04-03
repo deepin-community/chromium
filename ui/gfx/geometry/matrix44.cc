@@ -9,6 +9,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "ui/gfx/geometry/decomposed_transform.h"
 
 namespace gfx {
@@ -101,14 +103,18 @@ ALWAYS_INLINE bool InverseWithDouble4Cols(Double4& c0,
 
 }  // anonymous namespace
 
-void Matrix44::GetColMajor(double dst[16]) const {
-  const double* src = &matrix_[0][0];
-  std::copy(src, src + 16, dst);
+void Matrix44::GetColMajor(base::span<double, 16> dst) const {
+  base::span UNSAFE_TODO(src{&matrix_[0][0], base::fixed_extent<16>()});
+  dst.copy_from(src);
 }
 
-void Matrix44::GetColMajorF(float dst[16]) const {
-  const double* src = &matrix_[0][0];
-  std::copy(src, src + 16, dst);
+void Matrix44::GetColMajorF(base::span<float, 16> dst) const {
+  base::span UNSAFE_TODO(src{&matrix_[0][0], base::fixed_extent<16>()});
+
+  // TODO: It's surprising that this isn't flagged as unsafe.
+  //       It'd be nice if copy_from() supported differing element types,
+  //       then this would be statically safe.
+  std::ranges::copy(src, dst.begin());
 }
 
 void Matrix44::PreTranslate(double dx, double dy) {
@@ -123,7 +129,7 @@ void Matrix44::PreTranslate3d(double dx, double dy, double dz) {
 }
 
 void Matrix44::PostTranslate(double dx, double dy) {
-  if (LIKELY(!HasPerspective())) {
+  if (!HasPerspective()) [[likely]] {
     matrix_[3][0] += dx;
     matrix_[3][1] += dy;
   } else {
@@ -147,11 +153,11 @@ void Matrix44::PostTranslate3d(double dx, double dy, double dz) {
   if (AllTrue(t == Double4{0, 0, 0, 0}))
     return;
 
-  if (LIKELY(!HasPerspective())) {
+  if (!HasPerspective()) [[likely]] {
     SetCol(3, Col(3) + t);
   } else {
     for (int i = 0; i < 4; ++i)
-      SetCol(i, Col(i) + t * matrix_[i][3]);
+      SetCol(i, Col(i) + t * UNSAFE_TODO(matrix_[i])[3]);
   }
 }
 
@@ -261,7 +267,7 @@ void Matrix44::Skew(double tan_skew_x, double tan_skew_y) {
   SetCol(1, c1 + c0 * tan_skew_x);
 }
 
-void Matrix44::ApplyDecomposedSkews(const double skews[3]) {
+void Matrix44::ApplyDecomposedSkews(base::span<const double, 3> skews) {
   Double4 c0 = Col(0);
   Double4 c1 = Col(1);
   Double4 c2 = Col(2);
@@ -407,7 +413,7 @@ void Matrix44::Zoom(double zoom_factor) {
   matrix_[3][2] *= zoom_factor;
 }
 
-double Matrix44::MapVector2(double vec[2]) const {
+double Matrix44::MapVector2(base::span<double, 2> vec) const {
   double v0 = vec[0];
   double v1 = vec[1];
   double x = v0 * matrix_[0][0] + v1 * matrix_[1][0] + matrix_[3][0];
@@ -435,7 +441,7 @@ void Matrix44::Flatten() {
   SetCol(2, Double4{0, 0, 1, 0});
 }
 
-// TODO(crbug.com/1359528): Consider letting this function always succeed.
+// TODO(crbug.com/40237414): Consider letting this function always succeed.
 std::optional<DecomposedTransform> Matrix44::Decompose2d() const {
   DCHECK(Is2dTransform());
 

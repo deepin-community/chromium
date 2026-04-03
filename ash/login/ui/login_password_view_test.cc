@@ -5,6 +5,7 @@
 #include "ash/login/ui/login_password_view.h"
 
 #include <memory>
+#include <string_view>
 
 #include "ash/login/ui/login_arrow_navigation_delegate.h"
 #include "ash/login/ui/login_test_base.h"
@@ -14,9 +15,9 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/ime/text_input_type.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/widget/widget.h"
@@ -48,7 +49,7 @@ class LoginPasswordViewTest : public LoginTestBase {
     view_->SetLoginArrowNavigationDelegate(arrow_navigation_delegate_.get());
     // Focusable views are expected to have accessible names in order to pass
     // the accessibility paint checks.
-    view_->SetAccessibleName(u"Password");
+    view_->SetAccessibleNameOnTextfield(u"Password");
     view_->Init(
         base::BindRepeating(&LoginPasswordViewTest::OnPasswordSubmit,
                             base::Unretained(this)),
@@ -58,14 +59,20 @@ class LoginPasswordViewTest : public LoginTestBase {
     SetWidget(CreateWidgetWithContent(view_));
   }
 
-  void OnPasswordSubmit(const std::u16string& password) {
-    password_ = password;
+  void TearDown() override {
+    arrow_navigation_delegate_.reset();
+    view_ = nullptr;
+    LoginTestBase::TearDown();
+  }
+
+  void OnPasswordSubmit(std::u16string_view password) {
+    password_ = std::u16string_view(password);
   }
   void OnPasswordTextChanged(bool is_empty) {
     is_password_field_empty_ = is_empty;
   }
 
-  raw_ptr<LoginPasswordView, DanglingUntriaged> view_ = nullptr;
+  raw_ptr<LoginPasswordView> view_ = nullptr;
   std::optional<std::u16string> password_;
   bool is_password_field_empty_ = true;
   std::unique_ptr<LoginScreenArrowNavigationDelegate>
@@ -185,23 +192,13 @@ TEST_F(LoginPasswordViewTest, PasswordSubmitViaButton) {
   EXPECT_EQ(test_api.textfield()->GetReadOnly(), true);
 }
 
-// Verifies that pressing 'Return' on the password field triggers an
-// unlock attempt by calling OnSubmit with an empty password.
-TEST_F(LoginPasswordViewTest, PressingReturnTriggersUnlockWithEmptyPassword) {
+// Verifies that pressing 'Return' on an empty password has no effect.
+TEST_F(LoginPasswordViewTest, PressingReturnHasNoEffect) {
   LoginPasswordView::TestApi test_api(view_);
 
-  // Hitting enter on an empty password should not submit an empty password
-  // when not allowed to.
-  view_->SetEnabledOnEmptyPassword(false);
   ui::test::EventGenerator* generator = GetEventGenerator();
   generator->PressKey(ui::KeyboardCode::VKEY_RETURN, ui::EF_NONE);
   ASSERT_FALSE(password_.has_value());
-
-  // When allowed, hitting enter should submit an empty password.
-  view_->SetEnabledOnEmptyPassword(true);
-  generator->PressKey(ui::KeyboardCode::VKEY_RETURN, ui::EF_NONE);
-  ASSERT_TRUE(password_.has_value());
-  EXPECT_EQ(u"", *password_);
 }
 
 // Verifies that text is not cleared after submitting a password.

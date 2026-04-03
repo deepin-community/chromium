@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/keyboard/keyboard_controller.h"
@@ -16,8 +15,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "components/exo/wm_helper.h"
-#include "ui/aura/client/aura_constants.h"
 #include "ui/base/ime/ash/input_method_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/display/screen.h"
@@ -118,7 +118,7 @@ CrostiniUnsupportedActionNotifier::Delegate::Delegate() = default;
 CrostiniUnsupportedActionNotifier::Delegate::~Delegate() = default;
 
 bool CrostiniUnsupportedActionNotifier::Delegate::IsInTabletMode() {
-  return display::Screen::GetScreen()->InTabletMode();
+  return display::Screen::Get()->InTabletMode();
 }
 
 bool CrostiniUnsupportedActionNotifier::Delegate::IsFocusedWindowCrostini() {
@@ -127,8 +127,8 @@ bool CrostiniUnsupportedActionNotifier::Delegate::IsFocusedWindowCrostini() {
   }
   auto* focused_window = exo::WMHelper::GetInstance()->GetFocusedWindow();
   return focused_window &&
-         (focused_window->GetProperty(aura::client::kAppType) ==
-          static_cast<int>(ash::AppType::CROSTINI_APP));
+         (focused_window->GetProperty(chromeos::kAppTypeKey) ==
+          chromeos::AppType::CROSTINI_APP);
 }
 
 bool CrostiniUnsupportedActionNotifier::Delegate::IsVirtualKeyboardVisible() {
@@ -166,12 +166,12 @@ void CrostiniUnsupportedActionNotifier::Delegate::RemoveFocusObserver(
 
 void CrostiniUnsupportedActionNotifier::Delegate::AddDisplayObserver(
     display::DisplayObserver* observer) {
-  display::Screen::GetScreen()->AddObserver(observer);
+  display::Screen::Get()->AddObserver(observer);
 }
 
 void CrostiniUnsupportedActionNotifier::Delegate::RemoveDisplayObserver(
     display::DisplayObserver* observer) {
-  display::Screen::GetScreen()->RemoveObserver(observer);
+  display::Screen::Get()->RemoveObserver(observer);
 }
 
 void CrostiniUnsupportedActionNotifier::Delegate::AddKeyboardControllerObserver(

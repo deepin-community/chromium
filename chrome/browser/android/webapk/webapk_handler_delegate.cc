@@ -7,19 +7,18 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/time/time.h"
-#include "chrome/android/chrome_jni_headers/WebApkHandlerDelegate_jni.h"
 #include "third_party/blink/public/mojom/manifest/display_mode.mojom.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/android/color_utils_android.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/WebApkHandlerDelegate_jni.h"
 
 WebApkHandlerDelegate::WebApkHandlerDelegate(const WebApkInfoCallback& callback)
     : callback_(callback) {
   JNIEnv* env = base::android::AttachCurrentThread();
   j_obj_.Reset(env, Java_WebApkHandlerDelegate_create(
-                        env, reinterpret_cast<intptr_t>(this))
-                        .obj());
+                        env, reinterpret_cast<intptr_t>(this)));
 }
 
 WebApkHandlerDelegate::~WebApkHandlerDelegate() {
@@ -34,29 +33,29 @@ void WebApkHandlerDelegate::RetrieveWebApks() {
 
 void WebApkHandlerDelegate::OnWebApkInfoRetrieved(
     JNIEnv* env,
-    const JavaParamRef<jstring>& jname,
-    const JavaParamRef<jstring>& jshort_name,
-    const JavaParamRef<jstring>& jpackage_name,
-    const JavaParamRef<jstring>& jid,
-    const jint jshell_apk_version,
-    const jint jversion_code,
-    const JavaParamRef<jstring>& juri,
-    const JavaParamRef<jstring>& jscope,
-    const JavaParamRef<jstring>& jmanifest_url,
-    const JavaParamRef<jstring>& jmanifest_start_url,
-    const JavaParamRef<jstring>& jmanifest_id,
-    const jint jdisplay_mode,
-    const jint jorientation,
-    const jlong jtheme_color,
-    const jlong jbackground_color,
-    const jlong jdark_theme_color,
-    const jlong jdark_background_color,
-    const jlong jlast_update_check_time_ms,
-    const jlong jlast_update_completion_time_ms,
-    const jboolean jrelax_updates,
-    const JavaParamRef<jstring>& jbacking_browser_package_name,
-    const jboolean jis_backing_browser,
-    const JavaParamRef<jstring>& jupdate_status) {
+    const std::string& jname,
+    const std::string& jshort_name,
+    const std::string& jpackage_name,
+    const std::string& jid,
+    const int32_t jshell_apk_version,
+    const int32_t jversion_code,
+    const std::string& juri,
+    const std::string& jscope,
+    const std::string& jmanifest_url,
+    const std::string& jmanifest_start_url,
+    const base::android::JavaRef<jstring>& jmanifest_id,
+    const int32_t jdisplay_mode,
+    const int32_t jorientation,
+    const int64_t jtheme_color,
+    const int64_t jbackground_color,
+    const int64_t jdark_theme_color,
+    const int64_t jdark_background_color,
+    const int64_t jlast_update_check_time_ms,
+    const int64_t jlast_update_completion_time_ms,
+    const bool jrelax_updates,
+    const base::android::JavaRef<jstring>& jbacking_browser_package_name,
+    const bool jis_backing_browser,
+    const std::string& jupdate_status) {
   std::string backing_browser_package_name;
   if (jbacking_browser_package_name) {
     backing_browser_package_name = base::android::ConvertJavaStringToUTF8(
@@ -69,16 +68,10 @@ void WebApkHandlerDelegate::OnWebApkInfoRetrieved(
   }
 
   callback_.Run(WebApkInfo(
-      base::android::ConvertJavaStringToUTF8(env, jname),
-      base::android::ConvertJavaStringToUTF8(env, jshort_name),
-      base::android::ConvertJavaStringToUTF8(env, jpackage_name),
-      base::android::ConvertJavaStringToUTF8(env, jid),
+      jname, jshort_name, jpackage_name, jid,
       static_cast<int>(jshell_apk_version), static_cast<int>(jversion_code),
-      base::android::ConvertJavaStringToUTF8(env, juri),
-      base::android::ConvertJavaStringToUTF8(env, jscope),
-      base::android::ConvertJavaStringToUTF8(env, jmanifest_url),
-      base::android::ConvertJavaStringToUTF8(env, jmanifest_start_url),
-      manifest_id, static_cast<blink::mojom::DisplayMode>(jdisplay_mode),
+      juri, jscope, jmanifest_url, jmanifest_start_url, manifest_id,
+      static_cast<blink::mojom::DisplayMode>(jdisplay_mode),
       static_cast<device::mojom::ScreenOrientationLockType>(jorientation),
       ui::JavaColorToOptionalSkColor(jtheme_color),
       ui::JavaColorToOptionalSkColor(jbackground_color),
@@ -87,7 +80,8 @@ void WebApkHandlerDelegate::OnWebApkInfoRetrieved(
       base::Time::FromMillisecondsSinceUnixEpoch(jlast_update_check_time_ms),
       base::Time::FromMillisecondsSinceUnixEpoch(
           jlast_update_completion_time_ms),
-      static_cast<bool>(jrelax_updates), backing_browser_package_name,
-      static_cast<bool>(jis_backing_browser),
-      base::android::ConvertJavaStringToUTF8(env, jupdate_status)));
+      jrelax_updates, backing_browser_package_name, jis_backing_browser,
+      jupdate_status));
 }
+
+DEFINE_JNI(WebApkHandlerDelegate)

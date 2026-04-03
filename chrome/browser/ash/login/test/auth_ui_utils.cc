@@ -11,6 +11,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/login_screen_test_api.h"
+#include "base/callback_list.h"
 #include "base/check.h"
 #include "chrome/browser/ash/login/test/composite_waiter.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
@@ -18,15 +19,15 @@
 #include "chrome/browser/ash/login/test/oobe_window_visibility_waiter.h"
 #include "chrome/browser/ash/login/test/test_condition_waiter.h"
 #include "chrome/browser/ash/login/test/test_predicate_waiter.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/cryptohome_recovery_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/enter_old_password_screen_handler.h"
-#include "chrome/browser/ui/webui/ash/login/gaia_password_changed_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/local_password_setup_handler.h"
 #include "chrome/browser/ui/webui/ash/login/osauth/factor_setup_success_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/osauth/local_data_loss_warning_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/osauth/osauth_error_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/pin_setup_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/user_creation_screen_handler.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "chrome/test/base/fake_gaia_mixin.h"
@@ -43,13 +44,6 @@ constexpr UIPath kUserCreationNextButton = {"user-creation", "nextButton"};
 constexpr UIPath kGaiaSigninPrimaryButton = {
     "gaia-signin", "signin-frame-dialog", "primary-action-button"};
 
-constexpr UIPath kPasswordStep = {"gaia-password-changed", "passwordStep"};
-constexpr UIPath kOldPasswordInput = {"gaia-password-changed",
-                                      "oldPasswordInput"};
-constexpr UIPath kSendPasswordButton = {"gaia-password-changed", "next"};
-constexpr UIPath kForgotPasswordButton = {"gaia-password-changed",
-                                          "forgotPasswordButton"};
-
 constexpr UIPath kEnterOldPasswordInputStep = {"enter-old-password",
                                                "passwordStep"};
 constexpr UIPath kEnterOldPasswordInput = {"enter-old-password",
@@ -58,13 +52,6 @@ constexpr UIPath kEnterOldPasswordProceedButton = {"enter-old-password",
                                                    "next"};
 constexpr UIPath kEnterOldPasswordForgotButton = {"enter-old-password",
                                                   "forgotPasswordButton"};
-
-constexpr UIPath kForgotPasswordStep = {"gaia-password-changed",
-                                        "forgotPassword"};
-constexpr UIPath kForgotCancel = {"gaia-password-changed", "cancelForgot"};
-
-constexpr UIPath kTryAgainRecovery = {"gaia-password-changed", "backButton"};
-constexpr UIPath kProceedAnyway = {"gaia-password-changed", "proceedAnyway"};
 
 constexpr UIPath kDataLossWarningElement = {"local-data-loss-warning"};
 // TODO: why don't we have it?
@@ -76,13 +63,6 @@ constexpr UIPath kDataLossWarningRemove = {"local-data-loss-warning",
                                            "proceedRemove"};
 constexpr UIPath kDataLossWarningReset = {"local-data-loss-warning",
                                           "powerwash"};
-
-constexpr UIPath kRecoverySuccessStep = {"cryptohome-recovery",
-                                         "successDialog"};
-constexpr UIPath kRecoveryDoneButton = {"cryptohome-recovery", "doneButton"};
-constexpr UIPath kRecoveryErrorStep = {"cryptohome-recovery", "errorDialog"};
-constexpr UIPath kRecoveryManualRecoveryButton = {"cryptohome-recovery",
-                                                  "manualRecoveryButton"};
 
 constexpr UIPath kRecoveryReauthNotificationStep = {"cryptohome-recovery",
                                                     "reauthNotificationDialog"};
@@ -105,12 +85,15 @@ constexpr UIPath kLocalPasswordSetupBackButton = {"local-password-setup",
 constexpr UIPath kLocalPasswordSetupNextButton = {"local-password-setup",
                                                   "nextButton"};
 
-const UIPath kFirstOnboardingScreen = {"consolidated-consent"};
+constexpr auto* kPinSetupScreen = PinSetupScreenView::kScreenId.name;
+const test::UIPath kPinSetupDoneStep = {kPinSetupScreen, "doneDialog"};
+const test::UIPath kPinSetupBackButton = {kPinSetupScreen, "backButton"};
+const test::UIPath kPinSetupKeyboardInput = {kPinSetupScreen, "pinKeyboard",
+                                             "pinKeyboard", "pinInput"};
+const test::UIPath kPinSetupNextButton = {kPinSetupScreen, "nextButton"};
+const test::UIPath kPinSetupDoneButton = {kPinSetupScreen, "doneButton"};
 
-bool IsOldFlow() {
-  return base::FeatureList::IsEnabled(
-      ash::features::kCryptohomeRecoveryBeforeFlowSplit);
-}
+const UIPath kFirstOnboardingScreen = {"consolidated-consent"};
 
 }  // namespace
 
@@ -190,7 +173,7 @@ OobePageActor::OobePageActor(std::optional<OobeScreenId> screen,
                              std::optional<ash::test::UIPath> path)
     : screen_(screen), path_(path) {}
 
-OobePageActor::~OobePageActor() {}
+OobePageActor::~OobePageActor() = default;
 
 std::unique_ptr<test::TestConditionWaiter> OobePageActor::UntilShown() {
   std::unique_ptr<test::TestConditionWaiter> result =
@@ -358,6 +341,47 @@ void LocalPasswordSetupPageActor::Submit() {
 
 // ----------------------------------------------------------
 
+PinSetupPageActor::PinSetupPageActor()
+    : OobePageActor(PinSetupScreenView::kScreenId, std::nullopt) {}
+PinSetupPageActor::~PinSetupPageActor() = default;
+
+void PinSetupPageActor::EnterPin(const std::string& pin) {
+  EXPECT_TRUE(std::ranges::all_of(pin, ::isdigit));
+  test::OobeJS().TypeIntoPath(pin, kPinSetupKeyboardInput);
+}
+
+void PinSetupPageActor::TapNext() {
+  test::OobeJS().TapOnPath(kPinSetupNextButton);
+}
+
+void PinSetupPageActor::InsertAndConfirmPin(const std::string& pin) {
+  EnterPin(pin);
+  TapNext();
+  // Wait until the back button is visible to ensure that the UI is showing
+  // the 'confirmation' step.
+  WaitUntilBackButtonVisible();
+  EnterPin(pin);
+  TapNext();
+}
+
+void PinSetupPageActor::TapDone() {
+  test::OobeJS().CreateVisibilityWaiter(true, kPinSetupDoneStep)->Wait();
+  test::OobeJS().TapOnPath(kPinSetupDoneButton);
+}
+
+void PinSetupPageActor::WaitUntilBackButtonVisible() {
+  test::OobeJS().CreateVisibilityWaiter(true, kPinSetupBackButton)->Wait();
+}
+
+std::unique_ptr<PinSetupPageActor> AwaitPinSetupUI() {
+  std::unique_ptr<PinSetupPageActor> result =
+      std::make_unique<PinSetupPageActor>();
+  result->UntilShown()->Wait();
+  return result;
+}
+
+// ----------------------------------------------------------
+
 LocalAuthenticationDialogActor::LocalAuthenticationDialogActor() = default;
 LocalAuthenticationDialogActor::~LocalAuthenticationDialogActor() = default;
 
@@ -374,6 +398,11 @@ void LocalAuthenticationDialogActor::SubmitPassword(
     const std::string& password) {
   EXPECT_TRUE(IsVisible());
   LoginScreenTestApi::SubmitPasswordLocalAuthenticationDialog(password);
+}
+
+void LocalAuthenticationDialogActor::SubmitPin(const std::string& pin) {
+  EXPECT_TRUE(IsVisible());
+  LoginScreenTestApi::SubmitPinLocalAuthenticationDialog(pin);
 }
 
 void LocalAuthenticationDialogActor::WaitUntilDismissed() {
@@ -404,12 +433,6 @@ void AuthErrorBubbleActor::PressLearnMoreButton() {
 // ----------------------------------------------------------
 
 std::unique_ptr<test::TestConditionWaiter> CreateOldPasswordEnterPageWaiter() {
-  if (IsOldFlow()) {
-    return std::make_unique<CompositeWaiter>(
-        std::make_unique<OobeWindowVisibilityWaiter>(true),
-        std::make_unique<OobeScreenWaiter>(GaiaPasswordChangedView::kScreenId),
-        OobeJS().CreateVisibilityWaiter(true, kPasswordStep));
-  }
   return std::make_unique<CompositeWaiter>(
       std::make_unique<OobeWindowVisibilityWaiter>(true),
       std::make_unique<OobeScreenWaiter>(
@@ -418,46 +441,24 @@ std::unique_ptr<test::TestConditionWaiter> CreateOldPasswordEnterPageWaiter() {
 }
 
 void PasswordChangedTypeOldPassword(const std::string& text) {
-  if (IsOldFlow()) {
-    test::OobeJS().TypeIntoPath(text, kOldPasswordInput);
-    return;
-  }
   test::OobeJS().TypeIntoPath(text, kEnterOldPasswordInput);
 }
 
 void PasswordChangedSubmitOldPassword() {
-  if (IsOldFlow()) {
-    test::OobeJS().ClickOnPath(kSendPasswordButton);
-    return;
-  }
   test::OobeJS().ClickOnPath(kEnterOldPasswordProceedButton);
 }
 
 std::unique_ptr<test::TestConditionWaiter>
 PasswordChangedInvalidPasswordFeedback() {
-  if (IsOldFlow()) {
-    return test::OobeJS().CreateWaiter(
-        test::GetOobeElementPath(kOldPasswordInput) + ".invalid");
-  }
   return test::OobeJS().CreateWaiter(
       test::GetOobeElementPath(kEnterOldPasswordInput) + ".invalid");
 }
 
 void PasswordChangedForgotPasswordAction() {
-  if (IsOldFlow()) {
-    test::OobeJS().ClickOnPath(kForgotPasswordButton);
-    return;
-  }
   test::OobeJS().ClickOnPath(kEnterOldPasswordForgotButton);
 }
 
 std::unique_ptr<test::TestConditionWaiter> LocalDataLossWarningPageWaiter() {
-  if (IsOldFlow()) {
-    return std::make_unique<CompositeWaiter>(
-        std::make_unique<OobeWindowVisibilityWaiter>(true),
-        std::make_unique<OobeScreenWaiter>(GaiaPasswordChangedView::kScreenId),
-        OobeJS().CreateVisibilityWaiter(true, kForgotPasswordStep));
-  }
   return std::make_unique<CompositeWaiter>(
       std::make_unique<OobeWindowVisibilityWaiter>(true),
       std::make_unique<OobeScreenWaiter>(
@@ -466,26 +467,14 @@ std::unique_ptr<test::TestConditionWaiter> LocalDataLossWarningPageWaiter() {
 }
 
 void LocalDataLossWarningPageCancelAction() {
-  if (IsOldFlow()) {
-    test::OobeJS().ClickOnPath(kForgotCancel);
-    return;
-  }
   test::OobeJS().ClickOnPath(kDataLossWarningCancel);
 }
 
 void LocalDataLossWarningPageGoBackAction() {
-  if (IsOldFlow()) {
-    test::OobeJS().ClickOnPath(kTryAgainRecovery);
-    return;
-  }
   test::OobeJS().ClickOnPath(kDataLossWarningBack);
 }
 
 void LocalDataLossWarningPageRemoveAction() {
-  if (IsOldFlow()) {
-    test::OobeJS().ClickOnPath(kProceedAnyway);
-    return;
-  }
   test::OobeJS().ClickOnPath(kDataLossWarningRemove);
 }
 
@@ -494,18 +483,10 @@ void LocalDataLossWarningPageResetAction() {
 }
 
 void LocalDataLossWarningPageExpectGoBack() {
-  if (IsOldFlow()) {
-    test::OobeJS().ExpectVisiblePath(kTryAgainRecovery);
-    return;
-  }
   test::OobeJS().ExpectVisiblePath(kDataLossWarningBack);
 }
 
 void LocalDataLossWarningPageExpectRemove() {
-  if (IsOldFlow()) {
-    test::OobeJS().ExpectVisiblePath(kProceedAnyway);
-    return;
-  }
   test::OobeJS().ExpectVisiblePath(kDataLossWarningRemove);
 }
 
@@ -554,6 +535,10 @@ void LocalPasswordSetupBackAction() {
   test::OobeJS().ClickOnPath(kLocalPasswordSetupBackButton);
 }
 
+UIPath LocalPasswordSetupBackActionPath() {
+  return kLocalPasswordSetupBackButton;
+}
+
 void LocalPasswordSetupExpectFirstInput() {
   test::OobeJS().ExpectVisiblePath(kLocalPasswordSetupFirstInput);
 }
@@ -571,13 +556,6 @@ void LocalPasswordSetupTypeConfirmPassword(const std::string& pw) {
 }
 
 std::unique_ptr<test::TestConditionWaiter> RecoveryPasswordUpdatedPageWaiter() {
-  if (IsOldFlow()) {
-    return std::make_unique<CompositeWaiter>(
-        std::make_unique<OobeWindowVisibilityWaiter>(true),
-        std::make_unique<OobeScreenWaiter>(
-            CryptohomeRecoveryScreenView::kScreenId),
-        OobeJS().CreateVisibilityWaiter(true, kRecoverySuccessStep));
-  }
   return CreatePasswordUpdateNoticePageWaiter();
 }
 
@@ -589,37 +567,15 @@ std::unique_ptr<LocalPasswordSetupPageActor> AwaitLocalPasswordSetupUI() {
 }
 
 void RecoveryPasswordUpdatedProceedAction() {
-  if (IsOldFlow()) {
-    test::OobeJS().ClickOnPath(kRecoveryDoneButton);
-    return;
-  }
+  // TODO(b/315829727): inline this and other now-one-line-methods.
   PasswordUpdateNoticeDoneAction();
 }
 
 std::unique_ptr<test::TestConditionWaiter> RecoveryErrorPageWaiter() {
-  if (IsOldFlow()) {
-    return std::make_unique<CompositeWaiter>(
-        std::make_unique<OobeWindowVisibilityWaiter>(true),
-        std::make_unique<OobeScreenWaiter>(
-            CryptohomeRecoveryScreenView::kScreenId),
-        OobeJS().CreateVisibilityWaiter(true, kRecoveryErrorStep));
-  }
   return std::make_unique<CompositeWaiter>(
       std::make_unique<OobeWindowVisibilityWaiter>(true),
       std::make_unique<OobeScreenWaiter>(
           ash::OSAuthErrorScreenView::kScreenId));
-}
-
-void RecoveryErrorExpectFallback() {
-  CHECK(IsOldFlow());
-  test::OobeJS().ExpectVisiblePath(kRecoveryManualRecoveryButton);
-  return;
-}
-
-void RecoveryErrorFallbackAction() {
-  CHECK(IsOldFlow());
-  test::OobeJS().ClickOnPath(kRecoveryManualRecoveryButton);
-  return;
 }
 
 std::unique_ptr<test::TestConditionWaiter> UserOnboardingWaiter() {

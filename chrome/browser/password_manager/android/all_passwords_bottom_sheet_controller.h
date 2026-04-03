@@ -15,13 +15,17 @@
 #include "components/device_reauth/device_authenticator.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_store/password_store_consumer.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "url/gurl.h"
 
 namespace password_manager {
 class PasswordManagerClient;
 class PasswordManagerDriver;
 }  // namespace password_manager
+
+namespace plus_addresses {
+class PlusAddressService;
+}  // namespace plus_addresses
 
 namespace safe_browsing {
 class PasswordReuseDetectionManagerClient;
@@ -40,10 +44,7 @@ class AllPasswordsBottomSheetController
  public:
   using RequestsToFillPassword =
       base::StrongAlias<struct RequestsToFillPasswordTag, bool>;
-  using ShowMigrationWarningCallback = base::RepeatingCallback<void(
-      gfx::NativeWindow,
-      Profile*,
-      password_manager::metrics_util::PasswordMigrationWarningTriggers)>;
+
   // No-op constructor for tests.
   AllPasswordsBottomSheetController(
       base::PassKey<class AllPasswordsBottomSheetControllerTest>,
@@ -56,8 +57,7 @@ class AllPasswordsBottomSheetController
       autofill::mojom::FocusedFieldType focused_field_type,
       password_manager::PasswordManagerClient* client,
       safe_browsing::PasswordReuseDetectionManagerClient*
-          password_reuse_detection_manager_client,
-      ShowMigrationWarningCallback show_migration_warning_callback);
+          password_reuse_detection_manager_client);
 
   AllPasswordsBottomSheetController(
       content::WebContents* web_contents,
@@ -84,6 +84,9 @@ class AllPasswordsBottomSheetController
                             const std::u16string password,
                             RequestsToFillPassword requests_to_fill_password);
 
+  // The Profile associated with the displayed web contents.
+  Profile* GetProfile();
+
   // The web page view containing the focused field.
   gfx::NativeView GetNativeView();
 
@@ -93,6 +96,10 @@ class AllPasswordsBottomSheetController
 
   // Returns the last committed URL of the frame from |driver_|.
   const GURL& GetFrameUrl();
+
+  // Uses `PlusAddressService` as a source of truth to check if the
+  // `maybe_plus_address` is an existing plus address.
+  bool IsPlusAddress(const std::string& potential_plus_address) const;
 
  private:
   // Called when the biometric re-auth completes. |password| is the password
@@ -146,9 +153,9 @@ class AllPasswordsBottomSheetController
   raw_ptr<safe_browsing::PasswordReuseDetectionManagerClient>
       password_reuse_detection_manager_client_ = nullptr;
 
-  // Callback invoked to try to show the password migration warning. Used
-  // to facilitate testing.
-  ShowMigrationWarningCallback show_migration_warning_callback_;
+  // `PlusAddressService` is used to check which credentials have a plus address
+  // as a username.
+  raw_ptr<const plus_addresses::PlusAddressService> plus_address_service_;
 
   base::WeakPtrFactory<AllPasswordsBottomSheetController> weak_ptr_factory_{
       this};

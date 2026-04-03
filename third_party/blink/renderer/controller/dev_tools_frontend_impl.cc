@@ -124,7 +124,7 @@ void DevToolsFrontendImpl::SetupDevToolsFrontend(
   api_script_ = api_script;
   host_.Bind(std::move(host),
              GetSupplementable()->GetTaskRunner(TaskType::kMiscPlatformAPI));
-  host_.set_disconnect_handler(WTF::BindOnce(
+  host_.set_disconnect_handler(BindOnce(
       &DevToolsFrontendImpl::DestroyOnHostGone, WrapWeakPersistent(this)));
   GetSupplementable()->GetPage()->SetDefaultPageScaleLimits(1.f, 1.f);
 }
@@ -140,7 +140,7 @@ void DevToolsFrontendImpl::SetupDevToolsExtensionAPI(
   api_script_ = extension_api;
 }
 
-void DevToolsFrontendImpl::SendMessageToEmbedder(base::Value::Dict message) {
+void DevToolsFrontendImpl::SendMessageToEmbedder(base::DictValue message) {
   if (host_.is_bound())
     host_->DispatchEmbedderMessage(std::move(message));
 }

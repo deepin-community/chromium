@@ -5,15 +5,17 @@
 #include "components/attribution_reporting/aggregatable_values.h"
 
 #include <stddef.h>
+#include <stdint.h>
 
-#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/test/gmock_expected_support.h"
 #include "base/test/values_test_util.h"
 #include "base/types/expected.h"
 #include "base/values.h"
+#include "components/attribution_reporting/constants.h"
 #include "components/attribution_reporting/filters.h"
 #include "components/attribution_reporting/test_utils.h"
 #include "components/attribution_reporting/trigger_registration_error.mojom.h"
@@ -58,32 +60,75 @@ TEST(AggregatableValuesTest, Parse) {
           ErrorIs(TriggerRegistrationError::kAggregatableValuesWrongType),
       },
       {
-          "value_not_int",
-          R"json({"a": true})json",
-          ErrorIs(TriggerRegistrationError::kAggregatableValuesValueWrongType),
+          "value_wrong_type",
+          R"json({"a": "1"})json",
+          ErrorIs(TriggerRegistrationError::kAggregatableValuesValueInvalid),
       },
       {
           "value_below_range",
           R"json({"a": 0})json",
-          ErrorIs(TriggerRegistrationError::kAggregatableValuesValueOutOfRange),
+          ErrorIs(TriggerRegistrationError::kAggregatableValuesValueInvalid),
       },
       {
           "value_above_range",
           R"json({"a": 65537})json",
-          ErrorIs(TriggerRegistrationError::kAggregatableValuesValueOutOfRange),
+          ErrorIs(TriggerRegistrationError::kAggregatableValuesValueInvalid),
+      },
+      {
+          "value_not_integer",
+          R"json({"a": 1.5})json",
+          ErrorIs(TriggerRegistrationError::kAggregatableValuesValueInvalid),
       },
       {
           "valid",
           R"json({"a": 1, "b": 65536})json",
+          ValueIs(ElementsAre(AllOf(
+              Property(&AggregatableValues::values,
+                       ElementsAre(Pair("a", *AggregatableValuesValue::Create(
+                                                 1, kDefaultFilteringId)),
+                                   Pair("b", *AggregatableValuesValue::Create(
+                                                 65536, kDefaultFilteringId)))),
+              Property(&AggregatableValues::filters, FilterPair())))),
+      },
+      {
+          "valid_trailing_zero",
+          R"json({"a": 2.0})json",
           ValueIs(ElementsAre(
-              AllOf(Property(&AggregatableValues::values,
-                             ElementsAre(Pair("a", 1), Pair("b", 65536))),
-                    Property(&AggregatableValues::filters, FilterPair())))),
+              Property(&AggregatableValues::values,
+                       ElementsAre(Pair("a", *AggregatableValuesValue::Create(
+                                                 2, kDefaultFilteringId)))))),
+      },
+      {
+          "valid_with_dictionary_value",
+          R"json({"a": 1, "b": { "value": 65536 }})json",
+          ValueIs(ElementsAre(AllOf(
+              Property(&AggregatableValues::values,
+                       ElementsAre(Pair("a", *AggregatableValuesValue::Create(
+                                                 1, kDefaultFilteringId)),
+                                   Pair("b", *AggregatableValuesValue::Create(
+                                                 65536, kDefaultFilteringId)))),
+              Property(&AggregatableValues::filters, FilterPair())))),
+      },
+      {
+          "invalid_filtering_id",
+          R"json({"a": 1, "b": { "value": 65536, "filtering_id": 1 }})json",
+          ErrorIs(TriggerRegistrationError::kAggregatableValuesValueInvalid),
+      },
+      {
+          "valid_with_filtering_id",
+          R"json({"a": 1, "b": { "value": 65536, "filtering_id": "255" }})json",
+          ValueIs(ElementsAre(AllOf(
+              Property(&AggregatableValues::values,
+                       ElementsAre(Pair("a", *AggregatableValuesValue::Create(
+                                                 1, kDefaultFilteringId)),
+                                   Pair("b", *AggregatableValuesValue::Create(
+                                                 65536, 255)))),
+              Property(&AggregatableValues::filters, FilterPair())))),
       },
       {
           "list_element_wrong_type",
           R"json([123])json",
-          ErrorIs(TriggerRegistrationError::kAggregatableValuesListWrongType),
+          ErrorIs(TriggerRegistrationError::kAggregatableValuesWrongType),
       },
       {
           "list_values_field_missing",
@@ -95,6 +140,18 @@ TEST(AggregatableValuesTest, Parse) {
           ])json",
           ErrorIs(TriggerRegistrationError::
                       kAggregatableValuesListValuesFieldMissing),
+      },
+      {
+          "list_values_invalid_value",
+          R"json([
+                {
+                  "values": {
+                    "a": 65537,
+                  }
+                }
+          ])json",
+          ErrorIs(
+              TriggerRegistrationError::kAggregatableValuesListValueInvalid),
       },
       {
           "list_filters_field_wrong_type",
@@ -113,10 +170,28 @@ TEST(AggregatableValuesTest, Parse) {
                   "values": {"a": 1,"b": 65536},
                 }
           ])json",
-          ValueIs(ElementsAre(
-              AllOf(Property(&AggregatableValues::values,
-                             ElementsAre(Pair("a", 1), Pair("b", 65536))),
-                    Property(&AggregatableValues::filters, FilterPair())))),
+          ValueIs(ElementsAre(AllOf(
+              Property(&AggregatableValues::values,
+                       ElementsAre(Pair("a", *AggregatableValuesValue::Create(
+                                                 1, kDefaultFilteringId)),
+                                   Pair("b", *AggregatableValuesValue::Create(
+                                                 65536, kDefaultFilteringId)))),
+              Property(&AggregatableValues::filters, FilterPair())))),
+      },
+      {
+          "valid_list_with_dictionary_values",
+          R"json([
+                {
+                  "values": {"a": { "value": 1 }, "b": { "value": 65536 } },
+                }
+          ])json",
+          ValueIs(ElementsAre(AllOf(
+              Property(&AggregatableValues::values,
+                       ElementsAre(Pair("a", *AggregatableValuesValue::Create(
+                                                 1, kDefaultFilteringId)),
+                                   Pair("b", *AggregatableValuesValue::Create(
+                                                 65536, kDefaultFilteringId)))),
+              Property(&AggregatableValues::filters, FilterPair())))),
       },
       {
           "valid_list_with_filters",
@@ -133,7 +208,10 @@ TEST(AggregatableValuesTest, Parse) {
           ])json",
           ValueIs(ElementsAre(AllOf(
               Property(&AggregatableValues::values,
-                       ElementsAre(Pair("a", 1), Pair("b", 65536))),
+                       ElementsAre(Pair("a", *AggregatableValuesValue::Create(
+                                                 1, kDefaultFilteringId)),
+                                   Pair("b", *AggregatableValuesValue::Create(
+                                                 65536, kDefaultFilteringId)))),
               Property(
                   &AggregatableValues::filters,
                   FilterPair(
@@ -148,22 +226,6 @@ TEST(AggregatableValuesTest, Parse) {
   }
 }
 
-TEST(AggregatableValuesTest, Parse_KeyLength) {
-  auto parse_dict_with_key_length = [](size_t length) {
-    base::Value::Dict dict;
-    dict.Set(std::string(length, 'a'), 1);
-    base::Value value(std::move(dict));
-    return AggregatableValues::FromJSON(&value);
-  };
-
-  for (size_t length = 0; length < 26; length++) {
-    EXPECT_THAT(parse_dict_with_key_length(length), ValueIs(_));
-  }
-
-  EXPECT_THAT(parse_dict_with_key_length(26),
-              ErrorIs(TriggerRegistrationError::kAggregatableValuesKeyTooLong));
-}
-
 TEST(AggregatableValuesTest, ToJson) {
   const struct {
     AggregatableValues input;
@@ -174,19 +236,30 @@ TEST(AggregatableValuesTest, ToJson) {
           R"json({"values": {}})json",
       },
       {
-          *AggregatableValues::Create(/*values=*/{{"a", 1}, {"b", 2}},
-                                      FilterPair()),
-          R"json({"values":{"a": 1,"b": 2}})json",
+          *AggregatableValues::Create(
+              /*values=*/{{"a", *AggregatableValuesValue::Create(
+                                    1, kDefaultFilteringId)},
+                          {"b", *AggregatableValuesValue::Create(2, 25)}},
+              FilterPair()),
+          R"json({"values":{
+            "a": {"value": 1, "filtering_id": "0" },
+            "b": {"value": 2, "filtering_id": "25" }
+          }})json",
       },
       {
           *AggregatableValues::Create(
-              /*values=*/{{"a", 1}, {"b", 2}},
+              /*values=*/{{"a", *AggregatableValuesValue::Create(1, 25)},
+                          {"b", *AggregatableValuesValue::Create(
+                                    2, kDefaultFilteringId)}},
               FilterPair(/*positive=*/{*FilterConfig::Create({{"c", {}}})},
                          /*negative=*/{*FilterConfig::Create({{"d", {}}})})),
           R"json({
             "filters": [{"c": []}],
             "not_filters": [{"d": []}],
-            "values":{"a": 1,"b": 2}
+            "values":{
+              "a": { "value": 1, "filtering_id": "25" },
+              "b": { "value": 2, "filtering_id": "0" }
+            }
           })json",
       },
   };

@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/signin/ash/inline_login_handler_impl.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -12,6 +13,8 @@
 #include "ash/style/dark_light_mode_controller_impl.h"
 #include "ash/system/session/guest_session_confirmation_dialog.h"
 #include "base/base64.h"
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
@@ -19,7 +22,6 @@
 #include "base/values.h"
 #include "chrome/browser/ash/account_manager/account_apps_availability.h"
 #include "chrome/browser/ash/account_manager/account_apps_availability_factory.h"
-#include "chrome/browser/ash/crosapi/browser_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/profiles/profile.h"
@@ -35,7 +37,6 @@
 #include "chromeos/version/version_loader.h"
 #include "components/account_manager_core/account.h"
 #include "components/account_manager_core/account_manager_facade.h"
-#include "components/account_manager_core/chromeos/account_manager_facade_factory.h"
 #include "components/account_manager_core/chromeos/account_manager_mojo_service.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -46,6 +47,7 @@
 #include "components/user_manager/user_manager.h"
 #include "crypto/sha2.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -53,6 +55,7 @@
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/chromeos/devicetype_utils.h"
 #include "ui/chromeos/resources/grit/ui_chromeos_resources.h"
+#include "ui/gfx/image/image_skia_rep.h"
 
 namespace ash {
 namespace {
@@ -69,16 +72,19 @@ constexpr char kAccountKeyEmail[] = "email";
 constexpr char kAccountKeyFullName[] = "fullName";
 constexpr char kAccountKeyImage[] = "image";
 
-std::string AnonymizeAccountEmail(const std::string& email) {
-  std::string result = base::Base64Encode(crypto::SHA256HashString(email));
-  return result + "@example.com";
-}
-
-// Returns a base64-encoded hash code of "signin_scoped_device_id:gaia_id".
+// Returns a base64-encoded hash code of "signin_scoped_device_id:gaia_id" for
+// secondary accounts, and `signin_scoped_device_id` for the Device / Primary
+// Account.
 std::string GetAccountDeviceId(const std::string& signin_scoped_device_id,
-                               const std::string& gaia_id) {
-  return base::Base64Encode(
-      crypto::SHA256HashString(signin_scoped_device_id + ":" + gaia_id));
+                               const GaiaId& primary_account_gaia_id,
+                               const GaiaId& gaia_id) {
+  if (primary_account_gaia_id == gaia_id) {
+    return signin_scoped_device_id;
+  }
+
+  // A secondary account was added / re-authenticated.
+  return base::Base64Encode(crypto::SHA256HashString(signin_scoped_device_id +
+                                                     ":" + gaia_id.ToString()));
 }
 
 bool IsPrimaryAccountBeingReauthenticated(
@@ -111,24 +117,24 @@ const SkBitmap& GetDefaultAccountIcon() {
   return default_icon.GetRepresentation(1.0f).GetBitmap();
 }
 
-base::Value::Dict GaiaAccountToValue(const ::account_manager::Account& account,
-                                     const AccountInfo& account_info) {
+base::DictValue GaiaAccountToValue(const ::account_manager::Account& account,
+                                   const AccountInfo& account_info) {
   DCHECK_EQ(account.key.account_type(), account_manager::AccountType::kGaia);
   DCHECK(!account_info.IsEmpty());
 
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kAccountKeyId, account.key.id());
   dict.Set(kAccountKeyEmail, account.raw_email);
-  dict.Set(kAccountKeyFullName, account_info.full_name);
+  dict.Set(kAccountKeyFullName, account_info.GetFullName().value_or(""));
   dict.Set(kAccountKeyImage, webui::GetBitmapDataUrl(
-                                 account_info.account_image.IsEmpty()
-                                     ? GetDefaultAccountIcon()
-                                     : account_info.account_image.AsBitmap()));
+                                 account_info.GetAvatarImage().has_value()
+                                     ? account_info.GetAvatarImage()->AsBitmap()
+                                     : GetDefaultAccountIcon()));
 
   return dict;
 }
 
-::account_manager::Account ValueToGaiaAccount(const base::Value::Dict& dict) {
+::account_manager::Account ValueToGaiaAccount(const base::DictValue& dict) {
   const std::string* id = dict.FindString(kAccountKeyId);
   DCHECK(id);
   const std::string* email = dict.FindString(kAccountKeyEmail);
@@ -163,7 +169,7 @@ class EduCoexistenceChildSigninHelper : public SigninHelper {
       crosapi::AccountManagerMojoService* account_manager_mojo_service,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       std::unique_ptr<SigninHelper::ArcHelper> arc_helper,
-      const std::string& gaia_id,
+      const GaiaId& gaia_id,
       const std::string& email,
       const std::string& auth_code,
       const std::string& signin_scoped_device_id,
@@ -290,7 +296,7 @@ void InlineLoginHandlerImpl::RegisterMessages() {
                                          base::Unretained(this)));
 }
 
-void InlineLoginHandlerImpl::SetExtraInitParams(base::Value::Dict& params) {
+void InlineLoginHandlerImpl::SetExtraInitParams(base::DictValue& params) {
   std::string* email = params.FindString("email");
   if (email && !email->empty()) {
     initial_email_ = *email;
@@ -299,7 +305,7 @@ void InlineLoginHandlerImpl::SetExtraInitParams(base::Value::Dict& params) {
   params.Set("clientId", gaia_urls->oauth2_chrome_client_id());
 
   const GURL& url = gaia_urls->embedded_setup_chromeos_url();
-  params.Set("gaiaPath", url.path().substr(1));
+  params.Set("gaiaPath", url.GetPath().substr(1));
 
   std::optional<std::string> version = chromeos::version_loader::GetVersion(
       chromeos::version_loader::VERSION_SHORT);
@@ -320,39 +326,38 @@ void InlineLoginHandlerImpl::SetExtraInitParams(base::Value::Dict& params) {
 }
 
 void InlineLoginHandlerImpl::CompleteLogin(const CompleteLoginParams& params) {
-  CHECK(!params.auth_code.empty());
-  CHECK(!params.gaia_id.empty());
-  CHECK(!params.email.empty());
-
-  if (AccountAppsAvailability::IsArcAccountRestrictionsEnabled()) {
-    ::GetAccountManagerFacade(Profile::FromWebUI(web_ui())->GetPath().value())
-        ->GetAccounts(base::BindOnce(
-            &InlineLoginHandlerImpl::OnGetAccountsToCompleteLogin,
-            weak_factory_.GetWeakPtr(), params));
+  CHECK(!params.email.empty()) << "Email cannot be empty";
+  CHECK(!params.gaia_id.empty()) << "Gaia id cannot be empty";
+  if (params.auth_code.empty()) {
+    // Authentication flow may have been completed without Gaia giving us an
+    // authorization code. Handle this gracefully.
+    // TODO(crbug/343738879): Check if we need to listen on cookie changes -
+    // like https://crrev.com/c/1972837
+    ShowSigninErrorPage(params.email, /*hosted_domain=*/std::string());
     return;
   }
 
-  CreateSigninHelper(params, /*arc_helper=*/nullptr);
+  AccountManagerFactory::Get()
+      ->GetAccountManagerFacade(Profile::FromWebUI(web_ui())->GetPath().value())
+      ->GetAccounts(
+          base::BindOnce(&InlineLoginHandlerImpl::OnGetAccountsToCompleteLogin,
+                         weak_factory_.GetWeakPtr(), params));
 }
 
-void InlineLoginHandlerImpl::HandleDialogClose(const base::Value::List& args) {
+void InlineLoginHandlerImpl::HandleDialogClose(const base::ListValue& args) {
   close_dialog_closure_.Run();
 }
 
 void InlineLoginHandlerImpl::OnGetAccountsToCompleteLogin(
     const CompleteLoginParams& params,
     const std::vector<::account_manager::Account>& accounts) {
-  bool is_new_account = !base::Contains(
-      accounts, params.gaia_id,
+  bool is_new_account = !std::ranges::contains(
+      accounts, params.gaia_id.ToString(),
       [](const account_manager::Account& account) { return account.key.id(); });
-  bool is_available_in_arc = params.is_available_in_arc;
-  Profile* profile = Profile::FromWebUI(web_ui());
-  if (profile->IsChild())
-    is_available_in_arc = true;
 
   std::unique_ptr<SigninHelper::ArcHelper> arc_helper =
       std::make_unique<SigninHelper::ArcHelper>(
-          is_available_in_arc, /*is_account_addition=*/is_new_account,
+          /*is_available_in_arc=*/true, /*is_account_addition=*/is_new_account,
           AccountAppsAvailabilityFactory::GetForProfile(
               Profile::FromWebUI(web_ui())));
   CreateSigninHelper(params, std::move(arc_helper));
@@ -374,9 +379,10 @@ void InlineLoginHandlerImpl::CreateSigninHelper(
 
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
-  std::string primary_account_email =
-      identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
-          .email;
+  const CoreAccountInfo primary_account_info =
+      identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
+  const std::string primary_account_email = primary_account_info.email;
+  const GaiaId primary_account_gaia_id = primary_account_info.gaia;
 
   // Child user added a secondary account.
   if (profile->IsChild() &&
@@ -386,7 +392,7 @@ void InlineLoginHandlerImpl::CreateSigninHelper(
         profile->GetURLLoaderFactory(), std::move(arc_helper), params.gaia_id,
         params.email, params.auth_code,
         GetAccountDeviceId(GetSigninScopedDeviceIdForProfile(profile),
-                           params.gaia_id),
+                           primary_account_gaia_id, params.gaia_id),
         profile->GetPrefs(), web_ui());
 
     return;
@@ -398,32 +404,32 @@ void InlineLoginHandlerImpl::CreateSigninHelper(
       show_signin_error_, profile->GetURLLoaderFactory(), std::move(arc_helper),
       params.gaia_id, params.email, params.auth_code,
       GetAccountDeviceId(GetSigninScopedDeviceIdForProfile(profile),
-                         params.gaia_id));
+                         primary_account_gaia_id, params.gaia_id));
 }
 
 void InlineLoginHandlerImpl::ShowSigninErrorPage(
     const std::string& email,
     const std::string& hosted_domain) {
-  base::Value::Dict params;
+  base::DictValue params;
   params.Set("email", email);
   params.Set("hostedDomain", hosted_domain);
   params.Set("deviceType", ui::GetChromeOSDeviceName());
-  params.Set("signinBlockedByPolicy", !hosted_domain.empty() ? true : false);
+  params.Set("signinBlockedByPolicy", !hosted_domain.empty());
 
   FireWebUIListener("show-signin-error-page", params);
 }
 
 void InlineLoginHandlerImpl::ShowIncognitoAndCloseDialog(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   chrome::NewIncognitoWindow(Profile::FromWebUI(web_ui()));
   close_dialog_closure_.Run();
 }
 
-void InlineLoginHandlerImpl::GetAccountsInSession(
-    const base::Value::List& args) {
+void InlineLoginHandlerImpl::GetAccountsInSession(const base::ListValue& args) {
   const std::string& callback_id = args[0].GetString();
   const Profile* profile = Profile::FromWebUI(web_ui());
-  ::GetAccountManagerFacade(profile->GetPath().value())
+  AccountManagerFactory::Get()
+      ->GetAccountManagerFacade(profile->GetPath().value())
       ->GetAccounts(base::BindOnce(&InlineLoginHandlerImpl::OnGetAccounts,
                                    weak_factory_.GetWeakPtr(), callback_id));
 }
@@ -431,26 +437,26 @@ void InlineLoginHandlerImpl::GetAccountsInSession(
 void InlineLoginHandlerImpl::OnGetAccounts(
     const std::string& callback_id,
     const std::vector<::account_manager::Account>& accounts) {
-  base::Value::List account_emails;
+  base::ListValue account_emails;
   for (const auto& account : accounts) {
-    if (account.key.account_type() ==
-        ::account_manager::AccountType::kActiveDirectory) {
-      // Don't send Active Directory account email to Gaia.
-      account_emails.Append(AnonymizeAccountEmail(account.raw_email));
-    } else {
-      account_emails.Append(account.raw_email);
-    }
+    // Currently, we only support `kGaia` account type. Should a new type be
+    // added in the future, consider removing the `CHECK_EQ()` below and
+    // handling the new type accordingly.
+    CHECK_EQ(account.key.account_type(), account_manager::AccountType::kGaia);
+
+    account_emails.Append(account.raw_email);
   }
 
   ResolveJavascriptCallback(base::Value(callback_id), account_emails);
 }
 
 void InlineLoginHandlerImpl::GetAccountsNotAvailableInArc(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   AllowJavascript();
   CHECK_EQ(1u, args.size());
   const std::string& callback_id = args[0].GetString();
-  ::GetAccountManagerFacade(Profile::FromWebUI(web_ui())->GetPath().value())
+  AccountManagerFactory::Get()
+      ->GetAccountManagerFacade(Profile::FromWebUI(web_ui())->GetPath().value())
       ->GetAccounts(base::BindOnce(
           &InlineLoginHandlerImpl::ContinueGetAccountsNotAvailableInArc,
           weak_factory_.GetWeakPtr(), callback_id));
@@ -469,18 +475,21 @@ void InlineLoginHandlerImpl::FinishGetAccountsNotAvailableInArc(
     const std::string& callback_id,
     const std::vector<::account_manager::Account>& accounts,
     const base::flat_set<account_manager::Account>& arc_accounts) {
-  base::Value::List result;
+  base::ListValue result;
   auto* identity_manager =
       IdentityManagerFactory::GetForProfile(Profile::FromWebUI(web_ui()));
   for (const auto& account : accounts) {
-    if (account.key.account_type() != account_manager::AccountType::kGaia)
+    if (account.key.account_type() != account_manager::AccountType::kGaia) {
       continue;
+    }
 
     if (!arc_accounts.contains(account)) {
       AccountInfo maybe_account_info =
-          identity_manager->FindExtendedAccountInfoByGaiaId(account.key.id());
-      if (maybe_account_info.IsEmpty())
+          identity_manager->FindExtendedAccountInfoByGaiaId(
+              GaiaId(account.key.id()));
+      if (maybe_account_info.IsEmpty()) {
         continue;
+      }
 
       result.Append(GaiaAccountToValue(account, maybe_account_info));
     }
@@ -489,9 +498,9 @@ void InlineLoginHandlerImpl::FinishGetAccountsNotAvailableInArc(
 }
 
 void InlineLoginHandlerImpl::MakeAvailableInArcAndCloseDialog(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK_EQ(1u, args.size());
-  const base::Value::Dict& dictionary = args.front().GetDict();
+  const base::DictValue& dictionary = args.front().GetDict();
   AccountAppsAvailabilityFactory::GetForProfile(Profile::FromWebUI(web_ui()))
       ->SetIsAccountAvailableInArc(ValueToGaiaAccount(dictionary),
                                    /*is_available=*/true);
@@ -499,7 +508,7 @@ void InlineLoginHandlerImpl::MakeAvailableInArcAndCloseDialog(
 }
 
 void InlineLoginHandlerImpl::HandleSkipWelcomePage(
-    const base::Value::List& args) {
+    const base::ListValue& args) {
   CHECK(!args.empty());
   const bool skip = args.front().GetBool();
   Profile::FromWebUI(web_ui())->GetPrefs()->SetBoolean(
@@ -507,18 +516,11 @@ void InlineLoginHandlerImpl::HandleSkipWelcomePage(
 }
 
 void InlineLoginHandlerImpl::OpenGuestWindowAndCloseDialog(
-    const base::Value::List& args) {
-  // Open the browser guest mode if available, else the device guest mode.
-  if (profiles::IsGuestModeEnabled()) {
-    crosapi::BrowserManager::Get()->NewGuestWindow();
-  } else {
-    GuestSessionConfirmationDialog::Show();
-  }
-
-  close_dialog_closure_.Run();
+    const base::ListValue& args) {
+  NOTREACHED();
 }
 
-void InlineLoginHandlerImpl::GetDeviceId(const base::Value::List& args) {
+void InlineLoginHandlerImpl::GetDeviceId(const base::ListValue& args) {
   CHECK_EQ(1u, args.size());
   const std::string& callback_id = args[0].GetString();
 

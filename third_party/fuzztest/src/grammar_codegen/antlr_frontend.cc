@@ -25,9 +25,9 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "./common/logging.h"
 #include "./grammar_codegen/generated_antlr_parser/ANTLRv4Lexer.h"
 #include "./grammar_codegen/grammar_info.h"
-#include "./fuzztest/internal/logging.h"
 
 namespace fuzztest::internal::grammar {
 
@@ -56,15 +56,25 @@ std::string EscapeString(absl::string_view text) {
 // Add '^' to the char set if it is a NOT set.
 std::string ConstructCharSetString(absl::string_view raw_str,
                                    bool is_not_set = false) {
-  FUZZTEST_INTERNAL_CHECK(
-      raw_str.size() > 2 && raw_str.front() == '[' && raw_str.back() == ']',
-      "Passed argument is not a range string: `" + std::string(raw_str) + "`");
+  FUZZTEST_CHECK(raw_str.size() > 2 && raw_str.front() == '[' &&
+                 raw_str.back() == ']')
+      << "Passed argument is not a range string: `" << raw_str << "`";
   std::string result(raw_str);
   if (is_not_set) {
     result = absl::StrFormat("[^%s]", result.substr(1, result.size() - 2));
   }
   return result;
 }
+
+// Returns a block representing a single space.
+Block SpaceBlock() {
+  Block block;
+  auto& terminal = block.element.emplace<kTerminal>();
+  terminal.type = TerminalType::kStringLiteral;
+  terminal.content = "\" \"";
+  return block;
+}
+
 }  // namespace
 
 void GrammarInfoBuilder::enterLexerRuleSpec(
@@ -94,7 +104,7 @@ Block GrammarInfoBuilder::ConstructBlock(
   if (lexer_atom_ctx->terminal() && lexer_atom_ctx->terminal()->TOKEN_REF()) {
     auto k = block.element.emplace<kNonTerminal>(
         NonTerminal{lexer_atom_ctx->getText()});
-    FUZZTEST_INTERNAL_CHECK(!k.name.empty(), "Empty name!");
+    FUZZTEST_CHECK(!k.name.empty()) << "Empty name!";
   } else {
     auto& terminal = block.element.emplace<kTerminal>();
     std::string text = lexer_atom_ctx->getText();
@@ -113,16 +123,16 @@ Block GrammarInfoBuilder::ConstructBlock(
           terminal.content =
               ConstructCharSetString(set_element_p->getText(), true);
         } else {
-          FUZZTEST_INTERNAL_CHECK(false, "Not lexer char set!");
+          FUZZTEST_LOG(FATAL) << "Not lexer char set!";
         }
       } else {
-        FUZZTEST_INTERNAL_CHECK(false, "Unhandled case!");
+        FUZZTEST_LOG(FATAL) << "Unhandled case!";
       }
     } else if (lexer_atom_ctx->DOT()) {
       terminal.type = TerminalType::kCharSet;
       terminal.content = EscapeString(lexer_atom_ctx->DOT()->getText());
     } else {
-      FUZZTEST_INTERNAL_CHECK(false, "Unhandled case!");
+      FUZZTEST_LOG(FATAL) << "Unhandled case!";
     }
   }
   return block;
@@ -142,7 +152,7 @@ ProductionRule GrammarInfoBuilder::ConstructProductionRule(
     } else if (element->lexerAtom() != NULL) {
       block = ConstructBlock(element->lexerAtom());
     } else {
-      FUZZTEST_INTERNAL_CHECK(false, "Unhandled case!");
+      FUZZTEST_LOG(FATAL) << "Unhandled case!";
     }
     if (element->ebnfSuffix()) {
       block.range = ParseRange(element->ebnfSuffix()->getText());
@@ -165,13 +175,14 @@ GrammarRule GrammarInfoBuilder::ConstructGrammarRule(
 }
 
 Range GrammarInfoBuilder::ParseRange(absl::string_view s) {
-  return (s == "?")                ? Range::kOptional
-         : (s == "+" || s == "+?") ? Range::kNonEmpty
-         : (s == "*" || s == "*?")
-             ? Range::kUnlimited
-             : (FUZZTEST_INTERNAL_CHECK(false,
-                                        absl::StrCat("Unhandled case: ", s)),
-                Range::kNoRange);
+  if (s == "?") {
+    return Range::kOptional;
+  } else if (s == "+" || s == "+?") {
+    return Range::kNonEmpty;
+  } else if (s == "*" || s == "*?") {
+    return Range::kUnlimited;
+  }
+  FUZZTEST_LOG(FATAL) << "Unhandled case: " << s;
 }
 
 Block GrammarInfoBuilder::ConstructBlock(
@@ -199,7 +210,7 @@ Block GrammarInfoBuilder::ConstructBlock(ANTLRv4Parser::AtomContext* atom_ctx) {
     ChangeStringQuote(node_name);
     terminal_node.content = node_name;
   } else {
-    FUZZTEST_INTERNAL_CHECK(false, "Unhandled case!");
+    FUZZTEST_LOG(FATAL) << "Unhandled case!";
   }
   return constructed_block;
 }
@@ -221,15 +232,14 @@ Block GrammarInfoBuilder::ConstructBlock(
     } else if (labeled_element->block()) {
       constructed_block = ConstructBlock(labeled_element->block());
     } else {
-      FUZZTEST_INTERNAL_CHECK(false, "Impossible case!");
+      FUZZTEST_LOG(FATAL) << "Impossible case!";
     }
   } else {
-    FUZZTEST_INTERNAL_CHECK(false, "Unhandled case!");
+    FUZZTEST_LOG(FATAL) << "Unhandled case!";
   }
 
   if (element->ebnfSuffix()) {
-    FUZZTEST_INTERNAL_CHECK(!suffix.has_value(),
-                            "It should have only one suffix.");
+    FUZZTEST_CHECK(!suffix.has_value()) << "It should have only one suffix.";
     suffix = element->ebnfSuffix()->getText();
   }
 
@@ -240,8 +250,17 @@ Block GrammarInfoBuilder::ConstructBlock(
 ProductionRule GrammarInfoBuilder::ConstructProductionRule(
     ANTLRv4Parser::AlternativeContext* ctx) {
   ProductionRule prod_rule;
-  for (auto element : ctx->element()) {
-    prod_rule.blocks.push_back(ConstructBlock(element));
+  for (int i = 0; i < ctx->element().size(); ++i) {
+    prod_rule.blocks.push_back(ConstructBlock(ctx->element(i)));
+
+    // If configured, insert a white space between blocks for a production rule.
+    //
+    // This is sometimes desired if the original grammar skips whitespaces but
+    // we still want to generate whitespaces in the domain so that the lexer
+    // can disambiguate some tokens, like keywords v.s. identifiers.
+    if (insert_space_between_blocks_ && i != ctx->element().size() - 1) {
+      prod_rule.blocks.push_back(SpaceBlock());
+    }
   }
   return prod_rule;
 }
@@ -253,7 +272,7 @@ GrammarRule GrammarInfoBuilder::ConstructGrammarRule(
   auto labeledAlt_vec = pctx->ruleBlock()->ruleAltList()->labeledAlt();
   for (auto labeled_alt : pctx->ruleBlock()->ruleAltList()->labeledAlt()) {
     auto ctx = labeled_alt->alternative();
-    FUZZTEST_INTERNAL_CHECK(ctx != nullptr, "Unhandeled case!");
+    FUZZTEST_CHECK(ctx != nullptr) << "Unhandeled case!";
     grammar_rule.productions.production_rules.push_back(
         ConstructProductionRule(ctx));
   }
@@ -262,9 +281,11 @@ GrammarRule GrammarInfoBuilder::ConstructGrammarRule(
 
 Grammar GrammarInfoBuilder::BuildGrammarInfo(
     const std::vector<std::string>& input_grammar_specs,
-    std::optional<std::string> grammar_name) {
-  FUZZTEST_INTERNAL_CHECK_PRECONDITION(!input_grammar_specs.empty(),
-                                       "No input files!");
+    std::optional<std::string> grammar_name, bool insert_space_between_blocks) {
+  FUZZTEST_PRECONDITION(!input_grammar_specs.empty()) << "No input files!";
+
+  insert_space_between_blocks_ = insert_space_between_blocks;
+
   for (auto& input_grammar_spec : input_grammar_specs) {
     antlr4::ANTLRInputStream input(input_grammar_spec);
     antlr4_grammar::ANTLRv4Lexer lexer(&input);
@@ -275,18 +296,18 @@ Grammar GrammarInfoBuilder::BuildGrammarInfo(
       antlr4::tree::ParseTree* tree = parser.grammarSpec();
       antlr4::tree::ParseTreeWalker::DEFAULT.walk(this, tree);
     } catch (antlr4::ParseCancellationException) {
-      FUZZTEST_INTERNAL_CHECK(false, "Cannot parse the grammar files!");
+      FUZZTEST_LOG(FATAL) << "Cannot parse the grammar files!";
     } catch (...) {
       // The ParseCancellationException might miss some errors. So we need to
       // catch everything here.
-      FUZZTEST_INTERNAL_CHECK(false, "Unknown errors!");
+      FUZZTEST_LOG(FATAL) << "Unknown errors!";
     }
   }
   if (grammar_name.has_value()) {
     grammar_name_ = *grammar_name;
   }
-  FUZZTEST_INTERNAL_CHECK(!grammar_name_.empty() && !rules_.empty(),
-                          "Wrong grammar file!");
+  FUZZTEST_CHECK(!grammar_name_.empty() && !rules_.empty())
+      << "Wrong grammar file!";
   return Grammar{std::move(grammar_name_), std::move(rules_)};
 }
 

@@ -12,6 +12,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/test/base/chromeos/crosier/power_manager_emitter.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "components/prefs/pref_service.h"
 #include "components/user_manager/user_names.h"
 
 namespace {
@@ -29,7 +30,7 @@ using LockScreen = AshIntegrationTest;
 //     (ChromeOS > Software > Commercial (Enterprise) > Identity > LURS)
 // Contacts:
 //     cros-lurs@google.com
-//     anastasiian@chromium.org
+//     antrim@chromium.org
 //     chromeos-sw-engprod@google.com
 //     cros-exp-wg+testresults@google.com (for fieldtrial_testing_config)
 IN_PROC_BROWSER_TEST_F(LockScreen, CloseLidDbusIntegration) {

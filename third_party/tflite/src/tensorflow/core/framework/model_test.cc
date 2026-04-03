@@ -20,11 +20,16 @@ limitations under the License.
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
 
+#include <gtest/gtest.h>
+#include "absl/status/status.h"
 #include "tensorflow/core/framework/cancellation.h"
+#include "tensorflow/core/framework/model.pb.h"
+#include "tensorflow/core/framework/op_def.pb.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/lib/gtl/cleanup.h"
@@ -49,7 +54,7 @@ std::function<int64_t(int64_t)> RamBudgetFunc(int64_t budget) {
   return [budget](int64_t) { return budget; };
 }
 
-int64_t CountParametersOnNode(const string& node_name,
+int64_t CountParametersOnNode(const std::string& node_name,
                               const Model::ModelParameters& parameters) {
   int64_t cnt = 0;
   for (const auto& pair : parameters) {
@@ -239,6 +244,27 @@ INSTANTIATE_TEST_SUITE_P(Test, AsyncKnownRatioTest,
                          ::testing::Combine(::testing::Values(1, 2, 4, 8),
                                             ::testing::Values(0, 50, 100, 200),
                                             ::testing::Values(0, 1, 2, 4)));
+
+TEST(AsyncKnownRatioTest, LegacyPrefetchAutotuneShouldBeExportedAsTunable) {
+  static constexpr int IRRELEVANT_MIN = 1;
+  constexpr int IRRELEVANT_MAX = 16;
+  constexpr int IRRELEVANT_VALUE = 1;
+  const Node::Args irrelevant_args = {0, "async_known_many", nullptr};
+
+  std::shared_ptr<Node> async_known_many = model::MakeAsyncKnownRatioNode(
+      irrelevant_args, /*ratio=*/100,
+      {model::MakeParameter(kBufferSize,
+                            std::make_shared<SharedState>(IRRELEVANT_VALUE,
+                                                          /*mu=*/nullptr,
+                                                          /*cond_var=*/nullptr),
+                            IRRELEVANT_MIN, IRRELEVANT_MAX)},
+      /*is_legacy_prefetch_autotuned=*/true);
+  std::shared_ptr<Node> cloned = async_known_many->Snapshot();
+  ModelProto::Node node;
+  ASSERT_EQ(cloned->ToProto(&node), absl::OkStatus());
+  ASSERT_EQ(node.parameters().size(), 1);
+  EXPECT_TRUE(node.parameters(0).tunable());
+}
 
 TEST(InterleaveManyTest, Model) {
   auto parameter =
@@ -839,10 +865,11 @@ TEST(AsyncInterleaveManyGradientTest, Model) {
       (new_output_time - output_time) / kParameterStep, kComparisonPrecision);
 }
 
-class AsyncKnownRatioGradientTest : public ::testing::TestWithParam<string> {};
+class AsyncKnownRatioGradientTest
+    : public ::testing::TestWithParam<std::string> {};
 
 TEST_P(AsyncKnownRatioGradientTest, Model) {
-  const string parameter_name = GetParam();
+  const std::string parameter_name = GetParam();
   const double input_time = 100;
   const int64_t num_inputs_per_output = 2;
 
@@ -1139,7 +1166,7 @@ TEST(SaveModelTest, Model) {
 
   // Make Save->Load roundtrip.
   Env* env = Env::Default();
-  string tmpFile;
+  std::string tmpFile;
   EXPECT_TRUE(env->LocalTempFilename(&tmpFile));
   tmpFile += "_autotune_model_test";
 
@@ -1375,7 +1402,7 @@ TEST(ModelTest, ModelMetrics) {
   std::shared_ptr<Node> root = model::MakeUnknownNode({0, "unknown0", nullptr});
   model.AddNode([&root](model::Node::Args args) { return root; }, root->name(),
                 nullptr, &root);
-  std::string model_id = strings::StrCat(reinterpret_cast<uintptr_t>(&model));
+  std::string model_id = absl::StrCat(reinterpret_cast<uintptr_t>(&model));
   EXPECT_THAT(cell_reader.Read(model_id),
               AllOf(HasSubstr("key: 0"), HasSubstr("name: \"unknown0\""),
                     HasSubstr("autotune: true")));
@@ -1390,7 +1417,7 @@ TEST(ModelTest, ModelCollectOptimizationMetrics) {
   model.output()->record_element();
   model.output()->record_start(100);
   model.output()->record_stop(200);
-  std::string model_id = strings::StrCat(reinterpret_cast<uintptr_t>(&model));
+  std::string model_id = absl::StrCat(reinterpret_cast<uintptr_t>(&model));
   // Before optimization, whatever metrics collected are returned.
   EXPECT_THAT(cell_reader.Read(model_id),
               AllOf(HasSubstr("key: 0"), HasSubstr("name: \"unknown0\""),
@@ -1434,7 +1461,7 @@ TEST(ModelTest, ModelCollectOptimizationMetrics) {
 TEST(ModelTest, ModelCollectAndDestroyRaceCondition) {
   CellReader<std::string> cell_reader("/tensorflow/data/model");
   auto* model = new model::Model();
-  std::string model_id = strings::StrCat(reinterpret_cast<uintptr_t>(model));
+  std::string model_id = absl::StrCat(reinterpret_cast<uintptr_t>(model));
   thread::ThreadPool threads(Env::Default(), "collect_and_destroy_race", 2);
   threads.Schedule([&]() { cell_reader.Read(model_id); });
   threads.Schedule([&]() { delete model; });
@@ -1630,7 +1657,7 @@ TEST_F(ModelTimingTest, TestDefaultParallelismInParallelInterleave) {
   const int32_t parallelism = 1;
   const int32_t deterministic = 1;
   const int32_t cycle_length = 3;
-  ComputeModelTiming(strings::Printf(
+  ComputeModelTiming(absl::StrFormat(
       R"pb(
         nodes: {
           key: 1
@@ -1814,7 +1841,7 @@ TEST_P(ParallelInterleaveTimingTest, ScenarioTest) {
   const int32_t parallelism = std::get<0>(GetParam());
   const int32_t deterministic = std::get<1>(GetParam());
   const int32_t cycle_length = std::get<2>(GetParam());
-  ComputeModelTiming(strings::Printf(
+  ComputeModelTiming(absl::StrFormat(
       R"pb(
         nodes: {
           key: 1
@@ -3546,6 +3573,127 @@ TEST(RamBudgetManagerTest, RequestAllocationsWithBudgetAdjustment) {
   EXPECT_FALSE(rbm.RequestLegacyPrefetchBytes(5));
   // Just fits
   EXPECT_TRUE(rbm.RequestLegacyPrefetchBytes(4));
+}
+
+TEST(NodeTest, OnlyCollectParametersThatHaveElementsProduced) {
+  // Builds a graph:
+  // root <- parallel_map <- parallel_interleave
+
+  static constexpr int kIrrelevantMin = 1;
+  static constexpr int kIrrelevantMax = 16;
+
+  auto parallel_interleave = model::MakeAsyncKnownRatioNode(
+      {0, "parallel_interleave", nullptr}, /*ratio=*/1,
+      {model::MakeParameter(kParallelism,
+                            std::make_shared<SharedState>(kAutotune,
+                                                          /*mu=*/nullptr,
+                                                          /*cond_var=*/nullptr),
+                            kIrrelevantMin, kIrrelevantMax)},
+      /*is_legacy_prefetch_autotuned=*/false);
+
+  auto parallel_map = model::MakeAsyncKnownRatioNode(
+      {1, "parallel_map", nullptr}, /*ratio=*/1,
+      {model::MakeParameter(kParallelism,
+                            std::make_shared<SharedState>(kAutotune,
+                                                          /*mu=*/nullptr,
+                                                          /*cond_var=*/nullptr),
+                            kIrrelevantMin, kIrrelevantMax)},
+      /*is_legacy_prefetch_autotuned=*/false);
+
+  parallel_map->add_input(parallel_interleave);
+
+  auto root = MakeUnknownNode({2, "unknown0", nullptr});
+  root->add_input(parallel_map);
+
+  // When there is no nodes seeing any input element, it should return 0
+  EXPECT_EQ(root->CollectTunableParameters().size(), 0);
+
+  // Simulates the situation when the data has been produced by the first op.
+  parallel_interleave->record_element();
+  EXPECT_EQ(root->CollectTunableParameters().size(), 1);
+
+  // Now that the second op has seen one element, there should be two parameters
+  // with nodes having element sizes.
+  parallel_map->record_element();
+  EXPECT_EQ(root->CollectTunableParameters().size(), 2);
+
+  // Finally, the root op has seen an element.
+  // But because it does not have parameters, the parameter size should still
+  // be 2.
+  root->record_element();
+  EXPECT_EQ(root->CollectTunableParameters().size(), 2);
+}
+
+TEST(NodeTest, TotalMaximumBufferedBytesHasValueWhenElementSizeProvided) {
+  // Builds a graph:
+  // root <- parallel_map <- parallel_interleave
+
+  static constexpr int kMin = 1;
+  static constexpr int kIrrelevantMax = 16;
+
+  static constexpr int64_t element_size = 100;
+
+  auto parallel_interleave = model::MakeAsyncKnownRatioNode(
+      {0, "parallel_interleave", nullptr}, /*ratio=*/1,
+      {model::MakeParameter(kParallelism,
+                            std::make_shared<SharedState>(kAutotune,
+                                                          /*mu=*/nullptr,
+                                                          /*cond_var=*/nullptr),
+                            kMin, kIrrelevantMax)},
+      /*is_legacy_prefetch_autotuned=*/false);
+
+  auto parallel_map_parameter =
+      model::MakeParameter(kParallelism,
+                           std::make_shared<SharedState>(kAutotune,
+                                                         /*mu=*/nullptr,
+                                                         /*cond_var=*/nullptr),
+                           kMin, kIrrelevantMax);
+  auto parallel_map = model::MakeAsyncKnownRatioNode(
+      {1, "parallel_map", nullptr}, /*ratio=*/1, {parallel_map_parameter},
+      /*is_legacy_prefetch_autotuned=*/false, element_size);
+
+  parallel_map->add_input(parallel_interleave);
+
+  auto root = MakeUnknownNode({2, "unknown0", nullptr});
+  root->add_input(parallel_map);
+
+  EXPECT_EQ(root->TotalMaximumBufferedBytes(), element_size * kMin);
+
+  parallel_map_parameter->value = 7;
+  EXPECT_EQ(root->TotalMaximumBufferedBytes(), element_size * 7);
+}
+
+TEST(NodeTest, TotalMaximumBufferedBytesNoValueWhenElementSizeNotProvided) {
+  // Builds a graph:
+  // root <- parallel_map <- parallel_interleave
+
+  static constexpr int kIrrelevantMin = 1;
+  static constexpr int kIrrelevantMax = 16;
+
+  auto parallel_interleave = model::MakeAsyncKnownRatioNode(
+      {0, "parallel_interleave", nullptr}, /*ratio=*/1,
+      {model::MakeParameter(kParallelism,
+                            std::make_shared<SharedState>(kAutotune,
+                                                          /*mu=*/nullptr,
+                                                          /*cond_var=*/nullptr),
+                            kIrrelevantMin, kIrrelevantMax)},
+      /*is_legacy_prefetch_autotuned=*/false);
+
+  auto parallel_map = model::MakeAsyncKnownRatioNode(
+      {1, "parallel_map", nullptr}, /*ratio=*/1,
+      {model::MakeParameter(kParallelism,
+                            std::make_shared<SharedState>(kAutotune,
+                                                          /*mu=*/nullptr,
+                                                          /*cond_var=*/nullptr),
+                            kIrrelevantMin, kIrrelevantMax)},
+      /*is_legacy_prefetch_autotuned=*/false, std::nullopt);
+
+  parallel_map->add_input(parallel_interleave);
+
+  auto root = MakeUnknownNode({2, "unknown0", nullptr});
+  root->add_input(parallel_map);
+
+  EXPECT_EQ(root->TotalMaximumBufferedBytes(), 0.);
 }
 
 }  // namespace

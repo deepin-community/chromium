@@ -14,6 +14,19 @@ limitations under the License.
 ==============================================================================*/
 #include "tensorflow/core/summary/summary_file_writer.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "absl/log/check.h"
+#include "absl/status/status.h"
+#include "absl/strings/match.h"
+#include "absl/strings/str_join.h"
 #include "tensorflow/core/framework/summary.pb.h"
 #include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/framework/types.h"
@@ -32,21 +45,21 @@ namespace {
 class FakeClockEnv : public EnvWrapper {
  public:
   FakeClockEnv() : EnvWrapper(Env::Default()), current_millis_(0) {}
-  void AdvanceByMillis(const uint64 millis) { current_millis_ += millis; }
-  uint64 NowMicros() const override { return current_millis_ * 1000; }
-  uint64 NowSeconds() const override { return current_millis_ * 1000; }
+  void AdvanceByMillis(const uint64_t millis) { current_millis_ += millis; }
+  uint64_t NowMicros() const override { return current_millis_ * 1000; }
+  uint64_t NowSeconds() const override { return current_millis_ * 1000; }
 
  private:
-  uint64 current_millis_;
+  uint64_t current_millis_;
 };
 
 class SummaryFileWriterTest : public ::testing::Test {
  protected:
-  Status SummaryTestHelper(
-      const string& test_name,
-      const std::function<Status(SummaryWriterInterface*)>& writer_fn,
+  absl::Status SummaryTestHelper(
+      const std::string& test_name,
+      const std::function<absl::Status(SummaryWriterInterface*)>& writer_fn,
       const std::function<void(const Event&)>& test_fn) {
-    static std::set<string>* tests = new std::set<string>();
+    static std::set<std::string>* tests = new std::set<std::string>();
     CHECK(tests->insert(test_name).second) << ": " << test_name;
 
     SummaryWriterInterface* writer;
@@ -57,10 +70,10 @@ class SummaryFileWriterTest : public ::testing::Test {
     TF_CHECK_OK(writer_fn(writer));
     TF_CHECK_OK(writer->Flush());
 
-    std::vector<string> files;
+    std::vector<std::string> files;
     TF_CHECK_OK(env_.GetChildren(testing::TmpDir(), &files));
     bool found = false;
-    for (const string& f : files) {
+    for (const std::string& f : files) {
       if (absl::StrContains(f, test_name)) {
         if (found) {
           return errors::Unknown("Found more than one file for ", test_name);
@@ -71,7 +84,7 @@ class SummaryFileWriterTest : public ::testing::Test {
                                              &read_file));
         io::RecordReader reader(read_file.get(), io::RecordReaderOptions());
         tstring record;
-        uint64 offset = 0;
+        uint64_t offset = 0;
         TF_CHECK_OK(
             reader.ReadRecord(&offset,
                               &record));  // The first event is irrelevant
@@ -84,7 +97,7 @@ class SummaryFileWriterTest : public ::testing::Test {
     if (!found) {
       return errors::Unknown("Found no file for ", test_name);
     }
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   FakeClockEnv env_;
@@ -99,7 +112,7 @@ TEST_F(SummaryFileWriterTest, WriteTensor) {
                                       2, one, "name",
                                       SummaryMetadata().SerializeAsString()));
                                   TF_RETURN_IF_ERROR(writer->Flush());
-                                  return OkStatus();
+                                  return absl::OkStatus();
                                 },
                                 [](const Event& e) {
                                   EXPECT_EQ(e.step(), 2);
@@ -114,7 +127,7 @@ TEST_F(SummaryFileWriterTest, WriteTensor) {
         TF_RETURN_IF_ERROR(writer->WriteTensor(
             2, hello, "name", SummaryMetadata().SerializeAsString()));
         TF_RETURN_IF_ERROR(writer->Flush());
-        return OkStatus();
+        return absl::OkStatus();
       },
       [](const Event& e) {
         EXPECT_EQ(e.step(), 2);
@@ -133,7 +146,7 @@ TEST_F(SummaryFileWriterTest, WriteScalar) {
         one.scalar<float>()() = 1.0;
         TF_RETURN_IF_ERROR(writer->WriteScalar(2, one, "name"));
         TF_RETURN_IF_ERROR(writer->Flush());
-        return OkStatus();
+        return absl::OkStatus();
       },
       [](const Event& e) {
         EXPECT_EQ(e.step(), 2);
@@ -151,7 +164,7 @@ TEST_F(SummaryFileWriterTest, WriteHistogram) {
                                   TF_RETURN_IF_ERROR(
                                       writer->WriteHistogram(2, one, "name"));
                                   TF_RETURN_IF_ERROR(writer->Flush());
-                                  return OkStatus();
+                                  return absl::OkStatus();
                                 },
                                 [](const Event& e) {
                                   EXPECT_EQ(e.step(), 2);
@@ -166,14 +179,14 @@ namespace {
 // Create a 1x1 monochrome image consisting of a single pixel oof the given
 // type.
 template <typename T>
-static Status CreateImage(SummaryWriterInterface* writer) {
+static absl::Status CreateImage(SummaryWriterInterface* writer) {
   Tensor bad_color(DT_UINT8, TensorShape({1}));
-  bad_color.scalar<uint8>()() = 0;
+  bad_color.scalar<uint8_t>()() = 0;
   Tensor one(DataTypeToEnum<T>::v(), TensorShape({1, 1, 1, 1}));
   one.scalar<T>()() = T(1);
   TF_RETURN_IF_ERROR(writer->WriteImage(2, one, "name", 1, bad_color));
   TF_RETURN_IF_ERROR(writer->Flush());
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 // Verify that the event contains an image generated by CreateImage above.
@@ -191,7 +204,7 @@ static void CheckImage(const Event& e) {
 
 TEST_F(SummaryFileWriterTest, WriteImageUInt8) {
   TF_CHECK_OK(
-      SummaryTestHelper("image_test_uint8", CreateImage<uint8>, CheckImage));
+      SummaryTestHelper("image_test_uint8", CreateImage<uint8_t>, CheckImage));
 }
 
 TEST_F(SummaryFileWriterTest, WriteImageFloat) {
@@ -217,7 +230,7 @@ TEST_F(SummaryFileWriterTest, WriteAudio) {
         one.scalar<float>()() = 1.0;
         TF_RETURN_IF_ERROR(writer->WriteAudio(2, one, "name", 1, 1));
         TF_RETURN_IF_ERROR(writer->Flush());
-        return OkStatus();
+        return absl::OkStatus();
       },
       [](const Event& e) {
         EXPECT_EQ(e.step(), 2);
@@ -236,7 +249,7 @@ TEST_F(SummaryFileWriterTest, WriteEvent) {
                           e->mutable_summary()->add_value()->set_tag("hi");
                           TF_RETURN_IF_ERROR(writer->WriteEvent(std::move(e)));
                           TF_RETURN_IF_ERROR(writer->Flush());
-                          return OkStatus();
+                          return absl::OkStatus();
                         },
                         [](const Event& e) {
                           EXPECT_EQ(e.step(), 7);
@@ -254,14 +267,14 @@ TEST_F(SummaryFileWriterTest, WallTime) {
         one.scalar<float>()() = 1.0;
         TF_RETURN_IF_ERROR(writer->WriteScalar(2, one, "name"));
         TF_RETURN_IF_ERROR(writer->Flush());
-        return OkStatus();
+        return absl::OkStatus();
       },
       [](const Event& e) { EXPECT_EQ(e.wall_time(), 7.023); }));
 }
 
 TEST_F(SummaryFileWriterTest, AvoidFilenameCollision) {
   // Keep unique with all other test names in this file.
-  string test_name = "avoid_filename_collision_test";
+  std::string test_name = "avoid_filename_collision_test";
   int num_files = 10;
   for (int i = 0; i < num_files; i++) {
     SummaryWriterInterface* writer;
@@ -269,11 +282,11 @@ TEST_F(SummaryFileWriterTest, AvoidFilenameCollision) {
                                         &env_, &writer));
     core::ScopedUnref deleter(writer);
   }
-  std::vector<string> files;
+  std::vector<std::string> files;
   TF_CHECK_OK(env_.GetChildren(testing::TmpDir(), &files));
   // Filter `files` down to just those generated in this test.
   files.erase(std::remove_if(files.begin(), files.end(),
-                             [test_name](string f) {
+                             [test_name](std::string f) {
                                return !absl::StrContains(f, test_name);
                              }),
               files.end());

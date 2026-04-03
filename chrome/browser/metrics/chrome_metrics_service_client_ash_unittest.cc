@@ -3,14 +3,14 @@
 // found in the LICENSE file.
 
 #include <memory>
-#include "base/memory/raw_ptr.h"
-#include "chrome/browser/metrics/chrome_metrics_service_client.h"
 
+#include "base/memory/raw_ptr.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/multidevice_setup/multidevice_setup_client_factory.h"
+#include "chrome/browser/metrics/chrome_metrics_service_client.h"
 #include "chrome/browser/metrics/chrome_metrics_services_manager_client.h"
 #include "chrome/browser/unified_consent/unified_consent_service_factory.h"
 #include "chrome/common/chrome_features.h"
@@ -32,6 +32,8 @@
 #include "components/metrics/test/test_enabled_state_provider.h"
 #include "components/metrics/unsent_log_store.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/sync/protocol/sync_enums.pb.h"
+#include "components/sync/service/sync_service_observer.h"
 #include "components/sync/test/test_sync_service.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/ukm/ukm_pref_names.h"
@@ -41,6 +43,7 @@
 #include "components/unified_consent/unified_consent_service.h"
 #include "components/variations/synthetic_trial_registry.h"
 #include "content/public/test/browser_task_environment.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_entry_builder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -50,7 +53,7 @@ namespace {
 using TestEvent1 = ukm::builders::PageLoad;
 
 // Needed to fake System Profile which is provided when ukm report is generated.
-// TODO(crbug/1396482): Refactor to remove the classes needed to fake
+// TODO(crbug.com/40249492): Refactor to remove the classes needed to fake
 // SystemProfile.
 class FakeMultiDeviceSetupClientImplFactory
     : public ash::multidevice_setup::MultiDeviceSetupClientImpl::Factory {
@@ -96,6 +99,8 @@ class ChromeMetricsServiceClientTestWithoutUKMProviders
     return client;
   }
 
+  bool notified_not_idle() const { return notified_not_idle_; }
+
  private:
   explicit ChromeMetricsServiceClientTestWithoutUKMProviders(
       metrics::MetricsStateManager* state_manager,
@@ -103,12 +108,15 @@ class ChromeMetricsServiceClientTestWithoutUKMProviders
       : ChromeMetricsServiceClient(state_manager, synthetic_trial_registry) {}
 
   void RegisterUKMProviders() override {}
+  void NotifyApplicationNotIdle() override { notified_not_idle_ = true; }
+
+  bool notified_not_idle_ = false;
 };
 
 class MockSyncService : public syncer::TestSyncService {
  public:
   MockSyncService() {
-    SetTransportState(TransportState::INITIALIZING);
+    SetMaxTransportState(TransportState::INITIALIZING);
     SetLastCycleSnapshot(syncer::SyncCycleSnapshot());
   }
 
@@ -118,8 +126,8 @@ class MockSyncService : public syncer::TestSyncService {
   ~MockSyncService() override { Shutdown(); }
 
   void SetStatus(bool has_passphrase, bool history_enabled, bool active) {
-    SetTransportState(active ? TransportState::ACTIVE
-                             : TransportState::INITIALIZING);
+    SetMaxTransportState(active ? TransportState::ACTIVE
+                                : TransportState::INITIALIZING);
     SetIsUsingExplicitPassphrase(has_passphrase);
 
     GetUserSettings()->SetSelectedTypes(
@@ -176,7 +184,7 @@ class MockSyncService : public syncer::TestSyncService {
   }
 
   // The list of observers of the SyncService state.
-  base::ObserverList<syncer::SyncServiceObserver>::Unchecked observers_;
+  base::ObserverList<syncer::SyncServiceObserver> observers_;
 };
 
 struct IndependentAppMetricsTestParams {
@@ -231,20 +239,16 @@ class ChromeMetricsServiceClientTestIgnoredForAppMetrics
     ash::multidevice_setup::MultiDeviceSetupClientImpl::Factory::
         SetFactoryForTesting(nullptr);
 
-    // ChromeMetricsServiceClient::Initialize() initializes
-    // IdentifiabilityStudySettings as part of creating the
-    // PrivacyBudgetUkmEntryFilter. Reset them after the test.
-    blink::IdentifiabilityStudySettings::ResetStateForTesting();
     profile_manager_.reset();
   }
 
-  std::unique_ptr<ChromeMetricsServiceClient> Init(
+  std::unique_ptr<ChromeMetricsServiceClientTestWithoutUKMProviders> Init(
       sync_preferences::TestingPrefServiceSyncable& prefs) {
     ChromeMetricsServiceClient::RegisterPrefs(prefs.registry());
     RegisterUrlKeyedAnonymizedDataCollectionPref(prefs);
     SetUrlKeyedAnonymizedDataCollectionEnabled(prefs, /*enabled=*/true);
 
-    std::unique_ptr<ChromeMetricsServiceClient> chrome_metrics_service_client =
+    auto chrome_metrics_service_client =
         ChromeMetricsServiceClientTestWithoutUKMProviders::Create(
             metrics_state_manager_.get(), synthetic_trial_registry_.get());
     chrome_metrics_service_client->StartObserving(&sync_service_, &prefs);
@@ -304,7 +308,7 @@ class ChromeMetricsServiceClientTestIgnoredForAppMetrics
 
   ukm::Report GetUkmReport() {
     metrics::UnsentLogStore* log_store =
-        GetUkmService()->reporting_service_for_testing().ukm_log_store();
+        GetUkmService()->reporting_service()->ukm_log_store();
     EXPECT_GE(log_store->size(), 1ul);
     log_store->StageNextLog();
 
@@ -372,6 +376,16 @@ class ChromeMetricsServiceClientTestIgnoredForAppMetrics
   std::unique_ptr<FakeMultiDeviceSetupClientImplFactory>
       fake_multidevice_setup_client_impl_factory_;
 };
+
+TEST_P(ChromeMetricsServiceClientTestIgnoredForAppMetrics,
+       NotifyNotIdleOnUserActivity) {
+  sync_preferences::TestingPrefServiceSyncable prefs;
+  auto chrome_metrics_service_client = Init(prefs);
+  EXPECT_FALSE(chrome_metrics_service_client->notified_not_idle());
+
+  ui::UserActivityDetector::Get()->HandleExternalUserActivity();
+  EXPECT_TRUE(chrome_metrics_service_client->notified_not_idle());
+}
 
 TEST_P(ChromeMetricsServiceClientTestIgnoredForAppMetrics,
        VerifyPurgeOnConsentChange) {

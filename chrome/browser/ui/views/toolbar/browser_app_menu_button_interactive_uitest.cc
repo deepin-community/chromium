@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/toolbar/app_menu_model.h"
-
 #include <optional>
 
 #include "base/feature_list.h"
@@ -15,6 +13,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/toolbar/bookmark_sub_menu_model.h"
 #include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
@@ -27,7 +26,8 @@
 #include "chrome/test/interaction/tracked_element_webcontents.h"
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "chrome/test/user_education/interactive_feature_promo_test.h"
-#include "components/user_education/common/feature_promo_controller.h"
+#include "components/user_education/common/feature_promo/feature_promo_controller.h"
+#include "components/user_education/views/help_bubble_view.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -111,11 +111,21 @@ IN_PROC_BROWSER_TEST_F(BrowserAppMenuButtonInteractiveTest,
   RunTestSequence(
       InstrumentTab(kPrimaryTabPageElementId),
       MaybeShowPromo(kMenuPromoTestFeature),
+      // Open the menu with the IPH. This should close the bubble.
+      PressButton(kToolbarAppMenuButtonElementId),
+      WaitForHide(
+          user_education::HelpBubbleView::kHelpBubbleElementIdForTesting),
+      SelectMenuItem(AppMenuModel::kBookmarksMenuItem),
+      // Verify that the promo is still active and the item is highlighted.
+      CheckPromoActive(kMenuPromoTestFeature, true),
+      CheckAlertStatus(BookmarkSubMenuModel::kShowBookmarkSidePanelItem, true),
+      CloseMenu(),
+      // Open the menu again, this time without the IPH.
       PressButton(kToolbarAppMenuButtonElementId),
       SelectMenuItem(AppMenuModel::kBookmarksMenuItem),
-      CheckAlertStatus(BookmarkSubMenuModel::kShowBookmarkSidePanelItem, true),
-      CloseMenu(), PressButton(kToolbarAppMenuButtonElementId),
-      SelectMenuItem(AppMenuModel::kBookmarksMenuItem),
+      // Verify that the promo is not still active and the item is not
+      // highlighted.
+      CheckPromoActive(kMenuPromoTestFeature, false),
       CheckAlertStatus(BookmarkSubMenuModel::kShowBookmarkSidePanelItem,
                        false));
 }

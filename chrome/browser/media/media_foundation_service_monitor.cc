@@ -77,7 +77,7 @@ void SetDisabledTimesGlobal(std::vector<base::Time> times) {
   PrefService* service = g_browser_process->local_state();
   DCHECK(service);
 
-  base::Value::List time_list;
+  base::ListValue time_list;
   for (auto time : times)
     time_list.Append(base::TimeToValue(time));
 
@@ -94,7 +94,7 @@ std::string GetDictKeyFromSite(const GURL& site) {
 }
 
 // Returns all origins that map to a site from a dictionary.
-std::vector<std::string> GetOriginsForSite(const base::Value::Dict& origin_dict,
+std::vector<std::string> GetOriginsForSite(const base::DictValue& origin_dict,
                                            const GURL& site) {
   std::vector<std::string> result;
   for (auto [origin_str, value] : origin_dict) {
@@ -128,7 +128,7 @@ std::vector<base::Time> GetDisabledTimesPerSite(const GURL& site) {
 
   std::set<base::Time> times;
   for (auto origin : origins) {
-    const base::Value::List* list = origin_dict.FindDict(origin)->FindList(
+    const base::ListValue* list = origin_dict.FindDict(origin)->FindList(
         prefs::kHardwareSecureDecryptionDisabledTimes);
     if (list) {
       for (const base::Value& time_value : *list) {
@@ -156,7 +156,7 @@ void SetDisabledTimesPerSite(const GURL& site, std::vector<base::Time> times) {
   auto origins = GetOriginsForSite(update.Get(), site);
 
   for (auto origin : origins) {
-    base::Value::Dict* origin_dict = update->FindDict(origin);
+    base::DictValue* origin_dict = update->FindDict(origin);
     if (!origin_dict) {
       continue;
     }
@@ -277,13 +277,25 @@ bool MediaFoundationServiceMonitor::IsHardwareSecureDecryptionDisabledByPref() {
 bool MediaFoundationServiceMonitor::IsHardwareSecureDecryptionAllowedForSite(
     const GURL& site) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  static bool allow_per_site_uma_logged = false;
 
   auto earliest_enable_time =
       GetEarliestEnableTime(GetDisabledTimesPerSite(site));
   DVLOG(1) << __func__ << ": site='" << site
            << "' earliest_enable_time=" << earliest_enable_time;
 
-  return base::Time::Now() > earliest_enable_time;
+  bool result = base::Time::Now() > earliest_enable_time;
+
+  // Note: This UMA gets reported once per browser session. It is possible that
+  // multiple sites report different result. However, only the first visited
+  // site will record UMA until the browser session restarts.
+  if (!allow_per_site_uma_logged) {
+    base::UmaHistogramBoolean(
+        "Media.EME.Widevine.HardwareSecure.AllowedForSite", result);
+    allow_per_site_uma_logged = true;
+  }
+
+  return result;
 }
 
 // static
@@ -300,8 +312,8 @@ void MediaFoundationServiceMonitor::Initialize() {
     AddGlobalSample(kSignificantPlayback, base::Time::Now());
 
   content::ServiceProcessHost::AddObserver(this);
-  base::PowerMonitor::AddPowerSuspendObserver(this);
-  display::Screen::GetScreen()->AddObserver(this);
+  base::PowerMonitor::GetInstance()->AddPowerSuspendObserver(this);
+  display::Screen::Get()->AddObserver(this);
 }
 
 void MediaFoundationServiceMonitor::ResetForTesting() {
@@ -334,8 +346,7 @@ void MediaFoundationServiceMonitor::OnServiceProcessCrashed(
                             HasRecentPowerOrDisplayChange());
 
   // Site should always be set when launching MediaFoundationService, but it
-  // could be empty, e.g. during capability checking or when
-  // `media::kCdmProcessSiteIsolation` is disabled.
+  // could be empty, e.g. during capability checking.
   DVLOG(1) << __func__ << ": MediaFoundationService process ("
            << info.site().value() << ") crashed!";
 
@@ -355,7 +366,8 @@ void MediaFoundationServiceMonitor::OnDisplayAdded(
     const display::Display& /*new_display*/) {
   OnPowerOrDisplayChange();
 }
-void MediaFoundationServiceMonitor::OnDidRemoveDisplays() {
+void MediaFoundationServiceMonitor::OnDisplaysRemoved(
+    const display::Displays& /*removed_displays*/) {
   OnPowerOrDisplayChange();
 }
 void MediaFoundationServiceMonitor::OnDisplayMetricsChanged(

@@ -6,20 +6,27 @@
 
 #include <inttypes.h>
 
-#include "base/auto_reset.h"
 #include "base/base64.h"
+#include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/trace_event.h"
+#include "build/build_config.h"
+#include "gpu/command_buffer/service/service_utils.h"
 #include "gpu/config/gpu_finch_features.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "skia/ext/skia_utils_base.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
 
 namespace gpu {
 namespace raster {
 namespace {
+
+// TODO(b/375264422): Temporary to debug potential shader cache entries
+// mismatch.
+BASE_FEATURE(kGrShaderCacheLoad, base::FEATURE_ENABLED_BY_DEFAULT);
 
 std::string MakeString(const SkData* data) {
   return std::string(static_cast<const char*>(data->data()), data->size());
@@ -33,10 +40,13 @@ sk_sp<SkData> MakeData(const std::string& str) {
 
 GrShaderCache::GrShaderCache(size_t max_cache_size_bytes, Client* client)
     : cache_size_limit_(max_cache_size_bytes),
+      curr_size_bytes_(0u),
       store_(Store::NO_AUTO_EVICT),
       client_(client),
-      enable_vk_pipeline_cache_(
-          base::FeatureList::IsEnabled(features::kEnableVkPipelineCache)) {
+      memory_pressure_listener_registration_(
+          FROM_HERE,
+          base::MemoryPressureListenerTag::kGrShaderCache,
+          this) {
   if (base::SingleThreadTaskRunner::HasCurrentDefault()) {
     base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
         this, "GrShaderCache",
@@ -51,6 +61,13 @@ GrShaderCache::~GrShaderCache() {
 
 sk_sp<SkData> GrShaderCache::load(const SkData& key) {
   TRACE_EVENT0("gpu", "GrShaderCache::load");
+
+  // TODO(b/375264422): Temporary to debug potential shader cache entries
+  // mismatch.
+  if (!base::FeatureList::IsEnabled(kGrShaderCacheLoad)) {
+    return nullptr;
+  }
+
   base::AutoLock auto_lock(lock_);
   DCHECK_NE(current_client_id(), kInvalidClientId);
 
@@ -85,8 +102,9 @@ void GrShaderCache::store(const SkData& key, const SkData& data) {
 
   CacheKey cache_key(SkData::MakeWithCopy(key.data(), key.size()));
 
-  if (data.size() > cache_size_limit_)
+  if (data.size() > GetCurrentCacheSizeLimit()) {
     return;
+  }
   EnforceLimits(data.size());
 
   auto existing_it = store_.Get(cache_key);
@@ -116,7 +134,7 @@ void GrShaderCache::PopulateCache(const std::string& key,
   base::Base64Decode(key, &decoded_key);
   CacheKey cache_key(MakeData(decoded_key));
 
-  if (data.length() > cache_size_limit_) {
+  if (data.length() > GetCurrentCacheSizeLimit()) {
     return;
   }
 
@@ -140,7 +158,6 @@ void GrShaderCache::PopulateCache(const std::string& key,
 
 GrShaderCache::Store::iterator GrShaderCache::AddToCache(CacheKey key,
                                                          CacheData data) {
-  lock_.AssertAcquired();
   auto it = store_.Put(key, std::move(data));
   curr_size_bytes_ += it->second.data->size();
   return it;
@@ -148,7 +165,6 @@ GrShaderCache::Store::iterator GrShaderCache::AddToCache(CacheKey key,
 
 template <typename Iterator>
 void GrShaderCache::EraseFromCache(Iterator it) {
-  lock_.AssertAcquired();
   DCHECK_GE(curr_size_bytes_, it->second.data->size());
 
   curr_size_bytes_ -= it->second.data->size();
@@ -160,38 +176,29 @@ void GrShaderCache::CacheClientIdOnDisk(int32_t client_id) {
   client_ids_to_cache_on_disk_.insert(client_id);
 }
 
-void GrShaderCache::PurgeMemory(
-    base::MemoryPressureListener::MemoryPressureLevel memory_pressure_level) {
-  base::AutoLock auto_lock(lock_);
-  size_t original_limit = cache_size_limit_;
-
-  switch (memory_pressure_level) {
-    case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_NONE:
-      return;
-    case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_MODERATE:
-      cache_size_limit_ = cache_size_limit_ / 4;
-      break;
-    case base::MemoryPressureListener::MEMORY_PRESSURE_LEVEL_CRITICAL:
-      cache_size_limit_ = 0;
-      break;
-  }
-
-  EnforceLimits(0u);
-  cache_size_limit_ = original_limit;
-}
-
 bool GrShaderCache::OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                                  base::trace_event::ProcessMemoryDump* pmd) {
   base::AutoLock auto_lock(lock_);
   using base::trace_event::MemoryAllocatorDump;
   std::string dump_name =
-      base::StringPrintf("gpu/gr_shader_cache/cache_0x%" PRIXPTR,
+      base::StringPrintf("gpu/shader_cache/gr_shader_cache/cache_0x%" PRIXPTR,
                          reinterpret_cast<uintptr_t>(this));
   MemoryAllocatorDump* dump = pmd->CreateAllocatorDump(dump_name);
   dump->AddScalar(MemoryAllocatorDump::kNameSize,
                   MemoryAllocatorDump::kUnitsBytes, curr_size_bytes_);
+  dump->AddScalar(MemoryAllocatorDump::kNameObjectCount,
+                  MemoryAllocatorDump::kUnitsObjects, store_.size());
 
   return true;
+}
+
+void GrShaderCache::OnMemoryPressure(
+    base::MemoryPressureLevel memory_pressure_level) {
+  base::AutoLock auto_lock(lock_);
+  memory_pressure_level_ = memory_pressure_level;
+  // Memory pressure has changed, so the cache limit may have been updated.
+  // Evict entries to match the new limit.
+  EnforceLimits(0u);
 }
 
 size_t GrShaderCache::num_cache_entries() const {
@@ -205,7 +212,6 @@ size_t GrShaderCache::curr_size_bytes_for_testing() const {
 }
 
 void GrShaderCache::WriteToDisk(const CacheKey& key, CacheData* data) {
-  lock_.AssertAcquired();
   DCHECK_NE(current_client_id(), kInvalidClientId);
 
   if (!data->pending_disk_write)
@@ -222,11 +228,17 @@ void GrShaderCache::WriteToDisk(const CacheKey& key, CacheData* data) {
 }
 
 void GrShaderCache::EnforceLimits(size_t size_needed) {
-  lock_.AssertAcquired();
-  DCHECK_LE(size_needed, cache_size_limit_);
+  size_t current_cache_size_limit = GetCurrentCacheSizeLimit();
+  DCHECK_LE(size_needed, current_cache_size_limit);
 
-  while (size_needed + curr_size_bytes_ > cache_size_limit_)
+  while (size_needed + curr_size_bytes_ > current_cache_size_limit) {
     EraseFromCache(store_.rbegin());
+  }
+}
+
+size_t GrShaderCache::GetCurrentCacheSizeLimit() const {
+  return gpu::UpdateShaderCacheSizeOnMemoryPressure(cache_size_limit_,
+                                                    memory_pressure_level_);
 }
 
 void GrShaderCache::StoreVkPipelineCacheIfNeeded(GrDirectContext* gr_context) {
@@ -242,19 +254,16 @@ void GrShaderCache::StoreVkPipelineCacheIfNeeded(GrDirectContext* gr_context) {
     need_store_pipeline_cache = need_store_pipeline_cache_;
   }
 
-  if (enable_vk_pipeline_cache_ && need_store_pipeline_cache) {
+  if (need_store_pipeline_cache) {
+    gr_context->storeVkPipelineCacheData();
     {
-      gr_context->storeVkPipelineCacheData();
-      {
-        base::AutoLock auto_lock(lock_);
-        need_store_pipeline_cache_ = false;
-      }
+      base::AutoLock auto_lock(lock_);
+      need_store_pipeline_cache_ = false;
     }
   }
 }
 
 int32_t GrShaderCache::current_client_id() const {
-  lock_.AssertAcquired();
   auto it = current_client_id_.find(base::PlatformThread::CurrentId());
   if (it != current_client_id_.end())
     return it->second;
@@ -276,7 +285,7 @@ GrShaderCache::ScopedCacheUse::~ScopedCacheUse() {
 }
 
 GrShaderCache::CacheKey::CacheKey(sk_sp<SkData> data) : data(std::move(data)) {
-  hash = base::FastHash(base::span(this->data->bytes(), this->data->size()));
+  hash = base::FastHash(skia::as_byte_span(*this->data));
 }
 GrShaderCache::CacheKey::CacheKey(const CacheKey& other) = default;
 GrShaderCache::CacheKey::CacheKey(CacheKey&& other) = default;

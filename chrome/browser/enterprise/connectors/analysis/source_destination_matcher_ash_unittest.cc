@@ -15,6 +15,7 @@
 #include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "chrome/browser/ash/file_manager/volume_manager.h"
 #include "chrome/browser/ash/file_manager/volume_manager_factory.h"
@@ -178,7 +179,7 @@ TEST_F(SourceDestinationMatcherAshTest, NullptrSettingsNoCrash) {
   SourceDestinationMatcherAsh matcher;
 
   size_t id = 0;
-  base::Value::List* settings = nullptr;
+  base::ListValue* settings = nullptr;
   matcher.AddFilters(&id, settings);
   EXPECT_EQ(id, 0u);
 }

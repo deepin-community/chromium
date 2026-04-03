@@ -34,7 +34,7 @@ namespace ash {
 namespace {
 
 display::Display GetDisplayForWindow(aura::Window* window) {
-  return display::Screen::GetScreen()->GetDisplayNearestWindow(window);
+  return display::Screen::Get()->GetDisplayNearestWindow(window);
 }
 
 gfx::Rect ConvertToScreenForWindow(aura::Window* window,
@@ -67,6 +67,7 @@ class PipPositionerDisplayTest : public AshTestBase,
 
   void TearDown() override {
     scoped_display_.reset();
+    root_window_ = nullptr;
     AshTestBase::TearDown();
   }
 
@@ -89,7 +90,7 @@ class PipPositionerDisplayTest : public AshTestBase,
 
  private:
   std::unique_ptr<display::ScopedDisplayForNewWindows> scoped_display_;
-  raw_ptr<aura::Window, DanglingUntriaged> root_window_;
+  raw_ptr<aura::Window> root_window_;
 };
 
 TEST_P(PipPositionerDisplayTest, PipAdjustPositionForDragClampsToMovementArea) {

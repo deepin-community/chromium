@@ -7,8 +7,10 @@
 #include <string>
 #include <utility>
 
+#include "base/metrics/statistics_recorder.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/safe_browsing/chrome_ping_manager_factory.h"
 #include "chrome/browser/safe_browsing/chrome_safe_browsing_blocking_page_factory.h"
@@ -18,7 +20,9 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_browser_process.h"
-#include "components/safe_browsing/content/browser/unsafe_resource_util.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "components/safe_browsing/content/browser/content_unsafe_resource_util.h"
+#include "components/safe_browsing/core/common/features.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/mock_render_process_host.h"
@@ -59,17 +63,16 @@ class MockSafeBrowsingUIManager : public safe_browsing::SafeBrowsingUIManager {
 
   bool IsUrlAllowlistedOrPendingForWebContents(
       const GURL& url,
-      bool is_subresource,
       content::NavigationEntry* entry,
       WebContents* web_contents,
       bool allowlist_only,
       safe_browsing::SBThreatType* threat_type) override {
-    *threat_type = safe_browsing::SB_THREAT_TYPE_URL_PHISHING;
+    *threat_type = safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_PHISHING;
     return true;
   }
 
  protected:
-  ~MockSafeBrowsingUIManager() override {}
+  ~MockSafeBrowsingUIManager() override = default;
 };
 
 }  // namespace
@@ -82,23 +85,22 @@ class PhishyInteractionTrackerTest : public ChromeRenderViewHostTestHarness {
   ~PhishyInteractionTrackerTest() override = default;
 
   void SetUp() override {
-    ChromeRenderViewHostTestHarness::SetUp();
     browser_process_ = TestingBrowserProcess::GetGlobal();
+
     sb_service_ =
         base::MakeRefCounted<safe_browsing::TestSafeBrowsingService>();
+    sb_service_->SetUseTestUrlLoaderFactory(true);
+    // Set sb_service before the ChromeRenderViewHostTestHarness::SetUp(),
+    // because it is needed to construct ping manager.
     browser_process_->SetSafeBrowsingService(sb_service_.get());
+
+    ChromeRenderViewHostTestHarness::SetUp();
 
     ui_manager_ = new StrictMock<MockSafeBrowsingUIManager>();
     phishy_interaction_tracker_ =
         base::WrapUnique(new PhishyInteractionTracker(web_contents()));
     phishy_interaction_tracker_->SetUIManagerForTesting(ui_manager_.get());
     phishy_interaction_tracker_->HandlePageChanged();
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    // Local state is needed to construct ProxyConfigService, which is a
-    // dependency of PingManager on ChromeOS.
-    TestingBrowserProcess::GetGlobal()->SetLocalState(profile()->GetPrefs());
-#endif
   }
 
   void TearDown() override {
@@ -106,14 +108,8 @@ class PhishyInteractionTrackerTest : public ChromeRenderViewHostTestHarness {
     // Delete the tracker object on the UI thread and release the
     // SafeBrowsingService.
     sb_service_.reset();
-    content::GetUIThreadTaskRunner({})->DeleteSoon(
-        FROM_HERE, phishy_interaction_tracker_.release());
     ui_manager_.reset();
     phishy_interaction_tracker_.reset();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-    TestingBrowserProcess::GetGlobal()->SetLocalState(nullptr);
-#endif
-    base::RunLoop().RunUntilIdle();
     ChromeRenderViewHostTestHarness::TearDown();
   }
 
@@ -121,14 +117,11 @@ class PhishyInteractionTrackerTest : public ChromeRenderViewHostTestHarness {
     return Profile::FromBrowserContext(web_contents()->GetBrowserContext());
   }
 
-  security_interstitials::UnsafeResource MakeUnsafeResource(
-      const char* url,
-      bool is_subresource) {
+  security_interstitials::UnsafeResource MakeUnsafeResource(const char* url) {
     security_interstitials::UnsafeResource resource;
     resource.url = GURL(url);
-    resource.is_subresource = is_subresource;
     resource.threat_type =
-        safe_browsing::SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING;
+        safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING;
     return resource;
   }
 
@@ -150,7 +143,7 @@ class PhishyInteractionTrackerTest : public ChromeRenderViewHostTestHarness {
   }
 
   void TriggerKeyEvent() {
-    content::NativeWebKeyboardEvent key_event(
+    input::NativeWebKeyboardEvent key_event(
         blink::WebKeyboardEvent::Type::kChar,
         blink::WebInputEvent::kNoModifiers, base::TimeTicks::Now());
     phishy_interaction_tracker_->HandleInputEvent(key_event);
@@ -171,7 +164,7 @@ class PhishyInteractionTrackerTest : public ChromeRenderViewHostTestHarness {
       const int& expected_occurrence_count) {
     // Find the interaction within the report by comparing
     // security_interstitial_interaction.
-    for (auto interaction : report.phishy_site_interactions()) {
+    for (const auto& interaction : report.phishy_site_interactions()) {
       if (interaction.phishy_site_interaction_type() ==
           expected_interaction_type) {
         EXPECT_EQ(interaction.occurrence_count(), expected_occurrence_count);
@@ -182,7 +175,8 @@ class PhishyInteractionTrackerTest : public ChromeRenderViewHostTestHarness {
           EXPECT_LE(interaction.first_interaction_timestamp_msec(),
                     interaction.last_interaction_timestamp_msec());
         }
-        break;
+        // Return once the interaction type is found and verified.
+        return;
       }
     }
   }
@@ -211,19 +205,20 @@ class PhishyInteractionTrackerTest : public ChromeRenderViewHostTestHarness {
 
  protected:
   raw_ptr<TestingBrowserProcess> browser_process_;
-  scoped_refptr<safe_browsing::SafeBrowsingService> sb_service_;
+
+  scoped_refptr<safe_browsing::TestSafeBrowsingService> sb_service_;
   std::unique_ptr<PhishyInteractionTracker> phishy_interaction_tracker_;
   scoped_refptr<MockSafeBrowsingUIManager> ui_manager_;
+  safe_browsing::ChromePingManagerAllowerForTesting allow_ping_manager_;
 };
 
 TEST_F(PhishyInteractionTrackerTest, CheckHistogramCountsOnPhishyUserEvents) {
   base::HistogramTester histogram_tester_;
 
-  security_interstitials::UnsafeResource resource =
-      MakeUnsafeResource(kBadURL, false /* is_subresource */);
+  security_interstitials::UnsafeResource resource = MakeUnsafeResource(kBadURL);
   safe_browsing::SBThreatType threat_type;
   EXPECT_TRUE(ui_manager_->IsUrlAllowlistedOrPendingForWebContents(
-      resource.url, resource.is_subresource, /*entry=*/nullptr,
+      resource.url, /*entry=*/nullptr,
       safe_browsing::unsafe_resource_util::GetWebContentsForResource(resource),
       true, &threat_type));
 
@@ -248,7 +243,10 @@ TEST_F(PhishyInteractionTrackerTest, CheckHistogramCountsOnPhishyUserEvents) {
   SetNullDelayForTest();
   TriggerPasteEvent();
 
-  base::RunLoop().RunUntilIdle();
+  base::RunLoop run_loop;
+  base::StatisticsRecorder::ScopedHistogramSampleObserver observer(
+      "SafeBrowsing.PhishySite.PasteEventCount", run_loop.QuitClosure());
+  run_loop.Run();
 
   histogram_tester_.ExpectUniqueSample(
       phishy_interaction_histogram + "ClickEventCount",
@@ -261,7 +259,11 @@ TEST_F(PhishyInteractionTrackerTest, CheckHistogramCountsOnPhishyUserEvents) {
       kExpectedPasteEventCount, 1);
 }
 
-TEST_F(PhishyInteractionTrackerTest, CheckPhishyUserInteractionClientReport) {
+TEST_F(PhishyInteractionTrackerTest,
+       CheckPhishyUserInteractionClientReport_WithoutSBERDeprecation) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
   safe_browsing::SetExtendedReportingPrefForTests(profile()->GetPrefs(), true);
   const int kExpectedClickEventCount = 4;
   const int kExpectedKeyEventCount = 1;
@@ -269,6 +271,7 @@ TEST_F(PhishyInteractionTrackerTest, CheckPhishyUserInteractionClientReport) {
   auto* ping_manager =
       safe_browsing::ChromePingManagerFactory::GetForBrowserContext(profile());
   network::TestURLLoaderFactory test_url_loader_factory;
+  base::RunLoop run_loop;
   test_url_loader_factory.SetInterceptor(
       base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
         std::unique_ptr<safe_browsing::ClientSafeBrowsingReportRequest>
@@ -276,6 +279,7 @@ TEST_F(PhishyInteractionTrackerTest, CheckPhishyUserInteractionClientReport) {
         VerifyPhishyInteractionReport(
             *actual_request.get(), kExpectedClickEventCount,
             kExpectedKeyEventCount, kExpectedPasteEventCount);
+        run_loop.Quit();
       }));
   ping_manager->SetURLLoaderFactoryForTesting(
       base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
@@ -298,5 +302,56 @@ TEST_F(PhishyInteractionTrackerTest, CheckPhishyUserInteractionClientReport) {
   SetNullDelayForTest();
   TriggerPasteEvent();
 
-  base::RunLoop().RunUntilIdle();
+  run_loop.Run();
+}
+
+TEST_F(PhishyInteractionTrackerTest, CheckPhishyUserInteractionClientReport) {
+  base::test::ScopedFeatureList feature_list;
+  // Feature is enabled, so reporting relies on the ESB pref.
+  feature_list.InitAndEnableFeature(
+      safe_browsing::kExtendedReportingRemovePrefDependency);
+
+  safe_browsing::SetExtendedReportingPrefForTests(profile()->GetPrefs(), false);
+  safe_browsing::SetSafeBrowsingState(
+      profile()->GetPrefs(),
+      safe_browsing::SafeBrowsingState::ENHANCED_PROTECTION);
+
+  const int kExpectedClickEventCount = 4;
+  const int kExpectedKeyEventCount = 1;
+  const int kExpectedPasteEventCount = 3;
+  auto* ping_manager =
+      safe_browsing::ChromePingManagerFactory::GetForBrowserContext(profile());
+  network::TestURLLoaderFactory test_url_loader_factory;
+  base::RunLoop run_loop;
+  test_url_loader_factory.SetInterceptor(
+      base::BindLambdaForTesting([&](const network::ResourceRequest& request) {
+        std::unique_ptr<safe_browsing::ClientSafeBrowsingReportRequest>
+            actual_request = GetActualRequest(request);
+        VerifyPhishyInteractionReport(
+            *actual_request.get(), kExpectedClickEventCount,
+            kExpectedKeyEventCount, kExpectedPasteEventCount);
+        run_loop.Quit();
+      }));
+  ping_manager->SetURLLoaderFactoryForTesting(
+      base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+          &test_url_loader_factory));
+
+  // Trigger kExpectedClickEventCount mouse events.
+  for (int i = 0; i < kExpectedClickEventCount; ++i) {
+    TriggerClickEvent();
+  }
+  // Trigger kExpectedKeyEventCount key events.
+  for (int i = 0; i < kExpectedKeyEventCount; ++i) {
+    TriggerKeyEvent();
+  }
+  // Trigger kExpectedPasteEventCount - 1 paste events so we can trigger a
+  // paste below.
+  for (int i = 0; i < kExpectedPasteEventCount - 1; ++i) {
+    TriggerPasteEvent();
+  }
+  // Set a null delay so that histograms get logged after this last user event.
+  SetNullDelayForTest();
+  TriggerPasteEvent();
+
+  run_loop.Run();
 }

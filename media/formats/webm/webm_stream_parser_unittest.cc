@@ -56,8 +56,7 @@ class WebMStreamParserTest : public testing::Test {
     // Note this portion is a simplified version of
     // StreamParserTestBase::AppendAllDataThenParseInPieces(). Consider unifying
     // via inheritance or utility method.
-    EXPECT_TRUE(
-        parser_->AppendToParseBuffer(buffer->data(), buffer->data_size()));
+    EXPECT_TRUE(parser_->AppendToParseBuffer(*buffer));
     bool has_more_data = true;
     size_t iterations = 0;
     while (has_more_data) {
@@ -66,7 +65,7 @@ class WebMStreamParserTest : public testing::Test {
       has_more_data =
           parse_result == StreamParser::ParseStatus::kSuccessHasMoreData;
       iterations++;
-      EXPECT_EQ(iterations < buffer->data_size(), has_more_data);
+      EXPECT_EQ(iterations < buffer->size(), has_more_data);
     }
   }
 
@@ -127,14 +126,14 @@ TEST_F(WebMStreamParserTest, VerifyMediaTrackMetadata) {
 
   const MediaTrack& video_track = *(media_tracks_->tracks()[0]);
   EXPECT_EQ(video_track.type(), MediaTrack::Type::kVideo);
-  EXPECT_EQ(video_track.bytestream_track_id(), 1);
+  EXPECT_EQ(video_track.stream_id(), 1);
   EXPECT_EQ(video_track.kind().value(), "main");
   EXPECT_EQ(video_track.label().value(), "");
   EXPECT_EQ(video_track.language().value(), "und");
 
   const MediaTrack& audio_track = *(media_tracks_->tracks()[1]);
   EXPECT_EQ(audio_track.type(), MediaTrack::Type::kAudio);
-  EXPECT_EQ(audio_track.bytestream_track_id(), 2);
+  EXPECT_EQ(audio_track.stream_id(), 2);
   EXPECT_EQ(audio_track.kind().value(), "main");
   EXPECT_EQ(audio_track.label().value(), "");
   EXPECT_EQ(audio_track.language().value(), "und");
@@ -186,7 +185,7 @@ TEST_F(WebMStreamParserTest, ColourElement) {
   EXPECT_EQ(video_track->type(), MediaTrack::Type::kVideo);
 
   const VideoDecoderConfig& video_config =
-      media_tracks_->getVideoConfig(video_track->bytestream_track_id());
+      media_tracks_->getVideoConfig(video_track->stream_id());
 
   VideoColorSpace expected_color_space(VideoColorSpace::PrimaryID::SMPTEST428_1,
                                        VideoColorSpace::TransferID::LOG,
@@ -194,13 +193,12 @@ TEST_F(WebMStreamParserTest, ColourElement) {
                                        gfx::ColorSpace::RangeID::FULL);
   EXPECT_EQ(video_config.color_space_info(), expected_color_space);
 
-  std::optional<gfx::HDRMetadata> hdr_metadata = video_config.hdr_metadata();
-  EXPECT_TRUE(hdr_metadata.has_value());
-  EXPECT_EQ(hdr_metadata->cta_861_3->max_content_light_level, 11u);
-  EXPECT_EQ(hdr_metadata->cta_861_3->max_frame_average_light_level, 12u);
+  gfx::HDRMetadata hdr_metadata = video_config.hdr_metadata();
+  EXPECT_EQ(hdr_metadata.cta_861_3->max_content_light_level, 11u);
+  EXPECT_EQ(hdr_metadata.cta_861_3->max_frame_average_light_level, 12u);
 
   const gfx::HdrMetadataSmpteSt2086& mmdata =
-      hdr_metadata->smpte_st_2086.value();
+      hdr_metadata.smpte_st_2086.value();
   EXPECT_FLOAT_EQ(mmdata.primaries.fRX, 0.1f);
   EXPECT_FLOAT_EQ(mmdata.primaries.fRY, 0.2f);
   EXPECT_FLOAT_EQ(mmdata.primaries.fGX, 0.1f);
@@ -226,7 +224,7 @@ TEST_F(WebMStreamParserTest, ColourElementWithUnspecifiedRange) {
   EXPECT_EQ(video_track->type(), MediaTrack::Type::kVideo);
 
   const VideoDecoderConfig& video_config =
-      media_tracks_->getVideoConfig(video_track->bytestream_track_id());
+      media_tracks_->getVideoConfig(video_track->stream_id());
 
   VideoColorSpace expected_color_space(VideoColorSpace::PrimaryID::SMPTEST428_1,
                                        VideoColorSpace::TransferID::LOG,

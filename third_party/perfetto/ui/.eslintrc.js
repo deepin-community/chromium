@@ -1,46 +1,40 @@
 module.exports = {
-  'env': {
-    'browser': true,
-    'es2021': true,
-    'node': true,
+  env: {
+    browser: true,
+    es2021: true,
+    node: true,
   },
-  'extends': [
-    'google',
-  ],
-  'parser': '@typescript-eslint/parser',
-  'parserOptions': {
-    'ecmaVersion': 'latest',
-    'sourceType': 'module',
-    'project': './tsconfig.json',
+  extends: ['google'],
+  parser: '@typescript-eslint/parser',
+  parserOptions: {
+    ecmaVersion: 'latest',
+    sourceType: 'module',
+    project: './tsconfig.json',
   },
-  'plugins': [
-    '@typescript-eslint',
-  ],
-  'rules': {
+  plugins: ['@typescript-eslint'],
+  rules: {
     // We don't want to enforce jsdoc everywhere:
     'require-jsdoc': 'off',
 
     // Relax jsdoc requirements
-    'valid-jsdoc': ['error', {
-      'requireParamType': false,
-      'requireReturnType': false,
-      'requireReturn': false,
-    }],
-
-    // Max line length is 80 with 2 space tabs.
-    // This matches the the old clang-format definition for consistency.
-    'max-len': [
+    'valid-jsdoc': [
       'error',
       {
-        'code': 80,
-        'tabWidth': 2,
-        'ignoreUrls': true,
-        'ignoreTemplateLiterals': true,
-        'ignoreStrings': true,
+        requireParamType: false,
+        requireReturnType: false,
+        requireReturn: false,
       },
     ],
 
-    "indent": ["error", 2],
+    // Formatting handled by prettier
+    'indent': 'off',
+    'max-len': 'off',
+    'operator-linebreak': 'off',
+    'quotes': 'off',
+    'brace-style': 'off',
+    'space-before-function-paren': 'off',
+    'generator-star-spacing': 'off',
+    'semi-spacing': 'off',
 
     // clang-format --js used to format EOL comments after (e.g.) an if like:
     // if (foo) {  // insightful comment
@@ -53,8 +47,10 @@ module.exports = {
     // Default no-unused-vars doesn't understand TypeScript enums. See:
     // https://github.com/typescript-eslint/typescript-eslint/issues/2621
     'no-unused-vars': 'off',
-    '@typescript-eslint/no-unused-vars':
-        ['error', {'argsIgnorePattern': '^_.*', 'varsIgnorePattern': '^_.*'}],
+    '@typescript-eslint/no-unused-vars': [
+      'error',
+      {argsIgnorePattern: '^_.*', varsIgnorePattern: '^_.*'},
+    ],
 
     // new Array() is banned (use [] instead) but new Array<Foo>() is
     // allowed since it can be clearer to put the type by the
@@ -73,7 +69,7 @@ module.exports = {
     // TODO(hjd): Switch these to be lowercase and remove capIsNew.
     // There are also some properties like: foo.factory these should
     // stay.
-    'new-cap': ['error', {'capIsNew': false, 'properties': false}],
+    'new-cap': ['error', {capIsNew: false, properties: false}],
 
     // Don't allow new introduction of any it is most always a mistake.
     '@typescript-eslint/no-explicit-any': 'error',

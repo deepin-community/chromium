@@ -9,16 +9,15 @@
 
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
-#include <vector>
 
-#include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
+#include "chrome/browser/web_applications/web_app_management_type.h"
 #include "components/services/app_service/public/cpp/file_handler.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/common/alternative_error_page_override_info.mojom-forward.h"
+#include "third_party/blink/public/common/safe_url_pattern.h"
 
 class GURL;
 class Profile;
@@ -39,30 +38,33 @@ class BrowserContext;
 
 namespace web_app {
 
-namespace error_page {
-// |alternative_error_page_params| dictionary key values in the
-// |AlternativeErrorPageOverrideInfo| mojom struct.
-const char kMessage[] = "web_app_error_page_message";
-const char kAppShortName[] = "app_short_name";
-const char kIconUrl[] = "icon_url";
-const char kSupplementaryIcon[] = "supplementary_icon";
-
-// This must match the HTML element id of the svg to show as a supplementary
-// icon on the default offline error page.
-const char16_t kOfflineIconId[] = u"offlineIcon";
-}  // namespace error_page
-
-// These functions return true if the WebApp System or its subset is allowed
-// for a given profile.
-// |profile| can be original profile or its secondary off-the-record profile.
-// Returns false if |profile| is nullptr.
+// These functions return true if the WebAppProvider is allowed
+// for a given profile. This does not consider 'original' profiles. Returns
+// false if |profile| is off-the-record or nullptr.
 //
-// Is main WebApp System allowed (WebAppProvider exists):
+// Note: For ChromeOS guest profiles, this instead returns 'true' if the profile
+// is off-the-record, and 'false' if it is not (as the user guest profile is
+// hard-coded as OTR).
 bool AreWebAppsEnabled(Profile* profile);
+
+// Returns WebAppInstallByUserEnabled policy configuration. Returns true if this
+// policy is not set or enabled. Returns false if this policy is disabled.
+bool IsWebAppInstallByUserPolicyEnabled(Profile* profile);
+
 // Is user allowed to install web apps from UI:
 bool AreWebAppsUserInstallable(Profile* profile);
 
-// Get BrowserContext to use for a WebApp KeyedService creation.
+// Returns if force installation of web apps is allowed
+bool AreWebAppsForceInstallable(Profile* profile);
+
+// Get BrowserContext to use for a WebApp KeyedService creation. This will
+// return a `nullptr` if `AreWebAppsEnabled` returns false for the given
+// profile of `context`.
+// Note: On ChromeOS only, if web apps are disabled for the profile of the
+// `context`, then this will consider the profile's original profile to support
+// the system web app implementation.
+// TODO(https://crbug.com/384063076): Stop returning for profiles on ChromeOS
+// where `AreWebAppsEnabled` returns `false`.
 content::BrowserContext* GetBrowserContextForWebApps(
     content::BrowserContext* context);
 content::BrowserContext* GetBrowserContextForWebAppMetrics(
@@ -95,7 +97,7 @@ base::FilePath GetWebAppsTempDirectory(
 // The return value (profile categories) are used to report metrics. They are
 // persisted to logs and should not be renamed. If new names are added, update
 // tool/metrics/histograms/histograms.xml: "SystemWebAppProfileCategory".
-std::string GetProfileCategoryForLogging(Profile* profile);
+std::string_view GetProfileCategoryForLogging(Profile* profile);
 
 // Returns true if the WebApp should have `WebAppChromeOsData()`.
 bool IsChromeOsDataMandatory();
@@ -130,8 +132,9 @@ bool HasAnySpecifiedSourcesAndNoOtherSources(
     WebAppManagementTypes sources,
     WebAppManagementTypes specified_sources);
 
-// Check if all types of |sources| are uninstallable by the user.
-bool CanUserUninstallWebApp(WebAppManagementTypes sources);
+// Check if all types of |sources| for |app_id| are uninstallable by the user.
+bool CanUserUninstallWebApp(const webapps::AppId& app_id,
+                            WebAppManagementTypes sources);
 
 // Extracts app_id from chrome://app-settings/<app-id> URL path.
 webapps::AppId GetAppIdFromAppSettingsUrl(const GURL& url);
@@ -142,60 +145,22 @@ bool IsInScope(const GURL& url, const GURL& scope);
 // Returns whether the `login_mode` should force a start at OS login.
 bool IsRunOnOsLoginModeEnabledForAutostart(RunOnOsLoginMode login_mode);
 
-#if BUILDFLAG(IS_CHROMEOS)
-// Web apps crosapi (used for Lacros web app management) will be enabled if
-// Lacros is the primary browser.
-bool IsWebAppsCrosapiEnabled();
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-// Allow user web apps on profiles other than the main profile.
-void SetSkipMainProfileCheckForTesting(bool skip_check);
-
-bool IsMainProfileCheckSkippedForTesting();
-
-// The storage partitions' domain name for the experimental web app isolation.
-// TODO(crbug.com/1425284): use a better domain name, or maybe use a unique
-// domain for each app.
-constexpr char kExperimentalWebAppStorageParitionDomain[] = "goldfish";
-#endif
-
-constexpr char kAppSettingsPageEntryPointsHistogramName[] =
+inline constexpr char kAppSettingsPageEntryPointsHistogramName[] =
     "WebApp.AppSettingsPage.EntryPoints";
 
 // These are used in histograms, do not remove/renumber entries. If you're
 // adding to this enum with the intention that it will be logged, update the
 // AppSettingsPageEntryPoint enum listing in
-// tools/metrics/histograms/enums.xml.
+// tools/metrics/histograms/metadata/webapps/enums.xml.
 enum class AppSettingsPageEntryPoint {
   kPageInfoView = 0,
   kChromeAppsPage = 1,
   kBrowserCommand = 2,
   kSubAppsInstallPrompt = 3,
-  kMaxValue = kSubAppsInstallPrompt,
+  kNotificationSettingsButton = 4,
+  kSiteDataDialog = 5,
+  kMaxValue = kSiteDataDialog,
 };
-
-// When user_display_mode indicates a user preference for opening in
-// a browser tab, we open in a browser tab. If the developer has specified
-// the app should utilize more advanced display modes and/or fallback chain,
-// attempt honor those preferences. Otherwise, we open in a standalone
-// window (for app_display_mode 'standalone' or 'fullscreen'), or a minimal-ui
-// window (for app_display_mode 'browser' or 'minimal-ui').
-//
-// |is_isolated| overrides browser display mode for Isolated Web Apps because
-// they can't be open as a tab.
-//
-// `is_shortcut_app` overrides the user display mode if `kCrosShortstand`
-// is enabled and `ignore_shortstand` is false.
-// TODO(b/319753599): Migrate chrome os shortcut out of web app system. Should
-// be able to remove all the shortcut related code after migration completion.
-DisplayMode ResolveEffectiveDisplayMode(
-    DisplayMode app_display_mode,
-    const std::vector<DisplayMode>& app_display_mode_overrides,
-    mojom::UserDisplayMode user_display_mode,
-    bool is_isolated,
-    bool is_shortcut_app,
-    bool ignore_shortstand);
 
 apps::LaunchContainer ConvertDisplayModeToAppLaunchContainer(
     DisplayMode display_mode);
@@ -214,6 +179,15 @@ content::mojom::AlternativeErrorPageOverrideInfoPtr ConstructWebAppErrorPage(
     std::u16string supplementary_icon);
 
 bool IsValidScopeForLinkCapturing(const GURL& scope);
+
+// Resets all content settings for the given `app_scope` to their default
+// values.
+void ResetAllContentSettingsForWebApp(Profile* profile, const GURL& app_scope);
+
+// TODO(http://b/331208955): Remove after migration.
+// Returns whether |app_id| will soon refer to a system web app given |sources|.
+bool WillBeSystemWebApp(const webapps::AppId& app_id,
+                        WebAppManagementTypes sources);
 
 }  // namespace web_app
 

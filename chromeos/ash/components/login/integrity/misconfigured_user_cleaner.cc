@@ -39,7 +39,8 @@ void MisconfiguredUserCleaner::CleanMisconfiguredUser() {
 
   if (misconfigured_user.has_value()) {
     LOG(ERROR) << "Found a user without credentials set up at creation.";
-    DoCleanup(integrity_manager, misconfigured_user.value());
+    auto strategy = integrity_manager.GetMisconfiguredUserCleanupStrategy();
+    DoCleanup(integrity_manager, misconfigured_user.value(), strategy);
   }
 }
 
@@ -52,21 +53,13 @@ void MisconfiguredUserCleaner::ScheduleCleanup() {
 
 void MisconfiguredUserCleaner::DoCleanup(
     user_manager::UserDirectoryIntegrityManager& integrity_manager,
-    const AccountId& account_id) {
-  auto is_enterprise_managed = session_controller_->IsEnterpriseManaged();
-  std::optional<int> existing_users_count =
-      session_controller_->GetExistingUsersCount();
-
-  if (!existing_users_count.has_value()) {
-    // We were not able to get the number of existing users, log error.
-    LOG(ERROR) << "Unable to retrieve the number of existing users";
-    return;
-  }
-  bool is_owner = !is_enterprise_managed && existing_users_count.value() == 0;
+    const AccountId& account_id,
+    user_manager::UserDirectoryIntegrityManager::CleanupStrategy strategy) {
   bool ignore_owner_in_tests =
       base::CommandLine::ForCurrentProcess()->HasSwitch(
           ash::switches::kCryptohomeIgnoreCleanupOwnershipForTesting);
-  if (is_owner) {
+  if (strategy == user_manager::UserDirectoryIntegrityManager::CleanupStrategy::
+                      kSilentPowerwash) {
     if (!ignore_owner_in_tests) {
       LOG(WARNING) << "User is owner, removing the user requires powerwash.";
       // user is owner, TPM ownership was established, powerwash the device.
@@ -79,8 +72,20 @@ void MisconfiguredUserCleaner::DoCleanup(
   }
 
   LOG(WARNING) << "User is non-owner, trigger user removal.";
-  integrity_manager.RemoveUser(account_id);
-  integrity_manager.ClearPrefs();
+  bool safe_to_remove_user = base::CommandLine::ForCurrentProcess()->HasSwitch(
+      ash::switches::kFirstExecAfterBoot);
+  // If we got to this point after user have signed in since last reboot (e.g.
+  // if Chrome have crashed right after starting user session), user removal
+  // might fail. Trigger a reboot without clearing prefs, it guarantees that
+  // this code would be called again after the reboot.
+  if (safe_to_remove_user) {
+    integrity_manager.RemoveUser(account_id);
+    integrity_manager.ClearPrefs();
+  } else {
+    chromeos::PowerManagerClient::Get()->RequestRestart(
+        power_manager::RequestRestartReason::REQUEST_RESTART_OTHER,
+        "Restarting for logged-in misconfigured user removal");
+  }
 }
 
 void MisconfiguredUserCleaner::OnStartDeviceWipe(bool result) {

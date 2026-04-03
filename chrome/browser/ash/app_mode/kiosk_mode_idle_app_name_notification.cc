@@ -61,7 +61,7 @@ KioskModeIdleAppNameNotification::KioskModeIdleAppNameNotification()
 KioskModeIdleAppNameNotification::~KioskModeIdleAppNameNotification() {
   ui::UserActivityDetector* user_activity_detector =
       ui::UserActivityDetector::Get();
-  if (user_activity_detector && user_activity_detector->HasObserver(this)) {
+  if (user_activity_detector->HasObserver(this)) {
     user_activity_detector->RemoveObserver(this);
   }
 
@@ -78,8 +78,7 @@ void KioskModeIdleAppNameNotification::Setup() {
 
 void KioskModeIdleAppNameNotification::OnUserActivity(const ui::Event* event) {
   if (show_notification_upon_next_user_activity_) {
-    display::Display display =
-        display::Screen::GetScreen()->GetPrimaryDisplay();
+    display::Display display = display::Screen::Get()->GetPrimaryDisplay();
     // The widget only appears on internal displays because the intent is to
     // avoid an app spoofing a password screen on a Chromebook. Customers using
     // external monitors for kiosk don't want this notification to show.
@@ -108,8 +107,10 @@ void KioskModeIdleAppNameNotification::SuspendDone(
 }
 
 void KioskModeIdleAppNameNotification::Start() {
-  if (!ui::UserActivityDetector::Get()->HasObserver(this)) {
-    ui::UserActivityDetector::Get()->AddObserver(this);
+  ui::UserActivityDetector* user_activity_detector =
+      ui::UserActivityDetector::Get();
+  if (!user_activity_detector->HasObserver(this)) {
+    user_activity_detector->AddObserver(this);
     chromeos::PowerManagerClient::Get()->AddObserver(this);
   }
   ResetTimer();

@@ -18,7 +18,7 @@ WebApksHandler::WebApksHandler()
     : delegate_(base::BindRepeating(&WebApksHandler::OnWebApkInfoRetrieved,
                                     base::Unretained(this))) {}
 
-WebApksHandler::~WebApksHandler() {}
+WebApksHandler::~WebApksHandler() = default;
 
 void WebApksHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
@@ -31,23 +31,25 @@ void WebApksHandler::RegisterMessages() {
                           base::Unretained(this)));
 }
 
-void WebApksHandler::HandleRequestWebApksInfo(const base::Value::List& args) {
+void WebApksHandler::HandleRequestWebApksInfo(const base::ListValue& args) {
   AllowJavascript();
   delegate_.RetrieveWebApks();
 }
 
-void WebApksHandler::HandleRequestWebApkUpdate(const base::Value::List& args) {
+void WebApksHandler::HandleRequestWebApkUpdate(const base::ListValue& args) {
   AllowJavascript();
   for (const auto& val : args) {
-    if (val.is_string())
+    if (val.is_string()) {
       ShortcutHelper::SetForceWebApkUpdate(val.GetString());
+    }
   }
 }
 
 void WebApksHandler::OnWebApkInfoRetrieved(const WebApkInfo& webapk_info) {
-  if (!IsJavascriptAllowed())
+  if (!IsJavascriptAllowed()) {
     return;
-  base::Value::Dict result;
+  }
+  base::DictValue result;
   result.Set("name", webapk_info.name);
   result.Set("shortName", webapk_info.short_name);
   result.Set("packageName", webapk_info.package_name);

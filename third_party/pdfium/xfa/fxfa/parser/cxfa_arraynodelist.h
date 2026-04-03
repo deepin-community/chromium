@@ -28,14 +28,14 @@ class CXFA_ArrayNodeList final : public CXFA_TreeList {
   bool Append(CXFA_Node* pNode) override;
   bool Insert(CXFA_Node* pNewNode, CXFA_Node* pBeforeNode) override;
   void Remove(CXFA_Node* pNode) override;
-  CXFA_Node* Item(size_t iIndex) override;
+  CXFA_Node* Item(size_t index) override;
 
   void SetArrayNodeList(const std::vector<CXFA_Node*>& srcArray);
 
  private:
-  explicit CXFA_ArrayNodeList(CXFA_Document* pDocument);
+  explicit CXFA_ArrayNodeList(CXFA_Document* document);
 
-  std::vector<cppgc::Member<CXFA_Node>> m_array;
+  std::vector<cppgc::Member<CXFA_Node>> array_;
 };
 
 #endif  // XFA_FXFA_PARSER_CXFA_ARRAYNODELIST_H_

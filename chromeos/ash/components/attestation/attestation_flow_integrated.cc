@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <optional>
 #include <utility>
+#include <variant>
 
 #include "base/check.h"
 #include "base/command_line.h"
@@ -89,6 +90,8 @@ std::optional<::attestation::CertificateProfile> ProfileToAttestationProtoEnum(
       return ::attestation::CertificateProfile::DEVICE_SETUP_CERTIFICATE;
     case PROFILE_DEVICE_TRUST_USER_CERTIFICATE:
       return ::attestation::CertificateProfile::DEVICE_TRUST_USER_CERTIFICATE;
+    case PROFILE_BEAM_DEVICE_CERTIFICATE:
+      return ::attestation::CertificateProfile::BEAM_DEVICE_CERTIFICATE;
     default:
       return {};
   }
@@ -107,8 +110,7 @@ AttestationFlowIntegrated::AttestationFlowIntegrated()
 // |AttestationFlow|.
 AttestationFlowIntegrated::AttestationFlowIntegrated(
     ::attestation::ACAType aca_type)
-    : AttestationFlow(/*server_proxy=*/nullptr),
-      aca_type_(aca_type),
+    : aca_type_(aca_type),
       attestation_client_(AttestationClient::Get()),
       ready_timeout_(kReadyTimeout),
       retry_delay_(kRetryDelay) {}
@@ -235,19 +237,19 @@ void AttestationFlowIntegrated::StartCertificateRequest(
     DCHECK(profile_specific_data.has_value())
         << "profile_specific_data must be provided for "
            "DEVICE_SETUP_CERTIFICATE";
-    DCHECK(absl::holds_alternative<
+    DCHECK(std::holds_alternative<
            ::attestation::DeviceSetupCertificateRequestMetadata>(
         profile_specific_data.value()))
         << "profile_specific_data must be of type "
            "::attestation::DeviceSetupCertificateRequestMetadata";
 
     request.mutable_device_setup_certificate_request_metadata()->set_id(
-        absl::get<::attestation::DeviceSetupCertificateRequestMetadata>(
+        std::get<::attestation::DeviceSetupCertificateRequestMetadata>(
             profile_specific_data.value())
             .id());
     request.mutable_device_setup_certificate_request_metadata()
         ->set_content_binding(
-            absl::get<::attestation::DeviceSetupCertificateRequestMetadata>(
+            std::get<::attestation::DeviceSetupCertificateRequestMetadata>(
                 profile_specific_data.value())
                 .content_binding());
   }

@@ -39,11 +39,12 @@ DefaultDeskButton::DefaultDeskButton(DeskBarViewBase* bar_view)
                      bar_view,
                      base::BindRepeating(&DefaultDeskButton::OnButtonPressed,
                                          base::Unretained(this))) {
-  GetViewAccessibility().OverrideName(
+  GetViewAccessibility().SetName(
       l10n_util::GetStringFUTF16(IDS_ASH_DESKS_DESK_ACCESSIBLE_NAME,
-                                 DesksController::Get()->desks()[0]->name()));
+                                 DesksController::Get()->desks()[0]->name()),
+      ax::mojom::NameFrom::kAttribute);
 
-  SetBackground(views::CreateThemedRoundedRectBackground(
+  SetBackground(views::CreateRoundedRectBackground(
       cros_tokens::kCrosSysSystemOnBase, kDefaultButtonCornerRadius));
 }
 
@@ -53,11 +54,11 @@ void DefaultDeskButton::UpdateLabelText() {
       bounds().width() - 2 * kDefaultButtonHorizontalPadding, gfx::ELIDE_TAIL));
 }
 
-gfx::Size DefaultDeskButton::CalculatePreferredSize() const {
-  auto* root_window =
-      bar_view_->GetWidget()->GetNativeWindow()->GetRootWindow();
+gfx::Size DefaultDeskButton::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   const int preview_width = DeskMiniView::GetPreviewWidth(
-      root_window->bounds().size(), DeskPreviewView::GetHeight(root_window));
+      bar_view_->root()->bounds().size(),
+      DeskPreviewView::GetHeight(bar_view_->root()));
   int label_width = 0, label_height = 0;
   gfx::Canvas::SizeStringInt(DesksController::Get()->desks()[0]->name(),
                              gfx::FontList(), &label_width, &label_height, 0,

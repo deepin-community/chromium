@@ -34,13 +34,13 @@ void FakePrintRenderFrame::SetPrintPreviewUI(
     mojo::PendingAssociatedRemote<mojom::PrintPreviewUI> preview) {}
 
 void FakePrintRenderFrame::InitiatePrintPreview(
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     mojo::PendingAssociatedRemote<mojom::PrintRenderer> print_renderer,
 #endif
     bool has_selection) {
 }
 
-void FakePrintRenderFrame::PrintPreview(base::Value::Dict settings) {}
+void FakePrintRenderFrame::PrintPreview(base::DictValue settings) {}
 
 void FakePrintRenderFrame::OnPrintPreviewDialogClosed() {}
 

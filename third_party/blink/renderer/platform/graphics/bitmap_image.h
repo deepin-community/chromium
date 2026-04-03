@@ -29,18 +29,20 @@
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_BITMAP_IMAGE_H_
 
 #include <memory>
-#include "base/memory/weak_ptr.h"
+
+#include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-blink.h"
 #include "third_party/blink/renderer/platform/graphics/deferred_image_decoder.h"
+#include "third_party/blink/renderer/platform/graphics/dom_node_id.h"
+#include "third_party/blink/renderer/platform/graphics/graphics_context.h"
 #include "third_party/blink/renderer/platform/graphics/image.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_animation.h"
 #include "third_party/blink/renderer/platform/timer.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
-#include "ui/gfx/geometry/size.h"
-
 #include "third_party/skia/include/core/SkRefCnt.h"
+#include "ui/gfx/geometry/size.h"
 
 namespace blink {
 
@@ -59,16 +61,11 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
     return base::AdoptRef(new BitmapImage(observer, is_multipart));
   }
 
-  // Returns a BitmapImage if `url` is a data URL with a known encoded 1x1
-  // transparent gif.
-  static scoped_refptr<BitmapImage> MaybeCreateTransparentPlaceholderImage(
-      KURL url);
-
   ~BitmapImage() override;
 
   bool IsBitmapImage() const override { return true; }
 
-  bool CurrentFrameHasSingleSecurityOrigin() const override;
+  bool HasSingleSecurityOrigin() const override;
 
   gfx::Size SizeWithConfig(SizeConfig) const override;
   bool GetHotSpot(gfx::Point&) const override;
@@ -92,14 +89,12 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
 
   scoped_refptr<Image> ImageForDefaultFrame() override;
 
-  // TODO(khushalsagar): These names are bogus, we don't know what the current
-  // frame is.
-  bool CurrentFrameKnownToBeOpaque() override;
-  bool CurrentFrameIsComplete() override;
-  bool CurrentFrameIsLazyDecoded() override;
+  bool IsOpaque() override;
+  bool FirstFrameIsComplete() override;
+  bool IsLazyDecoded() override;
   size_t FrameCount() override;
   PaintImage PaintImageForCurrentFrame() override;
-  ImageOrientation CurrentFrameOrientation() const override;
+  ImageOrientation Orientation() const override;
 
   PaintImage PaintImageForTesting();
   void AdvanceAnimationForTesting() override {
@@ -112,6 +107,9 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
   // Records the decoded image type in a UseCounter. |use_counter| may be a null
   // pointer.
   void RecordDecodedImageType(UseCounter* use_counter);
+
+  // Records the presence of a C2PA Manifest in a UseCounter.
+  void RecordDecodedImageC2PA(UseCounter* use_counter);
 
  protected:
   bool IsSizeAvailable() override;
@@ -130,10 +128,7 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
     kCertain     // The repetition count is known to be correct.
   };
 
-  BitmapImage(const SkBitmap&, ImageObserver* = nullptr);
-  BitmapImage(ImageObserver* = nullptr,
-              bool is_multi_part = false,
-              bool is_transparent_placeholder = false);
+  BitmapImage(ImageObserver* = nullptr, bool is_multi_part = false);
 
   void Draw(cc::PaintCanvas*,
             const cc::PaintFlags&,
@@ -170,7 +165,12 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
   // This caches the PaintImage created with the last updated encoded data to
   // ensure re-use of generated decodes. This is cleared each time the encoded
   // data is updated in DataChanged.
-  PaintImage cached_frame_;
+  HashMap<DOMNodeId, PaintImage> cached_frames_;
+  // Reserved ids for non-running frames.
+  const DOMNodeId NORMAL_CACHED_FRAME_ID = -2;
+  const DOMNodeId PAUSED_CACHED_FRAME_ID = -3;
+
+  HashMap<DOMNodeId, ImageAnimationEnum> image_animation_map_;
 
   // Whether or not we can play animation.
   mojom::blink::ImageAnimationPolicy animation_policy_ =
@@ -187,8 +187,10 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
 
   bool default_frame_has_alpha_ : 1;
 
-  const bool is_transparent_placeholder_ : 1;  // Whether this image represents
-                                               // a 1x1 transparent gif.
+  // TODO(crbug.com/429459566): PaintImageForCurrentFrame is an overridden
+  // function that is broadly used. Will change this to
+  // PaintImageForCurrentFrame's optional argument in separated CL.
+  raw_ptr<ImageNodeAnimationInfo> current_image_node_animation_info_ = nullptr;
 
   RepetitionCountStatus repetition_count_status_;
   int repetition_count_;  // How many total animation loops we should do.  This
@@ -196,6 +198,10 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
                           // incapable of animation.
 
   size_t frame_count_;
+  // The paused image will produce the first frame of animated image.
+  // This would possibly change via this issue [1].
+  // [1] https://github.com/webplatformco/project-image-animation/issues/2
+  PaintImage::Id paused_image_paint_image_id_ = -1;
 
   PaintImage::AnimationSequenceId reset_animation_sequence_id_ = 0;
 };

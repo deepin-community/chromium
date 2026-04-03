@@ -14,8 +14,40 @@
 namespace ash {
 
 class DeskButtonContainer;
+class DeskButtonWidget;
 class Shelf;
 enum class ShelfAlignment;
+
+// Delegate view for laying out the desk button UI. It does not use the default
+// fill layout since the desk button UI has dynamic size, and the widget
+// reserves the maximum possible space for the current shelf alignment and zero
+// state.
+class DeskButtonWidgetDelegateView : public views::WidgetDelegateView {
+ public:
+  DeskButtonWidgetDelegateView();
+  DeskButtonWidgetDelegateView(const DeskButtonWidgetDelegateView&) = delete;
+  DeskButtonWidgetDelegateView& operator=(const DeskButtonWidgetDelegateView&) =
+      delete;
+  ~DeskButtonWidgetDelegateView() override;
+
+  DeskButtonContainer* desk_button_container() const {
+    return desk_button_container_;
+  }
+
+  // Initializes the view. Must be called before any meaningful UIs can be
+  // laid out.
+  void Init(DeskButtonWidget* desk_button_widget);
+
+  // views::WidgetDelegateView:
+  void Layout(PassKey) override;
+
+  // views::View:
+  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
+
+ private:
+  raw_ptr<DeskButtonContainer> desk_button_container_ = nullptr;
+  raw_ptr<DeskButtonWidget> desk_button_widget_ = nullptr;
+};
 
 // The desk button provides an overview of existing desks and quick access to
 // them. The button is only visible in clamshell mode and disappears when in
@@ -23,52 +55,17 @@ enum class ShelfAlignment;
 class ASH_EXPORT DeskButtonWidget : public ShelfComponent,
                                     public views::Widget {
  public:
-  // Delegate view for laying out the desk button UI. It does not use the
-  // default fill layout since the desk button UI has dynamic size, and the
-  // widget reserves the maximum possible space for the current shelf alignment
-  // and zero state.
-  class DelegateView : public views::WidgetDelegateView {
-   public:
-    DelegateView();
-    DelegateView(const DelegateView&) = delete;
-    DelegateView& operator=(const DelegateView&) = delete;
-    ~DelegateView() override;
-
-    DeskButtonContainer* desk_button_container() const {
-      return desk_button_container_;
-    }
-
-    // Initializes the view. Must be called before any meaningful UIs can be
-    // laid out.
-    void Init(DeskButtonWidget* desk_button_widget);
-
-    // views::WidgetDelegateView:
-    bool CanActivate() const override;
-    void Layout(PassKey) override;
-
-    // views::View:
-    bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
-
-   private:
-    raw_ptr<DeskButtonContainer> desk_button_container_ = nullptr;
-    raw_ptr<DeskButtonWidget> desk_button_widget_ = nullptr;
-  };
-
   explicit DeskButtonWidget(Shelf* shelf);
   DeskButtonWidget(const DeskButtonWidget&) = delete;
   DeskButtonWidget& operator=(const DeskButtonWidget&) = delete;
   ~DeskButtonWidget() override;
 
-  // Returns the max length for the widget assuming provided `horizontal_shelf`
-  // and `zero_state` values.
-  static int GetMaxLength(bool horizontal_shelf, bool zero_state);
+  // Returns the max length for the widget for the horizontal or vertical shelf.
+  static int GetMaxLength(bool horizontal_shelf);
 
-  DelegateView* delegate_view() const { return delegate_view_; }
+  DeskButtonWidgetDelegateView* delegate_view() const { return delegate_view_; }
 
   Shelf* shelf() const { return shelf_; }
-
-  bool zero_state() const { return zero_state_; }
-  void set_zero_state(bool zero_state) { zero_state_ = zero_state; }
 
   // Indicates if the shelf should reserve some space for this widget.
   bool ShouldReserveSpaceFromShelf() const;
@@ -93,9 +90,8 @@ class ASH_EXPORT DeskButtonWidget : public ShelfComponent,
 
   DeskButtonContainer* GetDeskButtonContainer() const;
 
+  // Returns true if this widget belongs to a horizontal shelf.
   bool IsHorizontalShelf() const;
-
-  bool IsForcedZeroState() const;
 
   void SetDefaultChildToFocus(views::View* default_child_to_focus);
 
@@ -111,22 +107,19 @@ class ASH_EXPORT DeskButtonWidget : public ShelfComponent,
   // focusing, otherwise forward focusing.
   void MaybeFocusOut(bool reverse);
 
+  // Sets previous focus and next focus of desk button.
+  void InitializeAccessibleProperties();
+
  private:
   // views::Widget:
   bool OnNativeWidgetActivationChanged(bool active) override;
 
-  raw_ptr<DelegateView, DanglingUntriaged> delegate_view_ = nullptr;
+  raw_ptr<DeskButtonWidgetDelegateView, DanglingUntriaged> delegate_view_ =
+      nullptr;
 
   gfx::Rect target_bounds_;
 
   raw_ptr<Shelf> const shelf_;
-
-  // Indicates if the widget is in zero state. It means the desk button UI takes
-  // less space from shelf. It can happen for any of the following conditions:
-  //   1) The display width is under a certain threshold, i.e.
-  //   `kDeskButtonLargeDisplayThreshold`.
-  //   2) The current shelf is overflown.
-  bool zero_state_ = false;
 
   // Default child view to focus when `OnNativeWidgetActivationChanged()`
   // occurs. When it's not null, it should point to the desk button, the

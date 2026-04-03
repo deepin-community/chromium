@@ -13,7 +13,6 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/flat_set.h"
-#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "media/base/media_export.h"
 #include "media/base/stream_parser.h"
@@ -54,8 +53,8 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
             MediaLog* media_log) override;
   void Flush() override;
   bool GetGenerateTimestampsFlag() const override;
-  [[nodiscard]] bool AppendToParseBuffer(const uint8_t* buf,
-                                         size_t size) override;
+  [[nodiscard]] bool AppendToParseBuffer(
+      base::span<const uint8_t> buf) override;
   [[nodiscard]] ParseStatus Parse(int max_pending_bytes_to_inspect) override;
 
   // Calculates the rotation value from the track header display matricies.
@@ -72,8 +71,8 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
   };
 
   // Wrappers of `queue_` that observe constraint of `max_parse_offset_`.
-  void ModulatedPeek(const uint8_t** buf, int* size);
-  void ModulatedPeekAt(int64_t offset, const uint8_t** buf, int* size);
+  base::span<const uint8_t> ModulatedPeek();
+  base::span<const uint8_t> ModulatedPeekAt(int64_t offset);
   bool ModulatedTrim(int64_t max_offset);
 
   ParseResult ParseBox();
@@ -96,16 +95,6 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
   void ChangeState(State new_state);
 
   bool EmitConfigs();
-#if BUILDFLAG(USE_PROPRIETARY_CODECS)
-  bool PrepareAACBuffer(const AAC& aac_config,
-                        std::vector<uint8_t>* frame_buf,
-                        std::vector<SubsampleEntry>* subsamples) const;
-#endif
-#if BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
-  bool PrependIADescriptors(const IamfSpecificBox& iamf_box,
-                            std::vector<uint8_t>* frame_buf,
-                            std::vector<SubsampleEntry>* subsamples) const;
-#endif  // BUILDFLAG(ENABLE_PLATFORM_IAMF_AUDIO)
   ParseResult EnqueueSample(BufferQueueMap* buffers);
   bool SendAndFlushSamples(BufferQueueMap* buffers);
 
@@ -139,7 +128,7 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
   // operations, otherwise more data than the amount indicated in the Parse()
   // call's `max_pending_bytes_to_inspect` increment might be inspected in a
   // Parse() call. See the various Modulated*() wrappers in this class.
-  // TODO(https://crbug.com/1286464): Consider reworking all these parsers to
+  // TODO(crbug.com/40815633): Consider reworking all these parsers to
   // use a new type of queue that internally modulates the increment.
   int64_t max_parse_offset_ = 0;
   OffsetByteQueue queue_;

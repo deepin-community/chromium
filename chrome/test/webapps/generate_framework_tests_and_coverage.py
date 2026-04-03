@@ -224,7 +224,8 @@ def main(argv=None):
     default_tests_location = os.path.join(script_dir, "..", "..", "browser",
                                           "ui", "views", "web_apps")
     sync_tests_location = os.path.join(script_dir, "..", "..", "browser",
-                                       "sync", "test", "integration")
+                                       "sync", "test", "integration",
+                                       "web_apps")
 
     # These describe where existing browsertests are to be found, and where the
     # script runner will be directed to write tests to.
@@ -233,13 +234,15 @@ def main(argv=None):
             action_name_prefixes={"switch_profile_clients", "sync_"},
             browsertest_dir=sync_tests_location,
             test_file_prefix="two_client_web_apps_integration_test",
-            test_fixture="WebAppIntegration")
+            test_fixture="WebAppIntegration",
+            is_parameterized=True)
     ]
     default_partition = TestPartitionDescription(
         action_name_prefixes=set(),
         browsertest_dir=default_tests_location,
         test_file_prefix="web_app_integration_browsertest",
-        test_fixture="WebAppIntegration")
+        test_fixture="WebAppIntegration",
+        is_parameterized=False)
 
     graph_output_dir = None
     if options.graphs:

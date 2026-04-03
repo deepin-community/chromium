@@ -8,9 +8,13 @@
 #ifndef LIBANGLE_RENDERER_VULKAN_CLEVENTVK_H_
 #define LIBANGLE_RENDERER_VULKAN_CLEVENTVK_H_
 
-#include "libANGLE/renderer/vulkan/cl_types.h"
+#include <condition_variable>
+#include <mutex>
 
 #include "libANGLE/renderer/CLEventImpl.h"
+#include "libANGLE/renderer/serial_utils.h"
+
+#include "libANGLE/CLEvent.h"
 
 namespace rx
 {
@@ -18,8 +22,14 @@ namespace rx
 class CLEventVk : public CLEventImpl
 {
   public:
-    CLEventVk(const cl::Event &event);
+    CLEventVk(const cl::Event &event, const cl::ExecutionStatus initialStatus);
     ~CLEventVk() override;
+
+    cl_int getCommandType() const { return mEvent.getCommandType(); }
+    bool isUserEvent() const { return mEvent.isUserEvent(); }
+    cl::Event &getFrontendObject() { return const_cast<cl::Event &>(mEvent); }
+    const QueueSerial &getQueueSerial() { return mQueueSerial; }
+    void setQueueSerial(QueueSerial queueSerial);
 
     angle::Result getCommandExecutionStatus(cl_int &executionStatus) override;
 
@@ -31,6 +41,28 @@ class CLEventVk : public CLEventImpl
                                    size_t valueSize,
                                    void *value,
                                    size_t *valueSizeRet) override;
+
+    angle::Result waitForUserEventStatus();
+    angle::Result setStatusAndExecuteCallback(cl_int status);
+    angle::Result setTimestamp(cl_int status);
+
+  private:
+    std::mutex mUserEventMutex;
+    angle::SynchronizedValue<cl_int> mStatus;
+    std::condition_variable mUserEventCondition;
+    angle::SynchronizedValue<cl::EventStatusMap<bool>> mHaveCallbacks;
+
+    // Event profiling timestamps
+    struct ProfilingTimestamps
+    {
+        cl_ulong commandEndTS;
+        cl_ulong commandStartTS;
+        cl_ulong commandQueuedTS;
+        cl_ulong commandSubmitTS;
+        cl_ulong commandCompleteTS;
+    };
+    angle::SynchronizedValue<ProfilingTimestamps> mProfilingTimestamps;
+    QueueSerial mQueueSerial;
 };
 
 }  // namespace rx

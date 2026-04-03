@@ -7,27 +7,21 @@
 
 #include <memory>
 
-#include "chrome/common/accessibility/read_anything.mojom.h"
-#include "content/public/browser/webui_config.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_config.h"
+#include "chrome/browser/ui/webui/top_chrome/untrusted_top_chrome_web_ui_controller.h"
+#include "chrome/common/read_anything/read_anything.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
-#include "ui/webui/color_change_listener/color_change_handler.h"
-#include "ui/webui/resources/cr_components/color_change_listener/color_change_listener.mojom.h"
-#include "ui/webui/untrusted_bubble_web_ui_controller.h"
 
 class ReadAnythingUntrustedPageHandler;
+class ReadAnythingUntrustedUI;
 
-class ReadAnythingUIUntrustedConfig : public content::WebUIConfig {
+class ReadAnythingUIUntrustedConfig
+    : public DefaultTopChromeWebUIConfig<ReadAnythingUntrustedUI> {
  public:
   ReadAnythingUIUntrustedConfig();
   ~ReadAnythingUIUntrustedConfig() override;
-
-  // content::WebUIConfig:
-  std::unique_ptr<content::WebUIController> CreateWebUIController(
-      content::WebUI* web_ui,
-      const GURL& url) override;
-  bool IsWebUIEnabled(content::BrowserContext* browser_context) override;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -37,7 +31,7 @@ class ReadAnythingUIUntrustedConfig : public content::WebUIConfig {
 //  This class has the same lifetime as the Side Panel view.
 //
 class ReadAnythingUntrustedUI
-    : public ui::UntrustedBubbleWebUIController,
+    : public UntrustedTopChromeWebUIController,
       public read_anything::mojom::UntrustedPageHandlerFactory {
  public:
   explicit ReadAnythingUntrustedUI(content::WebUI* web_ui);
@@ -45,17 +39,13 @@ class ReadAnythingUntrustedUI
   ReadAnythingUntrustedUI& operator=(const ReadAnythingUntrustedUI&) = delete;
   ~ReadAnythingUntrustedUI() override;
 
-  void BindInterface(
-      mojo::PendingReceiver<color_change_listener::mojom::PageHandler>
-          pending_receiver);
-
   // Instantiates the implementor of the mojom::UntrustedPageHandlerFactory mojo
   // interface passing the pending receiver that will be internally bound.
   void BindInterface(
       mojo::PendingReceiver<read_anything::mojom::UntrustedPageHandlerFactory>
           receiver);
 
-  static constexpr std::string GetWebUIName() {
+  static constexpr std::string_view GetWebUIName() {
     return "ReadAnythingUntrusted";
   }
 
@@ -70,7 +60,6 @@ class ReadAnythingUntrustedUI
 
   std::unique_ptr<ReadAnythingUntrustedPageHandler>
       read_anything_untrusted_page_handler_;
-  std::unique_ptr<ui::ColorChangeHandler> color_provider_handler_;
   mojo::Receiver<read_anything::mojom::UntrustedPageHandlerFactory>
       read_anything_page_factory_receiver_{this};
 

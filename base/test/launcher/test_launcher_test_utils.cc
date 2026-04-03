@@ -4,22 +4,21 @@
 
 #include "base/test/launcher/test_launcher_test_utils.h"
 
+#include <optional>
+
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/test/gtest_util.h"
 #include "base/test/launcher/test_result.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-namespace base {
-
-namespace test_launcher_utils {
+namespace base::test_launcher_utils {
 
 namespace {
 
-// Helper function to return |Value::Dict::FindString| by value instead of
+// Helper function to return |DictValue::FindString| by value instead of
 // pointer to string, or empty string if nullptr.
-std::string FindStringKeyOrEmpty(const Value::Dict& dict,
+std::string FindStringKeyOrEmpty(const DictValue& dict,
                                  const std::string& key) {
   const std::string* value = dict.FindString(key);
   return value ? *value : std::string();
@@ -40,34 +39,36 @@ const testing::TestSuite* GetTestSuite(const std::string& test_suite_name) {
 
 }  // namespace
 
-bool ValidateKeyValue(const Value::Dict& dict,
+bool ValidateKeyValue(const DictValue& dict,
                       const std::string& key,
                       const std::string& expected_value) {
   std::string actual_value = FindStringKeyOrEmpty(dict, key);
   bool result = !actual_value.compare(expected_value);
-  if (!result)
+  if (!result) {
     ADD_FAILURE() << key << " expected value: " << expected_value
                   << ", actual: " << actual_value;
+  }
   return result;
 }
 
-bool ValidateKeyValue(const Value::Dict& dict,
+bool ValidateKeyValue(const DictValue& dict,
                       const std::string& key,
                       int64_t expected_value) {
   int actual_value = dict.FindInt(key).value_or(0);
   bool result = (actual_value == expected_value);
-  if (!result)
+  if (!result) {
     ADD_FAILURE() << key << " expected value: " << expected_value
                   << ", actual: " << actual_value;
+  }
   return result;
 }
 
-bool ValidateTestResult(const Value::Dict& iteration_data,
+bool ValidateTestResult(const DictValue& iteration_data,
                         const std::string& test_name,
                         const std::string& status,
                         size_t result_part_count,
                         bool have_running_info) {
-  const Value::List* results = iteration_data.FindList(test_name);
+  const ListValue* results = iteration_data.FindList(test_name);
   if (!results) {
     ADD_FAILURE() << "Cannot find result";
     return false;
@@ -77,14 +78,15 @@ bool ValidateTestResult(const Value::Dict& iteration_data,
     return false;
   }
 
-  const Value::Dict* dict = (*results)[0].GetIfDict();
+  const DictValue* dict = (*results)[0].GetIfDict();
   if (!dict) {
     ADD_FAILURE() << "Value must be of type DICTIONARY";
     return false;
   }
 
-  if (!ValidateKeyValue(*dict, "status", status))
+  if (!ValidateKeyValue(*dict, "status", status)) {
     return false;
+  }
 
   // Verify the keys that only exists when have_running_info, if the test didn't
   // run, it wouldn't have these information.
@@ -100,7 +102,7 @@ bool ValidateTestResult(const Value::Dict& iteration_data,
     }
   }
 
-  const Value::List* list = dict->FindList("result_parts");
+  const ListValue* list = dict->FindList("result_parts");
   if (!list) {
     ADD_FAILURE() << "Result must contain 'result_parts' key";
     return false;
@@ -114,7 +116,7 @@ bool ValidateTestResult(const Value::Dict& iteration_data,
   return true;
 }
 
-bool ValidateTestLocations(const Value::Dict& test_locations,
+bool ValidateTestLocations(const DictValue& test_locations,
                            const std::string& test_suite_name) {
   const testing::TestSuite* test_suite = GetTestSuite(test_suite_name);
   if (test_suite == nullptr) {
@@ -132,11 +134,11 @@ bool ValidateTestLocations(const Value::Dict& test_locations,
   return result;
 }
 
-bool ValidateTestLocation(const Value::Dict& test_locations,
+bool ValidateTestLocation(const DictValue& test_locations,
                           const std::string& test_name,
                           const std::string& file,
                           int line) {
-  const Value::Dict* dict =
+  const DictValue* dict =
       test_locations.FindDict(TestNameWithoutDisabledPrefix(test_name));
   if (!dict) {
     ADD_FAILURE() << "|test_locations| missing location for " << test_name;
@@ -148,19 +150,19 @@ bool ValidateTestLocation(const Value::Dict& test_locations,
   return result;
 }
 
-absl::optional<Value::Dict> ReadSummary(const FilePath& path) {
-  absl::optional<Value::Dict> result;
+std::optional<DictValue> ReadSummary(const FilePath& path) {
+  std::optional<DictValue> result;
   File resultFile(path, File::FLAG_OPEN | File::FLAG_READ);
   const int size = 2e7;
   std::string json;
   CHECK(ReadFileToStringWithMaxSize(path, &json, size));
-  absl::optional<Value> value = JSONReader::Read(json);
-  if (value && value->is_dict())
+  std::optional<Value> value =
+      JSONReader::Read(json, JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (value && value->is_dict()) {
     result = std::move(*value).TakeDict();
+  }
 
   return result;
 }
 
-}  // namespace test_launcher_utils
-
-}  // namespace base
+}  // namespace base::test_launcher_utils

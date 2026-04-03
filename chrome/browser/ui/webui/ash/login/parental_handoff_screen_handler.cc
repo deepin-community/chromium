@@ -34,10 +34,15 @@ void ParentalHandoffScreenHandler::DeclareLocalizedValues(
 }
 
 void ParentalHandoffScreenHandler::Show(const std::u16string& username) {
-  base::Value::Dict data;
+  base::DictValue data;
   data.Set(kUsername, username);
 
   ShowInWebUI(std::move(data));
+}
+
+base::WeakPtr<ParentalHandoffScreenView>
+ParentalHandoffScreenHandler::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
 }
 
 }  // namespace ash

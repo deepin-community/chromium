@@ -7,7 +7,7 @@
 
 #import <Foundation/Foundation.h>
 
-#include "components/autofill/core/browser/autofill_manager.h"
+#import "components/autofill/core/browser/foundations/autofill_manager.h"
 
 // Objective-C version of the AutofillManager::Observer interface. Only the
 // methods that are currently in use in Objective-C are implemented.
@@ -15,13 +15,22 @@
 
 @optional
 
-- (void)onAutofillManagerDestroyed:(autofill::AutofillManager&)manager;
+- (void)
+    onAutofillManagerStateChanged:(autofill::AutofillManager&)manager
+                             from:(autofill::AutofillManager::LifecycleState)
+                                      oldState
+                               to:(autofill::AutofillManager::LifecycleState)
+                                      newState;
 
 - (void)onFieldTypesDetermined:(autofill::AutofillManager&)manager
                        forForm:(autofill::FormGlobalId)form
                     fromSource:
                         (autofill::AutofillManager::Observer::FieldTypeSource)
-                            source;
+                            source
+          smallFormsWereParsed:(bool)smallFormsWereParsed;
+
+- (void)onAfterFormSubmitted:(autofill::AutofillManager&)manager
+                    formData:(const autofill::FormData&)form;
 @end
 
 namespace autofill {
@@ -37,10 +46,16 @@ class AutofillManagerObserverBridge final : public AutofillManager::Observer {
   ~AutofillManagerObserverBridge() final;
 
   // AutofillManager::Observer:
-  void OnAutofillManagerDestroyed(AutofillManager& manager) override;
+  void OnAutofillManagerStateChanged(
+      AutofillManager& manager,
+      autofill::AutofillManager::LifecycleState old_state,
+      autofill::AutofillManager::LifecycleState new_state) override;
   void OnFieldTypesDetermined(AutofillManager& manager,
                               FormGlobalId form,
-                              FieldTypeSource source) override;
+                              FieldTypeSource source,
+                              bool small_forms_were_parsed) override;
+  void OnAfterFormSubmitted(AutofillManager& manager,
+                            const FormData& form) override;
 
  private:
   __weak id<AutofillManagerObserver> observer_ = nil;

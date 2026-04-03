@@ -4,6 +4,8 @@
 
 #include "components/value_store/lazy_leveldb.h"
 
+#include <string_view>
+
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -12,8 +14,6 @@
 #include "third_party/leveldatabase/env_chromium.h"
 #include "third_party/leveldatabase/src/include/leveldb/iterator.h"
 #include "third_party/leveldatabase/src/include/leveldb/write_batch.h"
-
-using base::StringPiece;
 
 namespace value_store {
 
@@ -67,7 +67,7 @@ LazyLevelDb::LazyLevelDb(const std::string& uma_client_name,
 
   read_options_.verify_checksums = true;
 
-  // TODO(crbug.com/1226956): Remove reference to extensions.
+  // TODO(crbug.com/40189032): Remove reference to extensions.
   // Used in lieu of UMA_HISTOGRAM_ENUMERATION because the histogram name is
   // not a constant.
   open_histogram_ = base::LinearHistogram::FactoryGet(
@@ -94,7 +94,8 @@ ValueStore::Status LazyLevelDb::Read(const std::string& key,
   if (!s.ok())
     return ToValueStoreError(s);
 
-  std::optional<base::Value> read_value = base::JSONReader::Read(value_as_json);
+  std::optional<base::Value> read_value = base::JSONReader::Read(
+      value_as_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!read_value) {
     return ValueStore::Status(ValueStore::CORRUPTION, FixCorruption(&key),
                               kInvalidJson);

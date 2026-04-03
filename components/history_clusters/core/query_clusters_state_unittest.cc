@@ -23,7 +23,6 @@
 using ::testing::_;
 using ::testing::DoAll;
 using ::testing::ElementsAre;
-using ::testing::Invoke;
 using ::testing::SaveArg;
 
 namespace history_clusters {
@@ -110,29 +109,9 @@ class QueryClustersStateTest : public testing::Test {
   base::test::TaskEnvironment task_environment_;
 };
 
-TEST_F(QueryClustersStateTest, FilterParamsSetForZeroStateSyncedVisits) {
-  Config config;
-  config.apply_zero_state_filtering = true;
-  config.persist_clusters_in_history_db = true;
-  config.use_navigation_context_clusters = true;
-  config.include_synced_visits = true;
-  SetConfigForTesting(config);
-
-  QueryClustersState state(nullptr, nullptr, "");
-
-  QueryClustersFilterParams filter_params =
-      GetQueryClustersFilterParamsForState(&state);
-  EXPECT_TRUE(filter_params.is_search_initiated);
-  EXPECT_FALSE(filter_params.has_related_searches);
-  EXPECT_TRUE(filter_params.include_synced_visits);
-}
-
 TEST_F(QueryClustersStateTest, FilterParamsSetForZeroState) {
   Config config;
-  config.apply_zero_state_filtering = true;
-  config.persist_clusters_in_history_db = true;
   config.use_navigation_context_clusters = true;
-  config.include_synced_visits = false;
   SetConfigForTesting(config);
 
   QueryClustersState state(nullptr, nullptr, "");
@@ -141,35 +120,12 @@ TEST_F(QueryClustersStateTest, FilterParamsSetForZeroState) {
       GetQueryClustersFilterParamsForState(&state);
   EXPECT_TRUE(filter_params.is_search_initiated);
   EXPECT_FALSE(filter_params.has_related_searches);
-  EXPECT_FALSE(filter_params.include_synced_visits);
 }
 
 TEST_F(QueryClustersStateTest,
-       FilterParamsNotSetForZeroStateFeatureDisabledButSyncedVisitsStillSet) {
+       FilterParamsNotSetForZeroStateContextClusteringDisabled) {
   Config config;
-  config.apply_zero_state_filtering = false;
-  config.persist_clusters_in_history_db = true;
-  config.use_navigation_context_clusters = true;
-  config.include_synced_visits = true;
-  SetConfigForTesting(config);
-
-  QueryClustersState state(nullptr, nullptr, "");
-
-  QueryClustersFilterParams filter_params =
-      GetQueryClustersFilterParamsForState(&state);
-  EXPECT_FALSE(filter_params.is_search_initiated);
-  EXPECT_FALSE(filter_params.has_related_searches);
-  EXPECT_TRUE(filter_params.include_synced_visits);
-}
-
-TEST_F(
-    QueryClustersStateTest,
-    FilterParamsNotSetForZeroStateContextClusteringDisabledSyncedVisitsStillSet) {
-  Config config;
-  config.apply_zero_state_filtering = true;
-  config.persist_clusters_in_history_db = false;
   config.use_navigation_context_clusters = false;
-  config.include_synced_visits = true;
   SetConfigForTesting(config);
 
   QueryClustersState state(nullptr, nullptr, "");
@@ -178,16 +134,11 @@ TEST_F(
       GetQueryClustersFilterParamsForState(&state);
   EXPECT_FALSE(filter_params.is_search_initiated);
   EXPECT_FALSE(filter_params.has_related_searches);
-  EXPECT_TRUE(filter_params.include_synced_visits);
 }
 
-TEST_F(QueryClustersStateTest,
-       FilterParamsEnabledButNotSetForQueryButSyncedVisitsStillSet) {
+TEST_F(QueryClustersStateTest, FilterParamsEnabledButNotSetForQuery) {
   Config config;
-  config.apply_zero_state_filtering = true;
-  config.persist_clusters_in_history_db = true;
   config.use_navigation_context_clusters = true;
-  config.include_synced_visits = true;
   SetConfigForTesting(config);
 
   QueryClustersState state(nullptr, nullptr, "query");
@@ -196,25 +147,6 @@ TEST_F(QueryClustersStateTest,
       GetQueryClustersFilterParamsForState(&state);
   EXPECT_FALSE(filter_params.is_search_initiated);
   EXPECT_FALSE(filter_params.has_related_searches);
-  EXPECT_TRUE(filter_params.include_synced_visits);
-}
-
-TEST_F(QueryClustersStateTest,
-       FilterParamsEnabledButNotSetForQueryButDisabledSyncedVisitsStillSet) {
-  Config config;
-  config.apply_zero_state_filtering = true;
-  config.persist_clusters_in_history_db = true;
-  config.use_navigation_context_clusters = true;
-  config.include_synced_visits = false;
-  SetConfigForTesting(config);
-
-  QueryClustersState state(nullptr, nullptr, "query");
-
-  QueryClustersFilterParams filter_params =
-      GetQueryClustersFilterParamsForState(&state);
-  EXPECT_FALSE(filter_params.is_search_initiated);
-  EXPECT_FALSE(filter_params.has_related_searches);
-  EXPECT_FALSE(filter_params.include_synced_visits);
 }
 
 TEST_F(QueryClustersStateTest, PostProcessingOccursAndLogsHistograms) {
@@ -458,6 +390,7 @@ TEST_F(QueryClustersStateTest, GetUngroupedVisits) {
                     MockHistoryService::GetAnnotatedVisitsCallback callback,
                     base::CancelableTaskTracker* tracker) {
         get_annotated_visits_options = options;
+        EXPECT_TRUE(get_annotated_visits_options.include_actor_visits);
         get_ungrouped_visits_loop_1.Quit();
         return base::CancelableTaskTracker::kBadTaskId;
       })
@@ -467,6 +400,7 @@ TEST_F(QueryClustersStateTest, GetUngroupedVisits) {
                     MockHistoryService::GetAnnotatedVisitsCallback callback,
                     base::CancelableTaskTracker* tracker) {
         get_annotated_visits_options = options;
+        EXPECT_TRUE(get_annotated_visits_options.include_actor_visits);
         get_ungrouped_visits_loop_2.Quit();
         return base::CancelableTaskTracker::kBadTaskId;
       });

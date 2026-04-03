@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/policy/networking/user_network_configuration_updater.h"
@@ -95,8 +95,8 @@ class UserNetworkConfigurationUpdaterAsh
   void ImportClientCertificates() override;
 
   void ApplyNetworkPolicy(
-      const base::Value::List& network_configs_onc,
-      const base::Value::Dict& global_network_config) override;
+      const base::ListValue& network_configs_onc,
+      const base::DictValue& global_network_config) override;
 
   // ProfileObserver implementation
   void OnProfileInitializationComplete(Profile* profile) override;

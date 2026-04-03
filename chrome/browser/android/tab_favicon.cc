@@ -4,10 +4,12 @@
 
 #include "chrome/browser/android/tab_favicon.h"
 
-#include "chrome/android/chrome_jni_headers/TabFavicon_jni.h"
+#include "chrome/browser/android/tab_android.h"
 #include "components/favicon/content/content_favicon_driver.h"
+#include "content/public/browser/back_forward_transition_animation_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "skia/ext/image_operations.h"
+#include "third_party/blink/public/common/features_generated.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/android/java_bitmap.h"
@@ -16,38 +18,72 @@
 #include "ui/gfx/image/image_skia_rep.h"
 #include "url/android/gurl_android.h"
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/TabFavicon_jni.h"
+
+namespace {
+
+using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
-TabFavicon::TabFavicon(JNIEnv* env, const JavaParamRef<jobject>& obj)
-    : jobj_(env, obj) {}
+SkBitmap RescaleSkBitmap(const SkBitmap& original, int new_size_dip) {
+  SkImageInfo scaledInfo = original.info().makeWH(new_size_dip, new_size_dip);
+  SkBitmap resized;
+  resized.allocPixels(scaledInfo);
+  bool success = original.pixmap().scalePixels(
+      resized.pixmap(), SkSamplingOptions(SkFilterMode::kLinear));
+  CHECK(success);
+  resized.setImmutable();
+  return resized;
+}
+
+}  // namespace
+
+// static
+SkBitmap TabFavicon::GetBitmapForTab(TabAndroid* tab_android) {
+  if (!tab_android) {
+    return SkBitmap();
+  }
+  JNIEnv* env = base::android::AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> bitmap =
+      Java_TabFavicon_getBitmap(env, tab_android->GetJavaObject());
+  if (bitmap.is_null()) {
+    return SkBitmap();
+  }
+  return gfx::CreateSkBitmapFromJavaBitmap(gfx::JavaBitmap(bitmap));
+}
+
+TabFavicon::TabFavicon(JNIEnv* env,
+                       TabAndroid* tab_android,
+                       int navigation_transition_favicon_size)
+    : navigation_transition_favicon_size_(navigation_transition_favicon_size),
+      tab_android_(tab_android) {}
 
 TabFavicon::~TabFavicon() = default;
 
 void TabFavicon::SetWebContents(JNIEnv* env,
-                                const JavaParamRef<jobject>& obj,
-                                const JavaParamRef<jobject>& jweb_contents) {
-  favicon_driver_ = favicon::ContentFaviconDriver::FromWebContents(
-      content::WebContents::FromJavaWebContents(jweb_contents));
-  if (favicon_driver_)
+                                content::WebContents* web_contents) {
+  active_web_contents_ = web_contents;
+  favicon_driver_ =
+      favicon::ContentFaviconDriver::FromWebContents(active_web_contents_);
+  if (favicon_driver_) {
     favicon_driver_->AddObserver(this);
+  }
 }
 
-void TabFavicon::ResetWebContents(JNIEnv* env,
-                                  const JavaParamRef<jobject>& obj) {
+void TabFavicon::ResetWebContents(JNIEnv* env) {
+  active_web_contents_ = nullptr;
   if (favicon_driver_) {
     favicon_driver_->RemoveObserver(this);
     favicon_driver_ = nullptr;
   }
 }
 
-void TabFavicon::OnDestroyed(JNIEnv* env, const JavaParamRef<jobject>& obj) {
+void TabFavicon::OnDestroyed(JNIEnv* env) {
   delete this;
 }
 
-ScopedJavaLocalRef<jobject> TabFavicon::GetFavicon(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& obj) {
+ScopedJavaLocalRef<jobject> TabFavicon::GetFavicon(JNIEnv* env) {
   ScopedJavaLocalRef<jobject> bitmap;
 
   if (!favicon_driver_ || !favicon_driver_->FaviconIsValid()) {
@@ -58,7 +94,7 @@ ScopedJavaLocalRef<jobject> TabFavicon::GetFavicon(
   SkBitmap favicon = favicon_driver_->GetFavicon().AsBitmap();
   if (!favicon.empty()) {
     const float device_scale_factor =
-        display::Screen::GetScreen()->GetPrimaryDisplay().device_scale_factor();
+        display::Screen::Get()->GetPrimaryDisplay().device_scale_factor();
     int target_size_dip = device_scale_factor * gfx::kFaviconSize;
     if (favicon.width() != target_size_dip ||
         favicon.height() != target_size_dip) {
@@ -83,17 +119,45 @@ void TabFavicon::OnFaviconUpdated(favicon::FaviconDriver* favicon_driver,
   }
 
   SkBitmap favicon = image.AsImageSkia().GetRepresentation(1.0f).GetBitmap();
-  if (favicon.empty())
+  if (favicon.empty()) {
     return;
+  }
+
+  CHECK(tab_android_);
 
   JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> j_icon_url =
-      url::GURLAndroid::FromNativeGURL(env, icon_url);
-  Java_TabFavicon_onFaviconAvailable(
-      env, jobj_, gfx::ConvertToJavaBitmap(favicon), j_icon_url);
+
+  auto new_width = image.Width();
+  auto new_height = image.Height();
+  if (static_cast<bool>(Java_TabFavicon_shouldUpdateFaviconForBrowserUi(
+          env, tab_android_, new_width, new_height))) {
+    ScopedJavaLocalRef<jobject> j_icon_url =
+        url::GURLAndroid::FromNativeGURL(env, icon_url);
+    Java_TabFavicon_onFaviconAvailable(
+        env, tab_android_, gfx::ConvertToJavaBitmap(favicon), j_icon_url);
+  }
+  if (content::BackForwardTransitionAnimationManager::
+          ShouldAnimateBackForwardTransitions()) {
+    CHECK(active_web_contents_);
+    if (static_cast<bool>(
+            Java_TabFavicon_shouldUpdateFaviconForNavigationTransitions(
+                env, tab_android_, new_width, new_height))) {
+      SkBitmap scaled =
+          RescaleSkBitmap(favicon, navigation_transition_favicon_size_);
+      auto* manager =
+          active_web_contents_->GetBackForwardTransitionAnimationManager();
+      CHECK(manager);
+      manager->SetFavicon(std::move(scaled));
+    }
+  }
 }
 
-static jlong JNI_TabFavicon_Init(JNIEnv* env,
-                                 const JavaParamRef<jobject>& obj) {
-  return reinterpret_cast<intptr_t>(new TabFavicon(env, obj));
+static int64_t JNI_TabFavicon_Init(JNIEnv* env,
+                                   TabAndroid* tab_android,
+                                   int navigation_transition_favicon_size) {
+  CHECK(tab_android);
+  return reinterpret_cast<intptr_t>(
+      new TabFavicon(env, tab_android, navigation_transition_favicon_size));
 }
+
+DEFINE_JNI(TabFavicon)

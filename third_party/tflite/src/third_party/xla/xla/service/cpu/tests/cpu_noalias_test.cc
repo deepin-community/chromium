@@ -16,19 +16,34 @@ limitations under the License.
 #include <memory>
 #include <utility>
 
+#include "absl/status/status.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Type.h"
+#include "llvm/Support/Casting.h"
+#include "xla/hlo/analysis/alias_info.h"
+#include "xla/hlo/analysis/hlo_ordering.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
-#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/testlib/filecheck.h"
 #include "xla/literal.h"
+#include "xla/literal_util.h"
 #include "xla/service/buffer_assignment.h"
 #include "xla/service/cpu/tests/cpu_codegen_test.h"
 #include "xla/service/llvm_ir/alias_analysis.h"
+#include "xla/service/llvm_ir/ir_array.h"
 #include "xla/service/llvm_ir/llvm_util.h"
+#include "xla/service/logical_buffer.h"
 #include "xla/shape_util.h"
-#include "xla/tests/filecheck.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
 #include "xla/xla_data.pb.h"
-#include "tsl/platform/test.h"
 
 namespace xla {
 namespace cpu {
@@ -61,12 +76,14 @@ TEST_F(CpuNoAliasTest, Concat) {
   hlo_module->AddEntryComputation(std::move(computation));
 
   // Now that we have an HLO module, build an llvm_ir::AliasAnalysis for it.
+  AliasInfo alias_info;
   auto status_or_buffer_assn = BufferAssigner::Run(
       hlo_module.get(),
       std::make_unique<DependencyHloOrdering>(hlo_module.get()),
-      backend().compiler()->BufferSizeBytesFunction(),
-      [](LogicalBuffer::Color) { return /*alignment=*/1; });
-  ASSERT_EQ(status_or_buffer_assn.status(), OkStatus());
+      backend().compiler()->BufferSizeBytesFunction(), &alias_info,
+      [](LogicalBuffer::Color) { return /*alignment=*/1; },
+      BufferAssigner::Options{});
+  ASSERT_EQ(status_or_buffer_assn.status(), absl::OkStatus());
 
   llvm::LLVMContext context;
   llvm_ir::AliasAnalysis aa(*hlo_module, *status_or_buffer_assn.value(),

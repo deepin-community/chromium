@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import {v4} from 'uuid';
+import {sqlNameSafe} from './string_utils';
 
 export const uuidv4 = v4;
 
@@ -23,5 +24,23 @@ export const uuidv4 = v4;
  */
 export function uuidv4Sql(uuid?: string): string {
   const str = uuid ?? uuidv4();
-  return str.replace(/[^a-zA-Z0-9_]+/g, '_');
+  return sqlNameSafe(str);
+}
+
+// URL and SQL safe alphabet: A-Z, a-z, 0-9, _ (63 characters)
+const ALPHABET =
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_';
+
+/**
+ * Generate a short unique ID suitable for column identifiers.
+ * Prefixed with 'c' to ensure it's always a valid SQL identifier.
+ * Uses 8 characters from a 63-char alphabet (~2^47.6 unique values).
+ * @returns string A 9-character string starting with 'c'.
+ */
+export function shortUuid(): string {
+  let result = 'c';
+  for (let i = 0; i < 8; i++) {
+    result += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
+  }
+  return result;
 }

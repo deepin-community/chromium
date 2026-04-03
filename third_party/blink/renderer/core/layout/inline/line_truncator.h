@@ -25,7 +25,8 @@ class CORE_EXPORT LineTruncator final {
   STACK_ALLOCATED();
 
  public:
-  LineTruncator(const LineInfo& line_info);
+  explicit LineTruncator(const LineInfo& line_info,
+                         bool is_ellipsis_caused_by_line_clamp = false);
 
   // Truncate |line_box| and place ellipsis. Returns the new inline-size of the
   // |line_box|.
@@ -43,6 +44,8 @@ class CORE_EXPORT LineTruncator final {
  private:
   const ComputedStyle& EllipsisStyle() const;
 
+  String ComputeEllipsisText() const;
+
   // Initialize four ellipsis_*_ data members.
   void SetupEllipsis();
 
@@ -50,7 +53,7 @@ class CORE_EXPORT LineTruncator final {
   LayoutUnit PlaceEllipsisNextTo(LogicalLineItems* line_box,
                                  LogicalLineItem* ellipsized_child);
 
-  static constexpr wtf_size_t kDidNotAddChild = WTF::kNotFound;
+  static constexpr wtf_size_t kDidNotAddChild = kNotFound;
   // Add a child with truncated text of (*line_box)[source_index].
   // This function returns the index of the new child.
   // If the truncated text is empty, kDidNotAddChild is returned.
@@ -90,14 +93,30 @@ class CORE_EXPORT LineTruncator final {
   LayoutUnit available_width_;
   TextDirection line_direction_;
 
-  // The following 3 data members are available after SetupEllipsis().
+  // The following 2 data members are available after SetupEllipsis().
   const SimpleFontData* ellipsis_font_data_;
-  String ellipsis_text_;
   LayoutUnit ellipsis_width_;
 
+  class EllipsisShapeResult final
+      : public GarbageCollected<EllipsisShapeResult> {
+   public:
+    EllipsisShapeResult(const ShapeResultView& shape_result,
+                        const String& text,
+                        UBiDiLevel bidi_level)
+        : shape_result(shape_result), text(text), bidi_level(bidi_level) {}
+
+    Member<const ShapeResultView> shape_result;
+    String text;
+    UBiDiLevel bidi_level;
+
+    void Trace(Visitor* visitor) const { visitor->Trace(shape_result); }
+  };
   // This data member is available between SetupEllipsis() and
   // PlaceEllipsisNextTo().
-  ShapeResultView* ellipsis_shape_result_ = nullptr;
+  HeapVector<Member<const EllipsisShapeResult>, 1> ellipsis_shape_results_;
+
+  bool use_first_line_style_ = false;
+  bool is_ellipsis_caused_by_line_clamp_ = false;
 };
 
 }  // namespace blink

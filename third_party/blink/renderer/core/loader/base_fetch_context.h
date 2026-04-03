@@ -24,22 +24,12 @@
 
 namespace blink {
 
-class ClientHintsPreferences;
 class DetachableConsoleLogger;
 class DOMWrapperWorld;
 class DetachableResourceFetcherProperties;
 class KURL;
 class SubresourceFilter;
 class WebSocketHandshakeThrottle;
-
-// This is information for client hints that only make sense when attached to a
-// frame
-struct ClientHintImageInfo {
-  float dpr;
-  std::optional<float> resource_width;
-  std::optional<int> viewport_width;
-  std::optional<int> viewport_height;
-};
 
 // A core-level implementation of FetchContext that does not depend on
 // Frame. This class provides basic default implementation for some methods.
@@ -63,6 +53,16 @@ class CORE_EXPORT BaseFetchContext : public FetchContext {
   std::optional<ResourceRequestBlockedReason> CheckCSPForRequest(
       mojom::blink::RequestContextType,
       network::mojom::RequestDestination request_destination,
+      network::mojom::RequestMode request_mode,
+      const KURL&,
+      const ResourceLoaderOptions&,
+      ReportingDisposition,
+      const KURL& url_before_redirects,
+      ResourceRequest::RedirectStatus) const override;
+  std::optional<ResourceRequestBlockedReason> CheckAndEnforceCSPForRequest(
+      mojom::blink::RequestContextType,
+      network::mojom::RequestDestination request_destination,
+      network::mojom::RequestMode request_mode,
       const KURL&,
       const ResourceLoaderOptions&,
       ReportingDisposition,
@@ -96,19 +96,9 @@ class CORE_EXPORT BaseFetchContext : public FetchContext {
       const ResourceRequestHead& resource_request,
       base::optional_ref<const KURL> alias_url,
       ResourceType type,
-      const FetchInitiatorInfo& initiator_info) override;
-
-  void AddClientHintsIfNecessary(
-      const ClientHintsPreferences& hints_preferences,
-      const url::Origin& resource_origin,
-      bool is_1p_origin,
-      std::optional<UserAgentMetadata> ua,
-      const PermissionsPolicy* policy,
-      base::optional_ref<const ClientHintImageInfo> image_info,
-      base::optional_ref<const WTF::AtomicString> prefers_color_scheme,
-      base::optional_ref<const WTF::AtomicString> prefers_reduced_motion,
-      base::optional_ref<const WTF::AtomicString> prefers_reduced_transparency,
-      ResourceRequest& request);
+      const FetchInitiatorInfo& initiator_info,
+      bool scan_stack_for_ads,
+      subresource_filter::ScopedRule* out_rule) override;
 
  protected:
   BaseFetchContext(const DetachableResourceFetcherProperties& properties,
@@ -116,7 +106,7 @@ class CORE_EXPORT BaseFetchContext : public FetchContext {
       : fetcher_properties_(properties), console_logger_(logger) {}
 
   // Used for security checks.
-  virtual bool AllowScriptFromSource(const KURL&) const = 0;
+  virtual bool AllowScript() const = 0;
 
   // Note: subclasses are expected to override following methods.
   // Used in the default implementation for CanRequest, CanFollowRedirect
@@ -129,7 +119,7 @@ class CORE_EXPORT BaseFetchContext : public FetchContext {
   virtual ContentSecurityPolicy* GetContentSecurityPolicyForWorld(
       const DOMWrapperWorld* world) const = 0;
 
-  virtual bool IsSVGImageChromeClient() const = 0;
+  virtual bool IsIsolatedSVGChromeClient() const = 0;
   virtual bool ShouldBlockFetchByMixedContentCheck(
       mojom::blink::RequestContextType request_context,
       network::mojom::blink::IPAddressSpace target_address_space,
@@ -165,18 +155,13 @@ class CORE_EXPORT BaseFetchContext : public FetchContext {
   std::optional<ResourceRequestBlockedReason> CheckCSPForRequestInternal(
       mojom::blink::RequestContextType,
       network::mojom::RequestDestination request_destination,
+      network::mojom::RequestMode request_mode,
       const KURL&,
       const ResourceLoaderOptions&,
       ReportingDisposition,
       const KURL& url_before_redirects,
       ResourceRequest::RedirectStatus redirect_status,
       ContentSecurityPolicy::CheckHeaderType) const;
-
-  bool ShouldSendClientHint(const PermissionsPolicy*,
-                            const url::Origin&,
-                            bool is_1p_origin,
-                            network::mojom::blink::WebClientHintsType,
-                            const ClientHintsPreferences&) const;
 };
 
 }  // namespace blink

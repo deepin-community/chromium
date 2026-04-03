@@ -34,7 +34,7 @@ using ::tensorflow::test::function::NDef;
 using FDH = FunctionDefHelper;
 
 void CompareNodeFanins(const MutableGraphView& graph, NodeDef* node,
-                       absl::Span<const string> fanins) {
+                       absl::Span<const std::string> fanins) {
   ASSERT_EQ(node->input_size(), fanins.size());
   for (int i = 0; i < node->input_size(); ++i) {
     TensorId tensor_id = ParseTensorName(fanins[i]);
@@ -54,11 +54,11 @@ void CompareNodeFanins(const MutableGraphView& graph, NodeDef* node,
 }
 
 void CompareNodeFanouts(const MutableGraphView& graph, NodeDef* node,
-                        absl::Span<const string> fanouts) {
+                        absl::Span<const std::string> fanouts) {
   auto node_fanouts =
       graph.GetFanouts(*node, /*include_controlled_nodes=*/true);
   EXPECT_EQ(node_fanouts.size(), fanouts.size());
-  for (const string& fanout : fanouts) {
+  for (const std::string& fanout : fanouts) {
     TensorId tensor_id = ParseTensorName(fanout);
     MutableGraphView::InputPort input_port(graph.GetNode(tensor_id.node()),
                                            tensor_id.index());
@@ -66,11 +66,12 @@ void CompareNodeFanouts(const MutableGraphView& graph, NodeDef* node,
   }
 }
 
-void CheckNode(const MutableGraphView& graph, absl::string_view node_name,
-               absl::string_view op, absl::string_view device,
-               absl::Span<const std::pair<string, FDH::AttrValueWrapper>> attrs,
-               absl::Span<const string> fanins,
-               absl::Span<const string> fanouts) {
+void CheckNode(
+    const MutableGraphView& graph, absl::string_view node_name,
+    absl::string_view op, absl::string_view device,
+    absl::Span<const std::pair<std::string, FDH::AttrValueWrapper>> attrs,
+    absl::Span<const std::string> fanins,
+    absl::Span<const std::string> fanouts) {
   NodeDef* node = graph.GetNode(node_name);
   ASSERT_NE(node, nullptr);
   EXPECT_EQ(node->op(), op);
@@ -202,7 +203,7 @@ TEST(MutableGraphViewTest, AddSubgraphAndFailIfFunctionDifferent) {
   FunctionDef x_times_two = test::function::XTimesTwo();
   GraphDef subgraph = test::function::GDef({}, {x_times_two});
 
-  Status status = graph.AddSubgraph(std::move(subgraph));
+  absl::Status status = graph.AddSubgraph(std::move(subgraph));
   EXPECT_FALSE(status.ok());
   EXPECT_EQ(status.message(),
             "MutableGraphView::AddSubgraph(function_size=1) error: Found "
@@ -289,9 +290,9 @@ TEST(MutableGraphViewTest, UpdateNodeSwitchControlDependency) {
 
   AttrValue attr;
   attr.set_type(DT_FLOAT);
-  Status s = graph.UpdateNode("foo", "Switch", kDevice, {{"T", attr}});
+  absl::Status s = graph.UpdateNode("foo", "Switch", kDevice, {{"T", attr}});
   EXPECT_FALSE(s.ok());
-  string expected_msg =
+  std::string expected_msg =
       "MutableGraphView::UpdateNodeOp(node_name='foo', op='Switch', "
       "device='/device:foo:0', attrs={('T', type: DT_FLOAT)}) error: can't "
       "change node op to Switch when node drives a control dependency "
@@ -305,22 +306,23 @@ TEST(MutableGraphViewTest, UpdateNodeSwitchControlDependency) {
   CheckGraph(graph);
 }
 
-absl::flat_hash_map<string, std::vector<string>> GetNodeInputsFromGraph(
-    const GraphDef& graph, absl::string_view node_to_exclude) {
-  absl::flat_hash_map<string, std::vector<string>> node_inputs;
+absl::flat_hash_map<std::string, std::vector<std::string>>
+GetNodeInputsFromGraph(const GraphDef& graph,
+                       absl::string_view node_to_exclude) {
+  absl::flat_hash_map<std::string, std::vector<std::string>> node_inputs;
   for (const auto& node : graph.node()) {
     if (node.name() == node_to_exclude) {
       continue;
     }
     node_inputs[node.name()] =
-        std::vector<string>(node.input().begin(), node.input().end());
+        std::vector<std::string>(node.input().begin(), node.input().end());
   }
   return node_inputs;
 }
 
 void CheckUnmodifiedNodeFanins(
     const GraphDef& graph, absl::string_view node_to_exclude,
-    const absl::flat_hash_map<string, std::vector<string>>&
+    const absl::flat_hash_map<std::string, std::vector<std::string>>&
         unmodified_node_inputs) {
   for (const auto& node : graph.node()) {
     if (node.name() == node_to_exclude) {
@@ -337,8 +339,8 @@ void CheckUnmodifiedNodeFanins(
 
 void TestUpdateNodeName(absl::string_view from_node_name, bool node_exists,
                         absl::string_view to_node_name, bool update_fanouts,
-                        bool success, const string& error_msg,
-                        absl::Span<const string> expected_fanins) {
+                        bool success, const std::string& error_msg,
+                        absl::Span<const std::string> expected_fanins) {
   GraphDef graph_def = test::function::GDef(
       {NDef("a", "NotImportant", {}, {}), NDef("b", "NotImportant", {"a"}),
        NDef("c", "NotImportant", {}, {})},
@@ -353,16 +355,18 @@ void TestUpdateNodeName(absl::string_view from_node_name, bool node_exists,
     EXPECT_EQ(node, nullptr);
   }
 
-  absl::flat_hash_map<string, std::vector<string>> unmodified_node_inputs =
-      GetNodeInputsFromGraph(graph_def, from_node_name);
+  absl::flat_hash_map<std::string, std::vector<std::string>>
+      unmodified_node_inputs =
+          GetNodeInputsFromGraph(graph_def, from_node_name);
 
-  Status s = graph.UpdateNodeName(from_node_name, to_node_name, update_fanouts);
+  absl::Status s =
+      graph.UpdateNodeName(from_node_name, to_node_name, update_fanouts);
   EXPECT_EQ(s.ok(), success);
-  string updated_node_name;
+  std::string updated_node_name;
   if (success) {
-    updated_node_name = string(to_node_name);
+    updated_node_name = std::string(to_node_name);
   } else {
-    updated_node_name = string(from_node_name);
+    updated_node_name = std::string(from_node_name);
     EXPECT_EQ(s.message(), error_msg);
   }
   if (node_exists) {
@@ -377,7 +381,7 @@ void TestUpdateNodeName(absl::string_view from_node_name, bool node_exists,
 }
 
 TEST(MutableGraphViewTest, UpdateNodeName) {
-  string error_msg;
+  std::string error_msg;
   // Node has no fanouts.
   TestUpdateNodeName("b", /*node_exists=*/true, "d", /*update_fanouts=*/false,
                      /*success=*/true, error_msg, {"a"});
@@ -673,12 +677,13 @@ TEST(MutableGraphView, SwapNodeNamesSelfLoops) {
 
 void TestSwapNodeNamesError(absl::string_view from_node_name,
                             absl::string_view to_node_name, bool update_fanouts,
-                            const string& error_msg) {
+                            const std::string& error_msg) {
   GraphDef graph_def = SimpleSwapNodeNamesMutationGraph();
 
   MutableGraphView graph(&graph_def);
 
-  Status s = graph.SwapNodeNames(from_node_name, to_node_name, update_fanouts);
+  absl::Status s =
+      graph.SwapNodeNames(from_node_name, to_node_name, update_fanouts);
   EXPECT_EQ(s.ok(), false);
   EXPECT_EQ(s.message(), error_msg);
 
@@ -701,7 +706,7 @@ void TestSwapNodeNamesError(absl::string_view from_node_name,
 
 // TODO(lyandy): add tests with update_fanouts == true.
 TEST(MutableGraphView, SwapNodeNamesError) {
-  string error_msg;
+  std::string error_msg;
   // Missing nodes.
   error_msg =
       "MutableGraphView::SwapNodeNames(from_node_name='foo_3', "
@@ -842,9 +847,9 @@ TEST(MutableGraphViewTest, UpdateFanoutsToSwitchWithControlFromSwitch) {
 
   MutableGraphView graph(&graph_def);
 
-  Status s = graph.UpdateFanouts("a", "b");
+  absl::Status s = graph.UpdateFanouts("a", "b");
   EXPECT_FALSE(s.ok());
-  string expected_msg =
+  std::string expected_msg =
       "MutableGraphView::UpdateFanouts(from_node_name='a', to_node_name='b') "
       "error: can't update fanouts to node 'b' as it will become a Switch "
       "control dependency.";
@@ -907,8 +912,8 @@ GraphDef SimpleMutateFaninGraph() {
 
 void TestAddRegularFanin(absl::string_view node_name, bool node_exists,
                          const TensorId& fanin_to_add, bool success,
-                         const string& error_msg,
-                         absl::Span<const string> expected_fanins) {
+                         const std::string& error_msg,
+                         absl::Span<const std::string> expected_fanins) {
   GraphDef graph_def = SimpleMutateFaninGraph();
 
   MutableGraphView graph(&graph_def);
@@ -920,10 +925,10 @@ void TestAddRegularFanin(absl::string_view node_name, bool node_exists,
     EXPECT_EQ(node, nullptr);
   }
 
-  absl::flat_hash_map<string, std::vector<string>> unmodified_node_inputs =
-      GetNodeInputsFromGraph(graph_def, node_name);
+  absl::flat_hash_map<std::string, std::vector<std::string>>
+      unmodified_node_inputs = GetNodeInputsFromGraph(graph_def, node_name);
 
-  Status s = graph.AddRegularFanin(node_name, fanin_to_add);
+  absl::Status s = graph.AddRegularFanin(node_name, fanin_to_add);
   EXPECT_EQ(s.ok(), success);
   if (!success) {
     EXPECT_EQ(s.message(), error_msg);
@@ -938,7 +943,7 @@ void TestAddRegularFanin(absl::string_view node_name, bool node_exists,
 }
 
 TEST(MutableGraphViewTest, AddRegularFanin) {
-  string error_msg;
+  std::string error_msg;
   // Add input to node with 1 input 0 controls.
   TestAddRegularFanin("foo_1", /*node_exists=*/true, {"b", 1}, /*success=*/true,
                       error_msg, {"a", "b:1"});
@@ -1039,8 +1044,8 @@ TEST(MutableGraphViewTest, AddRegularFanin) {
 
 void TestAddRegularFaninByPort(absl::string_view node_name, bool node_exists,
                                int port, const TensorId& fanin_to_add,
-                               bool success, const string& error_msg,
-                               absl::Span<const string> expected_fanins) {
+                               bool success, const std::string& error_msg,
+                               absl::Span<const std::string> expected_fanins) {
   GraphDef graph_def = SimpleMutateFaninGraph();
 
   MutableGraphView graph(&graph_def);
@@ -1052,10 +1057,10 @@ void TestAddRegularFaninByPort(absl::string_view node_name, bool node_exists,
     EXPECT_EQ(node, nullptr);
   }
 
-  absl::flat_hash_map<string, std::vector<string>> unmodified_node_inputs =
-      GetNodeInputsFromGraph(graph_def, node_name);
+  absl::flat_hash_map<std::string, std::vector<std::string>>
+      unmodified_node_inputs = GetNodeInputsFromGraph(graph_def, node_name);
 
-  Status s = graph.AddRegularFaninByPort(node_name, port, fanin_to_add);
+  absl::Status s = graph.AddRegularFaninByPort(node_name, port, fanin_to_add);
   EXPECT_EQ(s.ok(), success);
   if (!success) {
     EXPECT_EQ(s.message(), error_msg);
@@ -1070,7 +1075,7 @@ void TestAddRegularFaninByPort(absl::string_view node_name, bool node_exists,
 }
 
 TEST(MutableGraphViewTest, AddRegularFaninByPort) {
-  string error_msg;
+  std::string error_msg;
   // Add input at start to node with some inputs and no controls.
   TestAddRegularFaninByPort("foo_3", /*node_exists=*/true, /*port=*/0, {"d", 2},
                             /*success=*/true, error_msg,
@@ -1193,8 +1198,8 @@ void CheckFanoutRemoved(const MutableGraphView& graph, const TensorId& fanin,
 
 void TestRemoveRegularFanin(absl::string_view node_name, bool node_exists,
                             const TensorId& fanin_to_remove, bool success,
-                            const string& error_msg,
-                            absl::Span<const string> expected_fanins) {
+                            const std::string& error_msg,
+                            absl::Span<const std::string> expected_fanins) {
   GraphDef graph_def = SimpleMutateFaninGraph();
 
   MutableGraphView graph(&graph_def);
@@ -1206,10 +1211,10 @@ void TestRemoveRegularFanin(absl::string_view node_name, bool node_exists,
     EXPECT_EQ(nullptr, node);
   }
 
-  absl::flat_hash_map<string, std::vector<string>> unmodified_node_inputs =
-      GetNodeInputsFromGraph(graph_def, node_name);
+  absl::flat_hash_map<std::string, std::vector<std::string>>
+      unmodified_node_inputs = GetNodeInputsFromGraph(graph_def, node_name);
 
-  Status s = graph.RemoveRegularFanin(node_name, fanin_to_remove);
+  absl::Status s = graph.RemoveRegularFanin(node_name, fanin_to_remove);
   EXPECT_EQ(s.ok(), success);
   if (!success) {
     EXPECT_EQ(s.message(), error_msg);
@@ -1227,7 +1232,7 @@ void TestRemoveRegularFanin(absl::string_view node_name, bool node_exists,
 }
 
 TEST(MutableGraphViewTest, RemoveRegularFanin) {
-  string error_msg;
+  std::string error_msg;
   // Remove input from node with 1 input 0 controls.
   TestRemoveRegularFanin("foo_1", /*node_exists=*/true, {"a", 0},
                          /*success=*/true, error_msg, {});
@@ -1333,10 +1338,10 @@ TEST(MutableGraphViewTest, RemoveRegularFanin) {
                          /*success=*/false, error_msg, {"^a", "^b"});
 }
 
-void TestRemoveRegularFaninByPort(absl::string_view node_name, bool node_exists,
-                                  int port, bool success,
-                                  const string& error_msg,
-                                  absl::Span<const string> expected_fanins) {
+void TestRemoveRegularFaninByPort(
+    absl::string_view node_name, bool node_exists, int port, bool success,
+    const std::string& error_msg,
+    absl::Span<const std::string> expected_fanins) {
   GraphDef graph_def = SimpleMutateFaninGraph();
 
   MutableGraphView graph(&graph_def);
@@ -1348,10 +1353,10 @@ void TestRemoveRegularFaninByPort(absl::string_view node_name, bool node_exists,
     EXPECT_EQ(nullptr, node);
   }
 
-  absl::flat_hash_map<string, std::vector<string>> unmodified_node_inputs =
-      GetNodeInputsFromGraph(graph_def, node_name);
+  absl::flat_hash_map<std::string, std::vector<std::string>>
+      unmodified_node_inputs = GetNodeInputsFromGraph(graph_def, node_name);
 
-  Status s = graph.RemoveRegularFaninByPort(node_name, port);
+  absl::Status s = graph.RemoveRegularFaninByPort(node_name, port);
   EXPECT_EQ(s.ok(), success);
   if (!success) {
     EXPECT_EQ(s.message(), error_msg);
@@ -1366,7 +1371,7 @@ void TestRemoveRegularFaninByPort(absl::string_view node_name, bool node_exists,
 }
 
 TEST(MutableGraphViewTest, RemoveRegularFaninByPort) {
-  string error_msg;
+  std::string error_msg;
   // Remove input at start of node with some inputs and no controls.
   TestRemoveRegularFaninByPort("foo_3", /*node_exists=*/true, /*port=*/0,
                                /*success=*/true, error_msg, {"a:1", "a:1"});
@@ -1438,14 +1443,14 @@ TEST(MutableGraphViewTest, RemoveRegularFaninByPort) {
 
 void TestRemoveAllFanins(absl::string_view node_name, bool node_exists,
                          bool keep_controlling_nodes, bool success,
-                         const string& error_msg,
-                         absl::Span<const string> expected_fanins) {
+                         const std::string& error_msg,
+                         absl::Span<const std::string> expected_fanins) {
   GraphDef graph_def = SimpleMutateFaninGraph();
 
   MutableGraphView graph(&graph_def);
 
   NodeDef* node = graph.GetNode(node_name);
-  absl::flat_hash_set<string> fanin_strings;
+  absl::flat_hash_set<std::string> fanin_strings;
   if (node_exists) {
     EXPECT_NE(node, nullptr);
     fanin_strings.insert(node->input().begin(), node->input().end());
@@ -1453,10 +1458,10 @@ void TestRemoveAllFanins(absl::string_view node_name, bool node_exists,
     EXPECT_EQ(node, nullptr);
   }
 
-  absl::flat_hash_map<string, std::vector<string>> unmodified_node_inputs =
-      GetNodeInputsFromGraph(graph_def, node_name);
+  absl::flat_hash_map<std::string, std::vector<std::string>>
+      unmodified_node_inputs = GetNodeInputsFromGraph(graph_def, node_name);
 
-  Status s = graph.RemoveAllFanins(node_name, keep_controlling_nodes);
+  absl::Status s = graph.RemoveAllFanins(node_name, keep_controlling_nodes);
   EXPECT_EQ(s.ok(), success);
   if (!success) {
     EXPECT_EQ(s.message(), error_msg);
@@ -1465,9 +1470,9 @@ void TestRemoveAllFanins(absl::string_view node_name, bool node_exists,
     CompareNodeFanins(graph, node, expected_fanins);
     if (success) {
       TensorId tensor_id;
-      auto retained_inputs = absl::flat_hash_set<string>(node->input().begin(),
-                                                         node->input().end());
-      for (const string& fanin : fanin_strings) {
+      auto retained_inputs = absl::flat_hash_set<std::string>(
+          node->input().begin(), node->input().end());
+      for (const std::string& fanin : fanin_strings) {
         if (!retained_inputs.contains(fanin)) {
           tensor_id = ParseTensorName(fanin);
           CheckFanoutRemoved(graph, tensor_id, node_name);
@@ -1482,7 +1487,7 @@ void TestRemoveAllFanins(absl::string_view node_name, bool node_exists,
 }
 
 TEST(MutableGraphViewTest, RemoveAllFanins) {
-  string error_msg;
+  std::string error_msg;
   // Remove all fanins from node with no control dependencies.
   TestRemoveAllFanins("foo_3", /*node_exists=*/true,
                       /*keep_controlling_nodes=*/false,
@@ -1536,8 +1541,8 @@ TEST(MutableGraphViewTest, RemoveAllFanins) {
 
 void TestUpdateFanin(absl::string_view node_name, bool node_exists,
                      const TensorId& from_fanin, const TensorId& to_fanin,
-                     bool success, const string& error_msg,
-                     absl::Span<const string> expected_fanins) {
+                     bool success, const std::string& error_msg,
+                     absl::Span<const std::string> expected_fanins) {
   GraphDef graph_def = SimpleMutateFaninGraph();
 
   MutableGraphView graph(&graph_def);
@@ -1549,10 +1554,10 @@ void TestUpdateFanin(absl::string_view node_name, bool node_exists,
     EXPECT_EQ(node, nullptr);
   }
 
-  absl::flat_hash_map<string, std::vector<string>> unmodified_node_inputs =
-      GetNodeInputsFromGraph(graph_def, node_name);
+  absl::flat_hash_map<std::string, std::vector<std::string>>
+      unmodified_node_inputs = GetNodeInputsFromGraph(graph_def, node_name);
 
-  Status s = graph.UpdateFanin(node_name, from_fanin, to_fanin);
+  absl::Status s = graph.UpdateFanin(node_name, from_fanin, to_fanin);
   EXPECT_EQ(s.ok(), success);
   if (!success) {
     EXPECT_EQ(s.message(), error_msg);
@@ -1570,7 +1575,7 @@ void TestUpdateFanin(absl::string_view node_name, bool node_exists,
 }
 
 TEST(MutableGraphViewTest, UpdateFanin) {
-  string error_msg;
+  std::string error_msg;
   // Update fanin from non control to non control.
   TestUpdateFanin("foo_4", /*node_exists=*/true, {"b", 2}, {"b", 3},
                   /*success=*/true, error_msg, {"a", "b:3", "b:3", "^c", "^d"});
@@ -1679,7 +1684,7 @@ TEST(MutableGraphViewTest, UpdateFanin) {
 }
 
 void TestUpdateFaninFromFaninToNodeAsSwitchControl(const TensorId& fanin) {
-  string tensor_id_str = TensorIdToString(fanin);
+  std::string tensor_id_str = TensorIdToString(fanin);
   GraphDef graph_def = test::function::GDef(
       {NDef("a", "NotImportant", {}, {}), NDef("b", "Switch", {}, {}),
        NDef("c", "NotImportant", {tensor_id_str})},
@@ -1687,9 +1692,9 @@ void TestUpdateFaninFromFaninToNodeAsSwitchControl(const TensorId& fanin) {
 
   MutableGraphView graph(&graph_def);
 
-  Status s = graph.UpdateFanin("c", fanin, {"b", Graph::kControlSlot});
+  absl::Status s = graph.UpdateFanin("c", fanin, {"b", Graph::kControlSlot});
   EXPECT_FALSE(s.ok());
-  string expected_msg = absl::Substitute(
+  std::string expected_msg = absl::Substitute(
       "MutableGraphView::UpdateFanin(node_name='c', from_fanin='$0', "
       "to_fanin='^b') error: can't update to fanin '^b' as it will become a "
       "Switch control dependency.",
@@ -1698,7 +1703,7 @@ void TestUpdateFaninFromFaninToNodeAsSwitchControl(const TensorId& fanin) {
 
   EXPECT_EQ(graph.graph()->node_size(), 3);
 
-  string fanout = IsControlInput(fanin) ? AsControlDependency("c") : "c";
+  std::string fanout = IsControlInput(fanin) ? AsControlDependency("c") : "c";
   CheckNode(graph, "a", "NotImportant", "", {}, {}, {fanout});
   CheckNode(graph, "b", "Switch", "", {}, {}, {});
   CheckNode(graph, "c", "NotImportant", "", {}, {tensor_id_str}, {});
@@ -1712,10 +1717,10 @@ TEST(MutableGraphViewTest, UpdateFaninToNodeAsSwitchControl) {
   TestUpdateFaninFromFaninToNodeAsSwitchControl({"a", Graph::kControlSlot});
 }
 
-void TestUpdateRegularFaninByPort(absl::string_view node_name, bool node_exists,
-                                  int port, const TensorId& fanin, bool success,
-                                  const string& error_msg,
-                                  absl::Span<const string> expected_fanins) {
+void TestUpdateRegularFaninByPort(
+    absl::string_view node_name, bool node_exists, int port,
+    const TensorId& fanin, bool success, const std::string& error_msg,
+    absl::Span<const std::string> expected_fanins) {
   GraphDef graph_def = SimpleMutateFaninGraph();
 
   MutableGraphView graph(&graph_def);
@@ -1727,10 +1732,10 @@ void TestUpdateRegularFaninByPort(absl::string_view node_name, bool node_exists,
     EXPECT_EQ(node, nullptr);
   }
 
-  absl::flat_hash_map<string, std::vector<string>> unmodified_node_inputs =
-      GetNodeInputsFromGraph(graph_def, node_name);
+  absl::flat_hash_map<std::string, std::vector<std::string>>
+      unmodified_node_inputs = GetNodeInputsFromGraph(graph_def, node_name);
 
-  Status s = graph.UpdateRegularFaninByPort(node_name, port, fanin);
+  absl::Status s = graph.UpdateRegularFaninByPort(node_name, port, fanin);
   EXPECT_EQ(s.ok(), success);
   if (!success) {
     EXPECT_EQ(s.message(), error_msg);
@@ -1745,7 +1750,7 @@ void TestUpdateRegularFaninByPort(absl::string_view node_name, bool node_exists,
 }
 
 TEST(MutableGraphViewTest, UpdateRegularFaninByPort) {
-  string error_msg;
+  std::string error_msg;
   // Update input at start to node with some inputs and no controls.
   TestUpdateRegularFaninByPort(
       "foo_3", /*node_exists=*/true, /*port=*/0, {"d", 2},
@@ -1876,10 +1881,10 @@ TEST(MutableGraphViewTest, UpdateRegularFaninByPort) {
                                /*success=*/false, error_msg, {"^a", "^b"});
 }
 
-void TestSwapRegularFaninsByPorts(absl::string_view node_name, bool node_exists,
-                                  int from_port, int to_port, bool success,
-                                  const string& error_msg,
-                                  absl::Span<const string> expected_fanins) {
+void TestSwapRegularFaninsByPorts(
+    absl::string_view node_name, bool node_exists, int from_port, int to_port,
+    bool success, const std::string& error_msg,
+    absl::Span<const std::string> expected_fanins) {
   GraphDef graph_def = SimpleMutateFaninGraph();
 
   MutableGraphView graph(&graph_def);
@@ -1891,10 +1896,11 @@ void TestSwapRegularFaninsByPorts(absl::string_view node_name, bool node_exists,
     EXPECT_EQ(node, nullptr);
   }
 
-  absl::flat_hash_map<string, std::vector<string>> unmodified_node_inputs =
-      GetNodeInputsFromGraph(graph_def, node_name);
+  absl::flat_hash_map<std::string, std::vector<std::string>>
+      unmodified_node_inputs = GetNodeInputsFromGraph(graph_def, node_name);
 
-  Status s = graph.SwapRegularFaninsByPorts(node_name, from_port, to_port);
+  absl::Status s =
+      graph.SwapRegularFaninsByPorts(node_name, from_port, to_port);
   EXPECT_EQ(s.ok(), success);
   if (!success) {
     EXPECT_EQ(s.message(), error_msg);
@@ -1909,7 +1915,7 @@ void TestSwapRegularFaninsByPorts(absl::string_view node_name, bool node_exists,
 }
 
 TEST(MutableGraphViewTest, SwapRegularFaninsByPorts) {
-  string error_msg;
+  std::string error_msg;
   // Swapping first and last regular fanins
   TestSwapRegularFaninsByPorts("foo_3", /*node_exists=*/true, /*from_port=*/0,
                                /*to_port=*/2, /*success=*/true, error_msg,
@@ -2392,9 +2398,9 @@ TEST(MutableGraphViewTest, AddControllingFaninMissing) {
 
   MutableGraphView graph(&graph_def);
   // Missing fanin.
-  Status s = graph.AddControllingFanin("a", {"c", Graph::kControlSlot});
+  absl::Status s = graph.AddControllingFanin("a", {"c", Graph::kControlSlot});
   EXPECT_FALSE(s.ok());
-  string expected_msg =
+  std::string expected_msg =
       "MutableGraphView::AddControllingFanin(node_name='a', fanin='^c') error: "
       "node 'c' was not found.";
   EXPECT_EQ(s.message(), expected_msg);
@@ -2464,9 +2470,9 @@ TEST(MutableGraphViewTest, AddControllingFaninSwitch) {
 
   MutableGraphView graph(&graph_def);
 
-  Status s = graph.AddControllingFanin("a", {"b", Graph::kControlSlot});
+  absl::Status s = graph.AddControllingFanin("a", {"b", Graph::kControlSlot});
   EXPECT_FALSE(s.ok());
-  string expected_msg =
+  std::string expected_msg =
       "MutableGraphView::AddControllingFanin(node_name='a', fanin='^b') error: "
       "can't add fanin '^b' as it will become a Switch control dependency.";
   EXPECT_EQ(s.message(), expected_msg);
@@ -2548,7 +2554,7 @@ TEST(MutableGraphViewTest, AddControllingFaninSwitchWithExistingAddedIdentity) {
 
 void TestAddControllingFaninSelfLoops(absl::string_view node_name,
                                       const TensorId& fanin,
-                                      const string& error_msg) {
+                                      const std::string& error_msg) {
   GraphDef graph_def = test::function::GDef(
       {NDef("a", "NotImportant", {}, {}),
        NDef("b", "Switch", {}, {{"T", DT_FLOAT}}),
@@ -2558,7 +2564,7 @@ void TestAddControllingFaninSelfLoops(absl::string_view node_name,
 
   MutableGraphView graph(&graph_def);
 
-  Status s = graph.AddControllingFanin(node_name, fanin);
+  absl::Status s = graph.AddControllingFanin(node_name, fanin);
   EXPECT_FALSE(s.ok());
   EXPECT_EQ(s.message(), error_msg);
 
@@ -2574,7 +2580,7 @@ void TestAddControllingFaninSelfLoops(absl::string_view node_name,
 }
 
 TEST(MutableGraphViewTest, AddControllingFaninSelfLoops) {
-  string error_msg =
+  std::string error_msg =
       "MutableGraphView::AddControllingFanin(node_name='a', fanin='^a') error: "
       "can't add fanin '^a' to self.";
   TestAddControllingFaninSelfLoops("a", {"a", Graph::kControlSlot}, error_msg);
@@ -2616,9 +2622,10 @@ TEST(MutableGraphViewTest, AddControllingFaninSelfLoopsGeneratedIdentity) {
   // node, with name `ConstantFoldingCtrl/b_1`. As the input node is of the same
   // name, we will introduce a self loop, so no control dependency should be
   // added.
-  Status s = graph.AddControllingFanin("ConstantFoldingCtrl/b_1", {"b", 1});
+  absl::Status s =
+      graph.AddControllingFanin("ConstantFoldingCtrl/b_1", {"b", 1});
   EXPECT_FALSE(s.ok());
-  string expected_msg =
+  std::string expected_msg =
       "MutableGraphView::AddControllingFanin(node_name='ConstantFoldingCtrl/"
       "b_1', fanin='b:1') error: can't add generated fanin "
       "'^ConstantFoldingCtrl/b_1' to self.";
@@ -2709,9 +2716,9 @@ TEST(MutableGraphViewTest, RemoveControllingFaninSelfLoop) {
 
   MutableGraphView graph(&graph_def);
 
-  Status s = graph.RemoveControllingFanin("c", "c");
+  absl::Status s = graph.RemoveControllingFanin("c", "c");
   EXPECT_FALSE(s.ok());
-  string expected_msg =
+  std::string expected_msg =
       "MutableGraphView::RemoveControllingFanin(node_name='c', "
       "fanin_node_name='c') error: can't remove fanin '^c' from "
       "self.";
@@ -2728,7 +2735,8 @@ TEST(MutableGraphViewTest, RemoveControllingFaninSelfLoop) {
 
 void TestUpdateAllRegularFaninsToControlling(
     absl::string_view node_name, bool node_exists, bool success,
-    const string& error_msg, absl::Span<const string> expected_fanins) {
+    const std::string& error_msg,
+    absl::Span<const std::string> expected_fanins) {
   constexpr char kDevice[] = "/device:foo:0";
   GraphDef graph_def = test::function::GDef(
       {NDef("a", "NotImportant", {}, {}),
@@ -2750,10 +2758,10 @@ void TestUpdateAllRegularFaninsToControlling(
     EXPECT_EQ(node, nullptr);
   }
 
-  absl::flat_hash_map<string, std::vector<string>> unmodified_node_inputs =
-      GetNodeInputsFromGraph(graph_def, node_name);
+  absl::flat_hash_map<std::string, std::vector<std::string>>
+      unmodified_node_inputs = GetNodeInputsFromGraph(graph_def, node_name);
 
-  Status s = graph.UpdateAllRegularFaninsToControlling(node_name);
+  absl::Status s = graph.UpdateAllRegularFaninsToControlling(node_name);
   EXPECT_EQ(s.ok(), success);
   if (!success) {
     EXPECT_EQ(s.message(), error_msg);
@@ -2768,7 +2776,7 @@ void TestUpdateAllRegularFaninsToControlling(
 }
 
 TEST(MutableGraphViewTest, UpdateAllRegularFaninsToControlling) {
-  string error_msg;
+  std::string error_msg;
   // Nodes with some regular fanins and some controls.
   TestUpdateAllRegularFaninsToControlling("a", /*node_exists=*/true,
                                           /*success=*/true, error_msg, {});
@@ -2935,9 +2943,9 @@ TEST(MutableGraphViewTest, DeleteNodesWithError) {
 
   MutableGraphView graph(&graph_def);
 
-  Status s = graph.DeleteNodes({"b", "a"});
+  absl::Status s = graph.DeleteNodes({"b", "a"});
   EXPECT_FALSE(s.ok());
-  string error_msg =
+  std::string error_msg =
       "MutableGraphView::DeleteNodes(nodes_to_delete={a, b}) error: can't "
       "delete node(s) with retained fanouts(s) [a, b].";
   EXPECT_EQ(s.message(), error_msg);
@@ -2969,9 +2977,9 @@ TEST(MutableGraphViewTest, DeleteNodesWithLargeError) {
 
   MutableGraphView graph(&graph_def);
 
-  Status s = graph.DeleteNodes({"a", "b", "c", "d", "e", "f"});
+  absl::Status s = graph.DeleteNodes({"a", "b", "c", "d", "e", "f"});
   EXPECT_FALSE(s.ok());
-  string error_msg =
+  std::string error_msg =
       "MutableGraphView::DeleteNodes(nodes_to_delete={a, b, c, d, e, ...}) "
       "error: can't delete node(s) with retained fanouts(s) [a, b, c, d, e, "
       "...].";

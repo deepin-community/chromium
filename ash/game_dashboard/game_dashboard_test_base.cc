@@ -4,10 +4,10 @@
 
 #include "ash/game_dashboard/game_dashboard_test_base.h"
 
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_features.h"
 #include "ash/game_dashboard/game_dashboard_controller.h"
 #include "ash/public/cpp/window_properties.h"
+#include "chromeos/ui/base/app_types.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "chromeos/ui/wm/window_util.h"
 #include "ui/aura/window.h"
@@ -15,18 +15,16 @@
 namespace ash {
 
 GameDashboardTestBase::GameDashboardTestBase()
-    : AshTestBase(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+    : AshTestBase(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
+  scoped_feature_list_.InitWithFeatures(
+      {features::kFeatureManagementGameDashboardRecordGame}, {});
+}
 
 void GameDashboardTestBase::SetUp() {
-  scoped_feature_list_.InitWithFeatures(
-      {features::kGameDashboard,
-       features::kFeatureManagementGameDashboardRecordGame},
-      {});
   AshTestBase::SetUp();
   UpdateDisplay(base::StringPrintf("%d+%d-%dx%d", kScreenBounds.x(),
                                    kScreenBounds.y(), kScreenBounds.width(),
                                    kScreenBounds.height()));
-  EXPECT_TRUE(features::IsGameDashboardEnabled());
 }
 
 void GameDashboardTestBase::AdvanceClock(base::TimeDelta delta) {
@@ -42,7 +40,7 @@ bool GameDashboardTestBase::IsControllerObservingWindow(
 
 std::unique_ptr<aura::Window> GameDashboardTestBase::CreateAppWindow(
     const std::string& app_id,
-    AppType app_type,
+    chromeos::AppType app_type,
     const gfx::Rect& bounds_in_screen) {
   std::unique_ptr<aura::Window> window =
       AshTestBase::CreateAppWindow(bounds_in_screen, app_type);

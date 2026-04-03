@@ -16,6 +16,7 @@ import optparse
 import os
 import pprint
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -548,6 +549,15 @@ def get_total_disk_space():
     return (total, free)
 
 
+def disk_usage():
+  total_disk_space, free_disk_space = get_total_disk_space()
+  total_disk_space_gb = int(total_disk_space / (1024 * 1024 * 1024))
+  used_disk_space_gb = int(
+      (total_disk_space - free_disk_space) / (1024 * 1024 * 1024))
+  percent_used = int(used_disk_space_gb * 100 / total_disk_space_gb)
+  return (used_disk_space_gb, total_disk_space_gb, percent_used)
+
+
 def ref_to_remote_ref(ref):
   """Maps refs to equivalent remote ref.
 
@@ -652,16 +662,16 @@ def _set_git_config(fn):
 
 
 def git_checkouts(solutions, revisions, refs, no_fetch_tags, git_cache_dir,
-                  cleanup_dir, enforce_fetch):
+                  cleanup_dir, enforce_fetch, clean_ignored):
   build_dir = os.getcwd()
   for sln in solutions:
     sln_dir = path.join(build_dir, sln['name'])
     _git_checkout(sln, sln_dir, revisions, refs, no_fetch_tags, git_cache_dir,
-                  cleanup_dir, enforce_fetch)
+                  cleanup_dir, enforce_fetch, clean_ignored)
 
 
 def _git_checkout(sln, sln_dir, revisions, refs, no_fetch_tags, git_cache_dir,
-                  cleanup_dir, enforce_fetch):
+                  cleanup_dir, enforce_fetch, clean_ignored):
   name = sln['name']
   url = sln['url']
 
@@ -731,7 +741,7 @@ def _git_checkout(sln, sln_dir, revisions, refs, no_fetch_tags, git_cache_dir,
       # 'pin or branch' as revision or ref, and not as file/directory which
       # happens to have the exact same name.
       git('checkout', '--force', pin or branch, '--', cwd=sln_dir)
-      git('clean', '-dff', cwd=sln_dir)
+      git('clean', '-dffx' if clean_ignored else '-dff', cwd=sln_dir)
       return
     except SubprocessFailed as e:
       # Exited abnormally, there's probably something wrong.
@@ -802,18 +812,31 @@ def emit_json(out_file, did_run, **kwargs):
 
 
 @_set_git_config
-def ensure_checkout(solutions, revisions, first_sln, target_os, target_os_only,
-                    target_cpu, patch_root, patch_refs, gerrit_rebase_patch_ref,
-                    no_fetch_tags, refs, git_cache_dir, cleanup_dir,
-                    gerrit_reset, enforce_fetch, experiments,
-                    download_topics=False):
+def ensure_checkout(solutions,
+                    revisions,
+                    first_sln,
+                    target_os,
+                    target_os_only,
+                    target_cpu,
+                    patch_root,
+                    patch_refs,
+                    gerrit_rebase_patch_ref,
+                    no_fetch_tags,
+                    refs,
+                    git_cache_dir,
+                    cleanup_dir,
+                    gerrit_reset,
+                    enforce_fetch,
+                    experiments,
+                    download_topics=False,
+                    clean_ignored=False):
   # Get a checkout of each solution, without DEPS or hooks.
   # Calling git directly because there is no way to run Gclient without
   # invoking DEPS.
   print('Fetching Git checkout')
 
   git_checkouts(solutions, revisions, refs, no_fetch_tags, git_cache_dir,
-                cleanup_dir, enforce_fetch)
+                cleanup_dir, enforce_fetch, clean_ignored)
 
   # Ensure our build/ directory is set up with the correct .gclient file.
   gclient_configure(solutions, target_os, target_os_only, target_cpu,
@@ -926,6 +949,9 @@ def parse_args():
   parse.add_option(
       '--download_topics',
       action='store_true')
+  parse.add_option('--clean-ignored',
+                   action='store_true',
+                   help='Also clean ignored files from the checkout.')
 
   parse.add_option('--clobber', action='store_true',
                    help='Delete checkout first, always')
@@ -998,14 +1024,7 @@ def prepare(options, git_slns, active):
   # Make sure we tell recipes that we didn't run if the script exits here.
   emit_json(options.output_json, did_run=active)
 
-  total_disk_space, free_disk_space = get_total_disk_space()
-  total_disk_space_gb = int(total_disk_space / (1024 * 1024 * 1024))
-  used_disk_space_gb = int((total_disk_space - free_disk_space)
-                           / (1024 * 1024 * 1024))
-  percent_used = int(used_disk_space_gb * 100 / total_disk_space_gb)
-  step_text = '[%dGB/%dGB used (%d%%)]' % (used_disk_space_gb,
-                                           total_disk_space_gb,
-                                           percent_used)
+  step_text = '[%dGB/%dGB used (%d%%)]' % disk_usage()
   # The first solution is where the primary DEPS file resides.
   first_sln = dir_names[0]
 
@@ -1087,8 +1106,8 @@ def checkout(options, git_slns, specs, revisions, step_text):
           git_cache_dir=options.git_cache_dir,
           cleanup_dir=options.cleanup_dir,
           gerrit_reset=not options.gerrit_no_reset,
-
-          experiments=experiments)
+          experiments=experiments,
+          clean_ignored=options.clean_ignored)
       ensure_checkout(**checkout_parameters)
       should_create_dirty_file = False
     except GclientSyncFailed:
@@ -1138,6 +1157,18 @@ def checkout(options, git_slns, specs, revisions, step_text):
 
   # Add git cache age to the output.properties
   properties['git_cache_epoch'] = cache_epoch
+
+  usage = disk_usage()
+  # successfully checked out. remove cleanup_dir to get free disk space.
+  if os.path.exists(options.cleanup_dir):
+    prev_usage = usage
+    print('Removing cleanup_dir %s' % options.cleanup_dir)
+    shutil.rmtree(options.cleanup_dir, ignore_errors=True)
+    usage = disk_usage()
+    print('Release %dGB (%d%%)' %
+          (prev_usage[0] - usage[0], prev_usage[2] - usage[2]))
+
+  step_text = step_text + (' -> [%dGB/%dGB used (%d%%)]' % usage)
 
   # Tell recipes information such as root, got_revision, etc.
   emit_json(options.output_json,

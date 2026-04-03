@@ -37,7 +37,7 @@ class MEDIA_EXPORT AudioManagerWin : public AudioManagerBase {
       const std::string& device_id) override;
   std::string GetAssociatedOutputDeviceID(
       const std::string& input_device_id) override;
-  const char* GetName() override;
+  const std::string_view GetName() override;
 
   // Implementation of AudioManagerBase.
   AudioOutputStream* MakeLinearOutputStream(
@@ -55,10 +55,12 @@ class MEDIA_EXPORT AudioManagerWin : public AudioManagerBase {
       const AudioParameters& params,
       const std::string& device_id,
       const LogCallback& log_callback) override;
+#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
   AudioOutputStream* MakeBitstreamOutputStream(
       const AudioParameters& params,
       const std::string& device_id,
       const LogCallback& log_callback) override;
+#endif
   std::string GetDefaultInputDeviceID() override;
   std::string GetDefaultOutputDeviceID() override;
   std::string GetCommunicationsInputDeviceID() override;

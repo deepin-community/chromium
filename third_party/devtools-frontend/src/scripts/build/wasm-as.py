@@ -1,4 +1,4 @@
-# Copyright 2022 The Chromium Authors. All rights reserved.
+# Copyright 2022 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -54,7 +54,7 @@ def script_main(args):
         options.output
     ])
     (size, offset) = re.search(
-        b'Section {[^}]*Type: CODE[^}]*Size: (\d*)[^}]*Offset: (\d*)[^}]*}',
+        rb'Section {[^}]*Type: CODE[^}]*Size: (\d*)[^}]*Offset: (\d*)[^}]*}',
         wasm_obj_headers).groups()
 
     # readobj reports as offset the location of the first byte of the header.

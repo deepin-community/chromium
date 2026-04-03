@@ -11,11 +11,12 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/check_op.h"
-#include "base/containers/contains.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
@@ -27,7 +28,6 @@
 #include "base/task/thread_pool.h"
 #include "base/types/optional_util.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/clipboard/clipboard_constants.h"
 #include "ui/base/clipboard/clipboard_data.h"
@@ -84,7 +84,7 @@ void UnregisterInstance(const ClipboardNonBacked* clipboard) {
 // ClipboardNonBacked*.
 bool IsRegisteredInstance(const Clipboard* clipboard) {
   base::AutoLock lock(GetInstanceRegistryLock());
-  return base::Contains(*GetInstanceRegistry(), clipboard);
+  return GetInstanceRegistry()->contains(clipboard);
 }
 
 }  // namespace
@@ -233,15 +233,15 @@ class ClipboardInternal {
   }
 
   // Reads data of type |type| from the ClipboardData.
-  void ReadWebCustomData(const std::u16string& type,
-                         std::u16string* result) const {
+  void ReadDataTransferCustomData(const std::u16string& type,
+                                  std::u16string* result) const {
     result->clear();
     const ClipboardData* data = GetData();
     if (!HasFormat(ClipboardInternalFormat::kCustom))
       return;
 
     std::optional<std::u16string> maybe_result = ReadCustomDataForType(
-        base::as_bytes(base::span(data->GetWebCustomData())), type);
+        base::as_byte_span(data->GetDataTransferCustomData()), type);
     if (maybe_result) {
       *result = std::move(*maybe_result);
     }
@@ -369,26 +369,26 @@ class ClipboardDataBuilder {
     clipboard.WriteData(TakeCurrentData());
   }
 
-  static void WriteText(base::StringPiece text) {
+  static void WriteText(std::string_view text) {
     ClipboardData* data = GetCurrentData();
-    data->set_text(text);
+    data->set_text(std::string(text));
   }
 
-  static void WriteHTML(base::StringPiece markup,
-                        std::optional<base::StringPiece> source_url) {
+  static void WriteHTML(std::string_view markup,
+                        std::optional<std::string_view> source_url) {
     ClipboardData* data = GetCurrentData();
-    data->set_markup_data(markup);
-    data->set_url(source_url ? *source_url : std::string());
+    data->set_markup_data(std::string(markup));
+    data->set_url(source_url ? std::string(*source_url) : std::string());
   }
 
-  static void WriteSvg(base::StringPiece markup) {
+  static void WriteSvg(std::string_view markup) {
     ClipboardData* data = GetCurrentData();
-    data->set_svg_data(markup);
+    data->set_svg_data(std::string(markup));
   }
 
-  static void WriteRTF(base::StringPiece rtf) {
+  static void WriteRTF(std::string_view rtf) {
     ClipboardData* data = GetCurrentData();
-    data->SetRTFData(rtf);
+    data->SetRTFData(std::string(rtf));
   }
 
   static void WriteFilenames(std::vector<ui::FileInfo> filenames) {
@@ -396,10 +396,10 @@ class ClipboardDataBuilder {
     data->set_filenames(std::move(filenames));
   }
 
-  static void WriteBookmark(base::StringPiece title, base::StringPiece url) {
+  static void WriteBookmark(std::string_view title, std::string_view url) {
     ClipboardData* data = GetCurrentData();
-    data->set_bookmark_title(title);
-    data->set_bookmark_url(url);
+    data->set_bookmark_title(std::string(title));
+    data->set_bookmark_url(std::string(url));
   }
 
   static void WriteWebSmartPaste() {
@@ -590,23 +590,23 @@ std::vector<std::u16string> ClipboardNonBacked::GetStandardFormats(
   std::vector<std::u16string> types;
   if (IsFormatAvailable(ClipboardFormatType::PlainTextType(), buffer,
                         data_dst)) {
-    types.push_back(base::UTF8ToUTF16(kMimeTypeText));
+    types.push_back(kMimeTypePlainText16);
   }
   if (IsFormatAvailable(ClipboardFormatType::HtmlType(), buffer, data_dst)) {
-    types.push_back(base::UTF8ToUTF16(kMimeTypeHTML));
+    types.push_back(kMimeTypeHtml16);
   }
   if (IsFormatAvailable(ClipboardFormatType::SvgType(), buffer, data_dst)) {
-    types.push_back(base::UTF8ToUTF16(kMimeTypeSvg));
+    types.push_back(kMimeTypeSvg16);
   }
   if (IsFormatAvailable(ClipboardFormatType::RtfType(), buffer, data_dst)) {
-    types.push_back(base::UTF8ToUTF16(kMimeTypeRTF));
+    types.push_back(kMimeTypeRtf16);
   }
   if (IsFormatAvailable(ClipboardFormatType::BitmapType(), buffer, data_dst)) {
-    types.push_back(base::UTF8ToUTF16(kMimeTypePNG));
+    types.push_back(kMimeTypePng16);
   }
   if (IsFormatAvailable(ClipboardFormatType::FilenamesType(), buffer,
                         data_dst)) {
-    types.push_back(base::UTF8ToUTF16(kMimeTypeURIList));
+    types.push_back(kMimeTypeUriList16);
   }
   return types;
 }
@@ -629,9 +629,10 @@ void ClipboardNonBacked::ReadAvailableTypes(
 
   if (clipboard_internal.IsFormatAvailable(ClipboardInternalFormat::kCustom) &&
       clipboard_internal.GetData()) {
-    ReadCustomDataTypes(base::as_bytes(base::span(
-                            clipboard_internal.GetData()->GetWebCustomData())),
-                        types);
+    ReadCustomDataTypes(
+        base::as_byte_span(
+            clipboard_internal.GetData()->GetDataTransferCustomData()),
+        types);
   }
 }
 
@@ -654,7 +655,7 @@ void ClipboardNonBacked::ReadText(ClipboardBuffer buffer,
   RecordRead(ClipboardFormatMetric::kText);
   clipboard_internal.ReadText(result);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ClipboardMonitor::GetInstance()->NotifyClipboardDataRead();
 #endif
 }
@@ -678,7 +679,7 @@ void ClipboardNonBacked::ReadAsciiText(ClipboardBuffer buffer,
   RecordRead(ClipboardFormatMetric::kText);
   clipboard_internal.ReadAsciiText(result);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ClipboardMonitor::GetInstance()->NotifyClipboardDataRead();
 #endif
 }
@@ -705,7 +706,7 @@ void ClipboardNonBacked::ReadHTML(ClipboardBuffer buffer,
   RecordRead(ClipboardFormatMetric::kHtml);
   clipboard_internal.ReadHTML(markup, src_url, fragment_start, fragment_end);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ClipboardMonitor::GetInstance()->NotifyClipboardDataRead();
 #endif
 }
@@ -729,7 +730,7 @@ void ClipboardNonBacked::ReadSvg(ClipboardBuffer buffer,
   RecordRead(ClipboardFormatMetric::kSvg);
   clipboard_internal.ReadSvg(result);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ClipboardMonitor::GetInstance()->NotifyClipboardDataRead();
 #endif
 }
@@ -753,7 +754,7 @@ void ClipboardNonBacked::ReadRTF(ClipboardBuffer buffer,
   RecordRead(ClipboardFormatMetric::kRtf);
   clipboard_internal.ReadRTF(result);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ClipboardMonitor::GetInstance()->NotifyClipboardDataRead();
 #endif
 }
@@ -778,22 +779,23 @@ void ClipboardNonBacked::ReadPng(ClipboardBuffer buffer,
   RecordRead(ClipboardFormatMetric::kPng);
   clipboard_internal.ReadPng(std::move(callback));
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ClipboardMonitor::GetInstance()->NotifyClipboardDataRead();
 #endif
 }
 
-void ClipboardNonBacked::ReadCustomData(ClipboardBuffer buffer,
-                                        const std::u16string& type,
-                                        const DataTransferEndpoint* data_dst,
-                                        std::u16string* result) const {
+void ClipboardNonBacked::ReadDataTransferCustomData(
+    ClipboardBuffer buffer,
+    const std::u16string& type,
+    const DataTransferEndpoint* data_dst,
+    std::u16string* result) const {
   DCHECK(CalledOnValidThread());
 
   const ClipboardInternal& clipboard_internal = GetInternalClipboard(buffer);
 
   if (!clipboard_internal.IsReadAllowed(
           data_dst, ClipboardInternalFormat::kCustom,
-          ClipboardFormatType::WebCustomDataType())) {
+          ClipboardFormatType::DataTransferCustomType())) {
     return;
   }
 
@@ -802,9 +804,9 @@ void ClipboardNonBacked::ReadCustomData(ClipboardBuffer buffer,
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   RecordRead(ClipboardFormatMetric::kCustomData);
-  clipboard_internal.ReadWebCustomData(type, result);
+  clipboard_internal.ReadDataTransferCustomData(type, result);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ClipboardMonitor::GetInstance()->NotifyClipboardDataRead();
 #endif
 }
@@ -829,7 +831,7 @@ void ClipboardNonBacked::ReadFilenames(
   RecordRead(ClipboardFormatMetric::kFilenames);
   *result = clipboard_internal.ReadFilenames();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ClipboardMonitor::GetInstance()->NotifyClipboardDataRead();
 #endif
 }
@@ -854,7 +856,7 @@ void ClipboardNonBacked::ReadBookmark(const DataTransferEndpoint* data_dst,
   RecordRead(ClipboardFormatMetric::kBookmark);
   clipboard_internal.ReadBookmark(title, url);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ClipboardMonitor::GetInstance()->NotifyClipboardDataRead();
 #endif
 }
@@ -867,7 +869,10 @@ void ClipboardNonBacked::ReadData(const ClipboardFormatType& format,
   const ClipboardInternal& clipboard_internal =
       GetInternalClipboard(ClipboardBuffer::kCopyPaste);
 
-  if (!clipboard_internal.IsReadAllowed(
+  // Reading an RFH token written in the clipboard is always allowed as it is
+  // used internally by the browser to evaluate other policies.
+  if (format.GetName() != "chromium/x-internal-source-rfh-token" &&
+      !clipboard_internal.IsReadAllowed(
           data_dst, ClipboardInternalFormat::kCustom, format)) {
     return;
   }
@@ -879,14 +884,14 @@ void ClipboardNonBacked::ReadData(const ClipboardFormatType& format,
   RecordRead(ClipboardFormatMetric::kData);
   clipboard_internal.ReadData(format, result);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ClipboardMonitor::GetInstance()->NotifyClipboardDataRead();
 #endif
 }
 
 #if BUILDFLAG(IS_OZONE)
 bool ClipboardNonBacked::IsSelectionBufferAvailable() const {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   return false;
 #else
   return true;
@@ -897,36 +902,41 @@ bool ClipboardNonBacked::IsSelectionBufferAvailable() const {
 void ClipboardNonBacked::WritePortableAndPlatformRepresentations(
     ClipboardBuffer buffer,
     const ObjectMap& objects,
+    const std::vector<RawData>& raw_objects,
     std::vector<Clipboard::PlatformRepresentation> platform_representations,
-    std::unique_ptr<DataTransferEndpoint> data_src) {
+    std::unique_ptr<DataTransferEndpoint> data_src,
+    uint32_t privacy_types) {
   DCHECK(CalledOnValidThread());
   DCHECK(IsSupportedClipboardBuffer(buffer));
 
   ClipboardInternal& clipboard_internal = GetInternalClipboard(buffer);
 
   DispatchPlatformRepresentations(std::move(platform_representations));
-  for (const auto& object : objects)
+  for (const auto& object : objects) {
     DispatchPortableRepresentation(object.second);
+  }
+  for (const auto& raw_object : raw_objects) {
+    DispatchPortableRepresentation(raw_object);
+  }
 
   ClipboardDataBuilder::CommitToClipboard(
       clipboard_internal, base::OptionalFromPtr(data_src.get()));
 }
 
-void ClipboardNonBacked::WriteText(base::StringPiece text) {
+void ClipboardNonBacked::WriteText(std::string_view text) {
   ClipboardDataBuilder::WriteText(text);
 }
 
-void ClipboardNonBacked::WriteHTML(
-    base::StringPiece markup,
-    std::optional<base::StringPiece> source_url) {
+void ClipboardNonBacked::WriteHTML(std::string_view markup,
+                                   std::optional<std::string_view> source_url) {
   ClipboardDataBuilder::WriteHTML(markup, source_url);
 }
 
-void ClipboardNonBacked::WriteSvg(base::StringPiece markup) {
+void ClipboardNonBacked::WriteSvg(std::string_view markup) {
   ClipboardDataBuilder::WriteSvg(markup);
 }
 
-void ClipboardNonBacked::WriteRTF(base::StringPiece rtf) {
+void ClipboardNonBacked::WriteRTF(std::string_view rtf) {
   ClipboardDataBuilder::WriteRTF(rtf);
 }
 
@@ -934,8 +944,8 @@ void ClipboardNonBacked::WriteFilenames(std::vector<ui::FileInfo> filenames) {
   ClipboardDataBuilder::WriteFilenames(std::move(filenames));
 }
 
-void ClipboardNonBacked::WriteBookmark(base::StringPiece title,
-                                       base::StringPiece url) {
+void ClipboardNonBacked::WriteBookmark(std::string_view title,
+                                       std::string_view url) {
   ClipboardDataBuilder::WriteBookmark(title, url);
 }
 

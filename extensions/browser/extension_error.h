@@ -20,11 +20,11 @@ namespace extensions {
 
 class ExtensionError {
  public:
-  enum Type {
-    MANIFEST_ERROR = 0,
-    RUNTIME_ERROR,
-    INTERNAL_ERROR,
-    NUM_ERROR_TYPES,  // Put new values above this.
+  enum class Type {
+    kManifestError = 0,
+    kRuntimeError,
+    kInternalError,
+    kNumErrorTypes,  // Put new values above this.
   };
 
   ExtensionError(const ExtensionError&) = delete;
@@ -34,7 +34,7 @@ class ExtensionError {
 
   virtual std::string GetDebugString() const;
 
-  // Return true if this error and |rhs| are considered equal, and should be
+  // Return true if this error and `rhs` are considered equal, and should be
   // grouped together.
   bool IsEqual(const ExtensionError* rhs) const;
 
@@ -117,7 +117,8 @@ class RuntimeError : public ExtensionError {
                const GURL& context_url,
                logging::LogSeverity level,
                int render_frame_id,
-               int render_process_id);
+               int render_process_id,
+               bool is_from_service_worker = false);
 
   RuntimeError(const RuntimeError&) = delete;
   RuntimeError& operator=(const RuntimeError&) = delete;
@@ -130,6 +131,7 @@ class RuntimeError : public ExtensionError {
   const StackTrace& stack_trace() const { return stack_trace_; }
   int render_frame_id() const { return render_frame_id_; }
   int render_process_id() const { return render_process_id_; }
+  bool is_from_service_worker() const { return is_from_service_worker_; }
 
  private:
   bool IsEqualImpl(const ExtensionError* rhs) const override;
@@ -146,6 +148,7 @@ class RuntimeError : public ExtensionError {
   // inspect the frame later, if possible.
   int render_frame_id_;
   int render_process_id_;
+  bool is_from_service_worker_ = false;
 };
 
 class InternalError : public ExtensionError {

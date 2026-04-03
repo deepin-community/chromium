@@ -10,6 +10,7 @@
 #include "media/base/ipc/media_param_traits.h"
 #include "media/base/video_decoder_config.h"
 #include "media/mojo/mojom/media_types.mojom.h"
+#include "media/mojo/mojom/video_aspect_ratio_mojom_traits.h"
 #include "media/mojo/mojom/video_color_space_mojom_traits.h"
 #include "media/mojo/mojom/video_transformation_mojom_traits.h"
 #include "ui/gfx/geometry/mojom/geometry_mojom_traits.h"
@@ -46,6 +47,11 @@ struct StructTraits<media::mojom::VideoDecoderConfigDataView,
     return input.natural_size();
   }
 
+  static const media::VideoAspectRatio& aspect_ratio(
+      const media::VideoDecoderConfig& input) {
+    return input.aspect_ratio();
+  }
+
   static const std::vector<uint8_t>& extra_data(
       const media::VideoDecoderConfig& input) {
     return input.extra_data();
@@ -66,7 +72,7 @@ struct StructTraits<media::mojom::VideoDecoderConfigDataView,
     return input.video_transformation();
   }
 
-  static const std::optional<gfx::HDRMetadata>& hdr_metadata(
+  static const gfx::HDRMetadata& hdr_metadata(
       const media::VideoDecoderConfig& input) {
     return input.hdr_metadata();
   }

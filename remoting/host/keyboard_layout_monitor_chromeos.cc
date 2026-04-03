@@ -4,9 +4,11 @@
 
 #include "remoting/host/keyboard_layout_monitor.h"
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
+#include "base/memory/raw_span.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/strings/utf_string_conversion_utils.h"
@@ -54,7 +56,7 @@ class Core : private ash::input_method::ImeKeyboard::Observer {
   LayoutKeyFunction GetFunctionFromKeyboardCode(
       ui::KeyboardCode key_code) const;
 
-  const base::span<const ui::DomCode> supported_keys_;
+  const base::raw_span<const ui::DomCode> supported_keys_;
   base::RepeatingCallback<void(const protocol::KeyboardLayout&)> callback_;
   base::ScopedObservation<ash::input_method::ImeKeyboard,
                           ash::input_method::ImeKeyboard::Observer>
@@ -122,7 +124,7 @@ void Core::QueryLayout() {
     for (int shift_level = 0; shift_level < shift_levels; shift_level++) {
       ui::DomKey key;
       ui::KeyboardCode key_code;
-      int event_flags = kShiftLevelFlags[shift_level];
+      int event_flags = UNSAFE_TODO(kShiftLevelFlags[shift_level]);
       if (!keyboard_layout_engine->Lookup(code, event_flags, &key, &key_code)) {
         continue;
       }

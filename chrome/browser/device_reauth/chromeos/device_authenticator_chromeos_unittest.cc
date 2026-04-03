@@ -4,35 +4,53 @@
 
 #include "chrome/browser/device_reauth/chromeos/device_authenticator_chromeos.h"
 
+#include "ash/constants/ash_features.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "components/device_reauth/device_reauth_metrics_util.h"
+#include "components/password_manager/core/common/password_manager_pref_names.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
+#include "components/prefs/testing_pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
 
+using ::base::test::RunOnceCallback;
 using device_reauth::DeviceAuthenticator;
 using device_reauth::ReauthResult;
+using ::testing::Return;
 
 class MockSystemAuthenticator : public AuthenticatorChromeOSInterface {
  public:
   MOCK_METHOD(void,
               AuthenticateUser,
-              (base::OnceCallback<void(bool)> callback),
+              (const std::u16string& message,
+               base::OnceCallback<void(bool)> callback),
+              (override));
+  MOCK_METHOD(BiometricsStatusChromeOS,
+              CheckIfBiometricsAvailable,
+              (),
+              (override));
+  MOCK_METHOD(void,
+              CheckIfPinIsAvailable,
+              (base::OnceCallback<void(bool)>),
               (override));
 };
 
 constexpr base::TimeDelta kAuthValidityPeriod = base::Seconds(60);
 constexpr char kHistogramName[] =
     "PasswordManager.ReauthToAccessPasswordInSettings";
-
-}  // namespace
 
 class DeviceAuthenticatorChromeOSTest : public testing::Test {
  public:
@@ -42,6 +60,21 @@ class DeviceAuthenticatorChromeOSTest : public testing::Test {
             device_reauth::DeviceAuthSource::kPasswordManager,
             kHistogramName) {}
   void SetUp() override {
+    auto* prefs = static_cast<TestingPrefServiceSimple*>(local_state());
+
+    if (!prefs->FindPreference(
+            password_manager::prefs::kHadBiometricsAvailable)) {
+      prefs->registry()->RegisterBooleanPref(
+          password_manager::prefs::kHadBiometricsAvailable, false);
+    }
+
+    if (!prefs->FindPreference(
+            password_manager::prefs::kPinAuthenticationAvailableOnChromeOS)) {
+      prefs->registry()->RegisterBooleanPref(
+          password_manager::prefs::kPinAuthenticationAvailableOnChromeOS,
+          false);
+    }
+
     std::unique_ptr<MockSystemAuthenticator> system_authenticator =
         std::make_unique<MockSystemAuthenticator>();
     system_authenticator_ = system_authenticator.get();
@@ -55,13 +88,17 @@ class DeviceAuthenticatorChromeOSTest : public testing::Test {
     return *system_authenticator_;
   }
 
+  PrefService* local_state() {
+    return TestingBrowserProcess::GetGlobal()->local_state();
+  }
+
   base::test::TaskEnvironment& task_environment() { return task_environment_; }
 
   base::HistogramTester& histogram_tester() { return histogram_tester_; }
 
   void ExpectAuthenticationAndSetResult(bool result) {
     EXPECT_CALL(system_authenticator(), AuthenticateUser)
-        .WillOnce(testing::WithArg<0>([result](auto callback) {
+        .WillOnce(testing::WithArg<1>([result](auto callback) {
           base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
               FROM_HERE,
               base::BindOnce(std::move(callback), /*auth_succeeded=*/result));
@@ -179,3 +216,100 @@ TEST_F(DeviceAuthenticatorChromeOSTest, RecordFailAuthHistogram) {
   histogram_tester().ExpectUniqueSample(kHistogramName, ReauthResult::kFailure,
                                         1);
 }
+
+// Test that CacheIfPinIsAvailable correctly calls the authenticator and sets
+// the pref.
+TEST_F(DeviceAuthenticatorChromeOSTest, CachePinAvailability) {
+  EXPECT_CALL(system_authenticator(), CheckIfPinIsAvailable)
+      .WillOnce(RunOnceCallback<0>(true));
+
+  // Trigger the caching logic
+  DeviceAuthenticatorChromeOS::CacheIfPinIsAvailable(&system_authenticator());
+
+  // Verify the preference was updated in the global local_state
+  EXPECT_TRUE(local_state()->GetBoolean(
+      password_manager::prefs::kPinAuthenticationAvailableOnChromeOS));
+}
+
+// Test checking for screen lock when Biometrics are NOT available but PIN IS
+// available.
+TEST_F(DeviceAuthenticatorChromeOSTest, CanAuthenticateWithPin) {
+  // Biometrics are unavailable
+  EXPECT_CALL(system_authenticator(), CheckIfBiometricsAvailable)
+      .WillOnce(Return(BiometricsStatusChromeOS::kUnavailable));
+
+  // PIN is available: simulate cached value in global local_state
+  local_state()->SetBoolean(
+      password_manager::prefs::kPinAuthenticationAvailableOnChromeOS, true);
+
+  // Should return true because PIN is available
+  EXPECT_TRUE(authenticator()->CanAuthenticateWithBiometricOrScreenLock());
+}
+
+// Test checking for screen lock when neither Biometrics nor PIN are available.
+TEST_F(DeviceAuthenticatorChromeOSTest,
+       CannotAuthenticateWithoutPinOrBiometrics) {
+  // Biometrics are unavailable
+  EXPECT_CALL(system_authenticator(), CheckIfBiometricsAvailable)
+      .WillOnce(Return(BiometricsStatusChromeOS::kUnavailable));
+
+  // PIN is unavailable: simulate cached value
+  local_state()->SetBoolean(
+      password_manager::prefs::kPinAuthenticationAvailableOnChromeOS, false);
+
+  // Should return false
+  EXPECT_FALSE(authenticator()->CanAuthenticateWithBiometricOrScreenLock());
+}
+
+// Verifies that the caching mechanism for BiometricsAvailable works.
+struct TestCase {
+  const char* description;
+  BiometricsStatusChromeOS availability;
+  bool expected_result;
+  int expected_bucket;
+};
+
+class DeviceAuthenticatorChromeOSTestAvailability
+    : public DeviceAuthenticatorChromeOSTest,
+      public testing::WithParamInterface<TestCase> {
+};
+
+TEST_P(DeviceAuthenticatorChromeOSTestAvailability, AvailabilityCheck) {
+  TestCase test_case = GetParam();
+  SCOPED_TRACE(test_case.description);
+  EXPECT_CALL(system_authenticator(), CheckIfBiometricsAvailable)
+      .WillOnce(Return(test_case.availability));
+  EXPECT_EQ(test_case.expected_result,
+            authenticator()->CanAuthenticateWithBiometrics());
+  EXPECT_EQ(test_case.expected_result,
+            local_state()->GetBoolean(
+                password_manager::prefs::kHadBiometricsAvailable));
+  histogram_tester().ExpectUniqueSample(
+      "PasswordManager.BiometricAvailabilityChromeOS",
+      test_case.expected_bucket, 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    DeviceAuthenticatorChromeOSTestAvailability,
+    ::testing::Values(
+        TestCase{
+            .description = "kAvailable",
+            .availability = BiometricsStatusChromeOS::kAvailable,
+            .expected_result = true,
+            .expected_bucket = 1,
+        },
+        TestCase{
+            .description = "kUnavailable",
+            .availability = BiometricsStatusChromeOS::kUnavailable,
+            .expected_result = false,
+            .expected_bucket = 2,
+
+        },
+        TestCase{
+            .description = "kNotConfiguredForUser",
+            .availability = BiometricsStatusChromeOS::kNotConfiguredForUser,
+            .expected_result = false,
+            .expected_bucket = 3,
+        }));
+}  // namespace

@@ -21,12 +21,19 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/Attributes.h"  // from @llvm-project
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
+#include "mlir/IR/Matchers.h"  // from @llvm-project
+#include "mlir/IR/Types.h"  // from @llvm-project
 #include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.h"
+#include "tensorflow/compiler/mlir/lite/quantization/common/quantization_lib/quantization_utils.h"
+#include "tensorflow/compiler/mlir/lite/utils/utils.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops_a_m.h"
 
 namespace mlir {
@@ -123,7 +130,7 @@ class InsertTFLQuantOpsAfterTFFakeQuantOp {
     int quant_dim = -1;
     if (PerAxis) {
       // This is a special case that the quant_dim is the last dimensions.
-      quant_dim = res.getType().template cast<ShapedType>().getRank() - 1;
+      quant_dim = mlir::cast<ShapedType>(res.getType()).getRank() - 1;
     }
     // Use the min/max from the operands and the num_bits and narrow_range
     // attribute to create the quantization parameter for the new quantize op.
@@ -131,7 +138,7 @@ class InsertTFLQuantOpsAfterTFFakeQuantOp {
     IntegerAttr num_bits = rewriter.getI64IntegerAttr(tf_op.getNumBits());
     BoolAttr narrow_range = rewriter.getBoolAttr(tf_op.getNarrowRange());
     Type res_type = tf_op.getType();
-    TypeAttr qtype = quant::GetQuantizedTypeAttr(
+    TypeAttr qtype = GetQuantizedTypeAttr(
         rewriter, res_type, min_value, max_value, quant_dim, num_bits,
         narrow_range, /*is_signed=*/false, /*legacy_float_scale=*/false,
         use_fake_quant_num_bits_);
@@ -143,10 +150,10 @@ class InsertTFLQuantOpsAfterTFFakeQuantOp {
     // dequantize ops, and insert them between the tf.FakeQuantWithMinMaxVarsOp
     // and its users.
     Value value = tf_op.getOutputs();
-    auto quantize = rewriter.create<TFL::QuantizeOp>(
-        tf_op.getLoc(), qtype.getValue(), value, qtype);
-    auto dequantize = rewriter.create<TFL::DequantizeOp>(
-        tf_op.getLoc(), res_type, quantize.getOutput());
+    auto quantize = TFL::QuantizeOp::create(rewriter, tf_op.getLoc(),
+                                            qtype.getValue(), value, qtype);
+    auto dequantize = TFL::DequantizeOp::create(rewriter, tf_op.getLoc(),
+                                                res_type, quantize.getOutput());
     value.replaceAllUsesWith(dequantize);
     quantize.getOperation()->replaceUsesOfWith(dequantize, value);
 

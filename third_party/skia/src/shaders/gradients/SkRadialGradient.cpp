@@ -11,13 +11,12 @@
 #include "include/core/SkMatrix.h"
 #include "include/core/SkRefCnt.h"
 #include "include/core/SkShader.h"
-#include "include/effects/SkGradientShader.h"
+#include "include/effects/SkGradient.h"
 #include "include/private/base/SkTArray.h"
 #include "src/core/SkRasterPipeline.h"
 #include "src/core/SkRasterPipelineOpList.h"
 #include "src/core/SkReadBuffer.h"
 #include "src/core/SkWriteBuffer.h"
-#include "src/shaders/SkLocalMatrixShader.h"
 #include "src/shaders/SkShaderBase.h"
 #include "src/shaders/gradients/SkGradientBaseShader.h"
 
@@ -36,7 +35,7 @@ static SkMatrix rad_to_unit_matrix(const SkPoint& center, SkScalar radius) {
     return matrix;
 }
 
-SkRadialGradient::SkRadialGradient(const SkPoint& center, SkScalar radius, const Descriptor& desc)
+SkRadialGradient::SkRadialGradient(const SkPoint& center, SkScalar radius, const SkGradient& desc)
         : SkGradientBaseShader(desc, rad_to_unit_matrix(center, radius))
         , fCenter(center)
         , fRadius(radius) {}
@@ -55,22 +54,18 @@ SkShaderBase::GradientType SkRadialGradient::asGradient(GradientInfo* info,
 }
 
 sk_sp<SkFlattenable> SkRadialGradient::CreateProc(SkReadBuffer& buffer) {
-    DescriptorScope desc;
-    SkMatrix legacyLocalMatrix;
-    if (!desc.unflatten(buffer, &legacyLocalMatrix)) {
+    SkGradientScope scope;
+    SkMatrix legacyLocalMatrix, *lmPtr = nullptr;
+    auto grad = scope.unflatten(buffer, &legacyLocalMatrix);
+    if (!grad) {
         return nullptr;
+    }
+    if (!legacyLocalMatrix.isIdentity()) {
+        lmPtr = &legacyLocalMatrix;
     }
     const SkPoint center = buffer.readPoint();
     const SkScalar radius = buffer.readScalar();
-    return SkGradientShader::MakeRadial(center,
-                                        radius,
-                                        desc.fColors,
-                                        std::move(desc.fColorSpace),
-                                        desc.fPositions,
-                                        desc.fColorCount,
-                                        desc.fTileMode,
-                                        desc.fInterpolation,
-                                        &legacyLocalMatrix);
+    return SkShaders::RadialGradient(center, radius, *grad, lmPtr);
 }
 
 void SkRadialGradient::flatten(SkWriteBuffer& buffer) const {
@@ -84,48 +79,21 @@ void SkRadialGradient::appendGradientStages(SkArenaAlloc*, SkRasterPipeline* p,
     p->append(SkRasterPipelineOp::xy_to_radius);
 }
 
-sk_sp<SkShader> SkGradientShader::MakeRadial(const SkPoint& center, SkScalar radius,
-                                             const SkColor4f colors[],
-                                             sk_sp<SkColorSpace> colorSpace,
-                                             const SkScalar pos[],
-                                             int colorCount,
-                                             SkTileMode mode,
-                                             const Interpolation& interpolation,
-                                             const SkMatrix* localMatrix) {
+sk_sp<SkShader> SkShaders::RadialGradient(SkPoint center, float radius,
+                                          const SkGradient& grad, const SkMatrix* lm) {
     if (radius < 0) {
         return nullptr;
     }
-    if (!SkGradientBaseShader::ValidGradient(colors, colorCount, mode, interpolation)) {
-        return nullptr;
-    }
-    if (1 == colorCount) {
-        return SkShaders::Color(colors[0], std::move(colorSpace));
-    }
-    if (localMatrix && !localMatrix->invert(nullptr)) {
-        return nullptr;
-    }
+
+    GRADIENT_FACTORY_EARLY_EXIT(grad, lm);
 
     if (SkScalarNearlyZero(radius, SkGradientBaseShader::kDegenerateThreshold)) {
         // Degenerate gradient optimization, and no special logic needed for clamped radial gradient
-        return SkGradientBaseShader::MakeDegenerateGradient(
-                colors, pos, colorCount, std::move(colorSpace), mode);
+        return SkGradientBaseShader::MakeDegenerateGradient(grad.colors());
     }
 
-    SkGradientBaseShader::Descriptor desc(
-            colors, std::move(colorSpace), pos, colorCount, mode, interpolation);
-    return SkLocalMatrixShader::MakeWrapped<SkRadialGradient>(localMatrix, center, radius, desc);
-}
-
-sk_sp<SkShader> SkGradientShader::MakeRadial(const SkPoint& center, SkScalar radius,
-                                             const SkColor colors[],
-                                             const SkScalar pos[],
-                                             int colorCount,
-                                             SkTileMode mode,
-                                             uint32_t flags,
-                                             const SkMatrix* localMatrix) {
-    SkColorConverter converter(colors, colorCount);
-    return MakeRadial(center, radius, converter.fColors4f.begin(), nullptr, pos, colorCount, mode,
-                      flags, localMatrix);
+    sk_sp<SkShader> s = sk_make_sp<SkRadialGradient>(center, radius, grad);
+    return s->makeWithLocalMatrix(lm ? *lm : SkMatrix::I());
 }
 
 void SkRegisterRadialGradientShaderFlattenable() {

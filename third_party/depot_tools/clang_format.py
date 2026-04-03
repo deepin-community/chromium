@@ -8,6 +8,7 @@ clang-format binaries are pulled down from Google Cloud Storage whenever you
 sync Chrome, to platform-specific locations. This script knows how to locate
 those tools, assuming the script is invoked from inside a Chromium checkout."""
 
+import detect_host_arch
 import gclient_paths
 import os
 import subprocess
@@ -40,11 +41,25 @@ def FindClangFormatToolInChromiumTree():
             'Set CHROMIUM_BUILDTOOLS_PATH to use outside of a chromium '
             'checkout.')
 
-    tool_path = os.path.join(bin_path,
-                             'clang-format' + gclient_paths.GetExeSuffix())
-    if not os.path.exists(tool_path):
-        raise NotFoundError('File does not exist: %s' % tool_path)
-    return tool_path
+    # TODO(b/336843583): Remove old_tool_path when migrated over
+    old_tool_path = os.path.join(bin_path,
+                                 'clang-format' + gclient_paths.GetExeSuffix())
+
+    new_bin_path = bin_path
+    arch = detect_host_arch.HostArch()
+    if sys.platform == 'darwin' and arch == 'arm64':
+        new_bin_path += '_arm64'
+    old_new_tool_path = os.path.join(
+        new_bin_path, 'format', 'clang-format' + gclient_paths.GetExeSuffix())
+    latest_new_tool_path = os.path.join(
+        f'{new_bin_path}-format', 'clang-format' + gclient_paths.GetExeSuffix())
+
+    possible_paths = [latest_new_tool_path, old_new_tool_path, old_tool_path]
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    raise NotFoundError('File does not exist in either path: %s' %
+                        possible_paths)
 
 
 def FindClangFormatScriptInChromiumTree(script_name):
@@ -59,7 +74,7 @@ def FindClangFormatScriptInChromiumTree(script_name):
     tools_path = gclient_paths.GetBuildtoolsPath()
     if not tools_path:
         raise NotFoundError(
-            'Could not find checkout in any parent of the current path.\n',
+            'Could not find checkout in any parent of the current path.\n'
             'Set CHROMIUM_BUILDTOOLS_PATH to use outside of a chromium '
             'checkout.')
 
@@ -69,13 +84,29 @@ def FindClangFormatScriptInChromiumTree(script_name):
         raise NotFoundError('File does not exist: %s' % script_path)
     return script_path
 
+def FindClangFormatInPath():
+    env_path = os.environ.get('PATH')
+    if not env_path:
+        return
+    for bin_dir in env_path.split(os.pathsep):
+        if bin_dir.rstrip(os.sep).endswith('depot_tools'):
+            # skip depot_tools to avoid calling gn.py infinitely.
+            continue
+        tool = os.path.join(
+            bin_dir,
+            'clang-format' + gclient_paths.GetExeSuffix(),
+        )
+        if os.path.isfile(tool):
+            return tool
 
 def main(args):
     try:
         tool = FindClangFormatToolInChromiumTree()
     except NotFoundError as e:
-        sys.stderr.write("%s\n" % str(e))
-        return 1
+        tool = FindClangFormatInPath()
+        if tool is None:
+            sys.stderr.write("%s\n" % str(e))
+            return 1
 
     # Add some visibility to --help showing where the tool lives, since this
     # redirection can be a little opaque.

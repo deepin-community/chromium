@@ -4,7 +4,14 @@
 
 #include "chromeos/ash/components/osauth/impl/auth_factor_presence_cache.h"
 
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+
 #include "base/strings/string_number_conversions.h"
+#include "base/values.h"
+#include "chromeos/ash/components/osauth/public/common_types.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user_manager.h"
 
@@ -15,10 +22,10 @@ std::string GetAuthPurposeKey(AuthPurpose purpose) {
   return base::NumberToString(static_cast<int>(purpose));
 }
 
-std::optional<AuthFactorsSet> GetForPurpose(const base::Value::Dict& cache,
+std::optional<AuthFactorsSet> GetForPurpose(const base::DictValue& cache,
                                             AuthPurpose purpose) {
   std::string purpose_key = GetAuthPurposeKey(purpose);
-  const base::Value::List* factor_list = cache.FindList(purpose_key);
+  const base::ListValue* factor_list = cache.FindList(purpose_key);
   if (!factor_list) {
     return std::nullopt;
   }
@@ -32,7 +39,7 @@ std::optional<AuthFactorsSet> GetForPurpose(const base::Value::Dict& cache,
   return result;
 }
 
-AuthFactorsSet GetWithFallback(const base::Value::Dict& cache,
+AuthFactorsSet GetWithFallback(const base::DictValue& cache,
                                AuthPurpose purpose) {
   {
     std::optional<AuthFactorsSet> result = GetForPurpose(cache, purpose);
@@ -77,12 +84,12 @@ AuthFactorPresenceCache::~AuthFactorPresenceCache() = default;
 void AuthFactorPresenceCache::StoreFactorPresenceCache(AuthAttemptVector vector,
                                                        AuthFactorsSet factors) {
   if (user_manager::UserManager::Get()->IsEphemeralAccountId(vector.account)) {
-    if (factors.Empty()) {
+    if (factors.empty()) {
       return;
     }
   }
-  base::Value::Dict cache = known_user_->GetAuthFactorCache(vector.account);
-  base::Value::List factor_list;
+  base::DictValue cache = known_user_->GetAuthFactorCache(vector.account);
+  base::ListValue factor_list;
   for (AshAuthFactor f : factors) {
     factor_list.Append(static_cast<int>(f));
   }
@@ -96,7 +103,7 @@ AuthFactorsSet AuthFactorPresenceCache::GetExpectedFactorsPresence(
     // Assume that ephemeral users do not have any auth factors associated:
     return AuthFactorsSet();
   }
-  base::Value::Dict cache = known_user_->GetAuthFactorCache(vector.account);
+  base::DictValue cache = known_user_->GetAuthFactorCache(vector.account);
   return GetWithFallback(cache, vector.purpose);
 }
 

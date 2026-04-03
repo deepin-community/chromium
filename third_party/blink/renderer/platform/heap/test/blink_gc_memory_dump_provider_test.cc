@@ -4,8 +4,8 @@
 
 #include "third_party/blink/renderer/platform/heap/blink_gc_memory_dump_provider.h"
 
-#include "base/containers/contains.h"
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+
 #include "base/trace_event/process_memory_dump.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/platform.h"
@@ -38,11 +38,11 @@ template <typename Callback>
 void IterateMemoryDumps(base::trace_event::ProcessMemoryDump& dump,
                         const std::string dump_prefix,
                         Callback callback) {
-  auto dump_prefix_depth = base::ranges::count(dump_prefix, '/');
+  auto dump_prefix_depth = std::ranges::count(dump_prefix, '/');
   for (auto& it : dump.allocator_dumps()) {
     const std::string& key = it.first;
     if ((key.compare(0, dump_prefix.size(), dump_prefix) == 0) &&
-        (base::ranges::count(key, '/') == dump_prefix_depth)) {
+        (std::ranges::count(key, '/') == dump_prefix_depth)) {
       callback(it.second.get());
     }
   }
@@ -110,7 +110,7 @@ TEST_F(BlinkGCMemoryDumpProviderTest, WorkerLightDump) {
 
   size_t workers_found = 0;
   for (const auto& kvp : dump->allocator_dumps()) {
-    if (base::Contains(kvp.first, "blink_gc/workers/")) {
+    if (kvp.first.contains("blink_gc/workers/")) {
       workers_found++;
       CheckBasicHeapDumpStructure(dump->GetAllocatorDump(kvp.first));
     }
@@ -136,7 +136,7 @@ TEST_F(BlinkGCMemoryDumpProviderTest, WorkerDetailedDump) {
   // Find worker suffix.
   std::string worker_suffix;
   for (const auto& kvp : dump->allocator_dumps()) {
-    if (base::Contains(kvp.first, worker_path_prefix + "/worker_0x")) {
+    if (kvp.first.contains(worker_path_prefix + "/worker_0x")) {
       auto start_pos = kvp.first.find("_0x");
       auto end_pos = kvp.first.find("/", start_pos);
       worker_suffix = kvp.first.substr(start_pos + 1, end_pos - start_pos - 1);

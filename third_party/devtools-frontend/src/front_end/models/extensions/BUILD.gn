@@ -1,18 +1,16 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("../../../scripts/build/ninja/devtools_entrypoint.gni")
 import("../../../scripts/build/ninja/devtools_module.gni")
+import("../../../scripts/build/typescript/typescript.gni")
 import("../visibility.gni")
 
 devtools_module("extensions") {
   sources = [
     "ExtensionAPI.ts",
     "ExtensionEndpoint.ts",
-    "ExtensionPanel.ts",
-    "ExtensionServer.ts",
-    "ExtensionView.ts",
     "HostUrlPattern.ts",
     "LanguageExtensionEndpoint.ts",
     "RecorderExtensionEndpoint.ts",
@@ -33,9 +31,6 @@ devtools_module("extensions") {
     "../../models/logs:bundle",
     "../../models/text_utils:bundle",
     "../../models/workspace:bundle",
-    "../../ui/legacy:bundle",
-    "../../ui/legacy/components/utils:bundle",
-    "../../ui/legacy/theme_support:bundle",
   ]
 }
 
@@ -46,13 +41,29 @@ devtools_entrypoint("bundle") {
 
   visibility = [
     ":*",
-    "../../../test/unittests/front_end/models/extensions:extensions",
     "../../entrypoints/main/*",
+    "../../panels/common",
     "../../panels/elements/*",
     "../../panels/recorder/*",
     "../../panels/sources/*",
     "../../panels/timeline/*",
+    "../../testing",
   ]
 
   visibility += devtools_models_visibility
+}
+
+ts_library("unittests") {
+  testonly = true
+
+  sources = [
+    "HostUrlPattern.test.ts",
+    "LanguageExtensionEndpoint.test.ts",
+    "RecorderPluginManager.test.ts",
+  ]
+
+  deps = [
+    ":bundle",
+    "../../testing",
+  ]
 }

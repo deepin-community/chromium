@@ -100,14 +100,16 @@ AudioCodec StringToAudioCodec(const std::string& codec_id) {
     return AudioCodec::kMP3;
   if (codec_id == "alac")
     return AudioCodec::kALAC;
-  if (codec_id == "flac")
+  if (codec_id == "flac" || codec_id == "fLaC") {
     return AudioCodec::kFLAC;
+  }
   if (base::StartsWith(codec_id, "mhm1.", base::CompareCase::SENSITIVE) ||
       base::StartsWith(codec_id, "mha1.", base::CompareCase::SENSITIVE)) {
     return AudioCodec::kMpegHAudio;
   }
-  if (codec_id == "opus")
+  if (codec_id == "opus" || codec_id == "Opus") {
     return AudioCodec::kOpus;
+  }
   if (codec_id == "vorbis")
     return AudioCodec::kVorbis;
   if (base::StartsWith(codec_id, "mp4a.40.", base::CompareCase::SENSITIVE))

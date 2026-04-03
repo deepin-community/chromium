@@ -17,36 +17,42 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <ostream>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "absl/log/check.h"
-#include "absl/log/log.h"
+#include "absl/random/bit_gen_ref.h"
+#include "absl/random/random.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
+#include "absl/strings/substitute.h"
 #include "./centipede/control_flow.h"
 #include "./centipede/coverage.h"
-#include "./centipede/defs.h"
 #include "./centipede/execution_metadata.h"
 #include "./centipede/feature.h"
 #include "./centipede/feature_set.h"
-#include "./centipede/logging.h"  // IWYU pragma: keep
+#include "./centipede/runner_result.h"
 #include "./centipede/util.h"
+#include "./common/defs.h"
+#include "./common/logging.h"  // IWYU pragma: keep
+#include "./common/remote_file.h"
+#include "./common/status_macros.h"
 
-namespace centipede {
+namespace fuzztest::internal {
 
 //------------------------------------------------------------------------------
 //                                  Corpus
 //------------------------------------------------------------------------------
 
-// Returns the weight of `fv` computed using `fs` and `coverage_frontier`.
-static size_t ComputeWeight(const FeatureVec &fv, const FeatureSet &fs,
-                            const CoverageFrontier &coverage_frontier) {
-  size_t weight = fs.ComputeWeight(fv);
+// Computes the weight component of input using its features `fv` and
+// the overall `coverage_frontier`.
+static size_t ComputeFrontierWeight(const FeatureVec& fv,
+                                    const CoverageFrontier& coverage_frontier) {
   // The following is checking for the cases where PCTable is not present. In
   // such cases, we cannot use any ControlFlow related features.
-  if (coverage_frontier.MaxPcIndex() == 0) return weight;
+  if (coverage_frontier.MaxPcIndex() == 0) return 1;
   size_t frontier_weights_sum = 0;
   for (const auto feature : fv) {
     if (!feature_domains::kPCs.Contains(feature)) continue;
@@ -58,7 +64,19 @@ static size_t ComputeWeight(const FeatureVec &fv, const FeatureSet &fs,
       frontier_weights_sum += coverage_frontier.FrontierWeight(pc_index);
     }
   }
-  return weight * (frontier_weights_sum + 1);  // Multiply by at least 1.
+  return frontier_weights_sum + 1;  // Multiply by at least 1.
+}
+
+std::optional<Corpus::WeightMethod> Corpus::ParseWeightMethod(
+    std::string_view method_string) {
+  if (method_string == "uniform") {
+    return WeightMethod::Uniform;
+  } else if (method_string == "recency") {
+    return WeightMethod::Recency;
+  } else if (method_string == "feature_rarity") {
+    return WeightMethod::FeatureRarity;
+  }
+  return std::nullopt;
 }
 
 std::pair<size_t, size_t> Corpus::MaxAndAvgSize() const {
@@ -72,20 +90,113 @@ std::pair<size_t, size_t> Corpus::MaxAndAvgSize() const {
   return {max, total / records_.size()};
 }
 
+void Corpus::UpdateWeights(const FeatureSet& fs,
+                           const CoverageFrontier& coverage_frontier,
+                           bool scale_by_exec_time) {
+  std::vector<double> weights;
+  weights.resize(records_.size());
+  for (size_t i = 0, n = records_.size(); i < n; ++i) {
+    auto& record = records_[i];
+    const size_t unseen = fs.PruneFeaturesAndCountUnseen(record.features);
+    FUZZTEST_CHECK_EQ(unseen, 0);
+    if (record.features.empty()) {
+      weights[i] = 0;
+      continue;
+    }
+    double base_weight = 0;
+    switch (method_) {
+      case WeightMethod::Uniform:
+        base_weight = 1;
+        break;
+      case WeightMethod::Recency:
+        base_weight = i + 1;
+        break;
+      case WeightMethod::FeatureRarity:
+        base_weight = fs.ComputeRarityWeight(record.features);
+        break;
+      default:
+        FUZZTEST_LOG(FATAL) << "Unknown corpus weight method";
+    }
+    weights[i] =
+        base_weight * ComputeFrontierWeight(record.features, coverage_frontier);
+  }
+  if (scale_by_exec_time) {
+    double total_exec_time_usec = 0;
+    // For loaded corpus, we don't have the exec time recorded. Thus we don't
+    // count them when calculating the average exec time or scale their weights.
+    size_t exec_time_divider = 0;
+    for (const auto& record : records_) {
+      if (!(record.stats == ExecutionResult::Stats{})) {
+        total_exec_time_usec += record.stats.exec_time_usec;
+        ++exec_time_divider;
+      }
+    }
+    const double avg_exec_time_usec =
+        exec_time_divider == 0 ? 0 : total_exec_time_usec / exec_time_divider;
+    for (size_t i = 0; i < records_.size(); ++i) {
+      const auto& record = records_[i];
+      if (record.stats == ExecutionResult::Stats{}) {
+        continue;
+      }
+      // Same as the scaling method from libFuzzer:
+      // https://github.com/llvm/llvm-project/blob/10bec2cd9dab796d5685fa8aadf47b912e3558fe/compiler-rt/lib/fuzzer/FuzzerCorpus.h#L101
+      if (record.stats.exec_time_usec > avg_exec_time_usec * 10) {
+        weights[i] *= 0.1;
+      } else if (record.stats.exec_time_usec > avg_exec_time_usec * 4) {
+        weights[i] *= 0.25;
+      } else if (record.stats.exec_time_usec > avg_exec_time_usec * 2) {
+        weights[i] *= 0.5;
+      } else if (record.stats.exec_time_usec * 3 > avg_exec_time_usec * 4) {
+        weights[i] *= 0.75;
+      } else if (record.stats.exec_time_usec * 4 < avg_exec_time_usec) {
+        weights[i] *= 3;
+      } else if (record.stats.exec_time_usec * 3 < avg_exec_time_usec) {
+        weights[i] *= 2;
+      } else if (record.stats.exec_time_usec * 2 < avg_exec_time_usec) {
+        weights[i] *= 1.5;
+      }
+    }
+  }
+  // Normalize weights into integers in [0, 2^16].
+  double highest_weight = 0;
+  double lowest_weight = 0;
+  double weight_sum = 0;
+  for (size_t i = 0; i < records_.size(); ++i) {
+    if (i == 0 || weights[i] > highest_weight) {
+      highest_weight = weights[i];
+    }
+    if (i == 0 || weights[i] < lowest_weight) {
+      lowest_weight = weights[i];
+    }
+    weight_sum += weights[i];
+  }
+  FUZZTEST_VLOG(1) << "Recomputed weight with average: "
+                   << weight_sum / records_.size()
+                   << " highest: " << highest_weight
+                   << " lowest: " << lowest_weight;
+  FUZZTEST_CHECK(lowest_weight >= 0) << "Must not have negative corpus weight!";
+  for (size_t i = 0; i < records_.size(); ++i) {
+    // If all weights are zeros, fall back to prioritize recent corpus.
+    const double normalized_weight = highest_weight > 0
+                                         ? (weights[i] / highest_weight)
+                                         : ((i + 1.0) / records_.size());
+    weighted_distribution_.ChangeWeight(i, normalized_weight * (1 << 16));
+  }
+  weighted_distribution_.RecomputeInternalState();
+}
+
 size_t Corpus::Prune(const FeatureSet &fs,
                      const CoverageFrontier &coverage_frontier,
                      size_t max_corpus_size, Rng &rng) {
   // TODO(kcc): use coverage_frontier.
-  CHECK(max_corpus_size);
+  FUZZTEST_CHECK(max_corpus_size);
   if (records_.size() < 2UL) return 0;
-  // Recompute the weights.
+
   size_t num_zero_weights = 0;
-  for (size_t i = 0, n = records_.size(); i < n; ++i) {
-    fs.PruneFeaturesAndCountUnseen(records_[i].features);
-    auto new_weight =
-        ComputeWeight(records_[i].features, fs, coverage_frontier);
-    weighted_distribution_.ChangeWeight(i, new_weight);
-    if (new_weight == 0) ++num_zero_weights;
+  for (size_t i = 0; i < records_.size(); ++i) {
+    if (weighted_distribution_.weights()[i] == 0) {
+      ++num_zero_weights;
+    }
   }
 
   // Remove zero weights and the corresponding corpus record.
@@ -96,10 +207,17 @@ size_t Corpus::Prune(const FeatureSet &fs,
       max_corpus_size, std::max(1UL, records_.size() - num_zero_weights));
   auto subset_to_remove =
       weighted_distribution_.RemoveRandomWeightedSubset(target_size, rng);
+  if (subset_to_remove.size() == records_.size()) {
+    // This can happen only when all inputs have zero weights - keep random one.
+    FUZZTEST_CHECK(num_zero_weights == records_.size());
+    subset_to_remove.erase(
+        subset_to_remove.begin() +
+        absl::Uniform<size_t>(rng, 0, subset_to_remove.size()));
+  }
   RemoveSubset(subset_to_remove, records_);
 
   weighted_distribution_.RecomputeInternalState();
-  CHECK(!records_.empty());
+  FUZZTEST_CHECK(!records_.empty());
 
   // Features may have shrunk from CountUnseenAndPruneFrequentFeatures.
   // Call shrink_to_fit for the features that survived the pruning.
@@ -111,44 +229,60 @@ size_t Corpus::Prune(const FeatureSet &fs,
   return subset_to_remove.size();
 }
 
-void Corpus::Add(const ByteArray &data, const FeatureVec &fv,
-                 const ExecutionMetadata &metadata, const FeatureSet &fs,
-                 const CoverageFrontier &coverage_frontier) {
+void Corpus::Add(const ByteArray& data, const FeatureVec& fv,
+                 const ExecutionMetadata& metadata,
+                 const ExecutionResult::Stats& stats, const FeatureSet& fs,
+                 const CoverageFrontier& coverage_frontier) {
   // TODO(kcc): use coverage_frontier.
-  CHECK(!data.empty())
+  FUZZTEST_CHECK(!data.empty())
       << "Got request to add empty element to corpus: ignoring";
-  CHECK_EQ(records_.size(), weighted_distribution_.size());
-  records_.push_back({data, fv, metadata});
-  weighted_distribution_.AddWeight(ComputeWeight(fv, fs, coverage_frontier));
+  FUZZTEST_CHECK_EQ(records_.size(), weighted_distribution_.size());
+  records_.push_back({data, fv, metadata, stats});
+  // Will be updated by `UpdateWeights`.
+  weighted_distribution_.AddWeight(0);
 }
 
-const CorpusRecord &Corpus::WeightedRandom(size_t random) const {
-  return records_[weighted_distribution_.RandomIndex(random)];
+const CorpusRecord& Corpus::WeightedRandom(absl::BitGenRef rng) const {
+  return records_[weighted_distribution_.RandomIndex(rng)];
 }
 
-const CorpusRecord &Corpus::UniformRandom(size_t random) const {
-  return records_[random % records_.size()];
+const CorpusRecord& Corpus::UniformRandom(absl::BitGenRef rng) const {
+  return records_[absl::Uniform<size_t>(rng, 0, records_.size())];
 }
 
-void Corpus::PrintStats(std::ostream &out, const FeatureSet &fs) {
-  out << "{\n";
-  out << "  \"num_inputs\": " << records_.size() << ",\n";
-  out << "  \"corpus_stats\": [\n";
+void Corpus::DumpStatsToFile(const FeatureSet &fs, std::string_view filepath,
+                             std::string_view description) {
+  auto *file = ValueOrDie(RemoteFileOpen(filepath, "w"));
+  FUZZTEST_CHECK(file != nullptr) << "Failed to open file: " << filepath;
+  FUZZTEST_CHECK_OK(RemoteFileSetWriteBufferSize(file, 100UL * 1024 * 1024));
+  static constexpr std::string_view kHeaderStub = R"(# $0
+{
+  "num_inputs": $1,
+  "corpus_stats": [)";
+  static constexpr std::string_view kRecordStub = R"($0
+    {"size": $1, "frequencies": [$2]})";
+  static constexpr std::string_view kFooter = R"(
+  ]
+}
+)";
+  const std::string header_str =
+      absl::Substitute(kHeaderStub, description, records_.size());
+  FUZZTEST_CHECK_OK(RemoteFileAppend(file, header_str));
   std::string before_record;
   for (const auto &record : records_) {
-    out << before_record;
-    before_record = ",\n";
-    out << "    {\"size\": " << record.data.size() << ", ";
-    out << "\"frequencies\": [";
-    std::string before_feature;
+    std::vector<size_t> frequencies;
+    frequencies.reserve(record.features.size());
     for (const auto feature : record.features) {
-      out << before_feature;
-      before_feature = ", ";
-      out << fs.Frequency(feature);
+      frequencies.push_back(fs.Frequency(feature));
     }
-    out << "]}";
+    const std::string frequencies_str = absl::StrJoin(frequencies, ", ");
+    const std::string record_str = absl::Substitute(
+        kRecordStub, before_record, record.data.size(), frequencies_str);
+    FUZZTEST_CHECK_OK(RemoteFileAppend(file, record_str));
+    before_record = ",";
   }
-  out << "\n  ]\n}\n";
+  FUZZTEST_CHECK_OK(RemoteFileAppend(file, std::string{kFooter}));
+  FUZZTEST_CHECK_OK(RemoteFileClose(file));
 }
 
 std::string Corpus::MemoryUsageString() const {
@@ -166,7 +300,7 @@ std::string Corpus::MemoryUsageString() const {
 //------------------------------------------------------------------------------
 
 void WeightedDistribution::AddWeight(uint64_t weight) {
-  CHECK_EQ(weights_.size(), cumulative_weights_.size());
+  FUZZTEST_CHECK_EQ(weights_.size(), cumulative_weights_.size());
   weights_.push_back(weight);
   if (cumulative_weights_.empty()) {
     cumulative_weights_.push_back(weight);
@@ -176,7 +310,7 @@ void WeightedDistribution::AddWeight(uint64_t weight) {
 }
 
 void WeightedDistribution::ChangeWeight(size_t idx, uint64_t new_weight) {
-  CHECK_LT(idx, size());
+  FUZZTEST_CHECK_LT(idx, size());
   weights_[idx] = new_weight;
   cumulative_weights_valid_ = false;
 }
@@ -192,18 +326,21 @@ void WeightedDistribution::RecomputeInternalState() {
 }
 
 __attribute__((noinline))  // to see it in profile.
-size_t
-WeightedDistribution::RandomIndex(size_t random) const {
-  CHECK(!weights_.empty());
-  CHECK(cumulative_weights_valid_);
-  uint64_t sum_of_all_weights = cumulative_weights_.back();
-  if (sum_of_all_weights == 0)
-    return random % size();  // can't do much else here.
-  random = random % sum_of_all_weights;
-  auto it = std::upper_bound(cumulative_weights_.begin(),
-                             cumulative_weights_.end(), random);
-  CHECK(it != cumulative_weights_.end());
-  return it - cumulative_weights_.begin();
+size_t WeightedDistribution::RandomIndex(absl::BitGenRef rng) const {
+  FUZZTEST_CHECK(!weights_.empty());
+  FUZZTEST_CHECK(cumulative_weights_valid_);
+  const uint64_t sum_of_all_weights = cumulative_weights_.back();
+  if (sum_of_all_weights == 0) {
+    // Can't do much else here.
+    return absl::Uniform<size_t>(rng, 0, size());
+  }
+  auto it =
+      std::upper_bound(cumulative_weights_.begin(), cumulative_weights_.end(),
+                       absl::Uniform<uint64_t>(rng, 0, sum_of_all_weights));
+  FUZZTEST_CHECK(it != cumulative_weights_.end());
+  const size_t index = it - cumulative_weights_.begin();
+  FUZZTEST_CHECK(weights_[index] != 0);
+  return index;
 }
 
 uint64_t WeightedDistribution::PopBack() {
@@ -301,4 +438,4 @@ size_t CoverageFrontier::Compute(
   return num_functions_in_frontier_;
 }
 
-}  // namespace centipede
+}  // namespace fuzztest::internal

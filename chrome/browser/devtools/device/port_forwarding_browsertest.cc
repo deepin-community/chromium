@@ -6,6 +6,7 @@
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -74,7 +75,7 @@ class PortForwardingTest: public InProcessBrowserTest {
     void set_run_loop(base::RunLoop* loop) { loop_ = loop; }
 
    private:
-    Profile* profile_;
+    raw_ptr<Profile> profile_;
     bool skip_empty_devices_;
     raw_ptr<base::RunLoop> loop_;
   };
@@ -93,14 +94,16 @@ IN_PROC_BROWSER_TEST_F(PortForwardingTest, LoadPageWithStyleAnsScript) {
   GURL original_url = embedded_test_server()->GetURL(kPortForwardingTestPage);
 
   std::string forwarding_port("8000");
-  GURL forwarding_url(original_url.scheme() + "://" +
-      original_url.host() + ":" + forwarding_port + original_url.path());
+  GURL forwarding_url(original_url.GetScheme() + "://" +
+                      original_url.GetHost() + ":" + forwarding_port +
+                      original_url.GetPath());
 
   PrefService* prefs = profile->GetPrefs();
   prefs->SetBoolean(prefs::kDevToolsPortForwardingEnabled, true);
 
-  base::Value::Dict config;
-  config.Set(forwarding_port, original_url.host() + ":" + original_url.port());
+  base::DictValue config;
+  config.Set(forwarding_port,
+             original_url.GetHost() + ":" + original_url.GetPort());
   prefs->SetDict(prefs::kDevToolsPortForwardingConfig, std::move(config));
   base::RunLoop loop1;
   Listener wait_for_port_forwarding(profile);
@@ -153,14 +156,16 @@ IN_PROC_BROWSER_TEST_F(PortForwardingDisconnectTest, DisconnectOnRelease) {
   GURL original_url = embedded_test_server()->GetURL(kPortForwardingTestPage);
 
   std::string forwarding_port("8000");
-  GURL forwarding_url(original_url.scheme() + "://" +
-      original_url.host() + ":" + forwarding_port + original_url.path());
+  GURL forwarding_url(original_url.GetScheme() + "://" +
+                      original_url.GetHost() + ":" + forwarding_port +
+                      original_url.GetPath());
 
   PrefService* prefs = profile->GetPrefs();
   prefs->SetBoolean(prefs::kDevToolsPortForwardingEnabled, true);
 
-  base::Value::Dict config;
-  config.Set(forwarding_port, original_url.host() + ":" + original_url.port());
+  base::DictValue config;
+  config.Set(forwarding_port,
+             original_url.GetHost() + ":" + original_url.GetPort());
   prefs->SetDict(prefs::kDevToolsPortForwardingConfig, std::move(config));
 
   base::RunLoop run_loop;

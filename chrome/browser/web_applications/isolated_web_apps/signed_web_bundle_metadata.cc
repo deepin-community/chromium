@@ -6,20 +6,26 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/types/expected.h"
+#include "base/types/expected_macros.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/callback_utils.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_install_command_helper.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_location.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_response_reader_factory.h"
+#include "chrome/browser/web_applications/isolated_web_apps/commands/isolated_web_app_install_command_helper.h"
+#include "chrome/browser/web_applications/isolated_web_apps/install/non_installed_bundle_inspection_context.h"
+#include "chrome/browser/web_applications/isolated_web_apps/jobs/prepare_install_info_job.h"
+#include "chrome/browser/web_applications/isolated_web_apps/runtime_data/chrome_iwa_runtime_data_provider.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_contents/web_app_data_retriever.h"
-#include "chrome/browser/web_applications/web_contents/web_app_url_loader.h"
 #include "chrome/browser/web_applications/web_contents/web_contents_manager.h"
+#include "components/webapps/browser/web_contents/web_app_url_loader.h"
+#include "components/webapps/isolated_web_apps/types/source.h"
+#include "components/webapps/isolated_web_apps/types/storage_location.h"
 #include "content/public/browser/web_contents.h"
 
 namespace web_app {
@@ -27,158 +33,88 @@ namespace {
 
 using WebAppInstalInfoCallback =
     base::OnceCallback<void(base::expected<WebAppInstallInfo, std::string>)>;
-using SignedWebBundleMetadataCallback =
-    SignedWebBundleMetadata::SignedWebBundleMetadataCallback;
 
 class WebAppInstallInfoFetcher {
  public:
   explicit WebAppInstallInfoFetcher(Profile* profile,
                                     WebAppProvider* provider,
                                     const IsolatedWebAppUrlInfo& url_info,
-                                    const IsolatedWebAppLocation& location)
-      : profile_(profile),
-        location_(location),
+                                    const IwaSourceBundleWithMode& source)
+      : profile_(*profile),
+        provider_(*provider),
+        source_(source),
+        helper_(std::make_unique<IsolatedWebAppInstallCommandHelper>(
+            url_info,
+            provider->web_contents_manager().CreateDataRetriever())),
         web_contents_(
             IsolatedWebAppInstallCommandHelper::CreateIsolatedWebAppWebContents(
-                *profile)),
-        url_loader_(provider->web_contents_manager().CreateUrlLoader()) {
-    CHECK(profile);
-    CHECK(provider);
-
-    helper_ = std::make_unique<IsolatedWebAppInstallCommandHelper>(
-        url_info, provider->web_contents_manager().CreateDataRetriever(),
-        IsolatedWebAppInstallCommandHelper::CreateDefaultResponseReaderFactory(
-            *profile->GetPrefs()));
-  }
+                *profile)) {}
 
   void FetchAndReply(WebAppInstalInfoCallback callback) {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     callback_ = std::move(callback);
 
-    if (absl::holds_alternative<DevModeProxy>(location_)) {
-      FailWithError("No Signed Web Bundle Metadata for dev-mode proxy.");
-      return;
-    }
-
-    auto weak_ptr = weak_factory_.GetWeakPtr();
-    RunChainedCallbacks(
-        base::BindOnce(&WebAppInstallInfoFetcher::CheckTrustAndSignatures,
-                       weak_ptr),
-        base::BindOnce(&WebAppInstallInfoFetcher::LoadInstallUrl, weak_ptr),
-        base::BindOnce(
-            &WebAppInstallInfoFetcher::CheckInstallabilityAndRetrieveManifest,
-            weak_ptr),
-        base::BindOnce(
-            &WebAppInstallInfoFetcher::ValidateManifestAndCreateInstallInfo,
-            weak_ptr),
-        base::BindOnce(
-            &WebAppInstallInfoFetcher::RetrieveIconsAndPopulateInstallInfo,
-            weak_ptr),
-        base::BindOnce(&WebAppInstallInfoFetcher::CreateSignedWebBundleMetadata,
-                       weak_ptr));
+    RunChainedWeakCallbacks(
+        weak_factory_.GetWeakPtr(),
+        &WebAppInstallInfoFetcher::CheckTrustAndSignatures,
+        &WebAppInstallInfoFetcher::PrepareInstallInfo,
+        &WebAppInstallInfoFetcher::CreateSignedWebBundleMetadata);
   }
 
  private:
-  void FailWithError(base::StringPiece error_message) {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  using TrustCheckResult = base::expected<void, std::string>;
+
+  void FailWithError(const std::string& error_message) {
     CHECK(callback_);
-    std::move(callback_).Run(base::unexpected(std::string(error_message)));
+    std::move(callback_).Run(base::unexpected(error_message));
   }
 
   void CheckTrustAndSignatures(base::OnceClosure next_step_callback) {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    CHECK(helper_);
     helper_->CheckTrustAndSignatures(
-        location_, profile_,
-        base::BindOnce(&WebAppInstallInfoFetcher::RunNextStepOnSuccess<void>,
+        source_, IwaMetadataReadingOperation{}, &*profile_,
+        base::BindOnce(&WebAppInstallInfoFetcher::OnTrustAndSignaturesChecked,
                        weak_factory_.GetWeakPtr(),
                        std::move(next_step_callback)));
   }
 
-  void LoadInstallUrl(base::OnceClosure next_step_callback) {
-    CHECK(helper_);
-    CHECK(web_contents_);
-    CHECK(url_loader_);
-    helper_->LoadInstallUrl(
-        location_, *web_contents_.get(), *url_loader_.get(),
-        base::BindOnce(&WebAppInstallInfoFetcher::RunNextStepOnSuccess<void>,
-                       weak_factory_.GetWeakPtr(),
-                       std::move(next_step_callback)));
+  void OnTrustAndSignaturesChecked(base::OnceClosure next_step_callback,
+                                   TrustCheckResult trust_check_result) {
+    RETURN_IF_ERROR(trust_check_result,
+                    [&](const std::string& error) { FailWithError(error); });
+    std::move(next_step_callback).Run();
   }
 
-  void CheckInstallabilityAndRetrieveManifest(
-      base::OnceCallback<
-          void(IsolatedWebAppInstallCommandHelper::ManifestAndUrl)>
+  void PrepareInstallInfo(
+      base::OnceCallback<void(PrepareInstallInfoJob::InstallInfoOrFailure)>
           next_step_callback) {
-    CHECK(helper_);
-    helper_->CheckInstallabilityAndRetrieveManifest(
-        *web_contents_.get(),
-        base::BindOnce(&WebAppInstallInfoFetcher::RunNextStepOnSuccess<
-                           IsolatedWebAppInstallCommandHelper::ManifestAndUrl>,
-                       weak_factory_.GetWeakPtr(),
-                       std::move(next_step_callback)));
+    prepare_install_info_job_ = PrepareInstallInfoJob::CreateAndStart(
+        *profile_, source_, IwaMetadataReadingOperation{},
+        /*expected_version=*/std::nullopt, *web_contents_, *helper_,
+        provider_->web_contents_manager().CreateUrlLoader(),
+        std::move(next_step_callback));
   }
 
-  void ValidateManifestAndCreateInstallInfo(
-      base::OnceCallback<void(WebAppInstallInfo)> next_step_callback,
-      IsolatedWebAppInstallCommandHelper::ManifestAndUrl manifest_and_url) {
-    CHECK(helper_);
-    base::expected<WebAppInstallInfo, std::string> install_info =
-        helper_->ValidateManifestAndCreateInstallInfo(std::nullopt,
-                                                      manifest_and_url);
-    RunNextStepOnSuccess(std::move(next_step_callback),
-                         std::move(install_info));
-  }
+  void CreateSignedWebBundleMetadata(
+      PrepareInstallInfoJob::InstallInfoOrFailure result) {
+    prepare_install_info_job_.reset();
 
-  void RetrieveIconsAndPopulateInstallInfo(
-      base::OnceCallback<void(WebAppInstallInfo)> next_step_callback,
-      WebAppInstallInfo install_info) {
-    CHECK(helper_);
-    helper_->RetrieveIconsAndPopulateInstallInfo(
-        std::move(install_info), *web_contents_.get(),
-        base::BindOnce(
-            &WebAppInstallInfoFetcher::RunNextStepOnSuccess<WebAppInstallInfo>,
-            weak_factory_.GetWeakPtr(), std::move(next_step_callback)));
-  }
+    ASSIGN_OR_RETURN(
+        WebAppInstallInfo install_info, std::move(result),
+        [&](const auto& failure) { FailWithError(failure.message); });
 
-  void CreateSignedWebBundleMetadata(WebAppInstallInfo install_info) {
     CHECK(callback_);
     std::move(callback_).Run(std::move(install_info));
   }
 
-  template <typename T, std::enable_if_t<std::is_void_v<T>, bool> = true>
-  void RunNextStepOnSuccess(base::OnceClosure next_step_callback,
-                            base::expected<T, std::string> status) {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    if (!status.has_value()) {
-      FailWithError(status.error());
-    } else {
-      std::move(next_step_callback).Run();
-    }
-  }
+  const raw_ref<Profile> profile_;
+  const raw_ref<WebAppProvider> provider_;
 
-  template <typename T, std::enable_if_t<!std::is_void_v<T>, bool> = true>
-  void RunNextStepOnSuccess(base::OnceCallback<void(T)> next_step_callback,
-                            base::expected<T, std::string> status) {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    if (!status.has_value()) {
-      FailWithError(status.error());
-    } else {
-      std::move(next_step_callback).Run(std::move(*status));
-    }
-  }
-
-  SEQUENCE_CHECKER(sequence_checker_);
-
-  raw_ptr<Profile> profile_;
-  IsolatedWebAppLocation location_;
+  IwaSourceBundleWithMode source_;
   WebAppInstalInfoCallback callback_;
 
-  std::unique_ptr<IsolatedWebAppInstallCommandHelper> helper_ = nullptr;
-
+  std::unique_ptr<IsolatedWebAppInstallCommandHelper> helper_;
   std::unique_ptr<content::WebContents> web_contents_;
 
-  std::unique_ptr<WebAppUrlLoader> url_loader_;
+  std::unique_ptr<PrepareInstallInfoJob> prepare_install_info_job_;
 
   base::WeakPtrFactory<WebAppInstallInfoFetcher> weak_factory_{this};
 };
@@ -186,30 +122,38 @@ class WebAppInstallInfoFetcher {
 }  // namespace
 
 // static
-void SignedWebBundleMetadata::Create(Profile* profile,
-                                     WebAppProvider* provider,
-                                     const IsolatedWebAppUrlInfo& url_info,
-                                     const IsolatedWebAppLocation& location,
-                                     SignedWebBundleMetadataCallback callback) {
+void SignedWebBundleMetadata::Create(
+    Profile* profile,
+    WebAppProvider* provider,
+    const IsolatedWebAppUrlInfo& url_info,
+    const IwaSourceBundleWithMode& source,
+    SignedWebBundleMetadata::SignedWebBundleMetadataCallback callback) {
   auto fetcher = std::make_unique<WebAppInstallInfoFetcher>(profile, provider,
-                                                            url_info, location);
+                                                            url_info, source);
   WebAppInstallInfoFetcher& fetcher_ref = *fetcher.get();
-
   fetcher_ref.FetchAndReply(base::BindOnce(
       [](const IsolatedWebAppUrlInfo& url_info,
-         const IsolatedWebAppLocation& location,
-         SignedWebBundleMetadataCallback callback,
+         const IwaSourceBundleWithMode& source,
+         SignedWebBundleMetadata::SignedWebBundleMetadataCallback callback,
          base::expected<WebAppInstallInfo, std::string> install_info) {
         std::move(callback).Run(install_info.transform(
-            [&url_info, &location](const WebAppInstallInfo& install_info)
+            [&url_info, &source](const WebAppInstallInfo& install_info)
                 -> SignedWebBundleMetadata {
+              const ChromeIwaRuntimeDataProvider::UserInstallAllowlistItemData*
+                  user_install_data =
+                      web_app::ChromeIwaRuntimeDataProvider::GetInstance()
+                          .GetUserInstallAllowlistData(
+                              url_info.web_bundle_id().id());
               return SignedWebBundleMetadata(
-                  url_info, location, install_info.title,
-                  install_info.isolated_web_app_version,
-                  install_info.icon_bitmaps);
+                  url_info, source, install_info.title.value(),
+                  install_info.isolated_web_app_version(),
+                  install_info.GetIconBitmapsForSecureSurfaces(),
+                  user_install_data
+                      ? std::optional(user_install_data->enterprise_name)
+                      : std::nullopt);
             }));
       },
-      url_info, location,
+      url_info, source,
       std::move(callback).Then(base::OnceClosure(
           base::DoNothingWithBoundArgs(std::move(fetcher))))));
 }
@@ -217,24 +161,27 @@ void SignedWebBundleMetadata::Create(Profile* profile,
 // static
 SignedWebBundleMetadata SignedWebBundleMetadata::CreateForTesting(
     const IsolatedWebAppUrlInfo& url_info,
-    const IsolatedWebAppLocation& location,
+    const IwaSourceBundleWithMode& source,
     const std::u16string& app_name,
-    const base::Version& version,
-    const IconBitmaps& icons) {
-  return SignedWebBundleMetadata(url_info, location, app_name, version, icons);
+    const IwaVersion& version,
+    DialogImageInfo image_info,
+    const std::optional<std::string>& enterprise_name) {
+  return SignedWebBundleMetadata(url_info, source, app_name, version,
+                                 std::move(image_info), enterprise_name);
 }
 
 SignedWebBundleMetadata::SignedWebBundleMetadata(
     const IsolatedWebAppUrlInfo& url_info,
-    const IsolatedWebAppLocation& location,
+    const IwaSourceBundleWithMode& source,
     const std::u16string& app_name,
-    const base::Version& version,
-    const IconBitmaps& icons)
+    const IwaVersion& version,
+    DialogImageInfo image_info,
+    const std::optional<std::string>& enterprise_name)
     : url_info_(url_info),
-      location_(location),
       app_name_(app_name),
       version_(version),
-      icons_(icons) {}
+      image_info_(std::move(image_info)),
+      enterprise_name_(enterprise_name) {}
 
 SignedWebBundleMetadata::~SignedWebBundleMetadata() = default;
 
@@ -247,7 +194,7 @@ SignedWebBundleMetadata& SignedWebBundleMetadata::operator=(
 bool SignedWebBundleMetadata::operator==(
     const SignedWebBundleMetadata& other) const {
   return url_info_ == other.url_info_ && app_name_ == other.app_name_ &&
-         version_ == other.version_ && icons_ == other.icons_;
+         version_ == other.version_ && image_info_ == other.image_info_;
 }
 
 }  // namespace web_app

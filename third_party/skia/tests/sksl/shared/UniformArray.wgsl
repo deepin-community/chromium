@@ -1,41 +1,22 @@
-### Compilation failed:
-
-error: :6:14 error: uniform storage requires that array elements are aligned to 16 bytes, but array element of type 'f32' has a stride of 4 bytes. Consider using a vector or struct as the element type instead.
-  testArray: array<f32, 5>,
-             ^^^^^^^^^^^^^
-
-:5:1 note: see layout of struct:
-/*            align(16) size(64) */ struct _GlobalUniforms {
-/* offset( 0) align( 4) size(20) */   testArray : array<f32, 5>;
-/* offset(20) align( 1) size(12) */   // -- implicit field alignment padding --;
-/* offset(32) align(16) size(16) */   colorGreen : vec4<f32>;
-/* offset(48) align(16) size(16) */   colorRed : vec4<f32>;
-/*                               */ };
-struct _GlobalUniforms {
-^^^^^^
-
-:10:36 note: '_GlobalUniforms' used in address space 'uniform' here
-@binding(0) @group(0) var<uniform> _globalUniforms: _GlobalUniforms;
-                                   ^^^^^^^^^^^^^^^
-
-
 diagnostic(off, derivative_uniformity);
+diagnostic(off, chromium.unreachable_code);
+enable f16;
 struct FSOut {
-  @location(0) sk_FragColor: vec4<f32>,
+  @location(0) sk_FragColor: vec4<f16>,
 };
 struct _GlobalUniforms {
-  testArray: array<f32, 5>,
-  colorGreen: vec4<f32>,
-  colorRed: vec4<f32>,
+  testArray: array<_skArrayElement_f, 5>,
+  colorGreen: vec4<f16>,
+  colorRed: vec4<f16>,
 };
-@binding(0) @group(0) var<uniform> _globalUniforms: _GlobalUniforms;
-fn _skslMain(coords: vec2<f32>) -> vec4<f32> {
+@group(0) @binding(0) var<uniform> _globalUniforms : _GlobalUniforms;
+fn _skslMain(coords: vec2<f32>) -> vec4<f16> {
   {
     {
       var index: i32 = 0;
       loop {
         {
-          if _globalUniforms.testArray[index] != f32(index + 1) {
+          if _skUnpacked__globalUniforms_testArray[index] != f32(index + 1) {
             {
               return _globalUniforms.colorRed;
             }
@@ -51,9 +32,15 @@ fn _skslMain(coords: vec2<f32>) -> vec4<f32> {
   }
 }
 @fragment fn main() -> FSOut {
+  _skInitializePolyfilledUniforms();
   var _stageOut: FSOut;
   _stageOut.sk_FragColor = _skslMain(/*fragcoord*/ vec2<f32>());
   return _stageOut;
 }
-
-1 error
+struct _skArrayElement_f {
+  @align(16) e : f32
+};
+var<private> _skUnpacked__globalUniforms_testArray: array<f32, 5>;
+fn _skInitializePolyfilledUniforms() {
+  _skUnpacked__globalUniforms_testArray = array<f32, 5>(_globalUniforms.testArray[0].e, _globalUniforms.testArray[1].e, _globalUniforms.testArray[2].e, _globalUniforms.testArray[3].e, _globalUniforms.testArray[4].e);
+}

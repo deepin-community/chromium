@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+{%- if not contains_only_enums %}
 {%- from 'cpp_macros.tmpl' import
     namespace_begin, namespace_end, variant_path %}
 
@@ -17,7 +18,6 @@
 #include <utility>
 
 #include "base/debug/alias.h"
-#include "base/hash/md5_constexpr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
@@ -26,8 +26,9 @@
 #include "mojo/public/cpp/bindings/lib/default_construct_tag_internal.h"
 #include "mojo/public/cpp/bindings/lib/generated_code_util.h"
 #include "mojo/public/cpp/bindings/lib/message_internal.h"
-#include "mojo/public/cpp/bindings/lib/send_message_helper.h"
 #include "mojo/public/cpp/bindings/lib/proxy_to_responder.h"
+#include "mojo/public/cpp/bindings/lib/send_message_helper.h"
+#include "mojo/public/cpp/bindings/lib/serialization.h"
 #include "mojo/public/cpp/bindings/lib/serialization_util.h"
 #include "mojo/public/cpp/bindings/lib/unserialized_message_context.h"
 #include "mojo/public/cpp/bindings/lib/validate_params.h"
@@ -53,19 +54,10 @@
 
 {{namespace_begin(namespaces_as_array, variant)}}
 
-{#--- Constants #}
-{%- for constant in module.constants %}
-{%-   if constant.kind|is_string_kind %}
-const char {{constant.name}}[] = {{constant|constant_value}};
-{%-   endif %}
-{%- endfor %}
-
 {#--- Struct Constants #}
 {%- for struct in structs %}
 {%-   for constant in struct.constants %}
-{%-     if constant.kind|is_string_kind %}
-const char {{struct.name}}::{{constant.name}}[] = {{constant|constant_value}};
-{%-     else %}
+{%-     if not constant.kind|is_string_kind %}
 constexpr {{constant.kind|cpp_pod_type}} {{struct.name}}::{{constant.name}};
 {%-     endif %}
 {%-   endfor %}
@@ -122,7 +114,12 @@ namespace mojo {
 void {{interface.name}}InterceptorForTesting::{{method.name}}({{interface_macros.declare_request_params("", method)}}) {
   GetForwardingInterface()->{{method.name}}(
     {%- for param in method.parameters -%}
-    std::move({{param.name}}){%- if not loop.last %}, {% endif %}
+    {%- if param.kind|is_non_const_ref_kind %}
+    {{param.name}}
+    {%- else %}
+    std::move({{param.name}})
+    {% endif %}
+    {%- if not loop.last %}, {% endif %}
     {%- endfor %}
     {%-   if method.response_parameters != None -%}
     {%-     if method.parameters %}, {% endif -%}
@@ -138,13 +135,18 @@ void {{interface.name}}InterceptorForTesting::{{method.name}}({{interface_macros
 
 {{interface.name}}AsyncWaiter::~{{interface.name}}AsyncWaiter() = default;
 
-{%  for method in interface.methods if method.response_parameters != None -%}
+{# TODO(crbug.com/404343228): add AsyncWaiter support for result types. #}
+{%  for method in interface.methods if (method.response_parameters != None and method.result_response == None) -%}
 void {{interface.name}}AsyncWaiter::{{method.name}}(
     {{interface_macros.declare_sync_method_params("", method)}}) {
   base::RunLoop loop;
   proxy_->{{method.name}}(
 {%-   for param in method.parameters -%}
+{%- if param.kind|is_non_const_ref_kind %}
+      {{param.name}},
+{%- else %}
       std::move({{param.name}}),
+{%- endif %}
 {%-   endfor %}
       base::BindOnce(
           [](base::RunLoop* loop
@@ -166,7 +168,7 @@ void {{interface.name}}AsyncWaiter::{{method.name}}(
   loop.Run();
 }
 
-{%   if method.response_parameters|length == 1 -%}
+{%   if method.response_parameters|length == 1 and method.result_response == None -%}
 {%-     set response_kind = method.response_parameters[0].kind -%}
 {%-     set response_type = response_kind|cpp_wrapper_call_type -%}
 {{response_type}} {{interface.name}}AsyncWaiter::{{method.name}}(
@@ -191,3 +193,4 @@ void {{interface.name}}AsyncWaiter::{{method.name}}(
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #endif
+{%- endif %}

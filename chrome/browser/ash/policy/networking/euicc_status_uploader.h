@@ -53,23 +53,6 @@ class EuiccStatusUploader : public ash::NetworkPolicyObserver,
                       PrefService* local_state,
                       IsDeviceActiveCallback is_device_managed_callback);
 
-  // TODO(b/281904820): Remove once the SM-DS Support feature is fully launched.
-  //
-  // WARNING: This format is deprecated as part of the SM-DS Support feature and
-  // is being replaced with |kLastUploadedEuiccStatusPref|.
-  //
-  // A local state preference that stores the last uploaded Euicc status in such
-  // format:
-  // {
-  //    euicc_count: integer
-  //    esim_profiles: [
-  //      iccid : string,
-  //      smdp_address : string
-  //    ]
-  // }
-  //
-  static const char kLastUploadedEuiccStatusPrefLegacy[];
-
   // A local state preference that stores the last uploaded Euicc status in the
   // following format:
   // {
@@ -92,7 +75,7 @@ class EuiccStatusUploader : public ash::NetworkPolicyObserver,
 
   // Constructs the proto for the EUICC status request.
   static std::unique_ptr<enterprise_management::UploadEuiccInfoRequest>
-  ConstructRequestFromStatus(const base::Value::Dict& status,
+  ConstructRequestFromStatus(const base::DictValue& status,
                              bool clear_profile_list);
 
   // ash::NetworkPolicyObserver:
@@ -102,9 +85,6 @@ class EuiccStatusUploader : public ash::NetworkPolicyObserver,
   // CloudPolicyClient::Observer:
   void OnRegistrationStateChanged(CloudPolicyClient* client) override;
   void OnPolicyFetched(CloudPolicyClient* client) override;
-  void OnClientError(CloudPolicyClient* client) override {}
-  void OnServiceAccountSet(CloudPolicyClient* client,
-                           const std::string& account_email) override {}
 
   // ash::HermesManagerClient:
   void OnAvailableEuiccListChanged() override;
@@ -115,11 +95,10 @@ class EuiccStatusUploader : public ash::NetworkPolicyObserver,
   // ash::ManagedCellularPrefHandler:
   void OnManagedCellularPrefChanged() override;
 
-  base::Value::Dict GetCurrentEuiccStatus() const;
+  base::DictValue GetCurrentEuiccStatus() const;
   void MaybeUploadStatus();
-  void MaybeUploadStatusWithDelay();
-  void UploadStatus(base::Value::Dict status);
-  void OnStatusUploaded(bool success);
+  void UploadStatus(base::DictValue status);
+  void OnStatusUploaded(bool should_send_clear_profiles_request, bool success);
   void RetryUpload();
 
   // Used in tests. Fires |retry_timer_| to avoid flakiness.
@@ -130,7 +109,7 @@ class EuiccStatusUploader : public ash::NetworkPolicyObserver,
 
   bool currently_uploading_ = false;
   // The status that is being uploaded right now.
-  base::Value::Dict attempted_upload_status_;
+  base::DictValue attempted_upload_status_;
   bool is_policy_fetched_ = false;
   IsDeviceActiveCallback is_device_managed_callback_;
 

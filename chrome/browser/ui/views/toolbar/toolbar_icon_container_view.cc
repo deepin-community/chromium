@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -109,7 +108,9 @@ class ToolbarIconContainerView::WidgetRestoreObserver
       this};
 };
 
-ToolbarIconContainerView::ToolbarIconContainerView(bool uses_highlight)
+ToolbarIconContainerView::ToolbarIconContainerView(
+    bool uses_highlight,
+    bool use_default_target_layout)
     : uses_highlight_(uses_highlight) {
   SetPaintToLayer();
   layer()->SetFillsBoundsOpaquely(false);
@@ -122,13 +123,16 @@ ToolbarIconContainerView::ToolbarIconContainerView(bool uses_highlight)
       views::AnimatingLayoutManager::BoundsAnimationMode::kAnimateBothAxes);
   animating_layout->SetDefaultFadeMode(
       views::AnimatingLayoutManager::FadeInOutMode::kSlideFromTrailingEdge);
-  auto* flex_layout = animating_layout->SetTargetLayoutManager(
-      std::make_unique<views::FlexLayout>());
-  flex_layout->SetCollapseMargins(true)
-      .SetIgnoreDefaultMainAxisMargins(true)
-      .SetDefault(
-          views::kMarginsKey,
-          gfx::Insets::VH(0, GetLayoutConstant(TOOLBAR_ELEMENT_PADDING)));
+  if (use_default_target_layout) {
+    auto* flex_layout = animating_layout->SetTargetLayoutManager(
+        std::make_unique<views::FlexLayout>());
+    flex_layout->SetCollapseMargins(true)
+        .SetIgnoreDefaultMainAxisMargins(true)
+        .SetDefault(
+            views::kMarginsKey,
+            gfx::Insets::VH(
+                0, GetLayoutConstant(LayoutConstant::kToolbarElementPadding)));
+  }
 }
 
 ToolbarIconContainerView::~ToolbarIconContainerView() {
@@ -141,10 +145,11 @@ void ToolbarIconContainerView::AddMainItem(views::View* item) {
   DCHECK(!main_item_);
   main_item_ = item;
   auto* const main_button = views::Button::AsButton(item);
-  if (main_button)
+  if (main_button) {
     ObserveButton(main_button);
+  }
 
-  AddChildView(main_item_.get());
+  AddChildViewRaw(main_item_.get());
 }
 
 void ToolbarIconContainerView::ObserveButton(views::Button* button) {
@@ -170,28 +175,34 @@ void ToolbarIconContainerView::RemoveObserver(const Observer* obs) {
 }
 
 bool ToolbarIconContainerView::GetHighlighted() const {
-  if (!uses_highlight_)
+  if (!uses_highlight_) {
     return false;
+  }
 
-  if (IsMouseHovered() && (!main_item_ || !main_item_->IsMouseHovered()))
+  if (IsMouseHovered() && (!main_item_ || !main_item_->IsMouseHovered())) {
     return true;
+  }
 
   // Focused, pressed or hovered children should trigger the highlight.
   for (const views::View* child : children()) {
-    if (child == main_item_)
+    if (child == main_item_) {
       continue;
-    if (child->HasFocus())
+    }
+    if (child->HasFocus()) {
       return true;
+    }
     const views::Button* button = views::Button::AsButton(child);
-    if (!button)
+    if (!button) {
       continue;
+    }
     if (button->GetState() == views::Button::ButtonState::STATE_PRESSED ||
         button->GetState() == views::Button::ButtonState::STATE_HOVERED) {
       return true;
     }
     // The container should also be highlighted if a dialog is anchored to.
-    if (base::Contains(highlighted_buttons_, button))
+    if (highlighted_buttons_.contains(button)) {
       return true;
+    }
   }
 
   return false;
@@ -248,7 +259,7 @@ void ToolbarIconContainerView::AddedToWidget() {
 
 void ToolbarIconContainerView::UpdateHighlight() {
   // New feature doesn't have a border around the toolbar icons.
-  // TODO(crbug.com/1279986): Remove ToolbarIconContainerView once feature is
+  // TODO(crbug.com/40811196): Remove ToolbarIconContainerView once feature is
   // rolled out.
   if (base::FeatureList::IsEnabled(
           extensions_features::kExtensionsMenuAccessControl)) {
@@ -258,18 +269,19 @@ void ToolbarIconContainerView::UpdateHighlight() {
   bool showing_before = border_.layer()->GetTargetOpacity() == 1;
   border_.layer()->SetOpacity(GetHighlighted() ? 1 : 0);
 
-  if (showing_before == (border_.layer()->GetTargetOpacity() == 1))
+  if (showing_before == (border_.layer()->GetTargetOpacity() == 1)) {
     return;
-  for (Observer& observer : observers_)
-    observer.OnHighlightChanged();
+  }
+  observers_.Notify(&Observer::OnHighlightChanged);
 }
 
 void ToolbarIconContainerView::OnButtonHighlightedChanged(
     views::Button* button) {
-  if (views::InkDrop::Get(button)->GetHighlighted())
+  if (views::InkDrop::Get(button)->GetHighlighted()) {
     highlighted_buttons_.insert(button);
-  else
+  } else {
     highlighted_buttons_.erase(button);
+  }
 
   UpdateHighlight();
 }

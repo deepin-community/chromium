@@ -13,13 +13,10 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/accelerators.h"
 #include "ash/public/cpp/accelerators_util.h"
-#include "ash/public/mojom/accelerator_configuration.mojom-shared.h"
 #include "ash/public/mojom/accelerator_configuration.mojom.h"
 #include "ash/public/mojom/accelerator_info.mojom.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
@@ -66,7 +63,7 @@ void AppendAcceleratorData(
 base::Value AcceleratorModificationDataToValue(
     const ui::Accelerator& accelerator,
     AcceleratorModificationAction action) {
-  base::Value::Dict accelerator_values;
+  base::DictValue accelerator_values;
   accelerator_values.Set(kAcceleratorModifiersKey, accelerator.modifiers());
   accelerator_values.Set(kAcceleratorKeyCodeKey,
                          static_cast<int>(accelerator.key_code()));
@@ -84,7 +81,7 @@ base::Value AcceleratorModificationDataToValue(
 }
 
 AcceleratorModificationData ValueToAcceleratorModificationData(
-    const base::Value::Dict& value) {
+    const base::DictValue& value) {
   std::optional<int> keycode = value.FindInt(kAcceleratorKeyCodeKey);
   std::optional<int> modifier = value.FindInt(kAcceleratorModifiersKey);
   std::optional<int> modification_action =
@@ -105,7 +102,8 @@ AcceleratorModificationData ValueToAcceleratorModificationData(
 
 void SetLookupMaps(base::span<const ash::AcceleratorData> accelerators,
                    ash::ActionIdToAcceleratorsMap& id_to_accelerator,
-                   AcceleratorActionMap& accelerator_to_id) {
+                   AcceleratorActionMap& accelerator_to_id,
+                   base::flat_set<ui::Accelerator>& locked_accelerator_set) {
   for (const auto& acceleratorData : accelerators) {
     ui::Accelerator accelerator(acceleratorData.keycode,
                                 acceleratorData.modifiers);
@@ -116,66 +114,60 @@ void SetLookupMaps(base::span<const ash::AcceleratorData> accelerators,
         std::make_pair(accelerator, acceleratorData.action));
     id_to_accelerator[static_cast<uint32_t>(acceleratorData.action)].push_back(
         accelerator);
+    if (acceleratorData.accelerator_locked) {
+      locked_accelerator_set.insert(accelerator);
+    }
   }
 }
 
 std::vector<ash::AcceleratorData> GetDefaultAccelerators() {
   std::vector<ash::AcceleratorData> accelerators;
-  AppendAcceleratorData(
-      accelerators,
-      base::make_span(ash::kAcceleratorData, ash::kAcceleratorDataLength));
+  AppendAcceleratorData(accelerators, ash::kAcceleratorData);
 
   if (::features::IsImprovedKeyboardShortcutsEnabled()) {
+    AppendAcceleratorData(accelerators,
+                          ash::kEnableWithPositionalAcceleratorsData);
     AppendAcceleratorData(
         accelerators,
-        base::make_span(ash::kEnableWithPositionalAcceleratorsData,
-                        ash::kEnableWithPositionalAcceleratorsDataLength));
-    AppendAcceleratorData(
-        accelerators,
-        base::make_span(
-            ash::kEnabledWithImprovedDesksKeyboardShortcutsAcceleratorData,
-            ash::
-                kEnabledWithImprovedDesksKeyboardShortcutsAcceleratorDataLength));
+        ash::kEnabledWithImprovedDesksKeyboardShortcutsAcceleratorData);
   } else {
-    AppendAcceleratorData(
-        accelerators,
-        base::make_span(ash::kDisableWithNewMappingAcceleratorData,
-                        ash::kDisableWithNewMappingAcceleratorDataLength));
+    AppendAcceleratorData(accelerators,
+                          ash::kDisableWithNewMappingAcceleratorData);
   }
   if (ash::features::IsSameAppWindowCycleEnabled()) {
-    AppendAcceleratorData(
-        accelerators,
-        base::make_span(
-            ash::kEnableWithSameAppWindowCycleAcceleratorData,
-            ash::kEnableWithSameAppWindowCycleAcceleratorDataLength));
+    AppendAcceleratorData(accelerators,
+                          ash::kEnableWithSameAppWindowCycleAcceleratorData);
   }
 
-  if (ash::features::IsGameDashboardEnabled()) {
-    AppendAcceleratorData(
-        accelerators,
-        base::make_span(ash::kToggleGameDashboardAcceleratorData,
-                        ash::kToggleGameDashboardAcceleratorDataLength));
+  if (ash::features::IsTilingWindowResizeEnabled()) {
+    AppendAcceleratorData(accelerators,
+                          ash::kTilingWindowResizeAcceleratorData);
   }
 
-  if (ash::features::IsPickerUpdateEnabled()) {
-    AppendAcceleratorData(
-        accelerators, base::make_span(ash::kTogglePickerAcceleratorData,
-                                      ash::kTogglePickerAcceleratorDataLength));
+  if (ash::features::IsDoNotDisturbShortcutEnabled()) {
+    AppendAcceleratorData(accelerators,
+                          ash::kToggleDoNotDisturbAcceleratorData);
   }
 
   // Debug accelerators.
   if (ash::debug::DebugAcceleratorsEnabled()) {
-    AppendAcceleratorData(accelerators,
-                          base::make_span(ash::kDebugAcceleratorData,
-                                          ash::kDebugAcceleratorDataLength));
+    AppendAcceleratorData(accelerators, ash::kDebugAcceleratorData);
   }
 
   // Developer accelerators.
   if (ash::debug::DeveloperAcceleratorsEnabled()) {
-    AppendAcceleratorData(
-        accelerators, base::make_span(ash::kDeveloperAcceleratorData,
-                                      ash::kDeveloperAcceleratorDataLength));
+    AppendAcceleratorData(accelerators, ash::kDeveloperAcceleratorData);
   }
+
+  if (ash::features::IsAppLaunchShortcutEnabled()) {
+    AppendAcceleratorData(accelerators, ash::kGeminiAcceleratorData);
+  }
+
+  if (ash::features::IsToggleCameraShortcutEnabled()) {
+    AppendAcceleratorData(accelerators,
+                          ash::kToggleCameraAllowedAcceleratorData);
+  }
+
   return accelerators;
 }
 
@@ -247,6 +239,11 @@ bool AshAcceleratorConfiguration::IsMutable() const {
 bool AshAcceleratorConfiguration::IsDeprecated(
     const ui::Accelerator& accelerator) const {
   return deprecated_accelerators_to_id_.Find(accelerator);
+}
+
+bool AshAcceleratorConfiguration::IsAcceleratorLocked(
+    const ui::Accelerator& accelerator) const {
+  return locked_accelerator_set_.contains(accelerator);
 }
 
 const AcceleratorAction* AshAcceleratorConfiguration::FindAcceleratorAction(
@@ -409,7 +406,7 @@ void AshAcceleratorConfiguration::Initialize(
 
   // Cache these accelerators as the default.
   SetLookupMaps(accelerators, default_id_to_accelerators_cache_,
-                default_accelerators_to_id_cache_);
+                default_accelerators_to_id_cache_, locked_accelerator_set_);
 
   // TODO(jimmyxgong): Before adding the accelerators to the mappings, apply
   // pref remaps.
@@ -417,13 +414,8 @@ void AshAcceleratorConfiguration::Initialize(
 }
 
 void AshAcceleratorConfiguration::InitializeDeprecatedAccelerators() {
-  base::span<const DeprecatedAcceleratorData> deprecated_accelerator_data(
-      kDeprecatedAcceleratorsData, kDeprecatedAcceleratorsDataLength);
-  base::span<const AcceleratorData> deprecated_accelerators(
-      kDeprecatedAccelerators, kDeprecatedAcceleratorsLength);
-
-  InitializeDeprecatedAccelerators(std::move(deprecated_accelerator_data),
-                                   std::move(deprecated_accelerators));
+  InitializeDeprecatedAccelerators(kDeprecatedAcceleratorsData,
+                                   kDeprecatedAccelerators);
 }
 
 void AshAcceleratorConfiguration::AddObserver(Observer* observer) {
@@ -460,7 +452,8 @@ void AshAcceleratorConfiguration::InitializeDeprecatedAccelerators(
 
 void AshAcceleratorConfiguration::AddAccelerators(
     base::span<const AcceleratorData> accelerators) {
-  SetLookupMaps(accelerators, id_to_accelerators_, accelerator_to_id_);
+  SetLookupMaps(accelerators, id_to_accelerators_, accelerator_to_id_,
+                locked_accelerator_set_);
   UpdateAndNotifyAccelerators();
 }
 
@@ -500,10 +493,25 @@ AcceleratorConfigResult AshAcceleratorConfiguration::DoRemoveAccelerator(
   CHECK(*found_id == action_id);
 
   // Remove accelerator from lookup map.
-  base::Erase(found_accelerators_iter->second, accelerator);
+  std::erase(found_accelerators_iter->second, accelerator);
 
   // Remove accelerator from reverse lookup map.
   accelerator_to_id_.Erase(accelerator);
+
+  // Also remove accelerators in the reverse key_state.
+  ui::Accelerator accelerator_reverse_state(accelerator);
+  accelerator_reverse_state.set_key_state(
+      accelerator.key_state() == ui::Accelerator::KeyState::PRESSED
+          ? ui::Accelerator::KeyState::RELEASED
+          : ui::Accelerator::KeyState::PRESSED);
+
+  const AcceleratorAction* reverse_key_state_id =
+      accelerator_to_id_.Find(accelerator_reverse_state);
+
+  if (reverse_key_state_id && *reverse_key_state_id == action_id) {
+    std::erase(found_accelerators_iter->second, accelerator_reverse_state);
+    accelerator_to_id_.Erase(accelerator_reverse_state);
+  }
 
   // Store the final state of `action_id`.
   if (save_override) {
@@ -643,6 +651,10 @@ bool AshAcceleratorConfiguration::IsValid(uint32_t id) const {
          default_id_to_accelerators_cache_.contains(id);
 }
 
+bool AshAcceleratorConfiguration::HasCustomAccelerators() {
+  return GetTotalNumberOfModifications() > 0;
+}
+
 void AshAcceleratorConfiguration::UpdateAndNotifyAccelerators() {
   // Re-populate `accelerators_` which contains all currently available
   // accelerators and deprecated accelerators, if present.
@@ -697,7 +709,7 @@ void AshAcceleratorConfiguration::ApplyPrefOverrides() {
                  << "a list. Skipping applying customization for this action.";
       continue;
     }
-    base::Value::List& override_list = entry.second.GetList();
+    base::ListValue& override_list = entry.second.GetList();
     if (override_list.empty()) {
       VLOG(1) << "Override list is unexpectedly empty for action ID: "
               << action_id << ". Skipping applying customization for "
@@ -712,7 +724,7 @@ void AshAcceleratorConfiguration::ApplyPrefOverrides() {
                    << "applying customization for action ID: " << action_id;
         continue;
       }
-      base::Value::Dict& override_dict = override_list_iter->GetDict();
+      base::DictValue& override_dict = override_list_iter->GetDict();
       AcceleratorModificationData override_data =
           ValueToAcceleratorModificationData(override_dict);
       if (override_data.action == AcceleratorModificationAction::kRemove) {
@@ -772,7 +784,7 @@ void AshAcceleratorConfiguration::UpdateOverrides(
   base::Value* action_entry = accelerator_overrides_.Find(action_id_key);
 
   if (!action_entry) {
-    base::Value::List accelerator_override_list;
+    base::ListValue accelerator_override_list;
     // No existing overrides, add the override entry and return.
     accelerator_override_list.Append(
         AcceleratorModificationDataToValue(accelerator, action));
@@ -786,7 +798,7 @@ void AshAcceleratorConfiguration::UpdateOverrides(
                << "a list. Cannot apply updates for action ID: " << action_id;
     return;
   }
-  base::Value::List& override_list = action_entry->GetList();
+  base::ListValue& override_list = action_entry->GetList();
   if (action_entry->GetList().empty()) {
     VLOG(1) << "No entries inside action ID: " << action_id
             << ". Cannot apply updates.";
@@ -858,7 +870,7 @@ bool AshAcceleratorConfiguration::AreAcceleratorsValid() {
       RestoreAllDefaults();
       return false;
     }
-    if (base::ranges::find(id_to_accelerator_iter->second, accelerator) ==
+    if (std::ranges::find(id_to_accelerator_iter->second, accelerator) ==
         id_to_accelerator_iter->second.end()) {
       LOG(ERROR) << "Shortcut overide prefs are out of sync, reverse lookup "
                  << "has an extra accelerator: "

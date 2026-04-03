@@ -4,12 +4,12 @@
 
 import 'chrome://resources/js/action_link.js';
 import './policy_conflict.js';
-import './strings.m.js';
+import '/strings.m.js';
 
 import {CustomElement} from 'chrome://resources/js/custom_element.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 
-import type {Conflict, PolicyConflictElement} from './policy_conflict.js';
+import type {Conflict} from './policy_conflict.js';
 import {getTemplate} from './policy_row.html.js';
 
 export interface Policy {
@@ -30,6 +30,7 @@ export interface Policy {
   superseded?: Conflict[];
   forSigninScreen: boolean;
   isExtension: boolean;
+  status: string;
 }
 
 
@@ -129,7 +130,7 @@ export class PolicyRowElement extends CustomElement {
 
       const convertValue = (value: string, format?: boolean) => {
         // Skip 'string' policy to avoid unnecessary conversions.
-        if (typeof value == 'string') {
+        if (typeof value === 'string') {
           return value;
         }
         if (format) {
@@ -178,8 +179,11 @@ export class PolicyRowElement extends CustomElement {
       const conflictsNotice = this.hasConflicts_ && !this.isMergedValue_ ?
           loadTimeData.getString('conflict') :
           '';
-      const ignoredNotice =
-          this.policy.ignored ? loadTimeData.getString('ignored') : '';
+      const ignoredNotice = this.policy.ignored ?
+          (this.policy.isExtension ?
+               loadTimeData.getString('ignoredByExtension') :
+               loadTimeData.getString('ignored')) :
+          '';
       let notice =
           [
             errorsNotice,
@@ -199,22 +203,21 @@ export class PolicyRowElement extends CustomElement {
         notice += `, ${supersededNotice}`;
       }
       messagesDisplay!.textContent = notice;
+      policy.status = notice;
 
       if (policy.conflicts) {
         policy.conflicts.forEach(conflict => {
-          const row = document.createElement('policy-conflict') as
-              PolicyConflictElement;
+          const row = document.createElement('policy-conflict');
           row.initialize(conflict, 'conflictValue');
-          row.classList!.add('policy-conflict-data');
+          row.classList.add('policy-conflict-data');
           this.shadowRoot!.appendChild(row);
         });
       }
       if (policy.superseded) {
         policy.superseded.forEach(superseded => {
-          const row = document.createElement('policy-conflict') as
-              PolicyConflictElement;
+          const row = document.createElement('policy-conflict');
           row.initialize(superseded, 'supersededValue');
-          row.classList!.add('policy-superseded-data');
+          row.classList.add('policy-superseded-data');
           this.shadowRoot!.appendChild(row);
         });
       }
@@ -238,7 +241,7 @@ export class PolicyRowElement extends CustomElement {
 
     // Copy the policy value to the clipboard.
     navigator.clipboard
-        .writeText((policyValueDisplay as CustomElement)!.innerText)
+        .writeText((policyValueDisplay as CustomElement).innerText)
         .catch(error => {
           console.error('Unable to copy policy value to clipboard:', error);
         });
@@ -257,23 +260,23 @@ export class PolicyRowElement extends CustomElement {
     levelRowDisplay.hidden = !levelRowDisplay.hidden;
     // </if>
     valueRowDisplay.hidden = !valueRowDisplay.hidden;
-    this.classList!.toggle('expanded', !valueRowDisplay.hidden);
+    this.classList.toggle('expanded', !valueRowDisplay.hidden);
 
     this.getRequiredElement('.show-more').hidden = !valueRowDisplay.hidden;
-    this.getRequiredElement('.show-less').hidden = valueRowDisplay!.hidden;
+    this.getRequiredElement('.show-less').hidden = valueRowDisplay.hidden;
     if (this.hasWarnings_) {
-      warningRowDisplay!.hidden = !warningRowDisplay.hidden;
+      warningRowDisplay.hidden = !warningRowDisplay.hidden;
     }
     if (this.hasErrors_) {
-      errorRowDisplay!.hidden = !errorRowDisplay.hidden;
+      errorRowDisplay.hidden = !errorRowDisplay.hidden;
     }
     if (this.hasInfos_) {
-      infoRowDisplay!.hidden = !infoRowDisplay.hidden;
+      infoRowDisplay.hidden = !infoRowDisplay.hidden;
     }
     this.shadowRoot!.querySelectorAll<HTMLElement>('.policy-conflict-data')
-        .forEach(row => row!.hidden = !row.hidden);
+        .forEach(row => row.hidden = !row.hidden);
     this.shadowRoot!.querySelectorAll<HTMLElement>('.policy-superseded-data')
-        .forEach(row => row!.hidden = !row.hidden);
+        .forEach(row => row.hidden = !row.hidden);
   }
 }
 declare global {

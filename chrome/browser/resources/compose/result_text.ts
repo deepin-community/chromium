@@ -3,17 +3,19 @@
 // found in the LICENSE file.
 
 import './icons.html.js';
-import './strings.m.js';
-import '//resources/cr_elements/cr_shared_vars.css.js';
+import '/strings.m.js';
 import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 
-import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 
-import {getTemplate} from './result_text.html.js';
+import {getCss} from './result_text.css.js';
+import {getHtml} from './result_text.html.js';
 import {WordStreamer} from './word_streamer.js';
 
 export interface ComposeResultTextElement {
   $: {
+    resultText: HTMLElement,
     partialResultText: HTMLElement,
     root: HTMLElement,
   };
@@ -29,23 +31,25 @@ export interface TextInput {
   streamingEnabled: boolean;
 }
 
-export class ComposeResultTextElement extends PolymerElement {
+export class ComposeResultTextElement extends CrLitElement {
   static get is() {
     return 'compose-result-text';
   }
 
-  static get template() {
-    return getTemplate();
+  static override get styles() {
+    return getCss();
   }
 
-  static get properties() {
+  override render() {
+    return getHtml.bind(this)();
+  }
+
+  static override get properties() {
     return {
       // Input properties.
 
       // The text to display.
-      textInput: {
-        type: Object,
-      },
+      textInput: {type: Object},
 
       // Output properties.
 
@@ -57,7 +61,6 @@ export class ComposeResultTextElement extends PolymerElement {
       // Is there any output to show.
       hasOutput: {
         type: Boolean,
-        computed: 'hasOutput_(displayedChunks_, displayedFullText_)',
         notify: true,
       },
 
@@ -65,39 +68,62 @@ export class ComposeResultTextElement extends PolymerElement {
 
       hasPartialOutput_: {
         type: Boolean,
-        computed: 'getHasPartialOutput_(displayedChunks_, displayedFullText_)',
         notify: true,
       },
-      displayedChunks_: {
-        type: Object,
-        readOnly: true,
-      },
-      displayedFullText_: {
-        type: String,
-        readOnly: true,
-      },
+      displayedChunks_: {type: Array},
+      displayedFullText_: {type: String},
     };
   }
 
-  static get observers() {
-    return ['updateInputs(textInput)'];
-  }
-
-  textInput: TextInput = {text: '', isPartial: false, streamingEnabled: false};
-  isOutputComplete: boolean = false;
-  hasOutput: boolean;
+  accessor textInput: TextInput = {
+    text: '',
+    isPartial: false,
+    streamingEnabled: false,
+  };
+  accessor isOutputComplete: boolean = false;
+  accessor hasOutput: boolean = false;
+  protected accessor hasPartialOutput_: boolean = false;
+  protected accessor displayedChunks_: StreamChunk[] = [];
+  protected accessor displayedFullText_: string = '';
 
   // Private regular properties.
   private wordStreamer_: WordStreamer;
-  private displayedChunks_: StreamChunk[] = [];
-  private displayedFullText_: string = '';
+  private initialText_: string = '';
 
   constructor() {
     super();
     this.wordStreamer_ = new WordStreamer(this.setStreamedWords_.bind(this));
   }
 
-  updateInputs() {
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
+
+    if (changedProperties.has('textInput')) {
+      this.updateInputs_();
+    }
+
+    const changedPrivateProperties =
+        changedProperties as Map<PropertyKey, unknown>;
+
+    if (changedPrivateProperties.has('displayedChunks_') ||
+        changedPrivateProperties.has('displayedFullText_') ||
+        changedProperties.has('isOutputComplete')) {
+      this.hasOutput =
+          this.displayedChunks_.length > 0 || this.displayedFullText_ !== '';
+      this.hasPartialOutput_ = this.hasOutput && !this.isOutputComplete;
+    }
+  }
+
+  override updated(changedProperties: PropertyValues<this>) {
+    super.updated(changedProperties);
+
+    // Making this change in updated() since it touches the DOM.
+    if (changedProperties.has('textInput')) {
+      this.$.resultText.innerText = this.textInput.text;
+    }
+  }
+
+  protected updateInputs_() {
     if (this.textInput.streamingEnabled) {
       this.isOutputComplete = false;
       this.wordStreamer_.setText(
@@ -121,12 +147,38 @@ export class ComposeResultTextElement extends PolymerElement {
     this.wordStreamer_.setCharsPerTickForTesting(5);
   }
 
-  private hasOutput_(): boolean {
-    return this.displayedChunks_.length > 0 || this.displayedFullText_ !== '';
+  protected onFocusIn_() {
+    this.dispatchEvent(new CustomEvent(
+        'set-result-focus', {bubbles: true, composed: true, detail: true}));
+
+    this.initialText_ = this.textInput.text;
   }
 
-  private getHasPartialOutput_(): boolean {
-    return this.hasOutput && !this.isOutputComplete;
+  protected onFocusOut_() {
+    this.dispatchEvent(new CustomEvent(
+        'set-result-focus', {bubbles: true, composed: true, detail: false}));
+
+    const currentText = this.$.resultText.innerText;
+    if (currentText === '') {
+      // We disallow the user from saving or using empty text. Instead, replace
+      // it with the starting state of the text before it was edited.
+      this.$.resultText.innerText = this.initialText_;
+      return;
+    }
+    // Only dispatch event if the text has changed from its initial state.
+    if (currentText !== this.initialText_) {
+      this.dispatchEvent(new CustomEvent(
+          'result-edit',
+          {bubbles: true, composed: true, detail: this.$.root.innerText}));
+    }
+  }
+
+  protected partialTextCanEdit_() {
+    if (this.hasOutput && this.isOutputComplete) {
+      return 'plaintext-only';
+    } else {
+      return 'false';
+    }
   }
 
   private setStreamedWords_(words: string[], isComplete: boolean) {

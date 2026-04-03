@@ -10,7 +10,7 @@
 #include <climits>
 #include <tuple>
 
-#include "third_party/googletest/src/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 #include "test/codec_factory.h"
 #include "test/encode_test_driver.h"
 #include "test/i420_video_source.h"
@@ -20,7 +20,7 @@ namespace {
 
 const int kTestMode = 0;
 
-typedef std::tuple<libvpx_test::TestMode, int> SuperframeTestParam;
+using SuperframeTestParam = std::tuple<libvpx_test::TestMode, int>;
 
 class SuperframeTest
     : public ::libvpx_test::EncoderTest,

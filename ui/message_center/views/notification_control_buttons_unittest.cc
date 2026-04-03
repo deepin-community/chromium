@@ -6,6 +6,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_unittest_util.h"
@@ -56,7 +57,8 @@ class NotificationControlButtonsTest : public views::ViewsTestBase {
   // views::ViewsTestBase:
   void SetUp() override {
     views::ViewsTestBase::SetUp();
-    widget_ = CreateTestWidget();
+    widget_ =
+        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
     Notification notification(
         NOTIFICATION_TYPE_SIMPLE, "id", u"title", u"id", ui::ImageModel(),
         std::u16string(), GURL(),

@@ -26,9 +26,8 @@ namespace network {
 class NetworkContext;
 
 // API implementation for exporting ongoing netlogs.
-class COMPONENT_EXPORT(NETWORK_SERVICE) NetLogExporter
-    : public mojom::NetLogExporter,
-      public base::SupportsWeakPtr<NetLogExporter> {
+class COMPONENT_EXPORT(NETWORK_SERVICE) NetLogExporter final
+    : public mojom::NetLogExporter {
  public:
   // This expects to live on the same thread as NetworkContext, e.g.
   // IO thread or NetworkService main thread.
@@ -40,11 +39,11 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetLogExporter
   ~NetLogExporter() override;
 
   void Start(base::File destination,
-             base::Value::Dict extra_constants,
+             base::DictValue extra_constants,
              net::NetLogCaptureMode capture_mode,
              uint64_t max_file_size,
              StartCallback callback) override;
-  void Stop(base::Value::Dict polled_data, StopCallback callback) override;
+  void Stop(base::DictValue polled_data, StopCallback callback) override;
 
   // Run off-thread by task scheduler, as does disk I/O.
   static base::FilePath CreateScratchDirForNetworkService(
@@ -65,13 +64,13 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetLogExporter
 
   static void StartWithScratchDirOrCleanup(
       base::WeakPtr<NetLogExporter> object,
-      base::Value::Dict extra_constants,
+      base::DictValue extra_constants,
       net::NetLogCaptureMode capture_mode,
       uint64_t max_file_size,
       StartCallback callback,
       const base::FilePath& scratch_dir_path);
 
-  void StartWithScratchDir(base::Value::Dict extra_constants,
+  void StartWithScratchDir(base::DictValue extra_constants,
                            net::NetLogCaptureMode capture_mode,
                            uint64_t max_file_size,
                            StartCallback callback,
@@ -90,6 +89,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetLogExporter
       scratch_dir_create_handler_for_tests_;
 
   THREAD_CHECKER(thread_checker_);
+
+  base::WeakPtrFactory<NetLogExporter> weak_ptr_factory_{this};
 };
 
 }  // namespace network

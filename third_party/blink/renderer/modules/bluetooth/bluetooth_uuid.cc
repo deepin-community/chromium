@@ -16,7 +16,7 @@ namespace blink {
 
 namespace {
 
-typedef WTF::HashMap<String, unsigned> NameToAssignedNumberMap;
+typedef HashMap<String, unsigned> NameToAssignedNumberMap;
 
 enum class GATTAttribute { kService, kCharacteristic, kDescriptor };
 
@@ -247,7 +247,7 @@ NameToAssignedNumberMap* GetAssignedNumberForCharacteristicNameMap() {
           {"latitude", 0x2AAE},
           {"longitude", 0x2AAF},
           {"local_north_coordinate", 0x2AB0},
-          {"local_east_coordinate.xml", 0x2AB1},
+          {"local_east_coordinate", 0x2AB1},
           {"floor_number", 0x2AB2},
           {"altitude", 0x2AB3},
           {"uncertainty", 0x2AB4},
@@ -339,8 +339,9 @@ String GetUUIDForGATTAttribute(GATTAttribute attribute,
   // https://webbluetoothcg.github.io/web-bluetooth/#dom-bluetoothuuid-getdescriptor
 
   const String name_str = GetUUIDFromV8Value(name);
-  if (WTF::IsValidUUID(name_str))
+  if (IsValidUUID(name_str)) {
     return name_str;
+  }
 
   // If name is in the corresponding attribute map return
   // BluetoothUUID.canonicalUUID(alias).
@@ -400,7 +401,7 @@ String GetUUIDForGATTAttribute(GATTAttribute attribute,
 
 String GetBluetoothUUIDFromV8Value(const V8UnionStringOrUnsignedLong* value) {
   const String value_str = GetUUIDFromV8Value(value);
-  return WTF::IsValidUUID(value_str) ? value_str : "";
+  return IsValidUUID(value_str) ? value_str : "";
 }
 
 // static

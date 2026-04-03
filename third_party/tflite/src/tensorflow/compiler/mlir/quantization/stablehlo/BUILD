@@ -1,5 +1,6 @@
-# Placeholder: load py_proto_library
 load("@llvm-project//mlir:tblgen.bzl", "gentbl_cc_library", "td_library")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_python//python:proto.bzl", "py_proto_library")
 load("//tensorflow:tensorflow.bzl", "tf_cc_binary", "tf_cc_test")
 load("//tensorflow:tensorflow.default.bzl", "get_compatible_with_portable")
 load("//tensorflow/compiler/mlir/quantization/stablehlo:internal_visibility_allowlist.bzl", "internal_visibility_allowlist")
@@ -8,11 +9,13 @@ load("//tensorflow/core/platform:build_config.bzl", "tf_proto_library")
 package_group(
     name = "internal_visibility_allowlist_package",
     packages = [
+        "//learning/brain/mlir/quantization/stablehlo/python/integration_test/...",
         "//tensorflow/compiler/mlir/lite/...",
         "//tensorflow/compiler/mlir/quantization/...",
         "//tensorflow/compiler/mlir/tf2xla/transforms/...",
         "//tensorflow/lite/...",
         "//third_party/cloud_tpu/inference_converter/...",  # TPU Inference Converter V1
+        "//waymo/ml/compiler/mlir/...",
     ] + internal_visibility_allowlist(),
 )
 
@@ -21,6 +24,7 @@ package(
     default_visibility = [
         ":internal_visibility_allowlist_package",
         "//tensorflow:__pkg__",
+        "//third_party/py/orbax:__subpackages__",
     ],
     licenses = ["notice"],
 )
@@ -28,14 +32,9 @@ package(
 gentbl_cc_library(
     name = "stablehlo_passes_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            [
-                "-gen-pass-decls",
-            ],
-            "passes/passes.h.inc",
-        ),
-    ],
+    tbl_outs = {"passes/passes.h.inc": [
+        "-gen-pass-decls",
+    ]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/passes.td",
     deps = [
@@ -47,20 +46,30 @@ cc_library(
     name = "passes",
     srcs = [
         "passes/convert_func_to_bfloat16.cc",
+        "passes/convert_shape_constraint_to_assert.cc",
         "passes/convert_xla_call_module_op_to_bfloat16.cc",
+        "passes/defer_activation_transpose.cc",
+        "passes/fold_constant_transpose.cc",
+        "passes/insert_calibration_statistics_saver.cc",
+        "passes/insert_weight_param.cc",
         "passes/lift_quantizable_spots_as_functions.cc",
         "passes/lift_quantizable_spots_as_functions_fusion.inc",
         "passes/lift_quantizable_spots_as_functions_simple.inc",
+        "passes/merge_fusion_with_dequantize.cc",
+        "passes/nchw_convolution_to_nhwc.cc",
         "passes/optimize_graph.cc",
         "passes/post_quantize.cc",
         "passes/prepare_quantize.cc",
         "passes/quantize.cc",
         "passes/quantize_composite_functions.cc",
         "passes/quantize_weight.cc",
+        "passes/remove_sharding_custom_call.cc",
+        "passes/remove_sharding_custom_call.inc",
         "passes/replace_stablehlo_ops_in_main_function_with_xla_call_module_ops.cc",
         "passes/restore_function_name.cc",
         "passes/unfuse_mhlo_batch_norm.cc",
         "passes/unwrap_xla_call_module_op.cc",
+        "passes/xla_call_module_to_call.cc",
     ],
     hdrs = [
         "passes/passes.h",
@@ -68,7 +77,6 @@ cc_library(
     compatible_with = get_compatible_with_portable(),
     deps = [
         ":bfloat16_type",
-        ":bridge_passes",
         ":fill_quantization_options",
         ":lift_quantizable_spots_as_functions_fusion_inc_gen",
         ":lift_quantizable_spots_as_functions_simple_inc_gen",
@@ -76,63 +84,54 @@ cc_library(
         ":quantization_config_proto_cc",
         ":quantization_options_proto_cc",
         ":quantization_patterns",
+        ":remove_sharding_custom_call_inc_gen",
         ":stablehlo_passes_inc_gen",
         ":stablehlo_type_utils",
-        "//tensorflow/compiler/mlir/lite:tensorflow_lite",
-        "//tensorflow/compiler/mlir/lite/quantization:quantization_config",
-        "//tensorflow/compiler/mlir/lite/quantization:quantization_lib",
-        "//tensorflow/compiler/mlir/lite/quantization/ir:QuantOps",
         "//tensorflow/compiler/mlir/quantization/common:attrs_and_constraints",
+        "//tensorflow/compiler/mlir/quantization/common:func",
         "//tensorflow/compiler/mlir/quantization/common:lift_as_function_call",
+        "//tensorflow/compiler/mlir/quantization/common:uniform_quantized_types",
         "//tensorflow/compiler/mlir/quantization/common/ir:QuantOps",
+        "//tensorflow/compiler/mlir/quantization/common/quantization_lib",
+        "//tensorflow/compiler/mlir/quantization/common/quantization_lib:quantization_config",
+        "//tensorflow/compiler/mlir/quantization/stablehlo/cc:permutation",
         "//tensorflow/compiler/mlir/quantization/stablehlo/ops:stablehlo_op_quant_spec",
-        "//tensorflow/compiler/mlir/quantization/tensorflow:passes",
         "//tensorflow/compiler/mlir/quantization/tensorflow:quantization_options_proto_cc",
         "//tensorflow/compiler/mlir/quantization/tensorflow:tf_quant_ops",
         "//tensorflow/compiler/mlir/quantization/tensorflow/cc:run_passes",
-        "//tensorflow/compiler/mlir/quantization/tensorflow/ops:tf_op_quant_spec",
         "//tensorflow/compiler/mlir/tensorflow",
-        "//tensorflow/compiler/mlir/tensorflow:dynamic_shape_utils",
-        "//tensorflow/compiler/mlir/tensorflow:tensorflow_attributes",
-        "//tensorflow/compiler/mlir/tensorflow:tensorflow_types",
         "//tensorflow/compiler/mlir/tensorflow:xla_call_module_attrs",
         "//tensorflow/core:portable_gif_internal",
-        "//tensorflow/core:protos_all_cc",
         "//tensorflow/core/ir/types:Dialect",
-        "//tensorflow/core/platform:path",
-        "//tensorflow/core/tpu:tpu_defs",
-        "//tensorflow/lite/kernels:padding",
-        "//tensorflow/lite/kernels/internal:quantization_util",
-        "@com_google_absl//absl/algorithm:container",
-        "@com_google_absl//absl/cleanup",
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/random",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
         "@eigen_archive//:eigen3",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:Parser",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:QuantOps",
         "@llvm-project//mlir:Rewrite",
         "@llvm-project//mlir:ShapeDialect",
         "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TensorDialect",
         "@llvm-project//mlir:TransformUtils",
-        "@llvm-project//mlir:Transforms",
-        "@local_tsl//tsl/platform:str_util",
-        "@local_tsl//tsl/protobuf:protos_all_cc",
-        "@local_xla//xla/mlir_hlo",
-        "@local_xla//xla/mlir_hlo:mhlo_passes",
-        "@local_xla//xla/mlir_hlo:unfuse_batch_norm",
+        "@shardy//shardy/dialect/sdy/ir:register",
         "@stablehlo//:chlo_ops",
         "@stablehlo//:stablehlo_ops",
+        "@stablehlo//:stablehlo_passes",
         "@stablehlo//:stablehlo_portable_api",
         "@stablehlo//:stablehlo_serialization",
+        "@stablehlo//:version",
+        "@tsl//tsl/platform:path",
+        "@tsl//tsl/platform:protobuf",
+        "@tsl//tsl/platform:regexp",
+        "@xla//xla/mlir_hlo",
+        "@xla//xla/mlir_hlo:mhlo_passes",
     ],
 )
 
@@ -144,18 +143,17 @@ cc_library(
     ],
     compatible_with = get_compatible_with_portable(),
     deps = [
-        "//tensorflow/compiler/mlir/lite/quantization:quantization_lib",
-        "//tensorflow/compiler/mlir/lite/quantization/ir:QuantOps",
+        ":quantization_config_proto_cc",
         "//tensorflow/compiler/mlir/quantization/common:attrs_and_constraints",
+        "//tensorflow/compiler/mlir/quantization/common:lift_as_function_call",
         "//tensorflow/compiler/mlir/quantization/common:uniform_quantized_types",
+        "//tensorflow/compiler/mlir/quantization/common/ir:QuantOps",
+        "//tensorflow/compiler/mlir/quantization/common/quantization_lib",
         "//tensorflow/compiler/mlir/quantization/stablehlo/ops:stablehlo_op_quant_spec",
-        "//tensorflow/compiler/mlir/quantization/tensorflow:passes",
         "//tensorflow/compiler/mlir/quantization/tensorflow:quantization_options_proto_cc",
         "//tensorflow/compiler/mlir/tensorflow",
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/core/platform:path",
-        "@com_google_absl//absl/algorithm:container",
-        "@com_google_absl//absl/container:flat_hash_set",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
@@ -172,10 +170,10 @@ td_library(
         "passes/lift_quantizable_spots_as_functions_fusion.td",
         "passes/lift_quantizable_spots_as_functions_simple.td",
         "passes/optimize_graph.td",
+        "passes/remove_sharding_custom_call.td",
     ],
     compatible_with = get_compatible_with_portable(),
     deps = [
-        "//tensorflow/compiler/mlir/lite:tensorflow_lite_ops_td_files",
         "//tensorflow/compiler/mlir/quantization/common:lift_as_function_call_td_files",
         "//tensorflow/compiler/mlir/quantization/tensorflow:quant_td_files",
         "//tensorflow/compiler/mlir/tensorflow:tensorflow_ops_td_files",
@@ -188,12 +186,7 @@ td_library(
 gentbl_cc_library(
     name = "lift_quantizable_spots_as_functions_simple_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            ["-gen-rewriters"],
-            "passes/lift_quantizable_spots_as_functions_simple.inc",
-        ),
-    ],
+    tbl_outs = {"passes/lift_quantizable_spots_as_functions_simple.inc": ["-gen-rewriters"]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/lift_quantizable_spots_as_functions_simple.td",
     deps = [
@@ -205,12 +198,7 @@ gentbl_cc_library(
 gentbl_cc_library(
     name = "lift_quantizable_spots_as_functions_fusion_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            ["-gen-rewriters"],
-            "passes/lift_quantizable_spots_as_functions_fusion.inc",
-        ),
-    ],
+    tbl_outs = {"passes/lift_quantizable_spots_as_functions_fusion.inc": ["-gen-rewriters"]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/lift_quantizable_spots_as_functions_fusion.td",
     deps = [
@@ -222,12 +210,7 @@ gentbl_cc_library(
 gentbl_cc_library(
     name = "optimize_graph_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            ["-gen-rewriters"],
-            "passes/optimize_graph.inc",
-        ),
-    ],
+    tbl_outs = {"passes/optimize_graph.inc": ["-gen-rewriters"]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/optimize_graph.td",
     deps = [
@@ -237,17 +220,23 @@ gentbl_cc_library(
 )
 
 gentbl_cc_library(
+    name = "remove_sharding_custom_call_inc_gen",
+    compatible_with = get_compatible_with_portable(),
+    tbl_outs = {"passes/remove_sharding_custom_call.inc": ["-gen-rewriters"]},
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "passes/remove_sharding_custom_call.td",
+    deps = [
+        ":quant_td_files",
+    ],
+)
+
+gentbl_cc_library(
     name = "bridge_passes_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            [
-                "-gen-pass-decls",
-                "-name=Bridge",
-            ],
-            "passes/bridge/passes.h.inc",
-        ),
-    ],
+    tbl_outs = {"passes/bridge/passes.h.inc": [
+        "-gen-pass-decls",
+        "-name=Bridge",
+    ]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/bridge/passes.td",
     deps = [
@@ -258,7 +247,6 @@ gentbl_cc_library(
 cc_library(
     name = "bridge_passes",
     srcs = [
-        "passes/bridge/convert_mhlo_quant_to_int.cc",
         "passes/bridge/convert_tf_quant_ops_to_mhlo.cc",
         "passes/bridge/convert_tf_quant_types.cc",
         "passes/bridge/optimize.cc",
@@ -269,10 +257,7 @@ cc_library(
         "passes/bridge/passes.h",
     ],
     compatible_with = get_compatible_with_portable(),
-    visibility = [
-        ":internal_visibility_allowlist_package",
-        "//tensorflow/compiler/mlir:__subpackages__",
-    ],
+    visibility = ["//visibility:public"],
     deps = [
         ":bridge_passes_inc_gen",
         ":optimize_inc_gen",
@@ -301,13 +286,14 @@ cc_library(
         "@llvm-project//mlir:QuantOps",
         "@llvm-project//mlir:ShapeDialect",
         "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TransformUtils",
         "@llvm-project//mlir:Transforms",
-        "@local_xla//xla:xla_data_proto_cc",
-        "@local_xla//xla/mlir_hlo",
-        "@local_xla//xla/mlir_hlo:chlo_legalize_to_hlo",
-        "@local_xla//xla/mlir_hlo:mhlo_passes",
-        "@local_xla//xla/translate/hlo_to_mhlo:attribute_importer",
         "@stablehlo//:chlo_ops",
+        "@stablehlo//:stablehlo_passes",
+        "@xla//xla:xla_data_proto_cc",
+        "@xla//xla/hlo/translate/hlo_to_mhlo:attribute_importer",
+        "@xla//xla/mlir_hlo",
+        "@xla//xla/mlir_hlo:mhlo_passes",
     ],
 )
 
@@ -321,19 +307,14 @@ td_library(
         "//tensorflow/compiler/mlir/tensorflow:tensorflow_ops_td_files",
         "@llvm-project//mlir:ArithOpsTdFiles",
         "@llvm-project//mlir:FuncTdFiles",
-        "@local_xla//xla/mlir_hlo:hlo_ops_td_files",
+        "@xla//xla/mlir_hlo:hlo_ops_td_files",
     ],
 )
 
 gentbl_cc_library(
     name = "optimize_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            ["-gen-rewriters"],
-            "passes/bridge/optimize.inc",
-        ),
-    ],
+    tbl_outs = {"passes/bridge/optimize.inc": ["-gen-rewriters"]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/bridge/optimize.td",
     deps = [":optimize_td_files"],
@@ -370,18 +351,20 @@ tf_cc_test(
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:QuantOps",
         "@llvm-project//mlir:Support",
-        "@local_tsl//tsl/platform:errors",
-        "@local_tsl//tsl/platform:statusor",
-        "@local_xla//xla:error_spec",
-        "@local_xla//xla:literal",
-        "@local_xla//xla:literal_util",
-        "@local_xla//xla:shape_util",
-        "@local_xla//xla/mlir_hlo",
-        "@local_xla//xla/pjrt:pjrt_client",
-        "@local_xla//xla/pjrt:pjrt_executable",
-        "@local_xla//xla/pjrt:tfrt_cpu_pjrt_client",
-        "@local_xla//xla/tests:literal_test_util",
         "@stablehlo//:chlo_ops",
+        "@xla//xla:error_spec",
+        "@xla//xla:literal",
+        "@xla//xla:literal_util",
+        "@xla//xla:shape_util",
+        "@xla//xla:xla_data_proto_cc",
+        "@xla//xla/mlir_hlo",
+        "@xla//xla/pjrt:pjrt_client",
+        "@xla//xla/pjrt:pjrt_executable",
+        "@xla//xla/pjrt/plugin/xla_cpu:cpu_client_options",
+        "@xla//xla/pjrt/plugin/xla_cpu:xla_cpu_pjrt_client",
+        "@xla//xla/tests:literal_test_util",
+        "@xla//xla/tsl/platform:errors",
+        "@xla//xla/tsl/platform:statusor",
     ],
 )
 
@@ -395,6 +378,7 @@ tf_cc_test(
         "//tensorflow/compiler/mlir/tf2xla/api/v2:legalize_tf",
         "//tensorflow/compiler/tf2xla:xla_helpers",
         "//tensorflow/core:framework",
+        "//tensorflow/core:protos_all_cc",
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
         "//tensorflow/core/protobuf:for_core_protos_cc",
@@ -403,9 +387,10 @@ tf_cc_test(
         "@com_google_googletest//:gtest",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:Pass",
-        "@local_xla//xla:shape_util",
-        "@local_xla//xla/client:client_library",
-        "@local_xla//xla/stream_executor",
+        "@xla//xla:shape_util",
+        "@xla//xla/client:client_library",
+        "@xla//xla/stream_executor:platform",
+        "@xla//xla/stream_executor:platform_manager",
     ],
 )
 
@@ -416,7 +401,7 @@ tf_cc_test(
         ":bridge_passes",
         "//tensorflow/compiler/mlir:register_common_dialects",
         "//tensorflow/compiler/mlir/tensorflow",
-        "//tensorflow/compiler/mlir/tensorflow:serialize_mlir_module_utils",
+        "//tensorflow/compiler/mlir/tensorflow:deserialize_mlir_module_utils",
         "//tensorflow/core:test",
         "//tensorflow/core/lib/monitoring:cell_reader",
         "@com_google_absl//absl/strings",
@@ -426,7 +411,7 @@ tf_cc_test(
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Support",
-        "@local_tsl//tsl/platform:statusor",
+        "@xla//xla/tsl/platform:statusor",
     ],
 )
 
@@ -439,7 +424,7 @@ cc_library(
         "quantize_passes.h",
     ],
     compatible_with = get_compatible_with_portable(),
-    visibility = [":internal_visibility_allowlist_package"],
+    visibility = ["//visibility:public"],
     deps = [
         ":fill_quantization_options",
         ":passes",
@@ -454,15 +439,10 @@ cc_library(
 gentbl_cc_library(
     name = "stablehlo_test_passes_inc_gen",
     compatible_with = get_compatible_with_portable(),
-    tbl_outs = [
-        (
-            [
-                "-gen-pass-decls",
-                "-name=Test",
-            ],
-            "passes/testing/passes.h.inc",
-        ),
-    ],
+    tbl_outs = {"passes/testing/passes.h.inc": [
+        "-gen-pass-decls",
+        "-name=Test",
+    ]},
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "passes/testing/passes.td",
     deps = [
@@ -473,6 +453,7 @@ gentbl_cc_library(
 cc_library(
     name = "test_passes",
     srcs = [
+        "passes/testing/test_lift_quantizable_spots_as_functions_with_quantization_specs.cc",
         "passes/testing/test_post_calibration_component.cc",
         "passes/testing/test_pre_calibration_component.cc",
         "passes/testing/test_tf_to_stablehlo_pass.cc",
@@ -482,27 +463,32 @@ cc_library(
     ],
     compatible_with = get_compatible_with_portable(),
     deps = [
+        ":passes",
         ":quantization_config_proto_cc",
         ":stablehlo_test_passes_inc_gen",
-        "//tensorflow/compiler/mlir/lite/quantization/ir:QuantOps",
+        "//tensorflow/compiler/mlir/quantization/common/ir:QuantOps",
+        "//tensorflow/compiler/mlir/quantization/stablehlo/cc:config",
         "//tensorflow/compiler/mlir/quantization/stablehlo/cc:post_calibration",
         "//tensorflow/compiler/mlir/quantization/stablehlo/cc:pre_calibration",
         "//tensorflow/compiler/mlir/quantization/tensorflow:quantization_options_proto_cc",
         "//tensorflow/compiler/mlir/quantization/tensorflow:quantize_preprocess",
         "//tensorflow/compiler/mlir/quantization/tensorflow/cc:run_passes",
         "//tensorflow/compiler/mlir/tensorflow",
-        "//tensorflow/compiler/mlir/tensorflow/transforms:verify_no_outside_compilation_markers_pass",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:QuantOps",
         "@llvm-project//mlir:SparseTensorDialect",
         "@llvm-project//mlir:Support",
-        "@local_xla//xla/mlir_hlo",
+        "@llvm-project//mlir:UBDialect",
         "@stablehlo//:chlo_ops",
         "@stablehlo//:stablehlo_ops",
         "@stablehlo//:vhlo_ops",
+        "@tsl//tsl/platform:protobuf",
+        "@xla//xla/mlir_hlo",
     ],
 )
 
@@ -533,6 +519,7 @@ tf_cc_test(
     deps = [
         ":math_utils",
         "@com_google_googletest//:gtest_main",
+        "@llvm-project//mlir:Support",
     ],
 )
 
@@ -562,6 +549,7 @@ tf_cc_test(
     deps = [
         ":stablehlo_type_utils",
         "@com_google_googletest//:gtest_main",
+        "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@stablehlo//:stablehlo_ops",
@@ -580,7 +568,7 @@ cc_library(
         "//tensorflow/core:framework",
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/core/framework:numeric_types",
-        "//tensorflow/core/platform:status",
+        "@com_google_absl//absl/status",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
@@ -613,8 +601,8 @@ tf_cc_test(
         "@llvm-project//mlir:QuantOps",
         "@llvm-project//mlir:SparseTensorDialect",
         "@llvm-project//mlir:Support",
-        "@local_tsl//tsl/framework:numeric_types",
-        "@local_xla//xla/mlir_hlo",
+        "@xla//xla/mlir_hlo",
+        "@xla//xla/tsl/framework:numeric_types",
     ],
 )
 
@@ -662,8 +650,8 @@ tf_cc_test(
         "@llvm-project//mlir:QuantOps",
         "@llvm-project//mlir:SparseTensorDialect",
         "@llvm-project//mlir:Support",
-        "@local_tsl//tsl/framework:numeric_types",
-        "@local_xla//xla/mlir_hlo",
+        "@xla//xla/mlir_hlo",
+        "@xla//xla/tsl/framework:numeric_types",
     ],
 )
 
@@ -674,7 +662,6 @@ tf_cc_test(
 tf_proto_library(
     name = "quantization_options_proto",
     srcs = ["quantization_options.proto"],
-    cc_api_version = 2,
     make_default_target_header_only = True,
     visibility = ["//visibility:public"],
 )
@@ -682,7 +669,6 @@ tf_proto_library(
 # copybara:uncomment_begin(google-only)
 # py_proto_library(
 #     name = "quantization_options_py_pb2",
-#     api_version = 2,
 #     visibility = [":internal_visibility_allowlist_package"],
 #     deps = [":quantization_options_proto"],
 # )
@@ -695,7 +681,6 @@ tf_proto_library(
 tf_proto_library(
     name = "quantization_config_proto",
     srcs = ["quantization_config.proto"],
-    cc_api_version = 2,
     make_default_target_header_only = True,
     visibility = ["//visibility:public"],
 )
@@ -703,8 +688,9 @@ tf_proto_library(
 # copybara:uncomment_begin(google-only)
 # py_proto_library(
 #     name = "quantization_config_py_pb2",
-#     api_version = 2,
-#     visibility = [":internal_visibility_allowlist_package"],
+#     visibility = [
+#         ":internal_visibility_allowlist_package",
+#     ],
 #     deps = [":quantization_config_proto"],
 # )
 # copybara:uncomment_end
@@ -722,25 +708,27 @@ tf_cc_binary(
         ":passes",
         ":test_passes",
         "//tensorflow/compiler/mlir:init_mlir",
-        "//tensorflow/compiler/mlir/lite/quantization/ir:QuantOps",
+        "//tensorflow/compiler/mlir/quantization/common/ir:QuantOps",
+        "//tensorflow/compiler/mlir/quantization/stablehlo/cc:pass_pipeline",
         "//tensorflow/compiler/mlir/tensorflow",
         "//tensorflow/compiler/mlir/tensorflow/transforms:tensorflow_passes",
         "//tensorflow/compiler/mlir/tensorflow/transforms:tf_dialect_passes",
         "//tensorflow/core/ir/types:Dialect",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:AllPassesAndDialects",
         "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:FuncExtensions",
         "@llvm-project//mlir:MlirOptLib",
         "@llvm-project//mlir:QuantOps",
+        "@llvm-project//mlir:RegisterAllPasses",
         "@llvm-project//mlir:SCFDialect",
         "@llvm-project//mlir:ShapeDialect",
-        "@llvm-project//mlir:Support",
         "@llvm-project//mlir:TensorDialect",
-        "@local_xla//xla/mlir_hlo:hlo_dialect_registration",
-        "@local_xla//xla/mlir_hlo:mhlo_passes",
         "@stablehlo//:stablehlo_ops",
         "@stablehlo//:stablehlo_passes",
         "@stablehlo//:vhlo_ops",
+        "@xla//xla/mlir_hlo:hlo_dialect_registration",
+        "@xla//xla/mlir_hlo:mhlo_passes",
     ],
 )

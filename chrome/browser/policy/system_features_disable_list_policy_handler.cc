@@ -4,19 +4,17 @@
 
 #include "system_features_disable_list_policy_handler.h"
 
-#include "base/containers/contains.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/constants/web_app_id_constants.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
-#include "chrome/browser/web_applications/web_app_id_constants.h"
+#include "build/build_config.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_registry_simple.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ash/constants/ash_pref_names.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+static_assert(BUILDFLAG(IS_CHROMEOS));
 
 namespace policy {
 
@@ -30,9 +28,22 @@ const char kExploreFeature[] = "explore";
 const char kCroshFeature[] = "crosh";
 const char kTerminalFeature[] = "terminal";
 const char kGalleryFeature[] = "gallery";
-
-const char kBlockedDisableMode[] = "blocked";
-const char kHiddenDisableMode[] = "hidden";
+const char kPrintJobsFeature[] = "print_jobs";
+const char kKeyShortcutsFeature[] = "key_shortcuts";
+const char kRecorderFeature[] = "recorder";
+const char kGmailFeature[] = "gmail";
+const char kGoogleDocsFeature[] = "google_docs";
+const char kGoogleSlidesFeature[] = "google_slides";
+const char kGoogleSheetsFeature[] = "google_sheets";
+const char kGoogleDriveFeature[] = "google_drive";
+const char kGoogleKeepFeature[] = "google_keep";
+const char kGoogleCalendarFeature[] = "google_calendar";
+const char kGoogleChatFeature[] = "google_chat";
+const char kYoutubeFeature[] = "youtube";
+const char kGoogleMapsFeature[] = "google_maps";
+const char kCalculatorFeature[] = "calculator";
+const char kTextEditorFeature[] = "text_editor";
+const char kVidsFeature[] = "vids";
 
 const char kSystemFeaturesDisableListHistogram[] =
     "Enterprise.SystemFeaturesDisableList";
@@ -44,37 +55,31 @@ SystemFeaturesDisableListPolicyHandler::SystemFeaturesDisableListPolicyHandler()
 SystemFeaturesDisableListPolicyHandler::
     ~SystemFeaturesDisableListPolicyHandler() = default;
 
-void SystemFeaturesDisableListPolicyHandler::RegisterPrefs(
-    PrefRegistrySimple* registry) {
-  registry->RegisterListPref(policy_prefs::kSystemFeaturesDisableList);
-  registry->RegisterStringPref(policy_prefs::kSystemFeaturesDisableMode,
-                               kBlockedDisableMode);
-}
-
 SystemFeature SystemFeaturesDisableListPolicyHandler::GetSystemFeatureFromAppId(
     const std::string& app_id) {
-  if (app_id == web_app::kCanvasAppId)
+  if (app_id == ash::kCanvasAppId) {
     return SystemFeature::kCanvas;
+  }
   return SystemFeature::kUnknownSystemFeature;
 }
 
 bool SystemFeaturesDisableListPolicyHandler::IsSystemFeatureDisabled(
     SystemFeature feature,
     PrefService* const pref_service) {
-  if (!pref_service)  // Sometimes it's not available in tests.
+  if (!pref_service) {  // Sometimes it's not available in tests.
     return false;
+  }
 
-  const base::Value::List& disabled_system_features =
+  const base::ListValue& disabled_system_features =
       pref_service->GetList(policy::policy_prefs::kSystemFeaturesDisableList);
 
-  return base::Contains(disabled_system_features,
-                        base::Value(static_cast<int>(feature)));
+  return disabled_system_features.contains(static_cast<int>(feature));
 }
 
 void SystemFeaturesDisableListPolicyHandler::ApplyList(
-    base::Value::List filtered_list,
+    base::ListValue filtered_list,
     PrefValueMap* prefs) {
-  base::Value::List enums_list;
+  base::ListValue enums_list;
   base::Value* old_list = nullptr;
   prefs->GetValue(policy_prefs::kSystemFeaturesDisableList, &old_list);
 
@@ -82,18 +87,15 @@ void SystemFeaturesDisableListPolicyHandler::ApplyList(
     SystemFeature feature = ConvertToEnum(element.GetString());
     enums_list.Append(static_cast<int>(feature));
 
-    if (!old_list || !base::Contains(old_list->GetList(),
-                                     base::Value(static_cast<int>(feature)))) {
+    if (!old_list || !old_list->GetList().contains(static_cast<int>(feature))) {
       base::UmaHistogramEnumeration(kSystemFeaturesDisableListHistogram,
                                     feature);
     }
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  bool os_settings_disabled = base::Contains(
-      enums_list, base::Value(static_cast<int>(SystemFeature::kOsSettings)));
+  bool os_settings_disabled =
+      enums_list.contains(static_cast<int>(SystemFeature::kOsSettings));
   prefs->SetBoolean(ash::prefs::kOsSettingsEnabled, !os_settings_disabled);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
   prefs->SetValue(policy_prefs::kSystemFeaturesDisableList,
                   base::Value(std::move(enums_list)));
 }
@@ -130,7 +132,54 @@ SystemFeature SystemFeaturesDisableListPolicyHandler::ConvertToEnum(
   if (system_feature == kGalleryFeature) {
     return SystemFeature::kGallery;
   }
-
+  if (system_feature == kPrintJobsFeature) {
+    return SystemFeature::kPrintJobs;
+  }
+  if (system_feature == kKeyShortcutsFeature) {
+    return SystemFeature::kKeyShortcuts;
+  }
+  if (system_feature == kRecorderFeature) {
+    return SystemFeature::kRecorder;
+  }
+  if (system_feature == kGmailFeature) {
+    return SystemFeature::kGmail;
+  }
+  if (system_feature == kGoogleDocsFeature) {
+    return SystemFeature::kGoogleDocs;
+  }
+  if (system_feature == kGoogleSlidesFeature) {
+    return SystemFeature::kGoogleSlides;
+  }
+  if (system_feature == kGoogleSheetsFeature) {
+    return SystemFeature::kGoogleSheets;
+  }
+  if (system_feature == kGoogleDriveFeature) {
+    return SystemFeature::kGoogleDrive;
+  }
+  if (system_feature == kGoogleKeepFeature) {
+    return SystemFeature::kGoogleKeep;
+  }
+  if (system_feature == kGoogleCalendarFeature) {
+    return SystemFeature::kGoogleCalendar;
+  }
+  if (system_feature == kGoogleChatFeature) {
+    return SystemFeature::kGoogleChat;
+  }
+  if (system_feature == kYoutubeFeature) {
+    return SystemFeature::kYoutube;
+  }
+  if (system_feature == kGoogleMapsFeature) {
+    return SystemFeature::kGoogleMaps;
+  }
+  if (system_feature == kCalculatorFeature) {
+    return SystemFeature::kCalculator;
+  }
+  if (system_feature == kTextEditorFeature) {
+    return SystemFeature::kTextEditor;
+  }
+  if (system_feature == kVidsFeature) {
+    return SystemFeature::kVids;
+  }
   LOG(ERROR) << "Unsupported system feature: " << system_feature;
   return SystemFeature::kUnknownSystemFeature;
 }

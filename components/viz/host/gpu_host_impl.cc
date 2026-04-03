@@ -21,20 +21,26 @@
 #include "build/build_config.h"
 #include "components/viz/common/buildflags.h"
 #include "components/viz/common/features.h"
+#include "components/viz/host/persistent_cache_sandboxed_file_factory.h"
 #include "gpu/config/gpu_driver_bug_workaround_type.h"
 #include "gpu/config/gpu_feature_info.h"
 #include "gpu/config/gpu_finch_features.h"
 #include "gpu/config/gpu_info.h"
 #include "gpu/ipc/common/gpu_client_ids.h"
 #include "gpu/ipc/host/gpu_disk_cache.h"
+#include "gpu/webgpu/dawn_commit_hash.h"
 #include "mojo/public/cpp/bindings/sync_call_restrictions.h"
+#include "services/webnn/host/weights_file_provider.h"
+#include "skia/buildflags.h"
+#include "skia/ext/skia_commit_hash.h"
 #include "ui/gfx/font_render_params.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "base/android/build_info.h"
+#include "base/android/android_info.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
+#include "services/webnn/host/execution_provider_initializer.h"
 #include "ui/gfx/win/rendering_window_manager.h"
 #elif BUILDFLAG(IS_MAC)
 #include "ui/accelerated_widget_mac/window_resize_helper_mac.h"
@@ -55,45 +61,58 @@ class FontRenderParams {
   FontRenderParams(const FontRenderParams&) = delete;
   FontRenderParams& operator=(const FontRenderParams&) = delete;
 
-  void Set(const gfx::FontRenderParams& params);
-  void Reset();
-  const std::optional<gfx::FontRenderParams>& Get();
+  void Set(const gfx::FontRenderParams& params) {
+    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+    params_ = params;
+    if (gpu_host_impl_) {
+      gpu_host_impl_->MaybeSendFontRenderParams();
+    }
+  }
+
+  const std::optional<gfx::FontRenderParams>& Get() {
+    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+    return params_;
+  }
+
+  void SetGpuHostImpl(GpuHostImpl* gpu_host_impl) {
+    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+    gpu_host_impl_ = gpu_host_impl;
+  }
 
  private:
   friend class base::NoDestructor<FontRenderParams>;
 
-  FontRenderParams();
-  ~FontRenderParams();
+  FontRenderParams() = default;
+
+  ~FontRenderParams() { NOTREACHED(); }
 
   THREAD_CHECKER(thread_checker_);
   std::optional<gfx::FontRenderParams> params_;
+  raw_ptr<GpuHostImpl> gpu_host_impl_ = nullptr;
 };
-
-void FontRenderParams::Set(const gfx::FontRenderParams& params) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  params_ = params;
-}
-
-void FontRenderParams::Reset() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  params_ = std::nullopt;
-}
-
-const std::optional<gfx::FontRenderParams>& FontRenderParams::Get() {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  return params_;
-}
-
-FontRenderParams::FontRenderParams() = default;
-
-FontRenderParams::~FontRenderParams() {
-  NOTREACHED();
-}
 
 FontRenderParams& GetFontRenderParams() {
   static base::NoDestructor<FontRenderParams> instance;
   return *instance;
 }
+
+#if BUILDFLAG(IS_OZONE)
+bool IsHdrEnabledForGpuInfo(const gpu::GPUInfo& gpu_info) {
+  return gpu_info.skia_backend_type != gpu::SkiaBackendType::kUnknown &&
+         gpu_info.skia_backend_type != gpu::SkiaBackendType::kNone;
+}
+#endif
+
+#if BUILDFLAG(SKIA_USE_DAWN)
+std::string GraphiteDawnCacheVersion() {
+  // We use a combination of Dawn and Skia's git hashes as the cache version.
+  // - Dawn's git hash is because a new Dawn's version might change the way
+  // shaders are compiled.
+  // - Skia's git hash is because some cached shaders might not be used in a
+  // newer version of Skia.
+  return SKIA_COMMIT_HASH "_" DAWN_COMMIT_HASH;
+}
+#endif
 
 }  // namespace
 
@@ -108,9 +127,7 @@ GpuHostImpl::GpuHostImpl(Delegate* delegate,
                          InitParams params)
     : delegate_(delegate),
       viz_main_(std::move(viz_main)),
-      params_(std::move(params)),
-      shared_bitmap_to_shared_image_flag_(
-          base::FeatureList::IsEnabled(features::kSharedBitmapToSharedImage)) {
+      params_(std::move(params)) {
   // Create a special GPU info collection service if the GPU process is used for
   // info collection only.
 #if BUILDFLAG(IS_WIN)
@@ -128,7 +145,6 @@ GpuHostImpl::GpuHostImpl(Delegate* delegate,
   delegate_->BindDiscardableMemoryReceiver(
       discardable_manager_remote.InitWithNewPipeAndPassReceiver());
 
-  DCHECK(GetFontRenderParams().Get());
   scoped_refptr<base::SequencedTaskRunner> task_runner = nullptr;
 #if BUILDFLAG(IS_MAC)
   if (params_.main_thread_task_runner->BelongsToCurrentThread())
@@ -139,12 +155,42 @@ GpuHostImpl::GpuHostImpl(Delegate* delegate,
   viz_main_->SetHostProcessId(base::GetCurrentProcId());
 #endif
 
+  mojom::GpuServiceCreationParamsPtr gpu_service_params =
+      mojom::GpuServiceCreationParams::New();
+#if BUILDFLAG(IS_OZONE)
+
+#if BUILDFLAG(IS_LINUX)
+  // Linux has an issue when running in single-process mode wherein
+  // GetPlatformRuntimeProperties() browser-side calls can have a data race with
+  // in-process GPU service initialization. The call to
+  // GetPlatformRuntimeProperties() below tickles that data race. Note that
+  // running in single-process mode on Linux is done only in test contexts.
+  const bool can_initialize_supports_overlays =
+      !params_.gpu_service_running_in_process;
+#else
+  constexpr bool can_initialize_supports_overlays = true;
+#endif
+
+  if (can_initialize_supports_overlays) {
+    gpu_service_params->supports_overlays = ui::OzonePlatform::GetInstance()
+                                                ->GetPlatformRuntimeProperties()
+                                                .supports_overlays;
+  }
+#endif
+
   viz_main_->CreateGpuService(
       gpu_service_remote_.BindNewPipeAndPassReceiver(task_runner),
       gpu_host_receiver_.BindNewPipeAndPassRemote(task_runner),
+      gpu_logging_receiver_.BindNewPipeAndPassRemote(task_runner),
       std::move(discardable_manager_remote),
-      use_shader_cache_shm_count_.CloneRegion(),
-      GetFontRenderParams().Get()->subpixel_rendering);
+      use_shader_cache_shm_count_.CloneRegion(), std::move(gpu_service_params));
+  MaybeSendFontRenderParams();
+
+  // The persistent cache is not used by the GPU process for info collection.
+  // Avoid loading the cache files multiple times.
+  if (!params_.info_collection_gpu_process) {
+    InitPersistentCache();
+  }
 
 #if BUILDFLAG(IS_OZONE)
   InitOzone();
@@ -152,19 +198,21 @@ GpuHostImpl::GpuHostImpl(Delegate* delegate,
 }
 
 GpuHostImpl::~GpuHostImpl() {
+  ClearPersistentCaches(false);
+  GetFontRenderParams().SetGpuHostImpl(nullptr);
   SendOutstandingReplies();
+}
+
+void GpuHostImpl::NotifyWorkloadIncrease() {
+#if BUILDFLAG(IS_ANDROID)
+  viz_main_->NotifyWorkloadIncrease();
+#endif
 }
 
 // static
 void GpuHostImpl::InitFontRenderParams(const gfx::FontRenderParams& params) {
   DCHECK(!GetFontRenderParams().Get());
   GetFontRenderParams().Set(params);
-}
-
-// static
-void GpuHostImpl::ResetFontRenderParams() {
-  DCHECK(GetFontRenderParams().Get());
-  GetFontRenderParams().Reset();
 }
 
 void GpuHostImpl::SetProcessId(base::ProcessId pid) {
@@ -181,6 +229,10 @@ void GpuHostImpl::OnProcessCrashed() {
   // cached binaries. Completely clear the shader cache to force shader binaries
   // to be re-created.
   if (use_shader_cache_shm_count_.GetCount() > 0) {
+    // Clear persistent cache files
+    send_persistent_cache_files_to_service_ = false;
+    ClearPersistentCaches(true);
+
     auto* gpu_disk_cache_factory = delegate_->GetGpuDiskCacheFactory();
     for (auto& [_, cache] : client_id_to_caches_) {
       // This call will temporarily extend the lifetime of the cache (kept
@@ -228,25 +280,15 @@ void GpuHostImpl::ConnectFrameSinkManager(
 void GpuHostImpl::EstablishGpuChannel(int client_id,
                                       uint64_t client_tracing_id,
                                       bool is_gpu_host,
+                                      bool enable_extra_handles_validation,
                                       bool sync,
                                       EstablishChannelCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  TRACE_EVENT0("gpu", "GpuHostImpl::EstablishGpuChannel");
+  TRACE_EVENT2("gpu", "GpuHostImpl::EstablishGpuChannel", "client_id",
+               client_id, "is_gpu_host", is_gpu_host);
+  DCHECK(!(is_gpu_host && enable_extra_handles_validation));
 
   shutdown_timeout_.Stop();
-
-  // If GPU features are already blocklisted, no need to establish the channel.
-  bool gpu_channel_allowed = shared_bitmap_to_shared_image_flag_
-                                 ? true
-                                 : delegate_->GpuAccessAllowed();
-  if (!gpu_channel_allowed) {
-    DVLOG(1) << "GPU access blocked, refusing to open a GPU channel.";
-    std::move(callback).Run(mojo::ScopedMessagePipeHandle(), gpu::GPUInfo(),
-                            gpu::GpuFeatureInfo(),
-                            gpu::SharedImageCapabilities(),
-                            EstablishChannelStatus::kGpuAccessDenied);
-    return;
-  }
 
   if (gpu::IsReservedClientId(client_id)) {
     // The display-compositor/GrShaderCache in the gpu process uses these
@@ -267,7 +309,8 @@ void GpuHostImpl::EstablishGpuChannel(int client_id,
     {
       mojo::SyncCallRestrictions::ScopedAllowSyncCall scoped_allow;
       gpu_service_remote_->EstablishGpuChannel(
-          client_id, client_tracing_id, is_gpu_host, &channel_handle, &gpu_info,
+          client_id, client_tracing_id, is_gpu_host,
+          enable_extra_handles_validation, &channel_handle, &gpu_info,
           &gpu_feature_info, &shared_image_capabilities);
     }
     OnChannelEstablished(client_id, true, std::move(channel_handle), gpu_info,
@@ -275,12 +318,14 @@ void GpuHostImpl::EstablishGpuChannel(int client_id,
   } else {
     gpu_service_remote_->EstablishGpuChannel(
         client_id, client_tracing_id, is_gpu_host,
+        enable_extra_handles_validation,
         base::BindOnce(&GpuHostImpl::OnChannelEstablished,
                        weak_ptr_factory_.GetWeakPtr(), client_id, false));
   }
 
   // The gpu host channel uses the same cache as the compositor client.
-  if (is_gpu_host) {
+  if (is_gpu_host &&
+      !base::FeatureList::IsEnabled(features::kGpuPersistentCache)) {
     SetChannelDiskCacheHandle(client_id,
                               gpu::kDisplayCompositorGpuDiskCacheHandle);
   }
@@ -333,7 +378,7 @@ void GpuHostImpl::CloseChannel(int client_id) {
 }
 
 #if BUILDFLAG(USE_VIZ_DEBUGGER)
-void GpuHostImpl::FilterVisualDebugStream(base::Value::Dict json) {
+void GpuHostImpl::FilterVisualDebugStream(base::DictValue json) {
   viz_main_->FilterDebugStream(std::move(json));
 }
 
@@ -412,6 +457,56 @@ void GpuHostImpl::TerminateGpuProcess(const std::string& message) {
 
 #endif  // BUILDFLAG(IS_OZONE)
 
+void GpuHostImpl::InitPersistentCache() {
+    auto* persistent_cache_file_factory =
+        PersistentCacheSandboxedFileFactory::GetInstance();
+    if (!persistent_cache_file_factory) {
+      // This can happen in tests when the cache directory is not defined.
+      return;
+    }
+
+    auto load_persistent_cache = [&](gpu::GpuDiskCacheHandle handle,
+                                     std::string cache_version) {
+      persistent_cache_file_factory->CreateFilesAsync(
+          GetGpuDiskCacheSubdir(gpu::GetHandleType(handle)), cache_version,
+          base::BindOnce(
+              [](base::WeakPtr<GpuHostImpl> gpu_host,
+                 gpu::GpuDiskCacheHandle handle,
+                 std::optional<persistent_cache::PendingBackend>
+                     pending_backend) {
+                if (!gpu_host || !pending_backend) {
+                  return;
+                }
+
+                gpu_host->OnPersistentCacheFilesCreated(
+                    handle, std::move(*pending_backend));
+              },
+              weak_ptr_factory_.GetWeakPtr(), handle));
+    };
+
+    if (base::FeatureList::IsEnabled(features::kGpuPersistentCache)) {
+      // The compositor and Skia cache both use GrShaderGpuDiskCache with the
+      // persistent cache.
+      load_persistent_cache(gpu::kGrShaderGpuDiskCacheHandle, params_.product);
+    }
+#if BUILDFLAG(SKIA_USE_DAWN)
+    if (features::kSkiaGraphiteDawnUsePersistentCache.Get()) {
+      load_persistent_cache(gpu::kGraphiteDawnGpuDiskCacheHandle,
+                            GraphiteDawnCacheVersion());
+    }
+#endif  // BUILDFLAG(SKIA_USE_DAWN)
+}
+
+void GpuHostImpl::SetChannelPersistentCachePendingBackend(
+    int client_id,
+    const gpu::GpuDiskCacheHandle& handle,
+    persistent_cache::PendingBackend pending_backend) {
+  TRACE_EVENT2("gpu", "GpuHostImpl::SetChannelPersistentCachePendingBackend",
+               "client_id", client_id, "handle_type", GetHandleType(handle));
+  gpu_service()->SetChannelPersistentCachePendingBackend(
+      client_id, handle, std::move(pending_backend));
+}
+
 std::string GpuHostImpl::GetShaderPrefixKey() {
   if (shader_prefix_key_.empty()) {
     const gpu::GPUInfo& info = delegate_->GetGPUInfo();
@@ -423,16 +518,8 @@ std::string GpuHostImpl::GetShaderPrefixKey() {
                          base::SysInfo::ProcessCPUArchitecture();
 
 #if BUILDFLAG(IS_ANDROID)
-    std::string build_fp =
-        base::android::BuildInfo::GetInstance()->android_build_fp();
+    std::string build_fp = base::android::android_info::android_build_fp();
     shader_prefix_key_ += "-" + build_fp;
-#elif BUILDFLAG(IS_CHROMEOS_LACROS)
-    // ChromeOS can update independently of Lacros and the GPU driver
-    // information is not enough to ensure blob compatibility. See
-    // crbug.com/1444684
-    std::string chromeos_version = base::SysInfo::OperatingSystemName() + " " +
-                                   base::SysInfo::OperatingSystemVersion();
-    shader_prefix_key_ += "-" + chromeos_version;
 #endif
   }
 
@@ -446,31 +533,7 @@ void GpuHostImpl::LoadedBlob(const gpu::GpuDiskCacheHandle& handle,
 
   TRACE_EVENT1("gpu", "GpuHostImpl::LoadedBlob", "handle_type",
                GetHandleType(handle));
-
-  // If cache key prefix is being generated in service side, we don't need to
-  // generate it here.
-  if (base::FeatureList::IsEnabled(
-          features::kGenGpuDiskCacheKeyPrefixInGpuService)) {
-    gpu_service_remote_->LoadedBlob(handle, key, data);
-  } else {
-    switch (gpu::GetHandleType(handle)) {
-      case gpu::GpuDiskCacheType::kGlShaders: {
-        std::string prefix = GetShaderPrefixKey();
-        bool prefix_ok = !key.compare(0, prefix.length(), prefix);
-        UMA_HISTOGRAM_BOOLEAN("GPU.ShaderLoadPrefixOK", prefix_ok);
-        if (prefix_ok) {
-          // Remove the prefix from the key before load.
-          std::string key_no_prefix = key.substr(prefix.length() + 1);
-          gpu_service_remote_->LoadedBlob(handle, key_no_prefix, data);
-        }
-        break;
-      }
-      case gpu::GpuDiskCacheType::kDawnWebGPU: {
-        gpu_service_remote_->LoadedBlob(handle, key, data);
-        break;
-      }
-    }
-  }
+  gpu_service_remote_->LoadedBlob(handle, key, data);
 }
 
 void GpuHostImpl::OnDiskCacheHandleDestoyed(
@@ -489,6 +552,12 @@ void GpuHostImpl::OnChannelEstablished(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   TRACE_EVENT0("gpu", "GpuHostImpl::OnChannelEstablished");
 
+#if BUILDFLAG(IS_OZONE)
+  ui::OzonePlatform::GetInstance()
+      ->GetGpuPlatformSupportHost()
+      ->OnHdrEnabledChanged(IsHdrEnabledForGpuInfo(gpu_info));
+#endif  // BUILDFLAG(IS_OZONE)
+
   auto it = channel_requests_.find(client_id);
   if (it == channel_requests_.end())
     return;
@@ -503,22 +572,6 @@ void GpuHostImpl::OnChannelEstablished(
                             gpu::GpuFeatureInfo(),
                             gpu::SharedImageCapabilities(),
                             EstablishChannelStatus::kGpuHostInvalid);
-    return;
-  }
-
-  // Currently if any of the GPU features are blocklisted, we don't establish a
-  // GPU channel.
-  bool gpu_channel_allowed = shared_bitmap_to_shared_image_flag_
-                                 ? true
-                                 : delegate_->GpuAccessAllowed();
-  if (!gpu_channel_allowed) {
-    gpu_service_remote_->CloseChannel(client_id);
-    std::move(callback).Run(mojo::ScopedMessagePipeHandle(), gpu::GPUInfo(),
-                            gpu::GpuFeatureInfo(),
-                            gpu::SharedImageCapabilities(),
-                            EstablishChannelStatus::kGpuAccessDenied);
-    RecordLogMessage(logging::LOGGING_WARNING, "WARNING",
-                     "Hardware acceleration is unavailable.");
     return;
   }
 
@@ -545,17 +598,37 @@ void GpuHostImpl::DidInitialize(
     const std::optional<gpu::GPUInfo>& gpu_info_for_hardware_gpu,
     const std::optional<gpu::GpuFeatureInfo>& gpu_feature_info_for_hardware_gpu,
     const gfx::GpuExtraInfo& gpu_extra_info) {
+  TRACE_EVENT0("gpu", "GpuHostImpl::DidInitialize");
   delegate_->DidInitialize(gpu_info, gpu_feature_info,
                            gpu_info_for_hardware_gpu,
                            gpu_feature_info_for_hardware_gpu, gpu_extra_info);
 
   if (!params_.disable_gpu_shader_disk_cache) {
-    SetChannelDiskCacheHandle(gpu::kDisplayCompositorClientId,
-                              gpu::kDisplayCompositorGpuDiskCacheHandle);
-    SetChannelDiskCacheHandle(gpu::kGrShaderCacheClientId,
-                              gpu::kGrShaderGpuDiskCacheHandle);
-    SetChannelDiskCacheHandle(gpu::kGraphiteDawnClientId,
-                              gpu::kGraphiteDawnGpuDiskCacheHandle);
+    // Signal that any delayed loads of the persistent cache files should be
+    // immediately forwarded to the GPU process.
+    send_persistent_cache_files_to_service_ = true;
+
+    // Forward existing persistent cache files now. They would only have been
+    // loaded if the experiment is active.
+    for (auto& persistent_cache_files : persistent_cache_files_) {
+      const gpu::GpuDiskCacheHandle& handle = persistent_cache_files.first;
+      persistent_cache::PendingBackend files =
+          std::move(persistent_cache_files.second);
+      SetChannelPersistentCachePendingBackend(gpu::GetHandleValue(handle),
+                                              handle, std::move(files));
+    }
+    persistent_cache_files_.clear();
+
+    if (!base::FeatureList::IsEnabled(features::kGpuPersistentCache)) {
+      SetChannelDiskCacheHandle(gpu::kDisplayCompositorClientId,
+                                gpu::kDisplayCompositorGpuDiskCacheHandle);
+      SetChannelDiskCacheHandle(gpu::kGrShaderCacheClientId,
+                                gpu::kGrShaderGpuDiskCacheHandle);
+    }
+    if (!features::kSkiaGraphiteDawnUsePersistentCache.Get()) {
+      SetChannelDiskCacheHandle(gpu::kGraphiteDawnClientId,
+                                gpu::kGraphiteDawnGpuDiskCacheHandle);
+    }
   }
 }
 
@@ -647,6 +720,11 @@ void GpuHostImpl::GetIsolationKey(
 
 void GpuHostImpl::DidUpdateGPUInfo(const gpu::GPUInfo& gpu_info) {
   delegate_->DidUpdateGPUInfo(gpu_info);
+#if BUILDFLAG(IS_OZONE)
+  ui::OzonePlatform::GetInstance()
+      ->GetGpuPlatformSupportHost()
+      ->OnHdrEnabledChanged(IsHdrEnabledForGpuInfo(gpu_info));
+#endif  // BUILDFLAG(IS_OZONE)
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -667,6 +745,19 @@ void GpuHostImpl::AddChildWindow(gpu::SurfaceHandle parent_window,
 }
 #endif  // BUILDFLAG(IS_WIN)
 
+void GpuHostImpl::MaybeSendFontRenderParams() {
+  if (const auto& params = GetFontRenderParams().Get()) {
+    viz_main_->SetRenderParams(params->subpixel_rendering,
+                               params->text_contrast, params->text_gamma);
+  } else {
+    GetFontRenderParams().SetGpuHostImpl(this);
+  }
+}
+
+gpu::GpuProcessHostShmCount* GpuHostImpl::GetShaderCacheShmCountForTesting() {
+  return &use_shader_cache_shm_count_;
+}
+
 void GpuHostImpl::StoreBlobToDisk(const gpu::GpuDiskCacheHandle& handle,
                                   const std::string& key,
                                   const std::string& blob) {
@@ -678,25 +769,34 @@ void GpuHostImpl::StoreBlobToDisk(const gpu::GpuDiskCacheHandle& handle,
 
   TRACE_EVENT1("gpu", "GpuHostImpl::StoreBlobToDisk", "handle_type",
                GetHandleType(handle));
+  cache->Cache(key, blob);
+}
 
-  // If cache key prefix is being generated in service side, we don't need to
-  // generate it here.
-  if (base::FeatureList::IsEnabled(
-          features::kGenGpuDiskCacheKeyPrefixInGpuService)) {
-    cache->Cache(key, blob);
-  } else {
-    switch (GetHandleType(handle)) {
-      case gpu::GpuDiskCacheType::kGlShaders: {
-        std::string prefix = GetShaderPrefixKey();
-        cache->Cache(base::StrCat({prefix, ":", key}), blob);
-        break;
-      }
-      case gpu::GpuDiskCacheType::kDawnWebGPU: {
-        cache->Cache(key, blob);
-        break;
-      }
+void GpuHostImpl::ClearGrShaderDiskCache() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  auto* gpu_disk_cache_factory = delegate_->GetGpuDiskCacheFactory();
+  for (auto& [client_id, cache] : client_id_to_caches_) {
+    // This call will temporarily extend the lifetime of the cache (kept
+    // alive in the factory), and may drop loads of cached shader binaries if
+    // it takes a while to complete. As we are intentionally dropping all
+    // binaries, this behavior is fine.
+    if (client_id == gpu::kGrShaderCacheClientId) {
+      gpu_disk_cache_factory->ClearByCache(
+          cache, base::Time(), base::Time::Max(), base::DoNothing());
     }
   }
+}
+
+#if BUILDFLAG(IS_WIN)
+void GpuHostImpl::EnsureWebNNExecutionProvidersReady(
+    EnsureWebNNExecutionProvidersReadyCallback cb) {
+  webnn::EnsureExecutionProvidersReady(std::move(cb));
+}
+#endif
+
+void GpuHostImpl::CreateWebNNWeightsFile(CreateWebNNWeightsFileCallback cb) {
+  webnn::CreateWeightsFile(std::move(cb));
 }
 
 void GpuHostImpl::RecordLogMessage(int32_t severity,
@@ -711,5 +811,55 @@ void GpuHostImpl::LogFrame(base::Value frame_data) {
     viz_debug_output_callback_.Run(std::move(frame_data));
 }
 #endif
+
+void GpuHostImpl::ClearPersistentCaches(bool delete_cache_files) {
+  auto* persistent_cache_file_factory =
+      PersistentCacheSandboxedFileFactory::GetInstance();
+  if (!persistent_cache_file_factory) {
+    return;
+  }
+
+  auto clear_persistent_cache = [&](const gpu::GpuDiskCacheHandle& handle,
+                                    const std::string& cache_version) {
+    // If a pending backend was created but not sent to the service yet, tell
+    // the factory to asynchronously delete it since it is a potentially
+    // blocking call.
+    if (auto iter = persistent_cache_files_.find(handle);
+        iter != persistent_cache_files_.end()) {
+      persistent_cache_file_factory->DeletePendingBackendAsync(
+          std::move(iter->second));
+      persistent_cache_files_.erase(iter);
+    }
+
+    // if `delete_cache_files` is set, delete all cache data.
+    if (delete_cache_files) {
+      persistent_cache_file_factory->ClearFilesAsync(
+          GetGpuDiskCacheSubdir(gpu::GetHandleType(handle)), cache_version,
+          base::DoNothing());
+    }
+  };
+
+  clear_persistent_cache(gpu::kGrShaderGpuDiskCacheHandle, params_.product);
+#if BUILDFLAG(SKIA_USE_DAWN)
+  clear_persistent_cache(gpu::kGraphiteDawnGpuDiskCacheHandle,
+                         GraphiteDawnCacheVersion());
+#endif
+
+  DCHECK(persistent_cache_files_.empty());
+}
+
+void GpuHostImpl::OnPersistentCacheFilesCreated(
+    gpu::GpuDiskCacheHandle handle,
+    persistent_cache::PendingBackend pending_backend) {
+  TRACE_EVENT0("gpu", "GpuHostImpl::OnPersistentCacheFilesCreated");
+
+  if (send_persistent_cache_files_to_service_) {
+    // If the service is already initialized, we send the files  immediately.
+    SetChannelPersistentCachePendingBackend(gpu::GetHandleValue(handle), handle,
+                                            std::move(pending_backend));
+  } else {
+    persistent_cache_files_[handle] = std::move(pending_backend);
+  }
+}
 
 }  // namespace viz

@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <string_view>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -64,15 +65,14 @@ class SearchBoxIconURLHelper: public SearchBox::IconURLHelper {
       override;
 
  private:
-  raw_ptr<const SearchBox, ExperimentalRenderer> search_box_;
+  raw_ptr<const SearchBox> search_box_;
 };
 
 SearchBoxIconURLHelper::SearchBoxIconURLHelper(const SearchBox* search_box)
     : search_box_(search_box) {
 }
 
-SearchBoxIconURLHelper::~SearchBoxIconURLHelper() {
-}
+SearchBoxIconURLHelper::~SearchBoxIconURLHelper() = default;
 
 std::string SearchBoxIconURLHelper::GetMainFrameToken() const {
   return search_box_->render_frame()
@@ -103,7 +103,7 @@ bool ParseFrameTokenAndRestrictedId(const std::string& id_part,
   DCHECK(frame_token_out);
   DCHECK(rid_out);
   // Check that the path is of Most visited item ID form.
-  std::vector<base::StringPiece> tokens = base::SplitStringPiece(
+  std::vector<std::string_view> tokens = base::SplitStringPiece(
       id_part, "/", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
   if (tokens.size() != 2)
     return false;
@@ -133,7 +133,7 @@ bool ParseIconRestrictedUrl(const GURL& url,
   DCHECK(frame_token);
   DCHECK(rid);
   // Strip leading slash.
-  std::string raw_path = url.path();
+  std::string raw_path = url.GetPath();
   DCHECK_GT(raw_path.length(), (size_t) 0);
   DCHECK_EQ(raw_path[0], '/');
   raw_path = raw_path.substr(1);

@@ -4,6 +4,7 @@
 
 #include "components/segmentation_platform/internal/android/execution/processing/custom_device_utils.h"
 
+// Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/segmentation_platform/internal/jni_headers/CustomDeviceUtils_jni.h"
 
 namespace segmentation_platform::processing {
@@ -15,3 +16,5 @@ int CustomDeviceUtils::GetDevicePPI() {
 }
 
 }  // namespace segmentation_platform::processing
+
+DEFINE_JNI(CustomDeviceUtils)

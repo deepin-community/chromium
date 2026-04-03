@@ -22,6 +22,10 @@ class TlsConnectionFactoryPosix;
 
 class TlsConnectionPosix : public TlsConnection {
  public:
+  TlsConnectionPosix(const TlsConnectionPosix&) = delete;
+  TlsConnectionPosix(TlsConnectionPosix&&) noexcept = delete;
+  TlsConnectionPosix& operator=(const TlsConnectionPosix&) = delete;
+  TlsConnectionPosix& operator=(TlsConnectionPosix&&) = delete;
   ~TlsConnectionPosix() override;
 
   // Sends any available bytes from this connection's buffer_.
@@ -33,12 +37,14 @@ class TlsConnectionPosix : public TlsConnection {
 
   // TlsConnection overrides.
   void SetClient(Client* client) override;
-  bool Send(const void* data, size_t len) override;
+  bool Send(ByteView data) override;
   IPEndpoint GetRemoteEndpoint() const override;
 
-  // Registers |this| with the platform TlsDataRouterPosix.  This is called
+  // Registers `this` with the platform TlsDataRouterPosix.  This is called
   // automatically by TlsConnectionFactoryPosix after the handshake completes.
   void RegisterConnectionWithDataRouter(PlatformClientPosix* platform_client);
+
+  bool HasPendingWrite() const { return !buffer_.GetReadableRegion().empty(); }
 
   const SocketHandle& socket_handle() const { return socket_->socket_handle(); }
 
@@ -51,7 +57,7 @@ class TlsConnectionPosix : public TlsConnection {
                      TaskRunner& task_runner);
 
  private:
-  // Called on any thread, to post a task to notify the Client that an |error|
+  // Called on any thread, to post a task to notify the Client that an `error`
   // has occurred.
   void DispatchError(Error error);
 
@@ -66,8 +72,6 @@ class TlsConnectionPosix : public TlsConnection {
   TlsWriteBuffer buffer_;
 
   WeakPtrFactory<TlsConnectionPosix> weak_factory_{this};
-
-  OSP_DISALLOW_COPY_AND_ASSIGN(TlsConnectionPosix);
 };
 
 }  // namespace openscreen

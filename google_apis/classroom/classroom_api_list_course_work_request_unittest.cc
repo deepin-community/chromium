@@ -92,8 +92,7 @@ class ClassroomApiListCourseWorkRequestTest : public testing::Test {
     ASSERT_TRUE(test_server_.Start());
 
     gaia_urls_overrider_ = std::make_unique<GaiaUrlsOverriderForTesting>(
-        base::CommandLine::ForCurrentProcess(), "classroom_api_origin_url",
-        test_server_.base_url().spec());
+        "classroom_api_origin_url", test_server_.base_url().spec());
     ASSERT_EQ(GaiaUrls::GetInstance()->classroom_api_origin_url(),
               test_server_.base_url().spec());
   }
@@ -121,7 +120,9 @@ TEST_F(ClassroomApiListCourseWorkRequestTest, ListCourseWorkRequest) {
                 Eq("/v1/courses/course-1/courseWork"
                    "?fields=courseWork(id%2Ctitle%2Cstate%2CalternateLink"
                    "%2CcreationTime%2CupdateTime%2CdueDate(year%2Cmonth%2Cday)"
-                   "%2CdueTime(hours%2Cminutes%2Cseconds%2Cnanos))"
+                   "%2CdueTime(hours%2Cminutes%2Cseconds%2Cnanos)%2CworkType"
+                   "%2Cmaterials(youtubeVideo(title)%2Clink(title)"
+                   "%2Cform(title)%2CdriveFile(driveFile(title))))"
                    "%2CnextPageToken")))))
       .WillOnce(Return(ByMove(TestRequestHandler::CreateSuccessfulResponse())));
 
@@ -149,7 +150,9 @@ TEST_F(ClassroomApiListCourseWorkRequestTest,
                 Eq("/v1/courses/course-1/courseWork"
                    "?fields=courseWork(id%2Ctitle%2Cstate%2CalternateLink"
                    "%2CcreationTime%2CupdateTime%2CdueDate(year%2Cmonth%2Cday)"
-                   "%2CdueTime(hours%2Cminutes%2Cseconds%2Cnanos))"
+                   "%2CdueTime(hours%2Cminutes%2Cseconds%2Cnanos)%2CworkType"
+                   "%2Cmaterials(youtubeVideo(title)%2Clink(title)"
+                   "%2Cform(title)%2CdriveFile(driveFile(title))))"
                    "%2CnextPageToken"
                    "&pageToken=qwerty")))))
       .WillOnce(Return(ByMove(TestRequestHandler::CreateSuccessfulResponse())));
@@ -178,7 +181,9 @@ TEST_F(ClassroomApiListCourseWorkRequestTest,
                 Eq("/v1/courses/course-1/courseWork"
                    "?fields=courseWork(id%2Ctitle%2Cstate%2CalternateLink"
                    "%2CcreationTime%2CupdateTime%2CdueDate(year%2Cmonth%2Cday)"
-                   "%2CdueTime(hours%2Cminutes%2Cseconds%2Cnanos))"
+                   "%2CdueTime(hours%2Cminutes%2Cseconds%2Cnanos)%2CworkType"
+                   "%2Cmaterials(youtubeVideo(title)%2Clink(title)"
+                   "%2Cform(title)%2CdriveFile(driveFile(title))))"
                    "%2CnextPageToken")))))
       .WillOnce(Return(ByMove(TestRequestHandler::CreateFailedResponse())));
 

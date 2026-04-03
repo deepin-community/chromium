@@ -3,34 +3,34 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/android/locale/locale_template_url_loader.h"
+
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/check_deref.h"
 #include "base/debug/dump_without_crashing.h"
-#include "chrome/browser/locale/jni_headers/LocaleTemplateUrlLoader_jni.h"
-#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "components/search_engines/prepopulated_engines.h"
 #include "components/search_engines/template_url_data.h"
 #include "components/search_engines/template_url_prepopulate_data.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/search_engines/util.h"
+#include "third_party/search_engines_data/resources/definitions/prepopulated_engines.h"
 
-using base::android::JavaParamRef;
-using base::android::ScopedJavaGlobalRef;
-using base::android::ScopedJavaLocalRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/locale/jni_headers/LocaleTemplateUrlLoader_jni.h"
+
 using base::android::AttachCurrentThread;
 using base::android::ConvertJavaStringToUTF8;
+using base::android::JavaRef;
+using base::android::ScopedJavaGlobalRef;
+using base::android::ScopedJavaLocalRef;
 
-static jlong JNI_LocaleTemplateUrlLoader_Init(
-    JNIEnv* env,
-    const JavaParamRef<jstring>& jlocale) {
-  Profile* profile =
-      ProfileManager::GetActiveUserProfile()->GetOriginalProfile();
+static int64_t JNI_LocaleTemplateUrlLoader_Init(JNIEnv* env,
+                                                std::string& locale,
+                                                Profile* profile) {
   return reinterpret_cast<intptr_t>(new LocaleTemplateUrlLoader(
-      ConvertJavaStringToUTF8(env, jlocale),
-      TemplateURLServiceFactory::GetForProfile(profile), profile));
+      locale, TemplateURLServiceFactory::GetForProfile(profile), profile));
 }
 
 LocaleTemplateUrlLoader::LocaleTemplateUrlLoader(const std::string& locale,
@@ -53,7 +53,7 @@ void LocaleTemplateUrlLoader::OnProfileWillBeDestroyed(Profile* profile) {
   template_url_service_ = nullptr;
 }
 
-jboolean LocaleTemplateUrlLoader::LoadTemplateUrls(JNIEnv* env) {
+bool LocaleTemplateUrlLoader::LoadTemplateUrls(JNIEnv* env) {
   DCHECK(locale_.length() == 2);
 
   if (!template_url_service_) {
@@ -189,4 +189,6 @@ int LocaleTemplateUrlLoader::GetDesignatedSearchEngineForChina() {
   return TemplateURLPrepopulateData::sogou.id;
 }
 
-LocaleTemplateUrlLoader::~LocaleTemplateUrlLoader() {}
+LocaleTemplateUrlLoader::~LocaleTemplateUrlLoader() = default;
+
+DEFINE_JNI(LocaleTemplateUrlLoader)

@@ -7,7 +7,6 @@
 
 #include "base/containers/flat_map.h"
 #include "base/functional/callback_forward.h"
-#include "base/memory/weak_ptr.h"
 #include "chromeos/ash/components/auth_panel/impl/factor_auth_view.h"
 #include "chromeos/ash/components/osauth/public/common_types.h"
 
@@ -33,14 +32,14 @@ class FactorAuthViewFactory {
   // enum.
   std::unique_ptr<FactorAuthView> CreateFactorAuthView(
       AshAuthFactor factor,
-      raw_ptr<AuthFactorStore> store,
-      raw_ptr<AuthPanelEventDispatcher> dispatcher);
+      AuthFactorStore* store,
+      AuthPanelEventDispatcher* dispatcher);
 
  private:
   // `FactorAuthView` factory functions:
   std::unique_ptr<FactorAuthView> CreatePasswordView(
-      raw_ptr<AuthFactorStore> store,
-      raw_ptr<AuthPanelEventDispatcher> dispatcher);
+      AuthFactorStore* store,
+      AuthPanelEventDispatcher* dispatcher);
 };
 
 }  // namespace ash

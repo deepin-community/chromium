@@ -6,6 +6,9 @@
 #define V8_SANDBOX_CODE_POINTER_TABLE_INL_H_
 
 #include "src/sandbox/code-pointer-table.h"
+// Include the non-inl header before the rest of the headers.
+
+#include "src/common/code-memory-access-inl.h"
 #include "src/sandbox/external-entity-table-inl.h"
 
 #ifdef V8_COMPRESS_POINTERS
@@ -67,8 +70,14 @@ bool CodePointerTableEntry::IsFreelistEntry() const {
   return (entrypoint & kFreeEntryTag) == kFreeEntryTag;
 }
 
-uint32_t CodePointerTableEntry::GetNextFreelistEntryIndex() const {
-  return static_cast<uint32_t>(entrypoint_.load(std::memory_order_relaxed));
+std::optional<uint32_t> CodePointerTableEntry::GetNextFreelistEntryIndex()
+    const {
+  auto entrypoint = entrypoint_.load(std::memory_order_relaxed);
+  if ((entrypoint & kFreeEntryTag) == kFreeEntryTag) {
+    return static_cast<uint32_t>(entrypoint);
+  } else {
+    return std::nullopt;
+  }
 }
 
 void CodePointerTableEntry::Mark() {
@@ -103,6 +112,10 @@ Address CodePointerTable::GetEntrypoint(CodePointerHandle handle,
 
 Address CodePointerTable::GetCodeObject(CodePointerHandle handle) const {
   uint32_t index = HandleToIndex(handle);
+  // Due to the fact that we use the heap object tag as marking bit, this table
+  // (in contrast to the trusted pointer table) does not return Smi::zero() for
+  // the 0th entry. That entry must therefore not be accessed here.
+  DCHECK_NE(index, 0);
   return at(index).GetCodeObject();
 }
 
@@ -110,12 +123,14 @@ void CodePointerTable::SetEntrypoint(CodePointerHandle handle, Address value,
                                      CodeEntrypointTag tag) {
   DCHECK_NE(kNullCodePointerHandle, handle);
   uint32_t index = HandleToIndex(handle);
+  CFIMetadataWriteScope write_scope("CodePointerTable write");
   at(index).SetEntrypoint(value, tag);
 }
 
 void CodePointerTable::SetCodeObject(CodePointerHandle handle, Address value) {
   DCHECK_NE(kNullCodePointerHandle, handle);
   uint32_t index = HandleToIndex(handle);
+  CFIMetadataWriteScope write_scope("CodePointerTable write");
   at(index).SetCodeObject(value);
 }
 
@@ -123,6 +138,7 @@ CodePointerHandle CodePointerTable::AllocateAndInitializeEntry(
     Space* space, Address code, Address entrypoint, CodeEntrypointTag tag) {
   DCHECK(space->BelongsTo(this));
   uint32_t index = AllocateEntry(space);
+  CFIMetadataWriteScope write_scope("CodePointerTable write");
   at(index).MakeCodePointerEntry(code, entrypoint, tag,
                                  space->allocate_black());
   return IndexToHandle(index);
@@ -136,6 +152,7 @@ void CodePointerTable::Mark(Space* space, CodePointerHandle handle) {
   uint32_t index = HandleToIndex(handle);
   DCHECK(space->Contains(index));
 
+  CFIMetadataWriteScope write_scope("CodePointerTable write");
   at(index).Mark();
 }
 

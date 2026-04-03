@@ -4,23 +4,28 @@
 
 #include "chrome/browser/ash/app_list/search/files/zero_state_drive_provider.h"
 
+#include "ash/constants/ash_features.h"
+#include "ash/utility/persistent_proto.h"
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/app_list/search/ranking/removed_results.pb.h"
 #include "chrome/browser/ash/app_list/search/test/test_search_controller.h"
-#include "chrome/browser/ash/app_list/search/util/persistent_proto.h"
+#include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/ash/file_suggest/file_suggest_keyed_service.h"
 #include "chrome/browser/ash/file_suggest/file_suggest_keyed_service_factory.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/ui/ash/holding_space/scoped_test_mount_point.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/dbus/power_manager/idle.pb.h"
+#include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -39,9 +44,12 @@ class TestFileSuggestKeyedService : public ash::FileSuggestKeyedService {
   explicit TestFileSuggestKeyedService(Profile* profile,
                                        const base::FilePath& proto_path)
       : FileSuggestKeyedService(
+            TestingBrowserProcess::GetGlobal()
+                ->GetFeatures()
+                ->application_locale_storage(),
             profile,
-            PersistentProto<RemovedResultsProto>(proto_path,
-                                                 base::TimeDelta())) {}
+            ash::PersistentProto<RemovedResultsProto>(proto_path,
+                                                      base::TimeDelta())) {}
   TestFileSuggestKeyedService(const TestFileSuggestKeyedService&) = delete;
   TestFileSuggestKeyedService& operator=(TestFileSuggestKeyedService&) = delete;
   ~TestFileSuggestKeyedService() override = default;
@@ -107,19 +115,24 @@ std::unique_ptr<KeyedService> BuildTestFileSuggestKeyedService(
 class ZeroStateDriveProviderTest : public testing::Test {
  protected:
   void SetUp() override {
+    scoped_feature_list_.InitAndDisableFeature(
+        ash::features::kLauncherContinueSectionWithRecentsRollout);
+
     testing_profile_manager_ = std::make_unique<TestingProfileManager>(
         TestingBrowserProcess::GetGlobal());
     EXPECT_TRUE(testing_profile_manager_->SetUp());
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     profile_ = testing_profile_manager_->CreateTestingProfile(
         "primary_profile@test",
-        {{ash::FileSuggestKeyedServiceFactory::GetInstance(),
-          base::BindRepeating(&BuildTestFileSuggestKeyedService,
-                              temp_dir_.GetPath())}});
+        {TestingProfile::TestingFactory{
+            ash::FileSuggestKeyedServiceFactory::GetInstance(),
+            base::BindRepeating(&BuildTestFileSuggestKeyedService,
+                                temp_dir_.GetPath())}});
     file_suggest_service_ = static_cast<TestFileSuggestKeyedService*>(
         ash::FileSuggestKeyedServiceFactory::GetInstance()->GetService(
             profile_));
-    session_manager_ = std::make_unique<session_manager::SessionManager>();
+    session_manager_ = std::make_unique<session_manager::SessionManager>(
+        std::make_unique<session_manager::FakeSessionManagerDelegate>());
 
     auto provider = std::make_unique<ZeroStateDriveProvider>(
         profile_, &search_controller_,
@@ -156,9 +169,11 @@ class ZeroStateDriveProviderTest : public testing::Test {
   raw_ptr<TestFileSuggestKeyedService> file_suggest_service_ = nullptr;
   // The mount point for drive files.
   std::unique_ptr<ScopedTestMountPoint> drive_fs_mount_point_;
+
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-// TODO(crbug.com/1348339): Add a test for a file mount-triggered update at
+// TODO(crbug.com/40855240): Add a test for a file mount-triggered update at
 // construction time.
 
 // Test that each of the trigger events causes an update.
@@ -254,10 +269,14 @@ TEST_F(ZeroStateDriveProviderTest, RespondOnSuggestDataFetched) {
         drive_fs_mount_point_.get()->CreateArbitraryFile();
     suggestions.emplace_back(ash::FileSuggestionType::kDriveFile,
                              suggested_file_path,
+                             /*title=*/std::nullopt,
                              /*new_prediction_reason=*/std::nullopt,
-                             /*timestamp=*/std::nullopt,
-                             /*secondary_timestamp=*/std::nullopt,
-                             /*new_score=*/std::nullopt);
+                             /*modified_time=*/std::nullopt,
+                             /*viewed_time=*/std::nullopt,
+                             /*shared_time=*/std::nullopt,
+                             /*new_score=*/std::nullopt,
+                             /*drive_file_id=*/std::nullopt,
+                             /*icon_url=*/std::nullopt);
   }
 
   // Only test this logic if the `file_suggest_service_` is ready for test.

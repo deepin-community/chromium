@@ -27,7 +27,8 @@
 
 #include "dawn/tests/unittests/native/mocks/DeviceMock.h"
 
-#include "dawn/native/Instance.h"
+#include <utility>
+
 #include "dawn/tests/unittests/native/mocks/BindGroupLayoutMock.h"
 #include "dawn/tests/unittests/native/mocks/BindGroupMock.h"
 #include "dawn/tests/unittests/native/mocks/BufferMock.h"
@@ -47,17 +48,19 @@ namespace dawn::native {
 using ::testing::NiceMock;
 using ::testing::WithArgs;
 
-DeviceMock::DeviceMock() {
-    mInstance = APICreateInstance(nullptr);
-
+DeviceMock::DeviceMock(AdapterBase* adapter,
+                       const UnpackedPtr<DeviceDescriptor>& descriptor,
+                       const TogglesState& deviceToggles,
+                       Ref<DeviceLostEvent>&& lostEvent)
+    : DeviceBase(adapter, descriptor, deviceToggles, std::move(lostEvent)) {
     // Set all default creation functions to return nice mock objects.
     ON_CALL(*this, CreateBindGroupImpl)
-        .WillByDefault(WithArgs<0>(
-            [this](const BindGroupDescriptor* descriptor) -> ResultOrError<Ref<BindGroupBase>> {
-                return AcquireRef(new NiceMock<BindGroupMock>(this, descriptor));
-            }));
+        .WillByDefault(WithArgs<0>([this](const UnpackedPtr<BindGroupDescriptor>& descriptor)
+                                       -> ResultOrError<Ref<BindGroupBase>> {
+            return AcquireRef(new NiceMock<BindGroupMock>(this, descriptor));
+        }));
     ON_CALL(*this, CreateBindGroupLayoutImpl)
-        .WillByDefault(WithArgs<0>([this](const BindGroupLayoutDescriptor* descriptor)
+        .WillByDefault(WithArgs<0>([this](const UnpackedPtr<BindGroupLayoutDescriptor>& descriptor)
                                        -> ResultOrError<Ref<BindGroupLayoutInternalBase>> {
             return AcquireRef(new NiceMock<BindGroupLayoutMock>(this, descriptor));
         }));
@@ -104,8 +107,8 @@ DeviceMock::DeviceMock() {
         }));
     ON_CALL(*this, CreateTextureViewImpl)
         .WillByDefault(WithArgs<0, 1>(
-            [](TextureBase* texture,
-               const TextureViewDescriptor* descriptor) -> ResultOrError<Ref<TextureViewBase>> {
+            [](TextureBase* texture, const UnpackedPtr<TextureViewDescriptor>& descriptor)
+                -> ResultOrError<Ref<TextureViewBase>> {
                 return AcquireRef(new NiceMock<TextureViewMock>(texture, descriptor));
             }));
     ON_CALL(*this, CreateUninitializedComputePipelineImpl)
@@ -124,14 +127,12 @@ DeviceMock::DeviceMock() {
 
     // Initialize the device.
     QueueDescriptor desc = {};
-    EXPECT_FALSE(Initialize(AcquireRef(new NiceMock<QueueMock>(this, &desc))).IsError());
+    EXPECT_FALSE(
+        Initialize(descriptor, AcquireRef(new NiceMock<QueueMock>(this, &desc))).IsError());
+    GetInstance()->GetEventManager()->TrackEvent(mLostEvent);
 }
 
 DeviceMock::~DeviceMock() = default;
-
-dawn::platform::Platform* DeviceMock::GetPlatform() const {
-    return mInstance->GetPlatform();
-}
 
 QueueMock* DeviceMock::GetQueueMock() {
     return reinterpret_cast<QueueMock*>(GetQueue());

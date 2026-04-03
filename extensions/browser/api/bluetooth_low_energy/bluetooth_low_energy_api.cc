@@ -18,7 +18,6 @@
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
-#include "base/types/cxx23_to_underlying.h"
 #include "base/types/expected_macros.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -58,6 +57,10 @@ const char kErrorInProgress[] = "In progress";
 const char kErrorInsufficientAuthorization[] = "Insufficient authorization";
 const char kErrorInvalidAdvertisementLength[] = "Invalid advertisement length";
 const char kErrorInvalidLength[] = "Invalid attribute value length";
+const char kErrorInvalidServiceId[] = "The service ID doesn't exist.";
+const char kErrorJniThreadAttach[] = "JNI thread attach error";
+const char kErrorJniEnvironment[] = "JNI environment error";
+const char kErrorNoMemory[] = "No memory";
 const char kErrorNotConnected[] = "Not connected";
 const char kErrorNotFound[] = "Instance not found";
 const char kErrorNotNotifying[] = "Not notifying";
@@ -68,7 +71,7 @@ const char kErrorPlatformNotSupported[] =
 const char kErrorTimeout[] = "Operation timed out";
 const char kErrorUnsupportedDevice[] =
     "This device is not supported on the current platform";
-const char kErrorInvalidServiceId[] = "The service ID doesn't exist.";
+const char kErrorWakelock[] = "Wakelock error";
 const char kErrorInvalidCharacteristicId[] =
     "The characteristic ID doesn't exist.";
 const char kErrorNotifyPropertyNotSet[] =
@@ -112,6 +115,14 @@ std::string StatusToString(BluetoothLowEnergyEventRouter::Status status) {
       return kErrorInsufficientAuthorization;
     case BluetoothLowEnergyEventRouter::kStatusErrorInvalidLength:
       return kErrorInvalidLength;
+    case BluetoothLowEnergyEventRouter::kStatusErrorInvalidServiceId:
+      return kErrorInvalidServiceId;
+    case BluetoothLowEnergyEventRouter::kStatusErrorJniEnvironment:
+      return kErrorJniEnvironment;
+    case BluetoothLowEnergyEventRouter::kStatusErrorJniThreadAttach:
+      return kErrorJniThreadAttach;
+    case BluetoothLowEnergyEventRouter::kStatusErrorNoMemory:
+      return kErrorNoMemory;
     case BluetoothLowEnergyEventRouter::kStatusErrorNotConnected:
       return kErrorNotConnected;
     case BluetoothLowEnergyEventRouter::kStatusErrorNotFound:
@@ -124,15 +135,13 @@ std::string StatusToString(BluetoothLowEnergyEventRouter::Status status) {
       return kErrorTimeout;
     case BluetoothLowEnergyEventRouter::kStatusErrorUnsupportedDevice:
       return kErrorUnsupportedDevice;
-    case BluetoothLowEnergyEventRouter::kStatusErrorInvalidServiceId:
-      return kErrorInvalidServiceId;
+    case BluetoothLowEnergyEventRouter::kStatusErrorWakelock:
+      return kErrorWakelock;
     case BluetoothLowEnergyEventRouter::kStatusSuccess:
       NOTREACHED();
-      break;
     default:
       return kErrorOperationFailed;
   }
-  return "";
 }
 
 extensions::BluetoothLowEnergyEventRouter* GetEventRouter(
@@ -187,7 +196,7 @@ device::BluetoothGattCharacteristic::Properties GetBluetoothProperties(
       device::BluetoothGattCharacteristic::PROPERTY_NONE;
 
   static_assert(
-      base::to_underlying(apibtle::CharacteristicProperty::kMaxValue) == 14,
+      std::to_underlying(apibtle::CharacteristicProperty::kMaxValue) == 14,
       "Update required if the number of characteristic properties changes.");
 
   if (HasProperty(api_properties,
@@ -273,7 +282,7 @@ device::BluetoothGattCharacteristic::Permissions GetBluetoothPermissions(
       device::BluetoothGattCharacteristic::PERMISSION_NONE;
 
   static_assert(
-      base::to_underlying(apibtle::DescriptorPermission::kMaxValue) == 6,
+      std::to_underlying(apibtle::DescriptorPermission::kMaxValue) == 6,
       "Update required if the number of descriptor permissions changes.");
 
   if (HasPermission(api_permissions, apibtle::DescriptorPermission::kRead)) {
@@ -622,7 +631,7 @@ void BluetoothLowEnergyGetCharacteristicsFunction::DoWork() {
   // Manually construct the result instead of using
   // apibtle::GetCharacteristics::Result::Create as it doesn't convert lists of
   // enums correctly.
-  base::Value::List result;
+  base::ListValue result;
   for (apibtle::Characteristic& characteristic : characteristic_list) {
     result.Append(apibtle::CharacteristicToValue(characteristic));
   }
@@ -724,7 +733,7 @@ void BluetoothLowEnergyGetDescriptorsFunction::DoWork() {
   // Manually construct the result instead of using
   // apibtle::GetDescriptors::Result::Create as it doesn't convert lists of
   // enums correctly.
-  base::Value::List result;
+  base::ListValue result;
   for (apibtle::Descriptor& descriptor : descriptor_list) {
     result.Append(apibtle::DescriptorToValue(descriptor));
   }
@@ -1273,10 +1282,9 @@ void BluetoothLowEnergyCreateServiceFunction::DoWork() {
 // is not possible.
 #if !BUILDFLAG(IS_WIN)
   base::WeakPtr<device::BluetoothLocalGattService> service =
-      device::BluetoothLocalGattService::Create(
-          event_router_->adapter(),
+      event_router_->adapter()->CreateLocalGattService(
           device::BluetoothUUID(params_->service.uuid),
-          params_->service.is_primary, nullptr, event_router_);
+          params_->service.is_primary, event_router_);
 
   event_router_->AddServiceToApp(extension_id(), service->GetIdentifier());
   Respond(ArgumentList(
@@ -1308,10 +1316,10 @@ void BluetoothLowEnergyCreateCharacteristicFunction::DoWork() {
   }
 
   base::WeakPtr<device::BluetoothLocalGattCharacteristic> characteristic =
-      device::BluetoothLocalGattCharacteristic::Create(
+      service->CreateCharacteristic(
           device::BluetoothUUID(params_->characteristic.uuid),
           GetBluetoothProperties(params_->characteristic.properties),
-          device::BluetoothGattCharacteristic::Permissions(), service);
+          device::BluetoothGattCharacteristic::Permissions());
 
   // Keep a track of this characteristic so we can look it up later if a
   // descriptor lists it as its parent.

@@ -13,7 +13,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
+#include <memory>
 #include <optional>
+#include <string>
+#include <utility>
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -84,7 +88,8 @@ LogicalResult GetSplitElementTypeAndCount(TF::TensorArraySplitV3Op split,
   if (!lengths_const) return split.emitOpError("non-constant split lengths");
   *count = lengths_const.getValue().getNumElements();
   if (*count <= 0) return split.emitOpError("non-positive split count");
-  auto buffer_type = split.getValue().getType().dyn_cast<RankedTensorType>();
+  auto buffer_type =
+      llvm::dyn_cast<RankedTensorType>(split.getValue().getType());
   if (!buffer_type || !buffer_type.hasStaticShape() ||
       buffer_type.getRank() < 1) {
     return split.emitOpError("unknown or invalid split tensor shape");
@@ -106,7 +111,7 @@ LogicalResult GetSplitElementTypeAndCount(TF::TensorArraySplitV3Op split,
 // Tries to infer the tensor array element shape.
 std::optional<llvm::SmallVector<int64_t, 8>> GetTensorArrayElementShape(
     TF::TensorArrayV3Op ta, ModuleOp module) {
-  auto element_shape = ta.getElementShapeAttr().cast<mlir::TF::ShapeAttr>();
+  auto element_shape = llvm::cast<tf_type::ShapeAttr>(ta.getElementShapeAttr());
   if (element_shape.hasStaticShape()) {
     auto shape = element_shape.getShape();
     // Convert int64 to int64_t.
@@ -138,20 +143,22 @@ std::optional<llvm::SmallVector<int64_t, 8>> GetTensorArrayElementShape(
           // TensorArrayScatter writes vector of tensors to TensorArray. We can
           // deduce the shape of TensorArray by dropping the 0th dim of
           // TensorArrayScatter `value`.
-          auto t = scatter.getValue().getType().dyn_cast<RankedTensorType>();
+          auto t =
+              llvm::dyn_cast<RankedTensorType>(scatter.getValue().getType());
           if (!t || t.getShape().empty()) return std::nullopt;
           return RankedTensorType::get(t.getShape().drop_front(),
                                        t.getElementType());
         } else if (auto gather =
                        llvm::dyn_cast<TF::TensorArrayGatherV3Op>(user)) {
           // Try to infer from result type of gather.
-          auto t = gather.getValue().getType().dyn_cast<RankedTensorType>();
+          auto t =
+              llvm::dyn_cast<RankedTensorType>(gather.getValue().getType());
           if (t && !t.getShape().empty())
             return RankedTensorType::get(t.getShape().drop_front(),
                                          t.getElementType());
           // Try to infer from `element_shape` attribute of gather.
-          auto element_shape = gather.getElementShapeAttr()
-                                   .dyn_cast_or_null<mlir::TF::ShapeAttr>();
+          auto element_shape = llvm::dyn_cast_if_present<tf_type::ShapeAttr>(
+              gather.getElementShapeAttr());
           if (element_shape && element_shape.hasStaticShape()) {
             return RankedTensorType::get(element_shape.getShape(),
                                          gather.getDtype());
@@ -165,9 +172,9 @@ std::optional<llvm::SmallVector<int64_t, 8>> GetTensorArrayElementShape(
 
 void ReplaceAllUsesWithCast(Value old_val, Value new_val) {
   if (old_val.use_empty()) return;
-  auto cast_op =
-      OpBuilder(old_val.getDefiningOp())
-          .create<tensor::CastOp>(old_val.getLoc(), old_val.getType(), new_val);
+  auto builder = OpBuilder(old_val.getDefiningOp());
+  auto cast_op = tensor::CastOp::create(builder, old_val.getLoc(),
+                                        old_val.getType(), new_val);
   old_val.replaceAllUsesWith(cast_op);
 }
 
@@ -207,10 +214,10 @@ LogicalResult HandleTensorArrayV3Op(
   }
   auto var_type = RankedTensorType::get(
       {}, TF::ResourceType::get(
-              ArrayRef<TensorType>{buffer.getType().cast<TensorType>()},
+              ArrayRef<TensorType>{llvm::cast<TensorType>(buffer.getType())},
               ta.getContext()));
-  auto local_var = builder.create<TF::MlirLocalVarOp>(
-      ta.getLoc(), ArrayRef<Type>{var_type}, ArrayRef<Value>{});
+  auto local_var = TF::MlirLocalVarOp::create(
+      builder, ta.getLoc(), ArrayRef<Type>{var_type}, ArrayRef<Value>{});
   cutil::WriteLocalVariable(local_var, buffer, builder, ta.getLoc());
   ta.getHandle().replaceAllUsesWith(local_var);
   // The flow output is just a way for the front end to enforce ordering among
@@ -218,8 +225,9 @@ LogicalResult HandleTensorArrayV3Op(
   // Just create a constant to replace its uses.
   tensorflow::Tensor scalar_tensor(tensorflow::DT_FLOAT, {});
   scalar_tensor.scalar<float>()() = 0.0f;
-  auto flow = builder.create<TF::ConstOp>(
-      ta.getLoc(), tensorflow::ConvertTensor(scalar_tensor, &builder).value());
+  auto flow = TF::ConstOp::create(
+      builder, ta.getLoc(),
+      tensorflow::ConvertTensor(scalar_tensor, &builder).value());
   ta.getFlow().replaceAllUsesWith(flow);
   ta.erase();
   (*stats)[local_var].accumulate_on_write = false;
@@ -266,9 +274,9 @@ LogicalResult HandleTensorArrayWriteV3Op(
         cutil::GetElement(index_reshape, buffer, builder, write.getLoc(),
                           /*keep_slice_shape=*/true);
     // Add a size-1 leading dimension to elem.
-    auto slice_type = original_elem.getType().cast<RankedTensorType>();
-    elem = builder.create<TF::ReshapeOp>(
-        write.getLoc(), ArrayRef<Type>{slice_type},
+    auto slice_type = llvm::cast<RankedTensorType>(original_elem.getType());
+    elem = TF::ReshapeOp::create(
+        builder, write.getLoc(), ArrayRef<Type>{slice_type},
         ArrayRef<Value>{elem, cutil::GetR1Const(slice_type.getShape(), builder,
                                                 write.getLoc())});
     elem =
@@ -291,15 +299,15 @@ LogicalResult HandleTensorArrayConcatV3Op(
   }
   OpBuilder builder(concat);
   auto buffer = cutil::ReadLocalVariable(local_var, builder, concat.getLoc());
-  auto buffer_type = buffer.getType().cast<RankedTensorType>();
+  auto buffer_type = llvm::cast<RankedTensorType>(buffer.getType());
   if (buffer_type.getShape().size() <= 1) {
     return concat.emitOpError("cannot concat on scalar-element tensor array");
   }
   // Merget he first two dimensions.
   auto shape = llvm::to_vector<8>(buffer_type.getShape().drop_front());
   shape[0] *= buffer_type.getDimSize(0);
-  buffer = builder.create<TF::ReshapeOp>(
-      concat.getLoc(),
+  buffer = TF::ReshapeOp::create(
+      builder, concat.getLoc(),
       ArrayRef<Type>{
           RankedTensorType::get(shape, buffer_type.getElementType())},
       ArrayRef<Value>{buffer,
@@ -313,8 +321,8 @@ LogicalResult HandleTensorArrayConcatV3Op(
   for (int64_t i = 0; i < buffer_type.getDimSize(0); ++i) {
     lengths_tensor.vec<int64_t>()(i) = buffer_type.getDimSize(1);
   }
-  concat.getLengths().replaceAllUsesWith(builder.create<TF::ConstOp>(
-      concat.getLoc(),
+  concat.getLengths().replaceAllUsesWith(TF::ConstOp::create(
+      builder, concat.getLoc(),
       tensorflow::ConvertTensor(lengths_tensor, &builder).value()));
   concat.erase();
   return success();
@@ -337,16 +345,14 @@ LogicalResult HandleTensorArraySplitV3Op(
   buffer_shape.push_back(count);
   for (int64_t dim : elem_type.getShape()) buffer_shape.push_back(dim);
   // Reshape the input to match the buffer of the tensor array.
-  Value buffer =
-      builder
-          .create<TF::ReshapeOp>(
-              split.getLoc(),
-              ArrayRef<Type>{RankedTensorType::get(buffer_shape,
-                                                   elem_type.getElementType())},
-              ArrayRef<Value>{
-                  split.getValue(),
-                  cutil::GetR1Const(buffer_shape, builder, split.getLoc())})
-          .getOutput();
+  Value buffer = TF::ReshapeOp::create(
+                     builder, split.getLoc(),
+                     ArrayRef<Type>{RankedTensorType::get(
+                         buffer_shape, elem_type.getElementType())},
+                     ArrayRef<Value>{split.getValue(),
+                                     cutil::GetR1Const(buffer_shape, builder,
+                                                       split.getLoc())})
+                     .getOutput();
   // Accumulate with the old buffer.
   auto old_buffer =
       cutil::ReadLocalVariable(local_var, builder, split.getLoc());
@@ -365,10 +371,9 @@ LogicalResult HandleTensorArraySizeV3Op(
   if (stats.count(local_var) == 0) {
     return size.emitOpError("unknown tensor array");
   }
-  auto buffer_type = getElementTypeOrSelf(local_var.getType())
-                         .cast<TF::ResourceType>()
-                         .getSubtypes()[0]
-                         .cast<RankedTensorType>();
+  auto buffer_type = llvm::cast<RankedTensorType>(
+      llvm::cast<TF::ResourceType>(getElementTypeOrSelf(local_var.getType()))
+          .getSubtypes()[0]);
   OpBuilder builder(size);
   auto result = cutil::CreateScalarConst(buffer_type.getDimSize(0), builder,
                                          size.getLoc());
@@ -380,13 +385,12 @@ LogicalResult HandleTensorArraySizeV3Op(
 LogicalResult CreateAndInitializeGradVariable(Type local_var_type,
                                               Operation* op, Value* var) {
   OpBuilder builder(op);
-  *var = builder.create<TF::MlirLocalVarOp>(
-      op->getLoc(), ArrayRef<Type>{local_var_type}, ArrayRef<Value>{});
+  *var = TF::MlirLocalVarOp::create(
+      builder, op->getLoc(), ArrayRef<Type>{local_var_type}, ArrayRef<Value>{});
   Value buffer;
-  auto buffer_type = getElementTypeOrSelf(local_var_type)
-                         .cast<TF::ResourceType>()
-                         .getSubtypes()[0]
-                         .cast<RankedTensorType>();
+  auto buffer_type = llvm::cast<RankedTensorType>(
+      llvm::cast<TF::ResourceType>(getElementTypeOrSelf(local_var_type))
+          .getSubtypes()[0]);
   if (failed(cutil::CreateInitBufferValue(
           buffer_type.getShape().drop_front(), buffer_type.getDimSize(0), op,
           buffer_type.getElementType(), builder, &buffer))) {
@@ -474,7 +478,7 @@ llvm::SmallDenseMap<int64_t, llvm::SmallVector<string, 4>> AccessedGradients(
   llvm::SmallDenseMap<int64_t, llvm::SmallVector<string, 4>> result;
   llvm::SmallDenseMap<int64_t, llvm::StringSet<>> result_sets;
   auto insert = [&](Value v, const string& source, const Block& func_block) {
-    auto arg = v.dyn_cast<BlockArgument>();
+    auto arg = dyn_cast<BlockArgument>(v);
     if (!arg || arg.getOwner() != &func_block) return;
     auto insert_res = result_sets[arg.getArgNumber()].insert(source);
     if (!insert_res.second) return;
@@ -590,7 +594,7 @@ LogicalResult HandleWhileOp(TF::WhileOp while_op, ModuleOp module,
   for (int64_t i = 0; i < while_op.getNumResults(); ++i) {
     if (!ta_arg_buffer_type(i)) continue;
     auto retval = old_body_ret->getOperand(i);
-    auto arg = retval.dyn_cast<BlockArgument>();
+    auto arg = dyn_cast<BlockArgument>(retval);
     if (!arg) {
       return while_op.emitOpError(
           "output tensor array does not alias input in a while loop");
@@ -599,8 +603,8 @@ LogicalResult HandleWhileOp(TF::WhileOp while_op, ModuleOp module,
       new_retvals.push_back(body_stats[arg].grads[source]);
     }
   }
-  OpBuilder(old_body_ret)
-      .create<func::ReturnOp>(old_body_ret->getLoc(), new_retvals);
+  auto ret_op_builder = OpBuilder(old_body_ret);
+  func::ReturnOp::create(ret_op_builder, old_body_ret->getLoc(), new_retvals);
   old_body_ret->erase();
   UpdateFuncType(body);
   // Recreate the while op.
@@ -625,10 +629,10 @@ LogicalResult HandleWhileOp(TF::WhileOp while_op, ModuleOp module,
       }
     }
   }
-  OpBuilder builder(while_op);
-  auto new_while = builder.create<TF::WhileOp>(
-      while_op.getLoc(), body.getFunctionType().getInputs(), operands,
-      while_op->getAttrs());
+  OpBuilder while_op_builder(while_op);
+  auto new_while = TF::WhileOp::create(while_op_builder, while_op.getLoc(),
+                                       body.getFunctionType().getInputs(),
+                                       operands, while_op->getAttrs());
   for (int64_t i = 0; i < while_op.getNumOperands(); ++i) {
     if (ta_arg_buffer_type(i)) {
       while_op.getResult(i).replaceAllUsesWith(while_op.getOperand(i));
@@ -693,18 +697,18 @@ LogicalResult HandleIfOp(TF::IfOp if_op, ModuleOp module,
     }
   }
   OpBuilder builder(if_op);
-  auto new_if = builder.create<TF::IfOp>(
-      if_op.getLoc(), then_branch.getFunctionType().getResults(), operands,
-      if_op->getAttrs());
+  auto new_if = TF::IfOp::create(builder, if_op.getLoc(),
+                                 then_branch.getFunctionType().getResults(),
+                                 operands, if_op->getAttrs());
   auto ret_forwards_input = [](func::FuncOp f, int64_t ret_ind) -> int64_t {
     auto retval = f.front().getTerminator()->getOperand(ret_ind);
-    auto arg = retval.dyn_cast<BlockArgument>();
+    auto arg = dyn_cast<BlockArgument>(retval);
     if (!arg) return -1;
     return arg.getArgNumber();
   };
   for (int64_t i = 0; i < if_op.getNumResults(); ++i) {
-    if (!getElementTypeOrSelf(if_op.getResult(i).getType())
-             .isa<TF::ResourceType>()) {
+    if (!isa<TF::ResourceType>(
+            getElementTypeOrSelf(if_op.getResult(i).getType()))) {
       if_op.getResult(i).replaceAllUsesWith(new_if.getResult(i));
       continue;
     }
@@ -752,9 +756,10 @@ LogicalResult HandlePartitionedCallOp(
       }
     }
     OpBuilder builder(call);
-    auto new_call = builder.create<CallOp>(
-        call.getLoc(), info.decomposed_callee.getFunctionType().getResults(),
-        new_operands, call->getAttrs());
+    auto new_call =
+        CallOp::create(builder, call.getLoc(),
+                       info.decomposed_callee.getFunctionType().getResults(),
+                       new_operands, call->getAttrs());
     new_call->setAttr(
         "f", SymbolRefAttr::get(
                  builder.getContext(),
@@ -807,8 +812,8 @@ LogicalResult HandlePartitionedCallOp(
   }
   for (int64_t i = 0; i < call.getNumResults(); ++i) {
     auto ret = lowered_callee.front().getTerminator()->getOperand(i);
-    if (!getElementTypeOrSelf(ret.getType()).isa<TF::ResourceType>()) continue;
-    auto arg = ret.dyn_cast<BlockArgument>();
+    if (!isa<TF::ResourceType>(getElementTypeOrSelf(ret.getType()))) continue;
+    auto arg = dyn_cast<BlockArgument>(ret);
     if (!arg) continue;
     info.ret_forward_input.emplace_back(i, arg.getArgNumber());
   }
@@ -838,7 +843,7 @@ LogicalResult HandleRegionControlFlowOps(
     llvm::StringMap<PartitionedCallTensorArrayOpsInfo>*
         decomposed_partitioned_call_callees) {
   for (OpOperand& operand : op.getOpOperands()) {
-    if (getElementTypeOrSelf(operand.get().getType()).isa<TF::ResourceType>()) {
+    if (isa<TF::ResourceType>(getElementTypeOrSelf(operand.get().getType()))) {
       return op.emitOpError()
              << "found unexpected type " << operand.get().getType()
              << " of operand #" << operand.getOperandNumber()
@@ -847,7 +852,7 @@ LogicalResult HandleRegionControlFlowOps(
     }
   }
   for (OpResult result : op.getResults()) {
-    if (getElementTypeOrSelf(result.getType()).isa<TF::ResourceType>()) {
+    if (isa<TF::ResourceType>(getElementTypeOrSelf(result.getType()))) {
       return op.emitOpError()
              << "found unexpected type " << result.getType() << " of result #"
              << result.getResultNumber()

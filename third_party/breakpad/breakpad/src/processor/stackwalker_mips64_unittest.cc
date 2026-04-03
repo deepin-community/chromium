@@ -41,7 +41,6 @@
 
 #include "breakpad_googletest_includes.h"
 #include "common/test_assembler.h"
-#include "common/using_std_string.h"
 #include "google_breakpad/common/minidump_format.h"
 #include "google_breakpad/processor/basic_source_line_resolver.h"
 #include "google_breakpad/processor/call_stack.h"
@@ -110,7 +109,7 @@ class StackwalkerMIPSFixture {
 
   // Set the Breakpad symbol information that supplier should return for
   // MODULE to INFO.
-  void SetModuleSymbols(MockCodeModule* module, const string& info) {
+  void SetModuleSymbols(MockCodeModule* module, const std::string& info) {
     size_t buffer_size;
     char* buffer = supplier.CopySymbolDataAndOwnTheCopy(info, &buffer_size);
     EXPECT_CALL(supplier, GetCStringSymbolData(module, &system_info, _, _, _))
@@ -122,7 +121,7 @@ class StackwalkerMIPSFixture {
   // Populate stack_region with the contents of stack_section. Use
   // stack_section.start() as the region's starting address.
   void RegionFromSection() {
-    string contents;
+    std::string contents;
     ASSERT_TRUE(stack_section.GetContents(&contents));
     stack_region.Init(stack_section.start().Value(), contents);
   }
@@ -158,7 +157,7 @@ TEST_F(SanityCheck, NoResolver) {
   raw_context.epc = 0x00400020;
   raw_context.iregs[MD_CONTEXT_MIPS_REG_SP] = 0x80000000;
 
-  StackFrameSymbolizer frame_symbolizer(NULL, NULL);
+  StackFrameSymbolizer frame_symbolizer(nullptr, nullptr);
   StackwalkerMIPS walker(&system_info, &raw_context, &stack_region, &modules,
                         &frame_symbolizer);
   // This should succeed, even without a resolver or supplier.
@@ -166,8 +165,7 @@ TEST_F(SanityCheck, NoResolver) {
   vector<const CodeModule*> modules_with_corrupt_symbols;
   ASSERT_TRUE(walker.Walk(&call_stack, &modules_without_symbols,
                           &modules_with_corrupt_symbols));
-  ASSERT_EQ(1U, modules_without_symbols.size());
-  ASSERT_EQ("module1", modules_without_symbols[0]->debug_file());
+  ASSERT_EQ(0U, modules_without_symbols.size());
   ASSERT_EQ(0U, modules_with_corrupt_symbols.size());
   frames = call_stack.frames();
   ASSERT_EQ(1U, frames->size());
@@ -214,7 +212,7 @@ TEST_F(GetContextFrame, NoStackMemory) {
   raw_context.iregs[MD_CONTEXT_MIPS_REG_SP] = 0x80000000;
 
   StackFrameSymbolizer frame_symbolizer(&supplier, &resolver);
-  StackwalkerMIPS walker(&system_info, &raw_context, NULL, &modules,
+  StackwalkerMIPS walker(&system_info, &raw_context, nullptr, &modules,
                          &frame_symbolizer);
   vector<const CodeModule*> modules_without_symbols;
   vector<const CodeModule*> modules_with_corrupt_symbols;

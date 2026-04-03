@@ -4,11 +4,12 @@
 
 // Some tests for the framework itself.
 
+#include <windows.h>
+
 #include <stddef.h>
 #include <stdlib.h>
 
-#include <windows.h>
-
+#include "base/compiler_specific.h"
 #include "base/debug/alias.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
@@ -106,8 +107,9 @@ SBOX_TESTS_COMMAND int IntegrationTestsTest_stuck(int argc, wchar_t **argv) {
 SBOX_TESTS_COMMAND int IntegrationTestsTest_args(int argc, wchar_t **argv) {
   for (int i = 0; i < argc; i++) {
     wchar_t argument[20];
-    size_t argument_bytes = wcslen(argv[i]) * sizeof(wchar_t);
-    memcpy(argument, argv[i], __min(sizeof(argument), argument_bytes));
+    size_t argument_bytes = wcslen(UNSAFE_TODO(argv[i])) * sizeof(wchar_t);
+    UNSAFE_TODO(
+        memcpy(argument, argv[i], __min(sizeof(argument), argument_bytes)));
   }
 
   return argc;
@@ -120,13 +122,13 @@ SBOX_TESTS_COMMAND int IntegrationTestsTest_event(int argc, wchar_t** argv) {
     return SBOX_TEST_INVALID_PARAMETER;
 
   base::win::ScopedHandle handle_started(
-      reinterpret_cast<HANDLE>(wcstoul(argv[0], nullptr, 16)));
+      reinterpret_cast<HANDLE>(UNSAFE_TODO(wcstoul(argv[0], nullptr, 16))));
   if (!handle_started.is_valid()) {
     return SBOX_TEST_NOT_FOUND;
   }
 
   base::win::ScopedHandle handle_done(
-      reinterpret_cast<HANDLE>(wcstoul(argv[1], nullptr, 16)));
+      reinterpret_cast<HANDLE>(UNSAFE_TODO(wcstoul(argv[1], nullptr, 16))));
   if (!handle_done.is_valid()) {
     return SBOX_TEST_NOT_FOUND;
   }
@@ -149,7 +151,7 @@ SBOX_TESTS_COMMAND int IntegrationTestsTest_memory(int argc, wchar_t** argv) {
   }
 
   base::win::ScopedHandle handle_started(
-      reinterpret_cast<HANDLE>(wcstoul(argv[0], nullptr, 16)));
+      reinterpret_cast<HANDLE>(UNSAFE_TODO(wcstoul(argv[0], nullptr, 16))));
   if (!handle_started.is_valid()) {
     return SBOX_TEST_NOT_FOUND;
   }

@@ -1,3 +1,4 @@
+// clang-format off
 // Auto-generated file. Do not edit!
 //   Template: src/qs8-gemm/MRx8c8-avx2.c.in
 //   Generator: tools/xngen
@@ -8,13 +9,16 @@
 // LICENSE file in the root directory of this source tree.
 
 #include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include <immintrin.h>
 
-#include <xnnpack/gemm.h>
-#include <xnnpack/intrinsics-polyfill.h>
-#include <xnnpack/math.h>
-#include <xnnpack/unaligned.h>
+#include "src/xnnpack/common.h"
+#include "src/xnnpack/gemm.h"
+#include "src/xnnpack/intrinsics-polyfill.h"
+#include "src/xnnpack/math.h"
+#include "src/xnnpack/microparams.h"
 
 
 void xnn_qd8_f32_qc8w_gemm_minmax_ukernel_2x8c8__avx2(
@@ -27,8 +31,8 @@ void xnn_qd8_f32_qc8w_gemm_minmax_ukernel_2x8c8__avx2(
     float* restrict c,
     size_t cm_stride,
     size_t cn_stride,
-    const union xnn_f32_minmax_params params[restrict XNN_MIN_ELEMENTS(1)],
-    const struct xnn_qd8_quantization_params quantization_params[restrict XNN_MIN_ELEMENTS(1)]) XNN_OOB_READS
+    const struct xnn_f32_minmax_params* restrict params,
+    const struct xnn_qd8_quantization_params* restrict quantization_params) XNN_OOB_READS
 {
   assert(mr != 0);
   assert(mr <= 2);
@@ -48,6 +52,11 @@ void xnn_qd8_f32_qc8w_gemm_minmax_ukernel_2x8c8__avx2(
     a1 = a0;
     c1 = c0;
   }
+
+  const __m256 vmin = _mm256_set1_ps(params->scalar.min);
+  const __m256 vmax = _mm256_set1_ps(params->scalar.max);
+  XNN_FORCE_REALIZATION(vmin);
+  XNN_FORCE_REALIZATION(vmax);
 
   do {
     const __m128i vinit0 = _mm_cvtsi32_si128(((const int*) w)[0]);
@@ -131,11 +140,9 @@ void xnn_qd8_f32_qc8w_gemm_minmax_ukernel_2x8c8__avx2(
     vout0x01234567 = _mm256_fmadd_ps(vout0x01234567, vfilter_output_scale01234567, vbias01234567);
     vout1x01234567 = _mm256_fmadd_ps(vout1x01234567, vfilter_output_scale01234567, vbias01234567);
 
-    const __m256 vmin = _mm256_load_ps(params->avx.min);
     vout0x01234567 = _mm256_max_ps(vout0x01234567, vmin);
     vout1x01234567 = _mm256_max_ps(vout1x01234567, vmin);
 
-    const __m256 vmax = _mm256_load_ps(params->avx.max);
     vout0x01234567 = _mm256_min_ps(vout0x01234567, vmax);
     vout1x01234567 = _mm256_min_ps(vout1x01234567, vmax);
 

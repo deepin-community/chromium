@@ -41,7 +41,6 @@
 
 #include "breakpad_googletest_includes.h"
 #include "common/test_assembler.h"
-#include "common/using_std_string.h"
 #include "google_breakpad/common/minidump_format.h"
 #include "google_breakpad/processor/basic_source_line_resolver.h"
 #include "google_breakpad/processor/call_stack.h"
@@ -109,7 +108,7 @@ public:
 
   // Set the Breakpad symbol information that supplier should return for
   // MODULE to INFO.
-  void SetModuleSymbols(MockCodeModule* module, const string& info) {
+  void SetModuleSymbols(MockCodeModule* module, const std::string& info) {
     size_t buffer_size;
     char *buffer = supplier.CopySymbolDataAndOwnTheCopy(info, &buffer_size);
     EXPECT_CALL(supplier, GetCStringSymbolData(module, &system_info, _, _, _))
@@ -121,7 +120,7 @@ public:
   // Populate stack_region with the contents of stack_section. Use
   // stack_section.start() as the region's starting address.
   void RegionFromSection() {
-    string contents;
+    std::string contents;
     ASSERT_TRUE(stack_section.GetContents(&contents));
     stack_region.Init(stack_section.start().Value(), contents);
   }
@@ -151,7 +150,7 @@ class SanityCheck: public StackwalkerRISCV64Fixture, public Test { };
 TEST_F(SanityCheck, NoResolver) {
   // Since the context's frame pointer is garbage, the stack walk will end after
   // the first frame.
-  StackFrameSymbolizer frame_symbolizer(NULL, NULL);
+  StackFrameSymbolizer frame_symbolizer(nullptr, nullptr);
   StackwalkerRISCV64 walker(&system_info, &raw_context, &stack_region, &modules,
                             &frame_symbolizer);
   // This should succeed even without a resolver or supplier.
@@ -175,7 +174,7 @@ class GetContextFrame: public StackwalkerRISCV64Fixture, public Test { };
 // without stack memory present.
 TEST_F(GetContextFrame, NoStackMemory) {
   StackFrameSymbolizer frame_symbolizer(&supplier, &resolver);
-  StackwalkerRISCV64 walker(&system_info, &raw_context, NULL, &modules,
+  StackwalkerRISCV64 walker(&system_info, &raw_context, nullptr, &modules,
                             &frame_symbolizer);
   vector<const CodeModule*> modules_without_symbols;
   vector<const CodeModule*> modules_with_corrupt_symbols;

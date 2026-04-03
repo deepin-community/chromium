@@ -12,35 +12,44 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
-#include <algorithm>
+
 #include <array>
-#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
 
-#include "absl/algorithm/container.h"
 #include "absl/cleanup/cleanup.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "absl/strings/string_view.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringExtras.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/DialectRegistry.h"  // from @llvm-project
 #include "mlir/IR/IRMapping.h"  // from @llvm-project
+#include "mlir/IR/Location.h"  // from @llvm-project
+#include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/IR/SymbolTable.h"  // from @llvm-project
 #include "mlir/IR/TypeRange.h"  // from @llvm-project
+#include "mlir/IR/Types.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
+#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/Support/TypeID.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/quantization/common/func.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/passes/manipulate_model_attr.h"
 #include "tensorflow/compiler/mlir/quantization/tensorflow/passes/passes.h"
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_dialect.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_executor.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_saved_model.h"
-#include "tensorflow/compiler/mlir/tensorflow/translate/import_model.h"
 
 namespace mlir {
 namespace quant {
@@ -55,7 +64,6 @@ using ::mlir::tf_saved_model::kTfSavedModelInitializerInitType;
 using ::mlir::tf_saved_model::kTfSavedModelInitializerRestoreType;
 using ::mlir::tf_saved_model::kTfSavedModelInitializerTypeAttr;
 using ::mlir::tf_saved_model::SessionInitializerOp;
-using ::tensorflow::kImportModelDefaultGraphFuncName;
 
 // Array of initializer functions' types. The corresponding initializer
 // functions should be merged in this order. This is because:
@@ -107,20 +115,6 @@ class MergeInitializerFunctionOpsToMainPass
   }
 };
 
-// Gets the "main" function from the module. Returns an empty op iff it doesn't
-// exist.
-func::FuncOp GetMainFunction(ModuleOp module_op) {
-  const auto main_func_id =
-      StringAttr::get(module_op.getContext(), kImportModelDefaultGraphFuncName);
-  auto func_ops = module_op.getOps<func::FuncOp>();
-  auto main_func_itr = absl::c_find_if(func_ops, [&main_func_id](auto func_op) {
-    return func_op.getName() == main_func_id;
-  });
-
-  if (main_func_itr == func_ops.end()) return {};
-  return *main_func_itr;
-}
-
 // Returns true iff func_op has either no Region or the body has no Blocks.
 bool IsFuncOpEmpty(func::FuncOp func_op) {
   return func_op->getNumRegions() == 0 || func_op.getBody().empty();
@@ -166,7 +160,7 @@ LogicalResult ValidateInitFunc(func::FuncOp init_func_op) {
 
   FetchOp fetch_op = graph_op.GetFetch();
   for (const Value fetch : fetch_op.getFetches()) {
-    if (!fetch.getType().isa<tf_executor::ControlType>()) {
+    if (!mlir::isa<tf_executor::ControlType>(fetch.getType())) {
       fetch_op.emitError(absl::StrFormat(
           "Validation failed for the initializer function: %s. "
           "All initializer function's fetches should be "
@@ -224,8 +218,8 @@ IRMapping CloneSrcFuncArgumentsToMainFunc(func::FuncOp src_func_op,
     const DictionaryAttr main_arg_attr =
         src_func_op.getArgAttrDict(src_arg_idx);
 
-    main_func_op.insertArgument(main_arg_idx, src_arg.getType(), main_arg_attr,
-                                src_arg.getLoc());
+    (void)main_func_op.insertArgument(main_arg_idx, src_arg.getType(),
+                                      main_arg_attr, src_arg.getLoc());
 
     const std::string new_input_name =
         absl::StrCat(GetInitializerType(src_func_op), "_", src_arg_idx, ":0");
@@ -293,8 +287,8 @@ IslandOp CreateNoOpWithControlDependencies(
     const ArrayRef<Value> control_dependencies) {
   auto builder = OpBuilder::atBlockTerminator(&main_graph_op.GetBody());
 
-  auto wrapper_island_op = builder.create<IslandOp>(
-      loc, /*outputs=*/TypeRange{},
+  auto wrapper_island_op = IslandOp::create(
+      builder, loc, /*outputs=*/TypeRange{},
       /*control=*/tf_executor::ControlType::get(builder.getContext()),
       /*controlInputs=*/control_dependencies);
   wrapper_island_op.getBody().emplaceBlock();
@@ -303,8 +297,8 @@ IslandOp CreateNoOpWithControlDependencies(
   auto guard = OpBuilder::InsertionGuard(builder);
   builder.setInsertionPointToStart(&wrapper_island_op.GetBody());
 
-  builder.create<TF::NoOp>(loc);
-  builder.create<tf_executor::YieldOp>(loc);
+  TF::NoOp::create(builder, loc);
+  tf_executor::YieldOp::create(builder, loc);
 
   return wrapper_island_op;
 }
@@ -320,7 +314,7 @@ void AddFetchOperandToMain(GraphOp main_graph_op, const Value fetch_operand) {
   fetches.emplace_back(fetch_operand);
 
   auto builder = OpBuilder::atBlockTerminator(&main_graph_op.GetBody());
-  builder.create<FetchOp>(main_graph_op.getLoc(), std::move(fetches));
+  FetchOp::create(builder, main_graph_op.getLoc(), std::move(fetches));
 }
 
 // Creates a new Location for the initializer function. This creates a loc by
@@ -336,7 +330,7 @@ void MergeInitializerFunctionOpsToMainPass::runOnOperation() {
   ModuleOp module_op = getOperation();
   MLIRContext* ctx = module_op.getContext();
 
-  func::FuncOp main_func_op = GetMainFunction(module_op);
+  func::FuncOp main_func_op = FindMainFuncOp(module_op);
   if (!main_func_op) {
     module_op.emitError("Main function op not found.");
     return signalPassFailure();

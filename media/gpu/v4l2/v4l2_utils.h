@@ -16,6 +16,7 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "media/base/supported_video_decoder_config.h"
+#include "media/base/svc_scalability_mode.h"
 #include "media/base/video_codecs.h"
 #include "mojo/public/cpp/platform/platform_handle.h"
 
@@ -56,43 +57,6 @@ using AllocateSecureBufferAsCallback =
 // Numerical value of ioctl() OK return value;
 constexpr int kIoctlOk = 0;
 
-// These values are logged to UMA. Entries should not be renumbered and numeric
-// values should never be reused. Please keep in sync with
-// "MediaIoctlRequests" in src/tools/metrics/histograms/enums.xml.
-enum class MediaIoctlRequests {
-  kMediaIocDeviceInfo = 0,
-  kMediaIocRequestAlloc = 1,
-  kMediaRequestIocQueue = 2,
-  kMediaRequestIocReinit = 3,
-  kMaxValue = kMediaRequestIocReinit,
-};
-
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused. Please keep in sync with
-// "VidiocIoctlRequests" in src/tools/metrics/histograms/enums.xml.
-enum class VidiocIoctlRequests {
-  kVidiocGFmt = 0,
-  kVidiocSFmt = 1,
-  kVidiocGSelection = 2,
-  kVidiocExpbuf = 3,
-  kVidiocReqbufs = 4,
-  kVidiocQuerybuf = 5,
-  kVidiocQbuf = 6,
-  kVidiocDqbuf = 7,
-  kVidiocStreamon = 8,
-  kVidiocStreamoff = 9,
-  kVidiocSExtCtrls = 10,
-  kMaxValue = kVidiocSExtCtrls,
-};
-
-// Records Media.V4L2VideoDecoder.MediaIoctlError UMA when errors happen with
-// media controller API ioctl requests.
-void RecordMediaIoctlUMA(MediaIoctlRequests function);
-
-// Records Vidioc.V4L2VideoDecoder.VidiocIoctlError UMA when errors happen with
-// V4L2 API ioctl requests.
-void RecordVidiocIoctlErrorUMA(VidiocIoctlRequests function);
-
 // Returns a human readable description of |memory|.
 const char* V4L2MemoryToString(v4l2_memory memory);
 
@@ -116,6 +80,11 @@ size_t GetNumPlanesOfV4L2PixFmt(uint32_t pix_fmt);
 // If error occurs, it returns std::nullopt.
 std::optional<VideoFrameLayout> V4L2FormatToVideoFrameLayout(
     const struct v4l2_format& format);
+
+// Query the driver to see what scalability modes are supported for the driver.
+std::vector<SVCScalabilityMode> GetSupportedScalabilityModesForV4L2Codec(
+    const IoctlAsCallback& ioctl_cb,
+    VideoCodecProfile media_profile);
 
 // Enumerates the supported VideoCodecProfiles for a given device (accessed via
 // |ioctl_cb|) and for |codec_as_pix_fmt| (e.g. V4L2_PIX_FMT_VP9). Returns an
@@ -160,6 +129,12 @@ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs();
 
 // Queries the driver to see if it supports stateful decoding.
 bool IsV4L2DecoderStateful();
+
+// Queries whether V4L2 virtual driver (VISL) is used on VM.
+bool IsVislDriver();
+
+// Returns a readable description of |ctrls|.
+std::string V4L2ControlsToString(const struct v4l2_ext_controls* ctrls);
 
 }  // namespace media
 

@@ -8,7 +8,10 @@
 #include <memory>
 
 #include "ui/views/controls/button/button.h"
-#include "ui/views/controls/button/image_button.h"
+
+namespace views {
+class ImageButton;
+}  // namespace views
 
 namespace autofill {
 

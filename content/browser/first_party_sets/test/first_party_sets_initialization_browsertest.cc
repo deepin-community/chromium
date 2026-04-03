@@ -4,6 +4,7 @@
 
 #include <memory>
 
+#include "base/strings/strcat.h"
 #include "base/test/scoped_feature_list.h"
 #include "content/browser/first_party_sets/test/scoped_mock_first_party_sets_handler.h"
 #include "content/public/browser/web_contents.h"
@@ -49,9 +50,9 @@ class FirstPartySetsDeadlockingQueriesBrowserTest
   void SetCrossSiteCookieOnDomain(const std::string& domain) {
     GURL domain_url = https_server_.GetURL(domain, "/");
     std::string cookie = base::StrCat({"cross-site=", domain});
-    content::SetCookie(
+    ASSERT_TRUE(content::SetCookie(
         shell()->web_contents()->GetBrowserContext(), domain_url,
-        base::StrCat({cookie, ";SameSite=None;Secure;Domain=", domain}));
+        base::StrCat({cookie, ";SameSite=None;Secure;Domain=", domain})));
     ASSERT_THAT(content::GetCookies(
                     shell()->web_contents()->GetBrowserContext(), domain_url),
                 testing::HasSubstr(cookie));

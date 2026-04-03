@@ -11,6 +11,7 @@
 #include "base/memory/weak_ptr.h"
 #include "remoting/protocol/authenticator.h"
 #include "remoting/protocol/channel_authenticator.h"
+#include "remoting/protocol/credentials_type.h"
 
 namespace remoting::protocol {
 
@@ -63,6 +64,7 @@ class FakeAuthenticator : public Authenticator {
     Action action = Action::ACCEPT;
     bool async = true;
     raw_ptr<base::RepeatingClosureList> reject_after_accepted;
+    CredentialsType credentials_type = CredentialsType::SHARED_SECRET;
   };
 
   FakeAuthenticator(Type type,
@@ -96,13 +98,17 @@ class FakeAuthenticator : public Authenticator {
   void Resume();
 
   // Authenticator interface.
+  CredentialsType credentials_type() const override;
+  const Authenticator& implementing_authenticator() const override;
   State state() const override;
   bool started() const override;
   RejectionReason rejection_reason() const override;
+  RejectionDetails rejection_details() const override;
   void ProcessMessage(const jingle_xmpp::XmlElement* message,
                       base::OnceClosure resume_callback) override;
   std::unique_ptr<jingle_xmpp::XmlElement> GetNextMessage() override;
   const std::string& GetAuthKey() const override;
+  const SessionPolicies* GetSessionPolicies() const override;
   std::unique_ptr<ChannelAuthenticator> CreateChannelAuthenticator()
       const override;
 
@@ -142,6 +148,8 @@ class FakeHostAuthenticatorFactory : public AuthenticatorFactory {
   std::unique_ptr<Authenticator> CreateAuthenticator(
       const std::string& local_jid,
       const std::string& remote_jid) override;
+
+  std::unique_ptr<AuthenticatorFactory> Clone() const override;
 
  private:
   const int messages_till_started_;

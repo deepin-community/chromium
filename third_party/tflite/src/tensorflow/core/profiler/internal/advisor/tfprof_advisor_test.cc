@@ -15,13 +15,23 @@ limitations under the License.
 
 #include "tensorflow/core/profiler/internal/advisor/tfprof_advisor.h"
 
+#include <cstdint>
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
-#include "tensorflow/core/lib/io/path.h"
-#include "tensorflow/core/platform/env.h"
+#include "absl/strings/match.h"
+#include "tensorflow/core/framework/graph.pb.h"
+#include "tensorflow/core/framework/node_def.pb.h"
+#include "tensorflow/core/framework/step_stats.pb.h"
 #include "tensorflow/core/platform/test.h"
+#include "tensorflow/core/platform/types.h"
+#include "tensorflow/core/profiler/internal/advisor/checker.h"
+#include "tensorflow/core/profiler/internal/tfprof_node.h"
+#include "tensorflow/core/profiler/internal/tfprof_stats.h"
+#include "tensorflow/core/profiler/tfprof_options.pb.h"
+#include "tensorflow/core/profiler/tfprof_output.pb.h"
 
 namespace tensorflow {
 namespace tfprof {
@@ -39,11 +49,10 @@ class TFProfAdvisorTest : public ::testing::Test {
     advisor_ = std::make_unique<Advisor>(stats_.get());
   }
 
-  std::unique_ptr<TFGraphNode> CreateNode(const string& name,
-                                          const string& type,
-                                          std::map<string, string> attrs,
-                                          int64_t step, int64_t start_miros,
-                                          int64_t end_rel_micros) {
+  std::unique_ptr<TFGraphNode> CreateNode(
+      const std::string& name, const std::string& type,
+      std::map<std::string, std::string> attrs, int64_t step,
+      int64_t start_miros, int64_t end_rel_micros) {
     node_defs_.push_back(std::make_unique<NodeDef>());
     NodeDef* def = node_defs_.back().get();
 
@@ -52,7 +61,8 @@ class TFProfAdvisorTest : public ::testing::Test {
     for (const auto& attr : attrs) {
       (*def->mutable_attr())[attr.first].set_s(attr.second);
     }
-    std::unique_ptr<TFGraphNode> node(new TFGraphNode(def, -1, nullptr));
+    std::unique_ptr<TFGraphNode> node =
+        std::make_unique<TFGraphNode>(def, -1, nullptr);
 
     NodeExecStats node_stat;
     node_stat.set_all_start_micros(start_miros);

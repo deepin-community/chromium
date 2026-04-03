@@ -8,7 +8,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/memory/ptr_util.h"
 #include "cc/animation/animation.h"
 #include "cc/animation/animation_host.h"
 #include "cc/animation/animation_id_provider.h"
@@ -197,8 +196,14 @@ float FakeFloatAnimationCurve::GetValue(base::TimeDelta now) const {
   return 0.0f;
 }
 
+float FakeFloatAnimationCurve::GetTransformedValue(
+    base::TimeDelta now,
+    gfx::TimingFunction::LimitDirection limit_direction) const {
+  return GetValue(now);
+}
+
 std::unique_ptr<gfx::AnimationCurve> FakeFloatAnimationCurve::Clone() const {
-  return base::WrapUnique(new FakeFloatAnimationCurve);
+  return std::make_unique<FakeFloatAnimationCurve>();
 }
 
 FakeTransformTransition::FakeTransformTransition(double duration)
@@ -214,6 +219,11 @@ gfx::TransformOperations FakeTransformTransition::GetValue(
     base::TimeDelta time) const {
   return gfx::TransformOperations();
 }
+gfx::TransformOperations FakeTransformTransition::GetTransformedValue(
+    base::TimeDelta time,
+    gfx::TimingFunction::LimitDirection limit_direction) const {
+  return GetValue(time);
+}
 
 bool FakeTransformTransition::PreservesAxisAlignment() const {
   return true;
@@ -225,7 +235,7 @@ bool FakeTransformTransition::MaximumScale(float* max_scale) const {
 }
 
 std::unique_ptr<gfx::AnimationCurve> FakeTransformTransition::Clone() const {
-  return base::WrapUnique(new FakeTransformTransition(*this));
+  return std::make_unique<FakeTransformTransition>(*this);
 }
 
 FakeFloatTransition::FakeFloatTransition(double duration, float from, float to)
@@ -242,8 +252,14 @@ float FakeFloatTransition::GetValue(base::TimeDelta time) const {
   return (1.0 - progress) * from_ + progress * to_;
 }
 
+float FakeFloatTransition::GetTransformedValue(
+    base::TimeDelta time,
+    gfx::TimingFunction::LimitDirection limit_direction) const {
+  return GetValue(time);
+}
+
 std::unique_ptr<gfx::AnimationCurve> FakeFloatTransition::Clone() const {
-  return base::WrapUnique(new FakeFloatTransition(*this));
+  return std::make_unique<FakeFloatTransition>(*this);
 }
 
 int AddScrollOffsetAnimationToAnimation(Animation* animation,

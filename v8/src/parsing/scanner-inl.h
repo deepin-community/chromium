@@ -5,8 +5,10 @@
 #ifndef V8_PARSING_SCANNER_INL_H_
 #define V8_PARSING_SCANNER_INL_H_
 
-#include "src/parsing/keywords-gen.h"
 #include "src/parsing/scanner.h"
+// Include the non-inl header before the rest of the headers.
+
+#include "src/parsing/keywords-gen.h"
 #include "src/strings/char-predicates-inl.h"
 #include "src/utils/utils.h"
 
@@ -131,12 +133,12 @@ static_assert(sizeof(Token::Value) == 1);
 constexpr Token::Value GetOneCharToken(char c) {
   // clang-format off
   return
-      c == '(' ? Token::kLParen :
-      c == ')' ? Token::kRParen :
-      c == '{' ? Token::kLBrace :
-      c == '}' ? Token::kRBrace :
-      c == '[' ? Token::kLBrack :
-      c == ']' ? Token::kRBrack :
+      c == '(' ? Token::kLeftParen :
+      c == ')' ? Token::kRightParen :
+      c == '{' ? Token::kLeftBrace :
+      c == '}' ? Token::kRightBrace :
+      c == '[' ? Token::kLeftBracket :
+      c == ']' ? Token::kRightBracket :
       c == '?' ? Token::kConditional :
       c == ':' ? Token::kColon :
       c == ';' ? Token::kSemicolon :
@@ -147,8 +149,8 @@ constexpr Token::Value GetOneCharToken(char c) {
       c == '^' ? Token::kBitXor :
       c == '~' ? Token::kBitNot :
       c == '!' ? Token::kNot :
-      c == '<' ? Token::kLt :
-      c == '>' ? Token::kGt :
+      c == '<' ? Token::kLessThan :
+      c == '>' ? Token::kGreaterThan :
       c == '%' ? Token::kMod :
       c == '=' ? Token::kAssign :
       c == '+' ? Token::kAdd :
@@ -347,6 +349,10 @@ V8_INLINE Token::Value Scanner::SkipWhiteSpace() {
 }
 
 V8_INLINE Token::Value Scanner::ScanSingleToken() {
+  bool old_saw_non_comment = saw_non_comment_;
+  // Assume the token we'll parse is not a comment; if it is, saw_non_comment_
+  // is restored.
+  saw_non_comment_ = true;
   Token::Value token;
   do {
     next().location.beg_pos = source_pos();
@@ -355,12 +361,12 @@ V8_INLINE Token::Value Scanner::ScanSingleToken() {
       token = one_char_tokens[c0_];
 
       switch (token) {
-        case Token::kLParen:
-        case Token::kRParen:
-        case Token::kLBrace:
-        case Token::kRBrace:
-        case Token::kLBrack:
-        case Token::kRBrack:
+        case Token::kLeftParen:
+        case Token::kRightParen:
+        case Token::kLeftBrace:
+        case Token::kRightBrace:
+        case Token::kLeftBracket:
+        case Token::kRightBracket:
         case Token::kColon:
         case Token::kSemicolon:
         case Token::kComma:
@@ -384,21 +390,21 @@ V8_INLINE Token::Value Scanner::ScanSingleToken() {
         case Token::kString:
           return ScanString();
 
-        case Token::kLt:
+        case Token::kLessThan:
           // < <= << <<= <!--
           Advance();
-          if (c0_ == '=') return Select(Token::kLte);
+          if (c0_ == '=') return Select(Token::kLessThanEq);
           if (c0_ == '<') return Select('=', Token::kAssignShl, Token::kShl);
           if (c0_ == '!') {
             token = ScanHtmlComment();
             continue;
           }
-          return Token::kLt;
+          return Token::kLessThan;
 
-        case Token::kGt:
+        case Token::kGreaterThan:
           // > >= >> >>= >>> >>>=
           Advance();
-          if (c0_ == '=') return Select(Token::kGte);
+          if (c0_ == '=') return Select(Token::kGreaterThanEq);
           if (c0_ == '>') {
             // >> >>= >>> >>>=
             Advance();
@@ -406,7 +412,7 @@ V8_INLINE Token::Value Scanner::ScanSingleToken() {
             if (c0_ == '>') return Select('=', Token::kAssignShr, Token::kShr);
             return Token::kSar;
           }
-          return Token::kGt;
+          return Token::kGreaterThan;
 
         case Token::kAssign:
           // = == === =>
@@ -418,7 +424,8 @@ V8_INLINE Token::Value Scanner::ScanSingleToken() {
         case Token::kNot:
           // ! != !==
           Advance();
-          if (c0_ == '=') return Select('=', Token::kNeStrict, Token::kNe);
+          if (c0_ == '=')
+            return Select('=', Token::kNotEqStrict, Token::kNotEq);
           return Token::kNot;
 
         case Token::kAdd:
@@ -459,6 +466,7 @@ V8_INLINE Token::Value Scanner::ScanSingleToken() {
           // /  // /* /=
           Advance();
           if (c0_ == '/') {
+            saw_non_comment_ = old_saw_non_comment;
             base::uc32 c = Peek();
             if (c == '#' || c == '@') {
               Advance();
@@ -470,6 +478,7 @@ V8_INLINE Token::Value Scanner::ScanSingleToken() {
             continue;
           }
           if (c0_ == '*') {
+            saw_non_comment_ = old_saw_non_comment;
             token = SkipMultiLineComment();
             continue;
           }
@@ -559,6 +568,7 @@ void Scanner::Scan(TokenDesc* next_desc) {
   SanityCheckTokenDesc(current());
   SanityCheckTokenDesc(next());
   SanityCheckTokenDesc(next_next());
+  SanityCheckTokenDesc(next_next_next());
 #endif
 }
 

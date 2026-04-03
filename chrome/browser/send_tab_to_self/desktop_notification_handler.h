@@ -22,7 +22,7 @@ class SendTabToSelfEntry;
 // Will only be used on desktop platform.
 // Will be created and owned by the NativeNotificationDisplayService.
 //
-// TODO(https://crbug.com/1280681): Remove this class, which is only used in
+// TODO(crbug.com/40811626): Remove this class, which is only used in
 // STTSv1.
 class DesktopNotificationHandler : public NotificationHandler,
                                    public ReceivingUiHandler {
@@ -60,9 +60,6 @@ class DesktopNotificationHandler : public NotificationHandler,
                                   const std::string& target_device_name);
   // Displays a notification telling the user that the tab could not be sent.
   void DisplayFailureMessage(const GURL& url);
-
-  // Retrieves the Profile for which this Handler will manage notifications.
-  const Profile* profile() const override;
 
  protected:
   const raw_ptr<Profile> profile_;

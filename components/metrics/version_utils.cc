@@ -10,7 +10,7 @@
 #include "components/version_info/version_info.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "base/android/build_info.h"
+#include "base/android/apk_info.h"
 #endif
 
 namespace metrics {
@@ -45,12 +45,11 @@ SystemProfileProto::Channel AsProtobufChannel(version_info::Channel channel) {
       return SystemProfileProto::CHANNEL_STABLE;
   }
   NOTREACHED();
-  return SystemProfileProto::CHANNEL_UNKNOWN;
 }
 
 std::string GetAppPackageName() {
 #if BUILDFLAG(IS_ANDROID)
-  return base::android::BuildInfo::GetInstance()->package_name();
+  return base::android::apk_info::package_name();
 #else
   return std::string();
 #endif

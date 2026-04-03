@@ -7,10 +7,10 @@
 #include <string>
 #include <unordered_set>
 
-#include "base/containers/contains.h"
 #include "base/containers/flat_map.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/scoped_observation.h"
+#include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/component_updater/soda_language_pack_component_installer.h"
 #include "chrome/grit/generated_resources.h"
@@ -25,9 +25,9 @@
 #include "media/mojo/mojom/speech_recognition_service.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace speech {
 
@@ -36,12 +36,12 @@ constexpr base::TimeDelta kIdleProcessTimeout = base::Seconds(5);
 ChromeSpeechRecognitionService::ChromeSpeechRecognitionService(
     content::BrowserContext* context)
     : context_(context) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (!base::FeatureList::IsEnabled(
           ash::features::kOnDeviceSpeechRecognition)) {
     return;
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   auto* soda_installer = speech::SodaInstaller::GetInstance();
 
@@ -100,7 +100,7 @@ void ChromeSpeechRecognitionService::LaunchIfNotRunning() {
   DCHECK(profile_prefs);
   DCHECK(global_prefs);
 
-  // TODO(crbug.com/1161569): Language pack path should be configurable per
+  // TODO(crbug.com/40162502): Language pack path should be configurable per
   // SpeechRecognitionRecognizer to allow multiple features to use Speech
   // recognition. For now, only Live Caption uses SpeechRecognitionService on
   // non-Chrome OS Chrome, so hard-coding to the Live Caption language code.
@@ -147,7 +147,7 @@ void ChromeSpeechRecognitionService::LaunchIfNotRunning() {
 base::flat_map<std::string, base::FilePath>
 ChromeSpeechRecognitionService::GetSodaConfigPaths() {
   base::flat_map<std::string, base::FilePath> config_file_paths;
-  std::unordered_set<std::string> registered_language_packs;
+  std::unordered_set<std::string_view> registered_language_packs;
   for (const auto& language : g_browser_process->local_state()->GetList(
            prefs::kSodaRegisteredLanguagePacks)) {
     registered_language_packs.insert(language.GetString());
@@ -159,7 +159,7 @@ ChromeSpeechRecognitionService::GetSodaConfigPaths() {
         g_browser_process->local_state()->GetFilePath(config.config_path_pref);
 
     if (!config_path.empty() &&
-        base::Contains(registered_language_packs, config.language_name)) {
+        registered_language_packs.contains(config.language_name)) {
       config_file_paths[config.language_name] = config_path;
     }
   }

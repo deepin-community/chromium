@@ -18,8 +18,10 @@ limitations under the License.
 #include <utility>
 
 #include "absl/status/status.h"
+#include "absl/synchronization/notification.h"
 #include "tensorflow/core/common_runtime/function.h"
 #include "tensorflow/core/common_runtime/input_colocation_exemption_registry.h"
+#include "tensorflow/core/data/dataset_utils.h"
 #include "tensorflow/core/data/name_utils.h"
 #include "tensorflow/core/framework/metrics.h"
 #include "tensorflow/core/framework/model.h"
@@ -75,7 +77,7 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
   ~Dataset() override { input_->Unref(); }
 
   std::unique_ptr<IteratorBase> MakeIteratorInternal(
-      const string& prefix) const override {
+      const std::string& prefix) const override {
     return std::make_unique<Iterator>(Iterator::Params{
         this, name_utils::IteratorPrefix(kDatasetType, prefix)});
   }
@@ -88,24 +90,25 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
     return input_->output_shapes();
   }
 
-  string DebugString() const override {
+  std::string DebugString() const override {
     return name_utils::DatasetDebugString(kDatasetType);
   }
 
-  Status InputDatasets(std::vector<const DatasetBase*>* inputs) const override {
+  absl::Status InputDatasets(
+      std::vector<const DatasetBase*>* inputs) const override {
     inputs->push_back(input_);
     return absl::OkStatus();
   }
 
-  Status CheckExternalState() const override {
+  absl::Status CheckExternalState() const override {
     TF_RETURN_IF_ERROR(captured_func_->CheckExternalState());
     return input_->CheckExternalState();
   }
 
  protected:
-  Status AsGraphDefInternal(SerializationContext* ctx,
-                            DatasetGraphDefBuilder* b,
-                            Node** output) const override {
+  absl::Status AsGraphDefInternal(SerializationContext* ctx,
+                                  DatasetGraphDefBuilder* b,
+                                  Node** output) const override {
     Node* input_graph_node;
     TF_RETURN_IF_ERROR(b->AddInputDataset(ctx, input_, &input_graph_node));
     std::vector<Node*> other_arguments;
@@ -113,7 +116,7 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
     TF_RETURN_IF_ERROR(captured_func_->AddToGraph(ctx, b, &other_arguments,
                                                   &other_arguments_types));
     Node* num_parallel_calls = nullptr;
-    TF_RETURN_IF_ERROR(b->AddScalar(static_cast<int32>(num_parallel_calls_),
+    TF_RETURN_IF_ERROR(b->AddScalar(static_cast<int32_t>(num_parallel_calls_),
                                     &num_parallel_calls));
     AttrValue deterministic_attr;
     b->BuildAttrValue(deterministic_.String(), &deterministic_attr);
@@ -150,7 +153,7 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
       if (deregister_fn_) deregister_fn_();
     }
 
-    Status Initialize(IteratorContext* ctx) override {
+    absl::Status Initialize(IteratorContext* ctx) override {
       mutex_lock l(*mu_);
       interleave_depth_ = ctx->interleave_depth();
       if (num_parallel_calls_->value == model::kAutotune) {
@@ -168,9 +171,9 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
           ctx, &instantiated_captured_func_);
     }
 
-    Status GetNextInternal(IteratorContext* ctx,
-                           std::vector<Tensor>* out_tensors,
-                           bool* end_of_sequence) override {
+    absl::Status GetNextInternal(IteratorContext* ctx,
+                                 std::vector<Tensor>* out_tensors,
+                                 bool* end_of_sequence) override {
       std::shared_ptr<InvocationResult> result;
       {
         mutex_lock l(*mu_);
@@ -184,9 +187,9 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
           return errors::Cancelled("Iterator was cancelled");
         }
       }
-      profiler::TraceMe traceme([&] {
-        return profiler::TraceMeEncode("ParallelFilterConsume",
-                                       {{"element_id", result->uid}});
+      tsl::profiler::TraceMe traceme([&] {
+        return tsl::profiler::TraceMeEncode("ParallelFilterConsume",
+                                            {{"element_id", result->uid}});
       });
       return ProcessResult(ctx, result, out_tensors, end_of_sequence);
     }
@@ -200,8 +203,8 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
                                 /*max=*/ctx->runner_threadpool_size())});
     }
 
-    Status SaveInternal(SerializationContext* ctx,
-                        IteratorStateWriter* writer) override {
+    absl::Status SaveInternal(SerializationContext* ctx,
+                              IteratorStateWriter* writer) override {
       TF_RETURN_IF_ERROR(ctx->HandleCheckExternalStateStatus(
           dataset()->captured_func_->CheckExternalState()));
       mutex_lock l(*mu_);
@@ -237,8 +240,8 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
       return absl::OkStatus();
     }
 
-    Status RestoreInternal(IteratorContext* ctx,
-                           IteratorStateReader* reader) override {
+    absl::Status RestoreInternal(IteratorContext* ctx,
+                                 IteratorStateReader* reader) override {
       mutex_lock l(*mu_);
       TF_RETURN_IF_ERROR(RestoreInput(ctx, reader, input_impl_));
       int64_t invocation_results_size;
@@ -283,10 +286,10 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
           "parallelism",
           parallelism == -1
               ? kTraceInfoUnavailable
-              : strings::Printf("%lld", static_cast<long long>(parallelism))));
+              : absl::StrFormat("%lld", static_cast<long long>(parallelism))));
       result.push_back(std::make_pair(
           "interleave_depth",
-          strings::Printf("%lld", static_cast<long long>(interleave_depth_))));
+          absl::StrFormat("%lld", static_cast<long long>(interleave_depth_))));
       return result;
     }
 
@@ -294,8 +297,8 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
     struct InvocationResult {
       InvocationResult() : uid(tensorflow::EnvTime::NowNanos()) {}
 
-      Notification notification;
-      Status status;
+      absl::Notification notification;
+      absl::Status status;
       std::vector<Tensor> return_values;
       std::vector<Tensor> predicate_values;
       bool end_of_input = false;
@@ -335,9 +338,9 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
     void CallFunction(const std::shared_ptr<IteratorContext>& ctx,
                       const std::shared_ptr<InvocationResult>& result)
         TF_LOCKS_EXCLUDED(*mu_) {
-      profiler::TraceMe traceme([&] {
-        return profiler::TraceMeEncode("ParallelFilterProduce",
-                                       {{"element_id", result->uid}});
+      tsl::profiler::TraceMe traceme([&] {
+        return tsl::profiler::TraceMeEncode("ParallelFilterProduce",
+                                            {{"element_id", result->uid}});
       });
       // Get the next input element.
       std::vector<Tensor> input_element;
@@ -348,7 +351,7 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
         return;
       }
       result->return_values = input_element;
-      auto done = [this, ctx, result](Status status) {
+      auto done = [this, ctx, result](absl::Status status) {
         result->status.Update(status);
         // Callback is not a predicate function, set the error status of this
         // result.
@@ -381,7 +384,7 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
             std::move(input_element));
         (*ctx->runner())(
             [this, ctx, fn = std::move(fn), done = std::move(done)]() {
-              Status s;
+              absl::Status s;
               // Check whether we are already recording to prevent invalid
               // nesting of `RecordStart` calls.
               if (IsRecording(ctx.get())) {
@@ -396,16 +399,16 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
       }
     }
 
-    Status ProcessResult(IteratorContext* ctx,
-                         const std::shared_ptr<InvocationResult>& result,
-                         std::vector<Tensor>* out_tensors,
-                         bool* end_of_sequence) TF_LOCKS_EXCLUDED(*mu_) {
+    absl::Status ProcessResult(IteratorContext* ctx,
+                               const std::shared_ptr<InvocationResult>& result,
+                               std::vector<Tensor>* out_tensors,
+                               bool* end_of_sequence) TF_LOCKS_EXCLUDED(*mu_) {
       if (!result->end_of_input && result->status.ok()) {
         *out_tensors = std::move(result->return_values);
         *end_of_sequence = false;
         return absl::OkStatus();
       }
-      if (errors::IsOutOfRange(result->status)) {
+      if (absl::IsOutOfRange(result->status)) {
         // `predicate` may deliberately raise `errors::OutOfRange` to indicate
         // that we should terminate the iteration early.
         return errors::InvalidArgument(
@@ -521,9 +524,9 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
       return true;
     }
 
-    Status WriteComponentsLocked(IteratorStateWriter* writer,
-                                 const std::string& prefix,
-                                 const std::vector<Tensor>& values)
+    absl::Status WriteComponentsLocked(IteratorStateWriter* writer,
+                                       const std::string& prefix,
+                                       const std::vector<Tensor>& values)
         TF_EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
       TF_RETURN_IF_ERROR(writer->WriteScalar(prefix, kSize, values.size()));
       for (size_t j = 0; j < values.size(); j++) {
@@ -533,10 +536,10 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
       return absl::OkStatus();
     }
 
-    Status ReadComponentsLocked(IteratorContext* ctx,
-                                IteratorStateReader* reader,
-                                const std::string& prefix,
-                                std::vector<Tensor>* values)
+    absl::Status ReadComponentsLocked(IteratorContext* ctx,
+                                      IteratorStateReader* reader,
+                                      const std::string& prefix,
+                                      std::vector<Tensor>* values)
         TF_EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
       int64_t size;
       TF_RETURN_IF_ERROR(reader->ReadScalar(prefix, kSize, &size));
@@ -555,8 +558,9 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
       return absl::OkStatus();
     }
 
-    Status WriteStatusLocked(IteratorStateWriter* writer,
-                             const std::string& key, const Status& status)
+    absl::Status WriteStatusLocked(IteratorStateWriter* writer,
+                                   const std::string& key,
+                                   const absl::Status& status)
         TF_EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
       TF_RETURN_IF_ERROR(writer->WriteScalar(
           key, kErrorCode, static_cast<int64_t>(status.code())));
@@ -567,8 +571,9 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
       return absl::OkStatus();
     }
 
-    Status ReadStatusLocked(IteratorStateReader* reader, const std::string& key,
-                            Status* status) TF_EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
+    absl::Status ReadStatusLocked(IteratorStateReader* reader,
+                                  const std::string& key, absl::Status* status)
+        TF_EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
       int64_t code_int;
       TF_RETURN_IF_ERROR(reader->ReadScalar(key, kErrorCode, &code_int));
       absl::StatusCode code = static_cast<absl::StatusCode>(code_int);
@@ -577,7 +582,7 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
         tstring error_message;
         TF_RETURN_IF_ERROR(
             reader->ReadScalar(key, kErrorMessage, &error_message));
-        *status = Status(code, error_message);
+        *status = absl::Status(code, error_message);
       } else {
         *status = absl::OkStatus();
       }
@@ -617,7 +622,7 @@ class ParallelFilterDatasetOp::Dataset : public DatasetBase {
     // root node to this node (not including this node) in the input pipeline
     // tree. We record the interleave depth so that it can be included in the
     // trace metadata.
-    int64 interleave_depth_ = -1;
+    int64_t interleave_depth_ = -1;
     std::unique_ptr<Thread> runner_thread_ TF_GUARDED_BY(*mu_);
   };
 

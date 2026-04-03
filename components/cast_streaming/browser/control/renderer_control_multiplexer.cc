@@ -4,6 +4,7 @@
 
 #include "components/cast_streaming/browser/control/renderer_control_multiplexer.h"
 
+#include "base/notimplemented.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
@@ -86,16 +87,19 @@ void RendererControlMultiplexer::SetCdm(
   renderer_remote_->SetCdm(cdm_id, std::move(callback));
 }
 
+void RendererControlMultiplexer::SetLatencyHint(
+    std::optional<base::TimeDelta> latency_hint) {
+  NOTIMPLEMENTED();
+}
+
 void RendererControlMultiplexer::Initialize(
     mojo::PendingAssociatedRemote<media::mojom::RendererClient> client,
     std::optional<
         std::vector<::mojo::PendingRemote<::media::mojom::DemuxerStream>>>
         streams,
-    media::mojom::MediaUrlParamsPtr media_url_params,
     InitializeCallback callback) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   renderer_remote_->Initialize(std::move(client), std::move(streams),
-                               std::move(media_url_params),
                                std::move(callback));
 }
 

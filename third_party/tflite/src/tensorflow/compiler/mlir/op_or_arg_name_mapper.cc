@@ -15,19 +15,18 @@ limitations under the License.
 
 #include "tensorflow/compiler/mlir/op_or_arg_name_mapper.h"
 
+#include <optional>
 #include <string>
 
 #include "absl/strings/string_view.h"
 #include "llvm/ADT/APInt.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "mlir/IR/Location.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/utils/name_utils.h"
 
 static inline absl::string_view StringRefToView(llvm::StringRef ref) {
@@ -79,6 +78,23 @@ llvm::StringRef OpOrArgNameMapper::GetUniqueName(llvm::StringRef prefix,
   }
 }
 
+std::optional<llvm::StringRef> OpOrArgNameMapper::GetMappedName(
+    OpOrVal op_or_val) {
+  auto name = GetMappedNameView(op_or_val);
+  if (name.has_value()) return StringViewToRef(name.value());
+  return std::nullopt;
+}
+
+std::optional<absl::string_view> OpOrArgNameMapper::GetMappedNameView(
+    OpOrVal op_or_val) {
+  if (!op_or_val_to_name_.contains(op_or_val)) {
+    return std::nullopt;
+  }
+  auto& name = op_or_val_to_name_[op_or_val];
+  if (!name.empty()) return name;
+  return std::nullopt;
+}
+
 llvm::StringRef OpOrArgNameMapper::GetUniqueName(OpOrVal op_or_val,
                                                  int hash_value) {
   auto& name = op_or_val_to_name_[op_or_val];
@@ -123,7 +139,7 @@ std::string OpOrArgLocNameMapper::GetName(OpOrVal op_or_val) {
   // If the location is none of the expected types, then simply use name
   // generated using the op type. Follow TF convention and append the result
   // index unless 0.
-  if (auto result = val.dyn_cast<mlir::OpResult>()) {
+  if (auto result = mlir::dyn_cast<mlir::OpResult>(val)) {
     if (result.getResultNumber() > 0)
       return llvm::formatv("{0}:{1}",
                            result.getOwner()->getName().getStringRef(),
@@ -131,7 +147,7 @@ std::string OpOrArgLocNameMapper::GetName(OpOrVal op_or_val) {
     return std::string(result.getOwner()->getName().getStringRef());
   }
   // Use the ASM syntax for BlockArgument
-  if (auto arg = val.dyn_cast<mlir::BlockArgument>()) {
+  if (auto arg = mlir::dyn_cast<mlir::BlockArgument>(val)) {
     return "arg" + std::to_string(arg.getArgNumber());
   }
   return "";

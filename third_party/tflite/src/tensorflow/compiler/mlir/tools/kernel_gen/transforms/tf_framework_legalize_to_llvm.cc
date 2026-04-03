@@ -25,6 +25,7 @@ limitations under the License.
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Transforms/DialectConversion.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tools/kernel_gen/ir/tf_framework_ops.h"
 #include "tensorflow/compiler/mlir/tools/kernel_gen/transforms/rewriters.h"
@@ -69,25 +70,27 @@ class ConvertToLLVMCallOpPattern : public ConvertOpToLLVMPattern<OpTy> {
     // If the attribute is missing or empty, set the element count to 0 and
     // return NULL.
     if (!attr.has_value() || attr.value().empty()) {
-      Value zero = rewriter->create<LLVM::ConstantOp>(
-          loc, size_ty, rewriter->getIntegerAttr(size_ty, 0));
-      Value null_ptr = rewriter->create<LLVM::ZeroOp>(loc, ptr_ty);
+      Value zero = LLVM::ConstantOp::create(
+          *rewriter, loc, size_ty, rewriter->getIntegerAttr(size_ty, 0));
+      Value null_ptr = LLVM::ZeroOp::create(*rewriter, loc, ptr_ty);
       return std::make_pair(zero, null_ptr);
     }
 
     // Allocate array to store the elements.
     auto &array_attr = attr.value();
-    Value array_size = rewriter->create<LLVM::ConstantOp>(
-        loc, size_ty, rewriter->getIntegerAttr(size_ty, array_attr.size()));
-    Value array_ptr = rewriter->create<LLVM::AllocaOp>(
-        loc, ptr_ty, element_ty, array_size, /*alignment=*/0);
+    Value array_size = LLVM::ConstantOp::create(
+        *rewriter, loc, size_ty,
+        rewriter->getIntegerAttr(size_ty, array_attr.size()));
+    Value array_ptr = LLVM::AllocaOp::create(*rewriter, loc, ptr_ty, element_ty,
+                                             array_size, /*alignment=*/0);
     for (const auto &e : llvm::enumerate(array_attr)) {
-      Value index = rewriter->create<LLVM::ConstantOp>(
-          loc, size_ty, rewriter->getIntegerAttr(size_ty, e.index()));
-      Value element_ptr = rewriter->create<LLVM::GEPOp>(loc, ptr_ty, element_ty,
-                                                        array_ptr, index);
+      Value index = LLVM::ConstantOp::create(
+          *rewriter, loc, size_ty,
+          rewriter->getIntegerAttr(size_ty, e.index()));
+      Value element_ptr = LLVM::GEPOp::create(*rewriter, loc, ptr_ty,
+                                              element_ty, array_ptr, index);
       Value element = create_element(e.value());
-      rewriter->create<LLVM::StoreOp>(loc, element, element_ptr);
+      LLVM::StoreOp::create(*rewriter, loc, element, element_ptr);
     }
     return std::make_pair(array_size, array_ptr);
   }
@@ -96,14 +99,14 @@ class ConvertToLLVMCallOpPattern : public ConvertOpToLLVMPattern<OpTy> {
       Location loc, Type size_ty, Type element_ty,
       std::optional<ArrayAttr> attr,
       ConversionPatternRewriter *rewriter) const {
-    assert(size_ty.isa<IntegerType>() && "expect integer size type");
-    assert(element_ty.isa<IntegerType>() && "expect integer element type");
+    assert(mlir::isa<IntegerType>(size_ty) && "expect integer size type");
+    assert(mlir::isa<IntegerType>(element_ty) && "expect integer element type");
     return ConvertArrayAttrToStackAllocatedArray(
         loc, size_ty, element_ty, attr, rewriter, [&](Attribute attr) {
-          return rewriter->create<LLVM::ConstantOp>(
-              loc, element_ty,
+          return LLVM::ConstantOp::create(
+              *rewriter, loc, element_ty,
               rewriter->getIntegerAttr(element_ty,
-                                       attr.cast<IntegerAttr>().getInt()));
+                                       mlir::cast<IntegerAttr>(attr).getInt()));
         });
   }
 };
@@ -135,8 +138,8 @@ class TFAllocOpConverter : public ConvertToLLVMCallOpPattern<TFAllocOp> {
 
     // Convert `output_index` or set it to -1 if the attribute is missing.
     Type llvmInt32Type = IntegerType::get(rewriter.getContext(), 32);
-    Value output_index = rewriter.create<LLVM::ConstantOp>(
-        loc, llvmInt32Type,
+    Value output_index = LLVM::ConstantOp::create(
+        rewriter, loc, llvmInt32Type,
         rewriter.getI32IntegerAttr(tf_alloc_op.getOutputIndex().has_value()
                                        ? tf_alloc_op.getOutputIndex().value()
                                        : -1));
@@ -151,12 +154,11 @@ class TFAllocOpConverter : public ConvertToLLVMCallOpPattern<TFAllocOp> {
     FlatSymbolRefAttr tf_func_ref =
         GetOrInsertLLVMFunction(GetFuncName(), GetFuncType(), op, &rewriter);
     Value allocated_byte_ptr =
-        rewriter
-            .create<LLVM::CallOp>(
-                loc, getVoidPtrType(), tf_func_ref,
-                llvm::ArrayRef({adaptor.getCtx(), num_elements, element_size,
-                                output_index, candidates_count_and_ptr.first,
-                                candidates_count_and_ptr.second}))
+        LLVM::CallOp::create(
+            rewriter, loc, getVoidPtrType(), tf_func_ref,
+            llvm::ArrayRef({adaptor.getCtx(), num_elements, element_size,
+                            output_index, candidates_count_and_ptr.first,
+                            candidates_count_and_ptr.second}))
             .getResult();
 
     MemRefDescriptor memRefDescriptor = CreateMemRefDescriptor(
@@ -190,7 +192,7 @@ class TFAllocOpConverter : public ConvertToLLVMCallOpPattern<TFAllocOp> {
                                           MemRefType memref_type,
                                           Value allocated_byte_ptr,
                                           ArrayRef<Value> sizes) const {
-    auto memref_desc = MemRefDescriptor::undef(
+    auto memref_desc = MemRefDescriptor::poison(
         rewriter, loc, typeConverter->convertType(memref_type));
 
     // TF AllocateRaw returns aligned pointer => AllocatedPtr == AlignedPtr.
@@ -212,7 +214,7 @@ class TFAllocOpConverter : public ConvertToLLVMCallOpPattern<TFAllocOp> {
       // Update stride
       if (pos > 0) {
         stride_carried =
-            rewriter.create<LLVM::MulOp>(loc, stride_carried, size);
+            LLVM::MulOp::create(rewriter, loc, stride_carried, size);
       }
     }
     return memref_desc;
@@ -227,7 +229,7 @@ class TFDeallocOpConverter : public ConvertToLLVMCallOpPattern<TFDeallocOp> {
       TFDeallocOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     // TODO(herhut) Support unranked memrefs.
-    if (!op.getMemref().getType().isa<MemRefType>()) return failure();
+    if (!mlir::isa<MemRefType>(op.getMemref().getType())) return failure();
     MemRefDescriptor memref(adaptor.getMemref());
 
     Value allocated_bytes_ptr = memref.allocatedPtr(rewriter, op.getLoc());
@@ -236,7 +238,7 @@ class TFDeallocOpConverter : public ConvertToLLVMCallOpPattern<TFDeallocOp> {
     FlatSymbolRefAttr tf_func_ref =
         GetOrInsertLLVMFunction(GetFuncName(), GetFuncType(), op, &rewriter);
     rewriter.replaceOpWithNewOp<LLVM::CallOp>(
-        op, std::nullopt, tf_func_ref,
+        op, mlir::TypeRange(), tf_func_ref,
         llvm::ArrayRef({adaptor.getCtx(), allocated_bytes_ptr}));
     return success();
   }
@@ -271,22 +273,20 @@ class JITCompileFromStrOpConverter
         ConvertIntegerArrayAttrToStackAllocatedArray(
             loc, rewriter.getI64Type(), rewriter.getI64Type(),
             op.getUnrollFactors(), &rewriter);
-    Value max_supported_rank = rewriter.create<LLVM::ConstantOp>(
-        loc, rewriter.getI64Type(), op.getMaxSupportedRankAttr());
-    Value enable_ftz = rewriter.create<LLVM::ConstantOp>(
-        loc, rewriter.getI1Type(), op.getEnableFtzAttr());
-    Value index_64bit = rewriter.create<LLVM::ConstantOp>(
-        loc, rewriter.getI1Type(), op.getIndex64BitAttr());
-    Value cpu_codegen = rewriter.create<LLVM::ConstantOp>(
-        loc, rewriter.getI1Type(), op.getCpuCodegenAttr());
+    Value enable_ftz = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI1Type(), op.getEnableFtzAttr());
+    Value index_64bit = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI1Type(), op.getIndex64BitAttr());
+    Value cpu_codegen = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI1Type(), op.getCpuCodegenAttr());
     FlatSymbolRefAttr tf_func_ref =
         GetOrInsertLLVMFunction(GetFuncName(), GetFuncType(), op, &rewriter);
     rewriter.replaceOpWithNewOp<LLVM::CallOp>(
         op, getVoidPtrType(), tf_func_ref,
         llvm::ArrayRef({adaptor.getCtx(), jit_module_code, tile_sizes.first,
                         tile_sizes.second, unroll_factors.first,
-                        unroll_factors.second, max_supported_rank, enable_ftz,
-                        index_64bit, cpu_codegen}));
+                        unroll_factors.second, enable_ftz, index_64bit,
+                        cpu_codegen}));
     return success();
   }
 
@@ -304,7 +304,6 @@ class JITCompileFromStrOpConverter
                            /*int64_t* tile_sizes_ptr*/ ptr_ty,
                            /*int64_t num_unroll_factors*/ i64_ty,
                            /*int64_t* unroll_factors_ptr*/ ptr_ty,
-                           /*int64_t max_supported_rank*/ i64_ty,
                            /*bool enable_ftz*/ i1_ty,
                            /*bool index_64bit*/ i1_ty,
                            /*bool cpu_codegen*/ i1_ty});
@@ -329,40 +328,39 @@ class JITExecuteOpConverter : public ConvertToLLVMCallOpPattern<JITExecuteOp> {
         getTypeConverter()->convertType(op->getResultTypes().front());
     Type ptr_ty = LLVM::LLVMPointerType::get(getContext());
     Type i64_ty = rewriter.getI64Type();
-    Value one = rewriter.create<LLVM::ConstantOp>(
-        loc, i64_ty, rewriter.getI64IntegerAttr(1));
+    Value one = LLVM::ConstantOp::create(rewriter, loc, i64_ty,
+                                         rewriter.getI64IntegerAttr(1));
     auto result_ptr =
-        rewriter.create<LLVM::AllocaOp>(loc, ptr_ty, result_ty, one);
+        LLVM::AllocaOp::create(rewriter, loc, ptr_ty, result_ty, one);
 
     // Pass the buffer arguments as a stack-allocated array.
     Type args_elem_ty = adaptor.getInputs().front().getType();
-    Value num_args = rewriter.create<LLVM::ConstantOp>(
-        loc, i64_ty,
+    Value num_args = LLVM::ConstantOp::create(
+        rewriter, loc, i64_ty,
         rewriter.getI64IntegerAttr(
             static_cast<int64_t>(adaptor.getInputs().size())));
     Value args_ptr =
-        rewriter.create<LLVM::AllocaOp>(loc, ptr_ty, args_elem_ty, num_args,
-                                        /*alignment=*/0);
+        LLVM::AllocaOp::create(rewriter, loc, ptr_ty, args_elem_ty, num_args,
+                               /*alignment=*/0);
     for (const auto &it : llvm::enumerate(adaptor.getInputs())) {
-      Value index = rewriter.create<LLVM::ConstantOp>(
-          loc, i64_ty, rewriter.getI64IntegerAttr(it.index()));
-      Value element_ptr = rewriter.create<LLVM::GEPOp>(
-          loc, ptr_ty, args_elem_ty, args_ptr, index);
-      rewriter.create<LLVM::StoreOp>(loc, it.value(), element_ptr);
+      Value index = LLVM::ConstantOp::create(
+          rewriter, loc, i64_ty, rewriter.getI64IntegerAttr(it.index()));
+      Value element_ptr = LLVM::GEPOp::create(rewriter, loc, ptr_ty,
+                                              args_elem_ty, args_ptr, index);
+      LLVM::StoreOp::create(rewriter, loc, it.value(), element_ptr);
     }
 
     // Materialize runtime call.
     FlatSymbolRefAttr tf_func_ref =
         GetOrInsertLLVMFunction(GetFuncName(), GetFuncType(), op, &rewriter);
-    rewriter.create<LLVM::CallOp>(
-        loc, std::nullopt, tf_func_ref,
-        ValueRange{adaptor.getCtx(), adaptor.getCallable(), result_ptr,
-                   num_args, args_ptr});
+    LLVM::CallOp::create(rewriter, loc, mlir::TypeRange(), tf_func_ref,
+                         ValueRange{adaptor.getCtx(), adaptor.getCallable(),
+                                    result_ptr, num_args, args_ptr});
 
     // Copy result (including the descriptor) to a stack-allocated buffer and
     // free the old descriptor.
     llvm::SmallVector<Value, 1> final_result = {
-        rewriter.create<LLVM::LoadOp>(loc, result_ty, result_ptr)};
+        LLVM::LoadOp::create(rewriter, loc, result_ty, result_ptr)};
     if (failed(copyUnrankedDescriptors(rewriter, loc, op->getResultTypes(),
                                        final_result,
                                        /*toDynamic=*/false))) {
@@ -404,11 +402,11 @@ class ReportErrorOpConverter
     // Insert function call.
     FlatSymbolRefAttr tf_func_ref =
         GetOrInsertLLVMFunction(GetFuncName(), GetFuncType(), op, &rewriter);
-    Value error_code = rewriter.create<LLVM::ConstantOp>(
-        loc, typeConverter->convertType(rewriter.getI32Type()),
+    Value error_code = LLVM::ConstantOp::create(
+        rewriter, loc, typeConverter->convertType(rewriter.getI32Type()),
         adaptor.getErrorCodeAttr());
     rewriter.replaceOpWithNewOp<LLVM::CallOp>(
-        op, std::nullopt, tf_func_ref,
+        op, mlir::TypeRange(), tf_func_ref,
         llvm::ArrayRef({adaptor.getCtx(), error_code, message_constant}));
     return success();
   }
@@ -432,7 +430,7 @@ class ReportErrorOpConverter
     std::string err_str;
     llvm::raw_string_ostream err_stream(err_str);
     err_stream << message;
-    if (!loc.isa<UnknownLoc>()) {
+    if (!mlir::isa<UnknownLoc>(loc)) {
       err_stream << " at ";
       loc.print(err_stream);
     }
@@ -468,16 +466,18 @@ class NullMemRefOpConverter : public ConvertOpToLLVMPattern<NullMemRefOp> {
     MLIRContext *ctx = null_memref_op.getContext();
     mlir::Operation *op = null_memref_op.getOperation();
 
-    auto shaped_result_type = null_memref_op.getType().cast<BaseMemRefType>();
-    auto mem_space =
-        shaped_result_type.getMemorySpace().dyn_cast_or_null<IntegerAttr>();
+    auto shaped_result_type =
+        mlir::cast<BaseMemRefType>(null_memref_op.getType());
+    auto mem_space = mlir::dyn_cast_or_null<IntegerAttr>(
+        shaped_result_type.getMemorySpace());
     unsigned address_space =
         static_cast<unsigned>(mem_space ? mem_space.getInt() : 0);
     LLVM::LLVMPointerType llvm_ptr_type =
         LLVM::LLVMPointerType::get(ctx, address_space);
 
     Value zero = createIndexAttrConstant(rewriter, loc, getIndexType(), 0);
-    if (auto result_type = null_memref_op.getType().dyn_cast<MemRefType>()) {
+    if (auto result_type =
+            mlir::dyn_cast<MemRefType>(null_memref_op.getType())) {
       // Set all dynamic sizes to 1 and compute fake strides.
       SmallVector<Value, 4> dyn_sizes(
           result_type.getNumDynamicDims(),
@@ -489,7 +489,7 @@ class NullMemRefOpConverter : public ConvertOpToLLVMPattern<NullMemRefOp> {
 
       // Prepare packed args [allocatedPtr, alignedPtr, offset, sizes, strides]
       // to create a memref descriptor.
-      Value null = rewriter.create<LLVM::ZeroOp>(loc, llvm_ptr_type);
+      Value null = LLVM::ZeroOp::create(rewriter, loc, llvm_ptr_type);
       SmallVector<Value, 12> packed_values{null, null, zero};
       packed_values.append(sizes);
       packed_values.append(strides);
@@ -500,31 +500,30 @@ class NullMemRefOpConverter : public ConvertOpToLLVMPattern<NullMemRefOp> {
       return success();
     }
 
-    auto result_type = null_memref_op.getType().cast<UnrankedMemRefType>();
+    auto result_type = mlir::cast<UnrankedMemRefType>(null_memref_op.getType());
     Type llvm_result_type = type_converter.convertType(result_type);
 
     auto desc =
-        UnrankedMemRefDescriptor::undef(rewriter, loc, llvm_result_type);
+        UnrankedMemRefDescriptor::poison(rewriter, loc, llvm_result_type);
     desc.setRank(rewriter, loc, zero);
 
     // Extract address space and element type.
     auto targetType =
-        null_memref_op.getResult().getType().cast<UnrankedMemRefType>();
+        mlir::cast<UnrankedMemRefType>(null_memref_op.getResult().getType());
     unsigned addressSpace =
         *getTypeConverter()->getMemRefAddressSpace(targetType);
 
     // Due to the current way of handling unranked memref results escaping, we
     // have to actually construct a ranked underlying descriptor instead of just
     // setting its pointer to NULL.
-    SmallVector<Value, 4> sizes;
-    UnrankedMemRefDescriptor::computeSizes(rewriter, loc, *getTypeConverter(),
-                                           desc, addressSpace, sizes);
-    Value underlying_desc_ptr = rewriter.create<LLVM::AllocaOp>(
-        loc, getVoidPtrType(), IntegerType::get(getContext(), 8),
-        sizes.front());
+    Value alloca_size = UnrankedMemRefDescriptor::computeSize(
+        rewriter, loc, *getTypeConverter(), desc, addressSpace);
+    Value underlying_desc_ptr =
+        LLVM::AllocaOp::create(rewriter, loc, getVoidPtrType(),
+                               IntegerType::get(getContext(), 8), alloca_size);
 
     // Populate underlying ranked descriptor.
-    Value null = rewriter.create<LLVM::ZeroOp>(loc, llvm_ptr_type);
+    Value null = LLVM::ZeroOp::create(rewriter, loc, llvm_ptr_type);
     UnrankedMemRefDescriptor::setAllocatedPtr(
         rewriter, loc, underlying_desc_ptr, llvm_ptr_type, null);
     UnrankedMemRefDescriptor::setAlignedPtr(rewriter, loc, *getTypeConverter(),
@@ -552,22 +551,24 @@ class IsValidMemRefOpConverter
     MemRefDescriptor desc(adaptor.getArg());
 
     // Compare every size in the descriptor to 0 to check num_elements == 0.
-    int64_t rank = op.getArg().getType().cast<MemRefType>().getRank();
-    Value is_empty_shape = rewriter.create<LLVM::ConstantOp>(
-        loc, rewriter.getI1Type(), rewriter.getBoolAttr(false));
+    int64_t rank = mlir::cast<MemRefType>(op.getArg().getType()).getRank();
+    Value is_empty_shape = LLVM::ConstantOp::create(
+        rewriter, loc, rewriter.getI1Type(), rewriter.getBoolAttr(false));
     Value zero = createIndexAttrConstant(rewriter, loc, getIndexType(), 0);
     for (int i = 0; i < rank; ++i) {
       Value size = desc.size(rewriter, loc, i);
-      Value is_zero_size = rewriter.create<LLVM::ICmpOp>(
-          loc, rewriter.getI1Type(), LLVM::ICmpPredicate::eq, size, zero);
+      Value is_zero_size =
+          LLVM::ICmpOp::create(rewriter, loc, rewriter.getI1Type(),
+                               LLVM::ICmpPredicate::eq, size, zero);
       is_empty_shape =
-          rewriter.create<LLVM::OrOp>(loc, is_empty_shape, is_zero_size);
+          LLVM::OrOp::create(rewriter, loc, is_empty_shape, is_zero_size);
     }
 
     Value ptr = desc.allocatedPtr(rewriter, loc);
-    Value null = rewriter.create<LLVM::ZeroOp>(loc, getVoidPtrType());
-    Value is_not_nullptr = rewriter.create<LLVM::ICmpOp>(
-        loc, rewriter.getI1Type(), LLVM::ICmpPredicate::ne, ptr, null);
+    Value null = LLVM::ZeroOp::create(rewriter, loc, getVoidPtrType());
+    Value is_not_nullptr =
+        LLVM::ICmpOp::create(rewriter, loc, rewriter.getI1Type(),
+                             LLVM::ICmpPredicate::ne, ptr, null);
 
     // Valid memref = ptr != NULL || num_elements == 0;
     rewriter.replaceOpWithNewOp<LLVM::OrOp>(op, is_not_nullptr, is_empty_shape);

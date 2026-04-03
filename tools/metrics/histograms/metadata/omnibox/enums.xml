@@ -33,11 +33,72 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="Directions"/>
   <int value="3" label="Website"/>
   <int value="4" label="Reviews"/>
+  <int value="5" label="Aim"/>
+  <int value="6" label="Lens"/>
+  <int value="7" label="TabSwitch"/>
 </enum>
+
+<!-- LINT.IfChange(AimEligibilityRequestStatus) -->
+
+<enum name="AimEligibilityRequestStatus">
+  <summary>
+    The status of a HTTP GET request sent to a backend to fetch AIM eligibility.
+  </summary>
+  <int value="0" label="kSent"/>
+  <int value="1" label="kErrorResponse"/>
+  <int value="2" label="kFailedToParse"/>
+  <int value="3" label="kSuccess"/>
+  <int value="4" label="kSuccessBrowserCache"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/omnibox/browser/aim_eligibility_service.h:EligibilityRequestStatus) -->
+
+<!-- LINT.IfChange(AimEligibilityResponseSource) -->
+
+<enum name="AimEligibilityResponseSource">
+  <summary>The source of the response for AIM eligibility.</summary>
+  <int value="0" label="kDefault"/>
+  <int value="1" label="kPrefs"/>
+  <int value="2" label="kServer"/>
+  <int value="3" label="kBrowserCache"/>
+  <int value="4" label="kUser"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/omnibox/browser/aim_eligibility_service.h:EligibilityResponseSource) -->
+
+<!-- LINT.IfChange(AiModeActivationSource) -->
+
+<enum name="AiModeActivationSource">
+  <summary>The source of the response for AIM eligibility.</summary>
+  <int value="0" label="Tool Menu"/>
+  <int value="1" label="Dedicated Button"/>
+  <int value="2" label="NTP Button"/>
+  <int value="3" label="Implicit"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:AiModeActivationSource,//ios/chrome/browser/composebox/ui/composebox_metrics_recorder.h:AiModeActivationSource) -->
+
+<!-- LINT.IfChange(AutocompleteRequestType) -->
+
+<enum name="AutocompleteRequestType">
+  <int value="0" label="Search"/>
+  <int value="1" label="Search prefetch"/>
+  <int value="2" label="AI Mode"/>
+  <int value="3" label="Image Generation"/>
+  <int value="4" label="Canvas"/>
+  <int value="5" label="Deep Search"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/omnibox/browser/android/java/src/org/chromium/components/omnibox/AutocompleteRequestType.java,//ios/chrome/browser/composebox/ui/composebox_metrics_recorder.h:AutocompleteRequestType)-->
 
 <enum name="BooleanNavigated">
   <int value="0" label="Navigation did not occur"/>
   <int value="1" label="Navigation occurred"/>
+</enum>
+
+<enum name="BooleanNonNull">
+  <int value="0" label="Null"/>
+  <int value="1" label="Non-null"/>
 </enum>
 
 <enum name="BooleanOffered">
@@ -50,21 +111,43 @@ chromium-metrics-reviews@google.com.
   <int value="1" label="Off the record"/>
 </enum>
 
-<enum name="ClientSummarizedResultType">
-  <int value="0" label="URL"/>
-  <int value="1" label="Search"/>
-  <int value="2" label="App"/>
-  <int value="3" label="Contact"/>
-  <int value="4" label="OnDevice"/>
-  <int value="5" label="Unknown"/>
+<!-- LINT.IfChange(ComposeboxDragAndDropType) -->
+
+<enum name="ComposeboxDragAndDropType">
+  <int value="0" label="Text"/>
+  <int value="1" label="Image"/>
+  <int value="2" label="Tab"/>
+  <int value="3" label="PDF"/>
+  <int value="4" label="Unknown"/>
 </enum>
+
+<!-- LINT.ThenChange(ios/chrome/browser/composebox/ui/composebox_metrics_recorder.h:ComposeboxDragAndDropType, //tools/metrics/histograms/metadata/omnibox/histograms.xml:ComposeboxDragAndDropType) -->
+
+<!-- LINT.IfChange(ContextType) -->
+
+<enum name="ContextType">
+  <int value="0" label="Tab"/>
+  <int value="1" label="File"/>
+  <int value="2" label="Image"/>
+  <int value="3" label="ImageGen"/>
+  <int value="4" label="DeepResearch"/>
+  <int value="5" label="Canvas"/>
+  <int value="6" label="AutoModel"/>
+  <int value="7" label="ThinkingModel"/>
+  <int value="8" label="RegularModel"/>
+  <int value="9" label="ProNoGenUiModel"/>
+  <int value="10" label="Unknown"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/omnibox/omnibox_context_menu_controller.h:ContextType) -->
 
 <enum name="DocumentProviderAllowedReason">
   <int value="0" label="Allowed"/>
   <int value="1" label="Unknown"/>
   <int value="2" label="Not allowed because feature disabled"/>
   <int value="3" label="Not allowed because the suggest setting is disabled"/>
-  <int value="4" label="Not allowed because the Drive setting is disabled"/>
+  <int value="4"
+      label="Not allowed because the Drive setting is disabled (obsolete)"/>
   <int value="5" label="Not allowed because the profile is off the record"/>
   <int value="6" label="Not allowed because the user is not logged in"/>
   <int value="7" label="Not allowed because the user is not Syncing"/>
@@ -73,6 +156,8 @@ chromium-metrics-reviews@google.com.
   <int value="10" label="Not allowed because the input is a focus or is empty"/>
   <int value="11" label="Not allowed because the input length is too short"/>
   <int value="12" label="Not allowed because the input looks like a URL"/>
+  <int value="13"
+      label="Not allowed because the user is not enterprise eligible"/>
 </enum>
 
 <enum name="DocumentSuggestRequestEvent">
@@ -85,6 +170,37 @@ chromium-metrics-reviews@google.com.
     Response was received asynchronously.
   </int>
 </enum>
+
+<enum name="DuplicateNavigationServingResult">
+  <int value="0" label="Not served then not served"/>
+  <int value="1" label="Not served then served"/>
+  <int value="2" label="Served then not served"/>
+  <int value="3" label="Served then served"/>
+</enum>
+
+<!-- LINT.IfChange(FocusResultedInNavigationTypes) -->
+
+<enum name="FocusResultedInNavigationTypes">
+  <int value="0" label="No navigation, no attachments"/>
+  <int value="1" label="Navigation, no attachments"/>
+  <int value="2" label="No navigation, with attachments"/>
+  <int value="3" label="Navigation, with attachments"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/OmniboxMetrics.java:FocusResultedInNavigationTypes,//ios/chrome/browser/composebox/ui/composebox_metrics_recorder.h:FocusResultedInNavigationType) -->
+
+<!-- LINT.IfChange(FuseboxAttachmentButtonType) -->
+
+<enum name="FuseboxAttachmentButtonType">
+  <int value="0" label="Current Tab"/>
+  <int value="1" label="Tab Picker"/>
+  <int value="2" label="Camera"/>
+  <int value="3" label="Gallery"/>
+  <int value="4" label="Files"/>
+  <int value="5" label="Clipboard"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/fusebox/FuseboxMetrics.java:FuseboxAttachmentButtonType,//ios/chrome/browser/composebox/ui/composebox_metrics_recorder.h:FuseboxAttachmentButtonType) -->
 
 <enum name="GroupId">
   <summary>
@@ -110,14 +226,20 @@ chromium-metrics-reviews@google.com.
   <int value="4" label="SearchTerms"/>
 </enum>
 
+<!-- LINT.IfChange(OmniboxBuiltinEngineType) -->
+
 <enum name="OmniboxBuiltinEngineType">
   <int value="0" label="Non built-in engine"/>
   <int value="1" label="Prepopulated Engine"/>
   <int value="2" label="@bookmarks starter pack engine"/>
   <int value="3" label="@history starter pack engine"/>
   <int value="4" label="@tabs starter pack engine"/>
-  <int value="5" label="@google starter pack engine"/>
+  <int value="5" label="@gemini starter pack engine"/>
+  <int value="6" label="@page starter pack engine"/>
+  <int value="7" label="@aimode starter pack engine"/>
 </enum>
+
+<!-- LINT.ThenChange(//components/search_engines/search_engine_type.h:BuiltinEngineType) -->
 
 <enum name="OmniboxEnteredKeywordMode2">
   <int value="0" label="invalid"/>
@@ -129,6 +251,7 @@ chromium-metrics-reviews@google.com.
   <int value="6" label="mouse click on hint view"/>
   <int value="7" label="tap gesture on hint view"/>
   <int value="8" label="select suggestion"/>
+  <int value="9" label="toolbelt"/>
 </enum>
 
 <enum name="OmniboxEscapeAction">
@@ -140,12 +263,6 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="Cleared user input"/>
   <int value="4" label="Closed popup and cleared user input"/>
   <int value="5" label="Blurred"/>
-</enum>
-
-<enum name="OmniboxFocusType">
-  <int value="0" label="INTERACTION_DEFAULT"/>
-  <int value="1" label="INTERACTION_FOCUS"/>
-  <int value="2" label="INTERACTION_CLOBBER"/>
 </enum>
 
 <enum name="OmniboxInputType">
@@ -165,6 +282,107 @@ chromium-metrics-reviews@google.com.
   <int value="4" label="Shortcut text prefix"/>
 </enum>
 
+<enum name="OmniboxWebUIRendererProcessGoneStatus">
+  <int value="0" label="Normal termination"/>
+  <int value="1" label="Abnormal termination"/>
+  <int value="2" label="Process was killed"/>
+  <int value="3" label="Process crashed"/>
+  <int value="4" label="Still running"/>
+  <int value="5" label="Process was killed by OOM"/>
+  <int value="6" label="OOM protected"/>
+  <int value="7" label="Launch failed"/>
+  <int value="8" label="OOM"/>
+  <int value="9" label="Integrity failure"/>
+  <int value="10" label="Evicted for memory"/>
+</enum>
+
+<!-- LINT.IfChange(OpenMatchWithKeyboardModifiers) -->
+
+<enum name="OpenMatchWithKeyboardModifiers">
+  <int value="0" label="No modifier"/>
+  <int value="1" label="Ctrl"/>
+  <int value="2" label="Alt"/>
+  <int value="3" label="Ctrl+Alt"/>
+  <int value="4" label="Shift+Command"/>
+  <int value="5" label="Ctrl+Shift+Command"/>
+  <int value="6" label="Alt+Shift"/>
+  <int value="7" label="Ctrl+Alt+Shift"/>
+  <int value="8" label="Command"/>
+  <int value="9" label="Ctrl+Command"/>
+  <int value="10" label="Shift"/>
+  <int value="11" label="Ctrl+Shift"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ui/views/omnibox/omnibox_view_views.cc:OpenMatchWithKeyboardModifiers) -->
+
+<!-- LINT.IfChange(PaywallSignal) -->
+
+<enum name="PaywallSignal">
+  <summary>
+    Indicates the paywall signal for a given page, if available.
+  </summary>
+  <int value="0" label="Unknown"/>
+  <int value="1" label="Signal present"/>
+  <int value="2" label="Signal not present"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/omnibox/browser/lens_suggest_inputs_utils.h:PaywallSignal) -->
+
+<!-- LINT.IfChange(ReconciliationType) -->
+
+<enum name="ReconciliationType">
+  <int value="0" label="No Reconciliation"/>
+  <int value="1" label="By prepopulate_id">Deprecated umbrella bucket</int>
+  <int value="2" label="By keyword"/>
+  <int value="3" label="By domain based keyword">
+    Deprecated umbrella bucket
+  </int>
+  <int value="4" label="By keyword (seznam migration)"/>
+  <int value="5" label="By keyword (yahoo migration)"/>
+  <int value="6" label="By prepopulate_id (global)"/>
+  <int value="7" label="By prepopulate_id (regional)"/>
+  <int value="8" label="By prepopulate_id (no match)">
+    Recorded when we attempt reconciliation by prepopulate_id but none of the
+    global nor regional buckets returned a match. The data provided will be set
+    without mixing in any prepopulated engine's data
+  </int>
+</enum>
+
+<!-- LINT.ThenChange(//components/search_engines/reconciling_template_url_data_holder.h:ReconciliationType) -->
+
+<enum name="RegulatoryExtensionVariant">
+  <int value="0" label="Default extension"/>
+  <int value="1" label="Android EEA"/>
+</enum>
+
+<!-- LINT.IfChange(RemoteRequestType) -->
+
+<enum name="RemoteRequestType">
+  <int value="0" label="search suggestion"/>
+  <int value="1" label="search suggestion warm-up"/>
+  <int value="2" label="search suggestion for images"/>
+  <int value="3" label="zero-prefix suggestion"/>
+  <int value="4" label="zero-prefix suggestion prefetching"/>
+  <int value="5" label="document suggestion"/>
+  <int value="6" label="suggestion deletion"/>
+  <int value="7" label="enterprise search aggregator suggestion"/>
+</enum>
+
+<!-- LINT.ThenChange(//components/omnibox/browser/remote_suggestions_service.h:RemoteRequestType) -->
+
+<!-- LINT.IfChange(SearchPrefetchCacheAliasFallbackReasonEnum) -->
+
+<enum name="SearchPrefetchCacheAliasFallbackReason">
+  <int value="0" label="kNoFallback"/>
+  <int value="1" label="kNoResponseHeaders"/>
+  <int value="2" label="kNon2xxResponse"/>
+  <int value="3" label="kRedirectResponse"/>
+  <int value="4" label="kErrorOnComplete"/>
+  <int value="5" label="kMojoDisconnect"/>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/preloading/prefetch/search_prefetch/cache_alias_search_prefetch_url_loader.h:FallbackReason) -->
+
 <enum name="SearchPrefetchEligibilityReason">
   <int value="0" label="Prefetch started"/>
   <int value="1" label="User disabled prefetch/preconnect"/>
@@ -175,6 +393,7 @@ chromium-metrics-reviews@google.com.
   <int value="6" label="Duplicate prefetch request"/>
   <int value="7" label="Too many recent prefetches"/>
   <int value="8" label="Throttle prevented the prefetch"/>
+  <int value="9" label="SlowNetwork suppressed the prefetch"/>
 </enum>
 
 <enum name="SearchPrefetchResponseDataReaderStatus">
@@ -192,30 +411,31 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="Navigation URL was not a default search URL"/>
   <int value="4" label="No prefetch issued for the search terms"/>
   <int value="5" label="Prefetch was for a different origin"/>
-  <int value="6" label="Prefetch request was cancelled"/>
+  <int value="6" label="Prefetch request was cancelled (Obsolete)"/>
   <int value="7" label="Prefetch request failed"/>
   <int value="8" label="Another reason (unexpected)"/>
   <int value="9" label="POST, reload, form, link, or other non-cache loads."/>
   <int value="10"
-      label="A prerender navigation request has taken this response away."/>
+      label="A prerender navigation request has taken this response away
+             (Obsolete)."/>
 </enum>
 
 <enum name="SearchPrefetchStatus">
   <int value="0" label="Not started"/>
-  <int value="1" label="In flight"/>
+  <int value="1" label="In flight (Obsolete)"/>
   <int value="2" label="Headers received (for streaming responses)"/>
   <int value="3"
       label="Headers received and user navigated to search terms (for
-             streaming responses)"/>
+             streaming responses) (Obsolete)"/>
   <int value="4" label="Completed the prefetch"/>
   <int value="5" label="Request failed"/>
-  <int value="6" label="Request cancelled"/>
+  <int value="6" label="Request cancelled (Obsolete)"/>
   <int value="7" label="Prefetch request served for real navigation"/>
-  <int value="8" label="Was served to prerender navigation stack"/>
+  <int value="8" label="Was served to prerender navigation stack (Obsolete)"/>
   <int value="9"
       label="Serving to prerender navigation stack and user navigated to
-             search terms"/>
-  <int value="10" label="Upgraded to prerender and succeeded"/>
+             search terms (Obsolete)"/>
+  <int value="10" label="Upgraded to prerender and succeeded (Obsolete)"/>
 </enum>
 
 <enum name="SearchPreloadForwardingResult">
@@ -224,6 +444,32 @@ chromium-metrics-reviews@google.com.
   <int value="2" label="kFailed"/>
   <int value="3" label="kCompleted"/>
 </enum>
+
+<!-- LINT.IfChange(SearchPreloadSignalResult) -->
+
+<enum name="SearchPreloadSignalResult">
+  <int value="0" label="kNotTriggeredMisc">kNotTriggeredMisc</int>
+  <int value="1" label="kPrefetchTriggered">kPrefetchTriggered</int>
+  <int value="2" label="kPrerenderTriggered">kPrerenderTriggered</int>
+  <int value="3" label="kNotTriggeredAlreadyTriggered">
+    kNotTriggeredAlreadyTriggered
+  </int>
+  <int value="4" label="kNotTriggeredPrefetchNotAlive">
+    kNotTriggeredPrefetchNotAlive
+  </int>
+  <int value="5" label="kNotTriggeredLimitExceeded">
+    kNotTriggeredLimitExceeded
+  </int>
+  <int value="6" label="kNotTriggeredIncognito">kNotTriggeredIncognito</int>
+  <int value="7" label="kNotTriggeredOnPressNotSearchType">
+    kNotTriggeredOnPressNotSearchType
+  </int>
+  <int value="8" label="kNotTriggeredOnPressNoSearchProviderOptIn">
+    kNotTriggeredOnPressNoSearchProviderOptIn
+  </int>
+</enum>
+
+<!-- LINT.ThenChange(//chrome/browser/preloading/search_preload/search_preload_signal_result.h) -->
 
 <enum name="SearchSuggestRequestEvent">
   <int value="1" label="requests sent">Request was sent.</int>
@@ -270,16 +516,6 @@ chromium-metrics-reviews@google.com.
   <int value="10" label="Currency"/>
   <int value="11" label="Local time"/>
   <int value="12" label="Play install"/>
-</enum>
-
-<enum name="SuggestionGroupId">
-  <summary>
-    Suggestion group IDs toggled visible or hidden in the omnibox result list.
-    Based on the SuggestionGroupIds enum in suggestion_config.proto, contains
-    values currently known to Chrome.
-  </summary>
-  <int value="40001" label="Onboarding"/>
-  <int value="40009" label="Proactive zero-suggest"/>
 </enum>
 
 <enum name="SuggestionPedalType">
@@ -329,16 +565,6 @@ chromium-metrics-reviews@google.com.
   <int value="40" label="Set Chrome as default browser"/>
 </enum>
 
-<enum name="SuggestRequestType">
-  <int value="0" label="search suggestion"/>
-  <int value="1" label="search suggestion warm-up"/>
-  <int value="2" label="search suggestion for images"/>
-  <int value="3" label="zero-prefix suggestion"/>
-  <int value="4" label="zero-prefix suggestion prefetching"/>
-  <int value="5" label="document suggestion"/>
-  <int value="6" label="suggestion deletion"/>
-</enum>
-
 <enum name="ZeroSuggestEligibility">
   <int value="0" label="Eligible for current context and external conditions">
     Zero-prefix suggestions are eligible.
@@ -356,24 +582,6 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="Generally ineligible in current context">
     Zero-prefix suggestions are not eligible in the given context. E.g., due to
     the page classification, focus type, input type, or an invalid page URL.
-  </int>
-</enum>
-
-<enum name="ZeroSuggestEligibleOnFocus">
-  <obsolete>
-    Obsolete as of M106.
-  </obsolete>
-  <int value="0" label="Eligible">
-    URL can be currently sent to the suggest server.
-  </int>
-  <int value="1"
-      label="Generally eligible in current context but particular URL
-             ineligible">
-    URL cannot be sent to the suggest server but another URL would be eligible
-    at this time.
-  </int>
-  <int value="2" label="Generally ineligible in current context">
-    No URL can be sent to the suggest server at this time.
   </int>
 </enum>
 

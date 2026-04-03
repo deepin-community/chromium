@@ -46,6 +46,10 @@ struct EncryptionInfo {
   // in the archive.
   bool is_encrypted = false;
 
+  // True if the metadata of the top-level archive is encrypted or at
+  // least one the files contained in the top-level archive are encrypted.
+  bool is_top_level_encrypted = false;
+
   enum PasswordStatus {
     kUnknown = 0,
     kKnownIncorrect = 1,
@@ -75,7 +79,8 @@ struct ArchiveAnalyzerResults {
   int directory_count = 0;
   ArchiveAnalysisResult analysis_result = ArchiveAnalysisResult::kUnspecified;
 
-  // TODO(crbug/1466284): Populate this information for RAR archives as well.
+  // TODO(crbug.com/40923880): Populate this information for RAR archives as
+  // well.
   EncryptionInfo encryption_info;
 
   ArchiveAnalyzerResults();
@@ -85,7 +90,7 @@ struct ArchiveAnalyzerResults {
 
 // Updates `results` with the results of inspecting `file`, given that it will
 // be extracted to `path`. Due to complications with the utility process sandbox
-// (see https://crbug.com/944633), the file inspection is limited to the first
+// (see https://crbug.com/41448365), the file inspection is limited to the first
 // `file_length` bytes of `file`.
 void UpdateArchiveAnalyzerResultsWithFile(base::FilePath path,
                                           base::File* file,
@@ -93,6 +98,7 @@ void UpdateArchiveAnalyzerResultsWithFile(base::FilePath path,
                                           bool is_encrypted,
                                           bool is_directory,
                                           bool contents_valid,
+                                          bool is_top_level,
                                           ArchiveAnalyzerResults* results);
 
 // Returns the `DownloadFileType_InspectionType` of the file path.

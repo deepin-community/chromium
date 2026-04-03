@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
@@ -157,11 +158,9 @@ ErrorTolerantBleAdvertisementImpl::CreateServiceUuids() const {
 
 device::BluetoothAdvertisement::ServiceData
 ErrorTolerantBleAdvertisementImpl::CreateServiceData() const {
-  DCHECK(!advertisement_data_->data.empty());
-
-  std::vector<uint8_t> data_as_vector(advertisement_data_->data.size());
-  memcpy(data_as_vector.data(), advertisement_data_->data.data(),
-         advertisement_data_->data.size());
+  const std::string& data = advertisement_data_->data;
+  DCHECK(!data.empty());
+  std::vector<uint8_t> data_as_vector(data.begin(), data.end());
 
   // Add a flag at the end of the service data to signify that the inverted
   // connection flow should be used.

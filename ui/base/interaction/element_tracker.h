@@ -5,6 +5,7 @@
 #ifndef UI_BASE_INTERACTION_ELEMENT_TRACKER_H_
 #define UI_BASE_INTERACTION_ELEMENT_TRACKER_H_
 
+#include <concepts>
 #include <list>
 #include <map>
 #include <memory>
@@ -19,6 +20,7 @@
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/framework_specific_implementation.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace ui {
 
@@ -43,7 +45,7 @@ using CustomElementEventType = ElementIdentifier;
 // You should derive a class for each UI framework whose elements you wish to
 // track. See README.md for information on how to create your own framework
 // implementations.
-class COMPONENT_EXPORT(UI_BASE) TrackedElement
+class COMPONENT_EXPORT(UI_BASE_INTERACTION) TrackedElement
     : public FrameworkSpecificImplementation {
  public:
   ~TrackedElement() override;
@@ -61,6 +63,10 @@ class COMPONENT_EXPORT(UI_BASE) TrackedElement
   // implementations that need to do additional tracking can implement their own
   // methods.
   virtual gfx::Rect GetScreenBounds() const;
+
+  // Returns the native view associated with this element, if any. This view is
+  // used as the parent window for anchoring secondary UIs.
+  virtual gfx::NativeView GetNativeView() const;
 
   // FrameworkSpecificImplementation:
   std::string ToString() const override;
@@ -86,7 +92,7 @@ class COMPONENT_EXPORT(UI_BASE) TrackedElement
 // An element must be visible before events can be sent for that element;
 // NotifyElementHidden() must be called before the element is destroyed or
 // changes context or identifier.
-class COMPONENT_EXPORT(UI_BASE) ElementTrackerFrameworkDelegate {
+class COMPONENT_EXPORT(UI_BASE_INTERACTION) ElementTrackerFrameworkDelegate {
  public:
   virtual void NotifyElementShown(TrackedElement* element) = 0;
   virtual void NotifyElementActivated(TrackedElement* element) = 0;
@@ -99,7 +105,7 @@ class COMPONENT_EXPORT(UI_BASE) ElementTrackerFrameworkDelegate {
 // eventually become hidden. Tracks only visible elements.
 //
 // NOT THREAD SAFE. Should only be accessed from the main UI thread.
-class COMPONENT_EXPORT(UI_BASE) ElementTracker
+class COMPONENT_EXPORT(UI_BASE_INTERACTION) ElementTracker
     : ElementTrackerFrameworkDelegate {
  public:
   // Callback that subscribers receive when the specified event occurs.
@@ -208,9 +214,23 @@ class COMPONENT_EXPORT(UI_BASE) ElementTracker
                                       Callback callback);
 
   // Adds a callback that will be called whenever an event of `event_type` is
-  // generated within any context.
+  // generated within any context by any element.
   Subscription AddCustomEventInAnyContextCallback(
       CustomElementEventType event_type,
+      Callback callback);
+
+  // Adds a callback that will be called whenever an event of `event_type` is
+  // generated within `context` by an element with identifier `id`.
+  Subscription AddCustomEventCallback(CustomElementEventType event_type,
+                                      ElementIdentifier id,
+                                      ElementContext context,
+                                      Callback callback);
+
+  // Adds a callback that will be called whenever an event of `event_type` is
+  // generated within any context by an element with identifier `id`.
+  Subscription AddCustomEventInAnyContextCallback(
+      CustomElementEventType event_type,
+      ElementIdentifier id,
       Callback callback);
 
   // Returns all known contexts.
@@ -256,7 +276,7 @@ class COMPONENT_EXPORT(UI_BASE) ElementTracker
   // notifications for; this allows us to zero out the reference in realtime if
   // the element is deleted. We use a list because the individual elements need
   // to be memory-stable.
-  std::list<TrackedElement*> notification_elements_;
+  std::list<raw_ptr<TrackedElement, CtnExperimental>> notification_elements_;
   std::map<LookupKey, ElementData> element_data_;
   base::RepeatingCallbackList<void(TrackedElement*)>
       any_element_shown_callbacks_;
@@ -265,12 +285,13 @@ class COMPONENT_EXPORT(UI_BASE) ElementTracker
 
 // Holds an TrackedElement reference and nulls it out if the element goes
 // away. In other words, acts as a weak reference for TrackedElements.
-class COMPONENT_EXPORT(UI_BASE) SafeElementReference {
+class COMPONENT_EXPORT(UI_BASE_INTERACTION) SafeElementReference {
  public:
   SafeElementReference();
   explicit SafeElementReference(TrackedElement* element);
   SafeElementReference(SafeElementReference&& other);
   SafeElementReference(const SafeElementReference& other);
+  SafeElementReference& operator=(TrackedElement* element);
   SafeElementReference& operator=(SafeElementReference&& other);
   SafeElementReference& operator=(const SafeElementReference& other);
   ~SafeElementReference();
@@ -281,14 +302,15 @@ class COMPONENT_EXPORT(UI_BASE) SafeElementReference {
   bool operator==(const SafeElementReference& other) const {
     return element_ == other.element_;
   }
-  bool operator!=(const SafeElementReference& other) const {
-    return element_ != other.element_;
-  }
   bool operator==(const TrackedElement* other) const {
     return element_ == other;
   }
-  bool operator!=(const TrackedElement* other) const {
-    return element_ != other;
+
+  // Gets the held element as type T if present, null if not present or not a T.
+  template <typename T>
+    requires std::derived_from<T, TrackedElement>
+  T* get_as() const {
+    return element_ ? element_->AsA<T>() : nullptr;
   }
 
  private:
@@ -305,12 +327,21 @@ class COMPONENT_EXPORT(UI_BASE) SafeElementReference {
 // your public header file and the DEFINE in corresponding .cc file. For local
 // values to be used in tests, use DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE()
 // defined below instead.
+//
+// Note: if you need to use the identifier outside the current component, use
+// DECLARE/DEFINE_EXPORTED_... below.
 #define DECLARE_CUSTOM_ELEMENT_EVENT_TYPE(EventName) \
   DECLARE_ELEMENT_IDENTIFIER_VALUE(EventName)
-#define DECLARE_EXPORTED_CUSTOM_ELEMENT_EVENT_TYPE(ExportName, EventName) \
-  DECLARE_EXPORTED_ELEMENT_IDENTIFIER_VALUE(ExportName, EventName)
 #define DEFINE_CUSTOM_ELEMENT_EVENT_TYPE(EventName) \
   DEFINE_ELEMENT_IDENTIFIER_VALUE(EventName)
+
+// Macros for declaring custom element event types that can be accessed in other
+// components. Put the DECLARE call in your public header file and the DEFINE
+// call in the corresponding .cc file.
+#define DECLARE_EXPORTED_CUSTOM_ELEMENT_EVENT_TYPE(ExportName, EventName) \
+  DECLARE_EXPORTED_ELEMENT_IDENTIFIER_VALUE(ExportName, EventName)
+#define DEFINE_EXPORTED_CUSTOM_ELEMENT_EVENT_TYPE(EventName) \
+  DEFINE_EXPORTED_ELEMENT_IDENTIFIER_VALUE(EventName)
 
 // Macros for declaring custom class element event type. Put the DECLARE call in
 // your .h file in your class declaration, and the DEFINE in the corresponding

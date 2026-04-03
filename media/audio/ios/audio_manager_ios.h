@@ -13,7 +13,6 @@
 #include <string>
 
 #include "base/compiler_specific.h"
-#include "base/memory/weak_ptr.h"
 #include "media/audio/apple/audio_auhal.h"
 #include "media/audio/apple/audio_manager_apple.h"
 #include "media/audio/audio_manager_base.h"
@@ -24,7 +23,6 @@ namespace media {
 // iOS implementation of the AudioManager singleton. This class is internal
 // to the audio output and only internal users can call methods not exposed by
 // the AudioManager class.
-// TODO(crbug.com/1413450): Fill this implementation out.
 class MEDIA_EXPORT AudioManagerIOS : public AudioManagerApple {
  public:
   AudioManagerIOS(std::unique_ptr<AudioThread> audio_thread,
@@ -44,7 +42,7 @@ class MEDIA_EXPORT AudioManagerIOS : public AudioManagerApple {
       const std::string& input_device_id) override;
   std::string GetAssociatedOutputDeviceID(
       const std::string& input_device_id) override;
-  const char* GetName() override;
+  const std::string_view GetName() override;
 
   // Implementation of AudioManagerBase.
   AudioOutputStream* MakeLinearOutputStream(

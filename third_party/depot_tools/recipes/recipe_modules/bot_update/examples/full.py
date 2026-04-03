@@ -3,8 +3,8 @@
 # found in the LICENSE file.
 
 from recipe_engine import post_process
+from recipe_engine import recipe_api
 
-PYTHON_VERSION_COMPATIBILITY = 'PY3'
 
 DEPS = [
   'bot_update',
@@ -24,11 +24,12 @@ from recipe_engine import engine_types
 from RECIPE_MODULES.depot_tools import gclient
 from PB.go.chromium.org.luci.buildbucket.proto.build import Build
 
+
 def RunSteps(api):
   api.gclient.use_mirror = True
   commit = api.buildbucket.build.input.gitiles_commit
 
-  src_cfg = api.gclient.make_config(CACHE_DIR=api.path['cache'].join('git'))
+  src_cfg = api.gclient.make_config(CACHE_DIR=api.path.cache_dir / 'git')
   soln = src_cfg.solutions.add()
   soln.name = 'src'
   soln.url = 'https://chromium.googlesource.com/chromium/src.git'
@@ -67,10 +68,6 @@ def RunSteps(api):
   add_blamelists = api.properties.get('add_blamelists', False)
   set_output_commit = api.properties.get('set_output_commit', True)
 
-  step_test_data = None
-  bot_update_output = engine_types.thaw(api.properties.get('bot_update_output'))
-  if bot_update_output:
-    step_test_data = lambda: api.json.test_api.output(bot_update_output)
   rev_overrides = {'infra': 'HEAD'}
   bot_update_step = api.bot_update.ensure_checkout(
       patch=patch,
@@ -85,14 +82,13 @@ def RunSteps(api):
       patch_refs=patch_refs,
       add_blamelists=add_blamelists,
       set_output_commit=set_output_commit,
-      step_test_data=step_test_data,
       recipe_revision_overrides=rev_overrides,
   )
   if patch:
     api.bot_update.deapply_patch(bot_update_step)
 
   if api.properties.get('resolve_chromium_fixed_version'):
-    api.bot_update.resolve_fixed_revision(bot_update_step.json.output, 'src')
+    api.bot_update.resolve_fixed_revision(bot_update_step, 'src')
 
 def GenTests(api):
 
@@ -104,6 +100,7 @@ def GenTests(api):
   def ci_build(**kwargs):
     kwargs.setdefault(
         'git_repo', 'https://chromium.googlesource.com/chromium/src')
+    kwargs.setdefault('revision', '2d72510e447ab60a9728aeea2362d8be2cbd7789')
     return (
         api.buildbucket.ci_build('chromium/src', 'ci', 'linux', **kwargs) +
         api.properties(patch=False)
@@ -126,10 +123,12 @@ def GenTests(api):
   )
   yield (api.test('unrecognized_commit_repo', status="INFRA_FAILURE") +
          ci_build(git_repo='https://unrecognized/repo'))
-  yield (
-      api.test('bot_update_failure') +
-      ci_build() +
-      api.properties(bot_update_output={'did_run': True})
+
+  yield api.test(
+      'bot_update_failure',
+      ci_build(),
+      api.bot_update.fail_checkout(True),
+      api.expect_status('INFRA_FAILURE'),
   )
 
   yield (
@@ -167,18 +166,30 @@ def GenTests(api):
   )
   yield (api.test('tryjob_fail', status="INFRA_FAILURE") + try_build() +
          api.step_data('bot_update', api.json.invalid(None), retcode=1))
-  yield (api.test('tryjob_fail_patch', status="FAILURE") + try_build() +
-         api.properties(fail_patch='apply') +
-         api.step_data('bot_update', retcode=88))
-  yield (api.test('tryjob_fail_patch_download', status="INFRA_FAILURE") +
-         try_build() + api.properties(fail_patch='download') +
-         api.step_data('bot_update', retcode=87))
-  yield (
-      api.test('tryjob_fail_missing_bot_update_json', status="INFRA_FAILURE") +
-      try_build() + api.override_step_data('bot_update', retcode=1) +
-      api.post_process(post_process.ResultReasonRE, 'Infra Failure.*') +
-      api.post_process(post_process.StatusException) +
-      api.post_process(post_process.DropExpectation))
+
+  yield api.test(
+      'tryjob_fail_patch',
+      try_build(),
+      api.bot_update.fail_patch(True),
+      api.expect_status('FAILURE'),
+  )
+
+  yield api.test(
+      'tryjob_fail_patch_download',
+      try_build(),
+      api.bot_update.fail_patch('download'),
+      api.expect_status('INFRA_FAILURE'),
+  )
+
+  yield api.test(
+      'tryjob_fail_missing_bot_update_json',
+      try_build(),
+      api.override_step_data('bot_update', retcode=1),
+      api.post_process(post_process.SummaryMarkdownRE, 'Infra Failure.*'),
+      api.post_process(post_process.StatusException),
+      api.post_process(post_process.DropExpectation),
+      status='INFRA_FAILURE')
+
   yield (
       api.test('clobber') +
       api.properties(clobber=1)
@@ -243,29 +254,38 @@ def GenTests(api):
   )
 
   yield (
-      api.test('revision_fallback_chain_set_output_commit') +
-      ci_build() +
+      api.test('revision_fallback_chain_set_output_commit') + ci_build() +
       api.properties(
           set_output_commit=True,
           revision_fallback_chain=True,
       ) +
       # Don't set commit position properties so that the set_output_commit code
       # attempts to do comparisons on the revision value
-      api.step_data('bot_update (without patch)', api.bot_update.output_json(
-          root='src', first_sln='src', revision_mapping={'got_revision': 'src'},
-          commit_positions=False))
+      api.step_data(
+          'bot_update (without patch)',
+          api.bot_update.output_json(
+              patch_root='src',
+              first_sln='src',
+              got_revision_mapping={'got_revision': 'src'},
+              commit_positions=False)))
+
+  yield api.test(
+      'upload_traces',
+      try_build(),
+      api.bot_update.fail_patch(True),
+      api.expect_status('FAILURE'),
   )
 
-  yield (api.test('upload_traces', status="FAILURE") + try_build() +
-         api.properties(fail_patch='apply') +
-         api.step_data('bot_update', retcode=88))
-
-  yield (api.test('upload_traces_fail', status="FAILURE") + try_build() +
-         api.properties(fail_patch='apply') +
-         api.step_data('bot_update', retcode=88) + api.step_data(
-             'upload git traces.gsutil upload',
-             retcode=1,
-         ))
+  yield api.test(
+      'upload_traces_fail',
+      try_build(),
+      api.bot_update.fail_patch(True),
+      api.step_data(
+          'upload git traces.gsutil upload',
+          retcode=1,
+      ),
+      api.expect_status('FAILURE'),
+  )
 
   yield (
       api.test('revision_specifying_ref') +
@@ -284,84 +304,131 @@ def GenTests(api):
       )
   )
 
-  yield (
-      api.test('add_blamelists_bot_update_failure') +
-      ci_build() +
+  yield api.test(
+      'add_blamelists_bot_update_failure',
+      ci_build(),
       api.properties(
           add_blamelists=True,
-          bot_update_output={'did_run': True},
           revisions={'src/v8': 'HEAD'},
-      )
+      ),
+      api.bot_update.fail_checkout(True),
+      api.expect_status('INFRA_FAILURE'),
   )
 
-  yield (
-      api.test('no_cp_checkout_a_specific_commit') +
-      ci_build(revision='a' * 40) +
-      api.properties(
-          bot_update_output={
-            'properties': {
-              'got_revision': 'a' * 40,
-            },
-            'manifest': {
-              'src': {
-                'revision': 'a' * 40,
-                'repository': 'https://chromium.googlesource.com/chromium/src',
-              }
-            }
-          }
-      )
+  yield api.test(
+      'no_cp_checkout_a_specific_commit',
+      ci_build(revision='a' * 40),
+      api.bot_update.commit_positions(False),
   )
 
-  yield (
-      api.test('no_cp_checkout_main') +
-      ci_build(revision='') +
-      api.properties(
-          bot_update_output={
-            'properties': {
-              'got_revision': 'a' * 40,
-            },
-            'manifest': {
-              'src': {
-                'revision': 'a' * 40,
-                'repository': 'https://chromium.googlesource.com/chromium/src',
-              }
-            }
-          }
-      )
+  yield api.test(
+      'no_cp_checkout_main',
+      ci_build(revision=''),
+      api.bot_update.commit_positions(False),
   )
 
-  yield (
-      api.test('no_cp_checkout_a_branch_head') +
-      ci_build(revision='', git_ref='refs/branch-heads/x') +
-      api.properties(
-          bot_update_output={
-            'properties': {
-              'got_revision': 'a' * 40,
-            },
-            'manifest': {
-              'src': {
-                'revision': 'a' * 40,
-                'repository': 'https://chromium.googlesource.com/chromium/src',
-              }
-            }
-          }
-      )
+  yield api.test(
+      'no_cp_checkout_a_branch_head',
+      ci_build(revision='', git_ref='refs/branch-heads/x'),
+      api.bot_update.commit_positions(False),
   )
 
-  yield (
-      api.test('no_cp_checkout_HEAD') +
-      ci_build(revision='HEAD') +
+  yield api.test(
+      'no_cp_checkout_HEAD',
+      ci_build(revision='HEAD'),
+      api.bot_update.commit_positions(False),
+  )
+
+  yield (api.test('stale-process-duration-override') + api.properties(
+      **
+      {'$depot_tools/bot_update': {
+          'stale_process_duration_override': 3000,
+      }}) + ci_build())
+
+  def check_revisions(check, output_json):
+    preconditions_valid = (
+        check(output_json['fixed_revisions']['infra'] == 'HEAD')
+        and check(output_json['fixed_revisions']['src'] ==
+                  '2d72510e447ab60a9728aeea2362d8be2cbd7789'))
+    if not preconditions_valid:
+      return  # pragma: no cover
+
+    manifest = output_json['manifest']
+    # An empty revision specified for a project where there is a fixed revision
+    # uses the fixed revision
+    check(manifest['src']['revision'] ==
+          '2d72510e447ab60a9728aeea2362d8be2cbd7789')
+    # An empty revision specified for a project where there is not a fixed
+    # revision will generate a revision for 'HEAD'
+    check(manifest['src/foo']['revision'] == api.bot_update.gen_revision(
+        'src/foo'))
+    # A non-empty revision specified for a project where there is not a fixed
+    # revision will use the revision (generating an actual revision for a ref)
+    check(manifest['src/v8']['revision'] == api.bot_update.gen_revision(
+        'src/v8@refs/bar'))
+    # A non-empty revision specified for a project where there is a fixed
+    # revision with the same value will use the revision (generating an actual
+    # revision for a ref)
+    check(manifest['infra']['revision'] == api.bot_update.gen_revision('infra'))
+
+  yield api.test(
+      'revisions',
+      ci_build(),
+      api.properties(patch=False),
+      api.bot_update.revisions({
+          'src': '',
+          'src/foo': '',
+          'src/v8': 'refs/bar',
+          'infra': 'HEAD',
+      }),
+      api.bot_update.post_check_output_json('bot_update (without patch)',
+                                            check_revisions),
+      api.post_process(post_process.DropExpectation),
+  )
+
+  def check_revisions_overriding_generation(check, output_json):
+    # Precondition check
+    if not check(output_json['fixed_revisions']['infra'] == 'HEAD'):
+      return  # pragma: no cover
+
+    manifest = output_json['manifest']
+    # A non-empty revision for a project where there is a fixed revision that is
+    # different is okay if the fixed revision would be replaced with a generated
+    # value: the specified revision will be used
+    check(manifest['infra']['revision'] == 'a' * 40)
+
+  yield api.test(
+      'revisions-overriding-revision-generation',
+      ci_build(),
+      api.properties(patch=False),
+      api.bot_update.revisions({
+          'infra': 'a' * 40,
+      }),
+      api.bot_update.post_check_output_json(
+          'bot_update (without patch)', check_revisions_overriding_generation),
+      api.post_process(post_process.DropExpectation),
+  )
+
+  def check_revisions_ref_revision_syntax(check, output_json):
+    # Precondition check
+    if not check(output_json['fixed_revisions']['src'] == 'refs/heads/foo:' +
+                 'a' * 40):
+      return  # pragma: no cover
+
+    manifest = output_json['manifest']
+    # When the ref:revision syntax is used, the revision portion should be used
+    # as the revision in the output
+    check(manifest['src']['revision'] == 'a' * 40)
+
+  yield api.test(
+      'ref-revision-syntax',
+      api.buildbucket.generic_build(),
       api.properties(
-          bot_update_output={
-            'properties': {
-              'got_revision': 'a' * 40,
-            },
-            'manifest': {
-              'src': {
-                'revision': 'a' * 40,
-                'repository': 'https://chromium.googlesource.com/chromium/src',
-              }
-            }
-          }
-      )
+          patch=False,
+          revision_fallback_chain=True,
+          revision='refs/heads/foo:' + 'a' * 40,
+      ),
+      api.bot_update.post_check_output_json(
+          'bot_update (without patch)', check_revisions_ref_revision_syntax),
+      api.post_process(post_process.DropExpectation),
   )

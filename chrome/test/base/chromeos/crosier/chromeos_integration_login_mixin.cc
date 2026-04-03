@@ -5,15 +5,16 @@
 #include "chrome/test/base/chromeos/crosier/chromeos_integration_login_mixin.h"
 
 #include "ash/constants/ash_switches.h"
+#include "base/notreached.h"
+#include "base/strings/strcat.h"
 #include "base/test/bind.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/branding_buildflags.h"
 #include "chrome/browser/ash/dbus/ash_dbus_helper.h"
-#include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_screens_utils.h"
+#include "chrome/browser/ash/login/test/test_predicate_waiter.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "chrome/test/base/chromeos/crosier/gaia_host_util.h"
 #include "chrome/test/base/chromeos/crosier/test_accounts.h"
@@ -94,7 +95,7 @@ void ChromeOSIntegrationLoginMixin::Login() {
       if (gaia_login_delegate_) {
         gaia_login_delegate_->DoCustomGaiaLogin(username_);
       } else {
-        CHECK(false)
+        NOTREACHED()
             << "CustomGaiaDelegate must be set for kCustomGaiaLogin mode.";
       }
       break;
@@ -207,13 +208,13 @@ void ChromeOSIntegrationLoginMixin::DoTestLogin() {
   // Any gmail account and password works for test login.
   constexpr char kTestUser[] = "testuser@gmail.com";
   constexpr char kTestPassword[] = "testpass";
-  constexpr char kTestGaiaId[] = "12345";
+  constexpr GaiaId::Literal kTestGaiaId("12345");
 
   username_ = kTestUser;
 
-  ash::test::OobeJS().Evaluate(
-      base::StringPrintf("Oobe.loginForTesting(\"%s\", \"%s\",\"%s\")",
-                         kTestUser, kTestPassword, kTestGaiaId));
+  ash::test::OobeJS().Evaluate(base::StringPrintf(
+      "Oobe.loginForTesting(\"%s\", \"%s\",\"%s\")", kTestUser, kTestPassword,
+      kTestGaiaId.ToString().c_str()));
 
   // Skip post login steps, such as ToS etc.
   ash::WizardController::default_controller()->SkipPostLoginScreensForTesting();
@@ -222,16 +223,7 @@ void ChromeOSIntegrationLoginMixin::DoTestLogin() {
 void ChromeOSIntegrationLoginMixin::DoGaiaLogin() {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   // Skip to login screen.
-  ash::WizardController::default_controller()->SkipToLoginForTesting();
-  ash::OobeScreenWaiter(ash::GaiaView::kScreenId).Wait();
-
-  // Wait for Gaia page to load.
-  while (!crosier::GetGaiaHost()) {
-    base::RunLoop run_loop;
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(500));
-    run_loop.Run();
-  }
+  crosier::SkipToGaiaScreenAndWait();
 
   std::string email;
   std::string password;
@@ -264,6 +256,6 @@ void ChromeOSIntegrationLoginMixin::DoGaiaLogin() {
   // Skip post login steps, such as ToS etc.
   ash::WizardController::default_controller()->SkipPostLoginScreensForTesting();
 #else
-  CHECK(false) << "Gaia login is only supported in branded build.";
+  NOTREACHED() << "Gaia login is only supported in branded build.";
 #endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 }

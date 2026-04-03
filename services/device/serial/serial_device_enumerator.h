@@ -30,6 +30,8 @@ class SerialDeviceEnumerator {
    public:
     virtual void OnPortAdded(const mojom::SerialPortInfo& port) = 0;
     virtual void OnPortRemoved(const mojom::SerialPortInfo& port) = 0;
+    virtual void OnPortConnectedStateChanged(
+        const mojom::SerialPortInfo& port) = 0;
   };
 
   static std::unique_ptr<SerialDeviceEnumerator> Create(
@@ -46,12 +48,18 @@ class SerialDeviceEnumerator {
       const base::UnguessableToken& token,
       bool use_alternate_path);
 
+  virtual scoped_refptr<SerialIoHandler> CreateIoHandler(
+      const base::FilePath& path,
+      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner);
+
  protected:
   // These helper methods take care of managing |ports_| and notifying
   // observers. |port|s passed to AddPort() must be unique and the |token|
   // passed to RemovePort() must have previously been added.
   void AddPort(mojom::SerialPortInfoPtr port);
   void RemovePort(base::UnguessableToken token);
+  void UpdatePortConnectedState(base::UnguessableToken token,
+                                bool is_connected);
 
   SEQUENCE_CHECKER(sequence_checker_);
 

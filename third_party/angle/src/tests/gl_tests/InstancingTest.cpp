@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
 
@@ -110,7 +114,7 @@ class InstancingTest : public ANGLETest<>
             ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_instanced_arrays"));
         }
 
-        // TODO: Fix these.  http://anglebug.com/3129
+        // TODO: Fix these.  http://anglebug.com/42261805
         ANGLE_SKIP_TEST_IF(IsD3D9() && draw == Indexed && geometry == Point);
         ANGLE_SKIP_TEST_IF(IsD3D9() && IsAMD());
 

@@ -7,15 +7,17 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
+#include "base/values.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
 #include "chromeos/ash/components/login/auth/auth_factor_editor.h"
+#include "chromeos/ash/components/login/auth/public/authentication_error.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "chromeos/ash/components/login/auth/recovery/cryptohome_recovery_performer.h"
-#include "components/account_id/account_id.h"
 
 namespace ash {
 
@@ -26,12 +28,6 @@ class CryptohomeRecoveryScreen : public BaseScreen {
  public:
   using TView = CryptohomeRecoveryScreenView;
   enum class Result {
-    kObsoleteSucceeded,
-    kObsoleteManualRecovery,
-    kObsoleteRetry,
-    kObsoleteNoRecoveryFactor,
-    kObsoleteTimeout,
-
     kGaiaLogin,
     kAuthenticated,
     kError,
@@ -60,7 +56,7 @@ class CryptohomeRecoveryScreen : public BaseScreen {
   // BaseScreen:
   void ShowImpl() override;
   void HideImpl() override;
-  void OnUserAction(const base::Value::List& args) override;
+  void OnUserAction(const base::ListValue& args) override;
 
  private:
   void OnGetAuthFactorsConfiguration(std::unique_ptr<UserContext> user_context,

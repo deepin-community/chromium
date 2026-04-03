@@ -18,6 +18,10 @@ assert(enable_perfetto_trace_processor_sqlite)
 
 source_set("operators") {
   sources = [
+    "counter_mipmap_operator.cc",
+    "counter_mipmap_operator.h",
+    "slice_mipmap_operator.cc",
+    "slice_mipmap_operator.h",
     "span_join_operator.cc",
     "span_join_operator.h",
     "window_operator.cc",
@@ -28,11 +32,37 @@ source_set("operators") {
     "../../../../../gn:default_deps",
     "../../../../../gn:sqlite",
     "../../../../../include/perfetto/trace_processor",
+    "../../../../../protos/perfetto/trace_processor:zero",
     "../../../../base",
+    "../../../containers",
     "../../../sqlite",
-    "../../../util",
+    "../../../util:galloping_search",
     "../../engine",
   ]
+  if (enable_perfetto_etm_importer) {
+    deps += [ ":etm" ]
+  }
+}
+
+if (enable_perfetto_etm_importer) {
+  source_set("etm") {
+    sources = [
+      "etm_decode_trace_vtable.cc",
+      "etm_decode_trace_vtable.h",
+      "etm_iterate_range_vtable.cc",
+      "etm_iterate_range_vtable.h",
+    ]
+    deps = [
+      "../../../../../gn:default_deps",
+      "../../../../../gn:sqlite",
+      "../../../../../include/perfetto/base",
+      "../../../../../include/perfetto/ext/base:base",
+      "../../../../base",
+      "../../../importers/etm",
+      "../../../sqlite",
+      "../../../storage",
+    ]
+  }
 }
 
 perfetto_unittest_source_set("unittests") {
@@ -43,7 +73,23 @@ perfetto_unittest_source_set("unittests") {
     "../../../../../gn:default_deps",
     "../../../../../gn:gtest_and_gmock",
     "../../../../../gn:sqlite",
+    "../../../containers",
     "../../../sqlite",
     "../../engine",
   ]
+}
+
+if (enable_perfetto_benchmarks) {
+  source_set("benchmarks") {
+    testonly = true
+    sources = [ "slice_mipmap_operator_benchmark.cc" ]
+    deps = [
+      ":operators",
+      "../../../../../gn:benchmark",
+      "../../../../../gn:default_deps",
+      "../../../../../gn:sqlite",
+      "../../../../base",
+      "../../../sqlite",
+    ]
+  }
 }

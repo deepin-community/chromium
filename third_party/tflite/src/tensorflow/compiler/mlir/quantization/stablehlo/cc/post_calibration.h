@@ -39,7 +39,7 @@ class PostCalibrationComponent : public Component {
   // debugging purposes.
   static constexpr absl::string_view kName = "quant_ptq_post_calibration";
 
-  explicit PostCalibrationComponent(absl::Nonnull<MLIRContext*> ctx);
+  explicit PostCalibrationComponent(MLIRContext* absl_nonnull ctx);
 
   absl::StatusOr<ModuleOp> Run(
       ModuleOp module_op,
@@ -47,12 +47,11 @@ class PostCalibrationComponent : public Component {
 
   void AddPasses(
       OpPassManager& pm,
-      const ::stablehlo::quantization::StaticRangePtqPreset&
-          static_range_ptq_preset,
+      const ::stablehlo::quantization::QuantizationSpecs& specs,
       const ::stablehlo::quantization::PipelineConfig& pipeline_config) const;
 
  private:
-  absl::Nonnull<MLIRContext*> ctx_;
+  MLIRContext* absl_nonnull ctx_;
 };
 
 }  // namespace mlir::quant::stablehlo

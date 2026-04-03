@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 // ElementTYpe<string> -> string
 type ElementType<T extends ArrayLike<unknown>> = T extends ArrayLike<infer E>? E : never;
 
-// Abstracts some generic operations that have different implementions depending
-// on whether we operate on strings or array of things.
+/**
+ * Abstracts some generic operations that have different implementations depending
+ * on whether we operate on strings or array of things.
+ **/
 interface TrieableTrait<T extends ArrayLike<ElementType<T>>> {
   empty(): T;
   append(base: T, appendage: ElementType<T>): T;
@@ -18,7 +20,7 @@ interface TrieableTrait<T extends ArrayLike<ElementType<T>>> {
 export class Trie<T extends ArrayLike<ElementType<T>>> {
   #size!: number;
   #root: number;
-  #edges!: Map<ElementType<T>, number>[];
+  #edges!: Array<Map<ElementType<T>, number>>;
   #isWord!: boolean[];
   #wordsInSubtree!: number[];
   #freeNodes!: number[];
@@ -38,8 +40,8 @@ export class Trie<T extends ArrayLike<ElementType<T>>> {
     });
   }
 
-  static newArrayTrie<T extends ElementType<T>[]>(): Trie<ElementType<T>[]> {
-    return new Trie<ElementType<T>[]>({
+  static newArrayTrie<T extends Array<ElementType<T>>>(): Trie<Array<ElementType<T>>> {
+    return new Trie<Array<ElementType<T>>>({
       empty: () => [],
       append: (base, appendage) => base.concat([appendage]),
       slice: (base, start, end) => base.slice(start, end),

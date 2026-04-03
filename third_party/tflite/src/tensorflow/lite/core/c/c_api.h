@@ -28,7 +28,7 @@ limitations under the License.
 #include "tensorflow/lite/builtin_ops.h"
 #include "tensorflow/lite/core/async/c/types.h"
 #include "tensorflow/lite/core/c/c_api_types.h"  // IWYU pragma: export
-#include "tensorflow/lite/core/c/registration_external.h"  // IWYU pragma: export
+#include "tensorflow/lite/core/c/operator.h"  // IWYU pragma: export
 
 /// C API for TensorFlow Lite.
 ///
@@ -212,6 +212,8 @@ TFL_CAPI_EXPORT extern TfLiteModel* TfLiteModelCreateFromFileWithErrorReporter(
     void* user_data);
 
 /// Destroys the model instance.
+///
+/// If `model` is a null pointer, this function has no effect.
 TFL_CAPI_EXPORT extern void TfLiteModelDelete(TfLiteModel* model);
 
 /// Returns a new interpreter options instances.
@@ -226,6 +228,8 @@ TFL_CAPI_EXPORT extern TfLiteInterpreterOptions* TfLiteInterpreterOptionsCopy(
     const TfLiteInterpreterOptions* from);
 
 /// Destroys the interpreter options instance.
+///
+/// If `options` is a null pointer, this function has no effect.
 TFL_CAPI_EXPORT extern void TfLiteInterpreterOptionsDelete(
     TfLiteInterpreterOptions* options);
 
@@ -266,19 +270,18 @@ TFL_CAPI_EXPORT extern void TfLiteInterpreterOptionsSetErrorReporter(
 
 /// Adds an op registration to be applied during `TfLiteInterpreter` creation.
 ///
-/// The `TfLiteRegistrationExternal` object is needed to implement custom op of
+/// The `TfLiteOperator` object is needed to implement custom op of
 /// TFLite Interpreter via C API. Calling this function ensures that any
 /// `TfLiteInterpreter` created with the specified `options` can execute models
 /// that use the custom operator specified in `registration`.
 /// Please refer https://www.tensorflow.org/lite/guide/ops_custom for custom op
 /// support.
-/// \note The caller retains ownership of the TfLiteRegistrationExternal object
+/// \note The caller retains ownership of the TfLiteOperator object
 /// and should ensure that it remains valid for the duration of any created
 /// interpreter's lifetime.
 /// \warning This is an experimental API and subject to change.
-TFL_CAPI_EXPORT extern void TfLiteInterpreterOptionsAddRegistrationExternal(
-    TfLiteInterpreterOptions* options,
-    TfLiteRegistrationExternal* registration);
+TFL_CAPI_EXPORT extern void TfLiteInterpreterOptionsAddOperator(
+    TfLiteInterpreterOptions* options, TfLiteOperator* registration);
 
 /// Enables users to cancel in-flight invocations with
 /// `TfLiteInterpreterCancel`.
@@ -310,6 +313,8 @@ TFL_CAPI_EXPORT extern TfLiteInterpreter* TfLiteInterpreterCreate(
     const TfLiteModel* model, const TfLiteInterpreterOptions* optional_options);
 
 /// Destroys the interpreter.
+///
+/// If `interpreter` is a null pointer, this function has no effect.
 TFL_CAPI_EXPORT extern void TfLiteInterpreterDelete(
     TfLiteInterpreter* interpreter);
 
@@ -642,6 +647,8 @@ TFL_CAPI_EXPORT extern TfLiteStatus TfLiteTensorCopyToBuffer(
     size_t output_data_size);
 
 /// Destroys the signature runner.
+///
+/// If `signature_runner` is a null pointer, this function has no effect.
 TFL_CAPI_EXPORT extern void TfLiteSignatureRunnerDelete(
     TfLiteSignatureRunner* signature_runner);
 

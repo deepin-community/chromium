@@ -17,11 +17,84 @@
 #include "third_party/blink/renderer/core/layout/layout_result.h"
 #include "third_party/blink/renderer/core/layout/length_utils.h"
 #include "third_party/blink/renderer/core/layout/logical_box_fragment.h"
+#include "third_party/blink/renderer/core/layout/out_of_flow_layout_part.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/positioned_float.h"
 #include "third_party/blink/renderer/core/layout/relative_utils.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
+
+void BoxFragmentBuilder::SetInitialTextBoxTrim() {
+  should_text_box_trim_node_start_ = space_.ShouldTextBoxTrimNodeStart();
+  should_text_box_trim_node_end_ = space_.ShouldTextBoxTrimNodeEnd();
+  should_text_box_trim_fragmentainer_start_ =
+      space_.ShouldTextBoxTrimFragmentainerStart();
+  should_text_box_trim_fragmentainer_end_ =
+      space_.ShouldTextBoxTrimFragmentainerEnd();
+
+  // Disable text box trimming if there's intervening border / padding.
+  if (should_text_box_trim_node_start_ &&
+      BorderPadding().block_start != LayoutUnit()) {
+    should_text_box_trim_node_start_ = false;
+  }
+  if (should_text_box_trim_node_end_ &&
+      BorderPadding().block_end != LayoutUnit()) {
+    should_text_box_trim_node_end_ = false;
+  }
+
+  // Initialize `text-box-trim` flags from `ComputedStyle`.
+  const ComputedStyle& style = Style();
+  if (style.TextBoxTrim() == ETextBoxTrim::kNone) {
+    return;
+  }
+
+  if (!space_.IsAnonymous()) {
+    should_text_box_trim_node_start_ |= style.ShouldTextBoxTrimStart();
+    should_text_box_trim_node_end_ |= style.ShouldTextBoxTrimEnd();
+  }
+
+  // Unless box-decoration-break is 'clone', box trimming specified inside a
+  // fragmentation context will not apply at fragmentainer breaks in that
+  // fragmentation context. Additionally, this is always disabled for
+  // pagination, since our implementation is not able to paint outside the page
+  // area.
+  if (!space_.HasBlockFragmentation() || space_.IsPaginated()) {
+    should_text_box_trim_fragmentainer_start_ = false;
+    should_text_box_trim_fragmentainer_end_ = false;
+  } else {
+    // Should only trim block-start at fragmentainer start if this node is
+    // resumed after a break.
+    if (IsBreakInside(PreviousBreakToken())) {
+      should_text_box_trim_fragmentainer_start_ |=
+          should_text_box_trim_node_start_;
+    } else {
+      should_text_box_trim_fragmentainer_start_ = false;
+    }
+
+    should_text_box_trim_fragmentainer_end_ |= should_text_box_trim_node_end_;
+
+    if (!space_.IsAnonymous() &&
+        style.BoxDecorationBreak() != EBoxDecorationBreak::kClone) {
+      should_text_box_trim_fragmentainer_start_ &=
+          !style.ShouldTextBoxTrimStart();
+      should_text_box_trim_fragmentainer_end_ &= !style.ShouldTextBoxTrimEnd();
+    }
+  }
+}
+
+void BoxFragmentBuilder::UpdateBorderPaddingForClonedBoxDecorations() {
+  const BlockBreakToken* break_token = PreviousBreakToken();
+  if (!IsBreakInside(break_token)) {
+    return;
+  }
+  // BorderPadding() is used for resolving the box size, and it needs to include
+  // the border/padding space taken up by this new fragment (to be created),
+  // plus all preceding ones.
+  int fragment_count_including_this = break_token->SequenceNumber() + 2;
+  border_padding_.block_start *= fragment_count_including_this;
+  border_padding_.block_end *= fragment_count_including_this;
+}
 
 const LayoutResult& BoxFragmentBuilder::LayoutResultForPropagation(
     const LayoutResult& layout_result) const {
@@ -45,7 +118,8 @@ const LayoutResult& BoxFragmentBuilder::LayoutResultForPropagation(
 
 void BoxFragmentBuilder::AddBreakBeforeChild(LayoutInputNode child,
                                              std::optional<BreakAppeal> appeal,
-                                             bool is_forced_break) {
+                                             bool is_forced_break,
+                                             LogicalOffset oof_start_offset) {
   // If there's a pre-set break token, we shouldn't be here.
   DCHECK(!break_token_);
 
@@ -58,7 +132,7 @@ void BoxFragmentBuilder::AddBreakBeforeChild(LayoutInputNode child,
     ClampBreakAppeal(*appeal);
   }
 
-  DCHECK(has_block_fragmentation_);
+  DCHECK(GetConstraintSpace().HasBlockFragmentation());
 
   if (!has_inflow_child_break_inside_)
     has_inflow_child_break_inside_ = !child.IsFloatingOrOutOfFlowPositioned();
@@ -74,11 +148,11 @@ void BoxFragmentBuilder::AddBreakBeforeChild(LayoutInputNode child,
       // can tell where to resume in the inline formatting context in the next
       // fragmentainer.
 
-      if (previous_break_token_) {
+      if (PreviousBreakToken()) {
         // If there's an incoming break token, see if it has a child inline
         // break token, and use that one. We may be past floats or lines that
         // were laid out in earlier fragments.
-        const auto& child_tokens = previous_break_token_->ChildBreakTokens();
+        const auto& child_tokens = PreviousBreakToken()->ChildBreakTokens();
         if (child_tokens.size()) {
           // If there is an inline break token, it will always be the last
           // child.
@@ -96,7 +170,8 @@ void BoxFragmentBuilder::AddBreakBeforeChild(LayoutInputNode child,
     }
     return;
   }
-  auto* token = BlockBreakToken::CreateBreakBefore(child, is_forced_break);
+  auto* token = BlockBreakToken::CreateBreakBefore(child, is_forced_break,
+                                                   oof_start_offset);
   child_break_tokens_.push_back(token);
 }
 
@@ -117,7 +192,8 @@ void BoxFragmentBuilder::AddResult(
 
   if (!fragment.IsBox() && items_builder_) {
     if (const auto* line = DynamicTo<PhysicalLineBoxFragment>(&fragment)) {
-      if (UNLIKELY(line->IsBlockInInline() && has_block_fragmentation_)) {
+      if (line->IsBlockInInline() &&
+          GetConstraintSpace().HasBlockFragmentation()) [[unlikely]] {
         // If this line box contains a block-in-inline, propagate break data
         // from the block-in-inline.
         const auto& line_items = items_builder_->GetLogicalLineItems(*line);
@@ -146,9 +222,10 @@ void BoxFragmentBuilder::AddResult(
     }
   }
 
-  if (UNLIKELY(has_block_fragmentation_))
+  if (GetConstraintSpace().HasBlockFragmentation()) {
     PropagateBreakInfo(*result_for_propagation, offset);
-  if (UNLIKELY(GetConstraintSpace().ShouldPropagateChildBreakValues())) {
+  }
+  if (GetConstraintSpace().ShouldPropagateChildBreakValues()) [[unlikely]] {
     PropagateChildBreakValues(*result_for_propagation);
   }
 
@@ -177,8 +254,9 @@ void BoxFragmentBuilder::AddChild(
     relative_offset = LogicalOffset();
     if (box_type_ != PhysicalFragment::BoxType::kInlineBox) {
       if (child.IsLineBox()) {
-        if (UNLIKELY(child.MayHaveDescendantAboveBlockStart()))
+        if (child.MayHaveDescendantAboveBlockStart()) [[unlikely]] {
           may_have_descendant_above_block_start_ = true;
+        }
       } else if (child.IsCSSBox()) {
         // Apply the relative position offset.
         const auto& box_child = To<PhysicalBoxFragment>(child);
@@ -313,45 +391,80 @@ EBreakBetween BoxFragmentBuilder::JoinedBreakBetweenValue(
   return JoinFragmentainerBreakValues(previous_break_after_, break_before);
 }
 
-void BoxFragmentBuilder::MoveChildrenInBlockDirection(LayoutUnit delta) {
+void BoxFragmentBuilder::MoveChildrenInDirection(LayoutUnit offset,
+                                                 bool is_block_direction) {
   DCHECK(is_new_fc_);
-  DCHECK_NE(FragmentBlockSize(), kIndefiniteSize);
+  DCHECK_NE(is_block_direction ? FragmentBlockSize() : FragmentInlineSize(),
+            kIndefiniteSize);
   DCHECK(oof_positioned_descendants_.empty());
 
-  if (delta == LayoutUnit())
-    return;
+  has_moved_children_ = true;
 
-  if (first_baseline_)
-    *first_baseline_ += delta;
-  if (last_baseline_)
-    *last_baseline_ += delta;
+  // Baselines do not apply in the inline direction.
+  if (is_block_direction) {
+    if (first_baseline_) {
+      *first_baseline_ += offset;
+    }
+    if (last_baseline_) {
+      *last_baseline_ += offset;
+    }
+  }
 
-  if (inflow_bounds_)
-    inflow_bounds_->offset.block_offset += delta;
+  if (inflow_bounds_) {
+    if (is_block_direction) {
+      inflow_bounds_->offset.block_offset += offset;
+    } else {
+      inflow_bounds_->offset.inline_offset += offset;
+    }
+  }
 
-  for (auto& child : children_)
-    child.offset.block_offset += delta;
+  for (auto& child : children_) {
+    if (is_block_direction) {
+      child.offset.block_offset += offset;
+    } else {
+      child.offset.inline_offset += offset;
+    }
+  }
 
-  for (auto& candidate : oof_positioned_candidates_)
-    candidate.static_position.offset.block_offset += delta;
+  for (auto& child : children_with_size_dependent_propagation_) {
+    if (is_block_direction) {
+      child.offset.block_offset += offset;
+    } else {
+      child.offset.inline_offset += offset;
+    }
+  }
+
+  for (auto& candidate : oof_positioned_candidates_) {
+    if (is_block_direction) {
+      candidate.static_position.offset.block_offset += offset;
+    } else {
+      candidate.static_position.offset.inline_offset += offset;
+    }
+  }
+
   for (auto& descendant : oof_positioned_fragmentainer_descendants_) {
     // If we have already returned past (above) the containing block of the OOF
     // (but not all the way the outermost fragmentainer), the containing block
     // is affected by this shift that we just decided to make. This shift wasn't
     // known at the time of normal propagation. So shift accordingly now.
-    descendant.containing_block.IncreaseBlockOffset(delta);
-    descendant.fixedpos_containing_block.IncreaseBlockOffset(delta);
+    if (is_block_direction) {
+      descendant.containing_block.IncreaseBlockOffset(offset);
+      descendant.fixedpos_containing_block.IncreaseBlockOffset(offset);
+    } else {
+      descendant.containing_block.IncreaseInlineOffset(offset);
+      descendant.fixedpos_containing_block.IncreaseInlineOffset(offset);
+    }
   }
 
   if (FragmentItemsBuilder* items_builder = ItemsBuilder()) {
-    items_builder->MoveChildrenInBlockDirection(delta);
+    items_builder->MoveChildrenInDirection(offset, is_block_direction);
   }
 }
 
 void BoxFragmentBuilder::PropagateBreakInfo(
     const LayoutResult& child_layout_result,
     LogicalOffset offset) {
-  DCHECK(has_block_fragmentation_);
+  DCHECK(GetConstraintSpace().HasBlockFragmentation());
 
   // Include the bounds of this child (in the block direction).
   LayoutUnit block_end_in_container =
@@ -427,7 +540,8 @@ void BoxFragmentBuilder::PropagateBreakInfo(
     }
     LayoutUnit fragment_block_end = offset.block_offset + block_size;
     LayoutUnit fragmentainer_overflow =
-        fragment_block_end - FragmentainerSpaceLeft(GetConstraintSpace());
+        fragment_block_end -
+        FragmentainerSpaceLeft(*this, /*is_for_children=*/false);
     if (fragmentainer_overflow > LayoutUnit()) {
       // This child overflows the page, because there's something monolithic
       // inside.
@@ -447,15 +561,16 @@ void BoxFragmentBuilder::PropagateBreakInfo(
     ClampBreakAppeal(appeal_inside);
   }
 
-  if (IsInitialColumnBalancingPass()) {
+  if (GetConstraintSpace().IsInitialColumnBalancingPass()) {
     PropagateTallestUnbreakableBlockSize(
         child_layout_result.TallestUnbreakableBlockSize());
   }
 
-  if (child_layout_result.HasForcedBreak())
+  if (child_layout_result.HasForcedBreak()) {
     SetHasForcedBreak();
-  else if (!IsInitialColumnBalancingPass())
+  } else if (!GetConstraintSpace().IsInitialColumnBalancingPass()) {
     PropagateSpaceShortage(child_layout_result.MinimalSpaceShortage());
+  }
 
   if (!child_box_fragment) {
     return;
@@ -463,7 +578,7 @@ void BoxFragmentBuilder::PropagateBreakInfo(
 
   // If a spanner was found inside the child, we need to finish up and propagate
   // the spanner to the column layout algorithm, so that it can take care of it.
-  if (UNLIKELY(GetConstraintSpace().IsInColumnBfc())) {
+  if (GetConstraintSpace().IsInColumnBfc()) [[unlikely]] {
     if (const auto* child_spanner_path =
             child_layout_result.GetColumnSpannerPath()) {
       DCHECK(HasInflowChildBreakInside() ||
@@ -477,7 +592,8 @@ void BoxFragmentBuilder::PropagateBreakInfo(
     DCHECK(!child_layout_result.GetColumnSpannerPath());
   }
 
-  if (!child_box_fragment->IsFragmentainerBox() &&
+  if (!RuntimeEnabledFeatures::FragmentedOofInCbEnabled() &&
+      !child_box_fragment->IsFragmentainerBox() &&
       !HasOutOfFlowInFragmentainerSubtree()) {
     SetHasOutOfFlowInFragmentainerSubtree(
         child_box_fragment->HasOutOfFlowInFragmentainerSubtree());
@@ -490,10 +606,14 @@ void BoxFragmentBuilder::PropagateChildBreakValues(
     return;
   }
 
+  // Propagate from regular in-flow child blocks, and also from page areas and
+  // page border boxes (need to do this for page* boxes in order to propagate
+  // page names).
   const auto& fragment = child_layout_result.GetPhysicalFragment();
-  if (fragment.IsInline() || !fragment.IsCSSBox() ||
-      fragment.IsFloatingOrOutOfFlowPositioned())
+  if (fragment.IsInline() || !fragment.IsBox() || fragment.IsColumnBox() ||
+      fragment.IsFloatingOrOutOfFlowPositioned()) {
     return;
+  }
 
   const ComputedStyle& child_style = fragment.Style();
 
@@ -517,8 +637,21 @@ void BoxFragmentBuilder::PropagateChildBreakValues(
       child_layout_result.FinalBreakAfter(), child_style.BreakAfter());
   SetPreviousBreakAfter(break_after);
 
-  if (GetConstraintSpace().IsPaginated()) {
-    SetPageNameIfNeeded(To<PhysicalBoxFragment>(fragment).PageName());
+  AtomicString child_page_name =
+      PageNameForChildFragment(*this, To<PhysicalBoxFragment>(fragment));
+  SetPageNameIfNeeded(child_page_name);
+}
+
+void BoxFragmentBuilder::HandleOofsAndSpecialDescendants() {
+  has_final_size_ = true;
+
+  // There may be OOFs with anchors. So be sure to propagate any anchors that
+  // we've found so far.
+  PropagateSizeDependentData();
+
+  OutOfFlowLayoutPart(this).Run();
+  if (!Style().ScrollMarkerGroupNone() && !GetConstraintSpace().IsAnonymous()) {
+    Node().HandleScrollMarkerGroup();
   }
 }
 
@@ -536,13 +669,15 @@ const LayoutResult* BoxFragmentBuilder::ToBoxFragment(
   }
 #endif
 
-  if (UNLIKELY(box_type_ == PhysicalFragment::kNormalBox && node_ &&
-               node_.IsBlockInInline())) {
+  Finalize();
+
+  if (box_type_ == PhysicalFragment::kNormalBox && node_ &&
+      node_.IsBlockInInline()) [[unlikely]] {
     SetIsBlockInInline();
   }
 
-  if (UNLIKELY(has_block_fragmentation_ && node_)) {
-    if (previous_break_token_ && previous_break_token_->IsAtBlockEnd()) {
+  if (GetConstraintSpace().HasBlockFragmentation() && node_) [[unlikely]] {
+    if (PreviousBreakToken() && PreviousBreakToken()->IsAtBlockEnd()) {
       // Avoid trailing margin propagation from a node that just has overflowing
       // content here in the current fragmentainer. It's in a parallel flow. If
       // we don't prevent such propagation, the trailing margin may push down
@@ -599,6 +734,7 @@ const LayoutResult* BoxFragmentBuilder::ToBoxFragment(
 void BoxFragmentBuilder::AdjustFragmentainerDescendant(
     LogicalOofNodeForFragmentation& descendant,
     bool only_fixedpos_containing_block) {
+  DCHECK(!RuntimeEnabledFeatures::FragmentedOofInCbEnabled());
   LayoutUnit previous_consumed_block_size;
   if (PreviousBreakToken())
     previous_consumed_block_size = PreviousBreakToken()->ConsumedBlockSize();
@@ -627,6 +763,7 @@ void BoxFragmentBuilder::AdjustFragmentainerDescendant(
 
 void BoxFragmentBuilder::
     AdjustFixedposContainingBlockForFragmentainerDescendants() {
+  DCHECK(!RuntimeEnabledFeatures::FragmentedOofInCbEnabled());
   if (!HasOutOfFlowFragmentainerDescendants())
     return;
 
@@ -637,6 +774,7 @@ void BoxFragmentBuilder::
 }
 
 void BoxFragmentBuilder::AdjustFixedposContainingBlockForInnerMulticols() {
+  DCHECK(!RuntimeEnabledFeatures::FragmentedOofInCbEnabled());
   if (!HasMulticolsWithPendingOOFs() || !PreviousBreakToken())
     return;
 
@@ -665,7 +803,7 @@ void BoxFragmentBuilder::CheckNoBlockFragmentation() const {
   DCHECK(!HasInflowChildBreakInside());
   DCHECK(!DidBreakSelf());
   DCHECK(!has_forced_break_);
-  DCHECK(GetConstraintSpace().ShouldRepeat() || !HasBreakTokenData());
+  DCHECK(!break_token_data_);
   DCHECK_EQ(minimal_space_shortage_, kIndefiniteSize);
   if (!GetConstraintSpace().ShouldPropagateChildBreakValues()) {
     DCHECK(!initial_break_before_);

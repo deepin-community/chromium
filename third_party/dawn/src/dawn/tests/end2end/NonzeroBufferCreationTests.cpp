@@ -33,23 +33,7 @@
 namespace dawn {
 namespace {
 
-class NonzeroBufferCreationTests : public DawnTest {
-  public:
-    void MapReadAsyncAndWait(wgpu::Buffer buffer, uint64_t offset, uint64_t size) {
-        bool done = false;
-        buffer.MapAsync(
-            wgpu::MapMode::Read, offset, size,
-            [](WGPUBufferMapAsyncStatus status, void* userdata) {
-                ASSERT_EQ(WGPUBufferMapAsyncStatus_Success, status);
-                *static_cast<bool*>(userdata) = true;
-            },
-            &done);
-
-        while (!done) {
-            WaitABit();
-        }
-    }
-};
+class NonzeroBufferCreationTests : public DawnTest {};
 
 // Verify that each byte of the buffer has all been initialized to 1 with the toggle enabled when it
 // is created with CopyDst usage.
@@ -92,6 +76,9 @@ TEST_P(NonzeroBufferCreationTests, BufferCreationWithMappedAtCreation) {
     // BufferZeroInitTests.
     DAWN_TEST_UNSUPPORTED_IF(UsesWire());
 
+    // TODO(crbug.com/473894293): [Capture] validation error: no CopyDst usage.
+    DAWN_SUPPRESS_TEST_IF(IsCaptureReplayCheckingEnabled());
+
     constexpr uint32_t kSize = 32u;
 
     wgpu::BufferDescriptor defaultDescriptor;
@@ -111,7 +98,7 @@ TEST_P(NonzeroBufferCreationTests, BufferCreationWithMappedAtCreation) {
         EXPECT_EQ(0, memcmp(mappedData, expectedData.data(), kSize));
         buffer.Unmap();
 
-        MapReadAsyncAndWait(buffer, 0, kSize);
+        MapAsyncAndWait(buffer, wgpu::MapMode::Read, 0, kSize);
         mappedData = static_cast<const uint8_t*>(buffer.GetConstMappedRange());
         EXPECT_EQ(0, memcmp(mappedData, expectedData.data(), kSize));
         buffer.Unmap();
@@ -156,6 +143,8 @@ DAWN_INSTANTIATE_TEST(NonzeroBufferCreationTests,
                       OpenGLESBackend({"nonzero_clear_resources_on_creation_for_testing"},
                                       {"lazy_clear_resource_on_first_use"}),
                       VulkanBackend({"nonzero_clear_resources_on_creation_for_testing"},
+                                    {"lazy_clear_resource_on_first_use"}),
+                      WebGPUBackend({"nonzero_clear_resources_on_creation_for_testing"},
                                     {"lazy_clear_resource_on_first_use"}));
 
 }  // anonymous namespace

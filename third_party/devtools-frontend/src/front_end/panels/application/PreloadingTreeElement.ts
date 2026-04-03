@@ -1,31 +1,31 @@
-// Copyright 2022 The Chromium Authors. All rights reserved.
+// Copyright 2022 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 import * as i18n from '../../core/i18n/i18n.js';
 import type * as Platform from '../../core/platform/platform.js';
 import type * as SDK from '../../core/sdk/sdk.js';
-import * as IconButton from '../../ui/components/icon_button/icon_button.js';
+import {createIcon} from '../../ui/kit/kit.js';
 
 import {ApplicationPanelTreeElement, ExpandableApplicationPanelTreeElement} from './ApplicationPanelTreeElement.js';
-import type * as PreloadingHelper from './preloading/helper/helper.js';
+import * as PreloadingHelper from './preloading/helper/helper.js';
 import {PreloadingAttemptView, PreloadingRuleSetView, PreloadingSummaryView} from './preloading/PreloadingView.js';
-import {type ResourcesPanel} from './ResourcesPanel.js';
+import type {ResourcesPanel} from './ResourcesPanel.js';
 
 const UIStrings = {
   /**
-   *@description Text in Application Panel Sidebar of the Application panel
+   * @description Text in Application Panel Sidebar of the Application panel
    */
   speculativeLoads: 'Speculative loads',
   /**
-   *@description Text in Application Panel Sidebar of the Application panel
+   * @description Text in Application Panel Sidebar of the Application panel
    */
   rules: 'Rules',
   /**
-   *@description Text in Application Panel Sidebar of the Application panel
+   * @description Text in Application Panel Sidebar of the Application panel
    */
   speculations: 'Speculations',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/application/PreloadingTreeElement.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
@@ -35,19 +35,19 @@ class PreloadingTreeElementBase<View extends PreloadingRuleSetView|PreloadingAtt
   #viewConstructor: {new(model: SDK.PreloadingModel.PreloadingModel): View};
   protected view?: View;
   #path: Platform.DevToolsPath.UrlString;
-  #selectedInternal: boolean;
+  #selected: boolean;
 
   constructor(
       panel: ResourcesPanel, viewConstructor: {new(model: SDK.PreloadingModel.PreloadingModel): View},
       path: Platform.DevToolsPath.UrlString, title: string) {
-    super(panel, title, false);
+    super(panel, title, false, 'speculative-loads');
 
     this.#viewConstructor = viewConstructor;
     this.#path = path;
 
-    const icon = IconButton.Icon.create('arrow-up-down');
+    const icon = createIcon('speculative-loads');
     this.setLeadingIcons([icon]);
-    this.#selectedInternal = false;
+    this.#selected = false;
 
     // TODO(https://crbug.com/1384419): Set link
   }
@@ -60,14 +60,14 @@ class PreloadingTreeElementBase<View extends PreloadingRuleSetView|PreloadingAtt
     this.#model = model;
 
     // Show the view if the model was initialized after selection.
-    if (this.#selectedInternal && !this.view) {
+    if (this.#selected && !this.view) {
       this.onselect(false);
     }
   }
 
   override onselect(selectedByUser?: boolean): boolean {
     super.onselect(selectedByUser);
-    this.#selectedInternal = true;
+    this.#selected = true;
 
     if (!this.#model) {
       return false;
@@ -86,24 +86,24 @@ class PreloadingTreeElementBase<View extends PreloadingRuleSetView|PreloadingAtt
 export class PreloadingSummaryTreeElement extends ExpandableApplicationPanelTreeElement {
   #model?: SDK.PreloadingModel.PreloadingModel;
   #view?: PreloadingSummaryView;
-  #selectedInternal: boolean;
+  #selected: boolean;
 
   #ruleSet: PreloadingRuleSetTreeElement|null = null;
   #attempt: PreloadingAttemptTreeElement|null = null;
 
   constructor(panel: ResourcesPanel) {
-    super(panel, i18nString(UIStrings.speculativeLoads), 'preloading');
+    super(panel, i18nString(UIStrings.speculativeLoads), '', '', 'preloading');
 
-    const icon = IconButton.Icon.create('arrow-up-down');
+    const icon = createIcon('speculative-loads');
     this.setLeadingIcons([icon]);
-    this.#selectedInternal = false;
+    this.#selected = false;
 
     // TODO(https://crbug.com/1384419): Set link
   }
 
   // Note that
   //
-  // - TreeElement.ensureSelection assumes TreeElement.treeOutline initalized.
+  // - TreeElement.ensureSelection assumes TreeElement.treeOutline initialized.
   // - TreeElement.treeOutline is propagated in TreeElement.appendChild.
   //
   // So, `this.constructChildren` should be called just after `parent.appendChild(this)`
@@ -125,14 +125,22 @@ export class PreloadingSummaryTreeElement extends ExpandableApplicationPanelTree
     this.#attempt.initialize(model);
 
     // Show the view if the model was initialized after selection.
-    if (this.#selectedInternal && !this.#view) {
+    // However, if the user last viewed this page and clicked into Rules or
+    // Speculations, we ensure that we instead show those pages.
+    if (this.#attempt.selected) {
+      const filter = new PreloadingHelper.PreloadingForward.AttemptViewWithFilter(null);
+      this.expandAndRevealAttempts(filter);
+    } else if (this.#ruleSet.selected) {
+      const filter = new PreloadingHelper.PreloadingForward.RuleSetView(null);
+      this.expandAndRevealRuleSet(filter);
+    } else if (this.#selected && !this.#view) {
       this.onselect(false);
     }
   }
 
   override onselect(selectedByUser?: boolean): boolean {
     super.onselect(selectedByUser);
-    this.#selectedInternal = true;
+    this.#selected = true;
 
     if (!this.#model) {
       return false;

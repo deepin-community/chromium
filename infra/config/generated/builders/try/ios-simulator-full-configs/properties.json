@@ -10,10 +10,9 @@
             "builder_id": {
               "bucket": "ci",
               "builder": "ios-simulator-full-configs",
-              "project": "chromium-m123"
+              "project": "chromium-m146"
             },
             "builder_spec": {
-              "build_gs_bucket": "chromium-mac-archive",
               "builder_group": "chromium.mac",
               "execution_mode": "COMPILE_AND_TEST",
               "legacy_chromium_config": {
@@ -40,9 +39,10 @@
         {
           "bucket": "ci",
           "builder": "ios-simulator-full-configs",
-          "project": "chromium-m123"
+          "project": "chromium-m146"
         }
-      ]
+      ],
+      "targets_spec_directory": "infra/config/generated/builders/try/ios-simulator-full-configs/targets"
     }
   },
   "$build/code_coverage": {
@@ -57,11 +57,17 @@
     "check_for_flakiness": true,
     "check_for_flakiness_with_resultdb": true
   },
-  "$build/reclient": {
-    "instance": "rbe-chromium-untrusted",
-    "jobs": 150,
-    "metrics_project": "chromium-reclient-metrics",
-    "scandeps_server": true
+  "$build/siso": {
+    "configs": [
+      "builder"
+    ],
+    "enable_cloud_monitoring": true,
+    "enable_cloud_trace": true,
+    "experiments": [],
+    "keep_going": 3,
+    "profile_mode": "cloud",
+    "project": "rbe-chromium-untrusted",
+    "remote_jobs": 150
   },
   "$recipe_engine/resultdb/test_presentation": {
     "column_keys": [],
@@ -73,5 +79,5 @@
   "builder_group": "tryserver.chromium.mac",
   "cq": "path-based",
   "recipe": "chromium_trybot",
-  "xcode_build_version": "15c500b"
+  "xcode_build_version": "17a400"
 }

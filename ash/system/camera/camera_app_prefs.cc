@@ -5,6 +5,7 @@
 #include "ash/system/camera/camera_app_prefs.h"
 
 #include "ash/constants/ash_pref_names.h"
+#include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -17,6 +18,7 @@ PrefService* GetPrimaryUserPrefService() {
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(prefs::kCameraAppDevToolsOpen, false);
+  registry->RegisterBooleanPref(prefs::kCameraAppSkipCancelUploadDialog, false);
 }
 
 bool ShouldDevToolsOpen() {
@@ -26,6 +28,16 @@ bool ShouldDevToolsOpen() {
 void SetDevToolsOpenState(bool is_opened) {
   GetPrimaryUserPrefService()->SetBoolean(prefs::kCameraAppDevToolsOpen,
                                           is_opened);
+}
+
+ASH_EXPORT bool ShouldSkipCancelUploadDialog() {
+  return GetPrimaryUserPrefService()->GetBoolean(
+      prefs::kCameraAppSkipCancelUploadDialog);
+}
+
+ASH_EXPORT void SetSkipCancelUploadDialog() {
+  GetPrimaryUserPrefService()->SetBoolean(
+      prefs::kCameraAppSkipCancelUploadDialog, true);
 }
 
 }  // namespace ash::camera_app_prefs

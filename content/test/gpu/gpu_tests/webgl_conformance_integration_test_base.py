@@ -3,27 +3,22 @@
 # found in the LICENSE file.
 """Base class for WebGL conformance tests."""
 
-import collections
+from collections.abc import Mapping
+import dataclasses
 import logging
 import json
 import os
-import sys
 import time
-from typing import Any, List, Optional, Set, Tuple
-
-import dataclasses  # Built-in, but pylint gives an ordering false positive.
-
-from gpu_tests import common_browser_args as cba
-from gpu_tests import common_typing as ct
-from gpu_tests import gpu_helper
-from gpu_tests import gpu_integration_test
-from gpu_tests import webgl_test_util
-from gpu_tests.util import websocket_server as wss
-from gpu_tests.util import websocket_utils
+from typing import Any
 
 import gpu_path_util
-
-from telemetry.internal.platform import gpu_info as telemetry_gpu_info
+from gpu_tests import common_browser_args as cba
+from gpu_tests import common_typing as ct
+from gpu_tests import gpu_integration_test
+from gpu_tests import webgl_test_util
+from gpu_tests.util import host_information
+from gpu_tests.util import websocket_server as wss
+from gpu_tests.util import websocket_utils
 
 TEST_PAGE_RELPATH = os.path.join(webgl_test_util.extensions_relpath,
                                  'webgl_test_page.html')
@@ -65,29 +60,24 @@ def _CompareVersion(version1: str, version2: str) -> int:
 @dataclasses.dataclass
 class WebGLTestArgs():
   """Struct-like class for passing args to a WebGLConformance test."""
-  webgl_version: Optional[int] = None
-  extension: Optional[str] = None
-  extension_list: Optional[List[str]] = None
+  webgl_version: int | None = None
+  extension: str | None = None
+  extension_list: list[str] | None = None
 
 
 class WebGLConformanceIntegrationTestBase(
     gpu_integration_test.GpuIntegrationTest):
 
-  _webgl_version: Optional[int] = None
-  is_asan = False
+  _webgl_version: int | None = None
   _crash_count = 0
-  _gl_backend = ''
-  _angle_backend = ''
-  _command_decoder = ''
-  _verified_flags = False
-  _original_environ: Optional[collections.abc.Mapping] = None
+  _original_environ: Mapping | None = None
   page_loaded = False
 
   # Scripts read from file during process start up.
-  _conformance_harness_script: Optional[str] = None
-  _extension_harness_additional_script: Optional[str] = None
+  _conformance_harness_script: str | None = None
+  _extension_harness_additional_script: str | None = None
 
-  websocket_server: Optional[wss.WebsocketServer] = None
+  websocket_server: wss.WebsocketServer | None = None
 
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
@@ -97,38 +87,48 @@ class WebGLConformanceIntegrationTestBase(
   def _SuiteSupportsParallelTests(cls) -> bool:
     return True
 
-  def _GetSerialGlobs(self) -> Set[str]:
-    return {
-        # crbug.com/1345466. Can be removed once OpenGL is no longer used on
-        # Mac.
-        'deqp/functional/gles3/transformfeedback/*',
-        # crbug.com/1347970. Flaking for unknown reasons on Metal backend.
-        'deqp/functional/gles3/textureshadow/*',
-        # crbug.com/1412460. Flaky timeouts on Mac Intel.
-        'deqp/functional/gles3/shadermatrix/*',
-        'deqp/functional/gles3/shaderoperator/*',
-    }
+  def _GetSerialGlobs(self) -> set[str]:
+    serial_globs = set()
+    if host_information.IsMac():
+      if host_information.IsAmdGpu():
+        serial_globs |= {
+            # crbug.com/1345466. Can be removed once OpenGL is no longer used on
+            # Mac.
+            'deqp/functional/gles3/transformfeedback/*',
+        }
+      if host_information.IsIntelGpu():
+        serial_globs |= {
+            # crbug.com/1412460. Flaky timeouts on Mac Intel.
+            'deqp/functional/gles3/shadermatrix/*',
+            'deqp/functional/gles3/shaderoperator/*',
+        }
+    return serial_globs
 
-  def _GetSerialTests(self) -> Set[str]:
-    return {
-        # crbug.com/1347970.
-        'conformance/textures/misc/texture-video-transparent.html',
-    }
+  def _GetSerialTests(self) -> set[str]:
+    serial_tests = set()
+    if host_information.IsLinux() and host_information.IsNvidiaGpu():
+      serial_tests |= {
+          # crbug.com/328528533. Regularly takes 2-3 minutes to complete on
+          # Linux/NVIDIA/Debug and can flakily hit the 5 minute timeout.
+          'conformance/uniforms/uniform-samplers-test.html',
+      }
+    return serial_tests
 
   @classmethod
   def AddCommandlineArgs(cls, parser: ct.CmdArgParser) -> None:
     super().AddCommandlineArgs(parser)
-    parser.add_option('--webgl-conformance-version',
-                      help='Version of the WebGL conformance tests to run.',
-                      default='1.0.4')
-    parser.add_option(
+    parser.add_argument('--webgl-conformance-version',
+                        help='Version of the WebGL conformance tests to run.',
+                        default='1.0.4')
+    parser.add_argument(
         '--webgl2-only',
-        help='Whether we include webgl 1 tests if version is 2.0.0 or above.',
-        default='false')
-    parser.add_option('--enable-metal-debug-layers',
-                      action='store_true',
-                      default=False,
-                      help='Whether to enable Metal debug layers')
+        action='store_true',
+        default=False,
+        help='Whether we include webgl 1 tests if version is 2.0.0 or above.')
+    parser.add_argument('--enable-metal-debug-layers',
+                        action='store_true',
+                        default=False,
+                        help='Whether to enable Metal debug layers')
 
   @classmethod
   def StartBrowser(cls) -> None:
@@ -146,20 +146,20 @@ class WebGLConformanceIntegrationTestBase(
     super()._SetClassVariablesFromOptions(options)
     cls._webgl_version = int(options.webgl_conformance_version.split('.')[0])
     if not cls._conformance_harness_script:
-      with open(
-          os.path.join(gpu_path_util.GPU_TEST_HARNESS_JAVASCRIPT_DIR,
-                       'websocket_heartbeat.js')) as f:
+      with open(os.path.join(gpu_path_util.GPU_TEST_HARNESS_JAVASCRIPT_DIR,
+                             'websocket_heartbeat.js'),
+                encoding='utf-8') as f:
         cls._conformance_harness_script = f.read()
       cls._conformance_harness_script += '\n'
-      with open(
-          os.path.join(gpu_path_util.GPU_TEST_HARNESS_JAVASCRIPT_DIR,
-                       'webgl_conformance_harness_script.js')) as f:
+      with open(os.path.join(gpu_path_util.GPU_TEST_HARNESS_JAVASCRIPT_DIR,
+                             'webgl_conformance_harness_script.js'),
+                encoding='utf-8') as f:
         cls._conformance_harness_script += f.read()
     if not cls._extension_harness_additional_script:
-      with open(
-          os.path.join(
-              gpu_path_util.GPU_TEST_HARNESS_JAVASCRIPT_DIR,
-              'webgl_conformance_extension_harness_additional_script.js')) as f:
+      with open(os.path.join(
+          gpu_path_util.GPU_TEST_HARNESS_JAVASCRIPT_DIR,
+          'webgl_conformance_extension_harness_additional_script.js'),
+                encoding='utf-8') as f:
         cls._extension_harness_additional_script = f.read()
 
   @classmethod
@@ -169,7 +169,7 @@ class WebGLConformanceIntegrationTestBase(
     #
     test_paths = cls._ParseTests('00_test_list.txt',
                                  options.webgl_conformance_version,
-                                 (options.webgl2_only == 'true'), None)
+                                 options.webgl2_only, None)
     assert cls._webgl_version is not None
     for test_path in test_paths:
       test_path_with_args = test_path
@@ -194,7 +194,7 @@ class WebGLConformanceIntegrationTestBase(
                         ])
     # Individual extension tests.
     for extension in extension_tests:
-      yield ('WebglExtension_%s' % extension,
+      yield (f'WebglExtension_{extension}',
              os.path.join(webgl_test_util.extensions_relpath,
                           'webgl_extension_test.html'), [
                               '_RunExtensionTest',
@@ -203,19 +203,20 @@ class WebGLConformanceIntegrationTestBase(
                           ])
 
   @classmethod
-  def _GetExtensionList(cls) -> List[str]:
+  def _GetExtensionList(cls) -> list[str]:
     raise NotImplementedError()
 
   @classmethod
   def _ModifyBrowserEnvironment(cls) -> None:
     super()._ModifyBrowserEnvironment()
-    if (sys.platform == 'darwin'
+    if (host_information.IsMac()
         and cls.GetOriginalFinderOptions().enable_metal_debug_layers):
       if cls._original_environ is None:
         cls._original_environ = os.environ.copy()
       os.environ['MTL_DEBUG_LAYER'] = '1'
       os.environ['MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS'] = '1'
-      os.environ['MTL_DEBUG_LAYER_VALIDATE_STORE_ACTIONS'] = '1'
+      # TODO(crbug.com/40275874)  Re-enable when Apple fixes the validation
+      # os.environ['MTL_DEBUG_LAYER_VALIDATE_STORE_ACTIONS'] = '1'
       os.environ['MTL_DEBUG_LAYER_VALIDATE_UNRETAINED_RESOURCES'] = '4'
 
   @classmethod
@@ -253,60 +254,6 @@ class WebGLConformanceIntegrationTestBase(
     test_args = args[1]
     getattr(self, test_name)(test_path, test_args)
 
-  def _VerifyGLBackend(self, gpu_info: telemetry_gpu_info.GPUInfo) -> bool:
-    # Verify that Chrome's GL backend matches if a specific one was requested
-    if self._gl_backend:
-      if (self._gl_backend == 'angle'
-          and gpu_helper.GetANGLERenderer(gpu_info) == 'angle-disabled'):
-        self.fail('requested GL backend (' + self._gl_backend + ')' +
-                  ' had no effect on the browser: ' +
-                  _GetGPUInfoErrorString(gpu_info))
-        return False
-    return True
-
-  def _VerifyANGLEBackend(self, gpu_info: telemetry_gpu_info.GPUInfo) -> bool:
-    if self._angle_backend:
-      # GPU exepections use slightly different names for the angle backends
-      # than the Chrome flags
-      known_backend_flag_map = {
-          'angle-d3d11': ['d3d11'],
-          'angle-d3d9': ['d3d9'],
-          'angle-opengl': ['gl'],
-          'angle-opengles': ['gles'],
-          'angle-metal': ['metal'],
-          'angle-vulkan': ['vulkan'],
-          # Support setting VK_ICD_FILENAMES for swiftshader when requesting
-          # the 'vulkan' backend.
-          'angle-swiftshader': ['swiftshader', 'vulkan'],
-      }
-      current_angle_backend = gpu_helper.GetANGLERenderer(gpu_info)
-      if (current_angle_backend not in known_backend_flag_map or
-          self._angle_backend not in \
-            known_backend_flag_map[current_angle_backend]):
-        self.fail('requested ANGLE backend (' + self._angle_backend + ')' +
-                  ' had no effect on the browser: ' +
-                  _GetGPUInfoErrorString(gpu_info))
-        return False
-    return True
-
-  def _VerifyCommandDecoder(self, gpu_info: telemetry_gpu_info.GPUInfo) -> bool:
-    if self._command_decoder:
-      # GPU exepections use slightly different names for the command decoders
-      # than the Chrome flags
-      known_command_decoder_flag_map = {
-          'passthrough': 'passthrough',
-          'no_passthrough': 'validating',
-      }
-      current_command_decoder = gpu_helper.GetCommandDecoder(gpu_info)
-      if (current_command_decoder not in known_command_decoder_flag_map or
-          known_command_decoder_flag_map[current_command_decoder] != \
-          self._command_decoder):
-        self.fail('requested command decoder (' + self._command_decoder + ')' +
-                  ' had no effect on the browser: ' +
-                  _GetGPUInfoErrorString(gpu_info))
-        return False
-    return True
-
   def _NavigateTo(self, test_path: str, harness_script: str) -> None:
     if not self.__class__.page_loaded:
       # If we haven't loaded the test page that we use to run tests within an
@@ -315,10 +262,10 @@ class WebGLConformanceIntegrationTestBase(
       self.tab.Navigate(url, script_to_evaluate_on_commit=harness_script)
       self.tab.WaitForDocumentReadyStateToBeComplete(timeout=5)
       self.tab.action_runner.EvaluateJavaScript(
-          'connectWebsocket("%d")' %
-          self.__class__.websocket_server.server_port,
+          f'connectWebsocket("{self.__class__.websocket_server.server_port}")',
           timeout=WEBSOCKET_JAVASCRIPT_TIMEOUT_S)
-      self.__class__.websocket_server.WaitForConnection()
+      self.__class__.websocket_server.WaitForConnection(
+          websocket_utils.GetScaledConnectionTimeout(self.child.jobs))
       response = self.__class__.websocket_server.Receive(
           WEBSOCKET_JAVASCRIPT_TIMEOUT_S)
       response = json.loads(response)
@@ -327,14 +274,8 @@ class WebGLConformanceIntegrationTestBase(
 
     gpu_info = self.browser.GetSystemInfo().gpu
     self._crash_count = gpu_info.aux_attributes['process_crash_count']
-    if not self._verified_flags:
-      # If the user specified any flags for ANGLE or the command decoder,
-      # verify that the browser is actually using the requested configuration
-      if (self._VerifyGLBackend(gpu_info) and self._VerifyANGLEBackend(gpu_info)
-          and self._VerifyCommandDecoder(gpu_info)):
-        self._verified_flags = True
     url = self.UrlOfStaticFilePath(test_path)
-    self.tab.action_runner.EvaluateJavaScript('runTest("%s")' % url)
+    self.tab.action_runner.EvaluateJavaScript(f'runTest("{url}")')
 
   def _HandleMessageLoop(self, test_timeout: float) -> None:
     got_test_started = False
@@ -352,14 +293,14 @@ class WebGLConformanceIntegrationTestBase(
 
         if time.time() - start_time > test_timeout:
           raise RuntimeError(
-              'Hit %.3f second global timeout, but page continued to send '
-              'messages over the websocket, i.e. was not due to a renderer '
-              'crash.' % test_timeout)
+              f'Hit {test_timeout:.3f} second global timeout, but page '
+              f'continued to send messages over the websocket, i.e. was not '
+              f'due to a renderer crash.')
 
         if not got_test_started:
           if response_type != 'TEST_STARTED':
-            raise RuntimeError('Got response %s when expected a test start.' %
-                               response_type)
+            raise RuntimeError(
+                f'Got response {response_type} when expected a test start.')
           got_test_started = True
           continue
 
@@ -367,12 +308,16 @@ class WebGLConformanceIntegrationTestBase(
           continue
         if response_type == 'TEST_FINISHED':
           break
-        raise RuntimeError('Received unknown message type %s' % response_type)
+        raise RuntimeError(f'Received unknown message type {response_type}')
     except wss.WebsocketReceiveMessageTimeoutError:
-      websocket_utils.HandleWebsocketReceiveTimeoutError(self.tab, start_time)
+      websocket_utils.HandleWebsocketReceiveTimeoutError(
+          self.tab,
+          start_time,
+          additional_info=f'test_started: {got_test_started}')
       raise
     except wss.ClientClosedConnectionError as e:
-      websocket_utils.HandlePrematureSocketClose(e, start_time)
+      websocket_utils.HandlePrematureSocketClose(
+          e, start_time, additional_info=f'test_started: {got_test_started}')
 
   def _GetHeartbeatTimeout(self) -> int:
     return int(self._GetNonSlowHeartbeatTimeout() * self._GetSlowMultiplier())
@@ -387,7 +332,7 @@ class WebGLConformanceIntegrationTestBase(
     # Parallel jobs increase load and can slow down test execution, so scale
     # based on the number of jobs. Target 2x increase with 4 jobs.
     multiplier = 1 + (self.child.jobs - 1) / 3.0
-    if self.is_asan:
+    if self._is_asan:
       multiplier *= ASAN_MULTIPLIER
     if self._finder_options.browser_type == 'web-engine-shell':
       multiplier *= WEBENGINE_MULTIPLIER
@@ -449,7 +394,7 @@ class WebGLConformanceIntegrationTestBase(
 
   def _GetTestTimeout(self) -> int:
     timeout = 300
-    if self.is_asan:
+    if self._is_asan:
       # Asan runs much slower and needs a longer timeout
       timeout *= 2
     return timeout
@@ -461,7 +406,7 @@ class WebGLConformanceIntegrationTestBase(
             self._extension_harness_additional_script)
 
   @classmethod
-  def GenerateBrowserArgs(cls, additional_args: List[str]) -> List[str]:
+  def GenerateBrowserArgs(cls, additional_args: list[str]) -> list[str]:
     """Adds default arguments to |additional_args|.
 
     See the parent class' method documentation for additional information.
@@ -483,6 +428,11 @@ class WebGLConformanceIntegrationTestBase(
         # Force-enable SharedArrayBuffer to be able to test its
         # support in WEBGL_multi_draw.
         '--enable-blink-features=SharedArrayBuffer',
+        # Disable the noise interventions. This needs to be disabled because the
+        # tests read out the exact pixels values. By adding noise to these pixel
+        # values, these tests will obviously fail. This is intended behavior for
+        # the feature, so this should remain disabled.
+        '--disable-features=CanvasNoise',
     ])
     # Note that the overriding of the default --js-flags probably
     # won't interact well with RestartBrowserIfNecessaryWithArgs, but
@@ -496,12 +446,6 @@ class WebGLConformanceIntegrationTestBase(
         if o.startswith('--js-flags'):
           found_js_flags = True
           user_js_flags = o
-        elif o.startswith('--use-gl='):
-          cls._gl_backend = o[len('--use-gl='):]
-        elif o.startswith('--use-angle='):
-          cls._angle_backend = o[len('--use-angle='):]
-        elif o.startswith('--use-cmd-decoder='):
-          cls._command_decoder = o[len('--use-cmd-decoder='):]
     if found_js_flags:
       logging.warning('Overriding built-in JavaScript flags:')
       logging.warning(' Original flags: %s', builtin_js_flags)
@@ -544,18 +488,20 @@ class WebGLConformanceIntegrationTestBase(
   @staticmethod
   def _DidWebGLTestSucceed(tab: ct.Tab) -> bool:
     # Ensure that we actually ran tests and they all passed.
-    return tab.EvaluateJavaScript('webglTestHarness._allTestSucceeded '
-                                  '&& webglTestHarness._totalTests > 0')
+    return tab.action_runner.EvaluateJavaScript(
+        'webglTestHarness._allTestSucceeded '
+        '&& webglTestHarness._totalTests > 0')
 
   @staticmethod
   def _WebGLTestMessages(tab: ct.Tab) -> str:
-    return tab.EvaluateJavaScript('webglTestHarness._messages')
+    return tab.action_runner.EvaluateJavaScript('webglTestHarness._messages')
 
   @classmethod
   def _ParseTests(cls, path: str, version: str, webgl2_only: bool,
-                  folder_min_version: Optional[str]) -> List[str]:
-    def _ParseTestNameAndVersions(line: str
-                                  ) -> Tuple[str, Optional[str], Optional[str]]:
+                  folder_min_version: str | None) -> list[str]:
+
+    def _ParseTestNameAndVersions(
+        line: str) -> tuple[str, str | None, str | None]:
       """Parses any min/max versions and the test name on the given line.
 
       Args:
@@ -624,28 +570,11 @@ class WebGLConformanceIntegrationTestBase(
     return test_paths
 
   @classmethod
-  def GetPlatformTags(cls, browser: ct.Browser) -> List[str]:
+  def GetPlatformTags(cls, browser: ct.Browser) -> list[str]:
     assert cls._webgl_version is not None
     tags = super().GetPlatformTags(browser)
-
-    system_info = browser.GetSystemInfo()
-    gpu_info = None
-    if system_info:
-      gpu_info = system_info.gpu
-      cls.is_asan = gpu_info.aux_attributes.get('is_asan', False)
-
     return tags
 
   @classmethod
-  def ExpectationsFiles(cls) -> List[str]:
+  def ExpectationsFiles(cls) -> list[str]:
     raise NotImplementedError()
-
-
-def _GetGPUInfoErrorString(gpu_info: telemetry_gpu_info.GPUInfo) -> str:
-  primary_gpu = gpu_info.devices[0]
-  error_str = 'primary gpu=' + primary_gpu.device_string
-  if gpu_info.aux_attributes:
-    gl_renderer = gpu_info.aux_attributes.get('gl_renderer')
-    if gl_renderer:
-      error_str += ', gl_renderer=' + gl_renderer
-  return error_str

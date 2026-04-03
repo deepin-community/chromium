@@ -24,7 +24,7 @@ ui::Layer* DelegatedFrameHostClientAura::DelegatedFrameHostGetLayer() const {
 }
 
 bool DelegatedFrameHostClientAura::DelegatedFrameHostIsVisible() const {
-  return !render_widget_host_view_->host()->is_hidden();
+  return !render_widget_host_view_->host()->IsHidden();
 }
 
 SkColor DelegatedFrameHostClientAura::DelegatedFrameHostGetGutterColor() const {
@@ -52,31 +52,14 @@ float DelegatedFrameHostClientAura::GetDeviceScaleFactor() const {
 }
 
 void DelegatedFrameHostClientAura::InvalidateLocalSurfaceIdOnEviction() {
-  // If the ui compositor is no longer visible, we may have evicted it, so
-  // assign it a new LSI for when it is made visible again.
-  auto* host = render_widget_host_view_->window()->GetHost();
-  if (DelegatedFrameHost::ShouldIncludeUiCompositorForEviction() && host &&
-      !host->compositor()->IsVisible()) {
-    host->window()->InvalidateLocalSurfaceId();
-    host->compositor()->SetLocalSurfaceIdFromParent(
-        host->window()->GetLocalSurfaceId());
-    render_widget_host_view_->AllocateLocalSurfaceIdOnNextShow();
-  }
-
   render_widget_host_view_->InvalidateLocalSurfaceIdOnEviction();
 }
 
-std::vector<viz::SurfaceId>
+viz::FrameEvictorClient::EvictIds
 DelegatedFrameHostClientAura::CollectSurfaceIdsForEviction() {
-  auto ids = render_widget_host_view_->host()->CollectSurfaceIdsForEviction();
-
-  // If the ui compositor is no longer visible, include its surface ID for
-  // eviction as well.
-  auto* host = render_widget_host_view_->window()->GetHost();
-  if (DelegatedFrameHost::ShouldIncludeUiCompositorForEviction() && host &&
-      !host->compositor()->IsVisible()) {
-    ids.push_back(host->window()->GetSurfaceId());
-  }
+  viz::FrameEvictorClient::EvictIds ids;
+  ids.embedded_ids =
+      render_widget_host_view_->host()->CollectSurfaceIdsForEviction();
   return ids;
 }
 

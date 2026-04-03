@@ -4,6 +4,9 @@
 
 #include "chromeos/ash/components/carrier_lock/provisioning_config_fetcher_impl.h"
 
+#include <optional>
+#include <string>
+
 #include "base/base64.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_string_value_serializer.h"
@@ -56,7 +59,7 @@ const net::NetworkTrafficAnnotationTag traffic_annotation =
           user_data {
             type: DEVICE_ID
             type: HW_OS_INFO
-            type: SESSION_ID
+            type: ACCESS_TOKEN
           }
           last_reviewed: "2023-10-24"
         }
@@ -80,6 +83,7 @@ void ProvisioningConfigFetcherImpl::RequestConfig(
     const std::string& manufacturer,
     const std::string& model,
     const std::string& fcm_token,
+    const std::string& attested_id,
     Callback callback) {
   if (config_callback_) {
     LOG(ERROR)
@@ -102,18 +106,18 @@ void ProvisioningConfigFetcherImpl::RequestConfig(
                                       "application/json");
 
   // Prepare request body
-  base::Value::Dict request;
-  base::Value::Dict device;
-  std::string request_body;
+  base::DictValue request;
+  base::DictValue device;
   request.Set("android_id", kAndroidId);
   request.Set("gcm_registration_id", fcm_token);
   device.Set("manufacturer", manufacturer);
   device.Set("model", model);
   device.Set("serialNumber", serial);
-  device.Set("chromeOsAttestedDeviceId", serial);
+  device.Set("chromeOsAttestedDeviceId",
+             (!attested_id.empty() ? attested_id : serial));
   device.Set("imei", imei);
   request.Set("deviceIdentifier", std::move(device));
-  base::JSONWriter::Write(request, &request_body);
+  std::string request_body = base::WriteJson(request).value_or("");
 
   // Send message using URLLoader
   simple_url_loader_ = network::SimpleURLLoader::Create(
@@ -155,7 +159,7 @@ RestrictedNetworks ProvisioningConfigFetcherImpl::GetNumberOfNetworks() {
 }
 
 void ProvisioningConfigFetcherImpl::OnDownloadToStringComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   simple_url_loader_.reset();
   if (!response_body) {
     LOG(ERROR) << "Provisioning response body is empty";
@@ -164,7 +168,8 @@ void ProvisioningConfigFetcherImpl::OnDownloadToStringComplete(
   }
 
   base::JSONReader::Result response_result =
-      base::JSONReader::ReadAndReturnValueWithError(*response_body);
+      base::JSONReader::ReadAndReturnValueWithError(
+          *response_body, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!response_result.has_value()) {
     LOG(ERROR) << "Provisioning JSONReader failed: "
                << response_result.error().message;
@@ -179,10 +184,9 @@ void ProvisioningConfigFetcherImpl::OnDownloadToStringComplete(
     ReturnError(Result::kInvalidResponse);
     return;
   }
-  base::Value::Dict response_value =
-      std::move(response_result.value().GetDict());
+  base::DictValue response_value = std::move(response_result.value().GetDict());
 
-  base::Value::Dict* response_record =
+  base::DictValue* response_record =
       response_value.FindDict(kProvisioningRecord);
   if (!response_record) {
     LOG(ERROR) << "Provisioning record not found";

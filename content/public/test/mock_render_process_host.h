@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
 #include <map>
 #include <memory>
 #include <set>
@@ -21,12 +22,10 @@
 #include "base/metrics/persistent_memory_allocator.h"
 #include "base/observer_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_process_host_factory.h"
 #include "content/public/browser/storage_partition_config.h"
-#include "ipc/ipc_test_sink.h"
 #include "media/media_buildflags.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -69,10 +68,6 @@ class MockRenderProcessHost : public RenderProcessHost {
 
   ~MockRenderProcessHost() override;
 
-  // Provides access to all IPC messages that would have been sent to the
-  // renderer via this RenderProcessHost.
-  IPC::TestSink& sink() { return sink_; }
-
   // Provides test access to how many times a bad message has been received.
   int bad_msg_count() const { return bad_msg_count_; }
 
@@ -97,23 +92,36 @@ class MockRenderProcessHost : public RenderProcessHost {
   int VisibleClientCount() override;
   unsigned int GetFrameDepth() override;
   bool GetIntersectsViewport() override;
+#if !BUILDFLAG(IS_ANDROID)
+  bool IsForInitialWebUI() const override;
+#endif  // !BUILDFLAG(IS_ANDROID)
   bool IsForGuestsOnly() override;
   bool IsJitDisabled() override;
+  bool AreV8OptimizationsDisabled() override;
+  bool DisallowV8FeatureFlagOverrides() override;
   bool IsPdf() override;
   void OnMediaStreamAdded() override;
   void OnMediaStreamRemoved() override;
   void OnForegroundServiceWorkerAdded() override;
   void OnForegroundServiceWorkerRemoved() override;
+  void OnBoostForLoadingAdded() override;
+  void OnBoostForLoadingRemoved() override;
+  void OnImmersiveXrSessionStarted() override;
+  void OnImmersiveXrSessionStopped() override;
   StoragePartition* GetStoragePartition() override;
   virtual void AddWord(const std::u16string& word);
   bool Shutdown(int exit_code) override;
   bool ShutdownRequested() override;
   bool FastShutdownIfPossible(size_t page_count,
-                              bool skip_unload_handlers) override;
+                              bool skip_unload_handlers,
+                              bool ignore_workers,
+                              bool ignore_keep_alive,
+                              bool ignore_pending_reuse) override;
   bool FastShutdownStarted() override;
   const base::Process& GetProcess() override;
   bool IsReady() override;
-  int GetID() const override;
+  ChildProcessId GetID() const override;
+  int GetDeprecatedID() const override;
   base::SafeRef<RenderProcessHost> GetSafeRef() const override;
   bool IsInitializedAndNotDead() override;
   bool IsDeletingSoon() override;
@@ -128,22 +136,22 @@ class MockRenderProcessHost : public RenderProcessHost {
       RenderProcessHostPriorityClient* priority_client) override;
   void RemovePriorityClient(
       RenderProcessHostPriorityClient* priority_client) override;
-  void SetPriorityOverride(bool foreground) override;
+#if !BUILDFLAG(IS_ANDROID)
+  void SetPriorityOverride(base::Process::Priority priority) override;
   bool HasPriorityOverride() override;
   void ClearPriorityOverride() override;
+#endif
 #if BUILDFLAG(IS_ANDROID)
+  void GraduateSpareToNormalRendererPriority() override;
+  bool ShouldThrottleNavigationForSpareRendererGraduation() override;
   ChildProcessImportance GetEffectiveImportance() override;
   base::android::ChildBindingState GetEffectiveChildBindingState() override;
   void DumpProcessStack() override;
 #endif
   void SetSuddenTerminationAllowed(bool allowed) override;
-  bool SuddenTerminationAllowed() override;
   BrowserContext* GetBrowserContext() override;
   bool InSameStoragePartition(StoragePartition* partition) override;
   IPC::ChannelProxy* GetChannel() override;
-#if BUILDFLAG(CONTENT_ENABLE_LEGACY_IPC)
-  void AddFilter(BrowserMessageFilter* filter) override;
-#endif
   base::TimeDelta GetChildProcessIdleTime() override;
   FilterURLResult FilterURL(bool empty_allowed, GURL* url) override;
   void EnableAudioDebugRecordings(const base::FilePath& file) override;
@@ -156,11 +164,8 @@ class MockRenderProcessHost : public RenderProcessHost {
   std::unique_ptr<base::PersistentMemoryAllocator> TakeMetricsAllocator()
       override;
   const base::TimeTicks& GetLastInitTime() override;
-  bool IsProcessBackgrounded() override;
-  size_t GetKeepAliveRefCount() const;
+  base::Process::Priority GetPriority() const override;
   size_t GetWorkerRefCount() const;
-  void IncrementKeepAliveRefCount(uint64_t handle_id) override;
-  void DecrementKeepAliveRefCount(uint64_t handle_id) override;
   std::string GetKeepAliveDurations() const override;
   size_t GetShutdownDelayRefCount() const override;
   int GetRenderFrameHostCount() const override;
@@ -168,13 +173,16 @@ class MockRenderProcessHost : public RenderProcessHost {
   void ForEachRenderFrameHost(
       base::FunctionRef<void(RenderFrameHost*)> on_render_frame_host) override;
   void RegisterRenderFrameHost(
-      const GlobalRenderFrameHostId& render_frame_host_id) override;
+      const GlobalRenderFrameHostId& render_frame_host_id,
+      bool is_outermost_main_frame) override;
   void UnregisterRenderFrameHost(
-      const GlobalRenderFrameHostId& render_frame_host_id) override;
+      const GlobalRenderFrameHostId& render_frame_host_id,
+      bool is_outermost_main_frame) override;
   void IncrementWorkerRefCount() override;
   void DecrementWorkerRefCount() override;
   void IncrementPendingReuseRefCount() override;
   void DecrementPendingReuseRefCount() override;
+  int GetPendingReuseRefCountForTesting() const override;
   bool AreRefCountsDisabled() override;
   mojom::Renderer* GetRendererInterface() override;
 
@@ -188,13 +196,16 @@ class MockRenderProcessHost : public RenderProcessHost {
                       const ProcessLock& process_lock) override;
   ProcessLock GetProcessLock() const override;
   bool IsProcessLockedToSiteForTesting() override;
-  void DelayProcessShutdown(const base::TimeDelta& subframe_shutdown_timeout,
-                            const base::TimeDelta& unload_handler_timeout,
-                            const SiteInfo& site_info) override {}
-  void StopTrackingProcessForShutdownDelay() override {}
+  base::ScopedClosureRunner DelayProcessShutdown(
+      const base::TimeDelta& subframe_shutdown_timeout,
+      const base::TimeDelta& unload_handler_timeout,
+      const SiteInfo& site_info) override;
+  void StopTrackingProcessForShutdownDelay() override;
   void BindCacheStorage(
       const network::CrossOriginEmbedderPolicy&,
       mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>,
+      const network::DocumentIsolationPolicy& document_isolation_policy,
+      mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>,
       const storage::BucketLocator& bucket,
       mojo::PendingReceiver<blink::mojom::CacheStorage> receiver) override;
   void BindFileSystemManager(
@@ -207,11 +218,12 @@ class MockRenderProcessHost : public RenderProcessHost {
       override {}
   void GetSandboxedFileSystemForBucket(
       const storage::BucketLocator& bucket,
+      const std::vector<std::string>& directory_path_components,
       blink::mojom::FileSystemAccessManager::GetSandboxedFileSystemCallback
           callback) override;
   void BindIndexedDB(
       const blink::StorageKey& storage_key,
-      const GlobalRenderFrameHostId& rfh_id,
+      BucketContext& bucket_context,
       mojo::PendingReceiver<blink::mojom::IDBFactory> receiver) override;
   void BindBucketManagerHost(
       base::WeakPtr<BucketContext> bucket_context,
@@ -258,40 +270,36 @@ class MockRenderProcessHost : public RenderProcessHost {
       const blink::StorageKey& storage_key,
       mojo::PendingReceiver<blink::mojom::NotificationService> receiver)
       override {}
-  void CreateWebSocketConnector(
-      const blink::StorageKey& storage_key,
-      mojo::PendingReceiver<blink::mojom::WebSocketConnector> receiver)
-      override {}
 #if BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
-  void CreateStableVideoDecoder(
-      mojo::PendingReceiver<media::stable::mojom::StableVideoDecoder> receiver)
-      override {}
+  void CreateOOPVideoDecoder(
+      mojo::PendingReceiver<media::mojom::VideoDecoder> receiver) override {}
 #endif  // BUILDFLAG(ALLOW_OOP_VIDEO_DECODER)
 
   std::string GetInfoForBrowserContextDestructionCrashReporting() override;
   void WriteIntoTrace(perfetto::TracedProto<TraceProto> proto) const override;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   void ReinitializeLogging(uint32_t logging_dest,
                            base::ScopedFD log_file_descriptor) override;
 #endif
 
   void SetBatterySaverMode(bool battery_saver_mode_enabled) override {}
+  uint64_t GetPrivateMemoryFootprint() override;
 
   void PauseSocketManagerForRenderFrameHost(
       const GlobalRenderFrameHostId& render_frame_host_id) override {}
   void ResumeSocketManagerForRenderFrameHost(
       const GlobalRenderFrameHostId& render_frame_host_id) override {}
 
-  // IPC::Sender via RenderProcessHost.
-  bool Send(IPC::Message* msg) override;
+  bool IsOnlyHostingPrerenderedFramesOrEmpty() override;
 
   // IPC::Listener via RenderProcessHost.
-  bool OnMessageReceived(const IPC::Message& msg) override;
   void OnChannelConnected(int32_t peer_pid) override;
 
-  void set_is_process_backgrounded(bool is_process_backgrounded) {
-    is_process_backgrounded_ = is_process_backgrounded;
+  void set_priority(base::Process::Priority priority) { priority_ = priority; }
+
+  void SetIsForInitialWebUI(bool is_for_initial_web_ui) {
+    is_for_initial_web_ui_ = is_for_initial_web_ui;
   }
 
   void SetProcess(base::Process&& new_process) {
@@ -315,26 +323,29 @@ class MockRenderProcessHost : public RenderProcessHost {
 
  private:
   // Stores IPC messages that would have been sent to the renderer.
-  IPC::TestSink sink_;
   int bad_msg_count_;
-  int id_;
+  ChildProcessId id_;
   bool has_connection_;
   raw_ptr<BrowserContext, DanglingUntriaged> browser_context_;
   base::ObserverList<RenderProcessHostObserver> observers_;
 
   StoragePartitionConfig storage_partition_config_;
-  base::flat_set<RenderProcessHostPriorityClient*> priority_clients_;
+  base::flat_set<raw_ptr<RenderProcessHostPriorityClient, CtnExperimental>>
+      priority_clients_;
   int prev_routing_id_;
   base::IDMap<IPC::Listener*> listeners_;
   bool shutdown_requested_;
   bool fast_shutdown_started_;
+  bool within_process_died_observer_ = false;
+  bool delayed_cleanup_ = false;
   bool deletion_callback_called_;
   bool is_for_guests_only_;
-  bool is_process_backgrounded_;
+  base::Process::Priority priority_;
   bool is_unused_;
+  bool is_for_initial_web_ui_ = false;
   bool is_ready_ = false;
   base::Process process;
-  int keep_alive_ref_count_;
+  int pending_view_count_;
   int worker_ref_count_;
   int pending_reuse_ref_count_;
   int foreground_service_worker_count_;
@@ -357,9 +368,9 @@ class MockRenderProcessHostFactory : public RenderProcessHostFactory {
 
   ~MockRenderProcessHostFactory() override;
 
-  RenderProcessHost* CreateRenderProcessHost(
-      BrowserContext* browser_context,
-      SiteInstance* site_instance) override;
+  // Builds MockRenderProcessHost and stores it in `processes_`.
+  RenderProcessHost* CreateRenderProcessHost(BrowserContext* browser_context,
+                                             SiteInstance* site_instance) final;
 
   // Removes the given MockRenderProcessHost from the MockRenderProcessHost
   // list.
@@ -370,7 +381,12 @@ class MockRenderProcessHostFactory : public RenderProcessHostFactory {
     return &processes_;
   }
 
- private:
+ protected:
+  // Builds MockRenderProcessHost.
+  virtual std::unique_ptr<MockRenderProcessHost> BuildRenderProcessHost(
+      BrowserContext* browser_context,
+      SiteInstance* site_instance);
+
   // A list of MockRenderProcessHosts created by this object. This list is used
   // for deleting all MockRenderProcessHosts that have not deleted by a test in
   // the destructor and prevent them from being leaked.

@@ -27,6 +27,9 @@ const DELEGATE: ClientApiDelegate = {
         await parentMessagePipe.sendMessage(Message.OPEN_FEEDBACK_DIALOG);
     return response['errorMessage'] as string;
   },
+  showOnDeviceAppControls() {
+    return parentMessagePipe.sendMessage(Message.SHOW_ON_DEVICE_APP_CONTROLS);
+  },
   showParentalControls() {
     return parentMessagePipe.sendMessage(Message.SHOW_PARENTAL_CONTROLS);
   },
@@ -55,10 +58,6 @@ const DELEGATE: ClientApiDelegate = {
   launchMicrosoft365Setup() {
     return parentMessagePipe.sendMessage(Message.LAUNCH_MICROSOFT_365_SETUP);
   },
-  maybeShowDiscoverNotification() {
-    return parentMessagePipe.sendMessage(
-        Message.MAYBE_SHOW_DISCOVER_NOTIFICATION);
-  },
   maybeShowReleaseNotesNotification() {
     return parentMessagePipe.sendMessage(
         Message.MAYBE_SHOW_RELEASE_NOTES_NOTIFICATION);
@@ -66,9 +65,22 @@ const DELEGATE: ClientApiDelegate = {
   getDeviceInfo(): Promise<DeviceInfo> {
     return parentMessagePipe.sendMessage(Message.GET_DEVICE_INFO);
   },
+  openSettings(path: number) {
+    parentMessagePipe.sendMessage(Message.OPEN_SETTINGS, path);
+  },
   openUrlInBrowserAndTriggerInstallDialog(url: string) {
     return parentMessagePipe.sendMessage(
         Message.OPEN_URL_IN_BROWSER_AND_TRIGGER_INSTALL_DIALOG, url);
+  },
+  setHasCompletedNewDeviceChecklist() {
+    parentMessagePipe.sendMessage(
+        Message.SET_HAS_COMPLETED_NEW_DEVICE_CHECKLIST);
+  },
+  setHasVisitedHowToPage() {
+    parentMessagePipe.sendMessage(Message.SET_HAS_VISITED_HOW_TO_PAGE);
+  },
+  openAppMallPath(path: string) {
+    parentMessagePipe.sendMessage(Message.OPEN_APP_MALL_PATH, {path});
   },
 };
 

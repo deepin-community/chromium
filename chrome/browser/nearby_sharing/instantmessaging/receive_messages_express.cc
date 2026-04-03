@@ -5,10 +5,12 @@
 #include "chrome/browser/nearby_sharing/instantmessaging/receive_messages_express.h"
 
 #include <sstream>
+#include <string_view>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notimplemented.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/nearby_sharing/instantmessaging/constants.h"
 #include "chrome/browser/nearby_sharing/instantmessaging/proto/instantmessaging.pb.h"
@@ -260,7 +262,7 @@ void ReceiveMessagesExpress::StopReceivingMessages() {
   }
 }
 
-void ReceiveMessagesExpress::OnDataReceived(base::StringPiece data,
+void ReceiveMessagesExpress::OnDataReceived(std::string_view data,
                                             base::OnceClosure resume) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 

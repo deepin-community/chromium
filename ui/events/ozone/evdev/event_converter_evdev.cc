@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ui/events/ozone/evdev/event_converter_evdev.h"
+
 #include <errno.h>
 #include <linux/input.h>
 #include <stddef.h>
 
-#include "ui/events/ozone/evdev/event_converter_evdev.h"
-
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/task/current_thread.h"
@@ -163,6 +164,10 @@ bool EventConverterEvdev::HasAssistantKey() const {
   return false;
 }
 
+bool EventConverterEvdev::HasFunctionKey() const {
+  return false;
+}
+
 bool EventConverterEvdev::HasCapsLockLed() const {
   return false;
 }
@@ -173,28 +178,23 @@ bool EventConverterEvdev::HasStylusSwitch() const {
 
 ui::StylusState EventConverterEvdev::GetStylusSwitchState() {
   NOTREACHED();
-  return ui::StylusState::REMOVED;
 }
 
 gfx::Size EventConverterEvdev::GetTouchscreenSize() const {
   NOTREACHED();
-  return gfx::Size();
 }
 
 std::vector<ui::GamepadDevice::Axis> EventConverterEvdev::GetGamepadAxes()
     const {
   NOTREACHED();
-  return std::vector<ui::GamepadDevice::Axis>();
 }
 
 bool EventConverterEvdev::GetGamepadRumbleCapability() const {
   NOTREACHED();
-  return false;
 }
 
 std::vector<uint64_t> EventConverterEvdev::GetGamepadKeyBits() const {
   NOTREACHED();
-  return std::vector<uint64_t>();
 }
 
 void EventConverterEvdev::PlayVibrationEffect(uint8_t amplitude,
@@ -220,7 +220,6 @@ void EventConverterEvdev::SetHapticTouchpadEffectForNextButtonRelease(
 
 int EventConverterEvdev::GetTouchPoints() const {
   NOTREACHED();
-  return 0;
 }
 
 void EventConverterEvdev::SetKeyFilter(bool enable_filter,
@@ -238,7 +237,7 @@ void EventConverterEvdev::SetCapsLockLed(bool enabled) {
     return;
 
   input_event events[2];
-  memset(&events, 0, sizeof(events));
+  UNSAFE_TODO(memset(&events, 0, sizeof(events)));
 
   events[0].type = EV_LED;
   events[0].code = LED_CAPSL;

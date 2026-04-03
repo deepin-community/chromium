@@ -49,12 +49,10 @@ class PLATFORM_EXPORT IdleTimeEstimator : public base::TaskObserver {
 
  private:
   cc::RollingTimeDeltaHistory per_frame_compositor_task_runtime_;
-  raw_ptr<const base::TickClock, ExperimentalRenderer>
-      time_source_;  // NOT OWNED
+  raw_ptr<const base::TickClock> time_source_;  // NOT OWNED
   double estimation_percentile_;
 
   base::TimeTicks task_start_time_;
-  base::TimeTicks prev_commit_time_;
   base::TimeDelta cumulative_compositor_runtime_;
   int nesting_level_;
   bool did_commit_;

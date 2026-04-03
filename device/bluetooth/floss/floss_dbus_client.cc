@@ -1,10 +1,12 @@
 // Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 #include "device/bluetooth/floss/floss_dbus_client.h"
 
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
 #include "dbus/message.h"
@@ -194,6 +196,53 @@ dbus::ObjectPath FlossDBusClient::GenerateLoggingPath(int adapter_index) {
       base::StringPrintf(kAdapterLoggingObjectFormat, adapter_index));
 }
 
+device::BluetoothDevice::ConnectErrorCode
+FlossDBusClient::BtifStatusToConnectErrorCode(
+    FlossDBusClient::BtifStatus status) {
+  switch (status) {
+    case BtifStatus::kSuccess:
+      NOTREACHED();
+    case BtifStatus::kFail:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_FAILED;
+    case BtifStatus::kNotReady:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_DEVICE_NOT_READY;
+    case BtifStatus::kAuthFailure:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_AUTH_FAILED;
+    case BtifStatus::kAuthRejected:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_AUTH_REJECTED;
+    case BtifStatus::kDone:
+    case BtifStatus::kBusy:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_INPROGRESS;
+    case BtifStatus::kUnsupported:
+      return device::BluetoothDevice::ConnectErrorCode::
+          ERROR_UNSUPPORTED_DEVICE;
+    case BtifStatus::kNomem:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_NO_MEMORY;
+    case BtifStatus::kParmInvalid:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_INVALID_ARGS;
+    case BtifStatus::kUnhandled:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_UNKNOWN;
+    case BtifStatus::kRmtDevDown:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_DOES_NOT_EXIST;
+    case BtifStatus::kJniEnvironmentError:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_JNI_ENVIRONMENT;
+    case BtifStatus::kJniThreadAttachError:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_JNI_THREAD_ATTACH;
+    case BtifStatus::kWakelockError:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_WAKELOCK;
+    case BtifStatus::kTimeout:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_NON_AUTH_TIMEOUT;
+    case BtifStatus::kDeviceNotFound:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_DOES_NOT_EXIST;
+    case BtifStatus::kUnexpectedState:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_UNEXPECTED_STATE;
+    case BtifStatus::kSocketError:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_SOCKET;
+    default:
+      return device::BluetoothDevice::ConnectErrorCode::ERROR_FAILED;
+  }
+}
+
 // Default error handler for dbus clients is to just print the error right now.
 // TODO(abps) - Deprecate this once error handling is implemented in the upper
 //              layers.
@@ -322,24 +371,18 @@ bool FlossDBusClient::ReadDBusParam(
 template <>
 bool FlossDBusClient::ReadDBusParam(dbus::MessageReader* reader,
                                     device::BluetoothUUID* uuid) {
-  const uint8_t* bytes = nullptr;
-  size_t length = 0;
-
-  if (reader->PopArrayOfBytes(&bytes, &length)) {
-    if (length == 16U) {
-      device::BluetoothUUID found_uuid(base::StringPrintf(
-          "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%"
-          "02x",
-          bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-          bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12],
-          bytes[13], bytes[14], bytes[15]));
-      DCHECK(found_uuid.IsValid());
-      *uuid = found_uuid;
-      return true;
-    }
+  base::span<const uint8_t> bytes;
+  if (!reader->PopArrayOfBytes(&bytes)) {
+    return false;
   }
 
-  return false;
+  if (bytes.size() != 16U) {
+    return false;
+  }
+
+  *uuid = device::BluetoothUUID(bytes);
+  DCHECK(uuid->IsValid());
+  return true;
 }
 
 // static
@@ -413,6 +456,18 @@ bool FlossDBusClient::ReadDBusParam(dbus::MessageReader* reader,
 
   success = reader->PopUint32(&val);
   *type = static_cast<FlossAdapterClient::BtAddressType>(val);
+
+  return success;
+}
+
+template <>
+bool FlossDBusClient::ReadDBusParam(dbus::MessageReader* reader,
+                                    FlossAdapterClient::BtAdapterRole* type) {
+  uint32_t val;
+  bool success;
+
+  success = reader->PopUint32(&val);
+  *type = static_cast<FlossAdapterClient::BtAdapterRole>(val);
 
   return success;
 }

@@ -26,8 +26,8 @@ class SharingHubBubbleViewImpl : public SharingHubBubbleView,
   METADATA_HEADER(SharingHubBubbleViewImpl, LocationBarBubbleDelegateView)
 
  public:
-  // Bubble will be anchored to |anchor_view|.
-  SharingHubBubbleViewImpl(views::View* anchor_view,
+  // Bubble will be anchored to `anchor`.
+  SharingHubBubbleViewImpl(views::BubbleAnchor anchor,
                            share::ShareAttempt attempt,
                            SharingHubBubbleController* controller);
 
@@ -38,9 +38,6 @@ class SharingHubBubbleViewImpl : public SharingHubBubbleView,
 
   // SharingHubBubbleView:
   void Hide() override;
-
-  // LocationBarBubbleDelegateView:
-  void OnThemeChanged() override;
 
   // Public for testing.
   void OnActionSelected(SharingHubBubbleActionButton* button);
@@ -55,10 +52,6 @@ class SharingHubBubbleViewImpl : public SharingHubBubbleView,
   // Populates the scroll view containing sharing actions.
   void PopulateScrollView(
       const std::vector<SharingHubAction>& first_party_actions);
-
-  // Resizes and potentially moves the bubble to fit the content's preferred
-  // size.
-  void MaybeSizeToContents();
 
   // Callback when the window is about to close, either from external causes
   // (parent window closed) or because the web contents requested it.

@@ -18,31 +18,33 @@ limitations under the License.
 #include <memory>
 #include <string>
 
-#include "absl/memory/memory.h"
+#include "absl/log/check.h"
+#include "absl/status/statusor.h"
 #include "tensorflow/compiler/tf2xla/tf2xla.pb.h"
-#include "xla/client/local_client.h"
+#include "tensorflow/compiler/tf2xla/xla_compiled_cpu_function_thunks.h"
+#include "xla/client/executable_build_options.h"
+#include "xla/hlo/testlib/test.h"
 #include "xla/service/compiler.h"
 #include "xla/service/platform_util.h"
+#include "xla/shape.h"
 #include "xla/shape_util.h"
-#include "xla/status_macros.h"
-#include "xla/stream_executor/multi_platform_manager.h"
 #include "xla/stream_executor/platform.h"
-#include "xla/test.h"
+#include "xla/stream_executor/platform_manager.h"
+#include "xla/tsl/lib/core/status_test_util.h"
 #include "xla/xla_data.pb.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
 #include "tensorflow/core/framework/attr_value_util.h"
 #include "tensorflow/core/framework/graph.pb.h"
 #include "tensorflow/core/framework/node_def.pb.h"
-#include "tensorflow/core/lib/core/status_test_util.h"
-#include "tensorflow/core/platform/statusor.h"
 #include "tensorflow/core/platform/test.h"
+#include "tensorflow/core/platform/types.h"
 
 namespace tensorflow {
 namespace {
 
 using ::testing::HasSubstr;
 
-PLATFORM_DEFINE_ID(kFakePlatformId);
+PLATFORM_DEFINE_ID(kFakePlatformId, FakePlatform);
 
 AttrValue TypeAttrValue(DataType type) {
   AttrValue attr_value;
@@ -175,21 +177,23 @@ TEST(XlaJitCompiledCpuFunction, Sum) {
       std::unique_ptr<XlaJitCompiledCpuFunction> jit,
       XlaJitCompiledCpuFunction::Compile(graph_def, config,
                                          xla::ExecutableBuildOptions()));
-  XlaCompiledCpuFunction function(jit->StaticData());
+  XlaCompiledCpuFunctionThunks function(jit->StaticData());
+  ASSERT_EQ(function.num_args(), 2);
+  ASSERT_EQ(function.num_results(), 1);
 
   // Run the function and check results.
-  *static_cast<int32*>(function.arg_data(0)) = 10;
-  *static_cast<int32*>(function.arg_data(1)) = 32;
+  *static_cast<int32_t*>(function.arg_data(0)) = 10;
+  *static_cast<int32_t*>(function.arg_data(1)) = 32;
   EXPECT_TRUE(function.Run());
   EXPECT_EQ(function.error_msg(), "");
-  EXPECT_EQ(*static_cast<int32*>(function.result_data(0)), 42);
+  EXPECT_EQ(*static_cast<int32_t*>(function.result_data(0)), 42);
 
   // Run the function again.
-  *static_cast<int32*>(function.arg_data(0)) = 100;
-  *static_cast<int32*>(function.arg_data(1)) = 320;
+  *static_cast<int32_t*>(function.arg_data(0)) = 100;
+  *static_cast<int32_t*>(function.arg_data(1)) = 320;
   EXPECT_TRUE(function.Run());
   EXPECT_EQ(function.error_msg(), "");
-  EXPECT_EQ(*static_cast<int32*>(function.result_data(0)), 420);
+  EXPECT_EQ(*static_cast<int32_t*>(function.result_data(0)), 420);
 
   // Check name to index lookups.
   EXPECT_TRUE(function.HasNameIndices());
@@ -237,7 +241,9 @@ TEST(XlaJitCompiledCpuFunction, Sum) {
   using xla::ShapeUtil;
   const xla::Shape s32 = ShapeUtil::MakeShape(xla::S32, {});
   ASSERT_TRUE(function.ProgramShape() != nullptr);
-  const xla::ProgramShape program_shape(*function.ProgramShape());
+  TF_ASSERT_OK_AND_ASSIGN(
+      xla::ProgramShape program_shape,
+      xla::ProgramShape::FromProto(*function.ProgramShape()));
   ASSERT_EQ(program_shape.parameters_size(), 2);
   EXPECT_TRUE(ShapeUtil::Compatible(program_shape.parameters(0), s32));
   EXPECT_TRUE(ShapeUtil::Compatible(program_shape.parameters(1), s32));
@@ -257,23 +263,25 @@ TEST(XlaJitCompiledCpuFunction, SumVariable) {
       std::unique_ptr<XlaJitCompiledCpuFunction> jit,
       XlaJitCompiledCpuFunction::Compile(graph_def, config,
                                          xla::ExecutableBuildOptions()));
-  XlaCompiledCpuFunction function(jit->StaticData());
+  XlaCompiledCpuFunctionThunks function(jit->StaticData());
+  ASSERT_EQ(function.num_args(), 2);
+  ASSERT_EQ(function.num_results(), 2);
 
   // Run the function and check results.
-  *static_cast<int32*>(function.arg_data(0)) = 10;
-  *static_cast<int32*>(function.arg_data(1)) = 32;
+  *static_cast<int32_t*>(function.arg_data(0)) = 10;
+  *static_cast<int32_t*>(function.arg_data(1)) = 32;
   EXPECT_TRUE(function.Run());
   EXPECT_EQ(function.error_msg(), "");
-  EXPECT_EQ(*static_cast<int32*>(function.result_data(0)), 10);
-  EXPECT_EQ(*static_cast<int32*>(function.result_data(1)), 42);
+  EXPECT_EQ(*static_cast<int32_t*>(function.result_data(0)), 10);
+  EXPECT_EQ(*static_cast<int32_t*>(function.result_data(1)), 42);
 
   // Run the function again.
-  *static_cast<int32*>(function.arg_data(0)) = 100;
-  *static_cast<int32*>(function.arg_data(1)) = 320;
+  *static_cast<int32_t*>(function.arg_data(0)) = 100;
+  *static_cast<int32_t*>(function.arg_data(1)) = 320;
   EXPECT_TRUE(function.Run());
   EXPECT_EQ(function.error_msg(), "");
-  EXPECT_EQ(*static_cast<int32*>(function.result_data(0)), 100);
-  EXPECT_EQ(*static_cast<int32*>(function.result_data(1)), 420);
+  EXPECT_EQ(*static_cast<int32_t*>(function.result_data(0)), 100);
+  EXPECT_EQ(*static_cast<int32_t*>(function.result_data(1)), 420);
 
   // Check name to index lookups.
   EXPECT_TRUE(function.HasNameIndices());
@@ -293,7 +301,9 @@ TEST(XlaJitCompiledCpuFunction, SumVariable) {
   const xla::Shape s32 = ShapeUtil::MakeShape(xla::S32, {});
   const xla::Shape s32_1 = ShapeUtil::MakeShape(xla::S32, {1});
   ASSERT_TRUE(function.ProgramShape() != nullptr);
-  const xla::ProgramShape program_shape(*function.ProgramShape());
+  TF_ASSERT_OK_AND_ASSIGN(
+      xla::ProgramShape program_shape,
+      xla::ProgramShape::FromProto(*function.ProgramShape()));
   ASSERT_EQ(program_shape.parameters_size(), 2);
   EXPECT_TRUE(ShapeUtil::Compatible(program_shape.parameters(0), s32));
   EXPECT_TRUE(ShapeUtil::Compatible(program_shape.parameters(1), s32_1));
@@ -308,46 +318,37 @@ TEST(XlaJitCompiledCpuFunction, SumVariable) {
 TEST(XlaJitCompiledCpuFunction, CanCompileWithAdditionalPlatform) {
   class FakePlatform : public se::Platform {
    public:
-    FakePlatform() : name_("FakePlatform") {}
+    FakePlatform() : name_(kFakePlatformId->ToName()) {}
     ~FakePlatform() override {}
 
     se::Platform::Id id() const override { return kFakePlatformId; }
 
     int VisibleDeviceCount() const override { return 0; }
 
-    const string& Name() const override { return name_; }
+    const std::string& Name() const override { return name_; }
 
-    tsl::StatusOr<std::unique_ptr<se::DeviceDescription>> DescriptionForDevice(
+    absl::StatusOr<std::unique_ptr<se::DeviceDescription>> DescriptionForDevice(
         int ordinal) const override {
       return std::unique_ptr<se::DeviceDescription>(nullptr);
     }
 
-    tsl::StatusOr<se::StreamExecutor*> ExecutorForDevice(int ordinal) override {
+    absl::StatusOr<se::StreamExecutor*> ExecutorForDevice(
+        int ordinal) override {
       return nullptr;
-    }
-
-    tsl::StatusOr<se::StreamExecutor*> GetExecutor(
-        const se::StreamExecutorConfig& config) override {
-      return nullptr;
-    }
-
-    tsl::StatusOr<std::unique_ptr<se::StreamExecutor>> GetUncachedExecutor(
-        const se::StreamExecutorConfig& config) override {
-      return std::unique_ptr<se::StreamExecutor>(nullptr);
     }
 
    private:
-    string name_;
+    std::string name_;
   };
 
-  TF_EXPECT_OK(se::MultiPlatformManager::RegisterPlatform(
-      std::make_unique<FakePlatform>()));
+  TF_EXPECT_OK(
+      se::PlatformManager::RegisterPlatform(std::make_unique<FakePlatform>()));
   xla::Compiler::RegisterCompilerFactory(kFakePlatformId, []() {
     return std::unique_ptr<xla::Compiler>(nullptr);
   });
 
   EXPECT_THAT(xla::PlatformUtil::GetDefaultPlatform().status().message(),
-              HasSubstr("FakePlatform"));
+              HasSubstr(kFakePlatformId->ToName()));
 
   GraphDef graph_def = SumGraph();
   tf2xla::Config config = SumConfig();

@@ -28,11 +28,11 @@
 #ifndef SRC_DAWN_UTILS_WIREHELPER_H_
 #define SRC_DAWN_UTILS_WIREHELPER_H_
 
+#include <webgpu/webgpu_cpp.h>
+
 #include <cstdint>
 #include <memory>
 #include <utility>
-
-#include "dawn/webgpu_cpp.h"
 
 struct DawnProcTable;
 
@@ -55,7 +55,7 @@ class WireHelper {
 
     // Helper to created a native instance and automatically register it with the wire if needed.
     // Return the native instance and the same result as RegisterInstance.
-    virtual std::pair<wgpu::Instance, std::unique_ptr<dawn::native::Instance>> CreateInstances(
+    std::pair<wgpu::Instance, std::unique_ptr<dawn::native::Instance>> CreateInstances(
         const wgpu::InstanceDescriptor* nativeDesc = nullptr,
         const wgpu::InstanceDescriptor* wireDesc = nullptr);
 
@@ -63,6 +63,12 @@ class WireHelper {
 
     virtual bool FlushClient() = 0;
     virtual bool FlushServer() = 0;
+
+    // Flushes the wire and all callbacks until idle.
+    void WaitUntilIdle(dawn::native::Instance* serverInstance,
+                       wgpu::Instance clientInstance = nullptr);
+
+    virtual bool IsIdle() = 0;
 };
 
 std::unique_ptr<WireHelper> CreateWireHelper(const DawnProcTable& procs,

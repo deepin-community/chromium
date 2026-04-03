@@ -10,10 +10,8 @@
 
 #include "ash/accessibility/accessibility_controller.h"
 #include "ash/shell.h"
-#include "ash/wm/bounds_tracker/window_bounds_tracker.h"
 #include "ash/wm/mru_window_tracker.h"
 #include "ash/wm/window_util.h"
-#include "base/containers/contains.h"
 #include "base/metrics/user_metrics.h"
 #include "ui/aura/window.h"
 #include "ui/display/display.h"
@@ -53,11 +51,12 @@ bool CanHandleMoveActiveWindowBetweenDisplays() {
   if (display_manager->IsInUnifiedMode() || display_manager->IsInMirrorMode())
     return false;
 
-  if (display::Screen::GetScreen()->GetNumDisplays() < 2)
+  if (display::Screen::Get()->GetNumDisplays() < 2) {
     return false;
+  }
 
   // The movement target window must be in window cycle list.
-  return base::Contains(
+  return std::ranges::contains(
       Shell::Get()->mru_window_tracker()->BuildWindowForCycleList(kActiveDesk),
       GetTargetWindow());
 }
@@ -68,8 +67,8 @@ void HandleMoveActiveWindowBetweenDisplays() {
   DCHECK(window);
 
   int64_t origin_display_id =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(window).id();
-  auto displays = display::Screen::GetScreen()->GetAllDisplays();
+      display::Screen::Get()->GetDisplayNearestWindow(window).id();
+  auto displays = display::Screen::Get()->GetAllDisplays();
   display::DisplayIdList display_id_list =
       display::CreateDisplayIdList(displays);
   // Find target display id in sorted display id list in a cycling way.
@@ -77,10 +76,6 @@ void HandleMoveActiveWindowBetweenDisplays() {
                               origin_display_id, display::CompareDisplayIds);
   int64_t target_display_id =
       itr == display_id_list.end() ? display_id_list[0] : *itr;
-
-  if (auto* window_bounds_tracker = Shell::Get()->window_bounds_tracker()) {
-    window_bounds_tracker->set_moving_window_between_displays(window);
-  }
   window_util::MoveWindowToDisplay(window, target_display_id);
   Shell::Get()->accessibility_controller()->TriggerAccessibilityAlert(
       AccessibilityAlert::WINDOW_MOVED_TO_ANOTHER_DISPLAY);

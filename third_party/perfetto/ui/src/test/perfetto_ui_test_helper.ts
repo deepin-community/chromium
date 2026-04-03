@@ -12,118 +12,172 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import {
+  expect,
+  Locator,
+  Page,
+  PageAssertionsToHaveScreenshotOptions,
+} from '@playwright/test';
 import fs from 'fs';
-import net from 'net';
 import path from 'path';
-import pixelmatch from 'pixelmatch';
-import {PNG} from 'pngjs';
-import {Page} from 'puppeteer';
+import {IdleDetectorWindow} from '../frontend/idle_detector_interface';
+import {assertExists} from '../base/logging';
+import {Size2D} from '../base/geom';
+import {AppImpl} from '../core/app_impl';
 
-// These constants have been hand selected by comparing the diffs of screenshots
-// between Linux on Mac. Unfortunately font-rendering is platform-specific.
-// Even though we force the same antialiasing and hinting settings, some minimal
-// differences exist.
-const DIFF_PER_PIXEL_THRESHOLD = 0.35;
-const DIFF_MAX_PIXELS = 50;
+// Define the locators for elements you always want to mask.
+const GLOBAL_MASKS: ((page: Page) => Locator)[] = [
+  // Hide the footer when running integration tests, as the version code and the
+  // tiny text with pending queries can fail the screenshot diff test.
+  (page) => page.locator('.pf-sidebar__footer'),
+];
 
-// Waits for the Perfetto UI to be quiescent, using a union of heuristics:
-// - Check that the progress bar is not animating.
-// - Check that the omnibox is not showing a message.
-// - Check that no redraws are pending in our RAF scheduler.
-// - Check that all the above is satisfied for |minIdleMs| consecutive ms.
-export async function waitForPerfettoIdle(page: Page, minIdleMs?: number) {
-  // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
-  minIdleMs = minIdleMs || 3000;
-  const tickMs = 250;
-  const timeoutMs = 60000;
-  const minIdleTicks = Math.ceil(minIdleMs / tickMs);
-  const timeoutTicks = Math.ceil(timeoutMs / tickMs);
-  let consecutiveIdleTicks = 0;
-  let reasons: string[] = [];
-  for (let ticks = 0; ticks < timeoutTicks; ticks++) {
-    await new Promise((r) => setTimeout(r, tickMs));
-    const isShowingMsg = !!(await page.$('.omnibox.message-mode'));
-    const isShowingAnim = !!(await page.$('.progress.progress-anim'));
-    const hasPendingRedraws =
-        await (await page.evaluateHandle('raf.hasPendingRedraws')).jsonValue();
+export class PerfettoTestHelper {
+  private cachedSidebarSize?: Size2D;
 
-    if (isShowingAnim || isShowingMsg || hasPendingRedraws) {
-      consecutiveIdleTicks = 0;
-      reasons = [];
-      if (isShowingAnim) {
-        reasons.push('showing progress animation');
-      }
-      if (isShowingMsg) {
-        reasons.push('showing omnibox message');
-      }
-      if (hasPendingRedraws) {
-        reasons.push('has pending redraws');
-      }
-      continue;
+  constructor(readonly page: Page) {}
+
+  resetFocus(): Promise<void> {
+    return this.page.click('.pf-sidebar img.pf-sidebar__brand');
+  }
+
+  async sidebarSize(): Promise<Size2D> {
+    if (this.cachedSidebarSize === undefined) {
+      const size = await this.page.locator('main > .pf-sidebar').boundingBox();
+      this.cachedSidebarSize = assertExists(size);
     }
-    if (++consecutiveIdleTicks >= minIdleTicks) {
-      return;
+    return this.cachedSidebarSize;
+  }
+
+  async navigate(fragment: string): Promise<void> {
+    await this.page.goto('/?testing=1' + fragment);
+    await this.waitForPerfettoIdle();
+    await this.applyTestingStyles();
+    await this.page.click('body');
+  }
+
+  async openTraceFile(traceName: string, args?: {}): Promise<void> {
+    args = {testing: '1', ...args};
+    const qs = Object.entries(args ?? {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join('&');
+    await this.page.goto('/?' + qs);
+    const file = await this.page.waitForSelector('input.trace_file', {
+      state: 'attached',
+    });
+    await this.page.evaluate(() =>
+      localStorage.setItem('dismissedPanningHint', 'true'),
+    );
+    const tracePath = this.getTestTracePath(traceName);
+    await assertExists(file).setInputFiles(tracePath);
+    await this.waitForPerfettoIdle();
+    await this.applyTestingStyles();
+    await this.page.mouse.move(0, 0);
+  }
+
+  /**
+   * Applies styles to minimize rendering differences between Mac and Linux.
+   */
+  private async applyTestingStyles(): Promise<void> {
+    await this.page.addStyleTag({
+      content: `
+        body {
+          -webkit-font-smoothing: antialiased !important;
+          font-kerning: none !important;
+        }
+      `,
+    });
+  }
+
+  waitForPerfettoIdle(idleHysteresisMs?: number): Promise<void> {
+    return this.page.evaluate(
+      async (ms) =>
+        (window as {} as IdleDetectorWindow).waitForPerfettoIdle(ms),
+      idleHysteresisMs,
+    );
+  }
+
+  async waitForIdleAndScreenshot(
+    screenshotName: string,
+    opts?: PageAssertionsToHaveScreenshotOptions,
+  ) {
+    await this.page.mouse.move(0, 0); // Move mouse out of the way.
+    await this.waitForPerfettoIdle();
+
+    // Get instances of the global locators for the current page.
+    const globalMaskLocators = GLOBAL_MASKS.map((getLocator) =>
+      getLocator(this.page),
+    );
+
+    // Combine global masks with any masks specific to this test call.
+    const allMasks = [...globalMaskLocators, ...(opts?.mask || [])];
+
+    // Call the original expect with the combined masks.
+    await expect.soft(this.page).toHaveScreenshot(screenshotName, {
+      ...opts,
+      mask: allMasks,
+    });
+  }
+
+  async toggleTrackGroup(locator: Locator) {
+    await locator.locator('.pf-track__shell').first().click();
+    await this.waitForPerfettoIdle();
+  }
+
+  locateTrack(name: string, trackGroup?: Locator): Locator {
+    return (trackGroup ?? this.page).locator(`.pf-track[ref="${name}"]`);
+  }
+
+  pinTrackUsingShellBtn(track: Locator) {
+    track.locator('button[title="Pin to top"]').click({force: true});
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async runCommand(cmdId: string, ...args: any[]) {
+    await this.page.evaluate(
+      (arg) => self.app.commands.runCommand(arg.cmdId, ...arg.args),
+      {cmdId, args},
+    );
+  }
+
+  async disableOmniboxPrompt() {
+    await this.page.evaluate(() =>
+      (self.app as AppImpl).omnibox.disablePrompts(),
+    );
+  }
+
+  async searchSlice(name: string) {
+    const omnibox = this.page.locator('input[ref=omnibox]');
+    await omnibox.focus();
+    await omnibox.fill(name);
+    await this.waitForPerfettoIdle();
+    await omnibox.press('Enter');
+    await this.waitForPerfettoIdle();
+  }
+
+  getTestTracePath(fname: string): string {
+    const parts = ['test', 'data', fname];
+    if (process.cwd().endsWith('/ui')) {
+      parts.unshift('..');
     }
+    const fPath = path.join(...parts);
+    if (!fs.existsSync(fPath)) {
+      throw new Error(`Could not locate file ${fPath}, cwd=${process.cwd()}`);
+    }
+    return fPath;
   }
-  throw new Error(
-    `waitForPerfettoIdle() failed. Did not reach idle after ${
-      timeoutMs} ms. ` +
-      `Reasons not considered idle: ${reasons.join(', ')}`);
-}
 
-export function getTestTracePath(fname: string): string {
-  const fPath = path.join('test', 'data', fname);
-  if (!fs.existsSync(fPath)) {
-    throw new Error('Could not locate trace file ' + fPath);
+  async clickMenuItem(text: string | RegExp) {
+    await this.page
+      .locator('.pf-popup-content .pf-menu-item', {hasText: text})
+      .click();
   }
-  return fPath;
-}
 
-export async function compareScreenshots(
-  reportPath: string, actualFilename: string, expectedFilename: string) {
-  if (!fs.existsSync(expectedFilename)) {
-    throw new Error(
-      `Could not find ${expectedFilename}. Run wih REBASELINE=1.`);
+  async switchToTab(text: string | RegExp) {
+    await this.page.locator('.pf-drawer-panel__tab', {hasText: text}).click();
   }
-  const actualImg = PNG.sync.read(fs.readFileSync(actualFilename));
-  const expectedImg = PNG.sync.read(fs.readFileSync(expectedFilename));
-  const {width, height} = actualImg;
-  expect(width).toEqual(expectedImg.width);
-  expect(height).toEqual(expectedImg.height);
-  const diffPng = new PNG({width, height});
-  const diff = await pixelmatch(
-    actualImg.data, expectedImg.data, diffPng.data, width, height, {
-      threshold: DIFF_PER_PIXEL_THRESHOLD,
-    });
-  if (diff > DIFF_MAX_PIXELS) {
-    const diffFilename = actualFilename.replace('.png', '-diff.png');
-    fs.writeFileSync(diffFilename, PNG.sync.write(diffPng));
-    fs.appendFileSync(
-      reportPath,
-      `${path.basename(actualFilename)};${path.basename(diffFilename)}\n`);
-    fail(`Diff test failed on ${diffFilename}, delta: ${diff} pixels`);
+
+  async scheduleFullRedraw(): Promise<void> {
+    await this.page.evaluate(() => self.app.raf.scheduleFullRedraw());
   }
-  return diff;
-}
-
-
-// If the user has a trace_processor_shell --httpd instance open, bail out,
-// as that will invalidate the test loading different data.
-export async function failIfTraceProcessorHttpdIsActive() {
-  return new Promise<void>((resolve, reject) => {
-    const client = new net.Socket();
-    client.connect(9001, '127.0.0.1', () => {
-      const err = 'trace_processor_shell --httpd detected on port 9001. ' +
-          'Bailing out as it interferes with the tests. ' +
-          'Please kill that and run the test again.';
-      console.error(err);
-      client.destroy();
-      reject(err);
-    });
-    client.on('error', (e: {code: string}) => {
-      expect(e.code).toBe('ECONNREFUSED');
-      resolve();
-    });
-    client.end();
-  });
 }

@@ -13,15 +13,15 @@
 #include <string.h>
 
 #include <algorithm>
-#include <cmath>
 #include <map>
 #include <string>
 #include <vector>
 
 #include "core/fxcrt/fx_memory.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
 #include "testing/image_diff/image_diff_png.h"
 #include "testing/utils/path_service.h"
-#include "third_party/base/numerics/safe_conversions.h"
+#include "testing/utils/pixel_diff_util.h"
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
@@ -65,14 +65,16 @@ class Image {
 
   // Returns the RGBA value of the pixel at the given location
   uint32_t pixel_at(int x, int y) const {
-    if (!pixel_in_bounds(x, y))
+    if (!pixel_in_bounds(x, y)) {
       return 0;
+    }
     return *reinterpret_cast<const uint32_t*>(&(data_[pixel_address(x, y)]));
   }
 
   void set_pixel_at(int x, int y, uint32_t color) {
-    if (!pixel_in_bounds(x, y))
+    if (!pixel_in_bounds(x, y)) {
       return;
+    }
 
     void* addr = &data_[pixel_address(x, y)];
     *reinterpret_cast<uint32_t*>(addr) = color;
@@ -82,8 +84,9 @@ class Image {
   bool CreateFromFilenameImpl(const std::string& path,
                               bool reverse_byte_order) {
     FILE* f = fopen(path.c_str(), "rb");
-    if (!f)
+    if (!f) {
       return false;
+    }
 
     std::vector<uint8_t> compressed;
     const size_t kBufSize = 1024;
@@ -143,33 +146,6 @@ void CountImageSizeMismatchAsPixelDifference(const Image& baseline,
   *pixels_different += (max_h - h) * max_w;
 }
 
-struct UnpackedPixel {
-  explicit UnpackedPixel(uint32_t packed)
-      : red(packed & 0xff),
-        green((packed >> 8) & 0xff),
-        blue((packed >> 16) & 0xff),
-        alpha((packed >> 24) & 0xff) {}
-
-  uint8_t red;
-  uint8_t green;
-  uint8_t blue;
-  uint8_t alpha;
-};
-
-uint8_t ChannelDelta(uint8_t baseline_channel, uint8_t actual_channel) {
-  // No casts are necessary because arithmetic operators implicitly convert
-  // `uint8_t` to `int` first. The final delta is always in the range 0 to 255.
-  return std::abs(baseline_channel - actual_channel);
-}
-
-uint8_t MaxPixelPerChannelDelta(const UnpackedPixel& baseline_pixel,
-                                const UnpackedPixel& actual_pixel) {
-  return std::max({ChannelDelta(baseline_pixel.red, actual_pixel.red),
-                   ChannelDelta(baseline_pixel.green, actual_pixel.green),
-                   ChannelDelta(baseline_pixel.blue, actual_pixel.blue),
-                   ChannelDelta(baseline_pixel.alpha, actual_pixel.alpha)});
-}
-
 float PercentageDifferent(const Image& baseline,
                           const Image& actual,
                           uint8_t max_pixel_per_channel_delta) {
@@ -186,8 +162,7 @@ float PercentageDifferent(const Image& baseline,
         continue;
       }
 
-      if (MaxPixelPerChannelDelta(UnpackedPixel(baseline_pixel),
-                                  UnpackedPixel(actual_pixel)) >
+      if (MaxPixelPerChannelDelta(baseline_pixel, actual_pixel) >
           max_pixel_per_channel_delta) {
         ++pixels_different;
       }
@@ -221,10 +196,11 @@ float HistogramPercentageDifferent(const Image& baseline, const Image& actual) {
     for (int x = 0; x < w; ++x) {
       uint32_t actual_rgba = actual.pixel_at(x, y);
       auto it = baseline_histogram.find(actual_rgba);
-      if (it != baseline_histogram.end() && it->second > 0)
+      if (it != baseline_histogram.end() && it->second > 0) {
         --it->second;
-      else
+      } else {
         ++pixels_different;
+      }
     }
   }
 
@@ -393,22 +369,26 @@ int DiffImages(const std::string& binary_name,
   bool same = do_subtraction
                   ? SubtractImages(baseline_image, actual_image, &diff_image)
                   : CreateImageDiff(baseline_image, actual_image, &diff_image);
-  if (same)
+  if (same) {
     return kStatusSame;
+  }
 
   std::vector<uint8_t> png_encoding = image_diff_png::EncodeRGBAPNG(
       diff_image.span(), diff_image.w(), diff_image.h(), diff_image.w() * 4);
-  if (png_encoding.empty())
+  if (png_encoding.empty()) {
     return kStatusError;
+  }
 
   FILE* f = fopen(out_file.c_str(), "wb");
-  if (!f)
+  if (!f) {
     return kStatusError;
+  }
 
   size_t size = png_encoding.size();
   char* ptr = reinterpret_cast<char*>(&png_encoding.front());
-  if (fwrite(ptr, 1, size, f) != size)
+  if (fwrite(ptr, 1, size, f) != size) {
     return kStatusError;
+  }
 
   return kStatusDifferent;
 }
@@ -432,8 +412,9 @@ int main(int argc, const char* argv[]) {
   int i;
   for (i = 1; i < argc; ++i) {
     const char* arg = argv[i];
-    if (strstr(arg, "--") != arg)
+    if (strstr(arg, "--") != arg) {
       break;
+    }
     if (strcmp(arg, "--histogram") == 0) {
       histograms = true;
     } else if (strcmp(arg, "--diff") == 0) {
@@ -446,12 +427,15 @@ int main(int argc, const char* argv[]) {
       max_pixel_per_channel_delta = 1;
     }
   }
-  if (i < argc)
+  if (i < argc) {
     filename1 = argv[i++];
-  if (i < argc)
+  }
+  if (i < argc) {
     filename2 = argv[i++];
-  if (i < argc)
+  }
+  if (i < argc) {
     diff_filename = argv[i++];
+  }
 
   if (produce_diff_image || produce_image_subtraction) {
     if (!diff_filename.empty()) {

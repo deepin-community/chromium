@@ -52,10 +52,10 @@ namespace dtensor {
 // Returns OK if the deletion succeeded, or if the resource was not found. Else
 // return the deletion error.
 template <class ResourceT>
-Status DeleteIfExists(ResourceMgr* resource_manager,
-                      const char* resource_name) {
+absl::Status DeleteIfExists(ResourceMgr* resource_manager,
+                            const char* resource_name) {
   VLOG(1) << "Removing resource " << resource_name << " if it exists";
-  Status status = resource_manager->Delete<ResourceT>(
+  absl::Status status = resource_manager->Delete<ResourceT>(
       resource_manager->default_container(), resource_name);
   if (status.ok()) {
     VLOG(1) << "Removed existing resource " << resource_name;
@@ -80,7 +80,7 @@ class ConfigureAndInitializeGlobalTPUOpKernel : public OpKernel {
     LOG(INFO) << "ConfigureAndInitializeGlobalTPUOpKernel op";
 
     ResourceMgr* rmgr = GetTPUConfigResourceMgr();
-    std::vector<int32> core_id_output_vec;
+    std::vector<int32_t> core_id_output_vec;
     auto retry_timeout = dtensor_tpu_init_retry_timeout;
 
     TpuSystemInterface* tpu_system = GetPreferredTpuSystem();
@@ -112,13 +112,13 @@ class ConfigureAndInitializeGlobalTPUOpKernel : public OpKernel {
             0, TensorShape({static_cast<long long>(core_id_output_vec_size)}),
             &ctx_output));
     for (size_t i = 0; i < core_id_output_vec_size; ++i) {
-      ctx_output->flat<int32>()(i) = core_id_output_vec[i];
+      ctx_output->flat<int32_t>()(i) = core_id_output_vec[i];
     }
 
     LOG(INFO) << "ConfigureAndInitializeGlobalTPUOpKernel done";
   }
 
-  ~ConfigureAndInitializeGlobalTPUOpKernel() override {}
+  ~ConfigureAndInitializeGlobalTPUOpKernel() override = default;
 
  private:
   // ConfigureAndInitializeGlobalTPUOpKernel is neither copyable nor movable.
@@ -129,9 +129,9 @@ class ConfigureAndInitializeGlobalTPUOpKernel : public OpKernel {
 
   bool use_tfrt_host_runtime_;
 
-  static Status InitializeInternal(OpKernelContext* ctx, ResourceMgr* rmgr,
-                                   absl::Duration retry_timeout,
-                                   std::vector<int32>* core_id_output_vec) {
+  static absl::Status InitializeInternal(
+      OpKernelContext* ctx, ResourceMgr* rmgr, absl::Duration retry_timeout,
+      std::vector<int32_t>* core_id_output_vec) {
     // Reset the TPU embedding engine interface if we are not the master.
     // We need to reset the interface before initializing the host because the
     // resetting process reset the TPU platform.
@@ -158,14 +158,14 @@ class ConfigureAndInitializeGlobalTPUOpKernel : public OpKernel {
     while (!tpu_platform->Initialized() &&
            (absl::Now() - start < retry_timeout)) {
       VLOG(1) << "Initializaing global TPU system.";
-      init_status = tpu_platform->Initialize({});
+      init_status = tpu_platform->Initialize();
     }
     if (!tpu_platform->Initialized()) {
       return errors::Unavailable("Unable to initialize TPU system.");
     }
 
     std::string host_config_serialized;
-    std::vector<int32> num_device_per_host;
+    std::vector<int32_t> num_device_per_host;
     const auto tpu_topology = tpu_platform->topology();
     num_device_per_host.reserve(tpu_topology.HostCount());
     for (int i = 0; i < tpu_topology.HostCount(); ++i) {
@@ -220,7 +220,7 @@ class ConfigureAndInitializeGlobalTPUOpKernel : public OpKernel {
                                     tpu_mesh));
 
     VLOG(1) << "Removing existing proto compilation cache lookup if it exists";
-    Status resource_delete_status =
+    absl::Status resource_delete_status =
         rmgr->Delete<tpu::TpuCompilationCacheLookup>(
             rmgr->default_container(), tpu::kCompiledProtoCacheResourceName);
 
@@ -253,7 +253,7 @@ class ShutdownTPUSystemOpKernel : public OpKernel {
   void Compute(OpKernelContext* ctx) override {
     LOG(INFO) << "ShutdownTPUSystemOpKernel op";
 
-    Status status;
+    absl::Status status;
     TpuSystemInterface* tpu_system = GetPreferredTpuSystem();
     if (tpu_system == nullptr) {
       VLOG(1) << "Shutting down the default TPU system.";

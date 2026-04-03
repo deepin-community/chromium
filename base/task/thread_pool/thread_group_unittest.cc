@@ -39,8 +39,7 @@
 #include "base/win/com_init_util.h"
 #endif
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
 namespace {
 
@@ -77,8 +76,9 @@ class ThreadPostingTasks : public SimpleThread {
 
  private:
   void Run() override {
-    for (size_t i = 0; i < kNumTasksPostedPerThread; ++i)
+    for (size_t i = 0; i < kNumTasksPostedPerThread; ++i) {
       EXPECT_TRUE(factory_.PostTask(post_nested_task_, OnceClosure()));
+    }
   }
 
   const scoped_refptr<TaskRunner> task_runner_;
@@ -110,7 +110,8 @@ class ThreadGroupTestBase : public testing::Test, public ThreadGroup::Delegate {
     ASSERT_FALSE(thread_group_);
     thread_group_ = std::make_unique<ThreadGroupImpl>(
         "TestThreadGroup", "A", ThreadType::kDefault,
-        task_tracker_.GetTrackedRef(), tracked_ref_factory_.GetTrackedRef());
+        /*thread_group_type=*/0, task_tracker_.GetTrackedRef(),
+        tracked_ref_factory_.GetTrackedRef());
 
     mock_pooled_task_runner_delegate_.SetThreadGroup(thread_group_.get());
   }
@@ -122,7 +123,8 @@ class ThreadGroupTestBase : public testing::Test, public ThreadGroup::Delegate {
         static_cast<ThreadGroupImpl*>(thread_group_.get());
     thread_group_impl->Start(kMaxTasks, kMaxBestEffortTasks, TimeDelta::Max(),
                              service_thread_.task_runner(), nullptr,
-                             worker_environment);
+                             worker_environment,
+                             /*synchronous_thread_start_for_testing=*/false);
   }
 
   void DestroyThreadGroup() {
@@ -145,7 +147,8 @@ class ThreadGroupTestBase : public testing::Test, public ThreadGroup::Delegate {
 
  private:
   // ThreadGroup::Delegate:
-  ThreadGroup* GetThreadGroupForTraits(const TaskTraits& traits) override {
+  ThreadGroup* GetThreadGroup(ThreadType thread_type,
+                              ThreadPolicy policy) override {
     return thread_group_.get();
   }
 
@@ -238,8 +241,9 @@ TEST_P(ThreadGroupTestAllExecutionModes, PostTaskAfterShutdown) {
 TEST_P(ThreadGroupTestAllExecutionModes, PostDelayedTask) {
   StartThreadGroup();
   // kJob doesn't support delays.
-  if (execution_mode() == TaskSourceExecutionMode::kJob)
+  if (execution_mode() == TaskSourceExecutionMode::kJob) {
     return;
+  }
 
   TestWaitableEvent task_ran(WaitableEvent::ResetPolicy::AUTOMATIC);
   auto task_runner = CreatePooledTaskRunner();
@@ -361,23 +365,70 @@ TEST_F(ThreadGroupTest, CanRunPolicyShouldYield) {
   task_tracker_.SetCanRunPolicy(CanRunPolicy::kNone);
   thread_group_->DidUpdateCanRunPolicy();
   EXPECT_TRUE(
-      thread_group_->ShouldYield({TaskPriority::BEST_EFFORT, TimeTicks()}));
-  EXPECT_TRUE(
-      thread_group_->ShouldYield({TaskPriority::USER_VISIBLE, TimeTicks()}));
+      thread_group_->ShouldYield({ThreadType::kBackground, TimeTicks()}));
+  EXPECT_TRUE(thread_group_->ShouldYield({ThreadType::kUtility, TimeTicks()}));
 
   task_tracker_.SetCanRunPolicy(CanRunPolicy::kForegroundOnly);
   thread_group_->DidUpdateCanRunPolicy();
   EXPECT_TRUE(
-      thread_group_->ShouldYield({TaskPriority::BEST_EFFORT, TimeTicks()}));
-  EXPECT_FALSE(
-      thread_group_->ShouldYield({TaskPriority::USER_VISIBLE, TimeTicks()}));
+      thread_group_->ShouldYield({ThreadType::kBackground, TimeTicks()}));
+  EXPECT_FALSE(thread_group_->ShouldYield({ThreadType::kUtility, TimeTicks()}));
 
   task_tracker_.SetCanRunPolicy(CanRunPolicy::kAll);
   thread_group_->DidUpdateCanRunPolicy();
   EXPECT_FALSE(
-      thread_group_->ShouldYield({TaskPriority::BEST_EFFORT, TimeTicks()}));
-  EXPECT_FALSE(
-      thread_group_->ShouldYield({TaskPriority::USER_VISIBLE, TimeTicks()}));
+      thread_group_->ShouldYield({ThreadType::kBackground, TimeTicks()}));
+  EXPECT_FALSE(thread_group_->ShouldYield({ThreadType::kUtility, TimeTicks()}));
+}
+
+TEST_F(ThreadGroupTest, SetMaxTasks) {
+  StartThreadGroup();
+
+  constexpr size_t kNewMaxTasks = kMaxTasks / 2;
+
+  ASSERT_EQ(thread_group_->GetMaxTasksForTesting(), kMaxTasks);
+  thread_group_->SetMaxTasks(kNewMaxTasks);
+  ASSERT_EQ(thread_group_->GetMaxTasksForTesting(), kNewMaxTasks);
+
+  TestWaitableEvent threads_running;
+  TestWaitableEvent busy_threads_continue;
+  const scoped_refptr<TaskRunner> task_runner =
+      test::CreatePooledTaskRunner({MayBlock(), WithBaseSyncPrimitives()},
+                                   &mock_pooled_task_runner_delegate_);
+
+  RepeatingClosure threads_running_barrier = BarrierClosure(
+      kNewMaxTasks,
+      BindOnce(&TestWaitableEvent::Signal, Unretained(&threads_running)));
+
+  // Posting these tasks should cause new workers to be created.
+  for (size_t i = 0; i < kNewMaxTasks; ++i) {
+    task_runner->PostTask(
+        FROM_HERE, BindLambdaForTesting(
+                       [&busy_threads_continue, &threads_running_barrier]() {
+                         threads_running_barrier.Run();
+                         busy_threads_continue.Wait();
+                       }));
+  }
+  threads_running.Wait();
+
+  AtomicFlag is_exiting;
+  // These tasks should not get executed until after other tasks become
+  // unblocked.
+  for (size_t i = 0; i < kNewMaxTasks; ++i) {
+    task_runner->PostTask(FROM_HERE, BindOnce(
+                                         [](AtomicFlag* is_exiting) {
+                                           EXPECT_TRUE(is_exiting->IsSet());
+                                         },
+                                         Unretained(&is_exiting)));
+  }
+  // Give time for those idle workers to possibly do work (which should not
+  // happen).
+  PlatformThread::Sleep(TestTimeouts::tiny_timeout());
+
+  is_exiting.Set();
+  thread_group_->ResetMaxTasks();
+  busy_threads_continue.Signal();
+  task_tracker_.FlushForTesting();
 }
 
 // Verify that the maximum number of BEST_EFFORT tasks that can run concurrently
@@ -388,9 +439,9 @@ TEST_F(ThreadGroupTest, UpdatePriorityBestEffortToUserBlocking) {
 
   CheckedLock num_tasks_running_lock;
 
-  std::unique_ptr<ConditionVariable> num_tasks_running_cv =
+  ConditionVariable num_tasks_running_cv =
       num_tasks_running_lock.CreateConditionVariable();
-  num_tasks_running_cv->declare_only_used_while_idle();
+  num_tasks_running_cv.declare_only_used_while_idle();
 
   size_t num_tasks_running = 0;
 
@@ -402,31 +453,34 @@ TEST_F(ThreadGroupTest, UpdatePriorityBestEffortToUserBlocking) {
         TaskTraits(TaskPriority::BEST_EFFORT),
         &mock_pooled_task_runner_delegate_));
     task_runners.back()->PostTask(
-        FROM_HERE, BindLambdaForTesting([&]() {
+        FROM_HERE, BindLambdaForTesting([&] {
           // Increment the number of tasks running.
           {
             CheckedAutoLock auto_lock(num_tasks_running_lock);
             ++num_tasks_running;
           }
-          num_tasks_running_cv->Broadcast();
+          num_tasks_running_cv.Broadcast();
 
           // Wait until all posted tasks are running.
           CheckedAutoLock auto_lock(num_tasks_running_lock);
-          while (num_tasks_running < kMaxTasks)
-            num_tasks_running_cv->Wait();
+          while (num_tasks_running < kMaxTasks) {
+            num_tasks_running_cv.Wait();
+          }
         }));
   }
 
   // Wait until |kMaxBestEffort| tasks start running.
   {
     CheckedAutoLock auto_lock(num_tasks_running_lock);
-    while (num_tasks_running < kMaxBestEffortTasks)
-      num_tasks_running_cv->Wait();
+    while (num_tasks_running < kMaxBestEffortTasks) {
+      num_tasks_running_cv.Wait();
+    }
   }
 
   // Update the priority of all TaskRunners to USER_BLOCKING.
-  for (size_t i = 0; i < kMaxTasks; ++i)
+  for (size_t i = 0; i < kMaxTasks; ++i) {
     task_runners[i]->UpdatePriority(TaskPriority::USER_BLOCKING);
+  }
 
   // Wait until all posted tasks start running. This should not block forever,
   // even in a thread group that enforces a maximum number of concurrent
@@ -434,8 +488,9 @@ TEST_F(ThreadGroupTest, UpdatePriorityBestEffortToUserBlocking) {
   static_assert(kMaxBestEffortTasks < kMaxTasks, "");
   {
     CheckedAutoLock auto_lock(num_tasks_running_lock);
-    while (num_tasks_running < kMaxTasks)
-      num_tasks_running_cv->Wait();
+    while (num_tasks_running < kMaxTasks) {
+      num_tasks_running_cv.Wait();
+    }
   }
 
   task_tracker_.FlushForTesting();
@@ -505,13 +560,13 @@ TEST_F(ThreadGroupTest, ShouldYieldSingleTask) {
 
   test::CreatePooledTaskRunner({TaskPriority::USER_BLOCKING},
                                &mock_pooled_task_runner_delegate_)
-      ->PostTask(FROM_HERE, BindLambdaForTesting([&]() {
+      ->PostTask(FROM_HERE, BindLambdaForTesting([&] {
                    EXPECT_FALSE(thread_group_->ShouldYield(
-                       {TaskPriority::BEST_EFFORT, TimeTicks::Now()}));
+                       {ThreadType::kBackground, TimeTicks::Now()}));
                    EXPECT_FALSE(thread_group_->ShouldYield(
-                       {TaskPriority::USER_VISIBLE, TimeTicks::Now()}));
+                       {ThreadType::kUtility, TimeTicks::Now()}));
                    EXPECT_FALSE(thread_group_->ShouldYield(
-                       {TaskPriority::USER_VISIBLE, TimeTicks::Now()}));
+                       {ThreadType::kUtility, TimeTicks::Now()}));
                  }));
 
   task_tracker_.FlushForTesting();
@@ -598,7 +653,7 @@ TEST_F(ThreadGroupTest, CancelJobTaskSource) {
   StartThreadGroup();
 
   CheckedLock tasks_running_lock;
-  std::unique_ptr<ConditionVariable> tasks_running_cv =
+  ConditionVariable tasks_running_cv =
       tasks_running_lock.CreateConditionVariable();
   bool tasks_running = false;
 
@@ -609,7 +664,7 @@ TEST_F(ThreadGroupTest, CancelJobTaskSource) {
           CheckedAutoLock auto_lock(tasks_running_lock);
           tasks_running = true;
         }
-        tasks_running_cv->Signal();
+        tasks_running_cv.Signal();
 
         while (!delegate->ShouldYield()) {
         }
@@ -624,8 +679,9 @@ TEST_F(ThreadGroupTest, CancelJobTaskSource) {
   // Wait for at least 1 task to start running.
   {
     CheckedAutoLock auto_lock(tasks_running_lock);
-    while (!tasks_running)
-      tasks_running_cv->Wait();
+    while (!tasks_running) {
+      tasks_running_cv.Wait();
+    }
   }
 
   // Cancels pending tasks and unblocks running ones.
@@ -800,9 +856,9 @@ TEST_F(ThreadGroupTest, JobTaskSourceUpdatePriority) {
 
   CheckedLock num_tasks_running_lock;
 
-  std::unique_ptr<ConditionVariable> num_tasks_running_cv =
+  ConditionVariable num_tasks_running_cv =
       num_tasks_running_lock.CreateConditionVariable();
-  num_tasks_running_cv->declare_only_used_while_idle();
+  num_tasks_running_cv.declare_only_used_while_idle();
 
   size_t num_tasks_running = 0;
 
@@ -813,12 +869,13 @@ TEST_F(ThreadGroupTest, JobTaskSourceUpdatePriority) {
           CheckedAutoLock auto_lock(num_tasks_running_lock);
           ++num_tasks_running;
         }
-        num_tasks_running_cv->Broadcast();
+        num_tasks_running_cv.Broadcast();
 
         // Wait until all posted tasks are running.
         CheckedAutoLock auto_lock(num_tasks_running_lock);
-        while (num_tasks_running < kMaxTasks)
-          num_tasks_running_cv->Wait();
+        while (num_tasks_running < kMaxTasks) {
+          num_tasks_running_cv.Wait();
+        }
       }),
       /* num_tasks_to_run */ kMaxTasks);
   scoped_refptr<JobTaskSource> task_source =
@@ -834,8 +891,9 @@ TEST_F(ThreadGroupTest, JobTaskSourceUpdatePriority) {
   // Wait until |kMaxBestEffort| tasks start running.
   {
     CheckedAutoLock auto_lock(num_tasks_running_lock);
-    while (num_tasks_running < kMaxBestEffortTasks)
-      num_tasks_running_cv->Wait();
+    while (num_tasks_running < kMaxBestEffortTasks) {
+      num_tasks_running_cv.Wait();
+    }
   }
 
   // Update the priority to USER_BLOCKING.
@@ -849,8 +907,9 @@ TEST_F(ThreadGroupTest, JobTaskSourceUpdatePriority) {
   static_assert(kMaxBestEffortTasks < kMaxTasks, "");
   {
     CheckedAutoLock auto_lock(num_tasks_running_lock);
-    while (num_tasks_running < kMaxTasks)
-      num_tasks_running_cv->Wait();
+    while (num_tasks_running < kMaxTasks) {
+      num_tasks_running_cv.Wait();
+    }
   }
 
   // Flush the task tracker to be sure that no local variables are accessed by
@@ -869,5 +928,4 @@ INSTANTIATE_TEST_SUITE_P(GenericJob,
                          ThreadGroupTestAllExecutionModes,
                          ::testing::Values(TaskSourceExecutionMode::kJob));
 
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal

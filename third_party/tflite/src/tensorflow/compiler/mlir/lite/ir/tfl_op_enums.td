@@ -27,9 +27,9 @@ include "tensorflow/compiler/mlir/lite/ir/tfl_op_interfaces.td"
 // Referred TF_AnyStrAttrOf in tensorflow/compiler/mlir/tensorflow/ir/tf_op_base.td
 class TFL_AnyStrAttrOf<list<string> cases> : StringBasedAttr<
   CPred<!foldl(
-      "$_self.cast<StringAttr>().getValue() == \"" # !head(cases) # "\"",
+      "llvm::cast<StringAttr>($_self).getValue() == \"" # !head(cases) # "\"",
       !foreach(case, !tail(cases),
-               "$_self.cast<StringAttr>().getValue() == \"" # case # "\""),
+               "llvm::cast<StringAttr>($_self).getValue() == \"" # case # "\""),
       prev, cur, prev # " || " # cur)>,
   "string attribute whose value is " #
     !foldl(/*init*/!head(cases), /*list*/!tail(cases),
@@ -164,6 +164,18 @@ def TFL_ConstBytesAttr : AttrDef<TFL_Dialect, "ConstBytes"> {
   let mnemonic = "const_bytes";
   let parameters = (ins StringRefParameter<"">:$value);
   let hasCustomAssemblyFormat = 1;
+}
+
+def TFL_ExternalBufferAttr : AttrDef<TFL_Dialect, "ExternalBuffer"> {
+  let mnemonic = "external_buffer";
+  let parameters = (ins
+      "::mlir::StringAttr":$group_name,
+      "uint64_t":$offset,
+      "uint64_t":$length,
+      "::mlir::StringAttr":$packing
+  );
+  let summary = "Flatbuffer external buffer metadata.";
+  let assemblyFormat = "`<` struct(params) `>`";
 }
 
 #endif // TFL_OP_ENUMS

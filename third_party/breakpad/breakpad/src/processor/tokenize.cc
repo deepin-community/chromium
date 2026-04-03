@@ -32,10 +32,9 @@
 
 #include <string.h>
 
+#include <algorithm>
 #include <string>
 #include <vector>
-
-#include "common/using_std_string.h"
 
 namespace google_breakpad {
 
@@ -61,18 +60,18 @@ bool Tokenize(char* line,
   while (token && --remaining > 0) {
     tokens->push_back(token);
     if (remaining > 1)
-      token = strtok_r(NULL, separators, &save_ptr);
+      token = strtok_r(nullptr, separators, &save_ptr);
   }
 
   // If there's anything left, just add it as a single token.
-  if (remaining == 0 && (token = strtok_r(NULL, "\r\n", &save_ptr))) {
+  if (remaining == 0 && (token = strtok_r(nullptr, "\r\n", &save_ptr))) {
     tokens->push_back(token);
   }
 
   return tokens->size() == static_cast<unsigned int>(max_tokens);
 }
 
-void StringToVector(const string& str, vector<char>& vec) {
+void StringToVector(const std::string& str, vector<char>& vec) {
   vec.resize(str.length() + 1);
   std::copy(str.begin(), str.end(), vec.begin());
   vec[str.length()] = '\0';

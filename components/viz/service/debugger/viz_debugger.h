@@ -15,6 +15,7 @@
 #include "base/debug/debugging_buildflags.h"
 #include "base/macros/concat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
@@ -28,6 +29,7 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/vector2d_f.h"
@@ -51,7 +53,7 @@ class VIZ_SERVICE_EXPORT VizDebugger {
  public:
   // These functions are called on a gpu thread that is not the
   // 'VizCompositorThread' and therefore have mulithreaded considerations.
-  void FilterDebugStream(base::Value::Dict json);
+  void FilterDebugStream(base::DictValue json);
   void StartDebugStream(
       mojo::PendingRemote<mojom::VizDebugOutput> pending_debug_output);
   void StopDebugStream();
@@ -89,6 +91,16 @@ class VIZ_SERVICE_EXPORT VizDebugger {
 
   static VizDebugger* GetInstance();
 
+  // Parse the given hex string to produce a SkColor value. The hex string must
+  // have a length of 7 and starts with a '#', e.g. "#ffffff". Returns
+  // SK_ColorTRANSPARENT on parse failure.
+  static SkColor HexStringToSkColor(std::string_view hex_string);
+
+  // Converts a SkColor value to its corresponding hex string. e.g. SK_ColorRED
+  // will produce "#ff0000".
+  static std::string SkColorToHexString(SkColor color);
+
+  VizDebugger();
   ~VizDebugger();
 
   struct VIZ_SERVICE_EXPORT BufferInfo {
@@ -126,7 +138,6 @@ class VIZ_SERVICE_EXPORT VizDebugger {
  private:
   friend class VizDebuggerInternal;
   static std::atomic<bool> enabled_;
-  VizDebugger();
   base::Value FrameAsJson(const uint64_t counter,
                           const gfx::Size& window_pix,
                           base::TimeTicks time_ticks);
@@ -149,15 +160,18 @@ class VIZ_SERVICE_EXPORT VizDebugger {
 
   struct CallSubmitCommon {
     CallSubmitCommon() = default;
-    CallSubmitCommon(int index, int source, int thread, DrawOption draw_option)
+    CallSubmitCommon(int index,
+                     int source,
+                     int64_t thread,
+                     DrawOption draw_option)
         : draw_index(index),
           source_index(source),
           thread_id(thread),
           option(draw_option) {}
-    base::Value::Dict GetDictionaryValue() const;
+    base::DictValue GetDictionaryValue() const;
     int draw_index;
     int source_index;
-    int thread_id;
+    int64_t thread_id;
     VizDebugger::DrawOption option;
   };
 
@@ -165,7 +179,7 @@ class VIZ_SERVICE_EXPORT VizDebugger {
     DrawCall() = default;
     DrawCall(int index,
              int source,
-             int thread,
+             int64_t thread,
              DrawOption draw_option,
              gfx::SizeF size,
              gfx::Vector2dF position,
@@ -189,7 +203,7 @@ class VIZ_SERVICE_EXPORT VizDebugger {
     LogCall() = default;
     LogCall(int index,
             int source,
-            int thread,
+            int64_t thread,
             DrawOption draw_option,
             std::string str)
         : CallSubmitCommon(index, source, thread, draw_option),
@@ -367,23 +381,11 @@ DrawRectToTraceValue(const gfx::Vector2dF& pos,
 
 #define DBG_DEFAULT_UV 0
 
-#define DBG_VIZ_DEBUGGER_TRACE_IMPL(anno, pos, size, text)                \
-  BASE_CONCAT(DBG_VIZ_DEBUGGER_TRACE_IMPL_, DBG_USE_VIZ_DEBUGGER_TRACE()) \
-  (anno, pos, size, text)
-
-// Allow definition of DBG_USE_VIZ_DEBUGGER_TRACE() just before callsite
-// (instead of before inclusion of this header).
-#define DBG_VIZ_DEBUGGER_TRACE_IMPL_DBG_USE_VIZ_DEBUGGER_TRACE() \
-  DBG_VIZ_DEBUGGER_TRACE_IMPL_0
-
-#define DBG_VIZ_DEBUGGER_TRACE_IMPL_0(anno, pos, size, text) \
-  std::ignore = anno;                                        \
-  std::ignore = pos;                                         \
-  std::ignore = size;
-
-#define DBG_VIZ_DEBUGGER_TRACE_IMPL_1(anno, pos, size, text)                   \
-  TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT(VIZ_DEBUGGER_TRACING_CATEGORY), anno, \
-               "args", viz::DrawRectToTraceValue(pos, size, text))
+#define DBG_VIZ_DEBUGGER_TRACE_IMPL(anno, pos, size, text)            \
+  TRACE_EVENT_INSTANT1(                                               \
+      TRACE_DISABLED_BY_DEFAULT(VIZ_DEBUGGER_TRACING_CATEGORY), anno, \
+      TRACE_EVENT_FLAG_NONE, "args",                                  \
+      viz::DrawRectToTraceValue(pos, size, text))
 
 #define DBG_DRAW_RECTANGLE_OPT_BUFF_UV_TEXT(anno, option, pos, size, id, uv, \
                                             text)                            \
@@ -402,20 +404,6 @@ DrawRectToTraceValue(const gfx::Vector2dF& pos,
   std::ignore = format;
 
 #define DBG_CONNECTED_OR_TRACING(enabled)                             \
-  BASE_CONCAT(DBG_VIZ_CATEGORY_ENABLE_, DBG_USE_VIZ_DEBUGGER_TRACE()) \
-  (enabled)
-
-// Allow definition of DBG_USE_VIZ_DEBUGGER_TRACE() just before callsite
-// (instead of before inclusion of this header).
-#define DBG_VIZ_CATEGORY_ENABLE_DBG_USE_VIZ_DEBUGGER_TRACE() \
-  DBG_VIZ_CATEGORY_ENABLE_0
-
-#define DBG_VIZ_CATEGORY_ENABLE_0(enabled) \
-  do {                                     \
-    enabled = false;                       \
-  } while (0)
-
-#define DBG_VIZ_CATEGORY_ENABLE_1(enabled) \
   TRACE_EVENT_CATEGORY_GROUP_ENABLED(      \
       TRACE_DISABLED_BY_DEFAULT(VIZ_DEBUGGER_TRACING_CATEGORY), (&enabled))
 

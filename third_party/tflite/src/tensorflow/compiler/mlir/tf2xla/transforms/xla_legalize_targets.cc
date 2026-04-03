@@ -21,12 +21,13 @@ limitations under the License.
 #include "mlir/Dialect/Tensor/IR/Tensor.h"  // from @llvm-project
 #include "mlir/Transforms/DialectConversion.h"  // from @llvm-project
 #include "stablehlo/dialect/ChloOps.h"  // from @stablehlo
+#include "stablehlo/dialect/StablehloOps.h"  // from @stablehlo
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_dialect.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "xla/mlir_hlo/mhlo/IR/hlo_ops.h"
 
 namespace mlir {
-namespace mhlo {
+namespace hlo {
 
 ConversionTarget GetDefaultLegalConversionTargets(MLIRContext& mlir_context,
                                                   bool legalize_chlo) {
@@ -34,10 +35,11 @@ ConversionTarget GetDefaultLegalConversionTargets(MLIRContext& mlir_context,
 
   if (legalize_chlo) {
     target.addIllegalDialect<chlo::ChloDialect>();
+    target.addIllegalDialect<stablehlo::StablehloDialect>();
   } else {
     target.addLegalDialect<chlo::ChloDialect>();
   }
-  target.addLegalDialect<MhloDialect>();
+  target.addLegalDialect<mhlo::MhloDialect>();
   target.addLegalDialect<arith::ArithDialect>();
   target.addLegalDialect<func::FuncDialect>();
   target.addLegalDialect<tensor::TensorDialect>();
@@ -52,5 +54,5 @@ ConversionTarget GetDefaultLegalConversionTargets(MLIRContext& mlir_context,
   return target;
 }
 
-}  // namespace mhlo
+}  // namespace hlo
 }  // namespace mlir

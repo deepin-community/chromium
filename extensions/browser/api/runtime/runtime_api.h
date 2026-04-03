@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
@@ -23,8 +24,11 @@
 #include "extensions/browser/process_manager.h"
 #include "extensions/browser/process_manager_observer.h"
 #include "extensions/browser/update_observer.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/runtime.h"
 #include "extensions/common/extension_id.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace base {
 class Version;
@@ -142,7 +146,7 @@ class RuntimeAPI : public BrowserContextKeyedAPI,
   void Shutdown() override;
 
   // extensions::UpdateObserver overrides:
-  void OnAppUpdateAvailable(const Extension* extension) override;
+  void OnAppUpdateAvailable(const Extension& extension) override;
   void OnChromeUpdateAvailable() override;
 
   // ProcessManagerObserver implementation:
@@ -199,7 +203,7 @@ class RuntimeEventRouter {
                                      const ExtensionId& extension_id);
 
   // Dispatches the onInstalled event to the given extension.
-  static void DispatchOnInstalledEvent(content::BrowserContext* context,
+  static void DispatchOnInstalledEvent(void* context_id,
                                        const ExtensionId& extension_id,
                                        const base::Version& old_version,
                                        bool chrome_updated);
@@ -207,7 +211,7 @@ class RuntimeEventRouter {
   // Dispatches the onUpdateAvailable event to the given extension.
   static void DispatchOnUpdateAvailableEvent(content::BrowserContext* context,
                                              const ExtensionId& extension_id,
-                                             const base::Value::Dict* manifest);
+                                             const base::DictValue* manifest);
 
   // Dispatches the onBrowserUpdateAvailable event to all extensions.
   static void DispatchOnBrowserUpdateAvailableEvent(
@@ -338,6 +342,12 @@ class RuntimeGetContextsFunction : public ExtensionFunction {
   // Returns a collection of all frame-based extension contexts for the
   // extension.
   std::vector<api::runtime::ExtensionContext> GetFrameContexts();
+
+  // Helper methods to return tab id, frame id and window id for a given
+  // context.
+  int GetTabId(content::WebContents& web_contents);
+  int GetFrameId(content::RenderFrameHost& host);
+  int GetWindowId(content::WebContents& web_contents);
 };
 
 }  // namespace extensions

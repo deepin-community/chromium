@@ -7,7 +7,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/webui/ash/settings/constants/constants_util.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/os_settings_section.h"
@@ -120,8 +119,9 @@ class Hierarchy::PerSectionHierarchyGenerator
     auto it = subpage_map.find(subpage);
 
     // Metadata already exists; return it.
-    if (it != subpage_map.end())
+    if (it != subpage_map.end()) {
       return it->second;
+    }
 
     // Metadata does not exist yet; insert then return it.
     auto pair = subpage_map.emplace(
@@ -139,8 +139,9 @@ class Hierarchy::PerSectionHierarchyGenerator
     auto it = settings_map.find(setting);
 
     // Metadata already exists; return it.
-    if (it != settings_map.end())
+    if (it != settings_map.end()) {
       return it->second;
+    }
 
     // Metadata does not exist yet; insert then return it.
     auto pair = settings_map.emplace(setting, section_);
@@ -252,8 +253,9 @@ std::vector<std::u16string> Hierarchy::GenerateAncestorHierarchyStrings(
   const SubpageMetadata& subpage_metadata = GetSubpageMetadata(subpage);
 
   // Top-level subpage; simply return section hierarchy.
-  if (!subpage_metadata.parent_subpage)
+  if (!subpage_metadata.parent_subpage) {
     return GenerateHierarchyStrings(subpage_metadata.section);
+  }
 
   // Nested subpage; use recursive call, then append parent subpage name itself.
   std::vector<std::u16string> hierarchy_strings =
@@ -270,8 +272,9 @@ std::vector<std::u16string> Hierarchy::GenerateAncestorHierarchyStrings(
   const SettingMetadata& setting_metadata = GetSettingMetadata(setting);
 
   // Top-level setting; simply return section hierarchy.
-  if (!setting_metadata.primary.subpage)
+  if (!setting_metadata.primary.subpage) {
     return GenerateHierarchyStrings(setting_metadata.primary.section);
+  }
 
   // Nested setting; use subpage ancestors, then append subpage name itself.
   std::vector<std::u16string> hierarchy_strings =
@@ -343,7 +346,7 @@ std::ostream& operator<<(std::ostream& os, const Hierarchy& h) {
     subpage_subpage.insert({subpage_id, {}});
     subpage_setting.insert({subpage_id, {}});
 
-    if (!base::Contains(h.subpage_map_, subpage_id)) {
+    if (!h.subpage_map_.contains(subpage_id)) {
       none_exist_subpage.push_back(subpage_id);
       continue;
     }
@@ -358,7 +361,7 @@ std::ostream& operator<<(std::ostream& os, const Hierarchy& h) {
   }
 
   for (auto& setting_id : AllSettings()) {
-    if (!base::Contains(h.setting_map_, setting_id)) {
+    if (!h.setting_map_.contains(setting_id)) {
       none_exist_setting.push_back(setting_id);
       continue;
     }

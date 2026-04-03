@@ -15,7 +15,6 @@ limitations under the License.
 
 #include "tensorflow/compiler/mlir/tf2xla/transforms/xla_legalize_targets.h"
 
-#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "mlir/Dialect/Arith/IR/Arith.h"  // from @llvm-project
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
@@ -32,7 +31,7 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 
 namespace mlir {
-namespace mhlo {
+namespace hlo {
 namespace {
 
 mlir::DialectRegistry GetDefaultDialectRegistry() {
@@ -64,8 +63,8 @@ class XlaLegalizeTargetsTest : public testing::Test {
 };
 
 TEST_F(XlaLegalizeTargetsTest, CreatesConversionTargets) {
-  auto const_int = builder_.create<mlir::arith::ConstantIntOp>(
-      builder_.getUnknownLoc(), /*value=*/10, builder_.getI32Type());
+  auto const_int = mlir::arith::ConstantIntOp::create(
+      builder_, builder_.getUnknownLoc(), builder_.getI32Type(), /*value=*/10);
 
   ConversionTarget target =
       GetDefaultLegalConversionTargets(context_, /*legalize_chlo=*/false);
@@ -73,8 +72,8 @@ TEST_F(XlaLegalizeTargetsTest, CreatesConversionTargets) {
 }
 
 TEST_F(XlaLegalizeTargetsTest, AllowsCHLODialect) {
-  auto const_int = builder_.create<chlo::ConstantOp>(
-      builder_.getUnknownLoc(), builder_.getI32TensorAttr({42}));
+  auto const_int = chlo::ConstantOp::create(builder_, builder_.getUnknownLoc(),
+                                            builder_.getI32TensorAttr({42}));
 
   ConversionTarget target =
       GetDefaultLegalConversionTargets(context_, /*legalize_chlo=*/true);
@@ -83,8 +82,8 @@ TEST_F(XlaLegalizeTargetsTest, AllowsCHLODialect) {
 }
 
 TEST_F(XlaLegalizeTargetsTest, DontAllowCHLODialect) {
-  auto const_int = builder_.create<chlo::ConstantOp>(
-      builder_.getUnknownLoc(), builder_.getI32TensorAttr({42}));
+  auto const_int = chlo::ConstantOp::create(builder_, builder_.getUnknownLoc(),
+                                            builder_.getI32TensorAttr({42}));
 
   ConversionTarget target =
       GetDefaultLegalConversionTargets(context_, /*legalize_chlo=*/false);
@@ -92,5 +91,5 @@ TEST_F(XlaLegalizeTargetsTest, DontAllowCHLODialect) {
 }
 
 }  // namespace
-}  // namespace mhlo
+}  // namespace hlo
 }  // namespace mlir

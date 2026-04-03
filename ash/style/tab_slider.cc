@@ -4,6 +4,7 @@
 
 #include "ash/style/tab_slider.h"
 
+#include <algorithm>
 #include <cstddef>
 
 #include "ash/style/style_util.h"
@@ -17,6 +18,7 @@
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/geometry/transform_util.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/table_layout.h"
 #include "ui/views/view_class_properties.h"
 
@@ -134,16 +136,23 @@ TabSliderButton* TabSlider::GetButtonAtIndex(size_t index) {
 
 void TabSlider::OnButtonSelected(TabSliderButton* button) {
   DCHECK(button);
-  DCHECK(base::Contains(buttons_, button));
+  DCHECK(std::ranges::contains(buttons_, button));
   DCHECK(button->selected());
 
-  // Deselect all the other buttons.
+  // Deselect all the other buttons and check if the tab slider has focus.
+  bool has_focus = false;
   for (ash::TabSliderButton* b : buttons_) {
     b->SetSelected(b == button);
+    has_focus |= b->HasFocus();
   }
 
   // Move the selector to the selected button.
   selector_view_->MoveToSelectedButton(button);
+
+  // Move the focus to the selected button.
+  if (has_focus) {
+    GetFocusManager()->SetFocusedView(button);
+  }
 }
 
 void TabSlider::Layout(PassKey) {
@@ -201,7 +210,7 @@ void TabSlider::AddButtonInternal(TabSliderButton* button) {
 
   // Add the button as a child of the tab slider and insert it in the
   // `buttons_` list.
-  AddChildView(button);
+  AddChildViewRaw(button);
   buttons_.emplace_back(button);
   button->AddedToSlider(this);
 }

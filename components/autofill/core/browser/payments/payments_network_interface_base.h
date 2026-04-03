@@ -5,13 +5,14 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_PAYMENTS_NETWORK_INTERFACE_BASE_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_PAYMENTS_NETWORK_INTERFACE_BASE_H_
 
+#include <optional>
 #include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
-#include "components/autofill/core/browser/data_model/autofill_profile.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/payments/client_behavior_constants.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "url/origin.h"
@@ -58,8 +59,8 @@ class PaymentsNetworkInterfaceBase {
   // denotes incognito mode.
   PaymentsNetworkInterfaceBase(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      signin::IdentityManager* const identity_manager,
-      AccountInfoGetter* const account_info_getter,
+      signin::IdentityManager* identity_manager,
+      AccountInfoGetter* account_info_getter,
       bool is_off_the_record = false);
 
   PaymentsNetworkInterfaceBase(const PaymentsNetworkInterfaceBase&) = delete;
@@ -77,7 +78,7 @@ class PaymentsNetworkInterfaceBase {
   void InitializeResourceRequest();
 
   // Callback from `simple_url_loader_`.
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
   void OnSimpleLoaderCompleteInternal(int response_code,
                                       const std::string& data);
 
@@ -119,7 +120,7 @@ class PaymentsNetworkInterfaceBase {
   std::string access_token_;
 
   // Denotes incognito mode.
-  // TODO(crbug.com/1409158): Remove this variable, as it should not be the
+  // TODO(crbug.com/40888896): Remove this variable, as it should not be the
   // PaymentsNetworkInterface's responsibility to check if the user is off the
   // record. The sole responsibility of the PaymentsNetworkInterface is to send
   // requests to the Google Payments server.

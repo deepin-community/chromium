@@ -33,7 +33,6 @@ SmbFsFileSystemBackendDelegate::CreateFileStreamReader(
     const base::Time& expected_modification_time,
     storage::FileSystemContext* context) {
   NOTREACHED();
-  return nullptr;
 }
 
 std::unique_ptr<storage::FileStreamWriter>
@@ -42,18 +41,10 @@ SmbFsFileSystemBackendDelegate::CreateFileStreamWriter(
     int64_t offset,
     storage::FileSystemContext* context) {
   NOTREACHED();
-  return nullptr;
 }
 
 storage::WatcherManager* SmbFsFileSystemBackendDelegate::GetWatcherManager(
     storage::FileSystemType type) {
-  NOTREACHED();
-  return nullptr;
-}
-
-void SmbFsFileSystemBackendDelegate::GetRedirectURLForContents(
-    const storage::FileSystemURL& url,
-    storage::URLCallback callback) {
   NOTREACHED();
 }
 

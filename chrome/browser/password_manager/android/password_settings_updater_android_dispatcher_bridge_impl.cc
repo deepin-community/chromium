@@ -8,10 +8,12 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "chrome/browser/password_manager/android/jni_headers/PasswordSettingsUpdaterDispatcherBridge_jni.h"
 #include "chrome/browser/password_manager/android/password_settings_updater_android_dispatcher_bridge.h"
 #include "chrome/browser/password_manager/android/password_settings_updater_android_receiver_bridge.h"
 #include "components/password_manager/core/browser/password_manager_setting.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/browser/password_manager/android/jni_headers/PasswordSettingsUpdaterDispatcherBridge_jni.h"
 
 namespace password_manager {
 
@@ -32,24 +34,14 @@ base::android::ScopedJavaLocalRef<jstring> GetJavaStringFromAccount(
 }  // namespace
 
 // static
-bool PasswordSettingsUpdaterAndroidDispatcherBridge::CanCreateAccessor() {
-  return Java_PasswordSettingsUpdaterDispatcherBridge_canCreateAccessor(
-      base::android::AttachCurrentThread());
-}
-
-// static
 std::unique_ptr<PasswordSettingsUpdaterAndroidDispatcherBridge>
 PasswordSettingsUpdaterAndroidDispatcherBridge::Create() {
-  DCHECK(Java_PasswordSettingsUpdaterDispatcherBridge_canCreateAccessor(
-      base::android::AttachCurrentThread()));
   return std::make_unique<PasswordSettingsUpdaterAndroidDispatcherBridgeImpl>();
 }
 
 PasswordSettingsUpdaterAndroidDispatcherBridgeImpl::
     PasswordSettingsUpdaterAndroidDispatcherBridgeImpl() {
   DETACH_FROM_THREAD(thread_checker_);
-  DCHECK(Java_PasswordSettingsUpdaterDispatcherBridge_canCreateAccessor(
-      base::android::AttachCurrentThread()));
 }
 
 PasswordSettingsUpdaterAndroidDispatcherBridgeImpl::
@@ -84,3 +76,5 @@ void PasswordSettingsUpdaterAndroidDispatcherBridgeImpl::
 }
 
 }  // namespace password_manager
+
+DEFINE_JNI(PasswordSettingsUpdaterDispatcherBridge)

@@ -11,32 +11,24 @@
 #include "build/build_config.h"
 #include "components/translate/core/common/translate_switches.h"
 
+namespace {
+// The default number of times user should consecutively translate for "Always
+// Translate" to automatically trigger.
+constexpr int kAutoAlwaysThreshold = 5;
+// The default number of times user should consecutively dismiss the translate
+// infobar for "Never Translate" to automatically trigger.
+constexpr int kAutoNeverThreshold = 20;
+// The default maximum number of times "Always Translate" is automatically
+// triggered.
+constexpr int kMaxNumberOfAutoAlways = 2;
+// The default maximum number of times "Never Translate" is automatically
+// triggered.
+constexpr int kMaxNumberOfAutoNever = 2;
+}  // namespace
+
 namespace translate {
 
 const char kSecurityOrigin[] = "https://translate.googleapis.com/";
-
-// The feature is explicitly disabled on Webview and Weblayer.
-// TODO(crbug.com/1292622): Enable the feature on Webview.
-// TODO(crbug.com/1247836): Enable the feature on WebLayer.
-BASE_FEATURE(kTFLiteLanguageDetectionEnabled,
-             "TFLiteLanguageDetectionEnabled",
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || \
-    BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-             base::FEATURE_ENABLED_BY_DEFAULT
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT
-#endif
-);
-
-BASE_FEATURE(kTFLiteLanguageDetectionIgnoreEnabled,
-             "TFLiteLanguageDetectionIgnoreEnabled",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-#if !BUILDFLAG(IS_WIN)
-BASE_FEATURE(kMmapLanguageDetectionModel,
-             "MmapLanguageDetectionModel",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-#endif
 
 GURL GetTranslateSecurityOrigin() {
   std::string security_origin(kSecurityOrigin);
@@ -49,44 +41,30 @@ GURL GetTranslateSecurityOrigin() {
 }
 
 bool IsTFLiteLanguageDetectionEnabled() {
-  return base::FeatureList::IsEnabled(kTFLiteLanguageDetectionEnabled);
+// The feature is explicitly disabled on WebView.
+// TODO(crbug.com/40819484): Enable the feature on WebView.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  return true;
+#else
+  return false;
+#endif
 }
-
-bool IsTFLiteLanguageDetectionIgnoreEnabled() {
-  return base::FeatureList::IsEnabled(kTFLiteLanguageDetectionIgnoreEnabled);
-}
-
-float GetTFLiteLanguageDetectionThreshold() {
-  return base::GetFieldTrialParamByFeatureAsDouble(
-      kTFLiteLanguageDetectionEnabled, "reliability_threshold", .7);
-}
-
-BASE_FEATURE(kTranslateAutoSnackbars,
-             "TranslateAutoSnackbars",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 int GetAutoAlwaysThreshold() {
-  static constexpr base::FeatureParam<int> auto_always_threshold{
-      &kTranslateAutoSnackbars, "AutoAlwaysThreshold", 5};
-  return auto_always_threshold.Get();
+  return kAutoAlwaysThreshold;
 }
 
 int GetAutoNeverThreshold() {
-  static constexpr base::FeatureParam<int> auto_never_threshold{
-      &kTranslateAutoSnackbars, "AutoNeverThreshold", 20};
-  return auto_never_threshold.Get();
+  return kAutoNeverThreshold;
 }
 
 int GetMaximumNumberOfAutoAlways() {
-  static constexpr base::FeatureParam<int> auto_always_maximum{
-      &kTranslateAutoSnackbars, "AutoAlwaysMaximum", 2};
-  return auto_always_maximum.Get();
+  return kMaxNumberOfAutoAlways;
 }
 
 int GetMaximumNumberOfAutoNever() {
-  static constexpr base::FeatureParam<int> auto_never_maximum{
-      &kTranslateAutoSnackbars, "AutoNeverMaximum", 2};
-  return auto_never_maximum.Get();
+  return kMaxNumberOfAutoNever;
 }
 
 }  // namespace translate

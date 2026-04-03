@@ -5,6 +5,7 @@
 #include "components/segmentation_platform/embedder/default_model/device_switcher_result_dispatcher.h"
 
 #include "base/feature_list.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -55,6 +56,7 @@ DeviceSwitcherResultDispatcher::GetCachedClassificationResult() {
 }
 
 void DeviceSwitcherResultDispatcher::WaitForClassificationResult(
+    base::TimeDelta timeout,
     ClassificationResultCallback callback) {
   if (latest_result_) {
     std::move(callback).Run(std::move(*latest_result_));
@@ -64,6 +66,12 @@ void DeviceSwitcherResultDispatcher::WaitForClassificationResult(
   // This class does not support waiting for multiple requests.
   DCHECK(waiting_callback_.is_null());
   waiting_callback_ = std::move(callback);
+
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&DeviceSwitcherResultDispatcher::OnWaitTimeout,
+                     weak_ptr_factory_.GetWeakPtr()),
+      timeout);
 }
 
 // static
@@ -109,6 +117,13 @@ void DeviceSwitcherResultDispatcher::OnGotResult(
   }
 }
 
+void DeviceSwitcherResultDispatcher::OnWaitTimeout() {
+  if (!waiting_callback_.is_null()) {
+    std::move(waiting_callback_)
+        .Run(ClassificationResult(PredictionStatus::kNotReady));
+  }
+}
+
 void DeviceSwitcherResultDispatcher::RegisterFieldTrials() {
   if (!field_trial_register_ || !latest_result_) {
     return;
@@ -126,13 +141,13 @@ void DeviceSwitcherResultDispatcher::RegisterFieldTrials() {
 void DeviceSwitcherResultDispatcher::SaveResultToPref(
     const ClassificationResult& result) {
   ScopedDictPrefUpdate update(prefs_, kDeviceSwitcherUserSegmentPrefKey);
-  base::Value::Dict& dictionary = update.Get();
+  base::DictValue& dictionary = update.Get();
   if (result.status != PredictionStatus::kSucceeded) {
     dictionary.Remove("result");
     return;
   }
-  base::Value::Dict segmentation_result;
-  base::Value::List labels;
+  base::DictValue segmentation_result;
+  base::ListValue labels;
   for (const auto& label : result.ordered_labels) {
     labels.Append(label);
   }
@@ -143,15 +158,14 @@ void DeviceSwitcherResultDispatcher::SaveResultToPref(
 std::optional<ClassificationResult>
 DeviceSwitcherResultDispatcher::ReadResultFromPref() const {
   ClassificationResult result(PredictionStatus::kNotReady);
-  const base::Value::Dict& dictionary =
+  const base::DictValue& dictionary =
       prefs_->GetDict(kDeviceSwitcherUserSegmentPrefKey);
   const base::Value* value = dictionary.Find("result");
   if (!value) {
     return std::nullopt;
   }
-  const base::Value::Dict& segmentation_result = value->GetDict();
-  const base::Value::List* labels_value =
-      segmentation_result.FindList("labels");
+  const base::DictValue& segmentation_result = value->GetDict();
+  const base::ListValue* labels_value = segmentation_result.FindList("labels");
   if (!labels_value) {
     return std::nullopt;
   }

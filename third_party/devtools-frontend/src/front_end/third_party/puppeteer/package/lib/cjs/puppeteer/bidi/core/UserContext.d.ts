@@ -3,7 +3,7 @@
  * Copyright 2024 Google Inc.
  * SPDX-License-Identifier: Apache-2.0
  */
-import type * as Bidi from 'chromium-bidi/lib/cjs/protocol/protocol.js';
+import type * as Bidi from 'webdriver-bidi-protocol';
 import { EventEmitter } from '../../common/EventEmitter.js';
 import { disposeSymbol } from '../../util/disposable.js';
 import type { Browser } from './Browser.js';
@@ -14,6 +14,7 @@ import { BrowsingContext } from './BrowsingContext.js';
  */
 export type CreateBrowsingContextOptions = Omit<Bidi.BrowsingContext.CreateParameters, 'type' | 'referenceContext'> & {
     referenceContext?: BrowsingContext;
+    background?: boolean;
 };
 /**
  * @internal
@@ -48,6 +49,7 @@ export declare class UserContext extends EventEmitter<{
     remove(): Promise<void>;
     getCookies(options?: GetCookiesOptions, sourceOrigin?: string | undefined): Promise<Bidi.Network.Cookie[]>;
     setCookie(cookie: Bidi.Storage.PartialCookie, sourceOrigin?: string): Promise<void>;
+    setPermissions(origin: string, descriptor: Bidi.Permissions.PermissionDescriptor, state: Bidi.Permissions.PermissionState): Promise<void>;
     [disposeSymbol](): void;
 }
 //# sourceMappingURL=UserContext.d.ts.map

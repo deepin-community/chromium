@@ -27,6 +27,11 @@ executable("traced_probes") {
   ]
   sources = [ "main.cc" ]
   assert_no_deps = [ "../../../gn:protobuf_lite" ]
+
+  # Abseil is only used in Perfetto via the gRPC/libprotobuf.
+  if (perfetto_build_standalone || is_perfetto_build_generator) {
+    assert_no_deps += [ "../../../buildtools:abseil_cpp" ]
+  }
 }
 
 # Contains all the implementation but not the main() entry point. This target
@@ -45,7 +50,7 @@ source_set("probes") {
 source_set("probes_src") {
   public_deps = [
     "ftrace",
-    "ftrace:ftrace_procfs",
+    "ftrace:tracefs",
   ]
   deps = [
     ":data_source",
@@ -59,7 +64,9 @@ source_set("probes_src") {
     "../../base",
     "../../tracing/core",
     "../../tracing/ipc/producer",
+    "android_cpu_per_uid",
     "android_game_intervention_list",
+    "android_kernel_wakelocks",
     "android_log",
     "android_system_property",
     "common",
@@ -72,10 +79,9 @@ source_set("probes_src") {
     "statsd_client",
     "sys_stats",
     "system_info",
+    "user_list",
   ]
   sources = [
-    "kmem_activity_trigger.cc",
-    "kmem_activity_trigger.h",
     "probes_producer.cc",
     "probes_producer.h",
   ]
@@ -114,5 +120,6 @@ perfetto_unittest_source_set("unittests") {
     "statsd_client:unittests",
     "sys_stats:unittests",
     "system_info:unittests",
+    "user_list:unittests",
   ]
 }

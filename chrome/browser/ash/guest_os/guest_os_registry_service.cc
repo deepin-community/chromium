@@ -4,18 +4,20 @@
 
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
 
+#include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
-#include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/time/clock.h"
@@ -28,6 +30,7 @@
 #include "chrome/browser/ash/borealis/borealis_app_launcher.h"
 #include "chrome/browser/ash/borealis/borealis_features.h"
 #include "chrome/browser/ash/borealis/borealis_service.h"
+#include "chrome/browser/ash/borealis/borealis_service_factory.h"
 #include "chrome/browser/ash/borealis/borealis_util.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_util.h"
 #include "chrome/browser/ash/crostini/crostini_features.h"
@@ -60,6 +63,15 @@ namespace guest_os {
 
 namespace {
 
+// Returns the current locale and fallbacks for it (in this order).
+std::vector<std::string> GetFallbackLocales() {
+  std::vector<std::string> locales = l10n_util::GetParentLocales(
+      l10n_util::NormalizeLocale(g_browser_process->GetApplicationLocale()));
+  // We use an empty locale as fallback.
+  locales.push_back(std::string());
+  return locales;
+}
+
 void Launch(vm_tools::apps::VmType vm_type,
             std::string app_id,
             Profile* profile,
@@ -76,8 +88,11 @@ void Launch(vm_tools::apps::VmType vm_type,
       break;
 
     case VmType::BOREALIS:
-      borealis::BorealisService::GetForProfile(profile)->AppLauncher().Launch(
-          app_id, {url.spec()}, base::DoNothing());
+      borealis::BorealisServiceFactory::GetForProfile(profile)
+          ->AppLauncher()
+          .Launch(app_id, {url.spec()},
+                  borealis::BorealisLaunchSource::kAppUrlHandler,
+                  base::DoNothing());
       break;
 
     default:
@@ -98,7 +113,7 @@ bool AppHandlesProtocol(const GuestOsRegistryService::Registration& app,
       !borealis::IsExternalURLAllowed(url)) {
     return false;
   }
-  return base::Contains(app.MimeTypes(), "x-scheme-handler/" + url.scheme());
+  return app.MimeTypes().contains("x-scheme-handler/" + url.GetScheme());
 }
 
 // This prefix is used when generating the crostini app list id.
@@ -106,8 +121,8 @@ constexpr char kCrostiniAppIdPrefix[] = "crostini:";
 
 constexpr char kCrostiniIconFolder[] = "crostini.icons";
 
-base::Value::Dict ProtoToDictionary(const App::LocaleString& locale_string) {
-  base::Value::Dict result;
+base::DictValue ProtoToDictionary(const App::LocaleString& locale_string) {
+  base::DictValue result;
   for (const App::LocaleString::Entry& entry : locale_string.values()) {
     const std::string& locale = entry.locale();
 
@@ -124,7 +139,7 @@ base::Value::Dict ProtoToDictionary(const App::LocaleString& locale_string) {
   return result;
 }
 
-std::set<std::string> ListToStringSet(const base::Value::List* list,
+std::set<std::string> ListToStringSet(const base::ListValue* list,
                                       bool to_lower_ascii = false) {
   std::set<std::string> result;
   if (!list) {
@@ -137,18 +152,18 @@ std::set<std::string> ListToStringSet(const base::Value::List* list,
   return result;
 }
 
-base::Value::List ProtoToList(
+base::ListValue ProtoToList(
     const google::protobuf::RepeatedPtrField<std::string>& strings) {
-  base::Value::List result;
+  base::ListValue result;
   for (const std::string& string : strings) {
     result.Append(string);
   }
   return result;
 }
 
-base::Value::Dict LocaleStringsProtoToDictionary(
+base::DictValue LocaleStringsProtoToDictionary(
     const App::LocaleStrings& repeated_locale_string) {
-  base::Value::Dict result;
+  base::DictValue result;
   for (const auto& strings_with_locale : repeated_locale_string.values()) {
     const std::string& locale = strings_with_locale.locale();
 
@@ -166,12 +181,12 @@ base::Value::Dict LocaleStringsProtoToDictionary(
 
 // Populate |pref_registration| based on the given App proto.
 // |name| should be |app.name()| in Dictionary form.
-void PopulatePrefRegistrationFromApp(base::Value::Dict& pref_registration,
+void PopulatePrefRegistrationFromApp(base::DictValue& pref_registration,
                                      VmType vm_type,
                                      const std::string& vm_name,
                                      const std::string& container_name,
                                      const vm_tools::apps::App& app,
-                                     base::Value::Dict name) {
+                                     base::DictValue name) {
   pref_registration.Set(guest_os::prefs::kAppDesktopFileIdKey,
                         base::Value(app.desktop_file_id()));
   pref_registration.Set(guest_os::prefs::kVmTypeKey, static_cast<int>(vm_type));
@@ -200,8 +215,8 @@ void PopulatePrefRegistrationFromApp(base::Value::Dict& pref_registration,
                         base::Value(app.package_id()));
 }
 
-bool EqualsExcludingTimestamps(const base::Value::Dict& left,
-                               const base::Value::Dict& right) {
+bool EqualsExcludingTimestamps(const base::DictValue& left,
+                               const base::DictValue& right) {
   auto left_iter = left.begin();
   auto right_iter = right.begin();
   while (left_iter != left.end() && right_iter != right.end()) {
@@ -249,7 +264,7 @@ template <typename List>
 static std::string Join(const List& list);
 
 static std::string ToString(bool b) {
-  return b ? "true" : "false";
+  return base::ToString(b);
 }
 
 static std::string ToString(int i) {
@@ -490,21 +505,13 @@ std::string GuestOsRegistryService::Registration::GetLocalizedString(
   if (!pref_.is_dict()) {
     return std::string();
   }
-  const base::Value::Dict* dict = pref_.GetDict().FindDict(key);
+  const base::DictValue* dict = pref_.GetDict().FindDict(key);
   if (!dict) {
     return std::string();
   }
 
-  std::string current_locale =
-      l10n_util::NormalizeLocale(g_browser_process->GetApplicationLocale());
-  std::vector<std::string> locales;
-  l10n_util::GetParentLocales(current_locale, &locales);
-  // We use an empty locale as fallback.
-  locales.push_back(std::string());
-
-  for (const std::string& locale : locales) {
-    const std::string* value = dict->FindString(locale);
-    if (value) {
+  for (const std::string& locale : GetFallbackLocales()) {
+    if (const std::string* value = dict->FindString(locale)) {
       return *value;
     }
   }
@@ -516,21 +523,13 @@ std::set<std::string> GuestOsRegistryService::Registration::GetLocalizedList(
   if (!pref_.is_dict()) {
     return {};
   }
-  const base::Value::Dict* dict = pref_.GetDict().FindDict(key);
+  const base::DictValue* dict = pref_.GetDict().FindDict(key);
   if (!dict) {
     return {};
   }
 
-  std::string current_locale =
-      l10n_util::NormalizeLocale(g_browser_process->GetApplicationLocale());
-  std::vector<std::string> locales;
-  l10n_util::GetParentLocales(current_locale, &locales);
-  // We use an empty locale as fallback.
-  locales.push_back(std::string());
-
-  for (const std::string& locale : locales) {
-    const base::Value::List* list = dict->FindList(locale);
-    if (list) {
+  for (const std::string& locale : GetFallbackLocales()) {
+    if (const base::ListValue* list = dict->FindList(locale)) {
       return ListToStringSet(list);
     }
   }
@@ -553,7 +552,7 @@ base::WeakPtr<GuestOsRegistryService> GuestOsRegistryService::GetWeakPtr() {
 
 std::map<std::string, GuestOsRegistryService::Registration>
 GuestOsRegistryService::GetAllRegisteredApps() const {
-  const base::Value::Dict& apps =
+  const base::DictValue& apps =
       prefs_->GetDict(guest_os::prefs::kGuestOsRegistry);
   std::map<std::string, GuestOsRegistryService::Registration> result;
   for (const auto item : apps) {
@@ -568,9 +567,10 @@ GuestOsRegistryService::GetEnabledApps() const {
       crostini::CrostiniFeatures::Get()->IsEnabled(profile_);
   bool plugin_vm_enabled =
       plugin_vm::PluginVmFeatures::Get()->IsEnabled(profile_);
-  bool borealis_enabled = borealis::BorealisService::GetForProfile(profile_)
-                              ->Features()
-                              .IsEnabled();
+  bool borealis_enabled =
+      borealis::BorealisServiceFactory::GetForProfile(profile_)
+          ->Features()
+          .IsEnabled();
   if (!crostini_enabled && !plugin_vm_enabled && !borealis_enabled) {
     return {};
   }
@@ -616,10 +616,10 @@ GuestOsRegistryService::GetRegisteredApps(VmType vm_type) const {
 
 std::optional<GuestOsRegistryService::Registration>
 GuestOsRegistryService::GetRegistration(const std::string& app_id) const {
-  const base::Value::Dict& apps =
+  const base::DictValue& apps =
       prefs_->GetDict(guest_os::prefs::kGuestOsRegistry);
 
-  const base::Value::Dict* pref_registration = apps.FindDict(app_id);
+  const base::DictValue* pref_registration = apps.FindDict(app_id);
   if (!pref_registration) {
     return std::nullopt;
   }
@@ -678,7 +678,6 @@ base::FilePath GuestOsRegistryService::GetIconPath(
       return app_path.AppendASCII("icon.svg");
     default:
       NOTREACHED();
-      return base::FilePath();
   }
 }
 
@@ -689,22 +688,6 @@ void GuestOsRegistryService::LoadIcon(const std::string& app_id,
                                       bool allow_placeholder_icon,
                                       int fallback_icon_resource_id,
                                       apps::LoadIconCallback callback) {
-  // Add container-badging to all crostini apps except the terminal, which is
-  // shared between containers. This is part of the multi-container UI, so is
-  // guarded by a flag.
-  if (crostini::CrostiniFeatures::Get()->IsMultiContainerAllowed(profile_)) {
-    auto reg = GetRegistration(app_id);
-    if (reg && reg->VmType() == VmType::TERMINA) {
-      callback = base::BindOnce(
-          &GuestOsRegistryService::ApplyContainerBadgeWithCallback,
-          weak_ptr_factory_.GetWeakPtr(),
-          crostini::GetContainerBadgeColor(
-              profile_, guest_os::GuestId(reg->VmType(), reg->VmName(),
-                                          reg->ContainerName())),
-          std::move(callback));
-    }
-  }
-
   if (icon_key.resource_id != apps::IconKey::kInvalidResourceId) {
     // The icon is a resource built into the Chrome OS binary.
     constexpr bool is_placeholder_icon = false;
@@ -740,59 +723,6 @@ void GuestOsRegistryService::LoadIcon(const std::string& app_id,
   apps::LoadIconFromFileWithFallback(
       icon_type, size_hint_in_dip, GetIconPath(app_id, scale_factor),
       icon_effects, std::move(callback), std::move(transcode_svg_fallback));
-}
-
-void GuestOsRegistryService::ApplyContainerBadge(
-    const std::optional<std::string>& app_id,
-    gfx::ImageSkia* image_skia) {
-  if (crostini::CrostiniFeatures::Get()->IsMultiContainerAllowed(profile_)) {
-    auto reg = GetRegistration(*app_id);
-    if (reg && reg->VmType() == guest_os::VmType::TERMINA) {
-      ApplyContainerBadgeForImageSkiaIcon(
-          crostini::GetContainerBadgeColor(
-              profile_, guest_os::GuestId(reg->VmType(), reg->VmName(),
-                                          reg->ContainerName())),
-          image_skia);
-    }
-  }
-}
-
-void GuestOsRegistryService::ApplyContainerBadgeForImageSkiaIcon(
-    SkColor badge_color,
-    gfx::ImageSkia* icon_out) {
-  gfx::ImageSkia badge_mask =
-      *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
-          IDR_ICON_BADGE_MASK);
-
-  if (badge_mask.size() != icon_out->size()) {
-    badge_mask = gfx::ImageSkiaOperations::CreateResizedImage(
-        badge_mask, skia::ImageOperations::RESIZE_BEST, icon_out->size());
-  }
-  badge_mask =
-      gfx::ImageSkiaOperations::CreateColorMask(badge_mask, badge_color);
-  *icon_out =
-      gfx::ImageSkiaOperations::CreateSuperimposedImage(*icon_out, badge_mask);
-}
-
-void GuestOsRegistryService::ApplyContainerBadgeWithCallback(
-    SkColor badge_color,
-    apps::LoadIconCallback callback,
-    apps::IconValuePtr icon) {
-  gfx::ImageSkia badge_mask =
-      *ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
-          IDR_ICON_BADGE_MASK);
-
-  if (badge_mask.size() != icon->uncompressed.size()) {
-    badge_mask = gfx::ImageSkiaOperations::CreateResizedImage(
-        badge_mask, skia::ImageOperations::RESIZE_BEST,
-        icon->uncompressed.size());
-  }
-  badge_mask =
-      gfx::ImageSkiaOperations::CreateColorMask(badge_mask, badge_color);
-  icon->uncompressed = gfx::ImageSkiaOperations::CreateSuperimposedImage(
-      icon->uncompressed, badge_mask);
-
-  std::move(callback).Run(std::move(icon));
 }
 
 void GuestOsRegistryService::TranscodeIconFromSvg(
@@ -894,7 +824,7 @@ void GuestOsRegistryService::ClearApplicationList(
   // The ScopedDictPrefUpdate should be destructed before calling the observer.
   {
     ScopedDictPrefUpdate update(prefs_, guest_os::prefs::kGuestOsRegistry);
-    base::Value::Dict& apps = update.Get();
+    base::DictValue& apps = update.Get();
 
     for (const auto item : apps) {
       Registration registration(item.first, item.second.Clone());
@@ -958,14 +888,14 @@ void GuestOsRegistryService::UpdateApplicationList(
   // The ScopedDictPrefUpdate should be destructed before calling the observer.
   {
     ScopedDictPrefUpdate update(prefs_, guest_os::prefs::kGuestOsRegistry);
-    base::Value::Dict& apps = update.Get();
+    base::DictValue& apps = update.Get();
     for (const App& app : app_list.apps()) {
       if (app.desktop_file_id().empty()) {
         LOG(WARNING) << "Received app with missing desktop file id";
         continue;
       }
 
-      base::Value::Dict name = ProtoToDictionary(app.name());
+      base::DictValue name = ProtoToDictionary(app.name());
       if (name.Find(std::string_view()) == nullptr) {
         LOG(WARNING) << "Received app '" << app.desktop_file_id()
                      << "' with missing unlocalized name";
@@ -976,12 +906,12 @@ void GuestOsRegistryService::UpdateApplicationList(
           app.desktop_file_id(), app_list.vm_name(), app_list.container_name());
       new_app_ids.insert(app_id);
 
-      base::Value::Dict pref_registration;
+      base::DictValue pref_registration;
       PopulatePrefRegistrationFromApp(
           pref_registration, vm_type, app_list.vm_name(),
           app_list.container_name(), app, std::move(name));
 
-      base::Value::Dict* old_app = apps.FindDict(app_id);
+      base::DictValue* old_app = apps.FindDict(app_id);
       if (old_app && EqualsExcludingTimestamps(pref_registration, *old_app)) {
         continue;
       }
@@ -1095,7 +1025,7 @@ void GuestOsRegistryService::RemoveObserver(Observer* observer) {
 
 void GuestOsRegistryService::AppLaunched(const std::string& app_id) {
   ScopedDictPrefUpdate update(prefs_, guest_os::prefs::kGuestOsRegistry);
-  base::Value::Dict& app = update->Find(app_id)->GetDict();
+  base::DictValue& app = update->Find(app_id)->GetDict();
   SetCurrentTime(app, guest_os::prefs::kAppLastLaunchTimeKey);
 
   auto vm_type = app.FindInt(guest_os::prefs::kVmTypeKey);
@@ -1111,7 +1041,7 @@ void GuestOsRegistryService::AppLaunched(const std::string& app_id) {
   }
 }
 
-void GuestOsRegistryService::SetCurrentTime(base::Value::Dict& dictionary,
+void GuestOsRegistryService::SetCurrentTime(base::DictValue& dictionary,
                                             const char* key) const {
   int64_t time = clock_->Now().ToDeltaSinceWindowsEpoch().InMicroseconds();
   dictionary.Set(key, base::Value(base::NumberToString(time)));
@@ -1120,9 +1050,9 @@ void GuestOsRegistryService::SetCurrentTime(base::Value::Dict& dictionary,
 void GuestOsRegistryService::SetAppScaled(const std::string& app_id,
                                           bool scaled) {
   ScopedDictPrefUpdate update(prefs_, guest_os::prefs::kGuestOsRegistry);
-  base::Value::Dict& apps = update.Get();
+  base::DictValue& apps = update.Get();
 
-  base::Value::Dict* app = apps.FindDict(app_id);
+  base::DictValue* app = apps.FindDict(app_id);
   if (!app) {
     LOG(ERROR)
         << "Tried to set display scaled property on the app with this app_id "

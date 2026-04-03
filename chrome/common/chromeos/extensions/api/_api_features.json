@@ -12,26 +12,18 @@
       "permission:os.diagnostics"
     ],
     "contexts": [
-      "blessed_extension"
+      "privileged_extension"
     ],
-    "platforms": [
-      "chromeos",
-      "lacros"
-    ],
-    "channel": "stable"
+    "platforms": ["chromeos"]
   },
   "os.events": {
     "dependencies": [
       "permission:os.events"
     ],
     "contexts": [
-      "blessed_extension"
+      "privileged_extension"
     ],
-    "platforms": [
-      "chromeos",
-      "lacros"
-    ],
-    "channel": "stable"
+    "platforms": ["chromeos"]
   },
   "os.management": {
     // Right now Management API is limited to audio control.
@@ -39,13 +31,9 @@
       "permission:os.management.audio"
     ],
     "contexts": [
-      "blessed_extension"
+      "privileged_extension"
     ],
-    "platforms": [
-      "chromeos",
-      "lacros"
-    ],
-    "channel": "stable"
+    "platforms": ["chromeos"]
   },
   "os.management.setAudioGain": {
     "dependencies": [
@@ -62,15 +50,8 @@
       "permission:os.telemetry"
     ],
     "contexts": [
-      "blessed_extension"
+      "privileged_extension"
     ],
-    "platforms": [
-      "chromeos",
-      "lacros"
-    ],
-    "channel": "stable"
-  },
-  "os.telemetry.getThermalInfo": {
-    "feature_flag": "TelemetryExtensionPendingApprovalApi"
+    "platforms": ["chromeos"]
   }
 }

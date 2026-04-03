@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,37 +7,30 @@ import type * as SDK from '../../core/sdk/sdk.js';
 import * as Protocol from '../../generated/protocol.js';
 
 import {Issue, IssueCategory, IssueKind} from './Issue.js';
-import {type MarkdownIssueDescription} from './MarkdownIssueDescription.js';
+import type {MarkdownIssueDescription} from './MarkdownIssueDescription.js';
 
 const UIStrings = {
   /**
-   *@description Link title for the Quirks Mode issue in the Issues panel
+   * @description Link title for the Quirks Mode issue in the Issues panel
    */
   documentCompatibilityMode: 'Document compatibility mode',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('models/issues_manager/QuirksModeIssue.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
-export class QuirksModeIssue extends Issue {
-  #issueDetails: Protocol.Audits.QuirksModeIssueDetails;
-
-  constructor(issueDetails: Protocol.Audits.QuirksModeIssueDetails, issuesModel: SDK.IssuesModel.IssuesModel) {
+export class QuirksModeIssue extends Issue<Protocol.Audits.QuirksModeIssueDetails> {
+  constructor(issueDetails: Protocol.Audits.QuirksModeIssueDetails, issuesModel: SDK.IssuesModel.IssuesModel|null) {
     const mode = issueDetails.isLimitedQuirksMode ? 'LimitedQuirksMode' : 'QuirksMode';
     const umaCode = [Protocol.Audits.InspectorIssueCode.QuirksModeIssue, mode].join('::');
-    super({code: Protocol.Audits.InspectorIssueCode.QuirksModeIssue, umaCode}, issuesModel);
-    this.#issueDetails = issueDetails;
+    super({code: Protocol.Audits.InspectorIssueCode.QuirksModeIssue, umaCode}, issueDetails, issuesModel);
   }
 
   primaryKey(): string {
-    return `${this.code()}-(${this.#issueDetails.documentNodeId})-(${this.#issueDetails.url})`;
+    return `${this.code()}-(${this.details().documentNodeId})-(${this.details().url})`;
   }
 
   getCategory(): IssueCategory {
-    return IssueCategory.QuirksMode;
-  }
-
-  details(): Protocol.Audits.QuirksModeIssueDetails {
-    return this.#issueDetails;
+    return IssueCategory.QUIRKS_MODE;
   }
 
   getDescription(): MarkdownIssueDescription {
@@ -53,11 +46,12 @@ export class QuirksModeIssue extends Issue {
   }
 
   getKind(): IssueKind {
-    return IssueKind.Improvement;
+    return IssueKind.IMPROVEMENT;
   }
 
-  static fromInspectorIssue(issuesModel: SDK.IssuesModel.IssuesModel, inspectorIssue: Protocol.Audits.InspectorIssue):
-      QuirksModeIssue[] {
+  static fromInspectorIssue(
+      issuesModel: SDK.IssuesModel.IssuesModel|null,
+      inspectorIssue: Protocol.Audits.InspectorIssue): QuirksModeIssue[] {
     const quirksModeIssueDetails = inspectorIssue.details.quirksModeIssueDetails;
     if (!quirksModeIssueDetails) {
       console.warn('Quirks Mode issue without details received.');

@@ -89,6 +89,11 @@ const char kModelOverride[] = "optimization-guide-model-override";
 const char kOnDeviceModelExecutionOverride[] =
     "optimization-guide-ondevice-model-execution-override";
 
+// Overrides the on-device model adaptation file paths for on-device model
+// execution.
+const char kOnDeviceModelAdaptationsOverride[] =
+    "optimization-guide-ondevice-model-adaptations-override";
+
 // Enables the on-device model to run validation at startup after a delay. A
 // text file can be provided used as input for the validation job and an output
 // file path can be provided to write the response to.
@@ -105,34 +110,32 @@ const char kModelValidate[] = "optimization-guide-model-validate";
 const char kModelExecutionValidate[] =
     "optimization-guide-model-execution-validate";
 
-const char kPageContentAnnotationsLoggingEnabled[] =
-    "enable-page-content-annotations-logging";
-
-const char kPageContentAnnotationsValidationStartupDelaySeconds[] =
-    "page-content-annotations-validation-startup-delay-seconds";
-
-const char kPageContentAnnotationsValidationBatchSizeOverride[] =
-    "page-content-annotations-validation-batch-size";
-
-// Enables the specific annotation type to run validation at startup after a
-// delay. A comma separated list of inputs can be given as a value which will be
-// used as input for the validation job.
-const char kPageContentAnnotationsValidationPageEntities[] =
-    "page-content-annotations-validation-page-entities";
-const char kPageContentAnnotationsValidationContentVisibility[] =
-    "page-content-annotations-validation-content-visibility";
-const char kPageContentAnnotationsValidationTextEmbedding[] =
-    "page-content-annotations-validation-text-embedding";
-
-// Writes the output of page content annotation validations to the given file.
-const char kPageContentAnnotationsValidationWriteToFile[] =
-    "page-content-annotations-validation-write-to-file";
+// Adds header to indicate to return debug logging data from the model execution
+// service via response header.
+const char kModelExecutionEnableRemoteDebugLogging[] =
+    "optimization-guide-model-execution-enable-remote-debug-logging";
 
 // Overrides the model quality service URL.
 const char kModelQualityServiceURL[] = "model-quality-service-url";
 
 // Overrides the ModelQuality Service API Key for remote requests to be made.
 const char kModelQualityServiceAPIKey[] = "model-quality-service-api-key";
+
+// Enables model quality logs regardless of other client-side settings, as long
+// as the client is a dogfood client.
+const char kEnableModelQualityDogfoodLogging[] =
+    "enable-model-quality-dogfood-logging";
+
+const char kGetFreeDiskSpaceWithUserVisiblePriorityTask[] =
+    "optimization-guide-get-free-disk-space-with-user-visible-priority-task";
+
+// Allows sending an language code to the backend.
+const char kOptimizationGuideLanguageOverride[] =
+    "optimization-guide-language-override";
+
+// Enables overriding Google API key configuration check for permissions.
+const char kGoogleApiKeyConfigurationCheckOverride[] =
+    "optimization-guide-google-api-key-configuration-check-override";
 
 std::string GetModelQualityServiceAPIKey() {
   // Command line override takes priority.
@@ -234,11 +237,6 @@ bool ShouldSkipModelDownloadVerificationForTesting() {
   return command_line->HasSwitch(kDisableModelDownloadVerificationForTesting);
 }
 
-bool IsModelOverridePresent() {
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  return command_line->HasSwitch(kModelOverride);
-}
-
 bool ShouldValidateModel() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   return command_line->HasSwitch(kModelValidate);
@@ -249,19 +247,12 @@ bool ShouldValidateModelExecution() {
   return command_line->HasSwitch(kModelExecutionValidate);
 }
 
-std::optional<std::string> GetModelOverride() {
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (!command_line->HasSwitch(kModelOverride))
-    return std::nullopt;
-  return command_line->GetSwitchValueASCII(kModelOverride);
-}
-
-std::optional<std::string> GetOnDeviceModelExecutionOverride() {
+std::optional<base::FilePath> GetOnDeviceModelExecutionOverride() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (!command_line->HasSwitch(kOnDeviceModelExecutionOverride)) {
     return std::nullopt;
   }
-  return command_line->GetSwitchValueASCII(kOnDeviceModelExecutionOverride);
+  return command_line->GetSwitchValuePath(kOnDeviceModelExecutionOverride);
 }
 
 std::optional<base::FilePath> GetOnDeviceValidationRequestOverride() {
@@ -280,92 +271,24 @@ std::optional<base::FilePath> GetOnDeviceValidationWriteToFile() {
   return command_line->GetSwitchValuePath(kOnDeviceValidationWriteToFile);
 }
 
-bool ShouldLogPageContentAnnotationsInput() {
-  static bool enabled = base::CommandLine::ForCurrentProcess()->HasSwitch(
-      kPageContentAnnotationsLoggingEnabled);
-  return enabled;
+bool ShouldGetFreeDiskSpaceWithUserVisiblePriorityTask() {
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  return command_line->HasSwitch(kGetFreeDiskSpaceWithUserVisiblePriorityTask);
 }
 
-std::optional<base::TimeDelta> PageContentAnnotationsValidationStartupDelay() {
+bool ShouldSkipGoogleApiKeyConfigurationCheck() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (!command_line->HasSwitch(
-          kPageContentAnnotationsValidationStartupDelaySeconds)) {
-    return std::nullopt;
-  }
-
-  std::string value = command_line->GetSwitchValueASCII(
-      kPageContentAnnotationsValidationStartupDelaySeconds);
-
-  size_t seconds = 0;
-  if (base::StringToSizeT(value, &seconds)) {
-    return base::Seconds(seconds);
-  }
-  return std::nullopt;
+  return command_line->HasSwitch(kGoogleApiKeyConfigurationCheckOverride);
 }
 
-std::optional<size_t> PageContentAnnotationsValidationBatchSize() {
+GURL GetModelExecutionServiceURL() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (!command_line->HasSwitch(
-          kPageContentAnnotationsValidationBatchSizeOverride)) {
-    return std::nullopt;
+  if (command_line->HasSwitch(
+          switches::kOptimizationGuideServiceModelExecutionURL)) {
+    return GURL(command_line->GetSwitchValueASCII(
+        switches::kOptimizationGuideServiceModelExecutionURL));
   }
-
-  std::string value = command_line->GetSwitchValueASCII(
-      kPageContentAnnotationsValidationBatchSizeOverride);
-
-  size_t size = 0;
-  if (base::StringToSizeT(value, &size)) {
-    return size;
-  }
-  return std::nullopt;
-}
-
-bool LogPageContentAnnotationsValidationToConsole() {
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  return command_line->HasSwitch(
-             kPageContentAnnotationsValidationPageEntities) ||
-         command_line->HasSwitch(
-             kPageContentAnnotationsValidationContentVisibility) ||
-         command_line->HasSwitch(
-             kPageContentAnnotationsValidationTextEmbedding);
-}
-
-std::optional<std::vector<std::string>>
-PageContentAnnotationsValidationInputForType(AnnotationType type) {
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-
-  std::string value;
-  switch (type) {
-    case AnnotationType::kPageEntities:
-      value = command_line->GetSwitchValueASCII(
-          kPageContentAnnotationsValidationPageEntities);
-      break;
-    case AnnotationType::kContentVisibility:
-      value = command_line->GetSwitchValueASCII(
-          kPageContentAnnotationsValidationContentVisibility);
-      break;
-    case AnnotationType::kTextEmbedding:
-      value = command_line->GetSwitchValueASCII(
-          kPageContentAnnotationsValidationTextEmbedding);
-      break;
-    default:
-      break;
-  }
-  if (value.empty()) {
-    return std::nullopt;
-  }
-
-  return base::SplitString(value, ",", base::KEEP_WHITESPACE,
-                           base::SPLIT_WANT_ALL);
-}
-
-std::optional<base::FilePath> PageContentAnnotationsValidationWriteToFile() {
-  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (!command_line->HasSwitch(kPageContentAnnotationsValidationWriteToFile)) {
-    return std::nullopt;
-  }
-  return command_line->GetSwitchValuePath(
-      kPageContentAnnotationsValidationWriteToFile);
+  return GURL(kOptimizationGuideServiceModelExecutionDefaultURL);
 }
 
 }  // namespace switches

@@ -43,6 +43,7 @@
 #include "dawn/native/QuerySet.h"
 #include "dawn/native/Queue.h"
 #include "dawn/native/RenderPipeline.h"
+#include "dawn/native/ResourceTable.h"
 #include "dawn/native/RingBufferAllocator.h"
 #include "dawn/native/Sampler.h"
 #include "dawn/native/ShaderModule.h"
@@ -65,6 +66,7 @@ using PipelineLayout = PipelineLayoutBase;
 class QuerySet;
 class Queue;
 class RenderPipeline;
+class ResourceTable;
 using Sampler = SamplerBase;
 class ShaderModule;
 class SwapChain;
@@ -83,6 +85,7 @@ struct NullBackendTraits {
     using QuerySetType = QuerySet;
     using QueueType = Queue;
     using RenderPipelineType = RenderPipeline;
+    using ResourceTableType = ResourceTable;
     using SamplerType = Sampler;
     using ShaderModuleType = ShaderModule;
     using SwapChainType = SwapChain;
@@ -104,7 +107,8 @@ class Device final : public DeviceBase {
   public:
     static ResultOrError<Ref<Device>> Create(AdapterBase* adapter,
                                              const UnpackedPtr<DeviceDescriptor>& descriptor,
-                                             const TogglesState& deviceToggles);
+                                             const TogglesState& deviceToggles,
+                                             Ref<DeviceBase::DeviceLostEvent>&& lostEvent);
     ~Device() override;
 
     MaybeError Initialize(const UnpackedPtr<DeviceDescriptor>& descriptor);
@@ -119,13 +123,13 @@ class Device final : public DeviceBase {
     MaybeError SubmitPendingOperations();
     void ForgetPendingOperations();
 
-    MaybeError CopyFromStagingToBufferImpl(BufferBase* source,
-                                           uint64_t sourceOffset,
-                                           BufferBase* destination,
-                                           uint64_t destinationOffset,
-                                           uint64_t size) override;
-    MaybeError CopyFromStagingToTextureImpl(const BufferBase* source,
-                                            const TextureDataLayout& src,
+    MaybeError CopyFromStagingToBuffer(BufferBase* source,
+                                       uint64_t sourceOffset,
+                                       BufferBase* destination,
+                                       uint64_t destinationOffset,
+                                       uint64_t size) override;
+    MaybeError CopyFromStagingToTextureImpl(BufferBase* source,
+                                            const TexelCopyBufferLayout& src,
                                             const TextureCopy& dst,
                                             const Extent3D& copySizePixels) override;
 
@@ -137,15 +141,15 @@ class Device final : public DeviceBase {
 
     float GetTimestampPeriodInNS() const override;
 
-    bool IsResolveTextureBlitWithDrawSupported() const override;
+    bool CanTextureLoadResolveTargetInTheSameRenderpass() const override;
 
   private:
     using DeviceBase::DeviceBase;
 
     ResultOrError<Ref<BindGroupBase>> CreateBindGroupImpl(
-        const BindGroupDescriptor* descriptor) override;
+        const UnpackedPtr<BindGroupDescriptor>& descriptor) override;
     ResultOrError<Ref<BindGroupLayoutInternalBase>> CreateBindGroupLayoutImpl(
-        const BindGroupLayoutDescriptor* descriptor) override;
+        const UnpackedPtr<BindGroupLayoutDescriptor>& descriptor) override;
     ResultOrError<Ref<BufferBase>> CreateBufferImpl(
         const UnpackedPtr<BufferDescriptor>& descriptor) override;
     Ref<ComputePipelineBase> CreateUninitializedComputePipelineImpl(
@@ -156,25 +160,23 @@ class Device final : public DeviceBase {
         const QuerySetDescriptor* descriptor) override;
     Ref<RenderPipelineBase> CreateUninitializedRenderPipelineImpl(
         const UnpackedPtr<RenderPipelineDescriptor>& descriptor) override;
+    ResultOrError<Ref<ResourceTableBase>> CreateResourceTableImpl(
+        const ResourceTableDescriptor* descriptor) override;
     ResultOrError<Ref<SamplerBase>> CreateSamplerImpl(const SamplerDescriptor* descriptor) override;
     ResultOrError<Ref<ShaderModuleBase>> CreateShaderModuleImpl(
         const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
-        ShaderModuleParseResult* parseResult,
-        OwnedCompilationMessages* compilationMessages) override;
+        const std::vector<tint::wgsl::Extension>& internalExtensions) override;
     ResultOrError<Ref<SwapChainBase>> CreateSwapChainImpl(
         Surface* surface,
         SwapChainBase* previousSwapChain,
-        const SwapChainDescriptor* descriptor) override;
+        const SurfaceConfiguration* config) override;
     ResultOrError<Ref<TextureBase>> CreateTextureImpl(
         const UnpackedPtr<TextureDescriptor>& descriptor) override;
     ResultOrError<Ref<TextureViewBase>> CreateTextureViewImpl(
         TextureBase* texture,
-        const TextureViewDescriptor* descriptor) override;
+        const UnpackedPtr<TextureViewDescriptor>& descriptor) override;
 
-    ResultOrError<wgpu::TextureUsage> GetSupportedSurfaceUsageImpl(
-        const Surface* surface) const override;
-
-    void DestroyImpl() override;
+    void DestroyImpl(DestroyReason reason) override;
 
     std::vector<std::unique_ptr<PendingOperation>> mPendingOperations;
 
@@ -184,20 +186,26 @@ class Device final : public DeviceBase {
 
 class PhysicalDevice : public PhysicalDeviceBase {
   public:
-    // Create null adapter without providing toggles state for testing, only inherit instance's
-    // toggles state
-    explicit PhysicalDevice(InstanceBase* instance);
+    static Ref<PhysicalDevice> Create();
+
     ~PhysicalDevice() override;
 
     // PhysicalDeviceBase Implementation
     bool SupportsExternalImages() const override;
 
-    bool SupportsFeatureLevel(FeatureLevel featureLevel) const override;
+    bool SupportsFeatureLevel(wgpu::FeatureLevel featureLevel,
+                              InstanceBase* instance) const override;
+
+    ResultOrError<PhysicalDeviceSurfaceCapabilities> GetSurfaceCapabilities(
+        InstanceBase* instance,
+        const Surface* surface) const override;
 
     // Used for the tests that intend to use an adapter without all features enabled.
     using PhysicalDeviceBase::SetSupportedFeaturesForTesting;
 
   private:
+    PhysicalDevice();
+
     MaybeError InitializeImpl() override;
     void InitializeSupportedFeaturesImpl() override;
     MaybeError InitializeSupportedLimitsImpl(CombinedLimits* limits) override;
@@ -206,13 +214,18 @@ class PhysicalDevice : public PhysicalDeviceBase {
         wgpu::FeatureName feature,
         const TogglesState& toggles) const override;
 
-    void SetupBackendAdapterToggles(TogglesState* adapterToggles) const override;
-    void SetupBackendDeviceToggles(TogglesState* deviceToggles) const override;
-    ResultOrError<Ref<DeviceBase>> CreateDeviceImpl(AdapterBase* adapter,
-                                                    const UnpackedPtr<DeviceDescriptor>& descriptor,
-                                                    const TogglesState& deviceToggles) override;
+    void SetupBackendAdapterToggles(dawn::platform::Platform* platform,
+                                    TogglesState* adapterToggles) const override;
+    void SetupBackendDeviceToggles(dawn::platform::Platform* platform,
+                                   TogglesState* deviceToggles) const override;
+    ResultOrError<Ref<DeviceBase>> CreateDeviceImpl(
+        AdapterBase* adapter,
+        const UnpackedPtr<DeviceDescriptor>& descriptor,
+        const TogglesState& deviceToggles,
+        Ref<DeviceBase::DeviceLostEvent>&& lostEvent) override;
 
-    void PopulateBackendProperties(UnpackedPtr<AdapterProperties>& properties) const override;
+    void PopulateBackendProperties(UnpackedPtr<AdapterInfo>& info,
+                                   const TogglesState& adapterToggles) const override;
 };
 
 // Helper class so |BindGroup| can allocate memory for its binding data,
@@ -222,23 +235,24 @@ class BindGroupDataHolder {
     explicit BindGroupDataHolder(size_t size);
     ~BindGroupDataHolder();
 
-    // TODO(https://crbug.com/dawn/2349): Investigate DanglingUntriaged in dawn/native.
-    raw_ptr<void, DanglingUntriaged> mBindingDataAllocation;
+    raw_ptr<void> mBindingDataAllocation;
 };
 
 // We don't have the complexity of placement-allocation of bind group data in
 // the Null backend. This class, keeps the binding data in a separate allocation for simplicity.
 class BindGroup final : private BindGroupDataHolder, public BindGroupBase {
   public:
-    BindGroup(DeviceBase* device, const BindGroupDescriptor* descriptor);
+    BindGroup(DeviceBase* device, const UnpackedPtr<BindGroupDescriptor>& descriptor);
 
   private:
     ~BindGroup() override = default;
+
+    MaybeError InitializeImpl() override;
 };
 
 class BindGroupLayout final : public BindGroupLayoutInternalBase {
   public:
-    BindGroupLayout(DeviceBase* device, const BindGroupLayoutDescriptor* descriptor);
+    BindGroupLayout(DeviceBase* device, const UnpackedPtr<BindGroupLayoutDescriptor>& descriptor);
 
   private:
     ~BindGroupLayout() override = default;
@@ -257,11 +271,12 @@ class Buffer final : public BufferBase {
 
   private:
     MaybeError MapAsyncImpl(wgpu::MapMode mode, size_t offset, size_t size) override;
-    void UnmapImpl() override;
-    void DestroyImpl() override;
+    MaybeError FinalizeMapImpl(BufferState newState) override;
+    void UnmapImpl(BufferState oldState, BufferState newState) override;
+    void DestroyImpl(DestroyReason reason) override;
     bool IsCPUWritableAtCreation() const override;
     MaybeError MapAtCreationImpl() override;
-    void* GetMappedPointer() override;
+    void* GetMappedPointerImpl() override;
 
     std::unique_ptr<uint8_t[]> mBackingData;
 };
@@ -290,9 +305,10 @@ class Queue final : public QueueBase {
     ResultOrError<ExecutionSerial> CheckAndUpdateCompletedSerials() override;
     void ForceEventualFlushOfCommands() override;
     bool HasPendingCommands() const override;
-    MaybeError SubmitPendingCommands() override;
-    ResultOrError<bool> WaitForQueueSerial(ExecutionSerial serial, Nanoseconds timeout) override;
-    MaybeError WaitForIdleForDestruction() override;
+    MaybeError SubmitPendingCommandsImpl() override;
+    ResultOrError<ExecutionSerial> WaitForQueueSerialImpl(ExecutionSerial waitSerial,
+                                                          Nanoseconds timeout) override;
+    MaybeError WaitForIdleForDestructionImpl() override;
 };
 
 class ComputePipeline final : public ComputePipelineBase {
@@ -309,12 +325,16 @@ class RenderPipeline final : public RenderPipelineBase {
     MaybeError InitializeImpl() override;
 };
 
+class ResourceTable final : public ResourceTableBase {
+  public:
+    ResourceTable(Device* device, const ResourceTableDescriptor* descriptor);
+
+    MaybeError Initialize();
+};
+
 class ShaderModule final : public ShaderModuleBase {
   public:
     using ShaderModuleBase::ShaderModuleBase;
-
-    MaybeError Initialize(ShaderModuleParseResult* parseResult,
-                          OwnedCompilationMessages* compilationMessages);
 };
 
 class SwapChain final : public SwapChainBase {
@@ -322,7 +342,7 @@ class SwapChain final : public SwapChainBase {
     static ResultOrError<Ref<SwapChain>> Create(Device* device,
                                                 Surface* surface,
                                                 SwapChainBase* previousSwapChain,
-                                                const SwapChainDescriptor* descriptor);
+                                                const SurfaceConfiguration* config);
     ~SwapChain() override;
 
   private:
@@ -332,13 +352,17 @@ class SwapChain final : public SwapChainBase {
     Ref<Texture> mTexture;
 
     MaybeError PresentImpl() override;
-    ResultOrError<Ref<TextureBase>> GetCurrentTextureImpl() override;
+    ResultOrError<SwapChainTextureInfo> GetCurrentTextureImpl() override;
     void DetachFromSurfaceImpl() override;
 };
 
 class Texture : public TextureBase {
   public:
     Texture(DeviceBase* device, const UnpackedPtr<TextureDescriptor>& descriptor);
+
+  private:
+    MaybeError PinImpl(wgpu::TextureUsage usage) override;
+    void UnpinImpl() override;
 };
 
 }  // namespace dawn::native::null

@@ -21,15 +21,44 @@ enum class DeviceType {
   kMouse = 3,
 };
 
+enum class MetadataTier {
+  kNoMetadata = 0,
+  kClassificationOnly = 1,
+  kHasButtonConfig = 2,
+  kMaxValue = kHasButtonConfig,
+};
+
+enum class DeviceImageDestination {
+  kNotification = 0,
+  kSettings = 1,
+};
+
 struct ASH_EXPORT MouseMetadata {
+  MouseMetadata();
+  MouseMetadata(mojom::CustomizationRestriction customization_restriction,
+                mojom::MouseButtonConfig config,
+                std::optional<std::string> name = std::nullopt);
+  ~MouseMetadata();
+  MouseMetadata(const MouseMetadata& other);
+
   mojom::CustomizationRestriction customization_restriction;
   mojom::MouseButtonConfig mouse_button_config;
+  std::optional<std::string> name = std::nullopt;
   bool operator==(const MouseMetadata& other) const;
 };
 
 struct ASH_EXPORT GraphicsTabletMetadata {
+  GraphicsTabletMetadata();
+  GraphicsTabletMetadata(
+      mojom::CustomizationRestriction customization_restriction,
+      mojom::GraphicsTabletButtonConfig config,
+      std::optional<std::string> name = std::nullopt);
+  ~GraphicsTabletMetadata();
+  GraphicsTabletMetadata(const GraphicsTabletMetadata& other);
+
   mojom::CustomizationRestriction customization_restriction;
   mojom::GraphicsTabletButtonConfig graphics_tablet_button_config;
+  std::optional<std::string> name = std::nullopt;
   bool operator==(const GraphicsTabletMetadata& other) const;
 };
 
@@ -97,6 +126,10 @@ GetTabletButtonRemappingListForConfig(
 // This function returns the vid pid alias list.
 ASH_EXPORT const base::flat_map<VendorProductId, VendorProductId>&
 GetVidPidAliasList();
+
+// This function returns whether or not a device has an associated companion
+// app.
+ASH_EXPORT bool DeviceHasCompanionAppAvailable(const std::string& device_key);
 
 }  // namespace ash
 

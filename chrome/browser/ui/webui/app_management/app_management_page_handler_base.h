@@ -9,7 +9,6 @@
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/web_applications/locks/all_apps_lock.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/services/app_service/public/cpp/app_types.h"
@@ -19,7 +18,7 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/webui/resources/cr_components/app_management/app_management.mojom.h"
 
 class Profile;
@@ -48,23 +47,17 @@ class AppManagementPageHandlerBase : public app_management::mojom::PageHandler,
   // app_management::mojom::PageHandler:
   void GetApps(GetAppsCallback callback) override;
   void GetApp(const std::string& app_id, GetAppCallback callback) override;
-  void GetSubAppToParentMap(GetSubAppToParentMapCallback callback) override;
-  void GetExtensionAppPermissionMessages(
-      const std::string& app_id,
-      GetExtensionAppPermissionMessagesCallback callback) override;
   void SetPermission(const std::string& app_id,
                      apps::PermissionPtr permission) override;
-  void Uninstall(const std::string& app_id) override;
   void OpenNativeSettings(const std::string& app_id) override;
-  void UpdateAppSize(const std::string& app_id) override;
   void SetFileHandlingEnabled(const std::string& app_id, bool enabled) override;
+  void UpdateAppSize(const std::string& app_id) override;
 
  protected:
   AppManagementPageHandlerBase(
       mojo::PendingReceiver<app_management::mojom::PageHandler> receiver,
       mojo::PendingRemote<app_management::mojom::Page> page,
-      Profile* profile,
-      Delegate& delegate);
+      Profile* profile);
 
   // Creates an AppPtr for the given `app_id`. Can be overridden to add
   // additional platform-specific data to the App. Returns nullptr if the given
@@ -91,8 +84,6 @@ class AppManagementPageHandlerBase : public app_management::mojom::PageHandler,
   mojo::Remote<app_management::mojom::Page> page_;
 
   raw_ptr<Profile> profile_;
-
-  const raw_ref<Delegate> delegate_;
 
   base::ScopedObservation<apps::AppRegistryCache,
                           apps::AppRegistryCache::Observer>

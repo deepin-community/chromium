@@ -10,10 +10,13 @@
 #include <linux/input.h>
 #include <unistd.h>
 
+#include <array>
 #include <memory>
 #include <utility>
 #include <vector>
 
+#include "ash/constants/ash_features.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
@@ -25,6 +28,9 @@
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/re2/src/re2/re2.h"
+#include "ui/display/screen.h"
+#include "ui/display/screen_base.h"
+#include "ui/display/test/test_screen.h"
 #include "ui/events/event.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
@@ -37,10 +43,6 @@
 #include "ui/events/platform/platform_event_source.h"
 #include "ui/events/test/scoped_event_test_tick_clock.h"
 #include "ui/events/types/event_type.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ash/constants/ash_features.h"
-#endif
 
 namespace {
 
@@ -316,9 +318,9 @@ class MockTabletEventConverterEvdev : public TabletEventConverterEvdev {
 
   ~MockTabletEventConverterEvdev() override = default;
 
-  void ConfigureReadMock(struct input_event* queue,
-                         long read_this_many,
-                         long queue_index);
+  void ConfigureReadMock(base::span<struct input_event> queue,
+                         size_t read_this_many,
+                         size_t queue_index);
 
   // Actually dispatch the event reader code.
   void ReadNow() {
@@ -387,14 +389,17 @@ MockTabletEventConverterEvdev::MockTabletEventConverterEvdev(
   write_pipe_ = fds[1];
 }
 
-void MockTabletEventConverterEvdev::ConfigureReadMock(struct input_event* queue,
-                                                      long read_this_many,
-                                                      long queue_index) {
-  int nwrite = HANDLE_EINTR(write(write_pipe_, queue + queue_index,
+void MockTabletEventConverterEvdev::ConfigureReadMock(
+    base::span<struct input_event> queue,
+    size_t read_this_many,
+    size_t queue_index) {
+  CHECK_GE(queue.size(), queue_index + read_this_many);
+  int nwrite = HANDLE_EINTR(write(write_pipe_,
+                                  queue.subspan(queue_index).data(),
                                   sizeof(struct input_event) * read_this_many));
-  DCHECK(nwrite ==
-         static_cast<int>(sizeof(struct input_event) * read_this_many))
-      << "write() failed, errno: " << errno;
+  DPCHECK(nwrite ==
+          static_cast<int>(sizeof(struct input_event) * read_this_many))
+      << "write() failed";
 }
 
 }  // namespace ui
@@ -460,10 +465,9 @@ class TabletEventConverterEvdevTest : public testing::Test {
     return ev->AsKeyEvent();
   }
 
-  void CheckEvents(struct ExpectedEvent expected_events[],
-                   unsigned num_events) {
-    ASSERT_EQ(num_events, size());
-    for (unsigned i = 0; i < num_events; ++i) {
+  void CheckEvents(base::span<const ExpectedEvent> expected_events) {
+    ASSERT_EQ(expected_events.size(), size());
+    for (size_t i = 0; i < expected_events.size(); ++i) {
       ui::MouseEvent* event = dispatched_event(i);
       EXPECT_EQ(event->pointer_details().pointer_type,
                 expected_events[i].pointer_type)
@@ -480,6 +484,16 @@ class TabletEventConverterEvdevTest : public testing::Test {
     dispatched_events_.push_back(std::move(cloned_event));
   }
 
+  static constexpr int64_t kPrimaryDisplayId = 1;
+  static constexpr gfx::Rect kPrimaryDisplayBounds{0, 0, 800, 600};
+
+  // testing::Test:
+  void SetUp() override {
+    test_screen_.display_list().AddDisplay(
+        display::Display(kPrimaryDisplayId, kPrimaryDisplayBounds),
+        display::DisplayList::Type::PRIMARY);
+  }
+
  private:
   base::test::SingleThreadTaskEnvironment task_environment_{
       base::test::SingleThreadTaskEnvironment::MainThreadType::UI};
@@ -490,6 +504,8 @@ class TabletEventConverterEvdevTest : public testing::Test {
   const std::unique_ptr<ui::EventFactoryEvdev> event_factory_;
   const std::unique_ptr<ui::DeviceEventDispatcherEvdev> dispatcher_;
   const std::unique_ptr<ui::test::ScopedEventTestTickClock> test_clock_;
+  display::test::TestScreen test_screen_{/*create_display=*/false,
+                                         /*register_screen=*/true};
 
   std::vector<std::unique_ptr<ui::Event>> dispatched_events_;
 
@@ -521,11 +537,11 @@ TEST_F(TabletEventConverterEvdevTest, MoveTopLeft) {
       {{0, 0}, EV_SYN, SYN_REPORT, 0},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
+  dev->ProcessEvents(mock_kernel_queue);
   ASSERT_EQ(1u, size());
 
   ui::MouseEvent* event = dispatched_event(0);
-  EXPECT_EQ(ui::ET_MOUSE_MOVED, event->type());
+  EXPECT_EQ(ui::EventType::kMouseMoved, event->type());
 
   EXPECT_LT(cursor()->GetLocation().x(), EPSILON);
   EXPECT_LT(cursor()->GetLocation().y(), EPSILON);
@@ -555,11 +571,11 @@ TEST_F(TabletEventConverterEvdevTest, MoveTopRight) {
       {{0, 0}, EV_SYN, SYN_REPORT, 0},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
+  dev->ProcessEvents(mock_kernel_queue);
   ASSERT_EQ(1u, size());
 
   ui::MouseEvent* event = dispatched_event(0);
-  EXPECT_EQ(ui::ET_MOUSE_MOVED, event->type());
+  EXPECT_EQ(ui::EventType::kMouseMoved, event->type());
 
   EXPECT_GT(cursor()->GetLocation().x(),
             cursor()->GetCursorConfinedBounds().width() - EPSILON);
@@ -590,11 +606,11 @@ TEST_F(TabletEventConverterEvdevTest, MoveBottomLeft) {
       {{0, 0}, EV_SYN, SYN_REPORT, 0},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
+  dev->ProcessEvents(mock_kernel_queue);
   ASSERT_EQ(1u, size());
 
   ui::MouseEvent* event = dispatched_event(0);
-  EXPECT_EQ(ui::ET_MOUSE_MOVED, event->type());
+  EXPECT_EQ(ui::EventType::kMouseMoved, event->type());
 
   EXPECT_LT(cursor()->GetLocation().x(), EPSILON);
   EXPECT_GT(cursor()->GetLocation().y(),
@@ -626,11 +642,11 @@ TEST_F(TabletEventConverterEvdevTest, MoveBottomRight) {
       {{0, 0}, EV_SYN, SYN_REPORT, 0},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
+  dev->ProcessEvents(mock_kernel_queue);
   ASSERT_EQ(1u, size());
 
   ui::MouseEvent* event = dispatched_event(0);
-  EXPECT_EQ(ui::ET_MOUSE_MOVED, event->type());
+  EXPECT_EQ(ui::EventType::kMouseMoved, event->type());
 
   EXPECT_GT(cursor()->GetLocation().x(),
             cursor()->GetCursorConfinedBounds().height() - EPSILON);
@@ -666,11 +682,11 @@ TEST_F(TabletEventConverterEvdevTest,
       {{0, 0}, EV_SYN, SYN_REPORT, 0},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
+  dev->ProcessEvents(mock_kernel_queue);
   ASSERT_EQ(1u, size());
 
   ui::MouseEvent* event = dispatched_event(0);
-  EXPECT_EQ(ui::ET_MOUSE_MOVED, event->type());
+  EXPECT_EQ(ui::EventType::kMouseMoved, event->type());
 
   EXPECT_EQ(event->flags(), ui::EF_NOT_SUITABLE_FOR_MOUSE_WARPING);
 }
@@ -714,22 +730,22 @@ TEST_F(TabletEventConverterEvdevTest, Tap) {
       {{0, 0}, EV_SYN, SYN_REPORT, 0},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
+  dev->ProcessEvents(mock_kernel_queue);
   EXPECT_EQ(3u, size());
 
   ui::MouseEvent* event = dispatched_event(0);
-  EXPECT_EQ(ui::ET_MOUSE_MOVED, event->type());
+  EXPECT_EQ(ui::EventType::kMouseMoved, event->type());
   EXPECT_EQ(ui::EventPointerType::kPen, event->pointer_details().pointer_type);
   EXPECT_FLOAT_EQ(5.625f, event->pointer_details().tilt_x);
   EXPECT_FLOAT_EQ(0.f, event->pointer_details().tilt_y);
   event = dispatched_event(1);
-  EXPECT_EQ(ui::ET_MOUSE_PRESSED, event->type());
+  EXPECT_EQ(ui::EventType::kMousePressed, event->type());
   EXPECT_EQ(ui::EventPointerType::kPen, event->pointer_details().pointer_type);
   EXPECT_FLOAT_EQ((float)992 / 2047, event->pointer_details().force);
   EXPECT_EQ(true, event->IsLeftMouseButton());
   event = dispatched_event(2);
   EXPECT_EQ(ui::EventPointerType::kPen, event->pointer_details().pointer_type);
-  EXPECT_EQ(ui::ET_MOUSE_RELEASED, event->type());
+  EXPECT_EQ(ui::EventType::kMouseReleased, event->type());
   EXPECT_FLOAT_EQ(0.0f, event->pointer_details().force);
   EXPECT_EQ(true, event->IsLeftMouseButton());
 }
@@ -773,23 +789,23 @@ TEST_F(TabletEventConverterEvdevTest, StylusButtonPress) {
       {{0, 0}, EV_SYN, SYN_REPORT, 0},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
+  dev->ProcessEvents(mock_kernel_queue);
   EXPECT_EQ(3u, size());
 
   ui::MouseEvent* event = dispatched_event(0);
-  EXPECT_EQ(ui::ET_MOUSE_MOVED, event->type());
+  EXPECT_EQ(ui::EventType::kMouseMoved, event->type());
   event = dispatched_event(1);
-  EXPECT_EQ(ui::ET_MOUSE_PRESSED, event->type());
+  EXPECT_EQ(ui::EventType::kMousePressed, event->type());
   EXPECT_EQ(true, event->IsRightMouseButton());
   event = dispatched_event(2);
-  EXPECT_EQ(ui::ET_MOUSE_RELEASED, event->type());
+  EXPECT_EQ(ui::EventType::kMouseReleased, event->type());
   EXPECT_EQ(true, event->IsRightMouseButton());
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(TabletEventConverterEvdevTest, TabletButtonPress) {
   base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(ash::features::kPeripheralCustomization);
+  feature_list.InitWithFeatures({ash::features::kPeripheralCustomization}, {});
 
   std::unique_ptr<ui::MockTabletEventConverterEvdev> dev =
       CreateDevice(kWacomIntuos5SPen);
@@ -799,14 +815,14 @@ TEST_F(TabletEventConverterEvdevTest, TabletButtonPress) {
       {{0, 0}, EV_KEY, BTN_0, 0},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
+  dev->ProcessEvents(mock_kernel_queue);
   EXPECT_EQ(2u, size());
 
   ui::KeyEvent* event = dispatched_key_event(0);
-  EXPECT_EQ(ui::ET_KEY_PRESSED, event->type());
+  EXPECT_EQ(ui::EventType::kKeyPressed, event->type());
   EXPECT_EQ(ui::VKEY_BUTTON_0, event->key_code());
   event = dispatched_key_event(1);
-  EXPECT_EQ(ui::ET_KEY_RELEASED, event->type());
+  EXPECT_EQ(ui::EventType::kKeyReleased, event->type());
   EXPECT_EQ(ui::VKEY_BUTTON_0, event->key_code());
 }
 #endif
@@ -822,7 +838,7 @@ TEST_F(TabletEventConverterEvdevTest, CheckStylusFiltering) {
       {{0, 0}, EV_SYN, SYN_REPORT, 0},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
+  dev->ProcessEvents(mock_kernel_queue);
   EXPECT_EQ(0u, size());
 }
 
@@ -869,18 +885,18 @@ TEST_F(TabletEventConverterEvdevTest, DigitizerPenOneSideButtonPress) {
       {{0, 0}, EV_SYN, SYN_REPORT, 0},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
+  dev->ProcessEvents(mock_kernel_queue);
   EXPECT_EQ(3u, size());
 
   ui::MouseEvent* event = dispatched_event(0);
-  EXPECT_EQ(ui::ET_MOUSE_MOVED, event->type());
+  EXPECT_EQ(ui::EventType::kMouseMoved, event->type());
 
   event = dispatched_event(1);
-  EXPECT_EQ(ui::ET_MOUSE_PRESSED, event->type());
+  EXPECT_EQ(ui::EventType::kMousePressed, event->type());
   EXPECT_EQ(true, event->IsRightMouseButton());
 
   event = dispatched_event(2);
-  EXPECT_EQ(ui::ET_MOUSE_RELEASED, event->type());
+  EXPECT_EQ(ui::EventType::kMouseReleased, event->type());
   EXPECT_EQ(true, event->IsRightMouseButton());
 }
 
@@ -914,15 +930,18 @@ TEST_F(TabletEventConverterEvdevTest, NoButtonPressedKernel5And6) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, SideEraserAlwaysPressedKernel5) {
@@ -957,15 +976,18 @@ TEST_F(TabletEventConverterEvdevTest, SideEraserAlwaysPressedKernel5) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseDragged,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, SideEraserAlwaysPressedKernel6) {
@@ -996,15 +1018,18 @@ TEST_F(TabletEventConverterEvdevTest, SideEraserAlwaysPressedKernel6) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseDragged,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, SideEraserReleasedWhileTouchingKernel5) {
@@ -1047,16 +1072,19 @@ TEST_F(TabletEventConverterEvdevTest, SideEraserReleasedWhileTouchingKernel5) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseDragged,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, SideEraserReleasedWhileTouchingKernel6) {
@@ -1094,16 +1122,19 @@ TEST_F(TabletEventConverterEvdevTest, SideEraserReleasedWhileTouchingKernel6) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseDragged,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest,
@@ -1150,16 +1181,19 @@ TEST_F(TabletEventConverterEvdevTest,
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, TailEraserKernel5And6) {
@@ -1201,13 +1235,15 @@ TEST_F(TabletEventConverterEvdevTest, TailEraserKernel5And6) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, Button1AlwaysPressedKernel5) {
@@ -1241,20 +1277,24 @@ TEST_F(TabletEventConverterEvdevTest, Button1AlwaysPressedKernel5) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED,
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED,
+      {PointerType::kPen, ui::EventType::kMouseDragged,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED,
+      {PointerType::kPen, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_RIGHT_MOUSE_BUTTON},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, Button1AlwaysPressedKernel6) {
@@ -1290,20 +1330,24 @@ TEST_F(TabletEventConverterEvdevTest, Button1AlwaysPressedKernel6) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED,
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED,
+      {PointerType::kPen, ui::EventType::kMouseDragged,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED,
+      {PointerType::kPen, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_RIGHT_MOUSE_BUTTON},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, Button1ReleasedWhileTouchingKernel5) {
@@ -1351,24 +1395,30 @@ TEST_F(TabletEventConverterEvdevTest, Button1ReleasedWhileTouchingKernel5) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED,
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED,
+      {PointerType::kPen, ui::EventType::kMouseDragged,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED,
+      {PointerType::kPen, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, Button1ReleasedWhileTouchingKernel6) {
@@ -1420,24 +1470,30 @@ TEST_F(TabletEventConverterEvdevTest, Button1ReleasedWhileTouchingKernel6) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED,
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED,
+      {PointerType::kPen, ui::EventType::kMouseDragged,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED,
+      {PointerType::kPen, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, Button1PressedWhileTouchingKernel5) {
@@ -1476,21 +1532,25 @@ TEST_F(TabletEventConverterEvdevTest, Button1PressedWhileTouchingKernel5) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED,
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED,
+      {PointerType::kPen, ui::EventType::kMouseDragged,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED,
+      {PointerType::kPen, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_RIGHT_MOUSE_BUTTON},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, Button1PressedWhileTouchingKernel6) {
@@ -1542,24 +1602,31 @@ TEST_F(TabletEventConverterEvdevTest, Button1PressedWhileTouchingKernel6) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED,
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED,
+      {PointerType::kPen, ui::EventType::kMouseDragged,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED,
+      {PointerType::kPen, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_RIGHT_MOUSE_BUTTON},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, Button2AlwaysPressedKernel5And6) {
@@ -1601,22 +1668,26 @@ TEST_F(TabletEventConverterEvdevTest, Button2AlwaysPressedKernel5And6) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED,
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED,
+      {PointerType::kPen, ui::EventType::kMouseDragged,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED,
+      {PointerType::kPen, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, Button2ReleasedWhileTouchingKernel5And6) {
@@ -1659,22 +1730,26 @@ TEST_F(TabletEventConverterEvdevTest, Button2ReleasedWhileTouchingKernel5And6) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED,
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED,
+      {PointerType::kPen, ui::EventType::kMouseDragged,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED,
+      {PointerType::kPen, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, Button2PressedWhileTouchingKernel5And6) {
@@ -1714,20 +1789,24 @@ TEST_F(TabletEventConverterEvdevTest, Button2PressedWhileTouchingKernel5And6) {
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_PRESSED,
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED,
+      {PointerType::kPen, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_DRAGGED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_RELEASED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kPen, ui::ET_MOUSE_MOVED, ui::EF_NONE},
+      {PointerType::kPen, ui::EventType::kMouseDragged,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseReleased,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kPen, ui::EventType::kMouseMoved, ui::EF_NONE},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest,
@@ -1780,17 +1859,19 @@ TEST_F(TabletEventConverterEvdevTest,
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED, ui::EF_MIDDLE_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED,
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
+       ui::EF_MIDDLE_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_MIDDLE_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED,
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_MIDDLE_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED, ui::EF_MIDDLE_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
+       ui::EF_MIDDLE_MOUSE_BUTTON},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest,
@@ -1845,17 +1926,19 @@ TEST_F(TabletEventConverterEvdevTest,
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED, ui::EF_MIDDLE_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED,
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
+       ui::EF_MIDDLE_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_MIDDLE_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED,
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_MIDDLE_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest,
@@ -1906,17 +1989,19 @@ TEST_F(TabletEventConverterEvdevTest,
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED,
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_MIDDLE_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED,
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_MIDDLE_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED, ui::EF_MIDDLE_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
+       ui::EF_MIDDLE_MOUSE_BUTTON},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest,
@@ -1971,17 +2056,19 @@ TEST_F(TabletEventConverterEvdevTest,
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED,
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED,
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED, ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
+       ui::EF_RIGHT_MOUSE_BUTTON},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest,
@@ -2037,17 +2124,19 @@ TEST_F(TabletEventConverterEvdevTest,
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED, ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED,
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
+       ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED,
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED, ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
+       ui::EF_LEFT_MOUSE_BUTTON},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest,
@@ -2100,17 +2189,19 @@ TEST_F(TabletEventConverterEvdevTest,
   };
 
   ExpectedEvent expected_events[] = {
-      {PointerType::kEraser, ui::ET_MOUSE_MOVED, ui::EF_NONE},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED, ui::EF_LEFT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_PRESSED,
+      {PointerType::kEraser, ui::EventType::kMouseMoved, ui::EF_NONE},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
+       ui::EF_LEFT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMousePressed,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED,
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
        ui::EF_LEFT_MOUSE_BUTTON | ui::EF_RIGHT_MOUSE_BUTTON},
-      {PointerType::kEraser, ui::ET_MOUSE_RELEASED, ui::EF_RIGHT_MOUSE_BUTTON},
+      {PointerType::kEraser, ui::EventType::kMouseReleased,
+       ui::EF_RIGHT_MOUSE_BUTTON},
   };
 
-  dev->ProcessEvents(mock_kernel_queue, std::size(mock_kernel_queue));
-  CheckEvents(expected_events, std::size(expected_events));
+  dev->ProcessEvents(mock_kernel_queue);
+  CheckEvents(expected_events);
 }
 
 TEST_F(TabletEventConverterEvdevTest, Basic) {
@@ -2194,4 +2285,123 @@ TEST_F(TabletEventConverterEvdevTest, LogXYTilt) {
   dev->DescribeForLog(output);
 
   EXPECT_EQ(output.str(), log);
+}
+
+// Uses real data captured from Wacom Intuos 5 Pen
+TEST_F(TabletEventConverterEvdevTest, MoveTopLeftRotate90) {
+  std::unique_ptr<ui::MockTabletEventConverterEvdev> dev =
+      CreateDevice(kWacomIntuos5SPen);
+
+  display::Screen* screen = display::Screen::Get();
+  screen->SetPanelRotationForTesting(screen->GetPrimaryDisplay().id(),
+                                     display::Display::ROTATE_90);
+
+  std::array<input_event, 15> mock_kernel_queue{{
+      {{0, 0}, EV_ABS, ABS_DISTANCE, 63},
+      {{0, 0}, EV_ABS, ABS_X, 477},
+      {{0, 0}, EV_ABS, ABS_TILT_X, 66},
+      {{0, 0}, EV_ABS, ABS_TILT_Y, 62},
+      {{0, 0}, EV_ABS, ABS_MISC, 1050626},
+      {{0, 0}, EV_KEY, BTN_TOOL_PEN, 1},
+      {{0, 0}, EV_MSC, MSC_SERIAL, 897618290},
+      {{0, 0}, EV_SYN, SYN_REPORT, 0},
+      {{0, 0}, EV_ABS, ABS_DISTANCE, 0},
+      {{0, 0}, EV_ABS, ABS_TILT_X, 0},
+      {{0, 0}, EV_ABS, ABS_TILT_Y, 0},
+      {{0, 0}, EV_KEY, BTN_TOOL_PEN, 0},
+      {{0, 0}, EV_ABS, ABS_MISC, 0},
+      {{0, 0}, EV_MSC, MSC_SERIAL, 897618290},
+      {{0, 0}, EV_SYN, SYN_REPORT, 0},
+  }};
+
+  dev->ProcessEvents(mock_kernel_queue);
+  ASSERT_EQ(1u, size());
+
+  ui::MouseEvent* event = dispatched_event(0);
+  EXPECT_EQ(ui::EventType::kMouseMoved, event->type());
+
+  // When the panel is installed at 90 degree rotation, top left of tablet
+  // should correspond to the top right of the screen.
+  EXPECT_GT(cursor()->GetLocation().x(),
+            cursor()->GetCursorConfinedBounds().width() - EPSILON);
+  EXPECT_LT(cursor()->GetLocation().y(), EPSILON);
+}
+
+TEST_F(TabletEventConverterEvdevTest, MoveTopLeftRotate180) {
+  std::unique_ptr<ui::MockTabletEventConverterEvdev> dev =
+      CreateDevice(kWacomIntuos5SPen);
+
+  display::Screen* screen = display::Screen::Get();
+  screen->SetPanelRotationForTesting(screen->GetPrimaryDisplay().id(),
+                                     display::Display::ROTATE_180);
+
+  std::array<input_event, 15> mock_kernel_queue{{
+      {{0, 0}, EV_ABS, ABS_DISTANCE, 63},
+      {{0, 0}, EV_ABS, ABS_X, 477},
+      {{0, 0}, EV_ABS, ABS_TILT_X, 66},
+      {{0, 0}, EV_ABS, ABS_TILT_Y, 62},
+      {{0, 0}, EV_ABS, ABS_MISC, 1050626},
+      {{0, 0}, EV_KEY, BTN_TOOL_PEN, 1},
+      {{0, 0}, EV_MSC, MSC_SERIAL, 897618290},
+      {{0, 0}, EV_SYN, SYN_REPORT, 0},
+      {{0, 0}, EV_ABS, ABS_DISTANCE, 0},
+      {{0, 0}, EV_ABS, ABS_TILT_X, 0},
+      {{0, 0}, EV_ABS, ABS_TILT_Y, 0},
+      {{0, 0}, EV_KEY, BTN_TOOL_PEN, 0},
+      {{0, 0}, EV_ABS, ABS_MISC, 0},
+      {{0, 0}, EV_MSC, MSC_SERIAL, 897618290},
+      {{0, 0}, EV_SYN, SYN_REPORT, 0},
+  }};
+
+  dev->ProcessEvents(mock_kernel_queue);
+  ASSERT_EQ(1u, size());
+
+  ui::MouseEvent* event = dispatched_event(0);
+  EXPECT_EQ(ui::EventType::kMouseMoved, event->type());
+
+  // When the panel is installed at 180 degree rotation, top left of tablet
+  // should correspond to the bottom right of the screen.
+  EXPECT_GT(cursor()->GetLocation().x(),
+            cursor()->GetCursorConfinedBounds().height() - EPSILON);
+  EXPECT_GT(cursor()->GetLocation().y(),
+            cursor()->GetCursorConfinedBounds().height() - EPSILON);
+}
+
+TEST_F(TabletEventConverterEvdevTest, MoveTopLeftRotate270) {
+  std::unique_ptr<ui::MockTabletEventConverterEvdev> dev =
+      CreateDevice(kWacomIntuos5SPen);
+
+  display::Screen* screen = display::Screen::Get();
+  screen->SetPanelRotationForTesting(screen->GetPrimaryDisplay().id(),
+                                     display::Display::ROTATE_270);
+
+  std::array<input_event, 15> mock_kernel_queue{{
+      {{0, 0}, EV_ABS, ABS_DISTANCE, 63},
+      {{0, 0}, EV_ABS, ABS_X, 477},
+      {{0, 0}, EV_ABS, ABS_TILT_X, 66},
+      {{0, 0}, EV_ABS, ABS_TILT_Y, 62},
+      {{0, 0}, EV_ABS, ABS_MISC, 1050626},
+      {{0, 0}, EV_KEY, BTN_TOOL_PEN, 1},
+      {{0, 0}, EV_MSC, MSC_SERIAL, 897618290},
+      {{0, 0}, EV_SYN, SYN_REPORT, 0},
+      {{0, 0}, EV_ABS, ABS_DISTANCE, 0},
+      {{0, 0}, EV_ABS, ABS_TILT_X, 0},
+      {{0, 0}, EV_ABS, ABS_TILT_Y, 0},
+      {{0, 0}, EV_KEY, BTN_TOOL_PEN, 0},
+      {{0, 0}, EV_ABS, ABS_MISC, 0},
+      {{0, 0}, EV_MSC, MSC_SERIAL, 897618290},
+      {{0, 0}, EV_SYN, SYN_REPORT, 0},
+  }};
+
+  dev->ProcessEvents(mock_kernel_queue);
+  ASSERT_EQ(1u, size());
+
+  ui::MouseEvent* event = dispatched_event(0);
+  EXPECT_EQ(ui::EventType::kMouseMoved, event->type());
+
+  // When the panel is installed at 270 degree rotation, top left of tablet
+  // should correspond to the bottom left of the screen.
+  EXPECT_LT(cursor()->GetLocation().x(), EPSILON);
+  EXPECT_GT(cursor()->GetLocation().y(),
+            cursor()->GetCursorConfinedBounds().height() - EPSILON);
 }

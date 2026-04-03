@@ -30,7 +30,6 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_font_selector.h"
-#include "third_party/blink/renderer/core/css/font_face.h"
 #include "third_party/blink/renderer/core/css/font_face_set.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/events/event_listener.h"
@@ -52,9 +51,7 @@ class CORE_EXPORT FontFaceSetDocument final : public FontFaceSet,
   FontFaceSetDocument& operator=(const FontFaceSetDocument&) = delete;
   ~FontFaceSetDocument() override;
 
-  ScriptPromiseTyped<FontFaceSet> ready(ScriptState*) override;
-
-  AtomicString status() const override;
+  ScriptPromise<FontFaceSet> ready(ScriptState*) override;
 
   void DidLayout();
   void BeginFontLoading(FontFace*);
@@ -82,7 +79,7 @@ class CORE_EXPORT FontFaceSetDocument final : public FontFaceSet,
   bool InActiveContext() const override;
   FontSelector* GetFontSelector() const override;
 
-  bool ResolveFontStyle(const String&, Font&) override;
+  const Font* ResolveFontStyle(const String&) override;
 
  private:
   Document* GetDocument() const;

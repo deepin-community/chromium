@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-@import "theme";
+@import "../theme";
 
 // If we're in a popup menu, remove the padding
 .pf-popup-menu.pf-popup {
@@ -28,45 +28,45 @@
   margin: 4px 0;
 
   .pf-menu-item {
-    font-family: $pf-font;
+    font-family: var(--pf-font-compact);
     user-select: none;
     text-align: left;
-    padding: 5px 10px;
+    padding: 6px 10px;
     white-space: nowrap;
     min-width: max-content;
+    line-height: 1;
     cursor: pointer;
 
-    background: $pf-minimal-background;
-    color: $pf-minimal-foreground;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas: "left-icon label right-icon";
 
-    & > .material-icons {
-      font-size: inherit;
-      line-height: inherit;
+    .pf-menu-item__label {
+      grid-area: label;
     }
 
-    & > .pf-left-icon {
-      float: left;
+    &__left-icon {
+      grid-area: left-icon;
       margin-right: 6px; // Make some room between the icon and label
     }
 
-    & > .pf-right-icon {
-      float: right;
+    &__right-icon {
+      grid-area: right-icon;
       margin-left: 6px; // Make some room between the icon and label
     }
 
     &:hover {
-      background: $pf-minimal-background-hover;
+      background: color_hover(transparent);
     }
 
     &:active,
     &.pf-active {
-      background: $pf-minimal-background-active;
+      background: color_active(transparent);
     }
 
     &[disabled] {
-      color: $pf-minimal-foreground-disabled;
-      background: $pf-minimal-background-disabled;
-      box-shadow: none;
+      color: var(--pf-color-text-muted);
+      background: unset;
       cursor: not-allowed;
     }
 
@@ -76,7 +76,29 @@
   }
 
   .pf-menu-divider {
-    border-bottom: solid 1px $pf-colour-thin-border;
+    border-bottom: solid 1px var(--pf-color-border);
     margin: 5px 0 5px 0;
+  }
+
+  // Remove duplicate dividers and dividers at the start or end of the menu
+  .pf-menu-divider:first-child,
+  .pf-menu-divider + .pf-menu-divider,
+  .pf-menu-divider:not(:has(~ :not(.pf-menu-divider))) {
+    display: none;
+  }
+
+  // Remove a menu divider if it directly follows another divider
+  .pf-menu-divider + .pf-menu-divider {
+    display: none;
+  }
+
+  .pf-menu-title {
+    font-family: var(--pf-font-compact);
+    font-weight: 800;
+    font-size: var(--pf-font-size-m);
+    text-transform: uppercase;
+    // color: var(--pf-color-text-muted);
+    padding: 3px 8px 3px 8px;
+    user-select: none;
   }
 }

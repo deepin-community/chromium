@@ -1,15 +1,16 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("../../../scripts/build/ninja/devtools_entrypoint.gni")
 import("../../../scripts/build/ninja/devtools_module.gni")
+import("../../../scripts/build/typescript/typescript.gni")
 
 devtools_module("sdk") {
   sources = [
     "AccessibilityModel.ts",
+    "AnimationModel.ts",
     "AutofillModel.ts",
-    "CPUProfileDataModel.ts",
     "CPUProfilerModel.ts",
     "CPUThrottlingManager.ts",
     "CSSContainerQuery.ts",
@@ -21,9 +22,11 @@ devtools_module("sdk") {
     "CSSModel.ts",
     "CSSProperty.ts",
     "CSSPropertyParser.ts",
+    "CSSPropertyParserMatchers.ts",
     "CSSQuery.ts",
     "CSSRule.ts",
     "CSSScope.ts",
+    "CSSStartingStyle.ts",
     "CSSStyleDeclaration.ts",
     "CSSStyleSheetHeader.ts",
     "CSSSupports.ts",
@@ -40,6 +43,7 @@ devtools_module("sdk") {
     "DOMModel.ts",
     "DebuggerModel.ts",
     "EmulationModel.ts",
+    "EnhancedTracesParser.ts",
     "EventBreakpointsModel.ts",
     "FrameAssociated.ts",
     "FrameManager.ts",
@@ -60,12 +64,14 @@ devtools_module("sdk") {
     "PaintProfiler.ts",
     "PerformanceMetricsModel.ts",
     "PreloadingModel.ts",
-    "ProfileTreeModel.ts",
+    "RehydratingConnection.ts",
+    "RehydratingObject.ts",
     "RemoteObject.ts",
     "Resource.ts",
     "ResourceTreeModel.ts",
     "RuntimeModel.ts",
     "SDKModel.ts",
+    "ScopeTreeCache.ts",
     "ScreenCaptureModel.ts",
     "Script.ts",
     "SecurityOriginManager.ts",
@@ -75,12 +81,16 @@ devtools_module("sdk") {
     "ServiceWorkerCacheModel.ts",
     "ServiceWorkerManager.ts",
     "SourceMap.ts",
+    "SourceMapCache.ts",
+    "SourceMapFunctionRanges.ts",
     "SourceMapManager.ts",
-    "SourceMapScopes.ts",
+    "SourceMapScopeChainEntry.ts",
+    "SourceMapScopesInfo.ts",
     "StorageBucketsModel.ts",
     "StorageKeyManager.ts",
     "Target.ts",
     "TargetManager.ts",
+    "TraceObject.ts",
     "WebAuthnModel.ts",
   ]
 
@@ -94,7 +104,9 @@ devtools_module("sdk") {
     "../../generated",
     "../../generated:protocol",
     "../../models/cpu_profile:bundle",
+    "../../models/formatter:bundle",
     "../../models/text_utils:bundle",
+    "../../third_party/source-map-scopes-codec:bundle",
   ]
 }
 
@@ -118,5 +130,99 @@ devtools_entrypoint("meta") {
     "../../core/i18n:bundle",
   ]
 
-  visibility = [ "../../entrypoints/*" ]
+  visibility = [
+    "../../../mcp/*",
+    "../../entrypoints/*",
+  ]
+}
+
+ts_library("unittests") {
+  testonly = true
+
+  sources = [
+    "AccessibilityModel.test.ts",
+    "AnimationModel.test.ts",
+    "AutofillModel.test.ts",
+    "CPUThrottlingManager.test.ts",
+    "CSSContainerQuery.test.ts",
+    "CSSMatchedStyles.test.ts",
+    "CSSModel.test.ts",
+    "CSSProperty.test.ts",
+    "CSSPropertyParser.test.ts",
+    "CSSPropertyParserMatchers.test.ts",
+    "CSSStyleDeclaration.test.ts",
+    "CSSStyleSheetHeader.test.ts",
+    "ChildTargetManager.test.ts",
+    "ConsoleModel.test.ts",
+    "Cookie.test.ts",
+    "CookieModel.test.ts",
+    "CookieParser.test.ts",
+    "DOMModel.test.ts",
+    "EmulationModel.test.ts",
+    "EnhancedTracesParser.test.ts",
+    "FrameManager.test.ts",
+    "NetworkManager.test.ts",
+    "NetworkRequest.test.ts",
+    "OverlayColorGenerator.test.ts",
+    "OverlayModel.test.ts",
+    "OverlayPersistentHighlighter.test.ts",
+    "PreloadingModel.test.ts",
+    "RehydratingConnection.test.ts",
+    "RemoteObject.test.ts",
+    "ResourceTreeModel.test.ts",
+    "ScopeTreeCache.test.ts",
+    "ScreenCaptureModel.test.ts",
+    "Script.test.ts",
+    "ServerSentEventsProtocol.test.ts",
+    "ServerTiming.test.ts",
+    "ServiceWorkerCacheModel.test.ts",
+    "ServiceWorkerManager.test.ts",
+    "SourceMap.test.ts",
+    "SourceMapCache.test.ts",
+    "SourceMapFunctionRanges.test.ts",
+    "SourceMapManager.test.ts",
+    "SourceMapScopeChainEntry.test.ts",
+    "SourceMapScopesInfo.test.ts",
+    "StorageBucketsModel.test.ts",
+    "StorageKeyManager.test.ts",
+    "TraceObject.test.ts",
+  ]
+
+  deps = [
+    ":bundle",
+    "../../generated:protocol",
+    "../../models/bindings:bundle",
+    "../../models/formatter:bundle",
+    "../../models/persistence:bundle",
+    "../../models/text_utils:bundle",
+    "../../models/trace:bundle",
+    "../../models/workspace:bundle",
+    "../../testing",
+    "../common:bundle",
+    "../protocol_client:bundle",
+    "../root:bundle",
+  ]
+}
+
+devtools_foundation_module("foundation_unittests") {
+  testonly = true
+
+  sources = [
+    "DebuggerModel.test.ts",
+    "PageResourceLoader.test.ts",
+    "RuntimeModel.test.ts",
+    "Target.test.ts",
+    "TargetManager.test.ts",
+  ]
+
+  deps = [
+    ":bundle",
+    "../../generated",
+    "../../models/bindings:bundle",
+    "../../models/workspace:bundle",
+    "../../testing",
+    "../host:bundle",
+    "../platform:bundle",
+    "../root:bundle",
+  ]
 }

@@ -15,6 +15,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "components/history/core/browser/features.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/sync/history_sync_metadata_database.h"
 #include "components/history/core/browser/sync/visit_id_remapper.h"
@@ -22,10 +23,11 @@
 #include "components/history/core/browser/visit_annotations_database.h"
 #include "components/sync/base/page_transition_conversion.h"
 #include "components/sync/model/conflict_resolution.h"
+#include "components/sync/model/data_type_local_change_processor.h"
 #include "components/sync/model/entity_change.h"
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/metadata_change_list.h"
-#include "components/sync/model/model_type_change_processor.h"
+#include "components/sync/model/model_error.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/model/sync_metadata_store_change_list.h"
 #include "components/sync/protocol/history_specifics.pb.h"
@@ -72,6 +74,7 @@ std::string GetStorageKeyFromVisitRow(const VisitRow& row) {
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+// LINT.IfChange(SyncHistoryDatabaseError)
 enum class SyncHistoryDatabaseError {
   kApplyIncrementalSyncChangesAddSyncedVisit = 0,
   kApplyIncrementalSyncChangesWriteMetadata = 1,
@@ -84,6 +87,7 @@ enum class SyncHistoryDatabaseError {
   kGetAllDataReadMetadata = 7,
   kMaxValue = kGetAllDataReadMetadata
 };
+// LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SyncHistoryDatabaseError)
 
 void RecordDatabaseError(SyncHistoryDatabaseError error) {
   DLOG(ERROR) << "SyncHistoryBridge database error: "
@@ -107,6 +111,8 @@ sync_pb::SyncEnums::BrowserType BrowserTypeToProto(
       return sync_pb::SyncEnums_BrowserType_TYPE_POPUP;
     case VisitContextAnnotations::BrowserType::kCustomTab:
       return sync_pb::SyncEnums_BrowserType_TYPE_CUSTOM_TAB;
+    case VisitContextAnnotations::BrowserType::kAuthTab:
+      return sync_pb::SyncEnums_BrowserType_TYPE_AUTH_TAB;
   }
   return sync_pb::SyncEnums_BrowserType_BROWSER_TYPE_UNKNOWN;
 }
@@ -122,6 +128,8 @@ VisitContextAnnotations::BrowserType BrowserTypeFromProto(
       return VisitContextAnnotations::BrowserType::kPopup;
     case sync_pb::SyncEnums_BrowserType_TYPE_CUSTOM_TAB:
       return VisitContextAnnotations::BrowserType::kCustomTab;
+    case sync_pb::SyncEnums_BrowserType_TYPE_AUTH_TAB:
+      return VisitContextAnnotations::BrowserType::kAuthTab;
   }
   return VisitContextAnnotations::BrowserType::kUnknown;
 }
@@ -174,6 +182,11 @@ VisitRow MakeVisitRow(const sync_pb::HistorySpecifics& specifics,
 
   // Definitionally, any visit from Sync is known to sync.
   row.is_known_to_sync = true;
+
+  // Transfer app_id if present.
+  if (specifics.has_app_id()) {
+    row.app_id = specifics.app_id();
+  }
 
   // Reconstruct the page transition - first get the core type.
   int page_transition = syncer::FromSyncPageTransition(
@@ -300,7 +313,8 @@ std::unique_ptr<syncer::EntityData> MakeEntityData(
     const GURL& referrer_url,
     const std::vector<GURL>& favicon_urls,
     int64_t local_cluster_id,
-    std::vector<VisitID>* included_visit_ids) {
+    std::vector<VisitID>* included_visit_ids,
+    std::optional<std::string> app_id) {
   DCHECK(!local_cache_guid.empty());
   DCHECK(!redirect_visits.empty());
 
@@ -442,6 +456,9 @@ std::unique_ptr<syncer::EntityData> MakeEntityData(
   }
 
   history->set_originator_cluster_id(local_cluster_id);
+  if (app_id) {
+    history->set_app_id(*app_id);
+  }
 
   // The entity name is used for debugging purposes; choose something that's a
   // decent tradeoff between "unique" and "readable".
@@ -469,8 +486,6 @@ bool SpecificsContainsOnlyValidURLs(
   return true;
 }
 
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
 enum class SpecificsError {
   kMissingRequiredFields = 0,
   kTooOld = 1,
@@ -516,17 +531,13 @@ std::optional<SpecificsError> GetSpecificsError(
   return {};
 }
 
-void RecordSpecificsError(SpecificsError error) {
-  base::UmaHistogramEnumeration("Sync.History.IncomingSpecificsError", error);
-}
-
 }  // namespace
 
 HistorySyncBridge::HistorySyncBridge(
     HistoryBackendForSync* history_backend,
     HistorySyncMetadataDatabase* sync_metadata_database,
-    std::unique_ptr<syncer::ModelTypeChangeProcessor> change_processor)
-    : ModelTypeSyncBridge(std::move(change_processor)),
+    std::unique_ptr<syncer::DataTypeLocalChangeProcessor> change_processor)
+    : DataTypeSyncBridge(std::move(change_processor)),
       history_backend_(history_backend),
       sync_metadata_database_(sync_metadata_database) {
   DCHECK(history_backend_);
@@ -542,7 +553,7 @@ HistorySyncBridge::CreateMetadataChangeList() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return std::make_unique<syncer::SyncMetadataStoreChangeList>(
       sync_metadata_database_, syncer::HISTORY,
-      base::BindRepeating(&syncer::ModelTypeChangeProcessor::ReportError,
+      base::BindRepeating(&syncer::DataTypeLocalChangeProcessor::ReportError,
                           change_processor()->GetWeakPtr()));
 }
 
@@ -552,7 +563,6 @@ std::optional<syncer::ModelError> HistorySyncBridge::MergeFullSyncData(
   // Since HISTORY is in ApplyUpdatesImmediatelyTypes(), MergeFullSyncData()
   // should never be called.
   NOTREACHED();
-  return {};
 }
 
 std::optional<syncer::ModelError>
@@ -573,13 +583,23 @@ HistorySyncBridge::ApplyIncrementalSyncChanges(
     const sync_pb::HistorySpecifics& specifics =
         entity_change->data().specifics.history();
 
+    // `kVisitedLinksOn404` may be enabled on one device, where 404s are saved
+    // to history. That device's history may then be synced to another device
+    // where `kVisitedLinksOn404` is disabled and is therefore not expecting
+    // 404s to be in history. To avoid this scenario, don't save 404s to the
+    // local device if the flag is disabled.
+    if (!base::FeatureList::IsEnabled(history::kVisitedLinksOn404) &&
+        specifics.has_http_response_code() &&
+        specifics.http_response_code() == 404) {
+      continue;
+    }
+
     // Check validity requirements.
     std::optional<SpecificsError> specifics_error =
         GetSpecificsError(specifics, history_backend_);
     if (specifics_error.has_value()) {
       DVLOG(1) << "Skipping invalid visit, reason "
                << static_cast<int>(*specifics_error);
-      RecordSpecificsError(*specifics_error);
       continue;
     }
 
@@ -627,7 +647,6 @@ HistorySyncBridge::ApplyIncrementalSyncChanges(
         // a conflict that'd be resolved as "local edit wins over remote
         // deletion", so still no ACTION_DELETE would arrive here.]
         NOTREACHED();
-        break;
     }
   }
 
@@ -656,12 +675,17 @@ void HistorySyncBridge::ApplyDisableSyncChanges(
   // Delete all foreign visits from the DB.
   history_backend_->DeleteAllForeignVisitsAndResetIsKnownToSync();
 
-  ModelTypeSyncBridge::ApplyDisableSyncChanges(
+  DataTypeSyncBridge::ApplyDisableSyncChanges(
       std::move(delete_metadata_change_list));
 }
 
-void HistorySyncBridge::GetData(StorageKeyList storage_keys,
-                                DataCallback callback) {
+std::unique_ptr<syncer::DataBatch> HistorySyncBridge::GetDataForCommit(
+    StorageKeyList storage_keys) {
+  return GetDataImpl(storage_keys);
+}
+
+std::unique_ptr<syncer::DataBatch> HistorySyncBridge::GetDataImpl(
+    StorageKeyList storage_keys) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto batch = std::make_unique<syncer::MutableDataBatch>();
@@ -696,14 +720,14 @@ void HistorySyncBridge::GetData(StorageKeyList storage_keys,
     batch->Put(key, std::move(entity_data));
   }
 
-  std::move(callback).Run(std::move(batch));
+  return batch;
 }
 
-void HistorySyncBridge::GetAllDataForDebugging(DataCallback callback) {
+std::unique_ptr<syncer::DataBatch> HistorySyncBridge::GetAllDataForDebugging() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (!sync_metadata_database_) {
-    return;
+    return nullptr;
   }
 
   auto metadata_batch = std::make_unique<syncer::MetadataBatch>();
@@ -711,34 +735,41 @@ void HistorySyncBridge::GetAllDataForDebugging(DataCallback callback) {
     RecordDatabaseError(SyncHistoryDatabaseError::kGetAllDataReadMetadata);
     change_processor()->ReportError(
         {FROM_HERE,
-         "Failed reading metadata from HistorySyncMetadataDatabase."});
+         syncer::ModelError::Type::kHistoryFailedToLoadMetadataForDebugging});
   }
   StorageKeyList storage_keys;
   for (const auto& [storage_key, metadata] : metadata_batch->GetAllMetadata()) {
     storage_keys.push_back(storage_key);
   }
-  GetData(std::move(storage_keys), std::move(callback));
+  return GetDataImpl(std::move(storage_keys));
 }
 
 std::string HistorySyncBridge::GetClientTag(
-    const syncer::EntityData& entity_data) {
+    const syncer::EntityData& entity_data) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(entity_data.specifics.has_history())
-      << "EntityData does not have history specifics.";
+  CHECK(entity_data.specifics.has_history());
 
   const sync_pb::HistorySpecifics& history = entity_data.specifics.history();
   return base::NumberToString(history.visit_time_windows_epoch_micros());
 }
 
 std::string HistorySyncBridge::GetStorageKey(
-    const syncer::EntityData& entity_data) {
+    const syncer::EntityData& entity_data) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(entity_data.specifics.has_history())
-      << "EntityData does not have history specifics.";
+  CHECK(entity_data.specifics.has_history());
 
   const sync_pb::HistorySpecifics& history = entity_data.specifics.history();
   return HistorySyncMetadataDatabase::StorageKeyFromMicrosSinceWindowsEpoch(
       history.visit_time_windows_epoch_micros());
+}
+
+bool HistorySyncBridge::IsEntityDataValid(
+    const syncer::EntityData& entity_data) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(entity_data.specifics.has_history());
+
+  const sync_pb::HistorySpecifics& history = entity_data.specifics.history();
+  return history.visit_time_windows_epoch_micros() > 0;
 }
 
 syncer::ConflictResolution HistorySyncBridge::ResolveConflict(
@@ -764,7 +795,7 @@ syncer::ConflictResolution HistorySyncBridge::ResolveConflict(
       GetLocalCacheGuid()) {
     return syncer::ConflictResolution::kUseLocal;
   }
-  return ModelTypeSyncBridge::ResolveConflict(storage_key, remote_data);
+  return DataTypeSyncBridge::ResolveConflict(storage_key, remote_data);
 }
 
 void HistorySyncBridge::OnURLVisited(HistoryBackend* history_backend,
@@ -792,7 +823,8 @@ void HistorySyncBridge::OnURLsModified(HistoryBackend* history_backend,
 
   for (const URLRow& url_row : changed_urls) {
     VisitRow visit_row;
-    if (history_backend_->GetMostRecentVisitForURL(url_row.id(), &visit_row) &&
+    if (history_backend_->GetMostRecentVisitForURL(
+            url_row.id(), &visit_row, VisitQuery404sPolicy::kInclude404s) &&
         visit_row.originator_cache_guid.empty()) {
       // It's the URL corresponding to a local visit - probably the title got
       // updated.
@@ -801,11 +833,11 @@ void HistorySyncBridge::OnURLsModified(HistoryBackend* history_backend,
   }
 }
 
-void HistorySyncBridge::OnURLsDeleted(HistoryBackend* history_backend,
-                                      bool all_history,
-                                      bool expired,
-                                      const URLRows& deleted_rows,
-                                      const std::set<GURL>& favicon_urls) {
+void HistorySyncBridge::OnHistoryDeletions(HistoryBackend* history_backend,
+                                           bool all_history,
+                                           bool expired,
+                                           const URLRows& deleted_rows,
+                                           const std::set<GURL>& favicon_urls) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   // If individual URLs get deleted, we're notified about their removed visits
@@ -874,7 +906,7 @@ void HistorySyncBridge::OnDatabaseError() {
   sync_metadata_database_ = nullptr;
   RecordDatabaseError(SyncHistoryDatabaseError::kOnDatabaseError);
   change_processor()->ReportError(
-      {FROM_HERE, "HistoryDatabase encountered error"});
+      {FROM_HERE, syncer::ModelError::Type::kHistoryDatabaseError});
 }
 
 void HistorySyncBridge::LoadMetadata() {
@@ -886,8 +918,7 @@ void HistorySyncBridge::LoadMetadata() {
   if (!sync_metadata_database_->GetAllSyncMetadata(batch.get())) {
     RecordDatabaseError(SyncHistoryDatabaseError::kLoadMetadata);
     change_processor()->ReportError(
-        {FROM_HERE,
-         "Failed reading metadata from HistorySyncMetadataDatabase."});
+        {FROM_HERE, syncer::ModelError::Type::kHistoryFailedToLoadMetadata});
     return;
   }
   change_processor()->ModelReadyToSync(std::move(batch));
@@ -930,6 +961,13 @@ bool HistorySyncBridge::ShouldCommitRightNow() const {
 void HistorySyncBridge::MaybeCommit(const VisitRow& visit_row) {
   // First check if the overall state allows committing right now.
   if (!ShouldCommitRightNow()) {
+    return;
+  }
+
+  // If this visit is actor-initiated, ignore it.
+  history::VisitSource visit_source = VisitSource::SOURCE_BROWSED;
+  if (history_backend_->GetVisitSource(visit_row.visit_id, &visit_source) &&
+      visit_source == VisitSource::SOURCE_ACTOR) {
     return;
   }
 
@@ -1064,9 +1102,10 @@ HistorySyncBridge::QueryRedirectChainAndMakeEntityData(
     // should be the same (except potentially in unit tests).
     int64_t local_cluster_id = history_backend_->GetClusterIdContainingVisit(
         redirect_visits.front().visit_id);
-    entities.push_back(MakeEntityData(
-        GetLocalCacheGuid(), annotated_visits, chain_middle_trimmed,
-        referrer_url, favicon_urls, local_cluster_id, included_visit_ids));
+    entities.push_back(MakeEntityData(GetLocalCacheGuid(), annotated_visits,
+                                      chain_middle_trimmed, referrer_url,
+                                      favicon_urls, local_cluster_id,
+                                      included_visit_ids, final_visit.app_id));
   }
 
   return entities;
@@ -1121,9 +1160,12 @@ bool HistorySyncBridge::AddEntityInBackend(
     referring_visit_id = added_visit_id;
 
     // If the sending client supports syncing its clusters, add the appropriate
-    // details to history.
+    // details to history. 404s shouldn't make their way into clusters in
+    // general, but if they do, that's a mistake we don't want to replicate on
+    // sync.
     DCHECK(!specifics.originator_cache_guid().empty());
-    if (specifics.originator_cluster_id() > 0) {
+    if (specifics.originator_cluster_id() > 0 &&
+        specifics.http_response_code() != 404) {
       // Populate the visit to a synced cluster.
       history::ClusterVisit cluster_visit;
       cluster_visit.annotated_visit.visit_row = visit_row;
@@ -1153,7 +1195,7 @@ bool HistorySyncBridge::UpdateEntityInBackend(
     const sync_pb::HistorySpecifics& specifics) {
   // Only try updating the final visit in a chain - earlier visits (i.e.
   // redirects) can't get updated anyway.
-  // TODO(crbug.com/1318028): Verify whether only updating the chain end
+  // TODO(crbug.com/40059424): Verify whether only updating the chain end
   // is indeed sufficient.
   int index = specifics.redirect_entries_size() - 1;
   VisitRow final_visit_row = MakeVisitRow(specifics, index);

@@ -4,16 +4,21 @@
 
 #include "components/soda/soda_installer_impl_chromeos.h"
 
+#include <algorithm>
+
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "chromeos/ash/components/dbus/dlcservice/fake_dlcservice_client.h"
 #include "components/live_caption/pref_names.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/soda/constants.h"
 #include "components/soda/pref_names.h"
 #include "components/soda/soda_features.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -25,6 +30,8 @@ const base::TimeDelta kSodaUninstallTime = base::Days(30);
 
 constexpr char kSodaEnglishLanguageInstallationResult[] =
     "SodaInstaller.Language.en-US.InstallationResult";
+constexpr char kSodaChineseTraditionalLanguageInstallationResult[] =
+    "SodaInstaller.Language.zh-TW.InstallationResult";
 }  // namespace
 
 namespace speech {
@@ -49,6 +56,8 @@ class SodaInstallerImplChromeOSTest : public testing::Test {
         ash::prefs::kProjectorCreationFlowLanguage, kUsEnglishLocale);
     pref_service_->registry()->RegisterStringPref(
         prefs::kLiveCaptionLanguageCode, kUsEnglishLocale);
+    pref_service_->registry()->RegisterStringPref(
+        ash::prefs::kClassManagementToolsAvailabilitySetting, std::string());
   }
 
   void TearDown() override {
@@ -80,8 +89,12 @@ class SodaInstallerImplChromeOSTest : public testing::Test {
     soda_installer_impl_->Init(pref_service_.get(), pref_service_.get());
   }
 
-  void InstallLanguage(const std::string& language) {
+  void InstallLanguage(std::string_view language) {
     soda_installer_impl_->InstallLanguage(language, pref_service_.get());
+  }
+
+  void UninstallLanguage(std::string_view language) {
+    soda_installer_impl_->UninstallLanguage(language, pref_service_.get());
   }
 
   void RunUntilIdle() { task_environment_.RunUntilIdle(); }
@@ -90,9 +103,13 @@ class SodaInstallerImplChromeOSTest : public testing::Test {
     fake_dlcservice_client_.set_install_error(dlcservice::kErrorNeedReboot);
   }
 
+  void SetDlcInstallRootPath(std::string_view path) {
+    fake_dlcservice_client_.set_install_root_path(path);
+  }
+
   void SetUninstallTimer() {
     soda_installer_impl_->SetUninstallTimer(pref_service_.get(),
-                                            pref_service_.get());
+                                            GetLanguageName(kEnglishLocale));
   }
 
   void FastForwardBy(base::TimeDelta delta) {
@@ -148,6 +165,28 @@ TEST_F(SodaInstallerImplChromeOSTest, IsSodaInstalled) {
                                      1);
 }
 
+TEST_F(SodaInstallerImplChromeOSTest, IsCorrectChineseLocaleInstalled) {
+  base::HistogramTester histogram_tester;
+
+  ASSERT_FALSE(IsSodaInstalled());
+  Init();
+  ASSERT_FALSE(IsSodaInstalled());
+  ASSERT_TRUE(base::test::RunUntil([&]() { return IsSodaInstalled(); }));
+
+  // Chinese-traditional is not installed.
+  histogram_tester.ExpectBucketCount(
+      kSodaChineseTraditionalLanguageInstallationResult, 1, 0);
+
+  // Also install Chinese-traditional as zh-TW:
+  InstallLanguage("zh-TW");
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return IsLanguageInstalled(speech::LanguageCode::kZhTw); }));
+
+  // Now chinese-traditional is installed correctly.
+  histogram_tester.ExpectBucketCount(
+      kSodaChineseTraditionalLanguageInstallationResult, 1, 1);
+}
+
 TEST_F(SodaInstallerImplChromeOSTest, IsDownloading) {
   ASSERT_FALSE(IsSodaDownloading());
   Init();
@@ -156,27 +195,51 @@ TEST_F(SodaInstallerImplChromeOSTest, IsDownloading) {
   ASSERT_FALSE(IsSodaDownloading());
 }
 
-TEST_F(SodaInstallerImplChromeOSTest, OnlyEnglishAvailable) {
+TEST_F(SodaInstallerImplChromeOSTest, SubSetCorrect) {
   std::vector<std::string> actual_langs =
       GetInstance()->GetAvailableLanguages();
-  EXPECT_THAT(actual_langs, ::testing::UnorderedElementsAre("en-US"));
+  auto expected_livecaption_langs =
+      GetInstance()->GetLiveCaptionEnabledLanguages();
+  EXPECT_THAT(expected_livecaption_langs, ::testing::IsSubsetOf(actual_langs));
 }
 
-TEST_F(SodaInstallerImplChromeOSTest, MultipleLangsAvailableInExperiment) {
+TEST_F(SodaInstallerImplChromeOSTest, ConchAddOns) {
   base::test::ScopedFeatureList scoped_feature_list_internal;
-  std::map<std::string, std::string> params;
-  params.insert({"available_languages",
-                 "it-IT:libsoda-chickenface,ja-JP:libsoda-moo,de-IT:"
-                 "incorrectprefix,wr-on:libsoda-wrong-language"});
-  scoped_feature_list_internal.InitAndEnableFeatureWithParameters(
-      ::speech::kCrosExpandSodaLanguages, params);
-  // explicit delete first to make the single instance enforcement happy.
+  scoped_feature_list_internal.InitWithFeatures(
+      {::speech::kCrosSodaConchLanguages,
+       ::speech::kFeatureManagementCrosSodaConchLanguages},
+      {});
+  auto expected_livecaption_langs =
+      GetInstance()->GetLiveCaptionEnabledLanguages();
+  EXPECT_THAT(expected_livecaption_langs,
+              ::testing::IsSupersetOf({"da-DK", "nb-NO", "nl-NL", "sv-SE"}));
+}
+
+TEST_F(SodaInstallerImplChromeOSTest, ConchInLiveCaptionFullList) {
+  base::test::ScopedFeatureList scoped_feature_list_internal;
+  scoped_feature_list_internal.InitWithFeatures(
+      {::speech::kCrosSodaConchLanguages,
+       ::speech::kFeatureManagementCrosSodaConchLanguages},
+      {});
   soda_installer_impl_.reset();
   soda_installer_impl_ = std::make_unique<SodaInstallerImplChromeOS>();
-  std::vector<std::string> actual_langs =
-      GetInstance()->GetAvailableLanguages();
-  EXPECT_THAT(actual_langs,
-              ::testing::UnorderedElementsAre("ja-JP", "it-IT", "en-US"));
+  std::vector<std::string> enabled_and_available_languages;
+  std::vector<base::DictValue> available_language_packs;
+  {
+    std::vector<std::string> enabled_languages =
+        GetInstance()->GetLiveCaptionEnabledLanguages();
+    std::vector<std::string> available_languages =
+        GetInstance()->GetAvailableLanguages();
+    base::flat_set<std::string> available_languages_set(
+        std::move(available_languages));
+    for (auto& enabled_language : enabled_languages) {
+      if (available_languages_set.contains(enabled_language)) {
+        enabled_and_available_languages.push_back(std::move(enabled_language));
+      }
+    }
+  }
+  EXPECT_THAT(enabled_and_available_languages,
+              ::testing::IsSupersetOf({"da-DK", "nb-NO", "nl-NL", "sv-SE"}));
 }
 
 TEST_F(SodaInstallerImplChromeOSTest, IsAnyLanguagePackInstalled) {
@@ -239,6 +302,26 @@ TEST_F(SodaInstallerImplChromeOSTest, UninstallSodaForTesting) {
   ASSERT_FALSE(IsLanguageInstalled(kEnglishLocale));
 }
 
+TEST_F(SodaInstallerImplChromeOSTest, UninstallLanguage) {
+  Init();
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return IsSodaInstalled() && IsLanguageInstalled(kEnglishLocale);
+  }));
+
+  // Uninstall the default locale.
+  UninstallLanguage(kUsEnglishLocale);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return !IsLanguageInstalled(kEnglishLocale); }));
+
+  // Now do the same for a chinese locale which requires special treatment.
+  InstallLanguage("zh-TW");
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return IsLanguageInstalled(speech::LanguageCode::kZhTw); }));
+  UninstallLanguage("zh-TW");
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return !IsLanguageInstalled(speech::LanguageCode::kZhTw); }));
+}
+
 TEST_F(SodaInstallerImplChromeOSTest, SodaProgressForTesting) {
   ASSERT_FALSE(IsSodaInstalled());
   ASSERT_FALSE(IsSodaDownloading());
@@ -249,6 +332,32 @@ TEST_F(SodaInstallerImplChromeOSTest, SodaProgressForTesting) {
   ASSERT_FALSE(IsAnyLanguagePackInstalled());
   ASSERT_TRUE(IsSodaDownloading());
   RunUntilIdle();
+}
+
+TEST_F(SodaInstallerImplChromeOSTest, GetLanguagePath) {
+  // Before installation, GetLanguagePath should return an empty path.
+  ASSERT_TRUE(GetInstance()->GetLanguagePath(kUsEnglishLocale).empty());
+  SetDlcInstallRootPath("/some/where");
+  Init();
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return IsSodaInstalled() && IsLanguageInstalled(kEnglishLocale);
+  }));
+  // After installation, GetLanguagePath should return a non-empty path.
+  ASSERT_FALSE(GetInstance()->GetLanguagePath(kUsEnglishLocale).empty());
+
+  // Test for Chinese locale.
+  ASSERT_TRUE(GetInstance()->GetLanguagePath("zh-TW").empty());
+  InstallLanguage("zh-TW");
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return IsLanguageInstalled(speech::LanguageCode::kZhTw); }));
+  ASSERT_FALSE(GetInstance()->GetLanguagePath("zh-TW").empty());
+}
+
+TEST_F(SodaInstallerImplChromeOSTest, GetLanguageDlcNameForLocale) {
+  Init();
+  EXPECT_FALSE(
+      GetInstance()->GetLanguageDlcNameForLocale(kUsEnglishLocale).empty());
+  EXPECT_FALSE(GetInstance()->GetLanguageDlcNameForLocale("zh-TW").empty());
 }
 
 TEST_F(SodaInstallerImplChromeOSTest, LanguagePackForTesting) {

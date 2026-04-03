@@ -1,44 +1,59 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+/* eslint-disable @devtools/no-lit-render-outside-of-view, @devtools/enforce-custom-element-definitions-location */
 
-import type * as Platform from '../../../core/platform/platform.js';
-import * as ComponentHelpers from '../../../ui/components/helpers/helpers.js';
-import * as LitHtml from '../../../ui/lit-html/lit-html.js';
+import {html, render} from '../../../ui/lit/lit.js';
+import * as UI from '../../legacy/legacy.js';
 
 import adornerStyles from './adorner.css.js';
 
-const {render, html} = LitHtml;
-
 export interface AdornerData {
   name: string;
-  content: HTMLElement;
+  content?: HTMLElement;
+  jslogContext?: string;
 }
 
+/**
+ * @deprecated Do not add new usages. The custom component will be removed an
+ * embedded into the corresponding views.
+ */
 export class Adorner extends HTMLElement {
-  static readonly litTagName = LitHtml.literal`devtools-adorner`;
   name = '';
 
   readonly #shadow = this.attachShadow({mode: 'open'});
-  #isToggle = false;
-  #ariaLabelDefault?: string;
-  #ariaLabelActive?: string;
-  #content?: HTMLElement;
 
-  set data(data: AdornerData) {
-    this.name = data.name;
-    data.content.slot = 'content';
-    this.#content?.remove();
-    this.append(data.content);
-    this.#content = data.content;
-    this.#render();
+  #isToggle = false;
+
+  override cloneNode(deep?: boolean): Node {
+    const node = UI.UIUtils.cloneCustomElement(this, deep);
+    node.name = this.name;
+    node.#isToggle = this.#isToggle;
+    return node;
   }
 
   connectedCallback(): void {
     if (!this.getAttribute('aria-label')) {
       this.setAttribute('aria-label', this.name);
     }
-    this.#shadow.adoptedStyleSheets = [adornerStyles];
+    this.#render();
+  }
+
+  static readonly observedAttributes = ['active', 'toggleable'];
+  attributeChangedCallback(name: string, oldValue: string, newValue: string): void {
+    if (oldValue === newValue) {
+      return;
+    }
+
+    switch (name) {
+      case 'active':
+        this.#toggle(newValue === 'true');
+        break;
+      case 'toggleable':
+        this.#isToggle = newValue === 'true';
+        this.#toggle(this.getAttribute('active') === 'true');
+        break;
+    }
   }
 
   isActive(): boolean {
@@ -49,13 +64,13 @@ export class Adorner extends HTMLElement {
    * Toggle the active state of the adorner. Optionally pass `true` to force-set
    * an active state; pass `false` to force-set an inactive state.
    */
-  toggle(forceActiveState?: boolean): void {
+  #toggle(forceActiveState?: boolean): void {
     if (!this.#isToggle) {
       return;
     }
     const shouldBecomeActive = forceActiveState === undefined ? !this.isActive() : forceActiveState;
+    this.setAttribute('role', 'button');
     this.setAttribute('aria-pressed', Boolean(shouldBecomeActive).toString());
-    this.setAttribute('aria-label', (shouldBecomeActive ? this.#ariaLabelActive : this.#ariaLabelDefault) || this.name);
   }
 
   show(): void {
@@ -66,61 +81,14 @@ export class Adorner extends HTMLElement {
     this.classList.add('hidden');
   }
 
-  /**
-   * Make adorner interactive by responding to click events with the provided action
-   * and simulating ARIA-capable toggle button behavior.
-   */
-  addInteraction(action: EventListener, options: {
-    ariaLabelDefault: Platform.UIString.LocalizedString,
-    ariaLabelActive: Platform.UIString.LocalizedString,
-    isToggle?: boolean,
-    shouldPropagateOnKeydown?: boolean,
-  }): void {
-    const {isToggle = false, shouldPropagateOnKeydown = false, ariaLabelDefault, ariaLabelActive} = options;
-
-    this.#isToggle = isToggle;
-    this.#ariaLabelDefault = ariaLabelDefault;
-    this.#ariaLabelActive = ariaLabelActive;
-    this.setAttribute('aria-label', ariaLabelDefault);
-
-    if (isToggle) {
-      this.addEventListener('click', () => {
-        this.toggle();
-      });
-      this.toggle(false /* initialize inactive state */);
-    }
-
-    this.addEventListener('click', action);
-
-    // Simulate an ARIA-capable toggle button
-    this.classList.add('clickable');
-    this.setAttribute('role', 'button');
-    this.tabIndex = 0;
-    this.addEventListener('keydown', event => {
-      if (event.code === 'Enter' || event.code === 'Space') {
-        this.click();
-        if (!shouldPropagateOnKeydown) {
-          event.stopPropagation();
-        }
-      }
-    });
-  }
-
   #render(): void {
-    // Disabled until https://crbug.com/1079231 is fixed.
-    // clang-format off
-    render(html`
-      <slot name="content"></slot>
-    `, this.#shadow, {
-      host: this,
-    });
+    render(html`<style>${adornerStyles}</style><slot></slot>`, this.#shadow, {host: this});
   }
 }
 
-ComponentHelpers.CustomElements.defineComponent('devtools-adorner', Adorner);
+customElements.define('devtools-adorner', Adorner);
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface HTMLElementTagNameMap {
     'devtools-adorner': Adorner;
   }

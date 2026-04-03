@@ -4,7 +4,8 @@
 
 #include "components/webapps/browser/installable/installable_task.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
 #include "components/webapps/browser/installable/installable_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/manifest/manifest_util.h"
@@ -13,7 +14,6 @@ namespace webapps {
 
 InstallableTask::InstallableTask(
     content::WebContents* web_contents,
-    content::ServiceWorkerContext* service_worker_context,
     base::WeakPtr<InstallableManager> installable_manager,
     const InstallableParams& params,
     InstallableCallback callback,
@@ -23,8 +23,7 @@ InstallableTask::InstallableTask(
       params_(params),
       callback_(std::move(callback)),
       page_data_(page_data) {
-  fetcher_ = std::make_unique<InstallableDataFetcher>(
-      web_contents, service_worker_context, page_data);
+  fetcher_ = std::make_unique<InstallableDataFetcher>(web_contents, page_data);
   evaluator_ = std::make_unique<InstallableEvaluator>(
       web_contents, page_data, params_.installable_criteria);
 }
@@ -51,7 +50,7 @@ void InstallableTask::RunCallback() {
         page_data_->primary_icon_purpose() ==
             blink::mojom::ManifestImageResource_Purpose::MASKABLE,
         page_data_->screenshots(),
-        installability_check_passed,
+        installability_check_passed_,
     };
     std::move(callback_).Run(data);
   }
@@ -64,9 +63,13 @@ void InstallableTask::ResetWithError(InstallableStatusCode code) {
   if (callback_) {
     blink::mojom::Manifest manifest;
     mojom::WebPageMetadata metadata;
-    std::move(callback_).Run(InstallableData({code}, GURL(), manifest, metadata,
-                                             GURL(), nullptr, false,
-                                             std::vector<Screenshot>(), false));
+    std::move(callback_).Run(InstallableData(
+        /*errors=*/{code}, /*manifest_url=*/GURL(), /*manifest=*/manifest,
+        /*metadata=*/metadata, /*primary_icon_url=*/GURL(),
+        /*primary_icon=*/nullptr,
+        /*has_maskable_primary_icon=*/false,
+        /*screenshots=*/std::vector<Screenshot>(),
+        /*installable_check_passed=*/false));
   }
 }
 
@@ -117,34 +120,15 @@ void InstallableTask::IncrementStateAndWorkOnNextTask() {
         return;
       }
       break;
-    case kCheckServiceWorker:
-      if (params_.has_worker) {
-        fetcher_->CheckServiceWorker(
-            base::BindOnce(&InstallableTask::OnFetchedData,
-                           base::Unretained(this)),
-            base::BindOnce(&InstallableTask::OnWaitingForServiceWorker,
-                           base::Unretained(this)),
-            params_.wait_for_worker);
-        return;
-      }
   }
   IncrementStateAndWorkOnNextTask();
 }
 
 void InstallableTask::OnFetchedData(InstallableStatusCode error) {
-  if (error != NO_ERROR_DETECTED) {
+  if (error != InstallableStatusCode::NO_ERROR_DETECTED) {
     errors_.push_back(error);
   }
   IncrementStateAndWorkOnNextTask();
-}
-
-void InstallableTask::OnWaitingForServiceWorker() {
-  // Set the param |wait_for_worker| to false so we only wait once per task.
-  params_.wait_for_worker = false;
-  // Reset to previous step so that it can resume from Checking SW.
-  state_ = kCheckServiceWorker - 1;
-
-  manager_->OnTaskPaused();
 }
 
 void InstallableTask::CheckEligibility() {
@@ -156,17 +140,16 @@ void InstallableTask::CheckEligibility() {
 }
 
 void InstallableTask::CheckInstallability() {
-  auto new_errors = evaluator_->CheckInstallability();
-  if (new_errors.has_value()) {
-    for (auto new_error : new_errors.value()) {
-      if (base::Contains(errors_, new_error)) {
-        // Don't add duplicated errors.
-        continue;
-      }
-      errors_.push_back(new_error);
+  std::vector<InstallableStatusCode> installable_errors =
+      evaluator_->CheckInstallability();
+  for (auto new_error : installable_errors) {
+    if (std::ranges::contains(errors_, new_error)) {
+      // Don't add duplicated errors.
+      continue;
     }
+    errors_.push_back(new_error);
   }
-  installability_check_passed = new_errors.has_value() && new_errors->empty();
+  installability_check_passed_ = installable_errors.empty();
   IncrementStateAndWorkOnNextTask();
 }
 

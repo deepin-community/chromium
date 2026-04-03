@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "platform/api/time.h"
-#include "platform/base/macros.h"
 #include "platform/impl/socket_handle_waiter_posix.h"
 #include "platform/impl/task_runner.h"
 #include "platform/impl/tls_data_router_posix.h"
@@ -38,16 +37,16 @@ class PlatformClientPosix {
  public:
   // Initializes the platform implementation.
   //
-  // |networking_loop_interval| sets the minimum amount of time that should pass
+  // `networking_loop_interval` sets the minimum amount of time that should pass
   // between iterations of the loop used to handle networking operations. Higher
   // values will result in less time being spent on these operations, but also
   // less performant networking operations. Be careful setting values larger
   // than a few hundred microseconds.
   //
-  // |networking_operation_timeout| sets how much time may be spent on a
+  // `networking_operation_timeout` sets how much time may be spent on a
   // single networking operation type.
   //
-  // |task_runner| is a client-provided TaskRunner implementation.
+  // `task_runner` is a client-provided TaskRunner implementation.
   static void Create(Clock::duration networking_operation_timeout,
                      std::unique_ptr<TaskRunnerImpl> task_runner);
 
@@ -62,6 +61,11 @@ class PlatformClientPosix {
   static void ShutDown();
 
   static PlatformClientPosix* GetInstance() { return instance_; }
+
+  PlatformClientPosix(const PlatformClientPosix&) = delete;
+  PlatformClientPosix(PlatformClientPosix&&) noexcept = delete;
+  PlatformClientPosix& operator=(const PlatformClientPosix&) = delete;
+  PlatformClientPosix& operator=(PlatformClientPosix&&) = delete;
 
   // This method is thread-safe.
   // FIXME: Rename to GetTlsDataRouter()
@@ -119,8 +123,6 @@ class PlatformClientPosix {
   std::optional<std::thread> task_runner_thread_;
 
   static PlatformClientPosix* instance_;
-
-  OSP_DISALLOW_COPY_AND_ASSIGN(PlatformClientPosix);
 };
 
 }  // namespace openscreen

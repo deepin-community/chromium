@@ -10,10 +10,9 @@
             "builder_id": {
               "bucket": "try",
               "builder": "win10.20h2-blink-rel",
-              "project": "chromium-m123"
+              "project": "chromium-m146"
             },
             "builder_spec": {
-              "build_gs_bucket": "chromium-fyi-archive",
               "builder_group": "tryserver.blink",
               "execution_mode": "COMPILE_AND_TEST",
               "legacy_chromium_config": {
@@ -22,7 +21,7 @@
                 ],
                 "build_config": "Release",
                 "config": "chromium",
-                "target_bits": 32,
+                "target_bits": 64,
                 "target_platform": "win"
               },
               "legacy_gclient_config": {
@@ -36,17 +35,23 @@
         {
           "bucket": "try",
           "builder": "win10.20h2-blink-rel",
-          "project": "chromium-m123"
+          "project": "chromium-m146"
         }
       ],
-      "retry_failed_shards": false
+      "retry_failed_shards": false,
+      "targets_spec_directory": "infra/config/generated/builders/try/win10.20h2-blink-rel/targets"
     }
   },
-  "$build/reclient": {
-    "instance": "rbe-chromium-untrusted",
-    "jobs": 150,
-    "metrics_project": "chromium-reclient-metrics",
-    "scandeps_server": true
+  "$build/siso": {
+    "configs": [
+      "builder"
+    ],
+    "enable_cloud_monitoring": true,
+    "enable_cloud_trace": true,
+    "experiments": [],
+    "profile_mode": "cloud",
+    "project": "rbe-chromium-untrusted",
+    "remote_jobs": 150
   },
   "$recipe_engine/resultdb/test_presentation": {
     "column_keys": [],

@@ -1,19 +1,19 @@
-// Copyright 2023 The Chromium Authors. All rights reserved.
+// Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import * as Host from '../../../core/host/host.js';
 import * as i18n from '../../../core/i18n/i18n.js';
 import * as Platform from '../../../core/platform/platform.js';
 import type * as Puppeteer from '../../../third_party/puppeteer/puppeteer.js';
 import * as Buttons from '../../../ui/components/buttons/buttons.js';
 import * as SuggestionInput from '../../../ui/components/suggestion_input/suggestion_input.js';
-import * as LitHtml from '../../../ui/lit-html/lit-html.js';
+import * as UI from '../../../ui/legacy/legacy.js';
+import * as Lit from '../../../ui/lit/lit.js';
 import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
-import * as Controllers from '../controllers/controllers.js';
 import * as Models from '../models/models.js';
 import * as Util from '../util/util.js';
 
+import {RequestSelectorAttributeEvent, SelectorPicker} from './SelectorPicker.js';
 import stepEditorStyles from './stepEditor.css.js';
 import {
   ArrayAssignments,
@@ -29,7 +29,7 @@ import {
   type RequiredKeys,
 } from './util.js';
 
-const {html, Decorators, Directives, LitElement} = LitHtml;
+const {html, Decorators, Directives, LitElement} = Lit;
 const {customElement, property, state} = Decorators;
 const {live} = Directives;
 
@@ -131,7 +131,7 @@ const defaultValuesByAttribute = deepFreeze({
 
 const attributesByType = deepFreeze<{
   [Type in Models.Schema.StepType]:
-      {required: Exclude<RequiredKeys<StepFor<Type>>, 'type'>[], optional: OptionalKeys<StepFor<Type>>[]};
+      {required: Array<Exclude<RequiredKeys<StepFor<Type>>, 'type'>>, optional: Array<OptionalKeys<StepFor<Type>>>};
 }>({
   [Models.Schema.StepType.Click]: {
     required: ['selectors', 'offsetX', 'offsetY'],
@@ -225,59 +225,54 @@ const attributesByType = deepFreeze<{
 
 const UIStrings = {
   /**
-   *@description The text that is disabled when the steps were not saved due to an error. The error message itself is always in English and not translated.
-   *@example {Saving failed} error
+   * @description The text that is disabled when the steps were not saved due to an error. The error message itself is always in English and not translated.
+   * @example {Saving failed} error
    */
   notSaved: 'Not saved: {error}',
   /**
-   *@description The button title that adds a new attribute to the form.
-   *@example {timeout} attributeName
+   * @description The button title that adds a new attribute to the form.
+   * @example {timeout} attributeName
    */
   addAttribute: 'Add {attributeName}',
   /**
-   *@description The title of a button that deletes an attribute from the form.
+   * @description The title of a button that deletes an attribute from the form.
    */
   deleteRow: 'Delete row',
   /**
-   *@description The title of a button that allows you to select an element on the page and update CSS/ARIA selectors.
-   */
-  selectorPicker: 'Select an element in the page to update selectors',
-  /**
-   *@description The title of a button that adds a new input field for the entry of the frame index. Frame index is the number of the frame within the page's frame tree.
+   * @description The title of a button that adds a new input field for the entry of the frame index. Frame index is the number of the frame within the page's frame tree.
    */
   addFrameIndex: 'Add frame index within the frame tree',
   /**
-   *@description The title of a button that removes a frame index field from the form.
+   * @description The title of a button that removes a frame index field from the form.
    */
   removeFrameIndex: 'Remove frame index',
   /**
-   *@description The title of a button that adds a field to input a part of a selector in the editor form.
+   * @description The title of a button that adds a field to input a part of a selector in the editor form.
    */
   addSelectorPart: 'Add a selector part',
   /**
-   *@description The title of a button that removes a field to input a part of a selector in the editor form.
+   * @description The title of a button that removes a field to input a part of a selector in the editor form.
    */
   removeSelectorPart: 'Remove a selector part',
   /**
-   *@description The title of a button that adds a field to input a selector in the editor form.
+   * @description The title of a button that adds a field to input a selector in the editor form.
    */
   addSelector: 'Add a selector',
   /**
-   *@description The title of a button that removes a field to input a selector in the editor form.
+   * @description The title of a button that removes a field to input a selector in the editor form.
    */
   removeSelector: 'Remove a selector',
   /**
-   *@description The error message display when a user enters a type in the input not associates with any existing types.
+   * @description The error message display when a user enters a type in the input not associates with any existing types.
    */
   unknownActionType: 'Unknown action type.',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/recorder/components/StepEditor.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
 declare global {
   interface HTMLElementTagNameMap {
     'devtools-recorder-step-editor': StepEditor;
-    'devtools-recorder-selector-picker-button': RecorderSelectorPickerButton;
   }
 }
 
@@ -364,7 +359,7 @@ export class EditorState {
       attribute: Attribute): Promise<DeepImmutable<typeof defaultValuesByAttribute[Attribute]>>;
   static async defaultByAttribute(_state: DeepImmutable<EditorState>, attribute: keyof typeof defaultValuesByAttribute):
       Promise<unknown> {
-    return this.#puppeteer.run(puppeteer => {
+    return await this.#puppeteer.run(puppeteer => {
       switch (attribute) {
         case 'assertedEvents': {
           return immutableDeepAssign(defaultValuesByAttribute.assertedEvents, new ArrayAssignments({
@@ -397,6 +392,7 @@ export class EditorState {
     const state = structuredClone(step) as EditorState;
     for (const key of ['parameters', 'properties'] as Array<'properties'>) {
       if (key in step && step[key] !== undefined) {
+        // @ts-expect-error Potential infinite type instantiation.
         state[key] = JSON.stringify(step[key]);
       }
     }
@@ -414,7 +410,7 @@ export class EditorState {
         return [...selector];
       });
     }
-    return deepFreeze(state as EditorState);
+    return deepFreeze(state);
   }
 
   static toStep(state: DeepImmutable<EditorState>): Models.Schema.Step {
@@ -450,57 +446,10 @@ export class EditorState {
         delete step.selectors;
       }
     }
-    if (state.frame && state.frame.length === 0 && 'frame' in step) {
+    if (state.frame?.length === 0 && 'frame' in step) {
       delete step.frame;
     }
     return cleanUndefineds(Models.SchemaUtils.parseStep(step));
-  }
-}
-
-/**
- * @fires RequestSelectorAttributeEvent#requestselectorattribute
- * @fires SelectorPickedEvent#selectorpicked
- */
-@customElement('devtools-recorder-selector-picker-button')
-class RecorderSelectorPickerButton extends LitElement {
-  static override styles = [stepEditorStyles];
-
-  @property() declare disabled: boolean;
-
-  #picker = new Controllers.SelectorPicker.SelectorPicker(this);
-
-  constructor() {
-    super();
-    this.disabled = false;
-  }
-
-  #handleClickEvent = (event: MouseEvent): void => {
-    event.preventDefault();
-    event.stopPropagation();
-    void this.#picker.toggle();
-  };
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    void this.#picker.stop();
-  }
-
-  protected override render(): LitHtml.TemplateResult|undefined {
-    if (this.disabled) {
-      return;
-    }
-    return html`<devtools-button
-      @click=${this.#handleClickEvent}
-      .title=${i18nString(UIStrings.selectorPicker)}
-      class="selector-picker"
-      .size=${Buttons.Button.Size.SMALL}
-      .iconName=${'select-element'}
-      .active=${this.#picker.active}
-      .variant=${Buttons.Button.Variant.SECONDARY}
-      jslog=${VisualLogging.toggle('selector-picker').track({
-      click: true,
-    })}
-    ></devtools-button>`;
   }
 }
 
@@ -510,15 +459,13 @@ class RecorderSelectorPickerButton extends LitElement {
  */
 @customElement('devtools-recorder-step-editor')
 export class StepEditor extends LitElement {
-  static override styles = [stepEditorStyles];
-
   @state() private declare state: DeepImmutable<EditorState>;
   @state() private declare error: string|undefined;
 
-  @property() declare isTypeEditable: boolean;
-  @property() declare disabled: boolean;
+  @property({type: Boolean}) declare isTypeEditable: boolean;
+  @property({type: Boolean}) declare disabled: boolean;
 
-  #renderedAttributes: Set<Attribute> = new Set();
+  #renderedAttributes = new Set<Attribute>();
 
   constructor() {
     super();
@@ -554,32 +501,29 @@ export class StepEditor extends LitElement {
     }
   }
 
-  #handleSelectorPickedEvent = (event: Controllers.SelectorPicker.SelectorPickedEvent): void => {
-    event.preventDefault();
-    event.stopPropagation();
+  #handleSelectorPicked =
+      (data: Models.Schema.StepWithSelectors&Pick<Models.Schema.ClickAttributes, 'offsetX'|'offsetY'>): void => {
+        this.#commit(immutableDeepAssign(this.state, {
+          target: data.target,
+          frame: data.frame,
+          selectors: data.selectors.map(selector => typeof selector === 'string' ? [selector] : selector),
+          offsetX: data.offsetX,
+          offsetY: data.offsetY,
+        }));
+      };
 
-    this.#commit(immutableDeepAssign(this.state, {
-      target: event.data.target,
-      frame: event.data.frame,
-      selectors: event.data.selectors.map(selector => typeof selector === 'string' ? [selector] : selector),
-      offsetX: event.data.offsetX,
-      offsetY: event.data.offsetY,
-    }));
+  #handleAttributeRequested = (send: (attribute?: string) => void): void => {
+    this.dispatchEvent(new RequestSelectorAttributeEvent(send));
   };
 
-  #handleAddOrRemoveClick =
-      (assignments: DeepImmutable<DeepPartial<Assignments<EditorState>>>, query: string,
-       metric: Host.UserMetrics.RecordingEdited): ((event: Event) => void) => event => {
+  #handleAddOrRemoveClick = (assignments: DeepImmutable<DeepPartial<Assignments<EditorState>>>, query: string):
+      ((event: Event) => void) => event => {
         event.preventDefault();
         event.stopPropagation();
 
         this.#commit(immutableDeepAssign(this.state, assignments));
 
         this.#ensureFocus(query);
-
-        if (metric) {
-          Host.userMetrics.recordingEdited(metric);
-        }
       };
 
   #handleKeyDownEvent = (event: Event): void => {
@@ -601,7 +545,6 @@ export class StepEditor extends LitElement {
     attribute: A,
     // If there are not assignments, then we should ignore the event.
     from(this: StepEditor, value: DataType<A>): DeepImmutable<DeepPartial<Assignments<EditorState>>>|undefined,
-    metric: Host.UserMetrics.RecordingEdited,
   }): ((event: Event) => void) => event => {
     assert(event.target instanceof SuggestionInput.SuggestionInput.SuggestionInput);
     if (event.target.disabled) {
@@ -615,10 +558,6 @@ export class StepEditor extends LitElement {
       return;
     }
     this.#commit(immutableDeepAssign(this.state, assignments));
-
-    if (opts.metric) {
-      Host.userMetrics.recordingEdited(opts.metric);
-    }
   };
 
   #handleTypeInputBlur = async(event: Event): Promise<void> => {
@@ -636,7 +575,6 @@ export class StepEditor extends LitElement {
       return;
     }
     this.#commit(await EditorState.default(value));
-    Host.userMetrics.recordingEdited(Host.UserMetrics.RecordingEdited.TypeChanged);
   };
 
   #handleAddRowClickEvent = async(event: MouseEvent): Promise<void> => {
@@ -653,16 +591,17 @@ export class StepEditor extends LitElement {
   };
 
   #renderInlineButton(opts: {class: string, title: string, iconName: string, onClick: (event: MouseEvent) => void}):
-      LitHtml.TemplateResult|undefined {
+      Lit.TemplateResult|undefined {
     if (this.disabled) {
       return;
     }
     return html`
       <devtools-button
         title=${opts.title}
+        .accessibleLabel=${opts.title}
         .size=${Buttons.Button.Size.SMALL}
         .iconName=${opts.iconName}
-        .variant=${Buttons.Button.Variant.SECONDARY}
+        .variant=${Buttons.Button.Variant.ICON}
         jslog=${VisualLogging.action(opts.class).track({
       click: true,
     })}
@@ -672,7 +611,7 @@ export class StepEditor extends LitElement {
     `;
   }
 
-  #renderDeleteButton(attribute: Attribute): LitHtml.TemplateResult|undefined {
+  #renderDeleteButton(attribute: Attribute): Lit.TemplateResult|undefined {
     if (this.disabled) {
       return;
     }
@@ -687,7 +626,7 @@ export class StepEditor extends LitElement {
     return html`<devtools-button
       .size=${Buttons.Button.Size.SMALL}
       .iconName=${'bin'}
-      .variant=${Buttons.Button.Variant.SECONDARY}
+      .variant=${Buttons.Button.Variant.ICON}
       .title=${i18nString(UIStrings.deleteRow)}
       class="inline-button delete-row"
       data-attribute=${attribute}
@@ -704,12 +643,13 @@ export class StepEditor extends LitElement {
     // clang-format on
   }
 
-  #renderTypeRow(editable: boolean): LitHtml.TemplateResult {
+  #renderTypeRow(editable: boolean): Lit.TemplateResult {
     this.#renderedAttributes.add('type');
     // clang-format off
     return html`<div class="row attribute" data-attribute="type" jslog=${VisualLogging.treeItem('type')}>
-      <div>type<span class="separator">:</span></div>
+      <div id="type">type<span class="separator">:</span></div>
       <devtools-suggestion-input
+        aria-labelledby="type"
         .disabled=${!editable || this.disabled}
         .options=${Object.values(Models.Schema.StepType)}
         .placeholder=${defaultValuesByAttribute.type}
@@ -720,7 +660,7 @@ export class StepEditor extends LitElement {
     // clang-format on
   }
 
-  #renderRow(attribute: Attribute): LitHtml.TemplateResult|undefined {
+  #renderRow(attribute: Attribute): Lit.TemplateResult|undefined {
     this.#renderedAttributes.add(attribute);
     const attributeValue = this.state[attribute]?.toString();
     if (attributeValue === undefined) {
@@ -728,9 +668,10 @@ export class StepEditor extends LitElement {
     }
     // clang-format off
     return html`<div class="row attribute" data-attribute=${attribute} jslog=${VisualLogging.treeItem(Platform.StringUtilities.toKebabCase(attribute))}>
-      <div>${attribute}<span class="separator">:</span></div>
+      <div id=${attribute}>${attribute}<span class="separator">:</span></div>
       <devtools-suggestion-input
         .disabled=${this.disabled}
+        aria-labelledby=${attribute}
         .placeholder=${defaultValuesByAttribute[attribute].toString()}
         .value=${live(attributeValue)}
         .mimeType=${(() => {
@@ -749,14 +690,8 @@ export class StepEditor extends LitElement {
         if (this.state[attribute] === undefined) {
           return;
         }
-        switch (attribute) {
-          case 'properties':
-            Host.userMetrics.recordingAssertion(Host.UserMetrics.RecordingAssertion.PropertyAssertionEdited);
-            break;
-        }
         return {[attribute]: value};
       },
-      metric: Host.UserMetrics.RecordingEdited.OtherEditing,
     })}
       ></devtools-suggestion-input>
       ${this.#renderDeleteButton(attribute)}
@@ -764,7 +699,7 @@ export class StepEditor extends LitElement {
     // clang-format on
   }
 
-  #renderFrameRow(): LitHtml.TemplateResult|undefined {
+  #renderFrameRow(): Lit.TemplateResult|undefined {
     this.#renderedAttributes.add('frame');
     if (this.state.frame === undefined) {
       return;
@@ -773,13 +708,14 @@ export class StepEditor extends LitElement {
     return html`
       <div class="attribute" data-attribute="frame" jslog=${VisualLogging.treeItem('frame')}>
         <div class="row">
-          <div>frame<span class="separator">:</span></div>
+          <div id="frame">frame<span class="separator">:</span></div>
           ${this.#renderDeleteButton('frame')}
         </div>
         ${this.state.frame.map((frame, index, frames) => {
           return html`
             <div class="padded row">
               <devtools-suggestion-input
+                aria-labelledby="frame"
                 .disabled=${this.disabled}
                 .placeholder=${defaultValuesByAttribute.frame[0].toString()}
                 .value=${live(frame.toString())}
@@ -794,7 +730,6 @@ export class StepEditor extends LitElement {
                       frame: new ArrayAssignments({ [index]: value }),
                     };
                   },
-                  metric: Host.UserMetrics.RecordingEdited.OtherEditing,
                 })}
               ></devtools-suggestion-input>
               ${this.#renderInlineButton({
@@ -810,7 +745,6 @@ export class StepEditor extends LitElement {
                     }),
                   },
                   `devtools-suggestion-input[data-path="frame.${index + 1}"]`,
-                  Host.UserMetrics.RecordingEdited.OtherEditing,
                 ),
               })}
               ${this.#renderInlineButton({
@@ -825,7 +759,6 @@ export class StepEditor extends LitElement {
                     index,
                     frames.length - 2,
                   )}"]`,
-                  Host.UserMetrics.RecordingEdited.OtherEditing,
                 ),
               })}
             </div>
@@ -836,7 +769,7 @@ export class StepEditor extends LitElement {
     // clang-format on
   }
 
-  #renderSelectorsRow(): LitHtml.TemplateResult|undefined {
+  #renderSelectorsRow(): Lit.TemplateResult|undefined {
     this.#renderedAttributes.add('selectors');
     if (this.state.selectors === undefined) {
       return;
@@ -845,15 +778,18 @@ export class StepEditor extends LitElement {
     return html`<div class="attribute" data-attribute="selectors" jslog=${VisualLogging.treeItem('selectors')}>
       <div class="row">
         <div>selectors<span class="separator">:</span></div>
-        <devtools-recorder-selector-picker-button
-          @selectorpicked=${this.#handleSelectorPickedEvent}
-          .disabled=${this.disabled}
-        ></devtools-recorder-selector-picker-button>
+        <devtools-widget
+          .widgetConfig=${UI.Widget.widgetConfig(SelectorPicker, {
+            disabled: this.disabled,
+            onSelectorPicked: this.#handleSelectorPicked,
+            onAttributeRequested: this.#handleAttributeRequested,
+          })}
+        ></devtools-widget>
         ${this.#renderDeleteButton('selectors')}
       </div>
       ${this.state.selectors.map((selector, index, selectors) => {
         return html`<div class="padded row" data-selector-path=${index}>
-            <div>selector #${index + 1}<span class="separator">:</span></div>
+            <div id="selector-${index}">selector #${index + 1}<span class="separator">:</span></div>
             ${this.#renderInlineButton({
               class: 'add-selector',
               title: i18nString(UIStrings.addSelector),
@@ -867,7 +803,6 @@ export class StepEditor extends LitElement {
                   }),
                 },
                 `devtools-suggestion-input[data-path="selectors.${index + 1}.0"]`,
-                Host.UserMetrics.RecordingEdited.SelectorAdded,
               ),
             })}
             ${this.#renderInlineButton({
@@ -880,7 +815,6 @@ export class StepEditor extends LitElement {
                   index,
                   selectors.length - 2,
                 )}.0"]`,
-                Host.UserMetrics.RecordingEdited.SelectorRemoved,
               ),
             })}
           </div>
@@ -890,6 +824,7 @@ export class StepEditor extends LitElement {
               data-selector-path="${index}.${partIndex}"
             >
               <devtools-suggestion-input
+                aria-labelledby="selector-${index}"
                 .disabled=${this.disabled}
                 .placeholder=${defaultValuesByAttribute.selectors[0][0]}
                 .value=${live(part)}
@@ -910,7 +845,6 @@ export class StepEditor extends LitElement {
                       }),
                     };
                   },
-                  metric: Host.UserMetrics.RecordingEdited.SelectorPartEdited,
                 })}
               ></devtools-suggestion-input>
               ${this.#renderInlineButton({
@@ -930,7 +864,6 @@ export class StepEditor extends LitElement {
                   `devtools-suggestion-input[data-path="selectors.${index}.${
                     partIndex + 1
                   }"]`,
-                  Host.UserMetrics.RecordingEdited.SelectorPartAdded,
                 ),
               })}
               ${this.#renderInlineButton({
@@ -949,7 +882,6 @@ export class StepEditor extends LitElement {
                     partIndex,
                     parts.length - 2,
                   )}"]`,
-                  Host.UserMetrics.RecordingEdited.SelectorPartRemoved,
                 ),
               })}
             </div>`;
@@ -959,7 +891,7 @@ export class StepEditor extends LitElement {
     // clang-format on
   }
 
-  #renderAssertedEvents(): LitHtml.TemplateResult|undefined {
+  #renderAssertedEvents(): Lit.TemplateResult|undefined {
     this.#renderedAttributes.add('assertedEvents');
     if (this.state.assertedEvents === undefined) {
       return;
@@ -972,12 +904,13 @@ export class StepEditor extends LitElement {
       </div>
       ${this.state.assertedEvents.map((event, index) => {
         return html` <div class="padded row" jslog=${VisualLogging.treeItem('event-type')}>
-            <div>type<span class="separator">:</span></div>
-            <div>${event.type}</div>
+            <div id="event-type">type<span class="separator">:</span></div>
+            <div aria-labelledby="event-type">${event.type}</div>
           </div>
           <div class="padded row" jslog=${VisualLogging.treeItem('event-title')}>
-            <div>title<span class="separator">:</span></div>
+            <div id="event-title">title<span class="separator">:</span></div>
             <devtools-suggestion-input
+              aria-labelledby="event-title"
               .disabled=${this.disabled}
               .placeholder=${defaultValuesByAttribute.assertedEvents[0].title}
               .value=${live(event.title ?? '')}
@@ -993,13 +926,13 @@ export class StepEditor extends LitElement {
                     }),
                   };
                 },
-                metric: Host.UserMetrics.RecordingEdited.OtherEditing,
               })}
             ></devtools-suggestion-input>
           </div>
-          <div class="padded row" jslog=${VisualLogging.treeItem('event-url')}>
+          <div  id="event-url" class="padded row" jslog=${VisualLogging.treeItem('event-url')}>
             <div>url<span class="separator">:</span></div>
             <devtools-suggestion-input
+              aria-labelledby="event-url"
               .disabled=${this.disabled}
               .placeholder=${defaultValuesByAttribute.assertedEvents[0].url}
               .value=${live(event.url ?? '')}
@@ -1015,7 +948,6 @@ export class StepEditor extends LitElement {
                     }),
                   };
                 },
-                metric: Host.UserMetrics.RecordingEdited.OtherEditing,
               })}
             ></devtools-suggestion-input>
           </div>`;
@@ -1024,7 +956,7 @@ export class StepEditor extends LitElement {
     // clang-format on
   }
 
-  #renderAttributesRow(): LitHtml.TemplateResult|undefined {
+  #renderAttributesRow(): Lit.TemplateResult|undefined {
     this.#renderedAttributes.add('attributes');
     if (this.state.attributes === undefined) {
       return;
@@ -1049,14 +981,10 @@ export class StepEditor extends LitElement {
                 if (this.state.attributes?.[index]?.name === undefined) {
                   return;
                 }
-                Host.userMetrics.recordingAssertion(
-                  Host.UserMetrics.RecordingAssertion.AttributeAssertionEdited,
-                );
                 return {
                   attributes: new ArrayAssignments({ [index]: { name } }),
                 };
               },
-              metric: Host.UserMetrics.RecordingEdited.OtherEditing,
             })}
           ></devtools-suggestion-input>
           <span class="separator">:</span>
@@ -1071,14 +999,10 @@ export class StepEditor extends LitElement {
                 if (this.state.attributes?.[index]?.value === undefined) {
                   return;
                 }
-                Host.userMetrics.recordingAssertion(
-                  Host.UserMetrics.RecordingAssertion.AttributeAssertionEdited,
-                );
                 return {
                   attributes: new ArrayAssignments({ [index]: { value } }),
                 };
               },
-              metric: Host.UserMetrics.RecordingEdited.OtherEditing,
             })}
           ></devtools-suggestion-input>
           ${this.#renderInlineButton({
@@ -1111,7 +1035,6 @@ export class StepEditor extends LitElement {
               `devtools-suggestion-input[data-path="attributes.${
                 index + 1
               }.name"]`,
-              Host.UserMetrics.RecordingEdited.OtherEditing,
             ),
           })}
           ${this.#renderInlineButton({
@@ -1124,7 +1047,6 @@ export class StepEditor extends LitElement {
                 index,
                 attributes.length - 2,
               )}.value"]`,
-              Host.UserMetrics.RecordingEdited.OtherEditing,
             ),
           })}
         </div>`;
@@ -1133,12 +1055,12 @@ export class StepEditor extends LitElement {
     // clang-format on
   }
 
-  #renderAddRowButtons(): Array<LitHtml.TemplateResult|undefined> {
+  #renderAddRowButtons(): Array<Lit.TemplateResult|undefined> {
     const attributes = attributesByType[this.state.type];
     return [...attributes.optional].filter(attr => this.state[attr] === undefined).map(attr => {
       // clang-format off
         return html`<devtools-button
-          .variant=${Buttons.Button.Variant.SECONDARY}
+          .variant=${Buttons.Button.Variant.OUTLINED}
           class="add-row"
           data-attribute=${attr}
           jslog=${VisualLogging.action(`add-${Platform.StringUtilities.toKebabCase(attr)}`)}
@@ -1159,12 +1081,13 @@ export class StepEditor extends LitElement {
     });
   };
 
-  protected override render(): LitHtml.TemplateResult {
+  protected override render(): Lit.TemplateResult {
     this.#renderedAttributes = new Set();
 
     // clang-format off
     const result = html`
-      <div class="wrapper" jslog=${VisualLogging.tree('step-editor')}>
+      <style>${stepEditorStyles}</style>
+      <div class="wrapper" jslog=${VisualLogging.tree('step-editor')} >
         ${this.#renderTypeRow(this.isTypeEditable)} ${this.#renderRow('target')}
         ${this.#renderFrameRow()} ${this.#renderSelectorsRow()}
         ${this.#renderRow('deviceType')} ${this.#renderRow('button')}
@@ -1202,14 +1125,11 @@ export class StepEditor extends LitElement {
     `;
 
     // clang-format on
-    Platform.DCHECK(() => {
-      for (const key of Object.keys(dataTypeByAttribute)) {
-        if (!this.#renderedAttributes.has(key as Attribute)) {
-          return false;
-        }
+    for (const key of Object.keys(dataTypeByAttribute)) {
+      if (!this.#renderedAttributes.has(key as Attribute)) {
+        throw new Error(`The editable attribute ${key} does not have UI`);
       }
-      return true;
-    }, 'One of the editable attributes does not have UI');
+    }
 
     return result;
   }

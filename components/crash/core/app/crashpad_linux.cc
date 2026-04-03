@@ -27,7 +27,7 @@
 #include "third_party/crashpad/crashpad/client/crashpad_client.h"
 #include "third_party/crashpad/crashpad/client/crashpad_info.h"
 
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS_DEVICE)
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -38,10 +38,6 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "third_party/cros_system_api/constants/crash_reporter.h"
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "base/build_time.h"
 #endif
 
 namespace crash_reporter {
@@ -63,7 +59,7 @@ bool FirstChanceHandlerHelper(int signo,
   return g_first_chance_handler(signo, siginfo, context);
 }
 
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS_DEVICE)
 // Returns /run/crash_reporter/crashpad_ready/<pid>, the file we touch to
 // tell crash_reporter that crashpad is ready and it doesn't need to use
 // early-crash mode.
@@ -104,7 +100,7 @@ void InformCrashReporterThatCrashpadIsReady() {
   // losing a single crash report is not a huge deal.
   base::AtExitManager::RegisterTask(base::BindOnce(&DeleteCrashpadIsReadyFile));
 }
-#endif  // BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_CHROMEOS_DEVICE)
 
 }  // namespace
 
@@ -119,7 +115,7 @@ bool GetHandlerSocket(int* fd, pid_t* pid) {
   return crashpad::CrashpadClient::GetHandlerSocket(fd, pid);
 }
 
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS_DEVICE)
 void DeleteCrashpadIsReadyFile() {
   // Attempt delete but do not log errors if the delete fails. The file might
   // not exist if this function is called twice, or if Chrome did a fork-
@@ -127,7 +123,7 @@ void DeleteCrashpadIsReadyFile() {
   // InformCrashReporterThatCrashpadIsReady().
   base::DeleteFile(GetCrashpadReadyFilename());
 }
-#endif  // BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_CHROMEOS_DEVICE)
 
 namespace internal {
 
@@ -138,6 +134,7 @@ bool PlatformCrashpadInitialization(
     const std::string& user_data_dir,
     const base::FilePath& exe_path,
     const std::vector<std::string>& initial_arguments,
+    const std::vector<base::FilePath>& attachments,
     base::FilePath* database_path) {
   DCHECK_EQ(initial_client, browser_process);
   DCHECK(initial_arguments.empty());
@@ -147,7 +144,7 @@ bool PlatformCrashpadInitialization(
   DCHECK(exe_path.empty());
 
   crashpad::CrashpadClient client;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   std::string crash_loop_before =
       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
           switches::kCrashLoopBefore);
@@ -178,46 +175,37 @@ bool PlatformCrashpadInitialization(
     // to ChromeOS's /sbin/crash_reporter which in turn passes the dump to
     // crash_sender which handles the upload.
     std::string url;
-#if !BUILDFLAG(IS_CHROMEOS)
+#if !BUILDFLAG(IS_CHROMEOS_DEVICE)
     url = crash_reporter_client->GetUploadUrl();
 #else
     url = std::string();
 #endif
 
-    std::string product_name, product_version, channel;
-    crash_reporter_client->GetProductNameAndVersion(&product_name,
-                                                    &product_version, &channel);
+    ProductInfo product_info;
+    crash_reporter_client->GetProductInfo(&product_info);
 
     std::map<std::string, std::string> annotations;
-    annotations["prod"] = product_name;
-    annotations["ver"] = product_version;
+    annotations["prod"] = product_info.product_name;
+    annotations["ver"] = product_info.version;
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
     // Empty means stable.
     const bool allow_empty_channel = true;
-    if (channel == "extended") {
+    if (product_info.channel == "extended") {
       // Extended stable reports as stable (empty string) with an extra bool.
-      channel.clear();
+      product_info.channel.clear();
       annotations["extended_stable_channel"] = "true";
     }
 #else
     const bool allow_empty_channel = false;
 #endif
-    if (allow_empty_channel || !channel.empty()) {
-      annotations["channel"] = channel;
+    if (allow_empty_channel || !product_info.channel.empty()) {
+      annotations["channel"] = product_info.channel;
     }
 
     annotations["plat"] = std::string("Linux");
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    // "build_time_millis" is used on LaCros chrome to determine when to stop
-    // sending crash reports (from outdated versions of the browser).
-    int64_t build_time =
-        (base::GetBuildTime() - base::Time::UnixEpoch()).InMilliseconds();
-    annotations["build_time_millis"] = base::NumberToString(build_time);
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS_DEVICE)
     // Chromium OS: save board and builder path for 'tast symbolize'.
     annotations["chromeos-board"] = base::SysInfo::GetLsbReleaseBoard();
     std::string builder_path;
@@ -242,7 +230,7 @@ bool PlatformCrashpadInitialization(
     // contain these annotations.
     arguments.push_back("--monitor-self-annotation=ptype=crashpad-handler");
 
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS_DEVICE)
     arguments.push_back("--use-cros-crash-reporter");
 
     if (crash_reporter_client->IsRunningUnattended()) {
@@ -253,7 +241,8 @@ bool PlatformCrashpadInitialization(
 #endif
 
     CHECK(client.StartHandler(handler_path, *database_path, metrics_path, url,
-                              annotations, arguments, false, false));
+                              annotations, arguments, false, false,
+                              attachments));
   } else {
     int fd = base::GlobalDescriptors::GetInstance()->Get(kCrashDumpSignal);
 
@@ -285,7 +274,7 @@ bool PlatformCrashpadInitialization(
       ->set_gather_indirectly_referenced_memory(crashpad::TriState::kEnabled,
                                                 kIndirectMemoryLimit);
 
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS_DEVICE)
   if (initial_client) {
     InformCrashReporterThatCrashpadIsReady();
   }

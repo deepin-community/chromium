@@ -23,13 +23,12 @@ const std::size_t kIntervalStep = 10;
 }  // namespace
 
 struct TestIntervalItem {
-  int32_t val;
-  std::size_t interval_start, interval_end;
-  QuicInterval<std::size_t> interval() const {
-    return QuicInterval<std::size_t>(interval_start, interval_end);
+  uint64_t val;
+  uint64_t interval_start, interval_end;
+  QuicInterval<uint64_t> interval() const {
+    return QuicInterval<uint64_t>(interval_start, interval_end);
   }
-  TestIntervalItem(int32_t val, std::size_t interval_start,
-                   std::size_t interval_end)
+  TestIntervalItem(uint64_t val, uint64_t interval_start, uint64_t interval_end)
       : val(val), interval_start(interval_start), interval_end(interval_end) {}
 };
 
@@ -355,6 +354,45 @@ TEST_F(QuicIntervalDequeTest, IteratorEmpty) {
   QID qid;
   auto it = qid.DataAt(0);
   EXPECT_EQ(it, qid.DataEnd());
+}
+
+// Test various iterator methods.
+TEST_F(QuicIntervalDequeTest, IteratorMethods) {
+  auto it1 = qid_.DataBegin();
+  auto it2 = qid_.DataBegin();
+
+  EXPECT_EQ(it1, it2);
+  EXPECT_TRUE(it1 == it2);
+  EXPECT_FALSE(it1 != it2);
+
+  EXPECT_EQ(it1++, it2);
+  EXPECT_NE(it1, it2);
+  EXPECT_FALSE(it1 == it2);
+  EXPECT_TRUE(it1 != it2);
+
+  it2++;
+  EXPECT_EQ(it1, it2);
+
+  EXPECT_NE(++it1, it2);
+
+  it1++;
+  it2 += 2;
+  EXPECT_EQ(it1, it2);
+
+  EXPECT_EQ(it1--, it2);
+  EXPECT_EQ(it1, --it2);
+
+  it1 += 24;
+  it1 -= 2;
+  it2 -= 1;
+  it2 += 23;
+  EXPECT_EQ(it1, it2);
+
+  it1 = qid_.DataBegin();
+  EXPECT_QUIC_BUG(it1--, "Iterator out of bounds.");
+
+  it2 = qid_.DataEnd();
+  EXPECT_QUIC_BUG(it2++, "Iterator out of bounds.");
 }
 
 }  // namespace test

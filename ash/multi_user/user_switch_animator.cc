@@ -4,21 +4,21 @@
 
 #include "ash/multi_user/user_switch_animator.h"
 
+#include <algorithm>
 #include <memory>
 
-#include "ash/multi_user/multi_user_window_manager_impl.h"
-#include "ash/public/cpp/multi_user_window_manager_delegate.h"
+#include "ash/multi_user/multi_user_window_manager.h"
+#include "ash/multi_user/multi_user_window_manager_observer.h"
 #include "ash/shell.h"
 #include "ash/wallpaper/wallpaper_controller_impl.h"
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/mru_window_tracker.h"
 #include "ash/wm/overview/overview_controller.h"
 #include "ash/wm/window_positioner.h"
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "ui/aura/client/aura_constants.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/layer_tree_owner.h"
@@ -78,7 +78,7 @@ class MaximizedWindowAnimationWatcher : public ui::ImplicitAnimationObserver {
 void PutMruWindowLast(
     std::vector<raw_ptr<aura::Window, VectorExperimental>>* window_list) {
   DCHECK(window_list);
-  auto it = base::ranges::find_if(*window_list, &wm::IsActiveWindow);
+  auto it = std::ranges::find_if(*window_list, &wm::IsActiveWindow);
   if (it == window_list->end())
     return;
   // Move the active window to the end of the list.
@@ -89,7 +89,7 @@ void PutMruWindowLast(
 
 }  // namespace
 
-UserSwitchAnimator::UserSwitchAnimator(MultiUserWindowManagerImpl* owner,
+UserSwitchAnimator::UserSwitchAnimator(MultiUserWindowManager* owner,
                                        const AccountId& new_account_id,
                                        base::TimeDelta animation_speed)
     : owner_(owner),
@@ -123,11 +123,12 @@ bool UserSwitchAnimator::CoversScreen(aura::Window* window) {
   // Full screen covers the screen naturally. Since a normal window can have the
   // same size as the work area, we only compare the bounds against the work
   // area.
-  if (wm::WindowStateIs(window, ui::SHOW_STATE_FULLSCREEN))
+  if (wm::WindowStateIs(window, ui::mojom::WindowShowState::kFullscreen)) {
     return true;
+  }
   gfx::Rect bounds = window->GetBoundsInScreen();
   gfx::Rect work_area =
-      display::Screen::GetScreen()->GetDisplayNearestWindow(window).work_area();
+      display::Screen::Get()->GetDisplayNearestWindow(window).work_area();
   bounds.Intersect(work_area);
   return work_area == bounds;
 }
@@ -153,7 +154,6 @@ void UserSwitchAnimator::AdvanceUserTransitionAnimation() {
       break;
     case ANIMATION_STEP_ENDED:
       NOTREACHED();
-      break;
   }
 }
 
@@ -201,7 +201,8 @@ void UserSwitchAnimator::TransitionUserShelf(AnimationStep animation_step) {
   if (animation_step != ANIMATION_STEP_SHOW_NEW_USER)
     return;
 
-  owner_->delegate_->OnTransitionUserShelfToNewAccount();
+  owner_->observers_.Notify(
+      &MultiUserWindowManagerObserver::OnTransitionUserShelfToNewAccount);
 }
 
 void UserSwitchAnimator::TransitionWindows(AnimationStep animation_step) {
@@ -235,11 +236,12 @@ void UserSwitchAnimator::TransitionWindows(AnimationStep animation_step) {
           // different than that of the for_show_account_id) should return to
           // their
           // original owners' desktops.
-          MultiUserWindowManagerImpl::WindowToEntryMap::const_iterator itr =
+          MultiUserWindowManager::WindowToEntryMap::const_iterator itr =
               owner_->window_to_entry().find(window);
           DCHECK(itr != owner_->window_to_entry().end());
           if (show_for_account_id != itr->second->owner() &&
-              wm::WindowStateIs(window, ui::SHOW_STATE_MINIMIZED)) {
+              wm::WindowStateIs(window,
+                                ui::mojom::WindowShowState::kMinimized)) {
             owner_->ShowWindowForUserIntern(window, itr->second->owner());
             wm::Unminimize(window);
             continue;
@@ -310,7 +312,8 @@ void UserSwitchAnimator::TransitionWindows(AnimationStep animation_step) {
       if (!mru_list.empty()) {
         aura::Window* window = mru_list[0];
         if (owner_->IsWindowOnDesktopOfUser(window, new_account_id_) &&
-            !wm::WindowStateIs(window, ui::SHOW_STATE_MINIMIZED)) {
+            !wm::WindowStateIs(window,
+                               ui::mojom::WindowShowState::kMinimized)) {
           // Several unit tests come here without an activation client.
           wm::ActivationClient* client =
               wm::GetActivationClient(window->GetRootWindow());
@@ -324,7 +327,6 @@ void UserSwitchAnimator::TransitionWindows(AnimationStep animation_step) {
     }
     case ANIMATION_STEP_ENDED:
       NOTREACHED();
-      break;
   }
 }
 
@@ -364,7 +366,7 @@ void UserSwitchAnimator::BuildUserToWindowsListMap() {
   auto& window_to_entry_map = owner_->window_to_entry();
   for (auto& window_entry_pair : window_to_entry_map) {
     aura::Window* parent_window = window_entry_pair.first->parent();
-    if (!base::Contains(parent_windows, parent_window)) {
+    if (!parent_windows.contains(parent_window)) {
       parent_windows.insert(parent_window);
       for (aura::Window* child_window : parent_window->children()) {
         auto itr = window_to_entry_map.find(child_window);

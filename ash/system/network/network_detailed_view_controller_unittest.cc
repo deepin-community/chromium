@@ -13,9 +13,9 @@
 #include "ash/test/ash_test_base.h"
 #include "ash/test/ash_test_helper.h"
 #include "base/strings/strcat.h"
+#include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "chromeos/ash/components/network/network_connect.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state_handler.h"
@@ -325,8 +325,6 @@ TEST_F(NetworkDetailedViewControllerTest, CellularNetworkListItemSelected) {
 TEST_F(NetworkDetailedViewControllerTest,
        CarrierLockedNetworkListItemSelected) {
   base::UserActionTester user_action_tester;
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kCellularCarrierLock);
 
   EXPECT_EQ(0, user_action_tester.GetActionCount(kNetworkConnectionDetails));
   EXPECT_EQ(0, user_action_tester.GetActionCount(kNetworkConnectConfigured));
@@ -344,30 +342,6 @@ TEST_F(NetworkDetailedViewControllerTest,
   cellular_network->type_state->get_cellular()->sim_lock_type = "network-pin";
   SelectNetworkListItem(cellular_network);
   EXPECT_EQ(0, GetSystemTrayClient()->show_sim_unlock_settings_count());
-}
-
-TEST_F(NetworkDetailedViewControllerTest,
-       CarrierLockedNetworkListItemSelectedFeatureDisabled) {
-  base::UserActionTester user_action_tester;
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(features::kCellularCarrierLock);
-
-  EXPECT_EQ(0, user_action_tester.GetActionCount(kNetworkConnectionDetails));
-  EXPECT_EQ(0, user_action_tester.GetActionCount(kNetworkConnectConfigured));
-  EXPECT_EQ(0, GetSystemTrayClient()->show_network_settings_count());
-  EXPECT_EQ(0, GetSystemTrayClient()->show_sim_unlock_settings_count());
-
-  NetworkStatePropertiesPtr cellular_network =
-      CreateStandaloneNetworkProperties(kCellular, NetworkType::kCellular,
-                                        ConnectionStateType::kConnected);
-
-  // With feature flag disabled verify that When cellular
-  // network is carrier locked SIM unlock
-  // settings page is displayed.
-  cellular_network->type_state->get_cellular()->sim_locked = true;
-  cellular_network->type_state->get_cellular()->sim_lock_type = "network-pin";
-  SelectNetworkListItem(cellular_network);
-  EXPECT_EQ(1, GetSystemTrayClient()->show_sim_unlock_settings_count());
 }
 
 TEST_F(NetworkDetailedViewControllerTest, WifiNetworkListItemSelected) {
@@ -431,8 +405,7 @@ TEST_F(NetworkDetailedViewControllerTest, WifiNetworkListItemSelected) {
 
   // Login as secondary user, and make sure network is not connected to,
   // but settings page is opened.
-  GetSessionControllerClient()->AddUserSession(kUser1Email);
-  SimulateUserLogin(kUser1Email);
+  SimulateUserLogin({kUser1Email});
   GetSessionControllerClient()->SetSessionState(
       session_manager::SessionState::LOGIN_SECONDARY);
   base::RunLoop().RunUntilIdle();
@@ -462,9 +435,6 @@ TEST_F(NetworkDetailedViewControllerTest, WifiStateChange) {
 }
 
 TEST_F(NetworkDetailedViewControllerTest, MobileToggleClicked) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(features::kInstantHotspotRebrand);
-
   AddCellularDevice();
 
   EXPECT_EQ(NetworkStateHandler::TechnologyState::TECHNOLOGY_ENABLED,
@@ -522,58 +492,6 @@ TEST_F(NetworkDetailedViewControllerTest, MobileToggleClicked) {
 
   EXPECT_EQ(BluetoothSystemState::kEnabled, GetBluetoothAdapterState());
   EXPECT_EQ(NetworkStateHandler::TechnologyState::TECHNOLOGY_ENABLED,
-            GetTechnologyState(NetworkTypePattern::Tether()));
-}
-
-TEST_F(NetworkDetailedViewControllerTest, MobileToggleDoesntAffectTether) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kInstantHotspotRebrand);
-
-  AddCellularDevice();
-  AddTetherDevice();
-
-  EXPECT_EQ(NetworkStateHandler::TechnologyState::TECHNOLOGY_ENABLED,
-            GetTechnologyState(NetworkTypePattern::Cellular()));
-  EXPECT_EQ(NetworkStateHandler::TechnologyState::TECHNOLOGY_ENABLED,
-            GetTechnologyState(NetworkTypePattern::Tether()));
-
-  // Toggle should only control Cellular device, not Tether device.
-  ToggleMobileState(/*new_state=*/false);
-  EXPECT_EQ(NetworkStateHandler::TechnologyState::TECHNOLOGY_AVAILABLE,
-            GetTechnologyState(NetworkTypePattern::Cellular()));
-  EXPECT_EQ(NetworkStateHandler::TechnologyState::TECHNOLOGY_ENABLED,
-            GetTechnologyState(NetworkTypePattern::Tether()));
-}
-
-TEST_F(NetworkDetailedViewControllerTest, MobileToggleDoesntAffectBluetooth) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(features::kInstantHotspotRebrand);
-
-  AddCellularDevice();
-  AddTetherDevice();
-
-  // When Tether is uninitialized and Bluetooth is disabled, toggling Mobile on
-  // should NOT enable Bluetooth with the Instant Hotspot Rebrand flag enabled.
-  SetTetherTechnologyState(
-      NetworkStateHandler::TechnologyState::TECHNOLOGY_UNINITIALIZED);
-  SetBluetoothAdapterState(BluetoothSystemState::kDisabled);
-
-  ToggleMobileState(/*new_state=*/true);
-  EXPECT_EQ(BluetoothSystemState::kDisabled, GetBluetoothAdapterState());
-  EXPECT_EQ(NetworkStateHandler::TechnologyState::TECHNOLOGY_UNINITIALIZED,
-            GetTechnologyState(NetworkTypePattern::Tether()));
-
-  // Simulate Bluetooth adapter being enabled. Note that when testing Bluetooth
-  // will be set to kEnabling and needs to be manually changed to kEnabled using
-  // adapter state. Disabling cellular will NOT change the Bluetooth or Tether
-  // state to available.
-  SetTetherTechnologyState(
-      NetworkStateHandler::TechnologyState::TECHNOLOGY_UNINITIALIZED);
-  SetBluetoothAdapterState(BluetoothSystemState::kEnabled);
-
-  ToggleMobileState(/*new_state=*/false);
-  EXPECT_EQ(BluetoothSystemState::kEnabled, GetBluetoothAdapterState());
-  EXPECT_EQ(NetworkStateHandler::TechnologyState::TECHNOLOGY_UNINITIALIZED,
             GetTechnologyState(NetworkTypePattern::Tether()));
 }
 

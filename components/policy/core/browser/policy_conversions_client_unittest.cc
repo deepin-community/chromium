@@ -4,6 +4,7 @@
 
 #include "components/policy/core/browser/policy_conversions_client.h"
 
+#include "base/strings/strcat.h"
 #include "components/policy/core/common/policy_map.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -14,25 +15,25 @@ constexpr char kPolicyName2[] = "policy_b";
 constexpr char kPolicyName3[] = "policy_c";
 }  // namespace
 
-class MockPolicyConversionsClient : public PolicyConversionsClient {
+class StubPolicyConversionsClient : public PolicyConversionsClient {
  public:
-  MockPolicyConversionsClient() = default;
-  MockPolicyConversionsClient(const MockPolicyConversionsClient&) = delete;
-  MockPolicyConversionsClient& operator=(const MockPolicyConversionsClient&) =
+  StubPolicyConversionsClient() = default;
+  StubPolicyConversionsClient(const StubPolicyConversionsClient&) = delete;
+  StubPolicyConversionsClient& operator=(const StubPolicyConversionsClient&) =
       delete;
-  ~MockPolicyConversionsClient() override = default;
+  ~StubPolicyConversionsClient() override = default;
 
  private:
   // PolicyConversionsClient.
   bool HasUserPolicies() const override { return false; }
-  base::Value::List GetExtensionPolicies(PolicyDomain policy_domain) override {
-    return base::Value::List();
+  base::ListValue GetExtensionPolicies(PolicyDomain policy_domain) override {
+    return base::ListValue();
   }
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  base::Value::List GetDeviceLocalAccountPolicies() override {
-    return base::Value::List();
+#if BUILDFLAG(IS_CHROMEOS)
+  base::ListValue GetDeviceLocalAccountPolicies() override {
+    return base::ListValue();
   }
-  base::Value::Dict GetIdentityFields() override { return base::Value::Dict(); }
+  base::DictValue GetIdentityFields() override { return base::DictValue(); }
 #endif
   PolicyService* GetPolicyService() const override { return nullptr; }
   SchemaRegistry* GetPolicySchemaRegistry() const override { return nullptr; }
@@ -47,13 +48,13 @@ class PolicyConversionsClientTest : public ::testing::Test {
     PolicyMap::Entry entry(policy::POLICY_LEVEL_MANDATORY,
                            policy::POLICY_SCOPE_MACHINE,
                            policy::POLICY_SOURCE_ENTERPRISE_DEFAULT,
-                           base::Value(base::Value::List()), nullptr);
+                           base::Value(base::ListValue()), nullptr);
     if (set_is_default)
       entry.SetIsDefaultValue();
     return entry;
   }
 
-  base::Value::Dict GetPolicyValues(
+  base::DictValue GetPolicyValues(
       const PolicyConversionsClient& client,
       const PolicyMap& map,
       const std::optional<PolicyConversions::PolicyToSchemaMap>&
@@ -76,11 +77,11 @@ TEST_F(PolicyConversionsClientTest, SetDropDefaultValues) {
            {kPolicyName2, policy::Schema()},
            {kPolicyName3, policy::Schema()}}};
 
-  MockPolicyConversionsClient client;
+  StubPolicyConversionsClient client;
 
   // All policies should exist because |drop_default_values_enabled_| is false
   // by default.
-  base::Value::Dict policies1 =
+  base::DictValue policies1 =
       GetPolicyValues(client, policy_map, policy_schemas);
   EXPECT_EQ(3u, policies1.size());
   EXPECT_NE(nullptr, policies1.FindDict(kPolicyName1));
@@ -89,13 +90,65 @@ TEST_F(PolicyConversionsClientTest, SetDropDefaultValues) {
 
   // Enable dropping default values.
   client.SetDropDefaultValues(true);
-  base::Value::Dict policies2 =
+  base::DictValue policies2 =
       GetPolicyValues(client, policy_map, policy_schemas);
 
   // A default valued policy should not exist.
   EXPECT_EQ(2u, policies2.size());
   EXPECT_NE(nullptr, policies2.FindDict(kPolicyName1));
   EXPECT_NE(nullptr, policies2.FindDict(kPolicyName3));
+}
+
+TEST_F(PolicyConversionsClientTest, HideMachineValues) {
+  policy::PolicyMap policy_map;
+  base::Value value("value");
+  base::Value hidden_value("********");
+  policy_map.Set(kPolicyName1, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+                 POLICY_SOURCE_CLOUD, value.Clone(), nullptr);
+  policy_map.Set(kPolicyName2, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+                 POLICY_SOURCE_CLOUD, value.Clone(), nullptr);
+  std::optional<PolicyConversions::PolicyToSchemaMap> policy_schemas =
+      policy::PolicyConversions::PolicyToSchemaMap{
+          {{kPolicyName1, policy::Schema()}}};
+  StubPolicyConversionsClient client;
+
+  base::DictValue policies =
+      GetPolicyValues(client, policy_map, policy_schemas);
+  EXPECT_EQ(value,
+            *policies.FindByDottedPath(base::StrCat({kPolicyName1, ".value"})));
+  EXPECT_EQ(value,
+            *policies.FindByDottedPath(base::StrCat({kPolicyName2, ".value"})));
+  EXPECT_TRUE(
+      policies.FindByDottedPath(base::StrCat({kPolicyName2, ".error"})));
+
+  client.EnableShowMachineValues(false);
+  policies = GetPolicyValues(client, policy_map, policy_schemas);
+  EXPECT_EQ(value,
+            *policies.FindByDottedPath(base::StrCat({kPolicyName1, ".value"})));
+  EXPECT_EQ(hidden_value,
+            *policies.FindByDottedPath(base::StrCat({kPolicyName2, ".value"})));
+  EXPECT_FALSE(
+      policies.FindByDottedPath(base::StrCat({kPolicyName2, ".error"})));
+}
+
+// Test policy ignored status handling.
+TEST_F(PolicyConversionsClientTest, PolicyIgnoredStatus) {
+  PolicyMap policy_map;
+  base::Value policy_value("policy_value");
+  PolicyMap::Entry entry(POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+                         POLICY_SOURCE_ENTERPRISE_DEFAULT,
+                         std::make_optional(policy_value.Clone()), nullptr);
+  entry.SetIgnored();
+  policy_map.Set(kPolicyName1, std::move(entry));
+
+  StubPolicyConversionsClient client;
+
+  base::DictValue policies = GetPolicyValues(client, policy_map, std::nullopt);
+
+  // Ignored policies should show "ignored" flag.
+  const base::DictValue* policy_dict = policies.FindDict(kPolicyName1);
+  ASSERT_NE(nullptr, policy_dict);
+  EXPECT_TRUE(policy_dict->FindBool("ignored").value_or(false));
 }
 
 }  // namespace policy

@@ -13,6 +13,8 @@
 #include "xfa/fgas/graphics/cfgas_gecolor.h"
 #include "xfa/fwl/cfwl_widget.h"
 
+namespace pdfium {
+
 class CFWL_Caret final : public CFWL_Widget, public CFX_Timer::CallbackIface {
  public:
   CONSTRUCT_VIA_MAKE_GARBAGE_COLLECTED;
@@ -38,7 +40,12 @@ class CFWL_Caret final : public CFWL_Widget, public CFX_Timer::CallbackIface {
 
   void DrawCaretBK(CFGAS_GEGraphics* pGraphics, const CFX_Matrix& mtMatrix);
 
-  std::unique_ptr<CFX_Timer> m_pTimer;
+  std::unique_ptr<CFX_Timer> timer_;
 };
+
+}  // namespace pdfium
+
+// TODO(crbug.com/42271761): Remove.
+using pdfium::CFWL_Caret;
 
 #endif  // XFA_FWL_CFWL_CARET_H_

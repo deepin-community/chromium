@@ -90,21 +90,29 @@ message HloOperandFilter {
   // If operand of an instruction is a tuple and indexing into the tuple is
   // required.
   optional TupleShapeIndex tuple_index = 5;
+  // Regex to match the entire instruction HLO. The HLO string is constructed
+  // using default HloPrintOptions. Refer to the HloPrintOptions class in
+  // hlo_instruction.h to know more about the format of the HLO string used for
+  // matching.
+  optional string instruction_regex = 6;
 }
 
 // Options to override preferred prefetch time for an operand.
 message PreferredPrefetchOverrideOptions {
+  reserved "after_instruction_name",  // 2
+      "before_instruction_name";      // 3
+  reserved 2, 3;
   oneof options {
     // A value X in [0, 1] that tells us the preferred prefetch time is the
     // fraction X through the live range. For example, .5 will set the
     // preferred prefetch time to the middle of live range.
     float prefetch_eagerness = 1;
-    // Preferred prefetch time is set to after the instruction with instruction
-    // name.
-    string after_instruction_name = 2;
-    // Preferred prefetch time is set to before the instruction with instruction
-    // name.
-    string before_instruction_name = 3;
+    // Preferred prefetch time is set to after the first instruction that
+    // matches the filter.
+    HloPositionMatcher after_instruction = 4;
+    // Preferred prefetch time is set to before the first instruction that
+    // matches the filter.
+    HloPositionMatcher before_instruction = 5;
   }
 }
 
@@ -123,6 +131,33 @@ message PreferredPrefetchOverrides {
   repeated PreferredPrefetchOverride overrides = 1;
 }
 
+// Specifies details on how to randomally select HloPositions for perturbation.
+//
+// Each HloPosition is randomally assigned (based on the seed) to a value in the
+// range [0...1). If it is within the range
+// [selection_range_begin...selection_range_end) it will have its prefetch
+// priority overridden based on the value of MsaSortOrderOverrideOptions.
+// Anything outside this range will be left as-is.
+//
+// We use the selection range (rather than just supplying the probability) to be
+// able to binary search in the case where there's just one instruction that
+// needs to have its priority fixed.
+//
+// The probability of any HloPosition to be perturbed is
+// selection_range_end-selection_range_begin.
+//
+// NOTE: different HloPositions with the same computation graph (the same
+// instruction fingerprint) will be considered as identical, and hence will
+// receive the same priority from the HloRandomFilter.
+message HloRandomFilter {
+  // Defaults to 1234
+  optional int64 seed = 1;
+  // Defaults to 0.
+  optional double selection_range_begin = 2;
+  // Defaults to 1.
+  optional double selection_range_end = 3;
+}
+
 // A message that identifies one or more HloPositions.
 message HloPositionMatcher {
   // Regex to match the entire instruction HLO. The HLO string is constructed
@@ -135,6 +170,14 @@ message HloPositionMatcher {
   // If output of an instruction is a tuple and indexing into the
   // tuple is required.
   optional TupleShapeIndex tuple_index = 3;
+  // Filters instructions with output size in bytes greater or equal to a value.
+  optional int64 size_gte = 4;
+  // Filters instructions with output size in bytes less or equal to a value.
+  optional int64 size_lte = 5;
+  // Filters instructions that have a use that matches the filter.
+  optional HloOperandFilter hlo_use_filter = 6;
+  // Filters instructions randomly.
+  optional HloRandomFilter hlo_random_filter = 7;
 }
 
 // Options to override preferred prefetch time for an operand.
@@ -148,6 +191,10 @@ message MsaSortOrderOverrideOptions {
     // multiple buffers are to be assigned last (within the same override
     // config) other tie breakers and stable sort order will take effect.
     bool assign_last = 2;
+    // Set the specific priority value, where lower values means "before" higher
+    // values. If multiple buffers are to be assigned the same value, other tie
+    // breakers and stable sort order will take effect.
+    int64 assign_value = 3;
   }
 }
 
@@ -157,10 +204,22 @@ message MsaSortOrderOverride {
   optional HloPositionMatcher hlo_position_matcher = 1;
   optional xla.memory_space_assignment.MsaSortOrderOverrideOptions
       override_options = 2;
+  optional bool apply_to_cross_program_prefetches = 3;
 }
 
 // Encloses chained override configs. The first config has highest precedence
 // and so on.
 message MsaSortOrderOverrides {
   repeated MsaSortOrderOverride overrides = 1;
+}
+
+// Expanded scoped alternate memory is a feature used at the end of MSA, in
+// in which we attempt to expand the size of allocated scoped alternate memory
+// buffers to the largest contiguous open space available.
+message ExpandedScopedAlternateMemoryMode {
+  enum Value {
+    UNDEFINED = 0;
+    DISABLED = 1;
+    ENABLED = 2;
+  }
 }

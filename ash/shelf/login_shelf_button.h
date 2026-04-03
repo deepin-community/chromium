@@ -13,6 +13,7 @@
 #include "ash/shelf/shelf_observer.h"
 #include "ash/style/pill_button.h"
 #include "base/functional/callback.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/raw_ref.h"
 #include "base/scoped_observation.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -37,7 +38,6 @@ class ASH_EXPORT LoginShelfButton : public PillButton, public ShelfObserver {
   int text_resource_id() const;
 
   // PillButton:
-  std::u16string GetTooltipText(const gfx::Point& p) const override;
   void OnFocus() override;
   void AddedToWidget() override;
 
@@ -51,6 +51,12 @@ class ASH_EXPORT LoginShelfButton : public PillButton, public ShelfObserver {
   bool GetIsActive() const;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(LoginShelfViewTest, LoginShelfButtonTooltipText);
+  FRIEND_TEST_ALL_PREFIXES(LoginShelfViewTest,
+                           LoginShelfButtonTooltipTextAccessibility);
+
+  void UpdateTooltipText(views::Label* label);
+
   base::ScopedObservation<Shelf, ShelfObserver> shelf_observer_{this};
 
   const raw_ref<const gfx::VectorIcon> icon_;
@@ -58,6 +64,8 @@ class ASH_EXPORT LoginShelfButton : public PillButton, public ShelfObserver {
 
   ShelfBackgroundType background_type_ = ShelfBackgroundType::kDefaultBg;
   bool is_active_ = false;
+
+  base::WeakPtrFactory<LoginShelfButton> weak_ptr_factory_{this};
 };
 
 }  // namespace ash

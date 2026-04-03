@@ -8,10 +8,11 @@
 
 #include "include/core/SkRefCnt.h"
 #include "include/core/SkTextureCompressionType.h"
-#include "include/gpu/GrBackendSurface.h"
-#include "include/gpu/GrTypes.h"
-#include "include/gpu/gl/GrGLTypes.h"
+#include "include/gpu/ganesh/GrBackendSurface.h"
+#include "include/gpu/ganesh/GrTypes.h"
+#include "include/gpu/ganesh/gl/GrGLTypes.h"
 #include "include/private/base/SkAssert.h"
+#include "include/private/base/SkDebug.h"
 #include "include/private/gpu/ganesh/GrTypesPriv.h"
 #include "src/gpu/ganesh/GrBackendSurfacePriv.h"
 #include "src/gpu/ganesh/gl/GrGLBackendSurfacePriv.h"
@@ -70,7 +71,7 @@ private:
     }
 
     std::string toString() const override {
-#if defined(SK_DEBUG) || defined(GR_TEST_UTILS)
+#if defined(SK_DEBUG) || defined(GPU_TEST_UTILS)
         return GrGLFormatToStr(fGLFormat);
 #else
         return "";
@@ -113,6 +114,19 @@ namespace GrBackendFormats {
 GrBackendFormat MakeGL(GrGLenum format, GrGLenum target) {
     return GrBackendSurfacePriv::MakeGrBackendFormat(
             gl_target_to_gr_target(target), GrBackendApi::kOpenGL, GrGLBackendFormatData(format));
+}
+
+GrBackendFormat MakeGL(GrGLenum format) {
+    return GrBackendSurfacePriv::MakeGrBackendFormat(
+            GrTextureType::k2D, GrBackendApi::kOpenGL, GrGLBackendFormatData(format));
+}
+
+GrBackendFormat MakeGLExternal() {
+    // For external backend formats, GL_RGBA8 likely does not match the actual bit depth of the
+    // underlying data. However, we just need a value that is defined in the GrGLFormat enum to
+    // avoid thinking that it's unsupported.
+    return GrBackendSurfacePriv::MakeGrBackendFormat(
+            GrTextureType::kExternal, GrBackendApi::kOpenGL, GrGLBackendFormatData(GR_GL_RGBA8));
 }
 
 GrGLFormat AsGLFormat(const GrBackendFormat& format) {
@@ -270,8 +284,8 @@ static const GrGLBackendRenderTargetData* get_and_cast_data(const GrBackendRende
 namespace GrBackendRenderTargets {
 // The GrGLTextureInfo must have a valid fFormat. If wrapping in an SkSurface we require the
 // stencil bits to be either 0, 8 or 16.
-SK_API GrBackendRenderTarget
-MakeGL(int width, int height, int sampleCnt, int stencilBits, const GrGLFramebufferInfo& glInfo) {
+GrBackendRenderTarget MakeGL(
+        int width, int height, int sampleCnt, int stencilBits, const GrGLFramebufferInfo& glInfo) {
     return GrBackendSurfacePriv::MakeGrBackendRenderTarget(width,
                                                            height,
                                                            std::max(1, sampleCnt),
@@ -281,7 +295,7 @@ MakeGL(int width, int height, int sampleCnt, int stencilBits, const GrGLFramebuf
                                                            GrGLBackendRenderTargetData(glInfo));
 }
 
-SK_API bool GetGLFramebufferInfo(const GrBackendRenderTarget& rt, GrGLFramebufferInfo* outInfo) {
+bool GetGLFramebufferInfo(const GrBackendRenderTarget& rt, GrGLFramebufferInfo* outInfo) {
     if (!rt.isValid() || rt.backend() != GrBackendApi::kOpenGL) {
         return false;
     }

@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_SERVICES_APP_SERVICE_PUBLIC_CPP_APP_LAUNCH_UTIL_H_
 #define COMPONENTS_SERVICES_APP_SERVICE_PUBLIC_CPP_APP_LAUNCH_UTIL_H_
 
+#include <iosfwd>
 #include <optional>
 
 #include "base/component_export.h"
@@ -19,11 +20,12 @@ namespace apps {
 // - Update LaunchSource in enums.xml
 // - Update ApplicationLaunchSource in
 //   //components/services/app_service/public/protos/app_types.proto.
-// - Email chromeos-data-team@google.com to request a corresponding change to
-//   backend enums.
 //
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
+// This is used for metrics, persisted to logs, and we should not
+//   - change the assigned value, nor
+//   - reuse the value which was used (even in past historically)
+// Email chromeos-data-team@google.com to request a corresponding change to
+// backend enums.
 enum class LaunchSource {
   kUnknown = 0,
   kFromAppListGrid = 1,              // Grid of apps, not the search box.
@@ -65,13 +67,18 @@ enum class LaunchSource {
   kFromReparenting = 34,               // Moving content into an app.
   kFromProfileMenu =
       35,  // Profile menu of installable chrome://password-manager WebUI.
-  kFromSysTrayCalendar = 36,  // Launches from the system tray Calendar.
-  kFromInstaller = 37,        // Installation UI
-  kFromFirstRun = 38,         // First Run.
+  kFromSysTrayCalendar = 36,      // Launches from the system tray Calendar.
+  kFromInstaller = 37,            // Installation UI
+  kFromFirstRun = 38,             // First Run.
+  kFromWelcomeTour = 39,          // Welcome Tour.
+  kFromFocusMode = 40,            // Focus Mode panel.
+  kFromSparky = 41,               // From Sparky feature.
+  kFromNavigationCapturing = 42,  // Web App Navigation Capturing.
+  kFromWebInstallApi = 43,        // Web Install API.
 
   // Add any new values above this one, and update kMaxValue to the highest
   // enumerator value.
-  kMaxValue = kFromFirstRun,
+  kMaxValue = kFromWebInstallApi,
 };
 
 // Don't remove items or change the order of this enum.  It's used in
@@ -105,6 +112,9 @@ using WindowInfoPtr = std::unique_ptr<WindowInfo>;
 COMPONENT_EXPORT(APP_TYPES)
 ApplicationLaunchSource ConvertLaunchSourceToProtoApplicationLaunchSource(
     LaunchSource launch_source);
+
+COMPONENT_EXPORT(APP_TYPES)
+std::ostream& operator<<(std::ostream& out, LaunchSource launch_source);
 
 }  // namespace apps
 

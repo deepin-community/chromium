@@ -56,7 +56,7 @@ class ScopedAllocatorOp : public OpKernel {
     }
     Tensor* backing_tensor = nullptr;
     AllocatorAttributes attr = context->output_alloc_attr(0);
-    Status s =
+    absl::Status s =
         context->allocate_output(0, {num_elements_}, &backing_tensor, attr);
     VLOG(1) << "_ScopedAllocatorOp " << context->op_kernel().name()
             << " new backing tensor size " << backing_tensor->TotalBytes()
@@ -77,9 +77,9 @@ class ScopedAllocatorOp : public OpKernel {
   DataType dtype_;
   int64_t num_elements_;
   std::vector<ScopedAllocator::Field> fields_;
-  string name_;
-  int32 id_;
-  int32 expected_call_count_;
+  std::string name_;
+  int32_t id_;
+  int32_t expected_call_count_;
   DeviceBase* device_;
 };
 
@@ -161,8 +161,8 @@ class ScopedAllocatorConcatOp : public OpKernel {
  private:
   TensorShape shape_;
   DataType dtype_;
-  string name_;
-  int32 id_;
+  std::string name_;
+  int32_t id_;
   bool reshape_;
   DeviceBase* device_;
 };
@@ -227,8 +227,8 @@ class ScopedAllocatorSplitOp : public OpKernel {
 
  private:
   DataType dtype_;
-  string name_;
-  int32 id_;
+  std::string name_;
+  int32_t id_;
   DeviceBase* device_;
 };
 

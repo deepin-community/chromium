@@ -4,13 +4,15 @@
 
 #include "components/services/app_service/public/cpp/icon_info.h"
 
+#include <array>
 #include <utility>
 
 namespace apps {
 
 namespace {
 
-const char* const kPurposeStrings[] = {"kAny", "kMonochrome", "kMaskable"};
+const auto kPurposeStrings =
+    std::to_array<const char*>({"kAny", "kMonochrome", "kMaskable"});
 
 }  // namespace
 
@@ -30,7 +32,7 @@ IconInfo& IconInfo::operator=(const IconInfo&) = default;
 IconInfo& IconInfo::operator=(IconInfo&&) noexcept = default;
 
 base::Value IconInfo::AsDebugValue() const {
-  base::Value::Dict root;
+  base::DictValue root;
   root.Set("url", url.spec());
   root.Set("square_size_px",
            square_size_px ? base::Value(*square_size_px) : base::Value());

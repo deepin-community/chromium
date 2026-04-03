@@ -2,18 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/sync/test/integration/autofill_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/sync/test/integration/wallet_helper.h"
-#include "components/autofill/core/browser/data_model/autofill_metadata.h"
-#include "components/autofill/core/browser/data_model/credit_card.h"
-#include "components/autofill/core/browser/personal_data_manager.h"
-#include "components/autofill/core/browser/test_autofill_clock.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#include "components/autofill/core/browser/data_model/payments/credit_card.h"
+#include "components/autofill/core/browser/test_utils/test_autofill_clock.h"
 #include "components/autofill/core/common/autofill_util.h"
+#include "components/sync/base/features.h"
 #include "components/sync/service/sync_service_impl.h"
-#include "components/sync/test/fake_server_http_post_provider.h"
 #include "content/public/test/browser_test.h"
-#include "net/base/network_change_notifier.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -43,14 +42,31 @@ const base::Time kArbitraryDefaultTime =
 const base::Time kLaterTime = base::Time::FromSecondsSinceUnixEpoch(5000);
 const base::Time kEvenLaterTime = base::Time::FromSecondsSinceUnixEpoch(6000);
 
-class TwoClientWalletSyncTest : public SyncTest {
+class TwoClientWalletSyncTest
+    : public SyncTest,
+      public testing::WithParamInterface<SyncTest::SetupSyncMode> {
  public:
-  TwoClientWalletSyncTest() : SyncTest(TWO_CLIENT) {}
+  TwoClientWalletSyncTest() : SyncTest(TWO_CLIENT) {
+    if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
+      scoped_feature_list_.InitAndEnableFeature(
+          syncer::kReplaceSyncPromosWithSignInPromos);
+    }
+  }
 
   TwoClientWalletSyncTest(const TwoClientWalletSyncTest&) = delete;
   TwoClientWalletSyncTest& operator=(const TwoClientWalletSyncTest&) = delete;
 
   ~TwoClientWalletSyncTest() override = default;
+
+  wallet_helper::StoreType GetStoreType() const {
+    return GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTransportOnly
+               ? wallet_helper::StoreType::kAccountStore
+               : wallet_helper::StoreType::kProfileStore;
+  }
+
+  SyncTest::SetupSyncMode GetSetupSyncMode() const override {
+    return GetParam();
+  }
 
   // Needed for AwaitQuiescence().
   bool TestUsesSelfNotifications() override { return true; }
@@ -69,9 +85,16 @@ class TwoClientWalletSyncTest : public SyncTest {
 
  private:
   autofill::TestAutofillClock test_clock_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest, UpdateCreditCardMetadata) {
+INSTANTIATE_TEST_SUITE_P(
+    /* no prefix */,
+    TwoClientWalletSyncTest,
+    GetSyncTestModes(),
+    testing::PrintToStringParamName());
+
+IN_PROC_BROWSER_TEST_P(TwoClientWalletSyncTest, UpdateCreditCardMetadata) {
   GetFakeServer()->SetWalletData(
       {CreateSyncWalletCard(/*name=*/"card-1", /*last_four=*/"0001",
                             kDefaultBillingAddressID),
@@ -79,31 +102,31 @@ IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest, UpdateCreditCardMetadata) {
   ASSERT_TRUE(SetupSyncAndInitialize());
 
   // Grab the current card on the first client.
-  std::vector<CreditCard*> credit_cards = GetServerCreditCards(0);
+  std::vector<const CreditCard*> credit_cards = GetServerCreditCards(0);
   ASSERT_EQ(1u, credit_cards.size());
   CreditCard card = *credit_cards[0];
 
   // Simulate using it -- increase both its use count and use date.
-  ASSERT_EQ(1u, card.use_count());
-  card.set_use_count(2);
-  card.set_use_date(kLaterTime);
-  UpdateServerCardMetadata(0, card);
+  ASSERT_EQ(1u, card.usage_history().use_count());
+  card.usage_history().set_use_count(2);
+  card.usage_history().set_use_date(kLaterTime);
+  UpdateServerCardMetadata(0, card, GetStoreType());
 
   // Wait for the change to propagate.
   EXPECT_TRUE(AutofillWalletChecker(0, 1).Wait());
 
   credit_cards = GetServerCreditCards(1);
   EXPECT_EQ(1U, credit_cards.size());
-  EXPECT_EQ(2u, credit_cards[0]->use_count());
-  EXPECT_EQ(kLaterTime, credit_cards[0]->use_date());
+  EXPECT_EQ(2u, credit_cards[0]->usage_history().use_count());
+  EXPECT_EQ(kLaterTime, credit_cards[0]->usage_history().use_date());
 
   credit_cards = GetServerCreditCards(0);
   EXPECT_EQ(1U, credit_cards.size());
-  EXPECT_EQ(2u, credit_cards[0]->use_count());
-  EXPECT_EQ(kLaterTime, credit_cards[0]->use_date());
+  EXPECT_EQ(2u, credit_cards[0]->usage_history().use_count());
+  EXPECT_EQ(kLaterTime, credit_cards[0]->usage_history().use_date());
 }
 
-IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest,
+IN_PROC_BROWSER_TEST_P(TwoClientWalletSyncTest,
                        UpdateCreditCardMetadataWhileNotSyncing) {
   GetFakeServer()->SetWalletData(
       {CreateSyncWalletCard(/*name=*/"card-1", /*last_four=*/"0001",
@@ -112,39 +135,37 @@ IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest,
   ASSERT_TRUE(SetupSyncAndInitialize());
 
   // Sumulate going offline on both clients.
-  fake_server::FakeServerHttpPostProvider::DisableNetwork();
+  DisableNetwork();
 
   // Grab the current card on the first client.
-  std::vector<CreditCard*> credit_cards = GetServerCreditCards(0);
+  std::vector<const CreditCard*> credit_cards = GetServerCreditCards(0);
   ASSERT_EQ(1u, credit_cards.size());
   CreditCard card = *credit_cards[0];
 
   // Simulate using it -- increase both its use count and use date.
-  ASSERT_EQ(1u, card.use_count());
-  card.set_use_count(2);
-  card.set_use_date(kLaterTime);
-  UpdateServerCardMetadata(0, card);
+  ASSERT_EQ(1u, card.usage_history().use_count());
+  card.usage_history().set_use_count(2);
+  card.usage_history().set_use_date(kLaterTime);
+  UpdateServerCardMetadata(0, card, GetStoreType());
 
   // Simulate going online again.
-  fake_server::FakeServerHttpPostProvider::EnableNetwork();
-  net::NetworkChangeNotifier::NotifyObserversOfNetworkChangeForTests(
-      net::NetworkChangeNotifier::CONNECTION_ETHERNET);
+  EnableNetwork();
 
   // Wait for the change to propagate.
   EXPECT_TRUE(AutofillWalletChecker(0, 1).Wait());
 
   credit_cards = GetServerCreditCards(0);
   EXPECT_EQ(1U, credit_cards.size());
-  EXPECT_EQ(2u, credit_cards[0]->use_count());
-  EXPECT_EQ(kLaterTime, credit_cards[0]->use_date());
+  EXPECT_EQ(2u, credit_cards[0]->usage_history().use_count());
+  EXPECT_EQ(kLaterTime, credit_cards[0]->usage_history().use_date());
 
   credit_cards = GetServerCreditCards(1);
   EXPECT_EQ(1U, credit_cards.size());
-  EXPECT_EQ(2u, credit_cards[0]->use_count());
-  EXPECT_EQ(kLaterTime, credit_cards[0]->use_date());
+  EXPECT_EQ(2u, credit_cards[0]->usage_history().use_count());
+  EXPECT_EQ(kLaterTime, credit_cards[0]->usage_history().use_date());
 }
 
-IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest,
+IN_PROC_BROWSER_TEST_P(TwoClientWalletSyncTest,
                        UpdateCreditCardMetadataConflictsWhileNotSyncing) {
   GetFakeServer()->SetWalletData(
       {CreateSyncWalletCard(/*name=*/"card-1", /*last_four=*/"0001",
@@ -153,30 +174,28 @@ IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest,
   ASSERT_TRUE(SetupSyncAndInitialize());
 
   // Sumulate going offline on both clients.
-  fake_server::FakeServerHttpPostProvider::DisableNetwork();
+  DisableNetwork();
 
   // Increase use stats on both clients, make use count higher on the first
   // client and use date higher on the second client.
-  std::vector<CreditCard*> credit_cards = GetServerCreditCards(0);
+  std::vector<const CreditCard*> credit_cards = GetServerCreditCards(0);
   ASSERT_EQ(1u, credit_cards.size());
   CreditCard card = *credit_cards[0];
-  ASSERT_EQ(1u, card.use_count());
-  card.set_use_count(3);
-  card.set_use_date(kLaterTime);
-  UpdateServerCardMetadata(0, card);
+  ASSERT_EQ(1u, card.usage_history().use_count());
+  card.usage_history().set_use_count(3);
+  card.usage_history().set_use_date(kLaterTime);
+  UpdateServerCardMetadata(0, card, GetStoreType());
 
   credit_cards = GetServerCreditCards(1);
   ASSERT_EQ(1u, credit_cards.size());
   card = *credit_cards[0];
-  ASSERT_EQ(1u, card.use_count());
-  card.set_use_count(2);
-  card.set_use_date(kEvenLaterTime);
-  UpdateServerCardMetadata(1, card);
+  ASSERT_EQ(1u, card.usage_history().use_count());
+  card.usage_history().set_use_count(2);
+  card.usage_history().set_use_date(kEvenLaterTime);
+  UpdateServerCardMetadata(1, card, GetStoreType());
 
   // Simulate going online again.
-  fake_server::FakeServerHttpPostProvider::EnableNetwork();
-  net::NetworkChangeNotifier::NotifyObserversOfNetworkChangeForTests(
-      net::NetworkChangeNotifier::CONNECTION_ETHERNET);
+  EnableNetwork();
 
   // Wait for the clients to coverge and both resolve the conflicts by taking
   // maxima in both components.
@@ -184,15 +203,15 @@ IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest,
 
   credit_cards = GetServerCreditCards(0);
   EXPECT_EQ(1U, credit_cards.size());
-  EXPECT_EQ(3u, credit_cards[0]->use_count());
-  EXPECT_EQ(kEvenLaterTime, credit_cards[0]->use_date());
+  EXPECT_EQ(3u, credit_cards[0]->usage_history().use_count());
+  EXPECT_EQ(kEvenLaterTime, credit_cards[0]->usage_history().use_date());
   credit_cards = GetServerCreditCards(1);
   EXPECT_EQ(1U, credit_cards.size());
-  EXPECT_EQ(3u, credit_cards[0]->use_count());
-  EXPECT_EQ(kEvenLaterTime, credit_cards[0]->use_date());
+  EXPECT_EQ(3u, credit_cards[0]->usage_history().use_count());
+  EXPECT_EQ(kEvenLaterTime, credit_cards[0]->usage_history().use_date());
 }
 
-IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest,
+IN_PROC_BROWSER_TEST_P(TwoClientWalletSyncTest,
                        UpdateCreditCardMetadataWithNewBillingAddressId) {
   GetFakeServer()->SetWalletData(
       {CreateSyncWalletCard(/*name=*/"card-1", /*last_four=*/"0001",
@@ -201,14 +220,14 @@ IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest,
   ASSERT_TRUE(SetupSyncAndInitialize());
 
   // Grab the current card on the first client.
-  std::vector<CreditCard*> credit_cards = GetServerCreditCards(0);
+  std::vector<const CreditCard*> credit_cards = GetServerCreditCards(0);
   ASSERT_EQ(1U, credit_cards.size());
   CreditCard card = *credit_cards[0];
   ASSERT_TRUE(card.billing_address_id().empty());
 
   // Update the billing address.
   card.set_billing_address_id(kDefaultBillingAddressID);
-  UpdateServerCardMetadata(0, card);
+  UpdateServerCardMetadata(0, card, GetStoreType());
   EXPECT_TRUE(AutofillWalletChecker(0, 1).Wait());
 
   // Make sure both clients have the updated billing_address_id.
@@ -221,7 +240,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest,
   EXPECT_EQ(kDefaultBillingAddressID, credit_cards[0]->billing_address_id());
 }
 
-IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest,
+IN_PROC_BROWSER_TEST_P(TwoClientWalletSyncTest,
                        UpdateCreditCardMetadataWithChangedBillingAddressId) {
   GetFakeServer()->SetWalletData(
       {CreateSyncWalletCard(/*name=*/"card-1", /*last_four=*/"0001",
@@ -230,14 +249,14 @@ IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest,
   ASSERT_TRUE(SetupSyncAndInitialize());
 
   // Grab the current card on the first client.
-  std::vector<CreditCard*> credit_cards = GetServerCreditCards(0);
+  std::vector<const CreditCard*> credit_cards = GetServerCreditCards(0);
   ASSERT_EQ(1U, credit_cards.size());
   CreditCard card = *credit_cards[0];
 
   // Update the billing address.
   ASSERT_EQ(kDefaultBillingAddressID, card.billing_address_id());
   card.set_billing_address_id(kDifferentBillingAddressId);
-  UpdateServerCardMetadata(0, card);
+  UpdateServerCardMetadata(0, card, GetStoreType());
   EXPECT_TRUE(AutofillWalletChecker(0, 1).Wait());
 
   // Make sure both clients have the updated billing_address_id.
@@ -250,7 +269,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientWalletSyncTest,
   EXPECT_EQ(kDifferentBillingAddressId, credit_cards[0]->billing_address_id());
 }
 
-IN_PROC_BROWSER_TEST_F(
+IN_PROC_BROWSER_TEST_P(
     TwoClientWalletSyncTest,
     UpdateCreditCardMetadataWithChangedBillingAddressId_RemoteToLocal) {
   GetFakeServer()->SetWalletData(
@@ -260,14 +279,14 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(SetupSyncAndInitialize());
 
   // Grab the current card on the first client.
-  std::vector<CreditCard*> credit_cards = GetServerCreditCards(0);
+  std::vector<const CreditCard*> credit_cards = GetServerCreditCards(0);
   ASSERT_EQ(1U, credit_cards.size());
   CreditCard card = *credit_cards[0];
   ASSERT_EQ(kDefaultBillingAddressID, card.billing_address_id());
 
   // Update the billing address (replace a remote profile by a local profile).
   card.set_billing_address_id(kLocalBillingAddressId);
-  UpdateServerCardMetadata(0, card);
+  UpdateServerCardMetadata(0, card, GetStoreType());
   EXPECT_TRUE(AutofillWalletChecker(0, 1).Wait());
 
   // Make sure both clients have the updated billing_address_id (local profile
@@ -281,7 +300,7 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(kLocalBillingAddressId, credit_cards[0]->billing_address_id());
 }
 
-IN_PROC_BROWSER_TEST_F(
+IN_PROC_BROWSER_TEST_P(
     TwoClientWalletSyncTest,
     UpdateCreditCardMetadataWithChangedBillingAddressId_RemoteToLocalConflict) {
   GetFakeServer()->SetWalletData(
@@ -291,35 +310,33 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(SetupSyncAndInitialize());
 
   // Sumulate going offline on both clients.
-  fake_server::FakeServerHttpPostProvider::DisableNetwork();
+  DisableNetwork();
 
   // Update the billing address id on both clients to different local ids.
-  std::vector<CreditCard*> credit_cards = GetServerCreditCards(0);
+  std::vector<const CreditCard*> credit_cards = GetServerCreditCards(0);
   ASSERT_EQ(1u, credit_cards.size());
   CreditCard card = *credit_cards[0];
   ASSERT_EQ(kDefaultBillingAddressID, card.billing_address_id());
   card.set_billing_address_id(kLocalBillingAddressId);
-  card.set_use_date(kLaterTime);
+  card.usage_history().set_use_date(kLaterTime);
   // We treat the corner-case of merging data after initial sync (with
   // use_count==1) differently, set use-count to a higher value.
-  card.set_use_count(2);
-  UpdateServerCardMetadata(0, card);
+  card.usage_history().set_use_count(2);
+  UpdateServerCardMetadata(0, card, GetStoreType());
 
   credit_cards = GetServerCreditCards(1);
   ASSERT_EQ(1u, credit_cards.size());
   card = *credit_cards[0];
   ASSERT_EQ(kDefaultBillingAddressID, card.billing_address_id());
   card.set_billing_address_id(kLocalBillingAddressId2);
-  card.set_use_date(kEvenLaterTime);
+  card.usage_history().set_use_date(kEvenLaterTime);
   // We treat the corner-case of merging data after initial sync (with
   // use_count==1) differently, set use-count to a higher value.
-  card.set_use_count(2);
-  UpdateServerCardMetadata(1, card);
+  card.usage_history().set_use_count(2);
+  UpdateServerCardMetadata(1, card, GetStoreType());
 
   // Simulate going online again.
-  fake_server::FakeServerHttpPostProvider::EnableNetwork();
-  net::NetworkChangeNotifier::NotifyObserversOfNetworkChangeForTests(
-      net::NetworkChangeNotifier::CONNECTION_ETHERNET);
+  EnableNetwork();
 
   // Wait for the clients to coverge and both resolve the conflicts by taking
   // maxima in both components.
@@ -328,11 +345,11 @@ IN_PROC_BROWSER_TEST_F(
   credit_cards = GetServerCreditCards(0);
   EXPECT_EQ(1U, credit_cards.size());
   EXPECT_EQ(kLocalBillingAddressId2, credit_cards[0]->billing_address_id());
-  EXPECT_EQ(kEvenLaterTime, credit_cards[0]->use_date());
+  EXPECT_EQ(kEvenLaterTime, credit_cards[0]->usage_history().use_date());
   credit_cards = GetServerCreditCards(1);
   EXPECT_EQ(1U, credit_cards.size());
   EXPECT_EQ(kLocalBillingAddressId2, credit_cards[0]->billing_address_id());
-  EXPECT_EQ(kEvenLaterTime, credit_cards[0]->use_date());
+  EXPECT_EQ(kEvenLaterTime, credit_cards[0]->usage_history().use_date());
 }
 
 }  // namespace

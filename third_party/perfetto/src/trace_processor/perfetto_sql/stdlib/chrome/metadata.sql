@@ -9,5 +9,7 @@ CREATE PERFETTO FUNCTION chrome_hardware_class()
 RETURNS STRING AS
 SELECT
   str_value
-  FROM metadata
-WHERE name = "cr-hardware-class";
+FROM metadata
+WHERE
+  name = "cr-hardware-class"
+LIMIT 1;

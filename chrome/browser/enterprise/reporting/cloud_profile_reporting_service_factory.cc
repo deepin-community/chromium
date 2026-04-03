@@ -4,13 +4,12 @@
 
 #include "chrome/browser/enterprise/reporting/cloud_profile_reporting_service_factory.h"
 
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/identifiers/profile_id_service_factory.h"
 #include "chrome/browser/enterprise/reporting/cloud_profile_reporting_service.h"
-#include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/enterprise/browser/reporting/report_scheduler.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "chrome/browser/enterprise/signals/signals_aggregator_factory.h"
 
 namespace enterprise_reporting {
 
@@ -33,12 +32,9 @@ CloudProfileReportingServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   Profile* profile = Profile::FromBrowserContext(context);
 
-  return std::make_unique<CloudProfileReportingService>(
-      profile,
-      g_browser_process->browser_policy_connector()
-          ->device_management_service(),
-      g_browser_process->shared_url_loader_factory());
+  return std::make_unique<CloudProfileReportingService>(profile);
 }
+
 bool CloudProfileReportingServiceFactory::ServiceIsCreatedWithBrowserContext()
     const {
   return true;
@@ -48,6 +44,10 @@ CloudProfileReportingServiceFactory::CloudProfileReportingServiceFactory()
     : ProfileKeyedServiceFactory("CloudProfileReporting",
                                  ProfileSelections::BuildForRegularProfile()) {
   DependsOn(enterprise::ProfileIdServiceFactory::GetInstance());
+  // Depends on this service because
+  // `CloudProfileReportingService.profile_request_generator_` has a dependency
+  // on it.
+  DependsOn(enterprise_signals::SignalsAggregatorFactory::GetInstance());
 }
 
 CloudProfileReportingServiceFactory::~CloudProfileReportingServiceFactory() =

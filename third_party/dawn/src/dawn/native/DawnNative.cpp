@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "dawn/common/Log.h"
+#include "dawn/native/Adapter.h"
 #include "dawn/native/BindGroupLayout.h"
 #include "dawn/native/Buffer.h"
 #include "dawn/native/Device.h"
@@ -42,10 +43,18 @@
 
 namespace dawn::native {
 
+const char MemoryDump::kNameSize[] = "size";
+const char MemoryDump::kNameObjectCount[] = "object_count";
+const char MemoryDump::kUnitsBytes[] = "bytes";
+const char MemoryDump::kUnitsObjects[] = "objects";
+
 const DawnProcTable& GetProcsAutogen();
 
 const DawnProcTable& GetProcs() {
     return GetProcsAutogen();
+}
+std::vector<const char*> GetTogglesUsed(const wgpu::Adapter& adapter) {
+    return FromAPI(adapter.Get())->GetTogglesUsed();
 }
 
 std::vector<const char*> GetTogglesUsed(WGPUDevice device) {
@@ -58,7 +67,7 @@ Adapter::Adapter() = default;
 
 Adapter::Adapter(AdapterBase* impl) : mImpl(impl) {
     if (mImpl != nullptr) {
-        mImpl->Reference();
+        mImpl->AddRef();
     }
 }
 
@@ -78,31 +87,14 @@ Adapter& Adapter::operator=(const Adapter& other) {
         }
         mImpl = other.mImpl;
         if (mImpl) {
-            mImpl->Reference();
+            mImpl->AddRef();
         }
     }
     return *this;
 }
 
-void Adapter::GetProperties(wgpu::AdapterProperties* properties) const {
-    GetProperties(reinterpret_cast<WGPUAdapterProperties*>(properties));
-}
-
-void Adapter::GetProperties(WGPUAdapterProperties* properties) const {
-    mImpl->APIGetProperties(FromAPI(properties));
-}
-
 WGPUAdapter Adapter::Get() const {
     return ToAPI(mImpl);
-}
-
-std::vector<const char*> Adapter::GetSupportedFeatures() const {
-    FeaturesSet supportedFeaturesSet = mImpl->GetSupportedFeatures();
-    return supportedFeaturesSet.GetEnabledFeatureNames();
-}
-
-bool Adapter::GetLimits(WGPUSupportedLimits* limits) const {
-    return mImpl->APIGetLimits(FromAPI(limits));
 }
 
 void Adapter::SetUseTieredLimits(bool useTieredLimits) {
@@ -125,22 +117,9 @@ WGPUDevice Adapter::CreateDevice(const WGPUDeviceDescriptor* deviceDescriptor) {
     return ToAPI(mImpl->APICreateDevice(FromAPI(deviceDescriptor)));
 }
 
-void Adapter::RequestDevice(const wgpu::DeviceDescriptor* descriptor,
-                            WGPURequestDeviceCallback callback,
-                            void* userdata) {
-    mImpl->APIRequestDevice(reinterpret_cast<const DeviceDescriptor*>(descriptor), callback,
-                            userdata);
-}
-
-void Adapter::RequestDevice(const WGPUDeviceDescriptor* descriptor,
-                            WGPURequestDeviceCallback callback,
-                            void* userdata) {
-    mImpl->APIRequestDevice(reinterpret_cast<const DeviceDescriptor*>(descriptor), callback,
-                            userdata);
-}
-
 void Adapter::ResetInternalDeviceForTesting() {
-    mImpl->GetPhysicalDevice()->ResetInternalDeviceForTesting();
+    [[maybe_unused]] bool hadError = mImpl->GetInstance()->ConsumedError(
+        mImpl->GetPhysicalDevice()->ResetInternalDeviceForTesting());
 }
 
 // DawnInstanceDescriptor
@@ -152,16 +131,27 @@ DawnInstanceDescriptor::DawnInstanceDescriptor() {
 bool DawnInstanceDescriptor::operator==(const DawnInstanceDescriptor& rhs) const {
     return (nextInChain == rhs.nextInChain) &&
            std::tie(additionalRuntimeSearchPathsCount, additionalRuntimeSearchPaths, platform,
-                    backendValidationLevel, beginCaptureOnStartup, enableAdapterBlocklist) ==
+                    backendValidationLevel, beginCaptureOnStartup) ==
                std::tie(rhs.additionalRuntimeSearchPathsCount, rhs.additionalRuntimeSearchPaths,
-                        rhs.platform, rhs.backendValidationLevel, rhs.beginCaptureOnStartup,
-                        rhs.enableAdapterBlocklist);
+                        rhs.platform, rhs.backendValidationLevel, rhs.beginCaptureOnStartup);
 }
 
 // Instance
 
 Instance::Instance(const WGPUInstanceDescriptor* desc)
     : mImpl(APICreateInstance(reinterpret_cast<const InstanceDescriptor*>(desc))) {
+    tint::Initialize();
+}
+
+Instance::Instance(const wgpu::InstanceDescriptor* desc)
+    : mImpl(APICreateInstance(reinterpret_cast<const InstanceDescriptor*>(desc))) {
+    tint::Initialize();
+}
+
+Instance::Instance(InstanceBase* impl) : mImpl(impl) {
+    if (mImpl != nullptr) {
+        mImpl->APIAddRef();
+    }
     tint::Initialize();
 }
 
@@ -189,46 +179,32 @@ const ToggleInfo* Instance::GetToggleInfo(const char* toggleName) {
     return mImpl->GetToggleInfo(toggleName);
 }
 
-const FeatureInfo* Instance::GetFeatureInfo(WGPUFeatureName feature) {
-    return mImpl->GetFeatureInfo(static_cast<wgpu::FeatureName>(feature));
-}
-
-void Instance::EnableBackendValidation(bool enableBackendValidation) {
-    if (enableBackendValidation) {
-        mImpl->SetBackendValidationLevel(BackendValidationLevel::Full);
-    }
-}
-
 void Instance::SetBackendValidationLevel(BackendValidationLevel level) {
     mImpl->SetBackendValidationLevel(level);
-}
-
-void Instance::EnableBeginCaptureOnStartup(bool beginCaptureOnStartup) {
-    mImpl->EnableBeginCaptureOnStartup(beginCaptureOnStartup);
-}
-
-void Instance::EnableAdapterBlocklist(bool enable) {
-    mImpl->EnableAdapterBlocklist(enable);
 }
 
 uint64_t Instance::GetDeviceCountForTesting() const {
     return mImpl->GetDeviceCountForTesting();
 }
 
+uint64_t Instance::GetDeprecationWarningCountForTesting() const {
+    return mImpl->GetDeprecationWarningCountForTesting();
+}
+
 WGPUInstance Instance::Get() const {
     return ToAPI(mImpl);
 }
 
+void Instance::DisconnectDawnPlatform() {
+    mImpl->DisconnectDawnPlatform();
+}
+
+void Instance::SetPlatformForTesting(dawn::platform::Platform* platform) {
+    mImpl->SetPlatformForTesting(platform);
+}
+
 size_t GetLazyClearCountForTesting(WGPUDevice device) {
     return FromAPI(device)->GetLazyClearCountForTesting();
-}
-
-size_t GetDeprecationWarningCountForTesting(WGPUDevice device) {
-    return FromAPI(device)->GetDeprecationWarningCountForTesting();
-}
-
-size_t GetPhysicalDeviceCountForTesting(WGPUInstance instance) {
-    return FromAPI(instance)->GetPhysicalDeviceCountForTesting();
 }
 
 bool IsTextureSubresourceInitialized(WGPUTexture texture,
@@ -248,9 +224,9 @@ bool IsTextureSubresourceInitialized(WGPUTexture texture,
     return textureBase->IsSubresourceContentInitialized(range);
 }
 
-std::vector<const char*> GetProcMapNamesForTestingInternal();
+std::vector<std::string_view> GetProcMapNamesForTestingInternal();
 
-std::vector<const char*> GetProcMapNamesForTesting() {
+std::vector<std::string_view> GetProcMapNamesForTesting() {
     return GetProcMapNamesForTestingInternal();
 }
 
@@ -301,6 +277,41 @@ const FeatureInfo* GetFeatureInfo(wgpu::FeatureName feature) {
         return nullptr;
     }
     return &kFeatureNameAndInfoList[FromAPI(feature)];
+}
+
+void MemoryDump::AddOwnerGUID(const char* name, uint64_t ownerGUID) {
+    // Provide a default empty implementation to prevent breaking existing MemoryDump
+    // implementations.
+}
+
+void DumpMemoryStatistics(WGPUDevice device, MemoryDump* dump) {
+    auto deviceGuard = FromAPI(device)->GetGuard();
+    FromAPI(device)->DumpMemoryStatistics(dump);
+}
+
+MemoryUsageInfo ComputeEstimatedMemoryUsageInfo(WGPUDevice device) {
+    auto deviceGuard = FromAPI(device)->GetGuard();
+    return FromAPI(device)->ComputeEstimatedMemoryUsage();
+}
+
+AllocatorMemoryInfo GetAllocatorMemoryInfo(WGPUDevice device) {
+    auto deviceGuard = FromAPI(device)->GetGuard();
+    return FromAPI(device)->GetAllocatorMemoryInfo();
+}
+
+bool ReduceMemoryUsage(WGPUDevice device) {
+    auto deviceGuard = FromAPI(device)->GetGuard();
+    return FromAPI(device)->ReduceMemoryUsage();
+}
+
+void PerformIdleTasks(const wgpu::Device& device) {
+    auto* deviceBase = FromAPI(device.Get());
+    auto deviceGuard = deviceBase->GetGuard();
+    deviceBase->PerformIdleTasks();
+}
+
+bool IsDeviceLost(WGPUDevice device) {
+    return FromAPI(device)->IsLost();
 }
 
 }  // namespace dawn::native

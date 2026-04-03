@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/extensions/api/runtime/chrome_runtime_api_delegate.h"
+
 #include <memory>
 #include <set>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -16,23 +17,26 @@
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/simple_test_tick_clock.h"
-#include "chrome/browser/extensions/api/runtime/chrome_runtime_api_delegate.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_service_test_with_install.h"
 #include "chrome/browser/extensions/test_extension_system.h"
-#include "chrome/browser/extensions/update_install_gate.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
+#include "extensions/browser/delayed_install_manager.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/event_router_factory.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/update_install_gate.h"
 #include "extensions/browser/updater/extension_downloader.h"
 #include "extensions/browser/updater/extension_downloader_test_delegate.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/verifier_formats.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
@@ -55,7 +59,7 @@ class TestEventRouter : public EventRouter {
 
   bool ExtensionHasEventListener(const ExtensionId& extension_id,
                                  const std::string& event_name) const override {
-    return base::Contains(fake_registry_, Entry(extension_id, event_name));
+    return fake_registry_.contains(Entry(extension_id, event_name));
   }
 
   // Pretend that |extension_id| is listening for |event_name|.
@@ -212,7 +216,7 @@ class ChromeRuntimeAPIDelegateTest : public ExtensionServiceTestWithInstall {
     InitializeExtensionServiceWithUpdater();
     runtime_delegate_ =
         std::make_unique<ChromeRuntimeAPIDelegate>(browser_context());
-    service()->updater()->SetExtensionCacheForTesting(nullptr);
+    ExtensionUpdater::Get(profile())->SetExtensionCacheForTesting(nullptr);
     EventRouterFactory::GetInstance()->SetTestingFactory(
         browser_context(),
         base::BindRepeating(&TestEventRouterFactoryFunction));
@@ -221,13 +225,16 @@ class ChromeRuntimeAPIDelegateTest : public ExtensionServiceTestWithInstall {
     // installation until the extension is idle.
     update_install_gate_ =
         std::make_unique<UpdateInstallGate>(service()->profile());
-    service()->RegisterInstallGate(ExtensionPrefs::DELAY_REASON_WAIT_FOR_IDLE,
-                                   update_install_gate_.get());
+    DelayedInstallManager::Get(browser_context())
+        ->RegisterInstallGate(ExtensionPrefs::DelayReason::kWaitForIdle,
+                              update_install_gate_.get());
     static_cast<TestExtensionSystem*>(ExtensionSystem::Get(browser_context()))
         ->SetReady();
   }
 
   void TearDown() override {
+    update_install_gate_.reset();
+    runtime_delegate_.reset();
     ExtensionDownloader::set_test_delegate(nullptr);
     ChromeRuntimeAPIDelegate::set_tick_clock_for_tests(nullptr);
     ExtensionServiceTestWithInstall::TearDown();
@@ -325,7 +332,7 @@ TEST_F(ChromeRuntimeAPIDelegateTest, RequestUpdateCheck) {
 
   // Reload the extension, causing the delayed update to v2 to happen, then do
   // another update check - we should get a no_update instead of throttled.
-  service()->ReloadExtension(id);
+  registrar()->ReloadExtension(id);
   const Extension* current =
       ExtensionRegistry::Get(browser_context())->GetInstalledExtension(id);
   ASSERT_NE(nullptr, current);

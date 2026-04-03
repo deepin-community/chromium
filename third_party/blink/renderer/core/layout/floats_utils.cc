@@ -72,6 +72,7 @@ ConstraintSpace CreateConstraintSpaceForFloat(
   SetOrthogonalFallbackInlineSizeIfNeeded(unpositioned_float.parent_style,
                                           unpositioned_float.node, &builder);
   builder.SetIsPaintedAtomically(true);
+  builder.SetIsHiddenForPaint(unpositioned_float.is_hidden_for_paint);
 
   if (origin_block_offset) {
     DCHECK(margins);
@@ -79,15 +80,18 @@ ConstraintSpace CreateConstraintSpaceForFloat(
     DCHECK_EQ(style.GetWritingMode(), parent_space.GetWritingMode());
 
     SetupSpaceBuilderForFragmentation(
-        parent_space, unpositioned_float.node, *origin_block_offset, &builder,
-        /* is_new_fc */ true, /* requires_content_before_breaking */ false);
+        parent_space, unpositioned_float.node,
+        unpositioned_float.fragmentainer_block_offset + *origin_block_offset,
+        unpositioned_float.fragmentainer_block_size,
+        /*requires_content_before_breaking=*/false, &builder);
 
     // For other node types, what matters is whether the block-start border edge
     // is at the fragmentainer start, but for floats, it's the block start
     // *margin* edge, since float margins are unbreakable and are never
     // truncated.
-    LayoutUnit margin_edge_offset = parent_space.FragmentainerOffset() +
-                                    *origin_block_offset - margins->block_start;
+    LayoutUnit margin_edge_offset =
+        unpositioned_float.fragmentainer_block_offset + *origin_block_offset -
+        margins->block_start;
     if (margin_edge_offset <= LayoutUnit())
       builder.SetIsAtFragmentainerStart();
   } else {
@@ -96,8 +100,6 @@ ConstraintSpace CreateConstraintSpaceForFloat(
 
   builder.SetAvailableSize(unpositioned_float.available_size);
   builder.SetPercentageResolutionSize(unpositioned_float.percentage_size);
-  builder.SetReplacedPercentageResolutionSize(
-      unpositioned_float.replaced_percentage_size);
   return builder.ToConstraintSpace();
 }
 
@@ -162,6 +164,7 @@ const ExclusionArea* CreateExclusionArea(
           : nullptr;
 
   return ExclusionArea::Create(BfcRect(start_offset, end_offset), type,
+                               unpositioned_float.is_hidden_for_paint,
                                std::move(shape_data));
 }
 
@@ -220,6 +223,8 @@ PositionedFloat PositionFloat(UnpositionedFloat* unpositioned_float,
   const LayoutResult* layout_result = nullptr;
   BoxStrut fragment_margins;
   LayoutOpportunity opportunity;
+  LayoutUnit fragmentainer_block_size =
+      unpositioned_float->fragmentainer_block_size;
   bool need_break_before = false;
 
   if (!is_fragmentable) {
@@ -332,7 +337,7 @@ PositionedFloat PositionFloat(UnpositionedFloat* unpositioned_float,
     // behavior is currently unspecified.
     if (!is_at_fragmentainer_start) {
       LayoutUnit fragmentainer_block_offset =
-          FragmentainerOffsetAtBfc(parent_space) +
+          unpositioned_float->FragmentainerOffsetAtBfc() +
           opportunity.rect.start_offset.block_offset +
           fragment_margins.block_start;
       const auto* break_token = To<BlockBreakToken>(
@@ -345,8 +350,9 @@ PositionedFloat PositionFloat(UnpositionedFloat* unpositioned_float,
       }
 
       if (!MovePastBreakpoint(parent_space, node, *layout_result,
-                              fragmentainer_block_offset, kBreakAppealPerfect,
-                              /* builder */ nullptr)) {
+                              fragmentainer_block_offset,
+                              fragmentainer_block_size, kBreakAppealPerfect,
+                              /*builder=*/nullptr)) {
         need_break_before = true;
       } else if (is_at_block_end &&
                  parent_space.HasKnownFragmentainerBlockSize()) {
@@ -355,7 +361,7 @@ PositionedFloat PositionFloat(UnpositionedFloat* unpositioned_float,
         LayoutUnit outer_block_end = fragmentainer_block_offset +
                                      float_fragment.BlockSize() +
                                      fragment_margins.block_end;
-        if (outer_block_end > FragmentainerCapacity(parent_space) &&
+        if (outer_block_end > fragmentainer_block_size &&
             !IsBreakInside(unpositioned_float->token)) {
           // Avoid breaking inside the block-end margin of a float. They are not
           // to collapse with the fragmentainer boundary, unlike margins on
@@ -392,10 +398,11 @@ PositionedFloat PositionFloat(UnpositionedFloat* unpositioned_float,
     // Create a special exclusion past everything, so that the container(s) may
     // grow to encompass the floats, if appropriate.
     BfcOffset past_everything(LayoutUnit(),
-                              FragmentainerSpaceLeft(parent_space) +
+                              unpositioned_float->FragmentainerSpaceLeft() +
                                   parent_space.ExpectedBfcBlockOffset());
     const ExclusionArea* exclusion = ExclusionArea::Create(
-        BfcRect(past_everything, past_everything), float_type);
+        BfcRect(past_everything, past_everything), float_type,
+        unpositioned_float->is_hidden_for_paint);
     exclusion_space->Add(std::move(exclusion));
 
     // Also specify that there will be a fragmentainer break before this
@@ -432,19 +439,39 @@ PositionedFloat PositionFloat(UnpositionedFloat* unpositioned_float,
   }
 
   LayoutUnit minimum_space_shortage;
-  if (break_before_token || physical_fragment.GetBreakToken()) {
-    // Broke before or inside the float.
-    if (parent_space.HasKnownFragmentainerBlockSize() &&
-        parent_space.BlockFragmentationType() == kFragmentColumn) {
-      LayoutUnit fragmentainer_block_offset =
-          FragmentainerOffsetAtBfc(parent_space) +
-          float_bfc_offset.block_offset;
-      minimum_space_shortage = CalculateSpaceShortage(
-          parent_space, layout_result, fragmentainer_block_offset);
+  LayoutUnit tallest_unbreakable_block_size;
+  if (parent_space.HasBlockFragmentation() &&
+      parent_space.BlockFragmentationType() == kFragmentColumn) {
+    LayoutUnit fragmentainer_block_offset =
+        unpositioned_float->FragmentainerOffsetAtBfc() +
+        float_bfc_offset.block_offset;
+
+    if (parent_space.HasKnownFragmentainerBlockSize()) {
+      if (break_before_token || physical_fragment.GetBreakToken()) {
+        // Broke before or inside the float. Figure out how much more space we
+        // would need to prevent that.
+        minimum_space_shortage = CalculateSpaceShortage(
+            parent_space, layout_result, fragmentainer_block_offset,
+            fragmentainer_block_size);
+      }
+    } else if (ShouldAvoidBreakInside(parent_space, *layout_result)) {
+      // Make sure the columns become at least as tall as the largest piece of
+      // unbreakable content. Keep in mind that margins are an unbreakble part
+      // of a float. Subtract block-start margin from the fragmentainer offset,
+      // so that we don't make room for the the parts that end up before the
+      // fragmentainer start.
+      DCHECK(parent_space.IsInitialColumnBalancingPass());
+      PhysicalBoxStrut margins = physical_fragment.Margins();
+      BoxStrut logical_margins =
+          margins.ConvertToLogical(parent_space.GetWritingDirection());
+      tallest_unbreakable_block_size = CalculateUnbreakableBlockSize(
+          parent_space, *layout_result,
+          fragmentainer_block_offset - logical_margins.block_start);
     }
   }
 
   return PositionedFloat(layout_result, break_before_token, float_bfc_offset,
+                         tallest_unbreakable_block_size,
                          minimum_space_shortage);
 }
 

@@ -26,7 +26,8 @@ constexpr char kOverrideActionDuration[] = "duration_mins";
 // Returns string containing |timestamp| int64_t value in milliseconds. This is
 // how timestamp is sent in a policy.
 std::string PolicyTimestamp(base::Time timestamp) {
-  return std::to_string((timestamp - base::Time::UnixEpoch()).InMilliseconds());
+  return base::NumberToString(
+      (timestamp - base::Time::UnixEpoch()).InMilliseconds());
 }
 
 }  // namespace
@@ -46,7 +47,7 @@ std::string TimeLimitOverride::ActionToString(Action action) {
 
 // static
 std::optional<TimeLimitOverride> TimeLimitOverride::FromDictionary(
-    const base::Value::Dict* dict) {
+    const base::DictValue* dict) {
   if (!dict) {
     DLOG(ERROR) << "Override entry is not a dictionary";
     return std::nullopt;
@@ -73,7 +74,7 @@ std::optional<TimeLimitOverride> TimeLimitOverride::FromDictionary(
   base::Time creation_time =
       base::Time::UnixEpoch() + base::Milliseconds(creation_time_millis);
 
-  const base::Value::Dict* action_dict =
+  const base::DictValue* action_dict =
       dict->FindDict(kOverrideActionSpecificData);
   const base::Value* duration_value =
       action_dict ? action_dict->Find(kOverrideActionDurationMins) : nullptr;
@@ -86,7 +87,7 @@ std::optional<TimeLimitOverride> TimeLimitOverride::FromDictionary(
 
 // static
 std::optional<TimeLimitOverride> TimeLimitOverride::MostRecentFromList(
-    const base::Value::List* list) {
+    const base::ListValue* list) {
   if (!list) {
     DLOG(ERROR) << "Override entries should be a list.";
     return std::nullopt;
@@ -121,21 +122,16 @@ TimeLimitOverride::TimeLimitOverride(TimeLimitOverride&&) = default;
 
 TimeLimitOverride& TimeLimitOverride::operator=(TimeLimitOverride&&) = default;
 
-bool TimeLimitOverride::operator==(const TimeLimitOverride& rhs) const {
-  return action_ == rhs.action() && created_at_ == rhs.created_at() &&
-         duration_ == rhs.duration();
-}
-
 bool TimeLimitOverride::IsLock() const {
   return action_ == Action::kLock;
 }
 
-base::Value::Dict TimeLimitOverride::ToDictionary() const {
-  base::Value::Dict dict;
+base::DictValue TimeLimitOverride::ToDictionary() const {
+  base::DictValue dict;
   dict.Set(kOverrideAction, base::Value(ActionToString(action_)));
   dict.Set(kOverrideActionCreatedAt, base::Value(PolicyTimestamp(created_at_)));
   if (duration_.has_value()) {
-    base::Value::Dict duration_dict;
+    base::DictValue duration_dict;
     duration_dict.Set(kOverrideActionDuration,
                       base::Value(duration_->InMinutes()));
     dict.Set(kOverrideActionSpecificData, std::move(duration_dict));

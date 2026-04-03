@@ -62,9 +62,6 @@ static int decode_frame(AVCodecContext *avctx, AVFrame *pic,
     if ((ret = ff_get_buffer(avctx, pic, 0)) < 0)
         return ret;
 
-    pic->pict_type = AV_PICTURE_TYPE_I;
-    pic->flags |= AV_FRAME_FLAG_KEY;
-
     for (field = 0; field < 2; field++) {
         int i;
         int field_h = (avctx->height + !field) >> 1;
@@ -110,6 +107,7 @@ static const AVOption frwu_options[] = {
 
 static const AVClass frwu_class = {
     .class_name = "frwu Decoder",
+    .item_name  = av_default_item_name,
     .option     = frwu_options,
     .version    = LIBAVUTIL_VERSION_INT,
 };

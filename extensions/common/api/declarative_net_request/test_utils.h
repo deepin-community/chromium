@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+
 #include "base/files/file_path.h"
 #include "base/values.h"
 #include "extensions/common/api/declarative_net_request/constants.h"
@@ -15,10 +16,12 @@
 
 namespace extensions::declarative_net_request {
 
+inline constexpr char kManifestSandboxPageFilepath[] = "manifest_sandbox.html";
+
 struct DictionarySource {
   DictionarySource() = default;
   virtual ~DictionarySource() = default;
-  virtual base::Value::Dict ToValue() const = 0;
+  virtual base::DictValue ToValue() const = 0;
 };
 
 // Helper structs to simplify building base::Values which can later be used to
@@ -37,7 +40,7 @@ struct TestHeaderCondition : public DictionarySource {
   std::optional<std::vector<std::string>> values;
   std::optional<std::vector<std::string>> excluded_values;
 
-  base::Value::Dict ToValue() const override;
+  base::DictValue ToValue() const override;
 };
 
 struct TestRuleCondition : public DictionarySource {
@@ -55,6 +58,8 @@ struct TestRuleCondition : public DictionarySource {
   std::optional<std::vector<std::string>> excluded_initiator_domains;
   std::optional<std::vector<std::string>> request_domains;
   std::optional<std::vector<std::string>> excluded_request_domains;
+  std::optional<std::vector<std::string>> top_domains;
+  std::optional<std::vector<std::string>> excluded_top_domains;
   std::optional<std::vector<std::string>> request_methods;
   std::optional<std::vector<std::string>> excluded_request_methods;
   std::optional<std::vector<std::string>> resource_types;
@@ -65,7 +70,7 @@ struct TestRuleCondition : public DictionarySource {
   std::optional<std::vector<TestHeaderCondition>> response_headers;
   std::optional<std::vector<TestHeaderCondition>> excluded_response_headers;
 
-  base::Value::Dict ToValue() const override;
+  base::DictValue ToValue() const override;
 };
 
 struct TestRuleQueryKeyValue : public DictionarySource {
@@ -78,7 +83,7 @@ struct TestRuleQueryKeyValue : public DictionarySource {
   std::optional<std::string> value;
   std::optional<bool> replace_only;
 
-  base::Value::Dict ToValue() const override;
+  base::DictValue ToValue() const override;
 };
 
 struct TestRuleQueryTransform : public DictionarySource {
@@ -90,7 +95,7 @@ struct TestRuleQueryTransform : public DictionarySource {
   std::optional<std::vector<std::string>> remove_params;
   std::optional<std::vector<TestRuleQueryKeyValue>> add_or_replace_params;
 
-  base::Value::Dict ToValue() const override;
+  base::DictValue ToValue() const override;
 };
 
 struct TestRuleTransform : public DictionarySource {
@@ -109,7 +114,7 @@ struct TestRuleTransform : public DictionarySource {
   std::optional<std::string> username;
   std::optional<std::string> password;
 
-  base::Value::Dict ToValue() const override;
+  base::DictValue ToValue() const override;
 };
 
 struct TestRuleRedirect : public DictionarySource {
@@ -123,7 +128,7 @@ struct TestRuleRedirect : public DictionarySource {
   std::optional<std::string> url;
   std::optional<std::string> regex_substitution;
 
-  base::Value::Dict ToValue() const override;
+  base::DictValue ToValue() const override;
 };
 
 struct TestHeaderInfo : public DictionarySource {
@@ -138,7 +143,7 @@ struct TestHeaderInfo : public DictionarySource {
   std::optional<std::string> operation;
   std::optional<std::string> value;
 
-  base::Value::Dict ToValue() const override;
+  base::DictValue ToValue() const override;
 };
 
 struct TestRuleAction : public DictionarySource {
@@ -152,7 +157,7 @@ struct TestRuleAction : public DictionarySource {
   std::optional<std::vector<TestHeaderInfo>> response_headers;
   std::optional<TestRuleRedirect> redirect;
 
-  base::Value::Dict ToValue() const override;
+  base::DictValue ToValue() const override;
 };
 
 struct TestRule : public DictionarySource {
@@ -166,7 +171,7 @@ struct TestRule : public DictionarySource {
   std::optional<TestRuleCondition> condition;
   std::optional<TestRuleAction> action;
 
-  base::Value::Dict ToValue() const override;
+  base::DictValue ToValue() const override;
 };
 
 // Helper function to build a generic TestRule.
@@ -199,16 +204,38 @@ enum ConfigFlag {
   // Whether the "declarativeNetRequestWithHostAccess" permission should be
   // included.
   kConfig_HasDelarativeNetRequestWithHostAccessPermission = 1 << 5,
+
+  // Whether the extension listens for the onUpdateAvailable event. This is
+  // needed for an extension with a background script to receive delayed
+  // updates.
+  kConfig_ListenForOnUpdateAvailable = 1 << 6,
+
+  // Whether the extension has an manifest sandbox page entry.
+  kConfig_HasManifestSandbox = 1 << 7,
+
+  // Whether the extension has a manifest action (popup) entry. This is needed
+  // to activate chrome.action API.
+  kConfig_HasAction = 1 << 8,
+
+  // Whether the "webRequest" permission should be included.
+  kConfig_HasWebRequestPermission = 1 << 9,
+
+  // Whether the "webRequestBlocking" permission should be included. Requires
+  // MV2 flag below.
+  kConfig_DEPRECATED_HasWebRequestBlockingPermission = 1 << 10,
+
+  // Whether to use deprecated Manifest Version 2.
+  kConfig_DEPRECATED_ManifestVersion2 = 1 << 11,
 };
 
 // Describes a single extension ruleset.
 struct TestRulesetInfo {
   TestRulesetInfo(const std::string& manifest_id_and_path,
-                  base::Value::List rules_value,
+                  base::ListValue rules_value,
                   bool enabled = true);
   TestRulesetInfo(const std::string& manifest_id,
                   const std::string& relative_file_path,
-                  base::Value::List rules_value,
+                  base::ListValue rules_value,
                   bool enabled = true);
   // Used to support the copy ctor, or to deliberately create `rules_value` of
   // the wrong type.
@@ -233,28 +260,28 @@ struct TestRulesetInfo {
 
   // Returns the corresponding value to be specified in the manifest for the
   // ruleset.
-  base::Value::Dict GetManifestValue() const;
+  base::DictValue GetManifestValue() const;
 };
 
 // Helper to build an extension manifest which uses the
-// kDeclarativeNetRequestKey manifest key. |hosts| specifies the host
-// permissions to grant. |flags| is a bitmask of ConfigFlag to configure the
-// extension. |ruleset_info| specifies the static rulesets for the extension.
-base::Value::Dict CreateManifest(
+// kDeclarativeNetRequestKey manifest key. `hosts` specifies the host
+// permissions to grant. `flags` is a bitmask of ConfigFlag to configure the
+// extension. `ruleset_info` specifies the static rulesets for the extension.
+base::DictValue CreateManifest(
     const std::vector<TestRulesetInfo>& ruleset_info,
     const std::vector<std::string>& hosts = {},
     unsigned flags = ConfigFlag::kConfig_None,
     const std::string& extension_name = "Test Extension");
 
-// Returns a base::Value::List corresponding to a vector of strings.
-base::Value::List ToListValue(const std::vector<std::string>& vec);
+// Returns a base::ListValue corresponding to a vector of strings.
+base::ListValue ToListValue(const std::vector<std::string>& vec);
 
-// Returns a base::Value::List corresponding to a vector of TestRules.
-base::Value::List ToListValue(const std::vector<TestRule>& rules);
+// Returns a base::ListValue corresponding to a vector of TestRules.
+base::ListValue ToListValue(const std::vector<TestRule>& rules);
 
-// Writes the rulesets specified in |ruleset_info| in the given |extension_dir|
-// together with the manifest file. |hosts| specifies the host permissions, the
-// extensions should have. |flags| is a bitmask of ConfigFlag to configure the
+// Writes the rulesets specified in `ruleset_info` in the given `extension_dir`
+// together with the manifest file. `hosts` specifies the host permissions, the
+// extensions should have. `flags` is a bitmask of ConfigFlag to configure the
 // extension.
 void WriteManifestAndRulesets(
     const base::FilePath& extension_dir,

@@ -17,6 +17,7 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
+#include "components/prefs/pref_service.h"
 #include "components/reporting/metrics/fakes/fake_reporting_settings.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -70,7 +71,7 @@ class WebsiteUsageObserverTest : public ::testing::Test {
   }
 
   void SetAllowlistedUrls(const std::vector<std::string>& allowlisted_urls) {
-    base::Value::List allowed_urls;
+    base::ListValue allowed_urls;
     for (const auto& url : allowlisted_urls) {
       allowed_urls.Append(url);
     }
@@ -80,7 +81,7 @@ class WebsiteUsageObserverTest : public ::testing::Test {
 
   void SetAllowlistedTelemetryTypes(
       const std::vector<std::string>& allowlisted_telemetry_types) {
-    base::Value::List allowed_telemetry_types;
+    base::ListValue allowed_telemetry_types;
     for (const auto& telemetry_type : allowlisted_telemetry_types) {
       allowed_telemetry_types.Append(telemetry_type);
     }

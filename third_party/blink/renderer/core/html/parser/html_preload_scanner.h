@@ -73,7 +73,7 @@ using MetaCHValues = Vector<MetaCHValue>;
 struct PendingPreloadData {
   MetaCHValues meta_ch_values;
   std::optional<ViewportDescription> viewport;
-  bool has_csp_meta_tag = false;
+  int csp_meta_tag_count = 0;
   bool has_located_potential_lcp_element = false;
   PreloadRequestStream requests;
 };
@@ -87,18 +87,21 @@ struct CORE_EXPORT CachedDocumentParameters {
  public:
   explicit CachedDocumentParameters(Document*);
   CachedDocumentParameters() = default;
+  static void SetLcppPreloadLazyLoadImageTypeForTesting(
+      std::optional<features::LcppPreloadLazyLoadImageType> type);
 
   bool do_html_preload_scanning;
   Length default_viewport_min_width;
   bool viewport_meta_zero_values_quirk;
   bool viewport_meta_enabled;
   network::mojom::ReferrerPolicy referrer_policy;
-  SubresourceIntegrity::IntegrityFeatures integrity_features;
   LocalFrame::LazyLoadImageSetting lazy_load_image_setting;
   // Work with the element locators. If the LCP candidate image is found and
   // that has a lazy loading indicator, ignore it and create preload request.
   // This will override |lazy_load_image_setting| behavior.
   features::LcppPreloadLazyLoadImageType preload_lazy_load_image_type;
+  static std::optional<features::LcppPreloadLazyLoadImageType>
+      preload_lazy_load_image_type_for_testing;
   HashSet<String> disabled_image_types;
 };
 
@@ -122,7 +125,7 @@ class TokenPreloadScanner {
             PreloadRequestStream& requests,
             MetaCHValues& meta_ch_values,
             std::optional<ViewportDescription>*,
-            bool* is_csp_meta_tag);
+            int* csp_meta_tag_counter);
 
   void SetPredictedBaseElementURL(const KURL& url) {
     predicted_base_element_url_ = url;
@@ -183,8 +186,7 @@ class TokenPreloadScanner {
   element_locator::TokenStreamMatcher lcp_element_matcher_;
 };
 
-class CORE_EXPORT HTMLPreloadScanner
-    : public base::SupportsWeakPtr<HTMLPreloadScanner> {
+class CORE_EXPORT HTMLPreloadScanner final {
   USING_FAST_MALLOC(HTMLPreloadScanner);
 
  public:
@@ -194,8 +196,8 @@ class CORE_EXPORT HTMLPreloadScanner
       HTMLParserOptions options,
       TokenPreloadScanner::ScannerType scanner_type);
 
-  using TakePreloadFn = WTF::CrossThreadRepeatingFunction<void(
-      std::unique_ptr<PendingPreloadData>)>;
+  using TakePreloadFn =
+      CrossThreadRepeatingFunction<void(std::unique_ptr<PendingPreloadData>)>;
 
   // Creates a HTMLPreloadScanner which will be bound to |task_runner|.
   struct Deleter {
@@ -234,6 +236,10 @@ class CORE_EXPORT HTMLPreloadScanner
   void ScanInBackground(const String& source,
                         const KURL& document_base_element_url);
 
+  base::WeakPtr<HTMLPreloadScanner> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  private:
   TokenPreloadScanner scanner_;
   SegmentedString source_;
@@ -241,6 +247,7 @@ class CORE_EXPORT HTMLPreloadScanner
   std::unique_ptr<BackgroundHTMLScanner::ScriptTokenScanner>
       script_token_scanner_;
   TakePreloadFn take_preload_;
+  base::WeakPtrFactory<HTMLPreloadScanner> weak_ptr_factory_{this};
 };
 
 }  // namespace blink

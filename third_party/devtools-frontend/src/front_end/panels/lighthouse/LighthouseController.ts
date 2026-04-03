@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,103 +11,91 @@ import * as Protocol from '../../generated/protocol.js';
 import * as EmulationModel from '../../models/emulation/emulation.js';
 import * as Emulation from '../emulation/emulation.js';
 
-import {type LighthouseRun, type ProtocolService} from './LighthouseProtocolService.js';
-import {type RunnerResult} from './LighthouseReporterTypes.js';
+import type {LighthouseRun as LighthouseRunType, ProtocolService} from './LighthouseProtocolService.js';
+import type {RunnerResult} from './LighthouseReporterTypes.js';
 
 const UIStrings = {
   /**
-   *@description Explanation for user that Ligthhouse can only audit HTTP/HTTPS pages
+   * @description Explanation for user that Ligthhouse can only audit HTTP/HTTPS pages
    */
   canOnlyAuditHttphttpsPages: 'Can only audit pages on HTTP or HTTPS. Navigate to a different page.',
   /**
-   *@description Text when stored data in one location may affect Lighthouse run
-   *@example {IndexedDB} PH1
+   * @description Text when stored data in one location may affect Lighthouse run
+   * @example {IndexedDB} PH1
    */
   thereMayBeStoredDataAffectingSingular:
       'There may be stored data affecting loading performance in this location: {PH1}. Audit this page in an incognito window to prevent those resources from affecting your scores.',
   /**
-   *@description Text when stored data in multiple locations may affect Lighthouse run
-   *@example {IndexedDB, WebSQL} PH1
+   * @description Text when stored data in multiple locations may affect Lighthouse run
+   * @example {IndexedDB, WebSQL} PH1
    */
   thereMayBeStoredDataAffectingLoadingPlural:
       'There may be stored data affecting loading performance in these locations: {PH1}. Audit this page in an incognito window to prevent those resources from affecting your scores.',
   /**
-   *@description Help text in Lighthouse Controller
+   * @description Help text in Lighthouse Controller
    */
   multipleTabsAreBeingControlledBy:
       'Multiple tabs are being controlled by the same `service worker`. Close your other tabs on the same origin to audit this page.',
   /**
-   *@description Help text in Lighthouse Controller
+   * @description Help text in Lighthouse Controller
    */
   atLeastOneCategoryMustBeSelected: 'At least one category must be selected.',
   /**
-   *@description Text in Application Panel Sidebar of the Application panel
+   * @description Text in Application Panel Sidebar of the Application panel
    */
   localStorage: 'Local storage',
   /**
-   *@description Text in Application Panel Sidebar of the Application panel
+   * @description Text in Application Panel Sidebar of the Application panel
    */
   indexeddb: 'IndexedDB',
   /**
-   *@description Text in Application Panel Sidebar of the Application panel
+   * @description Text in Application Panel Sidebar of the Application panel
    */
   webSql: 'Web SQL',
   /**
-   *@description Text of checkbox to include running the performance audits in Lighthouse
+   * @description Text of checkbox to include running the performance audits in Lighthouse
    */
   performance: 'Performance',
   /**
-   *@description Tooltip text of checkbox to include running the performance audits in Lighthouse
+   * @description Tooltip text of checkbox to include running the performance audits in Lighthouse
    */
   howLongDoesThisAppTakeToShow: 'How long does this app take to show content and become usable',
   /**
-   *@description Text of checkbox to include running the Progressive Web App audits in Lighthouse
-   */
-  progressiveWebApp: 'Progressive Web App',
-  /**
-   *@description Tooltip text of checkbox to include running the Progressive Web App audits in Lighthouse
-   */
-  doesThisPageMeetTheStandardOfA: 'Does this page meet the standard of a Progressive Web App',
-  /**
-   *@description Text of checkbox to include running the Best Practices audits in Lighthouse
+   * @description Text of checkbox to include running the Best Practices audits in Lighthouse
    */
   bestPractices: 'Best practices',
   /**
-   *@description Tooltip text of checkbox to include running the Best Practices audits in Lighthouse
+   * @description Tooltip text of checkbox to include running the Best Practices audits in Lighthouse
    */
   doesThisPageFollowBestPractices: 'Does this page follow best practices for modern web development',
   /**
-   *@description Text of checkbox to include running the Accessibility audits in Lighthouse
+   * @description Text of checkbox to include running the Accessibility audits in Lighthouse
    */
   accessibility: 'Accessibility',
   /**
-   *@description Tooltip text of checkbox to include running the Accessibility audits in Lighthouse
+   * @description Tooltip text of checkbox to include running the Accessibility audits in Lighthouse
    */
   isThisPageUsableByPeopleWith: 'Is this page usable by people with disabilities or impairments',
   /**
-   *@description Text of checkbox to include running the Search Engine Optimization audits in Lighthouse
+   * @description Text of checkbox to include running the Search Engine Optimization audits in Lighthouse
    */
   seo: 'SEO',
   /**
-   *@description Tooltip text of checkbox to include running the Search Engine Optimization audits in Lighthouse
+   * @description Tooltip text of checkbox to include running the Search Engine Optimization audits in Lighthouse
    */
   isThisPageOptimizedForSearch: 'Is this page optimized for search engine results ranking',
   /**
-   *@description Text of checkbox to include running the Ad speed and quality audits in Lighthouse
-   */
-  publisherAds: 'Publisher Ads',
-  /**
-   *@description Tooltip text of checkbox to include running the Ad speed and quality audits in Lighthouse
-   */
-  isThisPageOptimizedForAdSpeedAnd: 'Is this page optimized for ad speed and quality',
-  /**
-   *@description ARIA label for a radio button input to emulate mobile device behavior when running audits in Lighthouse.
+   * @description ARIA label for a radio button input to emulate mobile device behavior when running audits in Lighthouse.
    */
   applyMobileEmulation: 'Apply mobile emulation',
   /**
-   *@description Tooltip text of checkbox to emulate mobile device behavior when running audits in Lighthouse
+   * @description Tooltip text of checkbox to emulate mobile device behavior when running audits in Lighthouse
    */
   applyMobileEmulationDuring: 'Apply mobile emulation during auditing',
+  /**
+   * @description Tooltip text of checkbox to emulate desktop device behavior when running audits in Lighthouse
+   */
+  applyDesktopEmulationDuring: 'Apply desktop emulation during auditing',
   /**
    * @description ARIA label for a radio button input to select the Lighthouse mode.
    */
@@ -141,11 +129,11 @@ const UIStrings = {
    */
   snapshotTooltip: 'Snapshot mode analyzes the page in a particular state, typically after user interactions.',
   /**
-   *@description Text for the mobile platform, as opposed to desktop
+   * @description Text for the mobile platform, as opposed to desktop
    */
   mobile: 'Mobile',
   /**
-   *@description Text for the desktop platform, as opposed to mobile
+   * @description Text for the desktop platform, as opposed to mobile
    */
   desktop: 'Desktop',
   /**
@@ -166,7 +154,7 @@ const UIStrings = {
   simulateASlowerPageLoadBasedOn:
       'Simulated throttling simulates a slower page load based on data from an initial unthrottled load. DevTools throttling actually slows down the page.',
   /**
-   *@description Text of checkbox to reset storage features prior to running audits in Lighthouse
+   * @description Text of checkbox to reset storage features prior to running audits in Lighthouse
    */
   clearStorage: 'Clear storage',
   /**
@@ -176,22 +164,33 @@ const UIStrings = {
   resetStorageLocalstorage:
       'Reset storage (`cache`, `service workers`, etc) before auditing. (Good for performance & `PWA` testing)',
   /**
-   *@description Explanation for user that Ligthhouse can only audit when JavaScript is enabled
+   * @description Text of checkbox to enable JavaScript sampling while running audits in Lighthouse
+   */
+  enableSampling: 'Enable JS sampling',
+  /**
+   * @description Tooltip text of checkbox to enable JavaScript sampling while running audits in
+   * Lighthouse. Resetting the storage clears/empties it to a neutral state.
+   */
+  enableJavaScriptSampling:
+      'Enable JavaScript sampling during the Lighthouse run. This will provide more execution details in the performance panel when you view the trace, but has higher CPU overhead and may impact the performance of the page.',
+  /**
+   * @description Explanation for user that Lighthouse can only audit when JavaScript is enabled
    */
   javaScriptDisabled:
       'JavaScript is disabled. You need to enable JavaScript to audit this page. Open the Command Menu and run the Enable JavaScript command to enable JavaScript.',
-};
+} as const;
 const str_ = i18n.i18n.registerUIStrings('panels/lighthouse/LighthouseController.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 const i18nLazyString = i18n.i18n.getLazilyComputedLocalizedString.bind(undefined, str_);
 
-export class LighthouseController extends Common.ObjectWrapper.ObjectWrapper<EventTypes> implements
-    SDK.TargetManager.SDKModelObserver<SDK.ServiceWorkerManager.ServiceWorkerManager> {
-  private readonly protocolService: ProtocolService;
-  private manager?: SDK.ServiceWorkerManager.ServiceWorkerManager|null;
-  private serviceWorkerListeners?: Common.EventTarget.EventDescriptor[];
-  private inspectedURL?: Platform.DevToolsPath.UrlString;
-  private currentLighthouseRun?: LighthouseRun;
+class LighthouseRun {
+  readonly controller: LighthouseController;
+  readonly inspectedURL: Platform.DevToolsPath.UrlString;
+  readonly categoryIDs: string[];
+  readonly flags: {
+    formFactor: (string|undefined),
+    mode: string,
+  };
   private emulationStateBefore?: {
     emulation: {
       type: EmulationModel.DeviceModeModel.Type,
@@ -204,6 +203,164 @@ export class LighthouseController extends Common.ObjectWrapper.ObjectWrapper<Eve
     },
     network: {conditions: SDK.NetworkManager.Conditions},
   };
+  private readonly protocolService: ProtocolService;
+  #isRunning: boolean;
+  #cancelPromise: Promise<void>|null = null;
+
+  constructor(
+      controller: LighthouseController, protocolService: ProtocolService, inspectedURL: Platform.DevToolsPath.UrlString,
+      categoryIDs: string[], flags: {formFactor: (string|undefined), mode: string}) {
+    this.controller = controller;
+    this.protocolService = protocolService;
+    this.inspectedURL = inspectedURL;
+    this.categoryIDs = categoryIDs;
+    this.flags = flags;
+    this.#isRunning = false;
+  }
+
+  isRunning(): boolean {
+    return this.#isRunning;
+  }
+
+  async start(): Promise<void> {
+    this.#isRunning = true;
+    try {
+      await this.setupEmulationAndProtocolConnection();
+      if (this.flags.mode === 'timespan') {
+        await this.protocolService.startTimespan(
+            {inspectedURL: this.inspectedURL, categoryIDs: this.categoryIDs, flags: this.flags});
+      }
+    } catch (err) {
+      await this.cancel();
+      throw err;
+    }
+  }
+
+  async collect(): Promise<RunnerResult> {
+    try {
+      const lighthouseResponse = await this.protocolService.collectLighthouseResults(
+          {inspectedURL: this.inspectedURL, categoryIDs: this.categoryIDs, flags: this.flags});
+      if (!lighthouseResponse) {
+        throw new Error('No Lighthouse response');
+      }
+
+      if (lighthouseResponse.fatal) {
+        const error = new Error(lighthouseResponse.message);
+        error.stack = lighthouseResponse.stack;
+        throw error;
+      }
+      return lighthouseResponse;
+    } finally {
+      await this.cancel();
+    }
+  }
+
+  async cancel(): Promise<void> {
+    if (!this.#cancelPromise) {
+      this.#isRunning = false;
+      this.#cancelPromise = this.restoreEmulationAndProtocolConnection();
+    }
+
+    return await this.#cancelPromise;
+  }
+
+  /**
+   * We set the device emulation on the DevTools-side for two reasons:
+   * 1. To workaround some odd device metrics emulation bugs like occuluding viewports
+   * 2. To get the attractive device outline
+   */
+  private async setupEmulationAndProtocolConnection(): Promise<void> {
+    const emulationModel = EmulationModel.DeviceModeModel.DeviceModeModel.instance();
+    this.emulationStateBefore = {
+      emulation: {
+        type: emulationModel.type(),
+        enabled: emulationModel.enabledSetting().get(),
+        outlineEnabled: emulationModel.deviceOutlineSetting().get(),
+        toolbarControlsEnabled: emulationModel.toolbarControlsEnabledSetting().get(),
+        scale: emulationModel.scaleSetting().get(),
+        device: emulationModel.device(),
+        mode: emulationModel.mode(),
+      },
+      network: {conditions: SDK.NetworkManager.MultitargetNetworkManager.instance().networkConditions()},
+    };
+
+    emulationModel.toolbarControlsEnabledSetting().set(false);
+    if ('formFactor' in this.flags && this.flags.formFactor === 'desktop') {
+      emulationModel.enabledSetting().set(false);
+      emulationModel.emulate(EmulationModel.DeviceModeModel.Type.None, null, null);
+    } else if (this.flags.formFactor === 'mobile') {
+      emulationModel.enabledSetting().set(true);
+      emulationModel.deviceOutlineSetting().set(true);
+
+      for (const device of EmulationModel.EmulatedDevices.EmulatedDevicesList.instance().standard()) {
+        if (device.title === 'Moto G Power') {
+          emulationModel.emulate(EmulationModel.DeviceModeModel.Type.Device, device, device.modes[0], 1);
+        }
+      }
+    }
+
+    await this.protocolService.attach();
+  }
+
+  private async restoreEmulationAndProtocolConnection(): Promise<void> {
+    await this.protocolService.detach();
+
+    if (this.emulationStateBefore) {
+      const emulationModel = EmulationModel.DeviceModeModel.DeviceModeModel.instance();
+
+      // Detaching a session after overriding device metrics will prevent other sessions from overriding device metrics in the future.
+      // A workaround is to call "Emulation.clearDeviceMetricOverride" which is the result of the next line.
+      // https://bugs.chromium.org/p/chromium/issues/detail?id=1337089
+      emulationModel.emulate(EmulationModel.DeviceModeModel.Type.None, null, null);
+
+      const {type, enabled, outlineEnabled, toolbarControlsEnabled, scale, device, mode} =
+          this.emulationStateBefore.emulation;
+      emulationModel.enabledSetting().set(enabled);
+      emulationModel.deviceOutlineSetting().set(outlineEnabled);
+      emulationModel.toolbarControlsEnabledSetting().set(toolbarControlsEnabled);
+
+      // `emulate` will ignore the `scale` parameter for responsive emulation.
+      // In this case we can just set it here.
+      if (type === EmulationModel.DeviceModeModel.Type.Responsive) {
+        emulationModel.scaleSetting().set(scale);
+      }
+
+      emulationModel.emulate(type, device, mode, scale);
+
+      SDK.NetworkManager.MultitargetNetworkManager.instance().setNetworkConditions(
+          this.emulationStateBefore.network.conditions);
+      delete this.emulationStateBefore;
+    }
+
+    Emulation.InspectedPagePlaceholder.InspectedPagePlaceholder.instance().update(true);
+
+    const mainTarget = SDK.TargetManager.TargetManager.instance().primaryPageTarget();
+    if (!mainTarget) {
+      return;
+    }
+    const resourceTreeModel = mainTarget.model(SDK.ResourceTreeModel.ResourceTreeModel);
+    if (!resourceTreeModel) {
+      return;
+    }
+
+    // Reload to reset page state after a navigation.
+    // We want to retain page state for timespan and snapshot modes.
+    const mode = this.flags.mode;
+    if (mode === 'navigation') {
+      const inspectedURL = await this.controller.getInspectedURL();
+      await resourceTreeModel.navigate(inspectedURL);
+    }
+  }
+}
+
+export class LighthouseController extends Common.ObjectWrapper.ObjectWrapper<EventTypes> implements
+    SDK.TargetManager.SDKModelObserver<SDK.ServiceWorkerManager.ServiceWorkerManager> {
+  private readonly protocolService: ProtocolService;
+  private manager?: SDK.ServiceWorkerManager.ServiceWorkerManager|null;
+  private serviceWorkerListeners?: Common.EventTarget.EventDescriptor[];
+  private inspectedURL?: Platform.DevToolsPath.UrlString;
+  private currentLighthouseRun?: LighthouseRun;
+  private lastAction: Promise<void>|null = null;
 
   constructor(protocolService: ProtocolService) {
     super();
@@ -225,7 +382,7 @@ export class LighthouseController extends Common.ObjectWrapper.ObjectWrapper<Eve
 
     SDK.TargetManager.TargetManager.instance().observeModels(SDK.ServiceWorkerManager.ServiceWorkerManager, this);
     SDK.TargetManager.TargetManager.instance().addEventListener(
-        SDK.TargetManager.Events.InspectedURLChanged, this.recomputePageAuditability, this);
+        SDK.TargetManager.Events.INSPECTED_URL_CHANGED, this.recomputePageAuditability, this);
   }
 
   modelAdded(serviceWorkerManager: SDK.ServiceWorkerManager.ServiceWorkerManager): void {
@@ -236,9 +393,9 @@ export class LighthouseController extends Common.ObjectWrapper.ObjectWrapper<Eve
     this.manager = serviceWorkerManager;
     this.serviceWorkerListeners = [
       this.manager.addEventListener(
-          SDK.ServiceWorkerManager.Events.RegistrationUpdated, this.recomputePageAuditability, this),
+          SDK.ServiceWorkerManager.Events.REGISTRATION_UPDATED, this.recomputePageAuditability, this),
       this.manager.addEventListener(
-          SDK.ServiceWorkerManager.Events.RegistrationDeleted, this.recomputePageAuditability, this),
+          SDK.ServiceWorkerManager.Events.REGISTRATION_DELETED, this.recomputePageAuditability, this),
     ];
 
     this.recomputePageAuditability();
@@ -266,7 +423,7 @@ export class LighthouseController extends Common.ObjectWrapper.ObjectWrapper<Eve
     }
 
     const inspectedURL = Common.ParsedURL.ParsedURL.fromString(mainTarget.inspectedURL());
-    const inspectedOrigin = inspectedURL && inspectedURL.securityOrigin();
+    const inspectedOrigin = inspectedURL?.securityOrigin();
     for (const registration of this.manager.registrations().values()) {
       if (registration.securityOrigin !== inspectedOrigin) {
         continue;
@@ -287,12 +444,12 @@ export class LighthouseController extends Common.ObjectWrapper.ObjectWrapper<Eve
   }
 
   private unauditablePageMessage(): string|null {
-    if (!this.manager) {
+    if (!this.manager || this.getFlags().mode !== 'navigation') {
       return null;
     }
 
     const mainTarget = this.manager.target();
-    const inspectedURL = mainTarget && mainTarget.inspectedURL();
+    const inspectedURL = mainTarget?.inspectedURL();
     /*
      * The full history of Lighthouse panel + extensions et al:
      *
@@ -321,7 +478,7 @@ export class LighthouseController extends Common.ObjectWrapper.ObjectWrapper<Eve
       if (isPdf) {
         return i18nString(UIStrings.canOnlyAuditHttphttpsPages);
       }
-    } catch (e) {
+    } catch {
       return i18nString(UIStrings.canOnlyAuditHttphttpsPages);
     }
 
@@ -384,8 +541,16 @@ export class LighthouseController extends Common.ObjectWrapper.ObjectWrapper<Eve
     return navigationEntry.url as Platform.DevToolsPath.UrlString;
   }
 
-  getCurrentRun(): LighthouseRun|undefined {
-    return this.currentLighthouseRun;
+  getCurrentRun(): LighthouseRunType|undefined {
+    if (!this.currentLighthouseRun?.isRunning()) {
+      return;
+    }
+
+    return {
+      inspectedURL: this.currentLighthouseRun.inspectedURL,
+      categoryIDs: this.currentLighthouseRun.categoryIDs,
+      flags: this.currentLighthouseRun.flags,
+    };
   }
 
   getFlags(): {
@@ -403,8 +568,13 @@ export class LighthouseController extends Common.ObjectWrapper.ObjectWrapper<Eve
   }
 
   getCategoryIDs(): string[] {
+    const {mode} = this.getFlags();
     const categoryIDs = [];
     for (const preset of Presets) {
+      if (mode && !preset.supportedModes.includes(mode)) {
+        continue;
+      }
+
       if (preset.setting.get()) {
         categoryIDs.push(preset.configID);
       }
@@ -413,7 +583,7 @@ export class LighthouseController extends Common.ObjectWrapper.ObjectWrapper<Eve
   }
 
   async getInspectedURL(options?: {force: boolean}): Promise<Platform.DevToolsPath.UrlString> {
-    if (options && options.force || !this.inspectedURL) {
+    if (options?.force || !this.inspectedURL) {
       this.inspectedURL = await this.evaluateInspectedURL();
     }
     return this.inspectedURL;
@@ -458,164 +628,65 @@ export class LighthouseController extends Common.ObjectWrapper.ObjectWrapper<Eve
 
     switch (flags.mode) {
       case 'navigation':
-        Host.userMetrics.lighthouseModeRun(Host.UserMetrics.LighthouseModeRun.Navigation);
+        Host.userMetrics.lighthouseModeRun(Host.UserMetrics.LighthouseModeRun.NAVIGATION);
         break;
       case 'timespan':
-        Host.userMetrics.lighthouseModeRun(Host.UserMetrics.LighthouseModeRun.Timespan);
+        Host.userMetrics.lighthouseModeRun(Host.UserMetrics.LighthouseModeRun.TIMESPAN);
         break;
       case 'snapshot':
-        Host.userMetrics.lighthouseModeRun(Host.UserMetrics.LighthouseModeRun.Snapshot);
+        Host.userMetrics.lighthouseModeRun(Host.UserMetrics.LighthouseModeRun.SNAPSHOT);
         break;
     }
   }
 
   async startLighthouse(): Promise<void> {
-    try {
+    if (this.lastAction) {
+      await this.lastAction;
+    }
+
+    this.lastAction = new Promise(async resolve => {
+      if (this.currentLighthouseRun) {
+        await this.currentLighthouseRun.cancel();
+        this.currentLighthouseRun = undefined;
+      }
+
       const inspectedURL = await this.getInspectedURL({force: true});
       const categoryIDs = this.getCategoryIDs();
       const flags = this.getFlags();
 
       this.recordMetrics(flags, categoryIDs);
 
-      this.currentLighthouseRun = {inspectedURL, categoryIDs, flags};
-
-      await this.setupEmulationAndProtocolConnection();
-
-      if (flags.mode === 'timespan') {
-        await this.protocolService.startTimespan(this.currentLighthouseRun);
-      }
-    } catch (err) {
-      await this.restoreEmulationAndProtocolConnection();
-      throw err;
-    }
+      this.currentLighthouseRun = new LighthouseRun(this, this.protocolService, inspectedURL, categoryIDs, flags);
+      await this.currentLighthouseRun.start();
+      resolve();
+    });
+    return await this.lastAction;
   }
 
   async collectLighthouseResults(): Promise<RunnerResult> {
-    try {
-      if (!this.currentLighthouseRun) {
-        throw new Error('Lighthouse is not started');
-      }
-
-      const lighthouseResponse = await this.protocolService.collectLighthouseResults(this.currentLighthouseRun);
-      if (!lighthouseResponse) {
-        throw new Error('Auditing failed to produce a result');
-      }
-
-      if (lighthouseResponse.fatal) {
-        const error = new Error(lighthouseResponse.message);
-        error.stack = lighthouseResponse.stack;
-        throw error;
-      }
-
-      Host.userMetrics.actionTaken(Host.UserMetrics.Action.LighthouseFinished);
-
-      await this.restoreEmulationAndProtocolConnection();
-      return lighthouseResponse;
-    } catch (err) {
-      await this.restoreEmulationAndProtocolConnection();
-      throw err;
-    } finally {
-      this.currentLighthouseRun = undefined;
+    if (!this.currentLighthouseRun) {
+      throw new Error('Lighthouse is not started');
     }
+
+    const lighthouseResponse = await this.currentLighthouseRun.collect();
+    Host.userMetrics.actionTaken(Host.UserMetrics.Action.LighthouseFinished);
+    this.currentLighthouseRun = undefined;
+    return lighthouseResponse;
   }
 
   async cancelLighthouse(): Promise<void> {
-    await this.restoreEmulationAndProtocolConnection();
-    this.currentLighthouseRun = undefined;
-  }
+    if (this.lastAction) {
+      await this.lastAction;
+    }
 
-  /**
-   * We set the device emulation on the DevTools-side for two reasons:
-   * 1. To workaround some odd device metrics emulation bugs like occuluding viewports
-   * 2. To get the attractive device outline
-   */
-  private async setupEmulationAndProtocolConnection(): Promise<void> {
-    const flags = this.getFlags();
-
-    const emulationModel = EmulationModel.DeviceModeModel.DeviceModeModel.instance();
-    this.emulationStateBefore = {
-      emulation: {
-        type: emulationModel.type(),
-        enabled: emulationModel.enabledSetting().get(),
-        outlineEnabled: emulationModel.deviceOutlineSetting().get(),
-        toolbarControlsEnabled: emulationModel.toolbarControlsEnabledSetting().get(),
-        scale: emulationModel.scaleSetting().get(),
-        device: emulationModel.device(),
-        mode: emulationModel.mode(),
-      },
-      network: {conditions: SDK.NetworkManager.MultitargetNetworkManager.instance().networkConditions()},
-    };
-
-    emulationModel.toolbarControlsEnabledSetting().set(false);
-    if ('formFactor' in flags && flags.formFactor === 'desktop') {
-      emulationModel.enabledSetting().set(false);
-      emulationModel.emulate(EmulationModel.DeviceModeModel.Type.None, null, null);
-    } else if (flags.formFactor === 'mobile') {
-      emulationModel.enabledSetting().set(true);
-      emulationModel.deviceOutlineSetting().set(true);
-
-      for (const device of EmulationModel.EmulatedDevices.EmulatedDevicesList.instance().standard()) {
-        if (device.title === 'Moto G Power') {
-          emulationModel.emulate(EmulationModel.DeviceModeModel.Type.Device, device, device.modes[0], 1);
-        }
+    this.lastAction = new Promise(async resolve => {
+      if (this.currentLighthouseRun) {
+        await this.currentLighthouseRun.cancel();
+        this.currentLighthouseRun = undefined;
       }
-    }
-
-    await this.protocolService.attach();
-  }
-
-  private async restoreEmulationAndProtocolConnection(): Promise<void> {
-    if (!this.currentLighthouseRun) {
-      return;
-    }
-
-    await this.protocolService.detach();
-
-    if (this.emulationStateBefore) {
-      const emulationModel = EmulationModel.DeviceModeModel.DeviceModeModel.instance();
-
-      // Detaching a session after overriding device metrics will prevent other sessions from overriding device metrics in the future.
-      // A workaround is to call "Emulation.clearDeviceMetricOverride" which is the result of the next line.
-      // https://bugs.chromium.org/p/chromium/issues/detail?id=1337089
-      emulationModel.emulate(EmulationModel.DeviceModeModel.Type.None, null, null);
-
-      const {type, enabled, outlineEnabled, toolbarControlsEnabled, scale, device, mode} =
-          this.emulationStateBefore.emulation;
-      emulationModel.enabledSetting().set(enabled);
-      emulationModel.deviceOutlineSetting().set(outlineEnabled);
-      emulationModel.toolbarControlsEnabledSetting().set(toolbarControlsEnabled);
-
-      // `emulate` will ignore the `scale` parameter for responsive emulation.
-      // In this case we can just set it here.
-      if (type === EmulationModel.DeviceModeModel.Type.Responsive) {
-        emulationModel.scaleSetting().set(scale);
-      }
-
-      emulationModel.emulate(type, device, mode, scale);
-
-      SDK.NetworkManager.MultitargetNetworkManager.instance().setNetworkConditions(
-          this.emulationStateBefore.network.conditions);
-      delete this.emulationStateBefore;
-    }
-
-    Emulation.InspectedPagePlaceholder.InspectedPagePlaceholder.instance().update(true);
-
-    const mainTarget = SDK.TargetManager.TargetManager.instance().primaryPageTarget();
-    if (!mainTarget) {
-      return;
-    }
-    const resourceTreeModel = mainTarget.model(SDK.ResourceTreeModel.ResourceTreeModel);
-    if (!resourceTreeModel) {
-      return;
-    }
-
-    // Reload to reset page state after a navigation.
-    // We want to retain page state for timespan and snapshot modes.
-    const mode = this.currentLighthouseRun.flags.mode;
-    if (mode === 'navigation') {
-      const inspectedURL = await this.getInspectedURL();
-      await resourceTreeModel.navigate(inspectedURL);
-    }
+      resolve();
+    });
+    return await this.lastAction;
   }
 }
 
@@ -629,74 +700,48 @@ export const Presets: Preset[] = [
   // configID maps to Lighthouse's Object.keys(config.categories)[0] value
   {
     setting: Common.Settings.Settings.instance().createSetting(
-        'lighthouse.cat-perf', true, Common.Settings.SettingStorageType.Synced),
+        'lighthouse.cat-perf', true, Common.Settings.SettingStorageType.SYNCED),
     configID: 'performance',
     title: i18nLazyString(UIStrings.performance),
     description: i18nLazyString(UIStrings.howLongDoesThisAppTakeToShow),
-    plugin: false,
     supportedModes: ['navigation', 'timespan', 'snapshot'],
-    userMetric: Host.UserMetrics.LighthouseCategoryUsed.Performance,
+    userMetric: Host.UserMetrics.LighthouseCategoryUsed.PERFORMANCE,
   },
   {
     setting: Common.Settings.Settings.instance().createSetting(
-        'lighthouse.cat-a11y', true, Common.Settings.SettingStorageType.Synced),
+        'lighthouse.cat-a11y', true, Common.Settings.SettingStorageType.SYNCED),
     configID: 'accessibility',
     title: i18nLazyString(UIStrings.accessibility),
     description: i18nLazyString(UIStrings.isThisPageUsableByPeopleWith),
-    plugin: false,
     supportedModes: ['navigation', 'snapshot'],
-    userMetric: Host.UserMetrics.LighthouseCategoryUsed.Accessibility,
+    userMetric: Host.UserMetrics.LighthouseCategoryUsed.ACCESSIBILITY,
   },
   {
     setting: Common.Settings.Settings.instance().createSetting(
-        'lighthouse.cat-best-practices', true, Common.Settings.SettingStorageType.Synced),
+        'lighthouse.cat-best-practices', true, Common.Settings.SettingStorageType.SYNCED),
     configID: 'best-practices',
     title: i18nLazyString(UIStrings.bestPractices),
     description: i18nLazyString(UIStrings.doesThisPageFollowBestPractices),
-    plugin: false,
     supportedModes: ['navigation', 'timespan', 'snapshot'],
-    userMetric: Host.UserMetrics.LighthouseCategoryUsed.BestPractices,
+    userMetric: Host.UserMetrics.LighthouseCategoryUsed.BEST_PRACTICES,
   },
   {
     setting: Common.Settings.Settings.instance().createSetting(
-        'lighthouse.cat-seo', true, Common.Settings.SettingStorageType.Synced),
+        'lighthouse.cat-seo', true, Common.Settings.SettingStorageType.SYNCED),
     configID: 'seo',
     title: i18nLazyString(UIStrings.seo),
     description: i18nLazyString(UIStrings.isThisPageOptimizedForSearch),
-    plugin: false,
     supportedModes: ['navigation', 'snapshot'],
     userMetric: Host.UserMetrics.LighthouseCategoryUsed.SEO,
   },
-  {
-    setting: Common.Settings.Settings.instance().createSetting(
-        'lighthouse.cat-pwa', true, Common.Settings.SettingStorageType.Synced),
-    configID: 'pwa',
-    title: i18nLazyString(UIStrings.progressiveWebApp),
-    description: i18nLazyString(UIStrings.doesThisPageMeetTheStandardOfA),
-    plugin: false,
-    supportedModes: ['navigation'],
-    userMetric: Host.UserMetrics.LighthouseCategoryUsed.PWA,
-  },
-  {
-    setting: Common.Settings.Settings.instance().createSetting(
-        'lighthouse.cat-pubads', false, Common.Settings.SettingStorageType.Synced),
-    plugin: true,
-    configID: 'lighthouse-plugin-publisher-ads',
-    title: i18nLazyString(UIStrings.publisherAds),
-    description: i18nLazyString(UIStrings.isThisPageOptimizedForAdSpeedAnd),
-    supportedModes: ['navigation'],
-    userMetric: Host.UserMetrics.LighthouseCategoryUsed.PubAds,
-  },
 ];
 
-export type Flags = {
-  [flag: string]: string|boolean,
-};
+export type Flags = Record<string, string|boolean>;
 
 export const RuntimeSettings: RuntimeSetting[] = [
   {
     setting: Common.Settings.Settings.instance().createSetting(
-        'lighthouse.device-type', 'mobile', Common.Settings.SettingStorageType.Synced),
+        'lighthouse.device-type', 'mobile', Common.Settings.SettingStorageType.SYNCED),
     title: i18nLazyString(UIStrings.applyMobileEmulation),
     description: i18nLazyString(UIStrings.applyMobileEmulationDuring),
     setFlags: (flags: Flags, value: string|boolean) => {
@@ -704,14 +749,22 @@ export const RuntimeSettings: RuntimeSetting[] = [
       flags.formFactor = value;
     },
     options: [
-      {label: i18nLazyString(UIStrings.mobile), value: 'mobile'},
-      {label: i18nLazyString(UIStrings.desktop), value: 'desktop'},
+      {
+        label: i18nLazyString(UIStrings.mobile),
+        tooltip: i18nLazyString(UIStrings.applyMobileEmulationDuring),
+        value: 'mobile'
+      },
+      {
+        label: i18nLazyString(UIStrings.desktop),
+        tooltip: i18nLazyString(UIStrings.applyDesktopEmulationDuring),
+        value: 'desktop'
+      },
     ],
     learnMore: undefined,
   },
   {
     setting: Common.Settings.Settings.instance().createSetting(
-        'lighthouse.mode', 'navigation', Common.Settings.SettingStorageType.Synced),
+        'lighthouse.mode', 'navigation', Common.Settings.SettingStorageType.SYNCED),
     title: i18nLazyString(UIStrings.lighthouseMode),
     description: i18nLazyString(UIStrings.runLighthouseInMode),
     setFlags: (flags: Flags, value: string|boolean) => {
@@ -740,7 +793,7 @@ export const RuntimeSettings: RuntimeSetting[] = [
   {
     // This setting is disabled, but we keep it around to show in the UI.
     setting: Common.Settings.Settings.instance().createSetting(
-        'lighthouse.throttling', 'simulate', Common.Settings.SettingStorageType.Synced),
+        'lighthouse.throttling', 'simulate', Common.Settings.SettingStorageType.SYNCED),
     title: i18nLazyString(UIStrings.throttlingMethod),
     // We will disable this when we have a Lantern trace viewer within DevTools.
     learnMore:
@@ -761,7 +814,7 @@ export const RuntimeSettings: RuntimeSetting[] = [
   },
   {
     setting: Common.Settings.Settings.instance().createSetting(
-        'lighthouse.clear-storage', true, Common.Settings.SettingStorageType.Synced),
+        'lighthouse.clear-storage', true, Common.Settings.SettingStorageType.SYNCED),
     title: i18nLazyString(UIStrings.clearStorage),
     description: i18nLazyString(UIStrings.resetStorageLocalstorage),
     setFlags: (flags: Flags, value: string|boolean) => {
@@ -770,12 +823,29 @@ export const RuntimeSettings: RuntimeSetting[] = [
     options: undefined,
     learnMore: undefined,
   },
+  {
+    setting: Common.Settings.Settings.instance().createSetting(
+        'lighthouse.enable-sampling', false, Common.Settings.SettingStorageType.SYNCED),
+    title: i18nLazyString(UIStrings.enableSampling),
+    description: i18nLazyString(UIStrings.enableJavaScriptSampling),
+    setFlags: (flags: Flags, value: string|boolean) => {
+      if (value) {
+        flags.additionalTraceCategories = 'disabled-by-default-v8.cpu_profiler';
+      } else {
+        flags.additionalTraceCategories = '';
+      }
+    },
+    options: undefined,
+    learnMore: undefined,
+  },
 ];
 
 export enum Events {
+  /* eslint-disable @typescript-eslint/naming-convention -- Used by web_tests. */
   PageAuditabilityChanged = 'PageAuditabilityChanged',
   PageWarningsChanged = 'PageWarningsChanged',
   AuditProgressChanged = 'AuditProgressChanged',
+  /* eslint-enable @typescript-eslint/naming-convention */
 }
 
 export interface PageAuditabilityChangedEvent {
@@ -790,18 +860,17 @@ export interface AuditProgressChangedEvent {
   message: string;
 }
 
-export type EventTypes = {
-  [Events.PageAuditabilityChanged]: PageAuditabilityChangedEvent,
-  [Events.PageWarningsChanged]: PageWarningsChangedEvent,
-  [Events.AuditProgressChanged]: AuditProgressChangedEvent,
-};
+export interface EventTypes {
+  [Events.PageAuditabilityChanged]: PageAuditabilityChangedEvent;
+  [Events.PageWarningsChanged]: PageWarningsChangedEvent;
+  [Events.AuditProgressChanged]: AuditProgressChangedEvent;
+}
 
 export interface Preset {
   setting: Common.Settings.Setting<boolean>;
   configID: string;
   title: () => Common.UIString.LocalizedString;
   description: () => Common.UIString.LocalizedString;
-  plugin: boolean;
   supportedModes: string[];
   userMetric: Host.UserMetrics.LighthouseCategoryUsed;
 }
@@ -809,11 +878,11 @@ export interface RuntimeSetting {
   setting: Common.Settings.Setting<string|boolean>;
   description: () => Common.UIString.LocalizedString;
   setFlags: (flags: Flags, value: string|boolean) => void;
-  options?: {
+  options?: Array<{
     label: () => Common.UIString.LocalizedString,
     value: string,
     tooltip?: () => Common.UIString.LocalizedString,
-  }[];
+  }>;
   title?: () => Common.UIString.LocalizedString;
   learnMore?: Platform.DevToolsPath.UrlString;
 }

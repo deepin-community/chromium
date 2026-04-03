@@ -18,7 +18,7 @@ namespace openscreen::discovery {
 namespace {
 
 // Minimum delay between announcements of a given record in seconds.
-constexpr std::chrono::seconds kMinAnnounceDelay{1};
+constexpr std::chrono::seconds kMinAnnounceDelay(1);
 
 // Intervals between successive announcements must increase by at least a
 // factor of 2.
@@ -26,7 +26,7 @@ constexpr int kIntervalIncreaseFactor = 2;
 
 // TTL for a goodbye record in seconds. This constant is called out in RFC 6762
 // section 10.1.
-constexpr std::chrono::seconds kGoodbyeTtl{0};
+constexpr std::chrono::seconds kGoodbyeTtl(0);
 
 // Timespan between sending batches of announcement and goodbye records, in
 // microseconds.
@@ -43,8 +43,15 @@ inline MdnsRecord CreateGoodbyeRecord(const MdnsRecord& record) {
 
 }  // namespace
 
-MdnsPublisher::MdnsPublisher(MdnsSender* sender,
-                             MdnsProbeManager* ownership_manager,
+MdnsPublisher::RecordAnnouncerPtr MdnsPublisher::CreateAnnouncer(
+    MdnsRecord record) {
+  return std::make_unique<RecordAnnouncer>(std::move(record), *this,
+                                           task_runner_, now_function_,
+                                           max_announcement_attempts_);
+}
+
+MdnsPublisher::MdnsPublisher(MdnsSender& sender,
+                             MdnsProbeManager& ownership_manager,
                              TaskRunner& task_runner,
                              ClockNowFunctionPtr now_function,
                              const Config& config)
@@ -53,9 +60,7 @@ MdnsPublisher::MdnsPublisher(MdnsSender* sender,
       task_runner_(task_runner),
       now_function_(now_function),
       max_announcement_attempts_(config.new_record_announcement_count) {
-  OSP_DCHECK(ownership_manager_);
-  OSP_DCHECK(sender_);
-  OSP_DCHECK_GE(max_announcement_attempts_, 0);
+  OSP_CHECK_GE(max_announcement_attempts_, 0);
 }
 
 MdnsPublisher::~MdnsPublisher() {
@@ -66,8 +71,8 @@ MdnsPublisher::~MdnsPublisher() {
 }
 
 Error MdnsPublisher::RegisterRecord(const MdnsRecord& record) {
-  OSP_DCHECK(task_runner_.IsRunningOnTaskRunner());
-  OSP_DCHECK(record.dns_class() != DnsClass::kANY);
+  OSP_CHECK(task_runner_.IsRunningOnTaskRunner());
+  OSP_CHECK(record.dns_class() != DnsClass::kANY);
 
   if (!CanBePublished(record.dns_type())) {
     return Error::Code::kParameterInvalid;
@@ -93,8 +98,8 @@ Error MdnsPublisher::RegisterRecord(const MdnsRecord& record) {
 }
 
 Error MdnsPublisher::UnregisterRecord(const MdnsRecord& record) {
-  OSP_DCHECK(task_runner_.IsRunningOnTaskRunner());
-  OSP_DCHECK(record.dns_class() != DnsClass::kANY);
+  OSP_CHECK(task_runner_.IsRunningOnTaskRunner());
+  OSP_CHECK(record.dns_class() != DnsClass::kANY);
 
   if (!CanBePublished(record.dns_type())) {
     return Error::Code::kParameterInvalid;
@@ -107,7 +112,7 @@ Error MdnsPublisher::UnregisterRecord(const MdnsRecord& record) {
 
 Error MdnsPublisher::UpdateRegisteredRecord(const MdnsRecord& old_record,
                                             const MdnsRecord& new_record) {
-  OSP_DCHECK(task_runner_.IsRunningOnTaskRunner());
+  OSP_CHECK(task_runner_.IsRunningOnTaskRunner());
 
   if (!CanBePublished(new_record.dns_type())) {
     return Error::Code::kParameterInvalid;
@@ -141,7 +146,7 @@ Error MdnsPublisher::UpdateRegisteredRecord(const MdnsRecord& old_record,
 }
 
 size_t MdnsPublisher::GetRecordCount() const {
-  OSP_DCHECK(task_runner_.IsRunningOnTaskRunner());
+  OSP_CHECK(task_runner_.IsRunningOnTaskRunner());
 
   size_t count = 0;
   for (const auto& pair : records_) {
@@ -161,13 +166,13 @@ std::vector<MdnsRecord::ConstRef> MdnsPublisher::GetRecords(
     const DomainName& name,
     DnsType type,
     DnsClass clazz) {
-  OSP_DCHECK(task_runner_.IsRunningOnTaskRunner());
+  OSP_CHECK(task_runner_.IsRunningOnTaskRunner());
 
   std::vector<MdnsRecord::ConstRef> records;
   auto it = records_.find(name);
   if (it != records_.end()) {
     for (const RecordAnnouncerPtr& announcer : it->second) {
-      OSP_DCHECK(announcer.get());
+      OSP_CHECK(announcer);
       const DnsType record_dns_type = announcer->record().dns_type();
       const DnsClass record_dns_class = announcer->record().dns_class();
       if ((type == DnsType::kANY || type == record_dns_type) &&
@@ -188,7 +193,7 @@ std::vector<MdnsRecord::ConstRef> MdnsPublisher::GetPtrRecords(DnsClass clazz) {
   // the domain name against format '[^.]+\.(_tcp)|(_udp)\..*''
   for (auto it = records_.begin(); it != records_.end(); it++) {
     for (const RecordAnnouncerPtr& announcer : it->second) {
-      OSP_DCHECK(announcer.get());
+      OSP_CHECK(announcer);
       const DnsType record_dns_type = announcer->record().dns_type();
       if (record_dns_type != DnsType::kPTR) {
         continue;
@@ -240,12 +245,12 @@ bool MdnsPublisher::IsRecordNameClaimed(const MdnsRecord& record) const {
       record.dns_type() == DnsType::kPTR
           ? absl::get<PtrRecordRdata>(record.rdata()).ptr_domain()
           : record.name();
-  return ownership_manager_->IsDomainClaimed(name);
+  return ownership_manager_.IsDomainClaimed(name);
 }
 
 MdnsPublisher::RecordAnnouncer::RecordAnnouncer(
     MdnsRecord record,
-    MdnsPublisher* publisher,
+    MdnsPublisher& publisher,
     TaskRunner& task_runner,
     ClockNowFunctionPtr now_function,
     int target_announcement_attempts)
@@ -255,8 +260,7 @@ MdnsPublisher::RecordAnnouncer::RecordAnnouncer(
       record_(std::move(record)),
       alarm_(now_function_, task_runner_),
       target_announcement_attempts_(target_announcement_attempts) {
-  OSP_DCHECK(publisher_);
-  OSP_DCHECK(record_.ttl() != Clock::duration::zero());
+  OSP_CHECK(record_.ttl() != Clock::duration::zero());
 
   QueueAnnouncement();
 }
@@ -269,19 +273,19 @@ MdnsPublisher::RecordAnnouncer::~RecordAnnouncer() {
 }
 
 void MdnsPublisher::RecordAnnouncer::QueueGoodbye() {
-  OSP_DCHECK(task_runner_.IsRunningOnTaskRunner());
+  OSP_CHECK(task_runner_.IsRunningOnTaskRunner());
 
-  publisher_->QueueRecord(CreateGoodbyeRecord(record_));
+  publisher_.QueueRecord(CreateGoodbyeRecord(record_));
 }
 
 void MdnsPublisher::RecordAnnouncer::QueueAnnouncement() {
-  OSP_DCHECK(task_runner_.IsRunningOnTaskRunner());
+  OSP_CHECK(task_runner_.IsRunningOnTaskRunner());
 
   if (attempts_ >= target_announcement_attempts_) {
     return;
   }
 
-  publisher_->QueueRecord(record_);
+  publisher_.QueueRecord(record_);
 
   const Clock::duration new_delay = GetNextAnnounceDelay();
   attempts_++;
@@ -290,7 +294,7 @@ void MdnsPublisher::RecordAnnouncer::QueueAnnouncement() {
 
 void MdnsPublisher::QueueRecord(MdnsRecord record) {
   if (!batch_records_alarm_.has_value()) {
-    OSP_DCHECK(records_to_send_.empty());
+    OSP_CHECK(records_to_send_.empty());
     batch_records_alarm_.emplace(now_function_, task_runner_);
     batch_records_alarm_.value().ScheduleFromNow(
         [this]() { ProcessRecordQueue(); }, kDelayBetweenBatchedRecords);
@@ -332,7 +336,7 @@ void MdnsPublisher::QueueRecord(MdnsRecord record) {
 }
 
 void MdnsPublisher::ProcessRecordQueue() {
-  OSP_DCHECK(task_runner_.IsRunningOnTaskRunner());
+  OSP_CHECK(task_runner_.IsRunningOnTaskRunner());
 
   if (records_to_send_.empty()) {
     return;
@@ -350,13 +354,13 @@ void MdnsPublisher::ProcessRecordQueue() {
           << "known answer in suppressions...";
       it++;
     } else {
-      sender_->SendMulticast(message);
+      sender_.SendMulticast(message);
       message = MdnsMessage(CreateMessageId(), MessageType::Response);
     }
   }
 
   if (!message.answers().empty()) {
-    sender_->SendMulticast(message);
+    sender_.SendMulticast(message);
   }
 
   batch_records_alarm_ = std::nullopt;

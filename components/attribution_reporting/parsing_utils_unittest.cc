@@ -24,27 +24,18 @@ namespace {
 TEST(AttributionReportingParsingUtilsTest, ParseAggregationKeyPiece) {
   const struct {
     base::Value value;
-    base::expected<absl::uint128, AggregationKeyPieceError> expected;
+    base::expected<absl::uint128, ParseError> expected;
   } kTestCases[] = {
-      {base::Value(), base::unexpected(AggregationKeyPieceError::kWrongType)},
-      {base::Value("123"),
-       base::unexpected(AggregationKeyPieceError::kWrongFormat)},
+      {base::Value(), base::unexpected(ParseError())},
+      {base::Value("123"), base::unexpected(ParseError())},
       {base::Value("0x123"), 291},
       {base::Value("0X123"), 291},
-      {base::Value("0xG"),
-       base::unexpected(AggregationKeyPieceError::kWrongFormat)},
+      {base::Value("0xG"), base::unexpected(ParseError())},
   };
 
   for (const auto& test_case : kTestCases) {
     EXPECT_EQ(ParseAggregationKeyPiece(test_case.value), test_case.expected);
   }
-}
-
-TEST(AttributionReportingParsingUtilsTest, AggregationKeyIdHasValidLength) {
-  EXPECT_TRUE(AggregationKeyIdHasValidLength(
-      std::string(kMaxBytesPerAggregationKeyId, 'a')));
-  EXPECT_FALSE(AggregationKeyIdHasValidLength(
-      std::string(kMaxBytesPerAggregationKeyId + 1, 'a')));
 }
 
 TEST(AttributionReportingParsingUtilsTest, ParseUint64) {
@@ -92,7 +83,7 @@ TEST(AttributionReportingParsingUtilsTest, ParseUint64) {
 
   for (const auto& test_case : kTestCases) {
     SCOPED_TRACE(test_case.description);
-    const base::Value::Dict dict = base::test::ParseJsonDict(test_case.json);
+    const base::DictValue dict = base::test::ParseJsonDict(test_case.json);
     EXPECT_EQ(ParseUint64(dict, "key"), test_case.expected);
   }
 }
@@ -142,7 +133,7 @@ TEST(AttributionReportingParsingUtilsTest, ParseInt64) {
 
   for (const auto& test_case : kTestCases) {
     SCOPED_TRACE(test_case.description);
-    const base::Value::Dict dict = base::test::ParseJsonDict(test_case.json);
+    const base::DictValue dict = base::test::ParseJsonDict(test_case.json);
     EXPECT_EQ(ParseInt64(dict, "key"), test_case.expected);
   }
 }

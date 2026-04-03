@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "third_party/skia/include/core/SkColorType.h"
 
 namespace recording {
@@ -25,10 +26,10 @@ SkBitmap WrapVideoFrameInBitmap(const media::VideoFrame& video_frame) {
 
   SkBitmap bitmap;
   const uint8_t* pixels =
-      video_frame.visible_data(media::VideoFrame::kARGBPlane);
+      video_frame.visible_data(media::VideoFrame::Plane::kARGB);
   bitmap.installPixels(
       SkPixmap(image_info, pixels,
-               video_frame.row_bytes(media::VideoFrame::kARGBPlane)));
+               video_frame.row_bytes(media::VideoFrame::Plane::kARGB)));
   return bitmap;
 }
 
@@ -55,7 +56,7 @@ RgbVideoFrame::RgbVideoFrame(const SkBitmap& bitmap, base::TimeTicks frame_time)
   // in a 1-shot `memcpy()` call.
   if (width_ == bitmap.rowBytesAsPixels()) {
     const size_t num_bytes = num_pixels() * bytes_per_pixel;
-    std::memcpy(&data_[0], bitmap.getPixels(), num_bytes);
+    UNSAFE_TODO(std::memcpy(&data_[0], bitmap.getPixels(), num_bytes));
     return;
   }
 
@@ -67,7 +68,8 @@ RgbVideoFrame::RgbVideoFrame(const SkBitmap& bitmap, base::TimeTicks frame_time)
   DCHECK_EQ(width_ * sizeof(RgbColor), bytes_per_row);
 
   for (int row = 0; row < height_; ++row) {
-    std::memcpy(&data_[row * width_], bitmap.getAddr(0, row), bytes_per_row);
+    UNSAFE_TODO(std::memcpy(&data_[row * width_], bitmap.getAddr(0, row),
+                            bytes_per_row));
   }
 }
 
@@ -83,7 +85,8 @@ RgbVideoFrame::RgbVideoFrame(const RgbVideoFrame& other)
     : width_(other.width_),
       height_(other.height_),
       data_(new RgbColor[width_ * height_]) {
-  std::memcpy(&data_[0], &other.data_[0], num_pixels() * sizeof(RgbColor));
+  UNSAFE_TODO(
+      std::memcpy(&data_[0], &other.data_[0], num_pixels() * sizeof(RgbColor)));
 }
 
 }  // namespace recording

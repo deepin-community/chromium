@@ -31,8 +31,10 @@
 
 #include "third_party/blink/renderer/core/editing/commands/clipboard_commands.h"
 
+#include "base/auto_reset.h"
 #include "third_party/blink/public/platform/web_content_settings_client.h"
 #include "third_party/blink/renderer/core/clipboard/clipboard_utilities.h"
+#include "third_party/blink/renderer/core/clipboard/data_transfer.h"
 #include "third_party/blink/renderer/core/clipboard/data_transfer_access_policy.h"
 #include "third_party/blink/renderer/core/clipboard/paste_mode.h"
 #include "third_party/blink/renderer/core/clipboard/system_clipboard.h"
@@ -165,9 +167,19 @@ Element* ClipboardCommands::FindEventTargetForClipboardEvent(
   //  "Set target to be the element that contains the start of the selection in
   //   document order, or the body element if there is no selection or cursor."
   // We treat hidden selections as "no selection or cursor".
+  //  "if the context is not editable, then set target to the focused node,
+  //   or the body element if no node has focus."
   if (source == EditorCommandSource::kMenuOrKeyBinding &&
-      frame.Selection().IsHidden())
+      frame.Selection().IsHidden()) {
+    if (RuntimeEnabledFeatures::
+            ClipboardEventTargetCanBeFocusedElementEnabled()) {
+      Element* focusedElement = frame.GetDocument()->FocusedElement();
+      if (focusedElement && !IsEditable(*focusedElement)) {
+        return focusedElement;
+      }
+    }
     return frame.Selection().GetDocument().body();
+  }
 
   return FindEventTargetFrom(
       frame, frame.Selection().ComputeVisibleSelectionInDOMTree());
@@ -285,9 +297,7 @@ void ClipboardCommands::WriteSelectionToClipboard(LocalFrame& frame) {
   const KURL& url = frame.GetDocument()->Url();
   const String html = frame.Selection().SelectedHTMLForClipboard();
   String plain_text = frame.SelectedTextForClipboard();
-  // On Mac, add a meta charset tag for compatibility with native apps.
-  // See comments in AddMetaCharsetTagToHtmlOnMac for more details.
-  frame.GetSystemClipboard()->WriteHTML(AddMetaCharsetTagToHtmlOnMac(html), url,
+  frame.GetSystemClipboard()->WriteHTML(html, url,
                                         GetSmartReplaceOption(frame));
   ReplaceNBSPWithSpace(plain_text);
   frame.GetSystemClipboard()->WritePlainText(plain_text,
@@ -435,12 +445,15 @@ void ClipboardCommands::PasteAsFragment(LocalFrame& frame,
                                         DocumentFragment* pasting_fragment,
                                         bool smart_replace,
                                         bool match_style,
-                                        EditorCommandSource source) {
+                                        EditorCommandSource source,
+                                        DataTransfer* data_transfer) {
   Element* const target = FindEventTargetForClipboardEvent(frame, source);
-  if (!target)
+  if (!target) {
     return;
+  }
   target->DispatchEvent(*TextEvent::CreateForFragmentPaste(
-      frame.DomWindow(), pasting_fragment, smart_replace, match_style));
+      frame.DomWindow(), pasting_fragment, smart_replace, match_style,
+      data_transfer));
 }
 
 void ClipboardCommands::PasteAsPlainTextFromClipboard(
@@ -462,15 +475,10 @@ ClipboardCommands::GetFragmentFromClipboard(LocalFrame& frame) {
     unsigned fragment_start = 0;
     unsigned fragment_end = 0;
     KURL url;
-    // On Mac, remove meta charset tag that was added for compatibility with
-    // native apps. See comments in AddMetaCharsetTagToHtmlOnMac for more
-    // details.
     const String markup =
         frame.GetSystemClipboard()->ReadHTML(url, fragment_start, fragment_end);
-    const String html_markup = RemoveMetaTagAndCalcFragmentOffsetsFromHtmlOnMac(
-        markup, fragment_start, fragment_end);
     fragment = CreateStrictlyProcessedFragmentFromMarkupWithContext(
-        *frame.GetDocument(), html_markup, fragment_start, fragment_end, url);
+        *frame.GetDocument(), markup, fragment_start, fragment_end, url);
   }
   if (fragment)
     return std::make_pair(fragment, false);
@@ -498,7 +506,8 @@ ClipboardCommands::GetFragmentFromClipboard(LocalFrame& frame) {
 }
 
 void ClipboardCommands::PasteFromClipboard(LocalFrame& frame,
-                                           EditorCommandSource source) {
+                                           EditorCommandSource source,
+                                           DataTransfer* data_transfer) {
   const ClipboardCommands::FragmentAndPlainText fragment_and_plain_text =
       GetFragmentFromClipboard(frame);
 
@@ -506,7 +515,7 @@ void ClipboardCommands::PasteFromClipboard(LocalFrame& frame,
     return;
   PasteAsFragment(frame, fragment_and_plain_text.first,
                   CanSmartReplaceInClipboard(frame),
-                  fragment_and_plain_text.second, source);
+                  fragment_and_plain_text.second, source, data_transfer);
 }
 
 void ClipboardCommands::Paste(LocalFrame& frame, EditorCommandSource source) {
@@ -546,10 +555,11 @@ void ClipboardCommands::Paste(LocalFrame& frame, EditorCommandSource source) {
                                    ? PasteMode::kAllMimeTypes
                                    : PasteMode::kPlainTextOnly;
 
+  DataTransfer* data_transfer = nullptr;
   if (source == EditorCommandSource::kMenuOrKeyBinding) {
     Element* const target = FindEventTargetForClipboardEvent(frame, source);
 
-    DataTransfer* data_transfer = DataTransfer::Create(
+    data_transfer = DataTransfer::Create(
         DataTransfer::kCopyAndPaste, DataTransferAccessPolicy::kReadable,
         DataObject::CreateFromClipboard(
             target ? target->GetExecutionContext() : nullptr,
@@ -570,7 +580,9 @@ void ClipboardCommands::Paste(LocalFrame& frame, EditorCommandSource source) {
   }
 
   if (paste_mode == PasteMode::kAllMimeTypes) {
-    PasteFromClipboard(frame, source);
+    RuntimeEnabledFeatures::InputEventDataTransferForInsertCmdEnabled()
+        ? PasteFromClipboard(frame, source, data_transfer)
+        : PasteFromClipboard(frame, source);
     return;
   }
   PasteAsPlainTextFromClipboard(frame, source);
@@ -639,8 +651,8 @@ class CORE_EXPORT PasteImageResourceObserver final
   }
 
   String BuildMarkup() const {
-    return "<img src=\"" + src_.GetString() +
-           "\" referrerpolicy=\"no-referrer\" />";
+    return StrCat({"<img src=\"", src_.GetString(),
+                   "\" referrerpolicy=\"no-referrer\" />"});
   }
 
   DocumentFragment* BuildFragment() const {

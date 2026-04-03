@@ -242,7 +242,7 @@ public:
      *         the based Collator.
      * @stable ICU 2.2
      */
-    virtual CollationElementIterator* createCollationElementIterator(
+    CollationElementIterator* createCollationElementIterator(
                                            const UnicodeString& source) const;
 
     /**
@@ -254,7 +254,7 @@ public:
      *         based Collator.
      * @stable ICU 2.2
      */
-    virtual CollationElementIterator* createCollationElementIterator(
+    CollationElementIterator* createCollationElementIterator(
                                          const CharacterIterator& source) const;
 
     // Make deprecated versions of Collator::compare() visible.
@@ -449,7 +449,7 @@ public:
      *         IDs.
      * @stable ICU 2.0
      */
-    virtual UClassID getDynamicClassID(void) const override;
+    virtual UClassID getDynamicClassID() const override;
 
     /**
      * Returns the class ID for this class. This is useful only for comparing to
@@ -462,7 +462,7 @@ public:
      * @return The class ID for all objects of this class.
      * @stable ICU 2.0
      */
-    static UClassID U_EXPORT2 getStaticClassID(void);
+    static UClassID U_EXPORT2 getStaticClassID();
 
 #ifndef U_HIDE_DEPRECATED_API
     /**
@@ -843,14 +843,14 @@ private:
     const CollationSettings &getDefaultSettings() const;
 
     void setAttributeDefault(int32_t attribute) {
-        explicitlySetAttributes &= ~((uint32_t)1 << attribute);
+        explicitlySetAttributes &= ~(static_cast<uint32_t>(1) << attribute);
     }
     void setAttributeExplicitly(int32_t attribute) {
-        explicitlySetAttributes |= (uint32_t)1 << attribute;
+        explicitlySetAttributes |= static_cast<uint32_t>(1) << attribute;
     }
     UBool attributeHasBeenSetExplicitly(int32_t attribute) const {
         // assert(0 <= attribute < ATTR_LIMIT);
-        return (UBool)((explicitlySetAttributes & ((uint32_t)1 << attribute)) != 0);
+        return (explicitlySetAttributes & (static_cast<uint32_t>(1) << attribute)) != 0;
     }
 
     /**

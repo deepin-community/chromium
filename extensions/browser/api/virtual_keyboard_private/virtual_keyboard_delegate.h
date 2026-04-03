@@ -9,6 +9,7 @@
 #include <set>
 #include <string>
 #include <vector>
+
 #include "base/functional/callback.h"
 #include "base/values.h"
 #include "extensions/common/api/virtual_keyboard.h"
@@ -26,7 +27,7 @@ class VirtualKeyboardDelegate {
   virtual ~VirtualKeyboardDelegate() = default;
 
   using OnKeyboardSettingsCallback =
-      base::OnceCallback<void(std::optional<base::Value::Dict> settings)>;
+      base::OnceCallback<void(std::optional<base::DictValue> settings)>;
 
   using OnSetModeCallback = base::OnceCallback<void(bool success)>;
 

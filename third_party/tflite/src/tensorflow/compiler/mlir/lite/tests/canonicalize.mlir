@@ -1,4 +1,4 @@
-// RUN: tf-opt -canonicalize=test-convergence -tfl-runtime-verify -split-input-file -verify-diagnostics %s | FileCheck %s
+// RUN: litert-opt -canonicalize=test-convergence -tfl-runtime-verify -split-input-file -verify-diagnostics %s | FileCheck %s
 
 // CHECK-LABEL: @squeeze_folder
 func.func @squeeze_folder(%arg0 : tensor<?x?xf32>) -> tensor<?x?xf32> {
@@ -272,7 +272,7 @@ func.func @RemoveLstmQuantZeroBias(
      cell_clip = 1.000000e+01 : f32, fused_activation_function = "TANH", kernel_type = #tfl<lstm_kernel_type_attr FULL>, proj_clip = 0.01 : f32
   } : (tensor<1x528xf32>, tensor<2048x528xf32>, tensor<2048x528xf32>, tensor<2048x528xf32>, tensor<2048x528xf32>, tensor<2048x640xf32>, tensor<2048x640xf32>, tensor<2048x640xf32>, tensor<2048x640xf32>, none, none, none, tensor<2048xf32>, tensor<2048xf32>, tensor<2048xf32>, tensor<2048xf32>, tensor<640x2048xf32>, tensor<640xf32>, tensor<1x640xf32>, tensor<1x2048xf32>, tensor<2048xf32>, tensor<2048xf32>, tensor<2048xf32>, tensor<2048xf32>) -> tensor<1x640xf32>
     func.return %0 : tensor<1x640xf32>
-// CHECK: %[[NONE:.+]] = "tfl.no_value"() {value} : () -> none
+// CHECK: %[[NONE:.+]] = "tfl.no_value"() <{value}> : () -> none
 // CHECK: "tfl.lstm"(%arg0, %arg1, %arg2, %arg3, %arg4, %arg5, %arg6, %arg7, %arg8, %[[NONE]], %[[NONE]], %[[NONE]], %arg9, %arg10, %arg11, %arg12, %arg13, %[[NONE]], %arg19, %arg20, %arg15, %arg16, %arg17, %arg18)
 }
 
@@ -282,11 +282,11 @@ func.func @keepCustomFlexOps(%arg0: tensor<1x10xf32>) -> tensor<1x10xf32> {
   %2 = "tfl.custom"(%1, %arg0) {custom_code = "FlexAddV2", custom_option = #tfl<const_bytes : "0x0541646456320016120541646456321A001A002A070A015412023001320000021F191414042801">} : (tensor<1x10xf32>, tensor<1x10xf32>) -> tensor<1x10xf32>
   "tfl.custom"(%0, %2) {custom_code = "FlexAssignVariableOp", custom_option = #tfl<const_bytes : "0x1041737369676E5661726961626C654F70003B121041737369676E5661726961626C654F701A001A002A0B0A056474797065120230012A140A0E76616C69646174655F736861706512022800320000024F3E1414042801">} : (tensor<!tf_type.resource<tensor<1x10xf32>>>, tensor<1x10xf32>) -> ()
   %3 = "tfl.custom"(%0) {custom_code = "FlexReadVariableOp", custom_option = #tfl<const_bytes : "0x0E526561645661726961626C654F700021120E526561645661726961626C654F701A002A0B0A056474797065120230013200000233241414042801">} : (tensor<!tf_type.resource<tensor<1x10xf32>>>) -> tensor<1x10xf32>
-  // CHECK:      %0 = "tfl.custom"() {custom_code = "FlexVarHandleOp"
-  // CHECK-NEXT: %1 = "tfl.custom"(%0) {custom_code = "FlexReadVariableOp"
-  // CHECK-NEXT: %2 = "tfl.custom"(%1, %arg0) {custom_code = "FlexAddV2"
-  // CHECK-NEXT: "tfl.custom"(%0, %2) {custom_code = "FlexAssignVariableOp"
-  // CHECK-NEXT: %3 = "tfl.custom"(%0) {custom_code = "FlexReadVariableOp"
+  // CHECK:      %0 = "tfl.custom"() <{custom_code = "FlexVarHandleOp"
+  // CHECK-NEXT: %1 = "tfl.custom"(%0) <{custom_code = "FlexReadVariableOp"
+  // CHECK-NEXT: %2 = "tfl.custom"(%1, %arg0) <{custom_code = "FlexAddV2"
+  // CHECK-NEXT: "tfl.custom"(%0, %2) <{custom_code = "FlexAssignVariableOp"
+  // CHECK-NEXT: %3 = "tfl.custom"(%0) <{custom_code = "FlexReadVariableOp"
   func.return %3 : tensor<1x10xf32>
 }
 
@@ -304,7 +304,7 @@ func.func @broadcast_to_to_reshape(%arg0: tensor<4x4x4xf32>, %arg1 : tensor<4xi3
 
 // Converts tfl.broadcast_to to tfl.reshape if input and output have the same
 // number of elements.
-// CHECK-LABEL: broadcast_to_to_reshape_i64
+// CHECK-LABEL: @broadcast_to_to_reshape_i64
 func.func @broadcast_to_to_reshape_i64(%arg0: tensor<4x4x4xf32>, %arg1 : tensor<4xi64>) -> tensor<1x4x4x4xf32> {
   %0 = "tfl.broadcast_to"(%arg0, %arg1) : (tensor<4x4x4xf32>, tensor<4xi64>) -> tensor<1x4x4x4xf32>
   // CHECK: "tfl.cast"
@@ -317,7 +317,7 @@ func.func @broadcast_to_to_reshape_i64(%arg0: tensor<4x4x4xf32>, %arg1 : tensor<
 
 // Converts tfl.broadcast_to to tfl.reshape if input and output have the same
 // number of elements.
-// CHECK-LABEL: broadcast_to_to_reshape_i64_const
+// CHECK-LABEL: @broadcast_to_to_reshape_i64_const
 func.func @broadcast_to_to_reshape_i64_const(%arg0: tensor<4x4x4xf32>) -> tensor<1x4x4x4xf32> {
   %cst = arith.constant dense<[1, 4, 4, 4]> : tensor<4xi64>
   %0 = "tfl.broadcast_to"(%arg0, %cst) : (tensor<4x4x4xf32>, tensor<4xi64>) -> tensor<1x4x4x4xf32>
@@ -329,6 +329,7 @@ func.func @broadcast_to_to_reshape_i64_const(%arg0: tensor<4x4x4xf32>) -> tensor
 
 // -----
 
+// CHECK-LABEL: @trivial_dynamic_update_slice
 func.func @trivial_dynamic_update_slice(%arg0: tensor<2x7x14xf32>, %arg1: tensor<2x7x14xf32>) -> tensor<2x7x14xf32> {
   %0 = arith.constant dense<0> : tensor<3xi32>
   %1 = "tfl.dynamic_update_slice"(%arg0, %arg1, %0) : (tensor<2x7x14xf32>, tensor<2x7x14xf32>, tensor<3xi32>) -> tensor<2x7x14xf32>
@@ -338,6 +339,7 @@ func.func @trivial_dynamic_update_slice(%arg0: tensor<2x7x14xf32>, %arg1: tensor
 
 // -----
 
+// CHECK-LABEL: @trivial_dynamic_update_slice_wrong_update_shape
 func.func @trivial_dynamic_update_slice_wrong_update_shape(%arg0: tensor<2x7x14xf32>, %arg1: tensor<2x7x7xf32>) -> tensor<2x7x14xf32> {
   %0 = arith.constant dense<0> : tensor<3xi32>
   %1 = "tfl.dynamic_update_slice"(%arg0, %arg1, %0) : (tensor<2x7x14xf32>, tensor<2x7x7xf32>, tensor<3xi32>) -> tensor<2x7x14xf32>
@@ -373,3 +375,18 @@ func.func @OptimizeTranposeWithRank7orMoreEffectiveRank4(%arg0: tensor<56x8x56x1
   // CHECK: return %2
 }
 
+// CHECK-LABEL: @ConstPadToI32
+func.func @ConstPadToI32(%arg0: tensor<15600xf32>) -> tensor<15602xf32> {
+  %0 = "tfl.pseudo_const"() {value = dense<1> : tensor<1x2xi64>} : () -> tensor<1x2xi64>
+  %1 = "tfl.pad"(%arg0, %0) : (tensor<15600xf32>, tensor<1x2xi64>) -> tensor<15602xf32>
+  func.return %1 : tensor<15602xf32>
+  // CHECK: "tfl.pad"(%arg0, %cst) : (tensor<15600xf32>, tensor<1x2xi32>) -> tensor<15602xf32>
+}
+
+// CHECK-LABEL: @RemoveNoopTranspose
+func.func @RemoveNoopTranspose(%arg0: tensor<1x2x3x4xf32>) -> tensor<1x2x3x4xf32> {
+  %cst = arith.constant dense<[0, 1, 2, 3]> : tensor<4xi32>
+  %0 = "tfl.transpose"(%arg0, %cst) : (tensor<1x2x3x4xf32>, tensor<4xi32>) -> tensor<1x2x3x4xf32>
+  func.return %0 : tensor<1x2x3x4xf32>
+  // CHECK: return %arg0
+}

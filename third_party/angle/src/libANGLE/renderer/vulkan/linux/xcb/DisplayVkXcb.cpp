@@ -7,6 +7,10 @@
 //    Implements the class methods for DisplayVkXcb.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/vulkan/linux/xcb/DisplayVkXcb.h"
 
 #include <xcb/xcb.h>
@@ -58,7 +62,7 @@ egl::Error DisplayVkXcb::initialize(egl::Display *display)
             ERR() << "xcb_connect() failed, error " << xcb_connection_error;
             xcb_disconnect(mXcbConnection);
             mXcbConnection = nullptr;
-            return egl::EglNotInitialized();
+            return egl::Error(EGL_NOT_INITIALIZED);
         }
     }
     return DisplayVk::initialize(display);
@@ -125,7 +129,7 @@ void DisplayVkXcb::checkConfigSupport(egl::Config *config)
     }
 
     // TODO(geofflang): Test for native support and modify the config accordingly.
-    // http://anglebug.com/2692
+    // http://anglebug.com/42261400
 
     // Find the screen the window was created on:
     xcb_screen_iterator_t screenIterator = xcb_setup_roots_iterator(xcb_get_setup(mXcbConnection));

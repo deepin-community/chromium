@@ -9,12 +9,19 @@
  */
 #include "test/run_loop.h"
 
+#include "absl/functional/any_invocable.h"
+#include "api/task_queue/pending_task_safety_flag.h"
+#include "api/task_queue/task_queue_base.h"
+#include "api/units/time_delta.h"
+#include "rtc_base/socket.h"
+#include "rtc_base/socket_server.h"
+#include "rtc_base/thread.h"
 #include "rtc_base/time_utils.h"
 
 namespace webrtc {
 namespace test {
 
-RunLoop::RunLoop() {
+RunLoop::RunLoop() : weak_factory_(this) {
   worker_thread_.WrapCurrent();
 }
 
@@ -34,13 +41,30 @@ void RunLoop::Quit() {
   socket_server_.FailNextWait();
 }
 
+absl::AnyInvocable<void()> RunLoop::QuitClosure() {
+  return [loop = weak_factory_.GetWeakPtr()] {
+    if (loop) {
+      loop->Quit();
+    }
+  };
+}
+
+void RunLoop::RunFor(TimeDelta max_wait_duration) {
+  // If Quit is called before the timeout expires, then we'll cancel this post
+  // task automatically.
+  ScopedTaskSafety auto_cancel;
+  worker_thread_.PostDelayedHighPrecisionTask(
+      SafeTask(auto_cancel.flag(), QuitClosure()), max_wait_duration);
+  Run();
+}
+
 void RunLoop::Flush() {
   worker_thread_.PostTask([this]() { socket_server_.FailNextWait(); });
   // If a test clock is used, like with GlobalSimulatedTimeController then the
   // thread will loop forever since time never increases. Since the clock is
   // simulated, 0ms can be used as the loop delay, which will process all
   // messages ready for execution.
-  int cms = rtc::GetClockForTesting() ? 0 : 1000;
+  int cms = GetClockForTesting() ? 0 : 1000;
   worker_thread_.ProcessMessages(cms);
 }
 
@@ -51,7 +75,7 @@ void RunLoop::FakeSocketServer::FailNextWait() {
   fail_next_wait_ = true;
 }
 
-bool RunLoop::FakeSocketServer::Wait(webrtc::TimeDelta max_wait_duration,
+bool RunLoop::FakeSocketServer::Wait(TimeDelta max_wait_duration,
                                      bool process_io) {
   if (fail_next_wait_) {
     fail_next_wait_ = false;
@@ -62,12 +86,12 @@ bool RunLoop::FakeSocketServer::Wait(webrtc::TimeDelta max_wait_duration,
 
 void RunLoop::FakeSocketServer::WakeUp() {}
 
-rtc::Socket* RunLoop::FakeSocketServer::CreateSocket(int family, int type) {
+Socket* RunLoop::FakeSocketServer::CreateSocket(int family, int type) {
   return nullptr;
 }
 
-RunLoop::WorkerThread::WorkerThread(rtc::SocketServer* ss)
-    : rtc::Thread(ss), tq_setter_(this) {}
+RunLoop::WorkerThread::WorkerThread(SocketServer* ss)
+    : Thread(ss), tq_setter_(this) {}
 
 }  // namespace test
 }  // namespace webrtc

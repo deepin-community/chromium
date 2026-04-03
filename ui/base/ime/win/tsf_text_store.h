@@ -258,7 +258,8 @@ class COMPONENT_EXPORT(UI_BASE_IME_WIN) TSFTextStore
       ImeKeyEventDispatcher* ime_key_event_dispatcher);
 
   // Removes ImeKeyEventDispatcher pointer.
-  void RemoveImeKeyEventDispatcher();
+  void RemoveImeKeyEventDispatcher(
+      ImeKeyEventDispatcher* ime_key_event_dispatcher);
 
   // Cancels the ongoing composition if exists.
   bool CancelComposition();
@@ -274,7 +275,7 @@ class COMPONENT_EXPORT(UI_BASE_IME_WIN) TSFTextStore
   bool MaybeSendOnUrlChanged();
 
   // Sets the flag to indicate TSF support for empty text stores.
-  void SetUseEmptyTextStore(bool isEnabled);
+  void UseEmptyTextStore(bool is_enabled);
 
  private:
   friend class TSFTextStoreTest;
@@ -328,9 +329,6 @@ class COMPONENT_EXPORT(UI_BASE_IME_WIN) TSFTextStore
   // Returns if current input method is an IME.
   bool IsInputIME() const;
 
-  // Returns if the active input processor does not support vertical wrirting.
-  bool IsInputProcessorWithoutVerticalWriting() const;
-
   // Gets the style information from the display attribute for the actively
   // composed text.
   void GetStyle(const TF_DISPLAYATTRIBUTE& attribute, ImeTextSpan* span);
@@ -379,6 +377,10 @@ class COMPONENT_EXPORT(UI_BASE_IME_WIN) TSFTextStore
   // |on_start_composition_called_| indicates that OnStartComposition() is
   // called duriing current edit session.
   bool on_start_composition_called_ = false;
+
+  // `on_update_composition_called_` indicates that OnUpdateComposition() is
+  // called during ITextStoreACPSink::OnLockGranted().
+  bool on_update_composition_called_ = false;
 
   // |previous_composition_string_| indicicates composition string in last
   // edit session during same composition. |previous_composition_start_|
@@ -459,6 +461,9 @@ class COMPONENT_EXPORT(UI_BASE_IME_WIN) TSFTextStore
 
   // Checks for re-entrancy while writing to text input client.
   bool is_tic_write_in_progress_ = false;
+
+  // Checks for re-entrancy while canceling composition.
+  bool is_cancel_composition_in_progress_ = false;
 
   // The type of current lock.
   //   0: No lock.

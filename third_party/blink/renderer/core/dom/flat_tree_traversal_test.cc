@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 
+#include <array>
 #include <memory>
 #include <string_view>
 
@@ -15,9 +16,9 @@
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/core/html/html_slot_element.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -57,22 +58,23 @@ void FlatTreeTraversalTest::SetupSampleHTML(std::string_view main_html,
                                             std::string_view shadow_html,
                                             unsigned index) {
   Element* body = GetDocument().body();
-  body->setInnerHTML(String::FromUTF8(main_html));
+  body->SetInnerHTMLWithoutTrustedTypes(String::FromUTF8(main_html));
   auto* shadow_host = To<Element>(NodeTraversal::ChildAt(*body, index));
   AttachOpenShadowRoot(*shadow_host, shadow_html);
 }
 
 void FlatTreeTraversalTest::SetupDocumentTree(std::string_view main_html) {
   Element* body = GetDocument().body();
-  body->setInnerHTML(String::FromUTF8(main_html));
+  body->SetInnerHTMLWithoutTrustedTypes(String::FromUTF8(main_html));
 }
 
 void FlatTreeTraversalTest::AttachOpenShadowRoot(
     Element& shadow_host,
     std::string_view shadow_inner_html) {
   ShadowRoot& shadow_root =
-      shadow_host.AttachShadowRootForTesting(ShadowRootType::kOpen);
-  shadow_root.setInnerHTML(String::FromUTF8(shadow_inner_html));
+      shadow_host.AttachShadowRootForTesting(ShadowRootMode::kOpen);
+  shadow_root.SetInnerHTMLWithoutTrustedTypes(
+      String::FromUTF8(shadow_inner_html));
 }
 
 namespace {
@@ -125,7 +127,7 @@ TEST_F(FlatTreeTraversalTest, childAt) {
   Element* s04 = shadow_root->QuerySelector(AtomicString("#s04"));
 
   const unsigned kNumberOfChildNodes = 5;
-  Node* expected_child_nodes[5] = {s00, m01, s02, s03, s04};
+  std::array<Node*, 5> expected_child_nodes = {s00, m01, s02, s03, s04};
 
   ASSERT_EQ(kNumberOfChildNodes,
             FlatTreeTraversal::CountChildren(*shadow_host));

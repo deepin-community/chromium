@@ -12,31 +12,28 @@
 #include "apps/launcher.h"
 #include "base/containers/adapters.h"
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
-#include "chrome/browser/apps/app_service/app_service_proxy.h"
-#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/apps/app_service/browser_app_launcher.h"
 #include "chrome/browser/apps/app_shim/app_shim_termination_manager.h"
 #include "chrome/browser/apps/platform_apps/app_window_registry_util.h"
 #include "chrome/browser/apps/platform_apps/platform_app_launch.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/launch_util.h"
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/extensions/app_launch_params.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow_delegate.h"
+#include "chrome/browser/web_applications/extensions/launch.h"
 #include "chrome/browser/web_applications/extensions/web_app_extension_shortcut.h"
-#include "chrome/browser/web_applications/os_integration/web_app_shortcut_mac.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_metrics.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/browser/app_window/app_window_registry.h"
 #include "extensions/browser/app_window/native_app_window.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/launch_util.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_id.h"
 
@@ -142,7 +139,8 @@ bool ExtensionAppShimManagerDelegate::AppCanCreateHost(
     return false;
   if (extension->is_hosted_app() &&
       extensions::GetLaunchType(extensions::ExtensionPrefs::Get(profile),
-                                extension) == extensions::LAUNCH_TYPE_REGULAR) {
+                                extension) ==
+          extensions::LaunchType::kRegular) {
     return false;
   }
   // Note that this will return true for non-hosted apps (e.g, Chrome Remote
@@ -205,9 +203,8 @@ void ExtensionAppShimManagerDelegate::LaunchApp(
         profile, extension, WindowOpenDisposition::NEW_FOREGROUND_TAB,
         apps::LaunchSource::kFromCommandLine);
     params.launch_files = files;
-    apps::AppServiceProxyFactory::GetForProfile(profile)
-        ->BrowserAppLauncher()
-        ->LaunchAppWithParams(std::move(params), base::DoNothing());
+    web_app::LaunchExtensionOrWebApp(profile, std::move(params),
+                                     base::DoNothing());
     return;
   }
   if (files.empty()) {
@@ -232,7 +229,7 @@ void ExtensionAppShimManagerDelegate::LaunchShim(
   DCHECK(extension);
   // Only force recreation of shims when RemoteViews is in use (that is, for
   // PWAs). Otherwise, shims may be created unexpectedly.
-  // https://crbug.com/941160
+  // https://crbug.com/41446487
   if (web_app::RecreateShimsRequested(update_behavior) &&
       AppUsesRemoteCocoa(profile, app_id)) {
     // Load the resources needed to build the app shim (icons, etc), and then

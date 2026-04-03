@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/numerics/safe_conversions.h"
@@ -11,7 +16,7 @@
 #include "chrome/chrome_elf/third_party_dlls/public_api.h"
 #include "chrome/common/chrome_switches.h"
 
-// This function is a temporary workaround for https://crbug.com/655788. We
+// This function is a temporary workaround for https://crbug.com/41280821. We
 // need to come up with a better way to initialize crash reporting that can
 // happen inside DllMain().
 void SignalInitializeCrashReporting() {}
@@ -35,6 +40,10 @@ bool GetUserDataDirectoryThunk(wchar_t* user_data_dir,
             _TRUNCATE);
 
   return !user_data_dir_path.empty();
+}
+
+bool IsTemporaryUserDataDirectoryCreatedForHeadless() {
+  return false;
 }
 
 void SetMetricsClientId(const char* client_id) {}

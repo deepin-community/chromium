@@ -15,9 +15,20 @@ limitations under the License.
 
 #include "tensorflow/examples/speech_commands/recognize_commands.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <limits>
+#include <utility>
+#include <vector>
+
+#include "absl/status/status.h"
+#include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/types.h"
+
 namespace tensorflow {
 
-RecognizeCommands::RecognizeCommands(const std::vector<string>& labels,
+RecognizeCommands::RecognizeCommands(const std::vector<std::string>& labels,
                                      int32_t average_window_duration_ms,
                                      float detection_threshold,
                                      int32_t suppression_ms,
@@ -32,11 +43,9 @@ RecognizeCommands::RecognizeCommands(const std::vector<string>& labels,
   previous_top_label_time_ = std::numeric_limits<int64_t>::min();
 }
 
-Status RecognizeCommands::ProcessLatestResults(const Tensor& latest_results,
-                                               const int64_t current_time_ms,
-                                               string* found_command,
-                                               float* score,
-                                               bool* is_new_command) {
+absl::Status RecognizeCommands::ProcessLatestResults(
+    const Tensor& latest_results, const int64_t current_time_ms,
+    std::string* found_command, float* score, bool* is_new_command) {
   if (latest_results.NumElements() != labels_count_) {
     return errors::InvalidArgument(
         "The results for recognition should contain ", labels_count_,
@@ -71,7 +80,7 @@ Status RecognizeCommands::ProcessLatestResults(const Tensor& latest_results,
     *found_command = previous_top_label_;
     *score = 0.0f;
     *is_new_command = false;
-    return OkStatus();
+    return absl::OkStatus();
   }
 
   // Calculate the average score across all the results in the window.
@@ -99,7 +108,7 @@ Status RecognizeCommands::ProcessLatestResults(const Tensor& latest_results,
 
   // See if the latest top score is enough to trigger a detection.
   const int current_top_index = sorted_average_scores[0].first;
-  const string current_top_label = labels_[current_top_index];
+  const std::string current_top_label = labels_[current_top_index];
   const float current_top_score = sorted_average_scores[0].second;
   // If we've recently had another label trigger, assume one that occurs too
   // soon afterwards is a bad result.
@@ -122,7 +131,7 @@ Status RecognizeCommands::ProcessLatestResults(const Tensor& latest_results,
   *found_command = current_top_label;
   *score = current_top_score;
 
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace tensorflow

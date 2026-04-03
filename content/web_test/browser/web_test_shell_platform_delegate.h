@@ -31,7 +31,7 @@ class WebTestShellPlatformDelegate : public ShellPlatformDelegate {
                        bool is_enabled) override;
   void SetAddressBarURL(Shell* shell, const GURL& url) override;
   void SetTitle(Shell* shell, const std::u16string& title) override;
-  void MainFrameCreated(Shell* shell) override;
+  void MainFrameCreated(Shell* shell, RenderFrameHost* main_frame) override;
   std::unique_ptr<JavaScriptDialogManager> CreateJavaScriptDialogManager(
       Shell* shell) override;
   bool HandlePointerLockRequest(Shell* shell,
@@ -47,7 +47,7 @@ class WebTestShellPlatformDelegate : public ShellPlatformDelegate {
                                              WebContents* contents) override;
   bool HandleKeyboardEvent(Shell* shell,
                            WebContents* source,
-                           const NativeWebKeyboardEvent& event) override;
+                           const input::NativeWebKeyboardEvent& event) override;
 #endif
 
  private:

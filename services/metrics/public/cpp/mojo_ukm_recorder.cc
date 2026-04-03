@@ -11,7 +11,6 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "services/metrics/public/mojom/ukm_interface.mojom-forward.h"
 #include "services/metrics/public/mojom/ukm_interface.mojom.h"
 #include "third_party/abseil-cpp/absl/memory/memory.h"
 
@@ -62,6 +61,12 @@ void MojoUkmRecorder::AddEntry(mojom::UkmEntryPtr entry) {
     return;
   }
   interface_->AddEntry(std::move(entry));
+}
+
+void MojoUkmRecorder::RecordWebDXFeatures(SourceId source_id,
+                                          const std::set<int32_t>& features,
+                                          const size_t max_feature_value) {
+  NOTREACHED();
 }
 
 void MojoUkmRecorder::MarkSourceForDeletion(ukm::SourceId source_id) {

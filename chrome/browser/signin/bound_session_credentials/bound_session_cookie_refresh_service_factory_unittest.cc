@@ -5,19 +5,19 @@
 #include "chrome/browser/signin/bound_session_credentials/bound_session_cookie_refresh_service_factory.h"
 
 #include <memory>
+#include <optional>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/signin/account_consistency_mode_manager_factory.h"
 #include "chrome/browser/signin/bound_session_credentials/bound_session_cookie_refresh_service.h"
+#include "chrome/browser/signin/bound_session_credentials/bound_session_cookie_refresh_service_impl.h"
+#include "chrome/browser/signin/bound_session_credentials/unexportable_key_provider_config.h"
 #include "chrome/browser/signin/bound_session_credentials/unexportable_key_service_factory.h"
-#include "chrome/browser/signin/signin_features.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -38,11 +38,6 @@ using sync_preferences::TestingPrefServiceSyncable;
 using ::testing::TestWithParam;
 using ::testing::Values;
 
-std::unique_ptr<KeyedService> CreateFakeUnexportableKeyService(
-    content::BrowserContext* context) {
-  return std::make_unique<unexportable_keys::FakeUnexportableKeyService>();
-}
-
 bool DoesServiceExistForProfile(Profile* profile) {
   return BoundSessionCookieRefreshServiceFactory::GetForProfile(profile) !=
          nullptr;
@@ -50,70 +45,145 @@ bool DoesServiceExistForProfile(Profile* profile) {
 
 struct BoundSessionCookieRefreshServiceFactoryTestParams {
   std::string test_name;
-  std::vector<FeatureRefAndParams> enabled_features;
+  std::vector<FeatureRef> enabled_features;
   std::vector<FeatureRef> disabled_features;
-  std::optional<switches::EnableBoundSessionCredentialsDiceSupport>
-      expected_support;  // std::nullopt means no support at all.
+  std::optional<bool> feature_policy_value;
+  bool is_service_expected = false;
   ~BoundSessionCookieRefreshServiceFactoryTestParams() = default;
 };
 
 const BoundSessionCookieRefreshServiceFactoryTestParams kTestCases[] = {
-    {"EnabledWithDefaultDiceSupport",
-     {{switches::kEnableBoundSessionCredentials, {}}},
-     {},
-     switches::EnableBoundSessionCredentialsDiceSupport::kDisabled},
-    {"EnabledForNonDiceProfiles",
-     {{switches::kEnableBoundSessionCredentials,
-       {{"dice-support", "disabled"}}}},
-     {},
-     switches::EnableBoundSessionCredentialsDiceSupport::kDisabled},
-    {"EnabledForAllProfiles",
-     {{switches::kEnableBoundSessionCredentials,
-       {{"dice-support", "enabled"}}}},
-     {},
-     switches::EnableBoundSessionCredentialsDiceSupport::kEnabled},
-    {"Disabled", {}, {switches::kEnableBoundSessionCredentials}}};
+    {
+        "Enabled",
+        {switches::kEnableBoundSessionCredentials},
+        {},
+        std::nullopt,
+        true,
+    },
+    {
+        "Default",
+        {},
+        {},
+        std::nullopt,
+        BUILDFLAG(IS_WIN),
+    },
+    {
+        "Disabled",
+        {},
+        {switches::kEnableBoundSessionCredentials},
+        std::nullopt,
+        BUILDFLAG(IS_WIN),
+    },
+    {
+        "DisabledByPolicy",
+        {switches::kEnableBoundSessionCredentials},
+        {},
+        false,
+        BUILDFLAG(IS_WIN),
+    },
+    {
+        "EnabledByPolicy",
+        {},
+        {switches::kEnableBoundSessionCredentials},
+        true,
+        true,
+    },
+    {
+        "DisabledWithContinuityEnabled",
+        {kEnableBoundSessionCredentialsContinuity},
+        {switches::kEnableBoundSessionCredentials},
+        false,
+        true,
+    },
+    {
+        "DisabledWithExtrasDisabled",
+        {},
+        {switches::kEnableBoundSessionCredentials,
+         kEnableBoundSessionCredentialsContinuity},
+        std::nullopt,
+        false,
+    },
+    {
+        "EnabledWithExtrasDisabled",
+        {switches::kEnableBoundSessionCredentials},
+        {kEnableBoundSessionCredentialsContinuity},
+        std::nullopt,
+        true,
+    },
+    {
+        "DisabledByKillSwitch",
+        {switches::kBoundSessionCredentialsKillSwitch,
+         switches::kEnableBoundSessionCredentials},
+        {},
+        true,
+        false,
+    },
+};
+
+}  // namespace
 
 class BoundSessionCookieRefreshServiceFactoryTest
     : public TestWithParam<BoundSessionCookieRefreshServiceFactoryTestParams> {
  public:
   BoundSessionCookieRefreshServiceFactoryTest() {
-    feature_list.InitWithFeaturesAndParameters(GetParam().enabled_features,
-                                               GetParam().disabled_features);
+    feature_list.InitWithFeatures(GetParam().enabled_features,
+                                  GetParam().disabled_features);
+
+    // `BoundSessionCookieRefreshService` depends on `UnexportableKeyService`,
+    // ensure it is not null.
+    UnexportableKeyServiceFactory::GetInstance()->SetServiceFactoryForTesting(
+        base::BindRepeating(
+            [](crypto::UnexportableKeyProvider::Config config)
+                -> std::unique_ptr<unexportable_keys::UnexportableKeyService> {
+              return std::make_unique<
+                  unexportable_keys::FakeUnexportableKeyService>();
+            }));
   }
 
   void CreateProfile(bool otr_profile = false) {
-    // `BoundSessionCookieRefreshService` depends on `UnexportableKeyService`,
-    // ensure it is not null.
-    profile_builder_.AddTestingFactory(
-        UnexportableKeyServiceFactory::GetInstance(),
-        base::BindRepeating(&CreateFakeUnexportableKeyService));
+    TestingProfile::Builder profile_builder = CreateProfileBuilder();
+    std::unique_ptr<TestingPrefServiceSyncable> prefs =
+        std::make_unique<TestingPrefServiceSyncable>();
+    RegisterUserProfilePrefs(prefs->registry());
+    if (GetParam().feature_policy_value) {
+      prefs->SetManagedPref(prefs::kBoundSessionCredentialsEnabled,
+                            base::Value(*GetParam().feature_policy_value));
+    }
+    profile_builder.SetPrefService(std::move(prefs));
 
+    original_profile_ = profile_builder.Build();
     if (otr_profile) {
-      original_profile_ = std::make_unique<TestingProfile>();
       otr_profile_ =
-          std::move(profile_builder_.BuildIncognito(original_profile_.get()));
-    } else {
-      original_profile_ = profile_builder_.Build();
+          CreateProfileBuilder().BuildIncognito(original_profile_.get());
     }
   }
 
-  bool ShouldServiceExistDiceEnabled() {
-    return GetParam().expected_support ==
-           switches::EnableBoundSessionCredentialsDiceSupport::kEnabled;
-  }
-
-  bool ShouldServiceExistAccountConsistencyDisabled() {
-    return GetParam().expected_support.has_value();
-  }
+  bool ShouldServiceExist() { return GetParam().is_service_expected; }
 
   TestingProfile* original_profile() { return original_profile_.get(); }
   TestingProfile* otr_profile() { return otr_profile_.get(); }
 
  private:
+  TestingProfile::Builder CreateProfileBuilder() {
+    TestingProfile::Builder builder;
+    // Override `BoundSessionCookieRefreshServiceFactory` in order to bypass the
+    // `ServiceIsNULLWhileTesting()` check.
+    builder.AddTestingFactory(
+        BoundSessionCookieRefreshServiceFactory::GetInstance(),
+        base::BindRepeating(&BoundSessionCookieRefreshServiceFactoryTest::
+                                CreateBoundSessionCookieRefreshService,
+                            base::Unretained(this)));
+    return builder;
+  }
+
+  std::unique_ptr<KeyedService> CreateBoundSessionCookieRefreshService(
+      content::BrowserContext* context) {
+    return BoundSessionCookieRefreshServiceFactory::GetInstance()
+        ->BuildServiceInstanceForBrowserContext(context);
+  }
+
   content::BrowserTaskEnvironment task_environment;
   ScopedFeatureList feature_list;
-  TestingProfile::Builder profile_builder_;
   std::unique_ptr<TestingProfile> original_profile_;
   raw_ptr<TestingProfile> otr_profile_;
 };
@@ -125,7 +195,7 @@ TEST_P(BoundSessionCookieRefreshServiceFactoryTest, RegularProfileDiceEnabled) {
       AccountConsistencyModeManager::GetMethodForProfile(original_profile()),
       signin::AccountConsistencyMethod::kDice);
 
-  EXPECT_EQ(ShouldServiceExistDiceEnabled(),
+  EXPECT_EQ(ShouldServiceExist(),
             DoesServiceExistForProfile(original_profile()));
 }
 
@@ -139,7 +209,7 @@ TEST_P(BoundSessionCookieRefreshServiceFactoryTest,
   ASSERT_EQ(
       AccountConsistencyModeManager::GetMethodForProfile(original_profile()),
       signin::AccountConsistencyMethod::kDisabled);
-  EXPECT_EQ(ShouldServiceExistAccountConsistencyDisabled(),
+  EXPECT_EQ(ShouldServiceExist(),
             DoesServiceExistForProfile(original_profile()));
 }
 
@@ -148,8 +218,7 @@ TEST_P(BoundSessionCookieRefreshServiceFactoryTest, OTRProfile) {
   ASSERT_TRUE(otr_profile()->IsOffTheRecord());
   ASSERT_EQ(AccountConsistencyModeManager::GetMethodForProfile(otr_profile()),
             signin::AccountConsistencyMethod::kDisabled);
-  EXPECT_EQ(ShouldServiceExistAccountConsistencyDisabled(),
-            DoesServiceExistForProfile(otr_profile()));
+  EXPECT_EQ(ShouldServiceExist(), DoesServiceExistForProfile(otr_profile()));
 }
 
 TEST(BoundSessionCookieRefreshServiceFactoryTestNullUnexportableKeyService,
@@ -169,7 +238,9 @@ TEST(BoundSessionCookieRefreshServiceFactoryTestNullUnexportableKeyService,
       std::move(unexportable_key_service_factory));
 
   std::unique_ptr<TestingProfile> profile = profile_builder.Build();
-  ASSERT_FALSE(UnexportableKeyServiceFactory::GetForProfile(profile.get()));
+  ASSERT_FALSE(UnexportableKeyServiceFactory::GetForProfileAndPurpose(
+      profile.get(),
+      unexportable_keys::KeyPurpose::kDeviceBoundSessionCredentialsPrototype));
   EXPECT_FALSE(DoesServiceExistForProfile(profile.get()));
 }
 
@@ -182,4 +253,3 @@ INSTANTIATE_TEST_SUITE_P(
         BoundSessionCookieRefreshServiceFactoryTest::ParamType>& info) {
       return info.param.test_name;
     });
-}  // namespace

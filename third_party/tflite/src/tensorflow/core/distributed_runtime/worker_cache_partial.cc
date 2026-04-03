@@ -27,7 +27,7 @@ limitations under the License.
 namespace tensorflow {
 
 bool WorkerCachePartial::GetDeviceLocalityNonBlocking(
-    const string& device_name, DeviceLocality* locality) {
+    const std::string& device_name, DeviceLocality* locality) {
   mutex_lock lock(mu_);  // could use reader lock
   auto iter = device_status_cache_.find(device_name);
   if (iter != device_status_cache_.end()) {
@@ -37,13 +37,13 @@ bool WorkerCachePartial::GetDeviceLocalityNonBlocking(
   return false;
 }
 
-void WorkerCachePartial::GetDeviceLocalityAsync(const string& device_name,
+void WorkerCachePartial::GetDeviceLocalityAsync(const std::string& device_name,
                                                 DeviceLocality* locality,
                                                 StatusCallback done) {
   if (!GetDeviceLocalityNonBlocking(device_name, locality)) {
     // If cache entry was empty, make one try to fill it by RPC.
     SchedClosure([this, &device_name, locality, done]() {
-      Status s = RefreshDeviceStatus(device_name);
+      absl::Status s = RefreshDeviceStatus(device_name);
       if (s.ok() && !GetDeviceLocalityNonBlocking(device_name, locality)) {
         s = errors::Unavailable("No known remote device: ", device_name);
       }
@@ -54,10 +54,11 @@ void WorkerCachePartial::GetDeviceLocalityAsync(const string& device_name,
   done(absl::OkStatus());
 }
 
-Status WorkerCachePartial::RefreshDeviceStatus(const string& device_name) {
-  string task;
-  string device;
-  Status s;
+absl::Status WorkerCachePartial::RefreshDeviceStatus(
+    const std::string& device_name) {
+  std::string task;
+  std::string device;
+  absl::Status s;
   if (!DeviceNameUtils::SplitDeviceName(device_name, &task, &device)) {
     s = errors::InvalidArgument("Bad device name to RefreshDeviceStatus: ",
                                 device_name);

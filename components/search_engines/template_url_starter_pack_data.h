@@ -19,16 +19,22 @@ struct TemplateURLData;
 // search the web. Instead, they use the built-in omnibox providers to provide
 // suggestions. This file defines those search engines and util functions.
 
-namespace TemplateURLStarterPackData {
+namespace template_url_starter_pack_data {
 
-typedef enum {
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.search_engines
+// GENERATED_JAVA_PREFIX_TO_STRIP: k
+enum class StarterPackId {
+  kNone = 0,
+
   kBookmarks = 1,
   kHistory = 2,
   kTabs = 3,
-  kAskGoogle = 4,
+  kGemini = 4,
+  kPage = 5,
+  kAiMode = 6,
 
-  kMaxStarterPackID
-} StarterPackID;
+  kMaxStarterPackId
+};
 
 struct StarterPackEngine {
   int name_message_id;
@@ -36,7 +42,7 @@ struct StarterPackEngine {
   const char* const favicon_url;
   const char* const search_url;
   const char* const destination_url;
-  const StarterPackID id;
+  const StarterPackId id;
   const SearchEngineType type;
 };
 
@@ -47,7 +53,9 @@ extern const int kFirstCompatibleDataVersion;
 extern const StarterPackEngine bookmarks;
 extern const StarterPackEngine history;
 extern const StarterPackEngine tabs;
-extern const StarterPackEngine AskGoogle;
+extern const StarterPackEngine gemini;
+extern const StarterPackEngine page;
+extern const StarterPackEngine ai_mode;
 
 // Returns the current version of the starterpack data, so callers can know when
 // they need to re-merge.
@@ -62,8 +70,8 @@ std::vector<std::unique_ptr<TemplateURLData>> GetStarterPackEngines();
 
 // Returns the destination url for the starter pack engine associated with a
 // given starter pack id.
-std::u16string GetDestinationUrlForStarterPackID(int id);
+std::u16string GetDestinationUrlForStarterPackId(StarterPackId id);
 
-}  // namespace TemplateURLStarterPackData
+}  // namespace template_url_starter_pack_data
 
 #endif  // COMPONENTS_SEARCH_ENGINES_TEMPLATE_URL_STARTER_PACK_DATA_H_

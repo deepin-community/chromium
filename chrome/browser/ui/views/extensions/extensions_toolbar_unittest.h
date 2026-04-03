@@ -6,12 +6,13 @@
 #define CHROME_BROWSER_UI_VIEWS_EXTENSIONS_EXTENSIONS_TOOLBAR_UNITTEST_H_
 
 #include "base/memory/raw_ptr.h"
-#include "chrome/browser/extensions/site_permissions_helper.h"
-#include "chrome/browser/ui/views/extensions/extensions_toolbar_container.h"
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/test_with_browser_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "content/public/test/web_contents_tester.h"
+#include "extensions/browser/extension_registrar.h"
+#include "extensions/browser/permissions/site_permissions_helper.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/common/extension.h"
 
@@ -20,7 +21,7 @@ class ExtensionService;
 }  // namespace extensions
 
 // Base class for unit tests that use the toolbar area. This is used for unit
-// tests that are generally related to the ExtensionsToolbarContainer in the
+// tests that are generally related to the ExtensionsToolbarDesktop in the
 // ToolbarView area (e.g ExtensionsToolbarControls).
 // When possible, prefer creating a unit test with browser view instead of a
 // interactive ui or browser test since they are faster and less flaky.
@@ -38,7 +39,11 @@ class ExtensionsToolbarUnitTest : public TestWithBrowserView {
     return extension_service_;
   }
 
-  ExtensionsToolbarContainer* extensions_container() {
+  extensions::ExtensionRegistrar* extension_registrar() {
+    return extensions::ExtensionRegistrar::Get(profile());
+  }
+
+  ExtensionsToolbarDesktop* extensions_container() {
     return browser_view()->toolbar()->extensions_container();
   }
 
@@ -112,6 +117,18 @@ class ExtensionsToolbarUnitTest : public TestWithBrowserView {
       extensions::PermissionsManager::UserSiteSetting site_setting,
       const GURL& url);
 
+  // Adds a site access request with an optional `filter` for `extension` in
+  // `web_contents`.
+  void AddHostAccessRequest(
+      const extensions::Extension& extension,
+      content::WebContents* web_contents,
+      const std::optional<URLPattern>& filter = std::nullopt);
+
+  // Removes the site access request for `extension` in `web_contents`, if
+  // existent.
+  void RemoveHostAccessRequest(const extensions::Extension& extension,
+                               content::WebContents* web_contents);
+
   // Returns the user's site setting for `url`.
   extensions::PermissionsManager::UserSiteSetting GetUserSiteSetting(
       const GURL& url);
@@ -138,7 +155,7 @@ class ExtensionsToolbarUnitTest : public TestWithBrowserView {
   // etc.)
   void WaitForAnimation();
 
-  // Since this is a unittest, the ExtensionsToolbarContainer sometimes needs a
+  // Since this is a unittest, the ExtensionsToolbarDesktop sometimes needs a
   // nudge to re-layout the views.
   void LayoutContainerIfNecessary();
 
@@ -151,6 +168,7 @@ class ExtensionsToolbarUnitTest : public TestWithBrowserView {
   void TearDown() override;
 
  private:
+  base::test::ScopedFeatureList scoped_feature_list_;
   raw_ptr<extensions::ExtensionService, DanglingUntriaged> extension_service_ =
       nullptr;
   raw_ptr<extensions::PermissionsManager, DanglingUntriaged>

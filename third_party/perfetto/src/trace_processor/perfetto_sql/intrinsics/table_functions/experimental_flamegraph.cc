@@ -25,18 +25,16 @@
 
 #include "perfetto/base/logging.h"
 #include "perfetto/base/status.h"
+#include "perfetto/ext/base/status_macros.h"
 #include "perfetto/ext/base/status_or.h"
 #include "perfetto/ext/base/string_utils.h"
 #include "perfetto/trace_processor/basic_types.h"
-#include "src/trace_processor/db/column/types.h"
-#include "src/trace_processor/db/table.h"
+#include "src/trace_processor/containers/string_pool.h"
 #include "src/trace_processor/importers/proto/heap_graph_tracker.h"
-#include "src/trace_processor/importers/proto/heap_profile_tracker.h"
 #include "src/trace_processor/perfetto_sql/intrinsics/table_functions/flamegraph_construction_algorithms.h"
 #include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/tables/profiler_tables_py.h"
 #include "src/trace_processor/types/trace_processor_context.h"
-#include "src/trace_processor/util/status_macros.h"
 
 namespace perfetto::trace_processor {
 
@@ -71,23 +69,23 @@ base::StatusOr<int64_t> ParseTimeConstraintTs(const std::string& c,
 base::StatusOr<TimeConstraints> ParseTimeConstraint(const std::string& c) {
   if (base::StartsWith(c, "=")) {
     ASSIGN_OR_RETURN(int64_t ts, ParseTimeConstraintTs(c, 1));
-    return TimeConstraints{FilterOp::kEq, ts};
+    return TimeConstraints{dataframe::Eq{}, ts};
   }
   if (base::StartsWith(c, ">=")) {
     ASSIGN_OR_RETURN(int64_t ts, ParseTimeConstraintTs(c, 2));
-    return TimeConstraints{FilterOp::kGe, ts};
+    return TimeConstraints{dataframe::Ge{}, ts};
   }
   if (base::StartsWith(c, ">")) {
     ASSIGN_OR_RETURN(int64_t ts, ParseTimeConstraintTs(c, 1));
-    return TimeConstraints{FilterOp::kGt, ts};
+    return TimeConstraints{dataframe::Gt{}, ts};
   }
   if (base::StartsWith(c, "<=")) {
     ASSIGN_OR_RETURN(int64_t ts, ParseTimeConstraintTs(c, 2));
-    return TimeConstraints{FilterOp::kLe, ts};
+    return TimeConstraints{dataframe::Le{}, ts};
   }
   if (base::StartsWith(c, ">=")) {
     ASSIGN_OR_RETURN(int64_t ts, ParseTimeConstraintTs(c, 2));
-    return TimeConstraints{FilterOp::kLt, ts};
+    return TimeConstraints{dataframe::Lt{}, ts};
   }
   return base::ErrStatus("experimental_flamegraph: Unknown time constraint");
 }
@@ -186,7 +184,7 @@ class Matcher {
   const std::string focus_str_;
 };
 
-enum class FocusedState {
+enum class FocusedState : uint8_t {
   kNotFocused,
   kFocusedPropagating,
   kFocusedNotPropagating,
@@ -194,34 +192,38 @@ enum class FocusedState {
 
 using tables::ExperimentalFlamegraphTable;
 std::vector<FocusedState> ComputeFocusedState(
+    const StringPool& pool,
     const ExperimentalFlamegraphTable& table,
     const Matcher& focus_matcher) {
   // Each row corresponds to a node in the flame chart tree with its parent
   // ptr. Root trees (no parents) will have a null parent ptr.
   std::vector<FocusedState> focused(table.row_count());
 
-  for (uint32_t i = 0; i < table.row_count(); ++i) {
-    auto parent_id = table.parent_id()[i];
+  for (auto it = table.IterateRows(); it; ++it) {
+    auto parent_id = it.parent_id();
     // Constraint: all descendants MUST come after their parents.
-    PERFETTO_DCHECK(!parent_id.has_value() || *parent_id < table.id()[i]);
+    PERFETTO_DCHECK(!parent_id.has_value() || *parent_id < it.id());
 
-    if (focus_matcher.matches(table.name().GetString(i).ToStdString())) {
+    auto i = it.row_number().row_number();
+    if (focus_matcher.matches(pool.Get(it.name()).ToStdString())) {
       // Mark as focused
       focused[i] = FocusedState::kFocusedPropagating;
       auto current = parent_id;
       // Mark all parent nodes as focused
       while (current.has_value()) {
-        auto current_idx = *table.id().IndexOf(*current);
+        auto c = *table.FindById(*current);
+        uint32_t current_idx = c.ToRowNumber().row_number();
         if (focused[current_idx] != FocusedState::kNotFocused) {
           // We have already visited these nodes, skip
           break;
         }
         focused[current_idx] = FocusedState::kFocusedNotPropagating;
-        current = table.parent_id()[current_idx];
+        current = c.parent_id();
       }
-    } else if (parent_id.has_value() &&
-               focused[*table.id().IndexOf(*parent_id)] ==
-                   FocusedState::kFocusedPropagating) {
+    } else if (parent_id.has_value() && focused[table.FindById(*parent_id)
+                                                    ->ToRowNumber()
+                                                    .row_number()] ==
+                                            FocusedState::kFocusedPropagating) {
       // Focus cascades downwards.
       focused[i] = FocusedState::kFocusedPropagating;
     } else {
@@ -245,7 +247,7 @@ std::unique_ptr<tables::ExperimentalFlamegraphTable> FocusTable(
     return in;
   }
   std::vector<FocusedState> focused_state =
-      ComputeFocusedState(*in, Matcher(focus_str));
+      ComputeFocusedState(storage->string_pool(), *in, Matcher(focus_str));
   std::unique_ptr<ExperimentalFlamegraphTable> tbl(
       new tables::ExperimentalFlamegraphTable(storage->mutable_string_pool()));
 
@@ -253,19 +255,21 @@ std::unique_ptr<tables::ExperimentalFlamegraphTable> FocusTable(
   std::vector<CumulativeCounts> node_to_cumulatives(in->row_count());
   for (int64_t idx = in->row_count() - 1; idx >= 0; --idx) {
     auto i = static_cast<uint32_t>(idx);
+    auto rr = (*in)[i];
     if (focused_state[i] == FocusedState::kNotFocused) {
       continue;
     }
     auto& cumulatives = node_to_cumulatives[i];
-    cumulatives.size += in->size()[i];
-    cumulatives.count += in->count()[i];
-    cumulatives.alloc_size += in->alloc_size()[i];
-    cumulatives.alloc_count += in->alloc_count()[i];
+    cumulatives.size += rr.size();
+    cumulatives.count += rr.count();
+    cumulatives.alloc_size += rr.alloc_size();
+    cumulatives.alloc_count += rr.alloc_count();
 
-    auto parent_id = in->parent_id()[i];
+    auto parent_id = rr.parent_id();
     if (parent_id.has_value()) {
-      auto& parent_cumulatives =
-          node_to_cumulatives[*in->id().IndexOf(*parent_id)];
+      uint32_t parent_row =
+          in->FindById(*parent_id)->ToRowNumber().row_number();
+      auto& parent_cumulatives = node_to_cumulatives[parent_row];
       parent_cumulatives.size += cumulatives.size;
       parent_cumulatives.count += cumulatives.count;
       parent_cumulatives.alloc_size += cumulatives.alloc_size;
@@ -275,7 +279,8 @@ std::unique_ptr<tables::ExperimentalFlamegraphTable> FocusTable(
 
   // Mapping between the old rows ('node') to the new identifiers.
   std::vector<ExperimentalFlamegraphTable::Id> node_to_id(in->row_count());
-  for (uint32_t i = 0; i < in->row_count(); ++i) {
+  for (auto it = in->IterateRows(); it; ++it) {
+    uint32_t i = it.row_number().row_number();
     if (focused_state[i] == FocusedState::kNotFocused) {
       continue;
     }
@@ -283,22 +288,23 @@ std::unique_ptr<tables::ExperimentalFlamegraphTable> FocusTable(
     tables::ExperimentalFlamegraphTable::Row alloc_row{};
     // We must reparent the rows as every insertion will get its own
     // identifier.
-    auto original_parent_id = in->parent_id()[i];
+    auto original_parent_id = it.parent_id();
     if (original_parent_id.has_value()) {
-      auto original_idx = *in->id().IndexOf(*original_parent_id);
+      auto original_idx =
+          in->FindById(*original_parent_id)->ToRowNumber().row_number();
       alloc_row.parent_id = node_to_id[original_idx];
     }
 
-    alloc_row.ts = in->ts()[i];
-    alloc_row.upid = in->upid()[i];
-    alloc_row.profile_type = in->profile_type()[i];
-    alloc_row.depth = in->depth()[i];
-    alloc_row.name = in->name()[i];
-    alloc_row.map_name = in->map_name()[i];
-    alloc_row.count = in->count()[i];
-    alloc_row.size = in->size()[i];
-    alloc_row.alloc_count = in->alloc_count()[i];
-    alloc_row.alloc_size = in->alloc_size()[i];
+    alloc_row.ts = it.ts();
+    alloc_row.upid = it.upid();
+    alloc_row.profile_type = it.profile_type();
+    alloc_row.depth = it.depth();
+    alloc_row.name = it.name();
+    alloc_row.map_name = it.map_name();
+    alloc_row.count = it.count();
+    alloc_row.size = it.size();
+    alloc_row.alloc_count = it.alloc_count();
+    alloc_row.alloc_size = it.alloc_size();
 
     const auto& cumulative = node_to_cumulatives[i];
     alloc_row.cumulative_count = cumulative.count;
@@ -311,65 +317,78 @@ std::unique_ptr<tables::ExperimentalFlamegraphTable> FocusTable(
 }
 }  // namespace
 
-ExperimentalFlamegraph::ExperimentalFlamegraph(TraceProcessorContext* context)
-    : context_(context) {}
+ExperimentalFlamegraph::Cursor::Cursor(TraceProcessorContext* context)
+    : context_(context), table_(context_->storage->mutable_string_pool()) {}
 
-ExperimentalFlamegraph::~ExperimentalFlamegraph() = default;
-
-base::StatusOr<std::unique_ptr<Table>> ExperimentalFlamegraph::ComputeTable(
+bool ExperimentalFlamegraph::Cursor::Run(
     const std::vector<SqlValue>& arguments) {
-  ASSIGN_OR_RETURN(auto values, GetFlamegraphInputValues(arguments));
-
-  std::unique_ptr<tables::ExperimentalFlamegraphTable> table;
+  base::StatusOr<InputValues> values_status =
+      GetFlamegraphInputValues(arguments);
+  if (!values_status.ok()) {
+    return OnFailure(values_status.status());
+  }
+  InputValues values = std::move(values_status.value());
+  std::unique_ptr<tables::ExperimentalFlamegraphTable> constructed_table;
   switch (values.profile_type) {
     case ProfileType::kGraph: {
       if (!values.ts || !values.upid) {
-        return base::ErrStatus(
+        return OnFailure(base::ErrStatus(
             "experimental_flamegraph: ts and upid must be present for heap "
-            "graph");
+            "graph"));
       }
-      table = HeapGraphTracker::GetOrCreate(context_)->BuildFlamegraph(
+      constructed_table = HeapGraphTracker::Get(context_)->BuildFlamegraph(
           *values.ts, *values.upid);
       break;
     }
     case ProfileType::kHeapProfile: {
       if (!values.ts || !values.upid) {
-        return base::ErrStatus(
+        return OnFailure(base::ErrStatus(
             "experimental_flamegraph: ts and upid must be present for heap "
-            "profile");
+            "profile"));
       }
-      table = BuildHeapProfileFlamegraph(context_->storage.get(), *values.upid,
-                                         *values.ts);
+      constructed_table = BuildHeapProfileFlamegraph(context_->storage.get(),
+                                                     *values.upid, *values.ts);
       break;
     }
     case ProfileType::kPerf: {
-      table = BuildNativeCallStackSamplingFlamegraph(
+      constructed_table = BuildNativeCallStackSamplingFlamegraph(
           context_->storage.get(), values.upid, values.upid_group,
           values.time_constraints);
       break;
     }
   }
-  if (!table) {
-    return base::ErrStatus("Failed to build flamegraph");
+  if (!constructed_table) {
+    return OnFailure(base::ErrStatus("Failed to build flamegraph"));
   }
   if (values.focus_str) {
-    table = FocusTable(context_->storage.get(), std::move(table),
-                       *values.focus_str);
+    constructed_table =
+        FocusTable(context_->storage.get(), std::move(constructed_table),
+                   *values.focus_str);
   }
-  return std::unique_ptr<Table>(std::move(table));
+  table_ = std::move(*constructed_table);
+  return OnSuccess(&table_.dataframe());
 }
 
-Table::Schema ExperimentalFlamegraph::CreateSchema() {
-  return tables::ExperimentalFlamegraphTable::ComputeStaticSchema();
+ExperimentalFlamegraph::ExperimentalFlamegraph(TraceProcessorContext* context)
+    : context_(context) {}
+
+ExperimentalFlamegraph::~ExperimentalFlamegraph() = default;
+
+std::unique_ptr<StaticTableFunction::Cursor>
+ExperimentalFlamegraph::MakeCursor() {
+  return std::make_unique<Cursor>(context_);
+}
+
+dataframe::DataframeSpec ExperimentalFlamegraph::CreateSpec() {
+  return tables::ExperimentalFlamegraphTable::kSpec.ToUntypedDataframeSpec();
 }
 
 std::string ExperimentalFlamegraph::TableName() {
   return tables::ExperimentalFlamegraphTable::Name();
 }
 
-uint32_t ExperimentalFlamegraph::EstimateRowCount() {
-  // TODO(lalitm): return a better estimate here when possible.
-  return 1024;
+uint32_t ExperimentalFlamegraph::GetArgumentCount() const {
+  return 6;
 }
 
 }  // namespace perfetto::trace_processor

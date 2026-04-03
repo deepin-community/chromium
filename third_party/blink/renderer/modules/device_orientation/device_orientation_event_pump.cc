@@ -8,7 +8,7 @@
 
 #include "services/device/public/cpp/generic_sensor/sensor_reading.h"
 #include "services/device/public/mojom/sensor.mojom-blink.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/platform_event_controller.h"
@@ -91,8 +91,8 @@ void DeviceOrientationEventPump::SendStartMessage(LocalFrame& frame) {
         sensor_provider_.BindNewPipeAndPassReceiver(
             frame.GetTaskRunner(TaskType::kSensor)));
     sensor_provider_.set_disconnect_handler(
-        WTF::BindOnce(&DeviceSensorEventPump::HandleSensorProviderError,
-                      WrapWeakPersistent(this)));
+        BindOnce(&DeviceSensorEventPump::HandleSensorProviderError,
+                 WrapWeakPersistent(this)));
   }
 
   if (absolute_) {

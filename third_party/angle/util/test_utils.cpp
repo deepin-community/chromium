@@ -6,6 +6,10 @@
 
 // system_utils: Defines common utility functions
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "util/test_utils.h"
 
 #include <EGL/egl.h>
@@ -14,6 +18,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 
 namespace angle
 {
@@ -77,6 +82,7 @@ const DisplayTypeInfo kDisplayTypes[] = {
     {"swiftshader", EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE},
     {"vulkan", EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE},
     {"vulkan-null", EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE},
+    {"webgpu", EGL_PLATFORM_ANGLE_TYPE_WEBGPU_ANGLE},
 };
 }  // anonymous namespace
 

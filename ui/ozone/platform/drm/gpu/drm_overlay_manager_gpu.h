@@ -19,9 +19,8 @@ class DrmThreadProxy;
 // overlay validations requests to the DRM thread.
 class DrmOverlayManagerGpu : public DrmOverlayManager {
  public:
-  explicit DrmOverlayManagerGpu(
-      DrmThreadProxy* drm_thread_proxy,
-      bool allow_sync_and_real_buffer_page_flip_testing);
+  DrmOverlayManagerGpu(DrmThreadProxy* drm_thread_proxy,
+                       bool allow_sync_and_real_buffer_page_flip_testing);
 
   DrmOverlayManagerGpu(const DrmOverlayManagerGpu&) = delete;
   DrmOverlayManagerGpu& operator=(const DrmOverlayManagerGpu&) = delete;

@@ -13,27 +13,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <algorithm>
 #include <memory>
 #include <string>
-#include <vector>
 
-#include "llvm/ADT/BitVector.h"
-#include "llvm/ADT/STLExtras.h"
+#include "absl/strings/str_cat.h"
 #include "llvm/Support/Casting.h"
-#include "llvm/Support/Debug.h"
 #include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"  // from @llvm-project
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"  // from @llvm-project
-#include "mlir/Analysis/DataFlow/SparseAnalysis.h"  // from @llvm-project
-#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/Analysis/DataFlowFramework.h"  // from @llvm-project
 #include "mlir/Dialect/MLProgram/IR/MLProgram.h"  // from @llvm-project
-#include "mlir/Dialect/MLProgram/IR/MLProgramAttributes.h"  // from @llvm-project
+#include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
+#include "mlir/IR/DialectRegistry.h"  // from @llvm-project
 #include "mlir/IR/SymbolTable.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/analysis/resource_dataflow.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_saved_model.h"
@@ -66,8 +64,8 @@ Operation* GetHandleSource(Operation* op, DataFlowSolver& solver) {
   } else if (auto write = llvm::dyn_cast<TF::AssignVariableOp>(op)) {
     resource = write.getResource();
   }
-  const TF::ResourceDataflowAnalysis::StateT* state =
-      solver.lookupState<TF::ResourceDataflowAnalysis::StateT>(resource);
+  const TF::ResourceDataflowState* state =
+      solver.lookupState<TF::ResourceDataflowState>(resource);
   if (!state) {
     return nullptr;
   }
@@ -127,8 +125,8 @@ ml_program::GlobalOp CreateGlobalOpFromOp(Operation* source, OpBuilder& builder,
 
   if (!type) return nullptr;
 
-  auto globalOp = builder.create<ml_program::GlobalOp>(
-      builder.getBlock()->getParentOp()->getLoc(), name, type, false,
+  auto globalOp = ml_program::GlobalOp::create(
+      builder, builder.getBlock()->getParentOp()->getLoc(), name, type, false,
       initial_value, nullptr);
   symbol_table.insert(globalOp);
 
@@ -143,7 +141,7 @@ ml_program::GlobalOp CreateGlobalOpFromOp(Operation* source, OpBuilder& builder,
 struct LowerVariableOpsToMlProgramPass
     : public impl::LowerVariableOpsToMlProgramPassBase<
           LowerVariableOpsToMlProgramPass> {
-  explicit LowerVariableOpsToMlProgramPass() {}
+  explicit LowerVariableOpsToMlProgramPass() = default;
   void getDependentDialects(DialectRegistry& registry) const override {
     registry.insert<mlir::tf_saved_model::TensorFlowSavedModelDialect,
                     ml_program::MLProgramDialect>();
@@ -154,7 +152,7 @@ struct LowerVariableOpsToMlProgramPass
     DataFlowSolver solver;
     solver.load<dataflow::DeadCodeAnalysis>();
     solver.load<dataflow::SparseConstantPropagation>();
-    solver.load<TF::ResourceDataflowAnalysis>();
+    TF::LoadResourceDataflowAnalysis(solver);
     if (failed(solver.initializeAndRun(module))) return signalPassFailure();
 
     SymbolTable symbol_table(module);
@@ -168,12 +166,12 @@ struct LowerVariableOpsToMlProgramPass
           CreateGlobalOpFromOp(source, globalBuilder, symbol_table);
       if (!globalOp) return;
       OpBuilder builder(op);
-      Operation* load = builder.create<mlir::ml_program::GlobalLoadOp>(
-          op.getLoc(), globalOp.getType(),
+      Operation* load = mlir::ml_program::GlobalLoadOp::create(
+          builder, op.getLoc(), globalOp.getType(),
           SymbolRefAttr::get(op->getContext(), globalOp.getSymName()));
       if (globalOp.getType() != op.getValue().getType()) {
-        load = builder.create<TF::CastOp>(op.getLoc(), op.getValue().getType(),
-                                          load->getResult(0));
+        load = TF::CastOp::create(builder, op.getLoc(), op.getValue().getType(),
+                                  load->getResult(0));
       }
       op.getResult().replaceAllUsesWith(load->getResult(0));
       op.erase();
@@ -190,11 +188,11 @@ struct LowerVariableOpsToMlProgramPass
       globalOp.setIsMutableAttr(builder.getUnitAttr());
       Value value_to_store = op.getValue();
       if (globalOp.getType() != op.getValue().getType()) {
-        value_to_store = builder.create<TF::CastOp>(
-            op.getLoc(), globalOp.getType(), value_to_store);
+        value_to_store = TF::CastOp::create(builder, op.getLoc(),
+                                            globalOp.getType(), value_to_store);
       }
-      builder.create<mlir::ml_program::GlobalStoreOp>(
-          op.getLoc(),
+      mlir::ml_program::GlobalStoreOp::create(
+          builder, op.getLoc(),
           SymbolRefAttr::get(op->getContext(), globalOp.getSymName()),
           value_to_store);
       op.erase();

@@ -1,0 +1,93 @@
+// Copyright 2025 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#include "base/metrics/histogram_functions.h"
+#include "chrome/browser/actor/actor_tab_data.h"
+#include "chrome/browser/actor/ui/actor_ui_metrics.h"
+#include "chrome/browser/actor/ui/actor_ui_metrics_types.h"
+#include "chrome/browser/actor/ui/dom_node_geometry.h"
+#include "chrome/browser/actor/ui/event_dispatcher.h"
+#include "chrome/browser/actor/ui/ui_event.h"
+#include "chrome/browser/actor/ui/ui_event_debugstring.h"
+#include "chrome/common/chrome_features.h"
+
+namespace actor::ui {
+namespace {
+using base::UmaHistogramEnumeration;
+
+}  // namespace
+
+AsyncUiEvent ComputedMouseMove(tabs::TabInterface::Handle tab,
+                               const PageTarget& target) {
+  ActorTabData* actor_tab_data = ActorTabData::From(tab.Get());
+  if (base::FeatureList::IsEnabled(
+          features::kGlicActorSplitValidateAndExecute) &&
+      base::FeatureList::IsEnabled(features::kGlicActorUiMagicCursor)) {
+    if (actor_tab_data == nullptr) {
+      VLOG(4) << "ComputedMouseMove (GlicActorSplitValidateAndExecute): No "
+                 "ActorTabData available for tab "
+              << tab.raw_value();
+      RecordRendererResolvedTargetResult(
+          RendererResolvedTargetResult::kMissingActorTabData);
+      return MouseMove(tab, std::nullopt,
+                       TargetSource::kUnresolvableFromRenderer);
+    }
+    std::optional<gfx::Point> renderer_resolved_point =
+        actor_tab_data->GetLastRendererResolvedTarget();
+    if (!renderer_resolved_point.has_value()) {
+      VLOG(4) << "ComputedMouseMove: No cached renderer resolved target "
+                 "available for tab "
+              << tab.raw_value();
+      RecordRendererResolvedTargetResult(
+          RendererResolvedTargetResult::kRendererResolvedTargetHasNoValue);
+      return MouseMove(tab, std::nullopt,
+                       TargetSource::kUnresolvableFromRenderer);
+    }
+    VLOG(4) << "Retrieved renderer resolved target: "
+            << renderer_resolved_point.value().ToString();
+    RecordRendererResolvedTargetResult(RendererResolvedTargetResult::kSuccess);
+    return MouseMove(tab, renderer_resolved_point.value(),
+                     TargetSource::kRendererResolved);
+  }
+
+  if (std::holds_alternative<gfx::Point>(target)) {
+    RecordModelPageTargetType(ModelPageTargetType::kPoint);
+    return MouseMove(tab, std::get<gfx::Point>(target),
+                     TargetSource::kToolRequest);
+  }
+
+  RecordModelPageTargetType(ModelPageTargetType::kDomNode);
+
+  // Try to compute a point target by converting the DomNode to a gfx::Point.
+  if (actor_tab_data == nullptr) {
+    VLOG(4) << "ComputedMouseMove: No ActorTabData available for tab "
+            << tab.raw_value();
+    RecordComputedTargetResult(ComputedTargetResult::kMissingActorTabData);
+    return MouseMove(tab, std::nullopt, TargetSource::kUnresolvableInApc);
+  }
+
+  auto* geom = actor_tab_data->GetLastObservedDomNodeGeometry();
+  if (!geom) {
+    VLOG(4)
+        << "ComputedMouseMove: No cached APC/DomNodeGeometry available for tab "
+        << tab.raw_value();
+    RecordComputedTargetResult(
+        ComputedTargetResult::kMissingAnnotatedPageContent);
+    return MouseMove(tab, std::nullopt, TargetSource::kUnresolvableInApc);
+  }
+
+  auto pt_target = geom->GetDomNode(std::get<DomNode>(target));
+  if (!pt_target.has_value()) {
+    VLOG(4) << "ComputedMouseMove: Failed to resolve point target for "
+            << DebugString(target);
+    RecordComputedTargetResult(ComputedTargetResult::kTargetNotResolvedInApc);
+    return MouseMove(tab, std::nullopt, TargetSource::kUnresolvableInApc);
+  }
+  VLOG(4) << "Converted PageTarget: " << std::get<DomNode>(target) << " to "
+          << pt_target.value().ToString();
+  RecordComputedTargetResult(ComputedTargetResult::kSuccess);
+  return MouseMove(tab, pt_target.value(), TargetSource::kDerivedFromApc);
+}
+
+}  // namespace actor::ui

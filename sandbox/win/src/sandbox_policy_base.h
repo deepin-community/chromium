@@ -8,21 +8,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <list>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include <optional>
-#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/dcheck_is_on.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/scoped_refptr.h"
 #include "base/process/launch.h"
-#include "base/synchronization/lock.h"
+#include "base/types/expected.h"
 #include "base/win/access_token.h"
+#include "base/win/scoped_process_information.h"
 #include "base/win/windows_types.h"
 #include "sandbox/win/src/app_container_base.h"
 #include "sandbox/win/src/handle_closer.h"
@@ -63,7 +61,7 @@ class ConfigBase final : public TargetConfig {
   void SetJobMemoryLimit(size_t memory_limit) override;
   ResultCode AllowFileAccess(FileSemantics semantics,
                              const wchar_t* pattern) override;
-  ResultCode AllowExtraDlls(const wchar_t* pattern) override;
+  ResultCode AllowExtraDll(const wchar_t* path) override;
   ResultCode SetFakeGdiInit() override;
   void AddDllToUnload(const wchar_t* dll_name) override;
   ResultCode SetIntegrityLevel(IntegrityLevel integrity_level) override;
@@ -76,23 +74,25 @@ class ConfigBase final : public TargetConfig {
   MitigationFlags GetDelayedProcessMitigations() const override;
   void AddRestrictingRandomSid() override;
   void SetLockdownDefaultDacl() override;
-  ResultCode AddAppContainerProfile(const wchar_t* package_name,
-                                    bool create_profile) override;
-  scoped_refptr<AppContainer> GetAppContainer() override;
+  ResultCode AddAppContainerProfile(const wchar_t* package_name) override;
+  AppContainer* GetAppContainer() override;
   void AddKernelObjectToClose(HandleToClose handle_info) override;
   void SetDisconnectCsrss() override;
   void SetDesktop(Desktop desktop) override;
   void SetFilterEnvironment(bool filter) override;
   bool GetEnvironmentFiltered() override;
   void SetZeroAppShim() override;
+  void SetSecurityAttributeName(std::wstring_view name) override;
 
  private:
-  // Can call Freeze()
+  // Can call Freeze() and is_csrss_connected().
   friend class BrokerServicesBase;
   // Can examine private fields.
   friend class PolicyDiagnostic;
   // Can call private accessors.
   friend class PolicyBase;
+  // Can ask for the low-level policy.
+  friend class TopLevelDispatcher;
 
   // Promise that no further changes will be made to the configuration, and
   // this object can be reused by multiple policies.
@@ -104,6 +104,11 @@ class ConfigBase final : public TargetConfig {
   // Lazily populates the policy_ and policy_maker_ members for internal rules.
   // Can only be called before the object is fully configured.
   LowLevelPolicy* PolicyMaker();
+
+  // Some IPCs are only configured if a matching policy has been set, this
+  // method allows TopLevelDispatcher to determine if a policy exists for a
+  // given service. Only call after calling Freeze().
+  bool NeedsIpc(IpcTag service) const;
 
 #if DCHECK_IS_ON()
   // Used to sequence-check in DCHECK builds.
@@ -128,6 +133,12 @@ class ConfigBase final : public TargetConfig {
   Desktop desktop() { return desktop_; }
   const HandleCloserConfig& handle_closer() { return handle_closer_; }
   bool zero_appshim() { return zero_appshim_; }
+  const std::vector<base::win::ScopedHandle>& shared_handles() {
+    return shared_handles_;
+  }
+  std::optional<std::wstring> security_attribute_name() {
+    return security_attribute_name_;
+  }
 
   TokenLevel lockdown_level_;
   TokenLevel initial_level_;
@@ -154,7 +165,20 @@ class ConfigBase final : public TargetConfig {
   // The list of dlls to unload in the target process.
   std::vector<std::wstring> blocklisted_dlls_;
   // AppContainer to be applied to the target process.
-  scoped_refptr<AppContainerBase> app_container_;
+  std::unique_ptr<AppContainerBase> app_container_;
+  // List of handles to be shared with a new process to complete the config.
+  std::vector<base::win::ScopedHandle> shared_handles_;
+  // The name of the Security Attribute to use in the default DACL of the
+  // target process.
+  std::optional<std::wstring> security_attribute_name_;
+};
+
+struct TargetTokens {
+  base::win::AccessToken initial_;
+  base::win::AccessToken lockdown_;
+  TargetTokens(base::win::AccessToken initial, base::win::AccessToken lockdown);
+  TargetTokens(TargetTokens&&) = default;
+  ~TargetTokens();
 };
 
 class PolicyBase final : public TargetPolicy {
@@ -183,18 +207,15 @@ class PolicyBase final : public TargetPolicy {
   // Returns true if a job is associated with this policy.
   bool HasJob();
 
-  // Updates the active process limit on the policy's job to zero.
-  // Has no effect if the job is allowed to spawn processes.
-  ResultCode DropActiveProcessLimit();
-
   // Creates the two tokens with the levels specified in a previous call to
   // SetTokenLevel().
-  ResultCode MakeTokens(std::optional<base::win::AccessToken>& initial,
-                        std::optional<base::win::AccessToken>& lockdown);
+  base::expected<TargetTokens, ResultCode> MakeTokens();
 
-  // Applies the sandbox to |target| and takes ownership. Internally a
-  // call to TargetProcess::Init() is issued.
-  ResultCode ApplyToTarget(std::unique_ptr<TargetProcess> target);
+  // Initialize the sandbox process for the policy. This creates the IPC channel
+  // using the thread pool and applies process mitigations.
+  ResultCode InitProcess(HANDLE process_handle,
+                         ThreadPool* thread_pool,
+                         DWORD& last_error);
 
   EvalResult EvalPolicy(IpcTag service, CountedParameterSetBase* params);
 
@@ -209,6 +230,8 @@ class PolicyBase final : public TargetPolicy {
   friend class sandbox::BrokerServicesBase;
   // Allow PolicyDiagnostic to snapshot PolicyBase for diagnostics.
   friend class PolicyDiagnostic;
+  // Allow TopLevelDispatcher to know which IPC policy rules are necessary.
+  friend class TopLevelDispatcher;
 
   // Sets up interceptions for a new target. This policy must own |target|.
   ResultCode SetupAllInterceptions(TargetProcess& target);

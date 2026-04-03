@@ -6,9 +6,13 @@
 
 #include "base/metrics/histogram_macros.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/chrome_user_population_helper.h"
+#include "chrome/browser/safe_browsing/client_side_detection_intelligent_scan_delegate_factory.h"
 #include "chrome/browser/safe_browsing/client_side_detection_service_factory.h"
+#include "chrome/browser/safe_browsing/gemini_antiscam_protection/gemini_antiscam_protection_service.h"
+#include "chrome/browser/safe_browsing/gemini_antiscam_protection/gemini_antiscam_protection_service_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/safe_browsing/user_interaction_observer.h"
@@ -24,6 +28,10 @@
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "content/public/browser/global_routing_id.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/safe_browsing/android/safe_browsing_referring_app_bridge_android.h"
+#endif
+
 namespace safe_browsing {
 
 namespace {
@@ -38,7 +46,10 @@ ChromeClientSideDetectionHostDelegate::CreateHost(content::WebContents* tab) {
   Profile* profile = Profile::FromBrowserContext(browser_context);
   return ClientSideDetectionHost::Create(
       tab, std::make_unique<ChromeClientSideDetectionHostDelegate>(tab),
+      ClientSideDetectionIntelligentScanDelegateFactory::GetForProfile(profile),
       profile->GetPrefs(),
+      HistoryServiceFactory::GetForProfile(profile,
+                                           ServiceAccessType::IMPLICIT_ACCESS),
       std::make_unique<SafeBrowsingPrimaryAccountTokenFetcher>(
           IdentityManagerFactory::GetForProfile(profile)),
       profile->IsOffTheRecord(),
@@ -145,5 +156,50 @@ ChromeClientSideDetectionHostDelegate::GetUserPopulation() {
       Profile::FromBrowserContext(web_contents_->GetBrowserContext());
   return ::safe_browsing::GetUserPopulationForProfile(profile);
 }
+
+void ChromeClientSideDetectionHostDelegate::GetInnerText(
+    HostInnerTextCallback callback) {
+  content_extraction::GetInnerText(
+      *web_contents_->GetPrimaryMainFrame(), std::nullopt,
+      base::BindOnce(&ChromeClientSideDetectionHostDelegate::OnInnerTextResult,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void ChromeClientSideDetectionHostDelegate::MaybeStartGeminiAntiscamProtection(
+    GURL url,
+    ClientSideDetectionType request_type,
+    std::optional<bool> did_match_high_confidence_allowlist) {
+  GeminiAntiscamProtectionService* service =
+      GeminiAntiscamProtectionServiceFactory::GetForProfile(
+          Profile::FromBrowserContext(web_contents_->GetBrowserContext()));
+  if (service) {
+    // GetInnerText is called with a callback that will call
+    // GeminiAntiscamProtectionService::MaybeStartAntiscamProtection.
+    // The `did_match_high_confidence_allowlist` value is true if not set so
+    // that it will not trigger Gemini Antiscam Protection.
+    GetInnerText(base::BindOnce(
+        &GeminiAntiscamProtectionService::MaybeStartAntiscamProtection,
+        service->GetWeakPtr(),
+        GeminiAntiscamProtectionService::BuildGeminiAntiscamProtectionMetadata(
+            web_contents_),
+        url, request_type, did_match_high_confidence_allowlist.value_or(true),
+        web_contents_->GetPrimaryMainFrame()->GetLastCommittedURL()));
+  }
+}
+
+void ChromeClientSideDetectionHostDelegate::OnInnerTextResult(
+    HostInnerTextCallback callback,
+    std::unique_ptr<content_extraction::InnerTextResult> result) {
+  std::move(callback).Run(result ? result->inner_text : "");
+}
+
+#if BUILDFLAG(IS_ANDROID)
+internal::ReferringAppInfo
+ChromeClientSideDetectionHostDelegate::GetReferringAppInfo(
+    content::WebContents* web_contents) {
+  return safe_browsing::GetReferringAppInfo(web_contents,
+                                            /*get_webapk_info=*/false);
+}
+#endif
 
 }  // namespace safe_browsing

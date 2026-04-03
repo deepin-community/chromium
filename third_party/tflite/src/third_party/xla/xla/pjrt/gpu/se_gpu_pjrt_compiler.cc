@@ -15,47 +15,54 @@ limitations under the License.
 
 #include "xla/pjrt/gpu/se_gpu_pjrt_compiler.h"
 
+#include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
+#include "absl/log/check.h"
 #include "absl/status/status.h"
-#include "xla/client/xla_computation.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/layout_util.h"
+#include "xla/mlir_hlo/mhlo/transforms/passes.h"
 #include "xla/pjrt/gpu/se_gpu_pjrt_client.h"
+#include "xla/pjrt/gpu/se_gpu_topology_description.h"
+#include "xla/pjrt/mlir_to_hlo.h"
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/pjrt_compiler.h"
 #include "xla/pjrt/pjrt_executable.h"
-#include "xla/status_macros.h"
-#include "xla/stream_executor/platform/initialize.h"
-#include "tsl/platform/casts.h"
-#include "tsl/platform/errors.h"
-
-#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
-#include "xla/client/local_client.h"
-#include "xla/pjrt/mlir_to_hlo.h"
 #include "xla/pjrt/stream_executor_executable.h"
 #include "xla/pjrt/utils.h"
+#include "xla/service/compiled_module.h"
+#include "xla/service/compiler.h"
 #include "xla/service/dump.h"
-#include "xla/service/gpu/executable.pb.h"
-#include "xla/service/gpu/gpu_compiler.h"
+#include "xla/service/gpu_topology.h"
+#include "xla/service/hlo.pb.h"
+#include "xla/service/hlo_module_config.h"
 #include "xla/service/hlo_module_util.h"
-#include "xla/service/hlo_proto_util.h"
-#include "xla/service/local_service.h"
 #include "xla/service/local_service_utils.h"
-#include "xla/stream_executor/cuda/cuda_platform_id.h"
-#endif
-
-#if GOOGLE_CUDA
-#include "xla/service/gpu/nvptx_compiler.h"
-#elif TENSORFLOW_USE_ROCM
-#include "xla/service/gpu/amdgpu_compiler.h"
-#endif
+#include "xla/service/platform_util.h"
+#include "xla/shape.h"
+#include "xla/status_macros.h"
+#include "xla/stream_executor/platform.h"
+#include "xla/stream_executor/platform_manager.h"
+#include "xla/tsl/platform/errors.h"
+#include "xla/tsl/platform/statusor.h"
+#include "tsl/platform/casts.h"
 
 namespace xla {
 namespace {
 
 bool IsGpuClient(const PjRtClient& client) {
-  return client.platform_id() == CudaId() || client.platform_id() == RocmId();
+  return client.platform_id() == CudaId() || client.platform_id() == RocmId() ||
+         client.platform_id() == SyclId();
 }
 
 bool IsSameTopology(const PjRtTopologyDescription& topology1,
@@ -79,39 +86,89 @@ absl::Status IsValidTopologyAndClientForCompile(
     return absl::InvalidArgumentError(
         "SE:GPU compiler requires a GPU PjRtClient.");
   }
-  TF_ASSIGN_OR_RETURN(auto client_topology, client->GetTopologyDescription());
-
-  if (!IsSameTopology(topology, *client_topology)) {
-    return absl::UnimplementedError(
-        "SE:GPU compiler requires the topology same as the one in the client.");
-  }
   return absl::OkStatus();
 }
 
+absl::StatusOr<std::unique_ptr<xla::Compiler>>
+GetCompilerForDefaultGpuPlatform() {
+  TF_ASSIGN_OR_RETURN(stream_executor::Platform * platform,
+                      PlatformUtil::GetPlatform("gpu"));
+  return Compiler::GetForPlatform(platform->id());
+}
+
+absl::StatusOr<std::unique_ptr<xla::Compiler>> GetCompilerForPlatform(
+    std::optional<stream_executor::Platform::Id> platform_id) {
+  if (!platform_id.has_value()) {
+    return GetCompilerForDefaultGpuPlatform();
+  }
+
+  TF_ASSIGN_OR_RETURN(
+      stream_executor::Platform * platform,
+      stream_executor::PlatformManager::PlatformWithId(platform_id.value()));
+  return Compiler::GetForPlatform(platform->id());
+}
+
 }  // namespace
+
+StreamExecutorGpuCompiler::StreamExecutorGpuCompiler(
+    stream_executor::Platform::Id platform_id)
+    : requested_platform_id_(platform_id) {}
+
+absl::StatusOr<Compiler*> StreamExecutorGpuCompiler::GetOrCreateCompiler() {
+  absl::MutexLock lock(compiler_mutex_);
+  if (compiler_ == nullptr) {
+    // We get the compiler here because doing so in the constructor might fail
+    // due to static initialization order shenanigans (An instance of this class
+    // is initialized statically and this might happen before the compiler is
+    // registered with Compiler::RegisterCompilerFactory). For the same reason,
+    // we can't fail construction of this class, therefore we have this
+    // GetOrCreate function and we can return on error when calling Compile.
+    TF_ASSIGN_OR_RETURN(compiler_,
+                        GetCompilerForPlatform(requested_platform_id_));
+  }
+  return compiler_.get();
+}
 
 absl::StatusOr<std::unique_ptr<PjRtExecutable>>
 StreamExecutorGpuCompiler::Compile(CompileOptions options,
                                    const XlaComputation& computation,
                                    const PjRtTopologyDescription& topology,
                                    PjRtClient* client) {
-#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
-
-#if GOOGLE_CUDA
-  auto gpu_compiler = gpu::NVPTXCompiler();
-#else
-  auto gpu_compiler = gpu::AMDGPUCompiler();
-#endif
+  TF_ASSIGN_OR_RETURN(Compiler * gpu_compiler, GetOrCreateCompiler());
 
   CompileOptions input_options = options;
-  if (!options.target_config) {
-    if (!client) {
+  if (xla::IsEarlyExitCompilation(options)) {
+    auto* se_gpu_topology =
+        tsl::down_cast<const xla::StreamExecutorGpuTopologyDescription*>(
+            &topology);
+    const xla::GpuTopology& gpu_topology = se_gpu_topology->gpu_topology();
+    TF_RET_CHECK(gpu_topology.has_gpu_target_config())
+        << "GPU cross-compile is not yet implemented for topology "
+        << se_gpu_topology->ToProto()->ShortDebugString();
+    options.gpu_target_config = gpu_topology.gpu_target_config();
+  }
+  if (!options.gpu_target_config) {
+    if (client != nullptr) {
+      TF_RET_CHECK(IsGpuClient(*client))
+          << "GPU compilation requires a GPU PjRt client.";
+      TF_RETURN_IF_ERROR(IsValidTopologyAndClientForCompile(topology, client));
+      TF_ASSIGN_OR_RETURN(std::unique_ptr<PjRtExecutable> executable,
+                          client->Compile(computation, options));
+      return executable;
+    }
+    const auto& gpu_topology =
+        tensorflow::down_cast<const xla::StreamExecutorGpuTopologyDescription&>(
+            topology);
+    if (gpu_topology.target_config().has_value()) {
+      TF_ASSIGN_OR_RETURN(
+          Compiler::GpuTargetConfig target_config,
+          Compiler::GpuTargetConfig::FromProto(*gpu_topology.target_config()));
+      options.gpu_target_config.emplace(std::move(target_config));
+    } else {
       return absl::UnimplementedError(
           "Compilation without client and without target_config specified is "
           "not implemented");
     }
-    TF_RETURN_IF_ERROR(IsValidTopologyAndClientForCompile(topology, client));
-    return client->Compile(computation, options);
   }
   TF_RETURN_IF_ERROR(options.ApplyAllOptionOverrides());
   std::vector<const Shape*> argument_layout_pointers;
@@ -131,38 +188,31 @@ StreamExecutorGpuCompiler::Compile(CompileOptions options,
       HloModule::CreateFromProto(hlo_module_proto, *hlo_config));
   UpdateEntryComputationLayout(
       hlo_module.get(), std::bind(&Compiler::DefaultDeviceShapeRepresentation,
-                                  &gpu_compiler, std::placeholders::_1));
+                                  gpu_compiler, std::placeholders::_1));
   DumpHloModuleIfEnabled(*hlo_module, kBeforeOptimizationsDumpName);
-  Compiler::CompileOptions opts;
-  opts.target_config = options.target_config;
 
-  if (!options.executable_build_options.run_backend_only()) {
-    TF_ASSIGN_OR_RETURN(
-        hlo_module, gpu_compiler.RunHloPasses(std::move(hlo_module),
-                                              /*stream_exec=*/nullptr, opts));
+  AotCompilationOptions aot_options(gpu_compiler->PlatformId());
+  GpuTopology xla_gpu_topology = GetSingleDeviceGpuTopology(
+      /*platform_version=*/"", *options.gpu_target_config);
+  aot_options.set_gpu_topology(xla_gpu_topology);
+  aot_options.set_run_backend_only(
+      options.executable_build_options.run_backend_only());
+  if (IsEarlyExitCompilation(options)) {
+    aot_options.set_early_exit_point(
+        AotCompilationOptions::EarlyExitPoint::kAfterLayoutAssignment);
+    aot_options.set_executor(nullptr);
   }
-
-  AotCompilationOptions aot_options(gpu_compiler.PlatformId());
-  aot_options.set_target_config(*options.target_config);
-
   const int num_replicas = hlo_module->config().replica_count();
   const int num_partitions = hlo_module->config().num_partitions();
   const std::string name = hlo_module->name();
   const std::string fingerprint = hlo_module->GetFingerprint128();
-  auto unique_module_group =
-      std::make_unique<HloModuleGroup>(std::move(hlo_module));
   TF_ASSIGN_OR_RETURN(
-      std::vector<std::unique_ptr<AotCompilationResult>> aot_results,
-      gpu_compiler.CompileAheadOfTime(std::move(unique_module_group),
-                                      aot_options));
+      std::vector<std::unique_ptr<CompiledModule>> aot_results,
+      gpu_compiler->CompileAheadOfTime(std::move(hlo_module), aot_options));
   return std::make_unique<StreamExecutorExecutable>(
       std::move(input_options), std::move(aot_results), num_replicas,
-      num_partitions, name, fingerprint);
-#else
-  return absl::InternalError(
-      "GPU Compilation requires the target to be built with CUDA or "
-      "ROCm.");
-#endif
+      num_partitions, name, fingerprint,
+      /*default_memory_kind=*/StreamExecutorGpuHbmMemorySpace::kKind);
 }
 
 absl::StatusOr<std::unique_ptr<PjRtExecutable>>
@@ -170,23 +220,22 @@ StreamExecutorGpuCompiler::Compile(CompileOptions options,
                                    mlir::ModuleOp module,
                                    const PjRtTopologyDescription& topology,
                                    PjRtClient* client) {
-#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
-  CompileOptions input_options = options;
+  if (!options.gpu_target_config && client != nullptr) {
+    TF_RET_CHECK(IsGpuClient(*client))
+        << "GPU compilation requires a GPU PjRt client.";
+    TF_RETURN_IF_ERROR(IsValidTopologyAndClientForCompile(topology, client));
+    TF_ASSIGN_OR_RETURN(std::unique_ptr<PjRtExecutable> executable,
+                        client->Compile(module, options));
+    return executable;
+  }
+
   XlaComputation xla_computation;
   TF_RETURN_IF_ERROR(MlirToXlaComputation(
       module, xla_computation,
       /*use_tuple_args=*/options.parameter_is_tupled_arguments,
-      /*return_tuple=*/false));
-  return Compile(std::move(input_options), xla_computation, topology, client);
-#else
-  return absl::InternalError(
-      "GPU AOT compilation requires the target to be built with CUDA or "
-      "ROCm.");
-#endif
+      /*return_tuple=*/false,
+      /*exec_build_options=*/&options.executable_build_options,
+      mlir::mhlo::getGpuChloToHighLevelMhloOptions()));
+  return Compile(std::move(options), xla_computation, topology, client);
 }
-
-REGISTER_MODULE_INITIALIZER(pjrt_register_se_gpu_compiler, {
-  PjRtRegisterCompiler(CudaName(),
-                       std::make_unique<StreamExecutorGpuCompiler>());
-});
 }  // namespace xla

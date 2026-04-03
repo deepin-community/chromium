@@ -4,16 +4,25 @@
 
 #include "media/gpu/mac/video_toolbox_h264_accelerator.h"
 
+#include <array>
 #include <utility>
 
-#include "base/sys_byteorder.h"
+#include "base/compiler_specific.h"
+#include "base/feature_list.h"
+#include "base/numerics/byte_conversions.h"
 #include "build/build_config.h"
 #include "media/base/media_log.h"
+#include "media/base/video_types.h"
 
 namespace media {
 
 namespace {
+
 constexpr size_t kNALUHeaderLength = 4;
+
+// Kill-switch: Remove after M145 is stable.
+BASE_FEATURE(kResetDecoderForNonIDR, base::FEATURE_ENABLED_BY_DEFAULT);
+
 }  // namespace
 
 VideoToolboxH264Accelerator::VideoToolboxH264Accelerator(
@@ -81,10 +90,10 @@ VideoToolboxH264Accelerator::SubmitFrameMetadata(
   if (sps_data != active_sps_data_ || pps_data != active_pps_data_) {
     // If we're not at a keyframe and only the PPS has changed, put the new PPS
     // in-band and don't create a new format.
-    // TODO(crbug.com/1331597): Record that this PPS has been provided and avoid
-    // sending it again. (Copy implementation from H265Accelerator.)
+    // TODO(crbug.com/40227557): Record that this PPS has been provided and
+    // avoid sending it again. (Copy implementation from H265Accelerator.)
     if (!pic->idr && sps_data == active_sps_data_) {
-      slice_nalu_data_.push_back(base::make_span(pps_data));
+      slice_nalu_data_.push_back(base::span(pps_data));
       return Status::kOk;
     }
 
@@ -123,7 +132,7 @@ VideoToolboxH264Accelerator::Status VideoToolboxH264Accelerator::SubmitSlice(
     const std::vector<SubsampleEntry>& subsamples) {
   DVLOG(3) << __func__;
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  slice_nalu_data_.push_back(base::make_span(data, size));
+  slice_nalu_data_.push_back(UNSAFE_TODO(base::span(data, size)));
   return Status::kOk;
 }
 
@@ -163,19 +172,19 @@ VideoToolboxH264Accelerator::Status VideoToolboxH264Accelerator::SubmitDecode(
   }
 
   // Copy each NALU into the buffer, prefixed with a length header.
-  size_t offset = 0;
+  size_t offset = 0u;
   for (const auto& nalu_data : slice_nalu_data_) {
     // Write length header.
-    uint32_t header =
-        base::HostToNet32(static_cast<uint32_t>(nalu_data.size()));
-    status = CMBlockBufferReplaceDataBytes(&header, data.get(), offset,
-                                           kNALUHeaderLength);
+    std::array<uint8_t, kNALUHeaderLength> header =
+        base::U32ToBigEndian(static_cast<uint32_t>(nalu_data.size()));
+    status = CMBlockBufferReplaceDataBytes(header.data(), data.get(), offset,
+                                           header.size());
     if (status != noErr) {
       OSSTATUS_MEDIA_LOG(ERROR, status, media_log_.get())
           << "CMBlockBufferReplaceDataBytes()";
       return Status::kFail;
     }
-    offset += kNALUHeaderLength;
+    offset += header.size();
 
     // Write NALU data.
     status = CMBlockBufferReplaceDataBytes(nalu_data.data(), data.get(), offset,
@@ -208,6 +217,17 @@ VideoToolboxH264Accelerator::Status VideoToolboxH264Accelerator::SubmitDecode(
     return Status::kFail;
   }
 
+  if (!pic->idr && first_decode_ &&
+      base::FeatureList::IsEnabled(kResetDecoderForNonIDR)) {
+    // Flag the sample if it's non-IDR and the first sample provided. This was
+    // recommended by Apple to prevent corruption when seeking to SEI
+    // recovery points. See https://crbug.com/451536366.
+    CMSetAttachment(sample.get(),
+                    kCMSampleBufferAttachmentKey_ResetDecoderBeforeDecoding,
+                    kCFBooleanTrue, kCMAttachmentMode_ShouldNotPropagate);
+  }
+  first_decode_ = false;
+
   VideoToolboxDecompressionSessionMetadata session_metadata = {
 #if defined(ARCH_CPU_X86_FAMILY)
       // Allow software decoding on Intel hardware where the cutoff is around
@@ -216,7 +236,8 @@ VideoToolboxH264Accelerator::Status VideoToolboxH264Accelerator::SubmitDecode(
 #else
       /*allow_software_decoding=*/false,
 #endif  // defined(ARCH_CPU_X86_FAMILY)
-      /*is_hbd=*/false,
+      /*bit_depth=*/8,
+      /*chroma_sampling=*/VideoChromaSampling::k420,
       /*has_alpha=*/false,
       /*visible_rect=*/pic->visible_rect()};
   decode_cb_.Run(std::move(sample), session_metadata, std::move(pic));
@@ -241,6 +262,7 @@ void VideoToolboxH264Accelerator::Reset() {
   active_pps_data_.clear();
   active_format_.reset();
   slice_nalu_data_.clear();
+  first_decode_ = true;
 }
 
 }  // namespace media

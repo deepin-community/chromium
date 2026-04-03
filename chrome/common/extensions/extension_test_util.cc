@@ -10,6 +10,7 @@
 #include "base/files/file_path.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/path_service.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -25,6 +26,8 @@ using extensions::mojom::ManifestLocation;
 
 namespace extension_test_util {
 
+// TODO(crbug.com/41317803): Continue removing std::string error and
+// replacing with std::u16string.
 scoped_refptr<Extension> LoadManifestUnchecked(const std::string& dir,
                                                const std::string& test_file,
                                                ManifestLocation location,
@@ -42,11 +45,13 @@ scoped_refptr<Extension> LoadManifestUnchecked(const std::string& dir,
       deserializer.Deserialize(nullptr, error);
   if (!result)
     return nullptr;
-  const base::Value::Dict* dict = result->GetIfDict();
+  const base::DictValue* dict = result->GetIfDict();
   CHECK(dict);
 
+  std::u16string utf16_error;
   scoped_refptr<Extension> extension = Extension::Create(
-      path.DirName(), location, *dict, extra_flags, id, error);
+      path.DirName(), location, *dict, extra_flags, id, &utf16_error);
+  *error = base::UTF16ToUTF8(utf16_error);
   return extension;
 }
 
@@ -95,10 +100,27 @@ void SetGalleryUpdateURL(const GURL& new_url) {
   extensions::ExtensionsClient::Get()->InitializeWebStoreUrls(command_line);
 }
 
+// Note: This list should be kept in sync with the set of all features which
+// have delegated availability checks. This includes controlled_frame,
+// webstore_override, and user_scripts_availability.
 std::vector<const char*> GetExpectedDelegatedFeaturesForTest() {
   return {
-      "chromeWebViewInternal", "controlledFrameInternal", "guestViewInternal",
-      "webRequestInternal",    "webViewInternal",
+      // Controlled frame:
+      "chromeWebViewInternal",
+      "controlledFrameInternal",
+      "guestViewInternal",
+      "webRequestInternal",
+      "webViewInternal",
+
+      // Webstore override:
+      "management",
+      "webstorePrivate",
+
+      // userScripts availability:
+      "userScripts",
+      "userScripts.execute",
+      "userScripts.getWorldConfigurations",
+      "userScripts.resetWorldConfiguration",
   };
 }
 

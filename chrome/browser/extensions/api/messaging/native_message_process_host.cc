@@ -10,9 +10,11 @@
 #include <memory>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/process/kill.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
@@ -83,7 +85,7 @@ NativeMessageProcessHost::~NativeMessageProcessHost() {
 
   if (process_.IsValid()) {
 // Kill the host process if necessary to make sure we don't leave zombies.
-// TODO(https://crbug.com/806451): On OSX EnsureProcessTerminated() may
+// TODO(crbug.com/41367359): On OSX EnsureProcessTerminated() may
 // block, so we have to post a task on the blocking pool.
 #if BUILDFLAG(IS_MAC)
     base::ThreadPool::PostTask(
@@ -140,8 +142,9 @@ void NativeMessageProcessHost::LaunchHostProcess() {
 void NativeMessageProcessHost::OnHostProcessLaunched(
     NativeProcessLauncher::LaunchResult result,
     base::Process process,
-    base::File read_file,
-    base::File write_file) {
+    base::PlatformFile read_file,
+    std::unique_ptr<net::FileStream> read_stream,
+    std::unique_ptr<net::FileStream> write_stream) {
   DCHECK(task_runner_->BelongsToCurrentThread());
 
   switch (result) {
@@ -163,20 +166,12 @@ void NativeMessageProcessHost::OnHostProcessLaunched(
 
   process_ = std::move(process);
 #if BUILDFLAG(IS_POSIX)
-  // |read_stream_| will take ownership of |read_file|, so note the underlying
-  // file descript for use with FileDescriptorWatcher.
-  read_file_ = read_file.GetPlatformFile();
+  // |read_stream| owns |read_file|, yet the underlying file descript is needed
+  // for FileDescriptorWatcher.
+  read_file_ = read_file;
 #endif
-
-  scoped_refptr<base::TaskRunner> task_runner(
-      base::ThreadPool::CreateTaskRunner(
-          {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
-           base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN}));
-
-  read_stream_ =
-      std::make_unique<net::FileStream>(std::move(read_file), task_runner);
-  write_stream_ =
-      std::make_unique<net::FileStream>(std::move(write_file), task_runner);
+  read_stream_ = std::move(read_stream);
+  write_stream_ = std::move(write_stream);
 
   WaitRead();
   DoWrite();
@@ -196,8 +191,14 @@ void NativeMessageProcessHost::OnMessage(const std::string& json) {
   // Copy size and content of the message to the buffer.
   static_assert(sizeof(uint32_t) == kMessageHeaderSize,
                 "kMessageHeaderSize is incorrect");
-  *reinterpret_cast<uint32_t*>(buffer->data()) = json.size();
-  memcpy(buffer->data() + kMessageHeaderSize, json.data(), json.size());
+  const uint32_t message_size = base::checked_cast<uint32_t>(json.size());
+  UNSAFE_TODO(memcpy(buffer->data(),
+                     reinterpret_cast<const char*>(&message_size),
+                     kMessageHeaderSize));
+
+  buffer->span()
+      .subspan(kMessageHeaderSize)
+      .copy_from_nonoverlapping(base::as_byte_span(json));
 
   // Push new message to the write queue.
   write_queue_.push(buffer);
@@ -213,8 +214,6 @@ void NativeMessageProcessHost::Start(Client* client) {
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK(!client_);
   client_ = client;
-  // It's safe to use base::Unretained() here because NativeMessagePort always
-  // deletes us on the IO thread.
   task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&NativeMessageProcessHost::LaunchHostProcess,
                                 weak_factory_.GetWeakPtr()));
@@ -297,8 +296,9 @@ void NativeMessageProcessHost::ProcessIncomingData(
     if (incoming_data_.size() < kMessageHeaderSize)
       return;
 
+    // TODO(crbug.com/428945428): Fix unsafe uses of std::string::data().
     size_t message_size =
-        *reinterpret_cast<const uint32_t*>(incoming_data_.data());
+        *UNSAFE_TODO(reinterpret_cast<const uint32_t*>(incoming_data_.data()));
 
     if (message_size > kMaximumNativeMessageSize) {
       LOG(ERROR) << "Native Messaging host tried sending a message that is "

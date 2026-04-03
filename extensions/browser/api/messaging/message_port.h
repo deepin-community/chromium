@@ -7,6 +7,7 @@
 
 #include <optional>
 #include <string>
+
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
 #include "extensions/browser/activity.h"
@@ -24,7 +25,7 @@ class RenderFrameHost;
 
 namespace extensions {
 
-struct Message;
+class Message;
 struct MessagingEndpoint;
 struct PortContext;
 
@@ -42,11 +43,13 @@ class MessagePort
                               const std::string& error_message) = 0;
     // Closes the given port in the given `port_context`. If this was the last
     // context or if `close_channel` is true, then the other side is closed as
-    // well.
+    // well. If `error_message` is non-empty the sender will treat the port
+    // closing as an error with that message.
     virtual void ClosePort(const PortId& port_id,
                            int process_id,
                            const PortContext& port_context,
-                           bool close_channel) = 0;
+                           bool close_channel,
+                           const std::string& error_message) = 0;
 
     // Enqueues a message on a pending channel, or sends a message to the given
     // port if the channel isn't pending.
@@ -62,7 +65,7 @@ class MessagePort
 
   ~MessagePort() override;
 
-  // Called right before a channel is created for this MessagePort and |port|.
+  // Called right before a channel is created for this MessagePort and `port`.
   // This allows us to ensure that the ports have no RenderFrameHost instances
   // in common.
   virtual void RemoveCommonFrames(const MessagePort& port);
@@ -84,16 +87,17 @@ class MessagePort
   virtual void DispatchOnConnect(
       mojom::ChannelType channel_type,
       const std::string& channel_name,
-      std::optional<base::Value::Dict> source_tab,
+      std::optional<base::DictValue> source_tab,
       const ExtensionApiFrameIdMap::FrameData& source_frame,
       int guest_process_id,
       int guest_render_frame_routing_id,
       const MessagingEndpoint& source_endpoint,
       const std::string& target_extension_id,
       const GURL& source_url,
-      std::optional<url::Origin> source_origin);
+      std::optional<url::Origin> source_origin,
+      const std::set<base::UnguessableToken>& open_channel_tracking_ids);
 
-  // Notifies the port that the channel has been closed. If |error_message| is
+  // Notifies the port that the channel has been closed. If `error_message` is
   // non-empty, it indicates an error occurred while opening the connection.
   virtual void DispatchOnDisconnect(const std::string& error_message);
 
@@ -136,7 +140,8 @@ class MessagePort
   MessagePort();
 
   // mojom::MessagePortHost overrides:
-  void ClosePort(bool close_hannel) override;
+  void ClosePort(bool close_channel,
+                 const std::optional<std::string>& error_message) override;
   void PostMessage(Message message) override;
   void ResponsePending() override;
 

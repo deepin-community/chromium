@@ -29,12 +29,15 @@
 #define SRC_DAWN_NATIVE_COMMANDBUFFER_H_
 
 #include <string>
+#include <type_traits>
+#include <vector>
 
 #include "dawn/native/dawn_platform.h"
 
 #include "dawn/native/CommandAllocator.h"
 #include "dawn/native/Error.h"
 #include "dawn/native/Forward.h"
+#include "dawn/native/IndirectDrawMetadata.h"
 #include "dawn/native/ObjectBase.h"
 #include "dawn/native/PassResourceUsage.h"
 #include "dawn/native/Texture.h"
@@ -43,13 +46,14 @@ namespace dawn::native {
 
 struct BeginRenderPassCmd;
 struct CopyTextureToBufferCmd;
+struct BufferCopy;
 struct TextureCopy;
 
 class CommandBufferBase : public ApiObjectBase {
   public:
     CommandBufferBase(CommandEncoder* encoder, const CommandBufferDescriptor* descriptor);
 
-    static Ref<CommandBufferBase> MakeError(DeviceBase* device, const char* label);
+    static Ref<CommandBufferBase> MakeError(DeviceBase* device, StringView label);
 
     ObjectType GetType() const override;
     void FormatLabel(absl::FormatSink* s) const override;
@@ -61,34 +65,40 @@ class CommandBufferBase : public ApiObjectBase {
 
     const CommandBufferResourceUsage& GetResourceUsages() const;
 
+    const std::vector<IndirectDrawMetadata>& GetIndirectDrawMetadata();
+
     CommandIterator* GetCommandIteratorForTesting();
 
   protected:
-    void DestroyImpl() override;
+    void DestroyImpl(DestroyReason reason) override;
 
     CommandIterator mCommands;
 
   private:
-    CommandBufferBase(DeviceBase* device, ObjectBase::ErrorTag tag, const char* label);
+    CommandBufferBase(DeviceBase* device, ObjectBase::ErrorTag tag, StringView label);
 
     CommandBufferResourceUsage mResourceUsages;
-
+    std::vector<IndirectDrawMetadata> mIndirectDrawMetadata;
     std::string mEncoderLabel;
 };
 
 bool IsCompleteSubresourceCopiedTo(const TextureBase* texture,
-                                   const Extent3D& copySize,
+                                   const TexelExtent3D& copySize,
                                    const uint32_t mipLevel,
                                    Aspect aspect);
 bool IsCompleteSubresourceCopiedTo(const TextureBase* texture,
-                                   const Extent3D& copySize,
+                                   const TexelExtent3D& copySize,
                                    const uint32_t mipLevel,
                                    wgpu::TextureAspect textureAspect);
-SubresourceRange GetSubresourcesAffectedByCopy(const TextureCopy& copy, const Extent3D& copySize);
+SubresourceRange GetSubresourcesAffectedByCopy(const TextureCopy& copy,
+                                               const TexelExtent3D& copySize);
 
-void LazyClearRenderPassAttachments(BeginRenderPassCmd* renderPass);
+void LazyClearRenderPassAttachments(DeviceBase* device, BeginRenderPassCmd* renderPass);
 
 bool IsFullBufferOverwrittenInTextureToBufferCopy(const CopyTextureToBufferCmd* copy);
+bool IsFullBufferOverwrittenInTextureToBufferCopy(const TextureCopy& source,
+                                                  const BufferCopy& destination,
+                                                  const TexelExtent3D& copySize);
 
 std::array<float, 4> ConvertToFloatColor(dawn::native::Color color);
 std::array<int32_t, 4> ConvertToSignedIntegerColor(dawn::native::Color color);

@@ -46,11 +46,10 @@ limitations under the License.
 #include "mlir/Support/TypeID.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/debug/debug_options.pb.h"
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/env.h"
 #include "tensorflow/core/platform/types.h"
-#include "tsl/lib/core/status_test_util.h"
-#include "tsl/platform/env.h"
 #include "tsl/platform/path.h"
-#include "tsl/platform/status.h"
 
 namespace tensorflow {
 namespace debug_test {
@@ -104,24 +103,25 @@ class InitPassManagerTest : public testing::Test {
     context_.loadAllAvailableDialects();
 
     mlir::OpBuilder builder(&context_);
-    module_ = builder.create<mlir::ModuleOp>(builder.getUnknownLoc());
+    module_ = mlir::ModuleOp::create(builder, builder.getUnknownLoc());
 
     builder.setInsertionPointToStart(module_->getBody());
-    auto func = builder.create<mlir::func::FuncOp>(  //
-        builder.getUnknownLoc(), "main", builder.getFunctionType({}, {}));
+    auto func = mlir::func::FuncOp::create(builder,  //
+                                           builder.getUnknownLoc(), "main",
+                                           builder.getFunctionType({}, {}));
     func->setAttr("tfl.func", builder.getUnitAttr());
     builder.setInsertionPointToStart(func.addEntryBlock());
     llvm::SmallVector<int> shape{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-    builder.create<mlir::arith::ConstantOp>(
-        builder.getUnknownLoc(),
+    mlir::arith::ConstantOp::create(
+        builder, builder.getUnknownLoc(),
         mlir::DenseIntElementsAttr::get(
             mlir::RankedTensorType::get(shape.size(), builder.getI32Type()),
             shape));
-    builder.create<mlir::func::ReturnOp>(builder.getUnknownLoc());
+    mlir::func::ReturnOp::create(builder, builder.getUnknownLoc());
   }
 
-  tsl::Status GetDumpDir(std::string* dump_dir) {
-    std::vector<string> files;
+  absl::Status GetDumpDir(std::string* dump_dir) {
+    std::vector<std::string> files;
     if (auto status = tsl::Env::Default()->GetChildren(path_, &files);
         !status.ok()) {
       return status;
@@ -131,7 +131,7 @@ class InitPassManagerTest : public testing::Test {
           "Expecting directory to have one child.");
     }
     *dump_dir = tsl::io::JoinPath(path_, files[0]);
-    return tsl::OkStatus();
+    return absl::OkStatus();
   }
 
   std::string path_;

@@ -16,6 +16,7 @@
 #include "content/public/browser/web_contents.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 
 namespace {
 
@@ -31,7 +32,7 @@ bool IsSameSite(const url::Origin& origin1, const url::Origin& origin2) {
 }
 
 bool IsSameSite(const GURL& url1, const GURL& url2) {
-  return url1.SchemeIs(url2.scheme()) &&
+  return url1.SchemeIs(url2.GetScheme()) &&
          net::registry_controlled_domains::SameDomainOrHost(
              url1, url2,
              net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
@@ -54,7 +55,7 @@ page_load_metrics::PageLoadMetricsObserver::ObservePolicy
 ThirdPartyMetricsObserver::OnPrerenderStart(
     content::NavigationHandle* navigation_handle,
     const GURL& currently_committed_url) {
-  // TODO(https://crbug.com/1317494): Handle Prerendering cases.
+  // TODO(crbug.com/40222513): Handle Prerendering cases.
   return STOP_OBSERVING;
 }
 
@@ -135,7 +136,7 @@ void ThirdPartyMetricsObserver::OnCookieChange(
                           AccessType::kCookieWrite);
 }
 
-// TODO(crbug.com/1115657): It would be simpler to just pass in ThirdPartyInfo
+// TODO(crbug.com/40144431): It would be simpler to just pass in ThirdPartyInfo
 // and set the bits appropriately, but because this is called every time an
 // access is made, that would mean re-calling old accesses.  This could be fixed
 // by calling this only when the page is removed or when backgrounded.
@@ -315,7 +316,7 @@ void ThirdPartyMetricsObserver::OnTimingUpdate(
     }
   }
 
-  if (!newly_recorded_event_types.Empty()) {
+  if (!newly_recorded_event_types.empty()) {
     if (recorded_frame_events == recorded_frames_.end()) {
       recorded_frames_[subframe_rfh] = newly_recorded_event_types;
     } else {
@@ -350,7 +351,7 @@ ThirdPartyMetricsObserver::GetThirdPartyInfo(const GURL& url,
   // //net/base/registry_controlled_domains/registry_controlled_domains.h.
   if (registrable_domain.empty()) {
     if (url.has_host()) {
-      registrable_domain = url.host();
+      registrable_domain = url.GetHost();
     } else {
       return nullptr;
     }
@@ -360,14 +361,14 @@ ThirdPartyMetricsObserver::GetThirdPartyInfo(const GURL& url,
   is_third_party = true;
 
   GURL representative_url(
-      base::StrCat({url.scheme(), "://", registrable_domain, "/"}));
+      base::StrCat({url.GetScheme(), "://", registrable_domain, "/"}));
   auto it = all_third_party_info_.find(representative_url);
   if (it == all_third_party_info_.end() &&
       all_third_party_info_.size() < 1000) {  // Bound growth.
     it = all_third_party_info_.emplace(url, ThirdPartyInfo()).first;
   }
   // If there's no valid iterator, we've gone over the size limit for the map.
-  // TODO(crbug.com/1115657): We probably want UMA to let us know how often we
+  // TODO(crbug.com/40144431): We probably want UMA to let us know how often we
   // might be underreporting.
   return (it == all_third_party_info_.end() ? nullptr : &it->second);
 }

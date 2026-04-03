@@ -6,12 +6,10 @@
 
 #include <stddef.h>
 
-#include <optional>
 #include <string>
 #include <utility>
 
 #include "base/test/gmock_expected_support.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/values_test_util.h"
 #include "base/types/expected.h"
 #include "base/values.h"
@@ -46,22 +44,22 @@ TEST(AggregationKeysTest, FromJSON) {
       {
           "Not a dictionary",
           "[]",
-          ErrorIs(SourceRegistrationError::kAggregationKeysWrongType),
+          ErrorIs(SourceRegistrationError::kAggregationKeysDictInvalid),
       },
       {
           "key not a string",
           R"({"key":123})",
-          ErrorIs(SourceRegistrationError::kAggregationKeysValueWrongType),
+          ErrorIs(SourceRegistrationError::kAggregationKeysValueInvalid),
       },
       {
           "key doesn't start with 0x",
           R"({"key":"159"})",
-          ErrorIs(SourceRegistrationError::kAggregationKeysValueWrongFormat),
+          ErrorIs(SourceRegistrationError::kAggregationKeysValueInvalid),
       },
       {
           "Invalid key",
           R"({"key":"0xG59"})",
-          ErrorIs(SourceRegistrationError::kAggregationKeysValueWrongFormat),
+          ErrorIs(SourceRegistrationError::kAggregationKeysValueInvalid),
       },
       {
           "One valid key",
@@ -83,7 +81,7 @@ TEST(AggregationKeysTest, FromJSON) {
       {
           "Second key invalid",
           R"({"key1":"0x159","key2":""})",
-          ErrorIs(SourceRegistrationError::kAggregationKeysValueWrongFormat),
+          ErrorIs(SourceRegistrationError::kAggregationKeysValueInvalid),
       },
   };
 
@@ -101,8 +99,8 @@ TEST(AggregationKeysTest, FromJSON_CheckSize) {
     size_t key_count;
     size_t key_size;
 
-    base::Value::Dict GetHeader() const {
-      base::Value::Dict dict;
+    base::DictValue GetHeader() const {
+      base::DictValue dict;
       for (size_t i = 0u; i < key_count; ++i) {
         dict.Set(GetKey(i), "0x1");
       }
@@ -122,8 +120,9 @@ TEST(AggregationKeysTest, FromJSON_CheckSize) {
       {"empty", true, 0, 0},
       {"max_keys", true, kMaxAggregationKeysPerSource, 1},
       {"too_many_keys", false, kMaxAggregationKeysPerSource + 1, 1},
-      {"max_key_size", true, 1, kMaxBytesPerAggregationKeyId},
-      {"excessive_key_size", false, 1, kMaxBytesPerAggregationKeyId + 1},
+      {"max_key_size", true, 1, AggregationKeys::kMaxBytesPerAggregationKeyId},
+      {"excessive_key_size", false, 1,
+       AggregationKeys::kMaxBytesPerAggregationKeyId + 1},
   };
 
   for (const auto& test_case : kTestCases) {
@@ -131,21 +130,6 @@ TEST(AggregationKeysTest, FromJSON_CheckSize) {
     base::Value value(test_case.GetHeader());
     EXPECT_EQ(AggregationKeys::FromJSON(&value).has_value(), test_case.valid);
   }
-}
-
-TEST(AggregationKeysTest, FromJSON_RecordsMetric) {
-  using ::base::Bucket;
-
-  base::Value json = base::test::ParseJson(R"json({
-    "a": "0x3",
-    "b": "0x4"
-  })json");
-
-  base::HistogramTester histograms;
-  ASSERT_TRUE(AggregationKeys::FromJSON(&json).has_value());
-
-  EXPECT_THAT(histograms.GetAllSamples("Conversions.AggregatableKeysPerSource"),
-              ElementsAre(Bucket(2, 1)));
 }
 
 TEST(AggregationKeysTest, ToJson) {

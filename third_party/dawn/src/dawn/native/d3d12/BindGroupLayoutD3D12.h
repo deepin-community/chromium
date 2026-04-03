@@ -53,11 +53,15 @@ static constexpr uint32_t kRegisterSpacePlaceholder =
 
 class BindGroupLayout final : public BindGroupLayoutInternalBase {
   public:
-    static Ref<BindGroupLayout> Create(Device* device, const BindGroupLayoutDescriptor* descriptor);
+    static Ref<BindGroupLayout> Create(Device* device,
+                                       const UnpackedPtr<BindGroupLayoutDescriptor>& descriptor);
 
-    ResultOrError<Ref<BindGroup>> AllocateBindGroup(Device* device,
-                                                    const BindGroupDescriptor* descriptor);
-    void DeallocateBindGroup(BindGroup* bindGroup, CPUDescriptorHeapAllocation* viewAllocation);
+    ResultOrError<Ref<BindGroup>> AllocateBindGroup(
+        Device* device,
+        const UnpackedPtr<BindGroupDescriptor>& descriptor);
+    void DeallocateBindGroup(BindGroup* bindGroup);
+    void DeallocateDescriptor(CPUDescriptorHeapAllocation* viewAllocation);
+    void ReduceMemoryUsage() override;
 
     // The offset (in descriptor count) into the corresponding descriptor heap. Not valid for
     // dynamic binding indexes.
@@ -71,11 +75,14 @@ class BindGroupLayout final : public BindGroupLayoutInternalBase {
     uint32_t GetCbvUavSrvDescriptorCount() const;
     uint32_t GetSamplerDescriptorCount() const;
 
+    uint32_t GetViewSizeIncrement() const;
+
     const std::vector<D3D12_DESCRIPTOR_RANGE1>& GetCbvUavSrvDescriptorRanges() const;
     const std::vector<D3D12_DESCRIPTOR_RANGE1>& GetSamplerDescriptorRanges() const;
+    const std::vector<D3D12_STATIC_SAMPLER_DESC>& GetStaticSamplers() const;
 
   private:
-    BindGroupLayout(Device* device, const BindGroupLayoutDescriptor* descriptor);
+    BindGroupLayout(Device* device, const UnpackedPtr<BindGroupLayoutDescriptor>& descriptor);
     ~BindGroupLayout() override = default;
 
     // Contains the offset into the descriptor heap for the given resource view. Samplers and
@@ -91,16 +98,14 @@ class BindGroupLayout final : public BindGroupLayoutInternalBase {
 
     uint32_t mCbvUavSrvDescriptorCount;
     uint32_t mSamplerDescriptorCount;
+    uint32_t mViewSizeIncrement;
 
     std::vector<D3D12_DESCRIPTOR_RANGE1> mCbvUavSrvDescriptorRanges;
     std::vector<D3D12_DESCRIPTOR_RANGE1> mSamplerDescriptorRanges;
 
-    MutexProtected<SlabAllocator<BindGroup>> mBindGroupAllocator;
+    std::vector<D3D12_STATIC_SAMPLER_DESC> mStaticSamplers;
 
-    // TODO(https://crbug.com/dawn/2361): Rewrite those members with raw_ptr<T>.
-    // This is currently failing with MSVC cl.exe compiler.
-    RAW_PTR_EXCLUSION MutexProtected<StagingDescriptorAllocator>* mSamplerAllocator = nullptr;
-    RAW_PTR_EXCLUSION MutexProtected<StagingDescriptorAllocator>* mViewAllocator = nullptr;
+    MutexProtected<SlabAllocator<BindGroup>> mBindGroupAllocator;
 };
 
 }  // namespace dawn::native::d3d12

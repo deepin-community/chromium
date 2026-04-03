@@ -1,12 +1,16 @@
 // Copyright 2023 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
 #include "media/gpu/windows/scoped_d3d_buffers.h"
 
 #include <algorithm>
 
+#include "base/check_op.h"
+
 namespace media {
+
+ScopedD3DBuffer::ScopedD3DBuffer(base::span<uint8_t> data) : data_(data) {}
+ScopedD3DBuffer::~ScopedD3DBuffer() = default;
 
 D3DInputBuffer::D3DInputBuffer(std::unique_ptr<ScopedD3DBuffer> buffer)
     : buffer_(std::move(buffer)) {}
@@ -28,7 +32,9 @@ size_t ScopedSequenceD3DInputBuffer::BytesAvailable() const {
 
 size_t ScopedSequenceD3DInputBuffer::Write(base::span<const uint8_t> source) {
   size_t bytes_to_write = std::min(source.size(), BytesAvailable());
-  memcpy(buffer_->data() + offset_, source.data(), bytes_to_write);
+  buffer_->data()
+      .subspan(offset_, bytes_to_write)
+      .copy_from(source.first(bytes_to_write));
   offset_ += bytes_to_write;
   return bytes_to_write;
 }

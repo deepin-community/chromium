@@ -11,8 +11,8 @@
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "third_party/protobuf/src/google/protobuf/repeated_ptr_field.h"
 
 namespace policy {
@@ -46,7 +46,7 @@ class DeviceDlcPredownloadListPolicyHandler {
   // Decode a list of DLCs that should be pre downloaded to the device from
   // human-readable strings to DLC IDs. Any warning messages from the decoding
   // and schema validation process are stored in |warning|.
-  static base::Value::List DecodeDeviceDlcPredownloadListPolicy(
+  static base::ListValue DecodeDeviceDlcPredownloadListPolicy(
       const google::protobuf::RepeatedPtrField<std::string>& raw_policy_value,
       std::string& out_warning);
 

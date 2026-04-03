@@ -4,8 +4,8 @@
 
 #include "chrome/browser/enterprise/platform_auth/platform_auth_features.h"
 
-#include "build/build_config.h"
-
 namespace enterprise_auth {
+
+BASE_FEATURE(kEnableExtensibleEnterpriseSSO, base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace enterprise_auth

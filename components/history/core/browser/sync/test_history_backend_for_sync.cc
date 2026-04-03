@@ -4,7 +4,9 @@
 
 #include "components/history/core/browser/sync/test_history_backend_for_sync.h"
 
-#include "base/containers/cxx20_erase_vector.h"
+#include <vector>
+
+#include "components/history/core/browser/history_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace history {
@@ -57,11 +59,18 @@ void TestHistoryBackendForSync::AddOrReplaceContentAnnotation(
   content_annotations_[visit_id] = content_annotation;
 }
 
+void TestHistoryBackendForSync::AddOrReplaceVisitSource(
+    VisitID visit_id,
+    VisitSource visit_source) {
+  DCHECK_NE(visit_id, 0);
+  visit_sources_[visit_id] = visit_source;
+}
+
 void TestHistoryBackendForSync::RemoveURLAndVisits(URLID url_id) {
-  base::EraseIf(visits_, [url_id](const VisitRow& visit) {
+  std::erase_if(visits_, [url_id](const VisitRow& visit) {
     return visit.url_id == url_id;
   });
-  base::EraseIf(urls_,
+  std::erase_if(urls_,
                 [url_id](const URLRow& url) { return url.id() == url_id; });
 }
 
@@ -117,10 +126,32 @@ bool TestHistoryBackendForSync::GetVisitByID(VisitID visit_id,
   return false;
 }
 
-bool TestHistoryBackendForSync::GetMostRecentVisitForURL(URLID id,
-                                                         VisitRow* visit_row) {
+bool TestHistoryBackendForSync::GetVisitSource(const VisitID visit_id,
+                                               VisitSource* source) {
+  if (visit_sources_.count(visit_id)) {
+    *source = visit_sources_[visit_id];
+    return true;
+  }
+  *source = VisitSource::SOURCE_BROWSED;
+  return false;
+}
+
+bool TestHistoryBackendForSync::GetMostRecentVisitForURL(
+    URLID id,
+    VisitRow* visit_row,
+    VisitQuery404sPolicy policy_for_404_visits) {
   *visit_row = VisitRow();
   for (const VisitRow& candidate : visits_) {
+    VisitContextAnnotations context_annotations;
+    if (context_annotations_.count(candidate.visit_id)) {
+      context_annotations = context_annotations_[candidate.visit_id];
+
+      int http_response_code = context_annotations.on_visit.response_code;
+      if (policy_for_404_visits == VisitQuery404sPolicy::kExclude404s &&
+          http_response_code == 404) {
+        continue;
+      }
+    }
     if (candidate.url_id == id &&
         (candidate.visit_time > visit_row->visit_time ||
          (candidate.visit_time == visit_row->visit_time &&
@@ -156,7 +187,7 @@ VisitVector TestHistoryBackendForSync::GetRedirectChain(VisitRow visit) {
     }
     result.push_back(visit);
   }
-  std::reverse(result.begin(), result.end());
+  std::ranges::reverse(result);
   return result;
 }
 

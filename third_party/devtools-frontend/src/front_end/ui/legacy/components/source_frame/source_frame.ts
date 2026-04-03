@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@ import * as JSONView from './JSONView.js';
 import * as PreviewFactory from './PreviewFactory.js';
 import * as ResourceSourceFrame from './ResourceSourceFrame.js';
 import * as SourceFrame from './SourceFrame.js';
+import * as StreamingContentHexView from './StreamingContentHexView.js';
 import * as XMLView from './XMLView.js';
 
 export {
@@ -19,5 +20,6 @@ export {
   PreviewFactory,
   ResourceSourceFrame,
   SourceFrame,
+  StreamingContentHexView,
   XMLView,
 };

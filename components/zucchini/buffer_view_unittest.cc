@@ -11,6 +11,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/test/gtest_util.h"
 #include "components/zucchini/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -56,11 +57,11 @@ TEST_F(BufferViewTest, FromRange) {
   EXPECT_EQ(std::begin(raw_data), mutable_buffer.begin());
 
 #if GTEST_HAS_DEATH_TEST
-  EXPECT_DCHECK_DEATH(
+  EXPECT_CHECK_DEATH(
       ConstBufferView::FromRange(std::end(raw_data), std::begin(raw_data)));
 
-  EXPECT_DCHECK_DEATH(MutableBufferView::FromRange(std::begin(raw_data) + 1,
-                                                   std::begin(raw_data)));
+  UNSAFE_TODO(EXPECT_CHECK_DEATH(MutableBufferView::FromRange(
+      std::begin(raw_data) + 1, std::begin(raw_data))));
 #endif
 }
 
@@ -82,7 +83,7 @@ TEST_F(BufferViewTest, SubRegion) {
   ConstBufferView view(bytes_.data(), bytes_.size());
 
   ConstBufferView sub_view = view[{2, 4}];
-  EXPECT_EQ(view.begin() + 2, sub_view.begin());
+  UNSAFE_TODO(EXPECT_EQ(view.begin() + 2, sub_view.begin()));
   EXPECT_EQ(size_t(4), sub_view.size());
 }
 
@@ -94,7 +95,7 @@ TEST_F(BufferViewTest, Shrink) {
   buffer.shrink(2);
   EXPECT_EQ(size_t(2), buffer.size());
 #if GTEST_HAS_DEATH_TEST
-  EXPECT_DCHECK_DEATH(buffer.shrink(bytes_.size()));
+  EXPECT_CHECK_DEATH(buffer.shrink(bytes_.size()));
 #endif
 }
 

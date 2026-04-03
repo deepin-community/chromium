@@ -162,7 +162,6 @@ void GbmSurfaceless::SubmitFrame() {
       if (overlay.z_order() == 0 && overlay.gpu_fence()) {
         submitted_frame_gpu_fence_ = std::make_unique<gfx::GpuFence>(
             overlay.gpu_fence()->GetGpuFenceHandle().Clone());
-        break;
       }
     }
     submitted_frame_ = std::move(unsubmitted_frames_.front());

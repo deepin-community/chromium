@@ -7,6 +7,10 @@
 //   Performance test for binding objects
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "ANGLEPerfTest.h"
 
 #include <iostream>
@@ -113,7 +117,7 @@ BindingsBenchmark::BindingsBenchmark() : ANGLERenderTest("Bindings", GetParam())
 {
     if (GetParam().eglParameters.renderer == EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE)
     {
-        skipTest("http://anglebug.com/6264 Flaky on OpenGL");
+        skipTest("http://anglebug.com/42264783 Flaky on OpenGL");
     }
 }
 
@@ -228,7 +232,7 @@ BindingsParams D3D11Params(AllocationStyle allocationStyle)
 BindingsParams OpenGLOrGLESParams(AllocationStyle allocationStyle)
 {
     BindingsParams params;
-    params.eglParameters   = egl_platform::OPENGL_OR_GLES_NULL();
+    params.eglParameters   = egl_platform::OPENGL_OR_GLES();
     params.allocationStyle = allocationStyle;
     return params;
 }

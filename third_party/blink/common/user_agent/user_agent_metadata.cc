@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <algorithm>
-
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 
-#include "base/containers/contains.h"
+#include <algorithm>
+
+#include "base/containers/span.h"
 #include "base/pickle.h"
 #include "net/http/structured_headers.h"
 #include "third_party/blink/public/common/features.h"
@@ -15,6 +15,15 @@ namespace blink {
 
 namespace {
 constexpr uint32_t kVersion = 3u;
+
+// List of valid form factors.
+// See https://wicg.github.io/ua-client-hints/#sec-ch-ua-form-factors
+constexpr std::string_view kValidFormFactors[] = {
+    blink::kDesktopFormFactor, blink::kAutomotiveFormFactor,
+    blink::kMobileFormFactor,  blink::kTabletFormFactor,
+    blink::kXRFormFactor,      blink::kEInkFormFactor,
+    blink::kWatchFormFactor};
+
 }  // namespace
 
 UserAgentBrandVersion::UserAgentBrandVersion(const std::string& ua_brand,
@@ -53,9 +62,9 @@ const std::string UserAgentMetadata::SerializeBrandMajorVersionList() {
   return SerializeBrandVersionList(brand_version_list);
 }
 
-const std::string UserAgentMetadata::SerializeFormFactor() {
+const std::string UserAgentMetadata::SerializeFormFactors() {
   net::structured_headers::List structured;
-  for (auto& ff : form_factor) {
+  for (auto& ff : form_factors) {
     structured.push_back(net::structured_headers::ParameterizedMember(
         net::structured_headers::Item(ff), {}));
   }
@@ -93,9 +102,9 @@ std::optional<std::string> UserAgentMetadata::Marshal(
   out.WriteString(in->bitness);
   out.WriteBool(in->wow64);
 
-  out.WriteUInt32(base::checked_cast<uint32_t>(in->form_factor.size()));
-  for (const auto& form_factor : in->form_factor) {
-    out.WriteString(form_factor);
+  out.WriteUInt32(base::checked_cast<uint32_t>(in->form_factors.size()));
+  for (const auto& form_factors : in->form_factors) {
+    out.WriteString(form_factors);
   }
   return std::string(reinterpret_cast<const char*>(out.data()), out.size());
 }
@@ -103,70 +112,91 @@ std::optional<std::string> UserAgentMetadata::Marshal(
 // static
 std::optional<UserAgentMetadata> UserAgentMetadata::Demarshal(
     const std::optional<std::string>& encoded) {
-  if (!encoded)
+  if (!encoded) {
     return std::nullopt;
+  }
 
-  base::Pickle pickle(encoded->data(), encoded->size());
-  base::PickleIterator in(pickle);
+  base::PickleIterator in =
+      base::PickleIterator::WithData(base::as_byte_span(encoded.value()));
 
   uint32_t version;
   UserAgentMetadata out;
-  if (!in.ReadUInt32(&version) || version != kVersion)
+  if (!in.ReadUInt32(&version) || version != kVersion) {
     return std::nullopt;
+  }
 
   uint32_t brand_version_size;
-  if (!in.ReadUInt32(&brand_version_size))
+  if (!in.ReadUInt32(&brand_version_size)) {
     return std::nullopt;
+  }
   for (uint32_t i = 0; i < brand_version_size; i++) {
     UserAgentBrandVersion brand_version;
-    if (!in.ReadString(&brand_version.brand))
+    if (!in.ReadString(&brand_version.brand)) {
       return std::nullopt;
-    if (!in.ReadString(&brand_version.version))
+    }
+    if (!in.ReadString(&brand_version.version)) {
       return std::nullopt;
+    }
     out.brand_version_list.push_back(std::move(brand_version));
   }
 
   uint32_t brand_full_version_size;
-  if (!in.ReadUInt32(&brand_full_version_size))
+  if (!in.ReadUInt32(&brand_full_version_size)) {
     return std::nullopt;
+  }
   for (uint32_t i = 0; i < brand_full_version_size; i++) {
     UserAgentBrandVersion brand_version;
-    if (!in.ReadString(&brand_version.brand))
+    if (!in.ReadString(&brand_version.brand)) {
       return std::nullopt;
-    if (!in.ReadString(&brand_version.version))
+    }
+    if (!in.ReadString(&brand_version.version)) {
       return std::nullopt;
+    }
     out.brand_full_version_list.push_back(std::move(brand_version));
   }
 
-  if (!in.ReadString(&out.full_version))
-    return std::nullopt;
-  if (!in.ReadString(&out.platform))
-    return std::nullopt;
-  if (!in.ReadString(&out.platform_version))
-    return std::nullopt;
-  if (!in.ReadString(&out.architecture))
-    return std::nullopt;
-  if (!in.ReadString(&out.model))
-    return std::nullopt;
-  if (!in.ReadBool(&out.mobile))
-    return std::nullopt;
-  if (!in.ReadString(&out.bitness))
-    return std::nullopt;
-  if (!in.ReadBool(&out.wow64))
-    return std::nullopt;
-  uint32_t form_factor_size;
-  if (!in.ReadUInt32(&form_factor_size)) {
+  if (!in.ReadString(&out.full_version)) {
     return std::nullopt;
   }
-  std::string form_factor;
-  form_factor.reserve(form_factor_size);
-  for (uint32_t i = 0; i < form_factor_size; i++) {
-    if (!in.ReadString(&form_factor)) {
+  if (!in.ReadString(&out.platform)) {
+    return std::nullopt;
+  }
+  if (!in.ReadString(&out.platform_version)) {
+    return std::nullopt;
+  }
+  if (!in.ReadString(&out.architecture)) {
+    return std::nullopt;
+  }
+  if (!in.ReadString(&out.model)) {
+    return std::nullopt;
+  }
+  if (!in.ReadBool(&out.mobile)) {
+    return std::nullopt;
+  }
+  if (!in.ReadString(&out.bitness)) {
+    return std::nullopt;
+  }
+  if (!in.ReadBool(&out.wow64)) {
+    return std::nullopt;
+  }
+  uint32_t form_factors_size;
+  if (!in.ReadUInt32(&form_factors_size)) {
+    return std::nullopt;
+  }
+  std::string form_factors;
+  form_factors.reserve(form_factors_size);
+  for (uint32_t i = 0; i < form_factors_size; i++) {
+    if (!in.ReadString(&form_factors)) {
       return std::nullopt;
     }
-    out.form_factor.push_back(std::move(form_factor));
+    out.form_factors.push_back(std::move(form_factors));
   }
   return std::make_optional(std::move(out));
+}
+
+// static
+bool UserAgentMetadata::IsValidFormFactor(std::string_view form_factor) {
+  return std::ranges::contains(kValidFormFactors, form_factor);
 }
 
 bool UserAgentBrandVersion::operator==(const UserAgentBrandVersion& a) const {
@@ -180,7 +210,7 @@ bool operator==(const UserAgentMetadata& a, const UserAgentMetadata& b) {
          a.platform_version == b.platform_version &&
          a.architecture == b.architecture && a.model == b.model &&
          a.mobile == b.mobile && a.bitness == b.bitness && a.wow64 == b.wow64 &&
-         a.form_factor == b.form_factor;
+         a.form_factors == b.form_factors;
 }
 
 // static

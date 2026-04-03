@@ -15,14 +15,14 @@
 #include "base/values.h"
 #include "components/guest_view/browser/guest_view_event.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/common/url_constants.h"
 #include "extensions/browser/api/extensions_api_client.h"
 #include "extensions/browser/guest_view/web_view/web_view_constants.h"
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "extensions/browser/guest_view/web_view/web_view_permission_helper_delegate.h"
 #include "extensions/browser/guest_view/web_view/web_view_permission_types.h"
 #include "extensions/common/extension_features.h"
-#include "ppapi/buildflags/buildflags.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
 using base::UserMetricsAction;
@@ -54,9 +54,12 @@ static std::string PermissionTypeToString(WebViewPermissionType type) {
       return webview::kPermissionTypeNewWindow;
     case WEB_VIEW_PERMISSION_TYPE_POINTER_LOCK:
       return webview::kPermissionTypePointerLock;
+    case WEB_VIEW_PERMISSION_TYPE_CLIPBOARD_READ_WRITE:
+      return webview::kPermissionTypeClipboardReadWrite;
+    case WEB_VIEW_PERMISSION_TYPE_CLIPBOARD_SANITIZED_WRITE:
+      return webview::kPermissionTypeClipboardSanitizedWrite;
     default:
       NOTREACHED();
-      return std::string();
   }
 }
 
@@ -108,6 +111,14 @@ void RecordUserInitiatedUMA(
         base::RecordAction(
             UserMetricsAction("WebView.PermissionAllow.PointerLock"));
         break;
+      case WEB_VIEW_PERMISSION_TYPE_CLIPBOARD_READ_WRITE:
+        base::RecordAction(
+            UserMetricsAction("WebView.PermissionAllow.ClipboardReadWrite"));
+        break;
+      case WEB_VIEW_PERMISSION_TYPE_CLIPBOARD_SANITIZED_WRITE:
+        base::RecordAction(UserMetricsAction(
+            "WebView.PermissionAllow.ClipboardSanitizedWrite"));
+        break;
       default:
         break;
     }
@@ -151,6 +162,14 @@ void RecordUserInitiatedUMA(
         base::RecordAction(
             UserMetricsAction("WebView.PermissionDeny.PointerLock"));
         break;
+      case WEB_VIEW_PERMISSION_TYPE_CLIPBOARD_READ_WRITE:
+        base::RecordAction(
+            UserMetricsAction("WebView.PermissionDeny.ClipboardReadWrite"));
+        break;
+      case WEB_VIEW_PERMISSION_TYPE_CLIPBOARD_SANITIZED_WRITE:
+        base::RecordAction(UserMetricsAction(
+            "WebView.PermissionDeny.ClipboardSanitizedWrite"));
+        break;
       default:
         break;
     }
@@ -161,10 +180,9 @@ void RecordUserInitiatedUMA(
 
 WebViewPermissionHelper::WebViewPermissionHelper(WebViewGuest* web_view_guest)
     : next_permission_request_id_(guest_view::kInstanceIDNone),
-      web_view_guest_(web_view_guest),
-      default_media_access_permission_(false) {
-  web_view_permission_helper_delegate_.reset(
-      ExtensionsAPIClient::Get()->CreateWebViewPermissionHelperDelegate(this));
+      web_view_guest_(web_view_guest) {
+  web_view_permission_helper_delegate_ =
+      ExtensionsAPIClient::Get()->CreateWebViewPermissionHelperDelegate(this);
 }
 
 WebViewPermissionHelper::~WebViewPermissionHelper() {
@@ -189,16 +207,24 @@ WebViewPermissionHelper* WebViewPermissionHelper::FromRenderFrameHostId(
 }
 
 void WebViewPermissionHelper::RequestMediaAccessPermission(
-    content::WebContents* source,
     const content::MediaStreamRequest& request,
     content::MediaResponseCallback callback) {
-  base::Value::Dict request_info;
+  base::DictValue request_info;
   request_info.Set(guest_view::kUrl, request.security_origin.spec());
   RequestPermission(
       WEB_VIEW_PERMISSION_TYPE_MEDIA, std::move(request_info),
       base::BindOnce(&WebViewPermissionHelper::OnMediaPermissionResponse,
                      weak_factory_.GetWeakPtr(), request, std::move(callback)),
-      default_media_access_permission_);
+      /*allowed_by_default=*/false);
+}
+
+void WebViewPermissionHelper::RequestMediaAccessPermissionForControlledFrame(
+    content::WebContents* source,
+    const content::MediaStreamRequest& request,
+    content::MediaResponseCallback callback) {
+  web_view_permission_helper_delegate_
+      ->RequestMediaAccessPermissionForControlledFrame(source, request,
+                                                       std::move(callback));
 }
 
 bool WebViewPermissionHelper::CheckMediaAccessPermission(
@@ -218,24 +244,56 @@ bool WebViewPermissionHelper::CheckMediaAccessPermission(
                                    security_origin, type);
 }
 
+bool WebViewPermissionHelper::CheckMediaAccessPermissionForControlledFrame(
+    content::RenderFrameHost* render_frame_host,
+    const url::Origin& security_origin,
+    blink::mojom::MediaStreamType type) {
+  return web_view_permission_helper_delegate_
+      ->CheckMediaAccessPermissionForControlledFrame(render_frame_host,
+                                                     security_origin, type);
+}
+
 void WebViewPermissionHelper::OnMediaPermissionResponse(
     const content::MediaStreamRequest& request,
     content::MediaResponseCallback callback,
     bool allow,
     const std::string& user_input) {
   if (!allow) {
-    std::move(callback).Run(
-        blink::mojom::StreamDevicesSet(),
-        blink::mojom::MediaStreamRequestResult::PERMISSION_DENIED,
-        std::unique_ptr<content::MediaStreamUI>());
+    std::move(callback).Run(blink::mojom::StreamDevicesSet(),
+                            blink::mojom::MediaStreamRequestResult::
+                                PERMISSION_DENIED_BY_EMBEDDER_CONTEXT,
+                            std::unique_ptr<content::MediaStreamUI>());
     return;
   }
   if (!web_view_guest()->attached() ||
       !web_view_guest()->embedder_web_contents()->GetDelegate()) {
     std::move(callback).Run(
         blink::mojom::StreamDevicesSet(),
-        blink::mojom::MediaStreamRequestResult::INVALID_STATE,
+        blink::mojom::MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN,
         std::unique_ptr<content::MediaStreamUI>());
+    return;
+  }
+
+  content::RenderFrameHost* embedder_rfh = web_view_guest()->embedder_rfh();
+  const url::Origin& embedder_origin = embedder_rfh->GetLastCommittedOrigin();
+  if (web_view_permission_helper_delegate_
+          ->ForwardEmbeddedMediaPermissionChecksAsEmbedder(embedder_origin)) {
+    content::MediaStreamRequest embedder_request = request;
+    content::GlobalRenderFrameHostId embedder_rfh_id =
+        embedder_rfh->GetGlobalId();
+    // TODO(crbug.com/379869738) Remove GetUnsafeValue.
+    embedder_request.render_process_id =
+        embedder_rfh_id.child_id.GetUnsafeValue();
+    embedder_request.render_frame_id = embedder_rfh_id.frame_routing_id;
+    embedder_request.url_origin = embedder_origin;
+    embedder_request.security_origin = embedder_origin.GetURL();
+
+    web_view_guest()
+        ->embedder_web_contents()
+        ->GetDelegate()
+        ->RequestMediaAccessPermission(
+            web_view_guest()->embedder_web_contents(), embedder_request,
+            std::move(callback));
     return;
   }
 
@@ -291,9 +349,37 @@ void WebViewPermissionHelper::RequestFileSystemPermission(
       url, allowed_by_default, std::move(callback));
 }
 
-int WebViewPermissionHelper::RequestPermission(
+void WebViewPermissionHelper::RequestFullscreenPermission(
+    const url::Origin& requesting_origin,
+    PermissionResponseCallback callback) {
+  web_view_permission_helper_delegate_->RequestFullscreenPermission(
+      requesting_origin, std::move(callback));
+}
+
+void WebViewPermissionHelper::RequestClipboardReadWritePermission(
+    const GURL& requesting_frame_url,
+    bool user_gesture,
+    base::OnceCallback<void(bool)> callback) {
+  web_view_permission_helper_delegate_->RequestClipboardReadWritePermission(
+      requesting_frame_url, user_gesture, std::move(callback));
+}
+
+void WebViewPermissionHelper::RequestClipboardSanitizedWritePermission(
+    const GURL& requesting_frame_url,
+    base::OnceCallback<void(bool)> callback) {
+  web_view_permission_helper_delegate_
+      ->RequestClipboardSanitizedWritePermission(requesting_frame_url,
+                                                 std::move(callback));
+}
+
+std::optional<content::PermissionResult>
+WebViewPermissionHelper::OverridePermissionResult(ContentSettingsType type) {
+  return web_view_permission_helper_delegate_->OverridePermissionResult(type);
+}
+
+void WebViewPermissionHelper::RequestPermission(
     WebViewPermissionType permission_type,
-    base::Value::Dict request_info,
+    base::DictValue request_info,
     PermissionResponseCallback callback,
     bool allowed_by_default) {
   // If there are too many pending permission requests then reject this request.
@@ -306,13 +392,13 @@ int WebViewPermissionHelper::RequestPermission(
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback), allowed_by_default, std::string()));
-    return webview::kInvalidPermissionRequestID;
+    return;
   }
 
   int request_id = next_permission_request_id_++;
   pending_permission_requests_[request_id] = PermissionResponseInfo(
       std::move(callback), permission_type, allowed_by_default);
-  base::Value::Dict args;
+  base::DictValue args;
   args.Set(webview::kRequestInfo, std::move(request_info));
   args.Set(webview::kRequestId, request_id);
   switch (permission_type) {
@@ -333,7 +419,6 @@ int WebViewPermissionHelper::RequestPermission(
       break;
     }
   }
-  return request_id;
 }
 
 WebViewPermissionHelper::SetPermissionResult
@@ -359,15 +444,6 @@ WebViewPermissionHelper::SetPermission(
   pending_permission_requests_.erase(request_itr);
 
   return allow ? SET_PERMISSION_ALLOWED : SET_PERMISSION_DENIED;
-}
-
-void WebViewPermissionHelper::CancelPendingPermissionRequest(int request_id) {
-  auto request_itr = pending_permission_requests_.find(request_id);
-
-  if (request_itr == pending_permission_requests_.end())
-    return;
-
-  pending_permission_requests_.erase(request_itr);
 }
 
 WebViewPermissionHelper::PermissionResponseInfo::PermissionResponseInfo()

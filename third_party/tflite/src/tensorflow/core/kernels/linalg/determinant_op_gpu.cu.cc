@@ -68,12 +68,7 @@ __global__ void DeterminantFromPivotedLUKernel(
     for (int i = 0; i < n; ++i, i_idx += stride) {
       const RealScalar abs_i = Eigen::numext::abs(lu_factor[i_idx]);
       sum_log_abs_det += Eigen::numext::log(abs_i);
-      prod_sign = prod_sign * (lu_factor[i_idx] / abs_i);
-    }
-    if (!Eigen::numext::isfinite(sum_log_abs_det)) {
-      prod_sign = Scalar(0);
-      sum_log_abs_det = sum_log_abs_det > 0 ? -Eigen::numext::log(RealScalar(0))
-                                            : Eigen::numext::log(RealScalar(0));
+      prod_sign = prod_sign * Eigen::numext::sign(lu_factor[i_idx]);
     }
     if (compute_log_abs_det) {
       sign[o_idx] = prod_sign;
@@ -90,8 +85,8 @@ struct DeterminantFromPivotedLUFunctor<GPUDevice, Scalar> {
                   typename TTypes<Scalar, 3>::ConstTensor lu_factor,
                   const int* pivots, typename TTypes<Scalar, 1>::Tensor output,
                   int* info) {
-    const int64 num_matrices = output.size();
-    const int64 n = lu_factor.dimension(2);
+    const int64_t num_matrices = output.size();
+    const int64_t n = lu_factor.dimension(2);
     GpuLaunchConfig config = GetGpuLaunchConfig(num_matrices, device);
 
     TF_CHECK_OK(GpuLaunchKernel(
@@ -113,8 +108,8 @@ struct LogDeterminantFromPivotedLUFunctor<GPUDevice, Scalar> {
                   typename TTypes<Scalar, 3>::ConstTensor lu_factor,
                   const int* pivots, typename TTypes<Scalar, 1>::Tensor sign,
                   typename TTypes<Scalar, 1>::Tensor log_abs_det) {
-    const int64 num_matrices = sign.size();
-    const int64 n = lu_factor.dimension(2);
+    const int64_t num_matrices = sign.size();
+    const int64_t n = lu_factor.dimension(2);
     GpuLaunchConfig config = GetGpuLaunchConfig(num_matrices, device);
     TF_CHECK_OK(GpuLaunchKernel(
         DeterminantFromPivotedLUKernel<Scalar, /*compute_log_abs_det=*/true>,

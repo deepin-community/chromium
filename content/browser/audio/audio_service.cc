@@ -4,8 +4,7 @@
 
 #include "content/public/browser/audio_service.h"
 
-#include <optional>
-
+#include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/strings/strcat.h"
@@ -31,17 +30,11 @@
 #include "services/audio/service.h"
 #include "services/audio/service_factory.h"
 
-#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
+#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS) && BUILDFLAG(IS_WIN)
+#define PASS_EDID_ON_COMMAND_LINE 1
 #include "ui/display/util/edid_parser.h"
-
-#if BUILDFLAG(IS_LINUX)
-#include "ui/display/display_util.h"
-#endif  // BUILDFLAG(IS_LINUX)
-
-#if BUILDFLAG(IS_WIN)
 #include "ui/display/win/audio_edid_scan.h"
-#endif  // BUILDFLAG(IS_WIN)
-#endif  // BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
+#endif  // BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS) && BUILDFLAG(IS_WIN)
 
 namespace content {
 
@@ -89,14 +82,14 @@ void LaunchAudioServiceInProcess(
   if (!BrowserMainLoop::GetInstance())
     return;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) && defined(USE_CRAS)
+#if BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(USE_CRAS)
   if (GetContentClient()->browser()->EnforceSystemAudioEchoCancellation()) {
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
         switches::kSystemAecEnabled);
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH) && defined(USE_CRAS)
+#endif  // BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(USE_CRAS)
 
-  // TODO(https://crbug.com/853254): Remove
+  // TODO(crbug.com/40580951): Remove
   // BrowserMainLoop::GetAudioManager().
   audio::Service::GetInProcessTaskRunner()->PostTask(
       FROM_HERE,
@@ -125,15 +118,15 @@ void LaunchAudioServiceOutOfProcess(
   if (GetContentClient()->browser()->ShouldEnableAudioProcessHighPriority())
     switches.push_back(switches::kAudioProcessHighPriority);
 #endif  // BUILDFLAG(IS_WIN)
-#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
+#ifdef PASS_EDID_ON_COMMAND_LINE
   switches.push_back(base::StrCat({switches::kAudioCodecsFromEDID, "=",
                                    base::NumberToString(codec_bitmask)}));
-#endif  // BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
-#if BUILDFLAG(IS_CHROMEOS_ASH) && defined(USE_CRAS)
+#endif  // PASS_EDID_ON_COMMAND_LINE
+#if BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(USE_CRAS)
   if (GetContentClient()->browser()->EnforceSystemAudioEchoCancellation()) {
     switches.push_back(switches::kSystemAecEnabled);
   }
-#endif  // BUILDFLAG(IS_CHROMEOS) && defined(USE_CRAS)
+#endif  // BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(USE_CRAS)
   ServiceProcessHost::Launch(
       std::move(receiver),
       ServiceProcessHost::Options()
@@ -154,7 +147,7 @@ void LaunchAudioService(
   }
 }
 
-#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
+#ifdef PASS_EDID_ON_COMMAND_LINE
 // Convert the EDID supported audio bitstream formats into media codec bitmasks.
 uint32_t ConvertEdidBitstreams(uint32_t formats) {
   uint32_t codec_bitmask = 0;
@@ -167,13 +160,11 @@ uint32_t ConvertEdidBitstreams(uint32_t formats) {
   return codec_bitmask;
 }
 
-#if BUILDFLAG(IS_WIN)
 // Convert the EDID supported audio bitstream formats into media codec bitmasks.
 uint32_t ScanEdidBitstreams() {
   return ConvertEdidBitstreams(display::win::ScanEdidBitstreams());
 }
-#endif  // BUILDFLAG(IS_WIN)
-#endif  // BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS)
+#endif  // PASS_EDID_ON_COMMAND_LINE
 
 }  // namespace
 
@@ -193,7 +184,7 @@ audio::mojom::AudioService& GetAudioService() {
   auto& remote = remote_slot.GetOrCreateValue();
   if (!remote) {
     auto receiver = remote.BindNewPipeAndPassReceiver();
-#if BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS) && BUILDFLAG(IS_WIN)
+#ifdef PASS_EDID_ON_COMMAND_LINE
     // The EDID scan is done in a COM STA thread and the result
     // passed to the audio service launcher.
     base::ThreadPool::CreateCOMSTATaskRunner(
@@ -202,13 +193,9 @@ audio::mojom::AudioService& GetAudioService() {
         ->PostTaskAndReplyWithResult(
             FROM_HERE, base::BindOnce(&ScanEdidBitstreams),
             base::BindOnce(&LaunchAudioService, std::move(receiver)));
-#elif BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS) && BUILDFLAG(IS_LINUX)
-    LaunchAudioService(
-        std::move(receiver),
-        ConvertEdidBitstreams(display::DisplayUtil::GetAudioFormats()));
 #else
     LaunchAudioService(std::move(receiver), 0);
-#endif  // BUILDFLAG(ENABLE_PASSTHROUGH_AUDIO_CODECS) && BUILDFLAG(IS_WIN)
+#endif  // PASS_EDID_ON_COMMAND_LINE
     remote.reset_on_disconnect();
   }
   return *remote.get();

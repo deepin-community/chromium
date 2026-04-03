@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ui/ozone/platform/wayland/host/wayland_data_source.h"
 
 #include <gtk-primary-selection-client-protocol.h>
@@ -10,8 +11,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "base/files/file_util.h"
 #include "base/logging.h"
+#include "base/notimplemented.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
@@ -28,12 +29,19 @@ DataSource<T>::DataSource(T* data_source,
   DCHECK(delegate_);
 
   Initialize();
-  VLOG(1) << "DataSoure created:" << this;
+  VLOG(1) << "DataSource created:" << this;
 }
 
 template <typename T>
 DataSource<T>::~DataSource() {
-  VLOG(1) << "DataSoure deleted:" << this;
+  VLOG(1) << "DataSource deleted:" << this;
+}
+
+template <typename T>
+void DataSource<T>::HandleDropEvent() {
+  VLOG(1) << "OnDataSourceDropPerformed in WaylandDataSource";
+  // No timestamp for these events. Use EventTimeForNow(), for now.
+  delegate_->OnDataSourceDropPerformed(this, ui::EventTimeForNow());
 }
 
 template <typename T>
@@ -49,17 +57,16 @@ void DataSource<T>::HandleFinishEvent(bool completed) {
 // for more details about non-blocking behavior for 'write' syscall.
 // https://pubs.opengroup.org/onlinepubs/007904975/functions/write.html
 bool WriteDataNonBlocking(int fd, const std::string& data_str) {
-  const char* data = data_str.data();
-  const ssize_t size = base::checked_cast<ssize_t>(data_str.size());
-  ssize_t written = 0;
-  while (written < size) {
-    ssize_t result = write(fd, data + written, size - written);
-    if (result == -1) {
-      if (errno == EINTR || errno == EAGAIN)
-        continue;
+  const auto data_span = base::as_byte_span(data_str);
+  for (size_t written = 0; written < data_span.size();) {
+    const auto remaining_span = data_span.subspan(written);
+    const ssize_t result =
+        write(fd, remaining_span.data(), remaining_span.size());
+    if (result >= 0) {
+      written += static_cast<size_t>(result);
+    } else if (errno != EINTR && errno != EAGAIN) {
       return false;
     }
-    written += result;
   }
   return true;
 }
@@ -108,7 +115,8 @@ void DataSource<T>::OnTarget(void* data, T* source, const char* mime_type) {
 
 template <typename T>
 void DataSource<T>::OnDndDropPerformed(void* data, T* source) {
-  NOTIMPLEMENTED_LOG_ONCE();
+  auto* self = static_cast<DataSource<T>*>(data);
+  self->HandleDropEvent();
 }
 
 //////////////////////////////////////////////////////////////////////////////

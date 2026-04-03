@@ -20,15 +20,16 @@
 #include "ash/system/status_area_widget.h"
 #include "ash/wm/desks/desk_button/desk_button_container.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_forward.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/compositor/animation_throughput_reporter.h"
 #include "ui/compositor/presentation_time_recorder.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
+#include "ui/display/screen.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/transform_util.h"
@@ -44,7 +45,7 @@ namespace {
 // Returns the display id for the display that shows the shelf for |view|.
 int64_t GetDisplayIdForView(const views::View* view) {
   aura::Window* window = view->GetWidget()->GetNativeWindow();
-  return display::Screen::GetScreen()->GetDisplayNearestWindow(window).id();
+  return display::Screen::Get()->GetDisplayNearestWindow(window).id();
 }
 
 void ReportSmoothness(bool tablet_mode, bool launcher_visible, int smoothness) {
@@ -112,7 +113,7 @@ class ScrollableShelfView::ScrollableShelfArrowView
     // the hidden icon which receives the accessibility focus shows through
     // scroll animation. So the arrow button is not useful for the spoken
     // feedback users. The spoken feedback should ignore the arrow button.
-    GetViewAccessibility().OverrideIsIgnored(/*value=*/true);
+    GetViewAccessibility().SetIsIgnored(/*value=*/true);
   }
   ~ScrollableShelfArrowView() override = default;
 
@@ -223,7 +224,7 @@ void ScrollableShelfContainerView::Layout(PassKey) {
   // CalculateIdealSize. Because ShelfView::CalculatePreferredSize relies on the
   // bounds of app icon. Meanwhile, the icon's bounds may be updated by
   // animation.
-  const gfx::Rect ideal_bounds = gfx::Rect(CalculatePreferredSize());
+  const gfx::Rect ideal_bounds = gfx::Rect(CalculatePreferredSize({}));
 
   const gfx::Rect local_bounds = GetLocalBounds();
   gfx::Rect shelf_view_bounds =
@@ -402,6 +403,12 @@ void ScrollableShelfView::ScrollToNewPage(bool forward) {
     ScrollByYOffset(offset, /*animating=*/true);
 }
 
+void ScrollableShelfView::UpdateAccessiblePreviousAndNextFocus() {
+  GetViewAccessibility().SetNextFocus(GetShelf()->GetStatusAreaWidget());
+  GetViewAccessibility().SetPreviousFocus(
+      GetShelf()->shelf_widget()->navigation_widget());
+}
+
 views::FocusSearch* ScrollableShelfView::GetFocusSearch() {
   return focus_search_.get();
 }
@@ -447,7 +454,7 @@ gfx::Rect ScrollableShelfView::GetTargetScreenBoundsOfItemIcon(
 
   // Return a dummy value if the item specified by `id` does not exist in the
   // shelf model.
-  // TODO(https://crbug.com/1270498): it is a quick fixing. We should
+  // TODO(crbug.com/40057927): it is a quick fixing. We should
   // investigate the root cause.
   if (item_index_in_model < 0)
     return gfx::Rect();
@@ -513,7 +520,7 @@ gfx::Rect ScrollableShelfView::GetTargetScreenBoundsOfItemIcon(
     // target bounds from RTL to LTR. (2) Calculates the icon's bounds in screen
     // under LTR. (3) Transforms the icon's bounds to RTL.
     gfx::Rect display_bounds =
-        display::Screen::GetScreen()
+        display::Screen::Get()
             ->GetDisplayNearestWindow(GetWidget()->GetNativeView())
             .bounds();
     hotseat_bounds_in_screen.set_x(display_bounds.right() -
@@ -562,7 +569,7 @@ gfx::Insets ScrollableShelfView::CalculateMirroredEdgePadding(
       available_local_bounds.width(), available_local_bounds.height());
 
   int gap = CanFitAllAppsWithoutScrolling(available_local_bounds.size(),
-                                          CalculatePreferredSize())
+                                          CalculatePreferredSize({}))
                 ? available_size_for_app_icons - icons_size
                 : 0;  // overflow
 
@@ -672,10 +679,10 @@ void ScrollableShelfView::StartShelfScrollAnimation(float scroll_distance) {
 
   ui::AnimationThroughputReporter reporter(
       animation_settings.GetAnimator(),
-      metrics_util::ForSmoothnessV3(
-          base::BindRepeating(&ReportSmoothness, Shell::Get()->IsInTabletMode(),
-                              Shell::Get()->app_list_controller()->IsVisible(
-                                  GetDisplayIdForView(this)))));
+      metrics_util::ForSmoothnessV3(base::BindRepeating(
+          &ReportSmoothness, display::Screen::Get()->InTabletMode(),
+          Shell::Get()->app_list_controller()->IsVisible(
+              GetDisplayIdForView(this)))));
 
   shelf_container_view_->TranslateShelfView(scroll_offset_);
 }
@@ -712,8 +719,9 @@ const Shelf* ScrollableShelfView::GetShelf() const {
   return shelf_view_->shelf();
 }
 
-gfx::Size ScrollableShelfView::CalculatePreferredSize() const {
-  return shelf_container_view_->GetPreferredSize();
+gfx::Size ScrollableShelfView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  return shelf_container_view_->GetPreferredSize(available_size);
 }
 
 void ScrollableShelfView::Layout(PassKey) {
@@ -842,18 +850,12 @@ void ScrollableShelfView::OnGestureEvent(ui::GestureEvent* event) {
   } else if (shelf_view_->HandleGestureEvent(event)) {
     // |event| is consumed by ShelfView.
     event->StopPropagation();
-  } else if (event->type() == ui::ET_GESTURE_SCROLL_BEGIN) {
+  } else if (event->type() == ui::EventType::kGestureScrollBegin) {
     // |event| is consumed by neither ScrollableShelfView nor ShelfView. So the
     // gesture end event will not be propagated to this view. Then we need to
     // reset the class members related with scroll status explicitly.
     ResetScrollStatus();
   }
-}
-
-void ScrollableShelfView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  GetViewAccessibility().OverrideNextFocus(GetShelf()->GetStatusAreaWidget());
-  GetViewAccessibility().OverridePreviousFocus(
-      GetShelf()->shelf_widget()->navigation_widget());
 }
 
 void ScrollableShelfView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
@@ -993,7 +995,7 @@ void ScrollableShelfView::OnShelfButtonAboutToRequestFocusFromTabTraversal(
   ShelfWidget* shelf_widget = GetShelf()->shelf_widget();
   // In tablet mode, when the hotseat is not extended but one of the buttons
   // gets focused, it should update the visibility of the hotseat.
-  if (Shell::Get()->IsInTabletMode() &&
+  if (display::Screen::Get()->InTabletMode() &&
       !shelf_widget->hotseat_widget()->IsExtended()) {
     shelf_widget->shelf_layout_manager()->UpdateVisibilityState(
         /*force_layout=*/false);
@@ -1061,7 +1063,7 @@ ScrollableShelfView::CreateScopedActiveInkDropCount(const ShelfButton* sender) {
 void ScrollableShelfView::ShowContextMenuForViewImpl(
     views::View* source,
     const gfx::Point& point,
-    ui::MenuSourceType source_type) {
+    ui::mojom::MenuSourceType source_type) {
   // |point| is in screen coordinates. So it does not need to transform.
   shelf_view_->ShowContextMenuForViewImpl(shelf_view_, point, source_type);
 }
@@ -1196,7 +1198,7 @@ void ScrollableShelfView::ScheduleScrollForItemDragIfNeeded(
 
   drag_item_bounds_in_screen_.emplace(item_bounds_in_screen);
   if (AreBoundsWithinVisibleSpace(*drag_item_bounds_in_screen_)) {
-    page_flip_timer_.AbandonAndStop();
+    page_flip_timer_.Stop();
     return;
   }
 
@@ -1208,7 +1210,7 @@ void ScrollableShelfView::ScheduleScrollForItemDragIfNeeded(
 void ScrollableShelfView::CancelScrollForItemDrag() {
   drag_item_bounds_in_screen_.reset();
   if (page_flip_timer_.IsRunning())
-    page_flip_timer_.AbandonAndStop();
+    page_flip_timer_.Stop();
 }
 
 void ScrollableShelfView::OnImplicitAnimationsCompleted() {
@@ -1221,8 +1223,9 @@ void ScrollableShelfView::OnImplicitAnimationsCompleted() {
     UpdateTappableIconIndices();
 
   // Notifies ChromeVox of the changed location at the end of animation.
-  shelf_view_->NotifyAccessibilityEvent(ax::mojom::Event::kLocationChanged,
-                                        /*send_native_event=*/true);
+  shelf_view_->NotifyAccessibilityEventDeprecated(
+      ax::mojom::Event::kLocationChanged,
+      /*send_native_event=*/true);
 
   if (!drag_item_bounds_in_screen_ ||
       AreBoundsWithinVisibleSpace(*drag_item_bounds_in_screen_)) {
@@ -1305,7 +1308,7 @@ bool ScrollableShelfView::ShouldHandleGestures(const ui::GestureEvent& event) {
   if (scroll_status_ == kNotInScroll && !event.IsScrollGestureEvent())
     return false;
 
-  if (event.type() == ui::ET_GESTURE_SCROLL_BEGIN) {
+  if (event.type() == ui::EventType::kGestureScrollBegin) {
     CHECK_EQ(scroll_status_, kNotInScroll);
 
     float main_offset = event.details().scroll_x_hint();
@@ -1326,7 +1329,7 @@ bool ScrollableShelfView::ShouldHandleGestures(const ui::GestureEvent& event) {
   bool should_handle_gestures = scroll_status_ == kAlongMainAxisScroll;
 
   if (scroll_status_ == kAlongMainAxisScroll &&
-      event.type() == ui::ET_GESTURE_SCROLL_BEGIN) {
+      event.type() == ui::EventType::kGestureScrollBegin) {
     scroll_offset_before_main_axis_scrolling_ = scroll_offset_;
     layout_strategy_before_main_axis_scrolling_ = layout_strategy_;
 
@@ -1334,8 +1337,9 @@ bool ScrollableShelfView::ShouldHandleGestures(const ui::GestureEvent& event) {
     MaybeUpdateGradientZone();
   }
 
-  if (event.type() == ui::ET_GESTURE_END)
+  if (event.type() == ui::EventType::kGestureEnd) {
     ResetScrollStatus();
+  }
 
   return should_handle_gestures;
 }
@@ -1355,9 +1359,9 @@ bool ScrollableShelfView::ProcessGestureEvent(const ui::GestureEvent& event) {
 
   // Handle scroll-related events, but don't do anything special for begin and
   // end.
-  if (event.type() == ui::ET_GESTURE_SCROLL_BEGIN) {
+  if (event.type() == ui::EventType::kGestureScrollBegin) {
     DCHECK(!presentation_time_recorder_);
-    if (Shell::Get()->IsInTabletMode()) {
+    if (display::Screen::Get()->InTabletMode()) {
       if (Shell::Get()->app_list_controller()->IsVisible(
               GetDisplayIdForView(this))) {
         presentation_time_recorder_ = CreatePresentationTimeHistogramRecorder(
@@ -1395,9 +1399,10 @@ bool ScrollableShelfView::ProcessGestureEvent(const ui::GestureEvent& event) {
     return true;
   }
 
-  if (event.type() == ui::ET_GESTURE_END) {
-    // Do not reset |presentation_time_recorder_| in ui::ET_GESTURE_SCROLL_END
-    // event because it may not exist due to gesture fling.
+  if (event.type() == ui::EventType::kGestureEnd) {
+    // Do not reset |presentation_time_recorder_| in
+    // ui::EventType::kGestureScrollEnd event because it may not exist due to
+    // gesture fling.
     presentation_time_recorder_.reset();
 
     // The type of scrolling offset is float to ensure that ScrollableShelfView
@@ -1412,7 +1417,7 @@ bool ScrollableShelfView::ProcessGestureEvent(const ui::GestureEvent& event) {
     return true;
   }
 
-  if (event.type() == ui::ET_SCROLL_FLING_START) {
+  if (event.type() == ui::EventType::kScrollFlingStart) {
     const bool is_horizontal_alignment = GetShelf()->IsHorizontalAlignment();
     if (!ShouldHandleScroll(gfx::Vector2dF(event.details().velocity_x(),
                                            event.details().velocity_y()),
@@ -1440,8 +1445,9 @@ bool ScrollableShelfView::ProcessGestureEvent(const ui::GestureEvent& event) {
     return true;
   }
 
-  if (event.type() != ui::ET_GESTURE_SCROLL_UPDATE)
+  if (event.type() != ui::EventType::kGestureScrollUpdate) {
     return false;
+  }
 
   float scroll_delta = 0.f;
   const bool is_horizontal = GetShelf()->IsHorizontalAlignment();
@@ -1690,6 +1696,13 @@ void ScrollableShelfView::CalculateVerticalGradient(
   auto get_clamped = [](int position, int total) -> float {
     return std::clamp(static_cast<float>(position) / total, 0.f, 1.f);
   };
+
+  // Do not add gradient if visible height is too small.
+  if (visible_space_.bottom() <
+      visible_space_.y() +
+          2 * scrollable_shelf_constants::kGradientZoneLength) {
+    return;
+  }
 
   float gradient_start, gradient_end;
 
@@ -2006,7 +2019,7 @@ void ScrollableShelfView::UpdateAvailableSpace() {
 
 gfx::Rect ScrollableShelfView::CalculateVisibleSpace(
     LayoutStrategy layout_strategy) const {
-  const bool in_tablet_mode = Shell::Get()->IsInTabletMode();
+  const bool in_tablet_mode = display::Screen::Get()->InTabletMode();
   if (layout_strategy == kNotShowArrowButtons && !in_tablet_mode)
     return GetAvailableLocalBounds(/*use_target_bounds=*/false);
 
@@ -2046,7 +2059,7 @@ gfx::Rect ScrollableShelfView::CalculateVisibleSpace(
 
 gfx::Insets ScrollableShelfView::CalculateRipplePaddingInsets() const {
   // Indicates whether it is in tablet mode with hotseat enabled.
-  const bool in_tablet_mode = display::Screen::GetScreen()->InTabletMode();
+  const bool in_tablet_mode = display::Screen::Get()->InTabletMode();
 
   const int ripple_padding =
       ShelfConfig::Get()->scrollable_shelf_ripple_padding();
@@ -2065,7 +2078,7 @@ gfx::Insets ScrollableShelfView::CalculateRipplePaddingInsets() const {
 
 gfx::RoundedCornersF
 ScrollableShelfView::CalculateShelfContainerRoundedCorners() const {
-  if (!display::Screen::GetScreen()->InTabletMode()) {
+  if (!display::Screen::Get()->InTabletMode()) {
     return gfx::RoundedCornersF();
   }
 
@@ -2142,8 +2155,9 @@ bool ScrollableShelfView::ShouldDelegateScrollToShelf(
   // When the shelf is not aligned in the bottom, the events should be
   // propagated and handled as MouseWheel events.
 
-  if (event.type() != ui::ET_SCROLL)
+  if (event.type() != ui::EventType::kScroll) {
     return false;
+  }
 
   const float main_offset =
       GetShelf()->IsHorizontalAlignment() ? event.x_offset() : event.y_offset();
@@ -2251,7 +2265,7 @@ void ScrollableShelfView::EnableShelfRoundedCorners(bool enable) {
   // Only enable shelf rounded corners in tablet mode. Note that we allow
   // disabling rounded corners in clamshell. Because when switching to clamshell
   // from tablet, this method may be called after tablet mode ends.
-  if (enable && !display::Screen::GetScreen()->InTabletMode()) {
+  if (enable && !display::Screen::Get()->InTabletMode()) {
     return;
   }
 
@@ -2302,7 +2316,7 @@ bool ScrollableShelfView::ShouldEnableLayerClip() const {
     return true;
 
   // In clamshell, only use layer clip in overflow mode.
-  if (!display::Screen::GetScreen()->InTabletMode()) {
+  if (!display::Screen::Get()->InTabletMode()) {
     return false;
   }
 

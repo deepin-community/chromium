@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/ozone/public/hardware_capabilities.h"
 #include "ui/ozone/public/overlay_candidates_ozone.h"
 
@@ -35,6 +35,11 @@ class DrmOverlayCandidates : public OverlayCandidatesOzone {
   void ObserveHardwareCapabilities(
       HardwareCapabilitiesCallback receive_callback) override;
   void RegisterOverlayRequirement(bool requires_overlay) override;
+  void OnSwapBuffersComplete(gfx::SwapResult swap_result) override;
+  void SetSupportedSharedImageFormats(
+      base::flat_set<viz::SharedImageFormat> supported_formats) override;
+  void NotifyOverlayPromotion(
+      std::vector<gfx::OverlayType> promoted_overlay_types) override;
 
  private:
   const raw_ptr<DrmOverlayManager> overlay_manager_;  // Not owned.

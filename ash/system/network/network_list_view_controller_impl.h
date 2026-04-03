@@ -13,7 +13,6 @@
 #include "ash/system/network/network_list_mobile_header_view.h"
 #include "ash/system/network/network_list_network_header_view.h"
 #include "ash/system/network/network_list_network_item_view.h"
-#include "ash/system/network/network_list_tether_hosts_header_view.h"
 #include "ash/system/network/network_list_view_controller.h"
 #include "ash/system/network/network_list_wifi_header_view.h"
 #include "ash/system/network/tray_network_state_observer.h"
@@ -22,10 +21,8 @@
 #include "ash/system/tray/tray_utils.h"
 #include "ash/system/tray/tri_view.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/raw_ptr_exclusion.h"
 #include "base/timer/timer.h"
 #include "chromeos/ash/services/bluetooth_config/public/mojom/cros_bluetooth_config.mojom.h"
-#include "chromeos/ash/services/multidevice_setup/public/mojom/multidevice_setup.mojom.h"
 #include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -44,7 +41,6 @@ class NetworkDetailedNetworkView;
 class ASH_EXPORT NetworkListViewControllerImpl
     : public TrayNetworkStateObserver,
       public NetworkListViewController,
-      public multidevice_setup::mojom::HostStatusObserver,
       public bluetooth_config::mojom::SystemPropertiesObserver {
  public:
   NetworkListViewControllerImpl(
@@ -75,23 +71,18 @@ class ASH_EXPORT NetworkListViewControllerImpl
     kWifiSectionHeader = 15,
     kWifiStatusMessage = 16,
     kConnectionWarningSystemIcon = 17,
-    kConnectionWarningManagedIcon = 18,
-    kTetherHostsSectionHeader = 19,
-    kTetherHostsStatusMessage = 20
+    kConnectionWarningManagedIcon = 18
   };
 
   // Map of network guids and their corresponding list item views.
   using NetworkIdToViewMap =
-      base::flat_map<std::string, NetworkListNetworkItemView*>;
-
-  // multidevice_setup::mojom::HostStatusObserver:
-  void OnHostStatusChanged(
-      multidevice_setup::mojom::HostStatus host_status,
-      const std::optional<multidevice::RemoteDevice>& host_device) override;
+      base::flat_map<std::string,
+                     raw_ptr<NetworkListNetworkItemView, CtnExperimental>>;
 
   // TrayNetworkStateObserver:
   void ActiveNetworkStateChanged() override;
   void NetworkListChanged() override;
+  void DeviceStateListChanged() override;
   void GlobalPolicyChanged() override;
 
   // bluetooth_config::mojom::SystemPropertiesObserver:
@@ -120,9 +111,6 @@ class ASH_EXPORT NetworkListViewControllerImpl
   // Returns true if mobile data section should be added to view.
   bool ShouldMobileDataSectionBeShown();
 
-  // Returns true if tether hosts section should be added to view.
-  bool ShouldTetherHostsSectionBeShown();
-
   // Creates the wifi group header for wifi networks. If `is_known` is `true`,
   // it creates the "Known networks" header, which is the `known_header_`. If
   // `is_known` is false, it creates "Unknown networks" header, which is the
@@ -136,7 +124,7 @@ class ASH_EXPORT NetworkListViewControllerImpl
   // `index` is increased by 1 to indicate the order of this view so that this
   // view can be reordered later if necessary.
   size_t CreateConfigureNetworkEntry(
-      HoverHighlightView** plus_network_entry_ptr,
+      raw_ptr<HoverHighlightView>* plus_network_entry_ptr,
       NetworkType type,
       size_t index);
 
@@ -150,17 +138,13 @@ class ASH_EXPORT NetworkListViewControllerImpl
   // add an info message.
   void UpdateWifiSection();
 
-  // Updates the Tether Hosts section. This method creates a new header if one
-  // does not exist. If Bluetooth is disabled or Instant Hotspot is enabled with
-  // no nearby hosts, this method will display an error message.
-  void UpdateTetherHostsSection();
-
   // Updated mobile data toggle states and sets mobile data status message.
   void UpdateMobileToggleAndSetStatusMessage();
 
   // Creates an info label if missing and updates info label message.
-  void CreateInfoLabelIfMissingAndUpdate(int message_id,
-                                         TrayInfoLabel** info_label_ptr);
+  void CreateInfoLabelIfMissingAndUpdate(
+      int message_id,
+      raw_ptr<TrayInfoLabel>* info_label_ptr);
 
   // Creates a NetworkListNetworkItem if it does not exist else uses the
   // existing view, also reorders it in NetworkDetailedNetworkView scroll list.
@@ -224,61 +208,30 @@ class ASH_EXPORT NetworkListViewControllerImpl
       remote_cros_bluetooth_config_;
   mojo::Receiver<bluetooth_config::mojom::SystemPropertiesObserver>
       cros_system_properties_observer_receiver_{this};
-  mojo::Remote<multidevice_setup::mojom::MultiDeviceSetup>
-      multidevice_setup_remote_;
-  mojo::Receiver<multidevice_setup::mojom::HostStatusObserver>
-      host_status_observer_receiver_{this};
 
   bluetooth_config::mojom::BluetoothSystemState bluetooth_system_state_ =
       bluetooth_config::mojom::BluetoothSystemState::kUnavailable;
 
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION TrayInfoLabel* mobile_status_message_ = nullptr;
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION NetworkListMobileHeaderView* mobile_header_view_ = nullptr;
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION TriView* connection_warning_ = nullptr;
+  raw_ptr<TrayInfoLabel> mobile_status_message_ = nullptr;
+  raw_ptr<NetworkListMobileHeaderView> mobile_header_view_ = nullptr;
+  raw_ptr<TriView> connection_warning_ = nullptr;
 
   // Pointer to the icon displayed next to the connection warning message when
   // a proxy or a VPN is active. Owned by `connection_warning_`. If the network
   // is monitored by the admin, via policy, it displays the managed icon,
   // otherwise the system icon.
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION views::ImageView* connection_warning_icon_ = nullptr;
+  raw_ptr<views::ImageView> connection_warning_icon_ = nullptr;
   // Owned by `connection_warning_`.
-  raw_ptr<views::Label, DanglingUntriaged> connection_warning_label_ = nullptr;
+  raw_ptr<views::Label> connection_warning_label_ = nullptr;
 
-  raw_ptr<NetworkListWifiHeaderView, DanglingUntriaged> wifi_header_view_ =
-      nullptr;
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION TrayInfoLabel* wifi_status_message_ = nullptr;
-
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION TrayInfoLabel* tether_hosts_status_message_ = nullptr;
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION NetworkListTetherHostsHeaderView*
-      tether_hosts_header_view_ = nullptr;
+  raw_ptr<NetworkListWifiHeaderView> wifi_header_view_ = nullptr;
+  raw_ptr<TrayInfoLabel> wifi_status_message_ = nullptr;
 
   // Owned by views hierarchy.
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION views::Label* known_header_ = nullptr;
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION views::Label* unknown_header_ = nullptr;
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION HoverHighlightView* join_wifi_entry_ = nullptr;
-  // This field is not a raw_ptr<> because it was filtered by the rewriter
-  // for: #addr-of
-  RAW_PTR_EXCLUSION HoverHighlightView* add_esim_entry_ = nullptr;
+  raw_ptr<views::Label> known_header_ = nullptr;
+  raw_ptr<views::Label> unknown_header_ = nullptr;
+  raw_ptr<HoverHighlightView> join_wifi_entry_ = nullptr;
+  raw_ptr<HoverHighlightView> add_esim_entry_ = nullptr;
 
   bool has_cellular_networks_;
   bool has_wifi_networks_;
@@ -295,12 +248,7 @@ class ASH_EXPORT NetworkListViewControllerImpl
   // managed.
   bool is_vpn_managed_ = false;
 
-  // Indicates whether the user has a phone which could be set up via the
-  // cross-device suite of features.
-  bool has_phone_eligible_for_setup_ = false;
-
-  raw_ptr<NetworkDetailedNetworkView, DanglingUntriaged>
-      network_detailed_network_view_;
+  raw_ptr<NetworkDetailedNetworkView> network_detailed_network_view_;
   NetworkIdToViewMap network_id_to_view_map_;
 
   // Timer for repeatedly requesting network scans with a delay between

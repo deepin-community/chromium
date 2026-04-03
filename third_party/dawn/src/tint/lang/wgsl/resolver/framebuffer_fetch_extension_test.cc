@@ -66,7 +66,7 @@ TEST_F(FramebufferFetchExtensionTest, ColorParamUsedWithoutExtension) {
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(
         r()->error(),
-        R"(12:34 error: use of @color requires enabling extension 'chromium_experimental_framebuffer_fetch')");
+        R"(12:34 error: use of '@color' requires enabling extension 'chromium_experimental_framebuffer_fetch')");
 }
 
 TEST_F(FramebufferFetchExtensionTest, ColorMemberUsedWithExtension) {
@@ -94,7 +94,7 @@ TEST_F(FramebufferFetchExtensionTest, ColorMemberUsedWithoutExtension) {
     EXPECT_FALSE(r()->Resolve());
     EXPECT_EQ(
         r()->error(),
-        R"(12:34 error: use of @color requires enabling extension 'chromium_experimental_framebuffer_fetch')");
+        R"(12:34 error: use of '@color' requires enabling extension 'chromium_experimental_framebuffer_fetch')");
 }
 
 TEST_F(FramebufferFetchExtensionTest, DuplicateColorParams) {
@@ -112,7 +112,7 @@ TEST_F(FramebufferFetchExtensionTest, DuplicateColorParams) {
          ty.void_(), Empty, Vector{Stage(ast::PipelineStage::kFragment)});
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), R"(1:2 error: @color(1) appears multiple times)");
+    EXPECT_EQ(r()->error(), R"(1:2 error: '@color(1)' appears multiple times)");
 }
 
 TEST_F(FramebufferFetchExtensionTest, DuplicateColorStruct) {
@@ -132,11 +132,11 @@ TEST_F(FramebufferFetchExtensionTest, DuplicateColorStruct) {
                        Member("c", ty.vec4<f32>(), Vector{Color(Source{{1, 2}}, 1_a)}),
                    });
 
-    Func("f", Vector{Param("s", ty("S"))}, ty.void_(), Empty,
+    Func("f", Vector{Param("s", ty.AsType("S"))}, ty.void_(), Empty,
          Vector{Stage(ast::PipelineStage::kFragment)});
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), R"(1:2 error: @color(1) appears multiple times)");
+    EXPECT_EQ(r()->error(), R"(1:2 error: '@color(1)' appears multiple times)");
 }
 
 TEST_F(FramebufferFetchExtensionTest, DuplicateColorParamAndStruct) {
@@ -157,13 +157,13 @@ TEST_F(FramebufferFetchExtensionTest, DuplicateColorParamAndStruct) {
     Func("f",
          Vector{
              Param("a", ty.vec4<f32>(), Vector{Color(2_a)}),
-             Param("s", ty("S")),
+             Param("s", ty.AsType("S")),
              Param("d", ty.vec4<f32>(), Vector{Color(3_a)}),
          },
          ty.void_(), Empty, Vector{Stage(ast::PipelineStage::kFragment)});
 
     EXPECT_FALSE(r()->Resolve());
-    EXPECT_EQ(r()->error(), R"(1:2 error: @color(2) appears multiple times
+    EXPECT_EQ(r()->error(), R"(1:2 error: '@color(2)' appears multiple times
 note: while analyzing entry point 'f')");
 }
 
@@ -205,10 +205,9 @@ TEST_P(FramebufferFetchExtensionTest_Types, Param) {
         EXPECT_TRUE(r()->Resolve()) << r()->error();
     } else {
         EXPECT_FALSE(r()->Resolve());
-        auto expected =
-            ReplaceAll(R"(12:34 error: cannot apply @color to declaration of type '$TYPE'
-56:78 note: @color must only be applied to declarations of numeric scalar or numeric vector type)",
-                       "$TYPE", GetParam().name);
+        auto expected = R"(12:34 error: cannot apply '@color' to declaration of type ')" +
+                        GetParam().name + R"('
+56:78 note: '@color' must only be applied to declarations of numeric scalar or numeric vector type)";
         EXPECT_EQ(r()->error(), expected);
     }
 }
@@ -229,10 +228,9 @@ TEST_P(FramebufferFetchExtensionTest_Types, Struct) {
         EXPECT_TRUE(r()->Resolve()) << r()->error();
     } else {
         EXPECT_FALSE(r()->Resolve());
-        auto expected =
-            ReplaceAll(R"(12:34 error: cannot apply @color to declaration of type '$TYPE'
-56:78 note: @color must only be applied to declarations of numeric scalar or numeric vector type)",
-                       "$TYPE", GetParam().name);
+        auto expected = R"(12:34 error: cannot apply '@color' to declaration of type ')" +
+                        GetParam().name + R"('
+56:78 note: '@color' must only be applied to declarations of numeric scalar or numeric vector type)";
         EXPECT_EQ(r()->error(), expected);
     }
 }

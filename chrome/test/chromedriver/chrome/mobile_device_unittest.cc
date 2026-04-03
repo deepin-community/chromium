@@ -4,9 +4,9 @@
 
 #include "chrome/test/chromedriver/chrome/mobile_device.h"
 
+#include <string_view>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/strings/pattern.h"
@@ -87,7 +87,7 @@ TEST_P(MobileDevicePresetPerDeviceName, ValidatePresets) {
   if (device.user_agent.has_value()) {
     std::string user_agent = device.user_agent.value();
     mobile_ua =
-        base::StringPiece{user_agent}.find("Mobile") != base::StringPiece::npos;
+        std::string_view{user_agent}.find("Mobile") != std::string_view::npos;
   }
   const DeviceMetrics& device_metrics = device.device_metrics.value();
   // Testing the implication: mobile_ua => device_metrics.mobile

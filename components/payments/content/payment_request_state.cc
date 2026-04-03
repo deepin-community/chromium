@@ -4,39 +4,41 @@
 
 #include "components/payments/content/payment_request_state.h"
 
+#include <algorithm>
 #include <set>
 #include <utility>
+#include <vector>
 
-#include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
-#include "components/autofill/core/browser/address_normalizer.h"
-#include "components/autofill/core/browser/autofill_data_util.h"
-#include "components/autofill/core/browser/data_model/autofill_profile.h"
+#include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
+#include "components/autofill/core/browser/data_quality/addresses/address_normalizer.h"
+#include "components/autofill/core/browser/data_quality/autofill_data_util.h"
+#include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/geo/autofill_country.h"
-#include "components/autofill/core/browser/personal_data_manager.h"
-#include "components/autofill/core/browser/validation.h"
 #include "components/payments/content/content_payment_request_delegate.h"
 #include "components/payments/content/payment_app.h"
-#include "components/payments/content/payment_manifest_web_data_service.h"
 #include "components/payments/content/payment_response_helper.h"
 #include "components/payments/content/service_worker_payment_app.h"
+#include "components/payments/content/web_payments_web_data_service.h"
 #include "components/payments/core/error_strings.h"
 #include "components/payments/core/features.h"
 #include "components/payments/core/method_strings.h"
+#include "components/payments/core/payment_prefs.h"
 #include "components/payments/core/payment_request_data_util.h"
 #include "components/payments/core/payments_experimental_features.h"
 #include "components/webauthn/core/browser/internal_authenticator.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 
 namespace payments {
@@ -93,7 +95,7 @@ PaymentRequestState::PaymentRequestState(
   spec_->AddObserver(this);
 }
 
-PaymentRequestState::~PaymentRequestState() {}
+PaymentRequestState::~PaymentRequestState() = default;
 
 content::WebContents* PaymentRequestState::GetWebContents() {
   auto* rfh = content::RenderFrameHost::FromID(frame_routing_id_);
@@ -154,26 +156,21 @@ PaymentRequestState::CreateInternalAuthenticator() const {
   return GetPaymentRequestDelegate()->CreateInternalAuthenticator();
 }
 
-scoped_refptr<PaymentManifestWebDataService>
-PaymentRequestState::GetPaymentManifestWebDataService() const {
-  return GetPaymentRequestDelegate()->GetPaymentManifestWebDataService();
+scoped_refptr<WebPaymentsWebDataService>
+PaymentRequestState::GetWebPaymentsWebDataService() const {
+  return GetPaymentRequestDelegate()->GetWebPaymentsWebDataService();
 }
 
 bool PaymentRequestState::IsOffTheRecord() const {
   return GetPaymentRequestDelegate()->IsOffTheRecord();
 }
 
+bool PaymentRequestState::PrefsCanMakePayment() const {
+  return GetPaymentRequestDelegate()->GetPrefService()->GetBoolean(
+      kCanMakePaymentEnabled);
+}
+
 void PaymentRequestState::OnPaymentAppCreated(std::unique_ptr<PaymentApp> app) {
-  if (journey_logger_) {
-    if (base::Contains(app->GetAppMethodNames(), methods::kGooglePay) ||
-        base::Contains(app->GetAppMethodNames(), methods::kAndroidPay)) {
-      journey_logger_->SetAvailableMethod(
-          JourneyLogger::PaymentMethodCategory::kGoogle);
-    } else {
-      journey_logger_->SetAvailableMethod(
-          JourneyLogger::PaymentMethodCategory::kOther);
-    }
-  }
   available_apps_.emplace_back(std::move(app));
 }
 
@@ -192,12 +189,11 @@ void PaymentRequestState::OnDoneCreatingPaymentApps() {
   if (IsInTwa()) {
     // If a preferred payment app is present (e.g. Play Billing within a TWA),
     // all other payment apps are ignored.
-    bool has_preferred_app = base::ranges::any_of(
+    bool has_preferred_app = std::ranges::any_of(
         available_apps_, [](const auto& app) { return app->IsPreferred(); });
     if (has_preferred_app) {
-      base::EraseIf(available_apps_, [](const auto& app) {
-        return !app->IsPreferred();
-      });
+      std::erase_if(available_apps_,
+                    [](const auto& app) { return !app->IsPreferred(); });
 
       // By design, only one payment app can be preferred.
       DCHECK_EQ(available_apps_.size(), 1u);
@@ -209,7 +205,7 @@ void PaymentRequestState::OnDoneCreatingPaymentApps() {
   SetDefaultProfileSelections();
 
   get_all_apps_finished_ = true;
-  has_enrolled_instrument_ = base::ranges::any_of(
+  has_enrolled_instrument_ = std::ranges::any_of(
       available_apps_,
       [](const auto& app) { return app->HasEnrolledInstrument(); });
   are_requested_methods_supported_ |= !available_apps_.empty();
@@ -354,8 +350,8 @@ void PaymentRequestState::CheckRequestedMethodsSupported(
 
   if (!are_requested_methods_supported_ &&
       get_all_payment_apps_error_.empty() &&
-      base::Contains(spec_->payment_method_identifiers_set(),
-                     methods::kGooglePlayBilling) &&
+      spec_->payment_method_identifiers_set().contains(
+          methods::kGooglePlayBilling) &&
       !IsInTwa()) {
     get_all_payment_apps_error_ = errors::kAppStoreMethodOnlySupportedInTwa;
   }
@@ -403,7 +399,8 @@ void PaymentRequestState::OnPaymentAppWindowClosed() {
 void PaymentRequestState::RecordUseStats() {
   if (ShouldShowShippingSection()) {
     DCHECK(selected_shipping_profile_);
-    personal_data_manager_->RecordUseOf(selected_shipping_profile_.get());
+    personal_data_manager_->address_data_manager().RecordUseOf(
+        *selected_shipping_profile_);
   }
 
   if (ShouldShowContactSection()) {
@@ -413,19 +410,17 @@ void PaymentRequestState::RecordUseStats() {
     // should only be updated once.
     if (!ShouldShowShippingSection() || (selected_shipping_profile_->guid() !=
                                          selected_contact_profile_->guid())) {
-      personal_data_manager_->RecordUseOf(selected_contact_profile_.get());
+      personal_data_manager_->address_data_manager().RecordUseOf(
+          *selected_contact_profile_);
     }
   }
-
-  if (selected_app_)
-    selected_app_->RecordUse();
 }
 
 void PaymentRequestState::SetAvailablePaymentAppForRetry() {
   if (!selected_app_)
     return;
 
-  base::EraseIf(available_apps_, [this](const auto& payment_app) {
+  std::erase_if(available_apps_, [this](const auto& payment_app) {
     // Remove the app if it is not selected.
     return payment_app.get() != selected_app_.get();
   });
@@ -593,8 +588,13 @@ base::WeakPtr<PaymentRequestState> PaymentRequestState::AsWeakPtr() {
 }
 
 void PaymentRequestState::PopulateProfileCache() {
-  std::vector<autofill::AutofillProfile*> profiles =
-      personal_data_manager_->GetProfilesToSuggest();
+  std::vector<const autofill::AutofillProfile*> profiles =
+      personal_data_manager_->address_data_manager().GetProfilesToSuggest();
+
+  // Remove home and work profiles since they are non-editable.
+  std::erase_if(profiles, [](const autofill::AutofillProfile* profile) {
+    return profile->IsHomeAndWorkProfile();
+  });
 
   std::vector<raw_ptr<autofill::AutofillProfile, VectorExperimental>>
       raw_profiles_for_filtering;

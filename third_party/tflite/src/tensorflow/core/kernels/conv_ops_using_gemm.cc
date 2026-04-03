@@ -308,7 +308,7 @@ class Im2ColConvFunctor {
     // use TensorFlow's resource management to ensure that the memory will be
     // released when the session is over.
     Im2ColBufferResource<T1, chunk_value_count>* im2col_buffer_resource;
-    std::function<Status(Im2ColBufferResource<T1, chunk_value_count>**)>
+    std::function<absl::Status(Im2ColBufferResource<T1, chunk_value_count>**)>
         creator = [](Im2ColBufferResource<T1, chunk_value_count>** resource) {
           *resource = new Im2ColBufferResource<T1, chunk_value_count>();
           return absl::OkStatus();
@@ -433,7 +433,7 @@ class Conv2DUsingGemmOp : public BinaryOp<T> {
   explicit Conv2DUsingGemmOp(OpKernelConstruction* context)
       : BinaryOp<T>(context) {
     OP_REQUIRES_OK(context, context->GetAttr("strides", &strides_));
-    string data_format;
+    std::string data_format;
     OP_REQUIRES_OK(context, context->GetAttr("data_format", &data_format));
     OP_REQUIRES(context, FormatFromString(data_format, &data_format_),
                 errors::InvalidArgument("Invalid data format"));
@@ -557,7 +557,7 @@ class Conv2DUsingGemmOp : public BinaryOp<T> {
   }
 
  private:
-  std::vector<int32> strides_;
+  std::vector<int32_t> strides_;
   Padding padding_;
   TensorFormat data_format_;
 

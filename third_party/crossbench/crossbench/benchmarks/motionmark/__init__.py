@@ -4,10 +4,22 @@
 
 from __future__ import annotations
 
-from .motionmark_1_2 import MotionMark12Benchmark
-from .motionmark_1_3 import MotionMark13Benchmark
+from crossbench.benchmarks.motionmark.motionmark_1_0 import \
+    MotionMark10Benchmark
+from crossbench.benchmarks.motionmark.motionmark_1_1 import \
+    MotionMark11Benchmark
+from crossbench.benchmarks.motionmark.motionmark_1_2 import \
+    MotionMark12Benchmark
+from crossbench.benchmarks.motionmark.motionmark_1_3 import \
+    MotionMark13Benchmark
+from crossbench.benchmarks.motionmark.motionmark_1_3_1 import \
+    MotionMark131Benchmark
+from crossbench.benchmarks.motionmark.motionmark_main import \
+    MotionMarkMainBenchmark
 
-benchmark_classes = (MotionMark12Benchmark, MotionMark13Benchmark)
+benchmark_classes = (MotionMark10Benchmark, MotionMark11Benchmark,
+                     MotionMark12Benchmark, MotionMark13Benchmark,
+                     MotionMark131Benchmark, MotionMarkMainBenchmark)
 
 _versions = set()
 for benchmark_cls in benchmark_classes:

@@ -10,7 +10,11 @@
 
 #include <string>
 
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "build/build_config.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/gpu_gles2_export.h"
 #include "ui/gfx/buffer_types.h"
@@ -31,10 +35,6 @@
 #else  // GL_ERROR_DEBUGGING
 #define CHECK_GL_ERROR() void(0)
 #endif  // GL_ERROR_DEBUGGING
-
-namespace gl {
-struct GLVersionInfo;
-}
 
 namespace gpu {
 
@@ -68,10 +68,9 @@ struct CALayerSharedState {
 bool PrecisionMeetsSpecForHighpFloat(GLint rangeMin,
                                      GLint rangeMax,
                                      GLint precision);
-void QueryShaderPrecisionFormat(const gl::GLVersionInfo& gl_version_info,
-                                GLenum shader_type,
+void QueryShaderPrecisionFormat(GLenum shader_type,
                                 GLenum precision_type,
-                                GLint* range,
+                                base::span<GLint> range,
                                 GLint* precision);
 
 // Using the provided feature info, query the numeric limits of the underlying
@@ -86,7 +85,10 @@ void PopulateNumericCapabilities(Capabilities* caps,
 void PopulateGLCapabilities(GLCapabilities* caps,
                             const FeatureInfo* feature_info);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+void PopulateEmptyDRMCaps(
+    base::flat_set<viz::SharedImageFormat> mappable_formats,
+    base::flat_map<uint32_t, std::vector<uint64_t>>& drm_formats_and_modifiers);
 void PopulateDRMCapabilities(Capabilities* caps,
                              const FeatureInfo* feature_info);
 #endif
@@ -168,8 +170,6 @@ bool ValidateCopyTextureCHROMIUMInternalFormats(const FeatureInfo* feature_info,
 GLenum GetTextureBindingQuery(GLenum texture_type);
 
 gfx::OverlayTransform GetGFXOverlayTransform(GLenum plane_transform);
-
-bool GetGFXBufferFormat(GLenum internal_format, gfx::BufferFormat* out_format);
 
 bool IsASTCFormat(GLenum internal_format);
 bool IsCompressedTextureFormat(GLenum internal_format);

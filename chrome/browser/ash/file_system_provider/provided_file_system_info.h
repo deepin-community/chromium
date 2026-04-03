@@ -48,8 +48,7 @@ class ProviderId {
   std::string ToString() const;
   ProviderType GetType() const;
 
-  bool operator==(const ProviderId& other) const;
-  bool operator!=(const ProviderId& other) const;
+  friend bool operator==(const ProviderId&, const ProviderId&) = default;
   bool operator<(const ProviderId& other) const;
 
  private:
@@ -60,9 +59,6 @@ class ProviderId {
 };
 
 // The type of content cache that is used for the individual provider.
-// TODO(b/317137739): Move this value to
-// file_system_provider_capabilities_handler.h` once the
-// chrome.fileSystemProvider manifest exposes this value.
 enum class CacheType { LRU, NONE };
 
 // Contains information about the provided file system instance.
@@ -106,6 +102,8 @@ class ProvidedFileSystemInfo {
   extensions::FileSystemProviderSource source() const { return source_; }
   const IconSet& icon_set() const { return icon_set_; }
   CacheType cache_type() const { return cache_type_; }
+
+  bool operator==(const ProvidedFileSystemInfo& other) const;
 
  private:
   // ID of the provider supplying this file system.

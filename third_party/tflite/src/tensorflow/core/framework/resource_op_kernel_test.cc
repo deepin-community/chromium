@@ -47,7 +47,7 @@ class StubDevice : public DeviceBase {
 // Stub resource for testing resource op kernel.
 class StubResource : public ResourceBase {
  public:
-  string DebugString() const override { return ""; }
+  std::string DebugString() const override { return ""; }
   int code;
 };
 
@@ -57,19 +57,19 @@ class StubResourceOpKernel : public ResourceOpKernel<StubResource> {
   using ResourceOpKernel::ResourceOpKernel;
 
  private:
-  Status CreateResource(StubResource** resource) override {
+  absl::Status CreateResource(StubResource** resource) override {
     *resource = CHECK_NOTNULL(new StubResource);
     return GetNodeAttr(def(), "code", &(*resource)->code);
   }
 
-  Status VerifyResource(StubResource* resource) override {
+  absl::Status VerifyResource(StubResource* resource) override {
     int code;
     TF_RETURN_IF_ERROR(GetNodeAttr(def(), "code", &code));
     if (code != resource->code) {
       return errors::InvalidArgument("stub has code ", resource->code,
                                      " but requested code ", code);
     }
-    return OkStatus();
+    return absl::OkStatus();
   }
 };
 
@@ -84,16 +84,16 @@ REGISTER_KERNEL_BUILDER(Name("StubResourceOp").Device(DEVICE_CPU),
 
 class ResourceOpKernelTest : public ::testing::Test {
  protected:
-  std::unique_ptr<StubResourceOpKernel> CreateOp(int code,
-                                                 const string& shared_name) {
+  std::unique_ptr<StubResourceOpKernel> CreateOp(
+      int code, const std::string& shared_name) {
     static std::atomic<int64_t> count(0);
     NodeDef node_def;
-    TF_CHECK_OK(NodeDefBuilder(strings::StrCat("test-node", count.fetch_add(1)),
+    TF_CHECK_OK(NodeDefBuilder(absl::StrCat("test-node", count.fetch_add(1)),
                                "StubResourceOp")
                     .Attr("code", code)
                     .Attr("shared_name", shared_name)
                     .Finalize(&node_def));
-    Status status;
+    absl::Status status;
     std::unique_ptr<OpKernel> op(CreateOpKernel(
         DEVICE_CPU, &device_, device_.GetAllocator(AllocatorAttributes()),
         node_def, TF_GRAPH_DEF_VERSION, &status));
@@ -110,7 +110,7 @@ class ResourceOpKernelTest : public ::testing::Test {
     return resource_op;
   }
 
-  Status RunOpKernel(OpKernel* op) {
+  absl::Status RunOpKernel(OpKernel* op) {
     OpKernelContext::Params params;
 
     params.device = &device_;
@@ -137,7 +137,7 @@ TEST_F(ResourceOpKernelTest, PrivateResource) {
   // TODO(gonnet): This test is brittle since it assumes that the
   // ResourceManager is untouched and thus the private resource name starts
   // with "_0_".
-  const string key = "_0_" + op->name();
+  const std::string key = "_0_" + op->name();
 
   StubResource* resource;
   TF_ASSERT_OK(
@@ -148,14 +148,14 @@ TEST_F(ResourceOpKernelTest, PrivateResource) {
 
   // Destroy the op kernel. Expect the resource to be released.
   op = nullptr;
-  Status s =
+  absl::Status s =
       mgr_.Lookup<StubResource>(mgr_.default_container(), key, &resource);
 
   EXPECT_FALSE(s.ok());
 }
 
 TEST_F(ResourceOpKernelTest, SharedResource) {
-  const string shared_name = "shared_stub";
+  const std::string shared_name = "shared_stub";
   const int code = -201;
   auto op = CreateOp(code, shared_name);
   ASSERT_NE(op, nullptr);
@@ -199,7 +199,7 @@ TEST_F(ResourceOpKernelTest, VerifyResource) {
 }
 
 TEST_F(ResourceOpKernelTest, ContainerClearedBetweenRuns) {
-  const string shared_name = "shared_stub";
+  const std::string shared_name = "shared_stub";
   const int code = -201;
   auto op = CreateOp(code, shared_name);
   ASSERT_NE(op, nullptr);

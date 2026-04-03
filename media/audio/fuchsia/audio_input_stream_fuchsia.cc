@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/audio/fuchsia/audio_input_stream_fuchsia.h"
 
 #include <lib/sys/cpp/component_context.h>
@@ -11,8 +16,11 @@
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/fuchsia/process_context.h"
 #include "base/logging.h"
+#include "base/notimplemented.h"
 #include "media/audio/audio_device_description.h"
 #include "media/audio/fuchsia/audio_manager_fuchsia.h"
+#include "media/base/audio_bus.h"
+#include "media/base/audio_sample_types.h"
 
 namespace media {
 
@@ -70,9 +78,10 @@ AudioInputStream::OpenOutcome AudioInputStreamFuchsia::Open() {
   capturer_->SetPcmStreamType(std::move(stream_type));
 
   // Allocate shared buffer.
+  const size_t page_size = static_cast<size_t>(zx_system_get_page_size());
   size_t capture_buffer_size =
       parameters_.GetBytesPerBuffer(kSampleFormatF32) * kBufferPacketCapacity;
-  capture_buffer_size = base::bits::AlignUp(capture_buffer_size, ZX_PAGE_SIZE);
+  capture_buffer_size = base::bits::AlignUp(capture_buffer_size, page_size);
 
   zx::vmo buffer_vmo;
   zx_status_t status = zx::vmo::create(capture_buffer_size, 0, &buffer_vmo);
@@ -85,7 +94,7 @@ AudioInputStream::OpenOutcome AudioInputStreamFuchsia::Open() {
   bool mapped =
       capture_buffer_.Initialize(std::move(buffer_vmo), /*writable=*/false,
                                  /*offset=*/0, /*size=*/capture_buffer_size,
-                                 fuchsia::sysmem::CoherencyDomain::CPU);
+                                 fuchsia::sysmem2::CoherencyDomain::CPU);
 
   if (!mapped)
     return OpenOutcome::kFailed;
@@ -168,13 +177,14 @@ void AudioInputStreamFuchsia::OnPacketProduced(
   }
 
   if (callback_) {
-    int num_frames = packet.payload_size / bytes_per_frame;
-    if (!audio_bus_ || num_frames != audio_bus_->frames())
+    const int num_frames = packet.payload_size / bytes_per_frame;
+    if (!audio_bus_ || num_frames != audio_bus_->frames()) {
       audio_bus_ = AudioBus::Create(parameters_.channels(), num_frames);
-    audio_bus_->FromInterleaved<Float32SampleTypeTraits>(
-        reinterpret_cast<const float*>(capture_buffer_.GetMemory().data() +
-                                       packet.payload_offset),
-        num_frames);
+    }
+    auto source = capture_buffer_.GetMemory().subspan(packet.payload_offset,
+                                                      packet.payload_size);
+
+    audio_bus_->FromInterleavedBytes<Float32SampleTypeTraits>(source);
     callback_->OnData(audio_bus_.get(), base::TimeTicks::FromZxTime(packet.pts),
                       /*volume=*/1.0, {});
   }

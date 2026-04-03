@@ -4,6 +4,7 @@
 
 #include "ui/accessibility/ax_node_position.h"
 
+#include "base/containers/fixed_flat_map.h"
 #include "build/build_config.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/buildflags.h"
@@ -39,7 +40,7 @@ std::string ToString(const AXPositionKind kind) {
            {AXPositionKind::TREE_POSITION, "TreePosition"},
            {AXPositionKind::TEXT_POSITION, "TextPosition"}});
 
-  const auto* iter = kKindToString.find(kind);
+  const auto iter = kKindToString.find(kind);
   if (iter == std::end(kKindToString))
     return std::string();
   return iter->second;
@@ -117,8 +118,7 @@ AXNodePosition::AXNodePosition() = default;
 
 AXNodePosition::~AXNodePosition() = default;
 
-AXNodePosition::AXNodePosition(const AXNodePosition& other)
-    : AXPosition<AXNodePosition, AXNode>(other) {}
+AXNodePosition::AXNodePosition(const AXNodePosition& other) = default;
 
 AXNodePosition::AXPositionInstance AXNodePosition::Clone() const {
   return AXPositionInstance(new AXNodePosition(*this));

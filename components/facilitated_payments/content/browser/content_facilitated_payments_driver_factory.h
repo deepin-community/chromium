@@ -8,51 +8,63 @@
 #include <memory>
 
 #include "base/containers/flat_map.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/raw_ref.h"
 #include "components/facilitated_payments/content/browser/content_facilitated_payments_driver.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_user_data.h"
 
 namespace content {
-class RenderFrameHost;
 class WebContents;
+class NavigationHandle;
+class RenderFrameHost;
 }  // namespace content
-
-namespace optimization_guide {
-class OptimizationGuideDecider;
-}  // namespace optimization_guide
 
 namespace payments::facilitated {
 
+class FacilitatedPaymentsClient;
+
 // Manages the lifetime of `ContentFacilitatedPaymentsDriver`. It is owned by
-// `WebContents`. Creates one `ContentFacilitatedPaymentsDriver` for each
-// outermost main `RenderFrameHost`.
+// `ContentFacilitatedPaymentsClient`. Creates one
+// `ContentFacilitatedPaymentsDriver` for each outermost main `RenderFrameHost`.
 class ContentFacilitatedPaymentsDriverFactory
-    : public content::WebContentsUserData<
-          ContentFacilitatedPaymentsDriverFactory>,
-      public content::WebContentsObserver {
+    : public content::WebContentsObserver {
  public:
-  ContentFacilitatedPaymentsDriverFactory(
-      content::WebContents* web_contents,
-      optimization_guide::OptimizationGuideDecider* optimization_guide_decider);
+  ContentFacilitatedPaymentsDriverFactory(content::WebContents* web_contents,
+                                          FacilitatedPaymentsClient* client);
   ContentFacilitatedPaymentsDriverFactory(
       const ContentFacilitatedPaymentsDriverFactory&) = delete;
   ContentFacilitatedPaymentsDriverFactory& operator=(
       const ContentFacilitatedPaymentsDriverFactory&) = delete;
   ~ContentFacilitatedPaymentsDriverFactory() override;
 
- private:
-  friend class content::WebContentsUserData<
-      ContentFacilitatedPaymentsDriverFactory>;
-
-  // content::WebContentsObserver:
-  void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
-  void DidFinishLoad(content::RenderFrameHost* render_frame_host,
-                     const GURL& validated_url) override;
-
   // Gets or creates a dedicated `ContentFacilitatedPaymentsDriver` for the
   // `render_frame_host`. Drivers are only created for the outermost main frame.
   ContentFacilitatedPaymentsDriver& GetOrCreateForFrame(
       content::RenderFrameHost* render_frame_host);
+
+ private:
+  FRIEND_TEST_ALL_PREFIXES(
+      ContentFacilitatedPaymentsDriverFactoryTest,
+      OnTextCopiedToClipboard_PixCodeInIFrame_DoesNotTriggerPixDetection_PixFlowExitedReasonLogged);
+  FRIEND_TEST_ALL_PREFIXES(
+      ContentFacilitatedPaymentsDriverFactoryTest,
+      OnTextCopiedToClipboard_PixCodeInIFrame_FlagEnabled_PixFlowExitedReasonNotLogged);
+  FRIEND_TEST_ALL_PREFIXES(
+      ContentFacilitatedPaymentsDriverFactoryTest,
+      OnTextCopiedToClipboard_PixCodeInIFrame_FlagEnabled_CorrectIframeUrlPassedToDriver);
+  FRIEND_TEST_ALL_PREFIXES(
+      ContentFacilitatedPaymentsDriverFactoryTest,
+      OnTextCopiedToClipboard_FrameNotActive_DoesNotTriggerPixDetection_PixFlowExitedReasonLogged);
+  // content::WebContentsObserver:
+  void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
+  void RenderFrameHostStateChanged(
+      content::RenderFrameHost* render_frame_host,
+      content::RenderFrameHost::LifecycleState old_state,
+      content::RenderFrameHost::LifecycleState new_state) override;
+  void DidFinishNavigation(
+      content::NavigationHandle* navigation_handle) override;
+  void OnTextCopiedToClipboard(content::RenderFrameHost* render_frame_host,
+                               const std::u16string& copied_text) override;
 
   // Owns the drivers, one for each render frame host. Should be empty at
   // destruction time because its elements are erased in RenderFrameDeleted().
@@ -60,12 +72,8 @@ class ContentFacilitatedPaymentsDriverFactory
                  std::unique_ptr<ContentFacilitatedPaymentsDriver>>
       driver_map_;
 
-  // The optimization guide decider to help determine whether the current main
-  // frame URL is eligible for facilitated payments.
-  raw_ptr<optimization_guide::OptimizationGuideDecider>
-      optimization_guide_decider_ = nullptr;
-
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
+  // Owner.
+  const raw_ref<FacilitatedPaymentsClient> client_;
 };
 
 }  // namespace payments::facilitated

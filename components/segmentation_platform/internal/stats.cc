@@ -4,12 +4,15 @@
 
 #include "components/segmentation_platform/internal/stats.h"
 
+#include <string_view>
+
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/synchronization/lock.h"
@@ -48,6 +51,7 @@ GetOptimizationTargetOutputDescription(SegmentId segment_id) {
     case SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_FEED_USER:
     case SegmentId::OPTIMIZATION_TARGET_CONTEXTUAL_PAGE_ACTION_PRICE_TRACKING:
     case SegmentId::OPTIMIZATION_TARGET_WEB_APP_INSTALLATION_PROMO:
+    case SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_COMPOSE_PROMOTION:
       return proto::SegmentationModelMetadata::RETURN_TYPE_PROBABILITY;
     case SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_SEARCH_USER:
     case SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_TABLET_PRODUCTIVITY_USER:
@@ -72,7 +76,6 @@ AdaptiveToolbarButtonVariant OptimizationTargetToAdaptiveToolbarButtonVariant(
       return AdaptiveToolbarButtonVariant::kNone;
     default:
       NOTREACHED();
-      return AdaptiveToolbarButtonVariant::kUnknown;
   }
 }
 
@@ -102,7 +105,6 @@ AdaptiveToolbarSegmentSwitch GetAdaptiveToolbarSegmentSwitch(
           return AdaptiveToolbarSegmentSwitch::kNoneToVoice;
         default:
           NOTREACHED();
-          return AdaptiveToolbarSegmentSwitch::kUnknown;
       }
 
     case SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_NEW_TAB:
@@ -115,7 +117,6 @@ AdaptiveToolbarSegmentSwitch GetAdaptiveToolbarSegmentSwitch(
           return AdaptiveToolbarSegmentSwitch::kNewTabToVoice;
         default:
           NOTREACHED();
-          return AdaptiveToolbarSegmentSwitch::kUnknown;
       }
 
     case SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_SHARE:
@@ -128,7 +129,6 @@ AdaptiveToolbarSegmentSwitch GetAdaptiveToolbarSegmentSwitch(
           return AdaptiveToolbarSegmentSwitch::kShareToVoice;
         default:
           NOTREACHED();
-          return AdaptiveToolbarSegmentSwitch::kUnknown;
       }
 
     case SegmentId::OPTIMIZATION_TARGET_SEGMENTATION_VOICE:
@@ -141,18 +141,16 @@ AdaptiveToolbarSegmentSwitch GetAdaptiveToolbarSegmentSwitch(
           return AdaptiveToolbarSegmentSwitch::kVoiceToShare;
         default:
           NOTREACHED();
-          return AdaptiveToolbarSegmentSwitch::kUnknown;
       }
 
     default:
       NOTREACHED();
-      return AdaptiveToolbarSegmentSwitch::kUnknown;
   }
 }
 
 // Should map to ModelExecutionStatus variant string in
 // //tools/metrics/histograms/metadata/segmentation_platform/histograms.xml.
-std::optional<base::StringPiece> ModelExecutionStatusToHistogramVariant(
+std::optional<std::string_view> ModelExecutionStatusToHistogramVariant(
     ModelExecutionStatus status) {
   switch (status) {
     case ModelExecutionStatus::kSuccess:
@@ -184,7 +182,6 @@ std::string SignalTypeToHistogramVariant(proto::SignalType signal_type) {
       return "HistogramValue";
     default:
       NOTREACHED();
-      return "Unknown";
   }
 }
 
@@ -411,7 +408,7 @@ void RecordModelExecutionDurationModel(SegmentId segment_id,
                                        base::TimeDelta duration) {
   ModelExecutionStatus status = success ? ModelExecutionStatus::kSuccess
                                         : ModelExecutionStatus::kExecutionError;
-  std::optional<base::StringPiece> status_variant =
+  std::optional<std::string_view> status_variant =
       ModelExecutionStatusToHistogramVariant(status);
   if (!status_variant)
     return;
@@ -425,7 +422,7 @@ void RecordModelExecutionDurationModel(SegmentId segment_id,
 void RecordModelExecutionDurationTotal(SegmentId segment_id,
                                        ModelExecutionStatus status,
                                        base::TimeDelta duration) {
-  std::optional<base::StringPiece> status_variant =
+  std::optional<std::string_view> status_variant =
       ModelExecutionStatusToHistogramVariant(status);
   if (!status_variant)
     return;
@@ -509,8 +506,17 @@ void RecordModelExecutionResult(SegmentId segment_id,
     std::string histogram_name = "SegmentationPlatform.ModelExecution.Result." +
                                  base::NumberToString(i) + "." +
                                  SegmentIdToHistogramVariant(segment_id);
-    int scaled_model_score = is_probability_score ? result[i] * 100 : result[i];
+    int scaled_model_score = is_probability_score
+                                 ? base::ClampRound(result[i] * 100)
+                                 : base::ClampRound(result[i]);
+    // TODO(crbug.com/384798365): Remove this histogram after the new ones are
+    // established.
     base::UmaHistogramPercentage(histogram_name, scaled_model_score);
+
+    base::UmaHistogramPercentage(histogram_name + ".Raw",
+                                 base::ClampRound(result[i]));
+    base::UmaHistogramPercentage(histogram_name + ".Scaled100",
+                                 base::ClampRound(result[i] * 100));
   }
 }
 
@@ -725,7 +731,6 @@ SegmentationSelectionFailureReason GetSuccessOrFailureReason(
   switch (result_state) {
     case SegmentResultProvider::ResultState::kUnknown:
       NOTREACHED();
-      return SegmentationSelectionFailureReason::kMaxValue;
     case SegmentResultProvider::ResultState::kServerModelDatabaseScoreUsed:
       return SegmentationSelectionFailureReason::kServerModelDatabaseScoreUsed;
     case SegmentResultProvider::ResultState::kDefaultModelDatabaseScoreUsed:

@@ -5,6 +5,9 @@
 #ifndef CHROME_BROWSER_SIGNIN_BOUND_SESSION_CREDENTIALS_BOUND_SESSION_COOKIE_REFRESH_SERVICE_H_
 #define CHROME_BROWSER_SIGNIN_BOUND_SESSION_CREDENTIALS_BOUND_SESSION_COOKIE_REFRESH_SERVICE_H_
 
+#include <string>
+#include <vector>
+
 #include "base/containers/flat_set.h"
 #include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
@@ -14,6 +17,9 @@
 #include "chrome/common/renderer_configuration.mojom.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+
+struct BoundSessionDebugInfo;
+struct BoundSessionKey;
 
 // BoundSessionCookieRefreshService is responsible for maintaining cookies
 // associated with bound sessions. This class does the following:
@@ -51,30 +57,50 @@ class BoundSessionCookieRefreshService
 
   // Registers a new bound session and starts tracking it immediately. The
   // session persists across browser startups.
+  //
+  // This method is a no-op if the new session registration is not enabled.
   virtual void RegisterNewBoundSession(
       const bound_session_credentials::BoundSessionParams& params) = 0;
 
-  // Terminate the session if the session termination header is set and the
-  // `session_id` matches the current bound session's id. This header is
-  // expected to be set on signout.
+  // Terminates a session running on `response_url`'s site if the session
+  // termination header is set and the header's session ID matches the current
+  // session id. This header is expected to be set on signout.
   virtual void MaybeTerminateSession(
+      const GURL& response_url,
       const net::HttpResponseHeaders* headers) = 0;
 
   // Returns bound session params.
-  virtual chrome::mojom::BoundSessionThrottlerParamsPtr
+  virtual std::vector<chrome::mojom::BoundSessionThrottlerParamsPtr>
   GetBoundSessionThrottlerParams() const = 0;
 
   virtual void CreateRegistrationRequest(
       BoundSessionRegistrationFetcherParam registration_params) = 0;
+
+  // Stops the cookie rotation for the given session. This is a no-op if the
+  // given session does not exist.
+  //
+  // Once the cookie rotation is stopped, all throttled requests will remain
+  // throttled until the session is terminated.
+  // This is used by OAML to ensure all requests are throttled until the
+  // returned cookies are set.
+  //
+  // The session will be terminated after a timeout if it has not been
+  // terminated explicitly. This is a safety net to ensure the session is
+  // eventually terminated even if OAML fails to terminate the session.
+  virtual void StopCookieRotation(const BoundSessionKey& key) = 0;
 
   virtual base::WeakPtr<BoundSessionCookieRefreshService> GetWeakPtr() = 0;
 
   virtual void AddObserver(Observer* observer) = 0;
   virtual void RemoveObserver(Observer* observer) = 0;
 
+  virtual std::vector<BoundSessionDebugInfo> GetBoundSessionDebugInfo()
+      const = 0;
+
  private:
   friend class RendererUpdater;
   friend class BoundSessionCookieRefreshServiceImplBrowserTest;
+  friend class BoundSessionOAuthMultiloginBaseTest;
 
   // `RendererUpdater` class that is responsible for pushing updates to all
   // renderers calls this setter to subscribe for bound session throttler params

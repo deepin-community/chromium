@@ -68,13 +68,10 @@ privacy-sandbox-dialog-learn-more {
       var(--cr-dialog-button-container-padding-horizontal, 16px);
   padding-top: 16px;
   width: 100%;
-}
-
 <if expr="is_win">
-.buttons-container {
   flex-flow: row-reverse;
-}
 </if>
+}
 
 .buttons-container cr-button {
   margin-inline-start: 8px;
@@ -109,7 +106,7 @@ privacy-sandbox-dialog-learn-more {
 }
 
 .content-area.can-scroll {
-  border-bottom-color: var(--scrollable-border-color);
+  border-bottom-color: var(--cr-scrollable-border-color);
 }
 
 ul,
@@ -192,10 +189,19 @@ img.logo {
 .more-content-available.content-area {
   bottom: 0 !important;
 }
+
 .more-content-available .buttons-container {
   position: static !important;
 }
 
 #moreButton {
   border-radius: 100px;
+}
+
+.learn-more-bullet-description {
+  margin-bottom: 1rem;
+}
+
+a:focus {
+  outline-color: var(--cr-focus-outline-color);
 }

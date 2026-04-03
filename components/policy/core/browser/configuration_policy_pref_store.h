@@ -49,7 +49,7 @@ class POLICY_EXPORT ConfigurationPolicyPrefStore
   bool IsInitializationComplete() const override;
   bool GetValue(std::string_view key,
                 const base::Value** result) const override;
-  base::Value::Dict GetValues() const override;
+  base::DictValue GetValues() const override;
 
   // PolicyService::Observer methods:
   void OnPolicyUpdated(const PolicyNamespace& ns,
@@ -84,7 +84,7 @@ class POLICY_EXPORT ConfigurationPolicyPrefStore
   // Current policy preferences.
   std::unique_ptr<PrefValueMap> prefs_;
 
-  base::ObserverList<PrefStore::Observer, true>::Unchecked observers_;
+  base::ObserverList<PrefStore::Observer, true> observers_;
 };
 
 }  // namespace policy

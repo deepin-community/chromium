@@ -4,28 +4,30 @@
 
 #include "components/network_session_configurator/browser/network_session_configurator.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
 
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/strings/to_string.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "components/network_session_configurator/common/network_features.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/variations/variations_associated_data.h"
-#include "net/base/host_mapping_rules.h"
-#include "net/base/host_port_pair.h"
+#include "net/base/features.h"
+#include "net/disk_cache/backend_experiment.h"
+#include "net/disk_cache/buildflags.h"
 #include "net/http/http_network_session.h"
 #include "net/http/http_stream_factory.h"
+#include "net/third_party/quiche/src/quiche/http2/core/spdy_protocol.h"
 #include "net/third_party/quiche/src/quiche/quic/core/crypto/crypto_protocol.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_packets.h"
-#include "net/third_party/quiche/src/quiche/spdy/core/spdy_protocol.h"
 #include "net/url_request/url_request_context_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/scheme_host_port.h"
 
 namespace network_session_configurator {
 
@@ -33,7 +35,7 @@ class NetworkSessionConfiguratorTest : public testing::Test {
  public:
   NetworkSessionConfiguratorTest() {
     scoped_feature_list_.Init();
-    variations::testing::ClearAllVariationParams();
+    variations::test::ClearAllVariationParams();
   }
 
   void ParseCommandLineAndFieldTrials(const base::CommandLine& command_line) {
@@ -73,7 +75,8 @@ TEST_F(NetworkSessionConfiguratorTest, Defaults) {
   EXPECT_EQ(quic::QuicTagVector(), quic_params_.client_connection_options);
   EXPECT_FALSE(quic_params_.close_sessions_on_ip_change);
   EXPECT_FALSE(quic_params_.goaway_sessions_on_ip_change);
-  EXPECT_EQ(net::kIdleConnectionTimeout, quic_params_.idle_connection_timeout);
+  EXPECT_EQ(net::GetIdleConnectionTimeout(),
+            quic_params_.idle_connection_timeout);
   EXPECT_EQ(base::Seconds(quic::kPingTimeoutSecs),
             quic_params_.reduced_ping_timeout);
   EXPECT_EQ(base::Seconds(quic::kMaxTimeForCryptoHandshakeSecs),
@@ -90,22 +93,26 @@ TEST_F(NetworkSessionConfiguratorTest, Defaults) {
   EXPECT_FALSE(quic_params_.retry_on_alternate_network_before_handshake);
   EXPECT_FALSE(quic_params_.migrate_idle_sessions);
   EXPECT_TRUE(quic_params_.initial_rtt_for_handshake.is_zero());
-  EXPECT_FALSE(quic_params_.allow_server_migration);
+  EXPECT_TRUE(quic_params_.allow_server_migration);
   EXPECT_TRUE(params_.quic_host_allowlist.empty());
   EXPECT_TRUE(quic_params_.retransmittable_on_wire_timeout.is_zero());
   EXPECT_FALSE(quic_params_.disable_tls_zero_rtt);
   EXPECT_TRUE(quic_params_.allow_port_migration);
   EXPECT_EQ(0, quic_params_.multi_port_probing_interval);
+  EXPECT_FALSE(quic_params_.enable_debugging_sni_in_transport_param);
 
   EXPECT_EQ(net::DefaultSupportedQuicVersions(),
             quic_params_.supported_versions);
-  EXPECT_FALSE(params_.enable_quic_proxies_for_https_urls);
+  EXPECT_FALSE(quic_params_.force_quic_everywhere);
   EXPECT_EQ(0u, quic_params_.origins_to_force_quic_on.size());
   EXPECT_FALSE(
       quic_params_.initial_delay_for_broken_alternative_service.has_value());
   EXPECT_FALSE(quic_params_.exponential_backoff_on_initial_delay.has_value());
   EXPECT_FALSE(quic_params_.delay_main_job_with_available_spdy_session);
-  EXPECT_FALSE(quic_params_.use_new_alps_codepoint);
+  EXPECT_TRUE(quic_params_.use_new_alps_codepoint);
+  EXPECT_TRUE(quic_params_.enable_origin_frame);
+  EXPECT_TRUE(quic_params_.skip_dns_with_origin_frame);
+  EXPECT_FALSE(quic_params_.ignore_ip_matching_when_finding_existing_sessions);
 }
 
 TEST_F(NetworkSessionConfiguratorTest, Http2FieldTrialGroupNameDoesNotMatter) {
@@ -196,17 +203,6 @@ TEST_F(NetworkSessionConfiguratorTest, EnableQuicForDataReductionProxy) {
   ParseFieldTrials();
 
   EXPECT_TRUE(params_.enable_quic);
-}
-
-TEST_F(NetworkSessionConfiguratorTest, EnableQuicProxiesForHttpsUrls) {
-  std::map<std::string, std::string> field_trial_params;
-  field_trial_params["enable_quic_proxies_for_https_urls"] = "true";
-  base::AssociateFieldTrialParams("QUIC", "Enabled", field_trial_params);
-  base::FieldTrialList::CreateFieldTrial("QUIC", "Enabled");
-
-  ParseFieldTrials();
-
-  EXPECT_TRUE(params_.enable_quic_proxies_for_https_urls);
 }
 
 TEST_F(NetworkSessionConfiguratorTest, DisableRetryWithoutAltSvcOnQuicErrors) {
@@ -319,6 +315,65 @@ TEST_F(NetworkSessionConfiguratorTest,
   ParseFieldTrials();
 
   EXPECT_FALSE(quic_params_.delay_main_job_with_available_spdy_session);
+}
+
+TEST_F(NetworkSessionConfiguratorTest, DonotEnableOriginFrame) {
+  std::map<std::string, std::string> field_trial_params;
+  field_trial_params["enable_origin_frame"] = "false";
+  base::AssociateFieldTrialParams("QUIC", "Enabled", field_trial_params);
+  base::FieldTrialList::CreateFieldTrial("QUIC", "Enabled");
+
+  ParseFieldTrials();
+
+  EXPECT_FALSE(quic_params_.enable_origin_frame);
+}
+
+TEST_F(NetworkSessionConfiguratorTest, DonotSkipDnsWithOriginFrame) {
+  std::map<std::string, std::string> field_trial_params;
+  field_trial_params["skip_dns_with_origin_frame"] = "false";
+  base::AssociateFieldTrialParams("QUIC", "Enabled", field_trial_params);
+  base::FieldTrialList::CreateFieldTrial("QUIC", "Enabled");
+
+  ParseFieldTrials();
+
+  EXPECT_FALSE(quic_params_.skip_dns_with_origin_frame);
+}
+
+TEST_F(NetworkSessionConfiguratorTest,
+       IgnoreIpMatchingWhenFindingExistingSessions) {
+  std::map<std::string, std::string> field_trial_params;
+  field_trial_params["ignore_ip_matching_when_finding_existing_sessions"] =
+      "true";
+  base::AssociateFieldTrialParams("QUIC", "Enabled", field_trial_params);
+  base::FieldTrialList::CreateFieldTrial("QUIC", "Enabled");
+
+  ParseFieldTrials();
+
+  EXPECT_TRUE(quic_params_.ignore_ip_matching_when_finding_existing_sessions);
+}
+
+TEST_F(NetworkSessionConfiguratorTest,
+       DonotIgnoreIpMatchingWhenFindingExistingSessions) {
+  std::map<std::string, std::string> field_trial_params;
+  field_trial_params["ignore_ip_matching_when_finding_existing_sessions"] =
+      "false";
+  base::AssociateFieldTrialParams("QUIC", "Enabled", field_trial_params);
+  base::FieldTrialList::CreateFieldTrial("QUIC", "Enabled");
+
+  ParseFieldTrials();
+
+  EXPECT_FALSE(quic_params_.ignore_ip_matching_when_finding_existing_sessions);
+}
+
+TEST_F(NetworkSessionConfiguratorTest, DonotAllowServerMigration) {
+  std::map<std::string, std::string> field_trial_params;
+  field_trial_params["allow_server_migration"] = "false";
+  base::AssociateFieldTrialParams("QUIC", "Enabled", field_trial_params);
+  base::FieldTrialList::CreateFieldTrial("QUIC", "Enabled");
+
+  ParseFieldTrials();
+
+  EXPECT_FALSE(quic_params_.allow_server_migration);
 }
 
 TEST_F(NetworkSessionConfiguratorTest,
@@ -623,8 +678,8 @@ TEST_F(NetworkSessionConfiguratorTest, QuicHostAllowlist) {
   ParseFieldTrials();
 
   EXPECT_EQ(2u, params_.quic_host_allowlist.size());
-  EXPECT_TRUE(base::Contains(params_.quic_host_allowlist, "www.example.com"));
-  EXPECT_TRUE(base::Contains(params_.quic_host_allowlist, "www.example.org"));
+  EXPECT_TRUE(params_.quic_host_allowlist.contains("www.example.com"));
+  EXPECT_TRUE(params_.quic_host_allowlist.contains("www.example.org"));
 }
 
 TEST_F(NetworkSessionConfiguratorTest, QuicHostAllowlistEmpty) {
@@ -639,19 +694,19 @@ TEST_F(NetworkSessionConfiguratorTest, QuicHostAllowlistEmpty) {
 }
 
 TEST_F(NetworkSessionConfiguratorTest, QuicFlags) {
-  FLAGS_quic_reloadable_flag_quic_testonly_default_false = false;
-  FLAGS_quic_restart_flag_quic_testonly_default_true = true;
+  FLAGS_quiche_reloadable_flag_quic_testonly_default_false = false;
+  FLAGS_quiche_restart_flag_quic_testonly_default_true = true;
   std::map<std::string, std::string> field_trial_params;
   field_trial_params["set_quic_flags"] =
-      "FLAGS_quic_reloadable_flag_quic_testonly_default_false=true,"
-      "FLAGS_quic_restart_flag_quic_testonly_default_true=false";
+      "FLAGS_quiche_reloadable_flag_quic_testonly_default_false=true,"
+      "FLAGS_quiche_restart_flag_quic_testonly_default_true=false";
   base::AssociateFieldTrialParams("QUIC", "Enabled", field_trial_params);
   base::FieldTrialList::CreateFieldTrial("QUIC", "Enabled");
 
   ParseFieldTrials();
 
-  EXPECT_TRUE(FLAGS_quic_reloadable_flag_quic_testonly_default_false);
-  EXPECT_FALSE(FLAGS_quic_restart_flag_quic_testonly_default_true);
+  EXPECT_TRUE(FLAGS_quiche_reloadable_flag_quic_testonly_default_false);
+  EXPECT_FALSE(FLAGS_quiche_restart_flag_quic_testonly_default_true);
 }
 
 TEST_F(NetworkSessionConfiguratorTest, Http2SettingsFromFieldTrialParams) {
@@ -727,9 +782,8 @@ TEST_F(NetworkSessionConfiguratorTest, OriginToForceQuicOn) {
   command_line.AppendSwitch(switches::kEnableQuic);
   command_line.AppendSwitchASCII(switches::kOriginToForceQuicOn, "*");
   ParseCommandLineAndFieldTrials(command_line);
-  EXPECT_EQ(1u, quic_params_.origins_to_force_quic_on.size());
-  EXPECT_EQ(1u,
-            quic_params_.origins_to_force_quic_on.count(net::HostPortPair()));
+  EXPECT_TRUE(quic_params_.force_quic_everywhere);
+  EXPECT_EQ(0u, quic_params_.origins_to_force_quic_on.size());
 }
 
 TEST_F(NetworkSessionConfiguratorTest, OriginToForceQuicOn2) {
@@ -737,9 +791,10 @@ TEST_F(NetworkSessionConfiguratorTest, OriginToForceQuicOn2) {
   command_line.AppendSwitch(switches::kEnableQuic);
   command_line.AppendSwitchASCII(switches::kOriginToForceQuicOn, "foo:1234");
   ParseCommandLineAndFieldTrials(command_line);
+  EXPECT_FALSE(quic_params_.force_quic_everywhere);
   EXPECT_EQ(1u, quic_params_.origins_to_force_quic_on.size());
   EXPECT_EQ(1u, quic_params_.origins_to_force_quic_on.count(
-                    net::HostPortPair("foo", 1234)));
+                    url::SchemeHostPort("https", "foo", 1234)));
 }
 
 TEST_F(NetworkSessionConfiguratorTest, OriginToForceQuicOn3) {
@@ -747,11 +802,12 @@ TEST_F(NetworkSessionConfiguratorTest, OriginToForceQuicOn3) {
   command_line.AppendSwitch(switches::kEnableQuic);
   command_line.AppendSwitchASCII(switches::kOriginToForceQuicOn, "foo:1,bar:2");
   ParseCommandLineAndFieldTrials(command_line);
+  EXPECT_FALSE(quic_params_.force_quic_everywhere);
   EXPECT_EQ(2u, quic_params_.origins_to_force_quic_on.size());
   EXPECT_EQ(1u, quic_params_.origins_to_force_quic_on.count(
-                    net::HostPortPair("foo", 1)));
+                    url::SchemeHostPort("https", "foo", 1)));
   EXPECT_EQ(1u, quic_params_.origins_to_force_quic_on.count(
-                    net::HostPortPair("bar", 2)));
+                    url::SchemeHostPort("https", "bar", 2)));
 }
 
 TEST_F(NetworkSessionConfiguratorTest, EnableUserAlternateProtocolPorts) {
@@ -777,47 +833,56 @@ TEST_F(NetworkSessionConfiguratorTest, IgnoreCertificateErrors) {
   EXPECT_TRUE(params_.ignore_certificate_errors);
 }
 
-TEST_F(NetworkSessionConfiguratorTest, HostRules) {
-  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
-  command_line.AppendSwitchASCII(switches::kHostRules, "map *.com foo");
-  ParseCommandLineAndFieldTrials(command_line);
-
-  net::HostPortPair host_port_pair("spam.net", 80);
-  EXPECT_FALSE(params_.host_mapping_rules.RewriteHost(&host_port_pair));
-  EXPECT_EQ("spam.net", host_port_pair.host());
-
-  host_port_pair = net::HostPortPair("spam.com", 80);
-  EXPECT_TRUE(params_.host_mapping_rules.RewriteHost(&host_port_pair));
-  EXPECT_EQ("foo", host_port_pair.host());
-}
-
 TEST_F(NetworkSessionConfiguratorTest, DefaultCacheBackend) {
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
-    BUILDFLAG(IS_MAC)
-  EXPECT_EQ(net::URLRequestContextBuilder::HttpCacheParams::DISK_SIMPLE,
-            ChooseCacheType());
-#else
-  EXPECT_EQ(net::URLRequestContextBuilder::HttpCacheParams::DISK_BLOCKFILE,
-            ChooseCacheType());
-#endif
+  EXPECT_EQ(
+      disk_cache::IsSimpleBackendEnabledByDefaultPlatform()
+          ? net::URLRequestContextBuilder::HttpCacheParams::DISK_SIMPLE
+          : net::URLRequestContextBuilder::HttpCacheParams::DISK_BLOCKFILE,
+      ChooseCacheType());
 }
 
-TEST_F(NetworkSessionConfiguratorTest, SimpleCacheTrialExperimentYes) {
-  base::FieldTrialList::CreateFieldTrial("SimpleCacheTrial", "ExperimentYes");
+TEST_F(NetworkSessionConfiguratorTest, DiskCacheExperimentSimpleBackend) {
+  scoped_feature_list_.Reset();
+  scoped_feature_list_.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment, {{"backend", "simple"}});
   EXPECT_EQ(net::URLRequestContextBuilder::HttpCacheParams::DISK_SIMPLE,
             ChooseCacheType());
 }
 
-TEST_F(NetworkSessionConfiguratorTest, SimpleCacheTrialDisable) {
-  base::FieldTrialList::CreateFieldTrial("SimpleCacheTrial", "Disable");
-#if !BUILDFLAG(IS_ANDROID)
+TEST_F(NetworkSessionConfiguratorTest, DiskCacheExperimentBlockfileBackend) {
+  scoped_feature_list_.Reset();
+  scoped_feature_list_.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment, {{"backend", "blockfile"}});
   EXPECT_EQ(net::URLRequestContextBuilder::HttpCacheParams::DISK_BLOCKFILE,
             ChooseCacheType());
-#else  // BUILDFLAG(IS_ANDROID)
-  // Android always uses the simple cache.
-  EXPECT_EQ(net::URLRequestContextBuilder::HttpCacheParams::DISK_SIMPLE,
-            ChooseCacheType());
-#endif
+}
+
+TEST_F(NetworkSessionConfiguratorTest, DiskCacheExperimentDefaultBackend) {
+  scoped_feature_list_.Reset();
+  scoped_feature_list_.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment, {{"backend", "default"}});
+  EXPECT_EQ(
+      disk_cache::IsSimpleBackendEnabledByDefaultPlatform()
+          ? net::URLRequestContextBuilder::HttpCacheParams::DISK_SIMPLE
+          : net::URLRequestContextBuilder::HttpCacheParams::DISK_BLOCKFILE,
+      ChooseCacheType());
+}
+
+TEST_F(NetworkSessionConfiguratorTest, DiskCacheExperimentSqlBackend) {
+  scoped_feature_list_.Reset();
+  scoped_feature_list_.InitAndEnableFeatureWithParameters(
+      net::features::kDiskCacheBackendExperiment, {{"backend", "sql"}});
+#if BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
+  EXPECT_EQ(
+      net::URLRequestContextBuilder::HttpCacheParams::DISK_EXPERIMENTAL_SQL,
+      ChooseCacheType());
+#else   // BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
+  EXPECT_EQ(
+      disk_cache::IsSimpleBackendEnabledByDefaultPlatform()
+          ? net::URLRequestContextBuilder::HttpCacheParams::DISK_SIMPLE
+          : net::URLRequestContextBuilder::HttpCacheParams::DISK_BLOCKFILE,
+      ChooseCacheType());
+#endif  // BUILDFLAG(ENABLE_DISK_CACHE_SQL_BACKEND)
 }
 
 TEST_F(NetworkSessionConfiguratorTest, Http2GreaseSettingsFromCommandLine) {
@@ -903,6 +968,18 @@ TEST_F(NetworkSessionConfiguratorTest,
   EXPECT_EQ(base::Milliseconds(500), quic_params_.initial_rtt_for_handshake);
 }
 
+TEST_F(NetworkSessionConfiguratorTest,
+       QuicEnableDebuggingSniInTransportParamFromFieldTrialParams) {
+  std::map<std::string, std::string> field_trial_params;
+  field_trial_params["enable_debugging_sni_in_transport_param"] = "true";
+  base::AssociateFieldTrialParams("QUIC", "Enabled", field_trial_params);
+  base::FieldTrialList::CreateFieldTrial("QUIC", "Enabled");
+
+  ParseFieldTrials();
+
+  EXPECT_TRUE(quic_params_.enable_debugging_sni_in_transport_param);
+}
+
 class NetworkSessionConfiguratorWithQuicVersionTest
     : public NetworkSessionConfiguratorTest,
       public ::testing::WithParamInterface<quic::ParsedQuicVersion> {
@@ -921,7 +998,7 @@ INSTANTIATE_TEST_SUITE_P(QuicVersion,
 TEST_P(NetworkSessionConfiguratorWithQuicVersionTest, QuicVersion) {
   // Note that this test covers the legacy mechanism which relies on
   // QuicVersionToString. We should now be using ALPNs instead.
-  if (!version_.UsesQuicCrypto()) {
+  if (version_.IsIetfQuic()) {
     return;
   }
   base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
@@ -948,11 +1025,11 @@ TEST_P(NetworkSessionConfiguratorWithQuicVersionTest,
        SameQuicVersionsFromFieldTrialParams) {
   // Note that this test covers the legacy mechanism which relies on
   // QuicVersionToString. We should now be using ALPNs instead.
-  if (!version_.UsesQuicCrypto()) {
+  if (version_.IsIetfQuic()) {
     return;
   }
   quic::ParsedQuicVersionVector obsolete_versions = net::ObsoleteQuicVersions();
-  if (base::Contains(obsolete_versions, version_)) {
+  if (std::ranges::contains(obsolete_versions, version_)) {
     // Do not test obsolete versions here as those are covered by the
     // ObsoleteQuicVersion tests.
     return;
@@ -972,7 +1049,7 @@ TEST_P(NetworkSessionConfiguratorWithQuicVersionTest,
 TEST_P(NetworkSessionConfiguratorWithQuicVersionTest,
        SameQuicVersionsFromFieldTrialParamsAlpn) {
   quic::ParsedQuicVersionVector obsolete_versions = net::ObsoleteQuicVersions();
-  if (base::Contains(obsolete_versions, version_)) {
+  if (std::ranges::contains(obsolete_versions, version_)) {
     // Do not test obsolete versions here as those are covered by the
     // ObsoleteQuicVersion tests.
     return;
@@ -991,7 +1068,7 @@ TEST_P(NetworkSessionConfiguratorWithQuicVersionTest,
 TEST_P(NetworkSessionConfiguratorWithQuicVersionTest, ObsoleteQuicVersion) {
   // Test that a single obsolete version causes us to use default versions.
   quic::ParsedQuicVersionVector obsolete_versions = net::ObsoleteQuicVersions();
-  if (!base::Contains(obsolete_versions, version_)) {
+  if (!std::ranges::contains(obsolete_versions, version_)) {
     // Only test obsolete versions here.
     return;
   }
@@ -1010,7 +1087,7 @@ TEST_P(NetworkSessionConfiguratorWithQuicVersionTest,
   // Test that when using one obsolete version and a supported version, the
   // supported version is used.
   quic::ParsedQuicVersionVector obsolete_versions = net::ObsoleteQuicVersions();
-  if (!base::Contains(obsolete_versions, version_)) {
+  if (!std::ranges::contains(obsolete_versions, version_)) {
     // Only test obsolete versions here.
     return;
   }
@@ -1033,10 +1110,7 @@ class NetworkSessionConfiguratorWithNewAlpsCodepointTest
   NetworkSessionConfiguratorWithNewAlpsCodepointTest()
       : use_new_alps_codepoint_feature_setting_(std::get<0>(GetParam())),
         use_new_alps_codepoint_field_trial_setting_(std::get<1>(GetParam())) {
-    if (use_new_alps_codepoint_feature_setting_) {
-      feature_list_.InitAndEnableFeature(
-          net::features::kUseNewAlpsCodepointQUIC);
-    } else {
+    if (!use_new_alps_codepoint_feature_setting_) {
       feature_list_.InitAndDisableFeature(
           net::features::kUseNewAlpsCodepointQUIC);
     }
@@ -1078,7 +1152,7 @@ TEST_P(NetworkSessionConfiguratorWithNewAlpsCodepointTest,
        FromFieldTrialParams) {
   std::map<std::string, std::string> field_trial_params;
   field_trial_params["use_new_alps_codepoint"] =
-      use_new_alps_codepoint_field_trial_setting() ? "true" : "false";
+      base::ToString(use_new_alps_codepoint_field_trial_setting());
   base::AssociateFieldTrialParams("QUIC", "Enabled", field_trial_params);
   base::FieldTrialList::CreateFieldTrial("QUIC", "Enabled");
 

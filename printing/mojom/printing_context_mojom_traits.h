@@ -158,9 +158,9 @@ struct StructTraits<printing::mojom::PrintSettingsDataView,
   static bool is_modifiable(const printing::PrintSettings& s) {
     return s.is_modifiable();
   }
-  static const printing::PageMargins& requested_custom_margins_in_points(
+  static const printing::PageMargins& requested_custom_margins_in_microns(
       const printing::PrintSettings& s) {
-    return s.requested_custom_margins_in_points();
+    return s.requested_custom_margins_in_microns();
   }
   static int32_t pages_per_sheet(const printing::PrintSettings& s) {
     return s.pages_per_sheet();
@@ -186,7 +186,7 @@ struct StructTraits<printing::mojom::PrintSettingsDataView,
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
-  static const base::Value::Dict& system_print_dialog_data(
+  static const base::DictValue& system_print_dialog_data(
       const printing::PrintSettings& s) {
     return s.system_print_dialog_data();
   }

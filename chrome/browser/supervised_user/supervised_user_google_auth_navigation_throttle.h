@@ -5,8 +5,6 @@
 #ifndef CHROME_BROWSER_SUPERVISED_USER_SUPERVISED_USER_GOOGLE_AUTH_NAVIGATION_THROTTLE_H_
 #define CHROME_BROWSER_SUPERVISED_USER_SUPERVISED_USER_GOOGLE_AUTH_NAVIGATION_THROTTLE_H_
 
-#include <memory>
-
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -25,8 +23,11 @@ class SupervisedUserGoogleAuthNavigationThrottle
  public:
   // Returns a new throttle for the given navigation handle, or nullptr if no
   // throttling is required.
-  static std::unique_ptr<SupervisedUserGoogleAuthNavigationThrottle>
-  MaybeCreate(content::NavigationHandle* navigation_handle);
+  static void MaybeCreateAndAdd(content::NavigationThrottleRegistry& registry);
+
+  // If set, the throttle will pass the navigations. Use to simplify
+  // browser-test setup where mocking gaia flows is not practical.
+  static void SetPassThrottleForTesting();
 
   SupervisedUserGoogleAuthNavigationThrottle(
       const SupervisedUserGoogleAuthNavigationThrottle&) = delete;
@@ -46,7 +47,7 @@ class SupervisedUserGoogleAuthNavigationThrottle
  private:
   SupervisedUserGoogleAuthNavigationThrottle(
       Profile* profile,
-      content::NavigationHandle* navigation_handle);
+      content::NavigationThrottleRegistry& registry);
 
   void OnGoogleAuthStateChanged();
 

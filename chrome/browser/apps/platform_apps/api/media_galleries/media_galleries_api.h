@@ -43,6 +43,8 @@ class MediaGalleriesEventRouter : public extensions::BrowserContextKeyedAPI,
                                   public GalleryWatchManagerObserver,
                                   public extensions::EventRouter::Observer {
  public:
+  explicit MediaGalleriesEventRouter(content::BrowserContext* context);
+  ~MediaGalleriesEventRouter() override;
   MediaGalleriesEventRouter(const MediaGalleriesEventRouter&) = delete;
   MediaGalleriesEventRouter& operator=(const MediaGalleriesEventRouter&) =
       delete;
@@ -66,10 +68,7 @@ class MediaGalleriesEventRouter : public extensions::BrowserContextKeyedAPI,
       const std::string& extension_id,
       extensions::events::HistogramValue histogram_value,
       const std::string& event_name,
-      base::Value::List event_args);
-
-  explicit MediaGalleriesEventRouter(content::BrowserContext* context);
-  ~MediaGalleriesEventRouter() override;
+      base::ListValue event_args);
 
   // BrowserContextKeyedAPI implementation.
   static const char* service_name() { return "MediaGalleriesAPI"; }
@@ -174,7 +173,7 @@ class MediaGalleriesGetMetadataFunction : public ExtensionFunction {
 
   void GetMetadata(media_galleries::GetMetadataType metadata_type,
                    const std::string& blob_uuid,
-                   std::unique_ptr<std::string> blob_header,
+                   std::string blob_header,
                    int64_t total_blob_length);
 
   void OnSafeMediaMetadataParserDone(
@@ -184,7 +183,7 @@ class MediaGalleriesGetMetadataFunction : public ExtensionFunction {
       std::unique_ptr<std::vector<metadata::AttachedImage>> attached_images);
 
   void ConstructNextBlob(
-      base::Value::Dict result_dictionary,
+      base::DictValue result_dictionary,
       std::unique_ptr<std::vector<metadata::AttachedImage>> attached_images,
       std::vector<blink::mojom::SerializedBlobPtr> blobs,
       std::unique_ptr<content::BlobHandle> current_blob);

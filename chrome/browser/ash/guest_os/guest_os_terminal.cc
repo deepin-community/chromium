@@ -18,14 +18,17 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/apps/app_service/app_launch_params.h"
 #include "chrome/browser/apps/app_service/menu_item_constants.h"
 #include "chrome/browser/apps/app_service/menu_util.h"
+#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
+#include "chrome/browser/ash/bruschetta/bruschetta_util.h"
 #include "chrome/browser/ash/crostini/crostini_features.h"
 #include "chrome/browser/ash/crostini/crostini_installer.h"
+#include "chrome/browser/ash/crostini/crostini_installer_factory.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/guest_os/guest_os_pref_names.h"
 #include "chrome/browser/ash/guest_os/public/guest_os_service.h"
+#include "chrome/browser/ash/guest_os/public/guest_os_service_factory.h"
 #include "chrome/browser/ash/guest_os/public/guest_os_terminal_provider.h"
 #include "chrome/browser/ash/guest_os/public/types.h"
 #include "chrome/browser/browser_process.h"
@@ -40,6 +43,7 @@
 #include "components/app_restore/full_restore_save_handler.h"
 #include "components/app_restore/full_restore_utils.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/intent_util.h"
 #include "components/services/app_service/public/cpp/menu.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -123,20 +127,20 @@ void LaunchTerminalImpl(Profile* profile,
   // If opening a new tab, first pin home tab.
   full_restore::FullRestoreSaveHandler::GetInstance();
   GURL home(GetTerminalHomeUrl());
-  Browser* browser = ash::LaunchSystemWebAppImpl(
+  ash::BrowserDelegate* browser = ash::LaunchSystemWebAppImpl(
       profile, ash::SystemWebAppType::TERMINAL, home, params);
   if (!browser) {
     return;
   }
   if (url != home) {
-    chrome::AddTabAt(browser, url, /*index=*/1, /*foreground=*/true);
+    browser->AddTab(url, /*index=*/1,
+                    ash::BrowserDelegate::TabDisposition::kForeground);
   }
   auto info = std::make_unique<app_restore::AppLaunchInfo>(
-      kTerminalSystemAppId, browser->session_id().id(), params.container,
+      kTerminalSystemAppId, browser->GetSessionID().id(), params.container,
       params.disposition, params.display_id, std::vector<base::FilePath>{},
       nullptr);
-  full_restore::SaveAppLaunchInfo(browser->profile()->GetPath(),
-                                  std::move(info));
+  full_restore::SaveAppLaunchInfo(profile->GetPath(), std::move(info));
 }
 
 }  // namespace
@@ -257,7 +261,7 @@ void LaunchTerminalWithIntent(
     }
   }
 
-  auto* registry = guest_os::GuestOsService::GetForProfile(profile)
+  auto* registry = guest_os::GuestOsServiceFactory::GetForProfile(profile)
                        ->TerminalProviderRegistry();
   auto* provider = registry->Get(guest_id);
 
@@ -268,7 +272,8 @@ void LaunchTerminalWithIntent(
       // would bring up the installer, so keep that behaviour. Only applies to
       // the default Crostini VM, anything else is only accessible if the target
       // VM is installed.
-      auto* installer = crostini::CrostiniInstaller::GetForProfile(profile);
+      auto* installer =
+          crostini::CrostiniInstallerFactory::GetForProfile(profile);
       if (installer) {
         installer->ShowDialog(crostini::CrostiniUISurface::kAppList);
       }
@@ -413,7 +418,7 @@ void RecordTerminalSettingsChangesUMAs(Profile* profile) {
       {"line-height", TerminalSetting::kLineHeight},
   });
 
-  const base::Value::Dict& settings =
+  const base::DictValue& settings =
       profile->GetPrefs()->GetDict(guest_os::prefs::kGuestOsTerminalSettings);
   for (const auto item : settings) {
     // Only record settings for /hterm/profiles/default/.
@@ -421,7 +426,7 @@ void RecordTerminalSettingsChangesUMAs(Profile* profile) {
                           base::CompareCase::SENSITIVE)) {
       continue;
     }
-    const auto* it = kSettingsMap.find(
+    const auto it = kSettingsMap.find(
         std::string_view(item.first).substr(kSettingPrefixSize));
     base::UmaHistogramEnumeration(
         "Crostini.TerminalSettingsChanged",
@@ -437,7 +442,7 @@ std::string GetTerminalSettingBackgroundColor(
     return GetSettingsKey(kSettingsPrefixHterm, profile,
                           kSettingsKeyBackgroundColor);
   };
-  const base::Value::Dict& settings =
+  const base::DictValue& settings =
       profile->GetPrefs()->GetDict(guest_os::prefs::kGuestOsTerminalSettings);
   // 1. Use 'settings_profile' url param.
   std::string settings_profile;
@@ -460,29 +465,27 @@ std::string GetTerminalSettingBackgroundColor(
 }
 
 bool GetTerminalSettingPassCtrlW(Profile* profile) {
-  const base::Value::Dict& value =
+  const base::DictValue& value =
       profile->GetPrefs()->GetDict(guest_os::prefs::kGuestOsTerminalSettings);
   return value.FindBool(kSettingPassCtrlW).value_or(kDefaultPassCtrlW);
 }
 
 std::string ShortcutIdForSSH(const std::string& profileId) {
-  base::Value::Dict dict;
+  base::DictValue dict;
   dict.Set(kShortcutKey, base::Value(kShortcutValueSSH));
   dict.Set(kProfileIdKey, base::Value(profileId));
-  std::string shortcut_id;
-  base::JSONWriter::Write(dict, &shortcut_id);
-  return shortcut_id;
+  return base::WriteJson(dict).value_or("");
 }
 
 std::string ShortcutIdFromContainerId(Profile* profile,
                                       const guest_os::GuestId& id) {
-  base::Value::Dict dict = id.ToDictValue();
+  base::DictValue dict = id.ToDictValue();
   dict.Set(kShortcutKey, base::Value(kShortcutValueTerminal));
 
   // Find terminal profile from prefs.
-  const base::Value::Dict& settings =
+  const base::DictValue& settings =
       profile->GetPrefs()->GetDict(guest_os::prefs::kGuestOsTerminalSettings);
-  const base::Value::List* vsh_ids = settings.FindList("/vsh/profile-ids");
+  const base::ListValue* vsh_ids = settings.FindList("/vsh/profile-ids");
   if (vsh_ids) {
     for (const auto& vsh_id : *vsh_ids) {
       if (!vsh_id.is_string()) {
@@ -501,13 +504,11 @@ std::string ShortcutIdFromContainerId(Profile* profile,
     }
   }
 
-  std::string shortcut_id;
-  base::JSONWriter::Write(dict, &shortcut_id);
-  return shortcut_id;
+  return base::WriteJson(dict).value_or("");
 }
 
 base::flat_map<std::string, std::string> ExtrasFromShortcutId(
-    const base::Value::Dict& shortcut) {
+    const base::DictValue& shortcut) {
   base::flat_map<std::string, std::string> extras;
   for (const auto it : shortcut) {
     if (it.second.is_string()) {
@@ -520,9 +521,9 @@ base::flat_map<std::string, std::string> ExtrasFromShortcutId(
 std::vector<std::pair<std::string, std::string>> GetSSHConnections(
     Profile* profile) {
   std::vector<std::pair<std::string, std::string>> result;
-  const base::Value::Dict& settings =
+  const base::DictValue& settings =
       profile->GetPrefs()->GetDict(guest_os::prefs::kGuestOsTerminalSettings);
-  const base::Value::List* ids = settings.FindList("/nassh/profile-ids");
+  const base::ListValue* ids = settings.FindList("/nassh/profile-ids");
   if (!ids) {
     return result;
   }
@@ -544,6 +545,10 @@ void AddTerminalMenuItems(Profile* profile, apps::MenuItems& menu_items) {
   if (crostini::IsCrostiniRunning(profile)) {
     apps::AddCommandItem(ash::SHUTDOWN_GUEST_OS,
                          IDS_CROSTINI_SHUT_DOWN_LINUX_MENU_ITEM, menu_items);
+  }
+  if (bruschetta::IsBruschettaRunning(profile)) {
+    apps::AddCommandItem(ash::SHUTDOWN_BRUSCHETTA_OS,
+                         IDS_BRUSCHETTA_SHUT_DOWN_LINUX_MENU_ITEM, menu_items);
   }
 }
 
@@ -567,7 +572,7 @@ void AddTerminalMenuShortcuts(
   gfx::ImageSkia crostini_mascot_icon = icon(kCrostiniMascotIcon);
   std::vector<std::pair<std::string, std::string>> connections =
       GetSSHConnections(profile);
-  auto* registry = guest_os::GuestOsService::GetForProfile(profile)
+  auto* registry = guest_os::GuestOsServiceFactory::GetForProfile(profile)
                        ->TerminalProviderRegistry();
   if (connections.size() > 0 || registry->List().size() > 0) {
     apps::AddSeparator(ui::DOUBLE_SEPARATOR, menu_items);
@@ -593,8 +598,8 @@ void AddTerminalMenuShortcuts(
 bool ExecuteTerminalMenuShortcutCommand(Profile* profile,
                                         const std::string& shortcut_id,
                                         int64_t display_id) {
-  std::optional<base::Value::Dict> shortcut =
-      base::JSONReader::ReadDict(shortcut_id);
+  std::optional<base::DictValue> shortcut = base::JSONReader::ReadDict(
+      shortcut_id, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!shortcut) {
     return false;
   }
@@ -604,7 +609,7 @@ bool ExecuteTerminalMenuShortcutCommand(Profile* profile,
     if (!profileId) {
       return false;
     }
-    const base::Value::Dict& settings =
+    const base::DictValue& settings =
         profile->GetPrefs()->GetDict(guest_os::prefs::kGuestOsTerminalSettings);
     const std::string* settings_profile = settings.FindString(GetSettingsKey(
         kSettingsPrefixNassh, *profileId, kSettingsKeyTerminalProfile));

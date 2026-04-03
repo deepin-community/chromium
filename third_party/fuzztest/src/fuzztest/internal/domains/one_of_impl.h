@@ -23,6 +23,7 @@
 
 #include "absl/random/bit_gen_ref.h"
 #include "absl/random/distributions.h"
+#include "absl/status/status.h"
 #include "./fuzztest/internal/domains/domain_base.h"
 #include "./fuzztest/internal/domains/serialization_helpers.h"
 #include "./fuzztest/internal/meta.h"
@@ -34,7 +35,7 @@ namespace fuzztest::internal {
 
 template <typename... Inner>
 class OneOfImpl
-    : public DomainBase<
+    : public domain_implementor::DomainBase<
           OneOfImpl<Inner...>,
           value_type_t<std::tuple_element_t<0, std::tuple<Inner...>>>,
           std::variant<corpus_type_t<Inner>...>> {
@@ -61,7 +62,9 @@ class OneOfImpl
         });
   }
 
-  void Mutate(corpus_type& val, absl::BitGenRef prng, bool only_shrink) {
+  void Mutate(corpus_type& val, absl::BitGenRef prng,
+              const domain_implementor::MutationMetadata& metadata,
+              bool only_shrink) {
     // Switch to another domain 1% of the time when not reducing.
     if (kNumDomains > 1 && !only_shrink && absl::Bernoulli(prng, 0.01)) {
       // Choose a different index.
@@ -76,14 +79,14 @@ class OneOfImpl
     } else {
       Switch<kNumDomains>(val.index(), [&](auto I) {
         auto& domain = std::get<I>(domains_);
-        domain.Mutate(std::get<I>(val), prng, only_shrink);
+        domain.Mutate(std::get<I>(val), prng, metadata, only_shrink);
       });
     }
   }
 
   value_type GetValue(const corpus_type& v) const {
     return Switch<kNumDomains>(v.index(), [&](auto I) -> value_type {
-      auto domain = std::get<I>(domains_);
+      const auto& domain = std::get<I>(domains_);
       return domain.GetValue(std::get<I>(v));
     });
   }
@@ -110,7 +113,7 @@ class OneOfImpl
     return res;
   }
 
-  auto GetPrinter() const { return OneOfPrinter<Inner...>{domains_}; }
+  auto GetPrinter() const { return VariantPrinter<Inner...>{domains_}; }
 
   std::optional<corpus_type> ParseCorpus(const IRObject& obj) const {
     return ParseWithDomainVariant(domains_, obj);

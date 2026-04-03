@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
@@ -44,7 +45,7 @@ class PromoService : public KeyedService {
     // or with invalid data. Any previously cached response should be cleared.
     FATAL_ERROR,
     // There's a valid promo coming back from the promo server, but it's been
-    // locally blocked by the user client-side. TODO(crbug.com/1003508): send
+    // locally blocked by the user client-side. TODO(crbug.com/40098612): send
     // blocked promo IDs to the server so this doesn't happen / they can do a
     // better job ranking?
     OK_BUT_BLOCKED,
@@ -86,7 +87,7 @@ class PromoService : public KeyedService {
   void PromoDataLoaded(Status status, const std::optional<PromoData>& data);
 
  private:
-  void OnLoadDone(std::unique_ptr<std::string> response_body);
+  void OnLoadDone(std::optional<std::string> response_body);
   void OnJsonParsed(data_decoder::DataDecoder::ValueOrError result);
 
   void NotifyObservers();

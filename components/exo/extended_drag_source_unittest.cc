@@ -7,7 +7,6 @@
 #include <memory>
 #include <string>
 
-#include "ash/constants/app_types.h"
 #include "ash/drag_drop/drag_drop_controller.h"
 #include "ash/drag_drop/toplevel_window_drag_delegate.h"
 #include "ash/public/cpp/window_properties.h"
@@ -19,6 +18,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
+#include "chromeos/ui/base/app_types.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "components/exo/buffer.h"
 #include "components/exo/data_source.h"
@@ -90,29 +90,16 @@ class TestExtendedDragSourceDelegate : public ExtendedDragSource::Delegate {
 
   bool ShouldLockCursor() const override { return lock_cursor_; }
 
-  void OnSwallowed(const std::string& mime_type) override {
-    ASSERT_FALSE(swallowed_);
-    swallowed_ = true;
-  }
-
-  void OnUnswallowed(const std::string& mime_type,
-                     const gfx::Vector2d& offset) override {
-    ASSERT_TRUE(swallowed_);
-    swallowed_ = false;
-  }
-
   void OnDataSourceDestroying() override { delete this; }
 
  private:
   const bool allow_drap_no_target_;
   const bool lock_cursor_;
-
-  bool swallowed_ = true;
 };
 
 class ExtendedDragSourceTest : public test::ExoTestBase {
  public:
-  ExtendedDragSourceTest() {}
+  ExtendedDragSourceTest() = default;
   ExtendedDragSourceTest(const ExtendedDragSourceTest&) = delete;
   ExtendedDragSourceTest& operator=(const ExtendedDragSourceTest&) = delete;
   ~ExtendedDragSourceTest() override = default;
@@ -122,7 +109,7 @@ class ExtendedDragSourceTest : public test::ExoTestBase {
     drag_drop_controller_ = static_cast<ash::DragDropController*>(
         aura::client::GetDragDropClient(ash::Shell::GetPrimaryRootWindow()));
     ASSERT_TRUE(drag_drop_controller_);
-    drag_drop_controller_->set_should_block_during_drag_drop(false);
+    drag_drop_controller_->SetDisableNestedLoopForTesting(true);
     drag_drop_controller_->set_enabled(true);
 
     seat_ =
@@ -161,8 +148,7 @@ class ExtendedDragSourceTest : public test::ExoTestBase {
   }
 
   std::unique_ptr<Buffer> CreateBuffer(gfx::Size size) {
-    return std::make_unique<Buffer>(
-        exo_test_helper()->CreateGpuMemoryBuffer(size));
+    return test::ExoTestHelper::CreateBuffer(size);
   }
 
   raw_ptr<ash::DragDropController, DanglingUntriaged> drag_drop_controller_ =
@@ -296,9 +282,6 @@ class WindowObserverHookChecker : public aura::WindowObserver {
     dragged_window_ = surface_window_->GetToplevelWindow();
     dragged_window_->AddObserver(this);
     surface_window_->RemoveObserver(this);
-
-    dragged_window_->SetProperty(aura::client::kAppType,
-                                 static_cast<int>(ash::AppType::LACROS));
   }
 
   void OnWindowVisibilityChanging(aura::Window* window, bool visible) override {
@@ -437,7 +420,7 @@ TEST_F(ExtendedDragSourceTest, DragSurfaceNotMappedYet_Touch) {
             *extended_drag_source_->GetDragOffsetForTesting());
 
   // Initiate the gesture sequence.
-  DispatchGesture(ui::ET_GESTURE_BEGIN, gfx::Point(10, 10));
+  DispatchGesture(ui::EventType::kGestureBegin, gfx::Point(10, 10));
 
   // Map the |detached_surface|.
   auto detached_buffer = CreateBuffer({50, 50});
@@ -461,8 +444,7 @@ TEST_F(ExtendedDragSourceTest, DragSurfaceNotMappedYet_Touch) {
 TEST_F(ExtendedDragSourceTest, DestroyDraggedSurfaceWhileDragging) {
   // Create and map a toplevel shell surface.
   gfx::Size buffer_size(32, 32);
-  std::unique_ptr<Buffer> buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(buffer_size)));
+  auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
   std::unique_ptr<Surface> surface(new Surface);
   std::unique_ptr<ShellSurface> shell_surface(new ShellSurface(surface.get()));
   surface->Attach(buffer.get());
@@ -489,7 +471,7 @@ TEST_F(ExtendedDragSourceTest, DestroyDraggedSurfaceWhileDragging) {
   // Create an drag event instance to be dispatched manually
   // and hold a dangling target pointer.
   auto event = std::make_unique<ui::MouseEvent>(
-      ui::ET_MOUSE_DRAGGED, dragged_window->bounds().origin(),
+      ui::EventType::kMouseDragged, dragged_window->bounds().origin(),
       dragged_window->bounds().origin(), ui::EventTimeForNow(),
       ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
   ui::Event::DispatcherApi(event.get())
@@ -575,7 +557,7 @@ TEST_F(ExtendedDragSourceTest, CancelDraggingOperation) {
   generator.PressLeftButton();
 
   // Start a DragDropOperation.
-  drag_drop_controller_->set_should_block_during_drag_drop(true);
+  drag_drop_controller_->SetDisableNestedLoopForTesting(false);
   data_device_->StartDrag(data_source_.get(), surface, /*icon=*/nullptr,
                           ui::mojom::DragEventSource::kMouse);
 
@@ -648,7 +630,7 @@ TEST_F(ExtendedDragSourceTest, DragWithScreenCoordinates_Touch) {
   generator.PressTouch();
 
   // Start a DragDropOperation.
-  drag_drop_controller_->set_should_block_during_drag_drop(true);
+  drag_drop_controller_->SetDisableNestedLoopForTesting(false);
   data_device_->StartDrag(data_source_.get(), origin_surface, /*icon=*/nullptr,
                           ui::mojom::DragEventSource::kTouch);
 
@@ -729,7 +711,7 @@ TEST_F(ExtendedDragSourceTest, DragToAnotherDisplay) {
   generator->PressLeftButton();
 
   // Start a DragDropOperation.
-  drag_drop_controller_->set_should_block_during_drag_drop(true);
+  drag_drop_controller_->SetDisableNestedLoopForTesting(false);
 
   data_device_->StartDrag(data_source_.get(), origin_surface, /*icon=*/nullptr,
                           ui::mojom::DragEventSource::kMouse);
@@ -753,7 +735,7 @@ TEST_F(ExtendedDragSourceTest, DragToAnotherDisplay) {
           EXPECT_EQ(
               kOriginalWindowBounds.size(),
               shell_surface->GetWidget()->GetWindowBoundsInScreen().size());
-          auto display = display::Screen::GetScreen()->GetDisplayNearestWindow(
+          auto display = display::Screen::Get()->GetDisplayNearestWindow(
               shell_surface->GetWidget()->GetNativeWindow());
           // It should stay at the initial position when created.
           EXPECT_EQ(gfx::Rect(400, 0, 800, 600), display.bounds());
@@ -771,7 +753,7 @@ TEST_F(ExtendedDragSourceTest, DragToAnotherDisplay) {
   loop.Run();
   EXPECT_FALSE(toplevel_handler->is_drag_in_progress());
   EXPECT_FALSE(shell_surface->GetWidget()->IsMaximized());
-  auto display = display::Screen::GetScreen()->GetDisplayNearestWindow(
+  auto display = display::Screen::Get()->GetDisplayNearestWindow(
       shell_surface->GetWidget()->GetNativeWindow());
 
   gfx::Size secondary_display_size(400, 300);
@@ -803,9 +785,11 @@ TEST_F(ExtendedDragSourceTest, DragToAnotherDisplay) {
 // Regression test for crbug.com/40946538. Ensures Exo is able to handle
 // arbitrary ordering of asynchronous system mouse events and exo client drag
 // requests.
-TEST_F(ExtendedDragSourceTest, HandlesMouseMoveBeforeExtendedDragStart) {
+// TODO(crbug.com/333504586): This test started to consistently fail
+TEST_F(ExtendedDragSourceTest,
+       DISABLED_HandlesMouseMoveBeforeExtendedDragStart) {
   UpdateDisplay("800x600,800x600");
-  const auto* screen = display::Screen::GetScreen();
+  const auto* screen = display::Screen::Get();
   ASSERT_EQ(2u, screen->GetAllDisplays().size());
 
   // Create and map a toplevel shell surface at position 100, 100 on the second
@@ -832,7 +816,7 @@ TEST_F(ExtendedDragSourceTest, HandlesMouseMoveBeforeExtendedDragStart) {
   generator->PressLeftButton();
 
   // Initiate the drag and drop session from Ash's drag drop controller.
-  drag_drop_controller_->set_should_block_during_drag_drop(true);
+  drag_drop_controller_->SetDisableNestedLoopForTesting(false);
   data_device_->StartDrag(data_source_.get(), surface, /*icon=*/nullptr,
                           ui::mojom::DragEventSource::kMouse);
 

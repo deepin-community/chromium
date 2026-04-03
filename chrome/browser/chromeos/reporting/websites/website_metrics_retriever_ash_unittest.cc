@@ -27,16 +27,13 @@ class WebsiteMetricsRetrieverAshTest
     : public ::apps::AppPlatformMetricsServiceTestBase {
  protected:
   void SetUp() override {
-    // Set up test user and profile.
-    AddRegularUser(/*email=*/"test@test.com");
+    start_app_platform_metrics_service_on_init_ = false;
+    AppPlatformMetricsServiceTestBase::SetUp();
 
-    // Configure app service proxy for the test.
-    auto app_platform_metrics_service =
-        std::make_unique<::apps::AppPlatformMetricsService>(profile());
     app_service_proxy_ =
         ::apps::AppServiceProxyFactory::GetForProfile(profile());
     app_service_proxy_->SetAppPlatformMetricsServiceForTesting(
-        std::move(app_platform_metrics_service));
+        std::move(app_platform_metrics_service_));
 
     // Configure the website metrics retriever.
     website_metrics_retriever_ =
@@ -65,8 +62,10 @@ TEST_F(WebsiteMetricsRetrieverAshTest,
       app_platform_metrics_service));
 
   // Simulate init and verify callback is triggered with initialized component.
-  app_platform_metrics_service->Start(app_service_proxy_->AppRegistryCache(),
-                                      app_service_proxy_->InstanceRegistry());
+  app_platform_metrics_service->Start(
+      app_service_proxy_->AppRegistryCache(),
+      app_service_proxy_->InstanceRegistry(),
+      app_service_proxy_->AppCapabilityAccessCache());
   ASSERT_THAT(initialized_website_metrics,
               Eq(app_platform_metrics_service->WebsiteMetrics()));
   EXPECT_FALSE(website_metrics_retriever_->IsObservingSourceForTest(
@@ -78,8 +77,10 @@ TEST_F(WebsiteMetricsRetrieverAshTest, ReturnWebsiteMetricsIfInitialized) {
   // scenario.
   auto* const app_platform_metrics_service =
       app_service_proxy_->AppPlatformMetricsService();
-  app_platform_metrics_service->Start(app_service_proxy_->AppRegistryCache(),
-                                      app_service_proxy_->InstanceRegistry());
+  app_platform_metrics_service->Start(
+      app_service_proxy_->AppRegistryCache(),
+      app_service_proxy_->InstanceRegistry(),
+      app_service_proxy_->AppCapabilityAccessCache());
   ASSERT_THAT(app_platform_metrics_service->WebsiteMetrics(), NotNull());
 
   // Verify retriever returns initialized component without observing init.
@@ -121,8 +122,10 @@ TEST_F(WebsiteMetricsRetrieverAshTest,
 
   // Simulate init and verify both callbacks are triggered with initialized
   // component.
-  app_platform_metrics_service->Start(app_service_proxy_->AppRegistryCache(),
-                                      app_service_proxy_->InstanceRegistry());
+  app_platform_metrics_service->Start(
+      app_service_proxy_->AppRegistryCache(),
+      app_service_proxy_->InstanceRegistry(),
+      app_service_proxy_->AppCapabilityAccessCache());
   ASSERT_THAT(initialized_website_metrics_1,
               Eq(app_platform_metrics_service->WebsiteMetrics()));
   ASSERT_THAT(initialized_website_metrics_2,

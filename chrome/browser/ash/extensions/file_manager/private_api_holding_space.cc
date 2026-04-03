@@ -7,8 +7,8 @@
 #include <memory>
 #include <vector>
 
-#include "ash/public/cpp/holding_space/holding_space_metrics.h"
-#include "base/containers/cxx20_erase.h"
+#include "ash/constants/ash_features.h"
+#include "base/feature_list.h"
 #include "base/memory/ref_counted.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
 #include "chrome/browser/profiles/profile.h"
@@ -16,6 +16,8 @@
 #include "chrome/browser/ui/ash/holding_space/holding_space_keyed_service_factory.h"
 #include "chrome/common/extensions/api/file_manager_private.h"
 #include "chrome/common/extensions/api/file_manager_private_internal.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "components/user_manager/user_manager.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_url.h"
 #include "url/gurl.h"
@@ -57,21 +59,19 @@ FileManagerPrivateInternalToggleAddedToHoldingSpaceFunction::Run() {
   }
 
   if (params->add) {
-    base::EraseIf(
+    std::erase_if(
         file_system_urls,
         [holding_space](const storage::FileSystemURL& file_system_url) {
           return holding_space->ContainsPinnedFile(file_system_url);
         });
-    holding_space->AddPinnedFiles(
-        file_system_urls, ash::holding_space_metrics::EventSource::kFilesApp);
+    holding_space->AddPinnedFiles(file_system_urls);
   } else {
-    base::EraseIf(
+    std::erase_if(
         file_system_urls,
         [holding_space](const storage::FileSystemURL& file_system_url) {
           return !holding_space->ContainsPinnedFile(file_system_url);
         });
-    holding_space->RemovePinnedFiles(
-        file_system_urls, ash::holding_space_metrics::EventSource::kFilesApp);
+    holding_space->RemovePinnedFiles(file_system_urls);
   }
 
   return RespondNow(NoArguments());

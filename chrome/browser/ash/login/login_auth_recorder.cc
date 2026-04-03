@@ -34,7 +34,6 @@ std::optional<AuthMethodSwitchType> SwitchFromPasswordTo(AuthMethod current) {
     case AuthMethod::kPassword:
     case AuthMethod::kNothing:
       NOTREACHED();
-      return std::nullopt;
   }
 }
 
@@ -51,7 +50,6 @@ std::optional<AuthMethodSwitchType> SwitchFromPinTo(AuthMethod current) {
     case AuthMethod::kChallengeResponse:
     case AuthMethod::kNothing:
       NOTREACHED();
-      return std::nullopt;
   }
 }
 
@@ -68,7 +66,6 @@ std::optional<AuthMethodSwitchType> SwitchFromSmartlockTo(AuthMethod current) {
     case AuthMethod::kChallengeResponse:
     case AuthMethod::kNothing:
       NOTREACHED();
-      return std::nullopt;
   }
 }
 
@@ -86,7 +83,6 @@ std::optional<AuthMethodSwitchType> SwitchFromFingerprintTo(
     case AuthMethod::kChallengeResponse:
     case AuthMethod::kNothing:
       NOTREACHED();
-      return std::nullopt;
   }
 }
 
@@ -105,7 +101,6 @@ std::optional<AuthMethodSwitchType> SwitchFromNothingTo(AuthMethod current) {
       return AuthMethodSwitchType::kNothingToChallengeResponse;
     case AuthMethod::kNothing:
       NOTREACHED();
-      return std::nullopt;
   }
 }
 
@@ -125,7 +120,6 @@ std::optional<AuthMethodSwitchType> FindSwitchType(AuthMethod previous,
       return SwitchFromNothingTo(current);
     case AuthMethod::kChallengeResponse:
       NOTREACHED();
-      return std::nullopt;
   }
 }
 
@@ -161,8 +155,8 @@ void LoginAuthRecorder::RecordAuthMethod(AuthMethod method) {
   base::UmaHistogramEnumeration(
       base::StrCat(
           {prefix, "Used.",
-           (display::Screen::GetScreen()->InTabletMode() ? "TabletMode"
-                                                         : "ClamShellMode")}),
+           (display::Screen::Get()->InTabletMode() ? "TabletMode"
+                                                   : "ClamShellMode")}),
       method);
 
   if (last_auth_method_ != method) {

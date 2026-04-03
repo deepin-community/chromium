@@ -10,8 +10,14 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "build/build_config.h"
 #include "ui/base/clipboard/clipboard_constants.h"
 #include "ui/base/x/x11_clipboard_helper.h"
+
+#if BUILDFLAG(IS_LINUX)
+#include "base/strings/string_view_util.h"
+#include "ui/base/clipboard/clipboard_util_linux.h"
+#endif
 
 namespace ui {
 
@@ -32,6 +38,24 @@ void X11ClipboardOzone::OfferClipboardData(
   helper_->CreateNewClipboardData();
   for (const auto& item : data_map)
     helper_->InsertMapping(item.first, item.second);
+
+#if BUILDFLAG(IS_LINUX)
+  auto it = data_map.find(kMimeTypeUriList);
+  if (it != data_map.end()) {
+    std::string unparsed(base::as_string_view(*it->second));
+    std::vector<std::string> paths =
+        ui::clipboard_util::GetPathsFromUriList(unparsed);
+
+    std::string key = ui::clipboard_util::RegisterPathsWithPortal(paths);
+    if (!key.empty()) {
+      auto data_bytes =
+          base::MakeRefCounted<base::RefCountedBytes>(base::as_byte_span(key));
+      helper_->InsertMapping(kMimeTypePortalFileTransfer, data_bytes);
+      helper_->InsertMapping(kMimeTypePortalFiles, data_bytes);
+    }
+  }
+#endif
+
   helper_->TakeOwnershipOfSelection(buffer);
   std::move(callback).Run();
 }
@@ -41,10 +65,10 @@ void X11ClipboardOzone::RequestClipboardData(
     const std::string& mime_type,
     PlatformClipboard::RequestDataClosure callback) {
   DCHECK(!callback.is_null());
-  auto atoms =
-      mime_type == kMimeTypeText
-          ? helper_->GetTextAtoms()
-          : helper_->GetAtomsForFormat(ClipboardFormatType::GetType(mime_type));
+  auto atoms = mime_type == kMimeTypePlainText
+                   ? helper_->GetTextAtoms()
+                   : helper_->GetAtomsForFormat(
+                         ClipboardFormatType::CustomPlatformType(mime_type));
   auto selection_data = helper_->Read(buffer, atoms);
   std::move(callback).Run(selection_data.TakeBytes());
 }
@@ -55,7 +79,7 @@ void X11ClipboardOzone::GetAvailableMimeTypes(
   DCHECK(!callback.is_null());
   // This is the only function clients may use to request available formats, so
   // include both standard and platform-specific (atom names) values.
-  // TODO(crbug.com/1165466): Consider adding a way of filtering mime types and
+  // TODO(crbug.com/40054419): Consider adding a way of filtering mime types and
   // querying availability of specific formats, so implementations can optimize
   // it, if possible. E.g: Avoid multiple roundtrips to check if a given format
   // is available. See ClipboardX11::IsFormatAvailable for example.

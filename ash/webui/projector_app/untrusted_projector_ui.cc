@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ash/webui/projector_app/untrusted_projector_ui.h"
 
 #include "ash/strings/grit/ash_strings.h"
@@ -32,16 +33,11 @@ void CreateAndAddProjectorHTMLSource(content::WebUI* web_ui,
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       browser_context, kChromeUIUntrustedProjectorUrl);
 
-  source->AddResourcePaths(
-      base::make_span(kAshProjectorAppUntrustedResources,
-                      kAshProjectorAppUntrustedResourcesSize));
-  source->AddResourcePaths(base::make_span(kAshProjectorCommonResources,
-                                           kAshProjectorCommonResourcesSize));
-  source->AddResourcePaths(
-      base::make_span(kChromeosProjectorAppBundleResources,
-                      kChromeosProjectorAppBundleResourcesSize));
+  source->AddResourcePaths(kAshProjectorAppUntrustedResources);
+  source->AddResourcePaths(kAshProjectorCommonResources);
+  source->AddResourcePaths(kChromeosProjectorAppBundleResources);
 
-  source->AddResourcePath("", IDR_ASH_PROJECTOR_APP_UNTRUSTED_INDEX_HTML);
+  source->SetDefaultResource(IDR_ASH_PROJECTOR_APP_UNTRUSTED_INDEX_HTML);
   source->AddLocalizedString("appTitle", IDS_ASH_PROJECTOR_DISPLAY_SOURCE);
 
   // Provide a list of specific script resources (javascript files and inlined
@@ -74,11 +70,22 @@ void CreateAndAddProjectorHTMLSource(content::WebUI* web_ui,
       network::mojom::CSPDirectiveName::ConnectSrc,
       "connect-src 'self' https://www.googleapis.com "
       "https://drive.google.com;");
+  // Allow styles to include inline styling needed for Polymer elements and
+  // the material 3 dynamic palette.
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::StyleSrc,
+      "style-src 'self' 'unsafe-inline' chrome-untrusted://theme;");
 
   source->OverrideContentSecurityPolicy(
       network::mojom::CSPDirectiveName::TrustedTypes,
       "trusted-types polymer_resin lit-html goog#html polymer-html-literal "
       "polymer-template-event-attribute-policy;");
+
+  // For testing
+  source->OverrideContentSecurityPolicy(
+      network::mojom::CSPDirectiveName::ScriptSrc,
+      "script-src chrome-untrusted://resources chrome-untrusted://webui-test "
+      "'self';");
 
   delegate->PopulateLoadTimeData(source);
   source->UseStringsJs();
@@ -86,12 +93,10 @@ void CreateAndAddProjectorHTMLSource(content::WebUI* web_ui,
   auto* webui_allowlist = WebUIAllowlist::GetOrCreate(browser_context);
   const url::Origin untrusted_origin =
       url::Origin::Create(GURL(kChromeUIUntrustedProjectorUrl));
-  webui_allowlist->RegisterAutoGrantedPermission(untrusted_origin,
-                                                 ContentSettingsType::COOKIES);
-  webui_allowlist->RegisterAutoGrantedPermission(
-      untrusted_origin, ContentSettingsType::JAVASCRIPT);
-  webui_allowlist->RegisterAutoGrantedPermission(untrusted_origin,
-                                                 ContentSettingsType::IMAGES);
+  webui_allowlist->RegisterAutoGrantedPermissions(
+      untrusted_origin,
+      {ContentSettingsType::COOKIES, ContentSettingsType::JAVASCRIPT,
+       ContentSettingsType::IMAGES});
 }
 
 }  // namespace

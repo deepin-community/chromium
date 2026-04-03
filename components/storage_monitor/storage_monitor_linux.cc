@@ -17,7 +17,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/process/kill.h"
@@ -248,8 +247,7 @@ bool StorageMonitorLinux::GetStorageInfoForPath(
     return false;
 
   base::FilePath current = path;
-  while (!base::Contains(mount_info_map_, current) &&
-         current != current.DirName())
+  while (!mount_info_map_.contains(current) && current != current.DirName())
     current = current.DirName();
 
   auto mount_info = mount_info_map_.find(current);
@@ -274,8 +272,6 @@ void StorageMonitorLinux::EjectDevice(
     std::move(callback).Run(EJECT_FAILURE);
     return;
   }
-
-  DCHECK_NE(type, StorageInfo::MTP_OR_PTP);
 
   // Find the mount point for the given device ID.
   base::FilePath path;
@@ -324,12 +320,12 @@ void StorageMonitorLinux::UpdateMtab(const MountPointDeviceMap& new_mtab) {
     // |mount_point|.
     if (new_iter == new_mtab.end() || (new_iter->second != mount_device)) {
       auto priority = mount_priority_map_.find(mount_device);
-      DCHECK(priority != mount_priority_map_.end());
+      CHECK(priority != mount_priority_map_.end());
       ReferencedMountPoint::const_iterator has_priority =
           priority->second.find(mount_point);
       if (StorageInfo::IsRemovableDevice(
               old_iter->second.storage_info.device_id())) {
-        DCHECK(has_priority != priority->second.end());
+        CHECK(has_priority != priority->second.end());
         if (has_priority->second) {
           receiver()->ProcessDetach(old_iter->second.storage_info.device_id());
         }
@@ -412,7 +408,7 @@ void StorageMonitorLinux::UpdateMtab(const MountPointDeviceMap& new_mtab) {
 bool StorageMonitorLinux::IsDeviceAlreadyMounted(
     const base::FilePath& mount_device) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return base::Contains(mount_priority_map_, mount_device);
+  return mount_priority_map_.contains(mount_device);
 }
 
 void StorageMonitorLinux::HandleDeviceMountedMultipleTimes(
@@ -421,7 +417,7 @@ void StorageMonitorLinux::HandleDeviceMountedMultipleTimes(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto priority = mount_priority_map_.find(mount_device);
-  DCHECK(priority != mount_priority_map_.end());
+  CHECK(priority != mount_priority_map_.end());
   const base::FilePath& other_mount_point = priority->second.begin()->first;
   priority->second[mount_point] = false;
   mount_info_map_[mount_point] =

@@ -5,6 +5,9 @@
 #ifndef CHROME_BROWSER_ASH_APP_LIST_SEARCH_ESSENTIAL_SEARCH_SOCS_COOKIE_FETCHER_H_
 #define CHROME_BROWSER_ASH_APP_LIST_SEARCH_ESSENTIAL_SEARCH_SOCS_COOKIE_FETCHER_H_
 
+#include <optional>
+#include <string>
+
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/values.h"
@@ -23,7 +26,11 @@ namespace app_list {
 // SocsCookieFetcher is still WIP.
 class SocsCookieFetcher final {
  public:
-  // TODO(b/312542928): use this enum to collect UMA.
+  // This enum is tied directly to a UMA enum defined in
+  // //tools/metrics/histograms/metadata/ash/enums.xml, and should
+  // always reflect it (do not change one without changing the other).
+  // These values are persisted to logs. Entries should not be renumbered
+  // and numeric values should never be reused.
   enum class Status {
     kOk = 0,
     kRequestBodyNotSerialized = 1,
@@ -57,9 +64,9 @@ class SocsCookieFetcher final {
   void StartFetching();
 
  private:
-  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnSimpleLoaderComplete(std::optional<std::string> response_body);
   void OnJsonParsed(data_decoder::DataDecoder::ValueOrError result);
-  void ProcessValidTokenResponse(base::Value::Dict json_response);
+  void ProcessValidTokenResponse(base::DictValue json_response);
 
   // `consumer_` to call back when this request completes.
   const raw_ptr<Consumer> consumer_;

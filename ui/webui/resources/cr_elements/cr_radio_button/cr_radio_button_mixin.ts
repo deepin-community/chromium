@@ -27,15 +27,15 @@ export const CrRadioButtonMixin = dedupingMixin(
           return {
             checked: {
               type: Boolean,
-              value: false,
               reflectToAttribute: true,
+              value: false,
             },
 
             disabled: {
               type: Boolean,
-              value: false,
               reflectToAttribute: true,
               notify: true,
+              value: false,
             },
 
             /**
@@ -45,19 +45,19 @@ export const CrRadioButtonMixin = dedupingMixin(
              */
             focusable: {
               type: Boolean,
-              value: false,
               observer: 'onFocusableChanged_',
+              value: false,
             },
 
             hideLabelText: {
               type: Boolean,
-              value: false,
               reflectToAttribute: true,
+              value: false,
             },
 
             label: {
               type: String,
-              value: '',  // Allows hidden$= binding to run without being set.
+              value: '', // Allows hidden$= binding to run without being set.
             },
 
             name: {
@@ -76,20 +76,17 @@ export const CrRadioButtonMixin = dedupingMixin(
           };
         }
 
-        checked: boolean;
-        disabled: boolean;
-        focusable: boolean;
-        hideLabelText: boolean;
-        label: string;
-        name: string;
-        private buttonTabIndex_: number;
+        declare checked: boolean;
+        declare disabled: boolean;
+        declare focusable: boolean;
+        declare hideLabelText: boolean;
+        declare label: string;
+        declare name?: string;
+        declare protected buttonTabIndex_: number;
 
         override connectedCallback() {
           super.connectedCallback();
           this.addEventListener('blur', this.hideRipple_.bind(this));
-          if (!document.documentElement.hasAttribute('chrome-refresh-2023')) {
-            this.addEventListener('focus', this.onFocus_.bind(this));
-          }
           this.addEventListener('up', this.hideRipple_.bind(this));
         }
 
@@ -103,15 +100,11 @@ export const CrRadioButtonMixin = dedupingMixin(
           assertNotReached();
         }
 
-        private onFocus_() {
-          this.getPaperRipple().showAndHoldDown();
-        }
-
         private hideRipple_() {
           this.getPaperRipple().clear();
         }
 
-        private onFocusableChanged_() {
+        protected onFocusableChanged_() {
           const links = this.querySelectorAll('a');
           links.forEach((link) => {
             // Remove the tab stop on any links when the row is unchecked.
@@ -121,15 +114,15 @@ export const CrRadioButtonMixin = dedupingMixin(
           });
         }
 
-        private getAriaChecked_(): string {
+        protected getAriaChecked_(): string {
           return this.checked ? 'true' : 'false';
         }
 
-        private getAriaDisabled_(): string {
+        protected getAriaDisabled_(): string {
           return this.disabled ? 'true' : 'false';
         }
 
-        private getTabIndex_(): number {
+        protected getTabIndex_(): number {
           return this.focusable ? 0 : -1;
         }
 
@@ -142,7 +135,7 @@ export const CrRadioButtonMixin = dedupingMixin(
          *    it'll correctly obey non-zero tabindex ordering of the
          *    containing document.
          */
-        private onInputKeydown_(e: KeyboardEvent) {
+        protected onInputKeydown_(e: KeyboardEvent) {
           if (e.shiftKey && e.key === 'Tab') {
             this.focus();
           }
@@ -158,7 +151,7 @@ export interface CrRadioButtonMixinInterface {
   focusable: boolean;
   hideLabelText: boolean;
   label: string;
-  name: string;
+  name?: string;
 
   getPaperRipple(): PaperRippleElement;
 }

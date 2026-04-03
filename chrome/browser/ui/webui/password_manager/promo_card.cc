@@ -34,10 +34,9 @@ constexpr char kLastTimeShownKey[] = "last_time_shown";
 constexpr char kNumberOfTimesShownKey[] = "number_of_times_shown";
 constexpr char kWasDismissedKey[] = "was_dismissed";
 
-
 // Creates new pref entry for the promo card with a given id.
-base::Value::Dict CreatePromoCardPrefEntry(const std::string& id) {
-  base::Value::Dict promo_card_pref_entry;
+base::DictValue CreatePromoCardPrefEntry(const std::string& id) {
+  base::DictValue promo_card_pref_entry;
   promo_card_pref_entry.Set(kIdKey, id);
   promo_card_pref_entry.Set(kLastTimeShownKey, base::TimeToValue(base::Time()));
   promo_card_pref_entry.Set(kNumberOfTimesShownKey, 0);
@@ -52,18 +51,22 @@ base::Value::Dict CreatePromoCardPrefEntry(const std::string& id) {
 PasswordPromoCardBase::PasswordPromoCardBase(const std::string& id,
                                              PrefService* prefs)
     : prefs_(prefs) {
-  const base::Value::List& promo_card_prefs =
+  const base::ListValue& promo_card_prefs =
       prefs_->GetList(prefs::kPasswordManagerPromoCardsList);
   for (const auto& promo_card_pref : promo_card_prefs) {
-    if (*promo_card_pref.GetDict().FindString(kIdKey) == id) {
-      number_of_times_shown_ =
-          *promo_card_pref.GetDict().FindInt(kNumberOfTimesShownKey);
-      last_time_shown_ =
-          base::ValueToTime(promo_card_pref.GetDict().Find(kLastTimeShownKey))
-              .value();
-      was_dismissed_ = *promo_card_pref.GetDict().FindBool(kWasDismissedKey);
-      return;
+    auto* promo_id = promo_card_pref.GetDict().FindString(kIdKey);
+
+    if (promo_id == nullptr || *promo_id != id) {
+      continue;
     }
+
+    number_of_times_shown_ =
+        *promo_card_pref.GetDict().FindInt(kNumberOfTimesShownKey);
+    last_time_shown_ =
+        base::ValueToTime(promo_card_pref.GetDict().Find(kLastTimeShownKey))
+            .value();
+    was_dismissed_ = *promo_card_pref.GetDict().FindBool(kWasDismissedKey);
+    return;
   }
   // If there is no pref with matching ID, create one.
   ScopedListPrefUpdate update(prefs_, prefs::kPasswordManagerPromoCardsList);
@@ -86,8 +89,6 @@ void PasswordPromoCardBase::OnPromoCardDismissed() {
       break;
     }
   }
-  base::UmaHistogramEnumeration("PasswordManager.PromoCard.Dismissed",
-                                GetPromoCardType());
 }
 
 void PasswordPromoCardBase::OnPromoCardShown() {

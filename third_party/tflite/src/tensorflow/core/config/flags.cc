@@ -16,13 +16,14 @@ limitations under the License.
 #include "tensorflow/core/config/flags.h"
 
 #include "absl/strings/ascii.h"
+#include "absl/strings/string_view.h"
 #include "tensorflow/core/platform/stringpiece.h"
 #include "tensorflow/core/util/env_var.h"
 
 namespace tensorflow {
 namespace config {
 
-Flag::Flag(StringPiece flag, bool default_value) {
+Flag::Flag(absl::string_view flag, bool default_value) {
   bool val = default_value;
   if (ReadBoolFromEnvVar(absl::AsciiStrToUpper(flag), default_value, &val)
           .ok()) {

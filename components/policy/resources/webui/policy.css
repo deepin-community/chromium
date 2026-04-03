@@ -26,10 +26,17 @@ body {
 
 body > header {
   flex-shrink: 0;
+  align-items: center;
+  padding: 0 12px 12px 12px;
 }
 
 body > main {
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+#policy-ui {
   padding: 12px;
 }
 
@@ -48,15 +55,10 @@ status-box {
   width: 380px;
 }
 
-body > header {
-  align-items: center;
-  padding: 0 12px 12px 12px;
-}
-
 .header-row {
   align-items: center;
   display: flex;
-  height: 56px;
+  height: fit-content;
 }
 
 .action-header-row {
@@ -66,7 +68,7 @@ body > header {
 
 .action-row-buttons {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -169,12 +171,13 @@ body > header {
   font-size: 170%;
   font-weight: 500;
   letter-spacing: .25px;
+  line-height: 80%;
 }
 
 <if expr="not is_android and not is_ios">
 #topbar-brand-logo {
-  background-image: image-set("chrome://theme/current-channel-logo@1x" 1x,
-                              "chrome://theme/current-channel-logo@2x" 2x);
+  background-image: image-set('chrome://theme/current-channel-logo@1x' 1x,
+                              'chrome://theme/current-channel-logo@2x' 2x);
   background-size: cover;
   height: 24px;
   margin-inline-end: 10px;
@@ -196,7 +199,12 @@ body > header {
   display: flex;
   flex: 0 1;
   flex-basis: inherit;
+<if expr="not (is_android or is_ios)">
   height: 40px;
+</if>
+<if expr="is_android or is_ios">
+  height: 36px;
+</if>
 }
 
 #search-field-icon {
@@ -273,9 +281,3 @@ a {
     width: 100%;
   }
 }
-
-<if expr="is_android or is_ios">
-#search-field-container {
-  height: 36px;
-}
-</if>

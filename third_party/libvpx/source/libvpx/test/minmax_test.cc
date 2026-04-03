@@ -11,8 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "third_party/googletest/src/include/gtest/gtest.h"
+#include "gtest/gtest.h"
 
+#include "vpx_config.h"
 #include "./vpx_dsp_rtcd.h"
 #include "vpx/vpx_integer.h"
 #include "vpx_mem/vpx_mem.h"
@@ -24,8 +25,8 @@ namespace {
 
 using ::libvpx_test::ACMRandom;
 
-typedef void (*MinMaxFunc)(const uint8_t *a, int a_stride, const uint8_t *b,
-                           int b_stride, int *min, int *max);
+using MinMaxFunc = void (*)(const uint8_t *a, int a_stride, const uint8_t *b,
+                            int b_stride, int *min, int *max);
 
 class MinMaxTest : public ::testing::TestWithParam<MinMaxFunc> {
  public:

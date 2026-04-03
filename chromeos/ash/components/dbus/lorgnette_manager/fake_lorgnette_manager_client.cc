@@ -8,6 +8,7 @@
 
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/notimplemented.h"
 #include "base/task/single_thread_task_runner.h"
 
 namespace ash {
@@ -21,6 +22,7 @@ void FakeLorgnetteManagerClient::Init(dbus::Bus* bus) {}
 void FakeLorgnetteManagerClient::ListScanners(
     const std::string& client_id,
     bool local_only,
+    bool preferred_only,
     chromeos::DBusMethodCallback<lorgnette::ListScannersResponse> callback) {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), list_scanners_response_));

@@ -9,6 +9,7 @@
 #include "base/process/process.h"
 #include "base/process/process_handle.h"
 #include "base/process/process_metrics.h"
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "components/performance_manager/public/graph/process_node.h"
 #include "components/performance_manager/resource_attribution/cpu_measurement_monitor.h"
@@ -28,7 +29,8 @@ class CPUMeasurementDelegateImpl final : public CPUMeasurementDelegate {
   explicit CPUMeasurementDelegateImpl(const ProcessNode* process_node);
   ~CPUMeasurementDelegateImpl() final = default;
 
-  std::optional<base::TimeDelta> GetCumulativeCPUUsage() final;
+  base::expected<base::TimeDelta, ProcessCPUUsageError> GetCumulativeCPUUsage()
+      final;
 
  private:
   std::unique_ptr<base::ProcessMetrics> process_metrics_;
@@ -45,19 +47,9 @@ CPUMeasurementDelegateImpl::CPUMeasurementDelegateImpl(
 #endif
 }
 
-std::optional<base::TimeDelta>
+base::expected<base::TimeDelta, CPUMeasurementDelegate::ProcessCPUUsageError>
 CPUMeasurementDelegateImpl::GetCumulativeCPUUsage() {
-  base::TimeDelta cpu_usage;
-#if BUILDFLAG(IS_WIN)
-  cpu_usage = process_metrics_->GetPreciseCumulativeCPUUsage();
-#else
-  cpu_usage = process_metrics_->GetCumulativeCPUUsage();
-#endif
-  // Most platforms return a zero TimeDelta on error, Linux returns a negative.
-  if (!cpu_usage.is_positive()) {
-    return std::nullopt;
-  }
-  return cpu_usage;
+  return process_metrics_->GetCumulativeCPUUsage();
 }
 
 // The default production factory for CPUMeasurementDelegateImpl objects.
@@ -74,20 +66,17 @@ class CPUMeasurementDelegateFactoryImpl final
 
 bool CPUMeasurementDelegateFactoryImpl::ShouldMeasureProcess(
     const ProcessNode* process_node) {
-  // The process start time is not available until the ProcessId is assigned.
-  if (process_node->GetProcessId() == base::kNullProcessId) {
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, sandbox restrictions prevent the browser process from reading
+  // /proc/<pid>/stat of other processes. Bail out early to avoid the overhead
+  // of trying and failing to read the file.
+  // TODO(crbug.com/421901748): Implement CPU measurement of child processes on
+  // Android.
+  if (process_node->GetProcessId() != base::GetCurrentProcId()) {
     return false;
   }
-  // This can be called from OnProcessLifetimeChange after a process exits.
-  // Only handle process start notifications (which is when the pid is
-  // assigned), not exit notifications. Note the pid can be reassigned if a
-  // process dies and a new one is started for the same ProcessNode - in that
-  // case MonitorCPUUsage will reset the measurements and start monitoring the
-  // new process from scratch.
-  if (!process_node->GetProcess().IsValid()) {
-    return false;
-  }
-  return true;
+#endif
+  return ProcessNodeHasRunningProcess(process_node);
 }
 
 std::unique_ptr<CPUMeasurementDelegate>
@@ -113,6 +102,25 @@ void CPUMeasurementDelegate::SetDelegateFactoryForTesting(Graph* graph,
 CPUMeasurementDelegate::Factory* CPUMeasurementDelegate::GetDefaultFactory() {
   static base::NoDestructor<CPUMeasurementDelegateFactoryImpl> default_factory;
   return default_factory.get();
+}
+
+// static
+bool CPUMeasurementDelegate::Factory::ProcessNodeHasRunningProcess(
+    const performance_manager::ProcessNode* process_node) {
+  // The process start time is not available until the ProcessId is assigned.
+  if (process_node->GetProcessId() == base::kNullProcessId) {
+    return false;
+  }
+  // ShouldMeasureProcess() can be called from OnProcessLifetimeChange after a
+  // process exits. Only handle process start notifications (which is when the
+  // pid is assigned), not exit notifications. Note the pid can be reassigned if
+  // a process dies and a new one is started for the same ProcessNode - in that
+  // case MonitorCPUUsage will reset the measurements and start monitoring the
+  // new process from scratch.
+  if (!process_node->GetProcess().IsValid()) {
+    return false;
+  }
+  return true;
 }
 
 }  // namespace resource_attribution

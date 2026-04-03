@@ -23,10 +23,10 @@
 #include <memory>
 #include <vector>
 
-#include "perfetto/ext/base/string_utils.h"
 #include "perfetto/ext/base/http/http_server.h"
+#include "perfetto/ext/base/lock_free_task_runner.h"
+#include "perfetto/ext/base/string_utils.h"
 #include "perfetto/ext/base/unix_socket.h"
-#include "perfetto/ext/base/unix_task_runner.h"
 #include "perfetto/tracing/default_socket.h"
 
 namespace perfetto {
@@ -60,7 +60,7 @@ class WSBridge : public base::HttpRequestHandler,
  private:
   base::HttpServerConnection* GetWebsocket(base::UnixSocket*);
 
-  base::UnixTaskRunner task_runner_;
+  base::MaybeLockFreeTaskRunner task_runner_;
   std::vector<Endpoint> endpoints_;
   std::map<base::HttpServerConnection*, std::unique_ptr<base::UnixSocket>>
       conns_;
@@ -86,16 +86,18 @@ void WSBridge::Main(int, char**) {
   } else {
     adb_socket_endpoint = "127.0.0.1:5037";
   }
-  PERFETTO_LOG("[WSBridge] adb server socket is:%s.", adb_socket_endpoint.c_str());
+  PERFETTO_LOG("[WSBridge] adb server socket is:%s.",
+               adb_socket_endpoint.c_str());
   endpoints_.push_back({"/traced", GetConsumerSocket(), kTracedFamily});
-  endpoints_.push_back({"/adb", adb_socket_endpoint.c_str(), base::SockFamily::kInet});
+  endpoints_.push_back(
+      {"/adb", adb_socket_endpoint.c_str(), base::SockFamily::kInet});
 
   base::HttpServer srv(&task_runner_, this);
   srv.AddAllowedOrigin("http://localhost:10000");
   srv.AddAllowedOrigin("http://127.0.0.1:10000");
   srv.AddAllowedOrigin("https://ui.perfetto.dev");
 
-  srv.Start(kWebsocketPort);
+  srv.Start("localhost", kWebsocketPort);
   PERFETTO_LOG("[WSBridge] Listening on 127.0.0.1:%d", kWebsocketPort);
   task_runner_.Run();
 }

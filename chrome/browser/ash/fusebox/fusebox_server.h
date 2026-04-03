@@ -5,7 +5,10 @@
 #ifndef CHROME_BROWSER_ASH_FUSEBOX_FUSEBOX_SERVER_H_
 #define CHROME_BROWSER_ASH_FUSEBOX_FUSEBOX_SERVER_H_
 
+#include <functional>
+#include <map>
 #include <string>
+#include <variant>
 
 #include "base/containers/circular_deque.h"
 #include "base/files/file.h"
@@ -20,7 +23,6 @@
 #include "chrome/browser/ash/system_web_apps/apps/files_internals_debug_json_provider.h"
 #include "storage/browser/file_system/async_file_util.h"
 #include "storage/browser/file_system/file_system_context.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
 
 class Profile;
 
@@ -72,7 +74,7 @@ class Server : public ash::FilesInternalsDebugJSONProvider {
   // It returns an invalid storage::FileSystemURL if the filename doesn't match
   // "/media/fuse/fusebox/subdir/etc" or the "subdir" wasn't registered.
   storage::FileSystemURL ResolveFilename(Profile* profile,
-                                         const std::string& filename);
+                                         std::string_view filename);
 
   // Performs the inverse of ResolveFilename. It converts a FileSystemURL like
   // "filesystem:origin/external/mount_name/xxx/yyy/p/q.txt" to a FuseBox
@@ -225,7 +227,7 @@ class Server : public ash::FilesInternalsDebugJSONProvider {
   using PendingFlush = std::pair<FlushRequestProto, FlushCallback>;
   using PendingRead2 = std::pair<Read2RequestProto, Read2Callback>;
   using PendingWrite2 = std::pair<Write2RequestProto, Write2Callback>;
-  using PendingOp = absl::variant<PendingFlush, PendingRead2, PendingWrite2>;
+  using PendingOp = std::variant<PendingFlush, PendingRead2, PendingWrite2>;
 
   struct FuseFileMapEntry {
     FuseFileMapEntry(scoped_refptr<storage::FileSystemContext> fs_context_arg,
@@ -273,7 +275,7 @@ class Server : public ash::FilesInternalsDebugJSONProvider {
   // storage::FileSystemURL.
   //
   // Neither subdir nor fs_url_prefix should have a trailing slash.
-  using PrefixMap = std::map<std::string, PrefixMapEntry>;
+  using PrefixMap = std::map<std::string, PrefixMapEntry, std::less<>>;
 
   struct ReadDir2MapEntry {
     explicit ReadDir2MapEntry(ReadDir2Callback callback);

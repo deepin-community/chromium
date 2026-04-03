@@ -3,12 +3,15 @@
 // found in the LICENSE file.
 
 #include "services/network/network_service_proxy_delegate.h"
-#include "base/containers/contains.h"
+
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/strcat.h"
+#include "base/types/expected.h"
+#include "net/base/completion_once_callback.h"
 #include "net/base/features.h"
+#include "net/base/net_errors.h"
 #include "net/base/proxy_chain.h"
 #include "net/base/proxy_server.h"
 #include "net/base/url_util.h"
@@ -16,6 +19,7 @@
 #include "net/http/http_util.h"
 #include "net/proxy_resolution/proxy_info.h"
 #include "net/proxy_resolution/proxy_resolution_service.h"
+#include "net/proxy_resolution/proxy_retry_info.h"
 #include "services/network/url_loader.h"
 #include "url/url_constants.h"
 
@@ -66,7 +70,6 @@ bool RulesContainsProxy(const net::ProxyConfig::ProxyRules& proxy_rules,
   }
 
   NOTREACHED();
-  return false;
 }
 
 bool IsValidCustomProxyConfig(const mojom::CustomProxyConfig& config) {
@@ -83,7 +86,6 @@ bool IsValidCustomProxyConfig(const mojom::CustomProxyConfig& config) {
   }
 
   NOTREACHED();
-  return false;
 }
 
 // Merges headers from |in| to |out|. If the header already exists in |out| they
@@ -91,9 +93,9 @@ bool IsValidCustomProxyConfig(const mojom::CustomProxyConfig& config) {
 void MergeRequestHeaders(net::HttpRequestHeaders* out,
                          const net::HttpRequestHeaders& in) {
   for (net::HttpRequestHeaders::Iterator it(in); it.GetNext();) {
-    std::string old_value;
-    if (out->GetHeader(it.name(), &old_value)) {
-      out->SetHeader(it.name(), old_value + ", " + it.value());
+    std::optional<std::string> old_value = out->GetHeader(it.name());
+    if (old_value) {
+      out->SetHeader(it.name(), *old_value + ", " + it.value());
     } else {
       out->SetHeader(it.name(), it.value());
     }
@@ -133,8 +135,6 @@ void NetworkServiceProxyDelegate::OnResolveProxy(
     const std::string& method,
     const net::ProxyRetryInfoMap& proxy_retry_info,
     net::ProxyInfo* result) {
-  // At this point, this delegate is not supporting IP protection, so apply the
-  // `proxy_config_` as usual.
   if (!EligibleForProxy(*result, method)) {
     return;
   }
@@ -147,6 +147,9 @@ void NetworkServiceProxyDelegate::OnResolveProxy(
   }
 }
 
+void NetworkServiceProxyDelegate::OnSuccessfulRequestAfterFailures(
+    const net::ProxyRetryInfoMap& proxy_retry_info) {}
+
 void NetworkServiceProxyDelegate::OnFallback(const net::ProxyChain& bad_chain,
                                              int net_error) {
   if (observer_) {
@@ -154,23 +157,27 @@ void NetworkServiceProxyDelegate::OnFallback(const net::ProxyChain& bad_chain,
   }
 }
 
-void NetworkServiceProxyDelegate::OnBeforeTunnelRequest(
+base::expected<net::HttpRequestHeaders, net::Error>
+NetworkServiceProxyDelegate::OnBeforeTunnelRequest(
     const net::ProxyChain& proxy_chain,
-    size_t chain_index,
-    net::HttpRequestHeaders* extra_headers) {
+    size_t proxy_index,
+    OnBeforeTunnelRequestCallback callback) {
+  net::HttpRequestHeaders extra_headers;
   if (IsInProxyConfig(proxy_chain)) {
-    MergeRequestHeaders(extra_headers, proxy_config_->connect_tunnel_headers);
+    MergeRequestHeaders(&extra_headers, proxy_config_->connect_tunnel_headers);
   }
+  return extra_headers;
 }
 
 net::Error NetworkServiceProxyDelegate::OnTunnelHeadersReceived(
     const net::ProxyChain& proxy_chain,
-    size_t chain_index,
-    const net::HttpResponseHeaders& response_headers) {
+    size_t proxy_index,
+    const net::HttpResponseHeaders& response_headers,
+    net::CompletionOnceCallback callback) {
   if (observer_) {
     // Copy the response headers since mojo expects a ref counted object.
     observer_->OnTunnelHeadersReceived(
-        proxy_chain, chain_index,
+        proxy_chain, proxy_index,
         base::MakeRefCounted<net::HttpResponseHeaders>(
             response_headers.raw_headers()));
   }
@@ -196,7 +203,7 @@ bool NetworkServiceProxyDelegate::IsInProxyConfig(
     return false;
   }
 
-  // TODO(https://crbug.com/1491092): Support nested proxies.
+  // TODO(crbug.com/40284947): Support nested proxies.
   if (proxy_chain.is_single_proxy() &&
       RulesContainsProxy(proxy_config_->rules, proxy_chain.First())) {
     return true;
@@ -221,24 +228,6 @@ bool NetworkServiceProxyDelegate::EligibleForProxy(
   }
 
   return true;
-}
-
-net::ProxyList NetworkServiceProxyDelegate::MergeProxyRules(
-    const net::ProxyList& existing_proxy_list,
-    const net::ProxyList& custom_proxy_list) const {
-  net::ProxyList merged_proxy_list;
-  for (const auto& existing_chain : existing_proxy_list.AllChains()) {
-    if (existing_chain.is_direct()) {
-      // Replace direct option with all proxies in the custom proxy list
-      for (const auto& custom_chain : custom_proxy_list.AllChains()) {
-        merged_proxy_list.AddProxyChain(custom_chain);
-      }
-    } else {
-      merged_proxy_list.AddProxyChain(existing_chain);
-    }
-  }
-
-  return merged_proxy_list;
 }
 
 void NetworkServiceProxyDelegate::OnObserverDisconnect() {

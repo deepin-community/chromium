@@ -6,11 +6,10 @@
 #define CC_TILES_CHECKER_IMAGE_TRACKER_H_
 
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
-#include <optional>
-#include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
 #include "cc/cc_export.h"
 #include "cc/paint/image_id.h"
@@ -118,7 +117,7 @@ class CC_EXPORT CheckerImageTracker {
   }
   PaintImage::DecodingMode get_decoding_mode_hint_for_testing(
       PaintImage::Id id) {
-    DCHECK(base::Contains(decoding_mode_map_, id));
+    DCHECK(decoding_mode_map_.contains(id));
     return decoding_mode_map_[id];
   }
 

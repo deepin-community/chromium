@@ -15,9 +15,14 @@ limitations under the License.
 
 #include "tensorflow/core/grappler/graph_analyzer/subgraph.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
+#include <memory>
+#include <utility>
+#include <vector>
 
-#include "absl/memory/memory.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "tensorflow/core/grappler/graph_analyzer/hash_tools.h"
@@ -76,9 +81,9 @@ size_t Subgraph::Identity::Hash() const {
   return result;
 }
 
-string Subgraph::Dump() {
+std::string Subgraph::Dump() {
   // TODO(babkin): this is simplified for now.
-  std::vector<string> nodes;
+  std::vector<std::string> nodes;
   for (const auto& n : id_) {
     if (specific_) {
       nodes.emplace_back(absl::StrFormat("%s(%s)", n->opcode(), n->name()));

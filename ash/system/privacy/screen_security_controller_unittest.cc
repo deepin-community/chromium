@@ -56,10 +56,8 @@ class ScreenSecurityControllerTest : public AshTestBase {
   // AppAccessNotifierBaseTest:
   void SetUp() override {
     // This class is used only when video conference feature is not available.
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{},
-        /*disabled_features=*/{features::kVideoConference,
-                               features::kCameraEffectsSupportedByHardware});
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kFeatureManagementVideoConference);
     AshTestBase::SetUp();
   }
 
@@ -121,25 +119,25 @@ TEST_F(ScreenSecurityControllerTest, NotifyScreenShareStopNoNotification) {
   Shell::Get()->system_tray_notifier()->NotifyRemotingScreenShareStop();
 
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {features::kVideoConference, features::kCameraEffectsSupportedByHardware},
-      {});
+  scoped_feature_list.InitAndEnableFeature(
+      features::kFeatureManagementVideoConference);
   Shell::Get()->system_tray_notifier()->NotifyRemotingScreenShareStop();
 }
 
-// Tests that screen share notifications do not show when VideoConference is
-// enabled.
-TEST_F(ScreenSecurityControllerTest,
-       NoScreenShareNotificationWithVideoConference) {
+// Tests that remoting screen share notification is shown even if video
+// conference feature is enabled. This notification is not handled by the video
+// conference widget. For more info: (b:406034639).
+TEST_F(
+    ScreenSecurityControllerTest,
+    RemotingScreenShareNotificationIsShownEvenIfVideoConferenceFeatureIsEnabled) {
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {features::kVideoConference, features::kCameraEffectsSupportedByHardware},
-      {});
+  scoped_feature_list.InitAndEnableFeature(
+      features::kFeatureManagementVideoConference);
 
   Shell::Get()->system_tray_notifier()->NotifyRemotingScreenShareStart(
       base::DoNothing());
 
-  EXPECT_FALSE(FindNotification(kRemotingScreenShareNotificationId));
+  EXPECT_TRUE(FindNotification(kRemotingScreenShareNotificationId));
 }
 
 // Tests that calling `NotifyScreenAccessStop()` does not crash if called with
@@ -148,9 +146,8 @@ TEST_F(ScreenSecurityControllerTest, NotifyScreenCaptureStopNoNotification) {
   Shell::Get()->system_tray_notifier()->NotifyScreenAccessStop();
 
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {features::kVideoConference, features::kCameraEffectsSupportedByHardware},
-      {});
+  scoped_feature_list.InitAndEnableFeature(
+      features::kFeatureManagementVideoConference);
   Shell::Get()->system_tray_notifier()->NotifyScreenAccessStop();
 }
 
@@ -159,9 +156,8 @@ TEST_F(ScreenSecurityControllerTest, NotifyScreenCaptureStopNoNotification) {
 TEST_F(ScreenSecurityControllerTest,
        ScreenCaptureShowsNotificationWithVideoConference) {
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitWithFeatures(
-      {features::kVideoConference, features::kCameraEffectsSupportedByHardware},
-      {});
+  scoped_feature_list.InitAndEnableFeature(
+      features::kFeatureManagementVideoConference);
 
   Shell::Get()->system_tray_notifier()->NotifyScreenAccessStart(
       base::DoNothing(), base::RepeatingClosure(), std::u16string());

@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2016, Alliance for Open Media. All rights reserved
+# Copyright (c) 2016, Alliance for Open Media. All rights reserved.
 #
 # This source code is subject to the terms of the BSD 2 Clause License and the
 # Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License was
@@ -14,6 +14,7 @@ endif() # AOM_BUILD_CMAKE_AOM_CONFIGURE_CMAKE_
 set(AOM_BUILD_CMAKE_AOM_CONFIGURE_CMAKE_ 1)
 
 include(FindThreads)
+include(CheckSymbolExists)
 
 include("${AOM_ROOT}/build/cmake/aom_config_defaults.cmake")
 include("${AOM_ROOT}/build/cmake/aom_experiment_deps.cmake")
@@ -75,6 +76,8 @@ if(NOT AOM_TARGET_CPU)
     set(AOM_TARGET_CPU "arm64")
   elseif(cpu_lowercase MATCHES "^ppc")
     set(AOM_TARGET_CPU "ppc")
+  elseif(cpu_lowercase MATCHES "^riscv")
+    set(AOM_TARGET_CPU "riscv")
   else()
     message(WARNING "The architecture ${CMAKE_SYSTEM_PROCESSOR} is not "
                     "supported, falling back to the generic target")
@@ -190,7 +193,7 @@ elseif(AOM_TARGET_CPU MATCHES "arm")
     set(AOM_AS_FLAGS -arch ${AOM_TARGET_CPU} -isysroot ${CMAKE_OSX_SYSROOT})
   elseif(AOM_TARGET_SYSTEM STREQUAL "Windows")
     if(NOT CMAKE_ASM_COMPILER)
-      set(CMAKE_ASM_COMPILER ${CMAKE_C_COMPILER} -c -mimplicit-it=always)
+      set(CMAKE_ASM_COMPILER ${CMAKE_C_COMPILER} "-c -mimplicit-it=always")
     endif()
   else()
     if(NOT CMAKE_ASM_COMPILER)
@@ -237,6 +240,7 @@ if(AOM_TARGET_SYSTEM MATCHES "Darwin\|Linux\|Windows\|Android")
   set(CONFIG_OS_SUPPORT 1)
 endif()
 
+# Define macros that affect Windows headers.
 if(AOM_TARGET_SYSTEM STREQUAL "Windows")
   # The default _WIN32_WINNT value in MinGW is 0x0502 (Windows XP with SP2). Set
   # it to 0x0601 (Windows 7).
@@ -250,13 +254,19 @@ endif()
 # ensure RTCD_CONFIG_* are properly set.
 fix_experiment_configs()
 
-# Test compiler support.
-aom_get_inline("INLINE")
-
 # Don't just check for pthread.h, but use the result of the full pthreads
 # including a linking check in FindThreads above.
 set(HAVE_PTHREAD_H ${CMAKE_USE_PTHREADS_INIT})
 aom_check_source_compiles("unistd_check" "#include <unistd.h>" HAVE_UNISTD_H)
+
+if(HAVE_PTHREAD_H)
+  # Check for pthread setname_np API
+  aom_push_var(CMAKE_REQUIRED_DEFINITIONS "-D_GNU_SOURCE")
+  check_symbol_exists(pthread_setname_np pthread.h _HAS_PTHREAD_SETNAME_NP)
+  aom_pop_var(CMAKE_REQUIRED_DEFINITIONS)
+
+  set(HAVE_PTHREAD_SETNAME_NP ${_HAS_PTHREAD_SETNAME_NP})
+endif()
 
 if(NOT WIN32)
   aom_push_var(CMAKE_REQUIRED_LIBRARIES "m")
@@ -301,9 +311,8 @@ endif()
 
 # Test compiler flags.
 if(MSVC)
-  # It isn't possible to specify C99 conformance for MSVC. MSVC doesn't support
-  # C++ standards modes earlier than C++14.
-  add_cxx_flag_if_supported("/std:c++14")
+  # It isn't possible to specify C99 conformance for MSVC.
+  add_cxx_flag_if_supported("/std:c++17")
   add_compiler_flag_if_supported("/W3")
 
   # Disable MSVC warnings that suggest making code non-portable.
@@ -311,21 +320,17 @@ if(MSVC)
   if(ENABLE_WERROR)
     add_compiler_flag_if_supported("/WX")
   endif()
+
+  # Compile source files in parallel
+  add_compiler_flag_if_supported("/MP")
 else()
   require_c_flag("-std=c99" YES)
-  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
-     AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU"
-     AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
-    # Microsoft's C++ Standard Library requires C++14 as it's MSVC's default and
-    # minimum supported C++ version. If Clang is using this Standard Library
-    # implementation, it cannot target C++11.
-    require_cxx_flag_nomsvc("-std=c++14" YES)
-  elseif(CYGWIN AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    # The GNU C++ compiler in Cygwin needs the -std=gnu++11 flag to make the
+  if(CYGWIN AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # The GNU C++ compiler in Cygwin needs the -std=gnu++* flag to make the
     # POSIX function declarations visible in the Standard C Library headers.
-    require_cxx_flag_nomsvc("-std=gnu++11" YES)
+    require_cxx_flag_nomsvc("-std=gnu++17" YES)
   else()
-    require_cxx_flag_nomsvc("-std=c++11" YES)
+    require_cxx_flag_nomsvc("-std=c++17" YES)
   endif()
   add_compiler_flag_if_supported("-Wall")
   add_compiler_flag_if_supported("-Wdisabled-optimization")
@@ -346,19 +351,25 @@ else()
   add_compiler_flag_if_supported("-Wformat=2")
   add_c_flag_if_supported("-Wimplicit-function-declaration")
   add_compiler_flag_if_supported("-Wlogical-op")
+  add_compiler_flag_if_supported("-Wmissing-declarations")
+  if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+    add_compiler_flag_if_supported("-Wmissing-prototypes")
+  else()
+    add_c_flag_if_supported("-Wmissing-prototypes")
+  endif()
   add_compiler_flag_if_supported("-Wpointer-arith")
   add_compiler_flag_if_supported("-Wshadow")
   add_compiler_flag_if_supported("-Wshorten-64-to-32")
   add_compiler_flag_if_supported("-Wsign-compare")
   add_compiler_flag_if_supported("-Wstring-conversion")
   add_compiler_flag_if_supported("-Wtype-limits")
+  add_compiler_flag_if_supported("-Wundef")
   add_compiler_flag_if_supported("-Wuninitialized")
   add_compiler_flag_if_supported("-Wunreachable-code-aggressive")
   add_compiler_flag_if_supported("-Wunused")
   add_compiler_flag_if_supported("-Wvla")
-  add_cxx_flag_if_supported("-Wc++14-extensions")
-  add_cxx_flag_if_supported("-Wc++17-extensions")
   add_cxx_flag_if_supported("-Wc++20-extensions")
+  add_cxx_flag_if_supported("-Wc++23-extensions")
 
   if(CMAKE_C_COMPILER_ID MATCHES "GNU" AND SANITIZE MATCHES "address|undefined")
 
@@ -378,9 +389,6 @@ else()
     # Disable no optimization warning when compiling with sanitizers
     add_compiler_flag_if_supported("-Wno-disabled-optimization")
   endif()
-
-  # Add -Wundef only for C files to avoid massive gtest warning spam.
-  add_c_flag_if_supported("-Wundef")
 
   # Quiet gcc 6 vs 7 abi warnings:
   # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=77728

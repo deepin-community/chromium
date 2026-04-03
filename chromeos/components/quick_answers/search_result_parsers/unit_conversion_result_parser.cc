@@ -4,10 +4,10 @@
 
 #include "chromeos/components/quick_answers/search_result_parsers/unit_conversion_result_parser.h"
 
+#include <algorithm>
 #include <string>
 
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chromeos/components/quick_answers/utils/quick_answers_utils.h"
@@ -17,13 +17,11 @@
 namespace quick_answers {
 namespace {
 
-using base::Value;
-
 constexpr double kPreferredRatioRange = 100;
 constexpr int kMaxAlternativeUnitsNumber = 4;
 
 std::optional<ConversionRule> CreateConversionRule(
-    const Value::Dict& unit,
+    const base::DictValue& unit,
     const std::string& category) {
   const std::string* unit_name = unit.FindStringByDottedPath(kNamePath);
   if (!unit_name) {
@@ -37,24 +35,24 @@ std::optional<ConversionRule> CreateConversionRule(
 }
 
 std::vector<UnitConversion> ParseAlternativeUnitConversions(
-    const Value::Dict& result,
+    const base::DictValue& result,
     const UnitConversion& unit_conversion) {
   std::vector<UnitConversion> alternative_unit_conversions;
 
-  const Value::List* rule = result.FindListByDottedPath(kRuleSetPath);
+  const base::ListValue* rule = result.FindListByDottedPath(kRuleSetPath);
   if (!rule) {
     return alternative_unit_conversions;
   }
 
   UnitConverter converter(*rule);
-  const Value::List* possible_units =
+  const base::ListValue* possible_units =
       converter.GetPossibleUnitsForCategory(unit_conversion.category());
   if (!possible_units) {
     return alternative_unit_conversions;
   }
 
-  for (const Value& unit : *possible_units) {
-    const Value::Dict& unit_dict = unit.GetDict();
+  for (const base::Value& unit : *possible_units) {
+    const base::DictValue& unit_dict = unit.GetDict();
     const std::string* unit_name = unit_dict.FindStringByDottedPath(kNamePath);
     // Filter out the source and destination units.
     if (!unit_name || *unit_name == unit_conversion.source_rule().unit_name() ||
@@ -81,7 +79,7 @@ std::vector<UnitConversion> ParseAlternativeUnitConversions(
   // Sort |alternative_unit_conversions| from lowest to highest linear
   // conversion rates, then limit the vector size to
   // |kMaxAlternativeUnitsNumber| results.
-  base::ranges::sort(alternative_unit_conversions);
+  std::ranges::sort(alternative_unit_conversions);
   if (alternative_unit_conversions.size() > kMaxAlternativeUnitsNumber) {
     alternative_unit_conversions.erase(
         alternative_unit_conversions.begin() + kMaxAlternativeUnitsNumber,
@@ -94,7 +92,7 @@ std::vector<UnitConversion> ParseAlternativeUnitConversions(
 }  // namespace
 
 // Extract |quick_answer| from unit conversion result.
-bool UnitConversionResultParser::Parse(const Value::Dict& result,
+bool UnitConversionResultParser::Parse(const base::DictValue& result,
                                        QuickAnswer* quick_answer) {
   std::unique_ptr<StructuredResult> structured_result =
       ParseInStructuredResult(result);
@@ -106,7 +104,8 @@ bool UnitConversionResultParser::Parse(const Value::Dict& result,
 }
 
 std::unique_ptr<StructuredResult>
-UnitConversionResultParser::ParseInStructuredResult(const Value::Dict& result) {
+UnitConversionResultParser::ParseInStructuredResult(
+    const base::DictValue& result) {
   std::unique_ptr<UnitConversionResult> unit_conversion_result =
       std::make_unique<UnitConversionResult>();
 
@@ -135,13 +134,14 @@ UnitConversionResultParser::ParseInStructuredResult(const Value::Dict& result) {
   unit_conversion_result->source_amount = source_amount.value();
 
   std::optional<ConversionRule> source_rule;
-  const Value::Dict* source_unit = result.FindDictByDottedPath(kSourceUnitPath);
+  const base::DictValue* source_unit =
+      result.FindDictByDottedPath(kSourceUnitPath);
   if (source_unit) {
     source_rule = CreateConversionRule(*source_unit, *category);
   }
 
   std::optional<ConversionRule> dest_rule;
-  const Value::Dict* dest_unit = result.FindDictByDottedPath(kDestUnitPath);
+  const base::DictValue* dest_unit = result.FindDictByDottedPath(kDestUnitPath);
   if (dest_unit) {
     dest_rule = CreateConversionRule(*dest_unit, *category);
   }
@@ -157,7 +157,7 @@ UnitConversionResultParser::ParseInStructuredResult(const Value::Dict& result) {
     const std::optional<double> ratio = GetRatio(source_amount, dest_amount);
 
     if (ratio && ratio.value() > kPreferredRatioRange) {
-      const Value::List* rule = result.FindListByDottedPath(kRuleSetPath);
+      const base::ListValue* rule = result.FindListByDottedPath(kRuleSetPath);
       if (rule) {
         UnitConverter converter(*rule);
         dest_unit =

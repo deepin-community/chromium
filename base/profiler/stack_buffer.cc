@@ -6,6 +6,8 @@
 
 #include <bit>
 
+#include "base/compiler_specific.h"
+
 #if BUILDFLAG(IS_CHROMEOS)
 #include <sys/mman.h>
 
@@ -33,8 +35,8 @@ void StackBuffer::MarkUpperBufferContentsAsUnneeded(size_t retained_bytes) {
   // discard large amounts of memory causing weird crashes.
   CHECK_LE(actual_retained_bytes, size_);
 
-  uint8_t* start_of_discard =
-      reinterpret_cast<uint8_t*>(buffer_.get()) + actual_retained_bytes;
+  uint8_t* start_of_discard = UNSAFE_TODO(
+      reinterpret_cast<uint8_t*>(buffer_.get()) + actual_retained_bytes);
   size_t discard_size = size_ - actual_retained_bytes;
   int result = madvise(start_of_discard, discard_size, MADV_DONTNEED);
 

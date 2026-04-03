@@ -12,13 +12,12 @@
 #include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/notimplemented.h"
 #include "base/values.h"
 #include "chromeos/ash/components/quick_start/quick_start_message.h"
 #include "chromeos/ash/components/quick_start/quick_start_message_type.h"
 #include "chromeos/ash/components/quick_start/quick_start_metrics.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder.mojom.h"
-#include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom-forward.h"
-#include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom-shared.h"
 #include "chromeos/ash/services/nearby/public/mojom/quick_start_decoder_types.mojom.h"
 #include "components/cbor/reader.h"
 #include "components/cbor/values.h"
@@ -104,12 +103,12 @@ std::pair<int, std::optional<cbor::Value>> CborDecodeGetAssertionResponse(
 }
 
 std::string FindInstanceIdInBootstrapConfigurations(
-    const base::Value::Dict& payload) {
-  const base::Value::Dict* bootstrap_configurations =
+    const base::DictValue& payload) {
+  const base::DictValue* bootstrap_configurations =
       payload.FindDict(kBootstrapConfigurationsKey);
   CHECK(bootstrap_configurations);
 
-  const base::Value::Dict* device_details =
+  const base::DictValue* device_details =
       bootstrap_configurations->FindDict(kDeviceDetailsKey);
   if (!device_details) {
     LOG(WARNING) << "DeviceDetails not found within BootstrapConfigurations.";
@@ -121,13 +120,12 @@ std::string FindInstanceIdInBootstrapConfigurations(
   return instance_id_ptr ? *instance_id_ptr : "";
 }
 
-std::string FindEmailInBootstrapConfigurations(
-    const base::Value::Dict& payload) {
-  const base::Value::Dict* bootstrap_configurations =
+std::string FindEmailInBootstrapConfigurations(const base::DictValue& payload) {
+  const base::DictValue* bootstrap_configurations =
       payload.FindDict(kBootstrapConfigurationsKey);
   CHECK(bootstrap_configurations);
 
-  const base::Value::List* accounts =
+  const base::ListValue* accounts =
       bootstrap_configurations->FindList(kBootstrapAccountsKey);
   if (!accounts) {
     LOG(WARNING)
@@ -140,7 +138,7 @@ std::string FindEmailInBootstrapConfigurations(
     return "";
   }
 
-  const base::Value::Dict* first_account = accounts->front().GetIfDict();
+  const base::DictValue* first_account = accounts->front().GetIfDict();
   if (!first_account) {
     LOG(WARNING) << "Invalid value for account received from source device.";
     return "";
@@ -156,8 +154,8 @@ std::string FindEmailInBootstrapConfigurations(
 }
 
 bool FindIsSupervisedAccountInBootstrapConfigurations(
-    const base::Value::Dict& payload) {
-  const base::Value::Dict* second_device_auth_payload =
+    const base::DictValue& payload) {
+  const base::DictValue* second_device_auth_payload =
       payload.FindDict(kSecondDeviceAuthPayloadKey);
   if (!second_device_auth_payload) {
     LOG(WARNING) << "SecondDeviceAuthPayload not found in "
@@ -225,7 +223,7 @@ QuickStartDecoder::DoDecodeQuickStartMessage(const std::vector<uint8_t>& data) {
     }
   }
 
-  base::Value::Dict* payload = read_result.value()->GetPayload();
+  base::DictValue* payload = read_result.value()->GetPayload();
   QuickStartMessageType type = read_result.value()->get_type();
   switch (type) {
     case QuickStartMessageType::kSecondDeviceAuthPayload:
@@ -246,7 +244,7 @@ QuickStartDecoder::DoDecodeQuickStartMessage(const std::vector<uint8_t>& data) {
 
 base::expected<mojom::QuickStartMessagePtr, mojom::QuickStartDecoderError>
 QuickStartDecoder::DecodeSecondDeviceAuthPayload(
-    const base::Value::Dict& payload) {
+    const base::DictValue& payload) {
   const std::string* fido_message = payload.FindString(kFidoMessageKey);
   if (!fido_message) {
     LOG(ERROR) << "fidoMessage cannot be found within secondDeviceAuthPayload.";
@@ -274,8 +272,7 @@ QuickStartDecoder::DecodeSecondDeviceAuthPayload(
         mojom::QuickStartDecoderError::kMessageDoesNotMatchSchema);
   }
   uint8_t ctap_status = response_bytes[0];
-  base::span<const uint8_t> cbor_bytes(response_bytes);
-  cbor_bytes = cbor_bytes.subspan(1);
+  auto cbor_bytes = base::as_byte_span(response_bytes).subspan<1>();
   if (ctap_status != kCtapDeviceResponseSuccess) {
     LOG(ERROR) << "Ctap Device Response Status Code is not Success(0x00). Got: "
                << ctap_status;
@@ -371,7 +368,7 @@ QuickStartDecoder::DecodeSecondDeviceAuthPayload(
 }
 
 base::expected<mojom::QuickStartMessagePtr, mojom::QuickStartDecoderError>
-QuickStartDecoder::DecodeQuickStartPayload(const base::Value::Dict& payload) {
+QuickStartDecoder::DecodeQuickStartPayload(const base::DictValue& payload) {
   // user verification requested
   std::optional<bool> is_awaiting_user_verification;
   if ((is_awaiting_user_verification =
@@ -418,7 +415,7 @@ QuickStartDecoder::DecodeQuickStartPayload(const base::Value::Dict& payload) {
   }
 
   // wifi credentials
-  const base::Value::Dict* wifi_network_information = nullptr;
+  const base::DictValue* wifi_network_information = nullptr;
   if ((wifi_network_information =
            payload.FindDict(kWifiNetworkInformationKey))) {
     return DecodeWifiCredentials(*wifi_network_information);
@@ -439,7 +436,7 @@ QuickStartDecoder::DecodeQuickStartPayload(const base::Value::Dict& payload) {
 
 base::expected<mojom::QuickStartMessagePtr, mojom::QuickStartDecoderError>
 QuickStartDecoder::DecodeWifiCredentials(
-    const base::Value::Dict& wifi_network_information) {
+    const base::DictValue& wifi_network_information) {
   const std::string* ssid =
       wifi_network_information.FindString(kWifiNetworkSsidKey);
   if (!ssid) {
@@ -535,7 +532,7 @@ QuickStartDecoder::DecodeWifiCredentials(
 
 base::expected<mojom::QuickStartMessagePtr, mojom::QuickStartDecoderError>
 QuickStartDecoder::DecodeBootstrapConfigurations(
-    const base::Value::Dict& payload) {
+    const base::DictValue& payload) {
   return mojom::QuickStartMessage::NewBootstrapConfigurations(
       mojom::BootstrapConfigurations::New(
           FindInstanceIdInBootstrapConfigurations(payload),

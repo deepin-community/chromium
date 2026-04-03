@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,14 @@ import * as Common from '../../core/common/common.js';
 import type * as Platform from '../../core/platform/platform.js';
 import * as UI from '../../ui/legacy/legacy.js';
 
-import {type ResourcesPanel} from './ResourcesPanel.js';
+import type {ResourcesPanel} from './ResourcesPanel.js';
 
 export class ApplicationPanelTreeElement extends UI.TreeOutline.TreeElement {
   protected readonly resourcesPanel: ResourcesPanel;
+  private customItemURL?: Platform.DevToolsPath.UrlString;
 
-  constructor(resourcesPanel: ResourcesPanel, title: string, expandable: boolean) {
-    super(title, expandable);
+  constructor(resourcesPanel: ResourcesPanel, title: string, expandable: boolean, jslogContext: string) {
+    super(title, expandable, jslogContext);
     this.resourcesPanel = resourcesPanel;
     UI.ARIAUtils.setLabel(this.listItemElement, title);
     this.listItemElement.tabIndex = -1;
@@ -24,7 +25,14 @@ export class ApplicationPanelTreeElement extends UI.TreeOutline.TreeElement {
   }
 
   get itemURL(): Platform.DevToolsPath.UrlString {
+    if (this.customItemURL) {
+      return this.customItemURL;
+    }
     throw new Error('Unimplemented Method');
+  }
+
+  set itemURL(value: Platform.DevToolsPath.UrlString) {
+    this.customItemURL = value;
   }
 
   override onselect(selectedByUser: boolean|undefined): boolean {
@@ -55,16 +63,29 @@ export class ExpandableApplicationPanelTreeElement extends ApplicationPanelTreeE
   protected readonly categoryName: string;
   protected categoryLink: Platform.DevToolsPath.UrlString|null;
 
-  constructor(resourcesPanel: ResourcesPanel, categoryName: string, settingsKey: string, settingsDefault = false) {
-    super(resourcesPanel, categoryName, false);
+  // These strings are used for the empty state in each top most tree element
+  // in the Application Panel.
+  protected emptyCategoryHeadline: string;
+  protected categoryDescription: string;
+
+  constructor(
+      resourcesPanel: ResourcesPanel, categoryName: string, emptyCategoryHeadline: string, categoryDescription: string,
+      settingsKey: string, settingsDefault = false) {
+    super(resourcesPanel, categoryName, false, settingsKey);
     this.expandedSetting =
         Common.Settings.Settings.instance().createSetting('resources-' + settingsKey + '-expanded', settingsDefault);
     this.categoryName = categoryName;
     this.categoryLink = null;
+    this.emptyCategoryHeadline = emptyCategoryHeadline;
+    this.categoryDescription = categoryDescription;
   }
 
   override get itemURL(): Platform.DevToolsPath.UrlString {
     return 'category://' + this.categoryName as Platform.DevToolsPath.UrlString;
+  }
+
+  override set itemURL(value: Platform.DevToolsPath.UrlString) {
+    super.itemURL = value;
   }
 
   setLink(link: Platform.DevToolsPath.UrlString): void {
@@ -73,8 +94,31 @@ export class ExpandableApplicationPanelTreeElement extends ApplicationPanelTreeE
 
   override onselect(selectedByUser: boolean|undefined): boolean {
     super.onselect(selectedByUser);
-    this.resourcesPanel.showCategoryView(this.categoryName, this.categoryLink);
+    this.updateCategoryView();
     return false;
+  }
+
+  private updateCategoryView(): void {
+    const headline = this.childCount() === 0 ? this.emptyCategoryHeadline : this.categoryName;
+    this.resourcesPanel.showCategoryView(this.categoryName, headline, this.categoryDescription, this.categoryLink);
+  }
+
+  override appendChild(
+      child: UI.TreeOutline.TreeElement,
+      comparator?: ((arg0: UI.TreeOutline.TreeElement, arg1: UI.TreeOutline.TreeElement) => number)|undefined): void {
+    super.appendChild(child, comparator);
+    // Only update if relevant (changing from 0 to 1 child).
+    if (this.selected && this.childCount() === 1) {
+      this.updateCategoryView();
+    }
+  }
+
+  override removeChild(child: UI.TreeOutline.TreeElement): void {
+    super.removeChild(child);
+    // Only update if relevant (changing to 0 children).
+    if (this.selected && this.childCount() === 0) {
+      this.updateCategoryView();
+    }
   }
 
   override onattach(): void {

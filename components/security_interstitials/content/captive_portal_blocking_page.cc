@@ -115,7 +115,7 @@ std::string CaptivePortalBlockingPage::GetWiFiSSID() const {
 }
 
 void CaptivePortalBlockingPage::PopulateInterstitialStrings(
-    base::Value::Dict& load_time_data) {
+    base::DictValue& load_time_data) {
   load_time_data.Set("iconClass", "icon-offline");
   load_time_data.Set("type", "CAPTIVE_PORTAL");
   load_time_data.Set("overridable", false);
@@ -138,7 +138,8 @@ void CaptivePortalBlockingPage::PopulateInterstitialStrings(
 
   std::u16string paragraph;
   if (login_url_.is_empty() ||
-      login_url_.spec() == captive_portal::CaptivePortalDetector::kDefaultURL) {
+      login_url_.spec() ==
+          captive_portal::CaptivePortalDetector::GetDefaultUrl()) {
     // Don't show the login url when it's empty or is the portal detection URL.
     // login_url_ can be empty when:
     // - The captive portal intercepted requests without HTTP redirects, in
@@ -158,7 +159,8 @@ void CaptivePortalBlockingPage::PopulateInterstitialStrings(
   } else {
     // Portal redirection was done with HTTP redirects, so show the login URL.
     // If |languages| is empty, punycode in |login_host| will always be decoded.
-    std::u16string login_host = url_formatter::IDNToUnicode(login_url_.host());
+    std::u16string login_host =
+        url_formatter::IDNToUnicode(login_url_.GetHost());
     if (base::i18n::IsRTL())
       base::i18n::WrapStringWithLTRFormatting(&login_host);
 
@@ -181,8 +183,6 @@ void CaptivePortalBlockingPage::PopulateInterstitialStrings(
   load_time_data.Set("closeDetails", "");
   load_time_data.Set("explanationParagraph", "");
   load_time_data.Set("finalParagraph", "");
-  load_time_data.Set("recurrentErrorParagraph", "");
-  load_time_data.Set("show_recurrent_error_paragraph", false);
   load_time_data.Set(security_interstitials::kDisplayCheckBox, false);
 
   PopulateEnhancedProtectionMessage(load_time_data);

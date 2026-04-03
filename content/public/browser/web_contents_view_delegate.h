@@ -17,7 +17,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "content/common/content_export.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 #if defined(__OBJC__)
 #if BUILDFLAG(IS_MAC)
@@ -26,6 +26,7 @@
 #endif
 
 namespace content {
+class NavigationHandle;
 class RenderFrameHost;
 class RenderWidgetHost;
 class WebDragDestDelegate;
@@ -100,6 +101,14 @@ class CONTENT_EXPORT WebContentsViewDelegate {
   // callback once done.
   virtual void OnPerformingDrop(const DropData& drop_data,
                                 DropCompletionCallback callback);
+
+  // Notifies the delegate that the drag operation has ended.
+  virtual void WebContentsDragEnded();
+
+#if BUILDFLAG(IS_ANDROID)
+  virtual bool ShouldShowBlurTransitionAnimation(
+      NavigationHandle* navigation_handle);
+#endif
 };
 
 }  // namespace content

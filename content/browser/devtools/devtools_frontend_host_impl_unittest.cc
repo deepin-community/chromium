@@ -79,7 +79,7 @@ class DevToolsFrontendHostImplTest : public RenderViewHostTestHarness {
     // TestWebContents::Create, the static_casts are safe.
     devtools_frontend_host_impl_ = DevToolsFrontendHostImpl::CreateForTesting(
         static_cast<TestWebContents*>(web_contents())->GetPrimaryMainFrame(),
-        base::RepeatingCallback<void(base::Value::Dict)>());
+        base::RepeatingCallback<void(base::DictValue)>());
 
     process()->Init();
 
@@ -157,6 +157,8 @@ constexpr char DevToolsFrontendHostImplTest::kStackTrace8[];
 constexpr char16_t DevToolsFrontendHostImplTest::kStackTrace16[];
 
 TEST_F(DevToolsFrontendHostImplTest, ErrorNotReportedWhenFeatureIsNotEnabled) {
+  scoped_feature_list_.InitAndDisableFeature(
+      features::kEnableDevToolsJsErrorReporting);
   CallOnDidAddMessageToConsole(main_rfh(),
                                blink::mojom::ConsoleMessageLevel::kError,
                                kMessage16, 5, kSourceURL16, kStackTrace16);

@@ -16,11 +16,13 @@ limitations under the License.
 // This pass forms `tf_executor.island` per replica from a single
 // `tf_device.replicate` island.
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 
+#include "absl/strings/str_cat.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Sequence.h"
@@ -29,10 +31,10 @@ limitations under the License.
 #include "llvm/Support/Casting.h"
 #include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Block.h"  // from @llvm-project
-#include "mlir/IR/IRMapping.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/Diagnostics.h"  // from @llvm-project
 #include "mlir/IR/Dialect.h"  // from @llvm-project
+#include "mlir/IR/IRMapping.h"  // from @llvm-project
 #include "mlir/IR/Visitors.h"  // from @llvm-project
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
@@ -40,10 +42,10 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_executor.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/transforms/passes.h"
-#include "tensorflow/compiler/mlir/tensorflow/translate/split_into_island_per_op_pass.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/attribute_utils.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/device_util.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/tpu_rewrite_device_util.h"
+#include "tensorflow/compiler/mlir/tf2xla/transforms/split_into_island_per_op_pass.h"
 
 namespace mlir {
 namespace TFDevice {
@@ -92,7 +94,8 @@ LogicalResult GetDeviceOrdinal(const std::optional<DictionaryAttr>& devices,
            << " to be present in 'tf.device.replicate' op";
   }
   llvm::StringRef tpu_device =
-      tpu_replica.cast<ArrayAttr>()[replica_id].cast<StringAttr>().getValue();
+      llvm::cast<StringAttr>(llvm::cast<ArrayAttr>(tpu_replica)[replica_id])
+          .getValue();
   return tensorflow::GetDeviceOrdinalFromDeviceString(op->getLoc(), tpu_device,
                                                       &device_ordinal);
 }
@@ -120,10 +123,11 @@ LogicalResult UpdateRegionReplicateVariantOps(
         return failure();
 
       OpBuilder builder(op);
-      auto const_op = builder.create<TF::ConstOp>(
-          op->getLoc(), DenseIntElementsAttr::get(
-                            RankedTensorType::get({}, builder.getI64Type()),
-                            {device_ordinal}));
+      auto const_op = TF::ConstOp::create(
+          builder, op->getLoc(),
+          DenseIntElementsAttr::get(
+              RankedTensorType::get({}, builder.getI64Type()),
+              {device_ordinal}));
       op->replaceAllUsesWith(const_op);
       op->erase();
       return WalkResult::advance();
@@ -134,9 +138,9 @@ LogicalResult UpdateRegionReplicateVariantOps(
     // Map aliased devices to explicit devices based on replica.
     if (auto launch = dyn_cast<tf_device::LaunchOp>(op))
       if (auto device_by_replica = devices.value().get(launch.getDevice()))
-        launch->setAttr(
-            kDeviceAttr,
-            device_by_replica.cast<ArrayAttr>()[replica_id].cast<StringAttr>());
+        launch->setAttr(kDeviceAttr,
+                        llvm::cast<StringAttr>(llvm::cast<ArrayAttr>(
+                            device_by_replica)[replica_id]));
 
     return WalkResult::advance();
   });
@@ -164,16 +168,17 @@ LogicalResult ExpandReplicateIntoReplicas(
 
   // Replace replicate terminator with YieldOp.
   builder.setInsertionPoint(&terminator);
-  builder.create<tf_executor::YieldOp>(terminator.getLoc(),
-                                       terminator.getOperands());
+  tf_executor::YieldOp::create(builder, terminator.getLoc(),
+                               terminator.getOperands());
   terminator.erase();
 
   builder.setInsertionPoint(island_op);
   IRMapping mapping;
   for (int i : llvm::seq<int>(0, num_replicas)) {
     // Create new island for replica.
-    auto replica = builder.create<tf_executor::IslandOp>(
-        island_op.getLoc(), output_types, control_type, replica_inputs);
+    auto replica =
+        tf_executor::IslandOp::create(builder, island_op.getLoc(), output_types,
+                                      control_type, replica_inputs);
 
     // Map block arg to replica arg.
     mapping.clear();
@@ -305,13 +310,13 @@ LogicalResult CreateIslandsFromReplicate(const Dialect* tf_dialect,
       island_operands.push_back(replica.getControl());
 
     builder.setInsertionPoint(island_op);
-    auto island_sink = builder.create<tf_executor::IslandOp>(
-        island_op.getLoc(), llvm::ArrayRef<Type>{},
+    auto island_sink = tf_executor::IslandOp::create(
+        builder, island_op.getLoc(), llvm::ArrayRef<Type>{},
         tf_executor::ControlType::get(island_op.getContext()), island_operands);
     island_sink.getBody().push_back(new Block);
     builder.setInsertionPointToEnd(&island_sink.GetBody());
-    builder.create<tf_executor::YieldOp>(island_op.getLoc(),
-                                         llvm::ArrayRef<Value>{});
+    tf_executor::YieldOp::create(builder, island_op.getLoc(),
+                                 llvm::ArrayRef<Value>{});
     island_op.getControl().replaceAllUsesWith(island_sink.getControl());
   }
 
@@ -329,7 +334,7 @@ LogicalResult CreateIslandsFromReplicate(const Dialect* tf_dialect,
       fetches.append(unused_replica_controls.begin(),
                      unused_replica_controls.end());
       builder.setInsertionPoint(fetch);
-      builder.create<tf_executor::FetchOp>(fetch.getLoc(), fetches);
+      tf_executor::FetchOp::create(builder, fetch.getLoc(), fetches);
       fetch.erase();
     }
   } else {

@@ -137,11 +137,11 @@ bool IsSameYearAndMonth(base::Time ts1, base::Time ts2) {
          (ts1_exploded.month == ts2_exploded.month);
 }
 
-bool IsFirstActiveUnderFourMonthsAgo(base::Time active_ts,
-                                     base::Time first_active_week) {
-  // Simplify calculation to determine whether device was first active
-  // within 4 months in the past. Assume max of 31 days in a month.
-  base::Time starting_point = active_ts - base::Days(4 * 31);
+bool IsFirstActiveUnderNDaysAgo(base::Time active_ts,
+                                base::Time first_active_week,
+                                int num_days) {
+  // Checks for the starting point which is num of days before active_ts.
+  base::Time starting_point = active_ts - base::Days(num_days);
 
   // Check if first_active_week is after the starting point
   return first_active_week >= starting_point;
@@ -160,6 +160,46 @@ std::string TimeToYYYYMMDDString(base::Time ts) {
 std::string TimeToYYYYMMString(base::Time ts) {
   return base::UnlocalizedTimeFormatWithPattern(ts, "yyyyMM",
                                                 icu::TimeZone::getGMT());
+}
+
+// The ActivateDate is formatted: YYYY-WW and is generated based on UTC date
+// using `date +%Y-%W`.
+// For week 00, returns Jan 1st of that year.
+// For weeks 01-53, returns the Monday of that week.
+std::optional<base::Time> VpdActivateDateWeekAsTime(int year,
+                                                    int week_of_year) {
+  if (year < 0 || week_of_year < 0 || week_of_year > 53) {
+    LOG(ERROR) << "Invalid year or week of year"
+               << ". Variable year = " << year
+               << ". Variable week_of_year = " << week_of_year;
+    return std::nullopt;
+  }
+
+  // Get the first day of the year.
+  base::Time::Exploded jan1_exploded = {year, 1, 0, 1, 0, 0, 0, 0};
+  base::Time jan1;
+  if (!base::Time::FromUTCExploded(jan1_exploded, &jan1)) {
+    LOG(ERROR) << "Failed to explode first day of year = " << year;
+    return std::nullopt;
+  }
+
+  // Per `date +%W`, week 00 contains the days from Jan 1st until the first
+  // Monday of the year. We will represent this week by its first day.
+  if (week_of_year == 0) {
+    return jan1;
+  }
+
+  // Get day of week for Jan 1st. (Sunday=0, Monday=1, ..)
+  jan1.UTCExplode(&jan1_exploded);
+  int jan1_day_of_week = jan1_exploded.day_of_week;
+
+  // Get the first Monday of the year. Week 01 starts on this day.
+  int days_to_first_monday = (1 - jan1_day_of_week + 7) % 7;
+  base::Time first_monday_of_year = jan1 + base::Days(days_to_first_monday);
+
+  // Week `week_of_year` starts `(week_of_year - 1)` weeks after the first
+  // Monday.
+  return first_monday_of_year + base::Days((week_of_year - 1) * 7);
 }
 
 std::optional<base::Time> GetFirstActiveWeek() {
@@ -216,16 +256,16 @@ std::optional<base::Time> GetFirstActiveWeek() {
     return std::nullopt;
   }
 
-  auto iso8601_ts =
-      utils::Iso8601DateWeekAsTime(activate_year, activate_week_of_year);
-  if (!iso8601_ts.has_value()) {
-    LOG(ERROR) << "Failed to ISO8601 year and week of year as a timestamp.";
+  auto first_active_ts =
+      VpdActivateDateWeekAsTime(activate_year, activate_week_of_year);
+  if (!first_active_ts.has_value()) {
+    LOG(ERROR) << "Failed to convert year and week of year as a timestamp.";
     RecordIsActivateDateSet(false);
     return std::nullopt;
   }
 
   RecordIsActivateDateSet(true);
-  return iso8601_ts.value();
+  return first_active_ts.value();
 }
 
 std::optional<base::Time> FirstMondayOfISONewYear(int iso_year) {
@@ -266,36 +306,6 @@ std::optional<base::Time> FirstMondayOfISONewYear(int iso_year) {
   return first_monday_ts;
 }
 
-// The ActivateDate is formatted: YYYY-WW and is generated based on UTC date.
-// Returns the first day of the ISO8601 week.
-std::optional<base::Time> Iso8601DateWeekAsTime(int activate_year,
-                                                int activate_week_of_year) {
-  if (activate_year < 0 || activate_week_of_year <= 0 ||
-      activate_week_of_year > 53) {
-    LOG(ERROR) << "Invalid year or week of year"
-               << ". Variable activate_year = " << activate_year
-               << ". Variable activate_week_of_year = "
-               << activate_week_of_year;
-    return std::nullopt;
-  }
-
-  std::optional<base::Time> first_monday_iso_year =
-      FirstMondayOfISONewYear(activate_year);
-
-  if (!first_monday_iso_year.has_value()) {
-    return std::nullopt;
-  }
-
-  // Get the number of days to the start of a ISO 8601 week standard period
-  // for that year from the years first monday. This is equal to
-  // (activate_week_of_year-1) * 7 days.
-  int days_in_iso_period = 0;
-  days_in_iso_period = (activate_week_of_year - 1) * 7;
-
-  // Add the above two steps to get the start of a ISO 8601 week time.
-  return first_monday_iso_year.value() + base::Days(days_in_iso_period);
-}
-
 std::string ConvertTimeToISO8601String(base::Time ts) {
   if (ts.is_null()) {
     LOG(ERROR) << "Timestamp ts is not defined correctly. ts = " << ts;
@@ -319,7 +329,7 @@ std::string ConvertTimeToISO8601String(base::Time ts) {
   // This captures ts for up to the 3 days after the new year that are apart of
   // the previous year last ISO week.
   if (ts < first_monday_iso_year.value()) {
-    return std::to_string(activate_year - 1) + "-52";
+    return base::NumberToString(activate_year - 1) + "-52";
   }
 
   std::optional<base::Time> first_monday_iso_year_next =
@@ -333,7 +343,7 @@ std::string ConvertTimeToISO8601String(base::Time ts) {
   // This captures ts for up to the 3 days before the new year that are apart of
   // the current year first ISO week.
   if (ts >= first_monday_iso_year_next.value()) {
-    return std::to_string(activate_year + 1) + "-01";
+    return base::NumberToString(activate_year + 1) + "-01";
   }
 
   // Calculate the number of days between the given time and the first
@@ -344,9 +354,9 @@ std::string ConvertTimeToISO8601String(base::Time ts) {
   // Calculate the ISO 8601 week number
   int activate_week_of_year = days_difference / 7 + 1;
 
-  return std::to_string(activate_year) + "-" +
+  return base::NumberToString(activate_year) + "-" +
          (activate_week_of_year < 10 ? "0" : "") +
-         std::to_string(activate_week_of_year);
+         base::NumberToString(activate_week_of_year);
 }
 
 }  // namespace ash::report::utils

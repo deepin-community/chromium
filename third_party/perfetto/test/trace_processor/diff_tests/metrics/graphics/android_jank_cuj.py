@@ -172,6 +172,7 @@ def add_actual_surface_frame_events(ts,
                                     token,
                                     cookie=None,
                                     jank=None,
+                                    jank_score=0,
                                     on_time_finish_override=None,
                                     display_frame_token_override=None,
                                     layer_name=LAYER):
@@ -195,19 +196,28 @@ def add_actual_surface_frame_events(ts,
       gpu_composition=0,
       jank_type=jank_type,
       prediction_type=3,
-      layer_name=layer_name)
+      layer_name=layer_name,
+      jank_score=jank_score)
   trace.add_frame_end_event(ts=ts + dur, cookie=100002 + cookie)
 
 
+def add_instant_event_in_thread(trace, ts, buf, pid, tid):
+  trace.add_atrace_instant(ts=ts, tid=tid, pid=pid, buf=buf)
+
+
 trace = synth_common.create_trace()
+first_cuj = "J<FIRST_CUJ>"
+shade_cuj = "J<SHADE_ROW_EXPAND>"
 
 trace.add_packet()
 trace.add_package_list(
     ts=0, name="com.android.systemui", uid=10001, version_code=1)
 trace.add_package_list(ts=0, name="android", uid=1000, version_code=1)
+
 trace.add_process(pid=PID, ppid=1, cmdline="com.android.systemui", uid=10001)
 trace.add_process(
     pid=SF_PID, ppid=1, cmdline="/system/bin/surfaceflinger", uid=1000)
+
 trace.add_thread(
     tid=RTID, tgid=PID, cmdline="RenderThread", name="RenderThread")
 trace.add_thread(
@@ -216,17 +226,36 @@ trace.add_thread(
     tid=JITID, tgid=PID, cmdline="Jit thread pool", name="Jit thread pool")
 trace.add_thread(
     tid=SF_RETID, tgid=SF_PID, cmdline="RenderEngine", name="RenderEngine")
+
 trace.add_process_track_descriptor(PROCESS_TRACK, pid=PID)
 trace.add_track_descriptor(FIRST_CUJ_TRACK, parent=PROCESS_TRACK)
 trace.add_track_descriptor(SHADE_CUJ_TRACK, parent=PROCESS_TRACK)
 trace.add_track_descriptor(CANCELED_CUJ_TRACK, parent=PROCESS_TRACK)
-trace.add_track_event_slice_begin(
-    ts=5, track=FIRST_CUJ_TRACK, name="J<FIRST_CUJ>")
-trace.add_track_event_slice_end(ts=100_000_000, track=FIRST_CUJ_TRACK)
-trace.add_track_event_slice_begin(
-    ts=10, track=SHADE_CUJ_TRACK, name="J<SHADE_ROW_EXPAND>")
-trace.add_track_event_slice_end(ts=901_000_010, track=SHADE_CUJ_TRACK)
-add_instant_for_track(trace, ts=11, track=SHADE_CUJ_TRACK, name="FT#layerId#0")
+trace.add_ftrace_packet(cpu=0)
+
+##############################
+add_instant_event_in_thread(
+    trace, ts=6, buf=first_cuj + "#UIThread", pid=PID, tid=PID)
+
+add_instant_event_in_thread(
+    trace, ts=11, buf=shade_cuj + "#UIThread", pid=PID, tid=PID)
+
+add_instant_for_track(
+    trace, ts=7, track=FIRST_CUJ_TRACK, name="FT#beginVsync#10")
+
+add_instant_for_track(trace, ts=15, track=FIRST_CUJ_TRACK, name="FT#layerId#0")
+
+add_instant_for_track(
+    trace, ts=100_000_000 - 1, track=FIRST_CUJ_TRACK, name="FT#endVsync#90")
+
+add_instant_for_track(
+    trace, ts=12, track=SHADE_CUJ_TRACK, name="FT#beginVsync#10")
+
+add_instant_for_track(trace, ts=20, track=SHADE_CUJ_TRACK, name="FT#layerId#0")
+
+add_instant_for_track(
+    trace, ts=900_000_000 - 1, track=SHADE_CUJ_TRACK, name="FT#endVsync#160")
+##############################
 add_instant_for_track(
     trace,
     ts=950_100_000,
@@ -237,6 +266,11 @@ add_instant_for_track(
     ts=950_100_000,
     track=SHADE_CUJ_TRACK,
     name="FT#MissedSFCallback#150")
+
+trace.add_track_event_slice_begin(ts=5, track=FIRST_CUJ_TRACK, name=first_cuj)
+trace.add_track_event_slice_end(ts=100_000_000, track=FIRST_CUJ_TRACK)
+trace.add_track_event_slice_begin(ts=10, track=SHADE_CUJ_TRACK, name=shade_cuj)
+trace.add_track_event_slice_end(ts=901_000_010, track=SHADE_CUJ_TRACK)
 
 trace.add_track_event_slice_begin(
     ts=100_100_000, track=CANCELED_CUJ_TRACK, name="J<CANCELED>")
@@ -251,6 +285,21 @@ trace.add_atrace_counter(
     ts=150_200_000, tid=PID, pid=PID, buf="J<FIRST_CUJ>#missedAppFrames", cnt=5)
 trace.add_atrace_counter(
     ts=150_300_000, tid=PID, pid=PID, buf="J<FIRST_CUJ>#missedSfFrames", cnt=1)
+trace.add_atrace_counter(
+    ts=150_300_000, tid=PID, pid=PID, buf="J<FIRST_CUJ>#totalAnimTime", cnt=500)
+trace.add_atrace_counter(
+    ts=150_300_000,
+    tid=PID,
+    pid=PID,
+    buf="J<FIRST_CUJ>#weightedAppJank",
+    cnt=225)
+trace.add_atrace_counter(
+    ts=150_300_000,
+    tid=PID,
+    pid=PID,
+    buf="J<FIRST_CUJ>#weightedSfJank",
+    cnt=421)
+
 trace.add_atrace_counter(
     ts=150_400_000,
     tid=PID,
@@ -288,6 +337,24 @@ trace.add_atrace_counter(
     pid=PID,
     buf="J<SHADE_ROW_EXPAND>#maxSuccessiveMissedFrames",
     cnt=5)
+trace.add_atrace_counter(
+    ts=950_300_000,
+    tid=PID,
+    pid=PID,
+    buf="J<SHADE_ROW_EXPAND>#totalAnimTime",
+    cnt=250)
+trace.add_atrace_counter(
+    ts=950_300_000,
+    tid=PID,
+    pid=PID,
+    buf="J<SHADE_ROW_EXPAND>#weightedAppJank",
+    cnt=1025)
+trace.add_atrace_counter(
+    ts=950_300_000,
+    tid=PID,
+    pid=PID,
+    buf="J<SHADE_ROW_EXPAND>#weightedSfJank",
+    cnt=142)
 trace.add_atrace_counter(
     ts=950_400_000,
     tid=PID,
@@ -641,34 +708,36 @@ add_expected_display_frame_events(ts=1_016_000_000, dur=20_000_000, token=20)
 add_actual_display_frame_events(ts=1_016_000_000, dur=10_000_000, token=20)
 
 add_expected_surface_frame_events(ts=8_000_000, dur=20_000_000, token=20)
-add_actual_surface_frame_events(ts=8_000_000, dur=28_000_000, token=20, jank=66)
+add_actual_surface_frame_events(
+    ts=8_000_000, dur=28_000_000, token=20, jank=66, jank_score=10)
 
 add_expected_display_frame_events(ts=1_032_000_000, dur=16_000_000, token=30)
 add_actual_display_frame_events(ts=1_032_000_000, dur=16_000_000, token=30)
 
 add_expected_surface_frame_events(ts=30_000_000, dur=20_000_000, token=30)
 add_actual_surface_frame_events(
-    ts=30_000_000, dur=25_000_000, token=30, jank=64)
+    ts=30_000_000, dur=25_000_000, token=30, jank=64, jank_score=2)
 
 add_expected_display_frame_events(ts=1_048_000_000, dur=16_000_000, token=40)
 add_actual_display_frame_events(ts=1_048_000_000, dur=16_000_000, token=40)
 
 add_expected_surface_frame_events(ts=40_000_000, dur=20_000_000, token=40)
 add_actual_surface_frame_events(
-    ts=40_000_000, dur=40_000_000, token=40, jank=64)
+    ts=40_000_000, dur=40_000_000, token=40, jank=64, jank_score=3)
 
 add_expected_display_frame_events(ts=1_070_000_000, dur=16_000_000, token=60)
 add_actual_display_frame_events(ts=1_070_000_000, dur=16_000_000, token=60)
 
 add_expected_surface_frame_events(ts=70_000_000, dur=20_000_000, token=60)
 add_actual_surface_frame_events(
-    ts=70_000_000, dur=10_000_000, token=60, jank=64)
+    ts=70_000_000, dur=10_000_000, token=60, jank=64, jank_score=4)
 add_actual_surface_frame_events(
     ts=70_000_000,
     dur=20_000_000,
     token=60,
     cookie=62,
     jank=64,
+    jank_score=5,
     # second layer produced frame later so was picked up by the next SF frame
     display_frame_token_override=190)
 
@@ -677,7 +746,7 @@ add_actual_display_frame_events(ts=1_100_000_000, dur=16_000_000, token=90)
 
 add_expected_surface_frame_events(ts=100_000_000, dur=20_000_000, token=90)
 add_actual_surface_frame_events(
-    ts=100_000_000, dur=23_000_000, token=90, jank=64)
+    ts=100_000_000, dur=23_000_000, token=90, jank=64, jank_score=6)
 
 add_expected_display_frame_events(ts=1_200_000_000, dur=16_000_000, token=100)
 add_actual_display_frame_events(
@@ -685,7 +754,7 @@ add_actual_display_frame_events(
 
 add_expected_surface_frame_events(ts=200_000_000, dur=20_000_000, token=100)
 add_actual_surface_frame_events(
-    ts=200_000_000, dur=22_000_000, token=100, jank=34)
+    ts=200_000_000, dur=22_000_000, token=100, jank=34, jank_score=7)
 
 add_expected_surface_frame_events(ts=300_000_000, dur=20_000_000, token=110)
 add_actual_surface_frame_events(
@@ -696,6 +765,7 @@ add_actual_surface_frame_events(
     dur=80_000_000,
     token=110,
     jank=64,
+    jank_score=8,
     layer_name="TX - JankyLayer#1")
 
 add_expected_surface_frame_events(ts=400_000_000, dur=20_000_000, token=120)
@@ -704,23 +774,24 @@ add_actual_surface_frame_events(
     dur=61_000_000,
     token=120,
     jank=128,
+    jank_score=9,
     on_time_finish_override=1)
 
 # Multiple layers but only one of them janked (the one we care about)
 add_expected_surface_frame_events(ts=500_000_000, dur=20_000_000, token=130)
 add_actual_surface_frame_events(ts=500_000_000, dur=2_000_000, token=130)
 add_actual_surface_frame_events(
-    ts=550_000_000, dur=6_000_000, token=130, cookie=132, jank=64)
+    ts=550_000_000, dur=6_000_000, token=130, cookie=132, jank=64, jank_score=1)
 
 # Single layer but actual frame event is slighly after doFrame start
 add_expected_surface_frame_events(ts=600_000_000, dur=20_000_000, token=140)
 add_actual_surface_frame_events(
-    ts=608_600_000, dur=17_000_000, token=140, jank=64)
+    ts=608_600_000, dur=17_000_000, token=140, jank=64, jank_score=11)
 
 # Surface flinger stuffing frame not classified as missed
 add_expected_surface_frame_events(ts=650_000_000, dur=20_000_000, token=145)
 add_actual_surface_frame_events(
-    ts=650_000_000, dur=20_000_000, token=145, jank=512)
+    ts=650_000_000, dur=20_000_000, token=145, jank=512, jank_score=12)
 
 add_expected_surface_frame_events(ts=700_000_000, dur=20_000_000, token=150)
 add_actual_surface_frame_events(ts=700_500_000, dur=14_500_000, token=150)
@@ -730,6 +801,6 @@ add_expected_surface_frame_events(ts=800_000_000, dur=20_000_000, token=160)
 
 add_expected_surface_frame_events(ts=1_100_000_000, dur=20_000_000, token=1000)
 add_actual_surface_frame_events(
-    ts=1_100_000_000, dur=500_000_000, token=1000, jank=64)
+    ts=1_100_000_000, dur=500_000_000, token=1000, jank=64, jank_score=13)
 
 sys.stdout.buffer.write(trace.trace.SerializeToString())

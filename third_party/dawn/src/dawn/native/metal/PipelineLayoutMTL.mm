@@ -27,7 +27,6 @@
 
 #include "dawn/native/metal/PipelineLayoutMTL.h"
 
-#include "dawn/common/BitSetIterator.h"
 #include "dawn/common/MatchVariant.h"
 #include "dawn/native/BindGroupLayoutInternal.h"
 #include "dawn/native/metal/DeviceMTL.h"
@@ -50,7 +49,7 @@ PipelineLayout::PipelineLayout(Device* device,
         uint32_t samplerIndex = 0;
         uint32_t textureIndex = 0;
 
-        for (BindGroupIndex group : IterateBitSet(GetBindGroupLayoutsMask())) {
+        for (BindGroupIndex group : GetBindGroupLayoutsMask()) {
             mIndexInfo[stage][group].resize(GetBindGroupLayout(group)->GetBindingCount());
 
             for (BindingIndex bindingIndex{0};
@@ -63,22 +62,35 @@ PipelineLayout::PipelineLayout(Device* device,
 
                 MatchVariant(
                     bindingInfo.bindingLayout,
-                    [&](const BufferBindingLayout&) {
+                    [&](const BufferBindingInfo&) {
                         mIndexInfo[stage][group][bindingIndex] = bufferIndex;
                         bufferIndex++;
                     },
-                    [&](const SamplerBindingLayout&) {
+                    [&](const SamplerBindingInfo&) {
                         mIndexInfo[stage][group][bindingIndex] = samplerIndex;
                         samplerIndex++;
                     },
-                    [&](const TextureBindingLayout&) {
+                    [&](const TextureBindingInfo&) {
                         mIndexInfo[stage][group][bindingIndex] = textureIndex;
                         textureIndex++;
                     },
-                    [&](const StorageTextureBindingLayout&) {
+                    [&](const StorageTextureBindingInfo&) {
                         mIndexInfo[stage][group][bindingIndex] = textureIndex;
                         textureIndex++;
-                    });
+                    },
+                    [&](const TexelBufferBindingInfo&) {
+                        // Metal does not support texel buffers.
+                        // TODO(crbug/382544164): Prototype texel buffer feature
+                        DAWN_UNREACHABLE();
+                    },
+                    [&](const StaticSamplerBindingInfo&) {
+                        // Static samplers are handled in the frontend.
+                        // TODO(crbug.com/dawn/2482): Implement static samplers in the
+                        // Metal backend.
+                        DAWN_UNREACHABLE();
+                    },
+                    [](const InputAttachmentBindingInfo&) { DAWN_UNREACHABLE(); },
+                    [](const ExternalTextureBindingInfo&) { DAWN_UNREACHABLE(); });
             }
         }
 

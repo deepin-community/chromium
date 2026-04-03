@@ -191,11 +191,8 @@ std::string GServicesSettings::CalculateDigest(const SettingsMap& settings) {
     data += iter->second;
     data += '\0';
   }
-  uint8_t hash[base::kSHA1Length];
-  base::SHA1HashBytes(
-      reinterpret_cast<const unsigned char*>(&data[0]), data.size(), hash);
-  std::string digest = kDigestVersionPrefix + base::HexEncode(hash);
-  digest = base::ToLowerASCII(digest);
+  std::string digest = kDigestVersionPrefix;
+  digest += base::HexEncodeLower(base::SHA1Hash(base::as_byte_span(data)));
   return digest;
 }
 

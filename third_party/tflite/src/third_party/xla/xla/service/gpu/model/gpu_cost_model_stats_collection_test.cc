@@ -19,39 +19,40 @@ limitations under the License.
 
 #include <memory>
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include "absl/status/status_matchers.h"
+#include "mlir/IR/MLIRContext.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/testlib/hlo_hardware_independent_test_base.h"
 #include "xla/service/gpu/backend_configs.pb.h"
 #include "xla/service/gpu/gpu_device_info_for_tests.h"
 #include "xla/service/gpu/model/gpu_hlo_cost_analysis.h"
 #include "xla/service/hlo_cost_analysis.h"
-#include "xla/shape.h"
-#include "xla/shape_util.h"
-#include "xla/tests/hlo_test_base.h"
-#include "xla/tests/verified_hlo_module.h"
-#include "tsl/platform/statusor.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace xla {
 namespace gpu {
+namespace {
 
-class GpuCostModelStatsCollectionTest : public HloTestBase {
-  HloCostAnalysis::ShapeSizeFunction ShapeSizeBytesFunction() const {
-    return [&](const Shape& shape) {
-      constexpr int64_t kPointerSize = 8;
-      return ShapeUtil::ByteSizeOf(shape, kPointerSize);
-    };
-  }
+using ::absl_testing::IsOkAndHolds;
+using ::mlir::MLIRContext;
+using ::testing::Contains;
+using ::testing::Truly;
 
+class GpuCostModelStatsCollectionTest : public HloHardwareIndependentTestBase {
  public:
   GpuCostModelStatsCollection cost_model_stats_{
-      TestGpuDeviceInfo::RTXA6000DeviceInfo(),
-      GpuHloCostAnalysis::Options{ShapeSizeBytesFunction(),
-                                  /*per_second_rates=*/{},
-                                  /*count_multiple_input_accesses=*/true}};
+      TestGpuDeviceInfo::RTXH100SXMDeviceInfo(),
+      GpuHloCostAnalysis::Options{.count_multiple_input_accesses = true},
+      &mlir_context_};
+
+ protected:
+  mlir::MLIRContext mlir_context_;
 };
 
-TEST_F(GpuCostModelStatsCollectionTest, FusinInEntryComputation) {
-  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+TEST_F(GpuCostModelStatsCollectionTest, FusionInEntryComputation) {
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"hlo(
     HloModule test_module
 
     log {
@@ -63,22 +64,20 @@ TEST_F(GpuCostModelStatsCollectionTest, FusinInEntryComputation) {
       %p0 = f32[16384] parameter(0)
       ROOT %res = f32[16384]{0} fusion(p0), kind=kInput, calls=log
     }
-    )"));
+    )hlo"));
 
-  EXPECT_FALSE(cost_model_stats_.Run(module.get()).value());
+  EXPECT_THAT(cost_model_stats_.Run(module.get()), IsOkAndHolds(false));
 
   HloInstruction* root = module->entry_computation()->root_instruction();
   TF_ASSERT_OK_AND_ASSIGN(auto gpu_config,
                           root->backend_config<GpuBackendConfig>());
-  const FusionBackendConfig& backend_config =
-      gpu_config.fusion_backend_config();
 
-  EXPECT_TRUE(backend_config.has_reification_cost());
-  EXPECT_GT(backend_config.reification_cost().end_to_end_cycles(), 0);
+  EXPECT_EQ(gpu_config.reification_cost_size(), 1);
+  EXPECT_GT(gpu_config.reification_cost()[0].end_to_end_cycles(), 0);
 }
 
-TEST_F(GpuCostModelStatsCollectionTest, FusinInWhileComputation) {
-  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+TEST_F(GpuCostModelStatsCollectionTest, FusionInWhileComputation) {
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"hlo(
     HloModule test_module
 
     cond {
@@ -99,9 +98,9 @@ TEST_F(GpuCostModelStatsCollectionTest, FusinInWhileComputation) {
     ENTRY main {
       %p0 = f32[16384] parameter(0)
       ROOT %while = f32[16384] while(%p0), body=%loop, condition=%cond
-    })"));
+    })hlo"));
 
-  EXPECT_FALSE(cost_model_stats_.Run(module.get()).value());
+  EXPECT_THAT(cost_model_stats_.Run(module.get()), IsOkAndHolds(false));
 
   HloInstruction* root = module->entry_computation()
                              ->root_instruction()
@@ -109,12 +108,54 @@ TEST_F(GpuCostModelStatsCollectionTest, FusinInWhileComputation) {
                              ->root_instruction();
   TF_ASSERT_OK_AND_ASSIGN(auto gpu_config,
                           root->backend_config<GpuBackendConfig>());
-  const FusionBackendConfig& backend_config =
-      gpu_config.fusion_backend_config();
 
-  EXPECT_TRUE(backend_config.has_reification_cost());
-  EXPECT_GT(backend_config.reification_cost().end_to_end_cycles(), 0);
+  EXPECT_EQ(gpu_config.reification_cost_size(), 1);
+  EXPECT_GT(gpu_config.reification_cost()[0].end_to_end_cycles(), 0);
 }
 
+TEST_F(GpuCostModelStatsCollectionTest, GemmCostModelAddedToGemmFusion) {
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"hlo(
+  HloModule test_module
+
+  gemm_fusion_dot_computation {
+    p0 = f16[1024,512]{1,0} parameter(0)
+    p1 = f16[512,2048]{1,0} parameter(1)
+    ROOT %dot.1 = f16[1024,2048]{1,0} dot(p0, p1),
+      lhs_contracting_dims={1}, rhs_contracting_dims={0}
+  }
+
+  ENTRY main {
+    p0 = f16[1024,512]{1,0} parameter(0)
+    p1 = f16[512,2048]{1,0} parameter(1)
+    ROOT gemm_fusion_dot = f16[1024,2048]{1,0} fusion(p0, p1), kind=kCustom,
+      calls=gemm_fusion_dot_computation,
+      backend_config={
+        "fusion_backend_config": {
+          "kind":"__triton_nested_gemm_fusion",
+          "block_level_fusion_config": {
+            "num_warps":"4",
+            "output_tiles":[{"sizes":["64","128"]}],
+            "num_ctas":1,
+            "num_stages":3
+          }
+        }
+      }
+    }
+    )hlo"));
+
+  EXPECT_THAT(cost_model_stats_.Run(module.get()), IsOkAndHolds(false));
+
+  HloInstruction* root = module->entry_computation()->root_instruction();
+  TF_ASSERT_OK_AND_ASSIGN(auto gpu_config,
+                          root->backend_config<GpuBackendConfig>());
+
+  EXPECT_THAT(gpu_config.reification_cost(),
+              Contains(Truly([](const ReificationCost& cost) {
+                return cost.name() == "experimental-gemm-cost-model" &&
+                       cost.end_to_end_cycles() > 0;
+              })));
+}
+
+}  // namespace
 }  // namespace gpu
 }  // namespace xla

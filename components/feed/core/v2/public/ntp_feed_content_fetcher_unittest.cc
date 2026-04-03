@@ -103,10 +103,9 @@ TEST_F(NtpFeedContentFetcherTest, FetchFollowingFeedArticles) {
 
   EXPECT_CALL(callback, Run(testing::_))
       .Times(1)
-      .WillOnce(testing::Invoke(
-          [&](std::vector<NtpFeedContentFetcher::Article> articles) {
-            actual_articles = std::move(articles);
-          }));
+      .WillOnce([&](std::vector<NtpFeedContentFetcher::Article> articles) {
+        actual_articles = std::move(articles);
+      });
 
   // Inject a response of 5 articles. We should only get 3.
   feed_network_->InjectApiResponse<WebFeedListContentsDiscoverApi>(
@@ -117,7 +116,7 @@ TEST_F(NtpFeedContentFetcherTest, FetchFollowingFeedArticles) {
   std::optional<feedwire::Request> sent_request =
       feed_network_->GetApiRequestSent<WebFeedListContentsDiscoverApi>();
   ASSERT_TRUE(sent_request.has_value());
-  // TODO(https://crbug.com/1328951): Add a Chrome Desktop client type.
+  // TODO(crbug.com/40842320): Add a Chrome Desktop client type.
   EXPECT_EQ(feedwire::ClientInfo::ANDROID_ID,
             sent_request->feed_request().client_info().platform_type());
   EXPECT_EQ(feedwire::ClientInfo::CHROME_ANDROID,

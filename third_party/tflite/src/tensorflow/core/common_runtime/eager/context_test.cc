@@ -19,14 +19,28 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include <gmock/gmock.h>
 #include "absl/status/status.h"
 #include "absl/types/span.h"
+#include "tensorflow/c/eager/abstract_tensor_handle.h"
+#include "tensorflow/c/eager/immediate_execution_context.h"
+#include "tensorflow/c/eager/immediate_execution_operation.h"
+#include "tensorflow/c/eager/immediate_execution_tensor_handle.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/status.h"
+#include "tensorflow/core/common_runtime/composite_device.h"
+#include "tensorflow/core/common_runtime/device_mgr.h"
 #include "tensorflow/core/common_runtime/eager/context_distributed_manager.h"
+#include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/function.h"
+#include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_testutil.h"
-#include "tensorflow/core/lib/core/status_test_util.h"
-#include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/platform/refcount.h"
+#include "tensorflow/core/platform/status.h"
 #include "tensorflow/core/platform/test.h"
+#include "tensorflow/core/platform/types.h"
+#include "tensorflow/core/public/session_options.h"
 
 namespace tensorflow {
 namespace {
@@ -36,11 +50,11 @@ using ::testing::HasSubstr;
 typedef FunctionDefHelper FDH;
 
 // Return a fake device.
-static Device* CreateDevice(const string& type, int n) {
+static Device* CreateDevice(const std::string& type, int n) {
   class FakeDevice : public Device {
    public:
     explicit FakeDevice(const DeviceAttributes& attr) : Device(nullptr, attr) {}
-    Status Sync() override { return OkStatus(); }
+    absl::Status Sync() override { return absl::OkStatus(); }
     Allocator* GetAllocator(AllocatorAttributes) override { return nullptr; }
   };
   DeviceAttributes attr;
@@ -85,7 +99,7 @@ class EagerContextTest : public ::testing::Test {
 
 TEST_F(EagerContextTest, CompositeDevice) {
   InitContext(SessionOptions(), DEVICE_PLACEMENT_EXPLICIT);
-  std::vector<string> underlying_devices = {
+  std::vector<std::string> underlying_devices = {
       "/job:worker/replica:0/task:0/device:CPU:0",
       "/job:worker/replica:0/task:0/device:CPU:1"};
   CompositeDevice* composite_device_0 = nullptr;
@@ -120,10 +134,10 @@ TEST_F(EagerContextTest, CompositeDevice) {
 
 TEST_F(EagerContextTest, CompositeDeviceWithGivenName) {
   InitContext(SessionOptions(), DEVICE_PLACEMENT_EXPLICIT);
-  const std::vector<string> underlying_devices_0 = {
+  const std::vector<std::string> underlying_devices_0 = {
       "/job:worker/replica:0/task:0/device:CPU:0",
       "/job:worker/replica:0/task:0/device:CPU:1"};
-  const string composite_device_name =
+  const std::string composite_device_name =
       "/job:worker1/replica:0/task:0/device:COMPOSITE:5";
   // Create a CompositeDevice with the given name.
   CompositeDevice* composite_device_0 = nullptr;
@@ -136,7 +150,7 @@ TEST_F(EagerContextTest, CompositeDeviceWithGivenName) {
       context()->FindCompositeDeviceFromName(composite_device_name, &device));
   EXPECT_EQ(device, composite_device_0);
 
-  std::vector<string> underlying_devices_1 = {
+  std::vector<std::string> underlying_devices_1 = {
       "/job:worker/replica:0/task:0/device:CPU:1",
       "/job:worker/replica:0/task:0/device:CPU:2"};
   // Find a CompositeDevice with the given name.
@@ -240,7 +254,7 @@ TEST_F(EagerContextTest, AddFunctionDefRepeatDifferent) {
           {{"scale"}, "Cast", {"two"}, {{"SrcT", DT_INT64}, {"DstT", "$T"}}},
           {{"y"}, "Mul", {"x", "scale"}, {{"T", "$T"}}},
       });
-  Status s = context()->AddFunctionDef(x_times_two_copy);
+  absl::Status s = context()->AddFunctionDef(x_times_two_copy);
   EXPECT_FALSE(s.ok());
 }
 
@@ -267,7 +281,7 @@ TEST_F(EagerContextTest, FunctionErrorRecovery) {
            {{"T", DT_FLOAT}},
            /*dep=*/{"assert"}},
       });
-  Status s = context()->AddFunctionDef(assert_and_identity);
+  absl::Status s = context()->AddFunctionDef(assert_and_identity);
   auto fail_op = ImmediateOpPtr(context()->CreateOperation());
   TF_ASSERT_OK(fail_op->Reset("AssertAndIdentity",
                               "/job:localhost/replica:0/task:0/device:CPU:0"));
@@ -326,7 +340,7 @@ TEST_F(EagerContextTest, XlaCompileDeviceType) {
           {{"y"}, "Mul", {"x", "two"}, {{"T", DT_INT64}}},
       });
 
-  Status s = context()->AddFunctionDef(x_times_two);
+  absl::Status s = context()->AddFunctionDef(x_times_two);
   context()->SetJitCompileRewrite(true);
   auto op = ImmediateOpPtr(context()->CreateOperation());
   TF_ASSERT_OK(

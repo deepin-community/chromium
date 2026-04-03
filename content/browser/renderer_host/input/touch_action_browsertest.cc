@@ -8,16 +8,19 @@
 
 #include "base/auto_reset.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_mock_time_task_runner.h"
 #include "build/build_config.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
@@ -31,6 +34,7 @@
 #include "content/common/input/synthetic_pointer_action_list_params.h"
 #include "content/common/input/synthetic_smooth_scroll_gesture.h"
 #include "content/common/input/synthetic_smooth_scroll_gesture_params.h"
+#include "content/common/input/synthetic_tap_gesture.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/common/content_switches.h"
@@ -44,7 +48,13 @@
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/events/blink/blink_features.h"
+#include "ui/events/gesture_detection/filtered_gesture_provider.h"
 #include "ui/latency/latency_info.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "content/browser/renderer_host/input/touch_selection_controller_input_observer.h"
+#include "content/browser/renderer_host/render_widget_host_view_android.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 using blink::WebInputEvent;
 
@@ -204,7 +214,7 @@ class TouchActionBrowserTest : public ContentBrowserTest {
 
   void JankMainThread(base::TimeDelta delta) {
     std::string script = "var end = performance.now() + ";
-    script.append(std::to_string(delta.InMilliseconds()));
+    script.append(base::NumberToString(delta.InMilliseconds()));
     script.append("; while (performance.now() < end) ; ");
     EXPECT_TRUE(ExecJs(shell(), script));
   }
@@ -357,7 +367,38 @@ class TouchActionBrowserTest : public ContentBrowserTest {
 
     ASSERT_OK_AND_ASSIGN(
         auto parsed_json,
-        base::JSONReader::ReadAndReturnValueWithError(pointer_actions_json));
+        base::JSONReader::ReadAndReturnValueWithError(
+            pointer_actions_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
+    ActionsParser actions_parser(std::move(parsed_json));
+
+    ASSERT_TRUE(actions_parser.Parse());
+
+    run_loop_ = std::make_unique<base::RunLoop>();
+
+    GetWidgetHost()->QueueSyntheticGesture(
+        std::make_unique<SyntheticPointerAction>(
+            actions_parser.pointer_action_params()),
+        base::BindOnce(&TouchActionBrowserTest::OnSyntheticGestureCompleted,
+                       base::Unretained(this)));
+
+    // Runs until we get the OnSyntheticGestureCompleted callback
+    run_loop_->Run();
+    run_loop_.reset();
+  }
+
+  void DoTouchCancel() {
+    DCHECK(URLLoaded());
+    const std::string pointer_actions_json = R"HTML(
+        [{"source": "touch", "id": 0,
+              "actions": [
+              { "name": "pointerDown", "x": 50, "y": 50 },
+              { "name": "pointerCancel"}]}]
+        )HTML";
+
+    ASSERT_OK_AND_ASSIGN(
+        auto parsed_json,
+        base::JSONReader::ReadAndReturnValueWithError(
+            pointer_actions_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
     ActionsParser actions_parser(std::move(parsed_json));
 
     ASSERT_TRUE(actions_parser.Parse());
@@ -394,9 +435,10 @@ class TouchActionBrowserTest : public ContentBrowserTest {
         }]
         )HTML";
 
-    ASSERT_OK_AND_ASSIGN(
+    UNSAFE_BUFFERS(ASSERT_OK_AND_ASSIGN(
         auto parsed_json,
-        base::JSONReader::ReadAndReturnValueWithError(pointer_actions_json));
+        base::JSONReader::ReadAndReturnValueWithError(
+            pointer_actions_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS)));
     ActionsParser actions_parser(std::move(parsed_json));
 
     ASSERT_TRUE(actions_parser.Parse());
@@ -463,19 +505,20 @@ class TouchActionBrowserTest : public ContentBrowserTest {
     // It seems that even if the compositor frame has scrolled half of the
     // expected scroll offset, the Blink side scroll offset may not yet be
     // updated, so here we expect it to at least have scrolled.
-    // TODO(crbug.com/902446): this can be resolved by fixing this bug.
+    // TODO(crbug.com/40601223): this can be resolved by fixing this bug.
     if (expected_scroll_position_after_scroll.y() > 0)
       EXPECT_GT(scroll_top, 0);
     if (expected_scroll_position_after_scroll.x() > 0)
       EXPECT_GT(scroll_left, 0);
   }
 
+  std::unique_ptr<base::RunLoop> run_loop_;
+
  private:
   std::unique_ptr<RenderFrameSubmissionObserver> frame_observer_;
-  std::unique_ptr<base::RunLoop> run_loop_;
 };
 
-// TODO(crbug.com/1357167): Fix Mac failures.
+// TODO(crbug.com/40236573): Fix Mac failures.
 #if !defined(NDEBUG) || defined(ADDRESS_SANITIZER) ||       \
     defined(MEMORY_SANITIZER) || defined(LEAK_SANITIZER) || \
     defined(THREAD_SANITIZER) || BUILDFLAG(IS_MAC)
@@ -523,7 +566,72 @@ IN_PROC_BROWSER_TEST_F(TouchActionBrowserTest, MAYBE_TouchActionNone) {
   EXPECT_EQ(0, EvalJs(shell(), "eventCounts.touchcancel"));
 }
 
-// TODO(crbug.com/1357167): Fix Mac failures.
+// Tests that when double-tap zoom is disabled, the GestureTapUnconfirmed event
+// is converted to a GestureTap.
+IN_PROC_BROWSER_TEST_F(TouchActionBrowserTest,
+                       GestureTapUnconfirmedNotSentWhenDoubleTapIsDisabled) {
+  const std::string kDoubleTapZoomDataURL = R"HTML(
+    data:text/html,<!DOCTYPE html>
+    <style>
+      html, body {
+        margin: 0;
+      }
+      .target {
+        width: 100vw;
+        height: 100vh;
+        touch-action: pan-y;
+      }
+      .spacer { height: 10000px; }
+    </style>
+    <div class=target></div>
+    <div class=spacer></div>
+    <script>
+      document.title='ready';
+    </script>)HTML";
+  LoadURL(kDoubleTapZoomDataURL);
+
+  // A touch cancel to initialize gesture provider in Aura.
+  DoTouchCancel();
+
+  ui::GestureDetector* gesture_detector =
+      GetWidgetHost()
+          ->GetView()
+          ->GetFilteredGestureProviderForTesting()
+          ->GetGestureDetectorForTesting();
+  auto task_runner = base::MakeRefCounted<base::TestMockTimeTaskRunner>();
+  gesture_detector->SetGestureTimeoutHandlerTaskRunnerForTesting(task_runner);
+
+  GestureTapEventObserver tap_observer;
+  GetWidgetHost()->AddInputEventObserver(&tap_observer);
+
+  run_loop_ = std::make_unique<base::RunLoop>();
+
+  SyntheticTapGestureParams params;
+  params.gesture_source_type = content::mojom::GestureSourceType::kTouchInput;
+  params.position = gfx::PointF(50, 50);
+  params.duration_ms = 100;
+  GetWidgetHost()->QueueSyntheticGesture(
+      std::make_unique<SyntheticTapGesture>(params),
+      base::BindOnce(&TouchActionBrowserTest::OnSyntheticGestureCompleted,
+                     base::Unretained(this)));
+
+  run_loop_->Run();
+
+  // After the tap gesture has been completed, the tap event should have been
+  // seen exactly once.
+  EXPECT_EQ(1, tap_observer.num_gesture_tap_seen());
+
+  // Advance the task runner clock by timeout delay, to make sure the tap
+  // timeout task runs.
+  task_runner->FastForwardBy(gesture_detector->GetDoubleTapTimeoutForTesting());
+
+  // No extra tap is seen by input observers.
+  EXPECT_EQ(1, tap_observer.num_gesture_tap_seen());
+
+  GetWidgetHost()->RemoveInputEventObserver(&tap_observer);
+}
+
+// TODO(crbug.com/40236573): Fix Mac failures.
 #if !defined(NDEBUG) || defined(ADDRESS_SANITIZER) ||       \
     defined(MEMORY_SANITIZER) || defined(LEAK_SANITIZER) || \
     defined(THREAD_SANITIZER) || BUILDFLAG(IS_MAC)
@@ -540,7 +648,7 @@ IN_PROC_BROWSER_TEST_F(TouchActionBrowserTest, MAYBE_PanYMainThreadJanky) {
                                     gfx::Vector2d(0, 45), kShortJankTime);
 }
 
-// TODO(crbug.com/1357167): Fix Mac failures.
+// TODO(crbug.com/40236573): Fix Mac failures.
 #if !defined(NDEBUG) || defined(ADDRESS_SANITIZER) ||       \
     defined(MEMORY_SANITIZER) || defined(LEAK_SANITIZER) || \
     defined(THREAD_SANITIZER) || BUILDFLAG(IS_MAC)
@@ -587,7 +695,7 @@ IN_PROC_BROWSER_TEST_F(TouchActionBrowserTest,
   DoTwoFingerTouchScroll(true, gfx::Vector2d(20, 0));
 }
 
-// TODO(crbug.com/1357167): Fix Mac failures.
+// TODO(crbug.com/40236573): Fix Mac failures.
 #if !defined(NDEBUG) || defined(ADDRESS_SANITIZER) ||       \
     defined(MEMORY_SANITIZER) || defined(LEAK_SANITIZER) || \
     defined(THREAD_SANITIZER) || BUILDFLAG(IS_MAC)
@@ -604,7 +712,7 @@ IN_PROC_BROWSER_TEST_F(TouchActionBrowserTest, MAYBE_PanXYMainThreadJanky) {
                                     gfx::Vector2d(45, 45), kShortJankTime);
 }
 
-// TODO(crbug.com/1357167): Fix Mac failures.
+// TODO(crbug.com/40236573): Fix Mac failures.
 #if !defined(NDEBUG) || defined(ADDRESS_SANITIZER) ||       \
     defined(MEMORY_SANITIZER) || defined(LEAK_SANITIZER) || \
     defined(THREAD_SANITIZER) || BUILDFLAG(IS_MAC)
@@ -621,7 +729,7 @@ IN_PROC_BROWSER_TEST_F(TouchActionBrowserTest,
                                     kShortJankTime);
 }
 
-// TODO(crbug.com/1357167): Fix Mac failures.
+// TODO(crbug.com/40236573): Fix Mac failures.
 #if !defined(NDEBUG) || defined(ADDRESS_SANITIZER) ||       \
     defined(MEMORY_SANITIZER) || defined(LEAK_SANITIZER) || \
     defined(THREAD_SANITIZER) || BUILDFLAG(IS_MAC)
@@ -638,7 +746,7 @@ IN_PROC_BROWSER_TEST_F(TouchActionBrowserTest,
                                     kShortJankTime);
 }
 
-// TODO(crbug.com/1357167): Fix Mac failures.
+// TODO(crbug.com/40236573): Fix Mac failures.
 #if !defined(NDEBUG) || defined(ADDRESS_SANITIZER) ||       \
     defined(MEMORY_SANITIZER) || defined(LEAK_SANITIZER) || \
     defined(THREAD_SANITIZER) || BUILDFLAG(IS_MAC)
@@ -657,7 +765,7 @@ IN_PROC_BROWSER_TEST_F(TouchActionBrowserTest,
                                     kShortJankTime);
 }
 
-// TODO(crbug.com/1357167): Fix Mac failures.
+// TODO(crbug.com/40236573): Fix Mac failures.
 #if !defined(NDEBUG) || defined(ADDRESS_SANITIZER) ||       \
     defined(MEMORY_SANITIZER) || defined(LEAK_SANITIZER) || \
     defined(THREAD_SANITIZER) || BUILDFLAG(IS_MAC)
@@ -676,7 +784,7 @@ IN_PROC_BROWSER_TEST_F(TouchActionBrowserTest,
                                     kShortJankTime);
 }
 
-// TODO(crbug.com/899005): Make this test work on Android.
+// TODO(crbug.com/41422733): Make this test work on Android.
 #if BUILDFLAG(IS_ANDROID)
 #define MAYBE_TwoFingerPanYDisallowed DISABLED_TwoFingerPanYDisallowed
 #else
@@ -960,5 +1068,108 @@ IN_PROC_BROWSER_TEST_F(TouchActionBrowserTestEnableCursorControl,
   EXPECT_EQ(selection_start, EvalJs(shell(), "container.selectionEnd"));
   EXPECT_EQ(32, selection_start);
 }
+
+#if BUILDFLAG(IS_ANDROID)
+class ScrollBeginObserver : public RenderWidgetHost::InputEventObserver {
+ public:
+  ScrollBeginObserver(RenderWidgetHost& rwh,
+                      RenderWidgetHostViewAndroid& rwhv_android,
+                      base::OnceClosure quit_closure)
+      : rwh_(rwh),
+        rwhv_android_(rwhv_android),
+        quit_closure_(std::move(quit_closure)) {
+    rwh_->AddInputEventObserver(this);
+  }
+
+  ~ScrollBeginObserver() override { rwh_->RemoveInputEventObserver(this); }
+
+  void OnInputEvent(const RenderWidgetHost&,
+                    const blink::WebInputEvent& event,
+                    InputEventSource) override {
+    if (event.GetType() != blink::WebInputEvent::Type::kGestureScrollBegin) {
+      return;
+    }
+    // Insertion handles were active due to first scroll and should become
+    // inactive after view is removed from hierarchy.
+    EXPECT_EQ(rwhv_android_->touch_selection_controller()->active_status(),
+              ui::TouchSelectionController::ActiveStatus::kInsertionActive);
+    rwhv_android_->UpdateNativeViewTree(nullptr, nullptr);
+    EXPECT_EQ(rwhv_android_->touch_selection_controller()->active_status(),
+              ui::TouchSelectionController::ActiveStatus::kInactive);
+  }
+
+  void OnInputEventAck(const RenderWidgetHost&,
+                       blink::mojom::InputEventResultSource,
+                       blink::mojom::InputEventResultState,
+                       const blink::WebInputEvent& event) override {
+    if (event.GetType() != blink::WebInputEvent::Type::kGestureScrollBegin) {
+      return;
+    }
+    // Post a task so that it's guaranteed
+    // TouchSelectionControllerInputObserver would have also processed this
+    // problematic ack which comes after view having already been removed from
+    // hierarchy.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(quit_closure_));
+  }
+
+ private:
+  raw_ref<RenderWidgetHost> rwh_;
+  raw_ref<RenderWidgetHostViewAndroid> rwhv_android_;
+  base::OnceClosure quit_closure_;
+};
+
+IN_PROC_BROWSER_TEST_F(TouchActionBrowserTestEnableCursorControl,
+                       CursorControlDetachViewMidScroll) {
+  if (!::features::IsSwipeToMoveCursorEnabled()) {
+    return;
+  }
+
+  LoadURL(base::StringPrintf(kInputTagCursorControl, 40).c_str());
+
+  EXPECT_EQ(32, EvalJs(shell(), "container.selectionStart"));
+  EXPECT_EQ(32, EvalJs(shell(), "container.selectionEnd"));
+
+  // Do a scroll over input field to activate insertion handle.
+  DoTouchScroll(gfx::Point(85, 5), gfx::Vector2d(40, 0),
+                /* wait_until_scrolled*/ false, gfx::Vector2d(0, 0),
+                kNoJankTime);
+
+  auto* rwhv_android =
+      static_cast<RenderWidgetHostViewAndroid*>(GetWidgetHost()->GetView());
+  ASSERT_TRUE(rwhv_android);
+  EXPECT_EQ(rwhv_android->touch_selection_controller()->active_status(),
+            ui::TouchSelectionController::ActiveStatus::kInsertionActive);
+
+  base::RunLoop run_loop;
+  ScrollBeginObserver observer(*GetWidgetHost(), *rwhv_android,
+                               run_loop.QuitClosure());
+
+  float page_scale_factor = GetWidgetHost()
+                                ->render_frame_metadata_provider()
+                                ->LastRenderFrameMetadata()
+                                .page_scale_factor;
+  if (page_scale_factor == 0) {
+    page_scale_factor = 1.0f;
+  }
+  gfx::PointF touch_point(85, 5);
+  touch_point.Scale(page_scale_factor);
+
+  SyntheticSmoothScrollGestureParams params;
+  params.gesture_source_type = content::mojom::GestureSourceType::kTouchInput;
+  params.anchor = touch_point;
+  params.distances.emplace_back(-80, 0);
+
+  GetWidgetHost()->QueueSyntheticGesture(
+      std::make_unique<SyntheticSmoothScrollGesture>(params),
+      base::DoNothing());
+
+  // We expect the run loop be exited when ScrollBeginObserver processes
+  // ScrollBegin ack.
+  run_loop.Run();
+  EXPECT_TRUE(rwhv_android->GetTouchSelectionControllerInputObserver()
+                  ->HasSeenScrollBeginAckForTesting());
+}
+#endif  // BUILDFLAG(IS_ANDROID)
 
 }  // namespace content

@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/notreached.h"
@@ -23,6 +24,8 @@ using BookmarkNode = bookmarks::BookmarkNode;
 constexpr char kReadStatusKey[] = "read_status";
 constexpr char kReadStatusRead[] = "true";
 constexpr char kReadStatusUnread[] = "false";
+
+namespace reading_list {
 
 namespace {
 
@@ -95,16 +98,6 @@ void ReadingListManagerImpl::ReadingListWillRemoveEntry(
   RemoveBookmark(url);
 }
 
-void ReadingListManagerImpl::ReadingListDidMoveEntry(
-    const ReadingListModel* model,
-    const GURL& url) {
-  DCHECK(reading_list_model_->loaded());
-  scoped_refptr<const ReadingListEntry> moved_entry =
-      reading_list_model_->GetEntryByURL(url);
-  DCHECK(moved_entry);
-  AddOrUpdateBookmark(moved_entry.get());
-}
-
 void ReadingListManagerImpl::ReadingListDidUpdateEntry(
     const ReadingListModel* model,
     const GURL& url) {
@@ -161,7 +154,8 @@ const BookmarkNode* ReadingListManagerImpl::Add(const GURL& url,
   // Add or swap the reading list entry.
   const auto& new_entry = reading_list_model_->AddOrReplaceEntry(
       url, title, reading_list::ADDED_VIA_CURRENT_APP,
-      /*estimated_read_time=*/base::TimeDelta());
+      /*estimated_read_time=*/std::nullopt,
+      /*creation_time=*/std::nullopt);
   const auto* node = FindBookmarkByURL(new_entry.URL());
   return node;
 }
@@ -215,7 +209,12 @@ bool ReadingListManagerImpl::IsReadingListBookmark(
 
 void ReadingListManagerImpl::Delete(const GURL& url) {
   DCHECK(reading_list_model_->loaded());
-  reading_list_model_->RemoveEntryByURL(url);
+  reading_list_model_->RemoveEntryByURL(url, FROM_HERE);
+}
+
+void ReadingListManagerImpl::DeleteAll() {
+  DCHECK(reading_list_model_->loaded());
+  reading_list_model_->DeleteAllEntries(FROM_HERE);
 }
 
 const BookmarkNode* ReadingListManagerImpl::GetRoot() const {
@@ -278,15 +277,10 @@ bool ReadingListManagerImpl::GetReadStatus(
     return false;
 
   NOTREACHED() << "May not be reading list node.";
-  return false;
 }
 
 bool ReadingListManagerImpl::IsLoaded() const {
   return loaded_;
-}
-
-void ReadingListManagerImpl::SetIsLoadedForTests(bool is_loaded) {
-  loaded_ = is_loaded;
 }
 
 BookmarkNode* ReadingListManagerImpl::FindBookmarkByURL(const GURL& url) const {
@@ -330,3 +324,5 @@ void ReadingListManagerImpl::NotifyReadingListChanged() {
   for (Observer& observer : observers_)
     observer.ReadingListChanged();
 }
+
+}  // namespace reading_list

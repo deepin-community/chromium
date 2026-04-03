@@ -20,7 +20,7 @@ import "services/network/public/mojom/transferable_socket.mojom";
 
 // Maps to net::RuleBasedHostResolverProc::Rule::ResolverType.
 //
-// TODO(https://crbug.com/1298106) Deduplicate this enum's definition.
+// TODO(crbug.com/40822747) Deduplicate this enum's definition.
 enum ResolverType {
   kResolverTypeFail,
   kResolverTypeFailTimeout,
@@ -151,21 +151,11 @@ interface NetworkServiceTest {
       CertVerifyResult verify_result,
       int32 rv) => ();
 
-  // Toggles requiring CT for testing
-  enum RequireCT {
-    DEFAULT = 0,
-    REQUIRE = 1,
-  };
-
-  [Sync]
-  SetRequireCT(RequireCT required) => ();
-
   // Set the global transport security state preloaded static data source to
-  // the unittest_default source, with the reporting URIs rewritten to use
-  // |reporting_port|.  If |reporting_port| is 0, the source will be reset to
+  // the unittest_default source, if `enable_unittest_source` is true.
+  // If `enable_unittest_source` is false, the source will be reset to
   // the default.
-  [Sync]
-  SetTransportSecurityStateSource(uint16 reporting_port) => ();
+  SetTransportSecurityStateTestSource(bool enable_unittest_source) => ();
 
   // Allow host resolutions to reach the network. Since going to the network
   // can be a source of flakiness, this should only be called in tests that
@@ -262,4 +252,19 @@ interface NetworkServiceTest {
   // Only relevant on ChromeOS and Linux.
   [Sync]
   AllowsGSSAPILibraryLoad() => (bool allow_gssapi_library_load);
+
+  // Disable exclusive locking of the cookie database for testing.
+  // TODO(crbug.com/377940976): Remove this once the background sequence runner
+  // can be fully drained of tasks during network context shutdown.
+  [EnableIf=is_win]
+  DisableExclusiveCookieDatabaseLockingForTesting() => ();
+
+  // Returns true if the HappyEyeballs V3 is enabled for testing.
+  IsHappyEyeballsV3Enabled() => (bool is_happy_eyeballs_v3_enabled);
+
+  // Sets the flag in the NetworkService which determines whether the
+  // enterprise_auth::URLSessionURLLoader, used for performing the Okta SSO
+  // URL requests, uses a mock server for testing or the real network.
+  [EnableIf=is_mac]
+  SetUseMockURLSessionURLLoaderForTesting(bool use_mock_url_session_url_loader);
 };

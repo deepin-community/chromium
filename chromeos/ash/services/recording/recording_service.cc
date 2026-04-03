@@ -11,8 +11,10 @@
 #include <optional>
 
 #include "base/check.h"
+#include "base/containers/auto_spanification_helper.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/notreached.h"
 #include "base/task/bind_post_task.h"
@@ -98,8 +100,8 @@ gfx::ImageSkia ExtractImageFromVideoFrame(const media::VideoFrame& frame) {
   media::PaintCanvasVideoRenderer renderer;
   SkBitmap bitmap;
   bitmap.allocN32Pixels(visible_size.width(), visible_size.height());
-  renderer.ConvertVideoFrameToRGBPixels(&frame, bitmap.getPixels(),
-                                        bitmap.rowBytes());
+  base::span<uint8_t> pixmap_span = UNSAFE_SKBITMAP_TO_BYTES_SPAN(bitmap);
+  renderer.ConvertVideoFrameToRGBPixels(&frame, pixmap_span, bitmap.rowBytes());
 
   // Since this image will be used as a thumbnail, we can scale it down to save
   // on memory if needed. For example, if recording a FHD display, that will be
@@ -389,8 +391,7 @@ void RecordingService::OnFrameCaptured(
           info->visible_rect);
   scoped_refptr<media::VideoFrame> frame = media::VideoFrame::WrapExternalData(
       info->pixel_format, info->coded_size, visible_rect, visible_rect.size(),
-      reinterpret_cast<const uint8_t*>(mapping.memory()), mapping.size(),
-      info->timestamp);
+      mapping, info->timestamp);
   if (!frame) {
     DLOG(ERROR) << "Failed to create a VideoFrame.";
     return;
@@ -434,8 +435,8 @@ void RecordingService::OnFrameCaptured(
       .WithArgs(std::move(frame));
 }
 
-void RecordingService::OnNewSubCaptureTargetVersion(
-    uint32_t sub_capture_target_version) {}
+void RecordingService::OnNewCaptureVersion(
+    const media::CaptureVersion& capture_version) {}
 
 void RecordingService::OnFrameWithEmptyRegionCapture() {}
 

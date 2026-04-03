@@ -1,7 +1,7 @@
 // Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-//
+
 // This file implements the common entry point shared by all Chromoting Host
 // processes.
 
@@ -11,6 +11,7 @@
 
 #include "base/at_exit.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/i18n/icu_util.h"
 #include "base/logging.h"
@@ -19,7 +20,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "mojo/core/embedder/embedder.h"
-#include "remoting/base/breakpad.h"
+#include "remoting/base/crash/crash_reporting_crashpad.h"
 #include "remoting/base/logging.h"
 #include "remoting/host/base/host_exit_codes.h"
 #include "remoting/host/base/switches.h"
@@ -37,15 +38,20 @@
 
 #include <commctrl.h>
 #include <shellapi.h>
+
+#include "remoting/base/crash/crash_reporting_breakpad.h"
 #endif  // BUILDFLAG(IS_WIN)
 
 namespace remoting {
 
 // Known entry points.
-int HostProcessMain();
-#if BUILDFLAG(IS_WIN)
+int SingleProcessHostProcessMain();
+int NetworkProcessMain();
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 int DaemonProcessMain();
 int DesktopProcessMain();
+#endif
+#if BUILDFLAG(IS_WIN)
 int FileChooserMain();
 int RdpDesktopSessionMain();
 int UrlForwarderConfiguratorMain();
@@ -58,34 +64,33 @@ namespace {
 
 typedef int (*MainRoutineFn)();
 
-const char kUsageMessage[] =
-    "Usage: %s [options]\n"
-    "\n"
-    "Options:\n"
+void Usage(const base::FilePath& program_name) {
+  printf(
+      "Usage: %s [options]\n"
+      "\n"
+      "Options:\n"
 
 #if BUILDFLAG(IS_LINUX)
-    "  --audio-pipe-name=<pipe> - Sets the pipe name to capture audio on "
-    "Linux.\n"
+      "  --audio-pipe-name=<pipe> - Sets the pipe name to capture audio on "
+      "Linux.\n"
 #endif  // BUILDFLAG(IS_LINUX)
 
 #if BUILDFLAG(IS_APPLE)
-    "  --list-audio-devices     - List all audio devices and their device "
-    "UID.\n"
+      "  --list-audio-devices     - List all audio devices and their device "
+      "UID.\n"
 #endif  // BUILDFLAG(IS_APPLE)
 
-    "  --console                - Runs the daemon interactively.\n"
-    "  --elevate=<binary>       - Runs <binary> elevated.\n"
-    "  --host-config=<config>   - Specifies the host configuration.\n"
-    "  --help, -?               - Prints this message.\n"
-    "  --type                   - Specifies process type.\n"
-    "  --version                - Prints the host version and exits.\n"
-    "  --evaluate-type=<type>   - Evaluates the capability of the host.\n"
-    "  --enable-utempter        - Enables recording to utmp/wtmp on Linux.\n"
-    "  --webrtc-trace-event-file=<path> - Enables logging webrtc trace events "
-    "to a file.\n";
-
-void Usage(const base::FilePath& program_name) {
-  printf(kUsageMessage, program_name.MaybeAsASCII().c_str());
+      "  --console                - Runs the daemon interactively.\n"
+      "  --elevate=<binary>       - Runs <binary> elevated.\n"
+      "  --host-config=<config>   - Specifies the host configuration.\n"
+      "  --help, -?               - Prints this message.\n"
+      "  --type                   - Specifies process type.\n"
+      "  --version                - Prints the host version and exits.\n"
+      "  --evaluate-type=<type>   - Evaluates the capability of the host.\n"
+      "  --enable-wtmpdb          - Enables recording to wtmpdb on Linux.\n"
+      "  --webrtc-trace-event-file=<path> - Enables logging webrtc trace events"
+      " to a file.\n",
+      program_name.MaybeAsASCII().c_str());
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -119,8 +124,7 @@ int RunElevated() {
       command_line.GetCommandLineString();
 
   // Launch the child process requesting elevation.
-  SHELLEXECUTEINFO info;
-  memset(&info, 0, sizeof(info));
+  SHELLEXECUTEINFO info = {};
   info.cbSize = sizeof(info);
   info.lpVerb = L"runas";
   info.lpFile = binary.value().c_str();
@@ -142,13 +146,17 @@ int RunElevated() {
 MainRoutineFn SelectMainRoutine(const std::string& process_type) {
   MainRoutineFn main_routine = nullptr;
 
-  if (process_type == kProcessTypeHost) {
-    main_routine = &HostProcessMain;
-#if BUILDFLAG(IS_WIN)
+  if (process_type == kProcessTypeSingleProcessHost) {
+    main_routine = &SingleProcessHostProcessMain;
+  } else if (process_type == kProcessTypeNetwork) {
+    main_routine = &NetworkProcessMain;
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   } else if (process_type == kProcessTypeDaemon) {
     main_routine = &DaemonProcessMain;
   } else if (process_type == kProcessTypeDesktop) {
     main_routine = &DesktopProcessMain;
+#endif
+#if BUILDFLAG(IS_WIN)
   } else if (process_type == kProcessTypeFileChooser) {
     main_routine = &FileChooserMain;
   } else if (process_type == kProcessTypeRdpDesktopSession) {
@@ -195,8 +203,8 @@ int HostMain(int argc, char** argv) {
   }
 #endif  // BUILDFLAG(IS_WIN)
 
-  // Assume the host process by default.
-  std::string process_type = kProcessTypeHost;
+  // Assume the single-process host process by default.
+  std::string process_type = kProcessTypeSingleProcessHost;
   if (command_line->HasSwitch(kProcessTypeSwitchName)) {
     process_type = command_line->GetSwitchValueASCII(kProcessTypeSwitchName);
   }
@@ -217,14 +225,29 @@ int HostMain(int argc, char** argv) {
   // Enable debug logs.
   InitHostLogging();
 
-#if defined(REMOTING_ENABLE_BREAKPAD)
-  // Initialize Breakpad as early as possible. On Mac the command-line needs to
-  // be initialized first, so that the preference for crash-reporting can be
-  // looked up in the config file.
+#if defined(REMOTING_ENABLE_CRASH_REPORTING)
+  // Initialize crash reporting as early as possible. On Mac the command-line
+  // needs to be initialized first, so that the preference for crash-reporting
+  // can be looked up in the config file.
+  // Note that we enable crash reporting only if the user has opted in to having
+  // the crash reports uploaded.
   if (IsUsageStatsAllowed()) {
-    InitializeCrashReporting();
+#if BUILDFLAG(IS_LINUX)
+    InitializeCrashpadReporting();
+#elif BUILDFLAG(IS_WIN)
+    // TODO: joedow - Enable crash reporting for the RDP process.
+    if (process_type == kProcessTypeDaemon) {
+      InitializeBreakpadReporting();
+    } else if (process_type == kProcessTypeDesktop) {
+      // TODO(garykac): Switch to use InitializeCrashpadReporting();
+      InitializeBreakpadReporting();
+    } else if (command_line->HasSwitch(kCrashServerPipeHandle)) {
+      InitializeOopCrashClient(
+          command_line->GetSwitchValueASCII(kCrashServerPipeHandle));
+    }
+#endif
   }
-#endif  // defined(REMOTING_ENABLE_BREAKPAD)
+#endif  // defined(REMOTING_ENABLE_CRASH_REPORTING)
 
 #if BUILDFLAG(IS_WIN)
   // Register and initialize common controls.
@@ -247,13 +270,18 @@ int HostMain(int argc, char** argv) {
 
   remoting::LoadResources("");
 
-  mojo::core::Init({
-#if BUILDFLAG(IS_WIN)
-    .is_broker_process = main_routine == &DaemonProcessMain
-#else
-    .is_broker_process = main_routine == &HostProcessMain
+  bool is_broker_process = false;
+#if !BUILDFLAG(IS_MAC)
+  // The single-process host process should act as the mojo broker, except on
+  // Mac, where the broker process is the agent process broker.
+  is_broker_process |= main_routine == &SingleProcessHostProcessMain;
 #endif
-  });
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+  // For multi-process hosts, the daemon process acts as the broker.
+  is_broker_process |= main_routine == &DaemonProcessMain;
+#endif
+
+  mojo::core::Init({.is_broker_process = is_broker_process});
 
   // Invoke the entry point.
   int exit_code = main_routine();

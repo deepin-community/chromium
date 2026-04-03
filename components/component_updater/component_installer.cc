@@ -4,6 +4,7 @@
 
 #include "components/component_updater/component_installer.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -20,7 +21,6 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/ranges/algorithm.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
@@ -29,7 +29,6 @@
 #include "base/values.h"
 #include "base/version.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/component_updater/component_updater_paths.h"
 #include "components/component_updater/component_updater_service.h"
 #include "components/crx_file/crx_verifier.h"
@@ -42,13 +41,34 @@
 #include "base/apple/backup_util.h"
 #endif
 
+#if BUILDFLAG(IS_MAC)
+#include "base/mac/mac_util.h"
+#endif
+
 namespace component_updater {
 
 const char kNullVersion[] = "0.0.0.0";
 
 namespace {
-using Result = update_client::CrxInstaller::Result;
-using InstallError = update_client::InstallError;
+using Result = ::update_client::CrxInstaller::Result;
+using InstallError = ::update_client::InstallError;
+
+#if BUILDFLAG(IS_MAC)
+// Recursively remove quarantine attributes on the path.
+bool RemoveQuarantineAttributes(const base::FilePath& path) {
+  bool success = base::mac::RemoveQuarantineAttribute(path);
+  base::FileEnumerator file_enumerator(
+      base::FilePath(path), true,
+      base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES |
+          base::FileEnumerator::SHOW_SYM_LINKS);
+  for (base::FilePath name = file_enumerator.Next(); !name.empty();
+       name = file_enumerator.Next()) {
+    success = base::mac::RemoveQuarantineAttribute(name) && success;
+  }
+  return success;
+}
+#endif
+
 }  // namespace
 
 ComponentInstallerPolicy::~ComponentInstallerPolicy() = default;
@@ -58,6 +78,10 @@ bool ComponentInstallerPolicy::AllowCachedCopies() const {
 }
 
 bool ComponentInstallerPolicy::AllowUpdatesOnMeteredConnections() const {
+  return true;
+}
+
+bool ComponentInstallerPolicy::AllowUpdates() const {
   return true;
 }
 
@@ -83,7 +107,7 @@ ComponentInstaller::~ComponentInstaller() = default;
 void ComponentInstaller::Register(ComponentUpdateService* cus,
                                   base::OnceClosure callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(cus);
+  CHECK(cus);
 
   std::vector<uint8_t> public_key_hash;
   installer_policy_->GetHash(&public_key_hash);
@@ -118,15 +142,11 @@ void ComponentInstaller::Register(
                      std::move(callback)));
 }
 
-void ComponentInstaller::OnUpdateError(int error) {
-  VLOG(0) << "Component update error: " << error;
-}
-
 Result ComponentInstaller::InstallHelper(const base::FilePath& unpack_path,
-                                         base::Value::Dict* manifest,
+                                         base::DictValue* manifest,
                                          base::Version* version,
                                          base::FilePath* install_path) {
-  std::optional<base::Value::Dict> local_manifest =
+  std::optional<base::DictValue> local_manifest =
       update_client::ReadManifest(unpack_path);
   if (!local_manifest) {
     return Result(InstallError::BAD_MANIFEST);
@@ -171,16 +191,13 @@ Result ComponentInstaller::InstallHelper(const base::FilePath& unpack_path,
   base::ScopedTempDir install_path_owner;
   std::ignore = install_path_owner.Set(local_install_path);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (!base::SetPosixFilePermissions(local_install_path, 0755)) {
     VPLOG(0) << "SetPosixFilePermissions failed: "
              << local_install_path.value();
     return Result(InstallError::SET_PERMISSIONS_FAILED);
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-  DCHECK(!base::PathExists(unpack_path));
-  DCHECK(base::PathExists(local_install_path));
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_APPLE)
   // Since components can be large and can be re-downloaded when needed, they
@@ -188,9 +205,16 @@ Result ComponentInstaller::InstallHelper(const base::FilePath& unpack_path,
   base::apple::SetBackupExclusion(local_install_path);
 #endif
 
+#if BUILDFLAG(IS_MAC)
+  // Component downloads are trusted and shouldn't be quarantined. Ignore the
+  // return value: the install is still successful and non-executable components
+  // are usable even when quarantined.
+  RemoveQuarantineAttributes(local_install_path);
+#endif
+
   const Result result =
       installer_policy_->OnCustomInstall(*local_manifest, local_install_path);
-  if (result.error) {
+  if (result.result.category != update_client::ErrorCategory::kNone) {
     return result;
   }
 
@@ -212,13 +236,13 @@ void ComponentInstaller::Install(
     std::unique_ptr<InstallParams> /*install_params*/,
     ProgressCallback /*progress_callback*/,
     Callback callback) {
-  base::Value::Dict manifest;
+  base::DictValue manifest;
   base::Version version;
   base::FilePath install_path;
   const Result result =
       InstallHelper(unpack_path, &manifest, &version, &install_path);
   base::DeletePathRecursively(unpack_path);
-  if (result.error) {
+  if (result.result.category != update_client::ErrorCategory::kNone) {
     main_task_runner_->PostTask(FROM_HERE,
                                 base::BindOnce(std::move(callback), result));
     return;
@@ -234,13 +258,15 @@ void ComponentInstaller::Install(
                               base::BindOnce(std::move(callback), result));
 }
 
-bool ComponentInstaller::GetInstalledFile(const std::string& file,
-                                          base::FilePath* installed_file) {
-  if (current_version_ == base::Version(kNullVersion)) {
-    return false;  // No component has been installed yet.
+std::optional<base::FilePath> ComponentInstaller::GetInstalledFile(
+    const std::string& file) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  base::FilePath path = base::FilePath::FromASCII(file);
+  if (path.IsAbsolute() || path.ReferencesParent() ||
+      current_install_dir_.empty()) {
+    return std::nullopt;
   }
-  *installed_file = current_install_dir_.AppendASCII(file);
-  return true;
+  return current_install_dir_.Append(path);
 }
 
 bool ComponentInstaller::Uninstall() {
@@ -260,7 +286,7 @@ bool ComponentInstaller::FindPreinstallation(
     return false;
   }
 
-  std::optional<base::Value::Dict> manifest = update_client::ReadManifest(path);
+  std::optional<base::DictValue> manifest = update_client::ReadManifest(path);
   if (!manifest) {
     DVLOG(1) << "Manifest does not exist: " << path.MaybeAsASCII();
     return false;
@@ -296,9 +322,9 @@ bool ComponentInstaller::FindPreinstallation(
 
 // Checks to see if the installation found in |path| is valid, and returns
 // its manifest if it is.
-std::optional<base::Value::Dict>
-ComponentInstaller::GetValidInstallationManifest(const base::FilePath& path) {
-  std::optional<base::Value::Dict> manifest = update_client::ReadManifest(path);
+std::optional<base::DictValue> ComponentInstaller::GetValidInstallationManifest(
+    const base::FilePath& path) {
+  std::optional<base::DictValue> manifest = update_client::ReadManifest(path);
   if (!manifest) {
     VPLOG(0) << "Failed to read manifest for " << installer_policy_->GetName()
              << " (" << path.MaybeAsASCII() << ").";
@@ -312,10 +338,10 @@ ComponentInstaller::GetValidInstallationManifest(const base::FilePath& path) {
     return std::nullopt;
   }
 
-  const base::Value::List* accept_archs = manifest->FindList("accept_arch");
+  const base::ListValue* accept_archs = manifest->FindList("accept_arch");
   if (accept_archs != nullptr &&
-      base::ranges::none_of(*accept_archs, [](const base::Value& v) {
-        static const char* current_arch =
+      std::ranges::none_of(*accept_archs, [](const base::Value& v) {
+        static const std::string_view current_arch =
             update_client::UpdateQueryParams::GetArch();
         return v.is_string() && v.GetString() == current_arch;
       })) {
@@ -337,7 +363,7 @@ std::optional<base::Version> ComponentInstaller::SelectComponentVersion(
 
   std::optional<base::Version> selected_version;
   base::FilePath selected_path;
-  std::optional<base::Value::Dict> selected_manifest;
+  std::optional<base::DictValue> selected_manifest;
 
   const base::Version bundled_version = registration_info->version.IsValid()
                                             ? registration_info->version
@@ -361,7 +387,7 @@ std::optional<base::Version> ComponentInstaller::SelectComponentVersion(
 
     if (!selected_version || version > *selected_version ||
         (target_version && version == *target_version)) {
-      std::optional<base::Value::Dict> candidate_manifest =
+      std::optional<base::DictValue> candidate_manifest =
           GetValidInstallationManifest(path);
       if (candidate_manifest) {
         selected_version = version;
@@ -400,7 +426,7 @@ std::optional<base::Version> ComponentInstaller::SelectComponentVersion(
 
 void ComponentInstaller::DeleteUnselectedComponentVersions(
     const base::FilePath& base_dir,
-    const std::optional<base::Version>& selected_version) {
+    std::optional<base::Version> selected_version) {
   base::FileEnumerator file_enumerator(base_dir, false,
                                        base::FileEnumerator::DIRECTORIES);
 
@@ -429,7 +455,7 @@ std::optional<base::FilePath> ComponentInstaller::GetComponentDirectory() {
     return std::nullopt;
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   base::FilePath base_dir_ = base_component_dir;
   for (const base::FilePath::StringType& component :
        installer_policy_->GetRelativeInstallDir().GetComponents()) {
@@ -439,7 +465,7 @@ std::optional<base::FilePath> ComponentInstaller::GetComponentDirectory() {
       return std::nullopt;
     }
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   return base_dir;
 }
@@ -449,8 +475,8 @@ void ComponentInstaller::StartRegistration(
     const base::Version& max_previous_product_version,
     scoped_refptr<RegistrationInfo> registration_info) {
   VLOG(1) << __func__ << " for " << installer_policy_->GetName();
-  DCHECK(task_runner_);
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  CHECK(task_runner_);
+  CHECK(task_runner_->RunsTasksInCurrentSequence());
 
   // First check for an installation set up alongside Chrome itself.
   base::FilePath root;
@@ -479,8 +505,8 @@ void ComponentInstaller::StartRegistration(
 }
 
 void ComponentInstaller::UninstallOnTaskRunner() {
-  DCHECK(task_runner_);
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  CHECK(task_runner_);
+  CHECK(task_runner_->RunsTasksInCurrentSequence());
 
   const std::optional<base::FilePath> base_dir = GetComponentDirectory();
   if (!base_dir) {
@@ -546,7 +572,8 @@ void ComponentInstaller::FinishRegistration(
                this, installer_policy_->RequiresNetworkEncryption(),
                installer_policy_->SupportsGroupPolicyEnabledComponentUpdates(),
                installer_policy_->AllowCachedCopies(),
-               installer_policy_->AllowUpdatesOnMeteredConnections()))) {
+               installer_policy_->AllowUpdatesOnMeteredConnections(),
+               installer_policy_->AllowUpdates()))) {
     VLOG(0) << "Component registration failed for "
             << installer_policy_->GetName();
     if (!callback.is_null()) {
@@ -566,7 +593,7 @@ void ComponentInstaller::FinishRegistration(
   }
 }
 
-void ComponentInstaller::ComponentReady(base::Value::Dict manifest) {
+void ComponentInstaller::ComponentReady(base::DictValue manifest) {
   VLOG(1) << "Component ready, version " << current_version_.GetString()
           << " in " << current_install_dir_.value();
   installer_policy_->ComponentReady(current_version_, current_install_dir_,

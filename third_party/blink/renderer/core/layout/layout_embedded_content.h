@@ -66,7 +66,7 @@ class CORE_EXPORT LayoutEmbeddedContent : public LayoutReplaced {
   gfx::Rect BorderBoxFromEmbeddedContent(const gfx::Rect&) const;
 
   PhysicalRect ReplacedContentRectFrom(
-      const PhysicalRect& base_content_rect) const final;
+      const PhysicalRect& base_content_rect) const override;
 
   void UpdateOnEmbeddedContentViewChange();
   void UpdateGeometry(EmbeddedContentView&);
@@ -86,11 +86,16 @@ class CORE_EXPORT LayoutEmbeddedContent : public LayoutReplaced {
   // rendered by this object to the object's border-box.
   AffineTransform EmbeddedContentTransform() const;
 
+  virtual bool ShowsUnavailablePluginIndicator() const;
+
  protected:
   PaintLayerType LayerTypeRequired() const override;
 
-  void StyleDidChange(StyleDifference, const ComputedStyle* old_style) final;
-  void UpdateLayout() override;
+  PhysicalNaturalSizingInfo GetNaturalDimensions() const override;
+
+  void StyleDidChange(StyleDifference,
+                      const ComputedStyle* old_style,
+                      const StyleChangeContext&) final;
   void PaintReplaced(const PaintInfo&,
                      const PhysicalOffset& paint_offset) const override;
   CursorDirective GetCursor(const PhysicalOffset&, ui::Cursor&) const final;
@@ -117,6 +122,8 @@ class CORE_EXPORT LayoutEmbeddedContent : public LayoutReplaced {
   bool PointOverResizer(const HitTestResult&,
                         const HitTestLocation&,
                         const PhysicalOffset& accumulated_offset) const;
+
+  void PropagateZoomFactor(double zoom_factor);
 };
 
 template <>

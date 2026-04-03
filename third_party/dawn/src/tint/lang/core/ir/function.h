@@ -32,11 +32,11 @@
 #include <optional>
 #include <utility>
 
+#include "src/tint/lang/core/io_attributes.h"
+#include "src/tint/lang/core/ir/constant.h"
 #include "src/tint/lang/core/ir/function_param.h"
-#include "src/tint/lang/core/ir/location.h"
 #include "src/tint/lang/core/ir/value.h"
 #include "src/tint/lang/core/type/type.h"
-#include "src/tint/utils/containers/const_propagating_ptr.h"
 #include "src/tint/utils/ice/ice.h"
 
 // Forward declarations
@@ -66,12 +66,14 @@ class Function : public Castable<Function, Value> {
     Function();
 
     /// Constructor
+    /// @param type the type of the function itself
     /// @param rt the function return type
     /// @param stage the function stage
     /// @param wg_size the workgroup_size
-    Function(const core::type::Type* rt,
+    Function(const core::type::Type* type,
+             const core::type::Type* rt,
              PipelineStage stage = PipelineStage::kUndefined,
-             std::optional<std::array<uint32_t, 3>> wg_size = {});
+             std::optional<std::array<Value*, 3>> wg_size = {});
     ~Function() override;
 
     /// @copydoc Instruction::Clone()
@@ -84,17 +86,76 @@ class Function : public Castable<Function, Value> {
     /// @returns the function pipeline stage
     PipelineStage Stage() const { return pipeline_stage_; }
 
+    /// @returns true if the function is an entry point
+    bool IsEntryPoint() const { return pipeline_stage_ != PipelineStage::kUndefined; }
+
+    /// @returns true if the function is a compute stage entry point
+    bool IsCompute() const { return pipeline_stage_ == PipelineStage::kCompute; }
+
+    /// @returns true if the function is a fragment stage entry point
+    bool IsFragment() const { return pipeline_stage_ == PipelineStage::kFragment; }
+
+    /// @returns true if the function is a vertex stage entry point
+    bool IsVertex() const { return pipeline_stage_ == PipelineStage::kVertex; }
+
     /// Sets the workgroup size
     /// @param x the x size
     /// @param y the y size
     /// @param z the z size
-    void SetWorkgroupSize(uint32_t x, uint32_t y, uint32_t z) { workgroup_size_ = {x, y, z}; }
+    void SetWorkgroupSize(Value* x, Value* y, Value* z) { workgroup_size_ = {x, y, z}; }
+
+    /// Sets the workgroup size
+    /// @param size the new size
+    void SetWorkgroupSize(std::array<Value*, 3> size) { workgroup_size_ = size; }
 
     /// Clears the workgroup size.
     void ClearWorkgroupSize() { workgroup_size_ = {}; }
 
     /// @returns the workgroup size information
-    std::optional<std::array<uint32_t, 3>> WorkgroupSize() const { return workgroup_size_; }
+    std::optional<std::array<Value*, 3>> WorkgroupSize() const { return workgroup_size_; }
+
+    /// @returns the workgroup size information as `uint32_t` values. Note, this requires the values
+    /// to all be constants.
+    std::optional<std::array<uint32_t, 3>> WorkgroupSizeAsConst() const {
+        if (!workgroup_size_.has_value()) {
+            return std::nullopt;
+        }
+
+        auto& ary = workgroup_size_.value();
+        auto* x = ary[0]->As<core::ir::Constant>();
+        auto* y = ary[1]->As<core::ir::Constant>();
+        auto* z = ary[2]->As<core::ir::Constant>();
+        TINT_ASSERT(x && y && z);
+
+        return {{
+            x->Value()->ValueAs<uint32_t>(),
+            y->Value()->ValueAs<uint32_t>(),
+            z->Value()->ValueAs<uint32_t>(),
+        }};
+    }
+
+    /// Sets the subgroup size
+    /// @param size the new subgroup size
+    void SetSubgroupSize(Value* size) { subgroup_size_ = size; }
+
+    /// @returns the subgroup size information
+    std::optional<Value*> SubgroupSize() const { return subgroup_size_; }
+
+    /// @returns the subgroup size information as `uint32_t` values. Note, this requires the value
+    /// to be constant.
+    std::optional<uint32_t> SubgroupSizeAsConst() const {
+        if (!subgroup_size_.has_value()) {
+            return std::nullopt;
+        }
+
+        auto* value = subgroup_size_.value()->As<core::ir::Constant>();
+        TINT_ASSERT(value);
+
+        return value->Value()->ValueAs<uint32_t>();
+    }
+
+    /// Clears the subgroup size.
+    void ClearSubgroupSize() { subgroup_size_ = {}; }
 
     /// @param type the return type for the function
     void SetReturnType(const core::type::Type* type) { return_.type = type; }
@@ -102,41 +163,52 @@ class Function : public Castable<Function, Value> {
     /// @returns the return type for the function
     const core::type::Type* ReturnType() const { return return_.type; }
 
-    /// Sets the return attributes
+    /// Sets the return IO attributes.
+    /// @param attrs the attributes
+    void SetReturnAttributes(const IOAttributes& attrs) { return_.attributes = attrs; }
+    /// @returns the return IO attributes
+    const IOAttributes& ReturnAttributes() const { return return_.attributes; }
+
+    /// Sets the return builtin attribute
     /// @param builtin the builtin to set
     void SetReturnBuiltin(BuiltinValue builtin) {
-        TINT_ASSERT(!return_.builtin.has_value());
-        return_.builtin = builtin;
+        TINT_ASSERT(!return_.attributes.builtin.has_value());
+        return_.attributes.builtin = builtin;
     }
     /// @returns the return builtin attribute
-    std::optional<BuiltinValue> ReturnBuiltin() const { return return_.builtin; }
+    std::optional<BuiltinValue> ReturnBuiltin() const { return return_.attributes.builtin; }
 
-    /// Clears the return builtin attribute.
-    void ClearReturnBuiltin() { return_.builtin = {}; }
-
-    /// Sets the return location
-    /// @param location the location to set
-    void SetReturnLocation(Location location) { return_.location = std::move(location); }
-
-    /// Sets the return location
-    /// @param loc the location to set
-    /// @param interp the interpolation
-    void SetReturnLocation(uint32_t loc, std::optional<core::Interpolation> interp) {
-        return_.location = {loc, interp};
+    /// Sets the return depth mode attribute
+    /// @param depth_mode the depth mode to set
+    void SetReturnDepthMode(BuiltinDepthMode depth_mode) {
+        TINT_ASSERT(!return_.attributes.depth_mode.has_value());
+        return_.attributes.depth_mode = depth_mode;
     }
 
-    /// @returns the return location
-    std::optional<Location> ReturnLocation() const { return return_.location; }
+    /// Sets the return location.
+    /// @param loc the optional location to set
+    void SetReturnLocation(std::optional<uint32_t> loc) { return_.attributes.location = loc; }
 
-    /// Clears the return location attribute.
-    void ClearReturnLocation() { return_.location = {}; }
+    /// @returns the return location
+    std::optional<uint32_t> ReturnLocation() const { return return_.attributes.location; }
+
+    /// Sets the return interpolation.
+    /// @param interp the optional interpolation
+    void SetReturnInterpolation(std::optional<core::Interpolation> interp) {
+        return_.attributes.interpolation = interp;
+    }
+
+    /// @returns the return interpolation
+    std::optional<Interpolation> ReturnInterpolation() const {
+        return return_.attributes.interpolation;
+    }
 
     /// Sets the return as invariant
     /// @param val the invariant value to set
-    void SetReturnInvariant(bool val) { return_.invariant = val; }
+    void SetReturnInvariant(bool val) { return_.attributes.invariant = val; }
 
     /// @returns the return invariant value
-    bool ReturnInvariant() const { return return_.invariant; }
+    bool ReturnInvariant() const { return return_.attributes.invariant; }
 
     /// Sets the function parameters
     /// @param params the function parameters
@@ -145,6 +217,10 @@ class Function : public Castable<Function, Value> {
     /// Sets the function parameters
     /// @param params the function parameters
     void SetParams(std::initializer_list<FunctionParam*> params);
+
+    /// Appends a new function parameter.
+    /// @param param the function parameter to append
+    void AppendParam(FunctionParam* param);
 
     /// @returns the function parameters
     const VectorRef<FunctionParam*> Params() { return params_; }
@@ -170,17 +246,16 @@ class Function : public Castable<Function, Value> {
 
   private:
     PipelineStage pipeline_stage_ = PipelineStage::kUndefined;
-    std::optional<std::array<uint32_t, 3>> workgroup_size_;
+    std::optional<std::array<Value*, 3>> workgroup_size_;
+    std::optional<Value*> subgroup_size_;
 
     struct {
         const core::type::Type* type = nullptr;
-        std::optional<BuiltinValue> builtin;
-        std::optional<Location> location;
-        bool invariant = false;
+        IOAttributes attributes = {};
     } return_;
 
     Vector<FunctionParam*, 1> params_;
-    ConstPropagatingPtr<ir::Block> block_;
+    ir::Block* block_ = nullptr;
 };
 
 /// @param value the enum value
@@ -190,7 +265,8 @@ std::string_view ToString(Function::PipelineStage value);
 /// @param out the stream to write to
 /// @param value the Function::PipelineStage
 /// @returns @p out so calls can be chained
-template <typename STREAM, typename = traits::EnableIfIsOStream<STREAM>>
+template <typename STREAM>
+    requires(traits::IsOStream<STREAM>)
 auto& operator<<(STREAM& out, Function::PipelineStage value) {
     return out << ToString(value);
 }

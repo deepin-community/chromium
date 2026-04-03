@@ -7,8 +7,8 @@
 # certain ACL restrictions. For more info, see
 # http://go/chromium-cq#internal-builders-on-the-cq.
 
-load("//lib/branches.star", "branches")
-load("//lib/try.star", "default_location_filters", "try_")
+load("@chromium-luci//branches.star", "branches")
+load("@chromium-luci//try.star", "default_location_filters", "default_owner_whitelist_group_for_cq_bots", "try_")
 load("//project.star", "settings")
 
 def chrome_internal_verifier(
@@ -35,17 +35,16 @@ def chrome_internal_verifier(
             disable_reuse = tryjob.disable_reuse,
             experiment_percentage = tryjob.experiment_percentage,
             location_filters = location_filters,
+            mode_allowlist = tryjob.custom_cq_run_modes,
             result_visibility = cq.COMMENT_LEVEL_RESTRICTED,
+            **kwargs
         )
     else:
         branches.cq_tryjob_verifier(
             builder = "{}:try/{}".format(settings.chrome_project, builder),
             cq_group = "cq",
             includable_only = True,
-            owner_whitelist = [
-                "googlers",
-                "project-chromium-robot-committers",
-            ],
+            owner_whitelist = default_owner_whitelist_group_for_cq_bots(settings.chrome_project),
             result_visibility = cq.COMMENT_LEVEL_RESTRICTED,
             **kwargs
         )
@@ -70,10 +69,55 @@ chrome_internal_verifier(
     tryjob = try_.job(),
 )
 
+chrome_internal_verifier(
+    builder = "mega-cq-launcher",
+    tryjob = try_.job(
+        custom_cq_run_modes = [try_.MEGA_CQ_DRY_RUN_NAME, try_.MEGA_CQ_FULL_RUN_NAME],
+    ),
+)
+
 ### Optional builders ###
 
 chrome_internal_verifier(
+    # TODO(https://crbug.com/400712231): Turn on branches for this bot.
+    #branch_selector = branches.selector.ANDROID_BRANCHES,
+    builder = "android-arm32-orderfile",
+)
+
+chrome_internal_verifier(
+    # TODO(https://crbug.com/400712231): Turn on branches for this bot.
+    #branch_selector = branches.selector.ANDROID_BRANCHES,
+    builder = "android-arm64-orderfile",
+)
+
+chrome_internal_verifier(
+    branch_selector = branches.selector.ANDROID_BRANCHES,
+    builder = "android-arm32-pgo",
+)
+
+chrome_internal_verifier(
+    branch_selector = branches.selector.ANDROID_BRANCHES,
+    builder = "android-arm64-pgo",
+)
+
+chrome_internal_verifier(
+    # TODO(https://crbug.com/400712231): Turn on branches for this bot.
+    #branch_selector = branches.selector.ANDROID_BRANCHES,
+    builder = "webview-arm-orderfile",
+)
+
+chrome_internal_verifier(
+    # TODO(https://crbug.com/400712231): Turn on branches for this bot.
+    #branch_selector = branches.selector.ANDROID_BRANCHES,
+    builder = "webview-arm64-orderfile",
+)
+
+chrome_internal_verifier(
     builder = "android-internal-binary-size",
+)
+
+chrome_internal_verifier(
+    builder = "android-internal-dbg",
 )
 
 chrome_internal_verifier(
@@ -81,23 +125,37 @@ chrome_internal_verifier(
 )
 
 chrome_internal_verifier(
+    builder = "android-internal-unpublished-dbg",
+)
+
+chrome_internal_verifier(
+    branch_selector = branches.selector.ANDROID_BRANCHES,
+    builder = "android-arm-rel-ready",
+)
+
+chrome_internal_verifier(
+    branch_selector = branches.selector.ANDROID_BRANCHES,
+    builder = "android-x64-rel-ready",
+)
+
+chrome_internal_verifier(
+    builder = "chromeos-arm64-generic-cfi-thin-lto-chrome",
+)
+
+chrome_internal_verifier(
     builder = "chromeos-betty-chrome",
 )
 
 chrome_internal_verifier(
-    builder = "chromeos-betty-pi-arc-cfi-thin-lto-chrome",
+    builder = "chromeos-betty-chrome-dchecks",
 )
 
 chrome_internal_verifier(
-    builder = "chromeos-betty-pi-arc-chrome",
+    builder = "chromeos-betty-cfi-thin-lto-chrome",
 )
 
 chrome_internal_verifier(
-    builder = "chromeos-betty-pi-arc-chrome-accessibility-fyi",
-)
-
-chrome_internal_verifier(
-    builder = "chromeos-brya-chrome-skylab",
+    builder = "chromeos-brya-chrome",
 )
 
 chrome_internal_verifier(
@@ -113,10 +171,6 @@ chrome_internal_verifier(
 )
 
 chrome_internal_verifier(
-    builder = "chromeos-jacuzzi-chrome-skylab",
-)
-
-chrome_internal_verifier(
     builder = "chromeos-jacuzzi-compile-chrome",
 )
 
@@ -129,11 +183,41 @@ chrome_internal_verifier(
 )
 
 chrome_internal_verifier(
-    builder = "chromeos-volteer-chrome-skylab",
+    builder = "chromeos-trogdor-chrome",
+)
+
+chrome_internal_verifier(
+    builder = "chromeos-volteer-chrome",
+)
+
+chrome_internal_verifier(
+    branch_selector = branches.selector.ANDROID_BRANCHES,
+    builder = "cronet-arm64-gn2bp-debug",
+    # The limited traffic to the location_filters specified below makes this
+    # use of owner_whitelist acceptable (see
+    # https://crrev.com/c/6429907/4..6/infra/config/subprojects/chrome/try.star#b182).
+    owner_whitelist = ["googlers"],
+    tryjob = try_.job(
+        location_filters = [
+            "components/cronet/gn2bp/.+",
+        ],
+    ),
 )
 
 chrome_internal_verifier(
     builder = "chromeos-reven-chrome",
+)
+
+chrome_internal_verifier(
+    builder = "fuchsia-ava-astro",
+)
+
+chrome_internal_verifier(
+    builder = "fuchsia-ava-nelson",
+)
+
+chrome_internal_verifier(
+    builder = "fuchsia-ava-sherlock",
 )
 
 chrome_internal_verifier(
@@ -169,32 +253,40 @@ chrome_internal_verifier(
 )
 
 chrome_internal_verifier(
+    builder = "fuchsia-smoke-sherlock-roller",
+)
+
+chrome_internal_verifier(
+    builder = "fuchsia-webgl-astro",
+)
+
+chrome_internal_verifier(
+    builder = "fuchsia-webgl-nelson",
+)
+
+chrome_internal_verifier(
+    builder = "fuchsia-webgl-sherlock",
+)
+
+chrome_internal_verifier(
+    builder = "fuchsia-webgl-sherlock-qemu",
+)
+
+chrome_internal_verifier(
+    branch_selector = branches.selector.IOS_BRANCHES,
+    builder = "ios-rel-ready",
+)
+
+chrome_internal_verifier(
+    builder = "ios-simulator",
+)
+
+chrome_internal_verifier(
     builder = "ipad-device",
 )
 
 chrome_internal_verifier(
     builder = "iphone-device",
-)
-
-chrome_internal_verifier(
-    builder = "lacros-amd64-generic-chrome",
-)
-
-chrome_internal_verifier(
-    branch_selector = branches.selector.CROS_BRANCHES,
-    builder = "lacros-amd64-generic-chrome-skylab",
-)
-
-chrome_internal_verifier(
-    builder = "lacros-arm-generic-chrome",
-)
-
-chrome_internal_verifier(
-    builder = "lacros-arm-generic-chrome-skylab",
-)
-
-chrome_internal_verifier(
-    builder = "lacros-arm64-generic-chrome-skylab",
 )
 
 chrome_internal_verifier(
@@ -207,15 +299,11 @@ chrome_internal_verifier(
 )
 
 chrome_internal_verifier(
+    builder = "linux-cft",
+)
+
+chrome_internal_verifier(
     builder = "linux-chromeos-chrome",
-)
-
-chrome_internal_verifier(
-    builder = "linux-chromeos-chrome-with-lacros",
-)
-
-chrome_internal_verifier(
-    builder = "linux-lacros-chrome",
 )
 
 chrome_internal_verifier(
@@ -227,13 +315,44 @@ chrome_internal_verifier(
 )
 
 chrome_internal_verifier(
+    builder = "linux-perf-trigger",
+    # The current whitelist includes:
+    #  Googlers: internal users are always welcome
+    #  project-chromium-robot-committers: this list includes autoroll bots,
+    #       rubber stamper for reverts, etc.
+    #       We definitely want to have autoroll bots here because we have no
+    #       Perf tests on those sub repos, and we want to catch the regressions
+    #       during rollout.
+    owner_whitelist = ["googlers", "project-chromium-robot-committers"],
+    tryjob = try_.job(
+        # TODO(b/457822464) Keep it running for now and with new devices in Q1
+        # 2026. By the end of Q1, we will decide whether remove it or promote
+        # it to CQ.
+        experiment_percentage = 100,
+    ),
+)
+
+chrome_internal_verifier(
     branch_selector = branches.selector.LINUX_BRANCHES,
     builder = "linux-pgo",
 )
 
 chrome_internal_verifier(
+    branch_selector = branches.selector.LINUX_BRANCHES,
+    builder = "linux64-rel-ready",
+)
+
+chrome_internal_verifier(
+    builder = "mac-arm64-bluebird-rel",
+)
+
+chrome_internal_verifier(
     branch_selector = branches.selector.MAC_BRANCHES,
     builder = "mac-chrome",
+)
+
+chrome_internal_verifier(
+    builder = "mac-cft",
 )
 
 chrome_internal_verifier(
@@ -247,11 +366,44 @@ chrome_internal_verifier(
 )
 
 chrome_internal_verifier(
+    branch_selector = branches.selector.MAC_BRANCHES,
+    builder = "mac-rel-ready",
+)
+
+chrome_internal_verifier(
+    builder = "optimization_guide-ios-device",
+)
+
+chrome_internal_verifier(
+    builder = "optimization_guide-ios-simulator",
+)
+
+chrome_internal_verifier(
     builder = "optimization_guide-linux",
+    owner_whitelist = [
+        "google/optimization-guide-try-opt-in@google.com",
+    ],
+    tryjob = try_.job(
+        location_filters = [
+            "chrome/browser/ai/.+",
+            "components/optimization_guide/.+",
+            "services/on_device_model/.+",
+        ],
+    ),
 )
 
 chrome_internal_verifier(
     builder = "optimization_guide-mac-arm64",
+    owner_whitelist = [
+        "google/optimization-guide-try-opt-in@google.com",
+    ],
+    tryjob = try_.job(
+        location_filters = [
+            "chrome/browser/ai/.+",
+            "components/optimization_guide/.+",
+            "services/on_device_model/.+",
+        ],
+    ),
 )
 
 chrome_internal_verifier(
@@ -264,10 +416,28 @@ chrome_internal_verifier(
 
 chrome_internal_verifier(
     builder = "optimization_guide-win64",
+    owner_whitelist = [
+        "google/optimization-guide-try-opt-in@google.com",
+    ],
+    tryjob = try_.job(
+        location_filters = [
+            "chrome/browser/ai/.+",
+            "components/optimization_guide/.+",
+            "services/on_device_model/.+",
+        ],
+    ),
 )
 
 chrome_internal_verifier(
-    builder = "test-o-emulator",
+    builder = "test-emulator",
+)
+
+chrome_internal_verifier(
+    builder = "test-tablet",
+)
+
+chrome_internal_verifier(
+    builder = "win-arm64-bluebird-rel",
 )
 
 chrome_internal_verifier(
@@ -277,7 +447,40 @@ chrome_internal_verifier(
 
 chrome_internal_verifier(
     branch_selector = branches.selector.WINDOWS_BRANCHES,
+    builder = "win-arm64-rel-ready",
+)
+
+chrome_internal_verifier(
+    builder = "win-bluebird-rel",
+)
+
+chrome_internal_verifier(
+    branch_selector = branches.selector.WINDOWS_BRANCHES,
     builder = "win-chrome",
+)
+
+chrome_internal_verifier(
+    builder = "win-cft",
+)
+
+chrome_internal_verifier(
+    builder = "win-perf-trigger",
+    # The current whitelist includes:
+    #  Googlers: internal users are always welcome
+    #  project-chromium-robot-committers: this list includes autoroll bots,
+    #       rubber stamper for reverts, etc.
+    #       We definitely want to have autoroll bots here because we have no
+    #       Perf tests on those sub repos, and we want to catch the regressions
+    #       during rollout.
+    owner_whitelist = ["googlers", "project-chromium-robot-committers"],
+    tryjob = try_.job(
+        experiment_percentage = 100,
+    ),
+)
+
+chrome_internal_verifier(
+    branch_selector = branches.selector.WINDOWS_BRANCHES,
+    builder = "win-rel-ready",
 )
 
 chrome_internal_verifier(
@@ -293,4 +496,9 @@ chrome_internal_verifier(
 chrome_internal_verifier(
     branch_selector = branches.selector.WINDOWS_BRANCHES,
     builder = "win64-pgo",
+)
+
+chrome_internal_verifier(
+    branch_selector = branches.selector.WINDOWS_BRANCHES,
+    builder = "win64-rel-ready",
 )

@@ -43,7 +43,7 @@ def TFFramework_Dialect : Dialect {
 }
 
 def TFFramework_OpKernelContextType : DialectType<TFFramework_Dialect,
-    CPred<"$_self.isa<::mlir::kernel_gen::tf_framework::OpKernelContextType>()">,
+    CPred<"llvm::isa<::mlir::kernel_gen::tf_framework::OpKernelContextType>($_self)">,
           "op_kernel_construction">,
     BuildableType<"$_builder.getType<::mlir::kernel_gen::tf_framework::OpKernelContextType>()"> {
   let description = [{
@@ -53,7 +53,7 @@ def TFFramework_OpKernelContextType : DialectType<TFFramework_Dialect,
 }
 
 def TFFramework_JITCallableType : DialectType<TFFramework_Dialect, CPred<
-    "$_self.isa<::mlir::kernel_gen::tf_framework::JITCallableType>()">>,
+    "llvm::isa<::mlir::kernel_gen::tf_framework::JITCallableType>($_self)">>,
     BuildableType<"$_builder.getType<::mlir::kernel_gen::tf_framework::JITCallableType>()"> {
   let description = [{
     A `callable` represents the result of JIT compilation. Conceptually, it
@@ -107,7 +107,7 @@ def TFFramework_TFAllocOp : TFFramework_Op<"alloc", [
     }]>];
 
   let extraClassDeclaration = [{
-    MemRefType getType() { return getResult().getType().cast<MemRefType>(); }
+    MemRefType getType() { return llvm::cast<MemRefType>(getResult().getType()); }
     static constexpr StringRef kReuseOutputAttrName = "reuse_output";
     static constexpr StringRef kReuseInputCandidatesAttrName =
         "reuse_input_candidates";
@@ -284,7 +284,6 @@ def TFFramework_JITCompileFromStrOp : TFFramework_Op<"jit_compile_from_str",
     StrAttr:$code,
     I64ArrayAttr:$tileSizes,
     I64ArrayAttr:$unrollFactors,
-    I64Attr:$maxSupportedRank,
     BoolAttr:$enableFtz,
     BoolAttr:$index64Bit,
     BoolAttr:$cpuCodegen

@@ -1,9 +1,10 @@
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("../../../scripts/build/ninja/devtools_entrypoint.gni")
 import("../../../scripts/build/ninja/devtools_module.gni")
+import("../../../scripts/build/typescript/typescript.gni")
 import("../visibility.gni")
 
 devtools_module("emulation") {
@@ -20,7 +21,7 @@ devtools_module("emulation") {
     "../../core/root:bundle",
     "../../core/sdk:bundle",
     "../../generated:protocol",
-    "../../ui/legacy:bundle",
+    "../geometry:bundle",
   ]
 }
 
@@ -31,10 +32,29 @@ devtools_entrypoint("bundle") {
 
   visibility = [
     ":*",
-    "../../../test/unittests/front_end/entrypoints/missing_entrypoints/*",
-    "../../../test/unittests/front_end/models/emulation/*",
+    "../*",
     "../../panels/emulation/*",
+    "../../panels/lighthouse/*",
+    "../../panels/settings/emulation/*",
+    "../../panels/timeline/*",
+    "../crux-manager/*",
   ]
 
   visibility += devtools_models_visibility
+}
+
+ts_library("unittests") {
+  testonly = true
+
+  sources = [
+    "DeviceModeModel.test.ts",
+    "EmulatedDevices.test.ts",
+  ]
+
+  deps = [
+    ":bundle",
+    "../../core/platform:bundle",
+    "../../core/sdk:bundle",
+    "../../testing",
+  ]
 }

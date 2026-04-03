@@ -22,6 +22,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -162,6 +163,13 @@ struct TracingInitArgs {
   // inside a sandbox and can't create sockets directly.
   // Not yet supported for consumer connections currently.
   CreateSocketAsync create_socket_async = nullptr;
+
+  // [Optional] Specifies a custom track uuid for the current current. If
+  // specified, perfetto::ProcessTrack::Current().uuid will have this value. The
+  // value provided must be unique among all processes. When not specified, the
+  // perfetto::ProcessTrack::Current().uuid is chosen automatically based on
+  // PID, start time and a random source.
+  std::optional<uint64_t> process_uuid = std::nullopt;
 
  protected:
   friend class Tracing;
@@ -344,6 +352,30 @@ class PERFETTO_EXPORT_COMPONENT TracingSession {
   // started.
   virtual void StartBlocking() = 0;
 
+  // Struct passed as argument to the callback passed to CloneTrace().
+  struct CloneTraceCallbackArgs {
+    bool success;
+    std::string error;
+    // UUID of the cloned session.
+    int64_t uuid_msb;
+    int64_t uuid_lsb;
+  };
+
+  // Struct passed as argument to CloneTrace().
+  struct CloneTraceArgs {
+    // The unique_session_name of the session that should be cloned.
+    std::string unique_session_name;
+  };
+
+  // Clones an existing initialized tracing session from the same `BackendType`
+  // as this tracing session, and attaches to it. The session is cloned in
+  // read-only mode and can only be used to read a snapshot of an existing
+  // tracing session. For each session, only one CloneTrace call can be pending
+  // at the same time; subsequent calls after the callback is executed are
+  // supported.
+  using CloneTraceCallback = std::function<void(CloneTraceCallbackArgs)>;
+  virtual void CloneTrace(CloneTraceArgs args, CloneTraceCallback);
+
   // This callback will be invoked when all data sources have acknowledged that
   // tracing has started. This callback will be invoked on an internal perfetto
   // thread.
@@ -503,8 +535,8 @@ class PERFETTO_EXPORT_COMPONENT StartupTracingSession {
   virtual void AbortBlocking() = 0;
 };
 
-PERFETTO_ALWAYS_INLINE inline std::unique_ptr<TracingSession>
-Tracing::NewTrace(BackendType backend) {
+PERFETTO_ALWAYS_INLINE inline std::unique_ptr<TracingSession> Tracing::NewTrace(
+    BackendType backend) {
   // This code is inlined to allow dead-code elimination for unused consumer
   // implementation. The logic behind it is the following:
   // Nothing other than the code below references the GetInstance() method

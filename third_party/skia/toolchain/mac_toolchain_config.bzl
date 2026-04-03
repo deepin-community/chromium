@@ -24,13 +24,17 @@ load(
     "tool",
     "variable_with_value",
 )
+load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load(":clang_layering_check.bzl", "make_layering_check_features")
 
 # The location of the created clang toolchain.
-EXTERNAL_TOOLCHAIN = "external/clang_mac"
+EXTERNAL_TOOLCHAIN = "external/+_repo_rules2+clang_mac"
 
 # Root of our symlinks. These symlinks are created in download_mac_toolchain.bzl
 XCODE_MACSDK_SYMLINK = EXTERNAL_TOOLCHAIN + "/symlinks/xcode/MacSDK"
+
+# Must stay in sync with download_mac_toolchain.bzl.
+CLANG_VER = "22"
 
 _platform_constraints_to_import = {
     "@platforms//cpu:arm64": "_arm64_cpu",
@@ -40,7 +44,7 @@ _platform_constraints_to_import = {
 def _mac_toolchain_info(ctx):
     action_configs = _make_action_configs()
     features = []
-    features += _make_default_flags()
+    features += _make_default_flags(ctx)
     features += make_layering_check_features()
     features += _make_diagnostic_flags()
     features += _make_target_specific_flags(ctx)
@@ -58,7 +62,7 @@ def _mac_toolchain_info(ctx):
             # "If the compiler has --sysroot support, then these paths should use %sysroot%
             #  rather than the include path"
             # https://bazel.build/rules/lib/cc_common#create_cc_toolchain_config_info.cxx_builtin_include_directories
-            "%sysroot%/symlinks/xcode/MacSDK/Frameworks/",
+            "%sysroot%/symlinks/xcode/MacSDK/System/Library/Frameworks/",
         ],
         # If `ctx.attr.cpu` is blank (which is declared as optional below), this config will target
         # the host CPU. Specifying a target_cpu allows this config to be used for cross compilation.
@@ -232,12 +236,6 @@ def _make_action_configs():
         tools = [ar_tool],
     )
 
-    objc_archive_action = action_config(
-        action_name = ACTION_NAMES.objc_archive,
-        flag_sets = common_archive_flags,
-        tools = [ar_tool],
-    )
-
     action_configs = [
         assemble_action,
         c_compile_action,
@@ -247,7 +245,6 @@ def _make_action_configs():
         cpp_link_nodeps_dynamic_library_action,
         cpp_link_static_library_action,
         linkstamp_compile_action,
-        objc_archive_action,
         objc_compile_action,
         objcpp_compile_action,
         preprocess_assemble_action,
@@ -260,7 +257,7 @@ def _make_action_configs():
 # https://docs.bazel.build/versions/3.3.0/be/objective-c.html#objc_library
 #
 # Note: These values must be kept in sync with those defined in cmake_exporter.go.
-def _make_default_flags():
+def _make_default_flags(ctx):
     """Here we define the flags for certain actions that are always applied.
 
     For any flag that might be conditionally applied, it should be defined in //bazel/copts.bzl.
@@ -279,22 +276,22 @@ def _make_default_flags():
         flag_groups = [
             flag_group(
                 flags = [
-                    # THIS ORDER MATTERS GREATLY. If these are in the wrong order, the
-                    # #include_next directives will fail to find the files, causing a compilation
-                    # error (or, without -no-canonical-prefixes, a mysterious case where files
-                    # are included with an absolute path and fail the build).
+                    # THIS ORDER MATTERS GREATLY. If these are in the wrong order, we see errors
+                    # like "error: unknown type name 'size_t'". We want the C++ standard library
+                    # headers and then the internal clang version to "fulfill" any missing types
+                    # before we get to the other includes from the SDK and frameworks
                     "-isystem",
-                    EXTERNAL_TOOLCHAIN + "/include/c++/v1",
+                    XCODE_MACSDK_SYMLINK + "/usr/include/c++/v1",
+                    "-isystem",
+                    EXTERNAL_TOOLCHAIN + "/lib/clang/" + CLANG_VER + "/include",
                     "-isystem",
                     XCODE_MACSDK_SYMLINK + "/usr/include",
-                    "-isystem",
-                    EXTERNAL_TOOLCHAIN + "/lib/clang/15.0.1/include",
                     # Set the framework path to the Mac SDK framework directory. This has
                     # subfolders like OpenGL.framework
                     # We want -iframework so Clang hides diagnostic warnings from those header
                     # files we include. -F does not hide those.
                     "-iframework",
-                    XCODE_MACSDK_SYMLINK + "/Frameworks",
+                    XCODE_MACSDK_SYMLINK + "/System/Library/Frameworks",
                     # We do not want clang to search in absolute paths for files. This makes
                     # Bazel think we are using an outside resource and fail the compile.
                     "-no-canonical-prefixes",
@@ -312,7 +309,7 @@ def _make_default_flags():
         flag_groups = [
             flag_group(
                 flags = [
-                    "-std=c++17",
+                    "-std=c++20",
                 ],
             ),
         ],
@@ -355,12 +352,13 @@ def _make_default_flags():
                     # https://github.com/llvm/llvm-project/blob/d61341768cf0cff7ceeaddecc2f769b5c1b901c4/lld/MachO/InputFiles.cpp#L1418-L1420
                     "-Wl,-syslibroot",
                     XCODE_MACSDK_SYMLINK,
+                    # This path is relative to the syslibroot above, and we want lld to look in the
+                    # Frameworks symlink that was created in download_mac_toolchain.bzl.
+                    "-F/System/Library/Frameworks",
                     "-fuse-ld=lld",
-                    "-std=c++17",
-                    "-stdlib=libc++",
-                    EXTERNAL_TOOLCHAIN + "/lib/libc++.a",
-                    EXTERNAL_TOOLCHAIN + "/lib/libc++abi.a",
-                    EXTERNAL_TOOLCHAIN + "/lib/libunwind.a",
+                    "-std=c++20",
+                    # Link against gnu libc that's in the Mac SDK.
+                    "-lc++",
                 ],
             ),
         ],
@@ -424,6 +422,13 @@ def _make_diagnostic_flags():
             enabled = False,
             flag_sets = [
                 cxx_diagnostic,
+                link_diagnostic,
+            ],
+        ),
+        feature(
+            "link_diagnostic",
+            enabled = False,
+            flag_sets = [
                 link_diagnostic,
             ],
         ),

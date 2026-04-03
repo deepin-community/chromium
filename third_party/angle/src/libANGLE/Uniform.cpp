@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_libc_calls
+#endif
+
 #include "libANGLE/Uniform.h"
 #include "common/BinaryStream.h"
 #include "libANGLE/ProgramLinkedResources.h"
@@ -26,7 +30,7 @@ LinkedUniform::LinkedUniform(GLenum typeIn,
     ASSERT(arraySizesIn.size() <= 1);
 
     memset(this, 0, sizeof(*this));
-    SetBitField(pod.type, typeIn);
+    pod.typeIndex = GetUniformTypeIndex(typeIn);
     SetBitField(pod.precision, precisionIn);
     pod.location = locationIn;
     SetBitField(pod.binding, bindingIn);
@@ -54,7 +58,7 @@ LinkedUniform::LinkedUniform(const UsedUniform &usedUniform)
 
     // Note: Ensure every data member is initialized.
     pod.flagBitsAsUByte = 0;
-    SetBitField(pod.type, usedUniform.type);
+    pod.typeIndex       = GetUniformTypeIndex(usedUniform.type);
     SetBitField(pod.precision, usedUniform.precision);
     SetBitField(pod.imageUnitFormat, usedUniform.imageUnitFormat);
     pod.location          = usedUniform.location;
@@ -77,6 +81,7 @@ LinkedUniform::LinkedUniform(const UsedUniform &usedUniform)
 
     SetBitField(pod.flagBits.isFragmentInOut, usedUniform.isFragmentInOut);
     SetBitField(pod.flagBits.texelFetchStaticUse, usedUniform.texelFetchStaticUse);
+    SetBitField(pod.flagBits.isFloat16, usedUniform.isFloat16);
     ASSERT(!usedUniform.isArray() || pod.arraySize == usedUniform.getArraySizeProduct());
 }
 

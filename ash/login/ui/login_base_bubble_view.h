@@ -69,7 +69,8 @@ class ASH_EXPORT LoginBaseBubbleView : public views::View,
       ui::LayerAnimationSequence* sequence) override {}
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void Layout(PassKey) override;
   void OnBlur() override;
 
@@ -87,9 +88,6 @@ class ASH_EXPORT LoginBaseBubbleView : public views::View,
   }
 
  private:
-  // Create a layer for this view if doesn't exist.
-  void EnsureLayer();
-
   // Return bounds of the anchors root view. This bounds excludes virtual
   // keyboard.
   gfx::Rect GetRootViewBounds() const;

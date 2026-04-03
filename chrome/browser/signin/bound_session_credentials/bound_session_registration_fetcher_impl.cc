@@ -4,8 +4,13 @@
 
 #include "chrome/browser/signin/bound_session_credentials/bound_session_registration_fetcher_impl.h"
 
+#include <optional>
+#include <string>
+#include <string_view>
+
 #include "base/base64.h"
 #include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/metrics/histogram_functions.h"
@@ -20,6 +25,7 @@
 #include "components/unexportable_keys/unexportable_key_service.h"
 #include "components/variations/net/variations_http_headers.h"
 #include "google_apis/gaia/gaia_urls.h"
+#include "google_apis/gaia/register_bound_session_payload.h"
 #include "net/base/schemeful_site.h"
 #include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -29,22 +35,9 @@
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace {
-constexpr char kSessionIdentifier[] = "session_identifier";
-constexpr char kCredentials[] = "credentials";
+
 const char kXSSIPrefix[] = ")]}'";
 
-bound_session_credentials::Credential CreateCookieCredential(
-    const std::string& name,
-    const std::string& domain,
-    const std::string& path) {
-  bound_session_credentials::Credential credential;
-  bound_session_credentials::CookieCredential* cookie_credential =
-      credential.mutable_cookie_credential();
-  cookie_credential->set_name(name);
-  cookie_credential->set_domain(domain);
-  cookie_credential->set_path(path);
-  return credential;
-}
 }  // namespace
 
 BoundSessionRegistrationFetcherImpl::BoundSessionRegistrationFetcherImpl(
@@ -64,25 +57,28 @@ void BoundSessionRegistrationFetcherImpl::Start(
     RegistrationCompleteCallback callback) {
   TRACE_EVENT("browser", "BoundSessionRegistrationFetcherImpl::Start",
               perfetto::Flow::FromPointer(this), "endpoint",
-              registration_params_.RegistrationEndpoint());
+              registration_params_.registration_endpoint());
   CHECK(!registration_duration_.has_value());
   CHECK(!callback_);
   CHECK(!registration_token_helper_);
   registration_duration_.emplace();  // Starts the timer.
   callback_ = std::move(callback);
+  registration_token_helper_ =
+      std::make_unique<BindingKeyRegistrationTokenHelper>(
+          key_service_.get(),
+          base::ToVector(registration_params_.supported_algos()));
   // base::Unretained() is safe since `this` owns
   // `registration_token_helper_`.
-  registration_token_helper_ = RegistrationTokenHelper::CreateForSessionBinding(
-      key_service_.get(), registration_params_.Challenge(),
-      registration_params_.RegistrationEndpoint(),
+  registration_token_helper_->GenerateForSessionBinding(
+      registration_params_.challenge(),
+      registration_params_.registration_endpoint(),
       base::BindOnce(
           &BoundSessionRegistrationFetcherImpl::OnRegistrationTokenCreated,
           base::Unretained(this), base::ElapsedTimer()));
-  registration_token_helper_->Start();
 }
 
 void BoundSessionRegistrationFetcherImpl::OnURLLoaderComplete(
-    std::unique_ptr<std::string> response_body) {
+    std::optional<std::string> response_body) {
   const network::mojom::URLResponseHead* head = url_loader_->ResponseInfo();
   net::Error net_error = static_cast<net::Error>(url_loader_->NetError());
   TRACE_EVENT("browser",
@@ -118,23 +114,10 @@ void BoundSessionRegistrationFetcherImpl::OnURLLoaderComplete(
     return;
   }
 
-  RegistrationErrorOr<bound_session_credentials::BoundSessionParams>
-      params_or_error = ParseJsonResponse(std::move(response_body));
-  if (!params_or_error.has_value()) {
-    RunCallbackAndRecordMetrics(params_or_error);
-    return;
-  }
-
-  bound_session_credentials::BoundSessionParams params =
-      std::move(params_or_error).value();
-  params.set_site(
-      net::SchemefulSite(registration_params_.RegistrationEndpoint())
-          .Serialize());
-  params.set_wrapped_key(wrapped_key_str_);
-  *params.mutable_creation_time() =
-      bound_session_credentials::TimeToTimestamp(base::Time::Now());
-
-  if (!bound_session_credentials::AreParamsValid(params)) {
+  RegistrationErrorOr<bound_session_credentials::BoundSessionParams> params =
+      ParseJsonResponse(*response_body);
+  if (params.has_value() &&
+      !bound_session_credentials::AreParamsValid(*params)) {
     RunCallbackAndRecordMetrics(
         base::unexpected(RegistrationError::kInvalidSessionParams));
     return;
@@ -146,7 +129,7 @@ void BoundSessionRegistrationFetcherImpl::OnURLLoaderComplete(
 
 void BoundSessionRegistrationFetcherImpl::OnRegistrationTokenCreated(
     base::ElapsedTimer generate_registration_token_timer,
-    std::optional<RegistrationTokenHelper::Result> result) {
+    std::optional<BindingKeyRegistrationTokenHelper::Result> result) {
   TRACE_EVENT("browser",
               "BoundSessionRegistrationFetcherImpl::OnRegistrationTokenCreated",
               perfetto::Flow::FromPointer(this), "success", result.has_value());
@@ -190,32 +173,30 @@ void BoundSessionRegistrationFetcherImpl::StartFetchingRegistration(
                 email: "chrome-signin-team@google.com"
             }
           }
-          last_reviewed: "2023-06-15"
+          last_reviewed: "2024-05-30"
         }
         policy {
           cookies_allowed: YES
           cookies_store: "user"
           setting:
-             "This is a new feature being developed behind a flag that is"
-             " disabled by default (kEnableBoundSessionCredentials). This"
-             " request will only be sent if the feature is enabled and once"
-             " a server requests it with a special header."
-          policy_exception_justification:
-            "Not implemented. "
-            "If the feature is on, this request must be made to ensure the user"
-            " maintains their signed in status on the web for Google owned"
-            " domains."
+             "This feature cannot be disabled in settings, but this request "
+             "won't be made unless the user signs in to google.com."
+          chrome_policy: {
+            BoundSessionCredentialsEnabled {
+              BoundSessionCredentialsEnabled: false
+            }
+          }
         })");
 
   auto request = std::make_unique<network::ResourceRequest>();
-  request->url = registration_params_.RegistrationEndpoint();
+  request->url = registration_params_.registration_endpoint();
   request->method = "POST";
-  request->site_for_cookies =
-      net::SiteForCookies::FromUrl(registration_params_.RegistrationEndpoint());
+  request->site_for_cookies = net::SiteForCookies::FromUrl(
+      registration_params_.registration_endpoint());
   request->trusted_params = network::ResourceRequest::TrustedParams();
   request->trusted_params->isolation_info =
       net::IsolationInfo::CreateForInternalRequest(
-          url::Origin::Create(registration_params_.RegistrationEndpoint()));
+          url::Origin::Create(registration_params_.registration_endpoint()));
 
   std::string content_type = "application/jwt";
 
@@ -249,6 +230,8 @@ void BoundSessionRegistrationFetcherImpl::RunCallbackAndRecordMetrics(
   base::UmaHistogramEnumeration(
       "Signin.BoundSessionCredentials.SessionRegistrationResult",
       error_for_metrics);
+  base::UmaHistogramBoolean(
+      "Net.DeviceBoundSessions.GoogleRegistrationIsFromStandard", false);
   CHECK(registration_duration_.has_value());
   base::UmaHistogramMediumTimes(
       "Signin.BoundSessionCredentials.SessionRegistrationTotalDuration",
@@ -264,70 +247,49 @@ void BoundSessionRegistrationFetcherImpl::RunCallbackAndRecordMetrics(
 BoundSessionRegistrationFetcherImpl::RegistrationErrorOr<
     bound_session_credentials::BoundSessionParams>
 BoundSessionRegistrationFetcherImpl::ParseJsonResponse(
-    std::unique_ptr<std::string> response_body) {
+    const std::string& response_body) {
   // JSON responses normally should start with XSSI-protection prefix which
   // should be removed prior to parsing.
-  base::StringPiece response_json = *response_body;
-  if (base::StartsWith(*response_body, kXSSIPrefix,
-                       base::CompareCase::SENSITIVE)) {
-    response_json = response_json.substr(strlen(kXSSIPrefix));
+  std::string_view response_json = response_body;
+  auto remainder = base::RemovePrefix(response_json, kXSSIPrefix);
+  if (remainder) {
+    response_json = *remainder;
   }
-  std::optional<base::Value::Dict> maybe_root =
-      base::JSONReader::ReadDict(response_json);
+  std::optional<base::DictValue> maybe_root = base::JSONReader::ReadDict(
+      response_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
   if (!maybe_root) {
     return base::unexpected(RegistrationError::kParseJsonFailed);
   }
 
-  std::string* session_id = maybe_root->FindString(kSessionIdentifier);
-  base::Value::List* credentials_list = maybe_root->FindList(kCredentials);
-  if (!session_id || !credentials_list) {
-    // Incorrect registration params.
-    return base::unexpected(RegistrationError::kRequiredFieldMissing);
-  }
-
-  bound_session_credentials::BoundSessionParams params;
-  params.set_session_id(*session_id);
-
-  RegistrationErrorOr<std::vector<bound_session_credentials::Credential>>
-      credentials_or_error = ParseCredentials(*credentials_list);
-  if (!credentials_or_error.has_value()) {
-    return base::unexpected(credentials_or_error.error());
-  }
-
-  for (auto& credential : credentials_or_error.value()) {
-    *params.add_credentials() = std::move(credential);
-  }
-  return params;
-}
-
-BoundSessionRegistrationFetcherImpl::RegistrationErrorOr<
-    std::vector<bound_session_credentials::Credential>>
-BoundSessionRegistrationFetcherImpl::ParseCredentials(
-    const base::Value::List& credentials_list) {
-  std::vector<bound_session_credentials::Credential> cookie_credentials;
-  for (const auto& credential : credentials_list) {
-    const base::Value::Dict* credential_dict = credential.GetIfDict();
-    if (!credential_dict) {
-      // The parser ignores unknown dictionary entries and so we can do the same
-      // for unknown list entries.
-      continue;
+  const base::expected<RegisterBoundSessionPayload,
+                       RegisterBoundSessionPayload::ParserError>
+      payload = RegisterBoundSessionPayload::ParseFromJson(
+          *maybe_root, /*parse_for_dbsc_standard=*/false);
+  if (!payload.has_value()) {
+    switch (payload.error()) {
+      case RegisterBoundSessionPayload::ParserError::kRequiredFieldMissing:
+        return base::unexpected(RegistrationError::kRequiredFieldMissing);
+      case RegisterBoundSessionPayload::ParserError::
+          kRequiredCredentialFieldMissing:
+      case RegisterBoundSessionPayload::ParserError::kRequiredScopeFieldMissing:
+        return base::unexpected(
+            RegistrationError::kRequiredCredentialFieldMissing);
+      case RegisterBoundSessionPayload::ParserError::
+          kMalformedSessionScopeSpecification:
+      case RegisterBoundSessionPayload::ParserError::kInvalidScopeType:
+      case RegisterBoundSessionPayload::ParserError::kInvalidCredentialType:
+      case RegisterBoundSessionPayload::ParserError::kMalformedRefreshInitiator:
+        // Those errors are not expected for DBSC prototype session(s) format.
+        return base::unexpected(RegistrationError::kUnexpectedParserError);
     }
-    const std::string* name = credential_dict->FindString("name");
-    const base::Value::Dict* scope = credential_dict->FindDict("scope");
-    if (!name || !scope) {
-      // Invalid credential.
-      return base::unexpected(
-          RegistrationError::kRequiredCredentialFieldMissing);
-    }
-    const std::string* domain = scope->FindString("domain");
-    const std::string* path = scope->FindString("path");
-    if (!domain || !path) {
-      // Invalid credential.
-      return base::unexpected(
-          RegistrationError::kRequiredCredentialFieldMissing);
-    }
-    cookie_credentials.emplace_back(
-        CreateCookieCredential(*name, *domain, *path));
   }
-  return cookie_credentials;
+
+  return bound_session_credentials::
+      CreateBoundSessionsParamsFromRegistrationPayload(
+          *payload, url_loader_->GetFinalURL(),
+          net::SchemefulSite(registration_params_.registration_endpoint())
+              .GetURL(),
+          wrapped_key_str_,
+          bound_session_credentials::SessionOrigin::
+              SESSION_ORIGIN_REGISTRATION);
 }

@@ -4,11 +4,11 @@
 
 import '../cr_icon_button/cr_icon_button.js';
 import '../icons.html.js';
-import '//resources/polymer/v3_0/iron-media-query/iron-media-query.js';
 import './cr_toolbar_search_field.js';
 
 import {assert} from '//resources/js/assert.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 
 import {getCss} from './cr_toolbar.css.js';
 import {getHtml} from './cr_toolbar.html.js';
@@ -87,21 +87,37 @@ export class CrToolbarElement extends CrLitElement {
         type: Boolean,
         reflect: true,
       },
+
+      searchIconOverride: {type: String},
+      searchInputAriaDescription: {type: String},
     };
   }
 
-  pageName: string;
-  searchPrompt: string;
-  clearLabel: string;
-  menuLabel: string;
-  spinnerActive: boolean;
-  showMenu: boolean = false;
-  showSearch: boolean = true;
-  override autofocus: boolean = false;
-  narrow: boolean;
-  narrowThreshold: number = 900;
-  alwaysShowLogo: boolean = false;
-  protected showingSearch_: boolean;
+  accessor pageName: string = '';
+  accessor searchPrompt: string = '';
+  accessor clearLabel: string = '';
+  accessor menuLabel: string|undefined;
+  accessor spinnerActive: boolean = false;
+  accessor showMenu: boolean = false;
+  accessor showSearch: boolean = true;
+  override accessor autofocus: boolean = false;
+  accessor narrow: boolean = false;
+  accessor narrowThreshold: number = 900;
+  accessor alwaysShowLogo: boolean = false;
+  protected accessor showingSearch_: boolean = false;
+  accessor searchIconOverride: string|undefined;
+  accessor searchInputAriaDescription: string = '';
+  private narrowQuery_: MediaQueryList|null = null;
+
+  override willUpdate(changedProperties: PropertyValues<this>) {
+    super.willUpdate(changedProperties);
+    if (changedProperties.has('narrowThreshold')) {
+      this.narrowQuery_ =
+          window.matchMedia(`(max-width: ${this.narrowThreshold}px)`);
+      this.narrow = this.narrowQuery_.matches;
+      this.narrowQuery_.addListener(() => this.onQueryChanged_());
+    }
+  }
 
   getSearchField(): CrToolbarSearchFieldElement {
     return this.$.search;
@@ -116,22 +132,23 @@ export class CrToolbarElement extends CrLitElement {
     // Wait for rendering to finish to ensure menuButton exists on the DOM.
     await this.updateComplete;
     const menuButton =
-        this.shadowRoot!.querySelector<HTMLElement>('#menuButton');
+        this.shadowRoot.querySelector<HTMLElement>('#menuButton');
     assert(!!menuButton);
     menuButton.focus();
   }
 
   isMenuFocused(): boolean {
-    return !!this.shadowRoot!.activeElement &&
-        this.shadowRoot!.activeElement.id === 'menuButton';
+    return !!this.shadowRoot.activeElement &&
+        this.shadowRoot.activeElement.id === 'menuButton';
   }
 
   protected onShowingSearchChanged_(e: CustomEvent<{value: boolean}>) {
     this.showingSearch_ = e.detail.value;
   }
 
-  protected onQueryMatchesChanged_(e: CustomEvent<{value: boolean}>) {
-    this.narrow = e.detail.value;
+  private onQueryChanged_() {
+    assert(this.narrowQuery_);
+    this.narrow = this.narrowQuery_.matches;
   }
 }
 

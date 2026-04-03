@@ -12,9 +12,10 @@
 #include "base/memory/weak_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/send_tab_to_self/entry_point_display_reason.h"
-#include "components/sync/model/model_type_store_service.h"
+#include "components/sync/model/data_type_store_service.h"
 #include "components/sync/service/sync_service_observer.h"
 #include "components/version_info/channel.h"
+#include "base/scoped_observation.h"
 
 class GURL;
 class PrefService;
@@ -25,9 +26,13 @@ class HistoryService;
 
 namespace syncer {
 class DeviceInfoTracker;
-class ModelTypeControllerDelegate;
+class DataTypeControllerDelegate;
 class SyncService;
 }  // namespace syncer
+
+namespace sync_sessions {
+class SessionSyncService;
+}  // namespace sync_sessions
 
 namespace send_tab_to_self {
 class SendTabToSelfBridge;
@@ -39,10 +44,11 @@ class SendTabToSelfSyncService : public KeyedService,
  public:
   SendTabToSelfSyncService(
       version_info::Channel channel,
-      syncer::OnceModelTypeStoreFactory create_store_callback,
+      syncer::OnceDataTypeStoreFactory create_store_callback,
       history::HistoryService* history_service,
       PrefService* pref_service,
-      syncer::DeviceInfoTracker* device_info_tracker);
+      syncer::DeviceInfoTracker* device_info_tracker,
+      sync_sessions::SessionSyncService* session_sync_service);
 
   SendTabToSelfSyncService(const SendTabToSelfSyncService&) = delete;
   SendTabToSelfSyncService& operator=(const SendTabToSelfSyncService&) = delete;
@@ -59,7 +65,7 @@ class SendTabToSelfSyncService : public KeyedService,
   // Never returns null.
   virtual SendTabToSelfModel* GetSendTabToSelfModel();
 
-  virtual base::WeakPtr<syncer::ModelTypeControllerDelegate>
+  virtual base::WeakPtr<syncer::DataTypeControllerDelegate>
   GetControllerDelegate();
 
  protected:
@@ -76,6 +82,9 @@ class SendTabToSelfSyncService : public KeyedService,
   // Cyclic dependency, initialized in OnSyncServiceInitialized(), reset in
   // OnSyncShutdown().
   raw_ptr<syncer::SyncService> sync_service_ = nullptr;
+
+  base::ScopedObservation<syncer::SyncService, syncer::SyncServiceObserver>
+      sync_service_observation_{this};
 };
 
 }  // namespace send_tab_to_self

@@ -39,7 +39,6 @@
 #include <vector>
 
 #include "breakpad_googletest_includes.h"
-#include "common/using_std_string.h"
 #include "google_breakpad/common/minidump_format.h"
 #include "google_breakpad/processor/basic_source_line_resolver.h"
 #include "google_breakpad/processor/call_stack.h"
@@ -98,10 +97,10 @@ class StackwalkerAddressListTest : public testing::Test {
 
   // Set the Breakpad symbol information that supplier should return for
   // MODULE to INFO.
-  void SetModuleSymbols(MockCodeModule* module, const string& info) {
+  void SetModuleSymbols(MockCodeModule* module, const std::string& info) {
     size_t buffer_size;
     char* buffer = supplier.CopySymbolDataAndOwnTheCopy(info, &buffer_size);
-    EXPECT_CALL(supplier, GetCStringSymbolData(module, NULL, _, _, _))
+    EXPECT_CALL(supplier, GetCStringSymbolData(module, nullptr, _, _, _))
       .WillRepeatedly(DoAll(SetArgumentPointee<3>(buffer),
                             SetArgumentPointee<4>(buffer_size),
                             Return(MockSymbolSupplier::FOUND)));

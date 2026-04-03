@@ -15,6 +15,10 @@
 #include "media/base/android/media_codec_util.h"
 #endif
 
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_version.h"
+#endif
+
 namespace media {
 
 // static
@@ -22,8 +26,12 @@ bool MojoAudioEncoder::IsSupported(AudioCodec codec) {
   switch (codec) {
     case AudioCodec::kAAC:
 #if BUILDFLAG(IS_ANDROID)
-      return base::FeatureList::IsEnabled(media::kPlatformAudioEncoder) &&
-             MediaCodecUtil::IsAACEncoderAvailable();
+      return base::FeatureList::IsEnabled(media::kPlatformAudioEncoder);
+#elif BUILDFLAG(IS_WIN)
+      // Windows AAC encoder relies on the MediaFoundation, which is not
+      // installed for Windows N Sku.
+      return !base::win::OSInfo::GetInstance()->IsWindowsNSku() &&
+             base::FeatureList::IsEnabled(media::kPlatformAudioEncoder);
 #else
       return base::FeatureList::IsEnabled(media::kPlatformAudioEncoder);
 #endif
@@ -36,7 +44,7 @@ bool MojoAudioEncoder::IsSupported(AudioCodec codec) {
 MojoAudioEncoder::MojoAudioEncoder(
     mojo::PendingRemote<mojom::AudioEncoder> remote_encoder)
     : pending_remote_encoder_(std::move(remote_encoder)),
-      buffer_pool_(new AudioBufferMemoryPool()),
+      buffer_pool_(base::MakeRefCounted<AudioBufferMemoryPool>()),
       runner_(base::SequencedTaskRunner::GetCurrentDefault()) {
   weak_this_ = weak_factory_.GetWeakPtr();
 }

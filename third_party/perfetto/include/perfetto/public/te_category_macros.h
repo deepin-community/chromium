@@ -59,8 +59,19 @@
 // it would expand to zero arguments, because the behavior is compiler
 // dependent.
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) || defined(__clang__)
+#if defined(__clang__)
+#pragma clang diagnostic push
+// Fix 'error: #pragma system_header ignored in main file' for clang in Google3.
+#pragma clang diagnostic ignored "-Wpragma-system-header-outside-header"
+#endif
+
+// Ignore GCC warning about a missing argument for a variadic macro parameter.
 #pragma GCC system_header
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #endif
 
 #define PERFETTO_I_TE_CAT_DESCRIPTION_GET(D, ...) D
@@ -164,5 +175,10 @@
         sizeof(perfetto_i_cat_registry) / sizeof(perfetto_i_cat_registry[0])); \
     PerfettoTePublishCategories();                                             \
   } while (0)
+
+// Returns true if the category `NAME` is enabled. `NAME` should be a category
+// defined with PERFETTO_TE_CATEGORIES_DEFINE.
+#define PERFETTO_TE_IS_CATEGORY_ENABLED(NAME) \
+  PERFETTO_ATOMIC_LOAD_EXPLICIT((NAME).enabled, PERFETTO_MEMORY_ORDER_RELAXED)
 
 #endif  // INCLUDE_PERFETTO_PUBLIC_TE_CATEGORY_MACROS_H_

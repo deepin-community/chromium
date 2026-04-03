@@ -4,11 +4,12 @@
 
 #include "device/fido/mac/util.h"
 
+#import <Foundation/Foundation.h>
+#import <LocalAuthentication/LocalAuthentication.h>
+
 #include <array>
 #include <set>
 #include <string>
-
-#import <Foundation/Foundation.h>
 
 #include "base/apple/foundation_util.h"
 #include "base/apple/osstatus_logging.h"
@@ -18,10 +19,10 @@
 #include "base/strings/string_number_conversions.h"
 #include "build/branding_buildflags.h"
 #include "components/cbor/writer.h"
-#include "crypto/apple_keychain_v2.h"
-#include "device/fido/fido_constants.h"
-#include "device/fido/fido_parsing_utils.h"
+#include "crypto/apple/keychain_v2.h"
+#include "crypto/hash.h"
 #include "device/fido/p256_public_key.h"
+#include "device/fido/public/fido_constants.h"
 #include "device/fido/public_key.h"
 
 namespace device::fido::mac {
@@ -103,7 +104,7 @@ AuthenticatorData MakeAuthenticatorData(
   if (attested_credential_data) {
     flags |= static_cast<uint8_t>(AuthenticatorData::Flag::kAttestation);
   }
-  return AuthenticatorData(fido_parsing_utils::CreateSHA256Hash(rp_id), flags,
+  return AuthenticatorData(crypto::hash::Sha256(rp_id), flags,
                            MakeSignatureCounter(counter_type),
                            std::move(attested_credential_data));
 }
@@ -124,16 +125,15 @@ std::optional<std::vector<uint8_t>> GenerateSignature(
                     client_data_hash.size());
   ScopedCFTypeRef<CFErrorRef> err;
   ScopedCFTypeRef<CFDataRef> sig_data(
-      crypto::AppleKeychainV2::GetInstance().KeyCreateSignature(
+      crypto::apple::KeychainV2::GetInstance().KeyCreateSignature(
           private_key, kSecKeyAlgorithmECDSASignatureMessageX962SHA256,
           sig_input.get(), err.InitializeInto()));
   if (!sig_data) {
     LOG(ERROR) << "SecKeyCreateSignature failed: " << err.get();
     return std::nullopt;
   }
-  return std::vector<uint8_t>(
-      CFDataGetBytePtr(sig_data.get()),
-      CFDataGetBytePtr(sig_data.get()) + CFDataGetLength(sig_data.get()));
+  auto sig_data_span = base::apple::CFDataToSpan(sig_data.get());
+  return std::vector<uint8_t>(sig_data_span.begin(), sig_data_span.end());
 }
 
 // SecKeyRefToECPublicKey converts a SecKeyRef for a public key into an
@@ -148,9 +148,7 @@ std::unique_ptr<PublicKey> SecKeyRefToECPublicKey(SecKeyRef public_key_ref) {
     LOG(ERROR) << "SecCopyExternalRepresentation failed: " << err.get();
     return nullptr;
   }
-  base::span<const uint8_t> key_data = base::make_span(
-      CFDataGetBytePtr(data_ref.get()),
-      base::checked_cast<size_t>(CFDataGetLength(data_ref.get())));
+  auto key_data = base::apple::CFDataToSpan(data_ref.get());
   auto key = P256PublicKey::ParseX962Uncompressed(
       static_cast<int32_t>(CoseAlgorithmIdentifier::kEs256), key_data);
   if (!key) {
@@ -160,7 +158,30 @@ std::unique_ptr<PublicKey> SecKeyRefToECPublicKey(SecKeyRef public_key_ref) {
   return key;
 }
 
+std::optional<CodeSigningState>& GetProcessIsSignedOverride() {
+  static std::optional<CodeSigningState> flag;
+  return flag;
+}
+
+ScopedProcessIsSignedOverride::ScopedProcessIsSignedOverride(
+    CodeSigningState process_is_signed) {
+  std::optional<CodeSigningState>& flag = GetProcessIsSignedOverride();
+  // Overrides don't nest.
+  CHECK(!flag.has_value());
+  flag = process_is_signed;
+}
+
+ScopedProcessIsSignedOverride::~ScopedProcessIsSignedOverride() {
+  std::optional<CodeSigningState>& flag = GetProcessIsSignedOverride();
+  CHECK(flag.has_value());
+  flag.reset();
+}
+
 CodeSigningState ProcessIsSigned() {
+  std::optional<CodeSigningState>& flag = GetProcessIsSignedOverride();
+  if (flag.has_value()) {
+    return *flag;
+  }
   base::apple::ScopedCFTypeRef<SecTaskRef> task(SecTaskCreateFromSelf(nullptr));
   if (!task) {
     return CodeSigningState::kNotSigned;
@@ -172,12 +193,39 @@ CodeSigningState ProcessIsSigned() {
                                     : CodeSigningState::kNotSigned;
 }
 
+bool ProfileAuthenticatorWillDoUserVerification(
+    device::UserVerificationRequirement requirement,
+    bool platform_has_biometrics) {
+  return requirement == device::UserVerificationRequirement::kRequired ||
+         platform_has_biometrics;
+}
+
+std::optional<bool>& GetBiometricOverride() {
+  static std::optional<bool> flag;
+  return flag;
+}
+
+ScopedBiometricsOverride::ScopedBiometricsOverride(bool has_biometrics) {
+  std::optional<bool>& flag = GetBiometricOverride();
+  // Overrides don't nest.
+  CHECK(!flag.has_value());
+  flag = has_biometrics;
+}
+
+ScopedBiometricsOverride::~ScopedBiometricsOverride() {
+  std::optional<bool>& flag = GetBiometricOverride();
+  CHECK(flag.has_value());
+  flag.reset();
+}
+
 bool DeviceHasBiometricsAvailable() {
-  LAContext* context = [[LAContext alloc] init];
-  NSError* nserr;
-  return
-      [context canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
-                           error:&nserr];
+  std::optional<bool>& flag = GetBiometricOverride();
+  if (flag.has_value()) {
+    return *flag;
+  }
+
+  return crypto::apple::KeychainV2::GetInstance().LAContextCanEvaluatePolicy(
+      LAPolicyDeviceOwnerAuthenticationWithBiometrics, /*error=*/nil);
 }
 
 }  // namespace device::fido::mac

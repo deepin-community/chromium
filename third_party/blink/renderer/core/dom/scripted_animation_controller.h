@@ -58,7 +58,7 @@ class CORE_EXPORT ScriptedAnimationController
   ~ScriptedAnimationController() override = default;
 
   void Trace(Visitor*) const override;
-  const char* NameInHeapSnapshot() const override {
+  const char* GetHumanReadableName() const override {
     return "ScriptedAnimationController";
   }
 
@@ -93,7 +93,7 @@ class CORE_EXPORT ScriptedAnimationController
   void ContextLifecycleStateChanged(mojom::FrameLifecycleState) final;
   void ContextDestroyed() final {}
 
-  void DispatchEventsAndCallbacksForPrinting();
+  void DispatchMediaQueryListEventsAndCallbacks();
 
   LocalDOMWindow* GetWindow() const;
   void ScheduleAnimationIfNeeded();

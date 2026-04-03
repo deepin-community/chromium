@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/screen_ai/screen_ai_service_router.h"
+
 #include <optional>
 
 #include "base/files/file_util.h"
@@ -9,17 +11,17 @@
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
 #include "base/task/thread_pool.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/screen_ai/screen_ai_service_router.h"
 #include "chrome/browser/screen_ai/screen_ai_service_router_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "components/services/screen_ai/buildflags/buildflags.h"
-#include "components/services/screen_ai/public/cpp/utilities.h"
 #include "content/public/test/browser_test.h"
+#include "services/screen_ai/buildflags/buildflags.h"
+#include "services/screen_ai/public/cpp/utilities.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_features.mojom-features.h"
 
@@ -53,7 +55,7 @@ class ResultsWaiter {
     run_loop.Run();
   }
 
-  void ResetResult() { result_ = absl::nullopt; }
+  void ResetResult() { result_ = std::nullopt; }
 
   bool GetResult() {
     EXPECT_TRUE(result_);
@@ -70,6 +72,14 @@ class ResultsWaiter {
 
   base::WeakPtrFactory<ResultsWaiter> weak_ptr_factory_{this};
 };
+
+base::FilePath GetComponentBinaryPath() {
+#if BUILDFLAG(ENABLE_SCREEN_AI_BROWSERTESTS)
+  return screen_ai::GetComponentBinaryPathForTests();
+#else
+  NOTREACHED() << "Test library is used on a not-suppported platform.";
+#endif
+}
 
 }  // namespace
 
@@ -129,7 +139,7 @@ class ScreenAIServiceRouterTest
   // InProcessBrowserTest:
   void SetUpOnMainThread() override {
     if (IsLibraryAvailableAtStartUp()) {
-      base::FilePath library_path = screen_ai::GetLatestComponentBinaryPath();
+      base::FilePath library_path = GetComponentBinaryPath();
       CHECK(!library_path.empty());
       CHECK(base::PathExists(library_path));
       ScreenAIInstallState::GetInstance()->SetComponentFolder(
@@ -161,7 +171,7 @@ class ScreenAIServiceRouterTest
         base::ThreadPool::PostTaskAndReplyWithResult(
             FROM_HERE,
             {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-            base::BindOnce(&screen_ai::GetLatestComponentBinaryPath),
+            base::BindOnce(&GetComponentBinaryPath),
             base::BindOnce([](const base::FilePath component_path) {
               ScreenAIInstallState::GetInstance()->SetComponentFolder(
                   component_path.DirName());

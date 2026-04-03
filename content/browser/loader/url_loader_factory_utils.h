@@ -5,11 +5,17 @@
 #ifndef CONTENT_BROWSER_LOADER_URL_LOADER_FACTORY_UTILS_H_
 #define CONTENT_BROWSER_LOADER_URL_LOADER_FACTORY_UTILS_H_
 
+#include <variant>
+
 #include "base/memory/stack_allocated.h"
 #include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/content_browser_client.h"
 #include "services/network/public/cpp/url_loader_factory_builder.h"
+
+namespace net {
+class IsolationInfo;
+}
 
 namespace content {
 
@@ -29,8 +35,14 @@ CONTENT_EXPORT const Interceptor& GetTestingInterceptor();
 // behavior.
 // This method must be called either on the UI thread or before threads start.
 // This callback is run on the UI thread.
-// TODO(crbug.com/1506871): Document when the interception occurs.
+// TODO(crbug.com/40947547): Document when the interception occurs.
 CONTENT_EXPORT void SetInterceptorForTesting(const Interceptor& interceptor);
+
+// Only accessed on the IO thread.
+// Basically the same as `!!GetTestingInterceptor()`, and introduced to avoid
+// possible race conditions between UI/IO threads.
+CONTENT_EXPORT bool HasInterceptorOnIOThreadForTesting();
+CONTENT_EXPORT void SetHasInterceptorOnIOThreadForTesting(bool has_interceptor);
 
 // A parameter object for `ContentBrowserClient::WillCreateURLLoaderFactory()`.
 class CONTENT_EXPORT ContentClientParams final {
@@ -41,9 +53,10 @@ class CONTENT_EXPORT ContentClientParams final {
                       RenderFrameHost* frame,
                       int render_process_id,
                       const url::Origin& request_initiator,
+                      const net::IsolationInfo& isolation_info,
                       ukm::SourceIdObj ukm_source_id,
                       bool* bypass_redirect_checks = nullptr,
-                      std::optional<int64_t> navigation_id = absl::nullopt,
+                      std::optional<int64_t> navigation_id = std::nullopt,
                       scoped_refptr<base::SequencedTaskRunner>
                           navigation_response_task_runner = nullptr);
 
@@ -67,6 +80,7 @@ class CONTENT_EXPORT ContentClientParams final {
   raw_ptr<RenderFrameHost> frame_;
   int render_process_id_;
   raw_ref<const url::Origin> request_initiator_;
+  raw_ref<const net::IsolationInfo> isolation_info_;
   ukm::SourceIdObj ukm_source_id_;
   raw_ptr<bool> bypass_redirect_checks_;
   std::optional<int64_t> navigation_id_;
@@ -124,8 +138,8 @@ class CONTENT_EXPORT TerminalParams final {
   //
   // See the `process_id_` comment below for `process_id`.
   using URLLoaderFactoryTypes =
-      absl::variant<mojo::PendingRemote<network::mojom::URLLoaderFactory>,
-                    scoped_refptr<network::SharedURLLoaderFactory>>;
+      std::variant<mojo::PendingRemote<network::mojom::URLLoaderFactory>,
+                   scoped_refptr<network::SharedURLLoaderFactory>>;
   static TerminalParams ForNonNetwork(URLLoaderFactoryTypes url_loader_factory,
                                       int process_id);
 

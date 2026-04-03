@@ -4,27 +4,31 @@
 
 #include "base/android/token_android.h"
 
-#include "base/base_jni/Token_jni.h"
+#include "base/base_minimal_jni/TokenBase_jni.h"
+#include "base/base_minimal_jni/Token_jni.h"
 
-namespace base {
-namespace android {
+namespace base::android {
 
 ScopedJavaLocalRef<jobject> TokenAndroid::Create(JNIEnv* env,
                                                  const base::Token& token) {
-  return Java_Token_Constructor(env, static_cast<jlong>(token.high()),
-                                static_cast<jlong>(token.low()));
+  return Java_Token_Constructor(env, static_cast<int64_t>(token.high()),
+                                static_cast<int64_t>(token.low()));
 }
 
 base::Token TokenAndroid::FromJavaToken(JNIEnv* env,
                                         const JavaRef<jobject>& j_token) {
-  const uint64_t high = static_cast<uint64_t>(Java_Token_getHigh(env, j_token));
-  const uint64_t low = static_cast<uint64_t>(Java_Token_getLow(env, j_token));
+  const uint64_t high = static_cast<uint64_t>(
+      Java_TokenBase_getHighForSerialization(env, j_token));
+  const uint64_t low = static_cast<uint64_t>(
+      Java_TokenBase_getLowForSerialization(env, j_token));
   return base::Token(high, low);
 }
 
-static ScopedJavaLocalRef<jobject> JNI_Token_CreateRandom(JNIEnv* env) {
-  return TokenAndroid::Create(env, base::Token::CreateRandom());
+static base::Token JNI_Token_CreateRandom(JNIEnv* env) {
+  return base::Token::CreateRandom();
 }
 
-}  // namespace android
-}  // namespace base
+}  // namespace base::android
+
+DEFINE_JNI(Token)
+DEFINE_JNI(TokenBase)

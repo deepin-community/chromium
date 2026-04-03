@@ -8,11 +8,11 @@
 #include <utility>
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "cc/paint/paint_flags.h"
 #include "chrome/grit/theme_resources.h"
 #include "extensions/browser/app_window/native_app_window.h"
 #include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkRRect.h"
 #include "third_party/skia/include/core/SkRegion.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -23,6 +23,7 @@
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/image/image.h"
 #include "ui/strings/grit/ui_strings.h"  // Accessibility names
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -66,7 +67,7 @@ void AppWindowFrameView::Init() {
         views::Button::STATE_PRESSED,
         ui::ImageModel::FromResourceId(IDR_APP_WINDOW_CLOSE_P));
     close_button->SetFocusBehavior(FocusBehavior::ACCESSIBLE_ONLY);
-    close_button->SetAccessibleName(
+    close_button->GetViewAccessibility().SetName(
         l10n_util::GetStringUTF16(IDS_APP_ACCNAME_CLOSE));
     close_button_ = AddChildView(std::move(close_button));
     // STATE_NORMAL images are set in SetButtonImagesForFrame, not here.
@@ -83,7 +84,7 @@ void AppWindowFrameView::Init() {
         views::Button::STATE_DISABLED,
         ui::ImageModel::FromResourceId(IDR_APP_WINDOW_MAXIMIZE_D));
     maximize_button->SetFocusBehavior(FocusBehavior::ACCESSIBLE_ONLY);
-    maximize_button->SetAccessibleName(
+    maximize_button->GetViewAccessibility().SetName(
         l10n_util::GetStringUTF16(IDS_APP_ACCNAME_MAXIMIZE));
     maximize_button_ = AddChildView(std::move(maximize_button));
     auto restore_button =
@@ -96,7 +97,7 @@ void AppWindowFrameView::Init() {
         views::Button::STATE_PRESSED,
         ui::ImageModel::FromResourceId(IDR_APP_WINDOW_RESTORE_P));
     restore_button->SetFocusBehavior(FocusBehavior::ACCESSIBLE_ONLY);
-    restore_button->SetAccessibleName(
+    restore_button->GetViewAccessibility().SetName(
         l10n_util::GetStringUTF16(IDS_APP_ACCNAME_RESTORE));
     restore_button_ = AddChildView(std::move(restore_button));
     auto minimize_button =
@@ -109,7 +110,7 @@ void AppWindowFrameView::Init() {
         views::Button::STATE_PRESSED,
         ui::ImageModel::FromResourceId(IDR_APP_WINDOW_MINIMIZE_P));
     minimize_button->SetFocusBehavior(FocusBehavior::ACCESSIBLE_ONLY);
-    minimize_button->SetAccessibleName(
+    minimize_button->GetViewAccessibility().SetName(
         l10n_util::GetStringUTF16(IDS_APP_ACCNAME_MINIMIZE));
     minimize_button_ = AddChildView(std::move(minimize_button));
 
@@ -134,7 +135,7 @@ void AppWindowFrameView::SetFrameCornerRadius(int radius) {
   SchedulePaint();
 }
 
-// views::NonClientFrameView implementation.
+// views::FrameView implementation.
 
 gfx::Rect AppWindowFrameView::GetBoundsForClientView() const {
   if (!draw_frame_ || widget_->IsFullscreen())
@@ -146,9 +147,7 @@ gfx::Rect AppWindowFrameView::GetBoundsForClientView() const {
 gfx::Rect AppWindowFrameView::GetWindowBoundsForClientBounds(
     const gfx::Rect& client_bounds) const {
   gfx::Rect window_bounds = client_bounds;
-// TODO(crbug.com/1052397): Revisit once build flag switch of lacros-chrome is
-// complete.
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_LINUX)
   // Get the difference between the widget's client area bounds and window
   // bounds, and grow |window_bounds| by that amount.
   gfx::Insets native_frame_insets =
@@ -239,8 +238,9 @@ void AppWindowFrameView::SizeConstraintsChanged() {
   }
 }
 
-gfx::Size AppWindowFrameView::CalculatePreferredSize() const {
-  gfx::Size pref = widget_->client_view()->GetPreferredSize();
+gfx::Size AppWindowFrameView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  gfx::Size pref = widget_->client_view()->GetPreferredSize(available_size);
   gfx::Rect bounds(0, 0, pref.width(), pref.height());
   return widget_->non_client_view()
       ->GetWindowBoundsForClientBounds(bounds)
@@ -248,7 +248,7 @@ gfx::Size AppWindowFrameView::CalculatePreferredSize() const {
 }
 
 void AppWindowFrameView::Layout(PassKey) {
-  LayoutSuperclass<NonClientFrameView>(this);
+  LayoutSuperclass<FrameView>(this);
 
   if (!draw_frame_)
     return;
@@ -263,7 +263,7 @@ void AppWindowFrameView::Layout(PassKey) {
   const int kRightMargin = 3;
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-  gfx::Size close_size = close_button_->GetPreferredSize();
+  gfx::Size close_size = close_button_->GetPreferredSize({});
   close_button_->SetBounds(width() - kRightMargin - close_size.width(),
                            kButtonOffsetY,
                            close_size.width(),
@@ -271,13 +271,13 @@ void AppWindowFrameView::Layout(PassKey) {
 
   maximize_button_->SetEnabled(widget_->widget_delegate() &&
                                widget_->widget_delegate()->CanMaximize());
-  gfx::Size maximize_size = maximize_button_->GetPreferredSize();
+  gfx::Size maximize_size = maximize_button_->GetPreferredSize({});
   maximize_button_->SetBounds(
       close_button_->x() - kButtonSpacing - maximize_size.width(),
       kButtonOffsetY,
       maximize_size.width(),
       maximize_size.height());
-  gfx::Size restore_size = restore_button_->GetPreferredSize();
+  gfx::Size restore_size = restore_button_->GetPreferredSize({});
   restore_button_->SetBounds(
       close_button_->x() - kButtonSpacing - restore_size.width(),
       kButtonOffsetY,
@@ -292,7 +292,7 @@ void AppWindowFrameView::Layout(PassKey) {
   else
     restore_button_->SetState(views::Button::STATE_NORMAL);
 
-  gfx::Size minimize_size = minimize_button_->GetPreferredSize();
+  gfx::Size minimize_size = minimize_button_->GetPreferredSize({});
   minimize_button_->SetState(views::Button::STATE_NORMAL);
   minimize_button_->SetBounds(
       maximize_button_->x() - kButtonSpacing - minimize_size.width(),
@@ -323,22 +323,16 @@ void AppWindowFrameView::OnPaint(gfx::Canvas* canvas) {
   flags.setStyle(cc::PaintFlags::kFill_Style);
   flags.setColor(CurrentFrameColor());
 
-  SkPath path;
-
   const SkScalar sk_corner_radius = SkIntToScalar(frame_corner_radius_);
-  const SkScalar radii[8] = {sk_corner_radius,
-                             sk_corner_radius,  // top-left
-                             sk_corner_radius,
-                             sk_corner_radius,  // top-right
-                             0,
-                             0,  // bottom-right
-                             0,
-                             0};  // bottom-left
+  const SkVector radii[4] = {{sk_corner_radius, sk_corner_radius},  // top-left
+                             {sk_corner_radius, sk_corner_radius},  // top-right
+                             {0, 0},   // bottom-right
+                             {0, 0}};  // bottom-left
 
   gfx::Rect frame_bounds(0, 0, width(), kCaptionHeight);
-  path.addRoundRect(gfx::RectToSkRect(frame_bounds), radii,
-                    SkPathDirection::kCW);
-  path.close();
+  const SkPath path = SkPath::RRect(
+      SkRRect::MakeRectRadii(gfx::RectToSkRect(frame_bounds), radii));
+
   canvas->DrawPath(path, flags);
 }
 

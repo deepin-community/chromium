@@ -2,8 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -29,8 +30,8 @@ class ExtensionTagsTest : public extensions::ExtensionBrowserTest {
   // If no extension task was found, a nullptr will be returned.
   Task* FindAndGetExtensionTask(
       const MockWebContentsTaskManager& task_manager) {
-    auto itr = base::ranges::find(task_manager.tasks(), Task::EXTENSION,
-                                  &Task::GetType);
+    auto itr = std::ranges::find(task_manager.tasks(), Task::EXTENSION,
+                                 &Task::GetType);
 
     return itr != task_manager.tasks().end() ? *itr : nullptr;
   }
@@ -65,7 +66,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTagsTest, Basic) {
   EXPECT_EQ(1U, tracked_tags().size());
 }
 
-// Disabled due to flakiness, see crbug.com/519333 and crbug.com/639185.
+// Disabled due to flakiness, see crbug.com/40430827 and crbug.com/40481263.
 IN_PROC_BROWSER_TEST_F(ExtensionTagsTest,
                        DISABLED_PreAndPostExistingTaskProviding) {
   // Browser tests start with a single tab.

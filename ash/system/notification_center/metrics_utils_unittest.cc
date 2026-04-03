@@ -6,18 +6,18 @@
 
 #include <memory>
 
-#include "ash/system/notification_center/views/ash_notification_view.h"
 #include "ash/system/notification_center/notification_center_test_api.h"
+#include "ash/system/notification_center/views/ash_notification_view.h"
 #include "ash/system/notification_center/views/notification_center_view.h"
 #include "ash/system/notification_center/views/notification_list_view.h"
 #include "ash/test/ash_test_base.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
-#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_unittest_util.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
@@ -308,13 +308,13 @@ TEST_F(MessageCenterMetricsUtilsTest, RecordNotificationViewTypeImage) {
       /*by_user=*/true, message_center::MessageCenter::RemoveType::ALL);
 
   auto image_notification = CreateTestNotification();
-  image_notification->set_image(gfx::test::CreateImage(kImageSize));
+  image_notification->SetImage(gfx::test::CreateImage(kImageSize));
   CheckNotificationViewTypeRecorded(
       std::move(image_notification),
       metrics_utils::NotificationViewType::HAS_IMAGE);
 
   auto grouped_image_notification = CreateTestNotification();
-  grouped_image_notification->set_image(gfx::test::CreateImage(kImageSize));
+  grouped_image_notification->SetImage(gfx::test::CreateImage(kImageSize));
   CheckNotificationViewTypeRecorded(
       std::move(grouped_image_notification),
       metrics_utils::NotificationViewType::GROUPED_HAS_IMAGE);
@@ -366,14 +366,14 @@ TEST_F(MessageCenterMetricsUtilsTest,
       /*by_user=*/true, message_center::MessageCenter::RemoveType::ALL);
 
   auto notification = CreateTestNotification();
-  notification->set_image(gfx::test::CreateImage(kImageSize));
+  notification->SetImage(gfx::test::CreateImage(kImageSize));
   notification->set_buttons({message_center::ButtonInfo(u"Test button")});
   CheckNotificationViewTypeRecorded(
       std::move(notification),
       metrics_utils::NotificationViewType::HAS_IMAGE_AND_ACTION);
 
   auto grouped_notification = CreateTestNotification();
-  grouped_notification->set_image(gfx::test::CreateImage(kImageSize));
+  grouped_notification->SetImage(gfx::test::CreateImage(kImageSize));
   grouped_notification->set_buttons(
       {message_center::ButtonInfo(u"Test button")});
   CheckNotificationViewTypeRecorded(
@@ -392,7 +392,7 @@ TEST_F(MessageCenterMetricsUtilsTest,
     return button;
   };
   auto notification = CreateTestNotification();
-  notification->set_image(gfx::test::CreateImage(kImageSize));
+  notification->SetImage(gfx::test::CreateImage(kImageSize));
   notification->set_buttons({create_inline_reply_button()});
 
   CheckNotificationViewTypeRecorded(
@@ -400,7 +400,7 @@ TEST_F(MessageCenterMetricsUtilsTest,
       metrics_utils::NotificationViewType::HAS_IMAGE_AND_INLINE_REPLY);
 
   auto grouped_notification = CreateTestNotification();
-  grouped_notification->set_image(gfx::test::CreateImage(kImageSize));
+  grouped_notification->SetImage(gfx::test::CreateImage(kImageSize));
   grouped_notification->set_buttons({create_inline_reply_button()});
   CheckNotificationViewTypeRecorded(
       std::move(grouped_notification),
@@ -468,7 +468,7 @@ TEST_F(MessageCenterMetricsUtilsTest, RecordSystemNotificationAdded) {
   // Create system notifications with a valid catalog name, one for a non-pinned
   // notification and one for a pinned one (e.g. Full Restore and Caps Lock).
   const NotificationCatalogName catalog_name =
-      NotificationCatalogName::kFullRestore;
+      NotificationCatalogName::kNightLight;
   const NotificationCatalogName pinned_catalog_name =
       NotificationCatalogName::kCapsLock;
   auto notification = CreateNotificationWithCatalogName(catalog_name);
@@ -495,7 +495,7 @@ TEST_F(MessageCenterMetricsUtilsTest,
 
   // Create a system notification with a valid catalog name (e.g. Full Restore).
   const NotificationCatalogName catalog_name =
-      NotificationCatalogName::kFullRestore;
+      NotificationCatalogName::kNightLight;
   auto notification = CreateNotificationWithCatalogName(catalog_name);
 
   // Add notification to message center.
@@ -541,14 +541,14 @@ TEST_F(MessageCenterMetricsUtilsTest, RecordPopupUserJourneyTime) {
 
   // Create a non-pinned system notification with a valid catalog name.
   const NotificationCatalogName catalog_name =
-      NotificationCatalogName::kFullRestore;
+      NotificationCatalogName::kNightLight;
   auto notification = CreateNotificationWithCatalogName(catalog_name);
 
   // Add notification to message center. Use the normal duration for adding the
   // notification so that the recorded popup duration is expected.
   auto* message_center = message_center::MessageCenter::Get();
-  std::optional<ui::ScopedAnimationDurationScaleMode> mode(
-      ui::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  std::optional<gfx::ScopedAnimationDurationScaleMode> mode(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   message_center->AddNotification(
       std::make_unique<message_center::Notification>(*notification));
 

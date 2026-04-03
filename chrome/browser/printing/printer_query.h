@@ -83,7 +83,7 @@ class PrinterQuery {
 
   // Updates the current settings with `new_settings` dictionary values.
   // Caller has to ensure that `this` is alive until `callback` is run.
-  virtual void SetSettings(base::Value::Dict new_settings,
+  virtual void SetSettings(base::DictValue new_settings,
                            base::OnceClosure callback);
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -97,7 +97,7 @@ class PrinterQuery {
   // Updates the printable area of the provided `PrintSettings` object.
   // Caller has to ensure that `this` and `print_settings` are alive until
   // `callback` runs.
-  // TODO(crbug.com/1424368):  Remove this if the printable areas can be made
+  // TODO(crbug.com/40260379):  Remove this if the printable areas can be made
   // fully available from `PrintBackend::GetPrinterSemanticCapsAndDefaults()`.
   virtual void UpdatePrintableArea(PrintSettings* print_settings,
                                    OnDidUpdatePrintableAreaCallback callback);
@@ -167,7 +167,7 @@ class PrinterQuery {
   virtual void UseDefaultSettings(SettingsCallback callback);
 
   // Called to update the print settings.
-  virtual void UpdatePrintSettings(base::Value::Dict new_settings,
+  virtual void UpdatePrintSettings(base::DictValue new_settings,
                                    SettingsCallback callback);
 
 #if BUILDFLAG(IS_CHROMEOS)

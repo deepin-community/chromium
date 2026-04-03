@@ -13,6 +13,7 @@
 #include "components/user_education/common/user_education_class_properties.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkRRect.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/color_palette.h"
@@ -42,9 +43,8 @@ class ToolbarButtonHighlightPathGenerator
     const int radii = ChromeLayoutProvider::Get()->GetCornerRadiusMetric(
         views::Emphasis::kMaximum, rect.size());
 
-    SkPath path;
-    path.addRoundRect(gfx::RectToSkRect(rect), radii, radii);
-    return path;
+    return SkPath::RRect(
+        SkRRect::MakeRectXY(gfx::RectToSkRect(rect), radii, radii));
   }
 };
 
@@ -54,13 +54,15 @@ gfx::Insets GetToolbarInkDropInsets(const views::View* host_view) {
   gfx::Insets margin_insets;
   gfx::Insets* const internal_padding =
       host_view->GetProperty(views::kInternalPaddingKey);
-  if (internal_padding)
+  if (internal_padding) {
     margin_insets = *internal_padding;
+  }
 
   // Inset the inkdrop insets so that the end result matches the target inkdrop
   // dimensions.
   const gfx::Size host_size = host_view->size();
-  const int inkdrop_dimensions = GetLayoutConstant(LOCATION_BAR_HEIGHT);
+  const int inkdrop_dimensions =
+      GetLayoutConstant(LayoutConstant::kLocationBarHeight);
   gfx::Insets inkdrop_insets =
       margin_insets +
       gfx::Insets(std::max(0, (host_size.height() - inkdrop_dimensions) / 2));
@@ -92,18 +94,14 @@ void ConfigureInkDropForToolbar(
       kToolbarInkDropHighlightVisibleAlpha / float{SK_AlphaOPAQUE});
   views::InkDrop::Get(host)->SetBaseColorCallback(
       base::BindRepeating(&GetToolbarInkDropBaseColor, host));
-
-  if (features::IsChromeRefresh2023()) {
-    ConfigureToolbarInkdropForRefresh2023(host, kColorToolbarInkDropHover,
-                                          kColorToolbarInkDropRipple);
-  }
+  ConfigureToolbarInkdropForRefresh2023(host, kColorToolbarInkDropHover,
+                                        kColorToolbarInkDropRipple);
 }
 
 void ConfigureToolbarInkdropForRefresh2023(
     views::View* const host,
     const ChromeColorIds hover_color_id,
     const ChromeColorIds ripple_color_id) {
-  CHECK(features::IsChromeRefresh2023());
   views::InkDrop::Get(host)->SetLayerRegion(views::LayerRegion::kAbove);
   CreateToolbarInkdropCallbacks(host, hover_color_id, ripple_color_id);
 }

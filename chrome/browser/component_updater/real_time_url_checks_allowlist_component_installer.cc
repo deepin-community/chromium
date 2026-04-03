@@ -20,8 +20,6 @@
 #include "base/values.h"
 #include "components/safe_browsing/android/real_time_url_checks_allowlist.h"
 
-using component_updater::ComponentUpdateService;
-
 namespace {
 
 const base::FilePath::CharType kRealTimeUrlChecksAllowlistPbFileName[] =
@@ -70,7 +68,7 @@ bool RealTimeUrlChecksAllowlistComponentInstallerPolicy::
 
 update_client::CrxInstaller::Result
 RealTimeUrlChecksAllowlistComponentInstallerPolicy::OnCustomInstall(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) {
   return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 }
@@ -86,7 +84,7 @@ RealTimeUrlChecksAllowlistComponentInstallerPolicy::GetInstalledPath(
 void RealTimeUrlChecksAllowlistComponentInstallerPolicy::ComponentReady(
     const base::Version& version,
     const base::FilePath& install_dir,
-    base::Value::Dict manifest) {
+    base::DictValue manifest) {
   base::ThreadPool::PostTask(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::BindOnce(&LoadFromDisk, GetInstalledPath(install_dir)));
@@ -94,7 +92,7 @@ void RealTimeUrlChecksAllowlistComponentInstallerPolicy::ComponentReady(
 
 // Called during startup and installation before ComponentReady().
 bool RealTimeUrlChecksAllowlistComponentInstallerPolicy::VerifyInstallation(
-    const base::Value::Dict& manifest,
+    const base::DictValue& manifest,
     const base::FilePath& install_dir) const {
   // No need to actually validate the proto here, since we'll do the checking
   // in |PopulateFromDynamicUpdate()|.
@@ -109,9 +107,8 @@ RealTimeUrlChecksAllowlistComponentInstallerPolicy::GetRelativeInstallDir()
 
 void RealTimeUrlChecksAllowlistComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(kRealTimeUrlChecksAllowlistPublicKeySHA256,
-               kRealTimeUrlChecksAllowlistPublicKeySHA256 +
-                   std::size(kRealTimeUrlChecksAllowlistPublicKeySHA256));
+  hash->assign(std::begin(kRealTimeUrlChecksAllowlistPublicKeySHA256),
+               std::end(kRealTimeUrlChecksAllowlistPublicKeySHA256));
 }
 
 std::string RealTimeUrlChecksAllowlistComponentInstallerPolicy::GetName()

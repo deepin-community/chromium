@@ -12,15 +12,9 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
-#include <cstdint>
-#include <memory>
 #include <string>
 #include <utility>
-#include <vector>
 
-#include "absl/container/inlined_vector.h"
-#include "absl/memory/memory.h"
-#include "absl/strings/string_view.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -28,6 +22,7 @@ limitations under the License.
 #include "mlir/Dialect/Tensor/IR/Tensor.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/Diagnostics.h"  // from @llvm-project
 #include "mlir/IR/IRMapping.h"  // from @llvm-project
@@ -35,11 +30,14 @@ limitations under the License.
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/Types.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "stablehlo/dialect/Base.h"  // from @stablehlo
 #include "tensorflow/compiler/mlir/op_or_arg_name_mapper.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tpu_embedding_ops_registry.h"
 #include "tensorflow/compiler/mlir/tf2xla/transforms/legalization_op_config.h"
+#include "tensorflow/compiler/mlir/tf2xla/transforms/legalize_tf_with_tf2xla_passes.h"
 #include "tensorflow/compiler/mlir/tf2xla/transforms/passes.h"
 #include "tensorflow/compiler/mlir/tf2xla/transforms/tf2xla_rewriter.h"
 #include "tensorflow/compiler/tf2xla/xla_compilation_device.h"
@@ -47,8 +45,9 @@ limitations under the License.
 #include "tensorflow/compiler/tf2xla/xla_expression.h"
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
-#include "xla/client/xla_builder.h"
-#include "xla/mlir_hlo/mhlo/IR/hlo_ops.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/status.h"
+#include "xla/tsl/platform/statusor.h"
 #include "tensorflow/core/common_runtime/device.h"
 #include "tensorflow/core/common_runtime/device_factory.h"
 #include "tensorflow/core/common_runtime/device_mgr.h"
@@ -63,9 +62,6 @@ limitations under the License.
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/framework/types.pb.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/status.h"
-#include "tsl/platform/statusor.h"
 
 namespace mlir {
 namespace mhlo {
@@ -75,18 +71,16 @@ namespace {
 // Returns true if the given type is a ranked tensor type with static or bounded
 // dimensions.
 bool IsBounded(Type ty) {
-  auto ranked_ty = ty.dyn_cast<RankedTensorType>();
+  auto ranked_ty = mlir::dyn_cast<RankedTensorType>(ty);
   if (!ranked_ty) return false;
 
   if (ranked_ty.hasStaticShape()) return true;
 
-  auto encoding =
-      ranked_ty.getEncoding().dyn_cast_or_null<TypeExtensionsAttr>();
-  if (!encoding) return false;
+  auto bounds = hlo::encodingToBounds(ranked_ty.getEncoding());
+  if (bounds.empty()) return false;
 
   for (int i = 0; i < ranked_ty.getRank(); ++i) {
-    if (ranked_ty.isDynamicDim(i) &&
-        encoding.getBounds()[i] == ShapedType::kDynamic) {
+    if (ranked_ty.isDynamicDim(i) && bounds[i] == ShapedType::kDynamic) {
       return false;
     }
   }
@@ -96,10 +90,11 @@ bool IsBounded(Type ty) {
 bool HasSymbolRefAttr(Operation* op) {
   for (const auto& attr : op->getAttrs()) {
     Attribute attr_value = attr.getValue();
-    if (attr_value.isa<SymbolRefAttr>()) {
+    if (mlir::isa<SymbolRefAttr>(attr_value)) {
       return true;
-    } else if (auto array_attr = attr_value.dyn_cast<ArrayAttr>()) {
-      if (!array_attr.empty() && array_attr.begin()->isa<SymbolRefAttr>()) {
+    } else if (auto array_attr = mlir::dyn_cast<ArrayAttr>(attr_value)) {
+      if (!array_attr.empty() &&
+          mlir::isa<SymbolRefAttr>(*array_attr.begin())) {
         return true;
       }
     }
@@ -130,13 +125,13 @@ class Tf2XlaRewritePattern : public ConversionPattern {
     auto abstractOp = op->getRegisteredInfo();
     if (!abstractOp) return failure();
 
-    if (!(IsOpAllowedTf2xlaFallback(abstractOp->getTypeID()) ||
+    if (!(hlo::IsOpAllowedTf2xlaFallback(abstractOp->getTypeID()) ||
           (prefer_tf2xla_ &&
-           IsOpAllowedTf2xlaPreferred(abstractOp->getTypeID())))) {
+           hlo::IsOpAllowedTf2xlaPreferred(abstractOp->getTypeID())))) {
       return failure();
     }
 
-    return Tf2XlaRewriter::RewriteOp(op, rewriter, device_type_);
+    return hlo::Tf2XlaRewriter::RewriteOp(op, rewriter, device_type_);
   }
 
  private:
@@ -146,8 +141,8 @@ class Tf2XlaRewritePattern : public ConversionPattern {
 };
 
 bool ShouldRefineTypeTo(Type original_ty, Type updated_ty) {
-  auto updated = updated_ty.dyn_cast<ShapedType>();
-  auto original = original_ty.dyn_cast<ShapedType>();
+  auto updated = mlir::dyn_cast<ShapedType>(updated_ty);
+  auto original = mlir::dyn_cast<ShapedType>(original_ty);
 
   // Both types must be shaped types.
   if (!original || !updated) return false;
@@ -225,8 +220,8 @@ Tf2XlaTypeConverter::Tf2XlaTypeConverter() {
   // fallback legalization.
   auto cast_value = [&](OpBuilder& builder, Type result_type, ValueRange inputs,
                         Location loc) -> Value {
-    return builder.create<mlir::tensor::CastOp>(loc, result_type,
-                                                inputs.front());
+    return mlir::tensor::CastOp::create(builder, loc, result_type,
+                                        inputs.front());
   };
   addSourceMaterialization(cast_value);
 }

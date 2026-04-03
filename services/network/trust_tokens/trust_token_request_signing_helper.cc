@@ -4,6 +4,7 @@
 
 #include "services/network/trust_tokens/trust_token_request_signing_helper.h"
 
+#include <algorithm>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -14,7 +15,6 @@
 #include "base/base64.h"
 #include "base/containers/flat_set.h"
 #include "base/no_destructor.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -42,7 +42,7 @@ const char kRedemptionRecordHeaderRedemptionRecordKey[] = "redemption-record";
 void LogOutcome(const net::NetLogWithSource& log, std::string_view outcome) {
   log.EndEvent(
       net::NetLogEventType::TRUST_TOKEN_OPERATION_BEGIN_SIGNING,
-      [outcome]() { return base::Value::Dict().Set("outcome", outcome); });
+      [outcome]() { return base::DictValue().Set("outcome", outcome); });
 }
 
 }  // namespace

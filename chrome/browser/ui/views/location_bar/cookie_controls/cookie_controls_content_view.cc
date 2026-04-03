@@ -4,30 +4,44 @@
 
 #include "chrome/browser/ui/views/location_bar/cookie_controls/cookie_controls_content_view.h"
 
+#include "base/strings/string_util.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/controls/rich_controls_container_view.h"
 #include "chrome/browser/ui/views/controls/rich_hover_button.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/content_settings/browser/ui/cookie_controls_util.h"
+#include "components/content_settings/core/common/cookie_controls_enforcement.h"
+#include "components/content_settings/core/common/cookie_controls_state.h"
 #include "components/content_settings/core/common/features.h"
+#include "components/privacy_sandbox/privacy_sandbox_features.h"
+#include "components/strings/grit/privacy_sandbox_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/controls/button/md_text_button_with_spinner.h"
 #include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/box_layout_view.h"
+#include "ui/views/vector_icons.h"
+#include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
 
 namespace {
 
+using Util = ::content_settings::CookieControlsUtil;
+
 constexpr int kMaxBubbleWidth = 1000;
 
 int GetDefaultIconSize() {
-  return GetLayoutConstant(PAGE_INFO_ICON_SIZE);
+  return GetLayoutConstant(LayoutConstant::kPageInfoIconSize);
 }
 
 std::unique_ptr<views::View> CreateSeparator(bool padded) {
@@ -38,12 +52,6 @@ std::unique_ptr<views::View> CreateSeparator(bool padded) {
                           DISTANCE_HORIZONTAL_SEPARATOR_PADDING_PAGE_INFO_VIEW)
                     : 0;
 
-  if (!features::IsChromeRefresh2023()) {
-    // Distance for multi content list is used, but split in half, since there
-    // is a separator in the middle of it. For ChromeRefresh2023, the separator
-    // spacing is larger hence no need to split in half.
-    vmargin /= 2;
-  }
   auto separator = std::make_unique<views::Separator>();
   separator->SetProperty(views::kMarginsKey, gfx::Insets::VH(vmargin, hmargin));
   return separator;
@@ -56,19 +64,32 @@ std::unique_ptr<views::View> CreateFullWidthSeparator() {
 std::unique_ptr<views::View> CreatePaddedSeparator() {
   return CreateSeparator(/*padded=*/true);
 }
+
+gfx::Insets UserBypassBubbleInsets() {
+  auto* provider = ChromeLayoutProvider::Get();
+  const int vertical_margin =
+      provider->GetDistanceMetric(DISTANCE_CONTENT_LIST_VERTICAL_MULTI);
+  const int side_margin =
+      provider->GetInsetsMetric(views::INSETS_DIALOG).left();
+  return gfx::Insets::VH(vertical_margin, side_margin);
+}
+
 }  // namespace
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(CookieControlsContentView, kTitle);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(CookieControlsContentView, kDescription);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(CookieControlsContentView,
+                                      kThirdPartyCookiesSummary);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(CookieControlsContentView, kToggleButton);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(CookieControlsContentView, kToggleLabel);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(CookieControlsContentView,
+                                      kThirdPartyCookiesLabel);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(CookieControlsContentView,
                                       kFeedbackButton);
 
 CookieControlsContentView::CookieControlsContentView() {
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical));
-
   AddChildView(CreateFullWidthSeparator());
   AddContentLabels();
   AddToggleRow();
@@ -76,17 +97,10 @@ CookieControlsContentView::CookieControlsContentView() {
 }
 
 void CookieControlsContentView::AddContentLabels() {
-  auto* provider = ChromeLayoutProvider::Get();
-  const int vertical_margin =
-      provider->GetDistanceMetric(DISTANCE_CONTENT_LIST_VERTICAL_MULTI);
-  const int side_margin =
-      provider->GetInsetsMetric(views::INSETS_DIALOG).left();
-
   label_wrapper_ = AddChildView(std::make_unique<views::View>());
   label_wrapper_->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kVertical));
-  label_wrapper_->SetProperty(views::kMarginsKey,
-                              gfx::Insets::VH(vertical_margin, side_margin));
+  label_wrapper_->SetProperty(views::kMarginsKey, UserBypassBubbleInsets());
   title_ = label_wrapper_->AddChildView(std::make_unique<views::Label>());
   title_->SetTextContext(views::style::CONTEXT_DIALOG_BODY_TEXT);
   title_->SetTextStyle(views::style::STYLE_BODY_3_EMPHASIS);
@@ -95,11 +109,7 @@ void CookieControlsContentView::AddContentLabels() {
 
   description_ = label_wrapper_->AddChildView(std::make_unique<views::Label>());
   description_->SetTextContext(views::style::CONTEXT_LABEL);
-  if (features::IsChromeRefresh2023()) {
-    description_->SetTextStyle(views::style::STYLE_BODY_5);
-  } else {
-    description_->SetTextStyle(views::style::STYLE_SECONDARY);
-  }
+  description_->SetTextStyle(views::style::STYLE_BODY_5);
   description_->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT);
   description_->SetMultiLine(true);
   description_->SetProperty(views::kElementIdentifierKey, kDescription);
@@ -110,21 +120,20 @@ void CookieControlsContentView::SetToggleIsOn(bool is_on) {
 }
 
 void CookieControlsContentView::SetToggleIcon(const gfx::VectorIcon& icon) {
-  toggle_row_->SetIcon(ui::ImageModel::FromVectorIcon(icon, ui::kColorIcon,
-                                                      GetDefaultIconSize()));
+  cookies_row_->SetIcon(ui::ImageModel::FromVectorIcon(icon, ui::kColorIcon,
+                                                       GetDefaultIconSize()));
 }
 
 void CookieControlsContentView::SetToggleVisible(bool visible) {
   toggle_button_->SetVisible(visible);
-  PreferredSizeChanged();
 }
 
-void CookieControlsContentView::SetToggleLabel(const std::u16string& label) {
-  toggle_label_->SetText(label);
-  if (features::IsChromeRefresh2023()) {
-    toggle_label_->SetTextStyle(views::style::STYLE_BODY_5);
-  }
+void CookieControlsContentView::SetCookiesLabel(const std::u16string& label) {
+  cookies_label_->SetText(label);
+  cookies_label_->SetTextStyle(views::style::STYLE_BODY_5);
+  cookies_label_->SetProperty(views::kElementIdentifierKey, kToggleLabel);
 
+  // TODO(https://b/344856056): Update this accessibility label for the new UI.
   const std::u16string accessible_name = base::JoinString(
       {
           l10n_util::GetStringUTF16(
@@ -132,7 +141,7 @@ void CookieControlsContentView::SetToggleLabel(const std::u16string& label) {
           label,
       },
       u"\n");
-  toggle_button_->SetAccessibleName(accessible_name);
+  toggle_button_->GetViewAccessibility().SetName(accessible_name);
 }
 
 void CookieControlsContentView::SetEnforcedIcon(const gfx::VectorIcon& icon,
@@ -143,41 +152,49 @@ void CookieControlsContentView::SetEnforcedIcon(const gfx::VectorIcon& icon,
 }
 
 void CookieControlsContentView::SetEnforcedIconVisible(bool visible) {
-  enforced_icon_->SetVisible(visible);
+  if (enforced_icon_ != nullptr) {
+    enforced_icon_->SetVisible(visible);
+  }
 }
 
 void CookieControlsContentView::SetFeedbackSectionVisibility(bool visible) {
   if (visible && base::FeatureList::IsEnabled(
                      content_settings::features::kUserBypassFeedback)) {
     feedback_section_->SetVisible(true);
+    // Ensure that the feedback row is always below ACT feature rows.
+    ReorderChildView(feedback_section_, children().size());
   } else {
     feedback_section_->SetVisible(false);
   }
-  PreferredSizeChanged();
+}
+
+void CookieControlsContentView::SetCookiesRowVisible(bool visible) {
+  cookies_row_->SetVisible(visible);
+}
+
+void CookieControlsContentView::UpdateFeedbackButtonSubtitle(
+    const std::u16string& subtitle) {
+  feedback_button_->SetSubtitleText(subtitle);
 }
 
 void CookieControlsContentView::AddToggleRow() {
-  toggle_row_ = AddChildView(std::make_unique<RichControlsContainerView>());
-  toggle_row_->SetTitle(l10n_util::GetStringUTF16(
+  cookies_row_ = AddChildView(std::make_unique<RichControlsContainerView>());
+  cookies_row_->SetTitle(l10n_util::GetStringUTF16(
       IDS_COOKIE_CONTROLS_BUBBLE_THIRD_PARTY_COOKIES_LABEL));
 
-  // The label will be provided via SetToggleLabel().
-  toggle_label_ = toggle_row_->AddSecondaryLabel(u"");
-  toggle_label_->SetProperty(views::kElementIdentifierKey, kToggleLabel);
-
+  // The label will be provided via SetCookiesLabel().
+  cookies_label_ = cookies_row_->AddSecondaryLabel(u"");
   enforced_icon_ =
-      toggle_row_->AddControl(std::make_unique<views::ImageView>());
+      cookies_row_->AddControl(std::make_unique<views::ImageView>());
 
-  toggle_button_ = toggle_row_->AddControl(
+  toggle_button_ = cookies_row_->AddControl(
       std::make_unique<views::ToggleButton>(base::BindRepeating(
           &CookieControlsContentView::NotifyToggleButtonPressedCallback,
           base::Unretained(this))));
   toggle_button_->SetPreferredSize(
       gfx::Size(toggle_button_->GetPreferredSize().width(),
-                toggle_row_->GetFirstLineHeight()));
-
-  // The accessible name will be updated again when the label is updated.
-  toggle_button_->SetAccessibleName(l10n_util::GetStringUTF16(
+                cookies_row_->GetFirstLineHeight()));
+  toggle_button_->GetViewAccessibility().SetName(l10n_util::GetStringUTF16(
       IDS_COOKIE_CONTROLS_BUBBLE_THIRD_PARTY_COOKIES_LABEL));
   toggle_button_->SetVisible(true);
   toggle_button_->SetProperty(views::kElementIdentifierKey, kToggleButton);
@@ -191,11 +208,12 @@ void CookieControlsContentView::AddFeedbackSection() {
   const ui::ImageModel feedback_icon = ui::ImageModel::FromVectorIcon(
       kSubmitFeedbackIcon, ui::kColorMenuIcon, GetDefaultIconSize());
   const ui::ImageModel launch_icon = ui::ImageModel::FromVectorIcon(
-      vector_icons::kLaunchIcon, ui::kColorMenuIcon, GetDefaultIconSize());
+      vector_icons::kLaunchIcon, ui::kColorMenuIcon,
+      GetLayoutConstant(LayoutConstant::kPageInfoIconSize));
 
   feedback_section_->AddChildView(CreatePaddedSeparator());
 
-  auto* feedback_button =
+  feedback_button_ =
       feedback_section_->AddChildView(std::make_unique<RichHoverButton>(
           base::BindRepeating(
               &CookieControlsContentView::NotifyFeedbackButtonPressedCallback,
@@ -203,14 +221,13 @@ void CookieControlsContentView::AddFeedbackSection() {
           feedback_icon,
           l10n_util::GetStringUTF16(
               IDS_COOKIE_CONTROLS_BUBBLE_SEND_FEEDBACK_BUTTON_TITLE),
-          std::u16string(),
-          l10n_util::GetStringUTF16(
-              IDS_COOKIE_CONTROLS_BUBBLE_SEND_FEEDBACK_BUTTON_TITLE),
           l10n_util::GetStringUTF16(
               IDS_COOKIE_CONTROLS_BUBBLE_SEND_FEEDBACK_BUTTON_DESCRIPTION),
           launch_icon));
 
-  feedback_button->SetProperty(views::kElementIdentifierKey, kFeedbackButton);
+  feedback_button_->SetProperty(views::kElementIdentifierKey, kFeedbackButton);
+  feedback_button_->SetTooltipText(l10n_util::GetStringUTF16(
+      IDS_COOKIE_CONTROLS_BUBBLE_SEND_FEEDBACK_BUTTON_TITLE));
 }
 
 void CookieControlsContentView::UpdateContentLabels(
@@ -218,35 +235,36 @@ void CookieControlsContentView::UpdateContentLabels(
     const std::u16string& description) {
   title_->SetText(title);
   description_->SetText(description);
-  PreferredSizeChanged();
 }
 
 void CookieControlsContentView::SetContentLabelsVisible(bool visible) {
   // Set visibility on the wrapper to ensure that margins are correctly updated.
   label_wrapper_->SetVisible(visible);
-  PreferredSizeChanged();
 }
 
 CookieControlsContentView::~CookieControlsContentView() = default;
 
-gfx::Size CookieControlsContentView::CalculatePreferredSize() const {
+void CookieControlsContentView::PreferredSizeChanged() {
+  views::View::PreferredSizeChanged();
+}
+
+gfx::Size CookieControlsContentView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   // Ensure that the width is only increased to support a longer title string,
-  // or a longer toggle. Other information can be wrapped or elided to keep the
-  // standard size.
-  auto size = views::View::CalculatePreferredSize();
+  // or a longer toggle. Other information can be wrapped or elided to keep
+  // the standard size.
+  auto size = views::View::CalculatePreferredSize(available_size);
 
   auto* provider = ChromeLayoutProvider::Get();
-  const int margins = provider->GetInsetsMetric(views::INSETS_DIALOG).left() +
-                      provider->GetInsetsMetric(views::INSETS_DIALOG).right();
+  const int margins = provider->GetInsetsMetric(views::INSETS_DIALOG).width();
 
   int title_width = title_->GetPreferredSize().width() + margins;
-  int toggle_width = toggle_row_->GetPreferredSize().width();
 
-  int desired_width =
-      std::clamp(std::max(title_width, toggle_width),
-                 ChromeLayoutProvider::Get()->GetDistanceMetric(
-                     views::DistanceMetric::DISTANCE_BUBBLE_PREFERRED_WIDTH),
-                 kMaxBubbleWidth);
+  int desired_width = std::clamp(
+      std::max(title_width, cookies_row_->GetPreferredSize().width()),
+      ChromeLayoutProvider::Get()->GetDistanceMetric(
+          views::DistanceMetric::DISTANCE_BUBBLE_PREFERRED_WIDTH),
+      kMaxBubbleWidth);
 
   return gfx::Size(desired_width, size.height());
 }

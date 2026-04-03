@@ -56,7 +56,7 @@ class MEDIA_GPU_EXPORT V4L2VideoDecoder
                   bool low_delay,
                   CdmContext* cdm_context,
                   InitCB init_cb,
-                  const OutputCB& output_cb,
+                  const PipelineOutputCB& output_cb,
                   const WaitingCB& waiting_cb) override;
   void Decode(scoped_refptr<DecoderBuffer> buffer, DecodeCB decode_cb) override;
   void Reset(base::OnceClosure reset_cb) override;
@@ -82,7 +82,7 @@ class MEDIA_GPU_EXPORT V4L2VideoDecoder
                         gfx::Rect visible_rect,
                         size_t num_codec_reference_frames,
                         uint8_t bit_depth) override;
-  void OutputFrame(scoped_refptr<VideoFrame> frame,
+  void OutputFrame(scoped_refptr<FrameResource> frame,
                    const gfx::Rect& visible_rect,
                    const VideoColorSpace& color_space,
                    base::TimeDelta timestamp) override;
@@ -134,6 +134,10 @@ class MEDIA_GPU_EXPORT V4L2VideoDecoder
                               const gfx::Rect& visible_rect,
                               size_t num_codec_reference_frames,
                               uint8_t bit_depth);
+
+  // Sends the EXT_CTRLS ioctl with the specified |size| and |bit_depth|. This
+  // is required by the V4L2 stateless decoder spec at 4.5.3.2. Initialization.
+  CroStatus SetExtCtrlsInit(const gfx::Size& size, const uint8_t bit_depth);
 
   // Start streaming V4L2 input and (if |start_output_queue| is true) output
   // queues. Attempt to start |device_poll_thread_| after streaming starts.
@@ -201,7 +205,7 @@ class MEDIA_GPU_EXPORT V4L2VideoDecoder
   VideoAspectRatio aspect_ratio_;
 
   // Callbacks passed from Initialize().
-  OutputCB output_cb_;
+  PipelineOutputCB output_cb_;
 
   // Hold onto profile and color space passed in from Initialize() so that
   // it is available for InitializeBackend().
@@ -215,6 +219,10 @@ class MEDIA_GPU_EXPORT V4L2VideoDecoder
   // Hold onto the input fourcc format so we can use it if we need to rebuild
   // the input queue.
   uint32_t input_format_fourcc_;
+
+  // Hold onto the type of decoder backend so we can choose different operations
+  // depend on decoder type.
+  bool backend_is_stateful_ = false;
 
   // V4L2 input and output queue.
   scoped_refptr<V4L2Queue> input_queue_;

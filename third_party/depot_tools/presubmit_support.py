@@ -18,13 +18,14 @@ import cpplint
 import fnmatch  # Exposed through the API.
 import glob
 import inspect
-import itertools
 import json  # Exposed through the API.
 import logging
+import mimetypes
 import multiprocessing
 import os  # Somewhat exposed through the API.
 import random
 import re  # Exposed through the API.
+import shutil
 import signal
 import sys  # Parts exposed through API.
 import tempfile  # Exposed through the API.
@@ -35,7 +36,8 @@ import unittest  # Exposed through the API.
 import urllib.parse as urlparse
 import urllib.request as urllib_request
 import urllib.error as urllib_error
-from typing import Mapping
+from dataclasses import asdict, dataclass
+from typing import ClassVar, Mapping
 from warnings import warn
 
 # Local imports.
@@ -43,9 +45,12 @@ import gclient_paths  # Exposed through the API
 import gclient_utils
 import git_footers
 import gerrit_util
+from gerrit_cache import GerritCache
+import lockfile
 import owners_client
 import owners_finder
 import presubmit_canned_checks
+import presubmit_diff
 import rdb_wrapper
 import scm
 import subprocess2 as subprocess  # Exposed through the API.
@@ -194,7 +199,7 @@ class ThreadPool(object):
 
         # On Windows, scripts on the current directory take precedence over
         # PATH, so that when testing depot_tools on Windows, calling
-        # `vpython.bat` will execute the copy of vpython of the depot_tools
+        # `vpython3.bat` will execute the copy of vpython of the depot_tools
         # under test instead of the one in the bot. As a workaround, we run the
         # tests from the parent directory instead.
         if (cmd[0] == vpython and 'cwd' in test.kwargs
@@ -311,20 +316,94 @@ def prompt_should_continue(prompt_string):
 
 # Top level object so multiprocessing can pickle
 # Public access through OutputApi object.
+@dataclass
+class _PresubmitResultLocation:
+    COMMIT_MSG_PATH: ClassVar[str] = '/COMMIT_MSG'
+    # path to the file where errors/warnings are reported.
+    #
+    # path MUST either be COMMIT_MSG_PATH or relative to the repo root to
+    # indicate the errors/warnings are against the commit message
+    # (a.k.a cl description).
+    file_path: str
+    # The range in the file defined by (start_line, start_col) -
+    # (end_line, end_col) where errors/warnings are reported.
+    # The semantic are the same as Gerrit comment range:
+    # https://gerrit-review.googlesource.com/Documentation/rest-api-changes.html#comment-range
+    #
+    # To specify the entire line, make start_line == end_line and
+    # start_col == end_col == 0.
+    start_line: int = 0  # inclusive 1-based
+    start_col: int = 0  # inclusive 0-based
+    end_line: int = 0  # exclusive 1-based
+    end_col: int = 0  # exclusive 0-based
+
+    def validate(self):
+        if not self.file_path:
+            raise ValueError('file path is required')
+        if self.file_path != self.COMMIT_MSG_PATH and os.path.isabs(
+                self.file_path):
+            raise ValueError(
+                f'file path must be relative path, got {self.file_path}')
+        if not self.start_line:
+            if self.end_line:
+                raise ValueError('end_line must be empty if start line is not '
+                                 'specified')
+            if self.start_col:
+                raise ValueError('start_col must be empty if start line is not '
+                                 'specified')
+            if self.end_col:
+                raise ValueError('end_col must be empty if start line is not '
+                                 'specified')
+        elif self.start_line < 0:
+            raise ValueError('start_line MUST not be negative, '
+                             f'got {self.start_line}')
+        elif self.end_line < 1:
+            raise ValueError('start_line is specified so end_line must be '
+                             f'positive, got {self.end_line}')
+        elif self.start_col < 0:
+            raise ValueError('start_col MUST not be negative, '
+                             f'got {self.start_col}')
+        elif self.end_col < 0:
+            raise ValueError('end_col MUST not be negative, '
+                             f'got {self.end_col}')
+        elif self.start_line > self.end_line or (
+                self.start_line == self.end_line
+                and self.start_col > self.end_col and self.end_col > 0):
+            raise ValueError(
+                '(start_line, start_col) must not be after (end_line, end_col'
+                f'), got ({self.start_line}, {self.start_col}) .. '
+                f'({self.end_line}, {self.end_col})')
+
+
+# Top level object so multiprocessing can pickle
+# Public access through OutputApi object.
 class _PresubmitResult(object):
     """Base class for result objects."""
     fatal = False
     should_prompt = False
 
-    def __init__(self, message, items=None, long_text='', show_callstack=None):
-        """
-        message: A short one-line message to indicate errors.
-        items: A list of short strings to indicate where errors occurred.
-        long_text: multi-line text output, e.g. from another tool
+    def __init__(self,
+                 message: str,
+                 items: list[str] = None,
+                 long_text: str = '',
+                 locations: list[_PresubmitResultLocation] = None,
+                 show_callstack: bool = None):
+        """Inits _PresubmitResult.
+
+        Args:
+            message: A short one-line message to indicate errors.
+            items: A list of short strings to indicate where errors occurred.
+                Note that if you are using this parameter to print where errors
+                occurred, please use `locations` instead
+            long_text: multi-line text output, e.g. from another tool
+            locations: The locations indicate where the errors occurred.
         """
         self._message = _PresubmitResult._ensure_str(message)
         self._items = items or []
         self._long_text = _PresubmitResult._ensure_str(long_text.rstrip())
+        self._locations = locations or []
+        for loc in self._locations:
+            loc.validate()
         if show_callstack is None:
             show_callstack = _SHOW_CALLSTACKS
         if show_callstack:
@@ -344,24 +423,45 @@ class _PresubmitResult(object):
             return val.decode()
         raise ValueError("Unknown string type %s" % type(val))
 
-    def handle(self):
-        sys.stdout.write(self._message)
-        sys.stdout.write('\n')
+    def handle(self, out_file=None):
+        if not out_file:
+            out_file = sys.stdout
+        out_file.write(self._message)
+        out_file.write('\n')
         for item in self._items:
-            sys.stdout.write('  ')
+            out_file.write('  ')
             # Write separately in case it's unicode.
-            sys.stdout.write(str(item))
-            sys.stdout.write('\n')
+            out_file.write(str(item))
+            out_file.write('\n')
+        if self._locations:
+            out_file.write('Found in:\n')
+            for loc in self._locations:
+                if loc.file_path == _PresubmitResultLocation.COMMIT_MSG_PATH:
+                    out_file.write('  - Commit Message')
+                else:
+                    out_file.write(f'  - {loc.file_path}')
+                if not loc.start_line:
+                    pass
+                elif loc.start_line == loc.end_line and (loc.start_col == 0
+                                                         and loc.end_col == 0):
+                    out_file.write(f' [Ln {loc.start_line}]')
+                elif loc.start_col == 0 and loc.end_col == 0:
+                    out_file.write(f' [Ln {loc.start_line} - {loc.end_line}]')
+                else:
+                    out_file.write(f' [Ln {loc.start_line}, Col {loc.start_col}'
+                                   f' - Ln {loc.end_line}, Col {loc.end_col}]')
+                out_file.write('\n')
         if self._long_text:
-            sys.stdout.write('\n***************\n')
+            out_file.write('\n***************\n')
             # Write separately in case it's unicode.
-            sys.stdout.write(self._long_text)
-            sys.stdout.write('\n***************\n')
+            out_file.write(self._long_text)
+            out_file.write('\n***************\n')
 
     def json_format(self):
         return {
             'message': self._message,
             'items': [str(item) for item in self._items],
+            'locations': [asdict(loc) for loc in self._locations],
             'long_text': self._long_text,
             'fatal': self.fatal
         }
@@ -401,12 +501,14 @@ class GerritAccessor(object):
 
     To avoid excessive Gerrit calls, caches the results.
     """
-    def __init__(self, url=None, project=None, branch=None):
+
+    def __init__(self, url=None, project=None, branch=None, root=None):
         self.host = urlparse.urlparse(url).netloc if url else None
         self.project = project
         self.branch = branch
         self.cache = {}
         self.code_owners_enabled = None
+        self.persistent_cache = GerritCache(root)
 
     def _FetchChangeDetail(self, issue):
         # Separate function to be easily mocked in tests.
@@ -499,8 +601,19 @@ class GerritAccessor(object):
 
     def IsCodeOwnersEnabledOnRepo(self):
         if self.code_owners_enabled is None:
-            self.code_owners_enabled = gerrit_util.IsCodeOwnersEnabledOnRepo(
-                self.host, self.project)
+            if self.persistent_cache:
+                key = GerritCache.get_repo_code_owners_enabled_key(
+                    self.host, self.project)
+                self.code_owners_enabled = self.persistent_cache.getBoolean(key)
+                if self.code_owners_enabled is None:
+                    self.code_owners_enabled = gerrit_util.IsCodeOwnersEnabledOnRepo(
+                        self.host, self.project)
+                    self.persistent_cache.setBoolean(key,
+                                                     self.code_owners_enabled)
+            else:
+                self.code_owners_enabled = gerrit_util.IsCodeOwnersEnabledOnRepo(
+                    self.host, self.project)
+
         return self.code_owners_enabled
 
 
@@ -513,6 +626,7 @@ class OutputApi(object):
     PresubmitPromptWarning = _PresubmitPromptWarning
     PresubmitNotifyResult = _PresubmitNotifyResult
     MailTextResult = _MailTextResult
+    PresubmitResultLocation = _PresubmitResultLocation
 
     def __init__(self, is_committing):
         self.is_committing = is_committing
@@ -560,6 +674,7 @@ class InputApi(object):
         r'.+\.js$',
         r'.+\.ts$',
         r'.+\.py$',
+        r'.+\.star$',
         r'.+\.sh$',
         r'.+\.rb$',
         r'.+\.pl$',
@@ -572,6 +687,7 @@ class InputApi(object):
         r'.+\.mojom$',
         r'.+\.fidl$',
         r'.+\.rs$',
+        r'.+\/res\/.+\.xml$',
     )
 
     # Path regexp that should be excluded from being considered containing
@@ -689,7 +805,8 @@ class InputApi(object):
                 self.owners_client = owners_client.GetCodeOwnersClient(
                     host=self.gerrit.host,
                     project=self.gerrit.project,
-                    branch=self.gerrit.branch)
+                    branch=self.gerrit.branch,
+                    cache=self.gerrit.persistent_cache)
             except Exception as e:
                 print('Failed to set owners_client - %s' % str(e))
         self.owners_finder = owners_finder.OwnersFinder
@@ -706,6 +823,7 @@ class InputApi(object):
                                                             '<hash_set>') else
             (a, b, header) for (a, b, header) in cpplint._re_pattern_templates
         ]
+
 
     def SetTimeout(self, timeout):
         self.thread_pool.timeout = timeout
@@ -739,10 +857,25 @@ class InputApi(object):
                 self.change.AffectedFiles(include_deletes, file_filter)))
 
     def LocalPaths(self):
-        """Returns local paths of input_api.AffectedFiles()."""
+        """Returns platform-native local paths of .AffectedFiles().
+
+        E.g. on Windows the paths will contain backslashes. The paths
+        will be relative to the client root, which might be different
+        than the CWD, so use this for platform-appropriate error messages,
+        but not for accessing the files. Use .AbsoluteLocalPaths() when you
+        need to actually access the files."""
         paths = [af.LocalPath() for af in self.AffectedFiles()]
         logging.debug('LocalPaths: %s', paths)
         return paths
+
+    def UnixLocalPaths(self):
+        """Returns unix-style local paths of input_api.AffectedFiles().
+
+        I.e., on Windows the path will contain forward slashes,
+        not backslashes. Other platforms are unchanged.
+
+        Use this when you need to check paths in a platform-independent way."""
+        return [p.replace(os.path.sep, '/') for p in self.LocalPaths()]
 
     def AbsoluteLocalPaths(self):
         """Returns absolute local paths of input_api.AffectedFiles()."""
@@ -782,6 +915,9 @@ class InputApi(object):
         '/' path separators should be used in the regular expressions and will work
         on Windows as well as other platforms.
 
+        For backwards-compatibility, '\' path separators will
+        also work correctly on Windows (but not on other platforms).
+
         Note: Copy-paste this function to suit your needs or use a lambda function.
         """
         if files_to_check is None:
@@ -791,13 +927,11 @@ class InputApi(object):
 
         def Find(affected_file, items):
             local_path = affected_file.LocalPath()
+            unix_local_path = affected_file.UnixLocalPath()
             for item in items:
                 if self.re.match(item, local_path):
                     return True
-                # Handle the cases where the files regex only handles /, but the
-                # local path uses \.
-                if self.is_windows and self.re.match(
-                        item, local_path.replace('\\', '/')):
+                if self.re.match(item, unix_local_path):
                     return True
             return False
 
@@ -925,46 +1059,29 @@ class _DiffCache(object):
 class _GitDiffCache(_DiffCache):
     """DiffCache implementation for git; gets all file diffs at once."""
 
-    def __init__(self, upstream):
+    def __init__(self, upstream, end_commit):
         """Stores the upstream revision against which all diffs are computed."""
         super(_GitDiffCache, self).__init__()
         self._upstream = upstream
+        self._end_commit = end_commit
         self._diffs_by_file = None
 
     def GetDiff(self, path, local_root):
         # Compare against None to distinguish between None and an initialized
         # but empty dictionary.
         if self._diffs_by_file == None:
-            # Compute a single diff for all files and parse the output; should
-            # with git this is much faster than computing one diff for each
-            # file.
-            diffs = {}
-
             # Don't specify any filenames below, because there are command line
             # length limits on some platforms and GenerateDiff would fail.
             unified_diff = scm.GIT.GenerateDiff(local_root,
                                                 files=[],
                                                 full_move=True,
-                                                branch=self._upstream)
-
-            # This regex matches the path twice, separated by a space. Note that
-            # filename itself may contain spaces.
-            file_marker = re.compile(
-                '^diff --git (?P<filename>.*) (?P=filename)$')
-            current_diff = []
-            keep_line_endings = True
-            for x in unified_diff.splitlines(keep_line_endings):
-                match = file_marker.match(x)
-                if match:
-                    # Marks the start of a new per-file section.
-                    diffs[match.group('filename')] = current_diff = [x]
-                elif x.startswith('diff --git'):
-                    raise PresubmitFailure('Unexpected diff line: %s' % x)
-                else:
-                    current_diff.append(x)
-
-            self._diffs_by_file = dict(
-                (normpath(path), ''.join(diff)) for path, diff in diffs.items())
+                                                branch=self._upstream,
+                                                branch_head=self._end_commit,
+                                                allow_prefix=True,
+                                                context=0)
+            # Compute a single diff for all files and parse the output; with git
+            # this is much faster than computing one diff for each file.
+            self._diffs_by_file = _parse_unified_diff(unified_diff)
 
         if path not in self._diffs_by_file:
             # SCM didn't have any diff on this file. It could be that the file
@@ -979,6 +1096,65 @@ class _GitDiffCache(_DiffCache):
         return scm.GIT.GetOldContents(local_root, path, branch=self._upstream)
 
 
+class _ProvidedDiffCache(_DiffCache):
+    """Caches diffs from the provided diff file."""
+
+    def __init__(self, diff):
+        """Stores all diffs and diffs per file."""
+        super(_ProvidedDiffCache, self).__init__()
+        self._diffs_by_file = None
+        self._diff = diff
+
+    def GetDiff(self, path, local_root):
+        """Get the diff for a particular path."""
+        if self._diffs_by_file == None:
+            self._diffs_by_file = _parse_unified_diff(self._diff)
+        return self._diffs_by_file.get(path, '')
+
+    def GetOldContents(self, path, local_root):
+        """Get the old version for a particular path."""
+        full_path = os.path.join(local_root, path)
+        diff = self.GetDiff(path, local_root)
+        is_file = os.path.isfile(full_path)
+        if not diff:
+            if is_file:
+                return gclient_utils.FileRead(full_path)
+            return ''
+
+        with gclient_utils.temporary_file() as diff_file:
+            gclient_utils.FileWrite(diff_file, diff)
+            try:
+                scm.GIT.Capture([
+                    'apply', '--reverse', '--unidiff-zero', '--check', diff_file
+                ],
+                                cwd=local_root)
+            except subprocess.CalledProcessError:
+                raise RuntimeError('Provided diff does not apply cleanly.')
+
+            # Apply the reverse diff to a temporary file and read its contents.
+            with gclient_utils.temporary_directory() as tmp_dir:
+                copy_dst = os.path.join(tmp_dir, path)
+                os.makedirs(os.path.dirname(copy_dst), exist_ok=True)
+                if is_file:
+                    shutil.copyfile(full_path, copy_dst)
+                scm.GIT.Capture([
+                    'apply',
+                    '--reverse',
+                    '--directory',
+                    tmp_dir,
+                    '--unidiff-zero',
+                    '--unsafe-paths',
+                    diff_file,
+                ],
+                                cwd=tmp_dir)
+                # Applying the patch can create a new file if the file at
+                # full_path was deleted, so check if the new file at copy_dst
+                # exists.
+                if os.path.isfile(copy_dst):
+                    return gclient_utils.FileRead(copy_dst)
+                return ''
+
+
 class AffectedFile(object):
     """Representation of a file in a change."""
 
@@ -990,23 +1166,34 @@ class AffectedFile(object):
         self._path = path
         self._action = action
         self._local_root = repository_root
-        self._is_directory = None
+        self._diff_cache = diff_cache
         self._cached_changed_contents = None
         self._cached_new_contents = None
-        self._diff_cache = diff_cache
+        self._extension = None
+        self._is_testable_file = None
         logging.debug('%s(%s)', self.__class__.__name__, self._path)
 
     def LocalPath(self):
         """Returns the path of this file on the local disk relative to client root.
 
-        This should be used for error messages but not for accessing files,
+        This should be used for error messages but not for accessing the file,
         because presubmit checks are run with CWD=PresubmitLocalPath() (which is
-        often != client root).
+        often != client root). Use .AbsoluteLocalPath() to access the file.
         """
         return normpath(self._path)
 
+    def UnixLocalPath(self):
+        """Returns LocalPath() normalized to use forward slashes.
+
+        On Windows, this means that any backslashes in the path will be
+        replaced with forward slashes. On other platforms the behavior
+        is unchanged."""
+        return self.LocalPath().replace(os.path.sep, '/')
+
     def AbsoluteLocalPath(self):
-        """Returns the absolute path of this file on the local disk."""
+        """Returns the absolute path of this file on the local disk.
+
+        Use this when you need to actually access the file."""
         return os.path.abspath(os.path.join(self._local_root, self.LocalPath()))
 
     def Action(self):
@@ -1017,7 +1204,14 @@ class AffectedFile(object):
         """Returns True if the file is a text file and not a binary file.
 
         Deleted files are not text file."""
-        raise NotImplementedError()  # Implement when needed
+        if self._is_testable_file is None:
+            if self.Action() == 'D':
+                # A deleted file is not testable.
+                self._is_testable_file = False
+            else:
+                t, _ = mimetypes.guess_type(self.AbsoluteLocalPath())
+                self._is_testable_file = bool(t and t.startswith('text/'))
+        return self._is_testable_file
 
     def IsTextFile(self):
         """An alias to IsTestableFile for backwards compatibility."""
@@ -1035,16 +1229,18 @@ class AffectedFile(object):
         return self._diff_cache.GetOldContents(self.LocalPath(),
                                                self._local_root).splitlines()
 
-    def NewContents(self):
+    def NewContents(self, flush_cache=False):
         """Returns an iterator over the lines in the new version of file.
 
         The new version is the file in the user's workspace, i.e. the 'right hand
         side'.
 
+        If flush_cache is True, read from disk and replace any cached contents.
+
         Contents will be empty if the file is a directory or does not exist.
         Note: The carriage returns (LF or CR) are stripped off.
         """
-        if self._cached_new_contents is None:
+        if self._cached_new_contents is None or flush_cache:
             self._cached_new_contents = []
             try:
                 self._cached_new_contents = gclient_utils.FileRead(
@@ -1076,7 +1272,8 @@ class AffectedFile(object):
         # The keeplinebreaks parameter to splitlines must be True or else the
         # CheckForWindowsLineEndings presubmit will be a NOP.
         for line in self.GenerateScmDiff().splitlines(keeplinebreaks):
-            m = re.match(r'^@@ [0-9\,\+\-]+ \+([0-9]+)\,[0-9]+ @@', line)
+            m = re.match(r'^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,[0-9]+)? @@',
+                         line)
             if m:
                 line_num = int(m.groups(1)[0])
                 continue
@@ -1089,6 +1286,20 @@ class AffectedFile(object):
             return result
         self._cached_changed_contents = result
         return self._cached_changed_contents[:]
+
+    def Extension(self):
+        """Returns the file extension as a string.
+
+        File extension is the portion of file name after the last dot, including the dot.
+        If file name has no dot (like 'OWNERS'), then returns an empty string ''.
+        If file has multiple extensions (like 'archive.tar.gz'), then the last
+        extension is returned (like '.gz')
+        This method is equivalent to NodeJS node:path method path.extname()
+        and Python3 pathlib PurePath.suffix() and os.path.splitext()
+        """
+        if self._extension is None:
+            self._extension = os.path.splitext(self._path)[1]
+        return self._extension
 
     def __str__(self):
         return self.LocalPath()
@@ -1106,8 +1317,6 @@ class GitAffectedFile(AffectedFile):
 
     def __init__(self, *args, **kwargs):
         AffectedFile.__init__(self, *args, **kwargs)
-        self._server_path = None
-        self._is_testable_file = None
 
     def IsTestableFile(self):
         if self._is_testable_file is None:
@@ -1118,6 +1327,11 @@ class GitAffectedFile(AffectedFile):
                 self._is_testable_file = os.path.isfile(
                     self.AbsoluteLocalPath())
         return self._is_testable_file
+
+
+class ProvidedDiffAffectedFile(AffectedFile):
+    """Representation of a file in a change described by a diff."""
+    DIFF_CACHE = _ProvidedDiffCache
 
 
 class Change(object):
@@ -1153,6 +1367,9 @@ class Change(object):
         self.tags = {}
         self._description_without_tags = ''
         self.SetDescriptionText(description)
+
+        # List of submodule paths in the repo.
+        self._submodules = None
 
         assert all((isinstance(f, (list, tuple)) and len(f) == 2)
                    for f in files), files
@@ -1287,6 +1504,13 @@ class Change(object):
     def TBR(self):
         return ','.join(self.TBRsFromDescription())
 
+    def UpstreamBranch(self):
+        """Returns the upstream branch for the change.
+
+        This is only applicable to Git changes.
+        """
+        return None
+
     def AllFiles(self, root=None):
         """List all files under source control in the repo."""
         raise NotImplementedError()
@@ -1307,11 +1531,11 @@ class Change(object):
         return list(filter(lambda x: x.Action() != 'D', affected))
 
     def AffectedSubmodules(self):
-        """Returns a list of AffectedFile instances for submodules in the change.
-
-        There is no SCM and no submodules, so return an empty list.
-        """
-        return []
+        """Returns a list of AffectedFile instances for submodules in the change."""
+        return [
+            af for af in self._affected_files
+            if af.LocalPath() in self._repo_submodules()
+        ]
 
     def AffectedTestableFiles(self, include_deletes=None, **kwargs):
         """Return a list of the existing text files in a change."""
@@ -1329,12 +1553,31 @@ class Change(object):
         return self.AffectedTestableFiles(include_deletes=include_deletes)
 
     def LocalPaths(self):
-        """Convenience function."""
+        """Returns platform-native local paths of .AffectedFiles().
+
+        E.g.., on Windows the paths will contain backslashes. The paths
+        will be relative to the client root, which might be different
+        than the CWD, so use this for platform-appropriate error messages,
+        but not for accessing the files. Use .AbsoluteLocalPaths() when
+        you need to actually access the files."""
         return [af.LocalPath() for af in self.AffectedFiles()]
+
+    def UnixLocalPaths(self):
+        """Returns unix-style local paths of .AffectedFiles().
+
+        I.e., on Windows the path will contain forward slashes,
+        not backslashes. Other platforms are unchanged.
+
+        Use this when you need to check paths in a platform-independent way."""
+        return [p.replace(os.path.sep, '/') for p in self.LocalPaths()]
 
     def LocalSubmodules(self):
         """Returns local paths for affected submodules."""
         return [af.LocalPath() for af in self.AffectedSubmodules()]
+
+    def AllLocalSubmodules(self) -> set[str]:
+        """Returns local paths for all submodules."""
+        return set(self._repo_submodules())
 
     def AbsoluteLocalPaths(self):
         """Convenience function."""
@@ -1371,32 +1614,23 @@ class Change(object):
         return {f.LocalPath(): f.OldContents() for f in files}
 
     def _repo_submodules(self):
-        """Returns submodule paths for current change's repo.
-
-        There is no SCM, so return an empty list.
-        """
-        return []
+        """Returns submodule paths for current change's repo."""
+        if not self._submodules:
+            self._submodules = scm.GIT.ListSubmodules(self.RepositoryRoot())
+        return self._submodules
 
 
 class GitChange(Change):
     _AFFECTED_FILES = GitAffectedFile
     scm = 'git'
 
-    def __init__(self, *args, upstream, **kwargs):
+    def __init__(self, *args, upstream, end_commit, **kwargs):
         self._upstream = upstream
+        self._end_commit = end_commit
         super(GitChange, self).__init__(*args)
 
-        # List of submodule paths in the repo.
-        self._submodules = None
-
     def _diff_cache(self):
-        return self._AFFECTED_FILES.DIFF_CACHE(self._upstream)
-
-    def _repo_submodules(self):
-        """Returns submodule paths for current change's repo."""
-        if not self._submodules:
-            self._submodules = scm.GIT.ListSubmodules(self.RepositoryRoot())
-        return self._submodules
+        return self._AFFECTED_FILES.DIFF_CACHE(self._upstream, self._end_commit)
 
     def UpstreamBranch(self):
         """Returns the upstream branch for the change."""
@@ -1429,12 +1663,21 @@ class GitChange(Change):
             return affected
         return list(filter(lambda x: x.Action() != 'D', affected))
 
-    def AffectedSubmodules(self):
-        """Returns a list of AffectedFile instances for submodules in the change."""
-        return [
-            af for af in self._affected_files
-            if af.LocalPath() in self._repo_submodules()
-        ]
+
+class ProvidedDiffChange(Change):
+    _AFFECTED_FILES = ProvidedDiffAffectedFile
+
+    def __init__(self, *args, diff, **kwargs):
+        self._diff = diff
+        super(ProvidedDiffChange, self).__init__(*args)
+
+    def _diff_cache(self):
+        return self._AFFECTED_FILES.DIFF_CACHE(self._diff)
+
+    def AllFiles(self, root=None):
+        """List all files under source control in the repo."""
+        root = root or self.RepositoryRoot()
+        return scm.DIFF.GetAllFiles(root)
 
 
 def ListRelevantPresubmitFiles(files, root):
@@ -1553,8 +1796,7 @@ def DoPostUploadExecuter(change, gerrit_obj, verbose):
         gerrit_obj: The GerritAccessor object.
         verbose: Prints debug info.
     """
-    python_version = 'Python %s' % sys.version_info.major
-    sys.stdout.write('Running %s post upload checks ...\n' % python_version)
+    sys.stdout.write('Running post upload checks ...\n')
     presubmit_files = ListRelevantPresubmitFiles(
         change.LocalPaths() + change.LocalSubmodules(), change.RepositoryRoot())
     if not presubmit_files and verbose:
@@ -1762,6 +2004,19 @@ class PresubmitExecuter(object):
             the result of the presubmit function call.
         """
         start_time = time_time()
+
+        def _progress_loop(event):
+            while not event.is_set():
+                if event.wait(timeout=30):
+                    return
+                sys.stdout.write(f'Still running {function_name} after '
+                                 f'{int(time_time() - start_time)}s...\n')
+
+        event = threading.Event()
+        event_thread = threading.Thread(target=_progress_loop, args=(event,))
+        event_thread.daemon = True
+        event_thread.start()
+
         try:
             result = eval(function_name + '(*__args)', context)
             self._check_result_type(result)
@@ -1772,6 +2027,9 @@ class PresubmitExecuter(object):
                     'Evaluation of %s failed: %s, %s' %
                     (function_name, e_value, traceback.format_exc()))
             ]
+        finally:
+            event.set()
+            event_thread.join()
 
         elapsed_time = time_time() - start_time
         if elapsed_time > 10.0:
@@ -1849,13 +2107,14 @@ def DoPresubmitChecks(change,
         1 if presubmit checks failed or 0 otherwise.
     """
     with setup_environ({'PYTHONDONTWRITEBYTECODE': '1'}):
-        python_version = 'Python %s' % sys.version_info.major
-        if committing:
-            sys.stdout.write('Running %s presubmit commit checks ...\n' %
-                             python_version)
-        else:
-            sys.stdout.write('Running %s presubmit upload checks ...\n' %
-                             python_version)
+        running_msg = 'Running presubmit '
+        running_msg += 'commit ' if committing else 'upload '
+        running_msg += 'checks '
+        if branch := scm.GIT.GetBranch(change.RepositoryRoot()):
+            running_msg += f'on branch {branch} '
+        running_msg += '...\n'
+        sys.stdout.write(running_msg)
+
         start_time = time_time()
         presubmit_files = ListRelevantPresubmitFiles(
             change.AbsoluteLocalPaths() + change.AbsoluteLocalSubmodules(),
@@ -1896,39 +2155,8 @@ def DoPresubmitChecks(change,
             else:
                 messages.setdefault('Messages', []).append(result)
 
-        # Print the different message types in a consistent order. ERRORS go
-        # last so that they will be most visible in the local-presubmit output.
-        for name in ['Messages', 'Warnings', 'ERRORS']:
-            if name in messages:
-                items = messages[name]
-                sys.stdout.write('** Presubmit %s: %d **\n' %
-                                 (name, len(items)))
-                for item in items:
-                    item.handle()
-                    sys.stdout.write('\n')
-
-        total_time = time_time() - start_time
-        if total_time > 1.0:
-            sys.stdout.write('Presubmit checks took %.1fs to calculate.\n' %
-                             total_time)
-
-        if not should_prompt and not presubmits_failed:
-            sys.stdout.write('%s presubmit checks passed.\n\n' % python_version)
-        elif should_prompt and not presubmits_failed:
-            sys.stdout.write('There were %s presubmit warnings. ' %
-                             python_version)
-            if may_prompt:
-                presubmits_failed = not prompt_should_continue(
-                    'Are you sure you wish to continue? (y/N): ')
-            else:
-                sys.stdout.write('\n')
-        else:
-            sys.stdout.write('There were %s presubmit errors.\n' %
-                             python_version)
-
-        if json_output:
-            # Write the presubmit results to json output
-            presubmit_results = {
+        presubmit_results_json = json.dumps(
+            {
                 'errors':
                 [error.json_format() for error in messages.get('ERRORS', [])],
                 'notifications': [
@@ -1941,19 +2169,62 @@ def DoPresubmitChecks(change,
                 ],
                 'more_cc':
                 executer.more_cc,
-            }
+            },
+            sort_keys=True)
 
-            gclient_utils.FileWrite(
-                json_output, json.dumps(presubmit_results, sort_keys=True))
+        # Write json result to stdout if json_output is '-'. Otherwise, write
+        # output string to stdout and json result to the file specified by
+        # json_output
+        if json_output == '-':
+            sys.stdout.write('**** Presubmit Results ****\n')
+            sys.stdout.write(presubmit_results_json)
+            sys.stdout.write('\n**** End of Presubmit Results ****\n')
+        else:
+            # Print the different message types in a consistent order. ERRORS go
+            # last so that they will be most visible in the local-presubmit output.
+            for name in ['Messages', 'Warnings', 'ERRORS']:
+                if name in messages:
+                    items = messages[name]
+                    sys.stdout.write('** Presubmit %s: %d **\n' %
+                                     (name, len(items)))
+                    for item in items:
+                        item.handle()
+                        sys.stdout.write('\n')
+            if json_output:
+                gclient_utils.FileWrite(json_output, presubmit_results_json)
+
+        total_time = time_time() - start_time
+        if total_time > 1.0:
+            sys.stdout.write('Presubmit checks took %.1fs to calculate.\n' %
+                             total_time)
+
+        if not should_prompt and not presubmits_failed:
+            sys.stdout.write('presubmit checks passed.\n\n')
+        elif should_prompt and not presubmits_failed:
+            sys.stdout.write('There were presubmit warnings. ')
+            if may_prompt:
+                presubmits_failed = not prompt_should_continue(
+                    'Are you sure you wish to continue? (y/N): ')
+            else:
+                sys.stdout.write('\n')
+        else:
+            sys.stdout.write('There were presubmit errors.\n')
 
         global _ASKED_FOR_FEEDBACK
         # Ask for feedback one time out of 5.
         if (results and random.randint(0, 4) == 0 and not _ASKED_FOR_FEEDBACK):
-            sys.stdout.write(
-                'Was the presubmit check useful? If not, run "git cl presubmit -v"\n'
-                'to figure out which PRESUBMIT.py was run, then run git blame\n'
-                'on the file to figure out who to ask for help.\n')
             _ASKED_FOR_FEEDBACK = True
+            if gclient_utils.IsEnvCog():
+                sys.stdout.write(
+                    'Was the presubmit check useful? If not, view the file\'s\n'
+                    'blame on Code Search to figure out who to ask for help.\n')
+            else:
+                sys.stdout.write(
+                    'Was the presubmit check useful? If not, run '
+                    '"git cl presubmit -v"\n'
+                    'to figure out which PRESUBMIT.py was run, then run '
+                    '"git blame"\n'
+                    'on the file to figure out who to ask for help.\n')
 
         return 1 if presubmits_failed else 0
 
@@ -1989,15 +2260,27 @@ def _parse_change(parser, options):
         parser: The parser used to parse the arguments from command line.
         options: The arguments parsed from command line.
     Returns:
-        A GitChange if the change root is a git repository, or a Change otherwise.
+        A GitChange if the change root is a git repository, a ProvidedDiffChange
+        if a diff file is specified, or a Change otherwise.
     """
-    if options.files and options.all_files:
-        parser.error('<files> cannot be specified when --all-files is set.')
+    if options.all_files:
+        if options.files:
+            parser.error('<files> cannot be specified when --all-files is set.')
+        if options.diff_file:
+            parser.error(
+                '<diff_file> cannot be specified when --all-files is set.')
+
+    if options.diff_file and options.generate_diff:
+        parser.error(
+            '<diff_file> cannot be specified when <generate_diff> is set.')
 
     change_scm = scm.determine_scm(options.root)
-    if change_scm != 'git' and not options.files:
-        parser.error('<files> is not optional for unversioned directories.')
+    if change_scm == 'diff' and not (options.files or options.all_files or
+                                     options.diff_file or options.description):
+        parser.error('unversioned directories must specify '
+                     '<files>, <all_files>, <diff_file>, or <description>.')
 
+    diff = None
     if options.files:
         if options.source_controlled_only:
             # Get the filtered set of files from SCM.
@@ -2007,23 +2290,49 @@ def _parse_change(parser, options):
                     if fnmatch.fnmatch(name, mask):
                         change_files.append(('M', name))
                         break
+        elif options.generate_diff:
+            gerrit_url = urlparse.urlparse(options.gerrit_url).netloc
+            diffs = presubmit_diff.create_diffs(
+                host=gerrit_url.split('-review')[0],
+                repo=options.gerrit_project,
+                ref=options.upstream,
+                root=options.root,
+                files=options.files,
+            )
+            diff = '\n'.join(diffs.values())
+            change_files = _diffs_to_change_files(diffs)
         else:
             # Get the filtered set of files from a directory scan.
             change_files = _parse_files(options.files, options.recursive)
     elif options.all_files:
-        change_files = [('M', f) for f in scm.GIT.GetAllFiles(options.root)]
+        if change_scm == 'git':
+            all_files = scm.GIT.GetAllFiles(options.root)
+        else:
+            all_files = scm.DIFF.GetAllFiles(options.root)
+        change_files = [('M', f) for f in all_files]
+    elif options.diff_file:
+        diff, change_files = _process_diff_file(options.diff_file)
     else:
-        change_files = scm.GIT.CaptureStatus(options.root,
-                                             options.upstream or None,
-                                             ignore_submodules=False)
+        if change_scm == 'git':
+            change_files = scm.GIT.CaptureStatus(options.root,
+                                                 options.upstream or None,
+                                                 ignore_submodules=False)
+        else:
+            # description only in 'diff' mode
+            change_files = []
     logging.info('Found %d file(s).', len(change_files))
 
     change_args = [
         options.name, options.description, options.root, change_files,
         options.issue, options.patchset, options.author
     ]
+
+    if diff is not None:
+        return ProvidedDiffChange(*change_args, diff=diff)
     if change_scm == 'git':
-        return GitChange(*change_args, upstream=options.upstream)
+        return GitChange(*change_args,
+                         upstream=options.upstream,
+                         end_commit=options.end_commit)
     return Change(*change_args)
 
 
@@ -2043,7 +2352,8 @@ def _parse_gerrit_options(parser, options):
     if options.gerrit_url:
         gerrit_obj = GerritAccessor(url=options.gerrit_url,
                                     project=options.gerrit_project,
-                                    branch=options.gerrit_branch)
+                                    branch=options.gerrit_branch,
+                                    root=options.root)
 
     if not options.gerrit_fetch:
         return gerrit_obj
@@ -2060,6 +2370,76 @@ def _parse_gerrit_options(parser, options):
     logging.info('Got description: """\n%s\n"""', options.description)
 
     return gerrit_obj
+
+
+def _parse_unified_diff(diff):
+    """Parses a unified git diff and returns a list of (path, diff) tuples."""
+    diffs = {}
+
+    # This regex matches the path twice, separated by a space. Note that
+    # filename itself may contain spaces.
+    file_marker = re.compile(
+        '^diff --git (?:a/)?(?P<filename>.*) (?:b/)?(?P=filename)$')
+    current_diff = []
+    keep_line_endings = True
+    for x in diff.splitlines(keep_line_endings):
+        match = file_marker.match(x)
+        if match:
+            # Marks the start of a new per-file section.
+            diffs[match.group('filename')] = current_diff = [x]
+        elif x.startswith('diff --git'):
+            raise PresubmitFailure('Unexpected diff line: %s' % x)
+        else:
+            current_diff.append(x)
+
+    return dict((normpath(path), ''.join(diff)) for path, diff in diffs.items())
+
+
+def _process_diff_file(diff_file):
+    diff = gclient_utils.FileRead(diff_file)
+    if not diff:
+        return '', []
+    return diff, _diffs_to_change_files(_parse_unified_diff(diff))
+
+
+def _diffs_to_change_files(diffs):
+    """Validates a dict of diffs and processes it into a list of change files.
+
+    Each change file is a tuple of (action, path) where action is one of:
+        * A: newly added file
+        * M: modified file
+        * D: deleted file
+
+    Args:
+        diffs: Dict of (path, diff) tuples.
+
+    Returns:
+        A list of change file tuples from the diffs.
+
+    Raises:
+        PresubmitFailure: If a diff is invalid.
+    """
+    change_files = []
+    for file, file_diff in diffs.items():
+        if not file_diff:
+            # If a file is modified such that its contents are the same as the
+            # upstream commit, it may not have a diff. For example, if you added
+            # a newline to a file in PS1, then deleted it in PS2, the diff will
+            # be empty. Add this to change_files as modified anyway.
+            change_files.append(('M', file))
+            continue
+
+        header_line = file_diff.splitlines()[1]
+        if not header_line:
+            raise PresubmitFailure('diff header is empty')
+        if header_line.startswith('new'):
+            action = 'A'
+        elif header_line.startswith('deleted'):
+            action = 'D'
+        else:
+            action = 'M'
+        change_files.append((action, file))
+    return change_files
 
 
 @contextlib.contextmanager
@@ -2133,6 +2513,10 @@ def main(argv=None):
                       help='The change description.')
     desc.add_argument('--description_file',
                       help='File to read change description from.')
+    parser.add_argument('--diff_file', help='File to read change diff from.')
+    parser.add_argument('--generate_diff',
+                        action='store_true',
+                        help='Create a diff using upstream server as base.')
     parser.add_argument('--issue', type=int, default=0)
     parser.add_argument('--patchset', type=int, default=0)
     parser.add_argument('--root',
@@ -2141,10 +2525,13 @@ def main(argv=None):
                         'If inherit-review-settings-ok is present in this '
                         'directory, parent directories up to the root file '
                         'system directories will also be searched.')
-    parser.add_argument(
-        '--upstream',
-        help='Git only: the base ref or upstream branch against '
-        'which the diff should be computed.')
+    parser.add_argument('--upstream',
+                        help='The base ref or upstream branch against '
+                        'which the diff should be computed.')
+    parser.add_argument('--end_commit',
+                        default='HEAD',
+                        help='The commit to diff against upstream. '
+                         'By default this is HEAD.')
     parser.add_argument('--default_presubmit')
     parser.add_argument('--may_prompt', action='store_true', default=False)
     parser.add_argument(
@@ -2168,7 +2555,8 @@ def main(argv=None):
                         help='Run all tests specified by input_api.RunTests in '
                         'all PRESUBMIT files in parallel.')
     parser.add_argument('--json_output',
-                        help='Write presubmit errors to json output.')
+                        help='Write presubmit results to json output. If \'-\' '
+                        'is provided, the results will be writting to stdout.')
     parser.add_argument('--all_files',
                         action='store_true',
                         help='Mark all files under source control as modified.')
@@ -2194,6 +2582,10 @@ def main(argv=None):
     log_format = ('[%(levelname).1s%(asctime)s %(process)d %(thread)d '
                   '%(filename)s] %(message)s')
     logging.basicConfig(format=log_format, level=log_level)
+
+    # Recognize *.gn files as text files, so they are included in testable
+    # files.
+    mimetypes.add_type('text/ninja', '.gn')
 
     # Print call stacks when _PresubmitResult objects are created with -v -v is
     # specified. This helps track down where presubmit messages are coming from.

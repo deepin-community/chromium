@@ -13,11 +13,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <memory>
 #include <utility>
 
-#include "xla/hlo/ir/hlo_instruction.h"
+#include <gtest/gtest.h>
+#include "xla/error_spec.h"
+#include "xla/hlo/testlib/verified_hlo_module.h"
 #include "xla/service/gpu/tests/gpu_codegen_test.h"
-#include "xla/service/hlo_module_config.h"
+#include "tsl/platform/statusor.h"
 
 namespace xla {
 namespace gpu {

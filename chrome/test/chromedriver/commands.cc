@@ -11,7 +11,6 @@
 #include <list>
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -35,12 +34,12 @@
 #include "chrome/test/chromedriver/util.h"
 
 namespace {
-void WriteChromeDriverExtendedStatus(base::Value::Dict& info) {
-  base::Value::Dict build;
+void WriteChromeDriverExtendedStatus(base::DictValue& info) {
+  base::DictValue build;
   build.Set("version", kChromeDriverVersion);
   info.Set("build", std::move(build));
 
-  base::Value::Dict os;
+  base::DictValue os;
   os.Set("name", base::SysInfo::OperatingSystemName());
   os.Set("version", base::SysInfo::OperatingSystemVersion());
   os.Set("arch", base::SysInfo::OperatingSystemArchitecture());
@@ -48,13 +47,13 @@ void WriteChromeDriverExtendedStatus(base::Value::Dict& info) {
 }
 }  // namespace
 
-void ExecuteGetStatus(const base::Value::Dict& params,
+void ExecuteGetStatus(const base::DictValue& params,
                       const std::string& session_id,
                       const CommandCallback& callback) {
   // W3C defined data:
   // ChromeDriver doesn't have a preset limit on number of active sessions,
   // so we are always ready.
-  base::Value::Dict info;
+  base::DictValue info;
   info.Set("ready", true);
   info.Set("message", base::StringPrintf("%s ready for new sessions.",
                                          kChromeDriverProductShortName));
@@ -66,10 +65,10 @@ void ExecuteGetStatus(const base::Value::Dict& params,
                std::string(), kW3CDefault);
 }
 
-void ExecuteBidiSessionStatus(const base::Value::Dict& params,
+void ExecuteBidiSessionStatus(const base::DictValue& params,
                               const std::string& session_id,
                               const CommandCallback& callback) {
-  base::Value::Dict info;
+  base::DictValue info;
   if (session_id.empty()) {
     info.Set("ready", true);
     info.Set("message", base::StringPrintf("%s ready for new sessions.",
@@ -91,7 +90,7 @@ void ExecuteBidiSessionStatus(const base::Value::Dict& params,
 
 void ExecuteCreateSession(SessionThreadMap* session_thread_map,
                           const Command& init_session_cmd,
-                          const base::Value::Dict& params,
+                          const base::DictValue& params,
                           const std::string& host,
                           const CommandCallback& callback) {
   std::string new_id = GenerateId();
@@ -114,7 +113,7 @@ void ExecuteCreateSession(SessionThreadMap* session_thread_map,
 
 void ExecuteBidiSessionNew(SessionThreadMap* session_thread_map,
                            const Command& init_session_cmd,
-                           const base::Value::Dict& params,
+                           const base::DictValue& params,
                            const std::string& resource,
                            const CommandCallback& callback) {
   if (!resource.empty()) {
@@ -122,8 +121,8 @@ void ExecuteBidiSessionNew(SessionThreadMap* session_thread_map,
                  resource, kW3CDefault);
     return;
   }
-  base::Value::Dict new_params;
-  const base::Value::Dict* capabilities =
+  base::DictValue new_params;
+  const base::DictValue* capabilities =
       params.FindDictByDottedPath("params.capabilities");
   if (capabilities) {
     new_params.Set("capabilities", capabilities->Clone());
@@ -137,7 +136,7 @@ namespace {
 
 void OnGetSession(const base::WeakPtr<size_t>& session_remaining_count,
                   const base::RepeatingClosure& all_get_session_func,
-                  base::Value::List& session_list,
+                  base::ListValue& session_list,
                   const Status& status,
                   std::unique_ptr<base::Value> value,
                   const std::string& session_id,
@@ -148,7 +147,7 @@ void OnGetSession(const base::WeakPtr<size_t>& session_remaining_count,
   (*session_remaining_count)--;
 
   if (value) {
-    base::Value::Dict session;
+    base::DictValue session;
     session.Set("id", session_id);
     session.Set("capabilities",
                 base::Value::FromUniquePtrValue(std::move(value)));
@@ -164,12 +163,12 @@ void OnGetSession(const base::WeakPtr<size_t>& session_remaining_count,
 
 void ExecuteGetSessions(const Command& session_capabilities_command,
                         SessionThreadMap* session_thread_map,
-                        const base::Value::Dict& params,
+                        const base::DictValue& params,
                         const std::string& session_id,
                         const CommandCallback& callback) {
   size_t get_remaining_count = session_thread_map->size();
   base::WeakPtrFactory<size_t> weak_ptr_factory(&get_remaining_count);
-  base::Value::List session_list;
+  base::ListValue session_list;
 
   if (!get_remaining_count) {
     callback.Run(Status(kOk),
@@ -217,7 +216,7 @@ void OnSessionQuit(const base::WeakPtr<size_t>& quit_remaining_count,
 
 void ExecuteQuitAll(const Command& quit_command,
                     SessionThreadMap* session_thread_map,
-                    const base::Value::Dict& params,
+                    const base::DictValue& params,
                     const std::string& session_id,
                     const CommandCallback& callback) {
   size_t quit_remaining_count = session_thread_map->size();
@@ -246,24 +245,15 @@ void ExecuteQuitAll(const Command& quit_command,
 
 namespace {
 
-void TerminateSessionThreadOnCommandThread(
-    SessionThreadMap* session_thread_map,
-    SessionConnectionMap* session_connection_map,
-    const std::string& session_id) {
-  session_thread_map->erase(session_id);
-  session_connection_map->erase(session_id);
-}
-
 void ExecuteSessionCommandOnSessionThread(
     const char* command_name,
     const std::string& session_id,
     const SessionCommand& command,
     bool w3c_standard_command,
     bool return_ok_without_session,
-    const base::Value::Dict& params,
+    const base::DictValue& params,
     scoped_refptr<base::SingleThreadTaskRunner> cmd_task_runner,
-    const CommandCallback& callback_on_cmd,
-    const base::RepeatingClosure& terminate_on_cmd) {
+    const CommandCallback& callback_on_cmd) {
   Session* session = GetThreadLocalSession();
 
   if (!session) {
@@ -282,8 +272,7 @@ void ExecuteSessionCommandOnSessionThread(
       // Note: ChromeDriver log-replay depends on the format of this logging.
       // see chromedriver/log_replay/client_replay.py
       VLOG(0) << "[" << session->id << "] "
-              << "COMMAND " << command_name << " "
-              << PrettyPrintValue(base::Value(params.Clone()));
+              << "COMMAND " << command_name << " " << PrettyPrintValue(params);
     }
   }
 
@@ -327,18 +316,31 @@ void ExecuteSessionCommandOnSessionThread(
                   ", but failed to kill browser:" + quit_status.message();
           }
           status = Status(kUnknownError, message, status);
-        } else if (status.code() == kDisconnected ||
-                   status.code() == kTargetDetached) {
+        } else if (status.code() == kDisconnected) {
+          session->quit = true;
+          std::string message(
+              "session deleted as the browser has closed the connection");
+          if (!session->detach) {
+            // Even though the connection was lost that makes the graceful
+            // shutdown impossible the Quit procedure falls back on killing the
+            // process in case if it is still alive.
+            Status quit_status = session->chrome->Quit();
+            if (quit_status.IsError()) {
+              message +=
+                  ", but failed to kill browser:" + quit_status.message();
+            }
+          }
+          status = Status(kInvalidSessionId, message, status);
+        } else if (status.code() == kTargetDetached) {
           // Some commands, like clicking a button or link which closes the
-          // window, may result in a kDisconnected error code.
-          std::list<std::string> web_view_ids;
-          Status status_tmp = session->chrome->GetWebViewIds(
-              &web_view_ids, session->w3c_compliant);
-          if (status_tmp.IsError() &&
-              status_tmp.code() != kChromeNotReachable) {
+          // window, may result in a kTargetDetached error code.
+          std::list<std::string> tab_view_ids;
+          Status status_tmp = session->chrome->GetTopLevelWebViewIds(
+              &tab_view_ids, session->w3c_compliant);
+          if (status_tmp.IsError()) {
             status.AddDetails("failed to check if window was closed: " +
                               status_tmp.message());
-          } else if (!base::Contains(web_view_ids, session->window)) {
+          } else if (!std::ranges::contains(tab_view_ids, session->window)) {
             status = Status(kOk);
           }
         }
@@ -373,22 +375,18 @@ void ExecuteSessionCommandOnSessionThread(
                                 session->id, session->w3c_compliant));
 
   if (session->quit) {
-    session->CloseAllConnections();
-    SetThreadLocalSession(std::unique_ptr<Session>());
-    delete session;
-    cmd_task_runner->PostTask(FROM_HERE, terminate_on_cmd);
+    Session::Terminate();
   }
 }
 
 }  // namespace
 
 void ExecuteSessionCommand(SessionThreadMap* session_thread_map,
-                           SessionConnectionMap* session_connection_map,
                            const char* command_name,
                            const SessionCommand& command,
                            bool w3c_standard_command,
                            bool return_ok_without_session,
-                           const base::Value::Dict& params,
+                           const base::DictValue& params,
                            const std::string& session_id,
                            const CommandCallback& callback) {
   auto iter = session_thread_map->find(session_id);
@@ -396,18 +394,16 @@ void ExecuteSessionCommand(SessionThreadMap* session_thread_map,
     Status status(return_ok_without_session ? kOk : kInvalidSessionId);
     callback.Run(status, std::unique_ptr<base::Value>(), session_id,
                  kW3CDefault);
-  } else {
-    iter->second->thread()->task_runner()->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            &ExecuteSessionCommandOnSessionThread, command_name, session_id,
-            command, w3c_standard_command, return_ok_without_session,
-            params.Clone(), base::SingleThreadTaskRunner::GetCurrentDefault(),
-            callback,
-            base::BindRepeating(&TerminateSessionThreadOnCommandThread,
-                                session_thread_map, session_connection_map,
-                                session_id)));
+    return;
   }
+
+  iter->second->thread()->task_runner()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&ExecuteSessionCommandOnSessionThread, command_name,
+                     session_id, command, w3c_standard_command,
+                     return_ok_without_session, params.Clone(),
+                     base::SingleThreadTaskRunner::GetCurrentDefault(),
+                     callback));
 }
 
 namespace internal {

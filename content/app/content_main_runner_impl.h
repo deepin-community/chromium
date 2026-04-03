@@ -9,7 +9,9 @@
 #include <optional>
 
 #include "base/functional/callback_helpers.h"
+#include "base/memory/memory_pressure_listener_registry.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory_coordinator/memory_consumer_registry.h"
 #include "content/browser/startup_data_impl.h"
 #include "content/public/app/content_main.h"
 #include "content/public/app/content_main_runner.h"
@@ -25,6 +27,8 @@ class DiscardableSharedMemoryManager;
 }
 
 namespace content {
+
+class BrowserMemoryCoordinator;
 class MojoIpcSupport;
 
 class ContentMainRunnerImpl : public ContentMainRunner {
@@ -52,6 +56,15 @@ class ContentMainRunnerImpl : public ContentMainRunner {
 
   bool is_browser_main_loop_started_ = false;
 
+  // The MemoryPressureListenerRegistry instantiated in the browser process.
+  // TODO(406578344): Remove `memory_pressure_listener_registry_` when the
+  // base::MemoryPressureListener API is deleted in favor of
+  // base::MemoryConsumer.
+  std::optional<base::MemoryPressureListenerRegistry>
+      memory_pressure_listener_registry_;
+
+  std::unique_ptr<BrowserMemoryCoordinator> browser_memory_coordinator_;
+
   std::unique_ptr<discardable_memory::DiscardableSharedMemoryManager>
       discardable_shared_memory_manager_;
   std::unique_ptr<MojoIpcSupport> mojo_ipc_support_;
@@ -61,10 +74,6 @@ class ContentMainRunnerImpl : public ContentMainRunner {
 
   // True if the runner has been shut down.
   bool is_shutdown_ = false;
-
-  // Set to true if this content process's main function should enable startup
-  // tracing after initializing Mojo.
-  bool needs_startup_tracing_after_mojo_init_ = false;
 
   // The delegate will outlive this object.
   raw_ptr<ContentMainDelegate> delegate_ = nullptr;

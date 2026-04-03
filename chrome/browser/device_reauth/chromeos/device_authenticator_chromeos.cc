@@ -5,8 +5,13 @@
 #include "chrome/browser/device_reauth/chromeos/device_authenticator_chromeos.h"
 
 #include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/task/sequenced_task_runner.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/password_manager/core/common/password_manager_pref_names.h"
+#include "components/prefs/pref_service.h"
 
 DeviceAuthenticatorChromeOS::DeviceAuthenticatorChromeOS(
     std::unique_ptr<AuthenticatorChromeOSInterface> authenticator,
@@ -20,17 +25,34 @@ DeviceAuthenticatorChromeOS::DeviceAuthenticatorChromeOS(
 DeviceAuthenticatorChromeOS::~DeviceAuthenticatorChromeOS() = default;
 
 bool DeviceAuthenticatorChromeOS::CanAuthenticateWithBiometrics() {
-  // TODO(crbug.com/1440090): Add implementation of the biometric
-  // authentication.
-  NOTIMPLEMENTED();
-  return false;
+  BiometricsStatusChromeOS status =
+      authenticator_->CheckIfBiometricsAvailable();
+  bool is_available = status == BiometricsStatusChromeOS::kAvailable;
+
+  CHECK(g_browser_process);
+  CHECK(g_browser_process->local_state());
+
+  if (is_available) {
+    // If biometrics is available, we should record that at one point in time
+    // biometrics was available on this device. This will never be set to false
+    // after setting to true here as we only record this when biometrics is
+    // available.
+    g_browser_process->local_state()->SetBoolean(
+        password_manager::prefs::kHadBiometricsAvailable, /*value=*/true);
+  }
+
+  base::UmaHistogramEnumeration("PasswordManager.BiometricAvailabilityChromeOS",
+                                status);
+  return is_available;
 }
 
 bool DeviceAuthenticatorChromeOS::CanAuthenticateWithBiometricOrScreenLock() {
-  // TODO(crbug.com/1440090): Add implementation of the biometric or screen lock
-  // authentication.
-  NOTIMPLEMENTED();
-  return false;
+  // Check for biometrics availability.
+  bool has_biometrics = CanAuthenticateWithBiometrics();
+  // Read the cached value for PIN availability.
+  bool has_pin = g_browser_process->local_state()->GetBoolean(
+      password_manager::prefs::kPinAuthenticationAvailableOnChromeOS);
+  return has_biometrics || has_pin;
 }
 
 void DeviceAuthenticatorChromeOS::AuthenticateWithMessage(
@@ -47,6 +69,7 @@ void DeviceAuthenticatorChromeOS::AuthenticateWithMessage(
   callback_ = std::move(callback);
 
   authenticator_->AuthenticateUser(
+      message,
       base::BindOnce(&DeviceAuthenticatorChromeOS::OnAuthenticationCompleted,
                      weak_ptr_factory_.GetWeakPtr()));
 }
@@ -65,4 +88,14 @@ void DeviceAuthenticatorChromeOS::OnAuthenticationCompleted(bool success) {
 
   RecordAuthenticationTimeIfSuccessful(success);
   std::move(callback_).Run(success);
+}
+
+// static
+void DeviceAuthenticatorChromeOS::CacheIfPinIsAvailable(
+    AuthenticatorChromeOSInterface* authenticator) {
+  authenticator->CheckIfPinIsAvailable(base::BindOnce([](bool has_pin) {
+    g_browser_process->local_state()->SetBoolean(
+        password_manager::prefs::kPinAuthenticationAvailableOnChromeOS,
+        has_pin);
+  }));
 }

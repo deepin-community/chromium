@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "services/device/generic_sensor/platform_sensor_provider.h"
 
 #include <utility>
 
-#include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "build/build_config.h"
 #include "services/device/public/cpp/generic_sensor/sensor_reading_shared_buffer.h"
@@ -41,6 +41,19 @@ constexpr uint64_t kSharedBufferSizeInBytes =
 PlatformSensorProvider::PlatformSensorProvider() = default;
 
 PlatformSensorProvider::~PlatformSensorProvider() {
+  // Invoke pending CreateSensor callbacks with nullptr.
+  auto requests_map = std::move(requests_map_);
+  for (auto& [type, callback_queue] : requests_map) {
+    for (auto& callback : callback_queue) {
+      std::move(callback).Run(nullptr);
+    }
+  }
+  // Notify sensors that the provider is about to be destroyed. Sensors hold a
+  // pointer to the shared sensor reading buffer that must not dangle.
+  auto sensor_map = std::move(sensor_map_);
+  for (auto& [type, sensor] : sensor_map) {
+    sensor->SensorReplaced();
+  }
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 }
 
@@ -74,9 +87,7 @@ void PlatformSensorProvider::CreateSensor(mojom::SensorType type,
     return;
   }
 
-  SensorReadingSharedBuffer* reading_buffer =
-      GetSensorReadingSharedBufferForType(type);
-  if (!reading_buffer) {
+  if (!GetSensorReadingSharedBufferForType(type)) {
     std::move(callback).Run(nullptr);
     return;
   }
@@ -87,9 +98,8 @@ void PlatformSensorProvider::CreateSensor(mojom::SensorType type,
   if (callback_queue_was_empty) {
     // This is the first CreateSensor call.
     CreateSensorInternal(
-        type, reading_buffer,
-        base::BindOnce(&PlatformSensorProvider::NotifySensorCreated,
-                       base::Unretained(this), type));
+        type, base::BindOnce(&PlatformSensorProvider::NotifySensorCreated,
+                             AsWeakPtr(), type));
   }
 }
 
@@ -99,7 +109,7 @@ scoped_refptr<PlatformSensor> PlatformSensorProvider::GetSensor(
 
   auto it = sensor_map_.find(type);
   if (it != sensor_map_.end()) {
-    return it->second;
+    return it->second.get();
   }
   return nullptr;
 }
@@ -160,8 +170,8 @@ void PlatformSensorProvider::NotifySensorCreated(
     mojom::SensorType type,
     scoped_refptr<PlatformSensor> sensor) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  DCHECK(!base::Contains(sensor_map_, type));
-  DCHECK(base::Contains(requests_map_, type));
+  DCHECK(!sensor_map_.contains(type));
+  DCHECK(requests_map_.contains(type));
 
   if (sensor) {
     sensor_map_[type] = sensor.get();
@@ -192,14 +202,20 @@ PlatformSensorProvider::GetPendingRequestTypes() {
 SensorReadingSharedBuffer*
 PlatformSensorProvider::GetSensorReadingSharedBufferForType(
     mojom::SensorType type) {
-  auto* ptr = static_cast<char*>(mapped_region_.mapping.memory());
-  if (!ptr) {
+  base::span<SensorReadingSharedBuffer> buffers =
+      mapped_region_.mapping.GetMemoryAsSpan<SensorReadingSharedBuffer>();
+  if (buffers.empty()) {
     return nullptr;
   }
 
-  ptr += SensorReadingSharedBuffer::GetOffset(type);
-  memset(ptr, 0, kReadingBufferSize);
-  return reinterpret_cast<SensorReadingSharedBuffer*>(ptr);
+  size_t offset = GetSensorReadingSharedBufferOffset(type);
+  CHECK(offset % sizeof(SensorReadingSharedBuffer) == 0);
+
+  SensorReadingSharedBuffer& buffer =
+      buffers[offset / sizeof(SensorReadingSharedBuffer)];
+  std::ranges::fill(base::byte_span_from_ref(base::allow_nonunique_obj, buffer),
+                    0);
+  return &buffer;
 }
 
 #if BUILDFLAG(IS_WIN)

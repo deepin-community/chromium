@@ -13,8 +13,8 @@
 // limitations under the License.
 
 import m from 'mithril';
-
 import {HTMLAnchorAttrs} from './common';
+import {Icon} from './icon';
 
 interface AnchorAttrs extends HTMLAnchorAttrs {
   // Optional icon to show at the end of the content.
@@ -25,11 +25,30 @@ export class Anchor implements m.ClassComponent<AnchorAttrs> {
   view({attrs, children}: m.CVnode<AnchorAttrs>) {
     const {icon, ...htmlAttrs} = attrs;
 
-    return m(
-      'a.pf-anchor',
-      htmlAttrs,
-      icon && m('i.material-icons', icon),
-      children,
-    );
+    return m('a.pf-anchor', htmlAttrs, children, icon && m(Icon, {icon}));
   }
+}
+
+/**
+ * Converts a string input in a <span>, extracts URLs and converts them into
+ * clickable links.
+ * @param text the input string, e.g., "See https://example.org for details".
+ * @returns a Mithril vnode, e.g.
+ *    <span>See <a href="https://example.org">example.org<a> for more details.
+ */
+export function linkify(text: string): m.Children {
+  const urlPattern = /(https?:\/\/[^\s]+)|(go\/[^\s]+)/g;
+  const parts = text.split(urlPattern);
+  return m(
+    'span',
+    parts.map((part) => {
+      if (/^(https?:\/\/[^\s]+)$/.test(part)) {
+        return m(Anchor, {href: part, target: '_blank'}, part.split('://')[1]);
+      } else if (/^(go\/[^\s]+)$/.test(part)) {
+        return m(Anchor, {href: `http://${part}`, target: '_blank'}, part);
+      } else {
+        return part;
+      }
+    }),
+  );
 }

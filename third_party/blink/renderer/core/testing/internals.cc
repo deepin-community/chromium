@@ -32,13 +32,13 @@
 #include <utility>
 
 #include "base/functional/function_ref.h"
+#include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/process/process_handle.h"
 #include "base/task/single_thread_task_runner.h"
 #include "cc/layers/picture_layer.h"
 #include "cc/trees/layer_tree_host.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
-#include "third_party/abseil-cpp/absl/utility/utility.h"
 #include "third_party/blink/public/common/widget/device_emulation_params.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
 #include "third_party/blink/public/mojom/favicon/favicon_url.mojom-blink.h"
@@ -59,7 +59,6 @@
 #include "third_party/blink/renderer/core/dom/dom_string_list.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/dom/range.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
@@ -95,6 +94,7 @@
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/test_report_body.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
+#include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/geometry/dom_point.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect_list.h"
@@ -106,7 +106,6 @@
 #include "third_party/blink/renderer/core/html/forms/form_controller.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
-#include "third_party/blink/renderer/core/html/forms/html_select_list_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_inner_elements.h"
 #include "third_party/blink/renderer/core/html/html_iframe_element.h"
@@ -131,7 +130,6 @@
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
 #include "third_party/blink/renderer/core/loader/history_item.h"
-#include "third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/page.h"
@@ -169,6 +167,7 @@
 #include "third_party/blink/renderer/core/testing/internal_settings.h"
 #include "third_party/blink/renderer/core/testing/internals_ukm_recorder.h"
 #include "third_party/blink/renderer/core/testing/mock_hyphenation.h"
+#include "third_party/blink/renderer/core/testing/nadc_attribute_test.h"
 #include "third_party/blink/renderer/core/testing/origin_trials_test.h"
 #include "third_party/blink/renderer/core/testing/record_test.h"
 #include "third_party/blink/renderer/core/testing/scoped_mock_overlay_scrollbars.h"
@@ -184,7 +183,6 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_throw_exception.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/graphics/compositing/paint_artifact_compositor.h"
 #include "third_party/blink/renderer/platform/graphics/paint/raster_invalidation_tracking.h"
 #include "third_party/blink/renderer/platform/heap/cross_thread_handle.h"
@@ -196,7 +194,6 @@
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_priority.h"
 #include "third_party/blink/renderer/platform/network/network_state_notifier.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
 #include "third_party/blink/renderer/platform/text/layout_locale.h"
@@ -212,6 +209,7 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/image/canvas_image_source.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -231,7 +229,7 @@ void ResetMockOverlayScrollbars() {
 
 class UseCounterImplObserverImpl final : public UseCounterImpl::Observer {
  public:
-  UseCounterImplObserverImpl(ScriptPromiseResolver* resolver,
+  UseCounterImplObserverImpl(ScriptPromiseResolver<IDLUndefined>* resolver,
                              WebFeature feature)
       : resolver_(resolver), feature_(feature) {}
   UseCounterImplObserverImpl(const UseCounterImplObserverImpl&) = delete;
@@ -241,7 +239,7 @@ class UseCounterImplObserverImpl final : public UseCounterImpl::Observer {
   bool OnCountFeature(WebFeature feature) final {
     if (feature_ != feature)
       return false;
-    resolver_->Resolve(static_cast<int>(feature));
+    resolver_->Resolve();
     return true;
   }
 
@@ -251,7 +249,7 @@ class UseCounterImplObserverImpl final : public UseCounterImpl::Observer {
   }
 
  private:
-  Member<ScriptPromiseResolver> resolver_;
+  Member<ScriptPromiseResolver<IDLUndefined>> resolver_;
   WebFeature feature_;
 };
 
@@ -318,27 +316,29 @@ class TestReadableStreamSource : public UnderlyingSourceBase {
   TestReadableStreamSource(ScriptState* script_state, Type type)
       : UnderlyingSourceBase(script_state), type_(type) {}
 
-  ScriptPromise Start(ScriptState* script_state, ExceptionState&) override {
+  ScriptPromise<IDLUndefined> Start(ScriptState* script_state) override {
     if (generator_) {
-      return ScriptPromise::CastUndefined(script_state);
+      return ToResolvedUndefinedPromise(script_state);
     }
-    resolver_ = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+    resolver_ =
+        MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
     return resolver_->Promise();
   }
 
-  ScriptPromise Pull(ScriptState* script_state, ExceptionState&) override {
+  ScriptPromise<IDLUndefined> Pull(ScriptState* script_state,
+                                   ExceptionState&) override {
     if (!generator_) {
-      return ScriptPromise::CastUndefined(script_state);
+      return ToResolvedUndefinedPromise(script_state);
     }
 
     const auto result = generator_->Generate();
     if (!result) {
       Controller()->Close();
-      return ScriptPromise::CastUndefined(script_state);
+      return ToResolvedUndefinedPromise(script_state);
     }
     Controller()->Enqueue(
         v8::Integer::New(script_state->GetIsolate(), *result));
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
   }
 
   std::unique_ptr<ReadableStreamTransferringOptimizer>
@@ -385,7 +385,7 @@ class TestReadableStreamSource : public UnderlyingSourceBase {
  private:
   const Type type_;
   std::unique_ptr<Generator> generator_;
-  Member<ScriptPromiseResolver> resolver_;
+  Member<ScriptPromiseResolver<IDLUndefined>> resolver_;
 };
 
 UnderlyingSourceBase*
@@ -442,7 +442,7 @@ class TestWritableStreamSink final : public UnderlyingSinkBase {
       PostCrossThreadTask(*task_runner_, FROM_HERE, std::move(error_callback_));
     }
 
-    // We don't use WTF::String because this object can be accessed from
+    // We don't use blink::String because this object can be accessed from
     // multiple threads.
     std::string result_;
 
@@ -482,19 +482,20 @@ class TestWritableStreamSink final : public UnderlyingSinkBase {
                 std::in_place,
                 false)) {}
 
-  ScriptPromise start(ScriptState* script_state,
-                      WritableStreamDefaultController*,
-                      ExceptionState&) override {
+  ScriptPromise<IDLUndefined> start(ScriptState* script_state,
+                                    WritableStreamDefaultController*,
+                                    ExceptionState&) override {
     if (internal_sink_) {
-      return ScriptPromise::CastUndefined(script_state);
+      return ToResolvedUndefinedPromise(script_state);
     }
-    start_resolver_ = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+    start_resolver_ =
+        MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
     return start_resolver_->Promise();
   }
-  ScriptPromise write(ScriptState* script_state,
-                      ScriptValue chunk,
-                      WritableStreamDefaultController*,
-                      ExceptionState&) override {
+  ScriptPromise<IDLUndefined> write(ScriptState* script_state,
+                                    ScriptValue chunk,
+                                    WritableStreamDefaultController*,
+                                    ExceptionState&) override {
     DCHECK(internal_sink_);
     internal_sink_->Append(
         ToCoreString(script_state->GetIsolate(),
@@ -502,15 +503,16 @@ class TestWritableStreamSink final : public UnderlyingSinkBase {
                          ->ToString(script_state->GetContext())
                          .ToLocalChecked())
             .Utf8());
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
   }
-  ScriptPromise close(ScriptState* script_state, ExceptionState&) override {
+  ScriptPromise<IDLUndefined> close(ScriptState* script_state,
+                                    ExceptionState&) override {
     DCHECK(internal_sink_);
     closed_ = true;
     if (!optimizer_flag_->data.load()) {
       // The normal closure case.
       internal_sink_->Close();
-      return ScriptPromise::CastUndefined(script_state);
+      return ToResolvedUndefinedPromise(script_state);
     }
 
     // When the optimizer is active, we need to detach `internal_sink_` and
@@ -520,12 +522,12 @@ class TestWritableStreamSink final : public UnderlyingSinkBase {
           *reply_task_runner_, FROM_HERE,
           CrossThreadBindOnce(std::move(reply_), std::move(internal_sink_)));
     }
-    return ScriptPromise::CastUndefined(script_state);
+    return ToResolvedUndefinedPromise(script_state);
   }
-  ScriptPromise abort(ScriptState* script_state,
-                      ScriptValue reason,
-                      ExceptionState&) override {
-    return ScriptPromise::CastUndefined(script_state);
+  ScriptPromise<IDLUndefined> abort(ScriptState* script_state,
+                                    ScriptValue reason,
+                                    ExceptionState&) override {
+    return ToResolvedUndefinedPromise(script_state);
   }
 
   void Attach(std::unique_ptr<InternalSink> internal_sink) {
@@ -578,10 +580,11 @@ class TestWritableStreamSink final : public UnderlyingSinkBase {
     UnderlyingSinkBase::Trace(visitor);
   }
 
-  static void Resolve(ScriptPromiseResolver* resolver, std::string result) {
+  static void Resolve(ScriptPromiseResolver<IDLString>* resolver,
+                      std::string result) {
     resolver->Resolve(String::FromUTF8(result));
   }
-  static void Reject(ScriptPromiseResolver* resolver) {
+  static void Reject(ScriptPromiseResolverBase* resolver) {
     ScriptState* script_state = resolver->GetScriptState();
     ScriptState::Scope scope(script_state);
     resolver->Reject(
@@ -594,7 +597,7 @@ class TestWritableStreamSink final : public UnderlyingSinkBase {
   // initially, and set atomically when the associated optimizer is activated.
   scoped_refptr<base::RefCountedData<std::atomic_bool>> optimizer_flag_;
   std::unique_ptr<InternalSink> internal_sink_;
-  Member<ScriptPromiseResolver> start_resolver_;
+  Member<ScriptPromiseResolver<IDLUndefined>> start_resolver_;
   bool closed_ = false;
   bool detached_ = false;
   Reply reply_;
@@ -624,7 +627,7 @@ TestWritableStreamSink::Optimizer::PerformInProcessOptimization(
   return sink;
 }
 
-void OnLCPPredicted(ScriptPromiseResolver* resolver,
+void OnLCPPredicted(ScriptPromiseResolver<IDLString>* resolver,
                     const Element* lcp_element) {
   const ElementLocator locator =
       lcp_element ? element_locator::OfElement(*lcp_element) : ElementLocator();
@@ -647,6 +650,9 @@ static std::optional<DocumentMarker::MarkerType> MarkerTypeFrom(
     return DocumentMarker::kActiveSuggestion;
   if (EqualIgnoringASCIICase(marker_type, "Suggestion"))
     return DocumentMarker::kSuggestion;
+  if (EqualIgnoringASCIICase(marker_type, "Glic")) {
+    return DocumentMarker::kGlic;
+  }
   return std::nullopt;
 }
 
@@ -695,7 +701,8 @@ void Internals::ResetToConsistentState(Page* page) {
 
   LocalFrame* frame = page->DeprecatedLocalMainFrame();
   frame->View()->LayoutViewport()->SetScrollOffset(
-      ScrollOffset(), mojom::blink::ScrollType::kProgrammatic);
+      ScrollOffset(), mojom::blink::ScrollType::kProgrammatic,
+      cc::ScrollSourceType::kNone);
   OverrideUserPreferredLanguagesForTesting(Vector<AtomicString>());
 
   KeyboardEventManager::SetCurrentCapsLockState(
@@ -711,10 +718,6 @@ Internals::Internals(ExecutionContext* context)
     : runtime_flags_(InternalRuntimeFlags::create()),
       document_(To<LocalDOMWindow>(context)->document()) {
   document_->Fetcher()->EnableIsPreloadedForTest();
-}
-
-Internals::~Internals() {
-  ResetMockOverlayScrollbars();
 }
 
 LocalFrame* Internals::GetFrame() const {
@@ -803,6 +806,17 @@ unsigned Internals::layoutCountForTesting(
   }
 
   return context_frame->View()->LayoutCountForTesting();
+}
+
+bool Internals::nodeNeedsStyleRecalc(Node* node,
+                                     ExceptionState& exception_state) const {
+  if (!node) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidNodeTypeError,
+                                      "Not a node");
+    return false;
+  }
+
+  return node->NeedsStyleRecalc();
 }
 
 unsigned Internals::hitTestCount(Document* doc,
@@ -898,8 +912,8 @@ bool Internals::isLoading(const String& url) {
   if (!document_)
     return false;
   const KURL full_url = document_->CompleteURL(url);
-  const String cache_identifier =
-      document_->Fetcher()->GetCacheIdentifier(full_url);
+  const String cache_identifier = document_->Fetcher()->GetCacheIdentifier(
+      full_url, /*skip_service_worker=*/false);
   Resource* resource =
       MemoryCache::Get()->ResourceForURL(full_url, cache_identifier);
   // We check loader() here instead of isLoading(), because a multipart
@@ -911,31 +925,32 @@ bool Internals::isLoadingFromMemoryCache(const String& url) {
   if (!document_)
     return false;
   const KURL full_url = document_->CompleteURL(url);
-  const String cache_identifier =
-      document_->Fetcher()->GetCacheIdentifier(full_url);
+  const String cache_identifier = document_->Fetcher()->GetCacheIdentifier(
+      full_url, /*skip_service_worker=*/false);
   Resource* resource =
       MemoryCache::Get()->ResourceForURL(full_url, cache_identifier);
   return resource && resource->GetStatus() == ResourceStatus::kCached;
 }
 
-ScriptPromise Internals::getInitialResourcePriority(ScriptState* script_state,
-                                                    const String& url,
-                                                    Document* document,
-                                                    bool new_load_only) {
-  ScriptPromiseResolver* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+ScriptPromise<IDLLong> Internals::getInitialResourcePriority(
+    ScriptState* script_state,
+    const String& url,
+    Document* document,
+    bool new_load_only) {
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLLong>>(script_state);
+  auto promise = resolver->Promise();
   KURL resource_url = url_test_helpers::ToKURL(url.Utf8());
 
-  auto callback = WTF::BindOnce(&Internals::ResolveResourcePriority,
-                                WrapPersistent(this), WrapPersistent(resolver));
+  auto callback = BindOnce(&Internals::ResolveResourcePriority,
+                           WrapPersistent(this), WrapPersistent(resolver));
   document->Fetcher()->AddPriorityObserverForTesting(
       resource_url, std::move(callback), new_load_only);
 
   return promise;
 }
 
-ScriptPromise Internals::getInitialResourcePriorityOfNewLoad(
+ScriptPromise<IDLLong> Internals::getInitialResourcePriorityOfNewLoad(
     ScriptState* script_state,
     const String& url,
     Document* document) {
@@ -992,9 +1007,9 @@ uint16_t Internals::compareTreeScopePosition(
   if (!tree_scope1 || !tree_scope2) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidAccessError,
-        String::Format(
+        UNSAFE_TODO(String::Format(
             "The %s node is neither a document node, nor a shadow root.",
-            tree_scope1 ? "second" : "first"));
+            tree_scope1 ? "second" : "first")));
     return 0;
   }
   return tree_scope1->ComparePosition(*tree_scope2);
@@ -1020,6 +1035,11 @@ void Internals::pauseAnimations(double pause_time,
 
 bool Internals::isCompositedAnimation(Animation* animation) {
   return animation->HasActiveAnimationsOnCompositor();
+}
+
+bool Internals::isMainThreadAnimation(Animation* animation) {
+  return !(animation->HasActiveAnimationsOnCompositor() ||
+           animation->AnimationHasNoEffect());
 }
 
 void Internals::disableCompositedAnimation(Animation* animation) {
@@ -1168,7 +1188,7 @@ ShadowRoot* Internals::shadowRoot(Element* host) {
   return host->GetShadowRoot();
 }
 
-String Internals::shadowRootType(const Node* root,
+String Internals::ShadowRootMode(const Node* root,
                                  ExceptionState& exception_state) const {
   DCHECK(root);
   auto* shadow_root = DynamicTo<ShadowRoot>(root);
@@ -1179,34 +1199,21 @@ String Internals::shadowRootType(const Node* root,
     return String();
   }
 
-  switch (shadow_root->GetType()) {
-    case ShadowRootType::kUserAgent:
+  switch (shadow_root->GetMode()) {
+    case ShadowRootMode::kUserAgent:
       return String("UserAgentShadowRoot");
-    case ShadowRootType::kOpen:
+    case ShadowRootMode::kOpen:
       return String("OpenShadowRoot");
-    case ShadowRootType::kClosed:
+    case ShadowRootMode::kClosed:
       return String("ClosedShadowRoot");
     default:
       NOTREACHED();
-      return String("Unknown");
   }
 }
 
 const AtomicString& Internals::shadowPseudoId(Element* element) {
   DCHECK(element);
   return element->ShadowPseudoId();
-}
-
-String Internals::visiblePlaceholder(Element* element) {
-  if (auto* text_control_element = ToTextControlOrNull(element)) {
-    if (!text_control_element->IsPlaceholderVisible())
-      return String();
-    if (HTMLElement* placeholder_element =
-            text_control_element->PlaceholderElement())
-      return placeholder_element->textContent();
-  }
-
-  return String();
 }
 
 bool Internals::isValidationMessageVisible(Element* element) {
@@ -1337,20 +1344,30 @@ void Internals::setMarker(Document* document,
     return;
   }
 
-  if (type != DocumentMarker::kSpelling && type != DocumentMarker::kGrammar) {
+  if (type != DocumentMarker::kSpelling && type != DocumentMarker::kGrammar &&
+      type != DocumentMarker::kGlic) {
     exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
                                       "internals.setMarker() currently only "
-                                      "supports spelling and grammar markers; "
-                                      "attempted to add marker of type '" +
+                                      "supports spelling, grammar and glic "
+                                      " markers; attempted to add marker of "
+                                      " type '" +
                                           marker_type + "'.");
     return;
   }
 
   document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
-  if (type == DocumentMarker::kSpelling)
+  if (type == DocumentMarker::kSpelling) {
     document->Markers().AddSpellingMarker(EphemeralRange(range));
-  else
+  } else if (type == DocumentMarker::kGrammar) {
     document->Markers().AddGrammarMarker(EphemeralRange(range));
+  } else {
+    // GLIC markers animate their color and start off transparent. So
+    // we need to start the animation and update it to the end in order to
+    // see the marker appearance.
+    document->Markers().AddGlicMarker(EphemeralRange(range));
+    document->Markers().StartGlicMarkerAnimationIfNeeded();
+    document->Markers().ContinueGlicMarkerAnimation(base::TimeTicks());
+  }
 }
 
 void Internals::removeMarker(Document* document,
@@ -1717,15 +1734,6 @@ void Internals::setTextMatchMarkersActive(Node* node,
       To<Text>(*node), start_offset, end_offset, active);
 }
 
-void Internals::setMarkedTextMatchesAreHighlighted(Document* document,
-                                                   bool highlight) {
-  if (!document || !document->GetFrame())
-    return;
-
-  document->GetFrame()->GetEditor().SetMarkedTextMatchesAreHighlighted(
-      highlight);
-}
-
 String Internals::viewportAsText(Document* document,
                                  float,
                                  int available_width,
@@ -1770,7 +1778,7 @@ String Internals::viewportAsText(Document* document,
   builder.Append(String::Number(constraints.maximum_scale));
 
   builder.Append("] and userScalable ");
-  builder.Append(description.user_zoom ? "true" : "false");
+  builder.Append(String::Boolean(description.user_zoom));
 
   return builder.ToString();
 }
@@ -2397,11 +2405,11 @@ AtomicString Internals::htmlNamespace() {
 }
 
 Vector<AtomicString> Internals::htmlTags() {
-  Vector<AtomicString> tags(html_names::kTagsCount);
-  std::unique_ptr<const HTMLQualifiedName*[]> qualified_names =
-      html_names::GetTags();
-  for (wtf_size_t i = 0; i < html_names::kTagsCount; ++i)
+  base::HeapArray<const QualifiedName*> qualified_names = html_names::GetTags();
+  Vector<AtomicString> tags(qualified_names.size());
+  for (size_t i = 0; i < qualified_names.size(); ++i) {
     tags[i] = qualified_names[i]->LocalName();
+  }
   return tags;
 }
 
@@ -2410,11 +2418,11 @@ AtomicString Internals::svgNamespace() {
 }
 
 Vector<AtomicString> Internals::svgTags() {
-  Vector<AtomicString> tags(svg_names::kTagsCount);
-  std::unique_ptr<const SVGQualifiedName*[]> qualified_names =
-      svg_names::GetTags();
-  for (wtf_size_t i = 0; i < svg_names::kTagsCount; ++i)
+  base::HeapArray<const QualifiedName*> qualified_names = svg_names::GetTags();
+  Vector<AtomicString> tags(qualified_names.size());
+  for (size_t i = 0; i < qualified_names.size(); ++i) {
     tags[i] = qualified_names[i]->LocalName();
+  }
   return tags;
 }
 
@@ -2537,20 +2545,19 @@ unsigned Internals::numberOfScrollableAreas(Document* document) {
 
   unsigned count = 0;
   LocalFrame* frame = document->GetFrame();
-  if (frame->View()->UserScrollableAreas()) {
-    for (const auto& scrollable_area : *frame->View()->UserScrollableAreas()) {
-      if (scrollable_area->ScrollsOverflow())
-        count++;
+  for (const auto& scrollable_area :
+       frame->View()->ScrollableAreas().Values()) {
+    if (scrollable_area->ScrollsOverflow()) {
+      count++;
     }
   }
 
   for (Frame* child = frame->Tree().FirstChild(); child;
        child = child->Tree().NextSibling()) {
     auto* child_local_frame = DynamicTo<LocalFrame>(child);
-    if (child_local_frame && child_local_frame->View() &&
-        child_local_frame->View()->UserScrollableAreas()) {
+    if (child_local_frame && child_local_frame->View()) {
       for (const auto& scrollable_area :
-           *child_local_frame->View()->UserScrollableAreas()) {
+           child_local_frame->View()->ScrollableAreas().Values()) {
         if (scrollable_area->ScrollsOverflow())
           count++;
       }
@@ -2580,10 +2587,6 @@ String Internals::layerTreeAsText(Document* document,
   return document->GetFrame()->GetLayerTreeAsTextForTesting(flags);
 }
 
-String Internals::scrollingStateTreeAsText(Document*) const {
-  return String();
-}
-
 String Internals::mainThreadScrollingReasons(
     Document* document,
     ExceptionState& exception_state) const {
@@ -2597,47 +2600,6 @@ String Internals::mainThreadScrollingReasons(
   document->GetFrame()->View()->UpdateAllLifecyclePhasesForTest();
 
   return document->GetFrame()->View()->MainThreadScrollingReasonsAsText();
-}
-
-DOMRectList* Internals::nonFastScrollableRects(
-    Document* document,
-    ExceptionState& exception_state) const {
-  DCHECK(document);
-  const LocalFrame* frame = document->GetFrame();
-  if (!frame) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidAccessError,
-                                      "The document provided is invalid.");
-    return nullptr;
-  }
-
-  frame->View()->UpdateAllLifecyclePhasesForTest();
-
-  auto* pac = document->View()->GetPaintArtifactCompositor();
-  auto* layer_tree_host = pac->RootLayer()->layer_tree_host();
-  // Ensure |cc::TransformTree| has updated the correct ToScreen transforms.
-  layer_tree_host->UpdateLayers();
-
-  Vector<gfx::Rect> layer_non_fast_scrollable_rects;
-  for (auto* layer : *layer_tree_host) {
-    const cc::Region& non_fast_region = layer->non_fast_scrollable_region();
-    for (gfx::Rect non_fast_rect : non_fast_region) {
-      gfx::RectF layer_rect(non_fast_rect);
-
-      // Map |layer_rect| into screen space.
-      layer_rect.Offset(layer->offset_to_transform_parent());
-      auto& transform_tree =
-          layer->layer_tree_host()->property_trees()->transform_tree_mutable();
-      transform_tree.UpdateTransforms(layer->transform_tree_index());
-      const gfx::Transform& to_screen =
-          transform_tree.ToScreen(layer->transform_tree_index());
-      gfx::Rect screen_rect =
-          gfx::ToEnclosingRect(to_screen.MapRect(layer_rect));
-
-      layer_non_fast_scrollable_rects.push_back(screen_rect);
-    }
-  }
-
-  return MakeGarbageCollected<DOMRectList>(layer_non_fast_scrollable_rects);
 }
 
 void Internals::evictAllResources() const {
@@ -2710,19 +2672,6 @@ int Internals::numberOfPages(float page_width,
                                      gfx::SizeF(page_width, page_height));
 }
 
-String Internals::pageProperty(String property_name,
-                               unsigned page_number,
-                               ExceptionState& exception_state) const {
-  if (!GetFrame()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidAccessError,
-                                      "No frame is available.");
-    return String();
-  }
-
-  return PrintContext::PageProperty(GetFrame(), property_name.Utf8().c_str(),
-                                    page_number);
-}
-
 float Internals::pageScaleFactor(ExceptionState& exception_state) {
   if (!document_->GetPage()) {
     exception_state.ThrowDOMException(
@@ -2762,15 +2711,16 @@ void Internals::setPageScaleFactorLimits(float min_scale_factor,
   page->SetDefaultPageScaleLimits(min_scale_factor, max_scale_factor);
 }
 
-float Internals::pageZoomFactor(ExceptionState& exception_state) {
+float Internals::layoutZoomFactor(ExceptionState& exception_state) {
   if (!document_->GetPage()) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidAccessError,
         "The document's page cannot be retrieved.");
     return 0;
   }
-  // Page zoom without Device Scale Factor.
-  return document_->GetPage()->GetChromeClient().UserZoomFactor();
+  // Layout zoom without Device Scale Factor.
+  return document_->GetPage()->GetChromeClient().UserZoomFactor(
+      document_->GetFrame());
 }
 
 void Internals::setIsCursorVisible(Document* document,
@@ -2854,7 +2804,7 @@ void Internals::setMediaControlsTestMode(HTMLMediaElement* media_element,
 void Internals::registerURLSchemeAsBypassingContentSecurityPolicy(
     const String& scheme) {
 #if DCHECK_IS_ON()
-  WTF::SetIsBeforeThreadCreatedForTest();  // Required for next operation:
+  SetIsBeforeThreadCreatedForTest();  // Required for next operation:
 #endif
   SchemeRegistry::RegisterURLSchemeAsBypassingContentSecurityPolicy(scheme);
 }
@@ -2870,7 +2820,7 @@ void Internals::registerURLSchemeAsBypassingContentSecurityPolicy(
       policy_areas_enum |= SchemeRegistry::kPolicyAreaStyle;
   }
 #if DCHECK_IS_ON()
-  WTF::SetIsBeforeThreadCreatedForTest();  // Required for next operation:
+  SetIsBeforeThreadCreatedForTest();  // Required for next operation:
 #endif
   SchemeRegistry::RegisterURLSchemeAsBypassingContentSecurityPolicy(
       scheme, static_cast<SchemeRegistry::PolicyAreas>(policy_areas_enum));
@@ -2879,10 +2829,10 @@ void Internals::registerURLSchemeAsBypassingContentSecurityPolicy(
 void Internals::removeURLSchemeRegisteredAsBypassingContentSecurityPolicy(
     const String& scheme) {
 #if DCHECK_IS_ON()
-  WTF::SetIsBeforeThreadCreatedForTest();  // Required for next operation:
+  SetIsBeforeThreadCreatedForTest();  // Required for next operation:
 #endif
-  SchemeRegistry::RemoveURLSchemeRegisteredAsBypassingContentSecurityPolicy(
-      scheme);
+  SchemeRegistry::
+      RemoveURLSchemeRegisteredAsBypassingContentSecurityPolicyForTest(scheme);
 }
 
 TypeConversions* Internals::typeConversions() const {
@@ -2915,6 +2865,10 @@ OriginTrialsTest* Internals::originTrialsTest() const {
 
 CallbackFunctionTest* Internals::callbackFunctionTest() const {
   return MakeGarbageCollected<CallbackFunctionTest>();
+}
+
+NADCAttributeTest* Internals::nadcAttributeTest() const {
+  return MakeGarbageCollected<NADCAttributeTest>();
 }
 
 Vector<String> Internals::getReferencedFilePaths() const {
@@ -3002,20 +2956,22 @@ void Internals::forceFullRepaint(Document* document,
 
 DOMRectList* Internals::draggableRegions(Document* document,
                                          ExceptionState& exception_state) {
-  return AnnotatedRegions(document, true, exception_state);
+  return DraggableRegions(document, true, exception_state);
 }
 
 DOMRectList* Internals::nonDraggableRegions(Document* document,
                                             ExceptionState& exception_state) {
-  return AnnotatedRegions(document, false, exception_state);
+  return DraggableRegions(document, false, exception_state);
 }
 
-void Internals::SetSupportsAppRegion(bool supports_app_region) {
-  document_->GetPage()->GetChromeClient().GetWebView()->SetSupportsAppRegion(
-      supports_app_region);
+void Internals::SetSupportsDraggableRegions(bool supports_draggable_regions) {
+  document_->GetPage()
+      ->GetChromeClient()
+      .GetWebView()
+      ->SetSupportsDraggableRegions(supports_draggable_regions);
 }
 
-DOMRectList* Internals::AnnotatedRegions(Document* document,
+DOMRectList* Internals::DraggableRegions(Document* document,
                                          bool draggable,
                                          ExceptionState& exception_state) {
   DCHECK(document);
@@ -3026,11 +2982,11 @@ DOMRectList* Internals::AnnotatedRegions(Document* document,
   }
 
   document->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
-  document->View()->UpdateDocumentAnnotatedRegions();
-  Vector<AnnotatedRegionValue> regions = document->AnnotatedRegions();
+  document->View()->UpdateDocumentDraggableRegions();
+  Vector<DraggableRegionValue> regions = document->DraggableRegions();
 
   Vector<gfx::QuadF> quads;
-  for (const AnnotatedRegionValue& region : regions) {
+  for (const DraggableRegionValue& region : regions) {
     if (region.draggable == draggable)
       quads.push_back(gfx::QuadF(gfx::RectF(region.bounds)));
   }
@@ -3153,7 +3109,6 @@ static const char* CursorTypeToString(
   }
 
   NOTREACHED();
-  return "UNKNOWN";
 }
 
 String Internals::getCurrentCursorInfo() {
@@ -3212,15 +3167,14 @@ DOMArrayBuffer* Internals::serializeObject(
   DOMArrayBuffer* buffer = DOMArrayBuffer::CreateUninitializedOrNull(
       base::checked_cast<uint32_t>(span.size()), sizeof(uint8_t));
   if (buffer)
-    memcpy(buffer->Data(), span.data(), span.size());
+    buffer->ByteSpan().copy_from(span);
   return buffer;
 }
 
 ScriptValue Internals::deserializeBuffer(v8::Isolate* isolate,
                                          DOMArrayBuffer* buffer) const {
   scoped_refptr<SerializedScriptValue> serialized_value =
-      SerializedScriptValue::Create(base::make_span(
-          static_cast<const uint8_t*>(buffer->Data()), buffer->ByteLength()));
+      SerializedScriptValue::Create(buffer->ByteSpan());
   return ScriptValue(isolate, serialized_value->Deserialize(isolate));
 }
 
@@ -3260,40 +3214,36 @@ StaticSelection* Internals::getSelectionInFlatTree(
 Node* Internals::visibleSelectionAnchorNode() {
   if (!GetFrame())
     return nullptr;
-  Position position = GetFrame()
-                          ->Selection()
-                          .ComputeVisibleSelectionInDOMTreeDeprecated()
-                          .Anchor();
+  GetFrame()->GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  Position position =
+      GetFrame()->Selection().ComputeVisibleSelectionInDOMTree().Anchor();
   return position.IsNull() ? nullptr : position.ComputeContainerNode();
 }
 
 unsigned Internals::visibleSelectionAnchorOffset() {
   if (!GetFrame())
     return 0;
-  Position position = GetFrame()
-                          ->Selection()
-                          .ComputeVisibleSelectionInDOMTreeDeprecated()
-                          .Anchor();
+  GetFrame()->GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  Position position =
+      GetFrame()->Selection().ComputeVisibleSelectionInDOMTree().Anchor();
   return position.IsNull() ? 0 : position.ComputeOffsetInContainerNode();
 }
 
 Node* Internals::visibleSelectionFocusNode() {
   if (!GetFrame())
     return nullptr;
-  Position position = GetFrame()
-                          ->Selection()
-                          .ComputeVisibleSelectionInDOMTreeDeprecated()
-                          .Focus();
+  GetFrame()->GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  Position position =
+      GetFrame()->Selection().ComputeVisibleSelectionInDOMTree().Focus();
   return position.IsNull() ? nullptr : position.ComputeContainerNode();
 }
 
 unsigned Internals::visibleSelectionFocusOffset() {
   if (!GetFrame())
     return 0;
-  Position position = GetFrame()
-                          ->Selection()
-                          .ComputeVisibleSelectionInDOMTreeDeprecated()
-                          .Focus();
+  GetFrame()->GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
+  Position position =
+      GetFrame()->Selection().ComputeVisibleSelectionInDOMTree().Focus();
   return position.IsNull() ? 0 : position.ComputeOffsetInContainerNode();
 }
 
@@ -3372,7 +3322,7 @@ int Internals::selectPopupItemStyleFontHeight(Node* node, int item_index) {
       select->ItemComputedStyle(*select->GetListItems()[item_index]);
 
   if (item_style) {
-    const SimpleFontData* font_data = item_style->GetFont().PrimaryFont();
+    const SimpleFontData* font_data = item_style->GetFont()->PrimaryFont();
     DCHECK(font_data);
     return font_data ? font_data->GetFontMetrics().Height() : 0;
   }
@@ -3382,12 +3332,6 @@ int Internals::selectPopupItemStyleFontHeight(Node* node, int item_index) {
 void Internals::resetTypeAheadSession(HTMLSelectElement* select) {
   DCHECK(select);
   select->ResetTypeAheadSessionForTesting();
-}
-
-void Internals::resetSelectListTypeAheadSession(
-    HTMLSelectListElement* selectlist) {
-  DCHECK(selectlist);
-  selectlist->ResetTypeAheadSessionForTesting();
 }
 
 void Internals::forceCompositingUpdate(Document* document,
@@ -3404,19 +3348,27 @@ void Internals::forceCompositingUpdate(Document* document,
 
 void Internals::setForcedColorsAndDarkPreferredColorScheme(Document* document) {
   DCHECK(document);
-  ColorSchemeHelper color_scheme_helper(*document);
-  color_scheme_helper.SetPreferredColorScheme(
+  color_scheme_helper_.emplace(*document);
+  color_scheme_helper_->SetPreferredColorScheme(
       mojom::blink::PreferredColorScheme::kDark);
-  color_scheme_helper.SetForcedColors(*document, ForcedColors::kActive);
-  color_scheme_helper.SetEmulatedForcedColors(*document,
-                                              /*is_dark_theme=*/false);
-  document->GetFrame()->View()->UpdateAllLifecyclePhasesForTest();
+  color_scheme_helper_->SetPreferredContrast(
+      mojom::blink::PreferredContrast::kMore);
+  color_scheme_helper_->SetInForcedColors(*document, /*in_forced_colors=*/true);
+  color_scheme_helper_->SetEmulatedForcedColors(*document,
+                                                /*is_dark_theme=*/false);
 }
 
 void Internals::setDarkPreferredColorScheme(Document* document) {
   DCHECK(document);
   Settings* settings = document->GetSettings();
   settings->SetPreferredColorScheme(mojom::blink::PreferredColorScheme::kDark);
+}
+
+void Internals::setDarkPreferredRootScrollbarColorScheme(Document* document) {
+  DCHECK(document);
+  color_scheme_helper_.emplace(*document);
+  color_scheme_helper_->SetPreferredRootScrollbarColorScheme(
+      mojom::blink::PreferredColorScheme::kDark);
 }
 
 void Internals::setShouldRevealPassword(Element* element,
@@ -3435,93 +3387,87 @@ void Internals::setShouldRevealPassword(Element* element,
 
 namespace {
 
-class AddOneFunction : public ScriptFunction::Callable {
+class AddOneFunction : public ThenCallable<IDLLong, AddOneFunction, IDLLong> {
  public:
-  ScriptValue Call(ScriptState* script_state, ScriptValue value) override {
-    v8::Local<v8::Value> v8_value = value.V8Value();
-    DCHECK(v8_value->IsNumber());
-    int32_t int_value =
-        static_cast<int32_t>(v8_value.As<v8::Integer>()->Value());
-    return ScriptValue(
-        script_state->GetIsolate(),
-        v8::Integer::New(script_state->GetIsolate(), int_value + 1));
-  }
+  int32_t React(ScriptState*, int32_t value) { return value + 1; }
+};
+
+class AddOneTypeMismatch
+    : public ThenCallable<IDLAny, AddOneTypeMismatch, IDLAny> {
+ public:
+  ScriptValue React(ScriptState*, ScriptValue value) { return value; }
 };
 
 }  // namespace
 
-ScriptPromiseTyped<IDLAny> Internals::createResolvedPromise(
+ScriptPromise<IDLAny> Internals::createResolvedPromise(
     ScriptState* script_state,
     ScriptValue value) {
-  auto* resolver =
-      MakeGarbageCollected<ScriptPromiseResolverTyped<IDLAny>>(script_state);
-  auto promise = resolver->Promise();
-  resolver->Resolve(value);
-  return promise;
+  return ToResolvedPromise<IDLAny>(script_state, value);
 }
 
-ScriptPromise Internals::createRejectedPromise(ScriptState* script_state,
-                                               ScriptValue value) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
-  resolver->Reject(value);
-  return promise;
+ScriptPromise<IDLAny> Internals::createRejectedPromise(
+    ScriptState* script_state,
+    ScriptValue value) {
+  return ScriptPromise<IDLAny>::Reject(script_state, value);
 }
 
-ScriptPromise Internals::addOneToPromise(ScriptState* script_state,
-                                         ScriptPromise promise) {
-  return promise.Then(MakeGarbageCollected<ScriptFunction>(
-      script_state, MakeGarbageCollected<AddOneFunction>()));
+ScriptPromise<IDLLong> Internals::addOneToPromise(
+    ScriptState* script_state,
+    ScriptPromise<IDLLong> promise) {
+  return promise.Then(script_state, MakeGarbageCollected<AddOneFunction>(),
+                      MakeGarbageCollected<AddOneTypeMismatch>());
 }
 
-ScriptPromise Internals::promiseCheck(ScriptState* script_state,
-                                      int32_t arg1,
-                                      bool arg2,
-                                      const ScriptValue& arg3,
-                                      const String& arg4,
-                                      const Vector<String>& arg5,
-                                      ExceptionState& exception_state) {
-  if (arg2)
-    return ScriptPromise::Cast(script_state,
-                               V8String(script_state->GetIsolate(), "done"));
+ScriptPromise<IDLAny> Internals::promiseCheck(ScriptState* script_state,
+                                              int32_t arg1,
+                                              bool arg2,
+                                              const ScriptValue& arg3,
+                                              const String& arg4,
+                                              const Vector<String>& arg5,
+                                              ExceptionState& exception_state) {
+  if (arg2) {
+    return ToResolvedPromise<IDLAny>(
+        script_state, V8String(script_state->GetIsolate(), "done"));
+  }
   exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                     "Thrown from the native implementation.");
-  return ScriptPromise();
+  return EmptyPromise();
 }
 
-ScriptPromise Internals::promiseCheckWithoutExceptionState(
+ScriptPromise<IDLAny> Internals::promiseCheckWithoutExceptionState(
     ScriptState* script_state,
     const ScriptValue& arg1,
     const String& arg2,
     const Vector<String>& arg3) {
-  return ScriptPromise::Cast(script_state,
-                             V8String(script_state->GetIsolate(), "done"));
+  return ToResolvedPromise<IDLAny>(
+      script_state, V8String(script_state->GetIsolate(), "done"));
 }
 
-ScriptPromise Internals::promiseCheckRange(ScriptState* script_state,
-                                           int32_t arg1) {
-  return ScriptPromise::Cast(script_state,
-                             V8String(script_state->GetIsolate(), "done"));
+ScriptPromise<IDLAny> Internals::promiseCheckRange(ScriptState* script_state,
+                                                   int32_t arg1) {
+  return ToResolvedPromise<IDLAny>(
+      script_state, V8String(script_state->GetIsolate(), "done"));
 }
 
-ScriptPromise Internals::promiseCheckOverload(ScriptState* script_state,
-                                              Location*) {
-  return ScriptPromise::Cast(script_state,
-                             V8String(script_state->GetIsolate(), "done"));
+ScriptPromise<IDLAny> Internals::promiseCheckOverload(ScriptState* script_state,
+                                                      Location*) {
+  return ToResolvedPromise<IDLAny>(
+      script_state, V8String(script_state->GetIsolate(), "done"));
 }
 
-ScriptPromise Internals::promiseCheckOverload(ScriptState* script_state,
-                                              Document*) {
-  return ScriptPromise::Cast(script_state,
-                             V8String(script_state->GetIsolate(), "done"));
+ScriptPromise<IDLAny> Internals::promiseCheckOverload(ScriptState* script_state,
+                                                      Document*) {
+  return ToResolvedPromise<IDLAny>(
+      script_state, V8String(script_state->GetIsolate(), "done"));
 }
 
-ScriptPromise Internals::promiseCheckOverload(ScriptState* script_state,
-                                              Location*,
-                                              int32_t,
-                                              int32_t) {
-  return ScriptPromise::Cast(script_state,
-                             V8String(script_state->GetIsolate(), "done"));
+ScriptPromise<IDLAny> Internals::promiseCheckOverload(ScriptState* script_state,
+                                                      Location*,
+                                                      int32_t,
+                                                      int32_t) {
+  return ToResolvedPromise<IDLAny>(
+      script_state, V8String(script_state->GetIsolate(), "done"));
 }
 
 void Internals::Trace(Visitor* visitor) const {
@@ -3568,28 +3514,18 @@ unsigned Internals::canvasFontCacheMaxFonts() {
   return CanvasFontCache::MaxFonts();
 }
 
-void Internals::forceLoseCanvasContext(HTMLCanvasElement* canvas,
-                                       const String& context_type) {
-  CanvasContextCreationAttributesCore attr;
-  CanvasRenderingContext* context =
-      canvas->GetCanvasRenderingContext(context_type, attr);
-  if (!context)
-    return;
+void Internals::forceLoseCanvasContext(CanvasRenderingContext* context) {
   context->LoseContext(CanvasRenderingContext::kSyntheticLostContext);
 }
 
-void Internals::forceLoseCanvasContext(OffscreenCanvas* offscreencanvas,
-                                       const String& context_type) {
-  CanvasContextCreationAttributesCore attr;
-  CanvasRenderingContext* context = offscreencanvas->GetCanvasRenderingContext(
-      document_->GetExecutionContext(), context_type, attr);
-  if (!context)
-    return;
-  context->LoseContext(CanvasRenderingContext::kSyntheticLostContext);
+void Internals::disableCanvasAccelerationForCanvas2D(
+    HTMLCanvasElement* canvas) {
+  canvas->RenderingContext()->DisableAccelerationForCanvas2D();
 }
 
-void Internals::disableCanvasAcceleration(HTMLCanvasElement* canvas) {
-  canvas->DisableAcceleration();
+bool Internals::isCanvasImageSourceAccelerated(
+    const CanvasImageSource* image_source) const {
+  return image_source->IsAccelerated();
 }
 
 String Internals::selectedHTMLForClipboard() {
@@ -3615,15 +3551,23 @@ String Internals::selectedTextForClipboard() {
 void Internals::setVisualViewportOffset(int css_x, int css_y) {
   if (!GetFrame())
     return;
-  float zoom = GetFrame()->PageZoomFactor();
+  float zoom = GetFrame()->LayoutZoomFactor();
   gfx::PointF offset(css_x * zoom, css_y * zoom);
   GetFrame()->GetPage()->GetVisualViewport().SetLocation(offset);
 }
 
 bool Internals::isUseCounted(Document* document, uint32_t feature) {
-  if (feature >= static_cast<int32_t>(WebFeature::kNumberOfFeatures))
+  if (feature > static_cast<int32_t>(WebFeature::kMaxValue)) {
     return false;
+  }
   return document->IsUseCounted(static_cast<WebFeature>(feature));
+}
+
+bool Internals::isWebDXFeatureUseCounted(Document* document, uint32_t feature) {
+  if (feature > static_cast<int32_t>(WebDXFeature::kMaxValue)) {
+    return false;
+  }
+  return document->IsWebDXFeatureCounted(static_cast<WebDXFeature>(feature));
 }
 
 bool Internals::isCSSPropertyUseCounted(Document* document,
@@ -3639,8 +3583,9 @@ bool Internals::isAnimatedCSSPropertyUseCounted(Document* document,
 }
 
 void Internals::clearUseCounter(Document* document, uint32_t feature) {
-  if (feature >= static_cast<int32_t>(WebFeature::kNumberOfFeatures))
+  if (feature > static_cast<int32_t>(WebFeature::kMaxValue)) {
     return;
+  }
   document->ClearUseCounterForTesting(static_cast<WebFeature>(feature));
 }
 
@@ -3680,12 +3625,14 @@ Vector<String> Internals::getCSSPropertyAliases() const {
   return result;
 }
 
-ScriptPromise Internals::observeUseCounter(ScriptState* script_state,
-                                           Document* document,
-                                           uint32_t feature) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
-  if (feature >= static_cast<int32_t>(WebFeature::kNumberOfFeatures)) {
+ScriptPromise<IDLUndefined> Internals::observeUseCounter(
+    ScriptState* script_state,
+    Document* document,
+    uint32_t feature) {
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
+  auto promise = resolver->Promise();
+  if (feature > static_cast<int32_t>(WebFeature::kMaxValue)) {
     resolver->Reject();
     return promise;
   }
@@ -3737,11 +3684,6 @@ bool Internals::setScrollbarVisibilityInScrollableArea(Node* node,
   if (ScrollableArea* scrollable_area = ScrollableAreaForNode(node)) {
     scrollable_area->SetScrollbarsHiddenForTesting(!visible);
 
-    if (MacScrollbarAnimator* scrollbar_animator =
-            scrollable_area->GetMacScrollbarAnimator()) {
-      scrollbar_animator->SetScrollbarsVisibleForTesting(visible);
-    }
-
     return scrollable_area->GetPageScrollbarTheme().UsesOverlayScrollbars();
   }
   return false;
@@ -3779,7 +3721,7 @@ String Internals::getProgrammaticScrollAnimationState(Node* node) const {
 }
 
 void Internals::crash() {
-  CHECK(false) << "Intentional crash";
+  NOTREACHED() << "Intentional crash";
 }
 
 String Internals::evaluateInInspectorOverlay(const String& script) {
@@ -3799,7 +3741,7 @@ bool Internals::isLowEndDevice() const {
 }
 
 Vector<String> Internals::supportedTextEncodingLabels() const {
-  return WTF::TextEncodingAliasesForTesting();
+  return TextEncodingAliasesForTesting();
 }
 
 void Internals::simulateRasterUnderInvalidations(bool enable) {
@@ -3841,7 +3783,7 @@ String Internals::getParsedImportMap(Document* document,
   if (!import_map)
     return "{}";
 
-  return import_map->ToString();
+  return import_map->ToStringForTesting();
 }
 
 void Internals::setDeviceEmulationScale(float scale,
@@ -3860,8 +3802,9 @@ void Internals::setDeviceEmulationScale(float scale,
   page->GetChromeClient().GetWebView()->EnableDeviceEmulation(params);
 }
 
-void Internals::ResolveResourcePriority(ScriptPromiseResolver* resolver,
-                                        int resource_load_priority) {
+void Internals::ResolveResourcePriority(
+    ScriptPromiseResolver<IDLLong>* resolver,
+    int resource_load_priority) {
   resolver->Resolve(resource_load_priority);
 }
 
@@ -3974,7 +3917,8 @@ ScriptValue Internals::createWritableStreamAndSink(
   }
 
   ExecutionContext* context = ExecutionContext::From(script_state);
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLString>>(script_state);
   auto internal_sink = std::make_unique<TestWritableStreamSink::InternalSink>(
       context->GetTaskRunner(TaskType::kInternalDefault),
       CrossThreadBindOnce(&TestWritableStreamSink::Resolve,
@@ -3997,7 +3941,8 @@ ScriptValue Internals::createWritableStreamAndSink(
   object
       ->Set(script_state->GetContext(),
             V8String(script_state->GetIsolate(), "sink"),
-            ToV8Traits<IDLPromise>::ToV8(script_state, resolver->Promise()))
+            ToV8Traits<IDLPromise<IDLString>>::ToV8(script_state,
+                                                    resolver->Promise()))
       .Check();
   return ScriptValue(script_state->GetIsolate(), object);
 }
@@ -4016,21 +3961,77 @@ void Internals::setBackForwardCacheRestorationBufferSize(unsigned int maxSize) {
   perf.setBackForwardCacheRestorationBufferSizeForTest(maxSize);
 }
 
+void Internals::setEventTimingBufferSize(unsigned int maxSize) {
+  WindowPerformance& perf =
+      *DOMWindowPerformance::performance(*document_->domWindow());
+  perf.setEventTimingBufferSizeForTest(maxSize);
+}
+
+void Internals::stopResponsivenessMetricsUkmSampling() {
+  WindowPerformance& perf =
+      *DOMWindowPerformance::performance(*document_->domWindow());
+  perf.GetResponsivenessMetrics().StopUkmSamplingForTesting();
+}
+
 Vector<String> Internals::getCreatorScripts(HTMLImageElement* img) {
   DCHECK(img);
   return Vector<String>(img->creator_scripts());
 }
 
-ScriptPromise Internals::LCPPrediction(ScriptState* script_state,
-                                       Document* document) {
-  ScriptPromiseResolver* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+String Internals::lastCompiledScriptFileName(Document* document) {
+  return ToScriptStateForMainWorld(document->GetFrame())
+      ->last_compiled_script_file_name();
+}
+
+bool Internals::lastCompiledScriptUsedCodeCache(Document* document) {
+  return ToScriptStateForMainWorld(document->GetFrame())
+      ->last_compiled_script_used_code_cache();
+}
+
+ScriptPromise<IDLString> Internals::LCPPrediction(ScriptState* script_state,
+                                                  Document* document) {
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLString>>(script_state);
+  auto promise = resolver->Promise();
 
   LCPCriticalPathPredictor* lcpp = document->GetFrame()->GetLCPP();
   CHECK(lcpp);
   lcpp->AddLCPPredictedCallback(
-      WTF::BindOnce(&OnLCPPredicted, WrapPersistent(resolver)));
+      BindOnce(&OnLCPPredicted, WrapPersistent(resolver)));
+  return promise;
+}
+
+void ExemptUrlFromNetworkRevocationComplete(
+    ScriptPromiseResolver<IDLUndefined>* resolver) {
+  resolver->Resolve();
+}
+
+ScriptPromise<IDLUndefined> Internals::exemptUrlFromNetworkRevocation(
+    ScriptState* script_state,
+    const String& url) {
+  if (!blink::features::IsFencedFramesEnabled()) {
+    return EmptyPromise();
+  }
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kFencedFramesLocalUnpartitionedDataAccess)) {
+    return EmptyPromise();
+  }
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kExemptUrlFromNetworkRevocationForTesting)) {
+    return EmptyPromise();
+  }
+  if (!GetFrame()) {
+    return EmptyPromise();
+  }
+  LocalFrame* frame = GetFrame();
+  DCHECK(frame->GetDocument());
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
+  auto promise = resolver->Promise();
+  frame->GetLocalFrameHostRemote().ExemptUrlFromNetworkRevocationForTesting(
+      url_test_helpers::ToKURL(url.Utf8()),
+      BindOnce(&ExemptUrlFromNetworkRevocationComplete,
+               WrapPersistent(resolver)));
   return promise;
 }
 

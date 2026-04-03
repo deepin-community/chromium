@@ -38,7 +38,7 @@ REGISTER_OP("FloatInput").Output("o: float");
 REGISTER_OP("Int32Input").Output("o: int32");
 
 TEST(ValidateGraphDefTest, TestValidGraph) {
-  const string graph_def_str =
+  const std::string graph_def_str =
       "node { name: 'A' op: 'FloatInput' }"
       "node { name: 'B' op: 'FloatInput' }"
       "node { name: 'C' op: 'Mul' attr { key: 'T' value { type: DT_FLOAT } }"
@@ -50,7 +50,7 @@ TEST(ValidateGraphDefTest, TestValidGraph) {
 }
 
 TEST(ValidateGraphDefTest, GraphWithUnspecifiedDefaultAttr) {
-  const string graph_def_str =
+  const std::string graph_def_str =
       "node { name: 'A' op: 'FloatInput' }"
       "node { name: 'B' op: 'Int32Input' }"
       "node { "
@@ -61,7 +61,7 @@ TEST(ValidateGraphDefTest, GraphWithUnspecifiedDefaultAttr) {
   GraphDef graph_def;
   auto parser = protobuf::TextFormat::Parser();
   CHECK(parser.MergeFromString(graph_def_str, &graph_def)) << graph_def_str;
-  Status s = graph::ValidateGraphDef(graph_def, *OpRegistry::Global());
+  absl::Status s = graph::ValidateGraphDef(graph_def, *OpRegistry::Global());
   EXPECT_FALSE(s.ok());
   EXPECT_TRUE(absl::StrContains(s.ToString(), "NodeDef missing attr"));
 
@@ -74,7 +74,7 @@ TEST(ValidateGraphDefTest, GraphWithUnspecifiedDefaultAttr) {
 
 TEST(ValidateGraphDefTest, GraphWithUnspecifiedRequiredAttr) {
   // "DstT" attribute is missing.
-  const string graph_def_str =
+  const std::string graph_def_str =
       "node { name: 'A' op: 'FloatInput' }"
       "node { "
       "       name: 'B' op: 'Cast' "
@@ -84,7 +84,7 @@ TEST(ValidateGraphDefTest, GraphWithUnspecifiedRequiredAttr) {
   GraphDef graph_def;
   auto parser = protobuf::TextFormat::Parser();
   CHECK(parser.MergeFromString(graph_def_str, &graph_def)) << graph_def_str;
-  Status s = graph::ValidateGraphDef(graph_def, *OpRegistry::Global());
+  absl::Status s = graph::ValidateGraphDef(graph_def, *OpRegistry::Global());
   EXPECT_FALSE(s.ok());
   EXPECT_TRUE(absl::StrContains(s.ToString(), "NodeDef missing attr"));
 
@@ -102,7 +102,7 @@ TEST(ValidateGraphDefAgainstOpListTest, GraphWithOpOnlyInOpList) {
   TF_ASSERT_OK(OpDefBuilder("UniqueSnowflake").Finalize(&op_reg_data));
   OpList op_list;
   *op_list.add_op() = op_reg_data.op_def;
-  const string graph_def_str = "node { name: 'A' op: 'UniqueSnowflake' }";
+  const std::string graph_def_str = "node { name: 'A' op: 'UniqueSnowflake' }";
   GraphDef graph_def;
   auto parser = protobuf::TextFormat::Parser();
   CHECK(parser.MergeFromString(graph_def_str, &graph_def)) << graph_def_str;
@@ -114,7 +114,7 @@ TEST(ValidateGraphDefAgainstOpListTest, GraphWithGlobalOpNotInOpList) {
   TF_ASSERT_OK(OpDefBuilder("NotAnywhere").Finalize(&op_reg_data));
   OpList op_list;
   *op_list.add_op() = op_reg_data.op_def;
-  const string graph_def_str = "node { name: 'A' op: 'FloatInput' }";
+  const std::string graph_def_str = "node { name: 'A' op: 'FloatInput' }";
   GraphDef graph_def;
   auto parser = protobuf::TextFormat::Parser();
   CHECK(parser.MergeFromString(graph_def_str, &graph_def)) << graph_def_str;
@@ -150,7 +150,7 @@ TEST(GetOpListForValidationTest, ShouldStripDocs) {
 }
 
 TEST(VerifyNoDuplicateNodeNames, NoDuplicateNodeNames) {
-  const string graph_def_str =
+  const std::string graph_def_str =
       "node { name: 'A' op: 'FloatInput' }"
       "node { name: 'B' op: 'Int32Input' }"
       "node { "
@@ -165,7 +165,7 @@ TEST(VerifyNoDuplicateNodeNames, NoDuplicateNodeNames) {
 }
 
 TEST(VerifyNoDuplicateNodeNames, DuplicateNodeNames) {
-  const string graph_def_str =
+  const std::string graph_def_str =
       "node { name: 'A' op: 'FloatInput' }"
       "node { name: 'A' op: 'Int32Input' }"
       "node { "
@@ -181,7 +181,7 @@ TEST(VerifyNoDuplicateNodeNames, DuplicateNodeNames) {
 }
 
 TEST(ValidateGraphHasNoCycleTest, NoCyclePasses) {
-  const string graph_def_str =
+  const std::string graph_def_str =
       "node { name: 'A' op: 'FloatInput' }"
       "node { name: 'B' op: 'FloatInput' }"
       "node { name: 'C' op: 'Mul' attr { key: 'T' value { type: DT_FLOAT } }"
@@ -198,7 +198,7 @@ TEST(ValidateGraphHasNoCycleTest, NoCyclePasses) {
 }
 
 TEST(ValidateGraphHasNoCycleTest, NoCycleWithMergePasses) {
-  const string graph_def_str =
+  const std::string graph_def_str =
       R"EOF(
       node { name: 'A' op: 'FloatInput' }
       node { name: 'merge' op: 'Merge' input: [ 'A:0', 'next:0' ]
@@ -221,17 +221,17 @@ TEST(ValidateGraphHasNoCycleTest, NoCycleWithMergePasses) {
   TF_EXPECT_OK(graph::ValidateGraphHasNoCycle(graph));
 }
 
-Node* AddNodeFromNodeDef(Graph& graph, const string& name,
-                         const string& node_type, int num_inputs) {
+Node* AddNodeFromNodeDef(Graph& graph, const std::string& name,
+                         const std::string& node_type, int num_inputs) {
   auto builder = NodeDefBuilder(name, node_type);
   for (int i = 0; i < num_inputs; ++i) {
-    builder = builder.Input(strings::StrCat("node_", i), i, DT_FLOAT);
+    builder = builder.Input(absl::StrCat("node_", i), i, DT_FLOAT);
   }
 
   NodeDef node_def;
   TF_CHECK_OK(builder.Finalize(&node_def));
 
-  Status s;
+  absl::Status s;
   Node* node = graph.AddNode(node_def, &s);
   TF_CHECK_OK(s);
   return node;
@@ -249,7 +249,7 @@ TEST(ValidateGraphHasNoCycleTest, CycleFails) {
 
   EXPECT_THAT(
       graph::ValidateGraphHasNoCycle(graph),
-      tsl::testing::StatusIs(
+      absl_testing::StatusIs(
           tsl::error::Code::INVALID_ARGUMENT,
           ::testing::ContainsRegex("Graph is invalid, contains a cycle")));
 }

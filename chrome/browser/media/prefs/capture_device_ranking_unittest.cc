@@ -125,6 +125,11 @@ TEST_F(CaptureDeviceRankingTest, PreferenceRankAudioDeviceInfos) {
       /*unique_id=*/"usb_mic",
       /*group_id=*/"usb_group",
   });
+  const media::AudioDeviceDescription kDefaultMic({
+      /*device_name=*/"",
+      /*unique_id=*/media::AudioDeviceDescription::kDefaultDeviceId,
+      /*group_id=*/"default_group",
+  });
   const media::AudioDeviceDescription kDevice3({/*device_name=*/"Device 3",
                                                 /*unique_id=*/"device_3",
                                                 /*group_id=*/"device_group"});
@@ -163,6 +168,68 @@ TEST_F(CaptureDeviceRankingTest, PreferenceRankAudioDeviceInfos) {
   ExpectAudioRanking(
       /*infos=*/{kDeviceExtra, kDevice3, kIntegratedMic, kUsbMic},
       /*expected_output=*/{kUsbMic, kIntegratedMic, kDevice3, kDeviceExtra});
+
+  // Include the default mic, which has an empty name.
+  UpdateAudioRanking(/*preferred_device=*/kDefaultMic, /*infos=*/{
+                         kUsbMic, kIntegratedMic, kDefaultMic, kDevice3});
+  ExpectAudioRanking(
+      /*infos=*/{kUsbMic, kIntegratedMic, kDefaultMic, kDevice3},
+      /*expected_output=*/{kDefaultMic, kUsbMic, kIntegratedMic, kDevice3});
+}
+
+TEST_F(CaptureDeviceRankingTest, PreferenceRankDefaultAudioDevice) {
+  const media::AudioDeviceDescription kIntegratedMic(
+      {/*device_name=*/"Integrated Mic",
+       /*unique_id=*/"integrated_mic",
+       /*group_id=*/"integrated_group"});
+  const media::AudioDeviceDescription kUsbMic({
+      /*device_name=*/"USB Mic",
+      /*unique_id=*/"usb_mic",
+      /*group_id=*/"usb_group",
+  });
+  const media::AudioDeviceDescription kDefaultMic({
+      /*device_name=*/"",
+      /*unique_id=*/media::AudioDeviceDescription::kDefaultDeviceId,
+      /*group_id=*/"default_group",
+  });
+
+  // Include the default mic, which has an empty name. Then expect that
+  // preference ranking works correctly for the other device info types.
+  UpdateAudioRanking(/*preferred_device=*/kDefaultMic,
+                     /*infos=*/{kUsbMic, kIntegratedMic, kDefaultMic});
+  ExpectAudioRanking(
+      /*infos=*/{kUsbMic, kDefaultMic, kIntegratedMic},
+      /*expected_output=*/{kDefaultMic, kUsbMic, kIntegratedMic});
+
+  {
+    const blink::WebMediaDeviceInfo kUsbDevice(
+        /*device_id=*/"usb_device",
+        /*label=*/"USB Device",
+        /*group_id=*/"usb_group");
+    const blink::WebMediaDeviceInfo kDefaultDevice(
+        /*device_id=*/media::AudioDeviceDescription::kDefaultDeviceId,
+        /*label=*/"Default",
+        /*group_id=*/"default_group");
+    std::vector infos = {kUsbDevice, kDefaultDevice};
+    media_prefs::PreferenceRankAudioDeviceInfos(prefs_, infos);
+    std::vector expected = {kDefaultDevice, kUsbDevice};
+    EXPECT_EQ(infos, expected);
+  }
+
+  {
+    const blink::MediaStreamDevice kUsbDevice(
+        /*type=*/blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE,
+        /*id=*/"usb_device",
+        /*name=*/"USB Device");
+    const blink::MediaStreamDevice kDefaultDevice(
+        /*type=*/blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE,
+        /*id=*/media::AudioDeviceDescription::kDefaultDeviceId,
+        /*name=*/"Default");
+    std::vector infos = {kUsbDevice, kDefaultDevice};
+    media_prefs::PreferenceRankAudioDeviceInfos(prefs_, infos);
+    std::vector expected = {kDefaultDevice, kUsbDevice};
+    EXPECT_EQ(infos, expected);
+  }
 }
 
 TEST_F(CaptureDeviceRankingTest, InitializeAudioDeviceInfosRanking) {
@@ -176,19 +243,21 @@ TEST_F(CaptureDeviceRankingTest, InitializeAudioDeviceInfosRanking) {
       /*group_id=*/"usb_group",
   });
 
-  prefs_.registry()->RegisterStringPref(prefs::kDefaultAudioCaptureDevice, "");
+  prefs_.registry()->RegisterStringPref(
+      prefs::kDefaultAudioCaptureDeviceDeprecated, "");
 
   // The default device is set to "" so the output should be unmodified.
   ExpectAudioRanking({kIntegratedMic, kUsbMic}, {kIntegratedMic, kUsbMic});
 
   // The default device isn't in the passed device list, so the output should be
   // unmodified.
-  prefs_.SetString(prefs::kDefaultAudioCaptureDevice, "not_found_id");
+  prefs_.SetString(prefs::kDefaultAudioCaptureDeviceDeprecated, "not_found_id");
   ExpectAudioRanking({kIntegratedMic, kUsbMic}, {kIntegratedMic, kUsbMic});
 
   // The default device is USB mic so the device ranking gets initialized to put
   // that first.
-  prefs_.SetString(prefs::kDefaultAudioCaptureDevice, kUsbMic.unique_id);
+  prefs_.SetString(prefs::kDefaultAudioCaptureDeviceDeprecated,
+                   kUsbMic.unique_id);
   ExpectAudioRanking({kIntegratedMic, kUsbMic}, {kUsbMic, kIntegratedMic});
 
   // The device ranking pref now has a value, so use that instead of the default
@@ -204,7 +273,8 @@ TEST_F(CaptureDeviceRankingTest, InitializeVideoDeviceInfosRanking) {
   const media::VideoCaptureDeviceInfo kUsbCamera({/*display_name=*/"USB Camera",
                                                   /*device_id=*/"usb_camera"});
 
-  prefs_.registry()->RegisterStringPref(prefs::kDefaultVideoCaptureDevice, "");
+  prefs_.registry()->RegisterStringPref(
+      prefs::kDefaultVideoCaptureDeviceDeprecated, "");
 
   // The default device is set to "" so the output should be unmodified.
   ExpectVideoRanking({kIntegratedCamera, kUsbCamera},
@@ -212,13 +282,13 @@ TEST_F(CaptureDeviceRankingTest, InitializeVideoDeviceInfosRanking) {
 
   // The default device isn't in the passed device list, so the output should be
   // unmodified.
-  prefs_.SetString(prefs::kDefaultVideoCaptureDevice, "not_found_id");
+  prefs_.SetString(prefs::kDefaultVideoCaptureDeviceDeprecated, "not_found_id");
   ExpectVideoRanking({kIntegratedCamera, kUsbCamera},
                      {kIntegratedCamera, kUsbCamera});
 
   // The default device is usb camera so the device ranking gets Initialized to
   // put that first.
-  prefs_.SetString(prefs::kDefaultVideoCaptureDevice,
+  prefs_.SetString(prefs::kDefaultVideoCaptureDeviceDeprecated,
                    kUsbCamera.descriptor.device_id);
   ExpectVideoRanking({kIntegratedCamera, kUsbCamera},
                      {kUsbCamera, kIntegratedCamera});
@@ -280,6 +350,10 @@ TEST_P(CaptureDeviceRankingWebMediaDeviceTest, PreferenceWebMediaDeviceInfos) {
       /*device_id=*/"usb_device",
       /*label=*/"USB Device",
       /*group_id=*/"usb_group");
+  const blink::WebMediaDeviceInfo kDefaultDevice(
+      /*device_id=*/media::AudioDeviceDescription::kDefaultDeviceId,
+      /*label=*/"Default",
+      /*group_id=*/"default_group");
   const blink::WebMediaDeviceInfo kDevice3(
       /*device_id=*/"device_3",
       /*label=*/"Device 3",
@@ -328,6 +402,16 @@ TEST_P(CaptureDeviceRankingWebMediaDeviceTest, PreferenceWebMediaDeviceInfos) {
       /*infos=*/{kDeviceExtra, kDevice3, kIntegratedDevice, kUsbDevice},
       /*expected_output=*/
       {kUsbDevice, kIntegratedDevice, kDevice3, kDeviceExtra});
+
+  // Include the default device.
+  UpdateDeviceRanking(
+      device_type, /*preferred_device=*/kDefaultDevice,
+      /*infos=*/{kUsbDevice, kIntegratedDevice, kDefaultDevice, kDevice3});
+  ExpectDeviceRanking(
+      device_type,
+      /*infos=*/{kUsbDevice, kIntegratedDevice, kDefaultDevice, kDevice3},
+      /*expected_output=*/
+      {kDefaultDevice, kUsbDevice, kIntegratedDevice, kDevice3});
 }
 
 class CaptureDeviceRankingMediaStreamDeviceTest
@@ -386,6 +470,10 @@ TEST_P(CaptureDeviceRankingMediaStreamDeviceTest,
       /*type=*/device_type,
       /*id=*/"usb_device",
       /*name=*/"USB Device");
+  const blink::MediaStreamDevice kDefaultDevice(
+      /*type=*/device_type,
+      /*id=*/media::AudioDeviceDescription::kDefaultDeviceId,
+      /*name=*/"Default");
   const blink::MediaStreamDevice kDevice3(
       /*type=*/device_type,
       /*id=*/"device_3",
@@ -432,4 +520,14 @@ TEST_P(CaptureDeviceRankingMediaStreamDeviceTest,
       /*infos=*/{kDeviceExtra, kDevice3, kIntegratedDevice, kUsbDevice},
       /*expected_output=*/
       {kUsbDevice, kIntegratedDevice, kDevice3, kDeviceExtra});
+
+  // Include the default device.
+  UpdateDeviceRanking(
+      device_type, /*preferred_device=*/kDefaultDevice,
+      /*infos=*/{kUsbDevice, kIntegratedDevice, kDefaultDevice, kDevice3});
+  ExpectDeviceRanking(
+      device_type,
+      /*infos=*/{kUsbDevice, kIntegratedDevice, kDefaultDevice, kDevice3},
+      /*expected_output=*/
+      {kDefaultDevice, kUsbDevice, kIntegratedDevice, kDevice3});
 }

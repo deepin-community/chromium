@@ -17,7 +17,6 @@
 #include "base/location.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -27,8 +26,11 @@
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/content_verifier/content_verifier.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_builder.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 using extensions::URLPatternSet;
 
@@ -69,7 +71,6 @@ TEST_F(ExtensionUserScriptLoaderTest, NoScriptsWithCallbackAfterLoad) {
   scoped_refptr<const Extension> extension(ExtensionBuilder("Test").Build());
   ExtensionUserScriptLoader loader(&profile, *extension,
                                    /*state_store=*/nullptr,
-                                   /*listen_for_extension_system_loaded=*/true,
                                    /*content_verifier=*/nullptr);
   base::RunLoop run_loop;
   auto on_load_complete = [&run_loop](UserScriptLoader* loader,
@@ -89,7 +90,6 @@ TEST_F(ExtensionUserScriptLoaderTest, NoScriptsAddedWithCallback) {
   scoped_refptr<const Extension> extension(ExtensionBuilder("Test").Build());
   ExtensionUserScriptLoader loader(&profile, *extension,
                                    /*state_store=*/nullptr,
-                                   /*listen_for_extension_system_loaded=*/true,
                                    /*content_verifier=*/nullptr);
 
   // Use a flag instead of a RunLoop to verify that the callback was called
@@ -114,7 +114,6 @@ TEST_F(ExtensionUserScriptLoaderTest, QueuedLoadWithCallback) {
   scoped_refptr<const Extension> extension(ExtensionBuilder("Test").Build());
   ExtensionUserScriptLoader loader(&profile, *extension,
                                    /*state_store=*/nullptr,
-                                   /*listen_for_extension_system_loaded=*/true,
                                    /*content_verifier=*/nullptr);
   base::RunLoop run_loop;
 
@@ -288,7 +287,6 @@ TEST_F(ExtensionUserScriptLoaderTest, SkipBOMAtTheBeginning) {
   scoped_refptr<const Extension> extension(ExtensionBuilder("Test").Build());
   ExtensionUserScriptLoader loader(&profile, *extension,
                                    /*state_store=*/nullptr,
-                                   /*listen_for_extension_system_loaded=*/true,
                                    /*content_verifier=*/nullptr);
   user_scripts = loader.LoadScriptsForTest(std::move(user_scripts));
 
@@ -322,7 +320,6 @@ TEST_F(ExtensionUserScriptLoaderTest, LeaveBOMNotAtTheBeginning) {
   scoped_refptr<const Extension> extension(ExtensionBuilder("Test").Build());
   ExtensionUserScriptLoader loader(&profile, *extension,
                                    /*state_store=*/nullptr,
-                                   /*listen_for_extension_system_loaded=*/true,
                                    /*content_verifier=*/nullptr);
   user_scripts = loader.LoadScriptsForTest(std::move(user_scripts));
 
@@ -338,6 +335,10 @@ TEST_F(ExtensionUserScriptLoaderTest, LeaveBOMNotAtTheBeginning) {
       "Extensions.ContentScripts.DynamicContentScriptsLengthPerLoad", 0);
 }
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+// TODO(crbug.com/469417243): Port to desktop Android. By default, Android
+// doesn't come with any component extensions, including the PDF one expected
+// by this test.
 TEST_F(ExtensionUserScriptLoaderTest, ComponentExtensionContentScriptIsLoaded) {
   base::FilePath resources_dir;
   ASSERT_TRUE(base::PathService::Get(chrome::DIR_RESOURCES, &resources_dir));
@@ -358,7 +359,6 @@ TEST_F(ExtensionUserScriptLoaderTest, ComponentExtensionContentScriptIsLoaded) {
   scoped_refptr<const Extension> extension(ExtensionBuilder("Test").Build());
   ExtensionUserScriptLoader loader(&profile, *extension,
                                    /*state_store=*/nullptr,
-                                   /*listen_for_extension_system_loaded=*/true,
                                    /*content_verifier=*/nullptr);
   user_scripts = loader.LoadScriptsForTest(std::move(user_scripts));
 
@@ -372,6 +372,7 @@ TEST_F(ExtensionUserScriptLoaderTest, ComponentExtensionContentScriptIsLoaded) {
   histogram_tester.ExpectTotalCount(
       "Extensions.ContentScripts.DynamicContentScriptsLengthPerLoad", 1);
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 TEST_F(ExtensionUserScriptLoaderTest, RecordScriptLengthUmas) {
   base::FilePath a_script_path = temp_dir_.GetPath().AppendASCII("a.script.js");
@@ -409,7 +410,6 @@ TEST_F(ExtensionUserScriptLoaderTest, RecordScriptLengthUmas) {
   scoped_refptr<const Extension> extension(ExtensionBuilder("Test").Build());
   ExtensionUserScriptLoader loader(&profile, *extension,
                                    /*state_store=*/nullptr,
-                                   /*listen_for_extension_system_loaded=*/true,
                                    /*content_verifier=*/nullptr);
   user_scripts = loader.LoadScriptsForTest(std::move(user_scripts));
 

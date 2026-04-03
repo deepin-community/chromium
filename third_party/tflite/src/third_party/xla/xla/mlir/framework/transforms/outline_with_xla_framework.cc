@@ -14,22 +14,26 @@ limitations under the License.
 ==============================================================================*/
 
 #include <memory>
-#include <stdexcept>
 #include <utility>
 
-#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
-#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"  // from @llvm-project
-#include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
-#include "mlir/Dialect/LLVMIR/LLVMAttrs.h"  // from @llvm-project
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"  // from @llvm-project
-#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
-#include "mlir/IR/BuiltinDialect.h"  // from @llvm-project
-#include "mlir/IR/BuiltinOps.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/IR/TypeRange.h"  // from @llvm-project
-#include "mlir/Support/LLVM.h"  // from @llvm-project
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinDialect.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/TypeRange.h"
+#include "mlir/IR/Types.h"
+#include "mlir/IR/Value.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "xla/mlir/framework/ir/xla_framework.h"
 #include "xla/mlir/framework/transforms/passes.h"
 
@@ -79,7 +83,7 @@ struct OutlineXLAFunc : public RewritePattern {
     if (!func) return failure();
     if (func.getSymName() != "main") return failure();
     if (llvm::any_of(op->getOperandTypes(),
-                     [](Type t) { return !t.isa<MemRefType>(); }) ||
+                     [](Type t) { return !mlir::isa<MemRefType>(t); }) ||
         op->getNumResults() != 0)
       return failure();
     if (func->hasAttr("outlined")) return failure();
@@ -99,9 +103,9 @@ struct OutlineXLAFunc : public RewritePattern {
 
     // The wrapper function will have the same name but with _xla_framework
     // appended and will be annotated with the attribute "xla_entry".
-    auto outline_func = rewriter.create<func::FuncOp>(
-        loc, func.getSymName().str() + "_xla_framework", func_type, attrs,
-        arg_attrs);
+    auto outline_func = func::FuncOp::create(
+        rewriter, loc, func.getSymName().str() + "_xla_framework", func_type,
+        attrs, arg_attrs);
     outline_func->setAttr("outlined", BoolAttr::get(ctx, true));
     outline_func->setAttr("xla_entry", BoolAttr::get(ctx, true));
     auto *b = rewriter.createBlock(&outline_func.getBody(), {},
@@ -110,20 +114,20 @@ struct OutlineXLAFunc : public RewritePattern {
     // Unwrap arguments
     SmallVector<Value> args;
     for (const auto &t : llvm::enumerate(func.getFunctionType().getInputs())) {
-      args.push_back(rewriter.create<xla_framework::XLABufferToMemOp>(
-          loc, t.value(), b->getArgument(t.index())));
+      args.push_back(xla_framework::XLABufferToMemOp::create(
+          rewriter, loc, t.value(), b->getArgument(t.index())));
     }
 
-    auto call = rewriter.create<func::CallOp>(
-        loc, func.getSymName(), func.getFunctionType().getResults(), args);
+    auto call = func::CallOp::create(rewriter, loc, func.getSymName(),
+                                     func.getFunctionType().getResults(), args);
     // Wrap results
     SmallVector<Value> results;
     for (auto t : call.getResults()) {
-      results.push_back(rewriter.create<xla_framework::MemToXLABufferOp>(
-          loc, ::mlir::xla_framework::BufferType::get(ctx), t));
+      results.push_back(xla_framework::MemToXLABufferOp::create(
+          rewriter, loc, ::mlir::xla_framework::BufferType::get(ctx), t));
     }
 
-    rewriter.create<func::ReturnOp>(loc, results);
+    func::ReturnOp::create(rewriter, loc, results);
 
     // Finally, mark the called function as private to prevent users from
     // accidentally trying to use it.
@@ -160,7 +164,7 @@ class OutlineWithXLAFrameworkPass
     patterns.add<OutlineXLAFunc>(ctx);
     //  Set target.
 
-    if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns)))) {
+    if (failed(applyPatternsGreedily(m, std::move(patterns)))) {
       signalPassFailure();
     }
     m->walk([](func::FuncOp f) {

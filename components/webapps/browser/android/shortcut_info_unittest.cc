@@ -4,13 +4,14 @@
 
 #include "components/webapps/browser/android/shortcut_info.h"
 
-#include <optional>
 #include <string>
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
+#include "components/webapps/browser/android/webapp_icon.h"
 #include "components/webapps/browser/android/webapps_icon_utils.h"
 #include "components/webapps/browser/features.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
@@ -19,6 +20,7 @@
 namespace webapps {
 
 using blink::mojom::DisplayMode;
+using DisplayOverride = blink::Manifest::DisplayOverride;
 using Purpose = blink::mojom::ManifestImageResource_Purpose;
 
 blink::Manifest::ImageResource CreateImage(const std::string& url,
@@ -74,7 +76,6 @@ TEST_F(ShortcutInfoTest, CreateShortcutInfo) {
   metadata->application_url = GURL("https://example.com/path/application-url");
 
   manifest_.display = blink::mojom::DisplayMode::kFullscreen;
-  manifest_.has_theme_color = true;
   manifest_.theme_color = 0xffcc0000;
   manifest_.id = GURL("https://example.com/path/id");
 
@@ -114,19 +115,15 @@ TEST_F(ShortcutInfoTest, AllAttributesUpdate) {
   manifest_.display = blink::mojom::DisplayMode::kFullscreen;
 
   info_.theme_color = 0xffff0000;
-  manifest_.has_theme_color = true;
   manifest_.theme_color = 0xffcc0000;
 
   info_.background_color = 0xffaa0000;
-  manifest_.has_background_color = true;
   manifest_.background_color = 0xffbb0000;
 
   info_.dark_theme_color = 0x000000;
-  manifest_.has_dark_theme_color = true;
   manifest_.dark_theme_color = 0x7a7a7a;
 
   info_.dark_background_color = 0x000000;
-  manifest_.has_dark_background_color = true;
   manifest_.dark_background_color = 0x7a7a7a;
 
   info_.icon_urls.push_back("https://old.com/icon.png");
@@ -216,17 +213,18 @@ TEST_F(ShortcutInfoTest, GetAllWebApkIcons) {
   info_.best_primary_icon_url = best_primary_icon_url;
   info_.splash_image_url = splash_image_url;
 
-  std::vector<WebappIcon> result_icons = info_.GetWebApkIcons();
+  auto result_icons = info_.GetWebApkIcons();
   ASSERT_EQ(4u, result_icons.size());
 
   std::vector<GURL> result_urls;
-  for (auto icon : result_icons) {
-    result_urls.push_back(icon.url());
+  for (const auto& [url, icon] : result_icons) {
+    ASSERT_EQ(url, icon->url());
+    result_urls.push_back(icon->url());
   }
   std::vector<GURL> expected_urls{best_primary_icon_url, splash_image_url,
                                   best_shortcut_icon_url_1,
                                   best_shortcut_icon_url_2};
-  ASSERT_EQ(expected_urls, result_urls);
+  EXPECT_THAT(result_urls, testing::UnorderedElementsAreArray(expected_urls));
 }
 
 TEST_F(ShortcutInfoTest, NotContainEmptyOrDuplicateWebApkIcons) {
@@ -237,16 +235,17 @@ TEST_F(ShortcutInfoTest, NotContainEmptyOrDuplicateWebApkIcons) {
   info_.best_shortcut_icon_urls.push_back(best_primary_icon_url);
   info_.best_primary_icon_url = best_primary_icon_url;
 
-  std::vector<WebappIcon> result_icons = info_.GetWebApkIcons();
+  auto result_icons = info_.GetWebApkIcons();
   std::vector<GURL> result_urls;
-  for (auto icon : result_icons) {
-    result_urls.push_back(icon.url());
+  for (const auto& [url, icon] : result_icons) {
+    ASSERT_EQ(url, icon->url());
+    result_urls.push_back(icon->url());
   }
 
   std::vector<GURL> expected{best_primary_icon_url, best_shortcut_icon_url};
 
   ASSERT_EQ(2u, result_icons.size());
-  ASSERT_EQ(expected, result_urls);
+  EXPECT_THAT(result_urls, testing::UnorderedElementsAreArray(expected));
 }
 
 TEST_F(ShortcutInfoTest, NameFallsBackToShortName) {
@@ -291,26 +290,26 @@ TEST_F(ShortcutInfoTest, IgnoreEmptyNameAndShortName) {
 TEST_F(ShortcutInfoTest, ShortcutItemsPopulated) {
   manifest_.shortcuts.push_back(CreateShortcut(
       "shortcut_1",
-      {CreateImage("/i1_1", {16, 16}, Purpose::ANY),
-       CreateImage("/i1_2", {64, 64}, Purpose::ANY),
-       CreateImage("/i1_3", {192, 192}, Purpose::ANY),  // best icon.
-       CreateImage("/i1_4", {256, 256}, Purpose::ANY)}));
+      {CreateImage("/i1_1.ico", {16, 16}, Purpose::ANY),
+       CreateImage("/i1_2.ico", {64, 64}, Purpose::ANY),
+       CreateImage("/i1_3.ico", {192, 192}, Purpose::ANY),  // best icon.
+       CreateImage("/i1_4.ico", {256, 256}, Purpose::ANY)}));
 
   manifest_.shortcuts.push_back(CreateShortcut(
       "shortcut_2",
-      {CreateImage("/i2_1", {192, 194}, Purpose::ANY),  // not square.
-       CreateImage("/i2_2", {194, 194}, Purpose::ANY)}));
+      {CreateImage("/i2_1.ico", {192, 194}, Purpose::ANY),  // not square.
+       CreateImage("/i2_2.ico", {194, 194}, Purpose::ANY)}));
 
   // Nothing chosen.
   manifest_.shortcuts.push_back(CreateShortcut(
-      "shortcut_3", {CreateImage("/i3_1", {16, 16}, Purpose::ANY)}));
+      "shortcut_3", {CreateImage("/i3_1.ico", {16, 16}, Purpose::ANY)}));
 
   WebappsIconUtils::SetIdealShortcutSizeForTesting(192);
   info_.UpdateFromManifest(manifest_);
 
   ASSERT_EQ(info_.best_shortcut_icon_urls.size(), 3u);
-  EXPECT_EQ(info_.best_shortcut_icon_urls[0].path(), "/i1_3");
-  EXPECT_EQ(info_.best_shortcut_icon_urls[1].path(), "/i2_2");
+  EXPECT_EQ(info_.best_shortcut_icon_urls[0].GetPath(), "/i1_3.ico");
+  EXPECT_EQ(info_.best_shortcut_icon_urls[1].GetPath(), "/i2_2.ico");
   EXPECT_FALSE(info_.best_shortcut_icon_urls[2].is_valid());
 }
 
@@ -337,13 +336,8 @@ TEST_F(ShortcutInfoTest, FindMaskableSplashIcon) {
 
   info_.UpdateBestSplashIcon(manifest_);
 
-  if (WebappsIconUtils::DoesAndroidSupportMaskableIcons()) {
-    EXPECT_EQ(info_.splash_image_url.path(), "/icon_144.png");
-    EXPECT_TRUE(info_.is_splash_image_maskable);
-  } else {
-    EXPECT_EQ(info_.splash_image_url.path(), "/icon_96.png");
-    EXPECT_FALSE(info_.is_splash_image_maskable);
-  }
+  EXPECT_EQ(info_.splash_image_url.GetPath(), "/icon_144.png");
+  EXPECT_TRUE(info_.is_splash_image_maskable);
 }
 
 TEST_F(ShortcutInfoTest, SplashIconFallbackToAny) {
@@ -356,30 +350,33 @@ TEST_F(ShortcutInfoTest, SplashIconFallbackToAny) {
 
   info_.UpdateBestSplashIcon(manifest_);
 
-  EXPECT_EQ(info_.splash_image_url.path(), "/icon_144.png");
+  EXPECT_EQ(info_.splash_image_url.GetPath(), "/icon_144.png");
   EXPECT_FALSE(info_.is_splash_image_maskable);
 }
 
 TEST_F(ShortcutInfoTest, DisplayOverride) {
-  manifest_.display = blink::mojom::DisplayMode::kBrowser;
-  manifest_.display_override = {blink::mojom::DisplayMode::kMinimalUi};
+  manifest_.display = DisplayMode::kBrowser;
+  manifest_.display_override = {
+      DisplayOverride::Create(DisplayMode::kMinimalUi)};
   info_.UpdateFromManifest(manifest_);
-  EXPECT_EQ(info_.display, blink::mojom::DisplayMode::kMinimalUi);
+  EXPECT_EQ(info_.display, DisplayMode::kMinimalUi);
 
-  manifest_.display = blink::mojom::DisplayMode::kFullscreen;
-  manifest_.display_override = {blink::mojom::DisplayMode::kBrowser};
+  manifest_.display = DisplayMode::kFullscreen;
+  manifest_.display_override = {DisplayOverride::Create(DisplayMode::kBrowser)};
   info_.UpdateFromManifest(manifest_);
-  EXPECT_EQ(info_.display, blink::mojom::DisplayMode::kBrowser);
+  EXPECT_EQ(info_.display, DisplayMode::kBrowser);
 
-  manifest_.display = blink::mojom::DisplayMode::kStandalone;
-  manifest_.display_override = {blink::mojom::DisplayMode::kFullscreen};
+  manifest_.display = DisplayMode::kStandalone;
+  manifest_.display_override = {
+      DisplayOverride::Create(DisplayMode::kFullscreen)};
   info_.UpdateFromManifest(manifest_);
-  EXPECT_EQ(info_.display, blink::mojom::DisplayMode::kFullscreen);
+  EXPECT_EQ(info_.display, DisplayMode::kFullscreen);
 
-  manifest_.display = blink::mojom::DisplayMode::kMinimalUi;
-  manifest_.display_override = {blink::mojom::DisplayMode::kStandalone};
+  manifest_.display = DisplayMode::kMinimalUi;
+  manifest_.display_override = {
+      DisplayOverride::Create(DisplayMode::kStandalone)};
   info_.UpdateFromManifest(manifest_);
-  EXPECT_EQ(info_.display, blink::mojom::DisplayMode::kStandalone);
+  EXPECT_EQ(info_.display, DisplayMode::kStandalone);
 }
 
 TEST_F(ShortcutInfoTest, ManifestIdGenerated) {
@@ -392,9 +389,6 @@ TEST_F(ShortcutInfoTest, ManifestIdGenerated) {
 }
 
 TEST_F(ShortcutInfoTest, UpdateDisplayModeWebApk) {
-  scoped_feature_list_.InitAndEnableFeature(
-      features::kUniversalInstallManifest);
-
   std::vector<DisplayMode> display_modes = {
       DisplayMode::kUndefined, DisplayMode::kBrowser, DisplayMode::kMinimalUi,
       DisplayMode::kStandalone, DisplayMode::kFullscreen};
@@ -416,9 +410,6 @@ TEST_F(ShortcutInfoTest, UpdateDisplayModeWebApk) {
 }
 
 TEST_F(ShortcutInfoTest, UpdateDisplayModeNotWebApk) {
-  scoped_feature_list_.InitAndEnableFeature(
-      features::kUniversalInstallManifest);
-
   std::vector<DisplayMode> display_modes = {
       DisplayMode::kUndefined, DisplayMode::kBrowser, DisplayMode::kMinimalUi,
       DisplayMode::kStandalone, DisplayMode::kFullscreen};

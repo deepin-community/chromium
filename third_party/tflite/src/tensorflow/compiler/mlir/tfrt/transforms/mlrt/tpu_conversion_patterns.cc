@@ -19,6 +19,7 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tfrt/ir/mlrt/tf_mlrt_ops.h"
 #include "tensorflow/compiler/mlir/tfrt/ir/mlrt/tf_mlrt_tpu_ops.h"
 #include "tensorflow/compiler/mlir/tfrt/transforms/mlrt/execute_op_registry.h"
+#include "tensorflow/compiler/mlir/tfrt/transforms/mlrt/mlrt_device_constants.h"
 #include "tensorflow/compiler/mlir/tfrt/transforms/utils.h"
 
 namespace tensorflow {
@@ -91,14 +92,13 @@ class TPUCompileMlirAndExecuteOpPreParallelizationConversion
       }
     }
 
-    auto compile_and_execute_op =
-        rewriter.create<tf_mlrt::TFTPUCompileAndExecuteOp>(
-            op.getLoc(), op.getResultTypes(), operands,
-            rewriter.getDenseI32ArrayAttr(constant_operand_indices),
-            op.getMetadataAttr(), op.getMlirModuleAttr(),
-            rewriter.getUI32IntegerAttr(tensor_operands_size),
-            rewriter.getDenseI32ArrayAttr(operands_with_static_shapes),
-            producer_name);
+    auto compile_and_execute_op = tf_mlrt::TFTPUCompileAndExecuteOp::create(
+        rewriter, op.getLoc(), op.getResultTypes(), operands,
+        rewriter.getDenseI32ArrayAttr(constant_operand_indices),
+        op.getMetadataAttr(), op.getMlirModuleAttr(),
+        rewriter.getUI32IntegerAttr(tensor_operands_size),
+        rewriter.getDenseI32ArrayAttr(operands_with_static_shapes),
+        producer_name);
 
     rewriter.replaceOp(op, compile_and_execute_op->getResults());
 
@@ -127,11 +127,11 @@ class TPUCompileMlirAndExecuteOpConversion
     result_types.append(op.getResults().size(),
                         rewriter.getType<mlrt::compiler::FutureType>());
 
-    auto compile_and_execute_op =
-        rewriter.create<tf_mlrt_tpu::CompileAndExecuteOp>(
-            op.getLoc(), result_types, operands, op.getConstantOperandIndices(),
-            op.getMetadataAttr(), op.getMlirModuleAttr(), op.getNumOperands(),
-            op.getOperandsWithStaticShape(), op.getProducerName());
+    auto compile_and_execute_op = tf_mlrt_tpu::CompileAndExecuteOp::create(
+        rewriter, op.getLoc(), result_types, operands,
+        op.getConstantOperandIndices(), op.getMetadataAttr(),
+        op.getMlirModuleAttr(), op.getNumOperands(),
+        op.getOperandsWithStaticShape(), op.getProducerName());
 
     rewriter.replaceOp(op, compile_and_execute_op->getResults());
 

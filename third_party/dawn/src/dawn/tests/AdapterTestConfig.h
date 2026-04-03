@@ -29,13 +29,12 @@
 #define SRC_DAWN_TESTS_ADAPTERTESTCONFIG_H_
 
 #include <stdint.h>
+#include <webgpu/webgpu_cpp.h>
 
 #include <initializer_list>
 #include <ostream>
 #include <string>
 #include <vector>
-
-#include "dawn/webgpu_cpp.h"
 
 struct BackendTestConfig {
     BackendTestConfig(wgpu::BackendType backendType,
@@ -49,7 +48,12 @@ struct BackendTestConfig {
 };
 
 struct TestAdapterProperties {
-    TestAdapterProperties(const wgpu::AdapterProperties& properties, bool selected);
+    // The innerBackendType is only used for WebGPU backend.
+    TestAdapterProperties(const wgpu::AdapterInfo& info,
+                          bool selected,
+                          bool compatibilityMode,
+                          wgpu::BackendType innerBackendType = wgpu::BackendType::Undefined);
+
     uint32_t vendorID;
     std::string vendorName;
     std::string architecture;
@@ -58,6 +62,9 @@ struct TestAdapterProperties {
     std::string driverDescription;
     wgpu::AdapterType adapterType;
     wgpu::BackendType backendType;
+    // The inner backend type for WebGPU backend. when backendType is not wgpu::BackendType::WebGPU,
+    // innerBackendType is wgpu::BackendType::Undefined.
+    wgpu::BackendType innerBackendType;
     bool compatibilityMode;
     bool selected;
 
@@ -87,6 +94,9 @@ BackendTestConfig MetalBackend(std::initializer_list<const char*> forceEnabledWo
 
 BackendTestConfig NullBackend(std::initializer_list<const char*> forceEnabledWorkarounds = {},
                               std::initializer_list<const char*> forceDisabledWorkarounds = {});
+
+BackendTestConfig WebGPUBackend(std::initializer_list<const char*> forceEnabledWorkarounds = {},
+                                std::initializer_list<const char*> forceDisabledWorkarounds = {});
 
 BackendTestConfig OpenGLBackend(std::initializer_list<const char*> forceEnabledWorkarounds = {},
                                 std::initializer_list<const char*> forceDisabledWorkarounds = {});

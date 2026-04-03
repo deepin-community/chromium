@@ -20,6 +20,7 @@
 #include "absl/types/span.h"
 #include "quiche/quic/core/crypto/tls_connection.h"
 #include "quiche/quic/core/frames/quic_ack_frequency_frame.h"
+#include "quiche/quic/core/frames/quic_reset_stream_at_frame.h"
 #include "quiche/quic/core/frames/quic_stop_sending_frame.h"
 #include "quiche/quic/core/frames/quic_window_update_frame.h"
 #include "quiche/quic/core/handshaker_delegate_interface.h"
@@ -45,9 +46,9 @@
 #include "quiche/quic/platform/api/quic_export.h"
 #include "quiche/quic/platform/api/quic_flags.h"
 #include "quiche/quic/platform/api/quic_socket_address.h"
-#include "quiche/common/platform/api/quiche_mem_slice.h"
 #include "quiche/common/quiche_callbacks.h"
 #include "quiche/common/quiche_linked_hash_map.h"
+#include "quiche/common/quiche_mem_slice.h"
 
 namespace quic {
 
@@ -106,6 +107,162 @@ class QUICHE_EXPORT QuicSession
 
     virtual void OnServerPreferredAddressAvailable(
         const QuicSocketAddress& /*server_preferred_address*/) = 0;
+
+    // Called when connection detected path degrading.
+    virtual void OnPathDegrading() = 0;
+
+    // Called when the config has been negotiated.
+    virtual void OnConfigNegotiated(const QuicConfig& config) = 0;
+  };
+
+  // Wrapper around a `QuicConfig` which provides access to the underlying
+  // config.
+  class QUICHE_EXPORT SavedConfig {
+   public:
+    // Creates a new `SavedConfig` which stores a copy of `config`.
+    explicit SavedConfig(const QuicConfig& config)
+        : config_(std::make_unique<QuicConfig>(config)) {}
+
+    // Returns the underlying `QuicConfig`. Must not be called after the config
+    // is deleted.
+    QuicConfig* RawConfig() {
+      QUIC_BUG_IF(no_config, config_deleted_);
+      QUIC_BUG_IF(no_config, delete_config_ && config_ == nullptr);
+      return config_.get();
+    }
+
+    void DeleteConfig(ParsedQuicVersion version);
+
+    bool HasReceivedInitialStreamFlowControlWindowBytes() const {
+      if (delete_config_ && config_ == nullptr) {
+        return has_received_initial_stream_flow_control_window_bytes_;
+      }
+      return config_->HasReceivedInitialStreamFlowControlWindowBytes();
+    }
+
+    bool HasReceivedInitialMaxStreamDataBytesUnidirectional() const {
+      if (delete_config_ && config_ == nullptr) {
+        return has_received_initial_max_stream_data_bytes_unidirectional_;
+      }
+      return config_->HasReceivedInitialMaxStreamDataBytesUnidirectional();
+    }
+
+    bool HasReceivedInitialMaxStreamDataBytesOutgoingBidirectional() const {
+      if (delete_config_ && config_ == nullptr) {
+        return has_received_initial_max_stream_data_bytes_outgoing_bidirectional_;  // NOLINT
+      }
+      return config_
+          ->HasReceivedInitialMaxStreamDataBytesOutgoingBidirectional();
+    }
+
+    bool HasReceivedInitialMaxStreamDataBytesIncomingBidirectional() const {
+      if (delete_config_ && config_ == nullptr) {
+        return has_received_initial_max_stream_data_bytes_incoming_bidirectional_;  // NOLINT
+      }
+      return config_
+          ->HasReceivedInitialMaxStreamDataBytesIncomingBidirectional();
+    }
+
+    bool HasReceivedMaxBidirectionalStreams() const {
+      if (delete_config_ && config_ == nullptr) {
+        return has_received_max_bidirectional_streams_;
+      }
+      return config_->HasReceivedMaxBidirectionalStreams();
+    }
+
+    uint64_t ReceivedInitialStreamFlowControlWindowBytes() const {
+      if (delete_config_ && config_ == nullptr) {
+        return received_initial_stream_flow_control_window_bytes_;
+      }
+      return config_->ReceivedInitialStreamFlowControlWindowBytes();
+    }
+
+    uint64_t ReceivedInitialMaxStreamDataBytesUnidirectional() const {
+      if (delete_config_ && config_ == nullptr) {
+        return received_initial_max_stream_data_bytes_unidirectional_;
+      }
+      return config_->ReceivedInitialMaxStreamDataBytesUnidirectional();
+    }
+
+    uint64_t ReceivedInitialMaxStreamDataBytesOutgoingBidirectional() const {
+      if (delete_config_ && config_ == nullptr) {
+        return received_initial_max_stream_data_bytes_outgoing_bidirectional_;
+      }
+      return config_->ReceivedInitialMaxStreamDataBytesOutgoingBidirectional();
+    }
+
+    uint64_t ReceivedInitialMaxStreamDataBytesIncomingBidirectional() const {
+      if (delete_config_ && config_ == nullptr) {
+        return received_initial_max_stream_data_bytes_incoming_bidirectional_;
+      }
+      return config_->ReceivedInitialMaxStreamDataBytesIncomingBidirectional();
+    }
+
+    uint64_t GetInitialStreamFlowControlWindowToSend() const {
+      if (delete_config_ && config_ == nullptr) {
+        return get_initial_stream_flow_control_window_to_send_;
+      }
+      return config_->GetInitialStreamFlowControlWindowToSend();
+    }
+
+    uint64_t GetInitialMaxStreamDataBytesUnidirectionalToSend() const {
+      if (delete_config_ && config_ == nullptr) {
+        return get_initial_max_stream_data_bytes_unidirectional_to_send_;
+      }
+      return config_->GetInitialMaxStreamDataBytesUnidirectionalToSend();
+    }
+
+    uint64_t GetInitialMaxStreamDataBytesOutgoingBidirectionalToSend() const {
+      if (delete_config_ && config_ == nullptr) {
+        return get_initial_max_stream_data_bytes_outgoing_bidirectional_to_send_;  // NOLINT
+      }
+      return config_->GetInitialMaxStreamDataBytesOutgoingBidirectionalToSend();
+    }
+
+    uint64_t GetInitialMaxStreamDataBytesIncomingBidirectionalToSend() const {
+      if (delete_config_ && config_ == nullptr) {
+        return get_initial_max_stream_data_bytes_incoming_bidirectional_to_send_;  // NOLINT
+      }
+      return config_->GetInitialMaxStreamDataBytesIncomingBidirectionalToSend();
+    }
+
+    uint64_t ReceivedMaxBidirectionalStreams() const {
+      if (delete_config_ && config_ == nullptr) {
+        return received_max_bidirectional_streams_;
+      }
+      return config_->ReceivedMaxBidirectionalStreams();
+    }
+
+    QuicTime::Delta IdleNetworkTimeout() const {
+      if (delete_config_ && config_ == nullptr) {
+        return idle_network_timeout_;
+      }
+      return config_->IdleNetworkTimeout();
+    }
+
+   private:
+    std::unique_ptr<QuicConfig> config_;
+    // TODO(b/461482627): Delete this when retiring the flag.
+    bool config_deleted_ = false;
+    const bool delete_config_ = GetQuicReloadableFlag(quic_delete_config);
+
+    bool has_received_initial_stream_flow_control_window_bytes_ = false;
+    bool has_received_initial_max_stream_data_bytes_unidirectional_ = false;
+    bool has_received_initial_max_stream_data_bytes_outgoing_bidirectional_ =
+        false;
+    bool has_received_initial_max_stream_data_bytes_incoming_bidirectional_ =
+        false;
+    bool has_received_max_bidirectional_streams_ = false;
+    uint64_t received_initial_stream_flow_control_window_bytes_;
+    uint64_t received_initial_max_stream_data_bytes_unidirectional_;
+    uint64_t received_initial_max_stream_data_bytes_outgoing_bidirectional_;
+    uint64_t received_initial_max_stream_data_bytes_incoming_bidirectional_;
+    uint64_t get_initial_stream_flow_control_window_to_send_;
+    uint64_t get_initial_max_stream_data_bytes_unidirectional_to_send_;
+    uint64_t get_initial_max_stream_data_bytes_outgoing_bidirectional_to_send_;
+    uint64_t get_initial_max_stream_data_bytes_incoming_bidirectional_to_send_;
+    uint64_t received_max_bidirectional_streams_;
+    QuicTime::Delta idle_network_timeout_ = QuicTime::Delta::Zero();
   };
 
   // Does not take ownership of |connection| or |visitor|.
@@ -117,7 +274,8 @@ class QUICHE_EXPORT QuicSession
               const QuicConfig& config,
               const ParsedQuicVersionVector& supported_versions,
               QuicStreamCount num_expected_unidirectional_static_streams,
-              std::unique_ptr<QuicDatagramQueue::Observer> datagram_observer);
+              std::unique_ptr<QuicDatagramQueue::Observer> datagram_observer,
+              QuicPriorityType priority_type = QuicPriorityType::kHttp);
   QuicSession(const QuicSession&) = delete;
   QuicSession& operator=(const QuicSession&) = delete;
 
@@ -132,8 +290,9 @@ class QUICHE_EXPORT QuicSession
   void OnStreamFrame(const QuicStreamFrame& frame) override;
   void OnCryptoFrame(const QuicCryptoFrame& frame) override;
   void OnRstStream(const QuicRstStreamFrame& frame) override;
+  void OnResetStreamAt(const QuicResetStreamAtFrame& frame) override;
   void OnGoAway(const QuicGoAwayFrame& frame) override;
-  void OnMessageReceived(absl::string_view message) override;
+  void OnDatagramReceived(absl::string_view datagram) override;
   void OnHandshakeDoneReceived() override;
   void OnNewTokenReceived(absl::string_view token) override;
   void OnWindowUpdateFrame(const QuicWindowUpdateFrame& frame) override;
@@ -143,9 +302,6 @@ class QUICHE_EXPORT QuicSession
   void OnWriteBlocked() override;
   void OnSuccessfulVersionNegotiation(
       const ParsedQuicVersion& version) override;
-  void OnPacketReceived(const QuicSocketAddress& self_address,
-                        const QuicSocketAddress& peer_address,
-                        bool is_connectivity_probe) override;
   void OnCanWrite() override;
   void OnCongestionWindowChange(QuicTime /*now*/) override {}
   void OnConnectionMigration(AddressChangeType /*type*/) override {}
@@ -167,6 +323,7 @@ class QUICHE_EXPORT QuicSession
   std::string GetStreamsInfoForLogging() const override;
   void OnPathDegrading() override;
   void OnForwardProgressMadeAfterPathDegrading() override;
+  void OnForwardProgressMadeAfterFlowLabelChange() override;
   bool AllowSelfAddressChange() const override;
   HandshakeState GetHandshakeState() const override;
   bool OnMaxStreamsFrame(const QuicMaxStreamsFrame& frame) override;
@@ -191,6 +348,7 @@ class QUICHE_EXPORT QuicSession
       const QuicSocketAddress& /*server_preferred_address*/) override;
   void MaybeBundleOpportunistically() override {}
   QuicByteCount GetFlowControlSendWindowSize(QuicStreamId id) override;
+  bool MaybeMitigateWriteError(const WriteResult& write_result) override;
 
   // QuicStreamFrameDataProducer
   WriteStreamDataResult WriteStreamData(QuicStreamId id,
@@ -203,7 +361,8 @@ class QUICHE_EXPORT QuicSession
 
   // SessionNotifierInterface methods:
   bool OnFrameAcked(const QuicFrame& frame, QuicTime::Delta ack_delay_time,
-                    QuicTime receive_timestamp) override;
+                    QuicTime receive_timestamp,
+                    bool is_retransmission) override;
   void OnStreamFrameRetransmitted(const QuicStreamFrame& frame) override;
   void OnFrameLost(const QuicFrame& frame) override;
   bool RetransmitFrames(const QuicFrames& frames,
@@ -226,47 +385,48 @@ class QUICHE_EXPORT QuicSession
                                 const QuicSocketAddress& peer_address,
                                 const QuicReceivedPacket& packet);
 
-  // Sends |message| as a QUIC DATAGRAM frame (QUIC MESSAGE frame in gQUIC).
+  // Sends |datagram| as a QUIC DATAGRAM frame.
   // See <https://datatracker.ietf.org/doc/html/draft-ietf-quic-datagram> for
   // more details.
   //
-  // Returns a MessageResult struct which includes the status of the write
-  // operation and a message ID.  The message ID (not sent on the wire) can be
-  // used to track the message; OnMessageAcked and OnMessageLost are called when
-  // a specific message gets acked or lost.
+  // Returns a DatagramResult struct which includes the status of the write
+  // operation and a datagram ID.  The datagram ID (not sent on the wire) can be
+  // used to track the datagram; OnDatagramAcked and OnDatagramLost are called
+  // when a specific datagram gets acked or lost.
   //
-  // If the write operation is successful, all of the slices in |message| are
-  // consumed, leaving them empty.  If MESSAGE_STATUS_INTERNAL_ERROR is
+  // If the write operation is successful, all of the slices in |datagram| are
+  // consumed, leaving them empty.  If DATAGRAM_STATUS_INTERNAL_ERROR is
   // returned, the slices in question may or may not be consumed; it is no
-  // longer safe to access those.  For all other status codes, |message| is kept
-  // intact.
+  // longer safe to access those.  For all other status codes, |datagram| is
+  // kept intact.
   //
-  // Note that SendMessage will fail with status = MESSAGE_STATUS_BLOCKED
+  // Note that SendDatagram will fail with status = DATAGRAM_STATUS_BLOCKED
   // if the connection is congestion control blocked or the underlying socket is
-  // write blocked. In this case the caller can retry sending message again when
-  // connection becomes available, for example after getting OnCanWrite()
+  // write blocked. In this case the caller can retry sending datagram again
+  // when connection becomes available, for example after getting OnCanWrite()
   // callback.
   //
-  // SendMessage flushes the current packet even it is not full; if the
+  // SendDatagram flushes the current packet even it is not full; if the
   // application needs to bundle other data in the same packet, consider using
   // QuicConnection::ScopedPacketFlusher around the relevant write operations.
-  MessageResult SendMessage(absl::Span<quiche::QuicheMemSlice> message);
+  DatagramResult SendDatagram(absl::Span<quiche::QuicheMemSlice> datagram);
 
-  // Same as above SendMessage, except caller can specify if the given |message|
-  // should be flushed even if the underlying connection is deemed unwritable.
-  MessageResult SendMessage(absl::Span<quiche::QuicheMemSlice> message,
-                            bool flush);
+  // Same as above SendDatagram, except caller can specify if the given
+  // |datagram| should be flushed even if the underlying connection is deemed
+  // unwritable.
+  DatagramResult SendDatagram(absl::Span<quiche::QuicheMemSlice> datagram,
+                              bool flush);
 
-  // Single-slice version of SendMessage().  Unlike the version above, this
+  // Single-slice version of SendDatagram().  Unlike the version above, this
   // version always takes ownership of the slice.
-  MessageResult SendMessage(quiche::QuicheMemSlice message);
+  DatagramResult SendDatagram(quiche::QuicheMemSlice datagram);
 
-  // Called when message with |message_id| gets acked.
-  virtual void OnMessageAcked(QuicMessageId message_id,
-                              QuicTime receive_timestamp);
+  // Called when datagram with |datagram_id| gets acked.
+  virtual void OnDatagramAcked(QuicDatagramId datagram_id,
+                               QuicTime receive_timestamp);
 
-  // Called when message with |message_id| is considered as lost.
-  virtual void OnMessageLost(QuicMessageId message_id);
+  // Called when datagram with |datagram_id| is considered as lost.
+  virtual void OnDatagramLost(QuicDatagramId datagram_id);
 
   // QuicControlFrameManager::DelegateInterface
   // Close the connection on error.
@@ -374,9 +534,10 @@ class QUICHE_EXPORT QuicSession
       const CryptoHandshakeMessage& message);
 
   // Returns mutable config for this session. Returned config is owned
-  // by QuicSession.
-  QuicConfig* config() { return &config_; }
-  const QuicConfig* config() const { return &config_; }
+  // by QuicSession. Must not be called after the handshake completes.
+  QuicConfig* config() { return saved_config_.RawConfig(); }
+
+  const SavedConfig& GetSavedConfig() const { return saved_config_; }
 
   // Returns true if the stream existed previously and has been closed.
   // Returns false if the stream is still active or if the stream has
@@ -403,7 +564,9 @@ class QUICHE_EXPORT QuicSession
   // connection-level flow control but not by its own stream-level flow control.
   // The stream will be given a chance to write when a connection-level
   // WINDOW_UPDATE arrives.
-  virtual void MarkConnectionLevelWriteBlocked(QuicStreamId id);
+  // TODO(b/235204908) Remove the return value.
+  // Returns false if an error occurred.
+  bool MarkConnectionLevelWriteBlocked(QuicStreamId id);
 
   // Called to close zombie stream |id|.
   void MaybeCloseZombieStream(QuicStreamId id);
@@ -487,15 +650,15 @@ class QUICHE_EXPORT QuicSession
                    const QuicSocketAddress& peer_address,
                    QuicPacketWriter* writer, bool owns_writer);
 
-  // Returns the largest payload that will fit into a single MESSAGE frame.
+  // Returns the largest payload that will fit into a single DATAGRAM frame.
   // Because overhead can vary during a connection, this method should be
-  // checked for every message.
-  QuicPacketLength GetCurrentLargestMessagePayload() const;
+  // checked for every datagram.
+  QuicPacketLength GetCurrentLargestDatagramPayload() const;
 
-  // Returns the largest payload that will fit into a single MESSAGE frame at
+  // Returns the largest payload that will fit into a single DATAGRAM frame at
   // any point during the connection.  This assumes the version and
   // connection ID lengths do not change.
-  QuicPacketLength GetGuaranteedLargestMessagePayload() const;
+  QuicPacketLength GetGuaranteedLargestDatagramPayload() const;
 
   bool transport_goaway_sent() const { return transport_goaway_sent_; }
 
@@ -503,6 +666,9 @@ class QUICHE_EXPORT QuicSession
 
   // Returns the Google QUIC error code
   QuicErrorCode error() const { return on_closed_frame_.quic_error_code; }
+  // The error code on the wire.  For Google QUIC frames, this has the same
+  // value as `error()`.
+  uint64_t wire_error() const { return on_closed_frame_.wire_error_code; }
   const std::string& error_details() const {
     return on_closed_frame_.error_details;
   }
@@ -608,6 +774,12 @@ class QUICHE_EXPORT QuicSession
   virtual void MaybeSendRstStreamFrame(QuicStreamId id,
                                        QuicResetStreamError error,
                                        QuicStreamOffset bytes_written);
+  // Does actual work of sending RESET_STREAM_AT, if the stream type allows.
+  // Also informs the connection so that pending stream frames can be flushed.
+  virtual void MaybeSendResetStreamAtFrame(QuicStreamId id,
+                                           QuicResetStreamError error,
+                                           QuicStreamOffset bytes_written,
+                                           QuicStreamOffset reliable_size);
 
   // Sends a STOP_SENDING frame if the stream type allows.
   virtual void MaybeSendStopSendingFrame(QuicStreamId id,
@@ -681,7 +853,15 @@ class QUICHE_EXPORT QuicSession
   void OnStreamCountReset();
 
   // Returns the priority type used by the streams in the session.
-  QuicPriorityType priority_type() const { return QuicPriorityType::kHttp; }
+  QuicPriorityType priority_type() const { return priority_type_; }
+
+  bool enable_stop_sending_for_zombie_streams() const {
+    return enable_stop_sending_for_zombie_streams_;
+  }
+
+  bool notify_stream_soon_to_destroy() const {
+    return notify_stream_soon_to_destroy_;
+  }
 
  protected:
   using StreamMap =
@@ -704,6 +884,8 @@ class QUICHE_EXPORT QuicSession
   // Returns nullptr and does error handling if the stream can not be created.
   virtual QuicStream* CreateIncomingStream(QuicStreamId id) = 0;
   virtual QuicStream* CreateIncomingStream(PendingStream* pending) = 0;
+  // Return true if the specified stream should be refused.
+  virtual bool ShouldRefuseIncomingStream(QuicStreamId) { return false; }
 
   // Return the reserved crypto stream.
   virtual QuicCryptoStream* GetMutableCryptoStream() = 0;
@@ -851,7 +1033,7 @@ class QUICHE_EXPORT QuicSession
   }
 
   UberQuicStreamIdManager& ietf_streamid_manager() {
-    QUICHE_DCHECK(VersionHasIetfQuicFrames(transport_version()));
+    QUICHE_DCHECK(VersionIsIetfQuic(transport_version()));
     return ietf_streamid_manager_;
   }
 
@@ -876,6 +1058,8 @@ class QUICHE_EXPORT QuicSession
       QuicStreamCount max_streams_accepted_per_loop) {
     max_streams_accepted_per_loop_ = max_streams_accepted_per_loop;
   }
+
+  bool enforce_immediate_goaway() const { return enforce_immediate_goaway_; }
 
  private:
   friend class test::QuicSessionPeer;
@@ -946,6 +1130,7 @@ class QUICHE_EXPORT QuicSession
   // Creates or gets pending strea, feed it with |frame|, and closes the pending
   // stream.
   void PendingStreamOnRstStream(const QuicRstStreamFrame& frame);
+  void PendingStreamOnResetStreamAt(const QuicResetStreamAtFrame& frame);
 
   // Creates or gets pending stream, feeds it with |frame|, and records the
   // max_data in the pending stream.
@@ -962,10 +1147,18 @@ class QUICHE_EXPORT QuicSession
 
   bool ExceedsPerLoopStreamLimit() const;
 
-  // Keep track of highest received byte offset of locally closed streams, while
-  // waiting for a definitive final highest offset from the peer.
-  absl::flat_hash_map<QuicStreamId, QuicStreamOffset>
-      locally_closed_streams_highest_offset_;
+  // Moves the stream pointed by |it| from stream_map_ to closed_streams_.
+  void PrepareStreamForDestruction(StreamMap::iterator it);
+
+  // Called by applications to perform |action| on streams that have received
+  // and sent FIN, but still waiting for ACK. Stream iteration will be stopped
+  // if action returns false.
+  void PerformActionOnNonStaticStreams(
+      quiche::UnretainedCallback<bool(QuicStream*)> action);
+
+  // A counter for streams which have sent and received FIN but waiting for
+  // application to consume data.
+  size_t num_draining_streams_;
 
   QuicConnection* connection_;
 
@@ -973,24 +1166,122 @@ class QUICHE_EXPORT QuicSession
   // during our destructor when connection_ may have already been destroyed.
   Perspective perspective_;
 
-  // May be null.
-  Visitor* visitor_;
-
   // A list of streams which need to write more data.  Stream register
   // themselves in their constructor, and unregisterm themselves in their
-  // destructors, so the write blocked list must outlive all streams.
-  std::unique_ptr<QuicWriteBlockedList> write_blocked_streams_;
-
-  ClosedStreams closed_streams_;
-
-  QuicConfig config_;
+  // destructors, so the write blocked list must outlive all streams. Don't
+  // reorder write_blocked_streams_ after stream_map_ for the correct
+  // destruction order.
+  std::unique_ptr<QuicWriteBlockedListInterface> write_blocked_streams_;
 
   // Map from StreamId to pointers to streams. Owns the streams.
   StreamMap stream_map_;
 
+  // A counter for streams which have done reading and writing, but are waiting
+  // for acks.
+  size_t num_zombie_streams_;
+
+  // A counter for static streams which are in stream_map_.
+  size_t num_static_streams_;
+
+  // TODO(fayang): switch to linked_hash_set when chromium supports it. The bool
+  // is not used here.
+  // List of streams with pending retransmissions.
+  quiche::QuicheLinkedHashMap<QuicStreamId, bool>
+      streams_with_pending_retransmission_;
+
+  // Used for connection-level flow control.
+  QuicFlowController flow_controller_;
+
+  QuicControlFrameManager control_frame_manager_;
+
+  // The buffer used to queue the DATAGRAM frames.
+  QuicDatagramQueue datagram_queue_;
+
+  // Initialized to false. Set to true when the session has been properly
+  // configured and is ready for general operation.
+  bool is_configured_;
+
+  // Whether the session has received a 0-RTT rejection (QUIC+TLS only).
+  bool was_zero_rtt_rejected_;
+
+  QuicPriorityType priority_type_;
+
+  const bool enable_stop_sending_for_zombie_streams_ =
+      GetQuicReloadableFlag(quic_deliver_stop_sending_to_zombie_streams);
+
+  // Whether a transport layer GOAWAY frame has been sent.
+  // Such a frame only exists in Google QUIC, therefore |transport_goaway_sent_|
+  // is always false when using IETF QUIC.
+  bool transport_goaway_sent_;
+  const bool notify_stream_soon_to_destroy_ =
+      GetQuicReloadableFlag(quic_notify_stream_soon_to_destroy);
+
+  const bool enforce_immediate_goaway_ =
+      GetQuicReloadableFlag(quic_enforce_immediate_goaway);
+
+  // Whether a transport layer GOAWAY frame has been received.
+  // Such a frame only exists in Google QUIC, therefore
+  // |transport_goaway_received_| is always false when using IETF QUIC.
+  bool transport_goaway_received_;
+
+  // This indicates a liveness testing is in progress, and push back the
+  // creation of new outgoing bidirectional streams.
+  bool liveness_testing_in_progress_;
+
+  // Default to max stream count so that there is no stream creation limit per
+  // event loop.
+  QuicStreamCount max_streams_accepted_per_loop_ = kMaxQuicStreamCount;
+
+  // The counter for newly created non-static incoming streams in the current
+  // event loop and gets reset for each event loop.
+  QuicStreamCount new_incoming_streams_in_current_loop_ = 0u;
+
+  // Id of latest successfully sent datagram.
+  QuicDatagramId last_datagram_id_;
+
+  // The stream id which was last popped in OnCanWrite, or 0, if not under the
+  // call stack of OnCanWrite.
+  QuicStreamId currently_writing_stream_id_;
+
+  // A counter for self initiated streams which have sent and received FIN but
+  // waiting for application to consume data.
+  size_t num_outgoing_draining_streams_;
+
+  std::optional<ConnectionCloseSource> connection_close_source_;
+
+  // Clean up closed_streams_ when this alarm fires.
+  std::unique_ptr<QuicAlarm> closed_streams_clean_up_alarm_;
+
+  // May be null.
+  Visitor* visitor_;
+
+  // Total number of datagram frames declared lost within the session.
+  uint64_t total_datagrams_lost_ = 0;
+
+  std::unique_ptr<QuicAlarm> stream_count_reset_alarm_;
+
+  // Only non-empty on the client after receiving a version negotiation packet,
+  // contains the configured versions from the original session before version
+  // negotiation was received.
+  ParsedQuicVersionVector client_original_supported_versions_;
+
+  ClosedStreams closed_streams_;
+
+  // Supported version list used by the crypto handshake only. Please note, this
+  // list may be a superset of the connection framer's supported versions.
+  ParsedQuicVersionVector supported_versions_;
+
+  std::optional<std::string> user_agent_id_;
+
+  // Keep track of highest received byte offset of locally closed streams, while
+  // waiting for a definitive final highest offset from the peer.
+  absl::flat_hash_map<QuicStreamId, QuicStreamOffset>
+      locally_closed_streams_highest_offset_;
   // Map from StreamId to PendingStreams for peer-created unidirectional streams
   // which are waiting for the first byte of payload to arrive.
   PendingStreamMap pending_stream_map_;
+  // Received information for a connection close.
+  QuicConnectionCloseFrame on_closed_frame_;
 
   // TODO(fayang): Consider moving LegacyQuicStreamIdManager into
   // UberQuicStreamIdManager.
@@ -1000,91 +1291,7 @@ class QUICHE_EXPORT QuicSession
   // Manages stream IDs for version99/IETF QUIC
   UberQuicStreamIdManager ietf_streamid_manager_;
 
-  // A counter for streams which have sent and received FIN but waiting for
-  // application to consume data.
-  size_t num_draining_streams_;
-
-  // A counter for self initiated streams which have sent and received FIN but
-  // waiting for application to consume data.
-  size_t num_outgoing_draining_streams_;
-
-  // A counter for static streams which are in stream_map_.
-  size_t num_static_streams_;
-
-  // A counter for streams which have done reading and writing, but are waiting
-  // for acks.
-  size_t num_zombie_streams_;
-
-  // Received information for a connection close.
-  QuicConnectionCloseFrame on_closed_frame_;
-  std::optional<ConnectionCloseSource> source_;
-
-  // Used for connection-level flow control.
-  QuicFlowController flow_controller_;
-
-  // The stream id which was last popped in OnCanWrite, or 0, if not under the
-  // call stack of OnCanWrite.
-  QuicStreamId currently_writing_stream_id_;
-
-  // Whether a transport layer GOAWAY frame has been sent.
-  // Such a frame only exists in Google QUIC, therefore |transport_goaway_sent_|
-  // is always false when using IETF QUIC.
-  bool transport_goaway_sent_;
-
-  // Whether a transport layer GOAWAY frame has been received.
-  // Such a frame only exists in Google QUIC, therefore
-  // |transport_goaway_received_| is always false when using IETF QUIC.
-  bool transport_goaway_received_;
-
-  QuicControlFrameManager control_frame_manager_;
-
-  // Id of latest successfully sent message.
-  QuicMessageId last_message_id_;
-
-  // The buffer used to queue the DATAGRAM frames.
-  QuicDatagramQueue datagram_queue_;
-
-  // Total number of datagram frames declared lost within the session.
-  uint64_t total_datagrams_lost_ = 0;
-
-  // TODO(fayang): switch to linked_hash_set when chromium supports it. The bool
-  // is not used here.
-  // List of streams with pending retransmissions.
-  quiche::QuicheLinkedHashMap<QuicStreamId, bool>
-      streams_with_pending_retransmission_;
-
-  // Clean up closed_streams_ when this alarm fires.
-  std::unique_ptr<QuicAlarm> closed_streams_clean_up_alarm_;
-
-  // Supported version list used by the crypto handshake only. Please note, this
-  // list may be a superset of the connection framer's supported versions.
-  ParsedQuicVersionVector supported_versions_;
-
-  // Only non-empty on the client after receiving a version negotiation packet,
-  // contains the configured versions from the original session before version
-  // negotiation was received.
-  ParsedQuicVersionVector client_original_supported_versions_;
-
-  std::optional<std::string> user_agent_id_;
-
-  // Initialized to false. Set to true when the session has been properly
-  // configured and is ready for general operation.
-  bool is_configured_;
-
-  // Whether the session has received a 0-RTT rejection (QUIC+TLS only).
-  bool was_zero_rtt_rejected_;
-
-  // This indicates a liveness testing is in progress, and push back the
-  // creation of new outgoing bidirectional streams.
-  bool liveness_testing_in_progress_;
-
-  // The counter for newly created non-static incoming streams in the current
-  // event loop and gets reset for each event loop.
-  QuicStreamCount new_incoming_streams_in_current_loop_ = 0u;
-  // Default to max stream count so that there is no stream creation limit per
-  // event loop.
-  QuicStreamCount max_streams_accepted_per_loop_ = kMaxQuicStreamCount;
-  std::unique_ptr<QuicAlarm> stream_count_reset_alarm_;
+  SavedConfig saved_config_;
 };
 
 }  // namespace quic

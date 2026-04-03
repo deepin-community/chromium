@@ -6,6 +6,8 @@
 
 #include <stddef.h>
 
+#include <array>
+
 #include "base/strings/string_number_conversions.h"
 #include "media/base/channel_layout.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -63,6 +65,7 @@ TEST(AudioParameters, Constructor_ParameterValuesPlusHardwareCapabilities) {
   int expected_samples = 880;
 
   AudioParameters::HardwareCapabilities hardware_capabilities(0, true);
+  hardware_capabilities.require_audio_offload = true;
   AudioParameters params(
       expected_format,
       ChannelLayoutConfig::FromLayout<expected_channel_layout>(), expected_rate,
@@ -74,6 +77,7 @@ TEST(AudioParameters, Constructor_ParameterValuesPlusHardwareCapabilities) {
   EXPECT_EQ(expected_rate, params.sample_rate());
   EXPECT_EQ(expected_samples, params.frames_per_buffer());
   EXPECT_TRUE(params.RequireEncapsulation());
+  EXPECT_TRUE(params.RequireOffload());
 }
 
 TEST(AudioParameters, GetBytesPerBuffer) {
@@ -95,7 +99,7 @@ TEST(AudioParameters, GetBytesPerBuffer) {
 }
 
 TEST(AudioParameters, Compare) {
-  AudioParameters values[] = {
+  auto values = std::to_array<AudioParameters>({
       AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
                       ChannelLayoutConfig::Mono(), 1000, 100),
       AudioParameters(AudioParameters::AUDIO_PCM_LINEAR,
@@ -131,7 +135,7 @@ TEST(AudioParameters, Compare) {
                       ChannelLayoutConfig::Stereo(), 2000, 100),
       AudioParameters(AudioParameters::AUDIO_PCM_LOW_LATENCY,
                       ChannelLayoutConfig::Stereo(), 2000, 200),
-  };
+  });
 
   for (size_t i = 0; i < std::size(values); ++i) {
     for (size_t j = 0; j < std::size(values); ++j) {
@@ -211,6 +215,55 @@ TEST(AudioParameters, ChannelLayoutConfig_GuessUnsupported) {
   ChannelLayoutConfig channel_layout_config = ChannelLayoutConfig::Guess(100);
   EXPECT_EQ(CHANNEL_LAYOUT_UNSUPPORTED, channel_layout_config.channel_layout());
   EXPECT_EQ(0, channel_layout_config.channels());
+}
+
+TEST(AudioParameters, ChannelLayoutConfig_GuessDiscrete) {
+  constexpr int kNumChannels = 12;
+  ChannelLayoutConfig channel_layout_config =
+      ChannelLayoutConfig::Guess(kNumChannels);
+  EXPECT_EQ(CHANNEL_LAYOUT_DISCRETE, channel_layout_config.channel_layout());
+  EXPECT_EQ(kNumChannels, channel_layout_config.channels());
+}
+
+TEST(AudioOutputBufferParametersHelperTest, LoadAndWriteGlitchInfo) {
+  AudioOutputBufferParameters params = {};
+  AudioOutputBufferParametersHelper helper;
+
+  // Check initial state.
+  AudioGlitchInfo glitch_info = helper.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(base::TimeDelta(), glitch_info.duration);
+  EXPECT_EQ(0u, glitch_info.count);
+
+  // Write a glitch.
+  AudioGlitchInfo glitch1{.duration = base::Milliseconds(100), .count = 1};
+  AudioOutputBufferParametersHelper::AddGlitchIncrementToBuffer(params,
+                                                                glitch1);
+
+  // Check that the glitch is read.
+  glitch_info = helper.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(glitch1.duration, glitch_info.duration);
+  EXPECT_EQ(glitch1.count, glitch_info.count);
+
+  // Check that the internal state is updated, so we don't read it again.
+  glitch_info = helper.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(base::TimeDelta(), glitch_info.duration);
+  EXPECT_EQ(0u, glitch_info.count);
+
+  // Write another glitch.
+  AudioGlitchInfo glitch2{.duration = base::Milliseconds(200), .count = 2};
+  AudioOutputBufferParametersHelper::AddGlitchIncrementToBuffer(params,
+                                                                glitch2);
+
+  // Check that we read the new glitch.
+  glitch_info = helper.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(glitch2.duration, glitch_info.duration);
+  EXPECT_EQ(glitch2.count, glitch_info.count);
+
+  // Check that a new helper reads the cumulative glitch info.
+  AudioOutputBufferParametersHelper helper2;
+  glitch_info = helper2.GetGlitchIncrementSinceLastCall(params);
+  EXPECT_EQ(glitch1.duration + glitch2.duration, glitch_info.duration);
+  EXPECT_EQ(glitch1.count + glitch2.count, glitch_info.count);
 }
 
 }  // namespace media

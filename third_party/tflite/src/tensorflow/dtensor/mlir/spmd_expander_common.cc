@@ -17,28 +17,45 @@ limitations under the License.
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
+#include <cstdint>
 #include <iterator>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/log/log.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/Location.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
+#include "mlir/IR/Matchers.h"  // from @llvm-project
+#include "mlir/IR/OpDefinition.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/OperationSupport.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_device.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 #include "tensorflow/core/platform/errors.h"
+#include "tensorflow/core/platform/status.h"
+#include "tensorflow/core/platform/types.h"
 #include "tensorflow/dtensor/cc/constants.h"
+#include "tensorflow/dtensor/cc/dstatus.h"
 #include "tensorflow/dtensor/cc/tensor_layout.h"
 #include "tensorflow/dtensor/mlir/device_utils.h"
 #include "tensorflow/dtensor/mlir/ir/tf_dtensor.h"
@@ -99,21 +116,22 @@ StatusOr<mlir::TensorType> GlobalTypeFromLocalType(
   return new_output_type;
 }
 
-Status CreateSplitOp(const int num_split, const int split_dimension,
-                     const mlir::Location location, mlir::Value src_input,
-                     mlir::OpBuilder* builder, mlir::TF::SplitOp* split_op) {
+absl::Status CreateSplitOp(const int num_split, const int split_dimension,
+                           const mlir::Location location, mlir::Value src_input,
+                           mlir::OpBuilder* builder,
+                           mlir::TF::SplitOp* split_op) {
   // Creates a const op to hold split dimension value.
   auto split_dim_type =
       mlir::RankedTensorType::get({}, builder->getIntegerType(32));
   auto split_dimension_attr =
       mlir::DenseElementsAttr::get(split_dim_type, split_dimension);
-  auto split_dimension_op = builder->create<mlir::TF::ConstOp>(
-      location, split_dim_type, split_dimension_attr);
+  auto split_dimension_op = mlir::TF::ConstOp::create(
+      *builder, location, split_dim_type, split_dimension_attr);
 
   // Correctly set output shapes of split op output if input shape is statically
   // known.
   mlir::Type output_type;
-  auto input_type = src_input.getType().cast<mlir::TensorType>();
+  auto input_type = mlir::cast<mlir::TensorType>(src_input.getType());
 
   if (input_type.hasRank()) {
     if (input_type.getShape()[split_dimension] == mlir::ShapedType::kDynamic) {
@@ -139,8 +157,9 @@ Status CreateSplitOp(const int num_split, const int split_dimension,
 
   // Creates a split op that splits |src_input| along |split_dimension|.
   llvm::SmallVector<mlir::Type, 4> output_types(num_split, output_type);
-  *split_op = builder->create<mlir::TF::SplitOp>(
-      location, output_types, split_dimension_op.getOutput(), src_input);
+  *split_op =
+      mlir::TF::SplitOp::create(*builder, location, output_types,
+                                split_dimension_op.getOutput(), src_input);
   return absl::OkStatus();
 }
 
@@ -209,7 +228,7 @@ StatusOr<Layout> GetBroadcastLayoutForElementWise(
   const int rank_offset_b = std::max(0, rank_a - rank_b);
   absl::flat_hash_map<std::string, int> mesh_dim_map_a;
   absl::flat_hash_map<std::string, int> mesh_dim_map_b;
-  std::vector<string> output_layout_specs;
+  std::vector<std::string> output_layout_specs;
 
   auto unsharded_specs = [](const int new_size) -> std::vector<std::string> {
     std::vector<std::string> spec_strs(new_size, Layout::kUnshardedDim);
@@ -513,7 +532,7 @@ StatusOr<mlir::Value> GetMeshCoordinatesFromCluster(
   // has the given mesh in it. If it exists, simply return that op's value.
   TF_ASSIGN_OR_RETURN(const auto mesh, ExtractDeviceMeshFromOp(cluster));
   if (!mesh) return errors::InvalidArgument("missing mesh on cluster");
-  string serialized_mesh = mesh->ToString();
+  std::string serialized_mesh = mesh->ToString();
   mlir::Value ret_val;
   auto result = cluster.walk([&](mlir::TF::FloorModOp op) -> mlir::WalkResult {
     if (op->hasAttrOfType<mlir::StringAttr>(kMeshCoordinatesAttr) &&
@@ -529,12 +548,12 @@ StatusOr<mlir::Value> GetMeshCoordinatesFromCluster(
 
   // We didn't find a FloorModOp for the given mesh, so we must produce the
   // FloorModOp and add the attr so we can find it on next call.
-  std::vector<int32> mesh_shape(mesh->rank());
+  std::vector<int32_t> mesh_shape(mesh->rank());
   for (int i = 0; i < mesh->rank(); ++i) mesh_shape[i] = mesh->dim(i).size;
 
   // This product represents the [b*c*d, c*d, d, 1] from the function
   // documentation.
-  std::vector<int32> running_product(mesh->rank());
+  std::vector<int32_t> running_product(mesh->rank());
   running_product[mesh->rank() - 1] = 1;
   for (int i = mesh->rank() - 1; i > 0; --i)
     running_product[i - 1] = running_product[i] * mesh_shape[i];
@@ -547,7 +566,7 @@ StatusOr<mlir::Value> GetMeshCoordinatesFromCluster(
   mlir::Attribute mesh_shape_attr =
       mlir::DenseIntElementsAttr::get(mesh_shape_type, mesh_shape);
   auto mesh_shape_value =
-      builder.create<mlir::TF::ConstOp>(cluster.getLoc(), mesh_shape_attr)
+      mlir::TF::ConstOp::create(builder, cluster.getLoc(), mesh_shape_attr)
           .getResult();
 
   auto running_product_value =
@@ -555,11 +574,11 @@ StatusOr<mlir::Value> GetMeshCoordinatesFromCluster(
 
   TF_ASSIGN_OR_RETURN(mlir::Value device_id, DeviceId(cluster));
 
-  auto div_op = builder.create<mlir::TF::DivOp>(cluster.getLoc(), device_id,
-                                                running_product_value);
+  auto div_op = mlir::TF::DivOp::create(builder, cluster.getLoc(), device_id,
+                                        running_product_value);
 
-  auto mod_op = builder.create<mlir::TF::FloorModOp>(
-      cluster.getLoc(), div_op.getZ(), mesh_shape_value);
+  auto mod_op = mlir::TF::FloorModOp::create(builder, cluster.getLoc(),
+                                             div_op.getZ(), mesh_shape_value);
 
   mod_op->setAttr(kMeshCoordinatesAttr, builder.getStringAttr(serialized_mesh));
   return mod_op.getZ();
@@ -635,8 +654,8 @@ void RemoveUnusedClusterResults(mlir::tf_device::ClusterOp cluster) {
                   [](mlir::Value v) { return v.getType(); });
 
   mlir::OpBuilder builder(cluster);
-  auto new_cluster = builder.create<mlir::tf_device::ClusterOp>(
-      cluster.getLoc(), new_result_types);
+  auto new_cluster = mlir::tf_device::ClusterOp::create(
+      builder, cluster.getLoc(), new_result_types);
   new_cluster->setAttr(kMeshAttr,
                        cluster->getAttrOfType<mlir::StringAttr>(kMeshAttr));
   new_cluster.getBody().push_back(new mlir::Block);
@@ -647,8 +666,8 @@ void RemoveUnusedClusterResults(mlir::tf_device::ClusterOp cluster) {
       std::prev(cluster_body.end()));
 
   builder.setInsertionPointToEnd(&new_cluster.GetBody());
-  builder.create<mlir::tf_device::ReturnOp>(cluster.getLoc(),
-                                            result_producing_values);
+  mlir::tf_device::ReturnOp::create(builder, cluster.getLoc(),
+                                    result_producing_values);
 
   assert(new_cluster.getNumResults() == new_result_values.size());
   for (auto it : llvm::zip(new_result_values, new_cluster.getResults())) {
@@ -667,20 +686,20 @@ namespace {
 // used. In order to ensure that all branch functions of TF control flow ops are
 // unique, we keep track of atomic counter for each control flow functions.
 // See b/174253694 for more details.
-std::atomic<int32> dtensor_controlflow_function_counter{0};
+std::atomic<int32_t> dtensor_controlflow_function_counter{0};
 
 }  // namespace
 
 mlir::StringAttr GetUniqueControlflowFnName(const std::string& prefix,
                                             mlir::OpBuilder& builder) {
-  int32 unique_id = dtensor_controlflow_function_counter++;
+  int32_t unique_id = dtensor_controlflow_function_counter++;
   return builder.getStringAttr(
       absl::StrCat(prefix, "_dtensor_function_", unique_id));
 }
 
-Status SetBuilderInsertionAfterValue(mlir::Value value,
-                                     mlir::OpBuilder& builder) {
-  if (value.isa<mlir::OpResult>()) {
+absl::Status SetBuilderInsertionAfterValue(mlir::Value value,
+                                           mlir::OpBuilder& builder) {
+  if (mlir::isa<mlir::OpResult>(value)) {
     builder.setInsertionPointAfterValue(value);
     return absl::OkStatus();
   }
@@ -699,7 +718,8 @@ Status SetBuilderInsertionAfterValue(mlir::Value value,
   return absl::OkStatus();
 }
 
-Status PrintTensor(mlir::Value value, const std::string& format_string = "%s") {
+absl::Status PrintTensor(mlir::Value value,
+                         const std::string& format_string = "%s") {
   mlir::OpBuilder builder(value.getContext());
   builder.setInsertionPointAfterValue(value);
   TF_ASSIGN_OR_RETURN(mlir::Value device_id, DeviceId(value));
@@ -707,19 +727,20 @@ Status PrintTensor(mlir::Value value, const std::string& format_string = "%s") {
   // Scalar string type
   mlir::RankedTensorType scalar_string =
       mlir::RankedTensorType::get({}, builder.getType<mlir::TF::StringType>());
-  mlir::TF::StringFormatOp format = builder.create<mlir::TF::StringFormatOp>(
-      value.getLoc(), scalar_string, mlir::ValueRange({device_id, value}));
+  mlir::TF::StringFormatOp format =
+      mlir::TF::StringFormatOp::create(builder, value.getLoc(), scalar_string,
+                                       mlir::ValueRange({device_id, value}));
   format->setAttr("template", builder.getStringAttr(all_format));
-  builder.create<mlir::TF::PrintV2Op>(value.getLoc(), format.getOutput(),
-                                      /*output_stream=*/"log(info)",
-                                      /*end=*/"\n");
+  mlir::TF::PrintV2Op::create(builder, value.getLoc(), format.getOutput(),
+                              /*output_stream=*/"log(info)",
+                              /*end=*/"\n");
   return absl::OkStatus();
 }
 
-Status ExtractConstStringVectorFromValue(
+absl::Status ExtractConstStringVectorFromValue(
     mlir::Value value, llvm::SmallVectorImpl<std::string>& out_vector) {
   value = GetForwardedDTensorLayoutInput(value);
-  if (value.isa<mlir::BlockArgument>())
+  if (mlir::isa<mlir::BlockArgument>(value))
     return errors::Internal("Unable get constant value from block argument.");
   mlir::DenseStringElementsAttr attr;
   if (!matchPattern(value, m_Constant(&attr))) {
@@ -736,7 +757,7 @@ Status ExtractConstStringVectorFromValue(
 
 StatusOr<std::string> ExtractConstScalarStringFromValue(mlir::Value value) {
   value = GetForwardedDTensorLayoutInput(value);
-  if (value.isa<mlir::BlockArgument>())
+  if (mlir::isa<mlir::BlockArgument>(value))
     return errors::Internal("Unable get constant value from block argument.");
   mlir::DenseStringElementsAttr attr;
   if (!matchPattern(value, m_Constant(&attr))) {

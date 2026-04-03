@@ -66,7 +66,7 @@ class BluetoothEventRouterTest : public ExtensionsTest {
 };
 
 TEST_F(BluetoothEventRouterTest, BluetoothEventListener) {
-  EventListenerInfo info("", "", GURL(), nullptr);
+  EventListenerInfo info("", "", GURL(), nullptr, nullptr);
   router_->OnListenerAdded(info);
   EXPECT_CALL(*mock_adapter_, RemoveObserver(testing::_)).Times(1);
   router_->OnListenerRemoved(info);
@@ -74,7 +74,7 @@ TEST_F(BluetoothEventRouterTest, BluetoothEventListener) {
 
 TEST_F(BluetoothEventRouterTest, MultipleBluetoothEventListeners) {
   // TODO(rkc/stevenjb): Test multiple extensions and WebUI.
-  EventListenerInfo info("", "", GURL(), nullptr);
+  EventListenerInfo info("", "", GURL(), nullptr, nullptr);
   router_->OnListenerAdded(info);
   router_->OnListenerAdded(info);
   router_->OnListenerAdded(info);
@@ -87,7 +87,7 @@ TEST_F(BluetoothEventRouterTest, MultipleBluetoothEventListeners) {
 TEST_F(BluetoothEventRouterTest, UnloadExtension) {
   scoped_refptr<const Extension> extension =
       ExtensionBuilder()
-          .SetManifest(base::Value::Dict()
+          .SetManifest(base::DictValue()
                            .Set("name", "BT event router test")
                            .Set("version", "1.0")
                            .Set("manifest_version", 2))
@@ -120,14 +120,14 @@ TEST_F(BluetoothEventRouterTest, SetDiscoveryFilter) {
   EXPECT_CALL(
       *mock_adapter_,
       StartScanWithFilter_(testing::Pointee(IsFilterEqual(&df)), testing::_))
-      .WillOnce(testing::Invoke(
+      .WillOnce(
           [](const device::BluetoothDiscoveryFilter* filter,
              base::OnceCallback<void(
                  /*is_error*/ bool,
                  device::UMABluetoothDiscoverySessionOutcome)>& callback) {
             std::move(callback).Run(
                 false, device::UMABluetoothDiscoverySessionOutcome::SUCCESS);
-          }));
+          });
 
   // RemoveDiscoverySession will be called when the BluetoothDiscoverySession
   // is destroyed

@@ -258,25 +258,32 @@ Point Rect::CenterPoint() const {
   return Point(x() + width() / 2, y() + height() / 2);
 }
 
-void Rect::ClampToCenteredSize(const Size& size) {
-  int new_width = std::min(width(), size.width());
-  int new_height = std::min(height(), size.height());
-  int new_x = x() + (width() - new_width) / 2;
-  int new_y = y() + (height() - new_height) / 2;
-  SetRect(new_x, new_y, new_width, new_height);
+void Rect::ToCenteredSize(const Size& size) {
+  int new_x = x() + (width() - size.width()) / 2;
+  int new_y = y() + (height() - size.height()) / 2;
+  SetRect(new_x, new_y, size.width(), size.height());
+}
+
+void Rect::ClampToCenteredSize(const Size& to_size) {
+  gfx::Size new_size = size();
+  new_size.SetToMin(to_size);
+  ToCenteredSize(new_size);
 }
 
 void Rect::Transpose() {
   SetRect(y(), x(), height(), width());
 }
 
-void Rect::SplitVertically(Rect* left_half, Rect* right_half) const {
-  DCHECK(left_half);
-  DCHECK(right_half);
+void Rect::SplitVertically(Rect& left_half, Rect& right_half) const {
+  left_half.SetRect(x(), y(), width() / 2, height());
+  right_half.SetRect(left_half.right(), y(), width() - left_half.width(),
+                     height());
+}
 
-  left_half->SetRect(x(), y(), width() / 2, height());
-  right_half->SetRect(
-      left_half->right(), y(), width() - left_half->width(), height());
+void Rect::SplitHorizontally(Rect& top_half, Rect& bottom_half) const {
+  top_half.SetRect(x(), y(), width(), height() / 2);
+  bottom_half.SetRect(x(), top_half.bottom(), width(),
+                      height() - top_half.height());
 }
 
 bool Rect::SharesEdgeWith(const Rect& rect) const {
@@ -338,6 +345,14 @@ Rect IntersectRects(const Rect& a, const Rect& b) {
 Rect UnionRects(const Rect& a, const Rect& b) {
   Rect result = a;
   result.Union(b);
+  return result;
+}
+
+Rect UnionRects(base::span<const Rect> rects) {
+  Rect result;
+  for (const Rect& rect : rects) {
+    result.Union(rect);
+  }
   return result;
 }
 

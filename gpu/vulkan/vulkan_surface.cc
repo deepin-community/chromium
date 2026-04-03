@@ -8,6 +8,7 @@
 
 #include <algorithm>
 
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/scoped_blocking_call.h"
@@ -43,10 +44,12 @@ VkSurfaceTransformFlagBitsKHR ToVkSurfaceTransformFlag(
       return VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR;
     case gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_270:
       return VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR;
-    default:
-      NOTREACHED() << "transform:" << transform;
-      return VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    case gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL_CLOCKWISE_90:
+    case gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL_CLOCKWISE_270:
+    case gfx::OVERLAY_TRANSFORM_INVALID:
+      break;
   };
+  NOTREACHED() << "transform:" << transform;
 }
 
 gfx::OverlayTransform FromVkSurfaceTransformFlag(
@@ -66,12 +69,11 @@ gfx::OverlayTransform FromVkSurfaceTransformFlag(
       return gfx::OVERLAY_TRANSFORM_ROTATE_CLOCKWISE_270;
     default:
       NOTREACHED() << "transform:" << transform;
-      return gfx::OVERLAY_TRANSFORM_INVALID;
   }
 }
 
 // Minimum VkImages in a vulkan swap chain.
-uint32_t kMinImageCount = 3u;
+constexpr uint32_t kMinImageCount = 3u;
 
 }  // namespace
 
@@ -139,12 +141,12 @@ bool VulkanSurface::Initialize(VulkanDeviceQueue* device_queue,
     return false;
   }
 
-  const VkFormat* preferred_formats = (format == FORMAT_RGBA_32)
-                                          ? kPreferredVkFormats32
-                                          : kPreferredVkFormats16;
-  unsigned int size = (format == FORMAT_RGBA_32)
-                          ? std::size(kPreferredVkFormats32)
-                          : std::size(kPreferredVkFormats16);
+  base::span<const VkFormat> preferred_formats;
+  if (format == FORMAT_RGBA_32) {
+    preferred_formats = kPreferredVkFormats32;
+  } else {
+    preferred_formats = kPreferredVkFormats16;
+  }
 
   if (formats.size() == 1 && VK_FORMAT_UNDEFINED == formats[0].format) {
     surface_format_.format = preferred_formats[0];
@@ -152,17 +154,17 @@ bool VulkanSurface::Initialize(VulkanDeviceQueue* device_queue,
   } else {
     bool format_set = false;
     for (VkSurfaceFormatKHR supported_format : formats) {
-      unsigned int counter = 0;
-      while (counter < size && format_set == false) {
-        if (supported_format.format == preferred_formats[counter]) {
+      for (const auto& preferred_format : preferred_formats) {
+        if (supported_format.format == preferred_format) {
           surface_format_ = supported_format;
           surface_format_.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
           format_set = true;
+          break;
         }
-        counter++;
       }
-      if (format_set)
+      if (format_set) {
         break;
+      }
     }
     if (!format_set) {
       DLOG(ERROR) << "Format not supported.";

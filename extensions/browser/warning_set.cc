@@ -176,7 +176,6 @@ std::string Warning::GetLocalizedMessage(const ExtensionSet* extensions) const {
           final_parameters[1], final_parameters[2], final_parameters[3]);
     default:
       NOTREACHED();
-      return std::string();
   }
 }
 

@@ -20,10 +20,10 @@
 #include "net/base/io_buffer.h"
 #include "net/socket/client_socket_handle.h"
 #include "net/socket/stream_socket.h"
+#include "net/socket/stream_socket_handle.h"
 #include "net/spdy/spdy_buffer.h"
 #include "net/third_party/quiche/src/quiche/quic/core/http/quic_header_list.h"
 #include "net/third_party/quiche/src/quiche/quic/core/http/spdy_utils.h"
-#include "net/third_party/quiche/src/quiche/quic/core/quic_ack_listener_interface.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_error_codes.h"
 #include "net/websockets/websocket_quic_spdy_stream.h"
 
@@ -31,7 +31,7 @@ namespace net {
 struct NetworkTrafficAnnotationTag;
 
 WebSocketClientSocketHandleAdapter::WebSocketClientSocketHandleAdapter(
-    std::unique_ptr<ClientSocketHandle> connection)
+    std::unique_ptr<StreamSocketHandle> connection)
     : connection_(std::move(connection)) {}
 
 WebSocketClientSocketHandleAdapter::~WebSocketClientSocketHandleAdapter() =
@@ -140,13 +140,13 @@ void WebSocketSpdyStreamAdapter::OnHeadersSent() {
 }
 
 void WebSocketSpdyStreamAdapter::OnEarlyHintsReceived(
-    const spdy::Http2HeaderBlock& headers) {
+    const quiche::HttpHeaderBlock& headers) {
   // This callback should not be called for a WebSocket handshake.
   NOTREACHED();
 }
 
 void WebSocketSpdyStreamAdapter::OnHeadersReceived(
-    const spdy::Http2HeaderBlock& response_headers) {
+    const quiche::HttpHeaderBlock& response_headers) {
   if (delegate_)
     delegate_->OnHeadersReceived(response_headers);
 }
@@ -176,7 +176,7 @@ void WebSocketSpdyStreamAdapter::OnDataSent() {
 }
 
 void WebSocketSpdyStreamAdapter::OnTrailers(
-    const spdy::Http2HeaderBlock& trailers) {}
+    const quiche::HttpHeaderBlock& trailers) {}
 
 void WebSocketSpdyStreamAdapter::OnClose(int status) {
   DCHECK_NE(ERR_IO_PENDING, status);
@@ -223,7 +223,7 @@ NetLogSource WebSocketSpdyStreamAdapter::source_dependency() const {
 int WebSocketSpdyStreamAdapter::CopySavedReadDataIntoBuffer() {
   DCHECK(read_buffer_);
   DCHECK(read_length_);
-  int rv = read_data_.Dequeue(read_buffer_->data(), read_length_);
+  int rv = read_data_.Dequeue(read_buffer_->first(read_length_));
   read_buffer_ = nullptr;
   read_length_ = 0u;
 
@@ -255,12 +255,12 @@ WebSocketQuicStreamAdapter::WebSocketQuicStreamAdapter(
 
 WebSocketQuicStreamAdapter::~WebSocketQuicStreamAdapter() {
   if (websocket_quic_spdy_stream_) {
-    websocket_quic_spdy_stream_->set_delegate(nullptr);
+    websocket_quic_spdy_stream_->DetachDelegate();
   }
 }
 
 size_t WebSocketQuicStreamAdapter::WriteHeaders(
-    spdy::Http2HeaderBlock header_block,
+    quiche::HttpHeaderBlock header_block,
     bool fin) {
   return websocket_quic_spdy_stream_->WriteHeaders(std::move(header_block), fin,
                                                    nullptr);
@@ -290,13 +290,37 @@ int WebSocketQuicStreamAdapter::Write(
     int buf_len,
     CompletionOnceCallback callback,
     const NetworkTrafficAnnotationTag& traffic_annotation) {
-  // TODO(momoka): Write implementation.
-  return OK;
+  DCHECK(!write_callback_);
+  DCHECK(websocket_quic_spdy_stream_);
+  CHECK_GT(buf_len, 0);
+  DCHECK(callback);
+
+  // Queue data to the QUIC stream. WriteOrBufferBody() either sends the data
+  // immediately if flow control allows, or buffers it internally.
+  websocket_quic_spdy_stream_->WriteOrBufferBody(
+      {buf->data(), static_cast<size_t>(buf_len)},
+      /*fin=*/false);
+
+  // Check CanWriteNewData() after queuing rather than before. This is necessary
+  // because WriteOrBufferBody() may have caused the send buffer to cross its
+  // threshold or exhausted the flow control window, blocking further writes.
+  // If the stream can still accept new data, complete the write synchronously.
+  // Otherwise, save |callback| to invoke later when OnCanWriteNewData() is
+  // called (triggered when buffered data is sent and buffer size drops below
+  // the threshold, allowing more data to be accepted).
+  if (websocket_quic_spdy_stream_->CanWriteNewData()) {
+    return buf_len;
+  }
+
+  write_length_ = buf_len;
+  write_callback_ = std::move(callback);
+  return ERR_IO_PENDING;
 }
 
 void WebSocketQuicStreamAdapter::Disconnect() {
   if (websocket_quic_spdy_stream_) {
-    websocket_quic_spdy_stream_->Reset(quic::QUIC_STREAM_CANCELLED);
+    websocket_quic_spdy_stream_->DetachDelegate();
+    ClearStream();
   }
 }
 
@@ -310,7 +334,7 @@ void WebSocketQuicStreamAdapter::OnInitialHeadersComplete(
     bool fin,
     size_t frame_len,
     const quic::QuicHeaderList& quic_header_list) {
-  spdy::Http2HeaderBlock response_headers;
+  quiche::HttpHeaderBlock response_headers;
   if (!quic::SpdyUtils::CopyAndValidateHeaders(quic_header_list, nullptr,
                                                &response_headers)) {
     DLOG(ERROR) << "Failed to parse header list: "
@@ -339,7 +363,7 @@ void WebSocketQuicStreamAdapter::OnBodyAvailable() {
   }
 
   DCHECK(read_buffer_);
-  DCHECK_GT(read_length_, 0);
+  CHECK_GT(read_length_, 0);
 
   int rv = websocket_quic_spdy_stream_->Read(read_buffer_, read_length_);
 
@@ -352,9 +376,39 @@ void WebSocketQuicStreamAdapter::OnBodyAvailable() {
   std::move(read_callback_).Run(rv);
 }
 
+void WebSocketQuicStreamAdapter::OnClose(int status) {
+  CHECK_LE(status, 0);
+  auto self = weak_factory_.GetWeakPtr();
+  ClearStream();
+
+  if (status == OK) {
+    status = ERR_CONNECTION_CLOSED;
+  }
+  if (read_callback_) {
+    std::move(read_callback_).Run(status);
+    if (!self) {  // |this| might have been destroyed.
+      return;
+    }
+  }
+  if (write_callback_) {
+    std::move(write_callback_).Run(status);
+    if (!self) {  // |this| might have been destroyed.
+      return;
+    }
+  }
+  if (delegate_) {
+    delegate_->OnClose(status);
+  }
+}
+
 void WebSocketQuicStreamAdapter::ClearStream() {
-  if (websocket_quic_spdy_stream_) {
-    websocket_quic_spdy_stream_ = nullptr;
+  websocket_quic_spdy_stream_ = nullptr;
+}
+
+void WebSocketQuicStreamAdapter::OnCanWriteNewData() {
+  if (write_callback_) {
+    CHECK_GT(write_length_, 0);
+    std::move(write_callback_).Run(write_length_);
   }
 }
 

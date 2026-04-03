@@ -16,7 +16,7 @@
 #include "base/values.h"
 #include "chromeos/ash/components/dbus/shill/modem_3gpp_client.h"
 #include "chromeos/ash/components/dbus/shill/shill_property_changed_observer.h"
-#include "chromeos/dbus/common/dbus_method_call_status.h"
+#include "chromeos/dbus/common/dbus_callback.h"
 
 namespace ash {
 
@@ -51,15 +51,15 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) Network3gppHandler
   void Init();
 
   // Callback to handle the manager properties with the list of devices.
-  void ManagerPropertiesCallback(std::optional<base::Value::Dict> properties);
+  void ManagerPropertiesCallback(std::optional<base::DictValue> properties);
 
   // Requests properties for each entry in |devices|.
-  void UpdateDevices(const base::Value::List& devices);
+  void UpdateDevices(const base::ListValue& devices);
 
   // Callback to handle the device properties for |device_path|.
   // A Network3gppDeviceHandler will be instantiated for each cellular device.
   void DevicePropertiesCallback(const std::string& device_path,
-                                std::optional<base::Value::Dict> properties);
+                                std::optional<base::DictValue> properties);
 
   // Called when the cellular device's object path changes. This means that
   // there has been an update to the device's SIM (removed or inserted) and that

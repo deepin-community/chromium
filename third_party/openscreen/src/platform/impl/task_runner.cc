@@ -30,6 +30,8 @@ void OnReceivedSignal(int signal) {
 
 }  // namespace
 
+TaskRunnerImpl::TaskWaiter::~TaskWaiter() = default;
+
 TaskRunnerImpl::TaskRunnerImpl(ClockNowFunctionPtr now_function,
                                TaskWaiter* event_waiter,
                                Clock::duration waiter_timeout)
@@ -40,7 +42,7 @@ TaskRunnerImpl::TaskRunnerImpl(ClockNowFunctionPtr now_function,
 
 TaskRunnerImpl::~TaskRunnerImpl() {
   // Ensure no thread is currently executing inside RunUntilStopped().
-  OSP_DCHECK_EQ(task_runner_thread_id_, std::thread::id());
+  OSP_CHECK_EQ(task_runner_thread_id_, std::thread::id());
 }
 
 void TaskRunnerImpl::PostPackagedTask(Task task) {
@@ -74,12 +76,12 @@ bool TaskRunnerImpl::IsRunningOnTaskRunner() {
 }
 
 void TaskRunnerImpl::RunUntilStopped() {
-  OSP_DCHECK(!is_running_);
+  OSP_CHECK(!is_running_);
   task_runner_thread_id_ = std::this_thread::get_id();
   is_running_ = true;
 
   OSP_DVLOG << "Running tasks until stopped...";
-  // Main loop: Run until the |is_running_| flag is set back to false by the
+  // Main loop: Run until the `is_running_` flag is set back to false by the
   // "quit task" posted by RequestStopSoon(), or the process received a
   // termination signal.
   while (is_running_) {
@@ -115,12 +117,18 @@ void TaskRunnerImpl::RunUntilSignaled() {
   g_signal_state = kNotSignaled;
   const auto old_sigint_handler = std::signal(SIGINT, &OnReceivedSignal);
   const auto old_sigterm_handler = std::signal(SIGTERM, &OnReceivedSignal);
+#if defined(SIGHUP)
+  const auto old_sighup_handler = std::signal(SIGHUP, &OnReceivedSignal);
+#endif
 
   RunUntilStopped();
 
   std::signal(SIGINT, old_sigint_handler);
   std::signal(SIGTERM, old_sigterm_handler);
-  OSP_DVLOG << "Received SIGNIT or SIGTERM, setting state to not running...";
+#if defined(SIGHUP)
+  std::signal(SIGHUP, old_sighup_handler);
+#endif
+  OSP_DVLOG << "Received signal, setting state to not running...";
   g_signal_state = kNotRunning;
 }
 
@@ -151,7 +159,7 @@ void TaskRunnerImpl::ScheduleDelayedTasks() {
 }
 
 bool TaskRunnerImpl::GrabMoreRunnableTasks() {
-  OSP_DCHECK(running_tasks_.empty());
+  OSP_CHECK(running_tasks_.empty());
 
   std::unique_lock<std::mutex> lock(task_mutex_);
   if (!tasks_.empty()) {

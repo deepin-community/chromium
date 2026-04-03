@@ -126,8 +126,8 @@ class WebRtcBrowserTest : public WebRtcTestBase {
     mojo::Remote<network::mojom::NetworkServiceTest> network_service_test;
     content::GetNetworkService()->BindTestInterfaceForTesting(
         network_service_test.BindNewPipeAndPassReceiver());
-    // TODO(crbug.com/901026): Make sure the network process is started to avoid
-    // a deadlock on Android.
+    // TODO(crbug.com/41423903): Make sure the network process is started to
+    // avoid a deadlock on Android.
     network_service_test.FlushForTesting();
 
     mojo::ScopedAllowSyncCallForTesting allow_sync_call;
@@ -177,10 +177,9 @@ IN_PROC_BROWSER_TEST_F(WebRtcBrowserTest,
 IN_PROC_BROWSER_TEST_F(WebRtcBrowserTest,
                        RunsAudioVideoWebRTCCallInTwoTabsH264) {
   // Only run test if run-time feature corresponding to |rtc_use_h264| is on.
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kWebRtcH264WithOpenH264FFmpeg)) {
+  if (!base::FeatureList::IsEnabled(media::kOpenH264SoftwareEncoder)) {
     LOG(WARNING)
-        << "Run-time feature WebRTC-H264WithOpenH264FFmpeg disabled. "
+        << "Run-time feature OpenH264SoftwareEncoder disabled. "
            "Skipping WebRtcBrowserTest.RunsAudioVideoWebRTCCallInTwoTabsH264 "
            "(test \"OK\")";
     return;
@@ -226,7 +225,7 @@ IN_PROC_BROWSER_TEST_F(
   RunsAudioVideoWebRTCCallInTwoTabsWithClonedCertificate(kKeygenAlgorithmRsa);
 }
 
-// TODO(https://crbug.com/1291255): Flaky on Linux ASAN.
+// TODO(crbug.com/40818639): Flaky on Linux ASAN.
 #if BUILDFLAG(IS_LINUX) && defined(ADDRESS_SANITIZER)
 #define MAYBE_RunsAudioVideoWebRTCCallInTwoTabsWithClonedCertificateEcdsa \
   DISABLED_RunsAudioVideoWebRTCCallInTwoTabsWithClonedCertificateEcdsa

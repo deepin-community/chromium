@@ -13,11 +13,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <cstdint>
+
+#include "absl/log/log.h"
+#include "absl/status/status.h"
+#include "absl/strings/cord.h"
+#include "xla/tsl/distributed_runtime/coordination/coordination_service_agent.h"
+#include "xla/tsl/distributed_runtime/coordination/coordination_service_error_util.h"
 #include "tensorflow/core/framework/common_shape_fns.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
-#include "tsl/distributed_runtime/coordination/coordination_service_agent.h"
-#include "tsl/distributed_runtime/coordination/coordination_service_error_util.h"
 
 namespace tensorflow {
 namespace {
@@ -40,12 +45,12 @@ class TestSetConfigKeyValueOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->input("key", &key_tensor));
     OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(key_tensor->shape()),
                 errors::InvalidArgument("Key must be scalar."));
-    const string& config_key = key_tensor->scalar<tstring>()();
+    const std::string& config_key = key_tensor->scalar<tstring>()();
     const Tensor* val_tensor;
     OP_REQUIRES_OK(ctx, ctx->input("value", &val_tensor));
     OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(key_tensor->shape()),
                 errors::InvalidArgument("Value must be scalar."));
-    const string& config_value = val_tensor->scalar<tstring>()();
+    const std::string& config_value = val_tensor->scalar<tstring>()();
     LOG(INFO) << "TestSetConfigKeyValueOp key=" << config_key
               << "value=" << config_value;
     auto* coord_agent = ctx->coordination_service_agent();
@@ -85,7 +90,7 @@ class TestGetConfigKeyValueOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->input("key", &key_tensor));
     OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(key_tensor->shape()),
                 errors::InvalidArgument("Key must be scalar."));
-    const string& config_key = key_tensor->scalar<tstring>()();
+    const std::string& config_key = key_tensor->scalar<tstring>()();
     LOG(INFO) << "TestGetConfigKeyValueOp key=" << config_key;
 
     auto* coord_agent = ctx->coordination_service_agent();
@@ -137,7 +142,8 @@ class TestReportErrorToClusterOp : public OpKernel {
     OP_REQUIRES_OK(ctx, ctx->input("error_message", &error_message_tensor));
     OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(error_message_tensor->shape()),
                 errors::InvalidArgument("Error message must be scalar."));
-    const string& error_message = error_message_tensor->scalar<tstring>()();
+    const std::string& error_message =
+        error_message_tensor->scalar<tstring>()();
     LOG(INFO) << "TestReportErrorToClusterOp error_code=" << error_code
               << " error_message=" << error_message;
     auto* coord_agent = ctx->coordination_service_agent();
@@ -147,8 +153,7 @@ class TestReportErrorToClusterOp : public OpKernel {
                            "initialized properly."));
       return;
     }
-    tensorflow::Status s(static_cast<absl::StatusCode>(error_code),
-                         error_message);
+    absl::Status s(static_cast<absl::StatusCode>(error_code), error_message);
     s.SetPayload(tsl::CoordinationErrorPayloadKey(),
                  absl::Cord("testing error payload"));
     OP_REQUIRES_OK(ctx, coord_agent->ReportError(s));

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -53,7 +54,7 @@ int BufferingFileStreamWriter::Write(net::IOBuffer* buffer,
   const int buffer_bytes =
       std::min(intermediate_buffer_length_ - buffered_bytes_, buffer_length);
 
-  CopyToIntermediateBuffer(base::WrapRefCounted(buffer), 0 /* buffer_offset */,
+  CopyToIntermediateBuffer(base::WrapRefCounted(buffer), /*buffer_offset=*/0,
                            buffer_bytes);
   const int bytes_left = buffer_length - buffer_bytes;
 
@@ -91,9 +92,8 @@ void BufferingFileStreamWriter::CopyToIntermediateBuffer(
     int buffer_offset,
     int buffer_length) {
   DCHECK_GE(intermediate_buffer_length_, buffer_length + buffered_bytes_);
-  memcpy(intermediate_buffer_->data() + buffered_bytes_,
-         buffer->data() + buffer_offset,
-         buffer_length);
+  UNSAFE_TODO(memcpy(intermediate_buffer_->data() + buffered_bytes_,
+                     buffer->data() + buffer_offset, buffer_length));
   buffered_bytes_ += buffer_length;
 }
 

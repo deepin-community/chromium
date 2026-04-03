@@ -1,47 +1,21 @@
-/*
- * Copyright (C) 2023 Google Inc. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// Copyright 2023 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
-import type * as Common from '../common/common.js';
-import type * as Protocol from '../../generated/protocol.js';
 import type * as ProtocolProxyApi from '../../generated/protocol-proxy-api.js';
+import type * as Protocol from '../../generated/protocol.js';
+import type * as Common from '../common/common.js';
 
-import {Capability, type Target} from './Target.js';
 import {SDKModel} from './SDKModel.js';
 import {Events as StorageKeyManagerEvents, StorageKeyManager} from './StorageKeyManager.js';
+import {Capability, type Target} from './Target.js';
 
 export class StorageBucketsModel extends SDKModel<EventTypes> implements ProtocolProxyApi.StorageDispatcher {
-  private enabled: boolean = false;
+  private enabled = false;
   readonly storageAgent: ProtocolProxyApi.StorageApi;
   private readonly storageKeyManager: StorageKeyManager|null;
-  private bucketsById: Map<string, Protocol.Storage.StorageBucketInfo> = new Map();
-  private trackedStorageKeys: Set<string> = new Set();
+  private bucketsById = new Map<string, Protocol.Storage.StorageBucketInfo>();
+  private trackedStorageKeys = new Set<string>();
 
   constructor(target: Target) {
     super(target);
@@ -86,8 +60,9 @@ export class StorageBucketsModel extends SDKModel<EventTypes> implements Protoco
     }
 
     if (this.storageKeyManager) {
-      this.storageKeyManager.addEventListener(StorageKeyManagerEvents.StorageKeyAdded, this.storageKeyAdded, this);
-      this.storageKeyManager.addEventListener(StorageKeyManagerEvents.StorageKeyRemoved, this.storageKeyRemoved, this);
+      this.storageKeyManager.addEventListener(StorageKeyManagerEvents.STORAGE_KEY_ADDED, this.storageKeyAdded, this);
+      this.storageKeyManager.addEventListener(
+          StorageKeyManagerEvents.STORAGE_KEY_REMOVED, this.storageKeyRemoved, this);
       for (const storageKey of this.storageKeyManager.storageKeys()) {
         this.addStorageKey(storageKey);
       }
@@ -126,16 +101,16 @@ export class StorageBucketsModel extends SDKModel<EventTypes> implements Protoco
 
   private bucketAdded(bucketInfo: Protocol.Storage.StorageBucketInfo): void {
     this.bucketsById.set(bucketInfo.id, bucketInfo);
-    this.dispatchEventToListeners(Events.BucketAdded, {model: this, bucketInfo});
+    this.dispatchEventToListeners(Events.BUCKET_ADDED, {model: this, bucketInfo});
   }
 
   private bucketRemoved(bucketInfo: Protocol.Storage.StorageBucketInfo): void {
     this.bucketsById.delete(bucketInfo.id);
-    this.dispatchEventToListeners(Events.BucketRemoved, {model: this, bucketInfo});
+    this.dispatchEventToListeners(Events.BUCKET_REMOVED, {model: this, bucketInfo});
   }
 
   private bucketChanged(bucketInfo: Protocol.Storage.StorageBucketInfo): void {
-    this.dispatchEventToListeners(Events.BucketChanged, {model: this, bucketInfo});
+    this.dispatchEventToListeners(Events.BUCKET_CHANGED, {model: this, bucketInfo});
   }
 
   private bucketInfosAreEqual(
@@ -195,16 +170,26 @@ export class StorageBucketsModel extends SDKModel<EventTypes> implements Protoco
   sharedStorageAccessed(_event: Protocol.Storage.SharedStorageAccessedEvent): void {
   }
 
+  sharedStorageWorkletOperationExecutionFinished(
+      _event: Protocol.Storage.SharedStorageWorkletOperationExecutionFinishedEvent): void {
+  }
+
   attributionReportingSourceRegistered(_event: Protocol.Storage.AttributionReportingSourceRegisteredEvent): void {
+  }
+  attributionReportingReportSent(_event: Protocol.Storage.AttributionReportingReportSentEvent): void {
+  }
+
+  attributionReportingVerboseDebugReportSent(_event: Protocol.Storage.AttributionReportingVerboseDebugReportSentEvent):
+      void {
   }
 }
 
-SDKModel.register(StorageBucketsModel, {capabilities: Capability.Storage, autostart: false});
+SDKModel.register(StorageBucketsModel, {capabilities: Capability.STORAGE, autostart: false});
 
 export const enum Events {
-  BucketAdded = 'BucketAdded',
-  BucketRemoved = 'BucketRemoved',
-  BucketChanged = 'BucketChanged',
+  BUCKET_ADDED = 'BucketAdded',
+  BUCKET_REMOVED = 'BucketRemoved',
+  BUCKET_CHANGED = 'BucketChanged',
 }
 
 export interface BucketEvent {
@@ -212,8 +197,8 @@ export interface BucketEvent {
   bucketInfo: Protocol.Storage.StorageBucketInfo;
 }
 
-export type EventTypes = {
-  [Events.BucketAdded]: BucketEvent,
-  [Events.BucketRemoved]: BucketEvent,
-  [Events.BucketChanged]: BucketEvent,
-};
+export interface EventTypes {
+  [Events.BUCKET_ADDED]: BucketEvent;
+  [Events.BUCKET_REMOVED]: BucketEvent;
+  [Events.BUCKET_CHANGED]: BucketEvent;
+}

@@ -98,8 +98,8 @@
   },
   {
     "os": [
-      "chromeos_ash"
+      "chromeos"
     ],
-    "reason_for_missing_test": "TODO(crbug.com/1213429) future policy"
+    "reason_for_missing_test": "TODO(crbug.com/40768762) future policy"
   }
 ]

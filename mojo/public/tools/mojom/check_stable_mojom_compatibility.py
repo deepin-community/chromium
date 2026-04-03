@@ -47,7 +47,8 @@ def _ValidateDelta(root, delta):
   old_files = {}
   new_files = {}
   for change in delta:
-    # TODO(crbug.com/953884): Use pathlib once we're migrated fully to Python 3.
+    # TODO(crbug.com/40623602): Use pathlib once we're migrated fully to
+    # Python 3.
     filename = change['filename'].replace('\\', '/')
     affected_files.add(filename)
     if change['old']:
@@ -82,7 +83,7 @@ def _ValidateDelta(root, delta):
     generated_files_to_skip = {
         ('third_party/blink/public/mojom/runtime_feature_state/'
          'runtime_feature.mojom'),
-        ('third_party/blink/public/mojom/origin_trial_feature/'
+        ('third_party/blink/public/mojom/origin_trials/'
          'origin_trial_feature.mojom'),
     }
 
@@ -111,7 +112,9 @@ def _ValidateDelta(root, delta):
     all_modules = {}
     all_modules.update(unmodified_modules)
     all_modules.update(override_modules)
-    modules[mojom] = translate.OrderedModule(ast, mojom, all_modules)
+    modules[mojom] = translate.OrderedModule(
+        ast, mojom, all_modules,
+        translate.ExtensibleEnumMode.RELAXED_FOR_BACKWARDS_COMPAT_CHECK)
 
   old_modules = {}
   for mojom in old_files:

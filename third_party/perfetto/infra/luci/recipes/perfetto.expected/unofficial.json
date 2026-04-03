@@ -12,7 +12,7 @@
       "/path/to/tmp/json",
       "ensure-directory",
       "--mode",
-      "0777",
+      "0o777",
       "[CACHE]/builder/perfetto"
     ],
     "infra_step": true,
@@ -62,7 +62,8 @@
       "git",
       "fetch",
       "--tags",
-      "https://android.googlesource.com/platform/external/perfetto",
+      "--force",
+      "https://chromium.googlesource.com/external/github.com/google/perfetto",
       "refs/heads/main"
     ],
     "cwd": "[CACHE]/builder/perfetto",
@@ -166,7 +167,7 @@
       "tools/gn",
       "gen",
       "[CACHE]/builder/perfetto/out/linux-amd64",
-      "--args=is_debug=false monolithic_binaries=true target_os=\"linux\" target_cpu=\"x64\""
+      "--args=is_clang=true monolithic_binaries=true is_debug=false enable_perfetto_etm_importer=false target_os=\"linux\" target_cpu=\"x64\""
     ],
     "cwd": "[CACHE]/builder/perfetto",
     "luci_context": {
@@ -252,7 +253,7 @@
       "tools/gn",
       "gen",
       "[CACHE]/builder/perfetto/out/linux-arm",
-      "--args=is_debug=false monolithic_binaries=true target_os=\"linux\" target_cpu=\"arm\""
+      "--args=is_clang=true monolithic_binaries=true is_debug=false enable_perfetto_etm_importer=false target_os=\"linux\" target_cpu=\"arm\""
     ],
     "cwd": "[CACHE]/builder/perfetto",
     "luci_context": {
@@ -338,7 +339,7 @@
       "tools/gn",
       "gen",
       "[CACHE]/builder/perfetto/out/linux-arm64",
-      "--args=is_debug=false monolithic_binaries=true target_os=\"linux\" target_cpu=\"arm64\""
+      "--args=is_clang=true monolithic_binaries=true is_debug=false enable_perfetto_etm_importer=false target_os=\"linux\" target_cpu=\"arm64\""
     ],
     "cwd": "[CACHE]/builder/perfetto",
     "luci_context": {

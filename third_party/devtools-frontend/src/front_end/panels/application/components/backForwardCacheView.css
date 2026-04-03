@@ -1,8 +1,12 @@
 /*
- * Copyright 2021 The Chromium Authors. All rights reserved.
+ * Copyright 2021 The Chromium Authors
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
+
+devtools-report-value {
+  overflow: hidden;
+}
 
 .inline-icon {
   vertical-align: sub;
@@ -17,6 +21,7 @@
   flex: auto;
   overflow-wrap: break-word;
   overflow: hidden;
+  grid-column-start: span 2;
 }
 
 .details-list {
@@ -66,6 +71,14 @@
   text-decoration: underline;
   cursor: pointer;
   outline-offset: 2px;
+}
+
+devtools-report-value:has(devtools-tree-outline) {
+  margin-left: var(--sys-size-7);
+}
+
+.cache-status-section:focus-visible {
+ outline: 0;
 }
 
 .tree-outline li .selection {

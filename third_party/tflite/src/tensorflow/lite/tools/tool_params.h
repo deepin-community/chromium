@@ -54,7 +54,7 @@ class ToolParam {
     return static_cast<const TypedToolParam<T>*>(this);
   }
 
-  virtual ~ToolParam() {}
+  virtual ~ToolParam() = default;
   explicit ToolParam(ParamType type)
       : has_value_set_(false), position_(0), type_(type) {}
 
@@ -94,7 +94,7 @@ class TypedToolParam : public ToolParam {
     has_value_set_ = true;
   }
 
-  T Get() const { return value_; }
+  const T& Get() const { return value_; }
 
   void Set(const ToolParam& other) override {
     Set(other.AsConstTyped<T>()->Get());

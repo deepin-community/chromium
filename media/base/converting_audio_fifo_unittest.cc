@@ -4,6 +4,7 @@
 
 #include "media/base/converting_audio_fifo.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "media/base/audio_bus.h"
@@ -67,10 +68,7 @@ class ConvertingAudioFifoTest
 
   void PushFramesWithValue(AudioParameters params, float value) {
     auto audio_bus = AudioBus::Create(params);
-    float* channel = audio_bus->channel(0);
-    for (int i = 0; i < audio_bus->frames(); ++i) {
-      channel[i] = value;
-    }
+    std::ranges::fill(audio_bus->channel(0), value);
   }
 
   int min_number_input_frames_needed() {

@@ -4,7 +4,6 @@
 
 #include "content/browser/renderer_host/stored_page.h"
 
-#include "base/containers/contains.h"
 #include "base/trace_event/typed_macros.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_frame_proxy_host.h"
@@ -13,12 +12,6 @@
 namespace content {
 namespace {
 using perfetto::protos::pbzero::ChromeTrackEvent;
-}
-
-bool RenderViewHostImplSafeRefComparator::operator()(
-    const base::SafeRef<RenderViewHostImpl>& a,
-    const base::SafeRef<RenderViewHostImpl>& b) const {
-  return &*a < &*b;
 }
 
 StoredPage::StoredPage(std::unique_ptr<RenderFrameHostImpl> rfh,

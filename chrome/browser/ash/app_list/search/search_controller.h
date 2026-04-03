@@ -21,9 +21,9 @@
 #include "chrome/browser/ash/app_list/search/app_discovery_metrics_manager.h"
 #include "chrome/browser/ash/app_list/search/burn_in_controller.h"
 #include "chrome/browser/ash/app_list/search/common/keyword_util.h"
-#include "chrome/browser/ash/app_list/search/federated_metrics_manager.h"
 #include "chrome/browser/ash/app_list/search/ranking/launch_data.h"
 #include "chrome/browser/ash/app_list/search/ranking/ranker_manager.h"
+#include "chrome/browser/ash/app_list/search/search_file_scanner.h"
 #include "chrome/browser/ash/app_list/search/types.h"
 
 class AppListControllerDelegate;
@@ -33,11 +33,6 @@ class Profile;
 
 namespace ash {
 class AppListNotifier;
-
-namespace federated {
-class FederatedServiceController;
-}  // namespace federated
-
 }  // namespace ash
 
 namespace app_list {
@@ -49,7 +44,7 @@ class SearchProvider;
 class SearchEngine;
 
 // Long queries will be truncated down to this length.
-constexpr int kMaxAllowedQueryLength = 500;
+inline constexpr int kMaxAllowedQueryLength = 500;
 
 // A controller that collects queries from the AppListClient, dispatches them to
 // search providers, then ranks and publishes the results to the AppListModel.
@@ -61,9 +56,7 @@ class SearchController {
   SearchController(AppListModelUpdater* model_updater,
                    AppListControllerDelegate* list_controller,
                    ash::AppListNotifier* notifier,
-                   Profile* profile,
-                   ash::federated::FederatedServiceController*
-                       federated_service_controller_);
+                   Profile* profile);
   virtual ~SearchController();
 
   SearchController(const SearchController&) = delete;
@@ -129,8 +122,6 @@ class SearchController {
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
-
-  void OnDefaultSearchIsGoogleSet(bool is_google);
 
   std::u16string get_query();
 
@@ -223,20 +214,17 @@ class SearchController {
 
   std::unique_ptr<SearchMetricsManager> metrics_manager_;
   std::unique_ptr<SearchSessionMetricsManager> session_metrics_manager_;
-  std::unique_ptr<federated::FederatedMetricsManager>
-      federated_metrics_manager_;
   std::unique_ptr<AppDiscoveryMetricsManager> app_discovery_metrics_manager_;
 
   std::unique_ptr<AppSearchDataSource> app_search_data_source_;
 
-  // TODO(b/315709613):Temporary before it is moved to a new service.
   std::unique_ptr<SearchEngine> search_engine_;
+
+  std::unique_ptr<SearchFileScanner> search_file_scanner_;
 
   const raw_ptr<AppListModelUpdater> model_updater_;
   const raw_ptr<AppListControllerDelegate> list_controller_;
   const raw_ptr<ash::AppListNotifier> notifier_;
-  const raw_ptr<ash::federated::FederatedServiceController>
-      federated_service_controller_;
 
   base::ObserverList<Observer> observer_list_;
 };

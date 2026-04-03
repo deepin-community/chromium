@@ -4,23 +4,28 @@
 
 #include "chrome/browser/password_manager/web_app_profile_switcher.h"
 
+#include <memory>
 #include <optional>
 
+#include "ash/constants/web_app_id_constants.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile_window.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/web_applications/locks/app_lock.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom-shared.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
-#include "chrome/browser/web_applications/web_app_id_constants.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
@@ -30,18 +35,18 @@
 
 namespace {
 
-web_app::WebAppInstallInfo MakeInstallInfoFromApp(
-    const web_app::WebApp* web_app) {
-  web_app::WebAppInstallInfo install_info;
-  install_info.title = base::UTF8ToUTF16(web_app->untranslated_name());
-  install_info.description =
-      base::UTF8ToUTF16(web_app->untranslated_description());
-  install_info.start_url = web_app->start_url();
-  install_info.manifest_id = web_app->manifest_id();
-  install_info.manifest_url = web_app->manifest_url();
-  install_info.scope = web_app->scope();
-  install_info.manifest_icons = web_app->manifest_icons();
-  install_info.display_mode = web_app->display_mode();
+std::unique_ptr<web_app::WebAppInstallInfo> MakeInstallInfoFromApp(
+    const web_app::WebApp& web_app) {
+  auto install_info = std::make_unique<web_app::WebAppInstallInfo>(
+      web_app.manifest_id(), web_app.start_url());
+  install_info->title = base::UTF8ToUTF16(web_app.untranslated_name());
+  install_info->description =
+      base::UTF8ToUTF16(web_app.untranslated_description());
+  install_info->manifest_url = web_app.manifest_url();
+  install_info->scope = web_app.scope();
+  install_info->manifest_icons = web_app.manifest_icons();
+  install_info->trusted_icons = web_app.trusted_icons();
+  install_info->display_mode = web_app.display_mode();
   return install_info;
 }
 
@@ -66,7 +71,7 @@ void WebAppProfileSwitcher::SwitchToProfile(
       weak_factory_.GetWeakPtr());
   profiles::LoadProfileAsync(profile_to_open, std::move(open_web_app_callback));
 
-  if (app_id_ == web_app::kPasswordManagerAppId) {
+  if (app_id_ == ash::kPasswordManagerAppId) {
     base::UmaHistogramEnumeration(
         "PasswordManager.ShortcutMetric",
         password_manager::metrics_util::PasswordManagerShortcutMetric::
@@ -98,17 +103,20 @@ void WebAppProfileSwitcher::QueryProfileWebAppRegistryToOpenWebApp(
       /*on_complete=*/base::DoNothing());
 }
 
+// TODO(crbug.com/379136842): Verify that the allowed states as part of
+// IsAppSurfaceableToUser() is correct.
 void WebAppProfileSwitcher::InstallOrOpenWebAppWindowForProfile(
     web_app::AppLock& new_profile_lock,
-    base::Value::Dict& debug_value) {
-  if (new_profile_lock.registrar().IsInstalled(app_id_)) {
+    base::DictValue& debug_value) {
+  if (new_profile_lock.registrar().AppMatches(
+          app_id_, web_app::WebAppFilter::IsAppSurfaceableToUser())) {
     // The web app is already installed and can be launched, or foregrounded,
     // if it's already launched.
-    Browser* launched_app =
+    BrowserWindowInterface* launched_app =
         web_app::AppBrowserController::FindForWebApp(*new_profile_, app_id_);
-    debug_value.Set("launched_app", launched_app ? true : false);
+    debug_value.Set("launched_app", !!launched_app);
     if (launched_app) {
-      launched_app->window()->Activate();
+      launched_app->GetWindow()->Activate();
       RunCompletionCallback();
     } else {
       LaunchAppWithId(app_id_,
@@ -118,7 +126,7 @@ void WebAppProfileSwitcher::InstallOrOpenWebAppWindowForProfile(
   }
   // Fetch app icons from the already installed app prior to
   // installation.
-  // TODO(crbug/1414331) Use the icon loading command once it's available.
+  // TODO(crbug.com/40256076) Use the icon loading command once it's available.
   web_app::WebAppProvider::GetForWebApps(&active_profile_.get())
       ->icon_manager()
       .ReadAllIcons(app_id_, base::BindOnce(
@@ -127,10 +135,13 @@ void WebAppProfileSwitcher::InstallOrOpenWebAppWindowForProfile(
 }
 
 void WebAppProfileSwitcher::InstallAndLaunchWebApp(
-    web_app::IconBitmaps icon_bitmaps) {
+    web_app::WebAppIconManager::WebAppBitmaps icon_bitmaps) {
   web_app::WebAppProvider* active_profile_provider =
       web_app::WebAppProvider::GetForWebApps(&active_profile_.get());
-  if (!active_profile_provider->registrar_unsafe().IsInstalled(app_id_)) {
+  // TODO(crbug.com/379136842): This is likely too 'permissive' of a check, and
+  // different more restrictive filter should likely be used instead.
+  if (!active_profile_provider->registrar_unsafe().AppMatches(
+          app_id_, web_app::WebAppFilter::IsAppSurfaceableToUser())) {
     RunCompletionCallback();
     return;
   }
@@ -138,9 +149,9 @@ void WebAppProfileSwitcher::InstallAndLaunchWebApp(
   const web_app::WebApp* web_app =
       active_profile_provider->registrar_unsafe().GetAppById(app_id_);
   DCHECK(web_app);
-  auto install_info = std::make_unique<web_app::WebAppInstallInfo>(
-      MakeInstallInfoFromApp(web_app));
-  install_info->icon_bitmaps = std::move(icon_bitmaps);
+  auto install_info = MakeInstallInfoFromApp(*web_app);
+  install_info->icon_bitmaps = std::move(icon_bitmaps.manifest_icons);
+  install_info->trusted_icon_bitmaps = std::move(icon_bitmaps.trusted_icons);
 
   web_app::WebAppInstallParams install_params;
   install_params.add_to_desktop = true;
@@ -163,7 +174,7 @@ void WebAppProfileSwitcher::InstallAndLaunchWebApp(
 void WebAppProfileSwitcher::LaunchAppWithId(
     const webapps::AppId& app_id,
     webapps::InstallResultCode install_result) {
-  // TODO(crbug/1414331): Record metrics for installation failures.
+  // TODO(crbug.com/40256076): Record metrics for installation failures.
   if (!IsSuccess(install_result)) {
     RunCompletionCallback();
     return;
@@ -173,7 +184,6 @@ void WebAppProfileSwitcher::LaunchAppWithId(
       ->scheduler()
       .LaunchApp(app_id, *base::CommandLine::ForCurrentProcess(),
                  /*current_directory=*/base::FilePath(),
-                 /*url_handler_launch_url=*/std::nullopt,
                  /*protocol_handler_launch_url=*/std::nullopt,
                  /*file_launch_url=*/std::nullopt, /*launch_files=*/{},
                  base::IgnoreArgs<base::WeakPtr<Browser>,

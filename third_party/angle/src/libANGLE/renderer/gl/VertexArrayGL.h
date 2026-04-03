@@ -25,8 +25,13 @@ struct VertexArrayStateGL;
 class VertexArrayGL : public VertexArrayImpl
 {
   public:
-    VertexArrayGL(const gl::VertexArrayState &data, GLuint id);
-    VertexArrayGL(const gl::VertexArrayState &data, GLuint id, VertexArrayStateGL *sharedState);
+    VertexArrayGL(const gl::VertexArrayState &data,
+                  GLuint id,
+                  const gl::VertexArrayBuffers &vertexArrayBuffers);
+    VertexArrayGL(const gl::VertexArrayState &data,
+                  GLuint id,
+                  const gl::VertexArrayBuffers &vertexArrayBuffers,
+                  VertexArrayStateGL *sharedState);
     ~VertexArrayGL() override;
 
     void destroy(const gl::Context *context) override;
@@ -47,6 +52,7 @@ class VertexArrayGL : public VertexArrayImpl
 
     GLuint getVertexArrayID() const;
     VertexArrayStateGL *getNativeState() const;
+    bool syncsToSharedState() const { return !mOwnsNativeState; }
 
     angle::Result syncState(const gl::Context *context,
                             const gl::VertexArray::DirtyBits &dirtyBits,

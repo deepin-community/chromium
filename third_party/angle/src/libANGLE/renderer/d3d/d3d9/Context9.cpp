@@ -9,6 +9,8 @@
 
 #include "libANGLE/renderer/d3d/d3d9/Context9.h"
 
+#include <utility>
+
 #include "common/entry_points_enum_autogen.h"
 #include "common/string_utils.h"
 #include "image_util/loadimage.h"
@@ -37,14 +39,17 @@ Context9::Context9(const gl::State &state, gl::ErrorSet *errorSet, Renderer9 *re
 
 Context9::~Context9() {}
 
-angle::Result Context9::initialize()
+angle::Result Context9::initialize(const angle::ImageLoadContext &imageLoadContext)
 {
+    mImageLoadContext = imageLoadContext;
     return angle::Result::Continue;
 }
 
 void Context9::onDestroy(const gl::Context *context)
 {
     mIncompleteTextures.onDestroy(context);
+
+    mImageLoadContext = {};
 }
 
 CompilerImpl *Context9::createCompiler()
@@ -100,9 +105,10 @@ BufferImpl *Context9::createBuffer(const gl::BufferState &state)
     return new Buffer9(state, mRenderer);
 }
 
-VertexArrayImpl *Context9::createVertexArray(const gl::VertexArrayState &data)
+VertexArrayImpl *Context9::createVertexArray(const gl::VertexArrayState &data,
+                                             const gl::VertexArrayBuffers &vertexArrayBuffers)
 {
-    return new VertexArray9(data);
+    return new VertexArray9(data, vertexArrayBuffers);
 }
 
 QueryImpl *Context9::createQuery(gl::QueryType type)
@@ -402,12 +408,11 @@ angle::Result Context9::pushGroupMarker(GLsizei length, const char *marker)
 
 angle::Result Context9::popGroupMarker()
 {
-    const char *marker = nullptr;
     if (!mMarkerStack.empty())
     {
-        marker = mMarkerStack.top().c_str();
+        std::string marker = std::move(mMarkerStack.top());
         mMarkerStack.pop();
-        mRenderer->getAnnotator()->endEvent(nullptr, marker,
+        mRenderer->getAnnotator()->endEvent(nullptr, marker.c_str(),
                                             angle::EntryPoint::GLPopGroupMarkerEXT);
     }
     return angle::Result::Continue;
@@ -535,10 +540,5 @@ void Context9::handleResult(HRESULT hr,
     errorStream << "Internal D3D9 error: " << gl::FmtHR(hr) << ": " << message;
 
     mErrors->handleError(glErrorCode, errorStream.str().c_str(), file, function, line);
-}
-
-angle::ImageLoadContext Context9::getImageLoadContext() const
-{
-    return getRenderer()->getDisplay()->getImageLoadContext();
 }
 }  // namespace rx

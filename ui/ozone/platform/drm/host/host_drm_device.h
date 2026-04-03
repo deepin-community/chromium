@@ -9,13 +9,13 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/weak_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/ozone/platform/drm/common/display_types.h"
 #include "ui/ozone/platform/drm/host/drm_cursor.h"
 #include "ui/ozone/platform/drm/host/gpu_thread_adapter.h"
@@ -70,7 +70,7 @@ class HostDrmDevice : public base::RefCountedThreadSafe<HostDrmDevice>,
   void GpuConfigureNativeDisplays(
       const std::vector<display::DisplayConfigurationParams>& config_requests,
       display::ConfigureCallback callback,
-      uint32_t modeset_flag) override;
+      display::ModesetFlags modeset_flags) override;
   bool GpuSetHdcpKeyProp(int64_t display_id, const std::string& key) override;
   bool GpuGetHDCPState(int64_t display_id) override;
   bool GpuSetHDCPState(
@@ -80,12 +80,18 @@ class HostDrmDevice : public base::RefCountedThreadSafe<HostDrmDevice>,
   void GpuSetColorTemperatureAdjustment(
       int64_t display_id,
       const display::ColorTemperatureAdjustment& cta) override;
+  void GpuSetColorCalibration(
+      int64_t display_id,
+      const display::ColorCalibration& calibration) override;
   void GpuSetGammaAdjustment(
       int64_t display_id,
       const display::GammaAdjustment& adjustment) override;
   void GpuSetPrivacyScreen(int64_t display_id,
                            bool enabled,
                            display::SetPrivacyScreenCallback callback) override;
+  void GpuGetSeamlessRefreshRates(
+      int64_t display_id,
+      display::GetSeamlessRefreshRatesCallback callback) override;
 
   // Services needed by DrmWindowHost
   bool GpuDestroyWindow(gfx::AcceleratedWidget widget) override;

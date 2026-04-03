@@ -1,12 +1,12 @@
 {
   "src/libANGLE/renderer/angle_format.py":
-    "8269a72cc5629fb2544975b6c36c2bd4",
+    "45ffbde9a8edc7cec1c6c3afc5517b30",
   "src/libANGLE/renderer/d3d/d3d11/gen_texture_format_table.py":
     "70dcd2607cd481f450233c7c2b5c7ac0",
   "src/libANGLE/renderer/d3d/d3d11/texture_format_data.json":
-    "c33d9f61426be6ea8088f1348ee51f29",
+    "4538ef526c5a801d4a079a6166488899",
   "src/libANGLE/renderer/d3d/d3d11/texture_format_map.json":
-    "6a0587f36ab306c48d3a3d4f931db89d",
+    "60005ea7dd15a4e18e6156bc88e0a08e",
   "src/libANGLE/renderer/d3d/d3d11/texture_format_table_autogen.cpp":
-    "a3064371e40b25d283452b41527c9d58"
+    "94f09f3702c5778f71f91cbde142912d"
 }

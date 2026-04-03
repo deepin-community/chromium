@@ -5,7 +5,7 @@
 #ifndef CHROME_BROWSER_NAVIGATION_PREDICTOR_PRELOADING_MODEL_HANDLER_H_
 #define CHROME_BROWSER_NAVIGATION_PREDICTOR_PRELOADING_MODEL_HANDLER_H_
 
-#include "components/optimization_guide/core/model_handler.h"
+#include "components/optimization_guide/core/inference/model_handler.h"
 
 // Model handler used to retrieve and eventually execute the model.
 class PreloadingModelHandler
@@ -17,9 +17,6 @@ class PreloadingModelHandler
   ~PreloadingModelHandler() override;
   PreloadingModelHandler(const PreloadingModelHandler&) = delete;
   PreloadingModelHandler& operator=(const PreloadingModelHandler&) = delete;
-
- private:
-  base::WeakPtrFactory<PreloadingModelHandler> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_NAVIGATION_PREDICTOR_PRELOADING_MODEL_HANDLER_H_

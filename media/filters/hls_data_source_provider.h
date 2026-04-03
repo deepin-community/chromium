@@ -8,10 +8,12 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string_view>
 
 #include "base/containers/queue.h"
+#include "base/containers/span.h"
 #include "base/functional/callback.h"
-#include "base/strings/string_piece.h"
+#include "base/sequence_checker.h"
 #include "base/types/id_type.h"
 #include "media/base/media_export.h"
 #include "media/base/status.h"
@@ -50,6 +52,7 @@ class MEDIA_EXPORT HlsDataSourceProvider {
   struct UrlDataSegment {
     const GURL uri;
     const std::optional<hls::types::ByteRange> range;
+    const bool bypass_cache;
   };
   using SegmentQueue = base::queue<UrlDataSegment>;
 
@@ -102,7 +105,19 @@ class MEDIA_EXPORT HlsDataSourceStream {
 
   std::optional<size_t> max_read_position() const { return max_read_position_; }
 
-  const uint8_t* raw_data() const { return buffer_.data(); }
+  base::span<const uint8_t> data() const { return buffer_; }
+
+  uint64_t memory_usage() const { return memory_usage_; }
+
+  bool would_taint_origin() const { return would_taint_origin_; }
+
+  // Allows the stream creator to update memory usage after the first or after
+  // subsequent reads.
+  void set_total_memory_usage(uint64_t usage) { memory_usage_ = usage; }
+
+  // A stream's origin is considered tainted if any backing data source involved
+  // in this playback is tainted.
+  void set_would_taint_origin() { would_taint_origin_ = true; }
 
   // Often the network data for HLS consists of plain-text manifest files, so
   // this supports accessing the fetched data as a string view.
@@ -113,9 +128,15 @@ class MEDIA_EXPORT HlsDataSourceStream {
   bool RequiresNextDataSource() const;
 
   // Gets the next segment URI from the queue of segments. It is invalid to call
-  // this method if `RequiresResetForNewSegment` does not return true. This
-  // method will also update the internal range if the segment has one set.
+  // this method if `RequiresNextDataSource` does not return true. This
+  // method will also update the internal range if the segment has one.
   GURL GetNextSegmentURI();
+
+  // Gets the next segment URI and its cache bypass option from the queue of
+  // segments. It is invalid to call this method if `RequiresNextDataSource`
+  // does not return true. This method will also update the internal range if
+  // the segment has one.
+  std::pair<GURL, bool> GetNextSegmentURIAndCacheStatus();
 
   // Has the stream read all possible data?
   bool CanReadMore() const;
@@ -126,12 +147,12 @@ class MEDIA_EXPORT HlsDataSourceStream {
 
   // Used by a HlsDataSourceProvider implementation to finish adding data to
   // the internal buffer.
-  void UnlockStreamPostWrite(int read_size, bool end_of_stream);
+  void UnlockStreamPostWrite(size_t read_size, bool end_of_stream);
 
   // Used by a HlsDataSourceProvider implementation to start adding new data,
   // which means ensuring that there is enough space for the expected write, as
   // well as returning the correct buffer address to write into.
-  uint8_t* LockStreamForWriting(int ensure_minimum_space);
+  base::span<uint8_t> LockStreamForWriting(size_t ensure_minimum_space);
 
  private:
   const StreamId stream_id_;
@@ -139,9 +160,17 @@ class MEDIA_EXPORT HlsDataSourceStream {
   // Active buffer data. Reading without clearing will append new data
   // to the end of the buffer. Clearing will not reset the read-head, but will
   // empty this buffer.
-  // TODO(crbug/1266991): Consider swapping out the vector with a more
+  // TODO(crbug.com/40057824): Consider swapping out the vector with a more
   // size-flexible data structure to avoid resizing.
   std::vector<uint8_t> buffer_;
+
+  // This is critical to security. Once set to true, it must _never_ be set back
+  // to false.
+  bool would_taint_origin_ = false;
+
+  // The memory usage represents the total memory usage for _all_ streams used
+  // in this playback.
+  uint64_t memory_usage_ = 0;
 
   size_t read_position_ = 0;
 

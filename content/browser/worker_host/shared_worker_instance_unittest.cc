@@ -6,8 +6,8 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
-#include "base/strings/string_piece.h"
 #include "base/strings/utf_string_conversions.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -31,12 +31,13 @@ class SharedWorkerInstanceTest : public testing::Test {
         blink::mojom::SharedWorkerCreationContextType::kNonsecure,
         storage_key.IsFirstPartyContext()
             ? blink::mojom::SharedWorkerSameSiteCookies::kAll
-            : blink::mojom::SharedWorkerSameSiteCookies::kNone);
+            : blink::mojom::SharedWorkerSameSiteCookies::kNone,
+        /*extended_lifetime=*/false);
   }
 
   bool Matches(const SharedWorkerInstance& instance,
                const std::string& url,
-               const base::StringPiece& name) {
+               const std::string_view& name) {
     blink::StorageKey storage_key;
     if (GURL(url).SchemeIs(url::kDataScheme)) {
       storage_key =

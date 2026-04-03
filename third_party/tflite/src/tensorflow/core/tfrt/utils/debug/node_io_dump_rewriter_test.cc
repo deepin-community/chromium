@@ -16,6 +16,7 @@ limitations under the License.
 
 #include <dirent.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -34,21 +35,21 @@ limitations under the License.
 #include "tensorflow/cc/ops/array_ops.h"
 #include "tensorflow/cc/ops/math_ops.h"
 #include "tensorflow/cc/saved_model/reader.h"
+#include "xla/tsl/lib/core/status_test_util.h"
+#include "xla/tsl/platform/statusor.h"
+#include "xla/tsl/platform/test.h"
 #include "tensorflow/core/common_runtime/function_utils.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/graph/graph.h"
-#include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/resource_loader.h"
+#include "tensorflow/core/platform/types.h"
 #include "tensorflow/core/protobuf/meta_graph.pb.h"
 #include "tensorflow/core/tfrt/saved_model/saved_model.h"
 #include "tensorflow/core/tfrt/saved_model/saved_model_testutil.h"
-#include "tsl/lib/core/status_test_util.h"
 #include "tsl/platform/path.h"
-#include "tsl/platform/statusor.h"
-#include "tsl/platform/test.h"
 
 namespace tensorflow {
 namespace tfrt_stub {
@@ -117,6 +118,7 @@ absl::StatusOr<std::vector<std::string>> GetFilenames(
     filenames.push_back(entry->d_name);
   }
   closedir(dir);
+  std::sort(filenames.begin(), filenames.end());
   return filenames;
 }
 
@@ -183,9 +185,9 @@ TEST(NodeIoDumpRewriterTest, OnSavedModelV1) {
   // Check the dump files.
   ASSERT_OK_AND_ASSIGN(auto filenames, GetFilenames(dump_dir));
   ASSERT_EQ(filenames.size(), 3);
-  EXPECT_TRUE(absl::StartsWith(filenames[0], "Add:out:0_"));
-  EXPECT_TRUE(absl::StartsWith(filenames[1], "Add:in:0_"));
-  EXPECT_TRUE(absl::StartsWith(filenames[2], "Add:in:1_"));
+  EXPECT_TRUE(absl::StartsWith(filenames[0], "Add:in:0_"));
+  EXPECT_TRUE(absl::StartsWith(filenames[1], "Add:in:1_"));
+  EXPECT_TRUE(absl::StartsWith(filenames[2], "Add:out:0_"));
 }
 
 TEST(NodeIoDumpRewriterTest, OnSavedModelV2) {
@@ -222,9 +224,9 @@ TEST(NodeIoDumpRewriterTest, OnSavedModelV2) {
   // Check the dump files.
   ASSERT_OK_AND_ASSIGN(auto filenames, GetFilenames(dump_dir));
   ASSERT_EQ(filenames.size(), 3);
-  EXPECT_TRUE(absl::StartsWith(filenames[0], "result:out:0_"));
+  EXPECT_TRUE(absl::StartsWith(filenames[0], "result:in:0_"));
   EXPECT_TRUE(absl::StartsWith(filenames[1], "result:in:1_"));
-  EXPECT_TRUE(absl::StartsWith(filenames[2], "result:in:0_"));
+  EXPECT_TRUE(absl::StartsWith(filenames[2], "result:out:0_"));
 }
 
 }  // namespace

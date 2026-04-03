@@ -34,7 +34,6 @@
 #include "src/dawn/node/binding/GPUBuffer.h"
 #include "src/dawn/node/binding/GPUComputePipeline.h"
 #include "src/dawn/node/binding/GPUQuerySet.h"
-#include "src/dawn/node/utils/Debug.h"
 
 namespace wgpu::binding {
 
@@ -43,7 +42,7 @@ namespace wgpu::binding {
 ////////////////////////////////////////////////////////////////////////////////
 GPUComputePassEncoder::GPUComputePassEncoder(const wgpu::ComputePassDescriptor& desc,
                                              wgpu::ComputePassEncoder enc)
-    : enc_(std::move(enc)), label_(desc.label ? desc.label : "") {}
+    : enc_(std::move(enc)), label_(CopyLabel(desc.label)) {}
 
 void GPUComputePassEncoder::setPipeline(Napi::Env,
                                         interop::Interface<interop::GPUComputePipeline> pipeline) {
@@ -117,6 +116,19 @@ void GPUComputePassEncoder::setBindGroup(
                       dynamicOffsetsData.Data() + dynamicOffsetsDataStart);
 }
 
+void GPUComputePassEncoder::setImmediates(Napi::Env env,
+                                          interop::GPUSize32 rangeOffset,
+                                          interop::AllowSharedBufferSource data,
+                                          interop::GPUSize64 dataOffsetElements,
+                                          std::optional<interop::GPUSize64> sizeElements) {
+    std::span<const uint8_t> dataSpan;
+    if (!ConvertDataElementsToSpan(env, &dataSpan, data, dataOffsetElements, sizeElements)) {
+        return;
+    }
+
+    enc_.SetImmediates(rangeOffset, dataSpan.data(), dataSpan.size());
+}
+
 void GPUComputePassEncoder::pushDebugGroup(Napi::Env, std::string groupLabel) {
     enc_.PushDebugGroup(groupLabel.c_str());
 }
@@ -134,7 +146,7 @@ std::string GPUComputePassEncoder::getLabel(Napi::Env) {
 }
 
 void GPUComputePassEncoder::setLabel(Napi::Env, std::string value) {
-    enc_.SetLabel(value.c_str());
+    enc_.SetLabel(std::string_view(value));
     label_ = value;
 }
 

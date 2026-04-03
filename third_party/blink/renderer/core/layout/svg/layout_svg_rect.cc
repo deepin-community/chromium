@@ -27,6 +27,7 @@
 
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_rect.h"
 
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/svg/svg_length_functions.h"
 #include "third_party/blink/renderer/core/svg/svg_rect_element.h"
 
@@ -37,9 +38,15 @@ namespace {
 bool GeometryPropertiesChanged(const ComputedStyle& old_style,
                                const ComputedStyle& new_style) {
   return old_style.X() != new_style.X() || old_style.Y() != new_style.Y() ||
-         old_style.UsedWidth() != new_style.UsedWidth() ||
-         old_style.UsedHeight() != new_style.UsedHeight() ||
+         old_style.Width() != new_style.Width() ||
+         old_style.Height() != new_style.Height() ||
          old_style.Rx() != new_style.Rx() || old_style.Ry() != new_style.Ry();
+}
+
+bool CalculateGeometryDependsOnViewport(const ComputedStyle& style) {
+  return style.Width().HasPercent() || style.Height().HasPercent() ||
+         style.X().HasPercent() || style.Y().HasPercent() ||
+         style.Rx().HasPercent() || style.Ry().HasPercent();
 }
 
 }  // namespace
@@ -48,10 +55,12 @@ LayoutSVGRect::LayoutSVGRect(SVGRectElement* node) : LayoutSVGShape(node) {}
 
 LayoutSVGRect::~LayoutSVGRect() = default;
 
-void LayoutSVGRect::StyleDidChange(StyleDifference diff,
-                                   const ComputedStyle* old_style) {
+void LayoutSVGRect::StyleDidChange(
+    StyleDifference diff,
+    const ComputedStyle* old_style,
+    const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
-  LayoutSVGShape::StyleDidChange(diff, old_style);
+  LayoutSVGShape::StyleDidChange(diff, old_style, style_change_context);
 
   if (old_style && GeometryPropertiesChanged(*old_style, StyleRef())) {
     SetNeedsShapeUpdate();
@@ -65,12 +74,14 @@ gfx::RectF LayoutSVGRect::UpdateShapeFromElement() {
   ClearPath();
   SetGeometryType(GeometryType::kEmpty);
 
-  const SVGViewportResolver viewport_resolver(*this);
   const ComputedStyle& style = StyleRef();
+  SetGeometryDependsOnViewport(CalculateGeometryDependsOnViewport(style));
+
+  const SVGViewportResolver viewport_resolver(*this);
   const gfx::PointF origin =
       PointForLengthPair(style.X(), style.Y(), viewport_resolver, style);
-  const gfx::Vector2dF size = VectorForLengthPair(
-      style.UsedWidth(), style.UsedHeight(), viewport_resolver, style);
+  const gfx::Vector2dF size = VectorForLengthPair(style.Width(), style.Height(),
+                                                  viewport_resolver, style);
   // Spec: "A negative value is an error." gfx::SizeF() clamps negative
   // width/height to 0.
   const gfx::RectF bounding_box(origin, gfx::SizeF(size.x(), size.y()));
@@ -142,7 +153,7 @@ bool LayoutSVGRect::DefinitelyHasSimpleStroke() const {
   // miterlimits, the join style used might not be correct (e.g. a miterlimit
   // of 1.4142135 should result in bevel joins, but may be drawn using miter
   // joins).
-  return !style.HasDashArray() && style.JoinStyle() == kMiterJoin &&
+  return !style.StrokeDashArray() && style.JoinStyle() == kMiterJoin &&
          style.StrokeMiterLimit() >= 1.5;
 }
 

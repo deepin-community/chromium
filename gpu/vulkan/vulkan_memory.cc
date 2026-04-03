@@ -7,6 +7,8 @@
 #include <vulkan/vulkan.h>
 
 #include <optional>
+
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "build/build_config.h"
 #include "gpu/vulkan/vulkan_device_queue.h"
@@ -26,12 +28,12 @@ std::optional<uint32_t> FindMemoryTypeIndex(
     if (((1u << i) & requirements->memoryTypeBits) == 0) {
       continue;
     }
-    if ((properties.memoryTypes[i].propertyFlags & flags) != flags) {
+    if ((UNSAFE_TODO(properties.memoryTypes[i]).propertyFlags & flags) !=
+        flags) {
       continue;
     }
     return i;
   }
-  NOTREACHED();
   return std::nullopt;
 }
 

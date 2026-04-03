@@ -6,9 +6,11 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <memory>
+#include <string>
 
-#include "base/containers/contains.h"
+#include "base/compiler_specific.h"
 #include "base/strings/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/event.h"
@@ -43,10 +45,10 @@ class CharacterComposerTest : public testing::Test {
  protected:
   // Returns a |KeyEvent| for a dead key press.
   KeyEvent* DeadKeyPress(char16_t combining_character) const {
-    KeyEvent* event =
-        new KeyEvent(ET_KEY_PRESSED, VKEY_UNKNOWN, DomCode::NONE, EF_NONE,
-                     DomKey::DeadKeyFromCombiningCharacter(combining_character),
-                     EventTimeForNow());
+    KeyEvent* event = new KeyEvent(
+        EventType::kKeyPressed, VKEY_UNKNOWN, DomCode::NONE, EF_NONE,
+        DomKey::DeadKeyFromCombiningCharacter(combining_character),
+        EventTimeForNow());
     return event;
   }
 
@@ -70,8 +72,8 @@ class CharacterComposerTest : public testing::Test {
     // Which physical key is used as the Compose key can usually be configured
     // and should therefore be irrelevant.
     return std::make_unique<KeyEvent>(
-        ET_KEY_PRESSED, KeyboardCode::VKEY_COMPOSE, DomCode::ALT_RIGHT, EF_NONE,
-        DomKey::COMPOSE, EventTimeForNow());
+        EventType::kKeyPressed, KeyboardCode::VKEY_COMPOSE, DomCode::ALT_RIGHT,
+        EF_NONE, DomKey::COMPOSE, EventTimeForNow());
   }
 
   // Expects key is filtered and no character is composed.
@@ -86,7 +88,7 @@ class CharacterComposerTest : public testing::Test {
                                             DomCode code,
                                             int flags,
                                             char16_t character) const {
-    return std::make_unique<KeyEvent>(ET_KEY_PRESSED, vkey, code, flags,
+    return std::make_unique<KeyEvent>(EventType::kKeyPressed, vkey, code, flags,
                                       DomKey::FromCharacter(character),
                                       EventTimeForNow());
   }
@@ -383,11 +385,11 @@ TEST_F(CharacterComposerTest, MainTableIsCorrectlyOrdered) {
     subtrees.push_back(index);
     for (int t = 0; t < kTypes; ++t) {
       // Skip the internal table and verify the next index is within the data.
-      index += 1 + 2 * kCompositions.tree[index];
+      index += 1 + 2 * UNSAFE_TODO(kCompositions.tree[index]);
       EXPECT_GT(kCompositions.tree_entries, index);
       // Skip the leaf table and verify that the next index is not past the
       // end of the data.
-      index += 1 + 2 * kCompositions.tree[index];
+      index += 1 + 2 * UNSAFE_TODO(kCompositions.tree[index]);
       EXPECT_GE(kCompositions.tree_entries, index);
     }
   }
@@ -401,24 +403,24 @@ TEST_F(CharacterComposerTest, MainTableIsCorrectlyOrdered) {
     for (int t = 0; t < kTypes; ++t) {
       // Check the internal subtable.
       uint16_t previous_key = 0;
-      uint16_t size = kCompositions.tree[index++];
+      uint16_t size = UNSAFE_TODO(kCompositions.tree[index++]);
       for (uint16_t i = 0; i < size; ++i) {
         // Verify that the subtable is sorted.
-        uint16_t key = kCompositions.tree[index];
-        uint16_t value = kCompositions.tree[index + 1];
+        uint16_t key = UNSAFE_TODO(kCompositions.tree[index]);
+        uint16_t value = UNSAFE_TODO(kCompositions.tree[index + 1]);
         if (i)
           EXPECT_LT(previous_key, key) << index;
         previous_key = key;
         // Verify that the internal link is valid.
-        EXPECT_TRUE(base::Contains(subtrees, value)) << index;
+        EXPECT_TRUE(std::ranges::contains(subtrees, value)) << index;
         index += 2;
       }
       // Check the leaf subtable.
       previous_key = 0;
-      size = kCompositions.tree[index++];
+      size = UNSAFE_TODO(kCompositions.tree[index++]);
       for (uint16_t i = 0; i < size; ++i) {
         // Verify that the subtable is sorted.
-        uint16_t key = kCompositions.tree[index];
+        uint16_t key = UNSAFE_TODO(kCompositions.tree[index]);
         if (i)
           EXPECT_LT(previous_key, key) << index;
         previous_key = key;
@@ -449,8 +451,7 @@ TEST_F(CharacterComposerTest, HexadecimalComposition) {
   ExpectUnicodeKeyFiltered(VKEY_9, DomCode::DIGIT9, EF_NONE, '9');
   ExpectUnicodeKeyComposed(
       VKEY_RETURN, DomCode::ENTER, EF_NONE, '\r',
-      std::u16string(kMusicalKeyboard,
-                     kMusicalKeyboard + std::size(kMusicalKeyboard)));
+      std::u16string(std::begin(kMusicalKeyboard), std::end(kMusicalKeyboard)));
 }
 
 TEST_F(CharacterComposerTest, HexadecimalCompositionPreedit) {

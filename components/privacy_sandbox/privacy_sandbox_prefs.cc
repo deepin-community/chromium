@@ -4,16 +4,13 @@
 
 #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
 
+#include "base/time/time.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
-#include "components/privacy_sandbox/tracking_protection_prefs.h"
 
 namespace privacy_sandbox {
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry) {
-  registry->RegisterBooleanPref(
-      prefs::kPrivacySandboxApisEnabled, true,
-      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterBooleanPref(prefs::kPrivacySandboxM1ConsentDecisionMade,
                                 false);
   registry->RegisterBooleanPref(prefs::kPrivacySandboxM1EEANoticeAcknowledged,
@@ -49,7 +46,8 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(
       prefs::kPrivacySandboxDisabledInsufficientConfirmation, false);
   registry->RegisterBooleanPref(
-      prefs::kPrivacySandboxFirstPartySetsDataAccessAllowedInitialized, false);
+      prefs::kPrivacySandboxRelatedWebsiteSetsDataAccessAllowedInitialized,
+      false);
   registry->RegisterBooleanPref(
       prefs::kPrivacySandboxRelatedWebsiteSetsEnabled, true,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
@@ -64,8 +62,17 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(
       prefs::kPrivacySandboxTopicsConsentTextAtLastUpdate, "");
 
-  // Register prefs for tracking protection.
-  tracking_protection::RegisterProfilePrefs(registry);
+  registry->RegisterBooleanPref(
+      prefs::kPrivacySandboxAllowNoticeFor3PCBlockedTrial, false);
+#if BUILDFLAG(IS_ANDROID)
+  registry->RegisterListPref(prefs::kPrivacySandboxActivityTypeRecord2);
+#endif
+  // TODO: b/462419925 - Deprecate these prefs post-Mode B rollback.
+  registry->RegisterBooleanPref(prefs::kShowRollbackUiModeB, false);
+  registry->RegisterBooleanPref(
+      prefs::kBlockAll3pcToggleEnabled, false,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterBooleanPref(prefs::kTrackingProtection3pcdEnabled, false);
 }
 
 }  // namespace privacy_sandbox

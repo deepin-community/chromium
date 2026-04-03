@@ -98,11 +98,6 @@ void ExtensionsRenderFrameObserver::BindAppWindowReceiver(
   receivers_.Add(this, std::move(receiver));
 }
 
-void ExtensionsRenderFrameObserver::SetSupportsAppRegion(
-    bool supports_app_region) {
-  render_frame()->GetWebView()->SetSupportsAppRegion(supports_app_region);
-}
-
 void ExtensionsRenderFrameObserver::SetVisuallyDeemphasized(bool deemphasized) {
   // TODO(danakj): This mojo API should be a MainFrame-only interface and object
   // rather than an every-frame interface and object.

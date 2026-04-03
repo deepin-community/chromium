@@ -3,7 +3,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License a
+# You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -15,27 +15,11 @@
 
 from python.generators.diff_tests.testing import Path, DataPath, Metric
 from python.generators.diff_tests.testing import Csv, Json, TextProto
-from python.generators.diff_tests.testing import DiffTestBlueprint
+from python.generators.diff_tests.testing import DiffTestBlueprint, TraceInjector
 from python.generators.diff_tests.testing import TestSuite
 
 
 class Tables(TestSuite):
-  # Contains tests for the handling of tables by trace processor. The focus of
-  # here is to check that trace processor is correctly returning and handling
-  # on the really important tables in trace processor.  Note: It's generally
-  # advisable to add tests here. Check the guidance provided by
-  # for choosing which folder to add a new test to. Window table
-  def test_android_sched_and_ps_smoke_window(self):
-    return DiffTestBlueprint(
-        trace=DataPath('android_sched_and_ps.pb'),
-        query="""
-        SELECT * FROM "window";
-        """,
-        out=Csv("""
-        "ts","dur","quantum_ts"
-        0,9223372036854775807,0
-        """))
-
   # Null printing
   def test_nulls(self):
     return DiffTestBlueprint(
@@ -147,52 +131,6 @@ class Tables(TestSuite):
         query=Metric('trace_metadata'),
         out=Path('trace_metadata.json.out'))
 
-  # Processes as a metric
-  def test_android_task_names(self):
-    return DiffTestBlueprint(
-        trace=TextProto(r"""
-        packet {
-          process_tree {
-            processes {
-              pid: 1
-              ppid: 0
-              cmdline: "init"
-              uid: 0
-            }
-            processes {
-              pid: 2
-              ppid: 1
-              cmdline: "com.google.android.gm:process"
-              uid: 10001
-            }
-          }
-        }
-        packet {
-          packages_list {
-            packages {
-              name: "com.google.android.gm"
-              uid: 10001
-            }
-          }
-        }
-        """),
-        query=Metric('android_task_names'),
-        out=TextProto(r"""
-        android_task_names {
-          process {
-            pid: 1
-            process_name: "init"
-            uid: 0
-          }
-          process {
-            pid: 2
-            process_name: "com.google.android.gm:process"
-            uid: 10001
-            uid_package_name: "com.google.android.gm"
-          }
-        }
-        """))
-
   # Ftrace stats imports in metadata and stats tables
   def test_ftrace_setup_errors(self):
     return DiffTestBlueprint(
@@ -287,34 +225,46 @@ class Tables(TestSuite):
         }
         """),
         query="""
-        SELECT
-          type,
-          cpu
+        SELECT cpu
         FROM cpu_track
-        ORDER BY type, cpu;
+        ORDER BY cpu;
         """,
         out=Csv("""
-        "type","cpu"
-        "cpu_track",0
-        "cpu_track",1
+        "cpu"
+        0
+        1
         """))
 
   def test_thread_state_flattened_aggregated(self):
     return DiffTestBlueprint(
         trace=DataPath('android_monitor_contention_trace.atr'),
         query="""
-      INCLUDE PERFETTO MODULE sched.thread_state_flattened;
-      select * from _get_flattened_thread_state_aggregated(11155, NULL);
-      """,
+          INCLUDE PERFETTO MODULE sched.thread_state_flattened;
+          select *
+          from _get_flattened_thread_state_aggregated(11155, NULL);
+        """,
         out=Path('thread_state_flattened_aggregated_csv.out'))
 
   def test_thread_state_flattened(self):
     return DiffTestBlueprint(
         trace=DataPath('android_monitor_contention_trace.atr'),
         query="""
-      INCLUDE PERFETTO MODULE sched.thread_state_flattened;
-      select * from _get_flattened_thread_state(11155, NULL);
-      """,
+          INCLUDE PERFETTO MODULE sched.thread_state_flattened;
+          SELECT
+            ts,
+            dur,
+            utid,
+            depth,
+            name,
+            slice_id,
+            cpu,
+            state,
+            io_wait,
+            blocked_function,
+            waker_utid,
+            irq_context
+          FROM _get_flattened_thread_state(11155, NULL);
+        """,
         out=Path('thread_state_flattened_csv.out'))
 
   def test_metadata(self):
@@ -330,6 +280,7 @@ class Tables(TestSuite):
               machine: "x86_64"
               release: "22.6.0"
             }
+            system_ram_bytes: 126598774784
           }
           trusted_uid: 158158
           trusted_packet_sequence_id: 1
@@ -339,17 +290,167 @@ class Tables(TestSuite):
               FROM metadata
               WHERE name IN (
                   "system_name", "system_version", "system_machine",
-                  "system_release", "timezone_off_mins")
+                  "system_release", "timezone_off_mins", "system_ram_bytes",
+                  "system_ram_gb")
               ORDER BY name
         """,
         out=Csv(r"""
                 "name","val"
                 "system_machine","x86_64"
                 "system_name","Darwin"
+                "system_ram_bytes",126598774784
+                "system_ram_gb",127
                 "system_release","22.6.0"
                 "system_version","Foobar"
                 "timezone_off_mins",60
                 """))
+
+  def test_metadata_schema(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          system_info {
+            utsname {
+              sysname: "Linux"
+            }
+          }
+          trusted_packet_sequence_id: 1
+        }
+        packet {
+          system_info {
+            utsname {
+              sysname: "Darwin"
+            }
+          }
+          machine_id: 1001
+          trusted_packet_sequence_id: 2
+        }
+        packet {
+          ftrace_events {
+            cpu: 0
+            event {
+              timestamp: 1000
+              pid: 100
+              print { buf: "host" }
+            }
+            last_read_event_timestamp: 1000
+          }
+          trusted_packet_sequence_id: 3
+        }
+        packet {
+          ftrace_events {
+            cpu: 0
+            event {
+              timestamp: 2000
+              pid: 200
+              print { buf: "remote" }
+            }
+            last_read_event_timestamp: 2000
+          }
+          machine_id: 1001
+          trusted_packet_sequence_id: 4
+        }
+        """),
+        query=r"""
+          SELECT
+            name,
+            key_type,
+            int_value,
+            str_value,
+            machine_id,
+            trace_id
+          FROM metadata
+          WHERE name IN ('system_name', 'trace_type', 'ftrace_latest_data_start_ns')
+          ORDER BY name, machine_id
+        """,
+        out=Csv(r"""
+          "name","key_type","int_value","str_value","machine_id","trace_id"
+          "ftrace_latest_data_start_ns","single",1000,"[NULL]",0,0
+          "ftrace_latest_data_start_ns","single",2000,"[NULL]",1,0
+          "system_name","single","[NULL]","Linux",0,"[NULL]"
+          "system_name","single","[NULL]","Darwin",1,"[NULL]"
+          "trace_type","single","[NULL]","proto","[NULL]",0
+        """))
+
+  def test_metadata_uuid_upgrade(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          trace_uuid {
+            msb: 0
+            lsb: 1
+          }
+          trusted_packet_sequence_id: 1
+        }
+        """),
+        query=r"""
+          SELECT name, str_value, machine_id, trace_id FROM metadata
+          WHERE name = 'trace_uuid';
+        """,
+        out=Csv(r"""
+          "name","str_value","machine_id","trace_id"
+          "trace_uuid","00000000-0000-0000-0000-000000000001","[NULL]",0
+        """))
+
+  def test_metadata_helpers(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          system_info {
+            utsname {
+              sysname: "Linux"
+            }
+          }
+          trusted_packet_sequence_id: 1
+        }
+        packet {
+          system_info {
+            utsname {
+              sysname: "Darwin"
+            }
+          }
+          machine_id: 1001
+          trusted_packet_sequence_id: 2
+        }
+        packet {
+          ftrace_events {
+            cpu: 0
+            event {
+              timestamp: 1000
+              pid: 100
+              print { buf: "host" }
+            }
+            last_read_event_timestamp: 1000
+          }
+          trusted_packet_sequence_id: 3
+        }
+        packet {
+          ftrace_events {
+            cpu: 0
+            event {
+              timestamp: 2000
+              pid: 200
+              print { buf: "remote" }
+            }
+            last_read_event_timestamp: 2000
+          }
+          machine_id: 1001
+          trusted_packet_sequence_id: 4
+        }
+        """),
+        query=r"""
+          SELECT
+            extract_metadata('system_name') as primary_system,
+            extract_metadata_for_machine(0, 'system_name') as machine_0_system,
+            extract_metadata_for_machine(1, 'system_name') as machine_1_system,
+            extract_metadata('ftrace_latest_data_start_ns') as primary_ftrace_start,
+            extract_metadata_for_machine(0, 'ftrace_latest_data_start_ns') as machine_0_ftrace_start,
+            extract_metadata_for_machine(1, 'ftrace_latest_data_start_ns') as machine_1_ftrace_start;
+        """,
+        out=Csv(r"""
+          "primary_system","machine_0_system","machine_1_system","primary_ftrace_start","machine_0_ftrace_start","machine_1_ftrace_start"
+          "Linux","Linux","Darwin",1000,1000,2000
+        """))
 
   def test_flow_table_trace_id(self):
     return DiffTestBlueprint(
@@ -385,12 +486,71 @@ class Tables(TestSuite):
             trusted_packet_sequence_id: 123
           }
         """),
-        query="SELECT * FROM flow;",
+        query="SELECT id, slice_out, slice_in, trace_id, arg_set_id FROM flow;",
         out=Csv("""
-          "id","type","slice_out","slice_in","trace_id","arg_set_id"
-          0,"flow",0,1,57,0
-          1,"flow",1,2,57,0
-                """))
+          "id","slice_out","slice_in","trace_id","arg_set_id"
+          0,0,1,57,"[NULL]"
+          1,1,2,57,"[NULL]"
+        """))
+
+  def test_flow_direction_corrected_by_timestamp(self):
+    return DiffTestBlueprint(
+        trace=TextProto("""
+          packet {
+            timestamp: 50
+            track_event {
+              name: "Slice A"
+              type: TYPE_SLICE_BEGIN
+              track_uuid: 10
+            }
+            trusted_packet_sequence_id: 123
+          }
+          packet {
+            timestamp: 100
+            track_event {
+              name: "Slice B"
+              type: TYPE_SLICE_BEGIN
+              track_uuid: 20
+              flow_ids: 42
+            }
+            trusted_packet_sequence_id: 123
+          }
+          packet {
+            timestamp: 200
+            track_event {
+              name: "Slice B"
+              type: TYPE_SLICE_END
+              track_uuid: 20
+            }
+            trusted_packet_sequence_id: 123
+          }
+          packet {
+            timestamp: 400
+            track_event {
+              name: "Slice A"
+              type: TYPE_SLICE_END
+              track_uuid: 10
+              flow_ids: 42
+            }
+            trusted_packet_sequence_id: 123
+          }
+        """),
+        query="""
+        SELECT 
+          s_out.name as name_out,
+          s_out.ts as ts_out,
+          s_in.name as name_in,
+          s_in.ts as ts_in,
+          f.trace_id
+        FROM flow f
+        JOIN slice s_out ON f.slice_out = s_out.id  
+        JOIN slice s_in ON f.slice_in = s_in.id
+        ORDER BY f.id;
+        """,
+        out=Csv("""
+          "name_out","ts_out","name_in","ts_in","trace_id"
+          "Slice A",50,"Slice B",100,42
+        """))
 
   def test_clock_snapshot_table_multiplier(self):
     return DiffTestBlueprint(
@@ -413,4 +573,145 @@ class Tables(TestSuite):
         out=Csv("""
           "TO_REALTIME(0)"
           420
+        """))
+
+  # Test cpu_track with machine_id ID.
+  def test_cpu_track_table_machine_id(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          ftrace_events {
+            cpu: 1
+            event {
+              timestamp: 100001000000
+              pid: 10
+              irq_handler_entry {
+                irq: 100
+                name : "resource1"
+              }
+            }
+            event {
+              timestamp: 100002000000
+              pid: 10
+              irq_handler_exit {
+                irq: 100
+                ret: 1
+              }
+            }
+          }
+          machine_id: 1001
+        }
+        packet {
+          ftrace_events {
+            cpu: 0
+            event {
+              timestamp: 100003000000
+              pid: 15
+              irq_handler_entry {
+                irq: 100
+                name : "resource1"
+              }
+            }
+          }
+          machine_id: 1001
+        }
+        """),
+        query="""
+        SELECT
+          c.ucpu,
+          ct.cpu,
+          c.machine_id
+        FROM cpu_track AS ct
+        JOIN cpu AS c ON ct.machine_id IS c.machine_id AND ct.cpu = c.cpu
+        ORDER BY ct.cpu
+        """,
+        out=Csv("""
+        "ucpu","cpu","machine_id"
+        4096,0,1
+        4097,1,1
+        """))
+
+  def test_async_slice_utid_arg_set_id(self):
+    return DiffTestBlueprint(
+        trace=DataPath('android_monitor_contention_trace.atr'),
+        query="""
+        SELECT COUNT(DISTINCT extract_arg(arg_set_id, 'utid')) AS utid_count,
+        COUNT(DISTINCT extract_arg(arg_set_id, 'end_utid')) AS end_utid_count
+        FROM counter
+        """,
+        out=Csv("""
+        "utid_count","end_utid_count"
+        89,0
+        """))
+
+  def test_machine(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          system_info {
+            tracing_service_version: "Perfetto v38.0-0bb49ab54 (0bb49ab54dbe55ce5b9dfea3a2ada68b87aecb65)"
+            timezone_off_mins: 60
+            utsname {
+              sysname: "Darwin"
+              version: "Foobar"
+              machine: "x86_64"
+              release: "22.6.0"
+            }
+            num_cpus: 4
+            system_ram_bytes: 126598774784
+          }
+          trusted_uid: 158158
+          trusted_packet_sequence_id: 1
+        }
+        packet {
+          system_info {
+            utsname {
+              sysname: "Linux"
+              version: "#1 SMP PREEMPT Wed Apr  2 01:42:00 UTC 2025"
+              release: "6.6.82-android15-8-g1a7680db913a-ab13304129"
+              machine: "x86_64"
+            }
+            android_build_fingerprint: "android_test_fingerprint"
+            android_device_manufacturer: "Android"
+            android_soc_model: "some_soc_model"
+            tracing_service_version: "Perfetto v50.1 (N/A)"
+            android_sdk_version: 33
+            page_size: 4096
+            num_cpus: 8
+            timezone_off_mins: 0
+            system_ram_bytes: 12008292352
+          }
+          machine_id: 2420838448
+          trusted_uid: 158158
+          trusted_packet_sequence_id: 1
+        }
+        """),
+        query="""
+        SELECT * FROM machine
+        """,
+        out=Csv("""
+        "id","raw_id","sysname","release","version","arch","num_cpus","android_build_fingerprint","android_device_manufacturer","android_sdk_version","system_ram_bytes","system_ram_gb"
+        0,0,"Darwin","22.6.0","Foobar","x86_64",4,"[NULL]","[NULL]","[NULL]",126598774784,127
+        1,2420838448,"Linux","6.6.82-android15-8-g1a7680db913a-ab13304129","#1 SMP PREEMPT Wed Apr  2 01:42:00 UTC 2025","x86_64",8,"android_test_fingerprint","Android",33,12008292352,12
+        """))
+
+  # user list table
+  def test_android_user_list(self):
+    return DiffTestBlueprint(
+        trace=DataPath('trace_user_list.pftrace'),
+        query="""
+        INCLUDE PERFETTO MODULE android.user_list;
+
+
+        SELECT
+          android_user_id,
+          type
+        FROM android_user_list
+        ORDER BY android_user_id;
+        """,
+        out=Csv("""
+        "android_user_id","type"
+        0,"android.os.usertype.system.HEADLESS" 
+        10,"android.os.usertype.full.SECONDARY" 
+        11,"android.os.usertype.full.GUEST"
         """))

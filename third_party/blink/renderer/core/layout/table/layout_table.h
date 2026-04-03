@@ -17,10 +17,8 @@ class LayoutTableSection;
 class LayoutTableCell;
 class TableBorders;
 
-enum SkipEmptySectionsValue { kDoNotSkipEmptySections, kSkipEmptySections };
-
-// LayoutTable is the LayoutObject associated with
-// display: table or inline-table.
+// LayoutTable is the LayoutObject associated with display: table or
+// inline-table.
 //
 // LayoutTable is the coordinator for determining the overall table structure.
 // The reason is that LayoutTableSection children have a local view over what
@@ -103,17 +101,15 @@ class CORE_EXPORT LayoutTable : public LayoutBlock {
 
   void Trace(Visitor*) const override;
 
-  static bool ShouldCreateInlineAnonymous(const LayoutObject& parent);
   static LayoutTable* CreateAnonymousWithParent(const LayoutObject&);
 
   bool IsFirstCell(const LayoutTableCell&) const;
+
+  // All the section methods will return non-empty sections.
   LayoutTableSection* FirstSection() const;
-  LayoutTableSection* FirstNonEmptySection() const;
-  LayoutTableSection* LastNonEmptySection() const;
-  LayoutTableSection* NextSection(const LayoutTableSection*,
-                                  SkipEmptySectionsValue) const;
-  LayoutTableSection* PreviousSection(const LayoutTableSection*,
-                                      SkipEmptySectionsValue) const;
+  LayoutTableSection* LastSection() const;
+  LayoutTableSection* NextSection(const LayoutTableSection*) const;
+  LayoutTableSection* PreviousSection(const LayoutTableSection*) const;
 
   wtf_size_t ColumnCount() const;
 
@@ -153,7 +149,8 @@ class CORE_EXPORT LayoutTable : public LayoutBlock {
   void RemoveChild(LayoutObject*) override;
 
   void StyleDidChange(StyleDifference diff,
-                      const ComputedStyle* old_style) override;
+                      const ComputedStyle* old_style,
+                      const StyleChangeContext&) override;
 
   LayoutBox* CreateAnonymousBoxWithSameTypeAs(
       const LayoutObject* parent) const override;
@@ -204,10 +201,20 @@ class CORE_EXPORT LayoutTable : public LayoutBlock {
 
   unsigned EffectiveColumnCount() const;
 
- protected:
+ private:
   bool IsTable() const final {
     NOT_DESTROYED();
     return true;
+  }
+
+  bool IsEligibleForSizeContainment() const final {
+    NOT_DESTROYED();
+    return false;
+  }
+
+  bool CanMergeWith(const LayoutBoxModelObject& other) const override {
+    NOT_DESTROYED();
+    return other.IsTable();
   }
 
   // Table paints background specially.
@@ -216,7 +223,6 @@ class CORE_EXPORT LayoutTable : public LayoutBlock {
     return false;
   }
 
- private:
   void InvalidateCachedTableBorders();
 
   // Table borders are cached because computing collapsed borders is expensive.

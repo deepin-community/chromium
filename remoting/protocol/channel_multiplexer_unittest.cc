@@ -14,7 +14,6 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
-#include "net/base/completion_repeating_callback.h"
 #include "net/base/net_errors.h"
 #include "net/socket/socket.h"
 #include "net/socket/stream_socket.h"
@@ -33,12 +32,12 @@ namespace remoting::protocol {
 
 namespace {
 
-const int kMessageSize = 1024;
-const int kMessages = 100;
-const char kMuxChannelName[] = "mux";
+constexpr int kMessageSize = 1024;
+constexpr int kMessages = 100;
+constexpr char kMuxChannelName[] = "mux";
 
-const char kTestChannelName[] = "test";
-const char kTestChannelName2[] = "test2";
+constexpr char kTestChannelName[] = "test";
+constexpr char kTestChannelName2[] = "test2";
 
 class MockConnectCallback {
  public:
@@ -115,8 +114,8 @@ class ChannelMultiplexerTest : public testing::Test {
   scoped_refptr<net::IOBufferWithSize> CreateTestBuffer(int size) {
     scoped_refptr<net::IOBufferWithSize> result =
         base::MakeRefCounted<net::IOBufferWithSize>(size);
-    for (int i = 0; i < size; ++i) {
-      result->data()[i] = rand() % 256;
+    for (auto& elem : result->span()) {
+      elem = rand() % 256;
     }
     return result;
   }
@@ -236,7 +235,7 @@ TEST_F(ChannelMultiplexerTest, WriteFailSync) {
 
   scoped_refptr<net::IOBufferWithSize> buf = CreateTestBuffer(100);
 
-  base::MockCallback<net::CompletionRepeatingCallback> cb1, cb2;
+  base::MockCallback<net::CompletionOnceCallback> cb1, cb2;
   EXPECT_CALL(cb1, Run(net::ERR_FAILED));
   EXPECT_CALL(cb2, Run(net::ERR_FAILED));
 
@@ -264,7 +263,7 @@ TEST_F(ChannelMultiplexerTest, WriteFailAsync) {
 
   scoped_refptr<net::IOBufferWithSize> buf = CreateTestBuffer(100);
 
-  base::MockCallback<net::CompletionRepeatingCallback> cb1, cb2;
+  base::MockCallback<net::CompletionOnceCallback> cb1, cb2;
   EXPECT_CALL(cb1, Run(net::ERR_FAILED));
   EXPECT_CALL(cb2, Run(net::ERR_FAILED));
 
@@ -291,7 +290,7 @@ TEST_F(ChannelMultiplexerTest, DeleteWhenFailed) {
 
   scoped_refptr<net::IOBufferWithSize> buf = CreateTestBuffer(100);
 
-  base::MockCallback<net::CompletionRepeatingCallback> cb1, cb2;
+  base::MockCallback<net::CompletionOnceCallback> cb1, cb2;
   EXPECT_CALL(cb1, Run(net::ERR_FAILED))
       .Times(AtMost(1))
       .WillOnce(InvokeWithoutArgs(this, &ChannelMultiplexerTest::DeleteAll));

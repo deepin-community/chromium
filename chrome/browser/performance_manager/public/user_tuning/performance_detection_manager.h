@@ -5,35 +5,52 @@
 #ifndef CHROME_BROWSER_PERFORMANCE_MANAGER_PUBLIC_USER_TUNING_PERFORMANCE_DETECTION_MANAGER_H_
 #define CHROME_BROWSER_PERFORMANCE_MANAGER_PUBLIC_USER_TUNING_PERFORMANCE_DETECTION_MANAGER_H_
 
-#include <memory>
+#include <map>
+#include <optional>
 #include <vector>
 
 #include "base/containers/enum_set.h"
+#include "base/containers/flat_map.h"
+#include "base/memory/weak_ptr.h"
+#include "base/observer_list.h"
 #include "base/observer_list_types.h"
-#include "chrome/browser/ui/webui/side_panel/performance_controls/performance.mojom.h"
+#include "base/timer/timer.h"
+#include "components/performance_manager/public/resource_attribution/page_context.h"
 
 class ChromeBrowserMainExtraPartsPerformanceManager;
-
-namespace content {
-class WebContents;
-}  // namespace content
 
 namespace performance_manager::user_tuning {
 
 class PerformanceDetectionManager {
  public:
-  using ResourceTypeSet =
-      base::EnumSet<side_panel::mojom::ResourceType,
-                    side_panel::mojom::ResourceType::kMinValue,
-                    side_panel::mojom::ResourceType::kMaxValue>;
+  enum class ResourceType {
+    kMemory = 0,
+    kMinValue = kMemory,
+    kCpu = 1,
+    kNetwork = 2,
+    kMaxValue = kNetwork,
+  };
+
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class HealthLevel {
+    kHealthy = 0,
+    kMinValue = kHealthy,
+    kDegraded = 1,
+    kUnhealthy = 2,
+    kMaxValue = kUnhealthy,
+  };
+
+  using ResourceTypeSet = base::
+      EnumSet<ResourceType, ResourceType::kMinValue, ResourceType::kMaxValue>;
+  using ActionableTabsResult = std::vector<resource_attribution::PageContext>;
 
   class StatusObserver : public base::CheckedObserver {
    public:
     // Called immediately with the current status when AddStatusObserver is
     // called, then again on changes (frequency determined by the backend).
-    // RequestStatus() requests an OOB update with most recent status.
-    virtual void OnStatusChanged(side_panel::mojom::ResourceType resource_type,
-                                 side_panel::mojom::HealthLevel health_level,
+    virtual void OnStatusChanged(ResourceType resource_type,
+                                 HealthLevel health_level,
                                  bool actionable) {}
   };
 
@@ -41,22 +58,26 @@ class PerformanceDetectionManager {
    public:
     // Called immediately with the current status when AddTabListObserver is
     // called, then again on changes (frequency determined by the backend).
-    // RequestTabList() requests an OOB update with most recent status.
-    virtual void OnActionableTabListChanged(
-        side_panel::mojom::ResourceType resource_type,
-        std::vector<content::WebContents*> tabs) {}
+    virtual void OnActionableTabListChanged(ResourceType resource_type,
+                                            ActionableTabsResult tabs) {}
   };
 
-  void AddStatusObserver(ResourceTypeSet resource_types, StatusObserver* o);
-  void RemoveStatusObserver(ResourceTypeSet resource_types, StatusObserver* o);
-  void RequestStatus(ResourceTypeSet resource_types, StatusObserver* o);
+  void AddStatusObserver(ResourceTypeSet resource_types,
+                         StatusObserver* observer);
+  void RemoveStatusObserver(StatusObserver* o);
 
   void AddActionableTabsObserver(ResourceTypeSet resource_types,
-                                 ActionableTabsObserver* o);
-  void RemoveActionableTabsObserver(ResourceTypeSet resource_types,
-                                    ActionableTabsObserver* o);
-  void RequestActionableTabs(ResourceTypeSet resource_types,
-                             ActionableTabsObserver* o);
+                                 ActionableTabsObserver* new_observer);
+  void RemoveActionableTabsObserver(ActionableTabsObserver* o);
+
+  // Discards all eligible pages in `tabs`. Returns true if at least 1 tab was
+  // discarded.
+  bool DiscardTabs(ActionableTabsResult tabs);
+
+  void ForceTabCpuDataRefresh();
+
+  void NotifyActionableTabObserversForTesting(ResourceType resource_type,
+                                              const ActionableTabsResult& tabs);
 
   // Returns whether a PerformanceDetectionManager was created and installed.
   // Should only return false in unit tests.
@@ -68,10 +89,31 @@ class PerformanceDetectionManager {
  private:
   friend class ::ChromeBrowserMainExtraPartsPerformanceManager;
   friend class PerformanceDetectionManagerTest;
+  friend class CpuHealthTrackerBrowserTest;
 
   PerformanceDetectionManager();
 
-  void Start();
+  // Notify all status observers of the current health status for
+  // 'resource_type'.
+  void NotifyStatusObservers(ResourceType resource_type,
+                             HealthLevel new_level,
+                             bool is_actionable);
+  void NotifyActionableTabObservers(ResourceType resource_type,
+                                    ActionableTabsResult tabs);
+
+  void OnDiscardComplete();
+  void RecordCpuHealthStatus(base::TimeDelta time_after_discard);
+
+  std::map<ResourceType, base::ObserverList<StatusObserver>> status_observers_;
+  std::map<ResourceType, base::ObserverList<ActionableTabsObserver>>
+      actionable_tab_observers_;
+  base::flat_map<ResourceType, ActionableTabsResult> actionable_tabs_;
+  base::flat_map<ResourceType, HealthLevel> current_health_status_;
+
+  std::optional<HealthLevel> health_level_before_discard_;
+  base::OneShotTimer discard_timer_;
+
+  base::WeakPtrFactory<PerformanceDetectionManager> weak_ptr_factory_{this};
 };
 
 }  // namespace performance_manager::user_tuning

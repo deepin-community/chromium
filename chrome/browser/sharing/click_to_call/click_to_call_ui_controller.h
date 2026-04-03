@@ -13,9 +13,9 @@
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "chrome/browser/sharing/click_to_call/click_to_call_metrics.h"
-#include "chrome/browser/sharing/sharing_service.h"
 #include "chrome/browser/sharing/sharing_ui_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
+#include "components/sharing_message/sharing_service.h"
 #include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "url/gurl.h"
@@ -52,14 +52,10 @@ class ClickToCallUiController
   // devices.
   void OnIntentPickerShown(bool has_devices, bool has_apps);
 
-  // Called when an Intent Picker dialog containing click to call results is
-  // closed.
-  void OnIntentPickerClosed();
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Overridden from SharingUiController:
   std::u16string GetTitle(SharingDialogType dialog_type) override;
-  PageActionIconType GetIconType() override;
   sync_pb::SharingSpecificFields::EnabledFeatures GetRequiredFeature()
       const override;
   void OnDeviceChosen(const SharingTargetDeviceInfo& device) override;

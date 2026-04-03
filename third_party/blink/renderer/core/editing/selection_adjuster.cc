@@ -26,6 +26,7 @@
 
 #include "third_party/blink/renderer/core/editing/selection_adjuster.h"
 
+#include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/ephemeral_range.h"
 #include "third_party/blink/renderer/core/editing/position.h"
@@ -33,6 +34,7 @@
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/editing/visible_selection.h"
 #include "third_party/blink/renderer/core/editing/visible_units.h"
+#include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
@@ -165,7 +167,6 @@ class GranularityAdjuster final {
     }
 
     NOTREACHED();
-    return passed_start.GetPosition();
   }
 
   template <typename Strategy>
@@ -263,6 +264,14 @@ class GranularityAdjuster final {
         const VisiblePositionTemplate<Strategy> visible_paragraph_end =
             EndOfParagraph(CreateVisiblePosition(passed_end));
 
+        // If we're selecting within a table cell, constrain the selection
+        // to stay within that cell to avoid including unwanted table structure
+        if (RuntimeEnabledFeatures::
+                RestrictTableCellSelectionToBoundaryEnabled() &&
+            EnclosingTableCell(visible_paragraph_end.DeepEquivalent())) {
+          return visible_paragraph_end.DeepEquivalent();
+        }
+
         // Include the "paragraph break" (the space from the end of this
         // paragraph to the start of the next one) in the selection.
         const VisiblePositionTemplate<Strategy> end =
@@ -301,7 +310,6 @@ class GranularityAdjuster final {
             .DeepEquivalent();
     }
     NOTREACHED();
-    return passed_end.GetPosition();
   }
 
   template <typename Strategy>
@@ -787,15 +795,13 @@ class SelectionTypeAdjuster final {
     // `StartPosition().AnchorNode()` is editable. In this case, we shouldn't
     // forward/backward the start/end position of `range`.
     // See http://crbug.com/1371268 for more details.
-    if (RuntimeEnabledFeatures::AvoidCaretVisibleSelectionAdjusterEnabled()) {
-      if (IsEditablePosition(backward_end_position) &&
-          CanonicalPositionOf(forward_start_position).IsNull()) {
-        forward_start_position = range.StartPosition();
-      }
-      if (IsEditablePosition(forward_start_position) &&
-          CanonicalPositionOf(backward_end_position).IsNull()) {
-        backward_end_position = range.EndPosition();
-      }
+    if (IsEditablePosition(backward_end_position) &&
+        CanonicalPositionOf(forward_start_position).IsNull()) {
+      forward_start_position = range.StartPosition();
+    }
+    if (IsEditablePosition(forward_start_position) &&
+        CanonicalPositionOf(backward_end_position).IsNull()) {
+      backward_end_position = range.EndPosition();
     }
     const EphemeralRangeTemplate<Strategy> minimal_range(forward_start_position,
                                                          backward_end_position);

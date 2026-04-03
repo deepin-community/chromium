@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
@@ -14,11 +15,14 @@
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "components/supervised_user/core/browser/permission_request_creator.h"
-#include "components/supervised_user/core/browser/supervised_user_settings_service.h"
+#include "components/supervised_user/core/browser/supervised_user_preferences.h"
+#include "components/supervised_user/core/browser/supervised_user_test_environment.h"
+#include "components/supervised_user/core/browser/supervised_user_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
+namespace supervised_user {
 namespace {
 
 class AsyncResultHolder {
@@ -47,8 +51,7 @@ class AsyncResultHolder {
 
 // TODO(agawronska): Check if this can be a real mock.
 // Mocks PermissionRequestCreator to test the async responses.
-class MockPermissionRequestCreator
-    : public supervised_user::PermissionRequestCreator {
+class MockPermissionRequestCreator : public PermissionRequestCreator {
  public:
   MockPermissionRequestCreator() = default;
 
@@ -56,7 +59,7 @@ class MockPermissionRequestCreator
   MockPermissionRequestCreator& operator=(const MockPermissionRequestCreator&) =
       delete;
 
-  ~MockPermissionRequestCreator() override {}
+  ~MockPermissionRequestCreator() override = default;
 
   void set_enabled(bool enabled) { enabled_ = enabled; }
 
@@ -85,43 +88,56 @@ class MockPermissionRequestCreator
   std::vector<SuccessCallback> callbacks_;
 };
 
-}  // namespace
-
 class RemoteWebApprovalsManagerTest : public ::testing::Test {
  protected:
-  RemoteWebApprovalsManagerTest() = default;
+  RemoteWebApprovalsManagerTest() {
+    EnableParentalControls(*supervised_user_test_environment_.pref_service());
+  }
 
   RemoteWebApprovalsManagerTest(const RemoteWebApprovalsManagerTest&) = delete;
   RemoteWebApprovalsManagerTest& operator=(
       const RemoteWebApprovalsManagerTest&) = delete;
+  ~RemoteWebApprovalsManagerTest() override {
+    supervised_user_test_environment_.Shutdown();
+  }
 
-  ~RemoteWebApprovalsManagerTest() override = default;
-
-  supervised_user::RemoteWebApprovalsManager& remote_web_approvals_manager() {
+  RemoteWebApprovalsManager& remote_web_approvals_manager() {
     return remote_web_approvals_manager_;
   }
 
-  void RequestApproval(const GURL& url, AsyncResultHolder* result_holder) {
+  void RequestApproval(WebFilteringResult filtering_result,
+                       AsyncResultHolder* result_holder) {
     remote_web_approvals_manager_.RequestApproval(
-        url, base::BindOnce(&AsyncResultHolder::SetResult,
-                            base::Unretained(result_holder)));
+        supervised_user_test_environment_.family_link_url_filter()
+            ->GetEffectiveUrlToUnblock(filtering_result),
+        base::BindOnce(&AsyncResultHolder::SetResult,
+                       base::Unretained(result_holder)));
+  }
+
+  SupervisedUserTestEnvironment& supervised_user_test_environment() {
+    return supervised_user_test_environment_;
   }
 
  private:
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  supervised_user::RemoteWebApprovalsManager remote_web_approvals_manager_;
+  SupervisedUserTestEnvironment supervised_user_test_environment_;
+  RemoteWebApprovalsManager remote_web_approvals_manager_;
 };
 
 TEST_F(RemoteWebApprovalsManagerTest, CreatePermissionRequest) {
   GURL url("http://www.example.com");
+  GURL stripped_url("http://example.com");
 
   // Without any permission request creators, it should be disabled, and any
   // AddURLAccessRequest() calls should fail.
   EXPECT_FALSE(remote_web_approvals_manager().AreApprovalRequestsEnabled());
   {
     AsyncResultHolder result_holder;
-    RequestApproval(url, &result_holder);
+    RequestApproval({.url = url,
+                     .behavior = FilteringBehavior::kBlock,
+                     .reason = FilteringBehaviorReason::DEFAULT},
+                    &result_holder);
     EXPECT_FALSE(result_holder.GetResult());
   }
 
@@ -134,7 +150,10 @@ TEST_F(RemoteWebApprovalsManagerTest, CreatePermissionRequest) {
   EXPECT_FALSE(remote_web_approvals_manager().AreApprovalRequestsEnabled());
   {
     AsyncResultHolder result_holder;
-    RequestApproval(url, &result_holder);
+    RequestApproval({.url = url,
+                     .behavior = FilteringBehavior::kBlock,
+                     .reason = FilteringBehaviorReason::DEFAULT},
+                    &result_holder);
     EXPECT_FALSE(result_holder.GetResult());
   }
 
@@ -144,9 +163,12 @@ TEST_F(RemoteWebApprovalsManagerTest, CreatePermissionRequest) {
   EXPECT_TRUE(remote_web_approvals_manager().AreApprovalRequestsEnabled());
   {
     AsyncResultHolder result_holder;
-    RequestApproval(url, &result_holder);
+    RequestApproval({.url = url,
+                     .behavior = FilteringBehavior::kBlock,
+                     .reason = FilteringBehaviorReason::DEFAULT},
+                    &result_holder);
     ASSERT_EQ(1u, creator->requested_urls().size());
-    EXPECT_EQ(url.spec(), creator->requested_urls()[0].spec());
+    EXPECT_EQ(stripped_url.spec(), creator->requested_urls()[0].spec());
 
     creator->AnswerRequest(0, true);
     EXPECT_TRUE(result_holder.GetResult());
@@ -154,9 +176,12 @@ TEST_F(RemoteWebApprovalsManagerTest, CreatePermissionRequest) {
 
   {
     AsyncResultHolder result_holder;
-    RequestApproval(url, &result_holder);
+    RequestApproval({.url = url,
+                     .behavior = FilteringBehavior::kBlock,
+                     .reason = FilteringBehaviorReason::DEFAULT},
+                    &result_holder);
     ASSERT_EQ(1u, creator->requested_urls().size());
-    EXPECT_EQ(url.spec(), creator->requested_urls()[0].spec());
+    EXPECT_EQ(stripped_url.spec(), creator->requested_urls()[0].spec());
 
     creator->AnswerRequest(0, false);
     EXPECT_FALSE(result_holder.GetResult());
@@ -168,9 +193,17 @@ TEST_F(RemoteWebApprovalsManagerTest, CreatePermissionRequest) {
   remote_web_approvals_manager().AddApprovalRequestCreator(
       base::WrapUnique(creator_2));
 
+  // Add an entry in for the test url in the blocklist in order to get the
+  // unstriped url in the approval.
+  supervised_user_test_environment().SetManualFilterForHost(url.GetHost(),
+                                                            false);
+
   {
     AsyncResultHolder result_holder;
-    RequestApproval(url, &result_holder);
+    RequestApproval({.url = url,
+                     .behavior = FilteringBehavior::kBlock,
+                     .reason = FilteringBehaviorReason::MANUAL},
+                    &result_holder);
     ASSERT_EQ(1u, creator->requested_urls().size());
     EXPECT_EQ(url.spec(), creator->requested_urls()[0].spec());
 
@@ -181,7 +214,10 @@ TEST_F(RemoteWebApprovalsManagerTest, CreatePermissionRequest) {
 
   {
     AsyncResultHolder result_holder;
-    RequestApproval(url, &result_holder);
+    RequestApproval({.url = url,
+                     .behavior = FilteringBehavior::kBlock,
+                     .reason = FilteringBehaviorReason::MANUAL},
+                    &result_holder);
     ASSERT_EQ(1u, creator->requested_urls().size());
     EXPECT_EQ(url.spec(), creator->requested_urls()[0].spec());
 
@@ -195,3 +231,6 @@ TEST_F(RemoteWebApprovalsManagerTest, CreatePermissionRequest) {
     EXPECT_TRUE(result_holder.GetResult());
   }
 }
+
+}  // namespace
+}  // namespace supervised_user

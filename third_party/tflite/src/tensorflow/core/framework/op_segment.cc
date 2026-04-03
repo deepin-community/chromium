@@ -35,9 +35,10 @@ OpSegment::~OpSegment() {
   for (const auto& kv : sessions_) delete kv.second;
 }
 
-Status OpSegment::FindOrCreate(const string& session_handle,
-                               const string& node_name, OpKernel** kernel,
-                               CreateKernelFn create_fn) {
+absl::Status OpSegment::FindOrCreate(const std::string& session_handle,
+                                     const std::string& node_name,
+                                     OpKernel** kernel,
+                                     CreateKernelFn create_fn) {
   {
     mutex_lock l(mu_);
     auto item = gtl::FindPtrOrNull(sessions_, session_handle);
@@ -46,10 +47,10 @@ Status OpSegment::FindOrCreate(const string& session_handle,
     }
     *kernel = gtl::FindPtrOrNull(item->name_kernel, node_name);
     if (*kernel != nullptr) {
-      return OkStatus();
+      return absl::OkStatus();
     }
   }
-  Status s = create_fn(kernel);
+  absl::Status s = create_fn(kernel);
   if (!s.ok()) {
     LOG(ERROR) << "Create kernel failed: " << s;
     return s;
@@ -68,10 +69,10 @@ Status OpSegment::FindOrCreate(const string& session_handle,
       *kernel = *p_kernel;
     }
   }
-  return OkStatus();
+  return absl::OkStatus();
 }
 
-void OpSegment::AddHold(const string& session_handle) {
+void OpSegment::AddHold(const std::string& session_handle) {
   mutex_lock l(mu_);
   Item** item = &sessions_[session_handle];
   if (*item == nullptr) {
@@ -81,7 +82,7 @@ void OpSegment::AddHold(const string& session_handle) {
   }
 }
 
-void OpSegment::RemoveHold(const string& session_handle) {
+void OpSegment::RemoveHold(const std::string& session_handle) {
   Item* item = nullptr;
   {
     mutex_lock l(mu_);
@@ -101,7 +102,7 @@ void OpSegment::RemoveHold(const string& session_handle) {
 }
 
 bool OpSegment::ShouldOwnKernel(FunctionLibraryRuntime* lib,
-                                const string& node_op) {
+                                const std::string& node_op) {
   // OpSegment should not own kernel if the node is stateless, or a function.
   return lib->IsStateful(node_op) &&
          lib->GetFunctionLibraryDefinition()->Find(node_op) == nullptr &&

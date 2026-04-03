@@ -6,7 +6,6 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
-#include "ash/public/mojom/input_device_settings.mojom-forward.h"
 #include "ash/public/mojom/input_device_settings.mojom.h"
 #include "ash/shell.h"
 #include "ash/system/input_device_settings/input_device_settings_defaults.h"
@@ -167,7 +166,7 @@ mojom::TouchpadSettingsPtr GetTouchpadSettingsFromPrefs(
 mojom::TouchpadSettingsPtr RetrieveTouchpadSettings(
     PrefService* pref_service,
     const mojom::Touchpad& touchpad,
-    const base::Value::Dict& settings_dict) {
+    const base::DictValue& settings_dict) {
   mojom::TouchpadSettingsPtr settings = mojom::TouchpadSettings::New();
   settings->sensitivity =
       settings_dict.FindInt(prefs::kTouchpadSettingSensitivity)
@@ -229,12 +228,12 @@ mojom::TouchpadSettingsPtr GetDefaultTouchpadSettings(
   return RetrieveTouchpadSettings(pref_service, touchpad, /*settings_dict=*/{});
 }
 
-base::Value::Dict ConvertSettingsToDict(
+base::DictValue ConvertSettingsToDict(
     const mojom::Touchpad& touchpad,
     const ForceTouchpadSettingPersistence& force_persistence,
-    const base::Value::Dict* existing_settings_dict) {
+    const base::DictValue* existing_settings_dict) {
   // Populate `settings_dict` with all settings in `settings`.
-  base::Value::Dict settings_dict;
+  base::DictValue settings_dict;
 
   if (ShouldPersistSetting(prefs::kTouchpadSettingSensitivity,
                            static_cast<int>(touchpad.settings->sensitivity),
@@ -337,9 +336,9 @@ void UpdateInternalTouchpadSettingsImpl(
   CHECK(touchpad.settings);
   CHECK(!touchpad.is_external);
 
-  base::Value::Dict existing_settings_dict =
+  base::DictValue existing_settings_dict =
       pref_service->GetDict(prefs::kTouchpadInternalSettings).Clone();
-  base::Value::Dict settings_dict = ConvertSettingsToDict(
+  base::DictValue settings_dict = ConvertSettingsToDict(
       touchpad, force_persistence, &existing_settings_dict);
 
   // Merge the new settings into the old settings so that all settings are
@@ -362,12 +361,12 @@ void UpdateTouchpadSettingsImpl(
     return;
   }
 
-  base::Value::Dict devices_dict =
+  base::DictValue devices_dict =
       pref_service->GetDict(prefs::kTouchpadDeviceSettingsDictPref).Clone();
-  base::Value::Dict* existing_settings_dict =
+  base::DictValue* existing_settings_dict =
       devices_dict.FindDict(touchpad.device_key);
 
-  base::Value::Dict settings_dict = ConvertSettingsToDict(
+  base::DictValue settings_dict = ConvertSettingsToDict(
       touchpad, force_persistence, existing_settings_dict);
   const base::Time time_stamp = base::Time::Now();
   settings_dict.Set(prefs::kLastUpdatedKey, base::TimeToValue(time_stamp));
@@ -428,20 +427,15 @@ void InitializeSettingsUpdateMetricInfo(
                         std::move(updated_metric_info));
 }
 
-}  // namespace
-
-TouchpadPrefHandlerImpl::TouchpadPrefHandlerImpl() = default;
-TouchpadPrefHandlerImpl::~TouchpadPrefHandlerImpl() = default;
-
-void TouchpadPrefHandlerImpl::InitializeTouchpadSettings(
-    PrefService* pref_service,
-    mojom::Touchpad* touchpad) {
+void InitializeTouchpadSettingsImpl(PrefService* pref_service,
+                                    mojom::Touchpad* touchpad,
+                                    bool force_initialize_to_default_settings) {
   if (!pref_service) {
     touchpad->settings = GetDefaultTouchpadSettings(pref_service, *touchpad);
     return;
   }
 
-  const base::Value::Dict* settings_dict = nullptr;
+  const base::DictValue* settings_dict = nullptr;
   if (!touchpad->is_external) {
     settings_dict = &pref_service->GetDict(prefs::kTouchpadInternalSettings);
     if (settings_dict->empty()) {
@@ -451,6 +445,12 @@ void TouchpadPrefHandlerImpl::InitializeTouchpadSettings(
     const auto& devices_dict =
         pref_service->GetDict(prefs::kTouchpadDeviceSettingsDictPref);
     settings_dict = devices_dict.FindDict(touchpad->device_key);
+  }
+
+  // Do not lookup settings dict if we are force refreshing back to default
+  // settings.
+  if (force_initialize_to_default_settings) {
+    settings_dict = nullptr;
   }
 
   ForceTouchpadSettingPersistence force_persistence;
@@ -477,6 +477,19 @@ void TouchpadPrefHandlerImpl::InitializeTouchpadSettings(
   UpdateTouchpadSettingsImpl(pref_service, *touchpad, force_persistence);
 }
 
+}  // namespace
+
+TouchpadPrefHandlerImpl::TouchpadPrefHandlerImpl() = default;
+TouchpadPrefHandlerImpl::~TouchpadPrefHandlerImpl() = default;
+
+void TouchpadPrefHandlerImpl::InitializeTouchpadSettings(
+    PrefService* pref_service,
+    mojom::Touchpad* touchpad) {
+  InitializeTouchpadSettingsImpl(
+      pref_service, touchpad,
+      /*force_initialize_to_default_settings=*/false);
+}
+
 void TouchpadPrefHandlerImpl::UpdateTouchpadSettings(
     PrefService* pref_service,
     const mojom::Touchpad& touchpad) {
@@ -488,10 +501,6 @@ void TouchpadPrefHandlerImpl::InitializeLoginScreenTouchpadSettings(
     PrefService* local_state,
     const AccountId& account_id,
     mojom::Touchpad* touchpad) {
-  // Verify if the flag is enabled.
-  if (!features::IsInputDeviceSettingsSplitEnabled()) {
-    return;
-  }
   CHECK(local_state);
 
   const auto* settings_dict = GetLoginScreenSettingsDict(
@@ -543,6 +552,13 @@ void TouchpadPrefHandlerImpl::UpdateDefaultTouchpadSettings(
                             /*existing_settings_dict=*/nullptr);
   pref_service->SetDict(prefs::kTouchpadDefaultSettings,
                         std::move(settings_dict));
+}
+
+void TouchpadPrefHandlerImpl::ForceInitializeWithDefaultSettings(
+    PrefService* pref_service,
+    mojom::Touchpad* touchpad) {
+  InitializeTouchpadSettingsImpl(pref_service, touchpad,
+                                 /*force_initialize_to_default_settings=*/true);
 }
 
 }  // namespace ash

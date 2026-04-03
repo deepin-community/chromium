@@ -10,8 +10,9 @@
 
 #include "base/apple/foundation_util.h"
 #include "base/check.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
-#include "base/notreached.h"
+#include "base/notimplemented.h"
 #include "base/strings/sys_string_conversions.h"
 #include "rlz/lib/assert.h"
 #include "rlz/lib/lib_values.h"
@@ -112,7 +113,7 @@ bool RlzValueStoreMac::ReadAccessPointRlz(AccessPoint access_point,
       ASSERT_STRING("GetAccessPointRlz: Insufficient buffer size");
       return false;
     }
-    strncpy(rlz, s.c_str(), rlz_size);
+    UNSAFE_TODO(strncpy(rlz, s.c_str(), rlz_size));
     return true;
   }
   if (rlz_size > 0) {
@@ -230,7 +231,7 @@ int g_lock_depth = 0;
 // This is the store object that might be shared. Only set if g_lock_depth > 0.
 RlzValueStoreMac* g_store_object = nullptr;
 
-NSString* CreateRlzDirectory() {
+NSURL* CreateRlzDirectory() {
   NSArray* paths = NSSearchPathForDirectoriesInDomains(
       NSApplicationSupportDirectory, NSUserDomainMask, /*expandTilde=*/YES);
   NSString* folder = nil;
@@ -250,28 +251,28 @@ NSString* CreateRlzDirectory() {
                           withIntermediateDirectories:YES
                                            attributes:nil
                                                 error:nil];
-  return folder;
+  return [NSURL fileURLWithPath:folder];
 }
 
 // Returns the path of the rlz plist store, also creates the parent directory
 // path if it doesn't exist.
-NSString* RlzPlistFilename() {
+NSURL* RlzPlistPathURL() {
   NSString* const kRlzFile = @"RlzStore.plist";
-  return [CreateRlzDirectory() stringByAppendingPathComponent:kRlzFile];
+  return [CreateRlzDirectory() URLByAppendingPathComponent:kRlzFile];
 }
 
 // Returns the path of the rlz lock file, also creates the parent directory
 // path if it doesn't exist.
-NSString* RlzLockFilename() {
+NSURL* RlzLockFileURL() {
   NSString* const kRlzLockfile = @"flockfile";
-  return [CreateRlzDirectory() stringByAppendingPathComponent:kRlzLockfile];
+  return [CreateRlzDirectory() URLByAppendingPathComponent:kRlzLockfile];
 }
 
 }  // namespace
 
 ScopedRlzValueStoreLock::ScopedRlzValueStoreLock() {
   bool got_distributed_lock = g_recursive_lock.TryGetCrossProcessLock(
-      base::apple::NSStringToFilePath(RlzLockFilename()));
+      base::apple::NSURLToFilePath(RlzLockFileURL()));
   // At this point, we hold the in-process lock, no matter the value of
   // |got_distributed_lock|.
 
@@ -294,19 +295,20 @@ ScopedRlzValueStoreLock::ScopedRlzValueStoreLock() {
 
   CHECK(!g_store_object);
 
-  NSString* plist = RlzPlistFilename();
+  NSURL* plist = RlzPlistPathURL();
 
   // Create an empty file if none exists yet.
-  if (![NSFileManager.defaultManager fileExistsAtPath:plist isDirectory:nil]) {
-    [[NSDictionary dictionary] writeToFile:plist atomically:YES];
+  if (![NSFileManager.defaultManager fileExistsAtPath:plist.path
+                                          isDirectory:nil]) {
+    [[NSDictionary dictionary] writeToURL:plist error:nil];
   }
 
   NSMutableDictionary* dict =
-      [NSMutableDictionary dictionaryWithContentsOfFile:plist];
+      [NSMutableDictionary dictionaryWithContentsOfURL:plist];
   VERIFY(dict);
 
   if (dict) {
-    store_.reset(new RlzValueStoreMac(dict, plist));
+    store_.reset(new RlzValueStoreMac(dict, plist.path));
     g_store_object = (RlzValueStoreMac*)store_.get();
   }
 }
@@ -326,7 +328,7 @@ ScopedRlzValueStoreLock::~ScopedRlzValueStoreLock() {
 
     NSDictionary* dict =
         static_cast<RlzValueStoreMac*>(store_.get())->dictionary();
-    VERIFY([dict writeToFile:RlzPlistFilename() atomically:YES]);
+    VERIFY([dict writeToURL:RlzPlistPathURL() error:nil]);
   }
 
   // Check that "store_ set" => "file_lock acquired". The converse isn't true,
@@ -359,7 +361,7 @@ void SetRlzStoreDirectory(const base::FilePath& directory) {
 
 std::string RlzStoreFilenameStr() {
   @autoreleasepool {
-    return std::string(RlzPlistFilename().fileSystemRepresentation);
+    return std::string(RlzPlistPathURL().fileSystemRepresentation);
   }
 }
 

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <string_view>
+
 #include "build/build_config.h"
 #include "content/browser/devtools/protocol/devtools_protocol_test_support.h"
 #include "content/browser/devtools/protocol/network.h"
@@ -32,7 +34,7 @@ class DevToolsTrustTokenBrowsertest : public DevToolsProtocolTest,
   }
 
   // The returned view is only valid until the next |SendCommand| call.
-  const base::Value::List& GetTrustTokensViaProtocol() {
+  const base::ListValue& GetTrustTokensViaProtocol() {
     SendCommandSync("Storage.getTrustTokens");
     const base::Value* tokens = result()->Find("tokens");
     CHECK(tokens);
@@ -42,7 +44,7 @@ class DevToolsTrustTokenBrowsertest : public DevToolsProtocolTest,
   // Asserts that CDP reports |count| number of tokens for |issuerOrigin|.
   void AssertTrustTokensViaProtocol(const std::string& issuerOrigin,
                                     int expectedCount) {
-    const base::Value::List& tokens = GetTrustTokensViaProtocol();
+    const base::ListValue& tokens = GetTrustTokensViaProtocol();
     EXPECT_GT(tokens.size(), 0ul);
 
     for (const auto& token : tokens) {
@@ -102,12 +104,12 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest,
 namespace {
 
 bool MatchStatus(const std::string& expected_status,
-                 const base::Value::Dict& params) {
+                 const base::DictValue& params) {
   const std::string* actual_status = params.FindString("status");
   return expected_status == *actual_status;
 }
 
-base::RepeatingCallback<bool(const base::Value::Dict&)> okStatusMatcher =
+base::RepeatingCallback<bool(const base::DictValue&)> okStatusMatcher =
     base::BindRepeating(
         &MatchStatus,
         protocol::Network::TrustTokenOperationDone::StatusEnum::Ok);
@@ -182,8 +184,8 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest, IframeEndToEnd) {
 
   // 3) Request and redeem a token, then use the redeemed token in a Signing
   // request.
-  auto execute_op_via_iframe = [&](base::StringPiece path,
-                                   base::StringPiece trust_token) {
+  auto execute_op_via_iframe = [&](std::string_view path,
+                                   std::string_view trust_token) {
     // It's important to set the trust token arguments before updating src, as
     // the latter triggers a load.
     EXPECT_TRUE(ExecJs(
@@ -295,7 +297,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsTrustTokenBrowsertest, ClearTrustTokens) {
   AssertTrustTokensViaProtocol(IssuanceOriginFromHost("a.test"), 10);
 
   // 5) Call Storage.clearTrustTokens
-  base::Value::Dict params;
+  base::DictValue params;
   params.Set("issuerOrigin", IssuanceOriginFromHost("a.test"));
   auto* result = SendCommandSync("Storage.clearTrustTokens", std::move(params));
 

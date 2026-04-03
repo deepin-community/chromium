@@ -20,6 +20,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -201,7 +202,7 @@ IN_PROC_BROWSER_TEST_F(CrossSiteTransferTest,
   GURL url2b =
       embedded_test_server()->GetURL("B.com", "/site_isolation/blank.html?2");
   GURL url2a = embedded_test_server()->GetURL(
-      "A.com", "/cross-site/" + url2b.host() + url2b.PathForRequest());
+      "A.com", "/cross-site/" + url2b.GetHost() + url2b.PathForRequest());
   NavigateToURLContentInitiated(shell(), url2a, true, true);
 
   // There should be one history entry. url2b should have replaced url1.
@@ -214,7 +215,7 @@ IN_PROC_BROWSER_TEST_F(CrossSiteTransferTest,
   GURL url3b =
       embedded_test_server()->GetURL("B.com", "/site_isolation/blank.html?3");
   GURL url3a = embedded_test_server()->GetURL(
-      "A.com", "/cross-site/" + url3b.host() + url3b.PathForRequest());
+      "A.com", "/cross-site/" + url3b.GetHost() + url3b.PathForRequest());
   NavigateToURLContentInitiated(shell(), url3a, false, true);
 
   // There should be two history entries. url2b should have replaced url1. url3b
@@ -296,7 +297,7 @@ IN_PROC_BROWSER_TEST_F(CrossSiteTransferTest, PostWithFileData) {
   run_loop.Run();
 
   // Remember the old process id for a sanity check below.
-  int old_process_id =
+  ChildProcessId old_process_id =
       shell()->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID();
 
   // Submit the form.
@@ -310,7 +311,7 @@ IN_PROC_BROWSER_TEST_F(CrossSiteTransferTest, PostWithFileData) {
             shell()->web_contents()->GetLastCommittedURL());
 
   // Verify that the test really verifies access of a *new* renderer process.
-  int new_process_id =
+  ChildProcessId new_process_id =
       shell()->web_contents()->GetPrimaryMainFrame()->GetProcess()->GetID();
   ASSERT_NE(new_process_id, old_process_id);
 
@@ -365,8 +366,9 @@ IN_PROC_BROWSER_TEST_F(CrossSiteTransferTest, MaliciousPostWithFileData) {
   // and |form_contents|.
   EXPECT_EQ(initial_target_url, target_contents->GetLastCommittedURL());
   EXPECT_EQ(form_url, form_contents->GetLastCommittedURL());
-  EXPECT_NE(target_contents->GetPrimaryMainFrame()->GetProcess()->GetID(),
-            form_contents->GetPrimaryMainFrame()->GetProcess()->GetID());
+  EXPECT_NE(
+      target_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID(),
+      form_contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID());
 
   // Prepare a file to upload.
   base::ScopedAllowBlockingForTesting allow_blocking;

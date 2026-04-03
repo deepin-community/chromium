@@ -8,6 +8,11 @@
 //    clang-format -i -style=chromium filename
 // DO NOT EDIT!
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ui/gl/gl_stub_api_base.h"
 
 namespace gl {
@@ -22,12 +27,6 @@ GLenum GLStubApiBase::glClientWaitSyncFn(GLsync sync,
   return 0;
 }
 
-GLenum GLStubApiBase::glClientWaitSyncAPPLEFn(GLsync sync,
-                                              GLbitfield flags,
-                                              GLuint64 timeout) {
-  return 0;
-}
-
 GLuint GLStubApiBase::glCreateProgramFn() {
   return 0;
 }
@@ -36,25 +35,7 @@ GLuint GLStubApiBase::glCreateShaderFn(GLenum type) {
   return 0;
 }
 
-GLuint GLStubApiBase::glCreateShaderProgramvFn(GLenum type,
-                                               GLsizei count,
-                                               const char* const* strings) {
-  return 0;
-}
-
 GLsync GLStubApiBase::glFenceSyncFn(GLenum condition, GLbitfield flags) {
-  return 0;
-}
-
-GLsync GLStubApiBase::glFenceSyncAPPLEFn(GLenum condition, GLbitfield flags) {
-  return 0;
-}
-
-GLuint GLStubApiBase::glGenPathsNVFn(GLsizei range) {
-  return 0;
-}
-
-GLuint GLStubApiBase::glGenProgramPipelinesFn(GLsizei n, GLuint* pipelines) {
   return 0;
 }
 
@@ -89,18 +70,6 @@ GLenum GLStubApiBase::glGetGraphicsResetStatusARBFn() {
   return 0;
 }
 
-GLuint GLStubApiBase::glGetProgramResourceIndexFn(GLuint program,
-                                                  GLenum programInterface,
-                                                  const GLchar* name) {
-  return 0;
-}
-
-GLint GLStubApiBase::glGetProgramResourceLocationFn(GLuint program,
-                                                    GLenum programInterface,
-                                                    const char* name) {
-  return 0;
-}
-
 const GLubyte* GLStubApiBase::glGetStringFn(GLenum name) {
   return 0;
 }
@@ -130,10 +99,6 @@ GLboolean GLStubApiBase::glIsEnablediOESFn(GLenum target, GLuint index) {
   return 0;
 }
 
-GLboolean GLStubApiBase::glIsFenceAPPLEFn(GLuint fence) {
-  return 0;
-}
-
 GLboolean GLStubApiBase::glIsFenceNVFn(GLuint fence) {
   return 0;
 }
@@ -142,15 +107,7 @@ GLboolean GLStubApiBase::glIsFramebufferEXTFn(GLuint framebuffer) {
   return 0;
 }
 
-GLboolean GLStubApiBase::glIsPathNVFn(GLuint path) {
-  return 0;
-}
-
 GLboolean GLStubApiBase::glIsProgramFn(GLuint program) {
-  return 0;
-}
-
-GLboolean GLStubApiBase::glIsProgramPipelineFn(GLuint pipeline) {
   return 0;
 }
 
@@ -174,10 +131,6 @@ GLboolean GLStubApiBase::glIsSyncFn(GLsync sync) {
   return 0;
 }
 
-GLboolean GLStubApiBase::glIsSyncAPPLEFn(GLsync sync) {
-  return 0;
-}
-
 GLboolean GLStubApiBase::glIsTextureFn(GLuint texture) {
   return 0;
 }
@@ -198,10 +151,6 @@ void* GLStubApiBase::glMapBufferRangeFn(GLenum target,
                                         GLintptr offset,
                                         GLsizeiptr length,
                                         GLbitfield access) {
-  return 0;
-}
-
-GLboolean GLStubApiBase::glTestFenceAPPLEFn(GLuint fence) {
   return 0;
 }
 

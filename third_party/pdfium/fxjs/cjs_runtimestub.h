@@ -24,15 +24,15 @@ class CJS_RuntimeStub final : public IJS_Runtime {
   // IJS_Runtime:
   CJS_Runtime* AsCJSRuntime() override;
   IJS_EventContext* NewEventContext() override;
-  void ReleaseEventContext(IJS_EventContext* pContext) override;
+  void ReleaseEventContext(IJS_EventContext* context) override;
   CPDFSDK_FormFillEnvironment* GetFormFillEnv() const override;
 
   std::optional<IJS_Runtime::JS_Error> ExecuteScript(
       const WideString& script) override;
 
  private:
-  UnownedPtr<CPDFSDK_FormFillEnvironment> const m_pFormFillEnv;
-  std::unique_ptr<IJS_EventContext> m_pContext;
+  UnownedPtr<CPDFSDK_FormFillEnvironment> const form_fill_env_;
+  std::unique_ptr<IJS_EventContext> context_;
 };
 
 #endif  // FXJS_CJS_RUNTIMESTUB_H_
